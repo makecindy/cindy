@@ -19,7 +19,7 @@ afterAll(async () => { await fs.rm(root, { recursive: true, force: true }); });
 // desktop route setting injected. Protects bounded native API calls and explicit rebuilds
 // after a server alias changes; CLI batching tests do not execute this host route.
 // Minimal failures: 65 entries; identical metadata rebuilt after v1 -> v2. Unit, no DB/network.
-vi.mock('../../utility-model/oneShotCandidates', () => ({
+vi.mock('../../maker-host/model-route-availability.js', () => ({
   isProviderModelRouteDisabled: () => false,
   isProviderRouteSuspended: () => false,
 }));

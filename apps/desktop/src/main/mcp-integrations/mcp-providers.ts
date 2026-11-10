@@ -1,3 +1,4 @@
+import { createIMessageMcpServer } from './imessageMcpServer';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
@@ -18,7 +19,7 @@ import { getDeviceId } from '../authManager.js';
 import { buildHistorySessionDeepLink } from '../deepLink.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
 import { TodoError, queryTodoItems, type TodoListQuery, type TodoPatch, type preflightTodoEvents } from '@cindy/maker-shared/teammate-todo';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
 import { resolveHelperSurface, resolveHelperSystemSkillsOff } from './helperSurface.js';
@@ -57,7 +58,7 @@ import {
   type GhostGrantLiveSessionState,
   type CindyGhostsHostDeps,
   type ToolResultImageDescription,
-} from './ghost.js';
+} from './ghost.desktop.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
 import { compressInlineImage } from './inlineImageCompressor.js';
 import { createTelegramBotMcpServer } from './telegramBotMcpServer.js';
@@ -76,7 +77,7 @@ import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
 import { createAgentAppUpdateCallbacks } from '../agent-app-update/index.js';
-import { getScheduler } from '../scheduler-host/index.js';
+import { getScheduler } from '../scheduler-host/index.desktop.js';
 import { getScheduleWebhookHost, scheduleWebhookReceiver } from '../scheduler-host/webhook/runtime.js';
 import { stabilizeHookCommand } from '../scheduler-host/hook-script-generator.js';
 import { assertPreRunHookCommandSyntax } from '../scheduler-host/pre-run-hook.js';
@@ -165,6 +166,7 @@ import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } fr
 export interface DesktopMcpProvidersDeps {
   localSkillLibraryCoordinator: LocalSkillLibraryCoordinator;
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
+  manageUserQuestions?: XdtHelperMcpDeps['manageUserQuestions'];
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel'>>;
   createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
@@ -870,7 +872,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             sessionInstanceId: context.sessionInstanceId,
             workingDir: context.workingDir ?? '',
             path: absPath,
-            toolName: 'cindy_helper.ask_owner',
+            toolName: 'cindy_helper.request_input_handoff',
             operation: 'read',
           }, deps.getLiveSessionGrantState));
           if (!picture.ok) return picture;
@@ -1046,6 +1048,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }
       },
       askUserQuestionAsync: deps.askUserQuestionAsync,
+      manageUserQuestions: deps.manageUserQuestions,
       sessionImport: sessionImportCallbacks,
       renameSessions: async ({ changes, dryRun }) => {
         if (!tryGetDbClient()) {
@@ -1165,11 +1168,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
           try {
-            const project = await resolveSessionProject({ callerSessionId: params.callerSessionId, projectDir: params.projectDir });
+            const project = await resolveSessionProject({ callerSessionId: params.callerSessionId,
+              projectDir: params.projectDir, workingDir: params.workingDir });
             if (!project.ok) return project;
             const result = await svc.startSessionTask({ ...params, projectDir: project.projectDir,
               workingDir: params.workingDir ?? project.projectDir ?? undefined });
-            return result.ok ? { ...result, projectDir: project.projectDir } : result;
+            return result.ok ? { ...result, projectDir: project.projectDir,
+              ...('projectFromWorkingDir' in project ? { projectFromWorkingDir: true } : {}) } : result;
           } catch (err) {
             return {
               ok: false,
@@ -1728,6 +1733,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         getSessionContext: () => resolveLiziMcpSessionContext(ctx),
       }),
     }),
+  });
+
+  gated.push({
+    name: 'cindy_imessage',
+    isEnabled: ctx => hasImChannelVendorOptions(ctx.vendorOptions, 'imessage')
+      || ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir),
+    toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_imessage',
+      instance: createIMessageMcpServer({ getSessionContext: () => resolveLiziMcpSessionContext(ctx) }) }),
   });
 
   // cindy_telegram_bot: 个人 / 伙伴 Telegram bot 轮次里的 Bot API 直通。只挂在带 Telegram 渠道

@@ -743,3 +743,29 @@ describe('custom MCP token replacement', () => {
     }
   });
 });
+
+// Unit regression: a crash can leave only a resource directory, without an
+// environment blob. Presence/cleanup must see it and remain account-scoped.
+it('detects and removes orphaned resource archives only for the current owner', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-resource-cleanup-'));
+  const previous = { ...electronState }, previousSession = { ...sessionState };
+  try {
+    electronState.userData = root; electronState.encryptionAvailable = false;
+    sessionState.mode = 'cloud'; sessionState.dataOwnerId = 'resource-owner';
+    const key = `bot_environment_${'b'.repeat(64)}`;
+    const directory = path.join(root, 'safe-storage', `${resolveOwnerScopedSecretStorageKey(key)}.resources`);
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'interrupted.enc.tmp'), 'encrypted fixture');
+    expect(botEnvironmentSecretIo.has(key)).toBe(true);
+    sessionState.dataOwnerId = 'other-owner';
+    expect(botEnvironmentSecretIo.has(key)).toBe(false);
+    await botEnvironmentSecretIo.removeResourceFiles(key, () => {});
+    expect(fs.existsSync(directory)).toBe(true);
+    sessionState.dataOwnerId = 'resource-owner';
+    await botEnvironmentSecretIo.removeResourceFiles(key, () => {});
+    expect(botEnvironmentSecretIo.has(key)).toBe(false);
+  } finally {
+    Object.assign(electronState, previous); Object.assign(sessionState, previousSession);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

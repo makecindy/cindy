@@ -36,6 +36,11 @@
     "exit": "Quitter le mode plan"
   },
   "panel": {
+    "questionUnanswered": "Sans réponse",
+    "questionWithdrawn": "Réponse désormais inutile",
+    "withdrawnDraft": "Cette question ne nécessite plus de réponse.\n{{reason}}\nVotre brouillon est conservé et peut être envoyé en complément.",
+    "sendSupplement": "Envoyer un complément",
+
     "readOnlyKind": "En attente",
     "readOnlyTitle": "En attente de confirmation sur votre ordinateur",
     "pendingRequests": "Demandes en attente",

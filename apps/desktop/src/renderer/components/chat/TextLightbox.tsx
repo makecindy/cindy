@@ -34,6 +34,7 @@ import { Copy, Search, WrapText, ListOrdered, ExternalLink, TriangleAlert } from
 import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
+import { formatBytes } from './formatBytes';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { detectRenderable } from '@/lib/textPreview';
@@ -74,21 +75,6 @@ interface TextLightboxProps {
 const OVERSIZE_LIMIT_MB = 10;
 const OVERSIZE_LIMIT = OVERSIZE_LIMIT_MB * 1024 * 1024;
 const TEXT_LIGHTBOX_OVERLAY_Z_INDEX = 9999;
-
-/**
- * Format a byte count for display in the toolbar (`3.4 MB`, `812 KB`, `73 B`).
- * Mirrors the spec wording — no thin-space, no parentheses, just "<n> <unit>".
- */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
-  if (bytes < 1024) return `${bytes} B`;
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
-  const mb = kb / 1024;
-  if (mb < 1024) return `${mb < 10 ? mb.toFixed(1) : mb.toFixed(1)} MB`;
-  const gb = mb / 1024;
-  return `${gb.toFixed(1)} GB`;
-}
 
 /**
  * Markdown line-scroll anchor selection (pure, unit-tested).

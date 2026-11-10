@@ -54,6 +54,7 @@ import {
   Languages,
   LayoutGrid,
   Monitor,
+  Smartphone,
   Search,
   type LucideIcon,
 } from "lucide-react-native";
@@ -109,6 +110,7 @@ import {
   resolveDesktopIceServers,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
+import { ErrorNotice } from "@/components/ErrorNotice";
 import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
 import { useScreenEdgePadding } from "@/components/screenEdgeInsets";
 import { goBackGuarded } from "@/utils/backGuard";
@@ -525,9 +527,14 @@ export function RemoteDesktopSession({
     showExitLockStatus
       ? "remoteDesktop.lockingOnExit"
       : recovery.current.at || status === "reconnecting"
-        ? "remoteDesktop.reconnecting"
-        : "remoteDesktop.connecting",
+        ? screenPlugin
+          ? "remoteDesktop.liveScreenReconnecting"
+          : "remoteDesktop.reconnecting"
+        : screenPlugin
+          ? "remoteDesktop.liveScreenConnecting"
+          : "remoteDesktop.connecting",
   );
+  const ConnectionIcon = screenPlugin ? Smartphone : Monitor;
   const [busy, setBusy] = useState(false);
   const [inputMode, setInputMode] = useInputModePreference();
   const inputModeRef = useRef(inputMode);
@@ -538,6 +545,14 @@ export function RemoteDesktopSession({
   const [controlPage, setControlPage] = useState<
     "controls" | "display" | "security"
   >("controls");
+  const unlockNotice =
+    lease &&
+    security.notice &&
+    !showConnectionStatus &&
+    !showExitLockStatus &&
+    !(operations && controlPage === "security")
+      ? security.notice
+      : null;
   const [toolbarSize, setToolbarSize] = useState({ width: 0, height: 0 });
   const [videoSettings, setVideoSettings, videoPreferencesLoaded] =
     useVideoSettingsPreference();
@@ -4019,7 +4034,8 @@ export function RemoteDesktopSession({
             )}
           {(showConnectionStatus ||
             showExitLockStatus ||
-            (!lease && error)) && (
+            (!lease && error) ||
+            unlockNotice) && (
             <View
               pointerEvents="box-none"
               style={[
@@ -4040,17 +4056,35 @@ export function RemoteDesktopSession({
             >
               {!frameReady && error !== "permissionHint" && (
                 <View style={styles.waitingComputer}>
-                  <Monitor
+                  <ConnectionIcon
                     size={iconSize.lg}
                     strokeWidth={iconStroke.regular}
                     color={colors.textTertiary}
                   />
                   <Text numberOfLines={2} style={styles.waitingComputerName}>
-                    {deviceName}
+                    {screenPlugin
+                      ? (lease?.screen?.name ??
+                        t("remoteDesktop.liveScreenTitle"))
+                      : deviceName}
                   </Text>
+                  {screenPlugin && (
+                    <Text numberOfLines={2} style={styles.waitingLabel}>
+                      {deviceName}
+                    </Text>
+                  )}
                 </View>
               )}
-              {showConnectionStatus || showExitLockStatus ? (
+              {unlockNotice ? (
+                <ErrorNotice
+                  message={unlockNotice}
+                  testID="remoteDesktop.autoUnlockNotice"
+                  accessibilityRole="alert"
+                  accessibilityLiveRegion="polite"
+                  onDismiss={security.clearNotice}
+                  dismissLabel={t("remoteDesktop.close")}
+                  dismissTestID="remoteDesktop.dismissUnlockNotice"
+                />
+              ) : showConnectionStatus || showExitLockStatus ? (
                 <View
                   style={[
                     styles.connectionBadge,
@@ -4279,6 +4313,7 @@ export function RemoteDesktopSession({
                         : {
                             ...security,
                             ...safety,
+                            notice: security.notice,
                             hostPlatform: caps?.platform,
                             lockOnExit,
                             lockOnExitAvailable:
@@ -4514,7 +4549,10 @@ export function RemoteDesktopSession({
           </Animated.View>
         )}
       </View>
-      {!screenPlugin && (
+      {(!screenPlugin ||
+        !frameReady ||
+        showConnectionStatus ||
+        Boolean(error)) && (
         <View
           testID="remoteDesktop.backPosition"
           pointerEvents="auto"

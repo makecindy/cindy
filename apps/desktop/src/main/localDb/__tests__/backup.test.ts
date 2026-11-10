@@ -73,13 +73,15 @@ describe('pruneIsoBackupsToBudget', () => {
   });
 
   it('大库场景（事故回归）：总体积超预算 → 只留最新一份', () => {
-    // 模拟 13GB 库、budget = 1.5×13 = 19.5GB：留下最新 13GB 后，再往旧一份就超预算
-    const b1 = makeBackup('2026-06-29T00-00-00-000Z', 13 * GB);
-    const b2 = makeBackup('2026-07-01T00-00-00-000Z', 13 * GB);
-    const b3 = makeBackup('2026-07-06T00-00-00-000Z', 13 * GB);
+    // 模拟 4GB 库、budget = max(1.5×4, 3) = 6GB：留下最新 4GB 后，再往旧一份就超预算。
+    // 用 4GB 而非事故现场的 13GB：Windows 上 truncate 不会打洞，3×13GB 会写满 CI 磁盘
+    // (ENOSPC)，而比例关系（单份 > 预算/2）与 13GB 场景相同。
+    const b1 = makeBackup('2026-06-29T00-00-00-000Z', 4 * GB);
+    const b2 = makeBackup('2026-07-01T00-00-00-000Z', 4 * GB);
+    const b3 = makeBackup('2026-07-06T00-00-00-000Z', 4 * GB);
     const removed = pruneIsoBackupsToBudget(dbFilePath, {
       maxCount: 3,
-      maxTotalBytes: isoBackupTotalBudgetBytes(13 * GB),
+      maxTotalBytes: isoBackupTotalBudgetBytes(4 * GB),
     });
     expect(removed.sort()).toEqual([b1, b2].sort());
     expect(listIsoBackups(dbFilePath)).toEqual([b3]);

@@ -1,5 +1,18 @@
 # 远程连接与手机版适配
 
+## 手机远程画面的心跳回复等待（2026-11-08）
+
+手机的设备画面和远程桌面共用续期逻辑。中转心跳回复只等 5 秒，该时限由共享的
+`resolveRemoteInvokeTimeoutMs`（packages/device-link `invokePolicy.ts`）按请求解析，
+`DeviceLinkContext.invoke` 并不接收调用方传入的 timeout，页面也不应再传。心跳每 3 秒检查一次，
+在途请求会阻止下一次发送，而电脑的租约只有 12 秒；回复丢失后由现有定时器继续续期，
+不新增定时器、不并发堆积心跳、不延长电脑的安全过期时限。
+
+故障半径：① 单次心跳回复延迟，不等于设备离线；② 只释放当前心跳的等待，保留原会话和
+现有续期节奏；③ 不重建共享 link、不影响其它任务，明确撤权和退出仍按原流程终止。
+本条只补回归测试：Mobile `remote-desktop/__tests__/screen.test.tsx` 的缺失心跳回复用例按
+真实的 `resolveMobileInvokeTimeoutMs` 结算，若策略退回默认长等待则失败。
+
 ## 供应商目录与已有许可的故障边界（2026-11-03）
 
 故障半径三问：① 目录 REST/信令暂时不可用，影响的是信息新鲜度，不等于所有执行机都失效；
@@ -115,7 +128,7 @@ Mobile `useSessionListActions`、`SessionMenuSheet`、`orphanSessionActions.test
 产品规则见 [`../product-rules/input-handoff.md`](../product-rules/input-handoff.md)。三种形态的落点：
 
 - **SSH 远程工作区**：不支持。目标窗口必须在执行代输入的这台电脑上；带 `remoteHostId` 的任务里
-  `ask_owner` 不列出 fill／scan，直接调用（含旧名 `request_input_handoff`）返回 `CAPABILITY_NOT_AVAILABLE`，
+  `request_input_handoff` 不提供远程窗口交接，调用返回 `CAPABILITY_NOT_AVAILABLE`，
   由 Agent 改为直接告诉主人需要什么。
 - **设备互联远程控制**：卡片快照随既有交互推送（`kind: "input_handoff"`）到所有控制端；交还、取消、
   停留、刷新、接手、看画面等**不带值**的决定走既有 `resolveInteraction`；**带值**的提交与截图只走插件

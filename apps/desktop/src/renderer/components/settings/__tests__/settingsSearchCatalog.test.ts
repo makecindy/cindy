@@ -120,7 +120,9 @@ describe('settings discoverability regressions', () => {
         ...AGENT_ISLAND_SOUND_OPTIONS.map((option) => `soundOptions.${option}`),
       ]) {
         const query = searchI18n.t(`settings.agentIsland.${key}`, { lng });
-        expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'settings.agentIsland.soundLabel'), query).toBe(visible);
+        // The row's hint is indexed whenever the row exists and may contain a short label such as "Follow system".
+        const inHint = agentIsland.supported && agentIsland.enabled && searchI18n.t('settings.agentIsland.soundHint', { lng }).toLowerCase().includes(query.toLowerCase());
+        expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'settings.agentIsland.soundLabel'), query).toBe(visible || inHint);
       }
     }
   });

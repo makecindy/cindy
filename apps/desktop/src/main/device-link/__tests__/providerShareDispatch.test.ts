@@ -18,8 +18,8 @@ const warn = vi.hoisted(() => vi.fn());
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn, error: vi.fn() }),
 }));
-vi.mock('../settings-store', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../settings-store')>()),
+vi.mock('../settings-store.desktop', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../settings-store.desktop')>()),
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, keepAwake: false, revokedControllers: [], disabledControlDeviceIds: [] }),
 }));
 
@@ -33,7 +33,7 @@ import {
   setRemoteAgentHandler,
   setRemoteSubscriptionPoolQuotaReader,
   setRemoteClaudeSubscriptionUsageReader,
-} from '../dispatch';
+} from '../dispatch.desktop';
 import { readLegacySubscriptionQuota } from '../../subscription-accounts/legacyQuota';
 
 const GUEST = providerShareGuestPeer('share-1', 'member-1', 'laptop');
@@ -421,6 +421,17 @@ describe('provider group channel', () => {
 });
 
 describe('provider share revoke', () => {
+  it('requires the host cleanup acknowledgement for standby revocation', async () => {
+    setRemoteAgentHandler(null);
+    await expect(revokeProviderShareControllers(() => true, true, true)).rejects.toThrow('cleanup is unavailable');
+    const purgeControllers = vi.fn(async (_match: (peer: string) => boolean, _strict?: boolean) => { throw new Error('cleanup busy'); });
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn(), purgeControllers });
+    await expect(revokeProviderShareControllers(() => true, true, true)).rejects.toThrow('cleanup busy');
+    expect(purgeControllers).toHaveBeenCalledWith(expect.any(Function), true);
+    expect(purgeControllers.mock.calls[0][0](GUEST)).toBe(true);
+    expect(purgeControllers.mock.calls[0][0]('same-account-mac')).toBe(false);
+  });
+
   it('only touches provider-share guests and routes purge to the remote agent host', async () => {
     const abortControllers = vi.fn<(match: (controller: string) => boolean) => Promise<void>>(async () => undefined);
     const purgeControllers = vi.fn<(match: (controller: string) => boolean) => Promise<void>>(async () => undefined);

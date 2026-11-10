@@ -1,3 +1,4 @@
+import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { Button } from '@/components/ui/button';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -155,7 +156,7 @@ export function BotDirectMessageView() {
 
   return (
     <main className="flex h-full min-w-0 flex-col overflow-hidden bg-[var(--surface)]">
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
+      <div onCopy={copyChatSelection} className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-4">
           {thread.messages.map((message) => {
             const ownSide = message.senderBotId === botId;

@@ -135,11 +135,16 @@
     "permissionDenied": "시스템 설정에서 Cindy 알림을 허용해 주세요.",
     "unregisterQueued": "껐습니다. 다시 온라인이 되면 등록 해제가 완료됩니다.",
     "preview": "채팅 내용 미리 보기",
-    "background": "백그라운드 채팅 연결 유지",
-    "backgroundActive": "백그라운드에서 채팅 메시지 수신 중",
+    "background": "백그라운드 알림",
+    "backgroundActive": "백그라운드에서 알림 수신 중",
     "backgroundStop": "수신 중지",
-    "backgroundHint": "Google 없이 연결하며 상시 알림이 표시됩니다. 알림에서 언제든 중지할 수 있습니다.",
-    "googleUnavailable": "Google 푸시를 사용할 수 없습니다. 백그라운드 채팅 연결로 메시지를 받을 수 있습니다."
+    "backgroundHint": "Google 푸시를 사용하기 어려운 경우 Cindy가 자동으로 백그라운드 연결을 유지합니다. 연결 중에는 상시 알림이 표시됩니다.",
+    "googleUnavailable": "Google 푸시를 사용할 수 없습니다. 알림 설정에 따라 백그라운드 연결을 사용합니다.",
+    "backgroundModes": {
+      "auto": "자동",
+      "on": "항상 켜기",
+      "off": "끄기"
+    }
   },
   "about": {
     "sectionTitle": "이 휴대폰 정보",

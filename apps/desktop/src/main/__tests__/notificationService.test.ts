@@ -145,7 +145,7 @@ vi.mock('../device-link/broadcast-tap', () => ({
   isDataOwnerBroadcastScopeCurrent: () => ownerScopeCurrent,
 }));
 const drainPersistQueue = vi.fn((): Promise<void> => Promise.resolve());
-vi.mock('../messagePersistBroadcaster', () => ({
+vi.mock('../messagePersistBroadcaster.desktop', () => ({
   drainPersistQueue: () => drainPersistQueue(),
 }));
 const drainSessionActiveTurnWrites = vi.fn((_sessionId: string): Promise<void> => Promise.resolve());
@@ -194,7 +194,7 @@ async function freshService() {
   drainSessionActiveTurnWrites.mockReset().mockResolvedValue(undefined);
   getSessionNotificationTurnSignal.mockReset().mockReturnValue(undefined);
   const service = await import('../notificationService');
-  const { setMainLocale } = await import('../i18n');
+  const { setMainLocale } = await import('../i18n.desktop');
   // 既有分发断言以简中为基准；需要验证其它语言的用例会在调用前显式切换。
   setMainLocale('zh-CN');
   return service;
@@ -220,6 +220,28 @@ const baseDeps = (feishuIm: FakeFeishuIM) => ({
 });
 
 describe('notificationService — channels 分发', () => {
+  // Unit regression: direct scheduler/autonomy toasts bypassed the renderer's island gate and
+  // played a second sound. Exercise actual OS options, including the exits that must stay audible.
+  it('applies the sound policy only where a Cindy sound can replace the system one', async () => {
+    const { initNotificationService, showDesktopSessionEvent, showDesktopChatMessage } = await freshService();
+    let silent = true;
+    initNotificationService({ ...baseDeps(makeFeishuIm(null)), shouldSilenceTaskNotification: (kind) => silent && kind !== 'error' });
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'done' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: true }));
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'error' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
+    // A run that never created a session changes no island state, so nothing else will sound.
+    showDesktopSessionEvent(() => null, { sessionId: '', title: 'Schedule', kind: 'done' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
+    // Group chat rows never get task sounds, so their fallback toast keeps the system sound.
+    const chat = { groupId: 'sound-chat', groupName: 'Chat', messageId: 'reply', senderName: 'Cindy', avatar: '', preview: 'Done' };
+    await showDesktopChatMessage(chat, () => true);
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.not.objectContaining({ silent: true }));
+    silent = false;
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'done' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
+  });
+
   // Regression: OS click must keep host + original task + reply anchor through reload,
   // and a notification from the previous account must not navigate the new account.
   it('routes desktop notification clicks with their original host and message, fenced by owner', async () => {
@@ -652,13 +674,21 @@ describe('notificationService — channels 分发', () => {
       title: 'Fix login',
       kind: 'needs-reply',
       markAttention: false,
+      remoteDeviceId: 'execution-host',
       channels: { desktop: false, feishu: false, mobile: true },
     });
 
     expect(markSessionNeedsAttention).not.toHaveBeenCalled();
-    expect(sendMobileSessionNotify).toHaveBeenCalled();
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'remote-1', remoteDeviceId: 'execution-host', muteExempt: true,
+    }));
     await expect(invokeHandler({ sessionId: 'remote-1', title: 'x', kind: 'done', markAttention: 'no' }))
       .rejects.toThrow('invalid session event payload');
+    for (const remoteDeviceId of ['', 42, 'x'.repeat(257)]) {
+      await expect(invokeHandler({ sessionId: 'remote-1', title: 'x', kind: 'error', remoteDeviceId }))
+        .rejects.toThrow('invalid session event payload');
+    }
   });
 
   it('rejects a caller that is not the Cindy renderer before any channel or badge work', async () => {
@@ -1156,7 +1186,7 @@ describe('notificationService — channels 分发', () => {
 
   it('zh-TW → 桌面与飞书使用繁中，空标题兜底也跟随当前语言', async () => {
     const { initNotificationService, showDesktopSessionEvent } = await freshService();
-    const { setMainLocale } = await import('../i18n');
+    const { setMainLocale } = await import('../i18n.desktop');
     const feishuIm = makeFeishuIm('ou_owner');
     initNotificationService(baseDeps(feishuIm));
     setMainLocale('zh-TW');
@@ -1501,7 +1531,7 @@ describe('teammate reply previews', () => {
   });
   it('uses localized reply fallback without inventing task completion when there is no body', async () => {
     const { initNotificationService } = await freshService();
-    const { setMainLocale } = await import('../i18n');
+    const { setMainLocale } = await import('../i18n.desktop');
     setMainLocale('en');
     readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Mochi' });
     initNotificationService(baseDeps(makeFeishuIm('owner')));

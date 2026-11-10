@@ -5,9 +5,10 @@ import { DEFAULT_ACCOUNT_USAGE_SCOPE } from '../../shared/subscriptionAccounts';
 
 const mirror = createRemoteDeviceUsageMirror<ClaudeSubscriptionUsageSnapshot>({
   invokeChannel: 'maker:usage:claude-subscription',
-  read: (deviceId, providerId = 'anthropic') => window.electronAPI.deviceLink.invoke(
+  read: (deviceId, providerId = 'anthropic', scheduling) => window.electronAPI.deviceLink.invoke(
     deviceId, 'maker:usage:claude-subscription', providerId === 'anthropic'
       ? [providerId, false, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
+    ...(scheduling ? [scheduling] : []),
   ),
   pushChannel: 'usage:claude-subscription-changed',
   defaultProviderId: 'anthropic',

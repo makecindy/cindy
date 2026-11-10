@@ -60,6 +60,23 @@ function Harness({ children }: { children?: ReactNode }) {
   );
 }
 
+function captureFrames() {
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextFrame = 0;
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    frames.set(++nextFrame, callback);
+    return nextFrame;
+  });
+  vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
+    frames.delete(id);
+  });
+  return () => act(() => {
+    const pending = [...frames.values()];
+    frames.clear();
+    for (const callback of pending) callback(16);
+  });
+}
+
 beforeEach(() => {
   // reduced-motion 直切:开场 focus 与收合卸载都无动画延时,断言稳定
   setReducedMotion(true);
@@ -72,6 +89,37 @@ afterEach(() => {
 });
 
 describe('MorphPopover interaction contract', () => {
+  // #9403: the existing focus tests did not cover invisible frames before opening.
+  // Production MorphPopover must reveal on the first frame (immediately for reduced
+  // motion). Minimal input: open one panel; old code needed a second rAF. Tier: unit.
+  it.each([false, true])('reveals without an extra invisible frame (reduced motion: %s)', (reduced) => {
+    setReducedMotion(reduced);
+    const flushFrame = captureFrames();
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = screen.getByRole('group', { name: 'Morph panel' });
+    if (!reduced) {
+      expect(panel.style.opacity).toBe('0');
+      flushFrame();
+    }
+    expect(panel.style.opacity).toBe('1');
+  });
+
+  // The earlier focus/toggle cases use reduced motion; they cannot catch a queued
+  // opening frame revealing an already closed panel. Tier: unit, no real waits.
+  it('cancels the pending reveal when closed before its first frame', () => {
+    setReducedMotion(false);
+    const flushFrame = captureFrames();
+    render(<Harness />);
+    const trigger = screen.getByRole('button', { name: 'Toggle' });
+    fireEvent.click(trigger);
+    const panel = screen.getByRole('group', { name: 'Morph panel' });
+    fireEvent.click(trigger);
+    flushFrame();
+    expect(panel.dataset.state).toBe('closed');
+    expect(panel.style.opacity).toBe('0');
+  });
+
   it('keeps the portaled panel outside Electron window drag regions', async () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));

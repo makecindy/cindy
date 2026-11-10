@@ -1,12 +1,10 @@
 {
   "progress": {
-    "stop": "Parar"
-  },
-  "work": {
-    "queued": "Na fila {{count}}",
-    "active": "Em andamento {{count}}",
-    "expand": "Expandir atividade dos colegas",
-    "collapse": "Recolher atividade dos colegas"
+    "stop": "Parar",
+    "stopMine": "Parar minhas solicitações",
+    "stopAll": "Parar tudo",
+    "stopAllHint": "Inclui solicitações de outras pessoas",
+    "step": "Etapa {{step}}/{{total}}"
   },
   "title": "Conversas em grupo",
   "memberSeparator": ", ",
@@ -88,7 +86,8 @@
     "planDoneGeneric": "Divisão de trabalho concluída",
     "olderOnComputer": "As mensagens anteriores estão no seu computador",
     "newMessages_many": "{{count}} novas mensagens",
-    "planDone_many": "Todas as {{count}} etapas concluídas"
+    "planDone_many": "Todas as {{count}} etapas concluídas",
+    "endTalk": "Encerrar"
   },
   "quote": {
     "label": "Citando {{name}}: {{summary}}",
@@ -107,6 +106,13 @@
     "stepFailed": "{{name}} encontrou um problema e não concluiu esta etapa",
     "stepTimeout": "{{name}} demorou demais, então esta etapa foi interrompida",
     "stepUnavailable": "{{name}} está indisponível e não pode executar esta etapa",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}} não começou a processar dentro do prazo de espera. Esta solicitação foi encerrada.",
+        "advice": "Peça ao proprietário do parceiro para verificar se a Cindy está funcionando e se o computador está conectado à rede.",
+        "details": "Quando a Cindy e a rede voltarem a funcionar, envie a mensagem novamente."
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}} não pode responder: o dispositivo do colega atingiu o limite de sessões remotas.",
@@ -178,6 +184,8 @@
     "start": "Iniciar plano",
     "dismiss": "Pular plano",
     "editHint": "Para mudar quem faz o quê, é só pedir",
+    "autoContinue": "Iniciar a próxima etapa automaticamente",
+    "autoContinueSaveFailed": "Não foi possível salvar as transições entre etapas. Tente novamente.",
     "autoNote": "Cada etapa concluída inicia a próxima automaticamente.",
     "pauseNote": "O trabalho pausa após cada etapa até você clicar em “Iniciar próxima etapa”.",
     "superseded": "Atualizado",
@@ -330,7 +338,9 @@
     "groupDissolved": "Este grupo foi dissolvido. Você ainda pode ler o histórico disponível.",
     "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
     "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas.",
-    "turnAlreadyStarted": "Este colega já começou e não pode ser pulado"
+    "turnAlreadyStarted": "Este colega já começou e não pode ser pulado",
+    "stopOwnershipUnknown": "Não foi possível parar parte do trabalho porque não foi possível verificar quem o solicitou.",
+    "nothingToStop": "Não há trabalho em andamento para parar."
   },
   "followUp": {
     "next": "Plano · Próxima etapa",
@@ -632,5 +642,6 @@
     },
     "externalFormatError": "Abra novamente o link completo da mensagem original."
   },
-  "memberCount_many": "{{count}} membros"
+  "memberCount_many": "{{count}} membros",
+  "waitingForOwner": "Aguardando confirmação"
 }

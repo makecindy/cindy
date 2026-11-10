@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 个任务运行中",
       "limitAria": "{{name}} 的并发上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同时 {{count}}",
       "weightAria": "{{name}} 的权重",
       "weightOption": "权重 {{weight}}",
       "assignAria": "给 {{name}} 分配任务",
@@ -873,6 +873,7 @@
         "pausedLocal": "已暂停接收外部新任务",
         "cooling": "冷却中",
         "coolingUntil": "冷却中 · 约 {{time}} 恢复",
+        "quotaExhausted": "配额已用完",
         "offline": "不在线",
         "unreachableHere": "从这台电脑连不上",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几轮对话和摘要，更早的细节可能记不全。",
       "quota": "还剩 {{left}}%",
       "quotaReset": "还剩 {{left}}%，{{reset}}",
-      "confirm": "换过去",
-      "cancel": "取消",
-      "remember": "以后自动换，不再询问（仅本任务）"
+      "confirm": "仅这次换过去",
+      "cancel": "暂不切换",
+      "remember": "以后自动切换，不再询问",
+      "disable": "不自动切换，不再询问",
+      "disableFailed": "未能确认选择是否已保存。请检查连接，并确认任务所在电脑上的 Cindy 已更新后重试。这条消息仍照常发送。",
+      "choiceLabel": "切换方式（仅本任务）",
+      "send": "继续发送"
     },
     "deleteConfirm": {
       "title": "删除 {{provider}} 的供应商组？",
@@ -2255,6 +2260,10 @@
         },
         "visibilityLabel": "壁纸可见度",
         "visibilityHint": "0% 隐藏壁纸，100% 完全显示壁纸。",
+        "desktopVisibilityLabel": "桌面透明度",
+        "desktopVisibilityHint": "透出 Cindy 后面的桌面与窗口，文字和控件保持清晰。",
+        "desktopBlurLabel": "桌面模糊",
+        "desktopBlurHint": "模糊窗口后面的桌面，0 为关闭，数值越大越模糊。不支持强度调节的系统使用默认效果。",
         "blurLabel": "壁纸模糊",
         "blurHint": "仅模糊壁纸，0 为关闭。动态壁纸开启模糊后会增加显卡负载。",
         "motionLabel": "展示方式",
@@ -2421,7 +2430,7 @@
       "skinLabel": "角色",
       "skinHint": "任务胶囊和灵动岛里显示的角色。",
       "soundLabel": "事件音效",
-      "soundHint": "为每类提醒选择 8-bit 音效，任务胶囊和灵动岛共用；点按的音效只在点任务胶囊时播放。",
+      "soundHint": "设置了事件音效时，只播放所选音效；未设置或关闭事件音效时，跟随系统通知设置。",
       "soundAria": "切换任务胶囊音效",
       "soundSelectAria": "{{event}}的音效",
       "soundPreviewAria": "预览{{event}}音效",
@@ -2476,7 +2485,7 @@
         "select": "点击操作"
       },
       "soundOptions": {
-        "none": "无",
+        "none": "跟随系统",
         "startup-chime": "启动音",
         "ring-chime": "圆环音",
         "item-found": "发现道具",
@@ -5188,6 +5197,15 @@
         "ariaLabel": "使用 {{shortcut}} 发送消息"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任务默认工作目录",
+      "label": "本机默认工作目录",
+      "hint": "新建本机任务且未选择项目时，预选此目录。明确选择的项目、对话或远程设备仍优先。",
+      "unset": "未设置（不预选目录）",
+      "choose": "选择目录",
+      "clear": "清除默认目录",
+      "failed": "保存默认工作目录失败，请重试"
+    },
     "linkOpen": {
       "title": "打开链接",
       "description": "选择消息链接的打开位置，右键可临时更换",
@@ -7363,6 +7381,11 @@
         "installedExpand": "展开全部 {{count}} 个已安装插件",
         "installedCollapse": "收起更多已安装插件",
         "recommendedSection": "推荐",
+        "todayRecommendations": "今日推荐",
+        "marketSection": "插件市场",
+        "browseMarket": "浏览插件市场",
+        "searching": "正在搜索…",
+        "allLoaded": "已显示全部 {{count}} 个插件",
         "updatesAvailable": "{{count}} 个插件有可用更新",
         "updateAll": "全部更新",
         "ignoreRound": "忽略本轮",
@@ -7392,7 +7415,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官方"
+          "official": "官方",
+          "community": "社区"
+        },
+        "publisherDescription": {
+          "official": "由 Cindy 官方发布和维护",
+          "community": "由社区开发者发布和维护",
+          "team": "由当前组织共享给有权限的成员",
+          "custom": "来自你添加的 Git 或本地文件夹市场",
+          "local": "从本机文件安装，或在本机开发"
         },
         "scopeAria": "筛选插件来源",
         "scope": {
@@ -9908,6 +9939,8 @@
     "banner": {
       "title": "已更新到 {{version}}",
       "subtitle": "重启以应用更新",
+      "nativeBuildTitle": "Apple 芯片版已就绪",
+      "nativeBuildSubtitle": "重启即换装，任务和设置都会保留",
       "viewNotes": "查看更新公告",
       "viewNotesAria": "查看 {{version}} 的更新公告",
       "button": "立即重启",
@@ -10716,6 +10749,9 @@
         "stepFailed": "{{name}}这一步出错了，没做完",
         "stepTimeout": "{{name}}太久没做完，这一步先停下",
         "stepUnavailable": "{{name}}现在不可用，这一步没法做",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}未能在等待期限内开始处理，本次请求已结束。\n请伙伴的主人检查所属电脑上的 Cindy 是否正常运行、网络是否连接。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}无法回复：伙伴所在设备保留的远程任务数已达上限。\n请伙伴的主人归档暂时不用的任务，或请远程电脑的主人在“远程与分享”中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}无法回复：远程电脑保留的任务总数已达上限。\n请那台电脑的主人释放暂时不用的任务，或在“远程与分享”中提高上限。",
@@ -11361,6 +11397,9 @@
       "databaseDriver": "数据库驱动无法加载，请更新或修复 Cindy 后重试。",
       "databaseUnavailable": "无法读取来源数据库，原数据未改动。修复后可重试。",
       "fileTooLarge": "文件或本次资料超过读取上限，未截断导入。",
+      "sourceFileTooLarge": "单个文件超过读取上限，此项未完整导入。",
+      "snapshotTooLarge": "本次读取的资料累计超过上限，未能完整导入。",
+      "itemTooLarge": "此项文件的总大小超过 128 MiB，未完整导入。",
       "memoryMetadata": "记忆摘要或标题不符合存储要求。",
       "memoryWrite": "记忆写入或完整性检查失败，可重试。",
       "memoryChanged": "已保存的记忆发生变化，未覆盖。",
@@ -11504,7 +11543,8 @@
         "lark": "Lark",
         "wecom": "企业微信",
         "dingtalk": "钉钉",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "已连接",
@@ -11635,6 +11675,22 @@
           "existing": "使用已在 Cindy 设置的机器人",
           "manual": "填写新的凭证",
           "moveNote": "这个机器人会从 设置 → IM 机器人 移过来，那里将变为空；原来的私聊和群聊改由 {{name}} 接着回复。"
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles 服务器",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API 密码",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "你的 iMessage 地址",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "对话 GUID（用逗号分隔）",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "本机监听地址",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "本机监听端口",
+          "listenPortPlaceholder": "18747",
+          "hint": "在本地网络连接 BlueBubbles，只处理所选对话。连接前，请先停止这些对话里的其它自动回复程序。",
+          "uncertain": "有 {{count}} 条消息的处理结果待核对。请先查看对话记录，再决定是否重试，避免重复回复。"
         }
       },
       "removeConfirm": {
@@ -12459,6 +12515,12 @@
       "missingDir": "目录不存在"
     },
     "pendingQueue": {
+      "stopping": "停止处理中",
+      "queued": "排队中",
+      "editingInComposer": "正在下方输入框编辑…",
+      "moveUp": "提前一位",
+      "moveDown": "延后一位",
+      "cancelSend": "取消发送",
       "regionAria": "待发送消息队列",
       "listAria": "队列消息",
       "pausedFooter": "任务已停止，队列暂停",
@@ -12910,6 +12972,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "本轮没有可显示的过程记录",
+      "unavailable": "未能读取过程记录",
       "record": "处理记录",
       "operations": "操作记录",
       "elapsed": "已处理 {{duration}}",
@@ -12955,6 +13019,11 @@
     "prevMessageJump": "跳到上一条提问：{{preview}}",
     "sessionLoading": "正在加载任务",
     "askUserQuestion": {
+    "unanswered": "未回答",
+    "withdrawn": "无需再回答",
+    "withdrawnDraft": "这个问题已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作为补充发送。",
+    "sendSupplement": "发送补充",
+
       "voice": {
         "hint": "可以说“第一项”或选项名称；多选后请说“确认选择”。",
         "freeTextHint": "可以直接说出回答，检查后说“确认选择”提交。",
@@ -14066,6 +14135,7 @@
       "taskAutoArchived": "已归档「{{title}}」",
       "taskAutoArchivedUndo": "撤销",
       "taskAutoArchivePending": "离开此任务后将自动归档",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作区有未提交改动，未自动归档",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "本次不会自动归档",
       "taskArchiveNow": "立即归档"
@@ -19245,6 +19315,7 @@
       "apply": "迁移"
     },
     "source": {
+      "receivingOn": "接收端：{{name}}",
       "description": "选一台登录了同一账号的电脑。它的插件、技能、设置和连接会照原样装到这台电脑；密钥只在你在那台电脑上点「允许」后复制，登录状态不会离开那台电脑。",
       "loading": "正在查找你的其他电脑…",
       "empty": "没有找到这个账号的其他电脑。在另一台电脑上登录 Cindy 后再打开这里",
@@ -19657,6 +19728,7 @@
     "lineNumbers": "行号"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "Codex 当前供应商未提供 ChatGPT 账号信息。请在添加供应商时选择「$t(subscriptionAccounts.signIn.anotherAccount)」，使用独立目录",
     "signIn": {
       "checking": "正在检测本机账号…",
       "detected": "检测到已登录账号",
@@ -19668,10 +19740,10 @@
       "useCodex": "使用 Codex 登录"
     },
     "title": "订阅账号",
-    "note": "首个账号沿用 CLI 默认目录，新增账号独立登录。新任务按策略分配，已有任务保留原账号。",
     "strategy": "负载均衡",
     "add": "添加账号",
     "default": "默认目录",
+    "defaultTag": "默认",
     "ready": "已连接",
     "signedOut": "需要登录",
     "unavailable": "暂时读不到状态",
@@ -19680,8 +19752,40 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
-    "directory": "账号目录",
+    "openDirectory": "打开账号目录",
+    "openDirectoryFailed": "无法打开账号目录，它可能已被移动或删除。",
     "loginAgain": "重新登录",
     "login": "登录"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 上次意外退出了",
+    "description": "要诊断原因吗？我们会把退出信息和脱敏日志整理成任务草稿，供你检查后发送。强制退出或断电也可能导致意外退出。",
+    "diagnose": "诊断问题",
+    "later": "暂不处理",
+    "logExcerpt": "相关日志（节选，可能不完整）",
+    "logsUnavailable": "没有可用的相关日志，暂时无法确定原因。",
+    "failed": "诊断材料准备失败，请重试。"
+  },
+  "githubStar": {
+    "title": "喜欢 Cindy 吗？",
+    "description": "在 GitHub 点个 Star，支持 Cindy",
+    "dismiss": "不再提醒",
+    "action": "给 Cindy 点赞",
+    "starring": "点亮星星…",
+    "thanks": "感谢你的 Star！",
+    "thanksDescription": "你的支持让 Cindy 继续成长",
+    "browserFallback": "前往 GitHub 为 Cindy 点 Star",
+    "openGithub": "打开 GitHub",
+    "openFailed": "未能打开 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正在连接 Cindy 后台…",
+    "restoring": "正在恢复任务状态…",
+    "retrying": "任务状态暂未同步，正在重试…",
+    "pairing": "需要重新连接授权",
+    "pairingHelp": "请保留此页。在启动 Cindy 后台的终端重新运行打开网页的命令，完成新页面的配对，再回到此页。",
+    "keepDraft": "已输入的草稿会保留。连接恢复后将自动同步任务状态。",
+    "retry": "重试连接",
+    "desktopAuthHelp": "请在启动终端更新后台连接设置，然后重新打开这个实验客户端。"
   }
 }

@@ -20,5 +20,18 @@ export default {
     await page.waitForFunction(() => globalThis.localStorage.getItem('notifications.agentIslandSubtleReminders') === null);
     if (await toggle.getAttribute('aria-checked') !== 'false') throw new Error('Reminder reset did not restore the default');
     await ui.capture('reset');
+    const complete = page.locator('#agent-island-sound-complete');
+    const card = page.locator('#settings-search-settings-agentIsland-soundLabel').locator('..').locator('..').locator('..');
+    // Shared Select (DESIGN §4): open the listbox and pick by visible label.
+    const pick = async id => {
+      await complete.click();
+      await page.getByRole('option', { name: await ui.t(`settings.agentIsland.soundOptions.${id}`), exact: true }).click();
+    };
+    await pick('none');
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('notifications.agentIslandSoundSettings') ?? '{}').sounds?.complete?.id === 'none');
+    await ui.capture('follow-system', { locator: card });
+    await pick('gem-collect');
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('notifications.agentIslandSoundSettings') ?? '{}').sounds?.complete?.id === 'gem-collect');
+    await ui.capture('event-sounds', { locator: card });
   },
 };

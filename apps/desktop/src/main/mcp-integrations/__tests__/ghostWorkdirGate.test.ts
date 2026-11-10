@@ -25,13 +25,14 @@ import type {
   GhostSetupEnsureRequest,
   GhostSetupEnsureResult,
 } from '../../cindy-brain/ghostSetupCoordinator';
-import { t } from '../../i18n';
+import { t } from '../../i18n.desktop';
 import { Session } from '@cindy/maker-core';
 import { resolveGhostFsSessionSnapshot } from '../../maker-ipc/ghostFsSessionSnapshot';
 import { createIpcError } from '../../../shared/ipc-errors';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
-import type { CindyGhostsHostDeps } from '../ghost';
+import type { CindyGhostsHostDeps } from '../ghost.desktop';
 import type { GhostInstallConsentPrompt } from '../../cindy-brain/ghostInstallConsent';
+import { beginHeadlessGhostSetupTurn } from '../ghostSetupInteractionSurface';
 import type { InstalledGhost, GhostSetupAssessment } from '../../../shared/ghost';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
@@ -130,6 +131,8 @@ vi.mock('../../git-context/githubSetupIpc.js', () => ({
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(tmpUserData, ...parts),
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'member-1', generation: 7 }),
+  activeOwnerScopeKey: () => 'cloud:member-1:7',
+  getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'member-1', ownerGeneration: 7 }),
   isAppSessionBoundaryPending: appSessionBoundaryPendingMock,
 }));
 vi.mock('../../maker-host/logger-adapter.js', () => {
@@ -261,7 +264,7 @@ vi.mock('../../plugin-publisher/host.js', () => ({
   startPluginPublish: startPluginPublishMock,
 }));
 // Existing cases classify through the mock below; only handoff routing reads non-media extensions.
-vi.mock('../../cindy-media/blobStore.js', () => ({ mimeForExt: (ext: string) => (['.csv', ''].includes(ext) ? null : 'image/png') }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ mimeForExt: (ext: string) => (['.csv', ''].includes(ext) ? null : 'image/png') }));
 vi.mock('../../cindy-media/ledger.js', () => ({
   hasRef: ledgerHasRefMock,
   hasGhostToolGrant: ledgerHasGhostToolGrantMock,
@@ -291,7 +294,7 @@ vi.mock('../../plugin-contributions/prepared.js', () => ({
   getPreparedContribution: (...args: unknown[]) => communityPreparedMock(...args),
 }));
 
-const { authorizeDesktopSessionPath, getCindyGhostsMcpDeps, getGhostRosterPrompt, setPageControlGhostProvider } = await import('../ghost');
+const { authorizeDesktopSessionPath, getCindyGhostsMcpDeps, getGhostRosterPrompt, setPageControlGhostProvider } = await import('../ghost.desktop');
 const { createCindyGhostsMcpServer, handleGhostList, handleGhostInfo, handleGhostCall, handleGhostManual } = await import('cindy-tools');
 const chatAttachments = await import('../../cindy-media/chatAttachments');
 const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisabledForWorkdir } =
@@ -1292,6 +1295,21 @@ describe('写路径 roundtrip(真实存储,tmp userData)', () => {
 });
 
 describe('connect_account shares Host live plugin policy', () => {
+  // Tier 1, #9250 live acceptance: owner IM turns have a headless marker, but
+  // teammate authorization cards are persistent Desktop cards, not turn waiters.
+  it('opens a persistent owner teammate connection from IM while ordinary headless setup stays blocked', async () => {
+    const release = beginHeadlessGhostSetupTurn('bot-session');
+    try {
+      isAuthorizationSessionMock.mockResolvedValueOnce(true);
+      const result = await makeDeps('codex', 'bot-session', 'bot-instance', { source: 'imessage' }).connectAccount!({ kind: 'host', id: 'im-imessage' });
+      expect(result).not.toMatchObject({ errorCode: 'NO_SESSION_CONTEXT' });
+      expect(authorizationRequestMock).toHaveBeenCalledWith('bot-session', { kind: 'host', id: 'im-imessage' });
+    } finally { release(); }
+    // The ordinary channel lane lacks a transient marker but remains headless.
+    isAuthorizationSessionMock.mockResolvedValueOnce(false);
+    expect(await makeDeps('codex', 'bot-session', 'bot-instance', { source: 'imessage' }).connectAccount!({ kind: 'plugin', id: 'art' }))
+      .toMatchObject({ errorCode: 'NO_SESSION_CONTEXT' });
+  });
   it('passes dynamically discovered plugins to Host without treating builtin toolsets as plugin grants', async () => {
     isAuthorizationSessionMock.mockResolvedValueOnce(true);
     const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', {
@@ -3613,6 +3631,7 @@ describe('market install live authority', () => {
     const ghost = { manifest: { id: 'mail-suite', name: 'Mail', version: '1' }, enabled: true };
     const market = {
       snapshot: vi.fn(async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
+      query: vi.fn(async () => ({ items: [], nextCursor: null, counts: null, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
       detail: vi.fn(async () => ({ ghostId: 'mail-suite', releaseId: 'r1', manifest: ghost.manifest })),
       install: vi.fn(async (_id: string, _options: unknown, context: InstallContext) => { context.assertCurrent?.(); return { ghost }; }),
     };
@@ -4325,4 +4344,14 @@ describe('对话文件交接(cindy_handoff_files)', async () => {
     });
     expect(dispatchedArgs()).toEqual({ keep: 1 });
   });
+});
+
+// Host extraction must preserve Desktop's persistent setup card lifetime;
+// a tool timeout is not a user cancellation of the setup interaction.
+it('does not couple ordinary desktop setup cards to a tool abort signal', async () => {
+  listMock.mockReturnValue([chipGhost('art')]);
+  const controller = new AbortController();
+  await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, signal: controller.signal });
+  expect(ensureReadyMock).toHaveBeenCalled();
+  expect(ensureReadyMock.mock.calls[0][0].signal).toBeUndefined();
 });
