@@ -18,7 +18,7 @@ export function checklistRoute(item: SetupMigrationChecklistItem): string {
     case 'market-source':
       return '/settings?tab=ghosts';
     case 'skill-manual':
-      return '/skillhub/local';
+      return '/skillhub/local?tab=local';
     case 'provider-key':
     case 'provider-connection':
     case 'provider-sign-in':

@@ -43,6 +43,7 @@ import { SkillhubHomeView } from '../SkillhubHomeView';
 import { SkillhubLocalLayout } from '../SkillhubLocalLayout';
 import { useSkillhubHomeNavigation } from '../hooks/useSkillhubHomeNavigation';
 import { useSettingsEscape } from '@/components/settings/useSettingsEscape';
+import { checklistRoute } from '@/features/setup-migration/checklistTargets';
 
 function NavigationControls() {
   const location = useLocation();
@@ -144,6 +145,20 @@ describe('Skill home navigation', () => {
   it('still opens a fresh catalog on Public', () => {
     renderCatalog();
     expectTab('public');
+  });
+
+  // #9685: unit regression through the production checklist destination and catalog.
+  // Existing navigation tests start at the catalog, missing migration on a fresh target.
+  // One manual skill and no installed skills must expose Local and the existing import action.
+  it('opens the manual skill migration destination on Local with file import available', () => {
+    mocks.store.skills = [];
+    renderCatalog(checklistRoute({
+      id: 'skill-manual:notes', kind: 'skill-manual', label: 'notes', ref: 'notes',
+    }));
+
+    expectTab('local');
+    expect(screen.getByRole('button', { name: 'skillhub.home.importAria' }).hasAttribute('disabled'))
+      .toBe(false);
   });
 
   it.each([
