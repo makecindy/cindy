@@ -69,3 +69,38 @@ fn malformed_admission_is_atomic_and_signing_keys_are_separate_from_transport_ke
     assert_eq!(command(&mut a, json!({"op":"verify","key":identity["signingKey"],"text":"changed","signature":signature})), false);
     assert_eq!(a.command(&json!({"op":"connect","key":identity["transportKey"],"address":{"link":3}})), Err("PEER_ADDRESS_MISMATCH"));
 }
+
+// Production background opener: an unrelated expired sender must not invalidate
+// a fresh sender. The transport tests do not exercise persisted notification trust.
+#[test]
+fn notification_trust_expires_only_the_selected_sender() {
+    let mut sender = engine(31, "fresh-host");
+    let mut old_sender = engine(32, "old-host");
+    let mut phone = engine(33, "phone");
+    let sender_key = command(&mut sender, json!({"op":"identity"}))["signingKey"].clone();
+    let old_key = command(&mut old_sender, json!({"op":"identity"}))["signingKey"].clone();
+    let notification_key = command(&mut phone, json!({"op":"notificationKey"}));
+    let now = 1_800_000_000_000u64;
+    let seal = |engine: &mut NativeEngine, id: &str| {
+        let signed = json!(["cindy-agent-net/notification/2", 2, "unit-network", id, "phone", "unit-notification", now, now + 60_000,
+            {"category":"session-done", "title":"Unit result", "deepLink":"/sessions/unit"}]);
+        command(engine, json!({"op":"notificationSeal", "recipientKey":notification_key["encryptionKey"], "text":signed.to_string()}))
+    };
+    let config = json!({"version":3, "secret":notification_key["secret"], "networkId":"unit-network", "deviceId":"phone",
+        "expiresAt":now + 120_000, "peers":{"fresh-host":sender_key, "old-host":old_key},
+        "peerExpiresAt":{"fresh-host":now + 120_000, "old-host":now - 1}});
+    let envelope = seal(&mut sender, "fresh-host");
+    assert!(phone.command(&json!({"op":"notificationOpen", "config":config, "envelope":envelope, "now":now})).is_ok());
+    let expired_envelope = seal(&mut old_sender, "old-host");
+    assert_eq!(phone.command(&json!({"op":"notificationOpen", "config":config, "envelope":expired_envelope, "now":now})),
+        Err("NOTIFICATION_SENDER_EXPIRED"));
+    let mut missing = config.clone();
+    missing["peerExpiresAt"].as_object_mut().unwrap().remove("fresh-host");
+    assert_eq!(phone.command(&json!({"op":"notificationOpen", "config":missing, "envelope":envelope, "now":now})),
+        Err("NOTIFICATION_SENDER_EXPIRED"));
+    assert_eq!(phone.command(&json!({"op":"notificationOpen", "config":config, "envelope":envelope, "now":now + 120_000})),
+        Err("NOTIFICATION_TRUST_EXPIRED"));
+    // Previous local format used the shortest certificate as its global bound.
+    let mut legacy = config.clone(); legacy["version"] = json!(2); legacy.as_object_mut().unwrap().remove("peerExpiresAt");
+    assert!(phone.command(&json!({"op":"notificationOpen", "config":legacy, "envelope":envelope, "now":now})).is_ok());
+}

@@ -37,10 +37,10 @@ vi.mock('@/device-link/agentNetPreferences', () => ({ getMobileAgentNetPreferenc
 
 const rootSeed = new Uint8Array(32).fill(21), signerSeed = new Uint8Array(32).fill(22);
 const root = toBase64Url(crypto.ed25519PublicKey(rootSeed));
-function fixture(deviceId: string): DeviceView {
+function fixture(deviceId: string, expiresAt = Date.now() + 86_400_000): DeviceView {
   const plain = { v: 2 as const, networkId: 'private:notification-unit', subject: 'unit-owner', deviceId,
     signingKey: toBase64Url(crypto.ed25519PublicKey(signerSeed)), transportKey: toBase64Url(new Uint8Array(32).fill(23)),
-    role: 'member' as const, issuedAt: Date.now() - 1000, expiresAt: Date.now() + 86_400_000, serial: 'serial-' + deviceId };
+    role: 'member' as const, issuedAt: Date.now() - 1000, expiresAt, serial: 'serial-' + deviceId };
   return { certificate: { ...plain, signature: toBase64Url(crypto.ed25519Sign(rootSeed, utf8(certificatePayload(plain)))) },
     name: deviceId, online: false, capabilities: [], remoteControlEnabled: false };
 }
@@ -80,6 +80,17 @@ it('does not re-register or reinstall background keys after notification deliver
   expect((await outcome).message).toBe('AGENT_NET_PUSH_STATE_CHANGED');
   expect(request).not.toHaveBeenCalled();
   expect(native.config).toBeNull();
+});
+
+it('keeps each sender expiry separate from the directory and local certificate deadline', async () => {
+  const { identity, self, remote, guard } = start();
+  const expiring = fixture('old-offline-host', Date.now() + 1000);
+  const directoryExpiresAt = Date.now() + 60_000;
+  updateMobileAgentNetNotificationTrust(identity, [self, remote, expiring], guard, directoryExpiresAt);
+  await mutateMobileAgentNetNotificationRegistration('PUT', body);
+  expect(native.config).toMatchObject({ version: 3, expiresAt: directoryExpiresAt,
+    peers: { host: remote.certificate.signingKey, 'old-offline-host': expiring.certificate.signingKey },
+    peerExpiresAt: { host: remote.certificate.expiresAt, 'old-offline-host': expiring.certificate.expiresAt } });
 });
 
 it('does not overwrite a newer revocation snapshot with a delayed older trust write', async () => {

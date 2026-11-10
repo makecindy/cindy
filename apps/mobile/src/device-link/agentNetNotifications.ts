@@ -122,23 +122,26 @@ async function persist(value: Active): Promise<void> {
   const { readPushPreviewEnabled } = await import('@/notifications/pushNotifications');
   const preview = await readPushPreviewEnabled(); guard();
   const peers: Record<string, string> = Object.create(null);
-  let expiresAt = Math.min(value.expiresAt, value.identity.api.certificate.expiresAt);
+  const peerExpiresAt: Record<string, number> = Object.create(null);
+  const expiresAt = Math.min(value.expiresAt, value.identity.api.certificate.expiresAt);
   for (const view of value.devices) {
     const c = view.certificate;
     if (verifyMobileAgentNetCertificate(value.identity.api.rootPublicKey, c)
       && c.networkId === value.identity.api.certificate.networkId && c.subject === value.identity.api.certificate.subject) {
-      peers[c.deviceId] = c.signingKey; expiresAt = Math.min(expiresAt, c.expiresAt);
+      peers[c.deviceId] = c.signingKey; peerExpiresAt[c.deviceId] = c.expiresAt;
     }
   }
-  const snapshot = JSON.stringify(peers), previous = value.persisted;
+  const snapshot = JSON.stringify([peers, peerExpiresAt, expiresAt]), previous = value.persisted;
   const onlyEncrypted = getMobileAgentNetPreferences().onlyEncrypted;
   if (previous && previous.peers === snapshot && previous.preview === preview && previous.onlyEncrypted === onlyEncrypted
     && Date.now() - previous.at < 60 * 60_000) return;
   const key = await value.identity.signer.command<{ secret: string; encryptionKey: string }>({ op: 'notificationKey' });
   guard();
-  await agentNetNative.configureNotifications(ticket, JSON.stringify({ version: 2,
+  // Local trust format 3 requires native per-sender expiry support. An older
+  // binary rejects it instead of trusting an expired peer until the global bound.
+  await agentNetNative.configureNotifications(ticket, JSON.stringify({ version: 3,
     networkId: value.identity.api.certificate.networkId, deviceId: value.identity.api.identity.deviceId,
-    scope: value.scope, expiresAt, peers, secret: key.secret, preview, onlyEncrypted }));
+    scope: value.scope, expiresAt, peers, peerExpiresAt, secret: key.secret, preview, onlyEncrypted }));
   guard();
   value.persisted = { peers: snapshot, preview, onlyEncrypted, at: Date.now() };
 }

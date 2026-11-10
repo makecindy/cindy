@@ -18,10 +18,11 @@ enum AgentNetNotifications {
     lock.lock(); defer { lock.unlock() }
     guard expected == ticket, let bytes = raw.data(using: .utf8), bytes.count <= 512 * 1024,
       let record = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-      record["version"] as? Int == 2,
+      let version = record["version"] as? Int, [2, 3].contains(version),
       let key = decode(record["secret"] as? String), key.count == 32,
       let until = record["expiresAt"] as? Double, until > now(), until <= now() + 14 * 86_400_000,
       let peers = record["peers"] as? [String: String], peers.count <= 2048,
+      version != 3 || (record["peerExpiresAt"] as? [String: Double]) != nil,
       let scope = record["scope"] as? String, scope.utf8.count <= 512
     else { throw failure() }
     try put("active", bytes)
@@ -34,6 +35,7 @@ enum AgentNetNotifications {
     lock.lock(); defer { lock.unlock() }
     do {
       guard let raw = get("active"), let config = try JSONSerialization.jsonObject(with: raw) as? [String: Any],
+        let version = config["version"] as? Int, [2, 3].contains(version),
         let until = config["expiresAt"] as? Double, until > now(),
         let scope = config["scope"] as? String,
         let parts = URLComponents(string: deepLink), parts.scheme == "cindy", parts.host == "agent-net-notification",
@@ -64,6 +66,10 @@ enum AgentNetNotifications {
         let target = payload["deepLink"] as? String, target.utf8.count <= 512,
         target.hasPrefix("/") || target.hasPrefix("cindy://")
       else { return nil }
+      if version == 3 {
+        guard let deadlines = config["peerExpiresAt"] as? [String: Double],
+          let deadline = deadlines[from], deadline > now() else { return nil }
+      }
       let signer = try Curve25519.Signing.PublicKey(rawRepresentation: publicBytes)
       guard signer.isValidSignature(signature, for: signed) else { return nil }
       let history = get("seen").flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }

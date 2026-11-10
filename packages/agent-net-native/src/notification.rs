@@ -36,6 +36,7 @@ pub(crate) fn open(input: &Value) -> Result<Value, &'static str> {
     let now = input["now"].as_u64().ok_or("INVALID_NOTIFICATION_TIME")?;
     let expiry = config["expiresAt"].as_u64().ok_or("INVALID_NOTIFICATION_TRUST")?;
     if expiry <= now || expiry.saturating_sub(now) > 14 * 24 * 60 * 60_000 { return Err("NOTIFICATION_TRUST_EXPIRED"); }
+    if !config["version"].is_null() && !matches!(config["version"].as_u64(), Some(2 | 3)) { return Err("INVALID_NOTIFICATION_TRUST"); }
     let seed = Zeroizing::new(bytes(&config["secret"])?);
     let secret = StaticSecret::from(<[u8; 32]>::try_from(seed.as_slice()).map_err(|_| "INVALID_NOTIFICATION_KEY")?);
     let packet = bytes(&input["envelope"])?;
@@ -64,6 +65,9 @@ pub(crate) fn open(input: &Value) -> Result<Value, &'static str> {
         || a[5].as_str().is_none_or(|s| s.is_empty() || s.len() > 64)
         || issued > now.saturating_add(30_000) || until <= now || until <= issued || until - issued > 5 * 60_000
     { return Err("INVALID_NOTIFICATION"); }
+    if config["version"] == 3 && config["peerExpiresAt"][from].as_u64().is_none_or(|until| until <= now) {
+        return Err("NOTIFICATION_SENDER_EXPIRED");
+    }
     let signing_key = bytes(&config["peers"][from])?;
     if signing_key.len() != 32 || !NativeCrypto::verify(&signing_key, signed, signature) { return Err("UNTRUSTED_NOTIFICATION_SENDER"); }
     let payload = &a[8];

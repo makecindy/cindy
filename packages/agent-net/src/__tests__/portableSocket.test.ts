@@ -10,6 +10,7 @@ import { expect, it, vi } from 'vitest';
 import { createPrivateNetwork, generateIdentity, issueCertificate, verifyCertificate } from '@cindy/agent-net-relay';
 import type { DeviceView } from '@cindy/agent-net-protocol';
 import { PROTOCOL_VERSION } from '@cindy/device-link-protocol';
+import { DeviceLinkClient, SERVER_CAPABILITY_NOTIFY } from '@cindy/device-link';
 import { AgentNetSocket } from '../portableSocket.js';
 import type { PeerChannel, RosterEntry } from '../types.js';
 
@@ -50,4 +51,43 @@ it('retires a failed LAN candidate and retries only that peer through the relay'
     await socket.dial('remote');
     expect(connect.mock.calls[2][0].dial).toEqual({ relayId: 'remote' });
   } finally { socket.close(); }
+});
+
+/** An offline cached start bypasses the successful-handshake path exercised by
+ * the integration suite. Notification capability must recover on this same app
+ * socket; reconnecting it would discard otherwise healthy direct peers. */
+it('refreshes notification capability when a cached offline startup reconnects', async () => {
+  const local = generateIdentity('local'), remote = generateIdentity('remote');
+  const { root, bootstrap } = createPrivateNetwork('Notification recovery', local);
+  const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
+  const device: DeviceView = { certificate, name: 'Remote', online: false, remoteControlEnabled: true, capabilities: [],
+    notificationKey: { v: 2, networkId: certificate.networkId, deviceId: remote.deviceId, encryptionKey: remote.transportKey, signature: 'unit' } };
+  const makeUplink = () => Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], notifications: true,
+    delegations: [], send() {}, presence() {}, onDatagram() {}, close() {} });
+  const first = makeUplink(), second = makeUplink();
+  const connect = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(first).mockResolvedValue(second);
+  const notify = vi.fn(async () => undefined), createWebSocket = vi.fn(async () => AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject, cachedDirectory: [device], directoryExpiresAt: Date.now() + 60_000,
+    bindings: { verifyCertificate, notify, createTransport: async () => ({ id: 'local', dial: {},
+      connect: async () => { throw new Error('No peer dial needed'); }, close: async () => undefined }) },
+  }));
+  const client = new DeviceLinkClient({ getWsUrl: () => 'ws://local-node.invalid', getToken: async () => 'unit-marker',
+    getHello: () => ({ deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false }),
+    createWebSocket, logger: { debug() {}, info() {}, warn() {}, error() {} } });
+  const payload = { category: 'session-done' as const, title: 'Completed', deepLink: '/sessions/unit', collapseId: 'unit', targetDeviceId: 'remote' };
+  try {
+    client.start(); await client.waitUntilOnline(1000);
+    expect(client.sendNotify(payload)).toBe(false);
+    await vi.waitFor(() => expect(client.hasServerCapability(SERVER_CAPABILITY_NOTIFY)).toBe(true), { timeout: 1500 });
+    expect(client.sendNotify(payload)).toBe(true);
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledOnce());
+    first.emit('close', 1006);
+    expect(client.sendNotify(payload)).toBe(false);
+    await vi.waitFor(() => expect(client.hasServerCapability(SERVER_CAPABILITY_NOTIFY)).toBe(true), { timeout: 1500 });
+    expect(client.sendNotify(payload)).toBe(true);
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
+    expect(createWebSocket).toHaveBeenCalledOnce();
+    expect(client.getStatus()).toBe('online');
+  } finally { client.stop(); }
 });

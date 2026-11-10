@@ -30,7 +30,9 @@ object AgentNetNotifications {
   @JvmStatic @Synchronized fun configure(context: Context, expected: String, raw: String) {
     val config = JSONObject(raw)
     val now = System.currentTimeMillis()
-    require(expected == ticket && raw.toByteArray().size <= 512 * 1024 && config.getInt("version") == 2
+    val version = config.getInt("version")
+    require(expected == ticket && raw.toByteArray().size <= 512 * 1024 && version in 2..3
+      && (version != 3 || config.optJSONObject("peerExpiresAt") != null)
       && decode(config.getString("secret")).size == 32 && config.getJSONObject("peers").length() <= 2048
       && config.getLong("expiresAt") > now && config.getLong("expiresAt") <= now + 14 * 86_400_000L)
     val cipher = Cipher.getInstance("AES/GCM/NoPadding")

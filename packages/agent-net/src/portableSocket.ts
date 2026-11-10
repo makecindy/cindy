@@ -147,6 +147,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       || next.identity.transportKey !== previous.identity.transportKey) throw new Error('AGENT_NET_IDENTITY_CHANGED');
     this.options.client = next;
     const old = this.uplink; this.uplink = null; old?.close();
+    if (this.ready) this.acknowledgeHello();
     if (this.reconnect) { clearTimeout(this.reconnect); this.reconnect = null; }
     try { await this.connectRelay(); } catch (error) { if (!this.closed) this.scheduleReconnect(); throw error; }
   }
@@ -279,10 +280,23 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       if (this.uplink !== uplink || this.closed) return;
       this.uplink = null;
       if ([4410, 4401, 4403].includes(code)) { this.close(4410); return; }
+      this.acknowledgeHello();
       // Existing direct connections remain alive; loss of one relay does not tear down the app socket.
       this.scheduleReconnect();
     });
     if (this.localHello && !this.options.client.delegation) uplink.presence(this.localHello.remoteControlEnabled, this.localHello.capabilities ?? [], this.localHello);
+    if (this.ready) this.acknowledgeHello();
+  }
+  /** DeviceLinkClient accepts repeated acknowledgements to update capabilities
+   * on the same application socket, without resetting authenticated peers. */
+  private acknowledgeHello(): void {
+    this.deliver({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
+      serverProtocolVersion: PROTOCOL_VERSION, deviceId: this.deviceId, userId: this.options.userId,
+      capabilities: [
+        ...(this.uplink?.notifications && this.options.bindings.notify ? [SERVER_CAPABILITY_NOTIFY] : []),
+        ...(this.options.scoped || this.options.client.delegation?.scope ? [SHARED_TASK_RELAY_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY] : []),
+      ],
+    } });
   }
   private scheduleReconnect(): void {
     if (this.closed || this.reconnect) return;
@@ -301,13 +315,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       if (frame.kind !== 'hello') return;
       this.localHello = frame.payload as HelloPayload; this.ready = true;
       if (!this.options.client.delegation) this.uplink?.presence(this.localHello.remoteControlEnabled, this.localHello.capabilities ?? [], this.localHello);
-      this.deliver({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
-        serverProtocolVersion: PROTOCOL_VERSION, deviceId: this.deviceId, userId: this.options.userId,
-        capabilities: [
-          ...(this.uplink?.notifications && this.options.bindings.notify ? [SERVER_CAPABILITY_NOTIFY] : []),
-          ...(this.options.scoped || this.options.client.delegation?.scope ? [SHARED_TASK_RELAY_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY] : []),
-        ],
-      } });
+      this.acknowledgeHello();
       for (const [id, view] of this.roster) if (id !== this.deviceId) {
         this.presence(id, false);
         if (view.online && this.deviceId < id) void this.dial(id).catch(() => undefined);
