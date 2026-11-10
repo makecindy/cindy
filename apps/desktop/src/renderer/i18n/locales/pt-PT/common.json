@@ -6567,7 +6567,11 @@
           "connectBot": "Associar este bot",
           "linkAnotherAccount": "Associar outra conta Feishu",
           "botFallback": "Bot Cindy",
-          "sharedSettings": "Estes bots partilham as pastas de trabalho e as definições dos modelos neste computador. Cada bot mantém as suas tarefas e a escolha do computador de trabalho."
+          "sharedSettings": "Estes bots partilham as pastas de trabalho e as definições dos modelos neste computador. Cada bot mantém as suas tarefas e a escolha do computador de trabalho.",
+          "workingDeviceLabel": "Computador de trabalho: {{name}}",
+          "workingDeviceThisComputer": "Este computador",
+          "workingDeviceUnknown": "Computador de trabalho ainda não sincronizado",
+          "workingDeviceUnnamed": "Computador sem nome"
         }
       },
       "summary": {

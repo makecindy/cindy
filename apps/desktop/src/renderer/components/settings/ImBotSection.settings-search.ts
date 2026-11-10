@@ -66,6 +66,7 @@ export const imBotSettings = defineSettings({
     tab: 'im-bot',
     targetId: 'cindy-im-feishu-working-device',
     titleKey: 'settings.remoteControl.hook.feishu.setWorkingDevice',
+    keywordKeys: ['settings.remoteControl.hook.feishu.workingDeviceLabel', 'settings.remoteControl.hook.feishu.workingDeviceThisComputer', 'settings.remoteControl.hook.feishu.workingDeviceUnknown', 'settings.remoteControl.hook.feishu.workingDeviceUnnamed'],
     sectionKey: 'settings.imBot.groups.cindy',
     aliases: ['Feishu', 'Lark', '工作电脑'],
   },

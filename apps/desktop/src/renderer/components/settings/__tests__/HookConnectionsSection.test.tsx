@@ -640,6 +640,33 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     expect(screen.getAllByText('settings.remoteControl.hook.feishu.status.failed').length).toBeGreaterThan(0);
   });
 
+  // Unit / owner request: known current computers hide the switch action, and
+  // server pushes update names/actions without a renderer-side fetch.
+  it('shows the working computer per account and hides selection on this computer', async () => {
+    const first: NonNullable<SlackHookView['feishu']['binding']> = {
+      provider: 'feishu', state: 'confirmed', attemptId: null, bindingId: 'first', principalId: 'alice', principalName: 'Alice',
+      scopeId: 'cli_app', scopeName: 'Cindy', connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null,
+      actions: ['select_device', 'revoke'], workingDevice: { name: 'My Mac', isCurrent: true },
+    };
+    const second = { ...first, bindingId: 'second', principalId: 'bob', principalName: 'Bob', workingDevice: { name: 'Office PC', isCurrent: false } };
+    const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu, enabled: true, available: true, status: 'connected', multiBindAvailable: true,
+      applications: [{ appId: 'cli_app', brand: 'feishu', appType: 'store', botName: 'Cindy', organization: null }], binding: first, bindings: [first, second] } };
+    ipc.get.mockResolvedValue({ hook }); ipc.providerBindSelect.mockResolvedValue({ hook });
+    const entry = resolveSettingsSearchEntry('im-bot', 'imBot.cindy.feishu.workingDevice');
+    render(<SettingsSearchNavigationContext.Provider value={{ entry, activation: 1 }}><HookConnectionsSection /></SettingsSearchNavigationContext.Provider>);
+    await screen.findByText('Alice');
+    const action = 'settings.remoteControl.hook.feishu.setWorkingDevice';
+    expect(screen.getAllByRole('button', { name: action })).toHaveLength(1);
+    expect(screen.getByText('· settings.remoteControl.hook.feishu.workingDeviceThisComputer')).toBeTruthy();
+    expect(tCalls).toContainEqual({ key: 'settings.remoteControl.hook.feishu.workingDeviceLabel', vars: { name: 'Office PC' } });
+    fireEvent.click(screen.getByRole('button', { name: action }));
+    await waitFor(() => expect(ipc.providerBindSelect).toHaveBeenCalledWith('feishu', 'second'));
+    const listener = ipc.onStatusChanged.mock.calls[0]![0];
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, bindings: [first, { ...second, workingDevice: { name: 'My Mac', isCurrent: true } }] } }));
+    expect(screen.queryByRole('button', { name: action })).toBeNull();
+    expect(ipc.get).toHaveBeenCalledTimes(1);
+  });
+
   // Two configured bots need distinct authorization/open targets, with one shared editor.
   it('shows both bot names and sends link/open actions to the chosen application', async () => {
     const account: NonNullable<SlackHookView['feishu']['binding']> = {

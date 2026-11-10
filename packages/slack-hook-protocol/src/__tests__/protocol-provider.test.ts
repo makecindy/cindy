@@ -586,3 +586,17 @@ describe('Feishu application coexistence contract', () => {
     expectReject(makeProviderBindUpdate({ ...first, applications }), 'applications');
   });
 });
+
+// Display metadata must not contradict the authoritative legacy projection.
+describe('Feishu working computer metadata', () => {
+  it('round-trips optional names and rejects malformed or contradictory metadata', () => {
+    const row = { ...CONFIRMED, provider: 'feishu' as const, workingDevice: { name: 'Office PC', isCurrent: false } };
+    roundTrip(makeProviderBindState({ ...row, bindings: [row] }));
+    for (const workingDevice of [{ name: 42, isCurrent: false }, { name: 'Office PC', isCurrent: 'yes' }, null]) {
+      expectReject({ ...makeProviderBindState(row), payload: { ...row, workingDevice } }, 'workingDevice');
+    }
+    expectReject(makeProviderBindState({ ...row, bindings: [{ ...row, workingDevice: { name: 'Other PC', isCurrent: true } }] }), 'bindings');
+    roundTrip(makeProviderBindSelection({ requestId: 'select', provider: 'feishu', bindingId: 'b', ok: true, workingDevice: { name: null, isCurrent: true } }));
+    expectReject({ ...makeProviderBindSelection({ requestId: 'select', provider: 'feishu', bindingId: 'b', ok: false }), payload: { requestId: 'select', provider: 'feishu', bindingId: 'b', ok: false, workingDevice: row.workingDevice } }, 'workingDevice');
+  });
+});

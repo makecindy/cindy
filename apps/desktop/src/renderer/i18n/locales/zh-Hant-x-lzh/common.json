@@ -6459,7 +6459,11 @@
           "connectBot": "聯此機器人",
           "linkAnotherAccount": "另聯飛書帳號",
           "botFallback": "Cindy 機器人",
-          "sharedSettings": "諸機器人共用本機工作目錄與模型之設，各有差事，工作電腦亦各自擇之。"
+          "sharedSettings": "諸機器人共用本機工作目錄與模型之設，各有差事，工作電腦亦各自擇之。",
+          "workingDeviceLabel": "工作電腦：{{name}}",
+          "workingDeviceThisComputer": "本機",
+          "workingDeviceUnknown": "工作電腦尚未同步",
+          "workingDeviceUnnamed": "未命名電腦"
         }
       },
       "summary": {

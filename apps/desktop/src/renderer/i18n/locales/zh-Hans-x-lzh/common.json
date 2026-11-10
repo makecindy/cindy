@@ -6459,7 +6459,11 @@
           "connectBot": "联此机器人",
           "linkAnotherAccount": "另联飞书账号",
           "botFallback": "Cindy 机器人",
-          "sharedSettings": "诸机器人共用本机工作目录与模型之设，各有差事，工作电脑亦各自择之。"
+          "sharedSettings": "诸机器人共用本机工作目录与模型之设，各有差事，工作电脑亦各自择之。",
+          "workingDeviceLabel": "工作电脑：{{name}}",
+          "workingDeviceThisComputer": "本机",
+          "workingDeviceUnknown": "工作电脑尚未同步",
+          "workingDeviceUnnamed": "未命名电脑"
         }
       },
       "summary": {

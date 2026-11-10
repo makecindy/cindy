@@ -4890,6 +4890,32 @@ describe('store Feishu multi-account manager', () => {
   const second: ProviderBindStatusPayload = { ...FEISHU_CONFIRMED, bindingId: 'binding-feishu-2', principalId: 'ou_second',
     principalName: 'Second User', tenantKey: 'tenant-b', actions: ['revoke', 'select_device'] };
   const features = [...FEISHU_FEATURES, HOOK_FEATURE_FEISHU_STORE_MULTI_BIND];
+  // Unit: display-only selection pushes must not finish a concurrent authorization,
+  // restore a foreign binding, reload preferences or send a server request.
+  it('updates only known working computer display while an additional account authorizes', () => {
+    const mirror = vi.fn();
+    const { manager, transports, sent } = feishuLaneHarness({ onHookReadyForPrefsMirror: mirror }, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    const first = { ...FEISHU_CONFIRMED, workingDevice: { name: 'Office PC', isCurrent: false } };
+    opts.onMessage(makeProviderBindState({ ...first, bindings: [first, second] }), () => true);
+    expect(manager.snapshot().feishu.bindings?.[0]?.workingDevice).toEqual(first.workingDevice);
+    manager.providerBindStart('feishu');
+    const start = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
+    if (start.type !== 'provider.bind.start') throw new Error('start missing');
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: start.payload.requestId, attemptId: 'new-auth' }), () => true);
+    mirror.mockClear(); const count = sent.length;
+    const update = { requestId: 'other-computer-changed', provider: 'feishu' as const, bindingId: first.bindingId!, ok: true,
+      workingDevice: { name: 'This PC', isCurrent: true } };
+    opts.onMessage(makeProviderBindSelection(update), () => true);
+    opts.onMessage(makeProviderBindSelection({ ...update, bindingId: 'foreign-binding' }), () => true);
+    expect(manager.snapshot().feishu.binding).toMatchObject({ state: 'pending', attemptId: 'new-auth' });
+    expect(manager.snapshot().feishu.bindings?.[0]?.workingDevice).toEqual(update.workingDevice);
+    expect(manager.snapshot().feishu.bindings).toHaveLength(2);
+    expect(manager.snapshot().feishu.bindings?.[1]?.workingDevice).toBeUndefined();
+    expect(sent).toHaveLength(count); expect(mirror).not.toHaveBeenCalled();
+  });
+
   // Review regression / unit: scopeName is optional display data, not binding
   // authority. Existing cache tests only used named scopes and missed this drop.
   it('keeps nameless confirmed bindings in the cache and preserves their first-account position', () => {

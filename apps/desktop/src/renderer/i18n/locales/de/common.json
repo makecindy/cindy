@@ -6502,7 +6502,11 @@
           "connectBot": "Diesen Bot verknüpfen",
           "linkAnotherAccount": "Weiteres Feishu-Konto verknüpfen",
           "botFallback": "Cindy-Bot",
-          "sharedSettings": "Diese Bots teilen Arbeitsordner und Modelleinstellungen auf diesem Computer. Aufgaben und die Auswahl des Arbeitscomputers bleiben für jeden Bot getrennt."
+          "sharedSettings": "Diese Bots teilen Arbeitsordner und Modelleinstellungen auf diesem Computer. Aufgaben und die Auswahl des Arbeitscomputers bleiben für jeden Bot getrennt.",
+          "workingDeviceLabel": "Arbeitscomputer: {{name}}",
+          "workingDeviceThisComputer": "Dieser Computer",
+          "workingDeviceUnknown": "Arbeitscomputer noch nicht synchronisiert",
+          "workingDeviceUnnamed": "Unbenannter Computer"
         }
       },
       "summary": {

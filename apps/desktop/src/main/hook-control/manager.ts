@@ -1580,6 +1580,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   ): ProviderBindingView {
     return {
       provider,
+      ...(payload.workingDevice === undefined ? {} : { workingDevice: { ...payload.workingDevice } }),
       state: payload.state,
       attemptId: payload.attemptId,
       bindingId: payload.bindingId,
@@ -2588,6 +2589,17 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     }
     if (msg.type === 'provider.bind.selection') {
       if (lane === null || msg.payload.provider !== lane.config.provider) return;
+      // Display-only updates may target existing bindings, even while another account authorizes.
+      // Never add a binding, complete an attempt, reload prefs or persist this transient state.
+      if (msg.payload.ok && msg.payload.workingDevice && !lane.awaitingStateSnapshot) {
+        const known = confirmedLaneBindings(lane).find((row) => row.bindingId === msg.payload.bindingId);
+        if (known) {
+          const workingDevice = { ...msg.payload.workingDevice };
+          lane.confirmedBindings = lane.confirmedBindings.map((row) => row.bindingId === known.bindingId ? { ...row, workingDevice } : row);
+          if (lane.binding?.state === 'confirmed' && lane.binding.bindingId === known.bindingId) lane.binding = { ...lane.binding, workingDevice };
+          notifyStatus(toView());
+        }
+      }
       const pending = lane.pendingSelection;
       if (pending === null || msg.payload.requestId !== pending.requestId || msg.payload.bindingId !== pending.bindingId) return;
       lane.pendingSelection = null;

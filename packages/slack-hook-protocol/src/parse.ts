@@ -863,9 +863,14 @@ function validateProviderBindRevoke(p: Record<string, unknown>): string | null {
 function validateProviderBindSelect(p: Record<string, unknown>): string | null {
   return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.select') ?? null;
 }
+function validWorkingDevice(value: unknown): boolean {
+  return isPlainObject(value) && isNullableNonEmptyString(value.name) && typeof value.isCurrent === 'boolean';
+}
 function validateProviderBindSelection(p: Record<string, unknown>): string | null {
   return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.selection')
-    ?? (typeof p.ok === 'boolean' ? null : 'provider.bind.selection.ok must be boolean');
+    ?? (typeof p.ok === 'boolean' ? null : 'provider.bind.selection.ok must be boolean')
+    ?? (p.workingDevice !== undefined && (p.provider !== 'feishu' || p.ok !== true || !validWorkingDevice(p.workingDevice))
+      ? 'provider.bind.selection.workingDevice is invalid' : null);
 }
 
 const PROVIDER_BIND_ID_FIELDS = [
@@ -892,6 +897,10 @@ function sameProviderBindingProjection(a: Record<string, unknown>, b: Record<str
   if (!fields.every((field) => (a[field] ?? null) === (b[field] ?? null))) return false;
   if (!Array.isArray(a.actions) || !Array.isArray(b.actions)
     || a.actions.length !== b.actions.length || a.actions.some((action, index) => action !== (b.actions as unknown[])[index])) return false;
+  const aDevice = isPlainObject(a.workingDevice) ? a.workingDevice : null;
+  const bDevice = isPlainObject(b.workingDevice) ? b.workingDevice : null;
+  if (aDevice === null || bDevice === null) { if (aDevice !== bDevice) return false; }
+  else if (aDevice.name !== bDevice.name || aDevice.isCurrent !== bDevice.isCurrent) return false;
   const left = isPlainObject(a.appInfo) ? a.appInfo : null;
   const right = isPlainObject(b.appInfo) ? b.appInfo : null;
   if (left === null || right === null) return left === right;
@@ -941,6 +950,9 @@ function validateProviderBindStatus(
     return `${label}.actions must not contain duplicates`;
   }
 
+  if (p.workingDevice !== undefined && (p.provider !== 'feishu' || p.state !== 'confirmed' || !validWorkingDevice(p.workingDevice))) {
+    return `${label}.workingDevice is invalid`;
+  }
   const validApp = (app: unknown): app is Record<string, unknown> => isPlainObject(app)
     && isNonEmptyString(app.appId) && ['feishu', 'lark'].includes(app.brand as string)
     && ['self_built', 'store'].includes(app.appType as string)

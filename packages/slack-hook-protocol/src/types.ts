@@ -921,10 +921,17 @@ export interface ProviderBindRevokePayload {
 
 export const PROVIDER_BIND_SELECT_TIMEOUT_MS = 10_000;
 
+/** Display-only working computer metadata; never grants binding/task authority. */
+export interface ProviderWorkingDevice { name: string | null; isCurrent: boolean }
+
 /** Select this confirmed binding as the working device; requires the select_device action. */
 export type ProviderBindSelectPayload = ProviderBindRevokePayload;
 /** Acknowledges only the requested selection; does not change any device’s binding state. */
-export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload { ok: boolean }
+export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload {
+  ok: boolean;
+  /** Also sent unsolicited to already-bound computers after a selection changes. */
+  workingDevice?: ProviderWorkingDevice;
+}
 
 /**
  * Shared payload for provider.bind.update and provider.bind.state. update is an
@@ -945,6 +952,8 @@ export interface FeishuApplicationState {
 }
 
 export interface ProviderBindStatusPayload {
+  /** Optional Feishu display state; absent on older servers and unconfirmed attempts. */
+  workingDevice?: ProviderWorkingDevice;
   appInfo?: FeishuBotAppInfo;
   applications?: FeishuApplicationState[];
   provider: HookProvider;

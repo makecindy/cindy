@@ -6502,7 +6502,11 @@
           "connectBot": "Link This Bot",
           "linkAnotherAccount": "Link Another Feishu Account",
           "botFallback": "Cindy bot",
-          "sharedSettings": "These bots share workspace and model settings on this computer. Each bot has separate tasks and a separate working computer selection."
+          "sharedSettings": "These bots share workspace and model settings on this computer. Each bot has separate tasks and a separate working computer selection.",
+          "workingDeviceLabel": "Working computer: {{name}}",
+          "workingDeviceThisComputer": "This computer",
+          "workingDeviceUnknown": "Working computer not yet synced",
+          "workingDeviceUnnamed": "Unnamed computer"
         }
       },
       "summary": {

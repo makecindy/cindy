@@ -70,6 +70,7 @@ import {
   slackHookInstallUrl,
   type HookTeamBindingView,
   type ProviderHookView,
+  type ProviderBindingView,
   type FeishuAppView,
   type SlackHookView,
 } from '../../../shared/hookControlIpc';
@@ -1506,9 +1507,34 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     }
   };
 
+  const workingDeviceHint = (account: ProviderBindingView) => <span className="block break-words text-12 leading-[1.4] text-[var(--text-secondary)]">
+    {account.workingDevice
+      ? t('settings.remoteControl.hook.feishu.workingDeviceLabel', { name: account.workingDevice.name ?? t('settings.remoteControl.hook.feishu.workingDeviceUnnamed') })
+      : t('settings.remoteControl.hook.feishu.workingDeviceUnknown')}
+    {account.workingDevice?.isCurrent ? <span className="ml-1.5 text-[var(--text-tertiary)]">· {t('settings.remoteControl.hook.feishu.workingDeviceThisComputer')}</span> : null}
+  </span>;
+
+  const renderFeishuAccount = (account: ProviderBindingView, view: ProviderHookView) => <SettingsRow key={account.bindingId} wrap
+    data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
+    title={account.principalName ?? account.principalId}
+    hint={<>
+      {account.tenantKey ? <span className="block break-all">{t('settings.remoteControl.hook.feishu.connectionTenant', { tenant: account.tenantKey })}</span> : null}
+      {workingDeviceHint(account)}
+    </>}
+    trailing={<div className="flex flex-wrap items-center gap-2">
+      {account.actions.includes('select_device') && account.workingDevice?.isCurrent !== true ? <Button variant="secondary" size="xs" compact type="button"
+        data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
+        disabled={selectingWorkingDevice || !view.enabled || !view.available || view.status !== 'connected'}
+        onClick={() => void selectWorkingDevice(account.bindingId!)}>{t('settings.remoteControl.hook.feishu.setWorkingDevice')}</Button> : null}
+      {account.actions.includes('revoke') ? <Button variant="secondary" tone="quiet" size="xs" compact type="button"
+        data-settings-search-action="Unlink this bot account"
+        disabled={!view.enabled || !view.available || view.status !== 'connected'}
+        onClick={() => void handleProviderUnlink('feishu', account.bindingId!)}>{t('settings.remoteControl.hook.feishu.unlink')}</Button> : null}
+    </div>} />;
+
   const renderFeishuApplications = (view: ProviderHookView) => {
     const busy = view.binding?.state === 'pending' || view.binding?.state === 'awaiting_confirmation';
-    return <>
+    return <div id={imBotSettings.cindyFeishuWorkingDevice.targetId} className="flex flex-col gap-3">
       {!view.enabled ? <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.disabledHint')}</p> : null}
       {view.enabled && view.available && view.status === 'connected' && !busy && (view.bindings?.length ?? 0) === 0
         ? <p className="text-11 leading-relaxed text-[var(--text-secondary)]">{t('settings.remoteControl.hook.feishu.chooseBot')}</p> : null}
@@ -1530,25 +1556,15 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             hint={<>
               <span>{t(`settings.remoteControl.hook.feishu.appType.${app.appType}`)}{app.organization ? ` · ${app.organization}` : ''}</span>
             </>} />
-          {accounts.map((account) => <SettingsRow key={account.bindingId} wrap
-            title={account.principalName ?? account.principalId}
-            hint={account.tenantKey ? t('settings.remoteControl.hook.feishu.connectionTenant', { tenant: account.tenantKey }) : undefined}
-            trailing={<div className="flex flex-wrap gap-2">
-              {account.actions.includes('select_device') ? <Button variant="secondary" size="xs" compact type="button"
-                data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
-                disabled={selectingWorkingDevice || !view.enabled || !view.available || view.status !== 'connected'}
-                onClick={() => void selectWorkingDevice(account.bindingId!)}>{t('settings.remoteControl.hook.feishu.setWorkingDevice')}</Button> : null}
-              {account.actions.includes('revoke') ? <Button variant="secondary" size="xs" compact type="button"
-                data-settings-search-action="Unlink this bot account"
-                disabled={!view.enabled || !view.available || view.status !== 'connected'}
-                onClick={() => void handleProviderUnlink('feishu', account.bindingId!)}>{t('settings.remoteControl.hook.feishu.unlink')}</Button> : null}
-            </div>} />)}
           {active && own?.bindCode ? <SettingsRow wrap
             title={<span className="font-mono tracking-wider">{own.bindCode}</span>}
             hint={t('settings.remoteControl.hook.feishu.bindCode.hint')}
             trailing={<Button variant="secondary" size="xs" compact type="button" data-settings-search-action="Copy the Feishu bind code"
               onClick={() => void handleCopyBindCode('feishu')}>{t('settings.remoteControl.hook.feishu.bindCode.copy')}</Button>} /> : null}
-          <div className="flex flex-wrap gap-2 p-3">
+          <div className="flex flex-wrap items-center gap-2 px-4 pb-4">
+              <Button variant={accounts.length > 0 ? "primary" : "secondary"} size="xs" compact type="button" data-settings-search-action="Open the channel connection or group setup link"
+                disabled={!view.enabled || !view.available || view.status !== 'connected'}
+                onClick={() => handleProviderOpen('feishu', 'provider', app.appId)}>{t('settings.remoteControl.hook.feishu.openBot')}</Button>
             {active ? <>
               {own?.actions.includes('open_connect_url') ? <Button variant="secondary" size="xs" compact type="button"
                 data-settings-search-action="Open the channel connection or group setup link"
@@ -1560,19 +1576,18 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 data-settings-search-action="Start or cancel linking this bot account"
                 onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindCancel('feishu'))}>{t('settings.remoteControl.hook.feishu.cancel')}</Button> : null}
             </> : <>
-              {(app.appType === 'store' && view.multiBindAvailable) || accounts.length === 0 ? <Button variant="secondary" size="xs" compact type="button"
+              {(app.appType === 'store' && view.multiBindAvailable) || accounts.length === 0 ? <Button variant={accounts.length === 0 ? 'primary' : 'secondary'} size="xs" compact type="button"
                 data-settings-search-action="Start or cancel linking this bot account"
                 disabled={busy || !view.enabled || !view.available || view.status !== 'connected'}
                 onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart('feishu', app.appId))}>{t(`settings.remoteControl.hook.feishu.${accounts.length > 0 ? 'linkAnotherAccount' : 'connectBot'}`)}</Button> : null}
             </>}
-              <Button variant="secondary" size="xs" compact type="button" data-settings-search-action="Open the channel connection or group setup link"
-                disabled={!view.enabled || !view.available || view.status !== 'connected'}
-                onClick={() => handleProviderOpen('feishu', 'provider', app.appId)}>{t('settings.remoteControl.hook.feishu.openBot')}</Button>
+
           </div>
+          {accounts.map((account) => renderFeishuAccount(account, view))}
         </SettingsCard>;
       })}
       <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.sharedSettings')}</p>
-    </>;
+    </div>;
   };
 
   const renderProviderCard = (provider: NeutralCardProvider) => {
@@ -1664,6 +1679,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </span>
           ) : null}
 
+          {provider === 'feishu' && cs.confirmed && !storeAccounts && view.binding ? workingDeviceHint(view.binding) : null}
+
           {view.enabled && view.available ? (
             <div className="flex flex-wrap items-center gap-2">
               {cs.inProgress && cs.binding?.connectUrl ? (
@@ -1727,7 +1744,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                       {t(`settings.remoteControl.hook.${provider}.addToGroup`)}
                     </Button>
                   ) : null}
-                  {provider === 'feishu' && cs.actions.includes('select_device') ? (
+                  {provider === 'feishu' && cs.actions.includes('select_device') && view.binding?.workingDevice?.isCurrent !== true ? (
                     <Button id={imBotSettings.cindyFeishuWorkingDevice.targetId} data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
                       variant="secondary" size="xs" compact type="button"
                       disabled={selectingWorkingDevice || !view.available || view.status !== 'connected'}
@@ -1768,34 +1785,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           {storeAccounts && (view.bindings?.length ?? 0) > 0 ? (
             <>
               <SettingsCard id={imBotSettings.cindyFeishuWorkingDevice.targetId}>
-                {view.bindings!.map((account) => (
-                  <SettingsRow key={account.bindingId} wrap
-                    title={account.principalName ?? account.principalId}
-                    hint={<>
-                      <span className="block break-all">{account.principalId}</span>
-                      {account.tenantKey ? <span className="block break-all">
-                        {t('settings.remoteControl.hook.feishu.connectionTenant', { tenant: account.tenantKey })}
-                      </span> : null}
-                    </>}
-                    trailing={<div className="flex flex-wrap items-center gap-2">
-                      {account.actions.includes('select_device') ? (
-                        <Button data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
-                          variant="secondary" size="xs" compact type="button"
-                          disabled={selectingWorkingDevice || !view.enabled || !view.available || view.status !== 'connected'}
-                          onClick={() => void selectWorkingDevice(account.bindingId!)}>
-                          {t('settings.remoteControl.hook.feishu.setWorkingDevice')}
-                        </Button>
-                      ) : null}
-                      {account.actions.includes('revoke') ? (
-                        <Button data-settings-search-action="Unlink this bot account"
-                          variant="secondary" size="xs" compact type="button"
-                          disabled={!view.enabled || !view.available || view.status !== 'connected'}
-                          onClick={() => void handleProviderUnlink('feishu', account.bindingId!)}>
-                          {t('settings.remoteControl.hook.feishu.unlink')}
-                        </Button>
-                      ) : null}
-                    </div>} />
-                ))}
+                {view.bindings!.map((account) => renderFeishuAccount(account, view))}
               </SettingsCard>
               <div className="flex flex-wrap items-center gap-2">
                 <Button data-settings-search-action="Open the channel connection or group setup link"

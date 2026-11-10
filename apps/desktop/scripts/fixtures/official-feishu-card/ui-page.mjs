@@ -19,6 +19,7 @@ export default {
     `,
   },
   cases: {
+    'working-long-name': { about: 'Current computer hides selection; long remote computer name wraps at 360px', viewport: { width: 360, height: 1100 }, data: { kind: 'working-long-name' } },
     'org-only': { about: 'Store release gate closed: only the configured enterprise bot appears', data: { kind: 'org-only' } },
     'choose-bot': { about: 'No linked account: choose a named bot before authorization', data: { kind: 'choose-bot' } },
     'choose-bot-narrow': { about: 'Bot selection at 360px wraps badges and actions', viewport: { width: 360, height: 1100 }, data: { kind: 'choose-bot' } },
@@ -68,7 +69,9 @@ export default {
       assert.ok(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.linkAnotherAccount'), exact: true }).isVisible());
     }
     if (ui.data.kind === 'coexist-error') assert.ok(await card.getByText('TLS connection failed', { exact: true }).isVisible());
-    if (ui.data.kind === 'coexist' || ui.data.kind === 'coexist-pending') {
+    if (ui.data.kind === 'working-long-name' || ui.data.kind === 'coexist' || ui.data.kind === 'coexist-pending') {
+      assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.setWorkingDevice'), exact: true }).count(), 2);
+
       assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.openBot'), exact: true }).count(), 2);
       assert.ok(await card.getByText('团队 Cindy', { exact: true }).isVisible());
       assert.ok(await card.getByText('Alice', { exact: true }).isVisible());
@@ -94,7 +97,8 @@ export default {
       assert.ok(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.retry'), exact: true }).isVisible());
     }
     if (ui.data.kind === 'confirmed') {
-      assert.ok(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.setWorkingDevice'), exact: true }).isVisible());
+      assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.setWorkingDevice'), exact: true }).count(), 0);
+      assert.ok(await card.getByText('Cindy MacBook', { exact: false }).isVisible());
     }
     if (ui.data.kind === 'pending') {
       assert.ok(await card.getByText('7KQ4-M2XD', { exact: true }).isVisible());

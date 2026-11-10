@@ -16,6 +16,11 @@ const disabledLane = {
 };
 
 function view(kind: string): SlackHookView {
+  if (kind === 'working-long-name') {
+    const base = view('coexist');
+    base.feishu.bindings![1]!.workingDevice = { name: 'Design-Team-Office-Workstation-With-A-Very-Long-Computer-Name', isCurrent: false };
+    return base;
+  }
   if (kind === 'org-only' || kind === 'choose-bot' || kind === 'coexist-store-failed') {
     const base = view('coexist');
     if (kind === 'org-only') {
@@ -33,7 +38,7 @@ function view(kind: string): SlackHookView {
   }
   if (kind === 'coexist' || kind === 'coexist-pending' || kind === 'coexist-error') {
     const base = view(kind === 'coexist-pending' ? 'store-pending' : 'store');
-    const org = { ...base.feishu.bindings![0]!, bindingId: 'org-binding', scopeId: 'cli_org', principalName: '张三', tenantKey: null };
+    const org = { ...base.feishu.bindings![0]!, bindingId: 'org-binding', scopeId: 'cli_org', principalName: '张三', tenantKey: null, workingDevice: { name: 'Team Workstation', isCurrent: false } };
     base.feishu.bindings = [...base.feishu.bindings!, org];
     base.feishu.applications = [
       { appId: 'cli_app', brand: 'feishu', appType: 'store', botName: 'Cindy', organization: '示例组织' },
@@ -46,7 +51,7 @@ function view(kind: string): SlackHookView {
     const base = view(kind === 'store' ? 'confirmed' : 'pending');
     const first = { ...view('confirmed').feishu.binding!, principalName: 'Alice', tenantKey: 'tenant-acme' };
     base.feishu = { ...base.feishu, multiBindAvailable: true,
-      bindings: [first, { ...first, bindingId: 'b2', principalId: 'ou_2', principalName: 'Bob', tenantKey: 'tenant-xd' }] };
+      bindings: [first, { ...first, bindingId: 'b2', principalId: 'ou_2', principalName: 'Bob', tenantKey: 'tenant-xd', workingDevice: { name: 'Office Windows PC', isCurrent: false } }] };
     if (kind === 'store-failed') base.feishu.binding = { ...base.feishu.binding!, state: 'failed',
       reason: 'access-denied', connectUrl: null, bindCode: null, expiresAt: null, actions: ['retry'] };
     return base;
@@ -67,6 +72,7 @@ function view(kind: string): SlackHookView {
               state: kind === 'confirmed' ? 'confirmed' as const : 'revoked' as const,
               attemptId: null,
               bindingId: 'b1',
+              ...(kind === 'confirmed' ? { workingDevice: { name: 'Cindy MacBook', isCurrent: true } } : {}),
               principalId: 'ou_1',
               principalName: '张三',
               scopeId: 'cli_app',
