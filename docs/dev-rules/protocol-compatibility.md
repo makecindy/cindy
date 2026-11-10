@@ -94,6 +94,11 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   `get_chat_history.messages[].clientId` 为可选增量字段，透传 reader 已有的原生/UI 锚点；旧端缺失时不从存储行 id 猜测。
 - `get_session_runtime` 增量返回可选 `permission_mode`；`set_session_runtime` 接受该可选字段。
   复用现有权限提交与回滚，省略字段时原任务调用保持原行为。插件继续/插话使用已有 `sourcePlugin` 来源元数据，不伪造当前任务。
+- `maker:session:handoff` 的既有能力探测增量返回 `pluginCaller:1`。插件发送方使用 `sender:{kind:'plugin',pluginId,name?}`，
+  不提供 `sender.sessionId` 或任务请求来源；旧任务发送方及 wire 字段保持原样。缺新能力位时在发送内容前返回不支持。
+  现有一次性回执绑定 `senderPluginId`，回查使用 `pluginId`；任务仍用原 session 字段，混合或缺失调用方拒绝。
+  接收任务按来源电脑限定 `sourcePlugin.pluginId=deviceId::pluginId`，保留目标权限与 Plan；界面不把它导航到本机同名插件。
+  不新增 channel、授权存储或 relay 字段；自建中转继续透明传输原业务 payload，无需同步适配。
 - `subscribe.topics` 增量识别 `message` / `task-state`，事件名为 `did-message-created` / `did-task-state-changed`，复用现有管子事件封装。
   receipt 增量可选 `approvedEventTopics`，不改变版本；旧宿主保存的未知 topic 不自动获得批准，原有 topic 继续原行为。
   新消息事件只提供正文和附件位置，不提供宿主路径；`historyCursor` 复用 `get_chat_history` 编解码，序号不作为持久重放凭证。

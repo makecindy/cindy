@@ -41,6 +41,16 @@ it('validates attachment reads against the same history scope before host I/O', 
   await server.close();
 });
 
+// Unit: explicit remote targets need a plugin actor, never a fabricated dispatcher Session.
+it('sends a plugin message to an explicit remote task without borrowing a sender task', async () => {
+  const sendToRemoteSession = vi.fn(async () => ({ ok: true as const, agentKind: 'codex' as const, wakeKind: 'queued' as const, targetTitle: null, targetLastUserSendAt: null }));
+  const server = createXdtHelperMcpServer({ sendToRemoteSession, sendToSession: vi.fn() }, { agentKind: 'codex', workingDir: '',
+    hostCaller: { kind: 'plugin', pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 } });
+  expect(parsePayload(await server.hostTools.call('send_to_session', { target_session_id: 'device::task', message: 'Continue' }))).toMatchObject({ ok: true, wake_kind: 'queued' });
+  expect(sendToRemoteSession).toHaveBeenCalledWith({ deviceId: 'device', sessionId: 'task', message: 'Continue', dispatcherSessionId: undefined });
+  await server.close();
+});
+
 // Unit via real registry: parity #15 adds exact message boundaries; old task controls
 // cannot invoke fork/rewind. Plugins must name a target and never inherit a session.
 it.each(['fork_session', 'rewind_session'] as const)('routes %s to the existing Host history operation', async tool => {

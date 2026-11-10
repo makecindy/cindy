@@ -14,9 +14,14 @@ export default {
     market: { about: 'Market details do not offer in-place file updates' },
     permissions: { about: 'Explicit auto-tool and native-host permission rows', viewport: { width: 360, height: 900 } },
     'host-tools': { about: 'Independent Host tool group permissions and approval retry' },
+    'remote-source': { about: 'Remote plugin provenance without a misleading local detail link', viewport: { width: 360, height: 240 } },
     'host-tool-permissions': { about: 'Install consent for the five Host tool groups', viewport: { width: 360, height: 900 } },
   },
   async check(page, ui) {
+    if (ui.case === 'remote-source') {
+      assert.equal(await page.getByRole('button').count(), 0);
+      return;
+    }
     if (ui.case === 'permissions' || ui.case === 'host-tool-permissions') return;
     if (ui.case === 'host-tools') {
       for (const group of ['history', 'control', 'handoff', 'settings', 'scheduler']) {

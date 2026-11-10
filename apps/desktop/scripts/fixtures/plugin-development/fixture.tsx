@@ -1,5 +1,6 @@
 import { mountPage, subscription } from '../../ui-page/harness';
 import { GhostPluginDetailView } from '../../../src/renderer/features/plugin/GhostPluginDetailView';
+import { MessageSourceLabels } from '../../../src/renderer/components/chat/MessageSourceLabels';
 import { GhostInstallConsentContent } from '../../../src/renderer/cindy-brain/GhostInstallConsentHost';
 import { toGhostPluginDetail } from '../../../src/renderer/features/plugin/lib/ghostPluginViewModel';
 import { ghostPermissionItems, type InstalledGhost } from '../../../src/shared/ghost';
@@ -58,7 +59,9 @@ mountPage({
     getFullscreenState: async () => false, onFullscreenChange: subscription('fullscreen'),
     ghosts: { activateBrowser: async () => ({ ok: true }), listSync: () => ({ ghosts: [ghost] }) },
   }),
-  render: ctx => ctx.case === 'authoring'
+  render: ctx => ctx.case === 'remote-source'
+    ? <main className="p-6"><MessageSourceLabels sourcePlugin={{ pluginId: 'source-device::dashboard', name: 'Dashboard' }} /></main>
+    : ctx.case === 'authoring'
     ? <MyPluginsPage reader={authorApi} cache={authorCache} installedPluginCount={2}
       localPlugins={candidateInstances.map(item => ({ id: item.instanceId, name: 'Example plugin', version: item.version } as GhostPluginListItem))}
       onViewLocal={noop} onSubmitUpdate={async instanceId => { document.documentElement.dataset.submittedInstance = instanceId; return false; }} />

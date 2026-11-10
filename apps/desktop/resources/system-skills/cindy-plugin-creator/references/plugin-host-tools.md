@@ -63,8 +63,10 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 单独改权限保留模型和待生效路线；同时修改时先应用运行设置，成功后提交权限。`generation` 保护运行设置，权限仍按原队列提交，
 模型可能等到下一次发送生效；权限档字段不替代独立的 Plan 开关。
 
-插件用 `send_to_session` 继续本机明确任务、或用 `steer_session({session_id,message})` 插话时，宿主记录插件来源，
+插件用 `send_to_session` 继续明确任务、或用 `steer_session({session_id,message})` 在本机插话时，宿主记录插件来源，
 不会借用任务身份，也不会继承别的任务权限档。收件任务继续使用它当前的权限与 Plan 状态，界面标签和模型来源说明同源。
+`send_to_session` 支持 `deviceId::sessionId`；派发前协商 `pluginCaller:1`，旧电脑缺少该能力时返回 `REMOTE_UNSUPPORTED`，不发送正文。
+来源标识为 `deviceId::pluginId`，仅用于来源展示；排队执行仍由既有一次性派发回执复核账号、安装、批准与原参数。
 
 ## 完整历史与附件
 
