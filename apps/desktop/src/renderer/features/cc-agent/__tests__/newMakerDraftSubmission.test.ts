@@ -586,7 +586,7 @@ describe('homepage submission to Main admission and first-message handoff', () =
       agentKind: 'codex', remoteHostId: 'fixture-host',
       providers: [sshNativeCodexProvider([sshModel('remote-model')])],
       model: 'remote-model', providerId: 'openai',
-      pluginRoute: async () => ({ outcome: 'routed', reason: 'fixture', route: {
+      pluginRoute: async () => ({ outcome: 'routed', pluginName: 'Router', modelName: 'remote-model', reason: 'fixture', route: {
         agentKind: 'codex', model: 'remote-model', providerId: 'xd',
       } }),
     });
