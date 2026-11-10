@@ -1032,6 +1032,26 @@ test("structured startup failures keep their actionable reason", () => {
 	);
 });
 
+// Test value: identifyDesktopProcesses must return the actual profile so whoami
+// can load its ready/source record. Windows Crashpad's /prefetch:4 was included
+// in that path, producing WHOAMI_MISMATCH for a running dev instance. Existing
+// fixtures only used --switch boundaries; the minimum missing input is an
+// unquoted profile path followed by /prefetch:4. Unit tier, in-memory process facts.
+test("desktop whoami excludes Windows prefetch from the Crashpad userData path", () => {
+	const sourceRoot = path.join(os.tmpdir(), "whoami-source");
+	const userData = path.join(os.tmpdir(), "Application Support", "CindyGlobal-dev");
+	const electron = path.join(sourceRoot, "node_modules", "electron", "dist", "electron.exe");
+	const appPath = path.join(sourceRoot, "apps", "desktop");
+	const instances = identifyDesktopProcesses([
+		{ pid: 10, ppid: 9, command: `"${electron}" .` },
+		{ pid: 11, ppid: 10, command: `"${electron}" --type=crashpad-handler --user-data-dir=${userData} /prefetch:4 --no-rate-limit --database=unused` },
+		{ pid: 12, ppid: 10, command: `"${electron}" --type=renderer --app-path="${appPath}" --enable-sandbox` },
+	], [{ rootDir: sourceRoot, branch: null }]);
+
+	assert.equal(instances.length, 1);
+	assert.equal(instances[0].userDataDir, userData);
+});
+
 test("desktop whoami identifies multiple passive previews sharing one userData", () => {
 	const previewRoot = path.resolve("/repo/cindy-preview");
 	const previewRootTwo = path.resolve("/repo/cindy-preview-two");

@@ -182,6 +182,7 @@ export type OrcaWorkerCreationErrorCode =
   | 'REMOTE_AGENT_SHARE_PAUSED'
   | 'REMOTE_AGENT_SHARE_REMOVED'
   | 'REMOTE_AGENT_SHARE_UNAVAILABLE'
+  | 'REMOTE_AGENT_SHARE_LEGACY_DISABLED'
   /** 指定的运行设备版本过旧，不支持协同远端 Worker。 */
   | 'UNSUPPORTED_CAPABILITY'
   | 'REMOTE_WORKDIR_NOT_FOUND'
@@ -804,7 +805,7 @@ function leadProviderGroupFollowCandidate(
   return entry;
 }
 
-const SHARE_ROUTE_REJECTION = /\[(REMOTE_AGENT_SHARE_(?:PAUSED|REMOVED|UNAVAILABLE))\]/;
+const SHARE_ROUTE_REJECTION = /\[(REMOTE_AGENT_SHARE_(?:PAUSED|REMOVED|UNAVAILABLE|LEGACY_DISABLED))\]/;
 
 /** 读不到 Worker 的 Agent 所在电脑的目录：分享保留具体原因，其余按那台连不上。 */
 export function agentDeviceCatalogFailure(err: unknown): {
@@ -817,6 +818,7 @@ export function agentDeviceCatalogFailure(err: unknown): {
     | 'REMOTE_AGENT_SHARE_PAUSED'
     | 'REMOTE_AGENT_SHARE_REMOVED'
     | 'REMOTE_AGENT_SHARE_UNAVAILABLE'
+    | 'REMOTE_AGENT_SHARE_LEGACY_DISABLED'
     | undefined;
   return share
     ? { ok: false, errorCode: share, message: `the shared provider for this Worker is not available: ${message}` }

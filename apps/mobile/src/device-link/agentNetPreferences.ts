@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSyncExternalStore } from 'react';
+import { getActiveSelfHostedRelay, isAgentNetOnlyRoute } from './selfHostedRelayRouting';
 
 const KEY = 'cindy.mobile.agent-net.preferences.v1';
 interface Preferences { ready: boolean; enabled: boolean; onlyEncrypted: boolean; generation: number; }
@@ -14,7 +15,10 @@ export const getMobileAgentNetPreferences = (): Readonly<Preferences> => current
 export function subscribeMobileAgentNetPreferences(listener: () => void): () => void {
   listeners.add(listener); return () => { listeners.delete(listener); };
 }
-export function mobileAgentNetRequiresEncryption(): boolean { return !current.ready || (current.enabled && current.onlyEncrypted); }
+export function mobileAgentNetRequiresEncryption(): boolean {
+  // 只走 V2 的网络(别人分享来的中转)没有旧版连接。
+  return !current.ready || (current.enabled && current.onlyEncrypted) || isAgentNetOnlyRoute(getActiveSelfHostedRelay());
+}
 export function mobileAgentNetAllowsLegacy(): boolean { return current.ready && !mobileAgentNetRequiresEncryption(); }
 export function waitForMobileAgentNetPreferences(): Promise<void> {
   if (current.ready) return Promise.resolve();

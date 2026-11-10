@@ -11,15 +11,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { generateKeyPairSync, randomBytes } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { createSocket } from 'node:dgram';
 import { once } from 'node:events';
 import WebSocket from 'ws';
 import { API, encodeDatagrams, sharingOriginsPayload, delegationPayload, MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { startAgentNetRelay, type Bootstrap, type RelayHandle, type RelayOptions } from '../server.js';
-import { generateIdentity, issueCertificate, publicBytes, createJoinRequest, approveJoin, createDelegation, createRequestProof, signature, type Identity } from '../identity.js';
+import { generateIdentity, issueCertificate, publicBytes, createJoinRequest, approveJoin, createDelegation, createRequestProof, signature, type Identity,
+  createTenantJoinRequest, verifyTenantPairingProof, tenantVerifyCode } from '../identity.js';
 import { AppError } from '@cindy/device-link-sharing/errors';
-import { AgentNetClient, authorization, submitJoin, pollJoin, encryptMedia, decryptMedia, type AgentNetUplink } from '../client.js';
+import { AgentNetClient, authorization, submitJoin, pollJoin, submitTenantJoin, pollTenantJoin, encryptMedia, decryptMedia, type AgentNetUplink } from '../client.js';
 import { uploadEncryptedMedia, openEncryptedMedia } from '../media.js';
 import { createHash } from 'node:crypto';
 
@@ -282,6 +283,67 @@ describe('independent V2 relay', () => {
     await expect(a.request('POST', '/media', { recipient: 'other', size: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await a.request('DELETE', '/devices/second');
     await expect(a.request('DELETE', '/devices/first')).rejects.toMatchObject({ code: 'OWNER_CANNOT_BE_REMOVED' });
+  });
+  // §5.5: another account gets its own network on a shared relay. Only the relay owner admits or revokes it,
+  // and neither side reaches the other's devices. Minimal input: one invite, one approval, one revocation.
+  it('admits another account into an isolated network only after relay-owner approval and revokes it', async () => {
+    const f = await fixture(), m = await f.join();
+    expect((await (await fetch(f.relay.url + API + '/info')).json()).features).toContain('tenants-v1');
+    await expect(m.client.request('POST', '/tenant-invites')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const guestRoot = generateKeyPairSync('ed25519').privateKey, guestRootKey = publicBytes(guestRoot);
+    const guest = generateIdentity('guest-pc'), networkId = 'private:' + randomUUID(), secret = randomBytes(32).toString('base64url');
+    const ask = async (requestNetwork = networkId) => {
+      const { inviteCode } = await f.client.request<{ inviteCode: string }>('POST', '/tenant-invites');
+      const request = createTenantJoinRequest({ root: guestRoot, identity: guest, networkId: requestNetwork, subject: 'owner:guest', name: 'Bob',
+        accountName: 'Bob', deviceName: 'Bob PC', inviteCode, pairingSecret: secret });
+      return { request, submitted: await submitTenantJoin(f.relay.url, request) };
+    };
+    const rejected = await ask('private:' + randomUUID());
+    await f.client.request('POST', '/tenant-requests/' + rejected.request.requestId + '/reject');
+    expect(await pollTenantJoin(f.relay.url, rejected.request.requestId, rejected.submitted.pollToken)).toEqual({ status: 'rejected' });
+    const { request, submitted } = await ask();
+    // An invite admits one request; the relay cannot check the pairing proof, the relay owner's computer does.
+    await expect(submitTenantJoin(f.relay.url, { ...request, requestId: randomUUID() })).rejects.toMatchObject({ code: 'TENANT_INVITE_INVALID' });
+    expect(await pollTenantJoin(f.relay.url, request.requestId, submitted.pollToken)).toEqual({ status: 'pending' });
+    const pending = (await f.client.request<{ requests: { request: typeof request }[] }>('GET', '/tenant-requests')).requests;
+    expect(pending.map(p => p.request.requestId)).toEqual([request.requestId]);
+    expect(verifyTenantPairingProof(pending[0].request, secret)).toBe(true);
+    expect(verifyTenantPairingProof(pending[0].request, randomBytes(32).toString('base64url'))).toBe(false);
+    expect(tenantVerifyCode(pending[0].request)).toBe(tenantVerifyCode(request));
+    const guestClient = new AgentNetClient(f.relay.url, guest, request.bootstrap.ownerCertificate, guestRootKey);
+    await expect(guestClient.directory()).rejects.toMatchObject({ code: 'NETWORK_UNKNOWN' });
+    await expect(m.client.request('POST', '/tenant-requests/' + request.requestId + '/approve')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await f.client.request('POST', '/tenant-requests/' + request.requestId + '/approve');
+    expect(await pollTenantJoin(f.relay.url, request.requestId, submitted.pollToken)).toEqual({ status: 'approved' });
+    // The guest administers its own network (its phone joins) but nothing relay-wide.
+    const phone = generateIdentity('guest-phone'), phoneSecret = randomBytes(32).toString('base64url');
+    const { joinCode } = await guestClient.request<{ joinCode: string }>('POST', '/join-codes');
+    const phoneRequest = createJoinRequest(phone, networkId, joinCode, 'guest-phone', phoneSecret);
+    const phoneSubmitted = await submitJoin(f.relay.url, phoneRequest);
+    const phoneCertificate = approveJoin(guestRoot, phoneRequest, phoneSecret, 'owner:guest');
+    await guestClient.request('POST', '/join-requests/' + phoneRequest.requestId + '/approve', { certificate: phoneCertificate });
+    expect((await pollJoin(f.relay.url, guestRootKey, networkId, phoneRequest.requestId, phoneSubmitted.pollToken)).certificate).toEqual(phoneCertificate);
+    await expect(guestClient.request('POST', '/tenant-invites')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(guestClient.request('GET', '/tenants')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect((await guestClient.directory()).map(d => d.certificate.deviceId)).toEqual(['guest-pc', 'guest-phone']);
+    expect((await f.client.directory()).map(d => d.certificate.deviceId)).toEqual(['owner', 'member']);
+    await expect(guestClient.request('POST', '/media', { recipient: 'member', size: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.client.request('POST', '/media', { recipient: 'guest-pc', size: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // Tenants survive a restart; state written before tenants existed infers the owner's network.
+    const file = path.join(f.dataDir, 'agent-net-state.json');
+    await f.relay.close();
+    const saved = JSON.parse(await readFile(file, 'utf8')); delete saved.primaryNetworkId; await writeFile(file, JSON.stringify(saved));
+    await f.restart();
+    expect((await f.client.request<{ tenants: unknown[] }>('GET', '/tenants')).tenants).toEqual([
+      expect.objectContaining({ networkId, accountName: 'Bob', devices: 2 })]);
+    const revived = new AgentNetClient(f.relay.url, guest, request.bootstrap.ownerCertificate, guestRootKey);
+    const uplink = await revived.connect(); f.uplinks.push(uplink);
+    const closed = once(uplink, 'close');
+    await f.client.request('DELETE', '/tenants/' + encodeURIComponent(networkId));
+    expect(await closed).toEqual([4410]);
+    await expect(revived.directory()).rejects.toMatchObject({ code: 'NETWORK_UNKNOWN' });
+    expect((await f.client.request<{ tenants: unknown[] }>('GET', '/tenants')).tenants).toEqual([]);
+    await expect(f.client.request('DELETE', '/tenants/' + encodeURIComponent(f.certificate.networkId))).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
   it('pairs through owner approval, pins identities, rejects replays and never contacts an official service', async () => {
     const realFetch = globalThis.fetch;

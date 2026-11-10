@@ -15,7 +15,7 @@ import {
   sharingOriginsPayload, sharingOriginsPolicyValid, type SharingOrigins, MAX_CONTROL_BYTES,
   guestRequestPath, delegationPrincipalMatches, delegationEndpointCertificate,
 } from '@cindy/agent-net-protocol';
-import { sha256, verifySignature, verifyCertificate, verifyDelegation, verifyJoinRequest, verifyRequestProof, verifyRequestDigestProof } from './identity.js';
+import { sha256, verifySignature, verifyCertificate, verifyDelegation, verifyJoinRequest, verifyRequestProof, verifyRequestDigestProof, verifyTenantJoinRequest } from './identity.js';
 import { Store, type NetworkRecord } from './store.js';
 import { AppError as SharingError } from '@cindy/device-link-sharing/errors';
 import { createAgentNetSharing, type AgentNetSharingOptions } from './sharing.js';
@@ -83,6 +83,14 @@ function jsonBody(bytes: Buffer): Record<string, unknown> {
 function blankNetwork(id: string, displayName: string, root: string, subject: string): NetworkRecord {
   return { id, name: displayName, rootPublicKey: root, subject, devices: {}, joinCodes: {}, joins: {}, grants: {}, pushTokens: {}, media: {} };
 }
+/** A network created from a verified owner bootstrap: the relay owner's at startup, or an approved tenant's. */
+function ownerNetwork(bootstrap: Bootstrap, ownerName = 'Owner'): NetworkRecord {
+  const c = bootstrap.ownerCertificate;
+  const network = blankNetwork(c.networkId, name(bootstrap.name), bootstrap.rootPublicKey, c.subject);
+  network.devices[c.deviceId] = { certificate: c, name: ownerName, customName: null, revokedAt: null };
+  return network;
+}
+const TENANT_REQUEST_TTL_MS = 10 * 60_000;
 /** No official URL or fetch is used here. The same engine is embeddable and independently deployable. */
 export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHandle> {
   const now = options.now ?? Date.now;
@@ -97,15 +105,20 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     const c = bootstrap.ownerCertificate;
     if (!verifyCertificate(bootstrap.rootPublicKey, c, c.issuedAt) || c.role !== 'owner' || c.networkId !== bootstrap.networkId || c.issuedAt > now() + 30_000) throw new Error('INVALID_BOOTSTRAP');
     await store.transaction((state) => {
+      // The bootstrap names the relay owner's network; only its owners administer tenants.
+      if (mode === 'self-hosted') state.primaryNetworkId = bootstrap.networkId;
       const existing = own(state.networks, bootstrap.networkId);
       if (existing) {
-        if (existing.rootPublicKey !== bootstrap.rootPublicKey || existing.subject !== c.subject) throw new Error('BOOTSTRAP_IDENTITY_MISMATCH');
+        if (existing.rootPublicKey !== bootstrap.rootPublicKey || existing.subject !== c.subject || existing.tenant) throw new Error('BOOTSTRAP_IDENTITY_MISMATCH');
         return;
       }
-      const network = blankNetwork(c.networkId, name(bootstrap.name), bootstrap.rootPublicKey, c.subject);
-      network.devices[c.deviceId] = { certificate: c, name: 'Owner', customName: null, revokedAt: null };
-      state.networks[network.id] = network;
+      state.networks[c.networkId] = ownerNetwork(bootstrap);
     });
+  }
+  if (mode === 'self-hosted' && store.primaryNetworkId() === undefined) {
+    // State written before tenants existed holds exactly the owner's network.
+    const owners = store.networks().filter(n => !n.tenant);
+    if (owners.length === 1) await store.transaction((state) => { state.primaryNetworkId = owners[0].id; });
   }
   if (mode === 'self-hosted' && store.networks().length === 0) throw new Error('SELF_HOSTED_BOOTSTRAP_REQUIRED');
   const sessions = new Map<string, Session>();
@@ -210,6 +223,9 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     } catch { return false; }
   }
   const requireOwner = (p: Principal) => p.certificate?.role === 'owner' ? undefined : fail(403, 'OWNER_REQUIRED');
+  // A tenant's own owner manages only its network; relay-wide tenant administration is the relay owner's.
+  const requireRelayOwner = (p: Principal) => !p.delegation && p.certificate?.role === 'owner' && store.primaryNetworkId() !== undefined
+    && p.networkId === store.primaryNetworkId() ? undefined : fail(403, 'FORBIDDEN');
   const expiredCredential = (p: Principal) => (p.certificate?.expiresAt ?? p.delegation?.expiresAt ?? Infinity) <= now();
   function roster(p: Principal): DeviceView[] {
     const n = network(p.networkId);
@@ -297,7 +313,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       const header = req.headers['x-agent-net-authorization'];
       if (typeof header !== 'string' || !header.startsWith('AgentNet ')) return fail(401, 'MEMBER_PROOF_REQUIRED');
       const p = await authenticate(req, bytes, false, undefined, header);
-      return { networkId: p.networkId, deviceId: p.deviceId, subject: p.certificate!.subject };
+      return { networkId: p.networkId, deviceId: p.deviceId, subject: p.certificate!.subject, tenant: !!store.network(p.networkId)?.tenant };
     },
     hostStatus(deviceId, networkId) {
       const session = sessions.get(key(networkId, deviceId));
@@ -325,7 +341,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     if (url.pathname === '/health' && method === 'GET') return writeJson(res, 200, { status: 'ok', protocolVersion: AGENT_NET_VERSION, udp: options.udpPort === undefined ? 'disabled' : 'ok' });
     if (url.pathname === API + '/info' && method === 'GET') return writeJson(res, 200, {
-      protocolVersion: AGENT_NET_VERSION, mode, udpPort: advertisedUdpPort, features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', 'notification-keys-v2', ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : [])],
+      protocolVersion: AGENT_NET_VERSION, mode, udpPort: advertisedUdpPort, features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', 'notification-keys-v2', ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
+        ...(mode === 'self-hosted' && store.primaryNetworkId() !== undefined ? ['tenants-v1'] : [])],
     });
     if (url.pathname.startsWith(API + '/sharing/')) {
       if (!sharing) return fail(404, 'SHARING_UNAVAILABLE');
@@ -373,6 +390,34 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       const join = own(n.joins, identifier(body.requestId));
       if (!join || join.expiresAt <= now() || join.pollHash !== sha256(string(body.pollToken))) return fail(403, 'POLL_TOKEN_INVALID');
       return writeJson(res, 200, { status: join.status, ...(join.status === 'approved' ? { certificate: join.certificate, rootPublicKey: n.rootPublicKey } : {}) });
+    }
+    // Another account asks for its own network on this relay. The invite code came from the
+    // relay owner's share link; the owner still approves after comparing the short code.
+    if (url.pathname === API + '/tenant-join' && method === 'POST') {
+      if (mode !== 'self-hosted' || store.primaryNetworkId() === undefined) return fail(404, 'NOT_FOUND');
+      if (!allow('tenant:' + (req.socket.remoteAddress ?? 'unknown'), 20)) return fail(429, 'TOO_MANY_REQUESTS');
+      const request = jsonBody(await readBody(req, 16_384));
+      if (!verifyTenantJoinRequest(request, now())) return fail(400, 'TENANT_JOIN_INVALID');
+      const pollToken = randomBytes(32).toString('base64url');
+      await store.transaction((state) => {
+        const invites = state.tenantInvites ??= {}, requests = state.tenantRequests ??= {};
+        const invite = own(invites, sha256(request.inviteCode));
+        if (!invite || invite.used || invite.expiresAt <= now()) return fail(403, 'TENANT_INVITE_INVALID');
+        const networkId = request.bootstrap.networkId;
+        if (own(state.networks, networkId) || own(requests, request.requestId)
+          || Object.values(requests).some(r => r.request.bootstrap.networkId === networkId)) return fail(409, 'TENANT_EXISTS');
+        if (Object.values(requests).filter(r => r.status === 'pending' && r.expiresAt > now()).length >= 32) return fail(429, 'TENANT_REQUEST_LIMIT');
+        invite.used = true;
+        requests[request.requestId] = { request, pollHash: sha256(pollToken), createdAt: now(), expiresAt: now() + TENANT_REQUEST_TTL_MS, status: 'pending' };
+      });
+      return writeJson(res, 202, { requestId: request.requestId, pollToken });
+    }
+    if (url.pathname === API + '/tenant-join/status' && method === 'POST') {
+      const body = jsonBody(await readBody(req, 4_096));
+      const requestId = string(body.requestId, 64), pollToken = string(body.pollToken);
+      const entry = store.tenantRequests().find(r => r.request.requestId === requestId);
+      if (!entry || entry.expiresAt <= now() || entry.pollHash !== sha256(pollToken)) return fail(403, 'POLL_TOKEN_INVALID');
+      return writeJson(res, 200, { status: entry.status, ...(entry.status === 'approved' ? { networkId: entry.request.bootstrap.networkId } : {}) });
     }
     if (!url.pathname.startsWith(API + '/')) return fail(404, 'NOT_FOUND');
     // Binary media chunks and JSON controls are both signed over their exact bytes.
@@ -456,6 +501,65 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       });
       disconnect(n.id, body.certificate && typeof body.certificate === 'object' ? (body.certificate as DeviceCertificate).deviceId : '');
       return writeJson(res, 200, { status: decision[2] === 'approve' ? 'approved' : 'rejected' });
+    }
+    if (url.pathname === API + '/tenant-invites' && method === 'POST') {
+      requireRelayOwner(principal);
+      const code = randomBytes(24).toString('base64url'), expiresAt = now() + 300_000;
+      await store.transaction((state) => {
+        const invites = state.tenantInvites ??= {};
+        for (const [id, old] of Object.entries(invites)) if (old.expiresAt <= now() || old.used) delete invites[id];
+        if (Object.keys(invites).length >= 32) return fail(429, 'TENANT_INVITE_LIMIT');
+        invites[sha256(code)] = { expiresAt, used: false };
+      });
+      return writeJson(res, 201, { inviteCode: code, expiresAt });
+    }
+    if (url.pathname === API + '/tenant-requests' && method === 'GET') {
+      requireRelayOwner(principal);
+      return writeJson(res, 200, { requests: store.tenantRequests().filter(r => r.status === 'pending' && r.expiresAt > now())
+        .map(r => ({ request: r.request, requestedAt: r.createdAt })) });
+    }
+    const tenantDecision = url.pathname.match(/^\/api\/agent-net\/tenant-requests\/([0-9a-f-]{36})\/(approve|reject)$/);
+    if (tenantDecision && method === 'POST') {
+      requireRelayOwner(principal);
+      const approve = tenantDecision[2] === 'approve';
+      await store.transaction((state) => {
+        const entry = own(state.tenantRequests ?? {}, tenantDecision[1]) ?? fail(404, 'NOT_FOUND');
+        if (entry.status !== 'pending' || entry.expiresAt <= now()) return fail(409, 'TENANT_REQUEST_EXPIRED');
+        if (!approve) { entry.status = 'rejected'; return; }
+        const { bootstrap, accountName, deviceName } = entry.request;
+        if (own(state.networks, bootstrap.networkId)) return fail(409, 'TENANT_EXISTS');
+        if (Object.values(state.networks).filter(t => t.tenant).length >= 64) return fail(409, 'TENANT_LIMIT');
+        const tenantNetwork = ownerNetwork(bootstrap, name(deviceName));
+        tenantNetwork.tenant = { accountName: name(accountName), createdAt: now() };
+        state.networks[bootstrap.networkId] = tenantNetwork;
+        entry.status = 'approved';
+      });
+      return writeJson(res, 200, { status: approve ? 'approved' : 'rejected' });
+    }
+    if (url.pathname === API + '/tenants' && method === 'GET') {
+      requireRelayOwner(principal);
+      return writeJson(res, 200, { tenants: store.networks().filter(t => t.tenant).map(t => ({
+        networkId: t.id, accountName: t.tenant!.accountName, createdAt: t.tenant!.createdAt,
+        devices: Object.values(t.devices).filter(d => d.revokedAt === null).length,
+        online: [...sessions.values()].some(s => s.principal.networkId === t.id && active(s.principal)) })) });
+    }
+    const tenant = url.pathname.match(/^\/api\/agent-net\/tenants\/([^/]+)$/);
+    if (tenant && method === 'DELETE') {
+      const target = decodeURIComponent(tenant[1]);
+      // The relay owner revokes a tenant; the tenant's own owner may also leave.
+      if (principal.delegation || principal.certificate?.role !== 'owner' || principal.networkId !== target) requireRelayOwner(principal);
+      const media = await store.transaction((state) => {
+        const removed = own(state.networks, target);
+        if (!removed?.tenant) return fail(404, 'NOT_FOUND');
+        delete state.networks[target];
+        if (state.delegationRequests) state.delegationRequests = state.delegationRequests.filter(r => r.networkId !== target);
+        for (const [id, r] of Object.entries(state.tenantRequests ?? {})) if (r.request.bootstrap.networkId === target) delete state.tenantRequests![id];
+        return Object.keys(removed.media);
+      });
+      for (const [id, session] of sessions) if (session.principal.networkId === target) { sessions.delete(id); session.ws.close(4410, 'access revoked'); }
+      for (const id of media) void mediaOperation(id, () => rm(path.join(mediaDir, id), { force: true }))
+        .catch(() => logger.error({}, 'agent-net tenant media cleanup failed'));
+      return writeJson(res, 200, { ok: true });
     }
     const device = url.pathname.match(/^\/api\/agent-net\/devices\/([^/]+)$/);
     if (device && ['PATCH', 'DELETE'].includes(method)) {
@@ -802,6 +906,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
           for (const [id, grant] of Object.entries(n.grants)) if (grant.delegation.expiresAt <= at
             && (grant.revokedAt === null || grant.revokedAt + MAX_GRANT_LIFETIME_MS <= at)) delete n.grants[id];
         }
+        for (const [id, invite] of Object.entries(state.tenantInvites ?? {})) if (invite.expiresAt <= at) delete state.tenantInvites![id];
+        for (const [id, r] of Object.entries(state.tenantRequests ?? {})) if (r.expiresAt <= at) delete state.tenantRequests![id];
       }).catch(() => logger.error({}, 'agent-net state cleanup failed')).finally(() => { sweeping = false; });
     }
   }, 30_000);

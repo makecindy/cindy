@@ -27,7 +27,7 @@ import { getActiveAuthRealm, getAuthState } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { fetchIdentityCard, providerShareApi, providerShareOwnerKey, sha256Hex, resolveAgentNetProviderShareLink } from './providerShareApi.js';
+import { fetchIdentityCard, providerShareApi, providerShareHiddenByEncryptedOnly, providerShareOwnerKey, sha256Hex, resolveAgentNetProviderShareLink } from './providerShareApi.js';
 import {
   crossRegionGetRequest,
   crossRegionLeave,
@@ -290,7 +290,12 @@ export function resolveRemoteAgentTarget(agentDeviceId: string): string {
   const shareId = parseProviderShareAgentDeviceId(agentDeviceId);
   if (!shareId) return agentDeviceId;
   const share = findReceivedShare(shareId);
-  if (!share) throw new Error('[REMOTE_AGENT_SHARE_REMOVED] this shared provider is no longer available');
+  if (!share) {
+    let hidden = false;
+    try { hidden = providerShareHiddenByEncryptedOnly(shareId); } catch { /* unreadable settings/vault: keep the removed verdict */ }
+    if (hidden) throw new Error('[REMOTE_AGENT_SHARE_LEGACY_DISABLED] encrypted-only connections block this older share');
+    throw new Error('[REMOTE_AGENT_SHARE_REMOVED] this shared provider is no longer available');
+  }
   if (share.status !== 'active') throw new Error('[REMOTE_AGENT_SHARE_PAUSED] the owner has paused this share');
   return providerShareHostPeer(share.shareId, share.hostDeviceId);
 }

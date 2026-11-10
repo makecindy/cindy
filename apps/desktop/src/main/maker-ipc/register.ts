@@ -285,6 +285,7 @@ import { initializePluginOauthCards } from '../plugin-oauth/cards.js';
 import { currentOauthIdentityScope, loadOauthSigningKey } from '../plugin-oauth/desktopIdentity.js';
 import { readDeviceLinkSettings, readLastKnownDeviceNames } from '../device-link/settings-store.js';
 import { getDeviceLinkStatus, getMobileNotifyGeneration, sendMobileBotGroupNotify, sendMobileSessionNotify } from '../device-link/index.js';
+import { notifyRelayAccountPreferenceChanged } from '../device-link/selfHostedRelayRuntime.js';
 import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
@@ -9080,7 +9081,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (rejection.startsWith('REMOTE_AGENT_SHARE_')) {
       // 分享来的供应商：给出分享专属原因(device-link 控制端同样降级为 PRECONDITION_FAILED)。
       throwIpcError(
-        isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : rejection as 'REMOTE_AGENT_SHARE_PAUSED' | 'REMOTE_AGENT_SHARE_REMOVED' | 'REMOTE_AGENT_SHARE_UNAVAILABLE',
+        isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : rejection as 'REMOTE_AGENT_SHARE_PAUSED' | 'REMOTE_AGENT_SHARE_REMOVED' | 'REMOTE_AGENT_SHARE_UNAVAILABLE' | 'REMOTE_AGENT_SHARE_LEGACY_DISABLED',
         'the shared provider is not available; the model was not changed',
       );
     }
@@ -14055,6 +14056,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onChatGroupAttention: (groupId, input, current) => {
       if (current()) getAgentIslandService()?.setGroupChat(groupId, input);
     },
+    // 同账号中转目录(自建中转):另一台设备列出或申请加入这台电脑的中转。
+    onAccountPreferenceChanged: notifyRelayAccountPreferenceChanged,
     onChatMessageNotification: (event, current) => {
       if (!current() || !getDesktopNotificationsEnabled()) return;
       if (event.conversationKind !== 'direct' && getAgentIslandService()?.notifyGroupChat(event.groupId)) return;

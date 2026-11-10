@@ -4,6 +4,7 @@ import {
   certificatePayload, certificatePolicyValid, delegationPayload, delegationPolicyValid, delegationScopeValid, joinPayload, requestPayload,
   type Delegation, type DeviceCertificate, type JoinRequest, type RequestProof,
 } from '@cindy/agent-net-protocol';
+import type { Bootstrap } from './server.js';
 
 export interface Identity {
   deviceId: string;
@@ -128,4 +129,56 @@ export function verifyDelegation(root: string, value: unknown, now = Date.now())
   return delegationPolicyValid(value, now) && verifyCertificate(root, value.issuerCertificate, now)
     && (value.executors?.every(e => verifyCertificate(root, e.certificate, value.issuedAt)) ?? true)
     && verifySignature(value.issuerCertificate.signingKey, delegationPayload(value), value.signature);
+}
+/** A guest account asks a shared self-hosted relay for its own private network.
+ * The pairing secret stays in the share link, so the relay cannot swap the root. */
+export interface TenantJoinRequest {
+  requestId: string;
+  inviteCode: string;
+  bootstrap: Bootstrap;
+  accountName: string;
+  deviceName: string;
+  pairingProof: string;
+}
+const UUID_V4 = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+const TENANT_REQUEST_ID = new RegExp('^' + UUID_V4 + '$'), TENANT_NETWORK_ID = new RegExp('^private:' + UUID_V4 + '$');
+const label = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= 64;
+export function tenantJoinPayload(r: Omit<TenantJoinRequest, 'pairingProof'>): string {
+  const b = r.bootstrap, c = b.ownerCertificate;
+  return JSON.stringify(['cindy-agent-net/tenant-join/1', r.requestId, r.inviteCode, b.networkId, b.name, b.rootPublicKey,
+    certificatePayload(c), c.signature, r.accountName, r.deviceName]);
+}
+export function createTenantJoinRequest(input: { root: KeyObject; identity: Pick<Identity, 'deviceId' | 'signingKey' | 'transportKey'>;
+  networkId: string; subject: string; name: string; accountName: string; deviceName: string; inviteCode: string; pairingSecret: string; requestId?: string }): TenantJoinRequest {
+  const ownerCertificate = issueCertificate(input.root, { networkId: input.networkId, subject: input.subject, identity: input.identity, role: 'owner' });
+  return signTenantJoinRequest({ requestId: input.requestId ?? randomUUID(), inviteCode: input.inviteCode,
+    bootstrap: { networkId: input.networkId, name: input.name, rootPublicKey: publicBytes(input.root), ownerCertificate },
+    accountName: input.accountName, deviceName: input.deviceName }, input.pairingSecret);
+}
+/** For a host that already keeps its root and owner certificate (its bootstrap) in secure storage. */
+export function signTenantJoinRequest(plain: Omit<TenantJoinRequest, 'pairingProof'>, pairingSecret: string): TenantJoinRequest {
+  const request = { ...plain, pairingProof: createHmac('sha256', pairingSecret).update(tenantJoinPayload(plain)).digest('base64url') };
+  if (!verifyTenantJoinRequest(request)) throw new Error('INVALID_TENANT_JOIN_REQUEST');
+  return request;
+}
+export function verifyTenantJoinRequest(value: unknown, now = Date.now()): value is TenantJoinRequest {
+  if (!value || typeof value !== 'object') return false;
+  const r = value as TenantJoinRequest, b = r.bootstrap as Partial<Bootstrap> | undefined;
+  if (Object.keys(r).length !== 6 || !b || typeof b !== 'object' || Object.keys(b).length !== 4) return false;
+  const c = b.ownerCertificate;
+  return typeof r.requestId === 'string' && TENANT_REQUEST_ID.test(r.requestId)
+    && typeof r.inviteCode === 'string' && /^[A-Za-z0-9_-]{32}$/.test(r.inviteCode)
+    && typeof b.networkId === 'string' && TENANT_NETWORK_ID.test(b.networkId) && label(b.name) && key(b.rootPublicKey)
+    && label(r.accountName) && label(r.deviceName) && typeof r.pairingProof === 'string' && KEY_PATTERN.test(r.pairingProof)
+    && verifyCertificate(b.rootPublicKey, c, now) && c.role === 'owner' && c.networkId === b.networkId && c.subject.length > 0;
+}
+export function verifyTenantPairingProof(request: TenantJoinRequest, secret: string): boolean {
+  if (!verifyTenantJoinRequest(request)) return false;
+  const expected = createHmac('sha256', secret).update(tenantJoinPayload(request)).digest();
+  const received = Buffer.from(request.pairingProof, 'base64url');
+  return received.length === expected.length && timingSafeEqual(received, expected);
+}
+/** Both sides show this short code; the relay owner compares it before approving. */
+export function tenantVerifyCode(request: Pick<TenantJoinRequest, 'pairingProof'>): string {
+  return String(createHash('sha256').update(request.pairingProof).digest().readUInt32BE(0) % 10_000).padStart(4, '0');
 }

@@ -17,7 +17,7 @@ vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ agentN
 vi.mock('../selfHostedRelayRouting.js', () => ({ activeSelfHostedRelay: () => ({
   relayId: '11111111-1111-4111-8111-111111111111', name: 'unit relay', baseUrl: 'http://127.0.0.1:1', role: 'owner',
   deviceId: 'device-a', ownerPublicKey: state.secrets?.agentNet?.rootPublicKey,
-}) }));
+}), isAgentNetOnlyRelay: (relay: { credential?: string } | null) => relay !== null && relay.credential === '' }));
 vi.mock('../selfHostedRelayConfig.js', () => ({
   readRelaySecrets: () => state.secrets,
   writeRelaySecrets: (_id: string, value: unknown) => { state.writes.push(value); state.secrets = value; },

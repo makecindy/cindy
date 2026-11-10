@@ -20,7 +20,7 @@ import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { createProviderShareDelegationChecks, type DelegationCheckInput,
   type DelegationCheckResult } from './providerShareDelegationChecks.js';
-import { agentNetSelectionKey, isAgentNetActive, agentNetAllowsLegacy } from './agentNetRuntime.js';
+import { agentNetSelectionKey, isAgentNetActive, agentNetAllowsLegacy, agentNetOnlyEncryptedByUser } from './agentNetRuntime.js';
 import { agentNetSharingAlias, agentNetSharingInvitation, agentNetSharingInvitationRoute, agentNetSharingRoute,
   listAgentNetProviderShares, rememberAgentNetSharingAliases, rememberAgentNetSharingGuest, rememberAgentNetSharingHost,
   rememberAgentNetSharingService, requestAgentNetSharing, retireAgentNetSharingGuest, selectedAgentNetSharingRoute,
@@ -161,6 +161,12 @@ export const providerShareApi: ProviderShareApi = {
     if (route) retireAgentNetSharingGuest('provider-share', route.resourceId);
   },
 };
+
+/** 「仅使用 Agent-Net」keeps every V1 share out of the received list: a missing share that was
+ * never pinned to V2 is blocked by that switch on this computer, not removed by its owner. */
+export function providerShareHiddenByEncryptedOnly(shareId: string): boolean {
+  return agentNetOnlyEncryptedByUser() && !agentNetSharingRoute('provider-share', shareId);
+}
 
 /** A V2 invitation carries its public root and service. Validate before pinning;
  * no account token, private root or transport seed is sent to that service. */

@@ -60,6 +60,8 @@ import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHostedRelay';
+import { useRelayAccountOffers } from '@/device-link/relayAccountDirectory';
+import { RELAY_JOIN_ROUTE, startRelayAccountJoin } from '@/device-link/relayJoinIntent';
 import { AgentNetSettingsGroup } from '@/device-link/AgentNetSettingsGroup';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
@@ -158,6 +160,8 @@ export default function SettingsScreen() {
   const { status, connectionIssue } = useDeviceLink();
   // 中转服务:官方中转或自建中转(docs/self-hosted-relay-plan.md §5.3)。
   const selfHostedRelay = useSelfHostedRelay();
+  // 同账号电脑正在用的中转:不用链接,点一下确认就加入(§5.4)。
+  const accountRelays = useRelayAccountOffers().filter((offer) => offer.relayId !== selfHostedRelay?.relayId);
   const [relaySwitching, setRelaySwitching] = useState(false);
   const [relayMessage, setRelayMessage] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -466,11 +470,33 @@ export default function SettingsScreen() {
     );
   }, [relaySwitching, selfHostedRelay, switchToOfficialRelay, t]);
 
+  const requestJoinAccountRelay = useCallback((offer: (typeof accountRelays)[number]) => {
+    if (relaySwitching) return;
+    Alert.alert(
+      t('relay.settings.accountSwitchTitle', { name: offer.name }),
+      [
+        t('relay.settings.accountSwitchBody', { device: offer.ownerDeviceName }),
+        selfHostedRelay ? t('relay.join.switchNote', { current: selfHostedRelay.name }) : '',
+      ].filter(Boolean).join('\n\n'),
+      [
+        { text: t('devices.common.cancel'), style: 'cancel' },
+        {
+          text: t('relay.settings.accountSwitchAction'),
+          onPress: () => {
+            startRelayAccountJoin(offer);
+            router.push(RELAY_JOIN_ROUTE);
+          },
+        },
+      ],
+    );
+  }, [relaySwitching, router, selfHostedRelay, t]);
+
   // 自建中转下:被主人移出 / 中转停用(4410)或中转凭证被拒(401),以及本机凭证缺失,
   // 都要在这里给出原因,并配「切回官方中转」。
+  // 只走 V2 的网络(别人分享来的中转)本来就没有旧版凭证。
   const relayIssueMessage = !selfHostedRelay
     ? null
-    : selfHostedRelay.credential === null
+    : selfHostedRelay.credential === null && !selfHostedRelay.agentNetOnly
       ? t('relay.settings.credentialMissingHint')
       : status !== 'online' && (connectionIssue?.kind === 'device-removed' || connectionIssue?.kind === 'auth-failed')
         ? t('relay.settings.removedHint')
@@ -705,11 +731,13 @@ export default function SettingsScreen() {
         </View>
 
         {/* 中转服务:当前走官方中转还是自建中转;自建时提供「切回官方中转」。
-            加入自建中转从电脑上的二维码进入(相机扫码打开加入页),这里不放扫码入口。 */}
+            同账号电脑正在用的中转列在这里,点一下确认就加入;别人分享的中转用相机扫码打开加入页,这里不放扫码入口。 */}
         <SettingsGroup
-          footer={selfHostedRelay
-            ? t('relay.settings.selfHostedHint', { address: selfHostedRelay.baseUrl })
-            : t('relay.settings.officialHint')}
+          footer={selfHostedRelay?.shared
+            ? t('relay.settings.sharedHint', { address: selfHostedRelay.baseUrl })
+            : selfHostedRelay
+              ? t('relay.settings.selfHostedHint', { address: selfHostedRelay.baseUrl })
+              : t('relay.settings.officialHint')}
           messages={[
             relayIssueMessage ? { text: relayIssueMessage, testID: 'settings.relay.issue' } : null,
             relayMessage ? { text: relayMessage, testID: 'settings.relay.message' } : null,
@@ -721,8 +749,26 @@ export default function SettingsScreen() {
             key="relay-current"
             label={t('relay.settings.currentLabel')}
             testID="settings.relay.current"
-            value={selfHostedRelay ? selfHostedRelay.name : t('relay.settings.official')}
+            value={selfHostedRelay
+              ? selfHostedRelay.shared?.ownerName
+                ? t('relay.settings.sharedCurrent', { name: selfHostedRelay.name, owner: selfHostedRelay.shared.ownerName })
+                : selfHostedRelay.name
+              : t('relay.settings.official')}
           />
+          {accountRelays.map((offer) => (
+            <ActionInfoRow
+              accessibilityLabel={t('relay.settings.accountSwitchTitle', { name: offer.name })}
+              disabled={relaySwitching}
+              key={`relay-account-${offer.ownerDeviceId}-${offer.relayId}`}
+              label={offer.name}
+              onPress={() => requestJoinAccountRelay(offer)}
+              testID={`settings.relay.account.${offer.relayId}`}
+              value={offer.kind === 'shared'
+                ? t(offer.sharedBy ? 'relay.settings.accountSharedBy' : 'relay.settings.accountSharedOn',
+                  { device: offer.ownerDeviceName, owner: offer.sharedBy ?? '' })
+                : t('relay.settings.accountManagedOn', { device: offer.ownerDeviceName })}
+            />
+          ))}
           {selfHostedRelay ? (
             <ActionInfoRow
               accessibilityLabel={t('relay.settings.switchToOfficial')}

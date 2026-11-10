@@ -10,10 +10,10 @@ import { randomBytes } from 'node:crypto';
 import { generateIdentity, createPrivateNetwork, verifyRequestProof } from '@cindy/agent-net-relay';
 import { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net';
-import { RoutedDeviceLinkClient, sharedTaskHostPeer } from '@cindy/device-link';
+import { RoutedDeviceLinkClient, providerShareHostPeer, sharedTaskHostPeer } from '@cindy/device-link';
 const state = vi.hoisted(() => ({ key: 'owner-a', pending: false, api: null as any,
   relay: null as any, config: null as any,
-  files: new Map<string, string>(), writes: [] as string[], http: vi.fn(), card: vi.fn(),
+  files: new Map<string, string>(), writes: [] as string[], http: vi.fn(), card: vi.fn(), agentNetEnabled: true, onlyEncrypted: false,
 }));
 vi.mock('node:fs', () => ({ default: {
   existsSync: (file: string) => state.files.has(file), statSync: (file: string) => ({ size: state.files.get(file)?.length ?? 0 }),
@@ -39,16 +39,16 @@ vi.mock('../selfHostedRelayConfig.js', () => ({ secureStorageAvailable: () => tr
   readRelayConfig: () => state.config,
   relayDataPath: () => '/unit-only-vault/' + state.key + '/sharing.enc' }));
 vi.mock('../selfHostedRelayRouting.js', () => ({ activeSelfHostedRelay: () => state.relay }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ agentNetEnabled: true }) }));
+vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ agentNetEnabled: state.agentNetEnabled }) }));
 vi.mock('../agentNetRuntime.js', () => ({ currentAgentNetClient: () => state.api, isAgentNetActive: () => true,
-  agentNetAllowsLegacy: () => false, agentNetSelectionKey: () => 'selected-private', agentNetClientForRelay: () => null,
+  agentNetAllowsLegacy: () => false, agentNetOnlyEncryptedByUser: () => state.onlyEncrypted, agentNetSelectionKey: () => 'selected-private', agentNetClientForRelay: () => null,
   openScopedAgentNetAppSocket: vi.fn() }));
 import { selectedAgentNetSharingRoute, rememberAgentNetSharingService, requestAgentNetSharing,
   joinAgentNetSharedTask, agentNetSharingRoute, stopAgentNetSharing, captureAgentNetSharingBoundaryClose, bindAgentNetSharing } from '../agentNetSharing.js';
-import { resolveAgentNetProviderShareLink, providerShareApi, providerShareLinkFor } from '../providerShareApi.js';
+import { resolveAgentNetProviderShareLink, providerShareApi, providerShareLinkFor, providerShareHiddenByEncryptedOnly } from '../providerShareApi.js';
 beforeEach(() => {
   state.key = 'owner-a'; state.pending = false; state.files.clear(); state.writes = [];
-  state.relay = null; state.config = null;
+  state.relay = null; state.config = null; state.agentNetEnabled = true; state.onlyEncrypted = false;
   state.http.mockReset(); state.card.mockReset();
   const identity = generateIdentity('self-device'), { bootstrap } = createPrivateNetwork('Unit fixture', identity);
   state.api = new AgentNetClient('https://private.example.test', identity, bootstrap.ownerCertificate, bootstrap.rootPublicKey);
@@ -100,6 +100,95 @@ it('keeps a provider application, approval, transport identity and leave on its 
     expect(new Headers(init.headers).get('authorization')).toMatch(/^AgentNetIdentity /);
   }
   expect(state.card.mock.calls.every(([, opts]) => opts.body.audience === 'cindy-agent-net-sharing')).toBe(true);
+});
+// Bug (real owner, 2026-11-10): origin sync had saved a placeholder service for
+// the owner's own relay; the host listing reused it as each share's route, so
+// every snapshot poll failed with ROUTE_CONFLICT and a new share was pinned to a
+// placeholder host. Real Main listing over that persisted vault shape; unit.
+it('lists owned shares whose origin is also saved as a discovered service', async () => {
+  const old = state.api;
+  state.api = new AgentNetClient(old.base, old.identity, old.certificate, old.rootPublicKey, undefined, { fetch: state.http });
+  const route = selectedAgentNetSharingRoute('provider-share')!;
+  const placeholder = { ...route, kind: 'shared-task', resourceId: 'origin-discovery', hostDeviceId: 'origin-discovery' };
+  const vault = { version: 2, seed: randomBytes(32).toString('base64url'),
+    routes: [{ ...route, resourceId: 'owned-share', aliases: { invitations: ['a'.repeat(64)] } }], services: [placeholder] };
+  state.files.set('/unit-only-vault/owner-a/sharing.enc', Buffer.from('unit-vault:' + JSON.stringify(vault)).toString('base64'));
+  const share = (shareId: string) => ({ shareId, providerId: 'claude', providerLabel: 'Claude', hostDeviceId: 'self-device',
+    createdAt: new Date().toISOString(), members: [], requests: [] });
+  state.http.mockImplementation(async (url: string) => String(url).includes('/sharing-origins')
+    ? Response.json({ origins: [] }) : Response.json({ shares: [share('owned-share'), share('second-share')] }));
+  await expect(providerShareApi.listOwned()).resolves.toMatchObject([{ shareId: 'owned-share' }, { shareId: 'second-share' }]);
+  expect(agentNetSharingRoute('provider-share', 'owned-share')).toMatchObject({ hostDeviceId: 'self-device', aliases: { invitations: ['a'.repeat(64)] } });
+  expect(agentNetSharingRoute('provider-share', 'second-share')).toMatchObject({ hostDeviceId: 'self-device', server: route.server });
+  expect(agentNetSharingRoute('provider-share', 'second-share')?.aliases?.invitations ?? []).toEqual([]);
+});
+/** Admit this device as a guest of another account's private provider share, through the
+ * public facade, then bind the routed client the way Main does after login. */
+async function admitPrivateGuest(resourceId: string) {
+  const old = state.api;
+  state.api = new AgentNetClient(old.base, old.identity, old.certificate, old.rootPublicKey, undefined, { fetch: state.http });
+  const receipt = { v: 2 as const, kind: 'provider-share' as const, resourceId, invitation: 'Q'.repeat(43),
+    networkId: 'private:friend', rootPublicKey: state.api.rootPublicKey, hostDeviceId: 'remote-host', region: 'global' as const };
+  const resolved = resolveAgentNetProviderShareLink(buildAgentNetSharingInvitation(receipt, 'https://friend.example.test'))!;
+  const later = new Date(Date.now() + 60_000).toISOString(), owner = { displayName: 'Owner', avatarUrl: null, region: 'global' };
+  const guest = { status: 'active' };
+  state.http.mockImplementation(async (url: string) => {
+    const { host, pathname: path } = new URL(String(url));
+    if (path.endsWith('/sharing-origins')) return Response.json({ origins: [] });
+    if (path.endsWith('/provider-shares/preview')) return Response.json({ shareId: resourceId, providerId: 'claude', providerLabel: 'Remote',
+      deviceName: 'Owner', owner, state: 'unused', expiresAt: later });
+    if (path.endsWith('/provider-shares/requests')) return Response.json({ requestId: 'guest-request', status: 'pending', pairingCode: '1234', expiresAt: later });
+    if (path.includes('/provider-shares/requests/')) return Response.json({ requestId: 'guest-request', status: 'approved', pairingCode: '1234',
+      expiresAt: later, shareId: resourceId, memberId: 'guest-member' });
+    if (path.includes('/sharing/transport')) return Response.json({ error: { code: 'NOT_FOUND' } }, { status: 404 });
+    if (host !== 'friend.example.test') return Response.json({ shares: [] });
+    return Response.json({ shares: [{ shareId: resourceId, memberId: 'guest-member', providerId: 'claude', providerLabel: 'Remote',
+      hostDeviceId: 'remote-host', deviceName: 'Owner', owner, status: guest.status, hostOnline: true, hostCapable: true }] });
+  });
+  await resolved.api.sendRequest(resolved.invitation, 'unit-display-card');
+  await providerShareApi.getRequest('guest-request');
+  const options = { getWsUrl: () => 'wss://unavailable.example.test', getToken: async () => null,
+    getHello: () => ({ deviceName: 'Guest', platform: 'test', appVersion: '1', remoteControlEnabled: false, busy: false }),
+    createWebSocket: () => { throw new Error('PRIMARY_MUST_NOT_BE_REQUIRED'); } };
+  const primary = new RoutedDeviceLinkClient(options), stop = bindAgentNetSharing(primary, options);
+  return { primary, stop, guest, peer: providerShareHostPeer(resourceId, receipt.hostDeviceId) };
+}
+// Bug (real guest, 2026-11-10): a pause bumps the member's admission version, so the relay closes
+// the member socket with 4410 and that scoped client stops for good; after resume the share stayed
+// "client stopped" until restart. Real Main listing + routed client, 4410 state set on that client; unit.
+it('rebuilds a member connection the relay closed once the owner lists the share active again', async () => {
+  const { primary, stop, guest, peer } = await admitPrivateGuest('paused-provider');
+  const dead = primary.connectionFor(peer);
+  expect(dead).not.toBe(primary);
+  (dead as unknown as { setConnectionIssue(issue: unknown): void }).setConnectionIssue({ kind: 'device-removed', closeCode: 4410, at: Date.now() });
+  guest.status = 'paused'; await providerShareApi.listReceived();
+  expect(primary.connectionFor(peer)).toBe(dead);
+  guest.status = 'active'; await providerShareApi.listReceived();
+  const rebuilt = primary.connectionFor(peer);
+  expect(rebuilt).not.toBe(dead); expect(rebuilt).not.toBe(primary); expect(rebuilt.getConnectionIssue()).toBeNull();
+  stop();
+});
+// Bug (real guest, 2026-11-10): with 「新版连接」off the guest could join, be approved and see the
+// share as active, yet every use failed with DEVICE_LINK_NOT_CONNECTED because the admission's own
+// connection was gated by this device's network toggle. Real routed client start; unit.
+it('connects a joined guest admission even when this device has its own Agent-Net network off', async () => {
+  state.agentNetEnabled = false;
+  const { primary, stop } = await admitPrivateGuest('toggle-off-provider');
+  state.http.mockClear();
+  primary.start();
+  await vi.waitFor(() => expect(state.http.mock.calls.some(([url]) => String(url) === 'https://friend.example.test/api/agent-net/sharing/transport')).toBe(true));
+  primary.stop(); stop();
+});
+// Bug (2026-11-10): with 「仅使用 Agent-Net」on, V1 shares never reach the received list and a task
+// using one said the owner removed it. Only a share never pinned to V2 is attributed to the switch.
+it('attributes a missing share to the encrypted-only switch only when it was never a V2 share', async () => {
+  const { stop } = await admitPrivateGuest('v2-provider');
+  state.onlyEncrypted = true;
+  expect(providerShareHiddenByEncryptedOnly('legacy-provider')).toBe(true);
+  expect(providerShareHiddenByEncryptedOnly('v2-provider')).toBe(false);
+  state.onlyEncrypted = false;
+  expect(providerShareHiddenByEncryptedOnly('legacy-provider')).toBe(false);
+  stop();
 });
 it('sends a key-bound short-lived card to the private service and persists only via the secure vault', async () => {
   const route = selectedAgentNetSharingRoute('shared-task')!;

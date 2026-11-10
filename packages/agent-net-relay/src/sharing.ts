@@ -18,9 +18,20 @@ export interface AgentNetSharingOptions {
   authenticate(req: IncomingMessage, body: Buffer, context: SharingAuthenticationContext): Promise<SharingActor>;
   providers: Omit<ProviderShareServiceOptions, 'hostStatus' | 'now'>;
 }
+/**
+ * A network another account owns on this relay (self-hosted-relay-plan.md §5.5) may belong to the peer region:
+ * its certificate carries the account's own ID, the relay names that account `x:<region>:<ID>`.
+ * The member certificate (signed by that network's root, held only by its owner) still has to match.
+ */
+export function sameAccount(member: { subject: string; tenant?: boolean }, accountId: string): boolean {
+  if (member.subject === accountId) return true;
+  const peer = /^x:(?:cn|global):(.+)$/.exec(accountId);
+  return member.tenant === true && peer?.[1] === member.subject;
+}
 export interface SharingHost {
   storage: SharingStorage;
-  member(req: IncomingMessage, bytes: Buffer): Promise<{ networkId: string; deviceId: string; subject: string }>;
+  /** `tenant`: the network another account owns on this relay. */
+  member(req: IncomingMessage, bytes: Buffer): Promise<{ networkId: string; deviceId: string; subject: string; tenant?: boolean }>;
   hostStatus(deviceId: string, networkId: string): { online: boolean; capabilities: readonly string[] };
   changed(networkIds: readonly string[]): void;
   requests(): DelegationRequest[];
@@ -104,7 +115,7 @@ export function createAgentNetSharing(options: AgentNetSharingOptions, host: Sha
     let networkId: string | undefined;
     const certified = async () => {
       const member = await host.member(req, bytes);
-      if (member.deviceId !== actor.deviceId || member.networkId !== actor.networkId || member.subject !== actor.accountId) throw permissionDenied('Network/account/device identity mismatch');
+      if (member.deviceId !== actor.deviceId || member.networkId !== actor.networkId || !sameAccount(member, actor.accountId)) throw permissionDenied('Network/account/device identity mismatch');
       networkId = member.networkId; return services(networkId);
     };
     const ordinary = services();

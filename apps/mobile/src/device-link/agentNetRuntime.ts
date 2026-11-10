@@ -3,7 +3,7 @@ import { AppState } from 'react-native';
 import { AgentNetSocket, NativeTransport } from '@cindy/agent-net/portable';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { getOfficialAgentNetApiBaseUrl } from '@/config/env';
-import { getActiveSelfHostedRelay, getSelfHostedRelayRouteGeneration, subscribeSelfHostedRelayRoute } from './selfHostedRelayRouting';
+import { getActiveSelfHostedRelay, getSelfHostedRelayRouteGeneration, isAgentNetOnlyRoute, subscribeSelfHostedRelayRoute } from './selfHostedRelayRouting';
 import { MobileAgentNetEngine } from './agentNetNative';
 import { ensureMobileAgentNetIdentity, clearMobileAgentNetIdentity, currentMobileAgentNetIdentity, type MobileAgentNetEnrollmentOptions } from './agentNetIdentity';
 import { getMobileAgentNetPreferences, mobileAgentNetRequiresEncryption, subscribeMobileAgentNetPreferences } from './agentNetPreferences';
@@ -25,6 +25,8 @@ function live(): AgentNetSocket | null {
 }
 export function isMobileAgentNetActive(): boolean {
   const settings = getMobileAgentNetPreferences(), route = getActiveSelfHostedRelay();
+  // 只走 V2 的网络(别人分享来的中转)不看「启用 Agent-Net」开关:没有旧版可退。
+  if (isAgentNetOnlyRoute(route)) return settings.ready && MobileAgentNetEngine.available() && !!route!.signing?.agentNet?.certificate;
   return settings.ready && settings.enabled && MobileAgentNetEngine.available()
     && (route ? !!route.signing?.agentNet : !!getOfficialAgentNetApiBaseUrl());
 }

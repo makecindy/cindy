@@ -6,10 +6,11 @@ import {
   guestRequestPath, delegationVisibleTo, delegationPrincipalMatches, delegationPayload,
   type Delegation, type DeviceCertificate, type DeviceView, type JoinRequest, type EnrollmentRequest, type TransportModeProof,
 } from '@cindy/agent-net-protocol';
-import { createDelegation, createRequestProof, sha256, signature, verifySignature, verifyCertificate, verifyDelegation, type Identity } from './identity.js';
+import { createDelegation, createRequestProof, sha256, signature, verifySignature, verifyCertificate, verifyDelegation, type Identity, type TenantJoinRequest } from './identity.js';
 import { delegationRequestPolicyValid, type DelegationRequest } from '@cindy/agent-net-protocol';
-export { generateIdentity, publicBytes, issueCertificate, createJoinRequest, approveJoin, createDelegation } from './identity.js';
-export type { Identity } from './identity.js';
+export { generateIdentity, publicBytes, issueCertificate, createJoinRequest, approveJoin, createDelegation,
+  createTenantJoinRequest, verifyTenantJoinRequest, verifyTenantPairingProof, tenantVerifyCode } from './identity.js';
+export type { Identity, TenantJoinRequest } from './identity.js';
 export { createPrivateNetwork } from './bootstrap.js';
 export { uploadEncryptedMedia, openEncryptedMedia } from './media.js';
 export { sealNotification } from './notification.js';
@@ -72,6 +73,15 @@ export async function pollJoin(base: string, rootPublicKey: string, networkId: s
   const result = await responseBody(await (transport.fetch ?? fetch)(checkBase(base, transport) + API + '/join/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ networkId, requestId, pollToken }), redirect: 'error', signal: AbortSignal.timeout(10_000) })) as { status: string; certificate?: DeviceCertificate; rootPublicKey?: string };
   if (result.status === 'approved' && (result.rootPublicKey !== rootPublicKey || !verifyCertificate(rootPublicKey, result.certificate) || result.certificate.networkId !== networkId)) throw new Error('UNTRUSTED_NETWORK_CERTIFICATE');
   return result;
+}
+/** Another account asks a shared self-hosted relay for its own network (§5.5); no certificate is returned,
+ * the guest already holds its own root and owner certificate. */
+export async function submitTenantJoin(base: string, request: TenantJoinRequest, transport: AgentNetClientTransport = {}): Promise<{ requestId: string; pollToken: string }> {
+  return responseBody(await (transport.fetch ?? fetch)(checkBase(base, transport) + API + '/tenant-join', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request), redirect: 'error', signal: AbortSignal.timeout(10_000) })) as Promise<{ requestId: string; pollToken: string }>;
+}
+export async function pollTenantJoin(base: string, requestId: string, pollToken: string, transport: AgentNetClientTransport = {}): Promise<{ status: string }> {
+  const result = await responseBody(await (transport.fetch ?? fetch)(checkBase(base, transport) + API + '/tenant-join/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId, pollToken }), redirect: 'error', signal: AbortSignal.timeout(10_000) })) as { status?: unknown };
+  return { status: typeof result.status === 'string' ? result.status : 'pending' };
 }
 export class AgentNetClient {
   readonly base: string;

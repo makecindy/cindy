@@ -4,13 +4,13 @@ import { createPrivateKey, randomUUID } from 'node:crypto';
 import { app } from 'electron';
 import WebSocket from 'ws';
 import { AgentNetWorkerSocket, type AgentNetAppSocket } from '@cindy/agent-net';
-import { approveJoin, identityFromSeed, issueCertificate, publicBytes, verifyCertificate, type Bootstrap, type Identity, type JoinRequest, type DeviceCertificate } from '@cindy/agent-net-relay';
+import { approveJoin, identityFromSeed, issueCertificate, publicBytes, signTenantJoinRequest, verifyCertificate, type Bootstrap, type Identity, type JoinRequest, type DeviceCertificate, type TenantJoinRequest } from '@cindy/agent-net-relay';
 import { AgentNetClient, createDelegationApprover, createTransportModeProof, verifyTransportModeProof } from '@cindy/agent-net-relay/client';
 import { CERT_LIFETIME_MS, type DeviceView } from '@cindy/agent-net-protocol';
 import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readDeviceLinkSettings } from './settings-store.js';
-import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
+import { activeSelfHostedRelay, isAgentNetOnlyRelay } from './selfHostedRelayRouting.js';
 import { readRelaySecrets, writeRelaySecrets, relayDataPath, readRelayConfig } from './selfHostedRelayConfig.js';
 import * as authManager from '../authManager.js';
 import { currentOfficialAgentNetClient, ensureOfficialAgentNetClient, officialAgentNetBase, officialAgentNetSlot } from './agentNetOfficial.js';
@@ -73,14 +73,35 @@ export function ensureOwnerAgentNetBootstrap(relayId: string, name: string): Boo
   } });
   return { networkId, name, rootPublicKey, ownerCertificate: certificate };
 }
+/**
+ * 别人分享的中转(self-hosted-relay-plan.md §5.5):本账号在上面建自己的网络。根密钥与主人证书只在本机安全存储,
+ * 中转只拿到公开的 bootstrap;配对证明用分享链接里的秘密,分享者电脑据此确认申请没被中转换掉。
+ */
+export function createAgentNetTenantRequest(networkUuid: string, seed: string, input: { name: string; accountName: string; inviteCode: string; pairingSecret: string }): TenantJoinRequest {
+  const subject = authManager.getCurrentUserId();
+  if (!subject || isAppSessionBoundaryPending()) throw new Error('AGENT_NET_OWNER_NOT_READY');
+  const root = rootKey(seed), identity = initialIdentity(networkUuid, seed, authManager.getDeviceId());
+  const certificate = issueCertificate(root, { networkId: 'private:' + networkUuid, subject, identity, role: 'owner' });
+  // 没有旧版凭证:这个网络只走 V2。
+  writeRelaySecrets(networkUuid, { credential: '', seed, agentNet: {
+    version: 2, signingPrivateKey: String(identity.signingPrivateKey.export({ type: 'pkcs8', format: 'pem' })),
+    transportPrivateKey: String(identity.transportPrivateKey.export({ type: 'pkcs8', format: 'pem' })), certificate, rootPublicKey: publicBytes(root),
+  } });
+  const bootstrap = ensureOwnerAgentNetBootstrap(networkUuid, input.name);
+  return signTenantJoinRequest({ requestId: randomUUID(), inviteCode: input.inviteCode, bootstrap,
+    accountName: input.accountName, deviceName: deviceName().trim().slice(0, 64) || 'Cindy' }, input.pairingSecret);
+}
 export function isAgentNetActive(): boolean {
   if (isAppSessionBoundaryPending()) return false;
   const relay = activeSelfHostedRelay();
+  // 只走 V2 的网络(别人分享的中转)不看「新版连接」开关:没有旧版可退。
+  if (isAgentNetOnlyRelay(relay)) return !!readRelaySecrets(relay!.relayId)?.agentNet;
   return readDeviceLinkSettings().agentNetEnabled === true
     && (relay ? !!readRelaySecrets(relay.relayId)?.agentNet : !!officialAgentNetBase());
 }
 export function agentNetSupportsPeer(id: string): boolean { return current?.supports(id) ?? false; }
 export function agentNetRequiresEncryption(): boolean {
+  if (isAgentNetOnlyRelay(activeSelfHostedRelay())) return true;
   const settings = readDeviceLinkSettings();
   return settings.agentNetEnabled === true && settings.agentNetOnlyEncrypted === true;
 }
@@ -90,6 +111,11 @@ export function agentNetSelectionKey(): string {
     settings.agentNetEnabled === true, settings.agentNetOnlyEncrypted === true]);
 }
 export function agentNetAllowsLegacy(): boolean { return !agentNetRequiresEncryption(); }
+/** The user's own 「仅使用 Agent-Net」switch (not a V2-only relay someone shared with this account). */
+export function agentNetOnlyEncryptedByUser(): boolean {
+  const settings = readDeviceLinkSettings();
+  return settings.agentNetEnabled === true && settings.agentNetOnlyEncrypted === true;
+}
 export async function createAgentNetOrLegacySocket<T>(
   legacy: () => T | Promise<T>,
   onTransport?: (encrypted: boolean) => void,

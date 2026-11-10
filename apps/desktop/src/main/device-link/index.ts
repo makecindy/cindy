@@ -939,7 +939,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // Prepare the name before the first hello without blocking Electron's main thread.
       await deviceNameReady;
       const relay = activeSelfHostedRelay();
-      if (relay) return authManager.getAuthState().isAuthenticated ? relay.credential : null;
+      // 只走 V2 的网络没有旧版凭证:不建旧版连接(主连接由 V2 承载)。
+      if (relay) return authManager.getAuthState().isAuthenticated && relay.credential ? relay.credential : null;
       return accountToken();
     },
   };

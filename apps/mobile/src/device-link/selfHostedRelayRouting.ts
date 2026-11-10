@@ -30,6 +30,18 @@ export interface SelfHostedRelayRoute {
    * 凭证缺失时它也是 null,此时不建连、不签名。种子同凭证一样只在内存,不进日志与诊断。
    */
   signing: SelfHostedRelaySigning | null;
+  /**
+   * 只走 V2 的网络(别人分享给本账号的中转,§5.5):没有旧版凭证,`credential` 为 null 不表示凭证缺失;
+   * 只用端到端加密连接,不连旧版。
+   */
+  agentNetOnly?: boolean;
+  /** 别人分享给本账号的中转;`ownerName` 是分享者的名字。 */
+  shared?: { ownerName: string | null };
+}
+
+/** 只走 V2 的网络:不论「启用 Agent-Net」开关,都只用加密连接(没有旧版可退)。 */
+export function isAgentNetOnlyRoute(route: SelfHostedRelayRoute | null): boolean {
+  return route?.agentNetOnly === true;
 }
 
 export interface SelfHostedRelaySigning {
@@ -77,7 +89,8 @@ function sameSigning(a: SelfHostedRelaySigning | null, b: SelfHostedRelaySigning
 function sameRoute(a: SelfHostedRelayRoute | null, b: SelfHostedRelayRoute | null): boolean {
   if (!a || !b) return a === b;
   return a.relayId === b.relayId && a.name === b.name && a.baseUrl === b.baseUrl && a.credential === b.credential
-    && sameSigning(a.signing, b.signing);
+    && sameSigning(a.signing, b.signing) && !!a.agentNetOnly === !!b.agentNetOnly
+    && JSON.stringify(a.shared ?? null) === JSON.stringify(b.shared ?? null);
 }
 
 function notify(): void {

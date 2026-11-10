@@ -58,6 +58,10 @@ type ScopedConnectionOptions = Omit<DeviceLinkClientOptions, 'getWsUrl' | 'getTo
 let binding: { client: RoutedDeviceLinkClient; options: ScopedConnectionOptions; session: Session;
   selection: string; pins: Map<string, () => void>; stop(): void } | null = null;
 const keyOf = (kind: Kind, id: string) => kind + ':' + id;
+/** A listing origin may be any pinned route or a discovery placeholder on that
+ * authority: carry only the authority, never another resource's host, member or aliases. */
+const resourceRoute = (origin: AgentNetSharingRoute, kind: Kind, resourceId: string, hostDeviceId: string): AgentNetSharingRoute =>
+  ({ v: origin.v, kind, resourceId, server: origin.server, networkId: origin.networkId, rootPublicKey: origin.rootPublicKey, region: origin.region, hostDeviceId });
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest();
 const seedValid = (seed: unknown): seed is string => typeof seed === 'string' && /^[A-Za-z0-9_-]{43}$/.test(seed)
   && Buffer.from(seed, 'base64url').toString('base64url') === seed;
@@ -131,15 +135,26 @@ function remember(state: Session, route: AgentNetSharingRoute, newAdmission = fa
     const next = { ...old, ...route, aliases: { ...old.aliases, ...route.aliases } };
     if (JSON.stringify(old) !== JSON.stringify(next)) {
       save(state, { ...state.vault, routes: state.vault.routes.map(r => r === old ? next : r) });
-      if (old.memberId !== next.memberId || old.seed !== next.seed || old.retired !== next.retired) {
-        state.connections.get(key)?.stop();
-        binding?.pins.get(key)?.(); binding?.pins.delete(key); state.connections.delete(key); state.sockets.delete(key);
-      }
+      if (old.memberId !== next.memberId || old.seed !== next.seed || old.retired !== next.retired) dropConnection(state, key);
     }
     installRoute(state, next); return next;
   }
   if (state.vault.routes.length >= 1024) throw new Error('AGENT_NET_SHARING_ROUTE_LIMIT');
   save(state, { ...state.vault, routes: [...state.vault.routes, route] }); installRoute(state, route); return route;
+}
+const leaseOf = new WeakMap<DeviceLinkClient, AgentNetSharingTransport>();
+function dropConnection(state: Session, key: string): void {
+  const scoped = state.connections.get(key), lease = scoped && leaseOf.get(scoped);
+  scoped?.stop(); if (lease) { lease.close(); state.leases.delete(lease); }
+  binding?.pins.get(key)?.(); binding?.pins.delete(key); state.connections.delete(key); state.sockets.delete(key);
+}
+/** The relay closes a member socket (4410) whenever the admission version moves: a pause, the
+ * member's next device or a rotated credential. That client never restarts by itself, so once
+ * the owner's list shows the share active again, rebuild it with a fresh lease. */
+function reviveMemberConnection(state: Session, route: AgentNetSharingRoute): void {
+  const key = keyOf(route.kind, route.resourceId);
+  if (!route.memberId || route.retired || state.connections.get(key)?.getConnectionIssue()?.kind !== 'device-removed') return;
+  dropConnection(state, key); installRoute(state, route);
 }
 function signer(identity: Identity) {
   return { identity, sign: async (value: string) => signature(identity.signingPrivateKey, value),
@@ -416,22 +431,22 @@ export async function listAgentNetProviderShares(received: boolean, legacy: () =
     if (result.status === 'fulfilled') state.lists.set(source.key, items);
     else if (source.route) for (const route of known.filter(r => originKey(r) === originKey(source.route))) unavailable.add(route.resourceId);
     for (const item of items) {
-      const row = item as { shareId: string; hostDeviceId: string; memberId?: string; members?: { memberId: string }[]; requests?: { requestId: string; linkId?: string }[] };
+      const row = item as { shareId: string; hostDeviceId: string; memberId?: string; status?: string; members?: { memberId: string }[]; requests?: { requestId: string; linkId?: string }[] };
       if (!row || typeof row.shareId !== 'string' || rows.has(row.shareId)) throw new Error('AGENT_NET_SHARING_ROUTE_CONFLICT');
       rows.set(row.shareId, item);
       if (result.status === 'rejected') { unavailable.add(row.shareId); continue; }
       if (!source.route) continue;
       let route = known.find(r => r.resourceId === row.shareId);
       if (!received && row.hostDeviceId === getDeviceId()) {
-        rememberAgentNetSharingHost('provider-share', row.shareId, source.route);
+        rememberAgentNetSharingHost('provider-share', row.shareId, resourceRoute(source.route, 'provider-share', row.shareId, row.hostDeviceId));
         route = agentNetSharingRoute('provider-share', row.shareId)!;
       } else if (received && row.memberId) {
-        route = rememberAgentNetSharingGuest({ ...source.route, resourceId: row.shareId, hostDeviceId: row.hostDeviceId,
-          memberId: undefined, seed: undefined }, row.memberId);
+        route = rememberAgentNetSharingGuest(resourceRoute(source.route, 'provider-share', row.shareId, row.hostDeviceId), row.memberId);
       }
       if (route) rememberAgentNetSharingAliases(route, { members: row.memberId ? [row.memberId] : row.members?.map(m => m.memberId) ?? [],
         requests: row.requests?.map(r => r.requestId) ?? route.aliases?.requests ?? [],
         invitations: [...new Set([...(route.aliases?.invitations ?? []), ...(row.requests?.flatMap(r => r.linkId ? [r.linkId] : []) ?? [])])] });
+      if (received && row.memberId && row.status === 'active') reviveMemberConnection(state, agentNetSharingRoute('provider-share', row.shareId)!);
     }
     if (received && source.route && result.status === 'fulfilled') {
       const ids = new Set(items.map(r => (r as { shareId: string }).shareId));
@@ -501,9 +516,9 @@ export async function listAgentNetSharedTasks(legacy: () => Promise<unknown>): P
       items.set(row.sharedTaskId, item);
       const subject = source.route ? agentNetSharingSubject(getCurrentUserId()!, getActiveAuthRealm(), source.route.region) : getCurrentUserId();
       if (source.route && row.ownerAccountId === subject && row.hostDeviceId === getDeviceId())
-        remember(state, { ...source.route, resourceId: row.sharedTaskId, hostDeviceId: row.hostDeviceId, memberId: undefined, seed: undefined });
+        remember(state, resourceRoute(source.route, 'shared-task', row.sharedTaskId, row.hostDeviceId));
       else if (source.route && row.ownerAccountId !== subject && typeof row.hostDeviceId === 'string' && !known.some(r => r.resourceId === row.sharedTaskId && !r.retired)) {
-        const route = { ...source.route, kind: 'shared-task' as const, resourceId: row.sharedTaskId, hostDeviceId: row.hostDeviceId, memberId: undefined, seed: undefined };
+        const route = resourceRoute(source.route, 'shared-task', row.sharedTaskId, row.hostDeviceId);
         rememberAgentNetSharingGuest(route);
         try {
           const detail = await business(state, route).request<{ status: string; guests: { accountId: string; memberId: string }[] }>(
@@ -536,7 +551,10 @@ function installRoute(state: Session, route: AgentNetSharingRoute): void {
     if (!scoped) {
       const guard = () => { state.guard();
         const pin = state.vault.routes.find(r => r.kind === route.kind && r.resourceId === route.resourceId);
-        if (binding !== target || !readDeviceLinkSettings().agentNetEnabled || route.memberId && (!pin || pin.retired || pin.seed !== route.seed || pin.memberId !== route.memberId))
+        // A guest admission was joined explicitly over V2 and has no V1 path to fall back to, so
+        // the 「新版连接」toggle (this device's own network) does not gate it; own routes still do.
+        if (binding !== target || !route.memberId && !readDeviceLinkSettings().agentNetEnabled
+          || route.memberId && (!pin || pin.retired || pin.seed !== route.seed || pin.memberId !== route.memberId))
           throw new Error('AGENT_NET_OWNER_CHANGED'); };
       let lease: AgentNetSharingTransport | null = null;
       let identity: Identity | null = null;
@@ -578,6 +596,7 @@ function installRoute(state: Session, route: AgentNetSharingRoute): void {
           schedule(); socket.once('close', () => { ended = true; if (renewal) clearTimeout(renewal); });
           return socket;
         } });
+      if (lease) leaseOf.set(scoped, lease);
       state.connections.set(key, scoped);
     }
     connection = scoped;

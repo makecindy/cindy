@@ -59,9 +59,14 @@ interface StoredRelayConfig {
   deviceId: string;
   /** 加入链接里的主人公钥。 */
   ownerPublicKey: string;
+  /** 别人分享给本账号的中转(§5.5);`ownerName` 是分享者的名字。 */
+  shared?: { ownerName: string | null };
 }
 
-/** 安全存储里的一条:凭证与签名种子同存同删,不会只剩一半。 */
+/**
+ * 安全存储里的一条:凭证与签名种子同存同删,不会只剩一半。
+ * 只走 V2 的网络(别人分享来的中转)没有旧版凭证(空字符串),但一定带着已签发的 V2 证书。
+ */
 interface StoredRelaySecrets {
   credential: string;
   seed: string;
@@ -96,6 +101,7 @@ function parseStoredConfig(raw: string | null): StoredRelayConfig | null {
     ) {
       return null;
     }
+    const shared = value.shared && typeof value.shared === 'object' ? value.shared : null;
     return {
       version: 2,
       mode: 'self-hosted',
@@ -105,6 +111,7 @@ function parseStoredConfig(raw: string | null): StoredRelayConfig | null {
       role: 'member',
       deviceId: value.deviceId,
       ownerPublicKey: value.ownerPublicKey,
+      ...(shared ? { shared: { ownerName: typeof shared.ownerName === 'string' ? shared.ownerName.slice(0, 64) : null } } : {}),
     };
   } catch {
     return null;
@@ -115,9 +122,11 @@ function parseStoredSecrets(raw: string | null): StoredRelaySecrets | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as Partial<StoredRelaySecrets>;
-    if (typeof value.credential !== 'string' || !value.credential) return null;
+    if (typeof value.credential !== 'string') return null;
     if (typeof value.seed !== 'string' || !SEED_PATTERN.test(value.seed)) return null;
     const agentNet = parseMobileAgentNetMembership(value.agentNet);
+    // 没有旧版凭证时只能靠已签发的 V2 证书连接。
+    if (!value.credential && !agentNet?.certificate) return null;
     return { credential: value.credential, seed: value.seed, ...(agentNet ? { agentNet } : {}) };
   } catch {
     return null;
@@ -186,12 +195,14 @@ function routeFromConfig(config: StoredRelayConfig, secrets: StoredRelaySecrets 
     relayId: config.relayId,
     name: config.name,
     baseUrl: config.baseUrl,
-    credential: secrets?.credential ?? null,
+    credential: secrets?.credential || null,
     signing: secrets
       ? { deviceId: config.deviceId, ownerPublicKey: config.ownerPublicKey, seed: secrets.seed,
           ...(secrets.agentNet?.networkId === 'private:' + config.relayId && secrets.agentNet.rootPublicKey === config.ownerPublicKey
             ? { agentNet: secrets.agentNet } : {}) }
       : null,
+    ...(secrets && !secrets.credential ? { agentNetOnly: true } : {}),
+    ...(config.shared ? { shared: config.shared } : {}),
   };
 }
 
@@ -222,14 +233,17 @@ async function saveSelfHostedRelayNow(input: {
   baseUrl: string;
   deviceId: string;
   ownerPublicKey: string;
+  /** 旧版凭证;只走 V2 的网络传空字符串,此时 `agentNet` 必须带着证书。 */
   credential: string;
   /** 本机签名私钥种子(base64url),见 `createRelayJoinIdentity`。 */
   seed: string;
   agentNet?: MobileAgentNetMembership;
+  shared?: { ownerName: string | null };
 }): Promise<void> {
   assertOwnerCurrent(input.owner);
   const baseUrl = normalizeRelayBaseUrl(input.baseUrl);
-  if (!baseUrl || !input.credential || !SEED_PATTERN.test(input.seed) || !isRelayPublicKey(input.ownerPublicKey)) {
+  if (!baseUrl || (!input.credential && !input.agentNet?.certificate) || !SEED_PATTERN.test(input.seed)
+    || !isRelayPublicKey(input.ownerPublicKey)) {
     throw new Error('INVALID_RELAY');
   }
   const accountKey = input.owner.accountKey;
@@ -244,8 +258,10 @@ async function saveSelfHostedRelayNow(input: {
     role: 'member',
     deviceId: input.deviceId,
     ownerPublicKey: input.ownerPublicKey,
+    ...(input.shared ? { shared: { ownerName: input.shared.ownerName?.slice(0, 64) ?? null } } : {}),
   };
   const agentNet = parseMobileAgentNetMembership(input.agentNet);
+  if (!input.credential && !agentNet?.certificate) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
   if (input.agentNet && (!agentNet || agentNet.networkId !== 'private:' + input.relayId
     || agentNet.rootPublicKey !== input.ownerPublicKey || (agentNet.certificate
       && (agentNet.certificate.deviceId !== input.deviceId || agentNet.certificate.subject !== input.owner.accountId)))) {
