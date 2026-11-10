@@ -421,3 +421,23 @@ import 列表末尾，恢复 Codex OAuth 先判断已登录、再解析凭证目
 Desktop 类型检查通过，44 个文件的 510 项相关测试通过；未重复完整回归。
 冷启动账号边界通知修复保留；是否由本分支改变启动顺序引出尚未确认，不将推测
 写作根因。
+
+### 送审产物检查（2026-11-10）
+
+最后两处修正提交 `883fca865f` 已构建 macOS arm64 版本无关安装包。
+首次构建继承的约 6 GB Node 堆上限导致 OOM；仅本次设置 16 GB 后通过，
+没有修改仓库默认预算。产物源码标识与提交一致，ad-hoc 签名验证通过。
+静态检查 33 个主进程及 preload 入口存在，Node 插件 worker 新文件名与主进程引用
+匹配，worker 只依赖 Node 内置模块，Ghost preload 只依赖 Electron。没有启动打包
+应用：其启动会先注册系统深链，不能让测试接管正式 Cindy 的链接关联。
+这些是打包及静态证据，不代表包内 utilityProcess 启动已实测。
+
+该提交随后用全新隔离 profile 冷启动，返回 ready；实际日志记录账号边界从
+signed-out/pending=true 到 pending=false，再由 initialize 收敛。仍未登录，
+不能据此声称真实账号功能验收通过。额外用同一组内存端口执行主线与分支的生产
+withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发最终状态。
+该对照证明主线函数也存在漏通知路径，不证明整机卡顿的唯一原因。
+
+`ui:check --changed --theme all` 的 Electron 测试进程提前退出；保留失败记录。
+改用脚本支持的 Chromium 引擎定向运行 host-connection 全部四种状态，亮暗共八个
+场景通过，包括 320px 配对提示；已检查生成图。此夹具不覆盖完整桌面、登录或模型。
