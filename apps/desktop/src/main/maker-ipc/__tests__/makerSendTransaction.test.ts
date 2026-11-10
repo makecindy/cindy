@@ -94,6 +94,31 @@ describe('local application task takeover', () => {
     expect(session.send).not.toHaveBeenCalled();
   });
 });
+
+describe('project resource drift recycling', () => {
+  function driftDeps() {
+    const { deps, session } = createDeps();
+    const live = createSession({ hasRecyclableProjectResourceDrift: () => true });
+    deps.getSession = () => live;
+    return { deps, live, session };
+  }
+
+  it('recycles a drifted live runtime when createOpts allows lazy rebuild', async () => {
+    const { deps, live } = driftDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted(
+      'session-1', 'hello', { id: 'session-1', agentKind: 'pi', workingDir: 'C:\\repo' });
+    expect(deps.closeSessionIfCurrent).toHaveBeenCalledWith('session-1');
+    expect(live.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps the live-send path when no createOpts can rebuild the runtime', async () => {
+    const { deps, live } = driftDeps();
+    // 直发/老链路无 createOpts:回收后 lazy-create 无法重建,按原运行时投递
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
+    expect(deps.closeSessionIfCurrent).not.toHaveBeenCalled();
+    expect(live.send).toHaveBeenCalledOnce();
+  });
+});
 describe('MCP App next-turn context', () => {
   it('keeps ordinary user intent when validating App context without a replacement intent', async () => {
     const assertCurrent = vi.fn(async () => {});
@@ -299,6 +324,7 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
     readScheduledPermissions: vi.fn(async () => ({ permissionMode: 'ask', planModeEnabled: false })),
     getSession: vi.fn((sessionId: string) => (sessionId === session.id ? session : undefined)),
     closeSession: vi.fn(async () => {}),
+    closeSessionIfCurrent: vi.fn(async () => {}),
     preflightBotRuntimeResources: vi.fn(async () => {}),
     getSessionMeta: vi.fn(async () => ({ title: '现有会话' })),
     ensureRemoteReadyForSessionStart: vi.fn(async () => {}),

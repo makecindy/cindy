@@ -13101,7 +13101,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     };
     const transaction=createMakerSendTransaction({
       statDirectory:async()=>({isDirectory:()=>true}),
-      getSession:()=>session,closeSession:async()=>{},preflightBotRuntimeResources:async()=>{},
+      getSession:()=>session,closeSession:async()=>{},closeSessionIfCurrent:async()=>{},preflightBotRuntimeResources:async()=>{},
       getSessionMeta:async()=>({}),ensureRemoteReadyForSessionStart:async()=>{},checkWorkDirExists:async()=>true,
       isOrcaMcpHydrated:()=>true,buildCreateOptsWithStderr:x=>x,synthesizeOrcaVendorOptionsFromDb:async()=>false,
       readSessionExtraDirsFromDb:async()=>[],readSessionWorkingDirFromDb:async()=>'/answer',
@@ -15323,7 +15323,7 @@ describe('usage-limit wait (ordinary tasks)', () => {
     })).mockRejectedValueOnce(quota);
     const transaction = createMakerSendTransaction({
       getSession: () => rehydrate ? session : undefined,
-      closeSession: async () => {}, preflightBotRuntimeResources: async () => {},
+      closeSession: async () => {}, closeSessionIfCurrent: async () => {}, preflightBotRuntimeResources: async () => {},
       getSessionMeta: async () => ({}), ensureRemoteReadyForSessionStart: async () => {},
       checkWorkDirExists: async () => true, isOrcaMcpHydrated: () => !rehydrate,
       buildCreateOptsWithStderr: x => x, synthesizeOrcaVendorOptionsFromDb: async () => rehydrate,
@@ -15526,6 +15526,51 @@ describe('usage-limit wait (ordinary tasks)', () => {
     await flush();
     expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
   });
+
+  // Unit regression: a completed user turn's SDK wake-up must retain recovery
+  // ownership. Earlier quota cases failed while activeTurn was still present.
+  it('keeps Fable wake-up errors visible and continues the original task after quota reset', async () => {
+    const h = createHarness();
+    const sid = 'fable-wake-quota';
+    h.setHasAssistantProgressAfter(async () => true);
+    h.coordinator.enqueue(sid, makeItem('q-original', 'original task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    h.coordinator.noteProviderInitiatedTurn(sid, 0);
+    const message = "You've reached your Fable limit. Switch to another model to continue.";
+    h.coordinator.onTurnEvent(sid, 'error', message, { sdkError: 'rate_limit', usageResetAt: 9_000_000 });
+    h.coordinator.onTurnEvent(sid, 'done');
+    expect(h.coordinator.getProjection(sid).error).toBe(message);
+    const candidate = h.onUsageLimitedTurnError.mock.calls.at(-1)?.[3] as number;
+    expect(candidate).toEqual(expect.any(Number));
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    expect(h.coordinator.getProjection(sid).usageLimitWait).toMatchObject({ resumeAt: 9_000_000 });
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1][3].persistUserMessage?.autoResume).toBe(true);
+    expect(h.sendToAgent.mock.calls[1][1]).not.toEqual({ type: 'user', content: 'original task' });
+  });
+
+  it.each(['stop', 'close', 'clear', 'new-session', 'new-generation'] as const)(
+    'does not restore a completed input for a stale provider wake after %s', async boundary => {
+      const h = createHarness();
+      const sid = 'stale-provider-wake';
+      h.coordinator.enqueue(sid, makeItem('q-original', 'original task'));
+      await flush();
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'done');
+      if (boundary === 'stop') h.coordinator.stop(sid);
+      if (boundary === 'close') h.coordinator.onSessionClosed(sid);
+      if (boundary === 'clear') h.coordinator.clearSession(sid);
+      if (boundary === 'new-session') h.setTurnSessionIdentity({});
+      h.coordinator.noteProviderInitiatedTurn(sid, boundary === 'new-generation' ? 1 : 0);
+      h.coordinator.onTurnEvent(sid, 'error', 'Fable limit', { sdkError: 'rate_limit' });
+      expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+      expect(h.coordinator.getProjection(sid).recovery).toBeNull();
+    },
+  );
 
   async function failWithLimit(sid: string, progress: boolean) {
     const h = createHarness();

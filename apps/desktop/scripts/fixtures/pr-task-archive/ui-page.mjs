@@ -9,7 +9,7 @@ export default {
     'src/renderer/components/chat/GhostCardModelSelect': 'export const GhostCardModelSelect = () => null;',
     'src/renderer/components/chat/GhostCardSessionLink': 'export const GhostCardSessionLink = () => null;',
 
-    'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ dataOwnerId: "fixture" }); export const useOptionalAuthDeviceId = () => null; export const useOptionalAuthUser = () => null;',
+    'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ dataOwnerId: "fixture" }); export const useOptionalAuthDeviceId = () => null; export const useOptionalAuthUser = () => null; export const useOptionalDataOwnerGeneration = () => 0;',
   },
   cases: {
     default: { about: '宿主已合并，插件尚未合并：不提示归档', data: { allMerged: false } },

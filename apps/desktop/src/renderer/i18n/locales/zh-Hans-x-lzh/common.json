@@ -4190,7 +4190,18 @@
           "ariaLabel": "许君之他机与君所分享之人调用此供方",
           "writeFailed": "远程调用之设未能存，请再试"
         },
-        "moreActionsAria": "余者"
+        "moreActionsAria": "余者",
+        "runLocation": {
+          "label": "运于何机",
+          "optionLocal": "此机",
+          "notSignedIn": "未登",
+          "autoBorrowing": "此机未登，新务借 {{device}} 以运之，无须再登。",
+          "local": "新务运于此机；亦可改择汝他机之已登者。",
+          "pinned": "新务运于 {{device}}，用彼机之登录；已行之务不移。",
+          "inline": "运于",
+          "signInHere": "于此机登录",
+          "writeFailed": "运处未能存，请再试。"
+        }
       },
       "detect": {
         "groupLabel": "察得此机 CLI",
@@ -6153,13 +6164,18 @@
         "allowInboundAria": "切换是否许 {{name}} 控此机",
         "peerControlOff": "对方未许远程操控",
         "masterOffHint": "须先开上方总开关",
-        "controllingThisMac": "已连 Cindy"
+        "controllingThisMac": "已连 Cindy",
+        "useThisDeviceModels": "用此机之模",
+        "allowModelUseAria": "许 {{name}} 用此机之模"
       },
       "toast": {
         "revoked": "已撤此设备之访问权",
         "revokeFailed": "撤销未成",
         "restored": "已复此设备之访问权",
-        "restoreFailed": "恢复未成"
+        "restoreFailed": "恢复未成",
+        "modelUseRestored": "彼机复得用此机之模",
+        "modelUseRevoked": "彼机不复得用此机之模",
+        "modelUseFailed": "「用此机之模」未能存，请再试。"
       },
       "sections": {
         "myDevices": "我之设备",
@@ -9018,6 +9034,8 @@
       "daysWindow": "{{days}}日"
     },
     "claude": {
+      "totalWeeklyLabel": "周总",
+      "temporarilyLimited": "暂限",
       "waitingDetail": "Claude 订阅余量将于下一轮毕后更新。",
       "weeklyLabel": "周限",
       "modelWeeklyLabel": "{{model}} 周限",
@@ -19509,6 +19527,7 @@
     }
   },
   "subscriptionAccounts": {
+    "unassigned": "账号待定",
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 账号资讯。请于新增供方时选「$t(subscriptionAccounts.signIn.anotherAccount)」，另用独立目录",
     "signIn": {
       "checking": "正察本机账号…",

@@ -467,6 +467,7 @@ function createRunnerHarness(
     }),
     // issue #456:排队派发路径也按所选模型 efforts reconcile effort;测试经 availableModels 注入能力。
     getCapabilities: vi.fn((_agent: string) => ({ availableModels: opts.availableModels ?? [] })),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
