@@ -1,3 +1,4 @@
+import { bearerKeyFromHeaders, reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import { rewriteFastModel } from './model-fast-mode.js';
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
@@ -449,8 +450,13 @@ export function setCodexSubagentOAuthReader(reader: (providerId?: string) => Pro
 }
 
 let _readGatewayKey: () => string | null = () => null;
-export function setCodexProxyGatewayKeyReader(fn: () => string | null): void {
+let _isReplacedGatewayKey: (key: string) => boolean = () => false;
+export function setCodexProxyGatewayKeyReader(
+  fn: () => string | null,
+  isReplaced: (key: string) => boolean = () => false,
+): void {
   _readGatewayKey = fn;
+  _isReplacedGatewayKey = isReplaced;
 }
 
 function headerValue(headers: Readonly<Record<string, string>>, name: string): string {
@@ -649,6 +655,24 @@ function reconcileResponsesReasoningEffort(
   return effort === body.reasoning.effort ? body : applyReasoningEffortOverride(body, effort ?? null);
 }
 
+/**
+ * 父任务存的是原生档位，出站前要先换成目标模型真正会发出的 HTTP 档。
+ * 收敛口径与 createProviderModelRewriteTransform 用的 reconcileOutboundReasoningEffort 相同：
+ * 目录声明了能力就按能力收敛（xhigh 落到只支持 low/high 的模型上是 high，
+ * ultra 不在声明里就落到最高兼容档）。目录没声明能力时原样保留，不猜。
+ */
+function httpEffortForRoute(
+  route: CodexSubagentRouteSnapshot,
+): CodexSubagentRouteSnapshot['reasoningEffort'] | undefined {
+  if (route.reasoningEffort === undefined) return undefined;
+  const model = getActiveCatalog().providers.find(provider => provider.id === route.providerId)
+    ?.models.codex?.find(candidate => candidate.id === route.catalogModel);
+  const efforts = model?.efforts ?? [];
+  if (efforts.length === 0) return route.reasoningEffort;
+  const resolved = reconcileOutboundReasoningEffort(route.reasoningEffort, efforts);
+  return resolved ?? null;
+}
+
 function observedReasoningEffort(body: Record<string, unknown>): string | undefined {
   if (!isPlainObject(body.reasoning) || typeof body.reasoning.effort !== 'string') {
     return undefined;
@@ -670,6 +694,23 @@ function recordObservedSubagentIdentity(
   });
 }
 
+/**
+ * 观察点必须落在整条出站链之后。前面的强制路由会先盖上父任务存档档位
+ * （例如 xhigh），createProviderModelRewriteTransform 才按目标模型能力
+ * 收敛成真正发出去的档。卡片读的是这份观察值，记早了就会展示模型没跑过的档。
+ */
+function createObservedSubagentIdentityTransform(): RequestTransform {
+  return (body, ctx) => {
+    if (!isPlainObject(body) || typeof body.model !== 'string') return null;
+    recordObservedSubagentIdentity(
+      ctx.headers,
+      body.model,
+      observedReasoningEffort(body),
+    );
+    return null;
+  };
+}
+
 export function getObservedCodexSubagentIdentity(
   childThreadId: string,
 ): CodexObservedSubagentIdentity | undefined {
@@ -677,9 +718,9 @@ export function getObservedCodexSubagentIdentity(
 }
 
 /**
- * Codex Subagent 请求的统一观察/路由入口。旧固定路由按冻结快照替换模型；智能
- * 调配按 Codex 在 spawn_agent 中实际选出的 model 查 Provider。没有 Cindy 路由时
- * 也记录原生 Sol/Terra 的真实请求身份，供卡片展示。必须放在 Provider 兼容层之前。
+ * Codex Subagent 请求的统一路由入口。旧固定路由按冻结快照替换模型；智能调配按
+ * Codex 在 spawn_agent 中实际选出的 model 查 Provider。必须放在 Provider 兼容层之前，
+ * 身份记录则等整条出站链收敛后再做（createObservedSubagentIdentityTransform）。
  */
 function createForcedSubagentRequestTransform(): RequestTransform {
   return (body, ctx) => {
@@ -689,25 +730,15 @@ function createForcedSubagentRequestTransform(): RequestTransform {
     const requestedModel = typeof body.model === 'string' ? body.model : '';
     const route = subagentRouteFromHeaders(ctx.headers)
       ?? smartSubagentRouteFromHeaders(ctx.headers, requestedModel);
-    if (!route) {
-      recordObservedSubagentIdentity(
-        ctx.headers,
-        requestedModel,
-        observedReasoningEffort(body),
-      );
-      return null;
-    }
+    if (!route) return null;
     const next: Record<string, unknown> = {
       ...body,
       model: route.catalogModel,
     };
-    const routed = applyReasoningEffortOverride(next, route.reasoningEffort);
-    recordObservedSubagentIdentity(
-      ctx.headers,
-      route.catalogModel,
-      observedReasoningEffort(routed),
-    );
-    return routed;
+    // 父档位先按目标模型能力收敛成真正会发出的 HTTP 档，再盖到子请求上。
+    // 同供应商也要盖：spawn_agent 选的 low 不是父任务存的 high。
+    // ultra 在这里已经变成最高兼容档，不会再被字面写回。
+    return applyReasoningEffortOverride(next, httpEffortForRoute(route));
   };
 }
 
@@ -1278,6 +1309,7 @@ function createChatBridgeDecision(
         bridge: 'chat',
         providerId,
         upstreamBase: route.routing.upstream,
+        headers: ctx?.headers,
       });
       // 只把入站头快照交给 bridge 解析稳定会话 ID(→ x-opencode-session,#4073);bridge 不透传
       // 这些头,凭证与 Codex 账号头仍由 buildLocalHandlerHeaders 的隔离边界管。
@@ -1324,6 +1356,7 @@ interface PrepareLocalBridgeBodyOptions {
   bridge: 'chat' | 'anthropic';
   providerId: string;
   upstreamBase: string;
+  headers?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -1355,6 +1388,14 @@ function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
     if (isPlainObject(body) && typeof body.model === 'string') {
       body = reconcileProviderReasoningEffort(body, opts.providerId, body.model);
     }
+  }
+  // 本地桥不走共享 transform 链，档位收敛完就在这里记。卡片读到的是桥真正发出去的档。
+  if (isPlainObject(body) && typeof body.model === 'string' && opts.headers) {
+    recordObservedSubagentIdentity(
+      opts.headers,
+      body.model,
+      observedReasoningEffort(body),
+    );
   }
   if (opts.instructions && isPlainObject(body)) {
     const existing = body.instructions;
@@ -1600,6 +1641,7 @@ function createAnthropicBridgeDecision(
         bridge: 'anthropic',
         providerId,
         upstreamBase,
+        headers: ctx?.headers,
       });
       return handler.handle({ parsedBody: body, ctx, res });
     },
@@ -2492,7 +2534,7 @@ function createCodexResponseObserver(): ResponseObserver {
 /**
  * 纯函数: 按 model(原始, 含 codex/ 前缀)+ spawn 鉴权注入方式决定 **默认** 上游 / 鉴权 override。
  * (会话显式选了供应商时由 resolveSessionRouteDecision 优先接管,不会走到这里。)
- *   - env-key spawn(codex 已带 gateway key): 全程 null(走默认上游 gateway, 不动 header)。
+ *   - env-key spawn: 仅把本次运行中已被替换的旧 key 换成当前 key，仍走默认网关。
  *   - oauth-bearer spawn(codex 带 OAuth token):
  *       codex/ 折扣模型 → 换 gateway key, 默认上游(gateway); 无 key 则 null(passthrough, 上游会 401)。
  *       普通模型        → override 上游到 ChatGPT, 透传 OAuth token(不动 header)= 订阅默认。
@@ -2502,8 +2544,17 @@ export function decideCodexRoute(opts: {
   model: string;
   authInjection: CodexProxyAuthInjection;
   gatewayKey: string | null;
+  requestKey?: string | null;
+  isReplacedGatewayKey?: (key: string) => boolean;
 }): RoutingDecision | null {
-  if (opts.authInjection === 'env-key' || opts.authInjection === 'provider-oauth') return null;
+  if (opts.authInjection === 'env-key') {
+    if (opts.gatewayKey && opts.requestKey && opts.requestKey !== opts.gatewayKey
+      && opts.isReplacedGatewayKey?.(opts.requestKey)) {
+      return { headerOverride: { authorization: `Bearer ${opts.gatewayKey}` } };
+    }
+    return null;
+  }
+  if (opts.authInjection === 'provider-oauth') return null;
   if (!opts.model) return null;
   const toGateway = gatewayProviderIdForRewrittenModel(opts.model) !== null;
   if (toGateway) {
@@ -2610,7 +2661,7 @@ export function createCodexGuestRoutingGuard(
     const defaultRouteIsShared = (providerId === 'xd' && authInjection === 'env-key')
       || (isOpenAiSubscriptionProviderId(providerId) && authInjection === 'oauth-bearer');
     return defaultRouteIsShared
-      ? decideCodexRoute({ model: requestModel, authInjection, gatewayKey: _readGatewayKey() })
+      ? decideCodexRoute({ model: requestModel, authInjection, gatewayKey: _readGatewayKey(), requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey })
       : codexGuestRouteRefusal();
   };
 }
@@ -3185,7 +3236,7 @@ export function createModelRoutingTransform(
             gatewayKey,
           );
           if (implicitProviderOAuth) return implicitProviderOAuth;
-          return decideCodexRoute({ model, authInjection, gatewayKey });
+          return decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
         });
       }
       const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(model, 'codex', gatewayKey);
@@ -3197,18 +3248,18 @@ export function createModelRoutingTransform(
     //    spawn 时那把凭证 —— oauth-bearer 揣的 OAuth token 在网关无效(要 sk-)→ 401。
     //    故按 spawn 凭证回它的原生后端: oauth-bearer → ChatGPT 订阅后端(只 override 上游、透传 OAuth
     //    token,等价 stock codex 订阅模式轮 /models 的去处); provider-oauth → 唯一 provider-oauth
-    //    供应商的上游/令牌(当前 xAI),避免把占位 key 打到网关; env-key → null(留默认网关, sk- key 本就有效)。
+    //    供应商的上游/令牌(当前 xAI),避免把占位 key 打到网关; env-key → 默认网关，只替换本次运行中已知被换掉的旧 key。
     //    `!model` 这道闸确保真实 /responses(永远带 model)绝不落进此分支,杜绝注册时序竞争误伤推理请求。
     if (!sessionId && !model) {
       if (authInjection === 'oauth-bearer') return { upstreamOverride: CODEX_OAUTH_UPSTREAM };
       if (authInjection === 'provider-oauth') {
         return resolveProviderOAuthControlRouteDecision('codex', gatewayKey);
       }
-      return null;
+      return decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
     }
 
-    // ② 未显式选供应商 → 回落默认路由(decideCodexRoute,与未升级行为字节级一致)。
-    const decision = decideCodexRoute({ model, authInjection, gatewayKey });
+    // ② 未显式选供应商 → 回落默认路由，env-key 只修复已知旧凭证。
+    const decision = decideCodexRoute({ model, authInjection, gatewayKey, requestKey: bearerKeyFromHeaders(ctx.headers), isReplacedGatewayKey: _isReplacedGatewayKey });
     // codex/ 折扣模型该走 gateway 换 key 但没配 key → null(passthrough), 上游大概率 401, 记一条诊断。
     if (decision === null && authInjection === 'oauth-bearer' && model
       && gatewayProviderIdForRewrittenModel(model) !== null && !gatewayKey) {
@@ -3337,6 +3388,9 @@ function createTransformRequestChain(
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
     transforms.push(createDumpTransform());
   }
+  // 档位与模型改写都在上面收敛。卡片读的观察身份必须是这份最终会发出去的值。
+  // 放在调试转储之后：转储只是旁路，不能盖掉它记下的出站身份。
+  transforms.push(createObservedSubagentIdentityTransform());
   return transforms;
 }
 
@@ -3521,7 +3575,21 @@ async function createCodexProxyHandle(
         scoped.onRequestSettled = transform.onRequestSettled;
         return scoped;
       },
-    ).concat((body, ctx) => crossProviderRequests.has(ctx.headers) ? null : frozenReasoning(body, ctx)),
+    ).concat((body, ctx) => {
+      // 同连接的命名空间路由不跑普通改写链，档位只在这条专用 transform 里收敛。
+      // 观察点必须排在它后面，卡片才读到真正发出去的档，而不是父任务存档档位。
+      if (crossProviderRequests.has(ctx.headers)) return null;
+      const reconciled = frozenReasoning(body, ctx);
+      const outgoing = isPlainObject(reconciled) ? reconciled : body;
+      if (isPlainObject(outgoing) && typeof outgoing.model === 'string') {
+        recordObservedSubagentIdentity(
+          ctx.headers,
+          outgoing.model,
+          observedReasoningEffort(outgoing),
+        );
+      }
+      return reconciled;
+    }),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);
@@ -3557,6 +3625,13 @@ async function createCodexProxyHandle(
       () => buildCodexGatewayBaseUrl(),
     ),
     responseObserver: composeResponseObservers(
+      ctx => {
+        if (ctx.status === 401
+          && ctx.upstreamBase.replace(/\/+$/, '') === buildCodexGatewayBaseUrl().replace(/\/+$/, '')) {
+          reportCindyGatewayKeyRejected(bearerKeyFromHeaders(ctx.outboundHeaders ?? ctx.requestHeaders));
+        }
+        return null;
+      },
       ctx => {
         if (!guestSessionId || ctx.status < 200 || ctx.status >= 300) return null;
         let model = '';

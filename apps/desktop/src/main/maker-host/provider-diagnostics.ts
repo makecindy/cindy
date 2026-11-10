@@ -34,6 +34,7 @@ import {
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
+import { getModelVisibilityOverride } from './model-visibility-mirror.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createMakerLogger } from './logger-adapter.js';
@@ -462,9 +463,27 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   // 探测发的是聊天形状的最小请求(见下方 requestPath/body 组装);挑第一个非聊天模型
   // (image/embedding/...)会把探测发给一个本来就不接受聊天请求的端点,得到的失败结论
   // 和"这个供应商配置是坏的"完全无关(2026-07 review,与 issue #882 第 3 点同一类问题)。
-  const model = (provider.models[agent] ?? []).find((m) =>
-    isAgentSelectableModel(m, { userProvider: provider.source === 'user' }),
-  );
+  // 列表第一个聊天模型若与上游协议不兼容,也会把整个供应商误报为连不上(issue #9470)。
+  // 用户明确打开的模型优先。镜像只存显式开关:true 是打开,false 是关掉,没拨过则无条目。
+  // 兜底先排除显式隐藏,再按原顺序取第一个可选模型;全部显式隐藏时仍退回第一个可选模型,
+  // 避免测试连接因「没有可见模型」变成空失败。镜像未就绪或读取失败时忽略可见性,走原兜底。
+  const candidates = provider.models[agent] ?? [];
+  const selectable = (m: (typeof candidates)[number]): boolean =>
+    isAgentSelectableModel(m, { userProvider: provider.source === 'user' });
+  let explicitlyShown: (typeof candidates)[number] | undefined;
+  let notHidden: (typeof candidates)[number] | undefined;
+  try {
+    for (const candidate of candidates) {
+      if (!selectable(candidate)) continue;
+      const override = getModelVisibilityOverride(agent, providerId, candidate.id);
+      if (override === true && !explicitlyShown) explicitlyShown = candidate;
+      if (override !== false && !notHidden) notHidden = candidate;
+    }
+  } catch {
+    explicitlyShown = undefined;
+    notHidden = undefined;
+  }
+  const model = explicitlyShown ?? notHidden ?? candidates.find(selectable);
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
   // Pi's HTTP-only route helper intentionally excludes SDK transports. A native
   // probe must keep the SDK route instead of treating that exclusion as failure.

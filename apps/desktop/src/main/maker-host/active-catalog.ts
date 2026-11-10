@@ -76,6 +76,7 @@ import {
 } from '@cindy/model-providers';
 
 import { selectDefaultModels } from './model-default-selection.js';
+import { codexApiModelMetadata } from './codex-api-model-capabilities.js';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
@@ -136,6 +137,10 @@ let customConfigs: CustomProviderConfig[] | null = null;
  * **additions-only**:静态 id first-wins,cache 只补未来新增模型,不会覆盖目录的受控能力元数据。
  */
 let discoveredCodex: CatalogModel[] = [];
+/** API-route engine report; never mixed with OAuth membership or persisted user edits. */
+let codexApiModels: CatalogModel[] | null = null;
+const getDiscoveredModelMetadata: NonNullable<Parameters<typeof buildUserProvider>[1]>['getDiscoveredModelMetadata'] =
+  (agent, model, routing) => codexApiModelMetadata(codexApiModels, agent, model, routing);
 /** Mirrors credential presence only; secrets stay in the existing secret store. */
 let openAiImagesApiKeyConfigured = false;
 /**
@@ -403,6 +408,15 @@ function resolveXdPiGatewayServerModelApi(
   )
     return null;
   const nativeApi = nativeApiForRoute('xd', model.id);
+  // Global Gemini Gateway exposes Responses even though Gemini's native API is Google.
+  // Honor that explicit execution route before native metadata selects an unavailable /v1beta
+  // entry point (#9288). Keep the native identity for presentation, and retain CN/dev, direct
+  // Google providers, and Gateway routes without this declaration on their existing policy.
+  if (
+    CURRENT_CINDY_REGION === 'global' &&
+    nativeApi === 'google-generative-ai' &&
+    model.perAgent?.pi?.wireProtocol === 'openai-responses'
+  ) return 'openai-responses';
   if (nativeApi) return nativeApi;
   const declared = piGatewayAuthorityCatalog
     ? resolveCatalogPiGatewayModelApi(piGatewayAuthorityCatalog, model.id)
@@ -445,7 +459,7 @@ function resolveXdPiGatewayHintModelApi(model: XdGatewayModelInfo): PiModelApi |
 }
 
 function resolveXdPiGatewayModelApi(model: XdGatewayModelInfo): PiModelApi | null {
-  // Source authority is deliberate and must not be inverted:
+  // Except for the explicit Global Gemini Responses route handled above, retain source authority:
   // Cindy Server downloaded Catalog > version-matched local Pi table > Cindy AI Gateway hint.
   const catalogApi = resolveXdPiGatewayServerModelApi(model);
   if (catalogApi !== undefined) return catalogApi;
@@ -465,7 +479,7 @@ function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
   return (model.agents ?? []).filter((agent) => agent !== 'pi' || !serverRetired);
 }
 
-/** Resolve Cindy's canonical policy for Pi, including local metadata for Server omissions.
+/** Resolve Pi's execution policy, including local metadata for Server omissions.
  * An explicit unknown keeps only an independently declared execution route.
  */
 export function resolveXdPiGatewayServerApi(modelId: string): PiModelApi | null | undefined {
@@ -2062,7 +2076,7 @@ function installActiveCatalog(
   baseUnverifiedXdMediaKinds = nextUnverifiedXdMediaKinds;
   if (customConfigs) {
     custom = customConfigs.map((config) =>
-      buildUserProvider(config, { modelRegistry: projectionRegistry, presets: catalog.presets }),
+      buildUserProvider(config, { modelRegistry: projectionRegistry, presets: catalog.presets, getDiscoveredModelMetadata }),
     );
   }
   markChanged();
@@ -2150,6 +2164,7 @@ export function commitModelPlaneFromCatalog(
       buildUserProvider(config, {
         modelRegistry: trustedCustomProviderRegistry,
         presets: (base ?? BUNDLED_CATALOG).presets,
+        getDiscoveredModelMetadata,
       }),
     );
   }
@@ -2201,9 +2216,21 @@ export function setCustomProviderConfigs(configs: CustomProviderConfig[]): void 
     buildUserProvider(config, {
       modelRegistry: trustedCustomProviderRegistry,
       presets: (base ?? BUNDLED_CATALOG).presets,
+      getDiscoveredModelMetadata,
     }),
   );
   markChanged();
+}
+
+export function hasCodexApiModelCapabilities(): boolean {
+  return codexApiModels !== null;
+}
+
+/** Replace the complete API-route engine report and re-project current raw configs. */
+export function setCodexApiModelCapabilities(models: CatalogModel[] | null): void {
+  codexApiModels = models;
+  if (customConfigs) setCustomProviderConfigs(customConfigs);
+  else markChanged();
 }
 
 /**

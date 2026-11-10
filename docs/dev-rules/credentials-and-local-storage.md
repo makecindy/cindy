@@ -66,6 +66,28 @@
 请求头；应前滚修复，不把密文转回明文来恢复兼容。实现与回归：`maker-host/custom-mcp-store.ts`
 及同名测试。Bearer token 继续走现有独立安全存储。
 
+## Codex 共享凭证与 Windows 独立登录
+
+Codex 共享登录使用文件软链接，不创建硬链接。Windows 无文件软链接权限时，
+显式连接进入现有的 Cindy 独立 OAuth 登录流程，凭证由 Codex 写在该实例的
+`codex-home/auth.json`；后台对账不复制 token，不按时间戳双向同步。
+独立 OAuth 回退仍受普通 Dev 禁止发起登录的写入门禁约束。启动 OAuth 前须确认
+本实例 auth 路径缺失或为单链接普通文件；旧别名清理失败、仍有共享链接或无法
+确认文件类型时拒绝启动，不把系统凭证交给声称独立的登录流程。
+
+升级只迁移当前实例的旧硬链接：可创建软链接则替换本实例的别名；不可创建时，
+仅移除仍与系统文件同 inode 的本实例硬链接，系统文件的字节和 inode 保持不变。
+已有独立文件保留。其它 profile 的别名由对应 profile 升级时迁移，不通过重写
+系统文件一次性拆链。早期开发实现遗留的 `.swapbak` / `.copytmp` 保留原样，
+不自动恢复或删除，避免撤销原生 Codex 登出或干扰仍在运行的旧实例。
+既有只读 Dev 消费 Release 凭证的一次性快照例外保持不变。
+目录 junction 或软链接可能让两个不同路径实际指向同一 `auth.json` 目录项。
+判断时展开父目录别名，不能仅比较路径字符串，也不能将不同名字的硬链接视为
+同一目录项；同一目录项直接复用，不执行迁移、快照覆盖或失效时的文件删除。
+
+实现与回归见 `maker-host/codex-auth-link.ts`、`auth-adapters.ts`、
+`codexAuthLink.test.ts` 和 `codexAuthInvalidation.test.ts`。
+
 ## Claude 订阅只经 Claude Code 自己的登录
 
 Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；第三方应用不得提供
@@ -73,9 +95,12 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 
 - 登录只拉起内置 CLI 的 `claude auth login --claudeai`，登录态只读
   `claude auth status --json`。凭证留在 CLI 默认凭证库（macOS 钥匙串 / `~/.claude`），
-  Cindy 不读取、不复制、不刷新它。CLI 按配置目录区分凭证库，所以本机 CLI 的会话（任何来源）
-  与登录检查都不得设 `CLAUDE_CONFIG_DIR`（dev 多实例也用默认目录），否则会看不到本机已有的
-  Claude Code 登录；SSH 远端的配置目录由远端 cc-manager 自己管理，不在此列。
+  Cindy 不读取、不复制、不刷新它。默认账号的会话与登录检查不设 `CLAUDE_CONFIG_DIR`
+  （dev 多实例的默认账号也一样），确保仍能看到终端已有登录。
+  2026-11-07 起，用户显式添加的[供应商内订阅账号](../product-rules/subscription-account-pools.md)
+  使用官方多账号方式：只在该账号的 CLI 子进程设置 `CLAUDE_CONFIG_DIR=~/.claude-cindy-<owner摘要>-<随机id>`，
+  登录、状态、用量、任务及分叉始终使用同一目录。目录不含邮箱，不接受外部传入路径。
+  SSH 远端的配置目录仍由远端 cc-manager 自己管理，不在此列。
   只有 Claude.ai 订阅账号的 OAuth 登录算「Claude 订阅」；CLI 用 Console 账号、API Key、
   apiKeyHelper、中转 token 或第三方云登录时按 `not_a_subscription` 处理，也不替用户改 CLI 的登录。
 - 登录态读取不得阻塞与订阅无关的路径：启动只在已连接时等待，列表类读取用缓存并后台刷新，
@@ -272,6 +297,7 @@ relay 原有 60 秒主动续期节流保持不变。
 | 浏览器用户配方与经验 | `userData/browser-recipes/<site>/recipes/<id 的 SHA-256>.json`，每站多个流程，原子替换；兼容旧 `recipe.json`，新文件优先。只保存参数化定义及 candidate/active/suspended 状态、浏览器 profile 范围，不保存试跑 inputs/页面返回值；禁止写入凭据，业务变动值用 inputs。同站 `experience.json` 最多保存 32 种操作形状（动作枚举、次数、时间），不保存 URL 路径/查询、选择器、脚本或输入输出；删除站点目录一并重置。重复形状仅提示当前 Agent 判断，不触发后台模型。试跑凭证与单轮修复预算只在 MCP 会话内存，暂停状态跨重启保留。 |
 | 浏览器大结果补读 | MCP 工具会话内存中保留最近四份原始 JSON，每份最多 200 万字符；不落盘、不上传，关闭会话后释放。`readResult` 只能读当前会话生成的引用，沿用原页面实际 profile 的代输入读取限制；切换后端、stop 或读取受保护页面时清除。工具复用宿主现有生命周期与后端对象引用，在下一次访问及异步预检后核对，包括设置/其它任务切换、切走再切回和嵌入后端恢复；切换中的动作仍报告真实结果，但不缓存原文或保存试跑凭证。超过上限明确截断，不能声称完整原文已保存。 |
 | 自建中转服务（Desktop） | `owners/<owner-key>/device-link-relay/`：`config.json` 只存选择、本机中转设置与服务器部署记录（地址、中转 ID、主人公钥，不含秘密）；`secrets/<中转ID>.enc` 是本机在该中转上的设备凭证与 Ed25519 签名私钥（本机当主人时即主人密钥），经 safeStorage 加密，Linux 只有 basic_text 时拒绝保存；第 1 版的 `credential.enc` / `owner-credential.enc` 读到旧配置时删除；`host/` 是本机运行中转时的数据（`relay-state.json` 只存各设备凭证的 SHA-256 与档案，0600 原子写入；`media/` 为设备间中转的文件，创建 24 小时后清理）。全部按账号隔离，账号作用域未提交时不读写。见 `device-link/selfHostedRelayConfig.ts`、`packages/device-link-relay` 与 [方案](../self-hosted-relay-plan.md) |
+| 自动化任务 Webhook | `owners/<账号>/schedule-webhooks/`：`state.json` 存本机端口、排队事件所属的本机路由 ID、固定元数据和 24 小时投递回执，不含请求正文和密钥；`secrets/<路由 ID>.enc` 存开发版本机入口的 safeStorage 加密签名密钥；`remote-identities.json` 只存任务 ID 与本机触发路由 ID 的对应关系，不含云端 URL 或密钥，创建请求前落盘、云端删除确认后清除，离线关闭时保留以防重启复用旧地址。宿主创建时固定账号目录，队列、身份与密钥的读写及清理始终使用该目录，停止后的迟到操作不得改用新账号目录。均为 0600 原子写入；触发条件关闭或任务删除时清理本机队列与密钥，启动时补清孤儿文件。加密不可用时生成密钥明确报错，不回退明文；启动不访问钥匙串，首个事件才解密。见 `scheduler-host/webhook/index.ts` 与 `__tests__/host.test.ts` |
 | 自建中转服务（Mobile） | AsyncStorage `cindy.mobile.self-hosted-relay.v2.<账号>` 只存选择（中转地址、名称、主人公钥、本机设备 ID），不含秘密；设备凭证与 Ed25519 签名私钥合存为 `expo-secure-store` 的 `cindy.selfHostedRelay.credential.v2.<账号哈希>`，仅本机、解锁后可读。没有签名私钥的 v1 记录不再使用，读到时尽力删除。见 `apps/mobile/src/device-link/selfHostedRelay.ts` |
 | 自建中转服务（用户服务器） | 「部署到我的服务器」经 SSH 写入用户自己的服务器：`/opt/cindy-relay`（Node 运行环境与 `relay.mjs`）、`/var/lib/cindy-relay`（属 `cindy-relay` 系统用户、0700：设备凭证哈希与证书档案、Let's Encrypt 账户密钥、0600 原子发布的 `tls/material.json` 证书与 TLS 私钥、`status.json`）、`/etc/systemd/system/cindy-relay.service`。旧分立 PEM 文件仅在密钥配对且未过期时兼容读取；续期提交失败保留上一完整代次。主人凭证明文与主人私钥从不离开主人电脑；卸载前核对中转 ID 和主人公钥，匹配才删除。见 `device-link/selfHostedRelayDeploy.ts` |
 | 本机应用 Agent 授权 | `owners/<owner-key>/local-agent/grants.json`，仅含令牌 SHA-256、自报应用资料、账号范围和按授权归属的原生恢复绑定，不存令牌明文、供应商凭据或消息。复用原子写入与恢复 helper；profile 根 `local-agent/host.lock` 复用跨进程锁，保证一个发现端点和写入者。开发连接码从当前服务内存按需生成，不新增公共实例登记或短码映射文件。临时输入与新授权的 Codex 运行历史在同一 owner 下的 `local-agent/clients/<grant-hash>/`；撤权同时关闭执行及工具入口，不允许跨授权恢复。协议与旧版兼容见 [本机应用接入](../local-agent-api.md) |
@@ -371,6 +397,17 @@ relay 原有 60 秒主动续期节流保持不变。
 定向测试。
 
 ## Cindy 托管的预装技能
+
+随包技能字节改变时必须递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。运行
+`pnpm check:built-in-skills`，对照完整 Git 历史核验工作区实际字节（含未跟踪文件），
+同版本不同内容或版本倒退会阻断；不会改 index、已安装技能或用户配置。检查在 CI 与
+个人版 `check` 安装依赖前执行，不给普通 Forge 打包增加 Git 历史要求（源码压缩包与
+浅克隆仍可打包，但不能声称通过此检查）。合成构建核验所有父分支，不能只和
+merge-base 比较：两个来源各自用了同一个新版本号，合成结果仍须再递增。可重复传
+`--base-ref <ref>` 纳入额外基准（例如不在当前祖先链中的上一次个人构建）。需要完整
+Git checkout；浅克隆先 `git fetch --unshallow`，不在缺失历史时假定核验通过。
+`.gitattributes` 固定整个资源目录的原始字节，避免 Windows 换行转换复用同一个版本号。
+该检查不改变运行时保留冲突版本、用户同名技能与用户修改的保护，也不打开跨 Harness 同步。
 
 `cindy-plugin-creator` 从内置 bundle 13 起提供。核验旧 bundle 时只对这个尚未引入的技能
 容许缺席；已记录的指纹以及 bundle 13 起的完整性要求不放宽。升级失败时保留旧 bundle

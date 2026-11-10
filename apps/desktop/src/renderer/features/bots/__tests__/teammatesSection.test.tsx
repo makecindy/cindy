@@ -8,7 +8,7 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/makerChatStore', () => { const running = new Map(); return { makerChatStore: { subscribeAll: () => () => {}, getRunningSnapshot: () => running } }; });
+vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: { subscribeAll: () => () => {}, getRunningSnapshot: () => mocks.running } }));
 
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 beforeAll(() => { HTMLElement.prototype.scrollIntoView = vi.fn(); });
@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   observeSession: vi.fn(),
   profiles: [] as unknown[],
+  running: new Map<string, { isRunning: boolean }>(),
   remoteBots: [] as import('../remoteBotRoster').RemoteBot[],
   devices: [] as Array<{ deviceId: string; name: string; isSelf: boolean }>,
   health: new Map<string, string>(),
@@ -77,6 +78,7 @@ vi.mock('react-router-dom', async importOriginal => ({
     : mocks.params.botId ? `/bots/${mocks.params.botId}` : '/bots', search: '', hash: '' }),
 }));
 vi.mock('../botStore', () => ({
+  getBotProfiles: () => mocks.profiles,
   useBotProfiles: () => mocks.profiles,
   useBotUnreadCounts: () => mocks.unread,
   refreshBotProfiles: mocks.refreshBotProfiles,
@@ -97,6 +99,7 @@ import { TeammatesSection } from '../TeammatesSection';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
 import { readTeammatesSectionCollapsed } from '../teammatesSectionPrefs';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 interface BotFixture {
   id: string;
@@ -136,6 +139,7 @@ beforeEach(() => {
   messageListeners = [];
   window.localStorage.clear();
   resetBotReadStateForTests();
+  setDataOwnerGeneration('fixture-owner', 1);
   mocks.navigate.mockReset();
   mocks.observeSession.mockReset();
   mocks.refreshBotProfiles.mockReset();
@@ -150,6 +154,7 @@ beforeEach(() => {
   mocks.groupMessages = new Map();
   mocks.params = {};
   mocks.profiles = [];
+  mocks.running = new Map();
   mocks.remoteBots = [];
   mocks.devices = [];
   mocks.islandActivity = new Map();
@@ -927,6 +932,101 @@ describe('TeammatesSection rows', () => {
     });
     // Debounced the same way as the message feed: one refresh per burst.
     expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression / unit: the real sync hook must publish the new preview even if
+  // an older list read replaces profiles during the 120 ms refresh window.
+  // The ordinary message test below never replaced the profile array mid-burst.
+  it('keeps a pending message refresh when an older list response replaces profiles', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const old = bot({ id: 'bot-1', name: 'PR steward', lastMessagePreview: 'Old reply' });
+    mocks.profiles = [old];
+    const view = render(<><UnreadSync /><TeammatesSection /></>);
+    mocks.refreshBotProfiles.mockImplementation(() => {
+      mocks.profiles = [{ ...old, lastMessagePreview: 'New reply' }];
+    });
+
+    act(() => { for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat' }); });
+    mocks.profiles = [{ ...old }];
+    view.rerender(<><UnreadSync /><TeammatesSection /></>);
+    expect(screen.getByText('Old reply')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(120); });
+    view.rerender(<><UnreadSync /><TeammatesSection /></>);
+    expect(screen.getByText('New reply')).toBeTruthy();
+    expect(screen.queryByText('Old reply')).toBeNull();
+  });
+
+  // Regression / unit: message + read receipts previously owned separate timers,
+  // so one visible update caused two list reads. Internal tool rows need neither.
+  it('coalesces read and message updates and ignores tool activity', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    mocks.running = new Map([['bot-1-chat', { isRunning: true }]]);
+    render(<UnreadSync />);
+    mocks.refreshBotProfiles.mockClear();
+    act(() => {
+      for (const role of ['tool_use', 'tool_result', 'thinking']) {
+        for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat', message: { role } });
+      }
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).not.toHaveBeenCalled();
+    act(() => {
+      for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat', message: { role: 'assistant' } });
+      markBotRead('bot-1', 2_000);
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes a sealed reply when the turn stops and still accepts late tool rows', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const old = bot({ id: 'bot-1', name: 'PR steward', lastMessagePreview: 'Old reply' });
+    mocks.profiles = [old];
+    mocks.running = new Map([['bot-1-chat', { isRunning: true }]]);
+    const view = render(<><UnreadSync /><TeammatesSection /></>);
+    mocks.refreshBotProfiles.mockImplementation(() => {
+      mocks.profiles = [{ ...old, lastMessagePreview: 'Sealed reply' }];
+    });
+    mocks.running = new Map();
+    view.rerender(<><UnreadSync /><TeammatesSection /></>);
+    view.rerender(<><UnreadSync /><TeammatesSection /></>);
+    expect(screen.getByText('Sealed reply')).toBeTruthy();
+
+    mocks.refreshBotProfiles.mockClear();
+    act(() => {
+      for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat', message: { role: 'tool_result' } });
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses current session membership and drops pending refreshes after an owner change or unmount', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    const view = render(<UnreadSync />);
+    mocks.profiles = [bot({ id: 'bot-2', name: 'New teammate' })];
+    view.rerender(<UnreadSync />);
+    mocks.refreshBotProfiles.mockClear();
+    act(() => {
+      for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat' });
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).not.toHaveBeenCalled();
+    act(() => {
+      for (const listener of messageListeners) listener({ sessionId: 'bot-2-chat' });
+      // Owner publication precedes React's render/cleanup during account switches.
+      setDataOwnerGeneration('next-owner', 2);
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).not.toHaveBeenCalled();
+    view.rerender(<UnreadSync />);
+    mocks.refreshBotProfiles.mockClear();
+    act(() => { for (const listener of messageListeners) listener({ sessionId: 'bot-2-chat' }); });
+    view.unmount();
+    act(() => { vi.advanceTimersByTime(120); });
+    expect(mocks.refreshBotProfiles).not.toHaveBeenCalled();
+    expect(messageListeners).toHaveLength(0);
   });
 
   it('refreshes the list when a message lands in a Bot task, and ignores other tasks', async () => {

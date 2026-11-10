@@ -819,12 +819,6 @@
     "apps/desktop/src/renderer/features/bots/__tests__/botNavigation.test.ts": {
       "sourceReads": 5
     },
-    "apps/desktop/src/renderer/features/bots/__tests__/botStore.lifecycle.test.ts": {
-      "resetModules": 2
-    },
-    "apps/desktop/src/renderer/features/bots/__tests__/botStore.modelSettings.test.ts": {
-      "resetModules": 1
-    },
     "apps/desktop/src/renderer/features/bots/__tests__/chatInviteBrowserHandoff.test.tsx": {
       "sourceReads": 1
     },
@@ -1036,9 +1030,6 @@
       "sourceReads": 3
     },
     "packages/maker-core/src/agents/pi/__tests__/pi-auto-review-dispatch.test.ts": {
-      "sourceReads": 1
-    },
-    "packages/maker-core/src/agents/pi/__tests__/pi-extra-dirs-prompt.test.ts": {
       "sourceReads": 1
     },
     "packages/maker-core/src/agents/pi/__tests__/pi-startsession-cleanup.test.ts": {

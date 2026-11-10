@@ -1,6 +1,9 @@
 export * from './types.js';
 export * from './routines.js';
 export * from './routine-engine.js';
+export { RoutineEventAdmission } from './routine-event-admission.js';
+export * from './webhook-queue.js';
+export * from './webhook-formats.js';
 export * from './pre-run-hook-update.js';
 export * from './builtin-templates.js';
 export * from './engine/scheduler.js';

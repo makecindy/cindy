@@ -9,7 +9,7 @@
  * 生成进 git 仓库工作区**(untracked、未被 ignore,一次 `git add -A` 就会提交)。
  *
  * 修复后的约定(本测试固化):import auth-adapters 不允许产生任何文件系统写入 ——
- * 目录/软链/硬链/marker 一律不许出现;预热统一走显式 warmUp()(maker-host 装配时调)。
+ * 目录/软链/硬链/marker 一律不许出现;凭证协调走 warmUp()，运行资源按需准备。
  */
 import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';

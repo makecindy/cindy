@@ -36,7 +36,16 @@ import {
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
 import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
-import { fetchManifest, getBaseUrl, isDev, probeBetaManifest, clearCachedManifest } from './manifestService';
+import {
+  fetchAppUpdateManifest,
+  fetchManifest,
+  getAppUpdateTargetArch,
+  getBaseUrl,
+  isDev,
+  probeBetaManifest,
+  clearCachedManifest,
+} from './manifestService';
+import { isRunningUnderArm64Translation } from './arm64Translation';
 import type { Manifest } from './manifestService';
 import { download, DownloadError } from './downloader/index';
 import { ProgressNormalizer } from './updateProgressNormalizer';
@@ -134,6 +143,31 @@ interface PatchInfo {
    * 旧 patch-info 没有这个字段,保持原行为。
    */
   enableBeta?: boolean;
+  /**
+   * 补丁的目标架构，仅在 Rosetta 下的 x64 包下载 arm64 原生包时写 'arm64'。
+   * 冷启动据此把同版本补丁认作待安装的换装，换装后进程已是 arm64 即按「已应用」清理。
+   * 旧 patch-info 没有这个字段，保持原行为。
+   */
+  targetArch?: string;
+}
+
+/**
+ * 应用更新只前进不后退；唯一例外是 Apple 芯片上经 Rosetta 运行的 darwin-x64 包换装
+ * 同版本的 arm64 原生包——版本不变，但把整个 .app 换成原生架构。macOS 更新脚本整包删除
+ * 再移入新 .app，不会残留 x64 文件。其它任何同版本、旧版本都沿用原拒绝。
+ */
+function appUpdateRelation(version: unknown, targetArch: string | undefined) {
+  const relation = compareAppUpdateVersions(version, app.getVersion());
+  if (
+    relation === 'same'
+    && targetArch === 'arm64'
+    && process.platform === 'darwin'
+    && process.arch === 'x64'
+    && isRunningUnderArm64Translation()
+  ) {
+    return 'newer' as const;
+  }
+  return relation;
 }
 
 /**
@@ -181,6 +215,8 @@ let downloadingVersion: string | undefined;
 let readyFilePath: string | undefined;
 /** 当前 staged 补丁对应的渠道代际。延迟清理用它区分「同路径上的新旧包」。 */
 let readyChannelEpoch: number | undefined;
+/** 当前 staged 补丁是换装原生架构的包时为 'arm64'（见 appUpdateRelation）。 */
+let readyTargetArch: string | undefined;
 /**
  * 更新渠道代际计数:用户在下载进行中关掉 beta(clearStagedPatch)时 +1,
  * 让 in-flight 的 checkForUpdate 在写回 patch-info / 恢复旧 patch 前察觉
@@ -674,7 +710,11 @@ export function clearReloginFlag(): void {
  *   - 'none'     → (Reserved; current implementation never returns this — kept
  *                  in the union for backward compatibility with prior callers.)
  */
-function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?: string } {
+function checkExistingPatch(): {
+  action: 'relaunch' | 'check' | 'none';
+  version?: string;
+  targetArch?: string;
+} {
   if (isCindyPersonalRuntime()) return { action: 'none' };
   const updatesDir = getUpdatesDir();
   const infoPath = path.join(updatesDir, PATCH_INFO_FILE);
@@ -714,9 +754,10 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
   }
 
   const currentVersion = app.getVersion();
-  const versionRelation = compareAppUpdateVersions(patchInfo.version, currentVersion);
+  const versionRelation = appUpdateRelation(patchInfo.version, patchInfo.targetArch);
   if (versionRelation === 'same') {
     // Patch matches current version → already applied; clean up and re-check.
+    // 换装原生架构的补丁在换装完成后（进程已是 arm64）同样走这里清理。
     // Keep the matching relogin flag: auth initialization owns consuming it.
     discardExistingPatch(patchInfo, patchFilePath, false);
     return { action: 'check' };
@@ -747,7 +788,8 @@ function checkExistingPatch(): { action: 'relaunch' | 'check' | 'none'; version?
   readyVersion = patchInfo.version;
   readyFilePath = patchFilePath;
   readyChannelEpoch = updateChannelEpoch;
-  return { action: 'relaunch', version: patchInfo.version };
+  readyTargetArch = patchInfo.targetArch;
+  return { action: 'relaunch', version: patchInfo.version, targetArch: patchInfo.targetArch };
 }
 
 function writePatchInfo(info: PatchInfo): void {
@@ -898,6 +940,7 @@ function discardStagedPatchFiles(): void {
   readyVersion = undefined;
   readyFilePath = undefined;
   readyChannelEpoch = undefined;
+  readyTargetArch = undefined;
   linuxStagedDebSha256 = null;
   linuxStagedDebSize = null;
   removePatchInfo();
@@ -926,6 +969,7 @@ function flushDeferredStagedPatchClear(): void {
       readyVersion = undefined;
       readyFilePath = undefined;
       readyChannelEpoch = undefined;
+      readyTargetArch = undefined;
     }
     return;
   }
@@ -1150,6 +1194,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   const previousReadyVersion = wasReady ? readyVersion : undefined;
   const previousReadyFilePath = wasReady ? readyFilePath : undefined;
   const previousReadyChannelEpoch = wasReady ? readyChannelEpoch : undefined;
+  const previousReadyTargetArch = wasReady ? readyTargetArch : undefined;
 
   // 只有非 ready 路径才广播 'checking' — wasReady 路径下广播 checking 会让 banner
   // 的可见条件(status === 'ready' || 'superseding')瞬间不满足,banner 抖一下。
@@ -1157,7 +1202,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     setStatus('checking');
   }
 
-  const manifest = manifestOverride ?? await fetchManifest();
+  const manifest = manifestOverride ?? await fetchAppUpdateManifest();
   if (!manifest) {
     log.info('Manifest fetch failed');
     if (!wasReady) currentStatus = 'idle';
@@ -1168,7 +1213,9 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   const currentVersion = app.getVersion();
   log.info('Version check: current=%s, latest=%s, ready=%s', currentVersion, latestVersion, previousReadyVersion ?? '<none>');
 
-  const versionRelation = compareAppUpdateVersions(latestVersion, currentVersion);
+  const targetArch = getAppUpdateTargetArch(manifest);
+  if (targetArch) log.info('Rosetta-translated x64 build: checking the %s native package', targetArch);
+  const versionRelation = appUpdateRelation(latestVersion, targetArch);
   if (versionRelation === 'invalid') {
     log.error(
       'Refusing app update because version comparison is invalid: current=%s latest=%s',
@@ -1218,7 +1265,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   }
 
   // wasReady 且 manifest 仍是已下好的同一个版本 → 无事发生,保持 ready。
-  if (wasReady && latestVersion === previousReadyVersion) {
+  if (wasReady && latestVersion === previousReadyVersion && targetArch === previousReadyTargetArch) {
     log.info('Ready patch v%s still matches latest — no superseding needed', previousReadyVersion);
     return 'ready';
   }
@@ -1345,13 +1392,17 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       return 'idle';
     }
 
-    const requireRelogin = manifest.app.requireRelogin === true;
+    // 重新授权是版本级迁移：只在版本真正前进时生效。同版本换装原生架构的用户已在当前
+    // 版本完成过这次迁移，再写标记会在冷启动时清掉已保存的账号登录。
+    const requireRelogin = manifest.app.requireRelogin === true
+      && compareAppUpdateVersions(latestVersion, currentVersion) === 'newer';
     writePatchInfo({
       version: latestVersion,
       fileName,
       sha256: asset.sha256.toLowerCase(),
       requireRelogin,
       enableBeta: channelEnableBetaAtStart,
+      ...(targetArch ? { targetArch } : {}),
     });
     // release-relogin-on-update: drop the marker the moment we've committed a
     // good patch on disk. Doing it here (rather than inside the platform
@@ -1364,6 +1415,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
     readyVersion = latestVersion;
     readyFilePath = result.path;
     readyChannelEpoch = updateChannelEpoch;
+    readyTargetArch = targetArch;
     // 信任锚:manifest 里的 installer 摘要与大小,进本进程内存,不落用户可写盘。
     linuxStagedDebSha256 = normalizeLinuxDebSha256(asset.sha256 ?? '');
     linuxStagedDebSize = typeof asset.size === 'number' && asset.size > 0 ? asset.size : null;
@@ -1396,6 +1448,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
         readyVersion = undefined;
         readyFilePath = undefined;
         readyChannelEpoch = undefined;
+        readyTargetArch = undefined;
         removePatchInfo();
         setStatus('idle');
         return 'idle';
@@ -1404,6 +1457,7 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
       readyVersion = previousReadyVersion;
       readyFilePath = previousReadyFilePath;
       readyChannelEpoch = previousReadyChannelEpoch;
+      readyTargetArch = previousReadyTargetArch;
       setStatus('ready', { version: previousReadyVersion });
       return 'ready';
     }
@@ -1434,6 +1488,7 @@ function handleApplyFailure(reason: string): void {
   readyVersion = undefined;
   readyFilePath = undefined;
   readyChannelEpoch = undefined;
+  readyTargetArch = undefined;
   isRelaunching = false;
   autoRelaunchInProgress = false;
   // Every failure exit converges here, including the two that fire *after*
@@ -1987,7 +2042,7 @@ async function executeRelaunchUnguarded(
   }
 
   const currentVersion = app.getVersion();
-  const versionRelation = compareAppUpdateVersions(readyVersion, currentVersion);
+  const versionRelation = appUpdateRelation(readyVersion, readyTargetArch);
   if (versionRelation !== 'newer') {
     log.error(
       'executeRelaunch() refused non-upgrade patch: current=%s patch=%s relation=%s',
@@ -2145,19 +2200,27 @@ export async function checkAppUpdateForAgent(): Promise<{
   const currentVersion = app.getVersion();
   const unsupported = agentUpdateUnsupportedReason();
   if (unsupported) return { status: 'unsupported', currentVersion, reason: unsupported };
-  if (currentStatus === 'downloading' || currentStatus === 'superseding') {
+  // Agent 的安装结果按「重启后版本前进」判定：同版本换装 Apple 芯片包（下载中或已就绪）
+  // 不交给 Agent，落到下面按清单严格比较，只走侧栏更新提示。
+  const advancesVersion = (version: string | undefined) =>
+    compareAppUpdateVersions(version, currentVersion) === 'newer';
+  if (
+    (currentStatus === 'downloading' || currentStatus === 'superseding')
+    && advancesVersion(downloadingVersion)
+  ) {
     // `readyVersion` is unset during a first download and still names the old
     // patch while superseding; report the version actually being downloaded.
     return { status: 'downloading', currentVersion, targetVersion: downloadingVersion };
   }
-  if (currentStatus === 'ready' && readyVersion) {
+  if (currentStatus === 'ready' && readyVersion && advancesVersion(readyVersion)) {
     return { status: 'ready', currentVersion, targetVersion: readyVersion };
   }
   // An Agent check must not stage a patch: checkForUpdate() downloads it and
   // enables the existing auto-relaunch-on-idle path. Read only the manifest;
   // the user can download and install through the built-in update action.
-  const manifest = await fetchManifest();
+  const manifest = await fetchAppUpdateManifest();
   if (!manifest) return { status: 'manifest_failed', currentVersion, reason: '无法读取当前渠道的更新信息。' };
+  // Agent 的安装结果按「重启后版本前进」判定，同版本换装原生架构只走侧栏更新提示。
   const relation = compareAppUpdateVersions(manifest.app?.version, currentVersion);
   if (relation === 'invalid') return {
     status: 'manifest_failed', currentVersion, reason: '当前渠道的更新版本信息无效。',
@@ -2575,7 +2638,7 @@ export function initUpdateService(): void {
       // Step 1: prefer manifest (so we don't relaunch into a stale intermediate version).
       // 启动态用短超时，避免 external CDN 慢时阻塞启动关键路径（#26）。
       // 后台 30-min 轮询仍走默认 30s 超时。
-      const manifest = await fetchManifest(STARTUP_MANIFEST_TIMEOUT_MS);
+      const manifest = await fetchAppUpdateManifest(STARTUP_MANIFEST_TIMEOUT_MS);
 
       if (!manifest) {
         // Network unavailable — fall back to local patch.
@@ -2598,7 +2661,8 @@ export function initUpdateService(): void {
       const currentVersion = app.getVersion();
       log.info('Startup: current=%s, latest=%s', currentVersion, latestVersion);
 
-      const startupVersionRelation = compareAppUpdateVersions(latestVersion, currentVersion);
+      const startupTargetArch = getAppUpdateTargetArch(manifest);
+      const startupVersionRelation = appUpdateRelation(latestVersion, startupTargetArch);
       if (startupVersionRelation !== 'newer') {
         // The online manifest is authoritative. A local patch that is no longer
         // advertised must not survive into a later offline startup.
@@ -2629,7 +2693,11 @@ export function initUpdateService(): void {
 
       // Step 2: local patch may already match latest → skip download.
       const patchResult = checkExistingPatch();
-      if (patchResult.action === 'relaunch' && patchResult.version === latestVersion) {
+      if (
+        patchResult.action === 'relaunch'
+        && patchResult.version === latestVersion
+        && patchResult.targetArch === startupTargetArch
+      ) {
         log.info('Local patch v%s matches latest, requesting relaunch', patchResult.version);
         if (process.platform === 'linux') {
           // 冷启动匹配旧补丁:把这份 CDN manifest 的 installer 摘要与大小
@@ -2660,6 +2728,7 @@ export function initUpdateService(): void {
         readyVersion = undefined;
         readyFilePath = undefined;
         readyChannelEpoch = undefined;
+        readyTargetArch = undefined;
         linuxStagedDebSha256 = null;
         linuxStagedDebSize = null;
       }

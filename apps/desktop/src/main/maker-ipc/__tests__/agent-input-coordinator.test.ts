@@ -9,7 +9,7 @@ import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUs
 import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { admitTaskAction, bindTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
+import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import { ProviderGroupUsageLimitError, providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
 import type { Session } from '@cindy/maker-core';
@@ -40,6 +40,8 @@ import {
 import { createQueuedDispatchReceipts } from '../queuedDispatchReceipts.js';
 import { discardQueuedInvitationWelcomes } from '../queuedInvitationWelcome.js';
 import { createOrcaInterAgentDispatcher } from '../orcaInterAgentDispatcher.js';
+import { buildOrcaQueueDispatchNote } from '../orcaQueueNote.js';
+import { createOrcaWorkerReportQueue } from '../orcaWorkerReportQueue.js';
 import {
   createOrcaTeamService,
   type OrcaTeamServiceDeps,
@@ -198,6 +200,74 @@ describe('task action dispatch authorization', () => {
     }
     // No outcome may leave a persisted user row with a failed reply behind.
     expect(h.onUndispatchedUserTurn).not.toHaveBeenCalled();
+  });
+
+  // The guard is judged only before the first persist. A recovery copy of an accepted turn
+  // (automatic or manual "continue", zero-output resend) has a new clientId and text, so it must
+  // not inherit the original delivery guard, the "requires authorization" mark or the
+  // teammate-origin heuristic; it runs under the receiving task's own permissions.
+  describe('recovery of an accepted task action turn', () => {
+    const TAKEOVER = { error: 'API Error: Connection closed mid-response.', attempt: 1, maxAttempts: 5, sessionTotal: 1 } as const;
+
+    const settled = vi.fn(async () => {});
+    async function failAcceptedTurn(mode: 'auto' | 'manual', progress: boolean) {
+      const h = createHarness(), sid = `accepted-task-action-${mode}-${progress}`;
+      const queued = makeItem('teammate-sent', 'Please fix the build', {
+        origin: { kind: 'session', senderSessionId: 'sender', senderBotId: 'bot', displayText: 'Please fix the build' },
+        autoReviewUserText: { kind: 'agent-request', request: { userText: 'Fix the build' } },
+      });
+      bindTaskActionInput(sid, queued, Object.assign(async () => {}, { onSettled: settled }));
+      if (mode === 'auto') h.setResumableTurnErrorTakeover(TAKEOVER);
+      h.setHasAssistantProgressAfter(async () => progress);
+      h.coordinator.enqueue(sid, queued);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'error', TAKEOVER.error, { sdkError: 'server_error' });
+      await flush();
+      expect(h.coordinator.getProjection(sid).recovery?.kind).toBe('active-turn');
+      return { h, sid };
+    }
+
+    it.each([
+      ['auto', true], ['auto', false], ['manual', true], ['manual', false],
+    ] as const)('dispatches the %s recovery copy (progress: %s) instead of discarding it', async (mode, progress) => {
+      const { h, sid } = await failAcceptedTurn(mode, progress);
+      if (mode === 'auto') await expect(h.coordinator.autoRetryLastError(sid, TAKEOVER.sessionTotal)).resolves.toBe('resumed');
+      else await h.coordinator.retryLastError(sid);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+      expect(h.sendToAgent.mock.calls[1]![1]).toEqual({
+        type: 'user', content: progress ? CONTINUE_AFTER_ERROR_PROMPT : 'Please fix the build',
+      });
+      // Attribution survives; only the delivery guard is gone.
+      expect(h.onDispatchedUserTurn.mock.calls[1]![1]).toMatchObject({
+        origin: { senderBotId: 'bot' },
+        autoReviewUserText: { kind: 'agent-request', request: { userText: 'Fix the build' } },
+      });
+      // The original's settle callback (receiver claim / sender receipt) still runs for the copy.
+      await settleTaskActionInput(h.onDispatchedUserTurn.mock.calls[1]![1]);
+      expect(settled).toHaveBeenCalledOnce();
+    });
+
+    it('still judges a never-persisted queue head when its retry follows a failed check', async () => {
+      const h = createHarness(), sid = 'task-action-queue-head-retry';
+      let revoked = false;
+      const queued = makeItem('teammate-sent', 'Please fix the build', {
+        origin: { kind: 'session', senderSessionId: 'sender', senderBotId: 'bot', displayText: 'Please fix the build' },
+      });
+      bindTaskActionInput(sid, queued, async () => {
+        throw revoked ? new Error('TASK_ACTION_AUTHORIZATION_EXPIRED')
+          : Object.assign(new Error('verification unavailable'), { code: 'GROUP_AUTHORIZATION_UNAVAILABLE' });
+      });
+      h.coordinator.enqueue(sid, queued);
+      await vi.waitFor(() => expect(h.coordinator.getProjection(sid).recovery).toEqual({ kind: 'queue-head', clientId: 'teammate-sent' }));
+      revoked = true;
+      await h.coordinator.retryLastError(sid);
+      await vi.waitFor(() => expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining({ clientId: 'teammate-sent' })));
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -848,6 +918,118 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'first' });
+  });
+
+  // 2026-11-10: a Lead acted on a Worker report while three later reports from the same Worker,
+  // which superseded it, sat unseen in its queue and each cost a further turn. Nothing told the
+  // receiver the queue was non-empty. Unit tier: real coordinator drain, production note builder.
+  it('tells the receiver which collaboration messages wait behind the one being delivered', async () => {
+    const report = (clientId: string, text: string, senderSessionId: string, senderLabel = 'reviewer') =>
+      makeItem(clientId, `[From Orca Worker]\n${text}`, {
+        origin: { kind: 'orca', senderLabel, displayText: text, senderSessionId },
+      });
+    const h = createHarness();
+    const sid = 'lead-task';
+    h.coordinator.setExecutionPaused(sid, true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, report('r1', 'Full report', 'worker-a'));
+    h.coordinator.enqueue(sid, makeItem('typed', 'typed by the user'));
+    h.coordinator.enqueue(sid, report('r2', 'Verdict unchanged\nsee above', 'worker-a'));
+    h.coordinator.enqueue(sid, report('r3', 'Build is green', 'worker-b', 'developer'));
+    h.coordinator.setExecutionPaused(sid, false);
+    await flush();
+
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({
+      type: 'user',
+      content:
+        '[From Orca Worker]\nFull report\n\n---\n' +
+        '(Queue note: 2 more collaboration messages are queued behind this one (1 from the same sender):\n' +
+        '- queued_message_id: r2 | from: same sender | starts: Verdict unchanged see above\n' +
+        '- queued_message_id: r3 | from: "developer" | starts: Build is green)',
+    });
+    // The note exists only on this dispatch. The stored row, its replay copy (readable by any
+    // Worker through read_lead_history) and the waiting items must not carry another sender's text.
+    const persisted = h.sendToAgent.mock.calls[0]?.[3]?.persistUserMessage;
+    expect(persisted?.content).toBe('[From Orca Worker]\nFull report');
+    expect(persisted?.agentFacingWireContent).toEqual({ type: 'user', content: '[From Orca Worker]\nFull report' });
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map((item) => item.text)).toEqual([
+      'typed by the user',
+      '[From Orca Worker]\nVerdict unchanged\nsee above',
+      '[From Orca Worker]\nBuild is green',
+    ]);
+
+    // A message the user typed is dispatched byte-for-byte even with reports waiting behind it.
+    const typedFirst = createHarness();
+    typedFirst.coordinator.setExecutionPaused(sid, true);
+    await typedFirst.coordinator.ensureQueueRestored(sid);
+    typedFirst.coordinator.enqueue(sid, makeItem('typed', 'typed by the user'));
+    typedFirst.coordinator.enqueue(sid, report('r1', 'Full report', 'worker-a'));
+    typedFirst.coordinator.setExecutionPaused(sid, false);
+    await flush();
+    expect(typedFirst.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: 'typed by the user' });
+  });
+
+  // Review of the Worker queue tools: the service tests use an in-memory queue, so the real
+  // coordinator rules were unproven for this caller — discard settlement on withdrawal, the
+  // adjacency rule on merge, and that the Lead finally reads the rewritten text. Unit tier.
+  it('applies a Worker\'s rewrite, withdrawal and merge to the Lead\'s real queue', async () => {
+    const worker = { workerId: 'w-review', workerSessionId: 'worker-a', leadSessionId: 'lead-task' };
+    const report = (clientId: string, text: string) =>
+      makeItem(clientId, `[From Orca Worker reviewer (worker_id: w-review)]\n${text}`, {
+        origin: { kind: 'orca', senderLabel: 'reviewer', displayText: text, senderSessionId: 'worker-a' },
+      });
+    const h = createHarness();
+    const sid = worker.leadSessionId;
+    const pending = () => h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
+    const reports = createOrcaWorkerReportQueue({
+      getSessionQueueSnapshot: async () => ({
+        pendingQueue: [...pending()],
+        consumingClientIds: [],
+        isWorking: true,
+        willQueue: true,
+        queuePaused: h.coordinator.isQueuePaused(sid),
+      }),
+      ensureQueueRestored: async () => true,
+      replaceQueuedMessage: (sessionId, clientId, next) =>
+        h.coordinator.replaceQueuedMessage(sessionId, clientId, next),
+      removeQueuedMessage: (sessionId, clientId) => {
+        h.coordinator.remove(sessionId, clientId);
+        return !pending().some((item) => item.clientId === clientId);
+      },
+      mergeQueuedMessages: (sessionId, clientIds, buildReplacement) =>
+        h.coordinator.mergeQueuedMessagesAtomically(sessionId, clientIds, buildReplacement).merged,
+      resolveWorkerRole: async () => 'reviewer',
+      reportWithdrawalStanding: () => 'other-assignment',
+      adoptQueuedReport: () => undefined,
+      log: { info: () => undefined },
+    });
+    h.coordinator.setExecutionPaused(sid, true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, report('r1', 'Full report'));
+    h.coordinator.enqueue(sid, makeItem('typed', 'typed by the user'));
+    h.coordinator.enqueue(sid, report('r2', 'Verdict unchanged'));
+    h.coordinator.enqueue(sid, report('r3', 'Two lines already fixed'));
+
+    await expect(reports.update({ ...worker, queuedMessageId: 'r1', message: 'Blocking issues only' }))
+      .resolves.toEqual({ ok: true, queuedMessageId: 'r1' });
+    await expect(reports.cancel({ ...worker, queuedMessageId: 'r2' }))
+      .resolves.toEqual({ ok: true, queuedMessageId: 'r2' });
+    // The discard hook is what releases the report's accepted callback and its assignment record.
+    expect(h.onDiscardedQueuedMessage.mock.calls.map(([, item]) => item.clientId)).toEqual(['r2']);
+    // r1 and r3 are separated by the user's message: the coordinator refuses, nothing moves.
+    await expect(reports.merge({ ...worker, queuedMessageIds: ['r1', 'r3'], message: 'merged' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'QUEUE_CHANGED' });
+    expect(pending().map((item) => item.clientId)).toEqual(['r1', 'typed', 'r3']);
+
+    h.coordinator.setExecutionPaused(sid, false);
+    await flush();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({
+      type: 'user',
+      content:
+        '[From Orca Worker reviewer (worker_id: w-review)]\nBlocking issues only\n\n---\n' +
+        '(Queue note: 1 more collaboration message is queued behind this one (1 from the same sender):\n' +
+        '- queued_message_id: r3 | from: same sender | starts: Two lines already fixed)',
+    });
   });
 
   it('preserves a text-only restriction across persisted queue restore and dispatch', async () => {
@@ -1734,6 +1916,9 @@ function createHarness(opts?: {
       ? { providerGroupSwitchCandidate: opts.providerGroupSwitchCandidate }
       : {}),
     noteSessionClearBoundary,
+    // Same wiring as register.ts; it only ever annotates collaboration messages.
+    describeQueueBehindDispatch: (_sessionId, item, pendingQueue) =>
+      buildOrcaQueueDispatchNote(item, pendingQueue),
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch,
     hasPendingCredentialSwitch: () => hasPendingCredentialSwitch?.() === true,
@@ -2098,6 +2283,30 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+// #8147 follow-up: snapshot identity is owned by the same error episode,
+// including duplicate terminal events and paired done; a new input clears it.
+describe('AgentInputCoordinator persisted error identity', () => {
+  it('retains the exact row across snapshot reads and rejects unrelated bindings', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'error-identity';
+    h.coordinator.onTurnEvent(sid, 'error', 'failed');
+    h.coordinator.bindErrorPersistId(sid, 'current-row', 'failed');
+    h.coordinator.onTurnEvent(sid, 'done');
+    expect(h.coordinator.getProjection(sid).errorPersistId).toBe('current-row');
+    h.coordinator.onTurnEvent(sid, 'error', 'failed');
+    expect(h.coordinator.getProjection(sid).errorPersistId).toBe('current-row');
+    h.coordinator.bindErrorPersistId(sid, 'unrelated-row', 'another failure');
+    expect(h.coordinator.getProjection(sid).errorPersistId).toBe('current-row');
+    h.coordinator.onTurnEvent(sid, 'error', 'another failure');
+    expect(h.coordinator.getProjection(sid).errorPersistId).toBeUndefined();
+    h.coordinator.bindErrorPersistId(sid, 'new-row', 'another failure');
+    h.coordinator.clearError(sid);
+    h.coordinator.onTurnEvent(sid, 'error', 'another failure');
+    expect(h.coordinator.getProjection(sid).errorPersistId).toBeUndefined();
+  });
 });
 
 describe('AgentInputCoordinator trusted session reference snapshots', () => {

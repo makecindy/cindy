@@ -1351,6 +1351,8 @@ describe('provider group relay for shared users', () => {
     }, () => '33333333-3333-4333-8333-333333333333');
     await client.open('claude-code', openPayload('relayed', { relay: relayKeyFor(GUEST_A), groupAssigned: true }));
     expect(started[0].input.guest).toBe(true);
+    expect(started[0].input.hostSessionId).toBe(hostSessionIdFor(`${OWNER_DEVICE}\0relay:${relayKeyFor(GUEST_A)}`, 'relayed'));
+    expect(started[0].input.hostSessionId).not.toBe(hostSessionIdFor(`${GUEST_A}\0relay:${relayKeyFor(GUEST_A)}`, 'relayed'));
     // 被中转的任务不能凭 id 接上这台主人自己的会话。
     await expect(new RemoteAgentRunClient(runId(), poller, {
       onEvent: () => undefined,

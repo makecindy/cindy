@@ -352,6 +352,9 @@ function createOutState() {
     lastBoundCreds: null as BotCredentials | null,
     accountEpoch: 0,
     laneAnchors: new Map<string, LaneAnchorState>(),
+    // 被飞书拒过 reply_in_thread 的回复根(聚合消息/不支持话题的单聊): 记住后
+    // 后续出站直接普通回复, 不再每次先失败一次再降级(#9313 review)。
+    threadReplyUnsupported: new Set<string>(),
     patchableOpeners: new Map<string, string>(),
     openerTriggers: new Map<string, string>(),
     deferredOpenerConsumes: [] as DeferredOpenerConsume[],
@@ -379,6 +382,7 @@ function clearAccountScopedOutboundState(): void {
   S().laneAnchors.clear();
   S().patchableOpeners.clear();
   S().openerTriggers.clear();
+  S().threadReplyUnsupported.clear();
   clearDeferredOpenerConsumes();
   S().accountEpoch += 1;
 }
@@ -615,6 +619,35 @@ type SendTarget =
   | { kind: 'reply'; messageId: string; replyInThread?: boolean };
 
 /**
+ * reply 目标: 被飞书拒过 reply_in_thread 的根直接普通回复, 不再重复那次
+ * 注定失败的写。
+ */
+function replyTarget(messageId: string, wantInThread: boolean): SendTarget {
+  const inThread = wantInThread === true && threadReplyAllowed(messageId);
+  return inThread
+    ? { kind: 'reply', messageId, replyInThread: true }
+    : { kind: 'reply', messageId };
+}
+
+/**
+ * 记住被飞书拒过 reply_in_thread 的回复根: 该根再出站时直接普通回复, 不必
+ * 每次先失败一次再降级(聚合消息 / 不支持话题的单聊是确定性的拒绝)。
+ * 账号替换时随账号态一起清掉。
+ *
+ * 账号在途被替换时不能写: 旧账号的拒绝结论进了新账号的缓存, 新账号对同一条
+ * 消息就会莫名丢掉 reply_in_thread, 话题回复落进群主流(#9313 review)。
+ */
+function markThreadReplyUnsupported(messageId: string): void {
+  const pin = pinnedAccount.getStore();
+  if (pin && pin.epoch !== S().accountEpoch) return;
+  S().threadReplyUnsupported.add(messageId);
+}
+
+function threadReplyAllowed(messageId: string): boolean {
+  return !S().threadReplyUnsupported.has(messageId);
+}
+
+/**
  * userId → 本次出站目标。
  *
  * advanceRound = true(流式建卡 — 每个 agent 回合的首条出站)时强制从 FIFO
@@ -626,7 +659,7 @@ function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean; thre
   const lane = decodeLaneUserId(userId);
   if (!lane && opts?.threadTs) {
     if (!opts.threadTs.startsWith('om_')) throw new Error('Invalid Feishu reply message id');
-    return { kind: 'reply', messageId: opts.threadTs, replyInThread: true };
+    return replyTarget(opts.threadTs, true);
   }
   if (!lane) return { kind: 'open_id', id: userId };
 
@@ -653,7 +686,7 @@ function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean; thre
     // 消息发进群主流(位置错误比丢失更糟)。held 是回拨的群主流触发消息时
     // 带 reply_in_thread 回复才能落回话题。
     return state.held
-      ? { kind: 'reply', messageId: state.held, replyInThread: state.inThreadReply || undefined }
+      ? replyTarget(state.held, state.inThreadReply)
       : null;
   }
   if (state.held && !state.quotedHeld) {
@@ -661,6 +694,24 @@ function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean; thre
     return { kind: 'reply', messageId: state.held };
   }
   return { kind: 'chat_id', id: lane.chatId };
+}
+
+/**
+ * 飞书 230072: 聚合消息(合并转发根)和不能开话题的单聊拒绝 reply_in_thread。
+ * 业务码可能在 2xx 响应体里(SDK 不抛), 也可能在抛出的 HTTP 错误上。
+ */
+const REPLY_IN_THREAD_UNSUPPORTED_CODE = 230072;
+
+function responseBusinessCode(res: { code?: number }): number | undefined {
+  return typeof res.code === 'number' ? res.code : undefined;
+}
+
+function thrownBusinessCode(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const direct = (err as { code?: unknown }).code;
+  if (typeof direct === 'number') return direct;
+  const nested = (err as { response?: { data?: { code?: unknown } } }).response?.data?.code;
+  return typeof nested === 'number' ? nested : undefined;
 }
 
 /** 统一出站: target 三形态 → message.create(open_id/chat_id) 或 message.reply。 */
@@ -672,15 +723,41 @@ async function createMessage(
 ): Promise<{ messageId: string; chatId?: string }> {
   const c = ensureClient();
   if (target.kind === 'reply') {
-    const res = await c.im.v1.message.reply({
+    // 每次发送重新 ensureClient:账号在途被替换时 pin epoch 拒绝,绝不把提示
+    // 发到旧 bot(#9313 review)。
+    const sendReply = (inThread: boolean) => ensureClient().im.v1.message.reply({
       path: { message_id: target.messageId },
       data: {
         content,
         msg_type: msgType,
         // 回拨到群主流触发消息的锚点: 必须 reply_in_thread 才落回话题。
-        ...(target.replyInThread ? { reply_in_thread: true } : {}),
+        ...(inThread ? { reply_in_thread: true } : {}),
       },
     });
+    const inThread = target.replyInThread === true;
+    let res: { code?: number; data?: { message_id?: string } };
+    let retriedWithoutThread = false;
+    try {
+      res = await sendReply(inThread);
+    } catch (err) {
+      // 话题回复被拒时改成普通回复再发一次, 否则「不支持」提示会跟这次失败一起被吞(#9245)。
+      if (!inThread || thrownBusinessCode(err) !== REPLY_IN_THREAD_UNSUPPORTED_CODE) throw err;
+      getLog().warn('[feishu/outbound] reply_in_thread rejected (230072); retrying as a normal reply');
+      // 这个根确定不支持话题回复: 记住它, 后续出站直接普通回复(#9313 review)。
+      markThreadReplyUnsupported(target.messageId);
+      retriedWithoutThread = true;
+      res = await sendReply(false);
+    }
+    if (
+      !retriedWithoutThread &&
+      inThread &&
+      responseBusinessCode(res) === REPLY_IN_THREAD_UNSUPPORTED_CODE &&
+      !res.data?.message_id
+    ) {
+      getLog().warn('[feishu/outbound] reply_in_thread rejected (230072); retrying as a normal reply');
+      markThreadReplyUnsupported(target.messageId);
+      res = await sendReply(false);
+    }
     const id = res.data?.message_id ?? '';
     if (!id) throw new Error('[feishu/outbound] reply: no message_id in response');
     return { messageId: id };
@@ -1876,6 +1953,8 @@ async function resolveReplyWithClient(
     if (!text) return null;
     return {
       replyContext: {
+        messageId: root.message_id,
+        ...(root.create_time ? { sentAt: Number(root.create_time) } : {}),
         author: authorOf(root),
         text,
         ...(root.sender?.sender_type === 'app' ? { isBot: true } : {}),

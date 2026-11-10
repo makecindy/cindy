@@ -414,6 +414,23 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     await fsp.rm(TEST_USER_DATA, { recursive: true, force: true });
   });
 
+  // unit 回归：2.1.321 实报 resolvedModel，description 不再带版本；旧用例只有带版本说明。
+  // 经主动发现入口验证活动目录，避免内核支持 5.2 而选择器仍只显示 5.1。
+  it('主动探测接受 SDK resolvedModel 并保留 Fable 5.2 的 Fast 能力', async () => {
+    setAnthropicModelProbe(async (onModels) => {
+      onModels([
+        { value: 'fable', resolvedModel: 'claude-fable-5-2', displayName: 'Fable 5.2',
+          description: 'For your toughest challenges', supportsFastMode: true },
+        { value: 'claude-fable-5-1', displayName: 'Fable 5.1' },
+      ]);
+      return true;
+    });
+    await expect(refreshAnthropicModelsFromProbe()).resolves.toBe(true);
+    await waitForAnthropicDiscoveryIdleForTest();
+    expect(anthropicIds()).toEqual(['claude-fable-5-2', 'claude-fable-5-1']);
+    expect(anthropicModel('claude-fable-5-2')).toMatchObject({ name: 'Fable 5.2', supportsFastMode: true });
+  });
+
   it('主动探测按发起时的授权世代生效:探测期间换号,旧账号的迟到清单不写入', async () => {
     setAnthropicModelProbe(async (onModels) => {
       onModels([{ value: 'claude-opus-4-8', displayName: 'Opus 4.8' }]);

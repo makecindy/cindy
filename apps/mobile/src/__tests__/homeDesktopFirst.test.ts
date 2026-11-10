@@ -890,7 +890,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('const headerNewSession = newSessionInHeader && newSessionEntryVisible;');
     // 顶栏新建与浮动按钮走同一入口(openNewSession → guardedPush → 抽屉 runNavigation 先关再跳)。
     expect(source).toContain('onPress={() => openNewSession()} testID="home.headerNewSessionButton">');
-    expect(source).toContain("if (run) run(() => push(href)); else push(href);");
+    expect(source).toContain("const guardedPush = useTaskListNavigation({ sidebar: sidebarNavigation, runNavigation });");
     // 抽屉与首页左上角都只打开系统菜单(HomeChromeDrawer 自有渲染测试),不再有关闭分支。
     expect(source).toContain('onPress={openChromeMenu}\n          testID="home.chromeMenu"');
     expect(source).not.toContain('onDismiss');

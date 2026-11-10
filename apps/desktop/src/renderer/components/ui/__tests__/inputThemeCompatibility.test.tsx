@@ -68,7 +68,7 @@ function loadTheme(type: ThemeType, colors: Record<string, string>): Theme {
   fs.writeFileSync(file, bytes);
   const payload = loadLocalThemesSync();
   expect(payload.success).toBe(true);
-  vi.stubGlobal('electronAPI', { localThemes: { listSync: () => payload } });
+  vi.stubGlobal('electronAPI', { localThemes: { listSync: () => payload, onChanged: () => () => {} } });
   bootstrapLocalThemesSync();
   const first = getLocalThemes().find((theme) => theme.id === 'input-compat-local');
   expect(first).toBeDefined();

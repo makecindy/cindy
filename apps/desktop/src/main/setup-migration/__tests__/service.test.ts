@@ -114,6 +114,38 @@ function harness(overrides: Partial<SetupMigrationServiceDeps> = {}) {
 }
 
 describe('setup migration service', () => {
+  // Unit tier, real preview: a stale picker must not bypass the fresh directory's
+  // availability facts, contact another source, or require a second directory read.
+  it.each([
+    ['missing', null, 'NOT_FOUND'],
+    ['offline', { online: false }, 'SETUP_SOURCE_UNAVAILABLE'],
+    ['remote control off', { remoteControlEnabled: false }, 'SETUP_SOURCE_UNAVAILABLE'],
+    ['control disabled', { controlEnabled: false }, 'SETUP_SOURCE_UNAVAILABLE'],
+    ['self', { isSelf: true }, 'NOT_FOUND'],
+    ['mobile', { platform: 'ios' }, 'NOT_FOUND'],
+  ] as const)('rejects a %s source before remote reads', async (_name, changes, code) => {
+    const listDevices = vi.fn(async () => [
+      ...(changes === null ? [] : [device(changes)]),
+      device({ deviceId: 'another', name: 'Another Mac' }),
+    ]);
+    const { service, remote } = harness({ listDevices });
+    await expect(service.preview('dev-old', 1)).rejects.toMatchObject({ code });
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    expect(remote).not.toHaveBeenCalled();
+  });
+
+  it('uses one directory read to validate and preview exactly the chosen source', async () => {
+    const listDevices = vi.fn(async () => [device({ deviceId: 'another' }), device()]);
+    const { service, remote } = harness({ listDevices });
+    const plan = await service.preview('dev-old', 1);
+    expect(listDevices).toHaveBeenCalledTimes(1);
+    expect(plan.source.deviceId).toBe('dev-old');
+    expect(remote.mock.calls).toEqual([
+      ['dev-old', { action: 'caps' }],
+      ['dev-old', { action: 'snapshot' }],
+    ]);
+  });
+
   it('lists other desktops of the account, readable ones first, with why the rest are not', async () => {
     const { service } = harness();
     expect(await service.sources()).toEqual([

@@ -61,8 +61,7 @@ import type { AgentKind as RendererAgentKind } from '@/lib/ccAgent.types';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../../shared/regionalMoney';
 import { useAgentCapabilities, type AgentKind as MakerAgentKind } from '@/hooks/useAgentCapabilities';
-import { useChatSessionFile } from './ChatSessionFileContext';
-import { PluginUiRendererView } from '@/cindy-brain/PluginUiRendererView';
+import { useSessionFileOrigin } from './ChatSessionFileContext';
 import { originDeviceId } from '@/lib/sessionFileOrigin';
 import { buildSessionMessageDeepLink } from '@/lib/deepLink';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
@@ -285,8 +284,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   const makerKind: MakerAgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
   // device-link 远程会话:fork 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // deviceId 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,见该文件注释)。
-  const sessionFile = useChatSessionFile();
-  const sessionFileOrigin = sessionFile.origin;
+  const sessionFileOrigin = useSessionFileOrigin();
   const { capabilities } = useAgentCapabilities(
     makerKind,
     currentSessionId ? originDeviceId(sessionFileOrigin) : undefined,
@@ -357,7 +355,6 @@ export const AssistantMessage = memo(function AssistantMessage({
     <MessageActionBar
       sessionId={currentSessionId}
       clientId={messageClientId}
-      pluginUiTarget={!sharedGuest && currentSessionId && messageClientId ? { sessionId: currentSessionId, id: messageClientId } : undefined}
       createdAt={createdAt}
       copyText={richAnswerText(content)}
       copyLinkText={messageDeepLink}
@@ -390,6 +387,7 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <div
+      data-selection-quote-scope=""
       className={cn('flex w-full flex-col items-start gap-1.5', botBubble && 'group/message')}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -408,50 +406,48 @@ export const AssistantMessage = memo(function AssistantMessage({
             {t('chat.failedSamplingAttempt')}
           </div>
         )}
-        {ghostRenderCard && messageClientId && !showOriginal ? (
-          // 出口钩子自绘:意识卡片替换气泡(净化后的静态 HTML,沙箱 iframe)。
-          // 复用 GhostToolCard(自带主机身份头 + 主题注入 + 沙箱),turn 级无
-          // 工具名/参数,running 恒 false(turn 已结束)。
-          <GhostToolCard
-            callId={messageClientId}
-            ghostId={ghostRenderCard.ghostId}
-            toolName=""
-            toolInput={undefined}
-            html={ghostRenderCard.html}
-            height={ghostRenderCard.height}
-            running={false}
-            sessionId={currentSessionId}
-          />
-        ) : isStreaming && USE_LINE_COMMIT_STREAMING && !hasRichAnswer(content) ? (
-          <StreamingBody
-            workingDir={workingDir}
-            content={displayContent}
-            localFileRefs={localFileRefs}
-            currentSessionId={currentSessionId}
-            currentSessionTitle={currentSessionTitle}
-            streamFadeKey={streamFadeKey}
-            allowPrivilegedLinks={allowPrivilegedLinks}
-          />
-        ) : (
-          // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
-          // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部启用
-          // 100ms throttle, false 时无节流, 行为和该文件性能优化前完全一致。
-          <PluginUiRendererView sessionId={currentSessionId ?? ''} point="message.body"
-            target={{ kind: 'message', id: messageClientId ?? '' }}
-            active={Boolean(!isStreaming && !ghostRenderCard && sessionFile.localConfirmed && currentSessionId && messageClientId && !sharedGuest)}>
-          <MarkdownRenderer
-            renderRichAnswers
-            workingDir={workingDir}
-            content={displayContent}
-            isStreaming={isStreaming}
-            streamFadeKey={streamFadeKey}
-            localFileRefs={localFileRefs}
-            currentSessionId={currentSessionId}
-            currentSessionTitle={currentSessionTitle}
-            allowPrivilegedLinks={allowPrivilegedLinks}
-          />
-          </PluginUiRendererView>
-        )}
+        <div data-selection-quote-body="" className="contents">
+          {ghostRenderCard && messageClientId && !showOriginal ? (
+            // 出口钩子自绘:意识卡片替换气泡(净化后的静态 HTML,沙箱 iframe)。
+            // 复用 GhostToolCard(自带主机身份头 + 主题注入 + 沙箱),turn 级无
+            // 工具名/参数,running 恒 false(turn 已结束)。
+            <GhostToolCard
+              callId={messageClientId}
+              ghostId={ghostRenderCard.ghostId}
+              toolName=""
+              toolInput={undefined}
+              html={ghostRenderCard.html}
+              height={ghostRenderCard.height}
+              running={false}
+              sessionId={currentSessionId}
+            />
+          ) : isStreaming && USE_LINE_COMMIT_STREAMING && !hasRichAnswer(content) ? (
+            <StreamingBody
+              workingDir={workingDir}
+              content={displayContent}
+              localFileRefs={localFileRefs}
+              currentSessionId={currentSessionId}
+              currentSessionTitle={currentSessionTitle}
+              streamFadeKey={streamFadeKey}
+              allowPrivilegedLinks={allowPrivilegedLinks}
+            />
+          ) : (
+            // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
+            // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部启用
+            // 100ms throttle, false 时无节流, 行为和该文件性能优化前完全一致。
+            <MarkdownRenderer
+              renderRichAnswers
+              workingDir={workingDir}
+              content={displayContent}
+              isStreaming={isStreaming}
+              streamFadeKey={streamFadeKey}
+              localFileRefs={localFileRefs}
+              currentSessionId={currentSessionId}
+              currentSessionTitle={currentSessionTitle}
+              allowPrivilegedLinks={allowPrivilegedLinks}
+            />
+          )}
+        </div>
         {/* 自绘卡在场:提供原文 ↔ 意识卡片切换(信任边界,主机绘制,始终可切回原文)。 */}
         {ghostRenderCard && (
           <button

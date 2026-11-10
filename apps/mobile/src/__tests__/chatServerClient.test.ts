@@ -433,13 +433,13 @@ describe('direct Chat Server client', () => {
     const blankText = { ...onlyMedia, content: [{ type: 'text', text: ' \n' }, ...onlyMedia.content] };
     expect(chatRoomRow(room(), { ...snapshot(), messages: [blankText] }, id(11)).item.display.preview).toBe('a.png, b.pdf');
   });
-  it.each(['AUTH_REQUIRED', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
+  it.each(['AUTH_REQUIRED', 'RUNTIME_TIMEOUT', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
     const source = message(20);
     let status = 'failed';
     const request = vi.fn();
     request.mockImplementation(async (path: string) => path.endsWith('/snapshot') ? snapshot()
       : path.endsWith('/plans') ? []
-      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code }]
+      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code, failure_reason: 'unclaimed_timeout' }]
       : [source]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
@@ -448,7 +448,8 @@ describe('direct Chat Server client', () => {
     expect(view.messages).toHaveLength(2);
     expect(view.messages[0]).toMatchObject({ id: source.id, kind: 'message' });
     expect(view.messages[1]).toMatchObject({ id: `execution-failure:${id(30)}:1`, sequence: view.messages[0].sequence,
-      kind: 'notice', runtimeFailureCode: failure_code === 'AUTH_REQUIRED' ? failure_code : 'RUNTIME_ERROR' });
+      kind: 'notice', runtimeFailureCode: failure_code === 'AUTH_REQUIRED' || failure_code === 'RUNTIME_TIMEOUT' ? failure_code : 'RUNTIME_ERROR' });
+    expect(view.messages[1].runtimeFailureReason).toBe(failure_code === 'RUNTIME_TIMEOUT' ? 'unclaimed_timeout' : undefined);
     expect(view.lastMessage?.preview).toBe('20');
     expect(JSON.stringify(view.messages)).not.toContain('private diagnostic');
     status = 'queued';

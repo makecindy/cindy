@@ -7,12 +7,11 @@
  */
 
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown } from 'lucide-react';
 import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
 import { classicalStyleOptions, languageSettings } from './LanguageSection.settings-search';
-import { SelectParts as Select } from '@/components/ui/select';
+import { Select } from '@/components/ui/select';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
-import { cn } from '@/lib/utils';
 import { useLocale } from '@/hooks/useLocale';
 import type { LocalePreference } from '@/i18n';
 import { isClassicalLocale, type ClassicalLocale } from '../../../shared/locale';
@@ -22,82 +21,6 @@ const CLASSICAL_OPTION = 'classical';
 type LanguageOption = LocalePreference | typeof CLASSICAL_OPTION;
 
 // 「跟随系统」优先,英语作为第一个显式语言,其余语言按支持列表顺序排列;古典版本合为一项放最后。
-
-const TRIGGER_CLASS = cn(
-  'flex h-9 max-w-full shrink-0 items-center justify-between gap-3 rounded-full border px-3.5 text-13 outline-none transition-colors',
-  'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-  'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-);
-
-interface PillSelectProps<T extends string> {
-  'data-setting-id': string;
-  value: T;
-  options: ReadonlyArray<{ value: T; label: string }>;
-  onChange: (value: T) => void;
-  ariaLabel: string;
-  className: string;
-}
-
-function PillSelect<T extends string>({
-  'data-setting-id': settingId,
-  value,
-  options,
-  onChange,
-  ariaLabel,
-  className,
-}: PillSelectProps<T>) {
-  return (
-    <Select.Root value={value} onValueChange={(next) => onChange(next as T)}>
-      <Select.Trigger
-        data-setting-id={settingId}
-        aria-label={ariaLabel}
-        className={cn(TRIGGER_CLASS, className)}
-      >
-        <span className="min-w-0 truncate text-left">
-          <Select.Value />
-        </span>
-        <Select.Icon asChild>
-          <ChevronDown
-            size={14}
-            className="shrink-0 text-[var(--settings-eye-icon)]"
-            aria-hidden="true"
-          />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content
-          position="popper"
-          side="bottom"
-          align="start"
-          sideOffset={6}
-          className={cn(
-            'z-[10010] max-h-[min(18rem,var(--radix-select-content-available-height))] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl p-2',
-            'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
-          )}
-        >
-          <Select.Viewport className="flex flex-col gap-[2px]">
-            {options.map((option) => (
-              <Select.Item
-                key={option.value}
-                value={option.value}
-                className={cn(
-                  'flex h-9 w-full cursor-pointer select-none items-center justify-between gap-3 rounded-[8px] px-3 text-left text-13 outline-none transition-colors',
-                  'text-[var(--settings-input-text)]',
-                  'data-[state=checked]:text-[var(--settings-menu-text-selected)]',
-                )}
-              >
-                <Select.ItemText className="min-w-0 truncate">{option.label}</Select.ItemText>
-                <Select.ItemIndicator>
-                  <Check size={16} className="shrink-0 text-[var(--settings-theme-icon-active)]" />
-                </Select.ItemIndicator>
-              </Select.Item>
-            ))}
-          </Select.Viewport>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
-  );
-}
 
 export function LanguageSection() {
   const { t } = useTranslation();
@@ -115,89 +38,62 @@ export function LanguageSection() {
   };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t(languageSettings.language.sectionKey)}
-      </h2>
-
-      <div
-        className={cn(
-          'flex flex-col rounded-xl px-4',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div
+    <SettingsSection title={t(languageSettings.language.sectionKey)}>
+      <SettingsCard>
+        <SettingsRow
           id={languageSettings.language.targetId}
-          className="flex flex-row items-center justify-between gap-6 py-4"
-        >
-          <div className="min-w-0 flex-1">
-            <p
-              className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-              style={{ letterSpacing: '0.12px' }}
-            >
-              {t(languageSettings.language.titleKey)}
-            </p>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t(languageSettings.language.descriptionKey)}
-            </p>
-          </div>
-          <PillSelect<LanguageOption>
-            data-setting-id={languageSettings.language.id}
-            value={classical ? CLASSICAL_OPTION : locale}
-            options={languageSettings.language.options.map((option) => ({
-              value: option.value,
-              label: t(option.labelKey),
-            }))}
-            onChange={chooseLanguage}
-            ariaLabel={t('settings.language.ariaLabel')}
-            className="w-[320px]"
-          />
-        </div>
+          title={t(languageSettings.language.titleKey)}
+          hint={t(languageSettings.language.descriptionKey)}
+          trailing={
+            <Select
+              data-setting-id={languageSettings.language.id}
+              value={classical ? CLASSICAL_OPTION : locale}
+              options={languageSettings.language.options.map((option) => ({
+                value: option.value,
+                label: t(option.labelKey),
+              }))}
+              onValueChange={(next) => chooseLanguage(next as LanguageOption)}
+              label={t('settings.language.ariaLabel')}
+              width="md"
+              className="shrink-0"
+            />
+          }
+        />
 
         {classical ? (
-          <div
+          <SettingsRow
             id={languageSettings.classical.targetId}
-            className="flex flex-row items-center justify-between gap-6 border-t border-[var(--settings-theme-card-border)] py-4"
-          >
-            <div className="min-w-0 flex-1">
-              <p
-                className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                style={{ letterSpacing: '0.12px' }}
-              >
-                {t(languageSettings.classical.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(languageSettings.classical.descriptionKey)}
-              </p>
-            </div>
-            <div className="flex w-[320px] max-w-full shrink-0 flex-row gap-2">
-              <PillSelect<ClassicalLocale>
-                data-setting-id={languageSettings.classical.id}
-                value={classical}
-                options={languageSettings.classical.options.map((script) => ({
-                  value: script.value,
-                  label: t(script.labelKey),
-                }))}
-                onChange={setLocale}
-                ariaLabel={t('settings.language.classical.scriptAriaLabel')}
-                className="w-[112px]"
-              />
-              <PillSelect<ClassicalReplyStyleId>
-                data-setting-id={languageSettings.classical.id}
-                value={classicalStyle}
-                options={classicalStyleOptions.map((style) => ({
-                  value: style.value,
-                  label: t(style.labelKey),
-                }))}
-                onChange={setClassicalStyle}
-                ariaLabel={t('settings.language.classical.styleAriaLabel')}
-                className="min-w-0 flex-1"
-              />
-            </div>
-          </div>
+            title={t(languageSettings.classical.titleKey)}
+            hint={t(languageSettings.classical.descriptionKey)}
+            trailing={
+              <div className="flex w-[320px] max-w-full shrink-0 flex-row gap-2">
+                <Select
+                  data-setting-id={languageSettings.classical.id}
+                  value={classical}
+                  options={languageSettings.classical.options.map((script) => ({
+                    value: script.value,
+                    label: t(script.labelKey),
+                  }))}
+                  onValueChange={(next) => setLocale(next as ClassicalLocale)}
+                  label={t('settings.language.classical.scriptAriaLabel')}
+                  className="w-[112px] shrink-0"
+                />
+                <Select
+                  data-setting-id={languageSettings.classical.id}
+                  value={classicalStyle}
+                  options={classicalStyleOptions.map((style) => ({
+                    value: style.value,
+                    label: t(style.labelKey),
+                  }))}
+                  onValueChange={(next) => setClassicalStyle(next as ClassicalReplyStyleId)}
+                  label={t('settings.language.classical.styleAriaLabel')}
+                  className="flex-1"
+                />
+              </div>
+            }
+          />
         ) : null}
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

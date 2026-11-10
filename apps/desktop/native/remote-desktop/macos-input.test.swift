@@ -91,3 +91,21 @@ do {
   precondition(handoffDetectQr(Data([1, 2, 3])).isEmpty, "Not a picture, no codes")
 }
 print("native qr detection passed")
+
+// Away guard: device noise must not lock a covered Mac; a deliberate press must.
+do {
+  var gate = AwayInputGate()
+  for type in [CGEventType.keyUp, .leftMouseUp, .rightMouseUp, .otherMouseUp, .mouseMoved, .leftMouseDragged] {
+    precondition(!gate.isPresence(type, flags: [], scroll: 0, now: 0), "Releases and drift are noise")
+  }
+  precondition(!gate.isPresence(.flagsChanged, flags: [], scroll: 0, now: 0), "A modifier release is noise")
+  precondition(!gate.isPresence(.flagsChanged, flags: .maskAlphaShift, scroll: 0, now: 0), "Caps Lock alone is noise")
+  precondition(gate.isPresence(.flagsChanged, flags: .maskCommand, scroll: 0, now: 0), "Pressing a modifier is presence")
+  precondition(gate.isPresence(.keyDown, flags: [], scroll: 0, now: 0))
+  precondition(gate.isPresence(.leftMouseDown, flags: [], scroll: 0, now: 0))
+  precondition(!gate.isPresence(.scrollWheel, flags: [], scroll: 10, now: 1), "One wheel tick is noise")
+  precondition(!gate.isPresence(.scrollWheel, flags: [], scroll: 10, now: 3), "Ticks seconds apart do not add up")
+  precondition(!gate.isPresence(.scrollWheel, flags: [], scroll: 10, now: 3.2))
+  precondition(gate.isPresence(.scrollWheel, flags: [], scroll: 10, now: 3.4), "A real scroll is presence")
+}
+print("native away input gate passed")

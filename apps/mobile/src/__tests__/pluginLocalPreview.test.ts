@@ -47,7 +47,7 @@ vi.mock("expo-file-system", () => ({
     create() {
       this.exists = true;
     }
-    write(value: string | Uint8Array) {
+    writeSync(value: string | Uint8Array) {
       disk.files.set(this.name, value);
     }
     delete() {

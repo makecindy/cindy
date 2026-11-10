@@ -1,5 +1,24 @@
 # Remote desktop
 
+## Hidden capture/data host diagnostics
+
+`Desktop capture` is the hidden host used by desktop capture, files, direct peers,
+and recording. Its presence does not by itself mean a screen is being captured.
+App activation must target the registered main window, never the first entry from
+`BrowserWindow.getAllWindows()`. Provider-share receipt only queues the approval
+UI/notification; clicking the notification or opening an invitation activates main.
+
+For an unexpectedly visible host, local `main-*.log` entries under
+`desktop-capture:window` identify its mode, window ID/native handle and bounds.
+`js-call` entries include sanitized source positions for visibility/focus calls;
+`native-event` entries report Electron events and do **not** claim an originating
+call stack. A per-window budget caps these records at 32 plus a limit notice.
+Correlate them with `provider-share` approval receipt and notification lifecycle
+records (local sequence, `show` versus `click`) to investigate no-click reports.
+These diagnostics omit notification text, share links, credentials and absolute
+stack paths, and do not expand the log-upload allowlist. They observe visibility
+without hiding or destroying a host that may carry an active connection.
+
 ## Idle protection
 
 Desktop and Mobile expose **Disconnect and lock when idle** in the remote desktop
@@ -29,6 +48,59 @@ locks the protected lease. A transient
 media reconnect preserves the live host lease and its idle deadline until resume;
 failed recovery reaches heartbeat expiry instead of renewing the idle budget.
 Only this desktop lease ends: other Device Link tasks and channels remain intact.
+
+## Keep working while away (macOS, 2026-11-06)
+
+Settings → App behavior → **Keep working while away** (macOS 14+, default off) reuses
+the privacy masks without a remote viewer. While it is on, Main holds
+`prevent-display-sleep` whether or not anything is running (the way a playing video
+does), so the display never idle-sleeps into the lock screen and a task sent later from
+a phone still finds a usable desktop. Real display sleep is not offered: macOS stops
+compositing windows for screenshots while the display is off, which would blind the
+Agent. When the owner has been away for the chosen time (30 s, 1, 2 or 5 minutes), or
+by default the system's own display-sleep time (`pmset` `displaysleep`, or an earlier
+screen saver; 10 minutes when both are Never), every display
+gets a black mask whose status line fades out after six seconds, so the screen reads as
+off; Agents keep working behind it: masks ignore mouse events and the
+`--away-guard` helper passes injected input. Owner absence is the HID idle time minus
+`cindy_computer`'s own dispatch, so Agent clicks never count as the owner.
+
+The helper consumes all physical input; only a deliberate press (key down, mouse
+button down, a modifier going down, or a real scroll of 30+ points within a second)
+turns into the fixed system lock shortcut. Releases, pointer drift, Caps Lock and stray
+scroll ticks are swallowed without locking, because idle mice, wireless receivers and
+some keypads emit them on their own (`AwayInputGate`). The owner unlocks with
+Touch ID or password through macOS itself, and the tap is disabled as soon as the lock
+is up. Covering every Space briefly makes Electron a background app, so Main brings the
+Cindy window that was focused back to the front after unlock. Away masks are
+non-activating panels that skip Electron's Dock-hiding process transform (it left Cindy
+a background-only app), and they are 99% opaque: a fully opaque full-screen window makes
+macOS mark the windows behind as occluded and Electron apps stop painting, so an Agent
+read stale screenshots even though its clicks landed. Settings → "Try it" covers the
+displays three seconds after the click; touching locks as usual, and an untouched
+preview uncovers after two minutes without locking (the owner was just using the Mac). It also locks on
+stdin EOF, a missed heartbeat or a dead parent, so a crashed Cindy leaves a locked
+screen rather than an uncovered desktop. Main locks before removing masks when the
+setting is turned off, a display is added (including while the masks are still going
+up), or a mask window fails, and removes them only once the lock is confirmed. If it
+cannot lock (e.g. Accessibility was revoked), the masks stay up with a "press
+Control-Command-Q" note, the display assertion is released and the masks go when macOS
+locks. Agent input skips the person-at-the-Mac check only after every mask is up and
+the helper is consuming physical input. Remote desktop sessions do not end the cover:
+the remote viewer captures through it, and a session alone (view-only, plugin screens)
+does not prove anyone protects this screen. An already-locked screen just drops the masks. A Cindy started on a locked screen reads
+the lock from the console session (`ioreg`), because Electron's idle-state probe never
+reports `locked` on macOS and the guard would otherwise keep the display on behind it.
+
+Fail-safe direction: missing Accessibility for the input helper, masks that cannot
+start, or an unreadable idle time release the display assertion, so macOS sleeps and
+locks exactly as it would without Cindy; mask setup is not retried for 60 seconds.
+After the owner unlocks, absence is measured from the unlock, so the screen is never
+covered again immediately after an unlock (Codex Locked use regression). Nothing
+in this path unlocks the screen, edits authorization rules or stores a password; a
+screen that was already locked when the setting was turned on stays locked. Logic lives in
+`apps/desktop/src/main/remote-desktop/awayGuard.ts` (unit-tested state machine) and
+`awayGuardService.ts`; shared-userData passive instances do not run it.
 
 ## Desktop viewer
 
@@ -170,7 +242,10 @@ rebinding to a different owner or target does not wait on that old barrier.
 The window reuses the existing resource-usage auxiliary-window controller and
 factory for hidden prewarming, two-phase readiness, hide/reuse and bounded crash
 recovery. Prewarming loads only the shell and never connects to or captures a
-computer. Closing/minimizing retires its lease, clears pixels and stops polling;
+computer. It is skipped unless the session can use device-link or the saved
+session mode is `cloud` (auth may still be verifying at startup), so local and
+signed-out profiles keep no spare viewer; after a later sign-in the first viewer
+opens cold. Closing/minimizing retires its lease, clears pixels and stops polling;
 ordinary focus loss releases held input while retaining viewing. A crashed or
 automatically restored viewer uses `resume`, preserving a host's explicit stop.
 An account boundary destroys the viewer windows. The host's single-viewer lease
@@ -323,6 +398,15 @@ attempt and 2,048 characters per candidate. Fields and cursors are validated on
 both sides. Duplicate candidates are applied once. A timed-out exchange does
 not tear down healthy video; polling is bounded to 30 seconds. SDP, candidate
 addresses, credentials and desktop content are not added to logs.
+
+The iOS viewer offers with `max-bundle`, so video, audio and the input channel
+gather candidates on one transport. The default balanced policy gathers a full
+set per media type: a phone with Wi-Fi, cellular and several IPv6 addresses
+produced 108 host candidates for one attempt, close to the 128 limit that ends
+the attempt without a retry. With max-bundle the same networks yield about a
+third of that. Desktop answerers already accept the offered BUNDLE group, so
+older Desktops need no change; the setting is native and ships with a new app
+build.
 
 | Phase                      | Bound                                                   |
 | -------------------------- | ------------------------------------------------------- |

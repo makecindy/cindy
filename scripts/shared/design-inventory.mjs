@@ -204,7 +204,7 @@ function matchingBracket(source, open) {
   return -1;
 }
 
-const ROUTE_KEY_RE = /(path|index|element|children)\s*:/y;
+const ROUTE_KEY_RE = /(path|index|element|lazy|children)\s*:/y;
 
 /** 抽出对象字面量体里 depth-0 的路由键，忽略嵌套对象与 JSX 属性里的同名键。 */
 function topLevelRouteKeys(body) {
@@ -255,6 +255,12 @@ function parseRouteObject(body) {
     const element = body.slice(elementAt);
     route.component = /^\s*<([A-Za-z][\w.]*)/.exec(element)?.[1];
     if (route.component === 'Navigate') route.to = /\bto="([^"]*)"/.exec(element)?.[1] ?? '';
+  }
+
+  // route lazy（按需加载的页面）：组件名取 lazy 函数返回的 `Component: X`。
+  const lazyAt = keys.get('lazy');
+  if (route.component === undefined && lazyAt !== undefined) {
+    route.component = /\bComponent:\s*([A-Z]\w*)/.exec(body.slice(lazyAt))?.[1];
   }
 
   const childrenAt = keys.get('children');
@@ -1521,7 +1527,7 @@ export function mobileCatalogSurfaces() {
     ['chat.new', '新建任务', ['sessions/new.tsx']],
     ['files', '任务文件与预览', ['files/[sessionId].tsx', 'files/preview/[sessionId].tsx']],
     ['relay-join', '扫码加入自建中转', ['relay-join.tsx']],
-    ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx', 'settings/developer.tsx', 'settings/device-name.tsx', 'settings/user-bubble.tsx', 'settings/voice-dictionary.tsx', 'settings/voice-speaker-filter.tsx']],
+    ['settings', '设置（含调试与日志上传可见入口）', ['settings.tsx', 'settings/developer.tsx', 'settings/device-name.tsx', 'settings/handheld.tsx', 'settings/user-bubble.tsx', 'settings/voice-dictionary.tsx', 'settings/voice-speaker-filter.tsx']],
     ['auth', '登录与添加账号', ['(auth)/login.tsx', 'add-account.tsx']],
     ['account-deletion', '账号注销', ['account-deletion.tsx']],
   ];

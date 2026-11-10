@@ -31,7 +31,8 @@ import {
 } from '../usage/accountUsageLimit.js';
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import { onCodexAutoResetRestored } from '../maker-ipc/usage.js';
-import { GoalController } from './controller';
+import { GoalController, GoalControllerDisposedError } from './controller';
+import { createMakerStartupGate } from '../maker-host/startup-gate.js';
 import { readTurnUsageResetAt } from './usageLimit.js';
 import { restoreSessionForGoal } from './sessionRestore.js';
 import { GoalStorage, type GoalDrizzleDb } from './storage';
@@ -47,6 +48,8 @@ export interface StartGoalControllerDeps {
 }
 
 let _controller: GoalController | null = null;
+// Reuse the bounded startup gate, with one instance per controller lifetime.
+let _controllerReady = createMakerStartupGate();
 onCodexAutoResetRestored(async providerId => {
   await _controller?.resumeRestoredQuota(id => hasRestoredCodexQuota(id, providerId));
 });
@@ -163,6 +166,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     },
   });
   _controller = controller;
+  _controllerReady.complete();
   logger.info('[goal-host] started');
   // resumeActiveGoals 异步(storage 是 async proxy);fire-and-forget,失败非致命。
   void controller.resumeActiveGoals().catch((err) => {
@@ -176,11 +180,23 @@ export function getGoalController(): GoalController | null {
   return _controller;
 }
 
+/** Wait for this lifetime only; Scheduler failure must not strand Goal queries. */
+export async function waitForGoalController(): Promise<GoalController | null> {
+  if (_controller) return _controller;
+  const generation = _teardownGeneration;
+  const ready = await _controllerReady.wait(30_000);
+  if (generation !== _teardownGeneration) throw new GoalControllerDisposedError();
+  return ready ? _controller : null;
+}
+
 /** 切账号 / 登出时调(与 resetScheduler 对齐;当前 bootstrap 不联动)。 */
 export async function resetGoalController(): Promise<void> {
   const controller = _controller;
   _controller = null;
   _teardownGeneration++;
+  // Wake old callers so they reject as superseded, never join the next owner.
+  _controllerReady.complete();
+  _controllerReady = createMakerStartupGate();
   if (controller) await controller.dispose();
 }
 

@@ -3,7 +3,7 @@ import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequ
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
@@ -75,6 +75,7 @@ import type {
 } from '../../shared/agentInputQueue.js';
 import {
   HOST_ONLY_AGENT_PREFIX,
+  appendNoteToMakerUserMessage,
   buildMakerUserMessage,
   getAgentInputAttachmentBlockType,
   getAgentFacingText,
@@ -613,6 +614,16 @@ export interface AgentInputCoordinatorDeps {
    */
   onDiscardedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
+   * 排队项派发那一刻，追加在发给模型的 wire 消息末尾的宿主说明；返回 null 不追加。
+   * `pendingQueue` 是该项取出后仍在等待的队列。说明不写回队列项（不进排队正文与落库正文）。
+   * 目前只用于协同消息的 Queue note，见 orcaQueueNote.ts。
+   */
+  describeQueueBehindDispatch?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    pendingQueue: readonly AgentInputQueuedMessage[],
+  ) => string | null;
+  /**
    * 这个会话的失败 turn 正在重试；`source` 区分人工操作与自动续跑。
    *
    * hook-control 用它把那一轮的结果接回渠道里那条已经收口的消息(turn.reopen)。
@@ -777,6 +788,7 @@ interface SessionInputState {
   error: string | null;
   /** Stable error reason for live projections; null when no terminal error is active. */
   errorReason: string | null;
+  errorPersistBinding: { message: string; persistId: string } | null;
   /** The failed scheduled input was persisted before its recovery was released. */
   errorCanContinue: boolean;
   /** Bounded structured details for tool-loop terminal errors. */
@@ -890,6 +902,7 @@ interface PendingAutoResumeRecovery {
   recovery: Extract<AgentInputRecovery, { kind: 'active-turn' }>;
   error: string | null;
   errorReason: string | null;
+  errorPersistBinding: SessionInputState['errorPersistBinding'];
   toolLoop: AgentInputToolLoopDetails | null;
   outputLimit: OutputLimitDetails | null;
   stickyError: string | null;
@@ -920,6 +933,7 @@ function createInitialInputState(
     activeTurn: null,
     error: null,
     errorReason: null,
+    errorPersistBinding: null,
     errorCanContinue: false,
     toolLoop: null,
     outputLimit: null,
@@ -1159,9 +1173,10 @@ function recordPendingTerminalEvent(active: ActiveTurn, event: ActiveTurnTermina
 }
 
 function clearErrorProjectionSignals(
-  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'outputLimit' | 'errorCanContinue'>,
+  state: Pick<SessionInputState, 'errorReason' | 'errorPersistBinding' | 'toolLoop' | 'outputLimit' | 'errorCanContinue'>,
 ): void {
   state.errorReason = null;
+  state.errorPersistBinding = null;
   state.toolLoop = null;
   state.outputLimit = null;
   state.errorCanContinue = false;
@@ -2976,6 +2991,7 @@ export class AgentInputCoordinator {
     // accepted 清理吞掉;合成收口分支需要回放它(review #939 第三轮)。
     const priorError = accepted.error;
     const priorErrorReason = accepted.errorReason;
+    const priorErrorPersistBinding = accepted.errorPersistBinding;
     const priorToolLoop = accepted.toolLoop;
     const priorOutputLimit = accepted.outputLimit;
     const priorStickyError = accepted.stickyError;
@@ -3081,6 +3097,7 @@ export class AgentInputCoordinator {
       if (priorError || priorRecovery) {
         latest.error = priorError;
         latest.errorReason = priorErrorReason;
+        latest.errorPersistBinding = priorErrorPersistBinding;
         latest.toolLoop = priorToolLoop;
         latest.outputLimit = priorOutputLimit;
         latest.stickyError = priorStickyError;
@@ -3452,7 +3469,7 @@ export class AgentInputCoordinator {
           }
         }
         const clientId = crypto.randomUUID();
-        continueItem = {
+        continueItem = acceptTaskActionRecoveryCopy(recovery.item, {
           ...recovery.item,
           clientId,
           text: continueText,
@@ -3483,7 +3500,7 @@ export class AgentInputCoordinator {
             content: continueText,
             createdAt: new Date().toISOString(),
           },
-        };
+        });
       }
     }
     // Only the verified group quota rejection can arm a queue-head wait: selection failed
@@ -3500,6 +3517,7 @@ export class AgentInputCoordinator {
     }
     const previousError = state.error;
     const previousErrorReason = state.errorReason;
+    const previousErrorPersistBinding = state.errorPersistBinding;
     const previousToolLoop = state.toolLoop;
     const previousOutputLimit = state.outputLimit;
     const previousStickyError = state.stickyError;
@@ -3537,7 +3555,7 @@ export class AgentInputCoordinator {
       let item = continueItem;
       if (!item) {
         const clientId = crypto.randomUUID();
-        item = {
+        item = acceptTaskActionRecoveryCopy(recovery.item, {
           ...(retryItem ?? recovery.item),
           clientId,
           autoResume: automatic ? true : undefined,
@@ -3551,7 +3569,7 @@ export class AgentInputCoordinator {
             clientId,
             createdAt: new Date().toISOString(),
           },
-        };
+        });
       }
       if ((opts?.auto && attemptToken !== null) || usageWait) {
         this.pendingAutoResumeRecoveries.set(item.clientId, {
@@ -3561,6 +3579,7 @@ export class AgentInputCoordinator {
           recovery,
           error: previousError,
           errorReason: previousErrorReason,
+          errorPersistBinding: previousErrorPersistBinding,
           toolLoop: previousToolLoop,
           outputLimit: previousOutputLimit,
           stickyError: previousStickyError,
@@ -4081,6 +4100,16 @@ export class AgentInputCoordinator {
       restoredGeneration: previous,
     });
     active.vendorTurnGeneration = previous;
+  }
+
+  /** Called synchronously after terminal ownership is settled and a row ID is reserved.
+   * The live event delivers the ID; future projection reads must retain the same identity.
+   * Keep the message with it so a different dispatch/sticky error cannot inherit the row.
+   */
+  bindErrorPersistId(sessionId: string, persistId: string, message: string): void {
+    const state = this.states.get(sessionId);
+    if (!persistId || !message || !state?.error || state.error !== message) return;
+    state.errorPersistBinding = { message, persistId };
   }
 
   onTurnEvent(
@@ -4635,6 +4664,9 @@ export class AgentInputCoordinator {
       queueEditLocks: [...state.queueEditLocks],
       queueAbortPending: state.queueAbortPending,
       error,
+      ...(error && state.errorPersistBinding?.message === error
+        ? { errorPersistId: state.errorPersistBinding.persistId }
+        : {}),
       ...(error && state.errorCanContinue ? { errorCanContinue: true } : {}),
       ...(error && state.errorReason ? { errorReason: state.errorReason } : {}),
       ...(error && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
@@ -5076,6 +5108,29 @@ export class AgentInputCoordinator {
     state.drainWakeupGeneration += 1;
   }
 
+  /** A host note is optional context; building it must never keep the queue head from dispatching. */
+  private describeQueueBehindDispatch(
+    sessionId: string,
+    head: AgentInputQueuedMessage,
+  ): string | null {
+    try {
+      return (
+        this.deps.describeQueueBehindDispatch?.(
+          sessionId,
+          head,
+          this.getState(sessionId).pendingQueue,
+        ) ?? null
+      );
+    } catch (error) {
+      log.warn('queue note skipped', {
+        sessionId,
+        clientId: head.clientId,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      return null;
+    }
+  }
+
   private async drain(sessionId: string, reason: string): Promise<void> {
     const state = this.getState(sessionId);
     const compact = this.getDrainableCompact(sessionId, state);
@@ -5246,6 +5301,12 @@ export class AgentInputCoordinator {
         referenceContexts,
       );
       const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
+      // Wire-only: derived from the live queue at this dispatch. The queue item and the stored
+      // replay copy (agentFacingWireContent, readable through history) never carry it.
+      const wireUserMessage = appendNoteToMakerUserMessage(
+        makerUserMessage,
+        this.describeQueueBehindDispatch(sessionId, head),
+      );
       active.sendStarted = true;
       active.dispatchLifecycle = 'sending';
       // Freeze side-effect timestamps before entering vendor code. A dispatch
@@ -5253,7 +5314,7 @@ export class AgentInputCoordinator {
       // post-dispatch acknowledgements must remain older than that marker.
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
       const appMessageGuard = queuedAppMessageGuard(head);
-      const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
+      const result = await this.deps.sendToAgent(sessionId, wireUserMessage, head.createOpts, {
         ...(appMessageGuard || taskActionGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
           try {
             await appMessageGuard?.();
@@ -6262,6 +6323,7 @@ export class AgentInputCoordinator {
     this.pendingAutoResumeRecoveries.delete(clientId);
     state.error = pending.error;
     state.errorReason = pending.errorReason;
+    state.errorPersistBinding = pending.errorPersistBinding;
     state.toolLoop = pending.toolLoop;
     state.outputLimit = pending.outputLimit;
     state.stickyError = pending.stickyError;

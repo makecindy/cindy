@@ -191,7 +191,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   //     让探测跟着弹窗开关反复重跑。
   const canOpenNotice = Boolean(onOpenVersionNotice);
   useEffect(() => {
-    if (status !== 'ready' || !version || !canOpenNotice || isCollapsed) {
+    // 同版本就绪 = 换装 Apple 芯片包，不展示公告链接，也就不必探测。
+    const nativeBuildSwitch = version === window.electronAPI?.appVersion;
+    if (status !== 'ready' || !version || !canOpenNotice || isCollapsed || nativeBuildSwitch) {
       setHasNotes(false);
       return;
     }
@@ -351,8 +353,14 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 文字链要显示的版本 —— undefined 即不显示。ready 态之外(superseding / error)没有
   // 可信版本号,confirming 态则刻意让位给两步确认。hasNotes 已经蕴含「ready + 该版本
   // 公告可渲染」,这里再显式列出条件,读代码时不必回溯 effect。
+  // 版本号不变却已就绪 = Rosetta 下的 Intel 包换装 Apple 芯片原生包（主进程只在这种情况
+  // 放行同版本补丁）。「已更新到 当前版本」会让人困惑，改说换装；也没有新的更新公告可看。
+  const isNativeBuildSwitch = status === 'ready' && !!version
+    && version === window.electronAPI?.appVersion;
   const notesVersion =
-    status === 'ready' && !confirming && hasNotes && version ? version : undefined;
+    status === 'ready' && !confirming && hasNotes && version && !isNativeBuildSwitch
+      ? version
+      : undefined;
 
   const versionSuffix = version ? ` (v${version})` : '';
   const versionForAria = version ?? 'latest';
@@ -555,7 +563,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
             ? t('update.banner.preparingTitle')
             : confirming
               ? t('update.banner.confirmTitle')
-              : t('update.banner.title', { version: version ?? '…' })}
+              : isNativeBuildSwitch
+                ? t('update.banner.nativeBuildTitle')
+                : t('update.banner.title', { version: version ?? '…' })}
         </p>
 
         {/* Subtitle + 「查看更新公告」文字链 —— 同一视觉组(gap-1),所以链接读作副标题的
@@ -575,7 +585,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
               ? t('update.banner.preparingSubtitle')
               : confirming
                 ? (formatRelaunchActivityHint((key, vars) => t(key, vars), activitySummary) ?? t('update.banner.confirmBusyHint'))
-                : t('update.banner.subtitle')}
+                : isNativeBuildSwitch
+                  ? t('update.banner.nativeBuildSubtitle')
+                  : t('update.banner.subtitle')}
           </p>
           {notesVersion && (
             <button

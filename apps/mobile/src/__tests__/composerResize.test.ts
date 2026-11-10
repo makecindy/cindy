@@ -13,6 +13,7 @@ import {
   computeComposerResizeBounds,
   resolveComposerInputHeight,
   settleComposerResizeDrag,
+  textScrollEdgeFromEvent,
   shouldClaimComposerResizeDrag,
   shouldDismissComposerOnRelease,
 } from '@/session/composerResize';
@@ -384,5 +385,20 @@ describe('buildComposerResizeTouchHandlers', () => {
     const progress = (translationY: number) => composerCollapseProgress({ bounds, startContentHeight: 28, translationY });
     expect([0, 6, 12, 24, 12, 0, -10].map(progress)).toEqual([0, 0.25, 0.5, 1, 0.5, 0, 0]);
     expect(progress(200)).toBe(1);
+  });
+});
+
+describe('textScrollEdgeFromEvent', () => {
+  it('computes the scroll edge when the event carries all metrics', () => {
+    const at = (y: number) => textScrollEdgeFromEvent({ contentOffset: { y }, contentSize: { height: 300 }, layoutMeasurement: { height: 100 } });
+    expect(at(0)).toEqual({ atTop: true, atBottom: false });
+    expect(at(100)).toEqual({ atTop: false, atBottom: false });
+    expect(at(200)).toEqual({ atTop: false, atBottom: true });
+  });
+
+  it('reports unknown (null) when Android omits contentSize / layoutMeasurement', () => {
+    expect(textScrollEdgeFromEvent({ contentOffset: { y: 10 } })).toBeNull();
+    expect(textScrollEdgeFromEvent({ contentOffset: { y: 10 }, layoutMeasurement: { height: 100 } })).toBeNull();
+    expect(textScrollEdgeFromEvent({})).toBeNull();
   });
 });
