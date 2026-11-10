@@ -10760,13 +10760,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               executionDevicesError={collab.workerForm.executionDevicesError}
               busy={collab.busy}
               customRoleMode={collab.workerForm.customRoleMode}
+              description={contextSheetView === 'collab' ? t('session.collab.enableHint') : null}
               error={collab.error}
               form={collab.workerForm.form}
               notice={contextSheetView === 'collab' ? collab.entryHint : null}
               onAgentChange={collab.workerForm.changeAgent}
               onChange={collab.workerForm.patch}
-              onCustomRoleModeChange={collab.workerForm.setCustomRoleMode}
               onPermissionChange={(mode) => void collab.workerForm.changePermission(mode)}
+              onRemoveRole={collab.workerForm.removeRole}
+              onSelectRole={collab.workerForm.selectRole}
+              roles={collab.workerForm.roles}
+              rolesEditable={collab.workerForm.rolesEditable}
               onPickModel={collab.workerForm.modelPicker.openPicker}
               onPickDirectory={collab.workerForm.directoryPicker.openPicker}
             />

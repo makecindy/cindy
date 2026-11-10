@@ -6540,6 +6540,7 @@ function CCAgentSessionContent({
         onClose={() => setCreateWorkerOpen(false)}
         onCreate={requestEnableCollab}
         title={t('orca.createWorker.enableCollabTitle')}
+        description={t('orca.createWorker.enableCollabDescription')}
         submitLabel={t('orca.createWorker.enableCollabSubmit')}
         requireWorkerPermissionModeSupport
         deviceId={remoteDeviceId}

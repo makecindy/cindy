@@ -2636,6 +2636,8 @@ interface ElectronAPI {
   syncWorkerCreationPrefs: (snapshot: {
     workerPermissionMode: 'auto' | 'bypassPermissions';
     selection?: import('../shared/workerCreationSelection').WorkerCreationSelection | null;
+    /** 当前账号的协同角色清单与每个角色的记忆，供手机与远程控制的电脑读取。 */
+    roles?: import('@cindy/device-link').OrcaWorkerRoles | null;
     ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp;
   }) => void;
 
@@ -2696,6 +2698,14 @@ interface ElectronAPI {
   /** Orca tool 显式修改 Worker 默认权限后，回写 renderer localStorage。 */
   onWorkerCreationPrefsApply: (
     cb: (payload: { workerPermissionMode: 'auto' | 'bypassPermissions' }) => void,
+  ) => () => void;
+
+  /** 手机或远程控制的电脑改了这台电脑的协同角色清单后，回写 renderer localStorage。 */
+  onWorkerRolesApplyRequest: (
+    cb: (payload: {
+      mutation: import('@cindy/device-link').OrcaWorkerRolesMutation;
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
+    }) => void,
   ) => () => void;
 
   /** 被控端本地 main → 自身 renderer:控制端写穿的会话「模型 effort/fast」pref(调本地 setter)。 */

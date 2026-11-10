@@ -982,6 +982,7 @@ const fanOutNewMakerWorktreeBranchChanged = createIpcFanOut(
   'maker:new-maker-worktree-branch:changed',
 );
 const fanOutWorkerCreationPrefsApply = createIpcFanOut('maker:worker-creation-prefs:apply');
+const fanOutWorkerRolesApplyRequest = createIpcFanOut('maker:worker-roles:apply-request');
 const fanOutMakerSessionPrefApply = createIpcFanOut('maker:session-pref:apply');
 const fanOutAppearanceSettingsChanged = createIpcFanOut('appearance-settings:changed');
 
@@ -2977,6 +2978,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   syncWorkerCreationPrefs: (snapshot: {
     workerPermissionMode: 'auto' | 'bypassPermissions';
     selection?: import('../shared/workerCreationSelection').WorkerCreationSelection | null;
+    /** 当前账号的协同角色清单与每个角色的记忆(main 校验后镜像，供手机与远程控制的电脑读取)。 */
+    roles?: unknown;
     ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp;
   }): void => ipcRenderer.send('maker:sync-worker-creation-prefs', snapshot),
 
@@ -3035,6 +3038,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onNewMakerWorktreeBranchChanged: fanOutNewMakerWorktreeBranchChanged,
   /** Orca tool 显式修改 Worker 默认权限后，回写 renderer localStorage。 */
   onWorkerCreationPrefsApply: fanOutWorkerCreationPrefsApply,
+  /** 手机或远程控制的电脑改了这台电脑的协同角色清单后，回写 renderer localStorage。 */
+  onWorkerRolesApplyRequest: fanOutWorkerRolesApplyRequest,
   onMakerSessionPrefApply: fanOutMakerSessionPrefApply,
 
   binding: {
