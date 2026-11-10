@@ -6,7 +6,7 @@ import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvai
  * 这份设置只决定同账号另一台电脑能否使用本机该供应商的登录与额度，
  * 不改变本机选择器里的模型可见性，也不把凭证或路由细节写进 device-link。
  */
-import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 

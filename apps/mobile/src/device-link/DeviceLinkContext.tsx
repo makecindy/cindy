@@ -791,9 +791,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         noteSessionLiveStreamsAcked(held);
         if (held.length > 0) record?.('subscription', 'applied', held.length);
         mobileDebugLog('debug', 'recovery', 'subscription acknowledged', { topicCount: held.length });
+        if (held.includes('sessions')) refreshProjectAliasesForClient(client, deviceId);
       },
     });
-    if (topics.includes('sessions')) refreshProjectAliasesForClient(client, deviceId);
   }, [connectionEpochFor, refreshProjectAliasesForClient]);
 
   // 熔断 open 设备的显式代表性探测:openLink 建链(成功按不定论,不关熔断),
@@ -1737,6 +1737,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 快速切换(连接被宽限保住、始终 online)不会有 online 状态转换,这条显式
         // 补齐就是断档回填的唯一触发点;其余路径下它因 status 未 online 而空转。
         void rehydrate();
+        // A retained sessions ACK skips subscribe on short background returns.
+        // Its aliases were explicitly suspended; refresh once here, not for every new owner.
+        if (resumingFromBackground) {
+          for (const plan of registryRef.current.snapshot()) {
+            if (plan.topics.includes('sessions')) refreshProjectAliasesForClient(client, plan.deviceId);
+          }
+        }
       }
       if (next === 'background') {
         diagnostics.background();

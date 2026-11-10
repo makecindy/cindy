@@ -3424,6 +3424,8 @@ describe('AgentIslandService native publishing', () => {
     service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
     service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
 
+    // Regression: the system activity must open the task it actually displays, even with Agent Notch off.
+    expect(liveActivity.sync).toHaveBeenLastCalledWith(expect.objectContaining({ taskUrl: 'cindy://session/s1' }));
     expect(playSoundWithoutHelper.mock.calls).toEqual([[customSound('start.wav')], [customSound('complete.wav')]]);
     expect(playSound).not.toHaveBeenCalled();
     expect([service.ownsTaskAlert('done'), service.ownsTaskAlert('needs-reply'), service.ownsTaskAlert('error')])
@@ -7516,6 +7518,23 @@ describe('Agent Island device sessions', () => {
       detail: '',
     };
   }
+
+  // Unit regression: a remote needs-input card must address its owning computer;
+  // existing island focus tests did not inspect the system Live Activity payload.
+  it('links the system needs-input card to the remote task on its owning computer', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const liveActivity = { sync: vi.fn(), ownsAlerts: () => true };
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish: () => true, playSound: () => true },
+      liveActivity: liveActivity as unknown as AgentIslandLiveActivity,
+    });
+    service.setEnabled(true);
+    service.setDeviceSessions([deviceSession('needs-interaction')]);
+    expect(liveActivity.sync).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'attention', taskUrl: 'cindy://session/remote-1?device=device-a',
+    }));
+  });
 
   it('stays silent for first-seen remote tasks and sounds on observed completion', async () => {
     const { AgentIslandService } = await import('../service.js');

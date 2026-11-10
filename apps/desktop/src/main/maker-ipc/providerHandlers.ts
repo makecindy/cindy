@@ -2808,6 +2808,12 @@ export function registerProviderHandlers(
     const providerId = requireProviderId(input);
     let failure: ProviderModelDiscoveryFailure | null;
     try {
+      // Settings and helper rediscovery must use the same live source. The legacy
+      // discovery hook may be a no-op for SDK-backed subscription providers.
+      if (isBuiltinRefreshableProviderId(providerId)) {
+        await deps.refreshBuiltinModels(providerId);
+        return { ok: true };
+      }
       failure = await deps.rediscoverModels(providerId);
     } catch (err) {
       // 原文只进 Main 日志:凭证读取 / token 刷新等依赖抛出的消息可能含内部路径或上游

@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { ChatQuote } from '@/lib/chatQuotes';
 import { appendQuoteToDraft } from '@/lib/composerDraftStore';
+import { CHAT_SELECTION_EXCLUDE_SELECTOR, hasChatSelectionGap, isChatSelectionRow } from './chatSelectionClipboard';
 
 /** 单条引用的长度上限:防止误选整篇转录把 prompt 撑爆;超出截断并加省略号。 */
 const QUOTE_MAX_CHARS = 4000;
@@ -43,7 +44,6 @@ const BUTTON_MIN_TOP_PX = 44;
 // untransformed `left` edge. Keep a full pill-width clearance on both sides:
 // the visual centering transform does not participate in that calculation.
 const BUTTON_EDGE_MARGIN_PX = 8;
-const FLOATING_QUOTE_DISABLED_SELECTOR = '[data-selection-floating-quote-disabled]';
 
 interface RectBounds {
   left: number;
@@ -56,21 +56,6 @@ interface RectBounds {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
-}
-
-/**
- * 用户消息不显示主动浮出的“添加到对话”按钮，但右键菜单仍可添加。
- * 用 Range 相交判断而非只看选区端点，避免跨消息拖选时夹带 user 消息时
- * 浮动按钮重新出现。
- */
-export function selectionIntersectsFloatingQuoteDisabledArea(
-  range: Pick<Range, 'intersectsNode'>,
-  container: Pick<HTMLElement, 'querySelectorAll'>,
-): boolean {
-  for (const element of container.querySelectorAll(FLOATING_QUOTE_DISABLED_SELECTOR)) {
-    if (range.intersectsNode(element)) return true;
-  }
-  return false;
 }
 
 function getSelectionDirection(selection: Selection): 'forward' | 'backward' {
@@ -147,6 +132,117 @@ function getFloatingAnchor(selection: Selection, range: Range): Omit<SelectionAn
   };
 }
 
+// Message rows contain source labels, timestamps, controls and hidden measurement
+// text as well as the sent body. Filter those nodes without changing the live
+// selection (including ranges crossing into the following assistant reply).
+function readQuoteText(selection: Selection, range: Range): string {
+  const scopeSelector = '[data-selection-quote-scope]';
+  const bodySelector = '[data-selection-quote-body]';
+  const common = range.commonAncestorContainer;
+  const element = common instanceof Element ? common : common.parentElement;
+  if (!element) return '';
+  // Preserve Chromium's serialization for body-only selections and other hosts
+  // such as file previews. Only mixed/scoped selections need DOM filtering.
+  if (element.closest(bodySelector) || (
+    !element.closest(scopeSelector)
+    && !Array.from(element.querySelectorAll(scopeSelector)).some(node => range.intersectsNode(node))
+  )) return selection.toString();
+
+  let text = '';
+  let pendingBreaks = 0;
+  let pendingSpace = false;
+  let tableRow: { separator: string; inCell: boolean } | null = null;
+  const selectability = new WeakMap<Element, boolean>();
+  const canSelect = (el: Element): boolean => {
+    const cached = selectability.get(el);
+    if (cached !== undefined) return cached;
+    const value = getComputedStyle(el).userSelect;
+    // auto follows the parent's used value; an explicit text/all descendant
+    // can restore selection inside a non-selectable ancestor.
+    const selectable = value === 'none' ? false
+      : value === 'text' || value === 'all' || !el.parentElement ? true : canSelect(el.parentElement);
+    selectability.set(el, selectable);
+    return selectable;
+  };
+  const append = (value: string) => {
+    if (!value) return;
+    if (text && pendingBreaks) {
+      const trailing = text.match(/\n*$/)![0].length;
+      const leading = value.match(/^\n*/)![0].length;
+      text += '\n'.repeat(Math.max(0, pendingBreaks - trailing - leading));
+    }
+    // Commit cell separators only when more selected cell content follows.
+    // Empty intervening cells retain their columns; row-end separators expire.
+    if (tableRow?.inCell) {
+      text += tableRow.separator;
+      tableRow.separator = '';
+    }
+    if (pendingSpace && text && !/\s$/.test(text) && !/^\s/.test(value)) text += ' ';
+    text += value;
+    pendingBreaks = 0;
+    pendingSpace = false;
+  };
+  const visit = (node: Node, parentStyle?: CSSStyleDeclaration) => {
+    if (!range.intersectsNode(node)) return;
+    const el = node instanceof Element ? node : node.parentElement;
+    if (!el) return;
+    if (el.closest(CHAT_SELECTION_EXCLUDE_SELECTOR)) return;
+    if (el.closest(scopeSelector) && !el.closest(bodySelector) && !el.querySelector(bodySelector)) return;
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!canSelect(el)) return;
+      const value = node.textContent ?? '';
+      append(value.slice(node === range.startContainer ? range.startOffset : 0,
+        node === range.endContainer ? range.endOffset : value.length));
+      return;
+    }
+    if (!(node instanceof Element)) return;
+    // KaTeX's clipped accessibility tree duplicates its visible glyphs. Keep
+    // only the visual range, so a partial formula stays partial. Native fields
+    // hold interactive state/options, not selected prose (as in chat copy).
+    if (node.matches('.katex-mathml, input, textarea, select')) return;
+    const style = getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden') return;
+    if (node.tagName === 'BR') { if (canSelect(node)) append('\n'); return; }
+    // Keep paragraph/list/table boundaries and preformatted whitespace when a
+    // cross-message selection is rebuilt. Range.toString() alone joins blocks.
+    // Flex/grid blockification must not turn inline labels/values into lines.
+    const rowItem = style.display === 'block' && parentStyle && isChatSelectionRow(parentStyle);
+    const breaks = node.tagName === 'P' ? 2 : rowItem ? 0
+      : /^(block|flex|grid|list-item|table|table-row)$/.test(style.display) ? 1 : 0;
+    const outerRow = tableRow;
+    if (style.display === 'table-row') tableRow = { separator: '', inCell: false };
+    if (style.display === 'table-cell' && tableRow) tableRow.inCell = true;
+    pendingBreaks = Math.max(pendingBreaks, breaks);
+    if (node.tagName === 'DETAILS' && !node.hasAttribute('open')) {
+      // Closed disclosures render only their first direct summary. Their other
+      // descendants can still report normal display/visibility in computed style.
+      const summary = Array.from(node.children).find(child => child.tagName === 'SUMMARY');
+      if (summary) visit(summary, style);
+    } else if (hasChatSelectionGap(style) && !node.closest('.katex-html')) {
+      const outerSpace = pendingSpace;
+      let selectedChild = false;
+      node.childNodes.forEach(child => {
+        const before = text.length;
+        pendingSpace ||= selectedChild;
+        visit(child, style);
+        selectedChild ||= text.length > before;
+      });
+      // A gap belongs between selected children, never after the last one.
+      pendingSpace = selectedChild ? false : outerSpace;
+    } else {
+      node.childNodes.forEach(child => visit(child, style));
+    }
+    pendingBreaks = Math.max(pendingBreaks, breaks);
+    if (style.display === 'table-cell' && tableRow) {
+      if (canSelect(node)) tableRow.separator += '\t';
+      tableRow.inCell = false;
+    }
+    tableRow = outerRow;
+  };
+  visit(common, common.parentElement ? getComputedStyle(common.parentElement) : undefined);
+  return text;
+}
+
 export function SelectionQuoteButton({
   sessionId,
   containerRef,
@@ -203,17 +299,9 @@ export function SelectionQuoteButton({
   useEffect(() => {
     // Position follows the actual selected text edge, not the mouse-up point. This keeps
     // the button attached to the selection even if the pointer is released outside it.
-    const readSelectionInStream = (allowQuoteDisabled = false): SelectionAnchor | null => {
+    const readSelectionInStream = (): SelectionAnchor | null => {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
-      const raw = getQuoteText?.() ?? sel.toString();
-      if (!raw.trim()) return null;
-      // 前导**缩进空格**必须保留:空白敏感代码(FileBodyView 选中缩进行)的
-      // 引用要与文件原文逐字符一致,模型才能按引用文本定位 / 精准编辑。但前
-      // 导 / 尾部**换行**要剥:对定位无意义,且以换行开头的引用会让
-      // formatQuoteForSend 的首行产出裸 `>`,引用解析的 `> ` 守卫会失配。
-      // trim 仅用于上面的空选区判定。
-      const text = raw.replace(/^[\r\n]+/, '').replace(/[\r\n]+$/, '');
       const container = containerRef.current;
       if (!container) return null;
       const range = sel.getRangeAt(0);
@@ -224,7 +312,14 @@ export function SelectionQuoteButton({
       ) {
         return null;
       }
-      if (!allowQuoteDisabled && selectionIntersectsFloatingQuoteDisabledArea(range, container)) return null;
+      const raw = getQuoteText?.() ?? readQuoteText(sel, range);
+      if (!raw.trim()) return null;
+      // 前导**缩进空格**必须保留:空白敏感代码(FileBodyView 选中缩进行)的
+      // 引用要与文件原文逐字符一致,模型才能按引用文本定位 / 精准编辑。但前
+      // 导 / 尾部**换行**要剥:对定位无意义,且以换行开头的引用会让
+      // formatQuoteForSend 的首行产出裸 `>`,引用解析的 `> ` 守卫会失配。
+      // trim 仅用于上面的空选区判定。
+      const text = raw.replace(/^[\r\n]+/, '').replace(/[\r\n]+$/, '');
       const floatingAnchor = getFloatingAnchor(sel, range);
       if (!floatingAnchor) return null;
 
@@ -246,7 +341,7 @@ export function SelectionQuoteButton({
     const container = containerRef.current;
     if (container) container.dataset.selectionQuoteContext = '';
     const unsubscribeAddToChat = window.electronAPI.onSelectionContextMenuAddToChat(() => {
-      const currentSelection = readSelectionInStream(true);
+      const currentSelection = readSelectionInStream();
       if (currentSelection) commitQuote(currentSelection);
     });
     document.addEventListener('mouseup', onMouseUp);

@@ -12,9 +12,11 @@ const h = vi.hoisted(() => ({
   glance: {} as any, profile: {} as any, glanceTodos: { enabled: false } as any, unseen: false, markSeen: vi.fn(), push: vi.fn(), dismiss: vi.fn(), returnHome: vi.fn(), screenOptions: [] as Array<Record<string, unknown>>,
   auth: { accountGeneration: 1, user: null },
   cloud: { supported: false, actors: [] as Array<{ kind: string; externalId: string; homeDeviceId: string | null }> },
-  homeSheet: {} as any,
+  homeSheet: {} as any, barEdge: 'none',
 }));
+vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => ({ barEdge: h.barEdge, width: 662, height: 942, insets: { top: 72, bottom: 0, left: 0, right: 0 } }) }));
 vi.mock('react-native', () => ({
+  Platform: { OS: 'ios' },
   useWindowDimensions: () => ({ width: 662, height: 942 }),
   Keyboard: { dismiss: h.dismiss },
   View: ({ children, testID }: any) => createElement('div', { 'data-testid': testID }, children),
@@ -41,11 +43,12 @@ vi.mock('@/session/useCompanionGlanceTodos', () => ({
   dueTodos: () => [],
   useGlanceDueSeen: () => ({ unseen: h.unseen, markSeen: h.markSeen }),
 }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }), Stack: {
+vi.mock('expo-router', () => ({ useIsFocused: () => true, useRouter: () => ({ push: h.push }), Stack: {
   Screen: ({ options }: any) => { h.screenOptions.push(options); return typeof options.headerTitle === 'function'
     ? createElement('div', { 'data-testid': 'native-title' }, options.headerTitle()) : null; },
   Toolbar: Object.assign(({ children, placement }: any) => createElement('div', { 'data-toolbar': placement }, children), {
     View: ({ children }: any) => children,
+    Button: ({ onPress, accessibilityLabel, disabled }: any) => createElement('button', { onClick: onPress, disabled, 'aria-label': accessibilityLabel }, accessibilityLabel),
   }),
 } }));
 vi.mock('@/session/CompanionProfileSheet', () => ({ CompanionProfileSheet: (props: unknown) => { h.profile = props; return null; } }));
@@ -58,7 +61,7 @@ let root: Root; let host: HTMLDivElement;
 const resource = { ref: { kind: 'bot', collectionId: 'bots', id: 'bot' }, display: { title: 'Cindy' } } as RemoteResource;
 const button = (id: string) => host.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!;
 beforeEach(() => {
-  vi.clearAllMocks(); h.auth.accountGeneration = 1; h.profile = {}; h.glance = {}; h.screenOptions = []; h.unseen = false;
+  h.barEdge = 'none'; vi.clearAllMocks(); h.auth.accountGeneration = 1; h.profile = {}; h.glance = {}; h.screenOptions = []; h.unseen = false;
   h.cloud = { supported: false, actors: [] }; h.homeSheet = {};
   host = document.createElement('div'); root = createRoot(host);
 });
@@ -109,12 +112,15 @@ it('shows the computer and whether it is online, and breathes while the companio
   expect(host.querySelector('[data-testid="ring"]')).toBeNull();
 });
 
-it('keeps profile controls closed until the chat entry is validated', async () => {
-  await act(async () => root.render(<CompanionHeader sessionId="s1" onQuoteTodo={() => {}} onAskCompanion={() => {}} resource={resource} deviceId="pc" deviceName="PC" online controlsReady={false} onBack={() => {}} onSearch={() => {}} />));
-  expect(button('companion.settings').disabled).toBe(true);
-  expect(button('companion.identity').disabled).toBe(true);
-  expect(h.profile.visible).toBe(false);
-  expect(h.glance.visible).toBe(false);
+it('allows profile inspection while sending to the companion is unavailable', async () => {
+  await act(async () => root.render(<CompanionHeader sessionId="s1" onQuoteTodo={() => {}} onAskCompanion={() => {}} resource={resource} deviceId="pc" deviceName="PC" online askCompanionReady={false} onBack={() => {}} onSearch={() => {}} />));
+  expect(button('companion.settings').disabled).toBe(false);
+  expect(button('companion.identity').disabled).toBe(false);
+  await act(async () => button('companion.settings').click());
+  expect(h.profile.visible).toBe(true);
+  await act(async () => button('companion.identity').click());
+  expect(h.glance.visible).toBe(true);
+  expect(h.glance.onCheckTodos).toBeUndefined();
 });
 
 // Execute the production page header state and JSX, following the existing page-hook tests.
@@ -154,6 +160,7 @@ function PageHost({ bindings }) {
   const { auth, deviceId, sessionId, companionResource, companionEntry, shareSelectionActive, setSearchOpen, goBackToHome, companionWorkingLabel, quoteTodoInComposer, askCompanionInComposer, canUseComposer, composerDraftHydrated } = bindings;
   const currentSession = null;
   const isSideChatSheet = false;
+  const adaptiveWindow = { barEdge: bindings.barEdge ?? 'none' };
   const horizontalSystemHeader = bindings.nativeHeader ?? false;
   const companionSettingsRequest = bindings.companionSettingsRequest;
   const deviceName = 'PC', remoteUnavailableReason = null, sessionListDrawerOverlayMounted = false, sessionListDrawerFloating = false;
@@ -171,16 +178,26 @@ const pageBindings = () => ({ auth: h.auth, deviceId: 'pc', sessionId: 'session-
   setSearchOpen: vi.fn(), goBackToHome: vi.fn(), companionWorkingLabel: null as string | null, quoteTodoInComposer: vi.fn(), askCompanionInComposer: vi.fn(), canUseComposer: true, composerDraftHydrated: true });
 const showPage = (bindings: ReturnType<typeof pageBindings>) => act(async () => { root.render(<PageHost bindings={bindings} />); });
 
-it.each([false, true])('wires the page: entry validation, Back and working breath (native=%s)', async nativeHeader => {
+it.each([false, true])('keeps profile controls stable across entry validation, with Back and working breath (native=%s)', async nativeHeader => {
   const bindings = pageBindings(); bindings.nativeHeader = nativeHeader; bindings.companionEntry.ready = false;
   await showPage(bindings);
   expect(host.textContent).toContain('Cindy');
-  expect(button('companion.settings').disabled).toBe(true);
+  expect(button('companion.settings').disabled).toBe(false);
+  expect(button('companion.identity').disabled).toBe(false);
+  await act(async () => button('companion.settings').click());
+  expect(h.profile.visible).toBe(true);
   expect(h.profile.online).toBe(true); // Synchronizing is not an offline connection.
   bindings.companionEntry.ready = true; bindings.companionWorkingLabel = 'Thinking…';
   await showPage(bindings);
   expect(button('companion.settings').disabled).toBe(false);
   expect(host.querySelector('[data-testid="ring"]')).not.toBeNull();
+  // A warm return revalidates dispatch authority without dimming inspection controls.
+  bindings.companionEntry.ready = false;
+  bindings.canUseComposer = false;
+  await showPage(bindings);
+  expect(button('companion.settings').disabled).toBe(false);
+  expect(button('companion.identity').disabled).toBe(false);
+  expect(h.glance.onCheckTodos).toBeUndefined();
   await act(async () => button('companion.back').click());
   expect(bindings.goBackToHome).toHaveBeenCalledOnce();
   // Replace the ordinary task title once the companion resolves, in either header host.
@@ -257,4 +274,23 @@ it('offers no computer change for a companion without a known main computer', as
   await act(async () => root.render(<CompanionHeader sessionId="s1" onQuoteTodo={() => {}} onAskCompanion={() => {}} resource={resource} deviceId="pc" deviceName="PC" online onBack={() => {}} onSearch={() => {}} />));
   await act(async () => button('companion.settings').click());
   expect(h.profile.onOpenHome).toBeUndefined();
+});
+
+it('moves companion Back and Settings into the system rail and restores them on unfolding', async () => {
+  const back = vi.fn();
+  const content = () => <CompanionHeader nativeHeader resource={resource} deviceId="pc" deviceName="PC" online
+    sessionId="s1" onBack={back} onSearch={() => {}} onQuoteTodo={() => {}} onAskCompanion={() => {}} />;
+  h.barEdge = 'right';
+  await act(async () => root.render(content()));
+  expect(host.querySelector('[data-testid="companion.back"]')).toBeNull();
+  expect(host.querySelector('[data-testid="companion.settings"]')).toBeNull();
+  expect(host.querySelector('[data-testid="companion.identity"]')).not.toBeNull();
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-toolbar="left"] button')!.click());
+  expect(back).toHaveBeenCalledOnce();
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-toolbar="right"] button')!.click());
+  expect(h.profile.visible).toBe(true);
+  h.barEdge = 'none';
+  await act(async () => root.render(content()));
+  expect(host.querySelector('[data-testid="companion.back"]')).not.toBeNull();
+  expect(host.querySelector('[data-testid="companion.settings"]')).not.toBeNull();
 });

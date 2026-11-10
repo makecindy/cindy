@@ -4,8 +4,9 @@ vi.mock('../providerShareAvailabilityUsage.js', () => ({ flushStandbyUsage: stan
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ipcMain } from 'electron';
+import { ipcMain, type BrowserWindow } from 'electron';
 import { PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL, REMOTE_AGENT_CHANNEL, type InvokeResultPayload,
   type ProviderShareOwned, type ProviderShareReceived } from '@cindy/device-link';
 
@@ -14,12 +15,21 @@ import type { ProviderUsageHistoryView } from '../../../shared/providerShare';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 
 const state = vi.hoisted(() => ({ owner: 'owner-a', boundaryPending: false }));
+const windowRouting = vi.hoisted(() => ({
+  windows: [] as BrowserWindow[], focusMain: vi.fn(), notifications: [] as EventEmitter[],
+}));
+vi.mock('../../deepLink.js', () => ({ focusMainWindow: windowRouting.focusMain }));
+vi.mock('../../notificationService.js', () => ({ getDesktopNotificationsEnabled: () => true }));
 const received = vi.hoisted(() => ({ shares: [] as ProviderShareReceived[], ready: true }));
 vi.mock('electron', () => ({
   app: { getPath: () => 'test-provider-share-user-data' },
   ipcMain: { handle: vi.fn() },
-  BrowserWindow: { getAllWindows: () => [] },
-  Notification: class { show() {} },
+  BrowserWindow: { getAllWindows: () => windowRouting.windows },
+  Notification: class extends EventEmitter {
+    static isSupported() { return true; }
+    constructor() { super(); windowRouting.notifications.push(this); }
+    show() { this.emit('show'); }
+  },
 }));
 const api = vi.hoisted(() => ({ createLink: vi.fn(), approve: vi.fn(), reject: vi.fn(), setMember: vi.fn() }));
 const host = vi.hoisted(() => ({
@@ -51,7 +61,7 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device' }));
 vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
-vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),
 }));
@@ -118,6 +128,7 @@ vi.mock('../providerShareGuestPrefs.js', () => ({ configureProviderShareGuestPre
 vi.mock('../providerShareGuestPrefsIpc.js', () => ({ setProviderShareCredentialConsentFromIpc: vi.fn() }));
 
 import {
+  openProviderShareJoin,
   executeProviderShareManagementCommand,
   parseProviderShareCommand,
   registerProviderShareIpc,
@@ -125,6 +136,7 @@ import {
   stopProviderShareRuntime,
   trimProviderUsageHistory,
 } from '../providerShareRuntime';
+import { markAppContentWindow } from '../../windowFocusClassifier';
 import { startProviderShareHost } from '../providerShareHost';
 import { startProviderShareGuest } from '../providerShareGuest';
 import { setBroadcastTapListener } from '../broadcast-tap';
@@ -161,6 +173,9 @@ function saveMemberNote(entry: 'local' | 'same-account'): Promise<unknown> {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  windowRouting.windows = [];
+  windowRouting.notifications = [];
+  windowRouting.focusMain.mockReturnValue(true);
   state.owner = 'owner-a';
   state.boundaryPending = false;
   usageStores.actual = null;
@@ -196,6 +211,50 @@ beforeEach(() => {
 });
 
 afterEach(() => { setBroadcastTapListener(null); stopProviderShareRuntime(); });
+
+// #9437 / unit: real share entry points must not show the first hidden data host.
+// Earlier management coverage always returned no BrowserWindows. The shared
+// deepLink suite separately verifies restoration/focus of the registered main window.
+function backgroundWindow(focused = false): BrowserWindow {
+  return {
+    isDestroyed: () => false, isMinimized: () => false, isVisible: () => true,
+    isFocused: () => focused, restore: vi.fn(), show: vi.fn(), focus: vi.fn(), setAlwaysOnTop: vi.fn(),
+  } as unknown as BrowserWindow;
+}
+
+it.each([true, false])('routes invitation activation to main without touching a helper (main available: %s)', (available) => {
+  const helper = backgroundWindow();
+  windowRouting.windows = [helper];
+  windowRouting.focusMain.mockReturnValue(available);
+  openProviderShareJoin('cindy://provider-share/join?test=synthetic');
+  expect(helper.show).not.toHaveBeenCalled();
+  expect(helper.focus).not.toHaveBeenCalled();
+  expect(windowRouting.focusMain).toHaveBeenCalledOnce();
+});
+
+it.each(['background', 'helper-focused', 'app-focused'] as const)(
+  'keeps receipt passive and only notification activation focuses main (%s)', async (foreground) => {
+    const helper = backgroundWindow(foreground === 'helper-focused');
+    const main = backgroundWindow(foreground === 'app-focused');
+    markAppContentWindow(main);
+    windowRouting.windows = [helper, main];
+    const callbacks = vi.mocked(startProviderShareHost).mock.calls.at(-1)![0];
+    callbacks.requested({
+      requestId: 'synthetic', displayName: 'Test', avatarUrl: null, region: 'global', pairingCode: '4827',
+      createdAt: '2026-11-09T00:00:00Z', expiresAt: '2026-11-10T00:00:00Z',
+    }, { shareId: 'synthetic', hostDeviceId: 'host-device', providerId: 'test', providerLabel: 'Test', createdAt: '', members: [], requests: [] }, false);
+    expect(windowRouting.focusMain).not.toHaveBeenCalled();
+    if (foreground === 'app-focused') {
+      expect(windowRouting.notifications).toHaveLength(0);
+    } else {
+      await vi.waitFor(() => expect(windowRouting.notifications).toHaveLength(1));
+      windowRouting.notifications[0].emit('click');
+      expect(windowRouting.focusMain).toHaveBeenCalledOnce();
+    }
+    expect(helper.show).not.toHaveBeenCalled();
+    expect(helper.focus).not.toHaveBeenCalled();
+  },
+);
 
 // #8010 review / unit: real runtime callbacks must reach the device-link tap,
 // not just local windows. Existing management tests only observed local delivery.

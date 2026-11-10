@@ -364,6 +364,29 @@ describe('plugin-card-rich projection', () => {
     expect(await projected('merged', ['plugin-card-actions'])).toMatchObject({ text: 'tail', items: [] });
   });
 
+  // Bug (2026-11-08): the phone card never offered the archive button or the auto-archive notice, because
+  // the button has no action and no text. Minimal input: one merged card, varying the task-wide facts.
+  it('tells newer phones when to offer the archive button, using the desktop task page rule', async () => {
+    const card = '<div><p>#9 Fix login</p><button data-ghost-task-archive="O/R#9" data-ghost-task-archive-auto="" aria-label="归档任务"></button></div>';
+    const projected = async (state: 'open' | 'merged', facts: { allMerged: boolean; attached: boolean }, primitives = ['plugin-card-actions', 'plugin-card-rich']) => {
+      const resource = await createGhostCardRemoteProvider({
+        readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html: card, v: 2, height: 100 }),
+        authorize: async () => {}, captureScope: () => () => true,
+        prStatus: async () => ({ ok: true, owner: 'o', repo: 'r', prNumber: 9, status: state, title: '', htmlUrl: '', branch: '' }) as never,
+        taskArchive: async () => facts,
+        interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+      }).get!(context, { ...request, client: { protocolVersion: 1, primitives } });
+      return (resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown>).taskArchive;
+    };
+    expect(await projected('merged', { allMerged: true, attached: false })).toEqual({ auto: true });
+    // An IM channel took the task over: the button stays, the silent archive does not.
+    expect(await projected('merged', { allMerged: true, attached: true })).toEqual({ auto: false });
+    // Another PR of the task is still open, or this card's PR is not merged: no button at all.
+    expect(await projected('merged', { allMerged: false, attached: false })).toBeUndefined();
+    expect(await projected('open', { allMerged: true, attached: false })).toBeUndefined();
+    expect(await projected('merged', { allMerged: true, attached: false }, ['plugin-card-actions'])).toBeUndefined();
+  });
+
   // Review (Greptile P2 on #9022): markedElements returns only outermost matches, so a mark for an
   // ended PR nested inside a mark for an open one stayed on the phone. Minimal input: B inside A (unit).
   it('also drops a nested open-only part whose own PR ended', async () => {

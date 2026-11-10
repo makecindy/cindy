@@ -3,9 +3,34 @@
  * 消息来源标签渲染:设备(查看者自己发的不标)、插件、共享任务作者(气泡上方)、
  * 脱敏自动化、本机 IM 卡片(保留普通用户操作)。沿用 pluginAttachmentBubble 的 RN 替身。
  */
-import { act, createElement, useImperativeHandle, useState } from "react";
+import { act, createElement, useImperativeHandle, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+// This suite renders zh-CN only. Keep the real i18n initializer, Chinese catalog
+// and English fallback without collecting the ten unused locale catalogs.
+vi.mock('@/i18n/locales/es', () => ({ default: {} }));
+vi.mock('@/i18n/locales/fr', () => ({ default: {} }));
+vi.mock('@/i18n/locales/de', () => ({ default: {} }));
+vi.mock('@/i18n/locales/pt-PT', () => ({ default: {} }));
+vi.mock('@/i18n/locales/pt-BR', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-Hant-x-lzh', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-Hans-x-lzh', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-TW', () => ({ default: {} }));
+vi.mock('@/i18n/locales/ja', () => ({ default: {} }));
+vi.mock('@/i18n/locales/ko', () => ({ default: {} }));
+// Use the production exports needed by this renderer through their narrow
+// entries; the barrels eagerly collect unrelated catalogs and runtime modules.
+vi.mock('@cindy/maker-shared', async () => ({
+  ...await import('../../../../packages/maker-shared/src/filePresentation'),
+  ...await import('../../../../packages/maker-shared/src/sessionPrRefs'),
+  ...await import('../../../../packages/maker-shared/src/sharedTask'),
+  ...await import('../../../../packages/maker-shared/src/outputLimitError'),
+  ...await import('../../../../packages/maker-shared/src/taskTags'),
+  ...await import('../../../../packages/maker-shared/src/userBubbleAppearance'),
+}));
+vi.mock('@cindy/model-providers', async () => ({
+  ...await import('../../../../packages/model-providers/src/classification'),
+}));
 vi.mock('@/platform/gestureHandler', () => {
   const chain = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => chain() });
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
@@ -27,6 +52,7 @@ const viewportHarness = vi.hoisted(() => ({
   finishReveal: null as any,
   renders: 0,
   captureNativeOpacity: false,
+  memoizedCells: false,
   opacityTargets: new Set<HTMLElement>(),
 }));
 
@@ -34,6 +60,7 @@ const viewportHarness = vi.hoisted(() => ({
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock("react-native", async () => {
   const React = await import("react");
+  const window = { width: 402, height: 874, scale: 3, fontScale: 1 };
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
   const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style, nativeRef }: any) =>
     React.createElement(
@@ -110,6 +137,7 @@ vi.mock("react-native", async () => {
     Alert: {},
     Linking: {},
     StatusBar: {},
+    Dimensions: { get: () => window, addEventListener: () => ({ remove() {} }) },
     useWindowDimensions: () => ({
       width: 402,
       height: 874,
@@ -129,9 +157,10 @@ vi.mock("@legendapp/list/react-native", () => ({
         return undefined;
       },
     }));
-    return data.map((item: any, index: number) =>
+    // Model retained native cells: changing renderItem alone need not redraw them.
+    return useMemo(() => data.map((item: any, index: number) =>
       createElement("section", { key: item.key }, renderItem({ item, index })),
-    );
+    ), [data, props.extraData, viewportHarness.memoizedCells ? null : renderItem]);
   },
   useRecyclingState: (initial: any) => useState(initial),
   useViewability: () => {},
@@ -192,12 +221,18 @@ vi.mock("react-native-uitextview", async () => {
   return { UITextView: (props: any) => createElement('div', {
     'data-native-text-view': true,
     'data-selection-menu-label': props.menuActionLabel,
+    'data-side-chat-menu-label': props.sideChatMenuActionLabel,
     // Simulate the native layout and a menu action for a two-character selection.
     // This exercises the renderer's real quote callback, not UIKit's gestures.
     ...(props.onMenuAction ? { onDoubleClick: (event: any) => {
       event.stopPropagation();
       props.onTextLayout({ nativeEvent: { lines: [event.currentTarget.textContent] } });
       props.onMenuAction({ nativeEvent: { target: 1, start: 1, end: 3 } });
+    } } : {}),
+    ...(props.onSideChatMenuAction ? { onContextMenu: (event: any) => {
+      event.stopPropagation();
+      props.onTextLayout({ nativeEvent: { lines: [event.currentTarget.textContent] } });
+      props.onSideChatMenuAction({ nativeEvent: { target: 1, start: 1, end: 3 } });
     } } : {}),
   }, createElement(Text, props)) };
 });
@@ -346,6 +381,30 @@ function mount(messages: RemoteMessage[], props: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+it('updates retained companion cells when topic replies change without new messages', () => {
+  viewportHarness.memoizedCells = true;
+  const open = vi.fn();
+  const topics = (replyCount: number) => ({
+    avatar: null, busy: false, open,
+    threads: new Map([['topic-root', { rootClientId: 'topic-root', replyCount }]]),
+  });
+  const h = mount([{ ...msg('topic-root', 'An existing answer', { turnCompleted: true }), role: 'assistant' }],
+    { companion: true, companionThreads: topics(1) });
+  try {
+    const row = () => h.host.querySelector('[data-testid="companion.thread.topic-root"]');
+    expect(row()?.textContent).toContain(i18n.t('groupChat.thread.replyCount', { count: 1 }));
+    const initial = row();
+    h.rerender({ companionThreads: topics(3) });
+    expect(row()).toBe(initial);
+    expect(row()?.textContent).toContain(i18n.t('groupChat.thread.replyCount', { count: 3 }));
+    act(() => row()!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(open).toHaveBeenCalledTimes(1);
+  } finally {
+    h.unmount();
+    viewportHarness.memoizedCells = false;
+  }
 });
 
 // Native replay: opening the keyboard restored opacity=0 on a revealed list.
@@ -835,6 +894,34 @@ describe("companion text selection and actions", () => {
       expect(h.host.querySelector('[data-testid="companion.messageReply"]')).toBeNull();
       expect(onQuote).not.toHaveBeenCalled();
       expect(onAddMessageToComposer).not.toHaveBeenCalled();
+    } finally { h.unmount(); }
+  });
+});
+
+describe("message body selection actions", () => {
+  // User requirement: own messages and Agent replies expose the same range actions.
+  // Existing coverage checks assistant tables and companion whole-message replies,
+  // not both actions on an ordinary user body. Unit: the real MessageRenderer
+  // receives a native two-character range from a short user/assistant message;
+  // only that range enters the chosen draft and side chat leaves the main draft intact.
+  it.each(["user", "assistant"] as const)("routes selected %s text to the chosen draft", (role) => {
+    const mainDraft = ["existing draft"];
+    const sideDraft: string[] = [];
+    const h = mount([{ ...msg("selection", "甲春风乙", { turnCompleted: true }), role }], {
+      onQuoteSelection: (quote: { text: string }) => mainDraft.push(quote.text),
+      onSideChatMessage: (text: string) => sideDraft.push(text),
+    });
+    try {
+      const body = h.host.querySelector(`[data-testid="message.${role === "user" ? "user" : "agent"}Bubble"]`)!;
+      const selection = body.querySelector('[data-selection-menu-label]')!;
+      expect(selection.getAttribute('data-selection-menu-label')).toBe(i18n.t('message.quote.menuLabel'));
+      expect(selection.getAttribute('data-side-chat-menu-label')).toBe(i18n.t('session.sideChat.title'));
+      act(() => selection.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+      expect(mainDraft).toEqual(["existing draft", "春风"]);
+      expect(sideDraft).toEqual([]);
+      act(() => selection.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })));
+      expect(sideDraft).toEqual(["春风"]);
+      expect(mainDraft).toEqual(["existing draft", "春风"]);
     } finally { h.unmount(); }
   });
 });

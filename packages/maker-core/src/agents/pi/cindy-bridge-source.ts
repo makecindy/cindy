@@ -2589,6 +2589,7 @@ interface McpServerRef {
 }
 
 const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools';
+const CINDY_ASYNC_QUESTION_TOOL = 'ask_user_question_async';
 const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool';
 const CINDY_START_SESSION_TASK_TOOL = 'start_session_task';
 const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task';
@@ -3382,7 +3383,7 @@ class CindyMcpGateway {
   /** The real MCP identity of a tool the model called by its short name, for the permission and capture hooks. */
   resolveHookedCall(toolName: string, input: unknown): ResolvedMcpGatewayCall | null {
     if (toolName === CINDY_MCP_CALL_TOOL) return this.resolveCall(input);
-    if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL) return this.resolveDirectHelperTool(toolName, input);
+    if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL || toolName === CINDY_ASYNC_QUESTION_TOOL) return this.resolveDirectHelperTool(toolName, input);
     return toolName === CINDY_BOT_MEMORY_TOOL ? this.resolveBotMemory(input) : null;
   }
 
@@ -4029,6 +4030,19 @@ class CindyMcpGateway {
         },
         execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
           this.executeStartSessionTask(params, signal),
+      });
+    }
+
+    // Match synchronous question discoverability while retaining the host schema and lifecycle.
+    const asyncQuestion = this.tools.get(mcpGatewayKey('cindy_helper', CINDY_ASYNC_QUESTION_TOOL));
+    if (asyncQuestion && !options.deniedTools?.includes(CINDY_ASYNC_QUESTION_TOOL)) {
+      pi.registerTool({
+        name: CINDY_ASYNC_QUESTION_TOOL,
+        label: 'Ask an optional question',
+        description: asyncQuestion.description,
+        parameters: asyncQuestion.inputSchema,
+        execute: async (_id: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_ASYNC_QUESTION_TOOL, params, signal),
       });
     }
 
@@ -5260,6 +5274,7 @@ export default async function cindyBridge(piApi: any) {
       (event.toolName === CINDY_MCP_CALL_TOOL
         || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
         || event.toolName === CINDY_LIST_MACHINES_TOOL
+        || event.toolName === CINDY_ASYNC_QUESTION_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
     ) return;
@@ -5372,6 +5387,10 @@ export default async function cindyBridge(piApi: any) {
   const VISION_DEFAULT_PROMPT =
     'Describe this image accurately and factually. Do NOT guess or fabricate details. ' +
     'Report visible text verbatim. If the image contains UI elements, list their labels and state.';
+  // /v1/messages 强制要求 max_tokens。思考模型先写 thinking 块，1024 常被吃光，
+  // 正文为空，视觉桥误判图片不可用（#4580）。4096 留给思考加一段描述，同时保持有界。
+  // 对齐 host 侧 VISION_ANTHROPIC_MAX_TOKENS。
+  const VISION_ANTHROPIC_MAX_TOKENS = 4096;
   const VISION_LOCATE_PROMPT_PREFIX =
     'Locate the target below and return its bounding box as "x1,y1,x2,y2" ' +
     '(pixel coordinates, top-left origin). If the target is not present, return NOT_FOUND. Target: ';
@@ -5425,6 +5444,20 @@ export default async function cindyBridge(piApi: any) {
       buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
     ) return 'image/webp';
     return null;
+  }
+
+  // Anthropic 视觉响应的正文。thinking / redacted_thinking 不是图片描述；
+  // 只有思考、没有 text 时返回空串，调用方按空描述失败（#4580）。
+  function anthropicVisionText(blocks: unknown): string {
+    if (!Array.isArray(blocks)) return '';
+    return blocks
+      .map((block) => {
+        if (!block || typeof block !== 'object') return '';
+        const b = block as { type?: unknown; text?: unknown };
+        if (b.type === 'thinking' || b.type === 'redacted_thinking') return '';
+        return typeof b.text === 'string' ? b.text : '';
+      })
+      .join('');
   }
 
   async function callPiVision(
@@ -5488,9 +5521,8 @@ export default async function cindyBridge(piApi: any) {
       : wire === 'anthropic-messages'
         ? {
             model: spec.model,
-            // /v1/messages 强制要求 max_tokens,缺省会 400 让 anthropic 风格后端
-            // 看起来不可用(对齐 host 侧 VISION_ANTHROPIC_MAX_TOKENS=1024)。
-            max_tokens: 1024,
+            // /v1/messages 强制要求 max_tokens。过小会被 thinking 块吃光（#4580）。
+            max_tokens: VISION_ANTHROPIC_MAX_TOKENS,
             messages: [
               {
                 role: 'user',
@@ -5546,12 +5578,7 @@ export default async function cindyBridge(piApi: any) {
     let content: unknown = null;
     if (wire === 'anthropic-messages') {
       const blocks = (json as { content?: unknown })?.content;
-      if (Array.isArray(blocks)) {
-        content = blocks
-          .map((b) => (b && typeof b === 'object' ? (b as { text?: unknown }).text : ''))
-          .filter((t): t is string => typeof t === 'string')
-          .join('');
-      }
+      content = anthropicVisionText(blocks);
     } else if (wire === 'openai-responses') {
       const output = (json as { output?: unknown })?.output;
       if (Array.isArray(output)) {

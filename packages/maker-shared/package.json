@@ -42,6 +42,7 @@
     "./ui-mock": "./src/uiMock.ts",
     "./ghost-command": "./src/ghostCommand.ts",
     "./ghost-card-form": "./src/ghostCardForm.ts",
+    "./ghost-card-task-archive": "./src/ghostCardTaskArchive.ts",
     "./mail-text-edit": "./src/mailTextEdit.ts",
     "./mail-message": "./src/mailMessage.ts",
     "./goal-command": "./src/goalCommand.ts",
@@ -121,7 +122,8 @@
     "./remote-desktop-mobile": "./src/remote-desktop/mobileHtml.ts",
     "./remote-desktop-scripts": "./src/remote-desktop/viewerScripts.ts",
     "./teammate-todo": "./src/teammateTodo.ts",
-    "./teammate-status": "./src/teammateStatus.ts"
+    "./teammate-status": "./src/teammateStatus.ts",
+    "./host-channel-contract": "./src/hostChannelContract.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",
