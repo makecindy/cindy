@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { RemoteActionDescriptor, RemoteActionInvokeRequest, RemoteActionInvokeResponse, RemoteLocalizedText, RemoteResource } from '@cindy/device-link';
 import type { getBotRemoteSettingsSource } from './bots.js';
 import { botRemoteResourceFromSource } from './botRemoteResourceProjection.js';
+import { automationsTitle } from './botRemoteAutomations.js';
 import { RemoteResourceRegistryError, type RemoteResourceHostContext } from '../../device-link/remoteResourceRegistry.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 
@@ -132,6 +133,9 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
       form('models', [{ id: 'followsDefault', label: copy.followsDefault, kind: 'toggle' }, { id: 'modelChain', label: copy.models, kind: 'multiline' }],
         { followsDefault: settings.followsDefault, modelChain: serializeModelRoutes(settings.modelChain) }),
       ...(settings.projectMode ? [] : [{ id: 'connections', primitive: 'markdown' as const, fallbackMarkdown: [...settings.skills, ...settings.connections, ...settings.toolsets].join('\n') }]),
+      // The teammate project's automations (`settings:<id>/automations`), as on the desktop settings page.
+      ...(settings.projectMode ? [{ id: 'automations', primitive: 'list', fallbackMarkdown: '',
+        data: { entries: [{ id: 'automations', title: automationsTitle, resourceId: `settings:${source.id}/automations` }] } }] : []),
     ];
     // A failed shelf read must not turn into an empty shelf or prevent profile recovery.
     try {

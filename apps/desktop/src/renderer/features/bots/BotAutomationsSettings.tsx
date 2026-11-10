@@ -10,7 +10,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/ui/toast';
 import { useSchedules } from '../scheduler/hooks/useSchedules';
-import { cronToHuman } from '../scheduler/lib/cronToHuman';
+import { cronToHuman } from '../../../shared/scheduleCronLabel';
 import { formatLastRun, formatNextRun } from '../scheduler/lib/formatters';
 import { useBotTranslation } from './botPronounContext';
 

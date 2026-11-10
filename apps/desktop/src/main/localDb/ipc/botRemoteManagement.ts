@@ -5,7 +5,7 @@ import { resolveAvailableTaskModels } from '../../maker-ipc/appDefaultModelContr
 import type { BotModelRoute } from '../../../shared/botModelChain.js';
 import { createBotRemoteSettingsResource } from './botRemoteSettingsResource.js';
 import { createBotProfile, createBotCanonicalSession, getBotMemoryService, getBotRemoteResourceSource, getBotRemoteSettingsSource, readBotSettingsProfile, searchBotHistory, setBotProfileAvatar, updateBotProfile } from './bots.js';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../../appSessionState.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { listBotSkillsForBot, readBotSkillForBot, deleteBotSkillForBot } from '../../maker-ipc/botSkillService.js';
 import {
@@ -23,6 +23,7 @@ import { readRemoteBotSessionAccess } from './botRemoteSessionAccess.js';
 import { createBotRemoteSettingsHost } from './botRemoteSettingsHost.js';
 import { createBotRemoteSettingsOps } from './botRemoteSettingsOps.js';
 import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
+import { teammateWorkspaceDir } from '../../maker-ipc/botProjectMemory.js';
 
 async function validateModelChain(chain: BotModelRoute[]) {
   const scope = activeOwnerScopeKey();
@@ -30,6 +31,9 @@ async function validateModelChain(chain: BotModelRoute[]) {
   if (isAppSessionBoundaryPending() || scope !== activeOwnerScopeKey()) throwIpcError('PRECONDITION_FAILED', 'Account changed');
   if (resolved.some(route => !route)) throwIpcError('INVALID_PARAMS', 'Model route unavailable');
 }
+
+/** Loaded on use, like the other page-only services below. */
+const scheduleIpc = () => import('../../maker-ipc/schedule.js');
 
 /** Composition only: profile transactions, skill reads and lifecycle stay with their existing owners. */
 const deps = {
@@ -56,6 +60,14 @@ const getEditor = createBotRemoteEditors({ ...deps,
   projects: {
     list: async botId => (await botLinkedProjectAccess(botId)).read(),
     set: async (botId, id, linked) => (await botLinkedProjectAccess(botId)).set(id, linked),
+  },
+  // The teammate project's automations, through the same scheduler calls as the Automations page.
+  automations: {
+    workspace: botId => teammateWorkspaceDir(ownerScopedUserDataPath(), botId),
+    list: async () => (await scheduleIpc()).scheduleHostAccess.list(),
+    inflight: async id => (await scheduleIpc()).scheduleHostAccess.inflight(id),
+    pause: async id => (await scheduleIpc()).pauseScheduleClearingUnread(id),
+    resume: async id => (await scheduleIpc()).scheduleHostAccess.resume(id),
   },
   async modelDefaults() {
     const owner = deps.owner();

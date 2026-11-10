@@ -7,6 +7,7 @@ import type { RemoteResourceHostContext } from '../../device-link/remoteResource
 import type { BotSkillDetail } from '../../../shared/botSkill.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import { createBotRemoteMemoryEditor, memoryCopy, type BotRemoteMemoryService } from './botRemoteMemory.js';
+import { createBotRemoteAutomationsEditor, type BotRemoteAutomationService } from './botRemoteAutomations.js';
 import type { BotProjectOption } from '../../../shared/botWorkbench.js';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
@@ -27,6 +28,7 @@ export interface BotRemoteEditorDeps extends Pick<BotRemoteSettingsDeps, 'owner'
   coreGuide(): string | Promise<string>;
   capabilities(sessionId: string, kind: Kind): Promise<Capability[]>;
   memory: BotRemoteMemoryService;
+  automations?: BotRemoteAutomationService;
 }
 export interface BotRemoteEditorOptions {
   /** `RemoteResourceGetRequest.query`, honored only by pages that advertise `search`. */
@@ -155,6 +157,12 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
     if (memory) {
       const settings = await deps.read(memory[1]); deps.assertOwner(owner);
       return memoryEditor(context, { botId: memory[1], botName: settings.source.name, entry: memory[2], locale, query: options.query, primitives: options.primitives ?? [] });
+    }
+    const automation = /^settings:([A-Za-z0-9_-]{1,128})\/automations(?:\/([A-Za-z0-9_-]{1,128}))?$/.exec(id);
+    if (automation && deps.automations) {
+      const settings = await deps.read(automation[1]); deps.assertOwner(owner);
+      if (!settings.projectMode) throwIpcError('NOT_FOUND', 'Unknown teammate editor');
+      return createBotRemoteAutomationsEditor({ ...deps, automations: deps.automations }, bind)(context, { botId: automation[1], botName: settings.source.name, scheduleId: automation[2], locale });
     }
     // `settings:<id>/follow-up` (V1 follow-up) is gone: it falls through to NOT_FOUND below.
     // `_`-prefixed sections are host Skill layers; learned skill slugs never contain `_`.

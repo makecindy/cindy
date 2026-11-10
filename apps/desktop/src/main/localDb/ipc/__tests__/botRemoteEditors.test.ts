@@ -322,3 +322,32 @@ it('distinguishes equal project paths on different devices in the list and toggl
   await f.send(detail, { linked: false });
   expect(projects.map(project => project.linked)).toEqual([false, true]);
 });
+
+// Owner 2026-11-10: the phone shows a teammate's automations like the desktop page. New phone write path:
+// only the teammate project's own automations are listed and switchable. Unit, real editor + opaque action.
+it('lists and switches only the automations of the teammate project', async () => {
+  const f = fixture();
+  Object.assign(f.settings, { projectMode: true });
+  const base = { cronExpr: '0 9 * * *', recurring: true, manual: false, workspaceKind: 'project', lastFiredAt: undefined, nextFireAt: undefined };
+  const schedules = [
+    { ...base, id: 'own', name: '早报', status: 'active', workingDir: '/home/bots/bot-a/workspace' },
+    { ...base, id: 'paused', name: '周报', status: 'paused', workingDir: '/home/bots/bot-a/workspace/' },
+    { ...base, id: 'other', name: '别人的', status: 'active', workingDir: '/home/bots/bot-b/workspace' },
+  ];
+  const set = (id: string, status: string) => { schedules.find(item => item.id === id)!.status = status; };
+  f.deps.automations = {
+    workspace: botId => `/home/bots/${botId}/workspace`,
+    list: async () => schedules.map(item => ({ ...item })) as never,
+    inflight: async () => 0,
+    pause: vi.fn(async (id: string) => set(id, 'paused')), resume: vi.fn(async (id: string) => set(id, 'active')),
+  };
+  const list = await f.resource('settings:bot-a/automations');
+  expect(f.entries(list, 'automations')).toEqual([
+    expect.objectContaining({ id: 'paused', subtitle: '每天 09:00 · 已暂停' }),
+    expect.objectContaining({ id: 'own', subtitle: '每天 09:00' }),
+  ]);
+  await expect(f.resource('settings:bot-a/automations/other')).rejects.toThrow();
+  await f.send(await f.resource('settings:bot-a/automations/own'), { active: false });
+  await f.send(await f.resource('settings:bot-a/automations/paused'), { active: true });
+  expect(schedules.map(item => item.status)).toEqual(['paused', 'active', 'active']);
+});
