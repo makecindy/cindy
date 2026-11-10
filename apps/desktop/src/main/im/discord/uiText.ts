@@ -30,6 +30,8 @@ export const ui = {
 平时直接发消息就行，我在听~`,
     unknownCommand: (cmd: string) =>
       `没认出 \`${cmd}\` 这个命令 🤔\n我能听懂的: /new、/model、/permission、/ctr、/exctr、/help`,
+    localTaskAccessUnavailable: (cmd: string) =>
+      `🔒 \`${cmd}\` 在服务器频道里用不了——它会把你桌面上的私人任务 / 项目挂到公共场合。想用的话，请在和我的私信里发。`,
     detachedBySlash: '🚪 接管结束，咱们回到 Discord 私聊。下次想远程操控 desktop 再 /ctr',
     detachedByRevoke: '⚠️ 你在 desktop 那边把接管收回去了，后续消息回到我们俩的 Discord 私聊。',
     notAttached: '🤷 你现在没在接管任何任务，/exctr 闲着也没事可干。',

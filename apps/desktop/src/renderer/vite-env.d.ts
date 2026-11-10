@@ -532,6 +532,25 @@ interface WechatChannelSettingsState {
   companionBotId?: string;
 }
 
+/** 服务器频道白名单：默认不开放；个人 bot 只认主人，伙伴连接可显式允许成员。 */
+type DiscordBotChannelAccess = import('../shared/botImConnection').BotImDiscordChannelAccess;
+type DiscordBotChannelPermissions = {
+  view: boolean;
+  send: boolean;
+  readHistory: boolean;
+  embed: boolean;
+  attachFiles: boolean;
+  sendInThreads: boolean;
+};
+type DiscordBotChannelListing = {
+  status: DiscordBotTransportStatus;
+  guilds: Array<{
+    id: string;
+    name: string;
+    channels: Array<{ id: string; name: string; permissions: DiscordBotChannelPermissions }>;
+  }>;
+};
+
 type DiscordBotSessionAuthCheckResult = {
   ok: boolean;
   missing: 'gateway-key' | 'agent-oauth' | 'provider-key' | 'provider-disconnected' | null;
@@ -2381,6 +2400,9 @@ interface ElectronAPI {
       lifecycleAnnouncement: boolean;
     }>;
     checkSessionAuth: () => Promise<DiscordBotSessionAuthCheckResult>;
+    listChannels: () => Promise<DiscordBotChannelListing>;
+    getChannelAccess: () => Promise<DiscordBotChannelAccess>;
+    setChannelAccess: (access: DiscordBotChannelAccess) => Promise<DiscordBotChannelAccess>;
     onStatusChange: (
       callback: (update: { status: DiscordBotTransportStatus }) => void,
     ) => () => void;
@@ -2453,6 +2475,14 @@ interface ElectronAPI {
       chatId: string;
       mode: import('../shared/botImConnection').BotImGroupActivationMode;
     }) => Promise<import('../shared/botImConnection').BotImConnectionGroupsPayload>;
+    /** Discord 连接的服务器频道白名单（可选：旧电脑没有）；默认空 = 不开放。 */
+    listDiscordChannels?: (payload: {
+      id: string;
+    }) => Promise<import('../shared/botImConnection').BotImDiscordChannelsPayload>;
+    setDiscordChannelAccess?: (payload: {
+      id: string;
+      access: import('../shared/botImConnection').BotImDiscordChannelAccess;
+    }) => Promise<import('../shared/botImConnection').BotImDiscordChannelsPayload>;
     /** 这条连接下有任务的落点(主人私聊 + 群 / 话题 / 其他人私聊的隐藏任务)。 */
     listLanes: (payload: {
       id: string;

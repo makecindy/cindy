@@ -4794,7 +4794,7 @@
     },
     "discordBot": {
       "title": "Bot Discord",
-      "description": "Ligue o seu próprio bot Discord para que o {{appName}} possa trabalhar a partir de mensagens privadas do Discord.",
+      "description": "Ligue o seu próprio bot do Discord para que o {{appName}} funcione a partir das mensagens diretas do Discord e dos canais de servidor que escolher.",
       "statusAria": "Estado do bot Discord: {{status}}",
       "status": {
         "needsConfig": "Requer configuração",
@@ -4838,6 +4838,64 @@
         "cellLabel": "Notificações de mensagens",
         "hint": "Fazer com que o bot Discord envie uma mensagem quando este dispositivo fica online ou offline"
       },
+      "channels": {
+        "title": "Canais do servidor",
+        "summary": {
+          "unknown": "A verificar…",
+          "off": "Desativado",
+          "on": "Servidores ativados: {{count}}"
+        },
+        "hint": "Desativado por predefinição. Ative um servidor e mencione o bot com @ nos canais de texto dele para o chamar. Cada canal e cada tópico tem o seu próprio contexto, separado, e o bot só recebe mensagens que o mencionam com @.",
+        "ownerOnly": "Por agora só você o pode chamar.",
+        "offline": "O bot não está ligado. Ligue-o para escolher canais; os canais já ativados mantêm-se ativados.",
+        "members": {
+          "label": "Permitir membros do canal",
+          "notice": "Os membros do canal ficam desativados por predefinição. Se os permitir, os membros que mencionarem o bot com @ usam as ferramentas que {{name}} já tem e partilham a memória de {{name}}. As permissões seguem a definição de permissões de {{name}}, e os comandos continuam a ser só seus.",
+          "aria": "Permitir membros de #{{channel}}",
+          "guildAria": "Permitir membros de {{guild}}"
+        },
+        "loading": "A ler os servidores em que o seu bot está…",
+        "refresh": "Atualizar",
+        "empty": "O bot ainda não está em nenhum servidor. Convide-o a partir do Discord Developer Portal e depois atualize.",
+        "noTextChannels": "Sem canais de texto",
+        "toggleAria": "Ativar #{{channel}} em {{guild}}",
+        "error": {
+          "load": "Não foi possível carregar os seus servidores.",
+          "save": "Não foi possível guardar a alteração. A mostrar o que está guardado neste momento.",
+          "unsupported": "Esse computador usa uma versão antiga do Cindy e não consegue gerir canais de servidor a partir daqui. Atualize primeiro o Cindy nesse computador."
+        },
+        "permission": {
+          "cannotSend": "O bot não consegue ver este canal nem enviar mensagens nele",
+          "limited": "Permissões em falta: {{list}}",
+          "separator": ", ",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "Servidores ou canais indisponíveis",
+          "hint": "Foram eliminados ou o bot já não está no servidor. Pode removê-los da lista.",
+          "remove": "Remover"
+        },
+        "ownerOnlyCardNotice": "Apenas o dono deste bot pode usar este botão.",
+        "guild": {
+          "summary": {
+            "off": "Desativado",
+            "all": "Todos os canais",
+            "selected": "{{count}} canais selecionados",
+            "none": "Nenhum canal selecionado"
+          },
+          "toggleAria": "Ativar {{guild}}",
+          "more": "Mais",
+          "modeAria": "Canais abrangidos em {{guild}}",
+          "mode": {
+            "all": "Todos os canais",
+            "selected": "Apenas canais escolhidos"
+          },
+          "allHint": "Inclui canais de texto adicionados mais tarde. O bot só responde nos canais em que consegue ver e enviar mensagens."
+        }
+      },
       "ownerNotice": {
         "linked": "✅ Tudo associado. Envie uma mensagem quando quiser.",
         "disconnected": "🔌 Desassociado. Volte a associar quando precisar de mim.",
@@ -4854,11 +4912,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "As mensagens privadas P1 não requerem qualquer Privileged Intent."
+          "body": "Não é necessário nenhum Privileged Intent (deixe o Message Content desativado). Nos servidores, o bot só recebe mensagens que o mencionam com @."
         },
         "step3": {
           "title": "Convidar o bot",
-          "body": "Em OAuth2 URL Generator, selecione o âmbito bot e conceda Send Messages, Read Message History e Attach Files. Convide o bot para qualquer servidor de que faça parte; as mensagens privadas exigem que partilhe um servidor com o bot."
+          "body": "No OAuth2 URL Generator, selecione o scope bot e conceda View Channels, Send Messages, Send Messages in Threads, Embed Links, Attach Files, Read Message History e Add Reactions. Convide o bot para qualquer server em que esteja; as mensagens diretas exigem que você e o bot partilhem um server."
         },
         "step4": {
           "title": "Copiar o seu ID de utilizador",

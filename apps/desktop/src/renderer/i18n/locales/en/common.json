@@ -4738,7 +4738,7 @@
     },
     "discordBot": {
       "title": "Discord Bot",
-      "description": "Connect your own Discord bot so {{appName}} can work from Discord DMs.",
+      "description": "Connect your own Discord bot so {{appName}} can work from Discord DMs and the server channels you choose.",
       "statusAria": "Discord bot status: {{status}}",
       "status": {
         "needsConfig": "Needs configuration",
@@ -4782,6 +4782,64 @@
         "cellLabel": "Message Notifications",
         "hint": "Have the Discord Bot send a message when this device goes online or offline"
       },
+      "channels": {
+        "title": "Server channels",
+        "summary": {
+          "unknown": "Checking…",
+          "off": "Off",
+          "on": "Servers on: {{count}}"
+        },
+        "hint": "Off by default. Turn on a server, then @mention the bot in its text channels to call it. Each channel and each thread keeps its own separate context, and the bot only receives messages that @mention it.",
+        "ownerOnly": "For now only you can call it.",
+        "offline": "The bot is not connected. Connect it to choose channels; channels already enabled stay enabled.",
+        "members": {
+          "label": "Allow channel members",
+          "notice": "Channel members are off by default. When you allow them, members who @mention the bot use the tools {{name}} already has and share {{name}}'s memory. Permissions follow {{name}}'s permission setting, and commands stay owner-only.",
+          "aria": "Allow members of #{{channel}}",
+          "guildAria": "Allow members of {{guild}}"
+        },
+        "loading": "Reading the servers your bot is in…",
+        "refresh": "Refresh",
+        "empty": "The bot isn't in any server yet. Invite it from the Discord Developer Portal, then refresh.",
+        "noTextChannels": "No text channels",
+        "toggleAria": "Enable {{guild}} #{{channel}}",
+        "error": {
+          "load": "Couldn't load your servers.",
+          "save": "Couldn't save that change. Showing what is currently saved.",
+          "unsupported": "This computer runs an older version of Cindy that can't manage server channels from here. Update Cindy on that computer first."
+        },
+        "permission": {
+          "cannotSend": "The bot can't view or send messages in this channel",
+          "limited": "Missing permissions: {{list}}",
+          "separator": ", ",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "Unavailable servers or channels",
+          "hint": "These were deleted, or the bot is no longer in the server. You can remove them from the list.",
+          "remove": "Remove"
+        },
+        "ownerOnlyCardNotice": "Only this bot's owner can use this button.",
+        "guild": {
+          "summary": {
+            "off": "Off",
+            "all": "All channels",
+            "selected": "{{count}} channels selected",
+            "none": "No channels selected"
+          },
+          "toggleAria": "Turn on {{guild}}",
+          "more": "More",
+          "modeAria": "Channels covered in {{guild}}",
+          "mode": {
+            "all": "All channels",
+            "selected": "Selected channels"
+          },
+          "allHint": "Includes text channels added later. The bot only responds in channels where it can view and send messages."
+        }
+      },
       "ownerNotice": {
         "linked": "✅ All linked. Just send a message when you're ready.",
         "disconnected": "🔌 Unlinked. Link again whenever you need me.",
@@ -4798,11 +4856,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "P1 DMs do not require any Privileged Intent."
+          "body": "No Privileged Intent is needed (keep Message Content off). In servers, the bot only receives messages that @mention it."
         },
         "step3": {
           "title": "Invite the bot",
-          "body": "In OAuth2 URL Generator, select the bot scope and grant Send Messages, Read Message History, and Attach Files. Invite the bot to any server you are in; DMs require you and the bot to share a server."
+          "body": "In OAuth2 URL Generator, select the bot scope and grant View Channels, Send Messages, Send Messages in Threads, Embed Links, Attach Files, Read Message History and Add Reactions. Invite the bot to any server you are in; DMs require you and the bot to share a server."
         },
         "step4": {
           "title": "Copy your user ID",

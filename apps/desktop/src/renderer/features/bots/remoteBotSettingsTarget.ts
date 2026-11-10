@@ -1,4 +1,4 @@
-import { BOT_IM_CHANNELS } from '../../../shared/botImConnection';
+import { BOT_IM_CHANNELS, type BotImDiscordChannelsPayload } from '../../../shared/botImConnection';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
@@ -228,6 +228,14 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
     remove: (payload) => call2('channels.im.remove', { id: payload.id }),
     listGroups: (payload) => call2('channels.im.listGroups', { id: payload.id }),
     setGroupActivation: (payload) => call2('channels.im.setGroupActivation', { ...payload }),
+    // 旧电脑不认这两个操作时不提供，页面上整个小节不显示。
+    ...(input.ops.has('channels.im.listDiscordChannels') && input.ops.has('channels.im.setDiscordChannelAccess')
+      ? {
+          listDiscordChannels: (payload: { id: string }) => call2<BotImDiscordChannelsPayload>('channels.im.listDiscordChannels', { id: payload.id }),
+          setDiscordChannelAccess: (payload: { id: string; access: unknown }) =>
+            call2<BotImDiscordChannelsPayload>('channels.im.setDiscordChannelAccess', { id: payload.id, access: payload.access }),
+        }
+      : {}),
     listLanes: (payload) => call2('channels.im.listLanes', { id: payload.id }),
     resetLane: (payload) => call2('channels.im.resetLane', { ...payload }),
     listAdoptable: () => invokeBotSettings(deviceId, 'channels.im.listAdoptable', null),

@@ -4695,7 +4695,7 @@
     },
     "discordBot": {
       "title": "Discord 봇",
-      "description": "직접 만든 Discord 봇을 연결하여 Discord DM에서 {{appName}}로 작업하세요.",
+      "description": "직접 만든 Discord 봇을 연결해 Discord DM과 선택한 서버 채널에서 {{appName}}을(를) 사용할 수 있게 합니다.",
       "statusAria": "Discord 봇 상태: {{status}}",
       "status": {
         "needsConfig": "구성 필요",
@@ -4739,6 +4739,64 @@
         "cellLabel": "메시지 알림",
         "hint": "이 기기가 온라인 또는 오프라인 상태가 되면 Discord Bot이 알림 메시지를 보냅니다"
       },
+      "channels": {
+        "title": "서버 채널",
+        "summary": {
+          "unknown": "확인 중…",
+          "off": "꺼짐",
+          "on": "켜 둔 서버: {{count}}"
+        },
+        "hint": "기본적으로 아무것도 열려 있지 않습니다. 서버를 켠 뒤 그 서버의 텍스트 채널에서 봇을 @멘션하면 호출할 수 있습니다. 채널마다, 스레드마다 컨텍스트가 따로 유지되고, 봇은 @멘션된 메시지만 받습니다.",
+        "ownerOnly": "지금은 본인만 호출할 수 있습니다.",
+        "offline": "봇이 연결되어 있지 않습니다. 연결하면 채널을 고를 수 있으며, 이미 켠 채널은 그대로 유지됩니다.",
+        "members": {
+          "label": "채널 멤버에게 허용",
+          "notice": "채널 멤버는 기본적으로 꺼져 있습니다. 허용하면 해당 채널에서 봇을 @멘션한 멤버가 {{name}}에 설정된 도구를 사용하고 {{name}}의 메모리를 공유합니다. 권한은 {{name}}의 권한 설정을 따르며, 명령은 계속 본인만 쓸 수 있습니다.",
+          "aria": "#{{channel}} 멤버에게 허용",
+          "guildAria": "{{guild}} 멤버에게 허용"
+        },
+        "loading": "봇이 들어 있는 서버를 읽는 중…",
+        "refresh": "새로고침",
+        "empty": "봇이 아직 어느 서버에도 들어 있지 않습니다. Discord Developer Portal에서 초대 링크를 만들어 추가한 뒤 새로고침하세요.",
+        "noTextChannels": "텍스트 채널이 없습니다",
+        "toggleAria": "{{guild}}의 #{{channel}} 사용",
+        "error": {
+          "load": "서버 목록을 불러오지 못했습니다.",
+          "save": "변경 사항을 저장하지 못했습니다. 현재 저장된 설정을 표시합니다.",
+          "unsupported": "해당 컴퓨터의 Cindy 버전이 오래되어 여기서는 서버 채널을 설정할 수 없습니다. 먼저 그 컴퓨터의 Cindy를 최신 버전으로 업데이트하세요."
+        },
+        "permission": {
+          "cannotSend": "봇이 이 채널을 보거나 메시지를 보낼 수 없습니다",
+          "limited": "부족한 권한: {{list}}",
+          "separator": ", ",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "사용할 수 없는 서버 또는 채널",
+          "hint": "삭제되었거나 봇이 해당 서버에 없습니다. 목록에서 제거할 수 있습니다.",
+          "remove": "제거"
+        },
+        "ownerOnlyCardNotice": "이 버튼은 봇의 소유자만 사용할 수 있습니다.",
+        "guild": {
+          "summary": {
+            "off": "꺼짐",
+            "all": "모든 채널",
+            "selected": "채널 {{count}}개 선택됨",
+            "none": "선택한 채널 없음"
+          },
+          "toggleAria": "{{guild}} 켜기",
+          "more": "더보기",
+          "modeAria": "{{guild}}에서 적용할 채널",
+          "mode": {
+            "all": "모든 채널",
+            "selected": "지정한 채널만"
+          },
+          "allHint": "나중에 추가되는 텍스트 채널도 포함됩니다. 봇이 보고 메시지를 보낼 수 있는 채널에서만 응답합니다."
+        }
+      },
       "ownerNotice": {
         "linked": "✅ 연동됐어요. 준비되면 바로 말을 걸어 주세요.",
         "disconnected": "🔌 연동을 해제했어요. 필요할 때 다시 연결하면 됩니다.",
@@ -4755,11 +4813,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "P1 DM 기능에는 어떤 Privileged Intent도 켤 필요가 없습니다."
+          "body": "Privileged Intent는 필요하지 않습니다(Message Content는 꺼 두세요). 서버에서는 봇이 @멘션된 메시지만 받습니다."
         },
         "step3": {
           "title": "Bot 초대",
-          "body": "OAuth2 URL Generator에서 scope bot을 선택하고 Send Messages, Read Message History, Attach Files 권한을 부여하세요. 내가 속한 임의의 server에 Bot을 초대하세요. DM을 사용하려면 나와 Bot이 같은 server에 있어야 합니다."
+          "body": "OAuth2 URL Generator에서 scope bot을 선택하고 View Channels, Send Messages, Send Messages in Threads, Embed Links, Attach Files, Read Message History, Add Reactions 권한을 부여합니다. 내가 속한 아무 server에 봇을 초대하세요. DM을 쓰려면 나와 봇이 같은 server에 있어야 합니다."
         },
         "step4": {
           "title": "사용자 ID 복사",

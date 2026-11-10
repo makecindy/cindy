@@ -4794,7 +4794,7 @@
     },
     "discordBot": {
       "title": "Bot Discord",
-      "description": "Connectez votre propre bot Discord pour que {{appName}} puisse travailler depuis les messages privés Discord.",
+      "description": "Connectez votre propre bot Discord pour que {{appName}} fonctionne depuis les messages privés Discord et les salons de serveur que vous choisissez.",
       "statusAria": "Statut du bot Discord : {{status}}",
       "status": {
         "needsConfig": "Configuration requise",
@@ -4838,6 +4838,64 @@
         "cellLabel": "Notifications par message",
         "hint": "Le bot Discord envoie un message lorsque cet appareil passe en ligne ou hors ligne"
       },
+      "channels": {
+        "title": "Salons du serveur",
+        "summary": {
+          "unknown": "Vérification…",
+          "off": "Désactivé",
+          "on": "Serveurs activés : {{count}}"
+        },
+        "hint": "Désactivé par défaut. Activez un serveur, puis mentionnez le bot avec @ dans ses salons textuels pour l’appeler. Chaque salon et chaque fil garde son propre contexte, indépendant, et le bot ne reçoit que les messages qui le mentionnent avec @.",
+        "ownerOnly": "Pour l’instant, vous seul pouvez l’appeler.",
+        "offline": "Le bot n’est pas connecté. Connectez-le pour choisir des salons ; les salons déjà activés restent activés.",
+        "members": {
+          "label": "Autoriser les membres du salon",
+          "notice": "Les membres du salon sont désactivés par défaut. Si vous les autorisez, les membres qui mentionnent le bot avec @ utilisent les outils déjà configurés pour {{name}} et partagent la mémoire de {{name}}. Les autorisations suivent le réglage d’autorisations de {{name}}, et les commandes restent réservées à vous.",
+          "aria": "Autoriser les membres de #{{channel}}",
+          "guildAria": "Autoriser les membres de {{guild}}"
+        },
+        "loading": "Lecture des serveurs où se trouve votre bot…",
+        "refresh": "Actualiser",
+        "empty": "Le bot n’est encore dans aucun serveur. Invitez-le depuis le Discord Developer Portal, puis actualisez.",
+        "noTextChannels": "Aucun salon textuel",
+        "toggleAria": "Activer #{{channel}} de {{guild}}",
+        "error": {
+          "load": "Impossible de charger vos serveurs.",
+          "save": "Impossible d’enregistrer cette modification. Affichage de ce qui est actuellement enregistré.",
+          "unsupported": "Cet ordinateur utilise une ancienne version de Cindy et ne peut pas gérer les salons de serveur d’ici. Mettez d’abord à jour Cindy sur cet ordinateur."
+        },
+        "permission": {
+          "cannotSend": "Le bot ne peut ni voir ce salon ni y envoyer de messages",
+          "limited": "Autorisations manquantes : {{list}}",
+          "separator": ", ",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "Serveurs ou salons indisponibles",
+          "hint": "Ils ont été supprimés, ou le bot n’est plus dans le serveur. Vous pouvez les retirer de la liste.",
+          "remove": "Retirer"
+        },
+        "ownerOnlyCardNotice": "Seul le propriétaire de ce bot peut utiliser ce bouton.",
+        "guild": {
+          "summary": {
+            "off": "Désactivé",
+            "all": "Tous les salons",
+            "selected": "{{count}} salons sélectionnés",
+            "none": "Aucun salon sélectionné"
+          },
+          "toggleAria": "Activer {{guild}}",
+          "more": "Plus",
+          "modeAria": "Salons couverts dans {{guild}}",
+          "mode": {
+            "all": "Tous les salons",
+            "selected": "Salons choisis uniquement"
+          },
+          "allHint": "Inclut les salons textuels ajoutés plus tard. Le bot ne répond que dans les salons où il peut voir et envoyer des messages."
+        }
+      },
       "ownerNotice": {
         "linked": "✅ Tout est associé. Envoyez simplement un message quand vous êtes prêt.",
         "disconnected": "🔌 Dissocié. Associez-moi à nouveau dès que vous avez besoin de moi.",
@@ -4854,11 +4912,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "Les messages privés P1 ne nécessitent aucun Privileged Intent."
+          "body": "Aucun Privileged Intent n’est nécessaire (laissez Message Content désactivé). Dans les serveurs, le bot ne reçoit que les messages qui le mentionnent avec @."
         },
         "step3": {
           "title": "Inviter le bot",
-          "body": "Dans OAuth2 URL Generator, sélectionnez le scope bot et accordez Send Messages, Read Message History et Attach Files. Invitez le bot sur n'importe quel serveur dont vous êtes membre ; les messages privés nécessitent que vous et le bot partagiez un serveur."
+          "body": "Dans OAuth2 URL Generator, sélectionnez le scope bot et accordez View Channels, Send Messages, Send Messages in Threads, Embed Links, Attach Files, Read Message History et Add Reactions. Invitez le bot sur n’importe quel server où vous êtes ; les messages privés exigent que vous et le bot partagiez un server."
         },
         "step4": {
           "title": "Copier votre identifiant utilisateur",
