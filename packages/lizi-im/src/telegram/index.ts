@@ -74,6 +74,7 @@ import {
   pickExpressiveReaction,
 } from './reactionPool.js';
 import { startTelegramStreaming } from './streamingText.js';
+import { TelegramOwnerPairing, type PendingOwnerPairing } from './ownerPairing.js';
 
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'telegram-owner-user-id';
@@ -145,6 +146,17 @@ const LINK_PREVIEW_OPTIONS = {
   is_disabled: TELEGRAM_PERSONAL_CAPABILITIES.linkPreviewDisabled,
 } as const;
 const SECRET_WRITE_FAILED_REASON = '无法安全保存凭证(系统安全存储不可用)';
+
+/** 没填主人时首条私聊收到的配对码回复(缺省中英双语)。 */
+function defaultOwnerPairingNotice(code: string, minutes: number): string {
+  return (
+    `🔐 配对码：${code}\n请回到 Cindy，在这个机器人的连接处输入这个配对码并确认，确认后你就是主人。配对码 ${minutes} 分钟内有效。\n` +
+    `Pairing code: ${code}\nGo back to Cindy and enter this code on the bot's connection to become the owner. The code is valid for ${minutes} minutes.`
+  );
+}
+/** 配对名额已满或刚被忽略时的回复(缺省中英双语)。 */
+const DEFAULT_OWNER_PAIRING_BUSY_NOTICE =
+  '⏳ 现在不能配对，请稍后再试。\nPairing isn’t available right now. Please try again later.';
 const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
 
 /** 非 owner 显式召唤(私聊/群 @/reply)的礼貌回应 — per-user 冷却防刷屏。 */
@@ -300,12 +312,23 @@ export interface TelegramIMOptions {
   /** 非 owner 显式召唤时的礼貌回应文案(缺省用内置中英双语一句)。 */
   strangerNotice?: string;
   /**
+   * 没有主人时改走「私聊拿配对码 → Cindy 本机确认」(缺省 false)。只有伙伴自有连接打开;
+   * 设置页那份个人 bot 必填主人 id, 没有主人时仍按陌生人处理, 不发码、不暴露配对请求。
+   */
+  ownerPairing?: boolean;
+  /** 还没有主人时, 私聊者收到的配对码回复(缺省用内置中英双语)。 */
+  ownerPairingNotice?: (code: string, validMinutes: number) => string;
+  /** 配对名额已满或刚被忽略时的回复(缺省用内置中英双语)。 */
+  ownerPairingBusyNotice?: () => string;
+  /**
    * owner 的命令菜单(setMyCommands + BotCommandScopeChat 精准只发 owner
    * 私聊; 陌生人/群成员看不到任何命令)。缺省不注册。
    */
   commandMenu?: ReadonlyArray<{ command: string; description: string }>;
   /** 测试注入: 替换真实 Bot API 客户端。 */
   apiFactory?: (token: string) => TelegramApiClient;
+  /** 测试注入: 配对码过期/冷却用的时钟。 */
+  ownerPairingClock?: () => number;
   /** 行为配置 getter(缺省 = TELEGRAM_DEFAULT_BEHAVIOR)。 */
   behavior?: () => TelegramBehaviorConfig;
   /**
@@ -368,12 +391,25 @@ export interface TelegramConfigState {
   ownerUserId: string | null;
   botUsername: string | null;
   saveErrorStatus?: IMStatus;
+  /**
+   * 开了主人配对、还没有主人时, 私聊过来等 Cindy 本机确认的请求(不含配对码);
+   * 有主人或没开配对时没有这个字段。
+   */
+  pendingOwnerPairings?: PendingOwnerPairing[];
 }
+
+export type TelegramOwnerPairingApproveResult =
+  | { ok: true; state: TelegramConfigState }
+  | { ok: false; reason: 'invalid' | 'expired' | 'already-paired' | 'secret-unavailable' | 'unsupported' }
+  | { ok: false; reason: 'locked'; retryAfterMs: number };
 
 export class TelegramIM extends BaseIM implements ChannelIM {
   private readonly messageHandlers = new Set<MessageHandler>();
   private readonly cardActionHandlers = new Set<CardActionHandler>();
   private readonly statusHandlers = new Set<StatusHandler>();
+  private readonly ownerPairingHandlers = new Set<() => void>();
+  /** 没填主人时的配对请求(内存态, 见 ownerPairing.ts)。 */
+  private readonly ownerPairing: TelegramOwnerPairing;
   private readonly groupWindowHandlers = new Set<GroupWindowHandler>();
 
   private status: IMStatus = { kind: 'idle' };
@@ -463,6 +499,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     private readonly opts: TelegramIMOptions = {},
   ) {
     super('telegram', host);
+    this.ownerPairing = new TelegramOwnerPairing(opts.ownerPairingClock ? { now: opts.ownerPairingClock } : {});
   }
 
   /** 本实例的 secret 键名(见 TelegramIMOptions.secretKeyPrefix)。 */
@@ -481,7 +518,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return;
     }
     const token = tokenResult.kind === 'value' ? tokenResult.value.trim() : '';
-    this.ownerUserId = this.host.secrets.read(this.secretKey(OWNER_USER_ID_SECRET_KEY))?.trim() ?? '';
+    // 主人与 token 同口径 fail closed: 读失败当成「没有主人」会让连接进入配对 / 陌生人放行。
+    const ownerResult = this.secretReadResult(this.secretKey(OWNER_USER_ID_SECRET_KEY));
+    if (ownerResult.kind === 'error') {
+      this.ownerUserId = '';
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      return;
+    }
+    this.ownerUserId = ownerResult.kind === 'value' ? ownerResult.value.trim() : '';
     if (!token) {
       this.setStatus({ kind: 'idle' });
       return;
@@ -538,6 +582,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
     // 换代先行: 在途 poll 循环据 configVersion 自行退出, 不会把下线状态覆盖回去。
     this.configVersion += 1;
+    this.clearPendingOwnerPairings();
     this.clearAllTypingLoops();
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
@@ -594,6 +639,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.disposing = true;
     // 在途的 429 退避等待就此收口 —— 否则一个最长一分钟的定时器会活过 dispose。
     this.lifetimeAbort.abort();
+    // 配对请求是本次运行的内存态, 释放后不留到下一个账号 / 下一次 init。
+    this.ownerPairing.reset();
     this.configVersion += 1;
     this.clearAllTypingLoops();
     // 回挂配对是连接期内存态 — 换代/断开后旧目标一律作废, 不跨代错配。
@@ -616,7 +663,109 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       ownerUserId: this.ownerUserId || null,
       botUsername: this.botUsername || null,
       ...(saveErrorStatus ? { saveErrorStatus } : {}),
+      ...(this.opts.ownerPairing && !this.ownerUserId ? { pendingOwnerPairings: this.ownerPairing.list() } : {}),
     };
+  }
+
+  /** 配对请求增减时通知(宿主据此刷新界面)。 */
+  onOwnerPairingChange(handler: () => void): () => void {
+    this.ownerPairingHandlers.add(handler);
+    return () => this.ownerPairingHandlers.delete(handler);
+  }
+
+  private emitOwnerPairingChange(): void {
+    for (const handler of this.ownerPairingHandlers) {
+      try {
+        handler();
+      } catch (err) {
+        this.log.warn(`telegram owner pairing listener failed: ${String(err)}`);
+      }
+    }
+  }
+
+  /**
+   * Cindy 本机侧确认配对: 主人在 Cindy 里输入 bot 回复的码, 与该私聊者的请求对上才写成主人。
+   * 只能由宿主(本机设置界面)调用, Telegram 入站永远走不到这里 —— 发消息的人不能自己变成主人。
+   */
+  async approveOwnerPairing(userId: string, code: string): Promise<TelegramOwnerPairingApproveResult> {
+    if (!this.opts.ownerPairing) return { ok: false, reason: 'unsupported' };
+    if (this.ownerUserId) return { ok: false, reason: 'already-paired' };
+    if (!this.host.secrets.isAvailable()) return { ok: false, reason: 'secret-unavailable' };
+    const result = this.ownerPairing.verify(userId, code);
+    if (result.kind !== 'match') {
+      this.log.info(`telegram owner pairing rejected (${result.kind})`);
+      if (result.kind === 'locked') return { ok: false, reason: 'locked', retryAfterMs: result.retryAfterMs };
+      return { ok: false, reason: result.kind };
+    }
+    // 先落盘再清请求: 写失败时请求原样保留, 主人可以重试。
+    if (!this.host.secrets.write(this.secretKey(OWNER_USER_ID_SECRET_KEY), result.user.userId)) {
+      return { ok: false, reason: 'secret-unavailable' };
+    }
+    this.ownerUserId = result.user.userId;
+    this.ownerPairing.clearPending();
+    this.strangerNoticeAt.delete(result.user.userId);
+    this.log.info('telegram owner paired from Cindy');
+    this.registerOwnerCommandMenu();
+    const noticeConfigVersion = this.configVersion;
+    const owner = this.ownerUserId;
+    await this.sendOwnerNoticeWithTimeout(
+      owner,
+      'linked',
+      OWNER_NOTICE_TIMEOUT_MS,
+      () => this.configVersion === noticeConfigVersion && this.ownerUserId === owner,
+    );
+    // 只通知一次; 宿主据此刷新界面。
+    this.emitOwnerPairingChange();
+    return { ok: true, state: this.getConfigState() };
+  }
+
+  /** 清掉待确认请求(换 token / 下线 / 释放 / 填了主人), 有变化才通知。 */
+  private clearPendingOwnerPairings(): void {
+    if (this.ownerPairing.clearPending()) this.emitOwnerPairingChange();
+  }
+
+  /** 忽略某位私聊者的配对请求(一段时间内不再给他发码)。 */
+  dismissOwnerPairing(userId: string): TelegramConfigState {
+    if (this.ownerPairing.dismiss(userId)) this.emitOwnerPairingChange();
+    return this.getConfigState();
+  }
+
+  /** 没有主人时的私聊: 只回配对码, 不进任何业务链路。 */
+  private handleOwnerPairingRequest(m: TgMessage): void {
+    const from = m.from;
+    if (!from || from.is_bot) return;
+    const displayName = [from.first_name, from.last_name].filter(Boolean).join(' ') || String(from.id);
+    const result = this.ownerPairing.request({
+      userId: String(from.id),
+      displayName,
+      ...(from.username ? { username: from.username } : {}),
+    });
+    if (result.kind === 'cooldown') {
+      // 不写 user / chat id, 也不写码。
+      this.log.info('telegram owner pairing request skipped (cooldown)');
+      return;
+    }
+    if (result.kind === 'issued') this.emitOwnerPairingChange();
+    const api = this.api;
+    if (!api) return;
+    let text: string;
+    if (result.kind === 'busy') {
+      this.log.info('telegram owner pairing request deferred (busy)');
+      text = this.opts.ownerPairingBusyNotice?.() || DEFAULT_OWNER_PAIRING_BUSY_NOTICE;
+    } else {
+      const minutes = Math.max(1, Math.round((result.expiresAt - (this.opts.ownerPairingClock?.() ?? Date.now())) / 60_000));
+      text = this.opts.ownerPairingNotice?.(result.code, minutes) ?? defaultOwnerPairingNotice(result.code, minutes);
+    }
+    void api
+      .call('sendMessage', {
+        chat_id: String(m.chat.id),
+        text,
+        reply_parameters: { message_id: m.message_id, allow_sending_without_reply: true },
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.warn(`telegram owner pairing reply failed (non-fatal): ${msg}`);
+      });
   }
 
   /** 当前主人的 Telegram 用户 id(未配置为空串)。 */
@@ -670,6 +819,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     if (token) {
       this.configVersion += 1;
       await this.stopPolling();
+      // 换了 token(可能是另一个 bot): 旧 bot 上的配对请求作废。
+      this.clearPendingOwnerPairings();
       this.ownerUserId = nextOwnerUserId;
       // 手动填 token 点连接 = 明确要在这台机器上用, 清掉遗留的下线标志,
       // 否则连上了但重启后又被 init 判回 offline。remove 吞异常且无返回值
@@ -712,6 +863,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       this.configVersion += 1;
       this.ownerUserId = nextOwnerUserId;
     }
+    // 填了主人: 未确认的配对请求一并作废。
+    if (this.ownerUserId) this.clearPendingOwnerPairings();
     return configResult();
   }
 
@@ -741,6 +894,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         .catch(() => {});
     }
     this.ownerUserId = '';
+    this.ownerPairing.reset();
     await this.sendOwnerNoticeWithTimeout(
       disconnectedOwnerUserId,
       'disconnected',
@@ -1727,6 +1881,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.logStaleSkip(staleFor, 'private', m.message_id);
         return;
       }
+      if (this.opts.ownerPairing && !this.ownerUserId) {
+        // 还没有主人: 私聊只换配对码, 不进伙伴对话、不触发任务(guestDm 也不例外)。
+        this.handleOwnerPairingRequest(m);
+        return;
+      }
       const isOwnerDm = String(m.from.id) === this.ownerUserId;
       if (!isOwnerDm) {
         if (!this.opts.guestDm) {
@@ -1793,6 +1952,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.logStaleSkip(staleFor, m.chat.type, m.message_id);
         return;
       }
+      // 等待配对(还没有主人): 群消息只入窗, 不触发任何一轮。
+      if (this.opts.ownerPairing && !this.ownerUserId) return;
 
       let trigger = detectGroupTrigger(m, this.botId, this.botUsername, this.botDisplayName);
       let ambient = false;

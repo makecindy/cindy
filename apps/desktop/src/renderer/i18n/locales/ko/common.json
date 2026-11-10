@@ -4996,7 +4996,9 @@
           "mention": "@만",
           "always": "활성"
         }
-      }
+      },
+      "ownerPairingNotice": "🔐 페어링 코드: {{code}}\nCindy로 돌아가 이 봇의 연결에 코드를 입력하면 내가 소유자가 됩니다. 코드는 {{minutes}}분 동안 유효합니다.",
+      "ownerPairingBusyNotice": "⏳ 지금은 페어링할 수 없습니다. 잠시 후 다시 시도하세요."
     },
     "dingtalkBot": {
       "serviceName": "DingTalk",
@@ -11543,7 +11545,8 @@
         "offline": "오프라인",
         "conflict": "다른 기기가 이 봇을 사용 중입니다",
         "error": "오류",
-        "idle": "연결되지 않음"
+        "idle": "연결되지 않음",
+        "awaitingPairing": "페어링 대기 중"
       },
       "remove": "제거",
       "removeAria": "{{platform}} 제거",
@@ -11605,8 +11608,10 @@
           "tokenLabel": "Bot Token",
           "tokenPlaceholder": "@BotFather가 발급한 Token 붙여넣기",
           "ownerLabel": "내 Telegram 사용자 ID",
+          "ownerOptionalLabel": "내 Telegram 사용자 ID(선택)",
           "ownerPlaceholder": "숫자 ID (@userinfobot에서 확인)",
-          "ownerHint": "이 ID에서 온 메시지는 {{name}}의 권한으로 실행됩니다. 그 외 사용자는 손님으로 처리됩니다."
+          "ownerHint": "이 ID에서 온 메시지는 {{name}}의 권한으로 실행됩니다. 그 외 사용자는 손님으로 처리됩니다.",
+          "ownerOptionalHint": "비워 두고 저장해도 됩니다. 저장한 뒤 내 Telegram 계정으로 이 봇에 메시지를 보내면 페어링됩니다. 직접 입력하려면 숫자 ID가 필요하며, Telegram에서 @userinfobot에 메시지를 보내 확인할 수 있습니다. 이 ID에서 온 메시지는 {{name}}의 권한으로 실행되고, 그 외 사용자는 손님으로 처리됩니다."
         },
         "feishu": {
           "serviceLabel": "서비스",
@@ -11659,7 +11664,8 @@
           "botUnavailable": "{{name}}은(는) 지금 사용할 수 없습니다. 복구된 뒤 다시 시도하세요.",
           "connectFailed": "연결하지 못했습니다: {{reason}}",
           "failed": "완료하지 못했습니다. 잠시 후 다시 시도하세요.",
-          "personalBotGone": "설정 → IM 봇에 이 봇이 더 이상 없습니다. 인증 정보를 입력하세요."
+          "personalBotGone": "설정 → IM 봇에 이 봇이 더 이상 없습니다. 인증 정보를 입력하세요.",
+          "ownerIsHandle": "@사용자 이름이 아니라 숫자 ID를 입력하세요. Telegram에서 @userinfobot에 메시지를 보내 확인할 수 있습니다. 비워 두고 저장한 뒤 봇에 메시지를 보내 페어링해도 됩니다."
         },
         "source": {
           "label": "연결 방법",
@@ -11704,6 +11710,33 @@
         "unbound": "공식 @askmycindy에 보낸 질문을 {{name}}에게 맡길 수 있습니다.",
         "managed": "파트너가 X 질문을 담당합니다. 해당 파트너의 메시지 플랫폼 설정에서 연결을 변경할 수 있습니다.",
         "riskBody": "X 질문에는 파트너의 공유 기억, 도구와 작업 폴더가 사용되며 답글은 공개됩니다. 개인 정보를 다루는 용도로 사용하지 마세요. 비공개 채팅 기록을 직접 사용하지 않습니다."
+      },
+      "pairing": {
+        "thisBot": "이 봇",
+        "hint": "내 Telegram 계정으로 {{bot}}에 메시지(또는 /start)를 보내세요. 봇이 페어링 코드를 답장하면, 그 코드를 여기에 입력해 {{name}}의 소유자가 됩니다.",
+        "listLabel": "페어링 요청",
+        "request": "{{who}} 님이 소유자가 되기를 요청했습니다",
+        "userIdLine": "Telegram ID {{userId}}",
+        "codeLabel": "Telegram에서 받은 페어링 코드",
+        "codePlaceholder": "6자리 코드",
+        "approve": "승인",
+        "approveAria": "{{who}} 님을 소유자로 승인",
+        "dismiss": "무시",
+        "dismissAria": "{{who}} 님의 요청 무시",
+        "confirmOnHost": "{{device}}에서 페어링을 승인하세요.",
+        "confirmOnHostUnnamed": "이 팀원이 실행 중인 컴퓨터에서 페어링을 승인하세요.",
+        "confirm": {
+          "title": "{{who}} 님을 소유자로 지정할까요?",
+          "description": "방금 내 Telegram 계정으로 봇에 메시지를 보낸 경우에만 승인하세요. 승인하면 Telegram ID {{userId}}의 메시지는 이 컴퓨터에서의 작업을 포함해 {{name}}의 권한으로 실행됩니다.",
+          "confirm": "승인",
+          "cancel": "취소"
+        },
+        "errors": {
+          "locked": "코드를 너무 많이 틀렸습니다. {{minutes}}분 후에 다시 시도하세요.",
+          "invalid": "코드가 일치하지 않습니다. 봇이 Telegram에서 보낸 코드를 확인하세요.",
+          "expired": "이 요청은 만료되었습니다. 봇에 다시 메시지를 보내 새 코드를 받으세요.",
+          "failed": "완료하지 못했습니다. 잠시 후 다시 시도하세요."
+        }
       }
     },
     "voiceMode": {

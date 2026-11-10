@@ -238,6 +238,11 @@ export function createBotTelegramIM(
     resolveImageUrl: resolveManagedImageAbsPath,
     expiredCardNotice: telegramUiText.expiredCardNotice,
     ownerNoticeText: (phase) => t(`settings.telegramBot.ownerNotice.${phase}`),
+    // 伙伴连接可以不填主人: 私聊拿配对码、在 Cindy 本机输入确认(个人 bot 不开)。
+    ownerPairing: true,
+    ownerPairingNotice: (code, minutes) =>
+      t('settings.telegramBot.ownerPairingNotice').replaceAll('{{code}}', code).replaceAll('{{minutes}}', String(minutes)),
+    ownerPairingBusyNotice: () => t('settings.telegramBot.ownerPairingBusyNotice'),
     behavior: options.behavior,
     commandMenu: buildPersonalBotCommandMenu((key) => t(key), { surface: 'companion' }),
     secretKeyPrefix,

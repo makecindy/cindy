@@ -71,11 +71,13 @@ export {
 export type {
   TelegramIMOptions,
   TelegramConfigState,
+  TelegramOwnerPairingApproveResult,
   TelegramGroupWindowEntry,
   TelegramOutboundMedia,
   TelegramOutboundMediaKind,
 } from './telegram/index.js';
 export { TELEGRAM_OUTBOUND_MEDIA } from './telegram/index.js';
+export type { PendingOwnerPairing } from './telegram/ownerPairing.js';
 export { TelegramApiError } from './telegram/api.js';
 export type { TelegramApiClient, TgChatMemberUpdated, TgMessage } from './telegram/api.js';
 export { TELEGRAM_DEFAULT_BEHAVIOR } from './telegram/index.js';

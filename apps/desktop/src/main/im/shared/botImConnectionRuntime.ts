@@ -25,7 +25,7 @@ import { getDbClient } from '../../localDb/client/current';
 import { archiveBotChannelLanes } from '../../localDb/ipc/bots';
 import { botProfiles } from '../../localDb/schema';
 import { withBotProfileLocks } from '../../maker-ipc/botProfileLock';
-import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
+import { assertTrustedAppRendererEvent, isTrustedAppRendererWindow } from '../../security/trustedAppRenderer';
 import { throwIpcError } from '../../utils/ipcValidate';
 import { isIpcError } from '../../../shared/ipc-errors';
 import { ownerScopedImSecrets } from '../ownerScopedStorage';
@@ -42,6 +42,7 @@ import {
   type BotImConnectionRemoveResult,
   type BotImConnectionView,
   type BotImFeishuService,
+  type BotImOwnerPairingRequest,
 } from '../../../shared/botImConnection';
 import {
   addBotImConnectionRecord,
@@ -188,12 +189,27 @@ function routingIdentityOf(transport: BotImTransportInstance, status: IMStatus):
   return status.appId || null;
 }
 
+/** 配对请求只投影这几个字段(白名单): 配对码与其它内部状态不进列表、广播和远程结果。 */
+function pairingRequestView(request: BotImOwnerPairingRequest): BotImOwnerPairingRequest {
+  return {
+    userId: request.userId,
+    displayName: request.displayName,
+    ...(request.username ? { username: request.username } : {}),
+    requestedAt: request.requestedAt,
+    expiresAt: request.expiresAt,
+  };
+}
+
 function identityOf(transport: BotImTransportInstance | undefined): BotImConnectionView['identity'] {
   if (!transport) return { username: null, ownerUserId: null };
   switch (transport.kind) {
     case 'telegram': {
       const state = transport.im.getConfigState();
-      return { username: state.botUsername ?? null, ownerUserId: state.ownerUserId ?? null };
+      return {
+        username: state.botUsername ?? null,
+        ownerUserId: state.ownerUserId ?? null,
+        ...(state.pendingOwnerPairings ? { pendingOwnerPairings: state.pendingOwnerPairings.map(pairingRequestView) } : {}),
+      };
     }
     case 'feishu':
       return { username: null, ownerUserId: transport.im.getOwnerOpenId() };
@@ -225,7 +241,8 @@ export function buildBotImConnectionListPayload(botId?: string): BotImConnection
 function broadcastChanged(): void {
   const payload = buildBotImConnectionListPayload();
   for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
+    // 列表里有配对请求者的身份: 只发给可信的 App 窗口。
+    if (win.isDestroyed() || !isTrustedAppRendererWindow(win)) continue;
     try {
       win.webContents.send(BOT_IM_CONNECTION_CHANGED_EVENT, payload);
     } catch {
@@ -250,7 +267,16 @@ function instantiate(record: BotImConnectionRecord): LiveInstance {
     }
     broadcastChanged();
   });
-  const live: LiveInstance = { record, transport, offStatus };
+  // Telegram 没填主人时, 私聊来的配对请求要即时出现在伙伴页。
+  const offPairing = transport.kind === 'telegram' ? transport.im.onOwnerPairingChange(broadcastChanged) : () => {};
+  const live: LiveInstance = {
+    record,
+    transport,
+    offStatus: () => {
+      offStatus();
+      offPairing();
+    },
+  };
   instances.set(record.id, live);
   return live;
 }
@@ -527,7 +553,7 @@ async function addBotImConnectionNow(
       }
       case 'telegram': {
         if (input.channel !== 'telegram') return rollback('channel mismatch');
-        const state = await transport.im.setConfig({ token: input.token, ownerUserId: input.ownerUserId });
+        const state = await transport.im.setConfig({ token: input.token, ownerUserId: input.ownerUserId ?? '' });
         const failed = state.saveErrorStatus ?? (state.status.kind === 'connected' ? null : state.status);
         if (failed) return rollback(describeStatusFailure(failed));
         break;
@@ -674,6 +700,48 @@ export async function removeBotImConnection(id: string): Promise<BotImConnection
   return { ...buildBotImConnectionListPayload(), archivedSessionIds };
 }
 
+function liveTelegram(id: string): TelegramIM {
+  if (!readBotImConnection(id)) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  const transport = instances.get(id)?.transport;
+  if (transport?.kind !== 'telegram') throwIpcError('PRECONDITION_FAILED', 'OWNER_PAIRING_UNSUPPORTED');
+  return transport.im;
+}
+
+/**
+ * 伙伴页确认 Telegram 主人配对(只走本机设置界面): 主人输入的码与该私聊者的请求对上才写成主人。
+ * 码不对 → OWNER_PAIRING_INVALID; 请求已过期 / 不存在 → OWNER_PAIRING_EXPIRED;
+ * 输错太多次 → `OWNER_PAIRING_LOCKED: <剩余分钟>`; 已经有主人 → OWNER_ALREADY_PAIRED。
+ * 成功后由传输层的配对变更通知广播一次, 这里不再重复广播。
+ */
+export async function approveBotImConnectionOwnerPairing(
+  id: string,
+  userId: string,
+  code: string,
+): Promise<BotImConnectionListPayload> {
+  const result = await liveTelegram(id).approveOwnerPairing(userId, code);
+  if (!result.ok) {
+    if (result.reason === 'locked') {
+      throwIpcError('PRECONDITION_FAILED', `OWNER_PAIRING_LOCKED: ${Math.max(1, Math.ceil(result.retryAfterMs / 60_000))}`);
+    }
+    const codeByReason = {
+      invalid: 'OWNER_PAIRING_INVALID',
+      expired: 'OWNER_PAIRING_EXPIRED',
+      'already-paired': 'OWNER_ALREADY_PAIRED',
+      'secret-unavailable': 'CONNECT_FAILED: secret-unavailable',
+      unsupported: 'OWNER_PAIRING_UNSUPPORTED',
+    } as const;
+    throwIpcError('PRECONDITION_FAILED', codeByReason[result.reason]);
+  }
+  log.info(`bot im connection ${id}: telegram owner paired`);
+  return buildBotImConnectionListPayload();
+}
+
+/** 忽略一条 Telegram 主人配对请求。 */
+export function dismissBotImConnectionOwnerPairing(id: string, userId: string): BotImConnectionListPayload {
+  liveTelegram(id).dismissOwnerPairing(userId);
+  return buildBotImConnectionListPayload();
+}
+
 /** Keep profile validation and deferred WeChat persistence in one lifecycle operation. */
 export async function setWechatCompanionBinding(
   botId: string | null,
@@ -730,6 +798,8 @@ export function parseBotImConnectionAddInput(payload: unknown): BotImConnectionA
     const token = typeof p.token === 'string' ? p.token.trim() : '';
     const ownerUserId = typeof p.ownerUserId === 'string' ? p.ownerUserId.trim() : '';
     if (!/^\d{6,20}:[A-Za-z0-9_-]{20,}$/.test(token)) throwIpcError('INVALID_PARAMS', 'token is invalid');
+    // 主人可不填: 连上后由主人私聊 bot、在 Cindy 里确认配对。填了就必须是数字 id(不是 @用户名)。
+    if (!ownerUserId) return { botId, channel: 'telegram', token };
     if (!/^\d{1,20}$/.test(ownerUserId)) throwIpcError('INVALID_PARAMS', 'ownerUserId is invalid');
     return { botId, channel: 'telegram', token, ownerUserId };
   }
@@ -784,6 +854,21 @@ export function registerBotImConnectionIpc(): void {
     const id = (payload as { id?: unknown } | null)?.id;
     if (!isBotImConnectionId(id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
     return removeBotImConnection(id);
+  });
+  ipcMain.handle('botImConnection:approve-owner-pairing', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { id?: unknown; userId?: unknown; code?: unknown };
+    if (!isBotImConnectionId(p.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    if (typeof p.userId !== 'string' || !/^\d{1,20}$/.test(p.userId)) throwIpcError('INVALID_PARAMS', 'userId is invalid');
+    if (typeof p.code !== 'string' || !p.code.trim() || p.code.length > 64) throwIpcError('INVALID_PARAMS', 'code is invalid');
+    return approveBotImConnectionOwnerPairing(p.id, p.userId, p.code);
+  });
+  ipcMain.handle('botImConnection:dismiss-owner-pairing', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { id?: unknown; userId?: unknown };
+    if (!isBotImConnectionId(p.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    if (typeof p.userId !== 'string' || !/^\d{1,20}$/.test(p.userId)) throwIpcError('INVALID_PARAMS', 'userId is invalid');
+    return dismissBotImConnectionOwnerPairing(p.id, p.userId);
   });
   ipcMain.handle('botImConnection:list-groups', (e, payload) => {
     assertTrustedAppRendererEvent(e);

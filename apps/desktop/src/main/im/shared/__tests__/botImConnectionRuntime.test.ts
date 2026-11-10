@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
   archived: [] as string[],
   archiveCalls: [] as unknown[],
   sent: [] as Array<{ channel: string; payload: unknown }>,
+  /** 不可信窗口(例如插件面板)收到的广播: 应当永远为空。 */
+  sentUntrusted: [] as Array<{ channel: string; payload: unknown }>,
   ownerKey: 'owner-a',
   drainWechat: vi.fn(async (update: () => void, isCurrent: () => boolean) => { if (isCurrent()) update(); }),
   /** 每次 Telegram setConfig 落盘前调用(测并发添加 / 建连期间切账号)。 */
@@ -33,6 +35,7 @@ vi.mock('electron', () => ({
   BrowserWindow: {
     getAllWindows: () => [
       { isDestroyed: () => false, webContents: { send: (channel: string, payload: unknown) => h.sent.push({ channel, payload }) } },
+      { untrusted: true, isDestroyed: () => false, webContents: { send: (channel: string, payload: unknown) => h.sentUntrusted.push({ channel, payload }) } },
     ],
   },
 }));
@@ -82,7 +85,12 @@ vi.mock('../../../localDb/ipc/bots', () => ({
     return h.archived;
   }),
 }));
-vi.mock('../../../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
+vi.mock('../../../security/trustedAppRenderer', () => ({
+  assertTrustedAppRendererEvent: vi.fn((event: { untrusted?: boolean } | null) => {
+    if (event?.untrusted) throw new Error('[FORBIDDEN] untrusted renderer');
+  }),
+  isTrustedAppRendererWindow: (win: { untrusted?: boolean }) => !win.untrusted,
+}));
 
 import {
   addBotImConnection,
@@ -116,12 +124,16 @@ type StatusHandler = (status: { kind: string; appId?: string }) => void;
 
 function fakeTelegram(prefix: string, opts: { connect: boolean }) {
   const handlers = new Set<StatusHandler>();
+  const pairingHandlers = new Set<() => void>();
+  /** 私聊过来、等确认的请求(测试直接塞)。 */
+  const pairing: Array<{ userId: string; displayName: string; username?: string; requestedAt: number; expiresAt: number }> = [];
   let status: { kind: string; appId?: string; reason?: string } = { kind: 'idle' };
   const set = (next: typeof status) => {
     status = next;
     for (const handler of handlers) handler(next);
   };
   const im = {
+    pairing,
     init: vi.fn(async () => {
       if (h.secrets.has(`${prefix}telegram-bot-token`)) set({ kind: 'connected', appId: '777' });
     }),
@@ -131,11 +143,16 @@ function fakeTelegram(prefix: string, opts: { connect: boolean }) {
       handlers.add(handler);
       return () => handlers.delete(handler);
     },
-    getConfigState: () => ({ status, ownerUserId: h.secrets.get(`${prefix}telegram-owner-user-id`) ?? null, botUsername: 'mia_bot' }),
+    getConfigState: () => {
+      const ownerUserId = h.secrets.get(`${prefix}telegram-owner-user-id`) ?? null;
+      // 传输层若多带了字段(这里故意塞一个 code), 运行时投影也必须只留白名单字段。
+      return { status, ownerUserId, botUsername: 'mia_bot',
+        ...(ownerUserId ? {} : { pendingOwnerPairings: pairing.map((item) => ({ ...item, code: 'K7MQ2P' })) }) };
+    },
     setConfig: vi.fn(async (payload: { token: string; ownerUserId: string }) => {
       await h.beforeTelegramSetConfig?.();
       h.secrets.set(`${prefix}telegram-bot-token`, payload.token);
-      h.secrets.set(`${prefix}telegram-owner-user-id`, payload.ownerUserId);
+      if (payload.ownerUserId) h.secrets.set(`${prefix}telegram-owner-user-id`, payload.ownerUserId);
       if (!opts.connect) {
         h.secrets.delete(`${prefix}telegram-bot-token`);
         h.secrets.delete(`${prefix}telegram-owner-user-id`);
@@ -152,6 +169,23 @@ function fakeTelegram(prefix: string, opts: { connect: boolean }) {
       h.secrets.delete(`${prefix}telegram-owner-user-id`);
       set({ kind: 'idle' });
       return { status };
+    }),
+    onOwnerPairingChange: vi.fn((handler: () => void) => {
+      pairingHandlers.add(handler);
+      return () => pairingHandlers.delete(handler);
+    }),
+    approveOwnerPairing: vi.fn(async (userId: string, code: string) => {
+      if (!pairing.some((item) => item.userId === userId)) return { ok: false as const, reason: 'expired' as const };
+      if (code !== 'K7MQ2P') return { ok: false as const, reason: 'invalid' as const };
+      h.secrets.set(`${prefix}telegram-owner-user-id`, userId);
+      pairing.length = 0;
+      for (const handler of pairingHandlers) handler();
+      return { ok: true as const, state: { status, ownerUserId: userId, botUsername: 'mia_bot' } };
+    }),
+    dismissOwnerPairing: vi.fn((userId: string) => {
+      const index = pairing.findIndex((item) => item.userId === userId);
+      if (index >= 0) pairing.splice(index, 1);
+      return { status, ownerUserId: null, botUsername: 'mia_bot' };
     }),
   };
   return im;
@@ -366,6 +400,7 @@ describe('bot im connection runtime', () => {
     h.archived = [];
     h.archiveCalls = [];
     h.sent = [];
+    h.sentUntrusted = [];
     h.ownerKey = 'owner-a';
     h.beforeTelegramSetConfig = null;
     created.length = 0;
@@ -589,6 +624,58 @@ describe('bot im connection runtime', () => {
     expect(listBotImConnections()[0]?.botContextId).toBe('777');
     expect(h.sent.some((item) => item.channel === 'botImConnection:changed')).toBe(true);
     expect(__testing.instances.size).toBe(1);
+  });
+
+  // #9678: Telegram 主人可不填, 连上后由主人私聊 bot、把配对码输进 Cindy 本机确认; 误填 @用户名要明确拒绝。
+  // 安全口径: 配对码不进列表 / 广播 / 远程结果; 广播只发可信窗口; 两个新 IPC 拒绝不可信来源。
+  // unit: 经真实 IPC handler 走 parse → add → list → approve / dismiss, 观察交给传输层的入参、投影与广播。
+  it('adds a Telegram bot without an owner, rejects an @handle owner, and pairs the owner only through the local approve IPC', async () => {
+    registerBotImConnectionIpc();
+    const add = h.ipcHandlers.get('botImConnection:add')!;
+    await expect(
+      Promise.resolve().then(() => add({}, { botId: 'bot-mia', channel: 'telegram', token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '@mia_owner' })),
+    ).rejects.toThrow(/ownerUserId is invalid/);
+    expect(created).toHaveLength(0);
+
+    const result = (await add({}, { botId: 'bot-mia', channel: 'telegram', token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '  ' })) as {
+      connection: { id: string; identity: { ownerUserId: string | null } };
+    };
+    const id = result.connection.id;
+    expect(created[0]!.im.setConfig).toHaveBeenCalledWith({ token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '' });
+    expect(result.connection.identity.ownerUserId).toBeNull();
+
+    created[0]!.im.pairing.push(
+      { userId: '4242', displayName: 'Lance', username: 'lance', requestedAt: 1, expiresAt: 2 },
+      { userId: '5151', displayName: 'Stranger', requestedAt: 1, expiresAt: 2 },
+    );
+    const listed = buildBotImConnectionListPayload();
+    expect(listed.connections[0]!.identity.pendingOwnerPairings).toEqual([
+      { userId: '4242', displayName: 'Lance', username: 'lance', requestedAt: 1, expiresAt: 2 },
+      { userId: '5151', displayName: 'Stranger', requestedAt: 1, expiresAt: 2 },
+    ]);
+    expect(JSON.stringify(listed)).not.toContain('K7MQ2P');
+
+    const approve = h.ipcHandlers.get('botImConnection:approve-owner-pairing')!;
+    const dismiss = h.ipcHandlers.get('botImConnection:dismiss-owner-pairing')!;
+    await expect(Promise.resolve().then(() => approve({ untrusted: true }, { id, userId: '4242', code: 'K7MQ2P' }))).rejects.toThrow(/untrusted/);
+    await expect(Promise.resolve().then(() => dismiss({ untrusted: true }, { id, userId: '5151' }))).rejects.toThrow(/untrusted/);
+    expect(created[0]!.im.approveOwnerPairing).not.toHaveBeenCalled();
+    expect(created[0]!.im.dismissOwnerPairing).not.toHaveBeenCalled();
+
+    const ignored = (await dismiss({}, { id, userId: '5151' })) as { connections: Array<{ identity: { pendingOwnerPairings?: Array<{ userId: string }> } }> };
+    expect(ignored.connections[0]!.identity.pendingOwnerPairings!.map((item) => item.userId)).toEqual(['4242']);
+
+    await expect(Promise.resolve().then(() => approve({}, { id, userId: '4242', code: 'WRONG1' }))).rejects.toThrow(/OWNER_PAIRING_INVALID/);
+    await expect(Promise.resolve().then(() => approve({}, { id, userId: '5151', code: 'K7MQ2P' }))).rejects.toThrow(/OWNER_PAIRING_EXPIRED/);
+    expect(buildBotImConnectionListPayload().connections[0]!.identity.ownerUserId).toBeNull();
+
+    h.sent = [];
+    const paired = (await approve({}, { id, userId: '4242', code: 'K7MQ2P' })) as { connections: Array<{ identity: { ownerUserId: string | null } }> };
+    expect(created[0]!.im.approveOwnerPairing).toHaveBeenLastCalledWith('4242', 'K7MQ2P');
+    expect(paired.connections[0]!.identity.ownerUserId).toBe('4242');
+    // 确认成功只广播一次(传输层的配对变更通知), 且只发给可信窗口。
+    expect(h.sent.filter((item) => item.channel === 'botImConnection:changed')).toHaveLength(1);
+    expect(h.sentUntrusted).toEqual([]);
   });
 
   it('rolls the whole connection back when the transport cannot connect', async () => {

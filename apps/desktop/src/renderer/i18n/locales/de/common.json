@@ -5039,7 +5039,9 @@
           "mention": "Nur @",
           "always": "Aktiv"
         }
-      }
+      },
+      "ownerPairingNotice": "🔐 Kopplungscode: {{code}}\nGeh zurück zu Cindy und gib diesen Code bei der Verbindung des Bots ein, um sein Besitzer zu werden. Der Code ist {{minutes}} Minuten gültig.",
+      "ownerPairingBusyNotice": "⏳ Kopplung ist gerade nicht möglich. Versuche es später erneut."
     },
     "dingtalkBot": {
       "serviceName": "DingTalk",
@@ -11588,7 +11590,8 @@
         "offline": "Offline",
         "conflict": "Ein anderes Gerät nutzt diesen Bot",
         "error": "Fehler",
-        "idle": "Nicht verbunden"
+        "idle": "Nicht verbunden",
+        "awaitingPairing": "Wartet auf Kopplung"
       },
       "remove": "Entfernen",
       "removeAria": "{{platform}} entfernen",
@@ -11651,8 +11654,10 @@
           "tokenLabel": "Bot-Token",
           "tokenPlaceholder": "Token von @BotFather einfügen",
           "ownerLabel": "Deine Telegram-Nutzer-ID",
+          "ownerOptionalLabel": "Deine Telegram-Nutzer-ID (optional)",
           "ownerPlaceholder": "Numerische ID (frage @userinfobot)",
-          "ownerHint": "Nachrichten von dieser ID werden mit den eigenen Berechtigungen von {{name}} verarbeitet. Alle anderen werden als Gäste behandelt."
+          "ownerHint": "Nachrichten von dieser ID werden mit den eigenen Berechtigungen von {{name}} verarbeitet. Alle anderen werden als Gäste behandelt.",
+          "ownerOptionalHint": "Lass das Feld leer, um stattdessen zu koppeln: Sende diesem Bot nach dem Speichern eine Nachricht von deinem eigenen Telegram-Konto. Zum direkten Eintragen brauchst du deine numerische ID – schreibe @userinfobot auf Telegram, um sie zu erhalten. Nachrichten von dieser ID werden mit den eigenen Berechtigungen von {{name}} verarbeitet; alle anderen werden als Gäste behandelt."
         },
         "feishu": {
           "serviceLabel": "Dienst",
@@ -11705,7 +11710,8 @@
           "botUnavailable": "{{name}} ist gerade nicht verfügbar. Versuche es erneut, sobald es wieder verfügbar ist.",
           "connectFailed": "Verbindung fehlgeschlagen: {{reason}}",
           "failed": "Vorgang fehlgeschlagen. Versuch es später erneut.",
-          "personalBotGone": "Dieser Bot ist unter Einstellungen → IM-Bots nicht mehr eingerichtet. Gib stattdessen seine Zugangsdaten ein."
+          "personalBotGone": "Dieser Bot ist unter Einstellungen → IM-Bots nicht mehr eingerichtet. Gib stattdessen seine Zugangsdaten ein.",
+          "ownerIsHandle": "Gib deine numerische Nutzer-ID ein, keinen @Nutzernamen. Schreibe @userinfobot auf Telegram, um sie zu erhalten, oder lass das Feld leer und kopple nach dem Speichern per Nachricht an den Bot."
         },
         "source": {
           "label": "So verbindest du dich",
@@ -11750,6 +11756,33 @@
         "unbound": "Lass {{name}} deine Fragen an den offiziellen Bot @askmycindy übernehmen.",
         "managed": "Ein Teammitglied übernimmt X-Fragen. Ändere die Zuweisung in den Nachrichtenplattform-Einstellungen dieses Teammitglieds.",
         "riskBody": "Fragen über X nutzen den gemeinsamen Speicher, die Tools und den Arbeitsbereich des Teammitglieds. Antworten sind öffentlich. Nutze X nicht für private Informationen. Der X-Thread greift nicht direkt auf deinen privaten Chatverlauf zu."
+      },
+      "pairing": {
+        "thisBot": "diesem Bot",
+        "hint": "Sende {{bot}} eine Nachricht (oder /start) von deinem eigenen Telegram-Konto. Er antwortet mit einem Kopplungscode; gib diesen Code hier ein, um Besitzer von {{name}} zu werden.",
+        "listLabel": "Kopplungsanfragen",
+        "request": "{{who}} möchte Besitzer werden",
+        "userIdLine": "Telegram-ID {{userId}}",
+        "codeLabel": "Kopplungscode aus Telegram",
+        "codePlaceholder": "6-stelliger Code",
+        "approve": "Bestätigen",
+        "approveAria": "{{who}} als Besitzer bestätigen",
+        "dismiss": "Ignorieren",
+        "dismissAria": "Anfrage von {{who}} ignorieren",
+        "confirmOnHost": "Bestätige die Kopplung auf {{device}}.",
+        "confirmOnHostUnnamed": "Bestätige die Kopplung auf dem Computer, auf dem dieses Teammitglied läuft.",
+        "confirm": {
+          "title": "{{who}} zum Besitzer machen?",
+          "description": "Bestätige nur, wenn du dem Bot gerade von deinem eigenen Telegram-Konto geschrieben hast. Danach werden Nachrichten von der Telegram-ID {{userId}} mit den eigenen Berechtigungen von {{name}} verarbeitet – auch auf diesem Computer.",
+          "confirm": "Bestätigen",
+          "cancel": "Abbrechen"
+        },
+        "errors": {
+          "locked": "Zu viele falsche Codes. Versuche es in {{minutes}} Minuten erneut.",
+          "invalid": "Der Code stimmt nicht. Prüfe den Code, den der Bot in Telegram geschickt hat.",
+          "expired": "Diese Anfrage ist abgelaufen. Sende dem Bot eine weitere Nachricht, um einen neuen Code zu erhalten.",
+          "failed": "Konnte nicht abgeschlossen werden. Versuche es später erneut."
+        }
       }
     },
     "voiceMode": {

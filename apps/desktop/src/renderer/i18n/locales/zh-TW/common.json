@@ -4996,7 +4996,9 @@
           "mention": "僅 @",
           "always": "全響應"
         }
-      }
+      },
+      "ownerPairingNotice": "🔐 配對碼：{{code}}\n請回到 Cindy，在這個機器人的連線處輸入這個配對碼，確認後你就是主人。配對碼 {{minutes}} 分鐘內有效。",
+      "ownerPairingBusyNotice": "⏳ 現在不能配對，請稍後再試。"
     },
     "dingtalkBot": {
       "serviceName": "釘釘",
@@ -11543,7 +11545,8 @@
         "offline": "已離線",
         "conflict": "另一台裝置正在使用這個機器人",
         "error": "發生錯誤",
-        "idle": "未連線"
+        "idle": "未連線",
+        "awaitingPairing": "等待配對"
       },
       "remove": "移除",
       "removeAria": "移除 {{platform}}",
@@ -11605,8 +11608,10 @@
           "tokenLabel": "Bot Token",
           "tokenPlaceholder": "貼上 @BotFather 產生的 Token",
           "ownerLabel": "你的 Telegram 使用者 ID",
+          "ownerOptionalLabel": "你的 Telegram 使用者 ID（選填）",
           "ownerPlaceholder": "純數字 ID（向 @userinfobot 查詢）",
-          "ownerHint": "來自這個 ID 的訊息依 {{name}} 自己的權限執行，其他人都視為訪客。"
+          "ownerHint": "來自這個 ID 的訊息依 {{name}} 自己的權限執行，其他人都視為訪客。",
+          "ownerOptionalHint": "留空也能儲存：儲存後用你自己的 Telegram 帳號傳一則訊息給這個機器人即可配對。要直接填寫，需要數字 ID，可在 Telegram 傳訊息給 @userinfobot 取得。來自這個 ID 的訊息依 {{name}} 自己的權限執行，其他人都視為訪客。"
         },
         "feishu": {
           "serviceLabel": "服務",
@@ -11659,7 +11664,8 @@
           "botUnavailable": "{{name}} 目前無法使用，等 TA 恢復後再試。",
           "connectFailed": "未能連線：{{reason}}",
           "failed": "未能完成，請稍後再試。",
-          "personalBotGone": "設定 → IM 機器人 裡已經沒有這個機器人了，請改為填寫憑證。"
+          "personalBotGone": "設定 → IM 機器人 裡已經沒有這個機器人了，請改為填寫憑證。",
+          "ownerIsHandle": "這裡要填數字 ID，不是 @使用者名稱。可在 Telegram 傳訊息給 @userinfobot 取得；也可以留空，儲存後傳訊息給機器人完成配對。"
         },
         "source": {
           "label": "連線方式",
@@ -11704,6 +11710,33 @@
         "unbound": "可將官方 @askmycindy 收到的你的提問交給 {{name}}。",
         "managed": "X 提問由夥伴處理。可在該夥伴的訊息平台設定中更改連結。",
         "riskBody": "X 提問會使用夥伴的共享記憶、能力和工作目錄，回答會公開。請勿透過 X 處理私人資訊。專線不會直接使用夥伴的私聊記錄。"
+      },
+      "pairing": {
+        "thisBot": "這個機器人",
+        "hint": "用你自己的 Telegram 帳號傳一則訊息給 {{bot}}（或 /start），它會回覆一個配對碼；把配對碼輸入到這裡，你就是 {{name}} 的主人。",
+        "listLabel": "配對請求",
+        "request": "{{who}} 請求成為主人",
+        "userIdLine": "Telegram ID {{userId}}",
+        "codeLabel": "Telegram 裡收到的配對碼",
+        "codePlaceholder": "6 位配對碼",
+        "approve": "確認",
+        "approveAria": "確認 {{who}} 成為主人",
+        "dismiss": "忽略",
+        "dismissAria": "忽略 {{who}} 的請求",
+        "confirmOnHost": "請在 {{device}} 上確認配對。",
+        "confirmOnHostUnnamed": "請在執行這位夥伴的電腦上確認配對。",
+        "confirm": {
+          "title": "讓 {{who}} 成為主人？",
+          "description": "只有在你本人剛用自己的 Telegram 帳號傳訊息給機器人時才確認。確認後，來自 Telegram ID {{userId}} 的訊息依 {{name}} 自己的權限執行，包括在這台電腦上操作。",
+          "confirm": "確認",
+          "cancel": "取消"
+        },
+        "errors": {
+          "locked": "配對碼錯誤次數太多，請 {{minutes}} 分鐘後再試。",
+          "invalid": "配對碼不對，請核對機器人在 Telegram 裡回覆的配對碼。",
+          "expired": "這個請求已過期，請再傳一則訊息給機器人取得新的配對碼。",
+          "failed": "沒能完成，請稍後再試。"
+        }
       }
     },
     "voiceMode": {

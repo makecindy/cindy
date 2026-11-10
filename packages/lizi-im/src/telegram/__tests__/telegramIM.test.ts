@@ -3450,3 +3450,203 @@ describe('TelegramIM 宿主工具的 Bot API 直通', () => {
     expect(im.getBotApi()).not.toBeNull();
   });
 });
+
+// #9678: 伙伴接自建 bot 时可以不填主人 id, 改为「私聊拿配对码 → 在 Cindy 里输入同一个码确认」。
+// 规则依据: 未确认前任何人发消息都不能成为主人、不进业务链路; 码只在 Telegram 里出现, 一次性、会过期、
+// 限速、防穷举; 个人 bot(设置页)不开配对。
+// unit: 经真实 TelegramIM 入站(假 Bot API)与宿主确认入口观察回复、事件、投影与落盘的主人。
+describe('TelegramIM 主人配对', () => {
+  const TOKEN = '999:secret-token-abcdefghijk';
+  const OWNER_KEY = 'pair:telegram-owner-user-id';
+  let clock: number;
+  let pairingIm: TelegramIM;
+
+  const replies = (needle: string) =>
+    api.calls.filter((call) => call.method === 'sendMessage' && String(call.params.text ?? '').includes(needle));
+  const codeReplies = () => replies('Pairing code');
+  const busyReplies = () => replies('try again later');
+  const codeOf = (index: number) => /Pairing code: ([A-Z2-9]{6})/.exec(String(codeReplies()[index]!.params.text))![1]!;
+  const create = () =>
+    new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      // 伙伴连接的生产配置(createBotTelegramIM): 对外开放私聊、不注册设置卡 IPC、开配对。
+      guestDm: true,
+      ipc: false,
+      ownerPairing: true,
+      secretKeyPrefix: 'pair:',
+      ownerPairingClock: () => clock,
+    });
+
+  beforeEach(async () => {
+    clock = Date.now();
+    pairingIm = create();
+    await pairingIm.setConfig({ token: TOKEN });
+  });
+
+  afterEach(async () => {
+    await pairingIm.dispose();
+  });
+
+  it('没有主人时私聊只回配对码、群 @ 不触发; 输入对的码才成为主人, 码不进投影', async () => {
+    const events: IMMessageEvent[] = [];
+    const windowEntries: TelegramGroupWindowEntry[] = [];
+    pairingIm.onMessage((e) => events.push(e));
+    pairingIm.onGroupWindowMessage((e) => windowEntries.push(e));
+    const changes = vi.fn();
+    pairingIm.onOwnerPairingChange(changes);
+    expect(pairingIm.getStatus().kind).toBe('connected');
+    expect(pairingIm.getConfigState()).toMatchObject({ ownerUserId: null, pendingOwnerPairings: [] });
+
+    api.pushUpdates([
+      privateMessage('/start', 4242, 1),
+      groupMessage({ text: '在吗', fromId: 4242, messageId: 2, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(codeReplies()).toHaveLength(1));
+    await vi.waitFor(() => expect(windowEntries).toHaveLength(1));
+    expect(events).toHaveLength(0);
+    expect(changes).toHaveBeenCalledTimes(1);
+    const code = codeOf(0);
+    expect(codeReplies()[0]!.params).toMatchObject({ chat_id: '4242' });
+    const [request] = pairingIm.getConfigState().pendingOwnerPairings!;
+    expect(request).toMatchObject({ userId: '4242', displayName: 'U' });
+    expect(JSON.stringify(pairingIm.getConfigState())).not.toContain(code);
+
+    const wrong = code === 'AAAAAA' ? 'BBBBBB' : 'AAAAAA';
+    expect(await pairingIm.approveOwnerPairing('4242', wrong)).toEqual({ ok: false, reason: 'invalid' });
+    // 码对、人不对(别人的请求 / 没请求过)也不行。
+    expect(await pairingIm.approveOwnerPairing('5555', code)).toEqual({ ok: false, reason: 'expired' });
+    expect(pairingIm.getOwnerUserId()).toBe('');
+    expect(ctx.secrets.has(OWNER_KEY)).toBe(false);
+
+    // 聊天界面里常把码拆开显示; 空格与大小写不影响。
+    changes.mockClear();
+    const approved = await pairingIm.approveOwnerPairing('4242', `${code.slice(0, 3).toLowerCase()} ${code.slice(3)}`);
+    expect(approved).toMatchObject({ ok: true, state: { ownerUserId: '4242' } });
+    expect(approved.ok && approved.state.pendingOwnerPairings).toBeUndefined();
+    expect(changes).toHaveBeenCalledTimes(1);
+    expect(ctx.secrets.get(OWNER_KEY)).toBe('4242');
+    expect(await pairingIm.approveOwnerPairing('4242', code)).toEqual({ ok: false, reason: 'already-paired' });
+
+    api.pushUpdates([privateMessage('hi', 4242, 3)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({ senderId: '4242', text: 'hi' });
+  });
+
+  it('同一人冷却期内不重复回码, 冷却后回同一个码, 过期后换新码且旧码作废', async () => {
+    api.pushUpdates([privateMessage('hi', 4242, 1), privateMessage('hi again', 4242, 2)]);
+    await vi.waitFor(() => expect(codeReplies()).toHaveLength(1));
+    const first = codeOf(0);
+
+    clock += 61_000;
+    api.pushUpdates([privateMessage('still there?', 4242, 3)]);
+    await vi.waitFor(() => expect(codeReplies()).toHaveLength(2));
+    expect(codeOf(1)).toBe(first);
+
+    clock += 15 * 60_000;
+    expect(pairingIm.getConfigState().pendingOwnerPairings).toEqual([]);
+    expect(await pairingIm.approveOwnerPairing('4242', first)).toEqual({ ok: false, reason: 'expired' });
+    api.pushUpdates([privateMessage('new code please', 4242, 4)]);
+    await vi.waitFor(() => expect(codeReplies()).toHaveLength(3));
+    expect(codeOf(2)).not.toBe(first);
+  });
+
+  it('名额满时回一句稍后再试(沿用冷却); 连续输错 5 次锁定; 对过期请求的尝试不计入失败', async () => {
+    api.pushUpdates([1, 2, 3, 4].map((n) => privateMessage('hi', 5000 + n, n)));
+    await vi.waitFor(() => expect(codeReplies()).toHaveLength(3));
+    await vi.waitFor(() => expect(busyReplies()).toHaveLength(1));
+    expect(busyReplies()[0]!.params).toMatchObject({ chat_id: '5004' });
+    api.pushUpdates([privateMessage('hi?', 5004, 5)]);
+    await vi.waitFor(() => expect(api.calls.filter((call) => call.method === 'sendMessage')).toHaveLength(4));
+    expect(busyReplies()).toHaveLength(1);
+    expect(pairingIm.getConfigState().pendingOwnerPairings!.map((item) => item.userId)).toEqual(['5001', '5002', '5003']);
+
+    const right = codeOf(0);
+    const wrong = right === 'AAAAAA' ? 'BBBBBB' : 'AAAAAA';
+    // 列表里过期 / 不存在的请求点多少次都不锁。
+    for (let i = 0; i < 6; i += 1) {
+      expect(await pairingIm.approveOwnerPairing('5004', right)).toEqual({ ok: false, reason: 'expired' });
+    }
+    for (let i = 0; i < 5; i += 1) {
+      expect(await pairingIm.approveOwnerPairing('5001', wrong)).toEqual({ ok: false, reason: 'invalid' });
+    }
+    expect(await pairingIm.approveOwnerPairing('5001', right)).toMatchObject({ ok: false, reason: 'locked', retryAfterMs: 15 * 60_000 });
+    expect(pairingIm.getOwnerUserId()).toBe('');
+  });
+
+  it('忽略后 10 分钟内只回稍后再试, 之后才重新发码', async () => {
+    api.pushUpdates([privateMessage('hi', 4242, 1)]);
+    await vi.waitFor(() => expect(codeReplies()).toHaveLength(1));
+    const changes = vi.fn();
+    pairingIm.onOwnerPairingChange(changes);
+    expect(pairingIm.dismissOwnerPairing('4242').pendingOwnerPairings).toEqual([]);
+    expect(changes).toHaveBeenCalledTimes(1);
+
+    clock += 61_000;
+    api.pushUpdates([privateMessage('again', 4242, 2)]);
+    await vi.waitFor(() => expect(busyReplies()).toHaveLength(1));
+    expect(codeReplies()).toHaveLength(1);
+
+    clock += 10 * 60_000;
+    api.pushUpdates([privateMessage('one more', 4242, 3)]);
+    await vi.waitFor(() => expect(codeReplies()).toHaveLength(2));
+  });
+
+  it('确认时主人写入失败不清请求, 可以重试', async () => {
+    api.pushUpdates([privateMessage('hi', 4242, 1)]);
+    await vi.waitFor(() => expect(codeReplies()).toHaveLength(1));
+    const write = ctx.host.secrets.write;
+    ctx.host.secrets.write = (name, value) => (name === OWNER_KEY ? false : write(name, value));
+    expect(await pairingIm.approveOwnerPairing('4242', codeOf(0))).toEqual({ ok: false, reason: 'secret-unavailable' });
+    expect(pairingIm.getOwnerUserId()).toBe('');
+    expect(pairingIm.getConfigState().pendingOwnerPairings).toHaveLength(1);
+    ctx.host.secrets.write = write;
+    expect(await pairingIm.approveOwnerPairing('4242', codeOf(0))).toMatchObject({ ok: true });
+  });
+
+  it('手填主人 / 下线清掉待确认; 重启后请求不保留、已确认的主人照旧; 主人读失败 fail closed', async () => {
+    api.pushUpdates([privateMessage('hi', 4242, 1)]);
+    await vi.waitFor(() => expect(codeReplies()).toHaveLength(1));
+    await pairingIm.setConfig({ ownerUserId: '7777' });
+    expect(pairingIm.getConfigState()).toMatchObject({ ownerUserId: '7777' });
+    expect(pairingIm.getConfigState().pendingOwnerPairings).toBeUndefined();
+
+    // 模拟重启: 先释放旧实例(它与新实例共用一个假 Bot API)。
+    await pairingIm.dispose();
+    ctx.secrets.delete(OWNER_KEY);
+    const restarted = create();
+    await restarted.init();
+    expect(restarted.getConfigState()).toMatchObject({ ownerUserId: null, pendingOwnerPairings: [] });
+    api.pushUpdates([privateMessage('hi', 4243, 2)]);
+    await vi.waitFor(() => expect(codeReplies()).toHaveLength(2));
+    await restarted.goOffline();
+    expect(restarted.getConfigState().pendingOwnerPairings).toEqual([]);
+    await restarted.dispose();
+
+    ctx.secrets.set(OWNER_KEY, '7777');
+    const paired = create();
+    await paired.init();
+    expect(paired.getOwnerUserId()).toBe('7777');
+    await paired.dispose();
+
+    const readResult = ctx.host.secrets.readResult!;
+    ctx.host.secrets.readResult = (name) => (name === OWNER_KEY ? { kind: 'error' } : readResult(name));
+    const unreadable = create();
+    await unreadable.init();
+    expect(unreadable.getStatus()).toMatchObject({ kind: 'error', code: 'secret-unavailable' });
+    expect(unreadable.getOwnerUserId()).toBe('');
+    ctx.host.secrets.readResult = readResult;
+    await unreadable.dispose();
+  });
+
+  it('个人 bot(没开配对)没有主人时仍按陌生人处理: 不发码、不出请求、确认入口不可用', async () => {
+    await pairingIm.dispose();
+    const personal = new TelegramIM(ctx.host, { apiFactory: () => api, ipc: false, secretKeyPrefix: 'personal:' });
+    await personal.setConfig({ token: TOKEN });
+    api.pushUpdates([privateMessage('hi', 4242, 1)]);
+    await vi.waitFor(() => expect(replies('only respond to my owner')).toHaveLength(1));
+    expect(codeReplies()).toHaveLength(0);
+    expect(personal.getConfigState().pendingOwnerPairings).toBeUndefined();
+    expect(await personal.approveOwnerPairing('4242', 'AAAAAA')).toEqual({ ok: false, reason: 'unsupported' });
+    await personal.dispose();
+  });
+});

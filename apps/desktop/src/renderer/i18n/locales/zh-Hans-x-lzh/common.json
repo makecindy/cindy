@@ -4996,7 +4996,9 @@
           "mention": "仅 @",
           "always": "皆应"
         }
-      }
+      },
+      "ownerPairingNotice": "🔐 配对码：{{code}}\n请归 Cindy，于此机器人之连线处书其码，确后君即为主。此码 {{minutes}} 分内有效。",
+      "ownerPairingBusyNotice": "⏳ 今不得配对，请稍后再试。"
     },
     "dingtalkBot": {
       "serviceName": "钉钉",
@@ -11543,7 +11545,8 @@
         "offline": "已失联",
         "conflict": "另一设备方用此机器人",
         "error": "有谬",
-        "idle": "未连"
+        "idle": "未连",
+        "awaitingPairing": "待配对"
       },
       "remove": "除",
       "removeAria": "除 {{platform}}",
@@ -11605,8 +11608,10 @@
           "tokenLabel": "Bot Token",
           "tokenPlaceholder": "粘贴 @BotFather 所生之 Token",
           "ownerLabel": "君之 Telegram 用户 ID",
+          "ownerOptionalLabel": "君之 Telegram 用户 ID（可不填）",
           "ownerPlaceholder": "纯数字 ID（问 @userinfobot）",
-          "ownerHint": "来自此 ID 之讯依 {{name}} 自身权柄行事，余者皆视为访客。"
+          "ownerHint": "来自此 ID 之讯依 {{name}} 自身权柄行事，余者皆视为访客。",
+          "ownerOptionalHint": "空之亦可存：存后以君自身 Telegram 账号致此机器人一讯，即可配对。若欲径填，须数字 ID，可于 Telegram 致讯 @userinfobot 得之。来自此 ID 之讯依 {{name}} 自身权柄行事，余者皆视为访客。"
         },
         "feishu": {
           "serviceLabel": "服务",
@@ -11659,7 +11664,8 @@
           "botUnavailable": "{{name}} 今不可用，待其复后再试。",
           "connectFailed": "连之未成：{{reason}}",
           "failed": "未竟，请稍后再试。",
-          "personalBotGone": "规制 → IM 机器人 中已无此机器人，请改填凭证。"
+          "personalBotGone": "规制 → IM 机器人 中已无此机器人，请改填凭证。",
+          "ownerIsHandle": "此处当填数字 ID，非 @名号。可于 Telegram 致讯 @userinfobot 得之；亦可空之，存后致讯机器人以成配对。"
         },
         "source": {
           "label": "连接之法",
@@ -11704,6 +11710,33 @@
         "unbound": "可将官方 @askmycindy 所收君之提问交予 {{name}}。",
         "managed": "X 之问由同僚处理。可于该同僚之传讯之所规制中更改所系。",
         "riskBody": "X 之问将用同僚之共享记忆、才能与工作目录，回答公开。勿经 X 处理私密信息。专线不直接用同僚之私聊记录。"
+      },
+      "pairing": {
+        "thisBot": "此机器人",
+        "hint": "以君自身 Telegram 账号致 {{bot}} 一讯（或 /start），彼当答以配对码；书其码于此，君即为 {{name}} 之主。",
+        "listLabel": "配对之请",
+        "request": "{{who}} 请为主人",
+        "userIdLine": "Telegram ID {{userId}}",
+        "codeLabel": "Telegram 所得之配对码",
+        "codePlaceholder": "六字之码",
+        "approve": "确认",
+        "approveAria": "确认 {{who}} 为主",
+        "dismiss": "置之",
+        "dismissAria": "置 {{who}} 之请",
+        "confirmOnHost": "请于 {{device}} 确认配对。",
+        "confirmOnHostUnnamed": "请于此伙伴所运行之电脑确认配对。",
+        "confirm": {
+          "title": "以 {{who}} 为主乎？",
+          "description": "唯君方以自身 Telegram 账号致讯机器人，乃可确之。确后，来自 Telegram ID {{userId}} 之讯依 {{name}} 自身权柄行事，并及此机之事。",
+          "confirm": "确认",
+          "cancel": "取消"
+        },
+        "errors": {
+          "locked": "误码过多，请 {{minutes}} 分后再试。",
+          "invalid": "码不相符，请核机器人于 Telegram 所答之码。",
+          "expired": "此请已逾时，请再致机器人一讯以得新码。",
+          "failed": "未竟其事，请稍后再试。"
+        }
       }
     },
     "voiceMode": {
