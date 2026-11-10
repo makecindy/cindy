@@ -58,9 +58,6 @@ import {
 } from './usageHistoryStats';
 import { SettingsPageHeader } from '@/components/ui/settings-rows';
 
-/** 全年热力图独立于概览和模型表的筛选范围。 */
-const HEATMAP_WINDOW_DAYS = 365;
-
 function Card({
   title,
   subtitle,
@@ -285,7 +282,7 @@ export function UsageHistorySection(): React.JSX.Element {
               fillWidth
               days={chartHistory?.days ?? []}
               todayKey={chartHistory?.todayKey ?? ''}
-              windowDays={HEATMAP_WINDOW_DAYS}
+              windowDays="auto"
               metric="tokens"
               selectedDay={selectedDay}
               onDayClick={handleDayClick}

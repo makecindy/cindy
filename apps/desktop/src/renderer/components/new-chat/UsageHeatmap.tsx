@@ -65,6 +65,26 @@ function fitWeeksForWidth(width: number, cellSize = CELL_PX): number {
   return Math.max(1, Math.floor((width + GAP_PX) / (cellSize + GAP_PX)));
 }
 
+/** Six calendar months, clamping month-end dates instead of overflowing into the next month. */
+function adaptiveHistoryWindow(
+  days: Array<{ day: string; money: RegionalMoney; tokens?: number }>,
+  todayKey: string,
+  metric: 'money' | 'tokens',
+): number {
+  const today = parseDayKey(todayKey);
+  if (!todayKey || Number.isNaN(today.getTime())) return 183;
+  const start = new Date(today.getFullYear(), today.getMonth() - 6, 1);
+  const lastDay = new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate();
+  start.setDate(Math.min(today.getDate(), lastDay));
+  const cutoff = toDayKey(start);
+  const hasOlderUsage = days.some(
+    (day) =>
+      day.day && day.day <= cutoff &&
+      (metric === 'tokens' ? (day.tokens ?? 0) : day.money.amount) > 0,
+  );
+  return hasOlderUsage ? 365 : calendarDayDistance(start, today) + 1;
+}
+
 /**
  * 周网格按周日对齐时，当前周的未来占位也会占用格子。返回覆盖完整
  * `windowDays` 历史的最小周数，避免周日等锚点把窗口前端截掉。
@@ -142,7 +162,8 @@ export function UsageHeatmap({
 }: {
   days: Array<{ day: string; money: RegionalMoney; tokens?: number }>;
   todayKey: string;
-  windowDays: number;
+  /** Auto uses six months for newer histories and a year once usage reaches six months. */
+  windowDays: number | 'auto';
   /** 格子深浅按哪一维分桶。'tokens' 下 tooltip 也只显示 token, 不出现金额。 */
   metric?: 'money' | 'tokens';
   /** Fill the plot with square cells for the requested history window (aligned to weeks). */
@@ -178,17 +199,19 @@ export function UsageHeatmap({
     return () => observer.disconnect();
   }, []);
 
-  const minimumWeeks = Math.max(MIN_HEATMAP_WEEKS, Math.ceil(windowDays / 7));
+  const historyWindowDays =
+    windowDays === 'auto' ? adaptiveHistoryWindow(days, todayKey, metric) : windowDays;
+  const minimumWeeks = Math.max(MIN_HEATMAP_WEEKS, Math.ceil(historyWindowDays / 7));
   // Data geometry stays compact when a cell also acts as a date filter (DESIGN.md §4).
   const cellSize = CELL_PX;
   const visibleWeeks = fillWidth
-    ? heatmapWeeksForWindow(todayKey, windowDays)
+    ? heatmapWeeksForWindow(todayKey, historyWindowDays)
     : resolveHeatmapWeeks({
         days,
         todayKey,
         availableWidth: Math.max(0, availableWidth - GAP_PX * 2),
         minimumWeeks,
-        windowDays,
+        windowDays: historyWindowDays,
         metric,
         cellSize,
       });
