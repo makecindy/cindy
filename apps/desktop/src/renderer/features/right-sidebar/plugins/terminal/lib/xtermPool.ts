@@ -26,6 +26,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SerializeAddon } from '@xterm/addon-serialize';
 
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import {
   DEFAULT_APPEARANCE_SETTINGS,
   DEFAULT_TERMINAL_FONT_FAMILY,
@@ -137,8 +138,26 @@ export function needsXtermAttach(tabId: string): boolean {
 }
 
 /** Clear the old exit before IPC so an unmount keeps receiving the new shell's events. */
-export function restartXterm(tabId: string): Promise<TerminalCreateResult> {
-  return transitionXterm(tabId, () => window.electronAPI.terminal.restart(tabId));
+export function restartXterm(params: TerminalCreateParams): Promise<TerminalCreateResult> {
+  const entry = pool.get(params.id);
+  return transitionXterm(params.id, async () => {
+    try {
+      return await window.electronAPI.terminal.restart(params.id);
+    } catch (error) {
+      // A failed native restart can already have disposed the old PTY. Do not
+      // reuse its attachment marker or recreate a tab closed while IPC waited.
+      if (!entry || pool.get(params.id) !== entry) throw error;
+      const code = extractIpcError(error)?.code;
+      if (code === 'TERMINAL_SPAWN_FAILED' || code === 'TERMINAL_SHELL_NOT_FOUND'
+        || code === 'TERMINAL_NOT_FOUND' || code === 'TERMINAL_ALREADY_DISPOSED') {
+        entry.ptyAttached = false;
+      }
+      if (code !== 'TERMINAL_NOT_FOUND' && code !== 'TERMINAL_ALREADY_DISPOSED') throw error;
+      // Retry is an explicit user action. Only a confirmed missing session
+      // falls back to create; a still-running PTY is never restarted implicitly.
+      return window.electronAPI.terminal.create(params);
+    }
+  });
 }
 
 export function attachXterm(params: TerminalCreateParams): Promise<TerminalCreateResult> {

@@ -37,7 +37,7 @@ vi.mock('../lib/xtermPool', () => ({
   setXtermExit: vi.fn(),
   onXtermExit: vi.fn(() => () => undefined),
   needsXtermAttach: () => !entry.ptyAttached,
-  restartXterm: (id: string) => window.electronAPI.terminal.restart(id),
+  restartXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.restart(params.id),
   attachXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.create(params),
 }));
 

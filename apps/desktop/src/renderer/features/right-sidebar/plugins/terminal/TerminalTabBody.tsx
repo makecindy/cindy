@@ -282,7 +282,11 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
     setRestarting(true);
     setRuntimeError(null);
     try {
-      const result = await restartXterm(tabId);
+      const result = await restartXterm({
+        id: tabId,
+        cwd: workdir || (typeof process !== 'undefined' && process.env?.HOME) || '/',
+        ...entry?.lastSize,
+      });
       if (!aliveRef.current) return;
       setRuntimeExit(getXtermExit(tabId));
       // The exited PTY ignored font-driven resizes. Restart uses its old grid,
@@ -307,7 +311,7 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
     } finally {
       if (aliveRef.current) setRestarting(false);
     }
-  }, [restarting, tabId, patchState]);
+  }, [restarting, tabId, workdir, patchState]);
 
   // 渲染:slot 撑满,exited / runtimeError 在上面叠一层 overlay
   return (

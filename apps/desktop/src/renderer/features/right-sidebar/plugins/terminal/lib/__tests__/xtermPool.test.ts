@@ -18,6 +18,47 @@ describe('openTerminalExternalLink', () => {
     vi.clearAllMocks();
   });
 
+  // Unit: #9815 discussion_r4528556652. Native restart removes the old PTY
+  // before spawning; a failed spawn must permit a later explicit retry to create it.
+  it('recreates a missing PTY on retry after destructive restart failure, retaining output', async () => {
+    const params = { id: 'missing', cwd: '/workspace', cols: 100, rows: 30 };
+    const result = { shellId: 'zsh' as const, shellDisplayName: 'zsh', pid: 42 };
+    const restart = vi.fn()
+      .mockRejectedValueOnce(new Error('[TERMINAL_SPAWN_FAILED] restart failed: unavailable cwd'))
+      .mockRejectedValueOnce(new Error('[TERMINAL_NOT_FOUND] pty session not found: missing'));
+    const create = vi.fn().mockResolvedValue(result);
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { terminal: { restart, create } } });
+    const entry = getOrCreateXterm(params.id);
+    entry.ptyAttached = true;
+    entry.terminal.write('retained before failed restart 中文');
+    setXtermExit(params.id, { code: 0, signal: null });
+    await expect(restartXterm(params)).rejects.toThrow('TERMINAL_SPAWN_FAILED');
+    expect(entry.ptyAttached).toBe(false);
+    expect(create).not.toHaveBeenCalled();
+    expect(await restartXterm(params)).toEqual(result);
+    expect(create).toHaveBeenCalledExactlyOnceWith(params);
+    expect(entry.ptyAttached).toBe(true);
+    expect(getXtermExit(params.id)).toBeNull();
+    await new Promise<void>(done => entry.terminal.write('', done));
+    expect(entry.terminal.buffer.active.getLine(0)?.translateToString(true)).toBe('retained before failed restart 中文');
+  });
+
+  it('does not recreate a missing PTY after its tab was closed during restart', async () => {
+    const params = { id: 'closed-restart', cwd: '/workspace' };
+    let reject!: (error: Error) => void;
+    const create = vi.fn();
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { terminal: {
+      restart: () => new Promise((_yes, no) => { reject = no; }), create,
+    } } });
+    getOrCreateXterm(params.id);
+    const pending = restartXterm(params);
+    disposeXterm(params.id);
+    reject(new Error('[TERMINAL_NOT_FOUND] pty session not found: closed-restart'));
+    await expect(pending).rejects.toThrow('TERMINAL_NOT_FOUND');
+    expect(create).not.toHaveBeenCalled();
+    expect(getXtermExit(params.id)).toBeNull();
+  });
+
   // Unit: #9815 discussion_r4528102349. The old exit must not release a
   // restarted shell whose IPC reply is still pending after the tab unmounts.
   it.each([
@@ -39,7 +80,7 @@ describe('openTerminalExternalLink', () => {
     const disposed = vi.spyOn(entry.terminal, 'dispose');
     const oldExit = { code: 0, signal: null };
     setXtermExit('restarting', oldExit);
-    const restarted = operation === 'restart' ? restartXterm('restarting') : attachXterm({ id: 'restarting', cwd: '/workspace' });
+    const restarted = operation === 'restart' ? restartXterm({ id: 'restarting', cwd: '/workspace' }) : attachXterm({ id: 'restarting', cwd: '/workspace' });
     detachXterm('restarting');
     expect(disposed).not.toHaveBeenCalled();
     // A replacement body subscribes while the old native request is pending.
