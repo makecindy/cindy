@@ -48,12 +48,7 @@ async function identityFor(enrollment?: MobileAgentNetEnrollmentOptions): Promis
   if (!identity) throw new Error('AGENT_NET_IDENTITY_REQUIRED');
   identity.signer.assertCurrent(); return identity;
 }
-export function canUploadMobileAgentNetMedia(deviceId?: string): boolean {
-  // A missing V2 route may use V1; a known V2 route's offline/denial error must
-  // propagate so mixed mode cannot silently upload the attachment as plaintext.
-  if (deviceId && isScopedPeer(deviceId)) return !!mobileAgentNetSharingMediaTarget(deviceId);
-  return !!deviceId && isMobileAgentNetActive() && !!mobileAgentNetMediaPeer(deviceId);
-}
+export { canUploadMobileAgentNetMedia } from './agentNetRuntime';
 export async function uploadMobileAgentNetMedia(deviceId: string | undefined, size: number, contentType: string,
   read: (offset: number, length: number) => Promise<Uint8Array>, options: { signal?: AbortSignal; assertCurrent?(): void } = {},
 ): Promise<{ key: string; sha256: string } | null> {

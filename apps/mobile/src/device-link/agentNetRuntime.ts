@@ -17,6 +17,7 @@ import { verifyMobileAgentNetCertificate, verifyMobileAgentNetDelegation } from 
 import { readMobileAgentNetDirectory, writeMobileAgentNetDirectory } from './agentNetDirectoryCache';
 import { verifyMobileAgentNetModeProof } from './agentNetMode';
 import { mobileAgentNetSharingMediaTarget } from './agentNetSharing';
+import { isScopedPeer } from '@cindy/device-link';
 
 let current: { socket: AgentNetSocket; guard(): void } | null = null;
 let openAttempt = 0;
@@ -42,9 +43,13 @@ export function mobileAgentNetMediaPeer(deviceId: string) {
   const certificate = socket.certificateFor(deviceId);
   return certificate ? { certificate } : null;
 }
+export function canUploadMobileAgentNetMedia(deviceId?: string): boolean {
+  // A known V2 sharing route's errors must never permit plaintext fallback.
+  if (deviceId && isScopedPeer(deviceId)) return !!mobileAgentNetSharingMediaTarget(deviceId);
+  return !!deviceId && isMobileAgentNetActive() && !!mobileAgentNetMediaPeer(deviceId);
+}
 installMobileAgentNetMedia({
-  available: deviceId => { if (!deviceId) return false;
-    try { return !!mobileAgentNetSharingMediaTarget(deviceId) || isMobileAgentNetActive() && !!mobileAgentNetMediaPeer(deviceId); } catch { return false; } },
+  available: canUploadMobileAgentNetMedia,
   requiresEncryption: mobileAgentNetRequiresEncryption,
   async upload(options) {
     const { uploadMobileAgentNetMedia } = await import('./agentNetMedia');
