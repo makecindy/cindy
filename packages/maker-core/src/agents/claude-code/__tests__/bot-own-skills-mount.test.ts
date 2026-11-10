@@ -28,7 +28,26 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }));
 
 // 设置落盘失败注入: 只有用例显式打开时才拒绝, 其余用例仍走真实实现。
-const flagSettingsMock = vi.hoisted(() => ({ fail: false, stagingAtFailure: [] as string[] }));
+// 记下这次调用实际建出来的暂存目录, 断言只看它们, 不扫系统临时目录
+// (并行用例也会建 cindy-claude-skills-* , 全局差集会把别人的算进来)。
+const flagSettingsMock = vi.hoisted(() => ({
+  fail: false,
+  stagingDirs: [] as string[],
+}));
+
+vi.mock('../managed-skill-plugins.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../managed-skill-plugins.js')>();
+  return {
+    ...actual,
+    prepareManagedSkillPlugins: async (
+      ...args: Parameters<typeof actual.prepareManagedSkillPlugins>
+    ) => {
+      const prepared = await actual.prepareManagedSkillPlugins(...args);
+      if (prepared.stagingDir) flagSettingsMock.stagingDirs.push(prepared.stagingDir);
+      return prepared;
+    },
+  };
+});
 
 vi.mock('../flag-settings-file.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../flag-settings-file.js')>();
@@ -38,10 +57,6 @@ vi.mock('../flag-settings-file.js', async (importOriginal) => {
       ...args: Parameters<typeof actual.materializeClaudeFlagSettings>
     ) => {
       if (!flagSettingsMock.fail) return actual.materializeClaudeFlagSettings(...args);
-      const { promises: fsp } = await import('node:fs');
-      const osmod = (await import('node:os')).default;
-      flagSettingsMock.stagingAtFailure = (await fsp.readdir(osmod.tmpdir()))
-        .filter((name) => name.startsWith('cindy-claude-skills-'));
       throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
     },
   };
@@ -501,8 +516,7 @@ describe('managed skill command collisions', () => {
 // 最小输入：一个受管技能 + 让 materializeClaudeFlagSettings 报 ENOSPC；tier unit。
 describe('managed skill staging cleanup when settings materialization fails', () => {
   it('removes the staging dir created before the failure', async () => {
-    const before = (await fs.readdir(os.tmpdir())).filter((name) => name.startsWith('cindy-claude-skills-'));
-    flagSettingsMock.stagingAtFailure = [];
+    flagSettingsMock.stagingDirs.length = 0;
     flagSettingsMock.fail = true;
     try {
       await expect(startBotSession({ managed: true, allowManaged: true })).rejects.toMatchObject({
@@ -512,9 +526,7 @@ describe('managed skill staging cleanup when settings materialization fails', ()
       flagSettingsMock.fail = false;
     }
 
-    const created = flagSettingsMock.stagingAtFailure.filter((name) => !before.includes(name));
-    expect(created).toHaveLength(1);
-    const stillThere = (await fs.readdir(os.tmpdir())).filter((name) => created.includes(name));
-    expect(stillThere).toEqual([]);
+    expect(flagSettingsMock.stagingDirs).toHaveLength(1);
+    await expect(fs.stat(flagSettingsMock.stagingDirs[0]!)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

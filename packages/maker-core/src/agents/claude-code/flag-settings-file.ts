@@ -9,9 +9,15 @@
  * which stays a few hundred characters no matter how long the catalog is.
  *
  * The file holds the same object `buildClaudeFlagSettings` already produced
- * (apiKeyHelper override, attribution, allowlist). It contains no credentials.
+ * (apiKeyHelper override, attribution, allowlist). It contains no credentials:
+ * `buildSettings()` never copies auth env into the settings object, and the guest
+ * route token stays on the child-process env (`ANTHROPIC_CUSTOM_HEADERS`), which the
+ * SDK passes to the CLI as its environment and never writes here. Mode 0600 is not
+ * treated as a credential boundary.
  * Remote cc-mgr sessions stay on the inline object: the daemon reads settings on
- * its own machine, and a path written here would not exist there.
+ * its own machine, and a path written here would not exist there. That inline object
+ * is the same credential-free settings value; the route token still rides the remote
+ * session env, not settings.
  */
 
 import { promises as fs } from 'node:fs';
