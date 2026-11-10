@@ -74,9 +74,9 @@ export async function runFolderPickerWheelSmoke(window: BrowserWindow): Promise<
       }
       throw new Error(`UI did not become ready: ${script}`);
     };
-    await until(
-      `!!window.electronAPI && !!document.querySelector('[data-testid="create-agent-mode-pill"]')`,
-    );
+    // Restored task/companion pages do not have the new-task project picker.
+    // Wait for its controls only after using the shared navigation below.
+    await until(`!!window.electronAPI`);
     // DOM coordinates below assume CSS pixels and window DIPs have the same scale.
     window.webContents.setZoomFactor(1);
     await settle();
@@ -148,8 +148,8 @@ export async function runFolderPickerWheelSmoke(window: BrowserWindow): Promise<
     await click(
       `${buttons}.find(e=>/新建任务|New task/i.test((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')+' '+e.textContent))`,
     );
-    await until(`location.hash.includes('/new')`);
     const trigger = `document.querySelector('[data-testid="create-agent-mode-pill"]')`;
+    await until(`location.hash.includes('/new') && !!${trigger}`);
     const list = `document.querySelector('[data-folder-picker-scroll]')`;
     const popup = `${list}?.closest('[role="dialog"]')`;
     const open = async () => {
