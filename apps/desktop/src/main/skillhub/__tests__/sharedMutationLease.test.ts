@@ -1,3 +1,4 @@
+import { configureAppDataDir } from '../../userDataPath';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -6,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-skill-lease-'));
+configureAppDataDir(root);
 vi.mock('electron', () => ({ app: { getPath: (name: string) => {
   if (name !== 'appData') throw new Error('lease must not depend on profile-specific userData');
   return root;
@@ -119,6 +121,7 @@ describe('shared Skill mutation lease', () => {
     lease!.retainUntilComplete(token);
     await lease!();
     vi.resetModules();
+    (await import('../../userDataPath')).configureAppDataDir(root);
     const restarted = (await import('../sharedMutationLease')).acquireSharedSkillMutationLease;
     expect(await restarted(['durable-alias'])).toBeNull();
     expect(await restarted(names, randomUUID())).toBeNull();

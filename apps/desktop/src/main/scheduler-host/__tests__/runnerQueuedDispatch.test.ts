@@ -117,10 +117,10 @@ import {
   QUEUED_DISPATCH_TRACK_POLL_MS,
   type MakerScheduleRunnerDeps,
   type SchedulerQueueDeps,
-} from '../runner';
+} from '../runner.desktop';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 import { withScheduleLock } from '../scheduleLock';
-import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.js';
+import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.desktop.js';
 import { createInputEnqueueHarness } from '../../maker-ipc/__tests__/inputEnqueueHarness.js';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../../shared/interruptedTurn.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';

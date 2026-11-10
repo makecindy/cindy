@@ -47,7 +47,7 @@ const deviceLinkSettings = vi.hoisted(() => ({
     revokedControllers: [] as string[],
   },
 }));
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 /**
@@ -72,7 +72,7 @@ import {
   flushMakerEventBatchesOnReconnect,
   handleControllerOffline,
   setSessionTextSnapshotReader,
-} from '../dispatch';
+} from '../dispatch.desktop';
 import * as subscriptions from '../subscriptions';
 import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 

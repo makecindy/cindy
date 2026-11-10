@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto';
 import type { Routine, RoutineInput } from '@cindy/maker-scheduler';
 import { TODO_CHECK_ROUTINE_PREFIX } from '../../shared/botAutonomy.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 
 /** 与例行任务引擎的 creationId 校验一致。 */
 const ROUTINE_ID_PATTERN = /^[a-zA-Z0-9_-]{16,128}$/;

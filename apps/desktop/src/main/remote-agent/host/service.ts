@@ -24,7 +24,7 @@ import {
   isDataOwnerBroadcastScopeCurrent,
   type DataOwnerBroadcastScope,
 } from '../../device-link/broadcast-tap.js';
-import { setRemoteAgentHandler } from '../../device-link/dispatch.js';
+import { setRemoteAgentHandler } from '../../device-link/dispatch.desktop.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
 import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { applyProviderShareDelegation, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
@@ -45,7 +45,7 @@ import { remoteAgentPollerFor } from '../controller/service';
 import { RemoteAgentRunClient, type RemoteAgentInvoke } from '../controller/runClient.js';
 import { getProviderShareUsageStore, installProviderShareUsageStore, type ProviderShareDirectReceiptRoute } from '../../device-link/providerShareUsageStore.js';
 import { currentProviderPartyUsageStore, flushProviderPartyUsage } from '../../usage/providerPartyUsageStore.js';
-import { onDeviceLinkSettingChanged, readDeviceLinkSettings } from '../../device-link/settings-store.js';
+import { onDeviceLinkSettingChanged, readDeviceLinkSettings } from '../../device-link/settings-store.desktop.js';
 import { readTurnUsageResetAt } from '../../goal-host/usageLimit.js';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService.js';
 import { bindHostedSessionProvider, hasHostedSessionModelAccess } from '../../maker-host/session-provider-store.js';

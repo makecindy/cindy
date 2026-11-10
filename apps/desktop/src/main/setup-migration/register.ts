@@ -47,13 +47,13 @@ import {
   storeGhostUserSecretsForSetup,
 } from '../cindy-brain/index.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
-import { setSetupSnapshotRemoteHandler, setSetupTransferRemoteHandler } from '../device-link/dispatch.js';
+import { setSetupSnapshotRemoteHandler, setSetupTransferRemoteHandler } from '../device-link/dispatch.desktop.js';
 import { defaultDeps as deviceDirectoryDeps, handleListDevices } from '../device-link/ipc.js';
-import { readDeviceLinkSettings } from '../device-link/settings-store.js';
+import { readDeviceLinkSettings } from '../device-link/settings-store.desktop.js';
 import { ownerScopedImSecrets } from '../im/ownerScopedStorage.js';
 import { createLogger } from '../logger.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { listCustomMcpNamesForSetup, listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
+import { listCustomMcpNamesForSetup, listCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js';
 import { hydrateCustomProviderHeaders } from '../maker-host/custom-provider-header-secrets.js';
 import { listCustomProviders } from '../maker-host/custom-provider-store.js';
 import { createCustomMcpServerForSetup } from '../maker-ipc/mcpHandlers.js';

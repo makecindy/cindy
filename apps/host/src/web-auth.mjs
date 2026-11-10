@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 /** Browser access is granted only after a local, bearer-authenticated pairing.
  * Codes are single-use; session cookies are unrelated to the profile API token.
@@ -7,8 +7,15 @@ export function createWebAuth({ now = Date.now } = {}) {
   const codes = new Map();
   const sessions = new Map();
   const revocations = new Set();
+  const sessionRevocations = new Set();
+  const callerId = token => `web:${createHash('sha256').update(token).digest('hex')}`;
+  function revokeSession(token) {
+    if (!sessions.delete(token)) return;
+    for (const listener of sessionRevocations) listener(callerId(token));
+  }
   function prune() {
-    for (const map of [codes, sessions]) for (const [key, expires] of map) if (expires <= now()) map.delete(key);
+    for (const [key, expires] of codes) if (expires <= now()) codes.delete(key);
+    for (const [key, expires] of sessions) if (expires <= now()) revokeSession(key);
   }
   return {
     pair() {
@@ -31,8 +38,14 @@ export function createWebAuth({ now = Date.now } = {}) {
       if (!match) return false;
       return sessions.has(match[1]);
     },
+    caller(cookie) {
+      prune();
+      const match = /(?:^|;\s*)cindy_host_web=([^;]+)/.exec(cookie ?? '');
+      return match && sessions.has(match[1]) ? callerId(match[1]) : null;
+    },
     onRevoke(listener) { revocations.add(listener); return () => revocations.delete(listener); },
-    clear() { codes.clear(); sessions.clear(); for (const listener of revocations) listener(); },
+    onSessionRevoke(listener) { sessionRevocations.add(listener); return () => sessionRevocations.delete(listener); },
+    clear() { codes.clear(); for (const token of sessions.keys()) revokeSession(token); for (const listener of revocations) listener(); },
   };
 }
 
@@ -55,6 +68,13 @@ export const CONNECT_SCRIPT = `(() => {
   if (!code) { if (zh) status.textContent = '请在运行 Host 的电脑上执行 pnpm host:open，打开已授权的浏览器入口。'; return; }
   status.textContent = zh ? '正在连接…' : 'Connecting…';
   fetch('/web/session', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({code}), credentials:'same-origin'})
-    .then(response => { if (!response.ok) throw new Error(); location.replace('/'); })
+    .then(response => {
+      if (!response.ok) throw new Error();
+      if (typeof BroadcastChannel !== 'undefined') {
+        const notice = new BroadcastChannel('cindy-host-pairing');
+        notice.postMessage('paired'); notice.close();
+      }
+      location.replace('/');
+    })
     .catch(() => { status.textContent = zh ? '连接链接已失效或服务不可用。请重新执行 pnpm host:open。' : 'The connection link expired or the service is unavailable. Run pnpm host:open again.'; });
 })();`;
