@@ -368,11 +368,7 @@ function QueueEditHarness({
       onSend={() => undefined}
       onStartVoiceConversation={onStartVoiceConversation}
       pendingQueue={[queuedMessage]}
-      queueExpanded={false}
-      onQueueExpandedChange={vi.fn()}
-      onQueueRemove={onRemove}
       queueEditingClientId={editingClientId}
-      onQueueEditBegin={vi.fn()}
       onQueueEditSubmit={onSubmit}
       onQueueEditCancel={() => {
         onCancel();
@@ -646,7 +642,7 @@ it('hides a missing existing model, recovers from the effective runtime, and pre
   expect(onSend).not.toHaveBeenCalled();
 });
 
-it('hides queue removal while editing and exits editing from the composer cancel button', async () => {
+it('keeps the queue out of the composer and exits editing from its cancel button', async () => {
   const onCancel = vi.fn();
   const onRemove = vi.fn();
   render(<QueueEditHarness onCancel={onCancel} onRemove={onRemove} />);
@@ -654,7 +650,7 @@ it('hides queue removal while editing and exits editing from the composer cancel
   const cancel = await screen.findByRole('button', {
     name: 'newChat.pendingQueue.editCancelAria',
   });
-  expect(screen.getByRole('listitem')).toBeTruthy();
+  expect(screen.queryByRole('listitem')).toBeNull();
   expect(
     screen.queryByRole('button', { name: 'newChat.pendingQueue.removeAria' }),
   ).toBeNull();
@@ -667,8 +663,7 @@ it('hides queue removal while editing and exits editing from the composer cancel
       screen.queryByRole('button', { name: 'newChat.pendingQueue.editCancelAria' }),
     ).toBeNull();
   });
-  fireEvent.mouseEnter(screen.getByRole('listitem'));
-  expect(screen.getByRole('button', { name: 'newChat.pendingQueue.removeAria' })).toBeTruthy();
+  expect(screen.queryByRole('listitem')).toBeNull();
   expect(onRemove).not.toHaveBeenCalled();
 });
 

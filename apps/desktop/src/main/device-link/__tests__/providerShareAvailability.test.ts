@@ -152,11 +152,14 @@ describe('standby client production entry points (all identities/providers are l
     await f.usage.acknowledgeDirectCleanup(f.usage.listPendingDirectCleanup('owner')[0]);
     expect(await published()).toEqual([{ memberId: 'member', joinedAt: Date.parse(updated.members[0].joinedAt), models: ['allowed'] }]);
   });
-  it('publishes local provider mapping and exact model permission without credentials', async () => {
+  // #9501 unit: publish the executor's effective window using the existing wire
+  // field; prior coverage only had a default and missed advanced-settings overrides.
+  it.each([undefined, 1_000_000])('publishes local provider mapping with source budget %s and exact permission', async (limit) => {
+    f.members[0].view.models.codex[0] = { ...model, contextWindowOverride: limit };
     await publishShareAvailability([owned]);
     const body = f.request.mock.calls.find(([path]) => path.endsWith('/publish'))![1].body.policy;
     expect(body).toMatchObject({ revision: 5, allowFast: false, fastRevision: 7,
-      executors: [{ deviceId: 'standby', providerId: 'local', limit: 2, models: [{ ...model, kind: 'codex' }] }],
+      executors: [{ deviceId: 'standby', providerId: 'local', limit: 2, models: [{ ...model, contextWindow: limit ?? model.contextWindow, kind: 'codex' }] }],
       members: [{ memberId: 'member', models: ['allowed'] }] });
     expect(f.remember).toHaveBeenCalledWith('share', 'group');
   });

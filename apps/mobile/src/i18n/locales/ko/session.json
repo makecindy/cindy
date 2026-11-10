@@ -813,7 +813,10 @@
     "quotaReset": "{{left}}% 남음 · {{reset}} 후 초기화",
     "confirm": "전환",
     "remember": "전환하고 앞으로 자동으로(이 작업만)",
-    "cancel": "취소"
+    "cancel": "취소",
+    "disable": "이 작업에서 자동 전환 안 함",
+    "disableFailed": "선택이 저장되었는지 확인하지 못했습니다. 연결을 확인하고 작업이 있는 컴퓨터의 Cindy가 최신 버전인지 확인한 후 다시 시도해 주세요. 이 메시지는 평소대로 전송됩니다.",
+    "moreOptions": "추가 옵션"
   },
   "messageEdit": {
     "editing": "메시지 편집 중",

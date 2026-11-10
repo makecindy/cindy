@@ -919,6 +919,30 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0]).toMatchObject({ kind: 'ask_user', body: 'Q: Choose?\nA: A\n\nQ: Choose?\nA: B' });
   });
 
+  // Pending history becomes unanswered only after the host has synchronized its live queue.
+  it('keeps orphaned questions readable without duplicating live cards', () => {
+    const row = message({ id: 'orphan', role: 'ask_user', content: {
+      requestId: 'question-id', status: 'pending', questions: [{ question: 'Install this version?' }],
+    } });
+    expect(normalizeRemoteMessages([row])).toEqual([]);
+    expect(normalizeRemoteMessages([row], { pendingQuestionIds: new Set(['question-id']) })).toEqual([]);
+    const expired = normalizeRemoteMessages([row], { pendingQuestionIds: new Set() });
+    expect(expired).toHaveLength(1);
+    expect(expired[0].body).toBe(`Q: Install this version?\n${i18n.t('interaction.panel.questionUnanswered')}`);
+    const cancelled = { ...row, content: { ...row.content as object, status: 'cancelled' } };
+    expect(normalizeRemoteMessages([cancelled])[0].body).toBe(expired[0].body);
+  });
+
+  it('keeps withdrawn history with its reason without inventing an answer', () => {
+    const items = normalizeRemoteMessages([message({ id: 'withdrawn', role: 'ask_user', content: {
+      status: 'cancelled', questions: [{ question: 'Logged in?' }], withdrawalReason: '已从日志确认', answers: {},
+    } })]);
+    expect(items).toHaveLength(1);
+    expect(items[0].body).toContain('Logged in?');
+    expect(items[0].body).toContain('已从日志确认');
+    expect(items[0].body).not.toContain('A:');
+  });
+
   it('renders only answered ask_user history as question and answer pairs', () => {
     const items = normalizeRemoteMessages([
       message({

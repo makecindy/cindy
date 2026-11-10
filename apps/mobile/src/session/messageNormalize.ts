@@ -272,7 +272,7 @@ const toolUsePayloadByMessage = new WeakMap<RemoteMessage, ToolUsePayload>();
 
 export function normalizeRemoteMessages(
   messages: readonly RemoteMessage[],
-  options: { preserveSourceOrder?: boolean; sessionSource?: string | null; includeInteractionTools?: boolean } = {},
+  options: { preserveSourceOrder?: boolean; sessionSource?: string | null; includeInteractionTools?: boolean; pendingQuestionIds?: ReadonlySet<string> } = {},
 ): NormalizedRemoteMessage[] {
   // History views already place live tails after their persisted prefix. A live
   // row's provisional timestamp must not undo that order during normalization.
@@ -385,7 +385,7 @@ export function normalizeRemoteMessages(
     }
 
     if (message.role === 'ask_user') {
-      const ask = normalizeAskUser(message);
+      const ask = normalizeAskUser(message, options.pendingQuestionIds);
       if (ask) result.push(ask);
       continue;
     }
@@ -882,10 +882,12 @@ function normalizeGoalCard(message: RemoteMessage): NormalizedRemoteMessage | nu
   };
 }
 
-function normalizeAskUser(message: RemoteMessage): NormalizedRemoteMessage | null {
+function normalizeAskUser(message: RemoteMessage, pendingQuestionIds?: ReadonlySet<string>): NormalizedRemoteMessage | null {
   const content = readRecord(message.content);
   if (!content) return null;
-  if (content.status !== 'answered') return null;
+  const withdrawalReason = content.status === 'cancelled' ? readString(content.withdrawalReason) : undefined;
+  if (content.status === 'pending' && (pendingQuestionIds === undefined || pendingQuestionIds.has(String(content.requestId)))) return null;
+  if (!['answered', 'cancelled', 'expired', 'pending'].includes(String(content.status))) return null;
 
   const questions = normalizeAskQuestions(content.questions);
   const answers = readStringRecord(content.answers);
@@ -898,7 +900,9 @@ function normalizeAskUser(message: RemoteMessage): NormalizedRemoteMessage | nul
 
   const body = pairs
     .filter((pair) => pair.question || pair.answer)
-    .map((pair) => `Q: ${pair.question}\nA: ${pair.answer || '(skipped)'}`)
+    .map((pair) => content.status !== 'answered'
+      ? `Q: ${pair.question}\n${withdrawalReason ? `${i18n.t('interaction.panel.questionWithdrawn')} · ${withdrawalReason}` : i18n.t('interaction.panel.questionUnanswered')}`
+      : `Q: ${pair.question}\nA: ${pair.answer || '(skipped)'}`)
     .join('\n\n');
 
   if (!body) return null;

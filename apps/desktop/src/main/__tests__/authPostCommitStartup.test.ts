@@ -38,6 +38,7 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
     stable = true;
   });
   const deps = {
+    authRefreshOverride: null,
     stableOwnerPostCommitCoordinator: coordinator,
     isPassiveSharedUserDataInstance: () => passive,
     getActiveAppSession: () => state,
@@ -94,6 +95,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
     }).outputText;
     let initialize!: () => Promise<unknown>;
     const deps = {
+    authRefreshOverride: null,
       ipcMain: {
         handle: (_channel: string, handler: typeof initialize) => {
           initialize = handler;

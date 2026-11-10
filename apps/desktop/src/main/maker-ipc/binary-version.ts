@@ -14,7 +14,6 @@
 
 import { registerPiKernelIpc } from './pi-kernel.js';
 import { ipcMain } from 'electron';
-import { execFile } from 'node:child_process';
 
 import { createLogger } from '../logger.js';
 import {
@@ -30,6 +29,7 @@ import {
   isBinaryVersionNotOlder,
   normalizeBinaryVersion,
   parseBinaryVersionOutput,
+  readBinaryVersionOutput,
 } from '../agent-binaries/binary-version-probe.js';
 import { getVendorAsset, vendorAssetMatchesPlatform } from '../agent-binaries/manifest.js';
 import { fetchManifest, getPlatformKey, type Manifest } from '../manifestService.js';
@@ -138,7 +138,7 @@ async function probeLocalVersion(
   }
 
   try {
-    const version = await spawnVersion(binaryPath);
+    const version = await readBinaryVersionOutput(binaryPath);
     if (agentKind !== 'pi') versionCache.set(binaryPath, version);
     return { kind: agentKind, binaryPath, version };
   } catch (err) {
@@ -158,29 +158,6 @@ function resolveBinaryPath(kind: AgentBinaryKind): string | null {
   if (kind === 'pi') return null;
   const cached = getCachedBinaryStatus(kind);
   return cached.binaryReady && cached.binaryPath ? cached.binaryPath : null;
-}
-
-function spawnVersion(binaryPath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      binaryPath,
-      ['--version'],
-      { timeout: 5000, windowsHide: true },
-      (err, stdout, stderr) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        const out = (stdout || stderr || '').toString().trim();
-        const firstLine = out.split(/\r?\n/)[0]?.trim() ?? '';
-        if (!firstLine) {
-          reject(new Error('empty --version output'));
-          return;
-        }
-        resolve(firstLine);
-      },
-    );
-  });
 }
 
 export function registerMakerBinaryVersionIpc(): void {

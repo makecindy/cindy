@@ -1,3 +1,6 @@
+import { configureSqliteVecExtPath } from '../../sqliteVecLoader.js';
+import { configureUserDataDir } from '../../../userDataPath.js';
+import { configureMigrationRuntime } from '../../migrationRuntime.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -96,8 +99,15 @@ describe('DbClient in-proc fallback', () => {
     const drizzleDir = path.join(userDataDir, 'drizzle');
     fs.mkdirSync(drizzleDir);
     fs.writeFileSync(path.join(drizzleDir, '0000_init.sql'), INIT_SQL, 'utf-8');
+    for (const fileName of ['0128_demonic_odin.sql', '0132_abnormal_dazzler.sql']) {
+      fs.copyFileSync(new URL(`../../../../../drizzle/${fileName}`, import.meta.url), path.join(drizzleDir, fileName));
+    }
     process.env.XDT_INPROC_TEST_USER_DATA = userDataDir;
     process.env.XDT_DB_INPROC = 'true';
+    configureUserDataDir(userDataDir);
+    configureMigrationRuntime({ drizzleDir, isPackaged: true });
+    // This fixture does not exercise vector search; use its isolated optional path.
+    configureSqliteVecExtPath(path.join(userDataDir, 'optional-vec0'));
     previousResourcesPath = process.resourcesPath;
     Object.defineProperty(process, 'resourcesPath', {
       configurable: true,
@@ -138,10 +148,6 @@ describe('DbClient in-proc fallback', () => {
       }),
     ]);
 
-    for (const fileName of ['0128_demonic_odin.sql', '0132_abnormal_dazzler.sql']) {
-      const usageMigration = fs.readFileSync(new URL(`../../../../../drizzle/${fileName}`, import.meta.url), 'utf8');
-      for (const statement of usageMigration.split('--> statement-breakpoint').filter(s => s.trim())) await client.exec(statement);
-    }
     const identity = { ghostId: 'inproc-plugin', displayName: 'Test', revision: 'revision', sourceKind: 'manual' as const,
       stableKey: null, pluginId: null, organizationId: null, sourceKey: null, serverRoot: null, version: '1.0', releaseId: null };
     const bindUsage = { action: 'bind', identity, newId: 'inproc-subject', now: 1 } satisfies PluginUsageTransaction;
