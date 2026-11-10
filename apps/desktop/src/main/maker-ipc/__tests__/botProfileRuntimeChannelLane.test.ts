@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ rows: [] as unknown[][] }));
@@ -219,7 +220,7 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(group.botRuntimeProfile?.toolsetPolicy.configured).toEqual(['browser', 'docs']);
     // ...but shares the teammate's one project memory, not the old teammate store.
     expect(group.makerMemoryEnabled).toBe(true);
-    expect(group.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey('/bots/bot/workspace'));
+    expect(group.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey(path.resolve('/bots/bot/workspace')));
     expect(deps.readMemoryIndex).not.toHaveBeenCalled();
 
     // An IM lane (other people) keeps the channel isolation: never the owner's ordinary-task
@@ -229,7 +230,7 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     const laneSnapshot = await hydrateBotProfileRuntime(lane, deps, { persistSnapshot: false });
     expect(lane.botRuntimeProfile?.projectContext).toBeUndefined();
     expect(laneSnapshot?.disabledToolsets).toEqual([]);
-    expect(lane.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey('/bots/bot/workspace'));
+    expect(lane.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey(path.resolve('/bots/bot/workspace')));
 
     // A chat-only group still gets no tools.
     seed('group', 'group:g1:access:chat:1', { ...narrow, projectMode: true });

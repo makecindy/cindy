@@ -151,7 +151,7 @@ async function migrateRoutines(botId: string, ownerRoot: string, workingDir: str
     assertCurrent();
     if (!retired(routine)) {
       const hold = imported === null || imported.has(routine.id);
-      const written = await writeRoutineAutomations(workingDir, routine, { route: route ?? null, paused: hold });
+      const written = await writeRoutineAutomations(workingDir, routine, { route: route ?? null, paused: hold, next: slice.next });
       const reason = imported?.get(routine.id);
       const note = !reason || !routine.enabled ? written.note
         : written.note ? `${written.note}; ${reason}` : `${routine.name}: ${reason}`;

@@ -10,7 +10,7 @@
  * - 最小失败输入：项目、项目外旧位置与旧文件夹各有同名记忆 + 后两处各有独有一条；有 / 没有搬迁与升级回执。
  * - tier：unit（临时目录真实文件 I/O，无 Electron、无 Git）。
  */
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -60,4 +60,16 @@ it('uploads a V2 teammate\'s project memories, with not-yet-copied earlier ones 
   expect(await read(true)).toEqual({ 'user_tea.md': 'project version', 'feedback_tone.md': 'not moved yet' });
   await writeFile(path.join(botProfileDir(root, 'bot_mia'), TEAMMATE_MEMORY_MOVE_RECEIPT_FILE), '{}');
   expect(await read(true)).toEqual({ 'user_tea.md': 'project version' });
+});
+
+// PR #9314 review: the cloud upload followed a project memory folder (or `.cindy`) that is a link
+// and uploaded whatever .md files it points to. It now refuses, keeping the uploaded memories.
+it('refuses to read a project memory folder that is a link', async () => {
+  root = await mkdtemp(path.join(os.tmpdir(), 'teammate-memory-link-'));
+  const workspace = teammateWorkspaceDir(root, 'bot_mia');
+  const outside = path.join(root, 'outside');
+  await put(outside, 'user_notes.md', 'private');
+  await mkdir(path.join(workspace, '.cindy'), { recursive: true });
+  await symlink(outside, teammateProjectMemoryDir(workspace), process.platform === 'win32' ? 'junction' : 'dir');
+  await expect(teammateMemoryDirs(root, 'bot_mia', true)).rejects.toThrow('link');
 });

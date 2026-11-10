@@ -14,6 +14,7 @@ import {
   hasTeammateMemoryMoved,
   legacyTeammateProjectMemoryDir,
   teammateProjectMemoryDir,
+  unlinkedTeammateProjectMemoryDir,
   teammateWorkspaceDir as teammateWorkspace,
 } from '../maker-ipc/botProjectMemory.js';
 import { BOT_V2_CARRYOVER_FILE } from '../maker-ipc/botV2Carryover.js';
@@ -38,8 +39,8 @@ export async function teammateStoreMemoryDirs(ownerRoot: string, botId: string):
   if (!await readTeammateProjectMode(botId)) return [botProfileMemoryDir(ownerRoot, botId)];
   const workspace = teammateWorkspace(ownerRoot, botId);
   return await hasTeammateMemoryMoved(ownerRoot, botId)
-    ? [teammateProjectMemoryDir(workspace)]
-    : [teammateProjectMemoryDir(workspace), await legacyTeammateProjectMemoryDir(ownerRoot, workspace)];
+    ? [unlinkedTeammateProjectMemoryDir(workspace)]
+    : [unlinkedTeammateProjectMemoryDir(workspace), await legacyTeammateProjectMemoryDir(ownerRoot, workspace)];
 }
 
 /** Before a take-over replaces it: the project's memories, skills and rules (its other files stay as they are). */
@@ -107,7 +108,7 @@ export function companionProjectIo(): CompanionProjectIo {
         paused: schedules.find(schedule => schedule.projectConfigId === config.id)?.status === 'paused' }));
     },
     upsertAutomation: async (workingDir, config) => {
-      await (await schedulerHost()).getProjectAutomationLoader().upsertSchedule(workingDir, config as unknown as ProjectScheduleConfig);
+      await (await schedulerHost()).getProjectAutomationLoader().upsertSchedule(workingDir, config as unknown as ProjectScheduleConfig, { keepUnreadable: true });
     },
     removeAutomation: async (workingDir, configId) => {
       await (await schedulerHost()).getProjectAutomationLoader().removeSchedule(workingDir, configId);

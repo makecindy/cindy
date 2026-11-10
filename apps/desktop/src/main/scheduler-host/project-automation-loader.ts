@@ -265,6 +265,8 @@ export class ProjectAutomationLoader {
   async upsertSchedule(
     workingDir: string,
     config: ProjectScheduleConfig,
+    /** Host writers (a teammate's own automations) must not replace a file they cannot read whole. */
+    options: { keepUnreadable?: boolean } = {},
   ): Promise<ReconcileResult> {
     if (!isProjectScheduleConfig(config)) {
       throwInvalidParams('invalid project schedule config');
@@ -273,6 +275,11 @@ export class ProjectAutomationLoader {
       throwInvalidParams('project schedule id must be kebab-case ascii');
     }
     const read = await this.readProjectAutomationsFromDisk(workingDir);
+    if (options.keepUnreadable && read.kind !== 'loaded' && read.kind !== 'missing') {
+      const err = new Error(`project automations unreadable (${read.kind}); left as it is`);
+      (err as { code?: string }).code = 'PRECONDITION_FAILED';
+      throw err;
+    }
     const schedules = read.kind === 'loaded' ? read.schedules : [];
     const next: ProjectAutomationsFile = {
       version: 1,

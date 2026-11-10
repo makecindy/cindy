@@ -262,6 +262,11 @@ describe('project automation provider reconciliation', () => {
       expect(saved?.providerId).toBe('remote-provider');
       expect(await loader.reconcile(dir)).toMatchObject({ updated: 0 });
       expect(update).toHaveBeenCalledTimes(2);
+      // PR #9314 review: a teammate's own writes keep a file they cannot read instead of replacing it.
+      const file = path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS);
+      await fs.writeFile(file, '{"version":1,"schedules":[', 'utf8');
+      await expect(loader.upsertSchedule(dir, config, { keepUnreadable: true })).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(await fs.readFile(file, 'utf8')).toBe('{"version":1,"schedules":[');
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

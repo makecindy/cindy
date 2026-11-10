@@ -92,13 +92,15 @@ export async function hasTeammateMemoryMoved(ownerRoot: string, botId: string): 
  * The folders a teammate's memories are read from, first one wins. A V2 teammate: its project's
  * memory folder; until the one-time move finished also the project memory's earlier place outside
  * the folder, and until its upgrade finished also its old folder (a memory not copied yet must not
- * look deleted). A V1 teammate: its old folder.
+ * look deleted). A V1 teammate: its old folder. The project's memory folder (or `.cindy`) being a
+ * link throws, as for the memory store: the cloud upload must not read whatever it points to, and
+ * a failed read keeps the uploaded memories as they are.
  */
 export async function teammateMemoryDirs(ownerRoot: string, botId: string, projectMode: boolean): Promise<string[]> {
   const old = botProfileMemoryDir(ownerRoot, botId);
   if (!projectMode) return [old];
   const workspace = teammateWorkspaceDir(ownerRoot, botId);
-  const dirs = [teammateProjectMemoryDir(workspace)];
+  const dirs = [unlinkedTeammateProjectMemoryDir(workspace)];
   if (!await hasTeammateMemoryMoved(ownerRoot, botId)) dirs.push(await legacyTeammateProjectMemoryDir(ownerRoot, workspace));
   if (!await hasTeammateUpgraded(ownerRoot, botId)) dirs.push(old);
   return dirs;

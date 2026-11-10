@@ -34,10 +34,17 @@ describe('convertRoutine', () => {
   // QA 2026-11-10: every 7 minutes became a paused manual automation, every 24 h a fixed 9:00,
   // and a paused draft without triggers produced nothing and no note before its source was removed.
   it('keeps any interval as an interval and a triggerless draft as a paused manual automation', () => {
-    const every = (intervalMs: number) => convertRoutine(routine({ enabled: true,
-      triggers: [{ id: 'i', kind: 'interval', intervalMs }] }), route, { now: 0, timezone: 'UTC' });
-    expect(every(7 * 60_000)).toMatchObject({ note: null, automations: [{ enabled: true, config: { intervalMs: 420_000, recurring: true } }] });
-    expect(every(86_400_000).automations[0].config).toMatchObject({ intervalMs: 86_400_000 });
+    const every = (intervalMs: number, next?: number) => convertRoutine(routine({ enabled: true,
+      triggers: [{ id: 'i', kind: 'interval', intervalMs }] }), route,
+      { now: 0, timezone: 'UTC', ...(next === undefined ? {} : { next: { [`${routine({}).id}:i`]: next } }) });
+    // PR #9314 review: V1 counted from a fixed beat; a cron keeps it where it can say it.
+    const at = Date.UTC(2026, 10, 11, 9, 3);
+    expect(every(15 * 60_000, at).automations[0]).toMatchObject({ enabled: true, config: { cronExpr: '3,18,33,48 * * * *' } });
+    expect(every(86_400_000, at).automations[0].config).toMatchObject({ cronExpr: '3 9 * * *' });
+    expect(every(86_400_000, at).automations[0].config).not.toHaveProperty('intervalMs');
+    const drift = every(7 * 60_000);
+    expect(drift).toMatchObject({ automations: [{ enabled: true, config: { intervalMs: 420_000, recurring: true } }] });
+    expect(drift.note).toContain('counts from the end of the previous run');
     const draft = convertRoutine(routine({ triggers: [] }), route, { now: 0, timezone: 'UTC' });
     expect(draft.automations).toEqual([{ enabled: false, config: expect.objectContaining({ manual: true, prompt: 'check PRs' }) }]);
     expect(draft.note).toContain('no trigger');

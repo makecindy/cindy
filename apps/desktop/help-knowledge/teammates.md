@@ -58,7 +58,7 @@ A **teammate** is a long-lived AI companion with its own name, avatar, personali
 **How permissions work (high level):**
 
 - When you ask in its chat, a teammate acts on your behalf under the chat's permission mode. **Full access** doesn't ask, **Auto-review** reviews automatically, and **Default permissions** asks you. No extra confirmation cards are added.
-- When it acts on its own (a follow-up wake-up, a message from another teammate or a stranger), it can only touch the tasks it opened and tasks already handed to it. It can keep those going toward the original goal or switch their model. Anything else on your sessions (new requirements, stopping, renaming, archiving, creating or changing automations) becomes a todo or a note to you. Reply to it and the teammate does it on your behalf.
+- When something else starts its turn (a message from another task or teammate, or an automation), it works like any other task under the same permission mode. There are no extra teammate-only limits, and nothing is turned into a todo for you.
 - Automations you set up run as your standing instructions.
 
 **Messaging platforms (the teammate's own bot):**

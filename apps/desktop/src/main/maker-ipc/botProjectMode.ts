@@ -376,11 +376,12 @@ export async function ensureBotProjectAutomations(input: {
   const loader = getProjectAutomationLoader();
   const existing = await loader.loadProjectSchedules(input.workingDir);
   if (existing?.some((config) => config.id === BOT_PROJECT_MEMORY_REVIEW_ID)) return false;
+  // An existing file that cannot be read whole is kept: the upgrade fails and retries next start.
   await loader.upsertSchedule(input.workingDir, botProjectMemoryReview({
     ...input,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     title: t('bots.homeFolder.projectMode.memoryReviewName'),
-  }));
+  }), { keepUnreadable: true });
   return true;
 }
 

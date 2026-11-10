@@ -44,7 +44,7 @@ describe('ensureBotProjectAutomations', () => {
       id: BOT_PROJECT_MEMORY_REVIEW_ID, agentKind: 'pi', model: 'm1', providerId: 'p1',
       name: 'Mimi · Review memory', persistentSession: true, silentWhenIdle: true,
       prompt: expect.stringContaining('teammate id bot-1'),
-    }));
+    }), { keepUnreadable: true });
 
     loader.loadProjectSchedules.mockResolvedValueOnce([{ id: BOT_PROJECT_MEMORY_REVIEW_ID }]);
     await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir: '/w', route })).resolves.toBe(false);

@@ -38,6 +38,42 @@ function intervalCron(intervalMs: number): string {
   return '0 * * * *';
 }
 
+function localParts(at: number, timezone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone, weekday: 'short', hour: 'numeric', minute: 'numeric', hourCycle: 'h23',
+  }).formatToParts(new Date(at));
+  const get = (type: string) => parts.find((part) => part.type === type)?.value;
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(get('weekday') ?? '');
+  return { minute: Number(get('minute')), hour: Number(get('hour')), weekday };
+}
+
+/**
+ * The V1 interval as a cron on the same beat: V1 ran every N from a fixed point (its anchor, or the
+ * time it was due next), while an interval automation counts from when the previous run finished.
+ * `at` is any time on that beat; without one the phase is unknown and only sub-day steps are kept.
+ * null: a cron cannot express this interval exactly.
+ */
+function beatCron(intervalMs: number, at: number | undefined, timezone: string): string | null {
+  const minutes = intervalMs / 60_000;
+  if (!Number.isInteger(minutes) || minutes <= 0) return null;
+  const local = at === undefined ? null : localParts(at, timezone);
+  if (local && (!Number.isInteger(local.minute) || !Number.isInteger(local.hour))) return null;
+  const steps = (period: number, step: number, phase: number) =>
+    Array.from({ length: period / step }, (_, index) => phase + index * step).join(',');
+  if (minutes < 60) return 60 % minutes === 0 ? `${steps(60, minutes, (local?.minute ?? 0) % minutes)} * * * *` : null;
+  const hours = minutes / 60;
+  if (!Number.isInteger(hours)) return null;
+  const minute = local?.minute ?? 0;
+  if (hours < 24) {
+    if (24 % hours !== 0) return null;
+    return `${minute} ${hours === 1 ? '*' : steps(24, hours, (local?.hour ?? 0) % hours)} * * *`;
+  }
+  if (!local) return null;
+  if (hours === 24) return `${minute} ${local.hour} * * *`;
+  if (hours === 168 && local.weekday >= 0) return `${minute} ${local.hour} * * ${local.weekday}`;
+  return null;
+}
+
 function onceCron(at: number, timezone: string): string | null {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: timezone, month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23',
@@ -94,18 +130,24 @@ export function migratedAutomationId(routineId: string, index: number): string {
 export function convertRoutine(
   routine: Routine,
   route: BotModelRoute | null,
-  options: { now: number; timezone: string },
+  options: { now: number; timezone: string; next?: Record<string, number> },
 ): RoutineConversion {
   const skipped: string[] = [];
   const schedules: Array<{ cronExpr: string; timezone: string; recurring: boolean; intervalMs?: number }> = [];
   const ran: string[] = [];
+  const drifted: string[] = [];
   for (const trigger of routine.triggers) {
     if (trigger.kind === 'cron') {
       schedules.push({ cronExpr: trigger.expression, timezone: trigger.timezone || options.timezone, recurring: true });
     } else if (trigger.kind === 'interval') {
-      // Every N, as before (the engine runs interval automations by the interval itself).
-      if (Number.isFinite(trigger.intervalMs) && trigger.intervalMs >= 60_000) {
+      // On the same beat when a cron can say it (V1 counted from a fixed point; review on PR #9314).
+      const at = options.next?.[`${routine.id}:${trigger.id}`] ?? trigger.anchorMs;
+      const beat = Number.isFinite(trigger.intervalMs) ? beatCron(trigger.intervalMs, at, options.timezone) : null;
+      if (beat) schedules.push({ cronExpr: beat, timezone: options.timezone, recurring: true });
+      else if (Number.isFinite(trigger.intervalMs) && trigger.intervalMs >= 60_000) {
+        // Same rate, counted from the end of the previous run: said in the note.
         schedules.push({ cronExpr: intervalCron(trigger.intervalMs), timezone: options.timezone, recurring: true, intervalMs: trigger.intervalMs });
+        drifted.push(`every ${Math.round(trigger.intervalMs / 60_000)} min`);
       } else skipped.push(`every ${Math.round(trigger.intervalMs / 1000)} s`);
     } else if (trigger.kind === 'once') {
       const cronExpr = trigger.at > options.now ? onceCron(trigger.at, options.timezone) : null;
@@ -154,6 +196,7 @@ export function convertRoutine(
   const reasons = [
     ...(skipped.length > 0 ? [`trigger not carried: ${skipped.join(', ')}, created paused`] : []),
     ...(draft ? ['it had no trigger; kept as a manual automation, paused'] : []),
+    ...(drifted.length ? [`${drifted.join(', ')} now counts from the end of the previous run, not a fixed beat`] : []),
     ...(automations.length === 0 && ran.length > 0 ? [`its one-off run (${ran.join(', ')}) is past; not recreated, its definition is in v1-archive/routines.json`] : []),
     ...(lostCheck ? ['plugin check not carried, created paused'] : []),
     // Running it here on another model would not be the same job: it waits for the owner.

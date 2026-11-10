@@ -26,6 +26,7 @@ vi.mock('../botRemoteResourceInvalidation.js', () => ({
 import { createBotLifecycleService } from '../botLifecycleService.js';
 import { teammateWorkspaceDir } from '../botProjectMemory.js';
 import { ownerScopedUserDataPath } from '../../appSessionState.js';
+import { normalizeRecentWorkdirPath } from '../../localDb/ipc/recentWorkdirsCore.js';
 import { tx as runWorkerTx } from '../../localDb/worker/opHandlers/tx.js';
 
 function createDatabase(): Database.Database {
@@ -397,7 +398,9 @@ describe('Bot lifecycle coordinator', () => {
       .run('opened-task', 'desktop', 'active', `${project}/notes`, project);
     sqlite.prepare('INSERT INTO sessions (id, source, status, updated_at, working_dir, project_dir) VALUES (?, ?, ?, 1, ?, ?)')
       .run('neighbour', 'desktop', 'active', `${project}-other`, `${project}-other`);
-    sqlite.prepare('INSERT INTO recent_workdirs (path) VALUES (?), (?)').run(project, `${project}-other`);
+    // Stored the way the project list stores them (forward slashes on Windows too).
+    const listed = [project, `${project}-other`].map(dir => normalizeRecentWorkdirPath(dir)!);
+    sqlite.prepare('INSERT INTO recent_workdirs (path) VALUES (?), (?)').run(...listed);
 
     const result = await service().run({ botId: 'bot-1', action: 'delete', confirmName: 'Helper', keepTaskHistory: false });
 
@@ -405,7 +408,7 @@ describe('Bot lifecycle coordinator', () => {
       ['automation-run', 'opened-task']);
     expect(closeSession).toHaveBeenCalledWith('automation-run');
     expect(closeSession).not.toHaveBeenCalledWith('neighbour');
-    expect(sqlite.prepare('SELECT path FROM recent_workdirs').pluck().all()).toEqual([`${project}-other`]);
+    expect(sqlite.prepare('SELECT path FROM recent_workdirs').pluck().all()).toEqual([listed[1]]);
     expect(result).toMatchObject({ status: 'deleted', affected: { sessions: 4 } });
   });
 });

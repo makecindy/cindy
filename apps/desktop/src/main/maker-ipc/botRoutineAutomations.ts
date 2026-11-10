@@ -54,12 +54,14 @@ async function pauseProjectAutomation(workingDir: string, configId: string): Pro
  */
 export async function writeRoutineAutomations(workingDir: string, routine: Routine, options: {
   route: BotModelRoute | null; paused?: boolean; now?: number; timezone?: string;
+  /** V1 timers (`<routine>:<trigger>` → when it was due next), keeping an interval's beat. */
+  next?: Record<string, number>;
 }): Promise<{ configIds: string[]; note: string | null }> {
   const converted = convertRoutine(routine, options.route,
-    { now: options.now ?? Date.now(), timezone: options.timezone ?? localTimezone() });
+    { now: options.now ?? Date.now(), timezone: options.timezone ?? localTimezone(), next: options.next });
   const loader = (await schedulerHost()).getProjectAutomationLoader();
   for (const automation of converted.automations) {
-    await loader.upsertSchedule(workingDir, automation.config);
+    await loader.upsertSchedule(workingDir, automation.config, { keepUnreadable: true });
     if (options.paused || !automation.enabled) await pauseProjectAutomation(workingDir, automation.config.id);
   }
   return { configIds: converted.automations.map((automation) => automation.config.id), note: converted.note };
