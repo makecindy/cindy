@@ -1,12 +1,10 @@
 {
   "progress": {
-    "stop": "Detener"
-  },
-  "work": {
-    "queued": "En cola {{count}}",
-    "active": "En curso {{count}}",
-    "expand": "Expandir actividad de compañeros",
-    "collapse": "Contraer actividad de compañeros"
+    "stop": "Detener",
+    "stopMine": "Detener lo mío",
+    "stopAll": "Detener todo",
+    "stopAllHint": "Incluye solicitudes de otras personas",
+    "step": "Paso {{step}}/{{total}}"
   },
   "title": "Chats grupales",
   "memberSeparator": ", ",
@@ -88,7 +86,8 @@
     "planDoneGeneric": "División de trabajo terminada",
     "olderOnComputer": "Los mensajes anteriores están en tu computadora.",
     "newMessages_many": "{{count}} nuevos mensajes",
-    "planDone_many": "Todos los pasos de {{count}} están realizados."
+    "planDone_many": "Todos los pasos de {{count}} están realizados.",
+    "endTalk": "Finalizar"
   },
   "quote": {
     "label": "Citando {{name}}: {{summary}}",
@@ -185,6 +184,8 @@
     "start": "Plan de inicio",
     "dismiss": "Saltar plan",
     "editHint": "Para cambiar quién hace qué, solo dilo",
+    "autoContinue": "Iniciar el siguiente paso automáticamente",
+    "autoContinueSaveFailed": "No se pudieron guardar las transiciones entre pasos. Inténtalo de nuevo.",
     "autoNote": "Cada paso finalizado inicia el siguiente automáticamente.",
     "pauseNote": "El trabajo se detiene después de cada paso hasta que haga clic en \"Iniciar el siguiente paso\".",
     "superseded": "Actualizado",
@@ -337,7 +338,9 @@
     "groupDissolved": "Este grupo ha sido disuelto. Aún puedes leer el historial disponible.",
     "lastOwner": "Transfiera la propiedad o disuelva este grupo antes de irse.",
     "allBotsMentionDisabled": "El propietario del grupo aún no ha habilitado @Todos los compañeros.",
-    "turnAlreadyStarted": "Este compañero ya ha empezado y no se puede omitir"
+    "turnAlreadyStarted": "Este compañero ya ha empezado y no se puede omitir",
+    "stopOwnershipUnknown": "No se pudo detener parte del trabajo porque no se pudo verificar quién lo solicitó.",
+    "nothingToStop": "No hay trabajo activo que detener."
   },
   "followUp": {
     "next": "Planificar · Siguiente paso",
@@ -639,5 +642,6 @@
     },
     "externalFormatError": "Vuelva a abrir el enlace completo del mensaje original."
   },
-  "memberCount_many": "Miembros de {{count}}"
+  "memberCount_many": "Miembros de {{count}}",
+  "waitingForOwner": "Esperando confirmación"
 }
