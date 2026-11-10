@@ -153,7 +153,10 @@ export function openSessionInNewWindow(
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
-    transparent: true,
+    // Only macOS needs a transparent window for its independent sidebar material.
+    // On Windows the transparent window shows the bare Acrylic backing while Chromium
+    // repaints after restore, so the sidebar flashes darker.
+    transparent: process.platform === 'darwin',
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
           backgroundMaterial: winBackdropConfig.backgroundMaterial,
