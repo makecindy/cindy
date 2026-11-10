@@ -1,3 +1,4 @@
+import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
 import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { composerRowChrome } from '@/session/composerGeometry';
 import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
@@ -10067,12 +10068,20 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     router,
   ]);
 
-  // 「由任务「X」发送」来源标签:工具只在同一设备的任务之间投递,来源任务与当前任务同设备。
+  // 跨电脑来源按宿主记录的设备打开；无前缀的历史来源仍属于当前任务所在设备。
   const openOriginSession = useCallback((originSessionId: string) => {
-    if (!deviceId || !originSessionId || originSessionId === sessionId) return;
+    const target = parseSourceSessionTarget(originSessionId);
+    const targetDeviceId = target?.deviceId ?? deviceId;
+    if (!target || !targetDeviceId) return;
+    if (target.sessionId === sessionId && targetDeviceId === deviceId) return;
+    const targetDevice = remoteSessionStore.getDeviceIdentity().find((item) => item.deviceId === targetDeviceId);
     router.push({
       pathname: '/sessions/[sessionId]',
-      params: { sessionId: originSessionId, deviceId, deviceName },
+      params: {
+        sessionId: target.sessionId,
+        deviceId: targetDeviceId,
+        deviceName: targetDevice?.name ?? (targetDeviceId === deviceId ? deviceName : targetDeviceId),
+      },
     });
   }, [deviceId, deviceName, router, sessionId]);
 

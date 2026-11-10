@@ -45,6 +45,8 @@ export interface BrowserToolSummary {
 
 export class BrowserToolRegistry {
   private readonly tools = new Map<string, BrowserToolDef>();
+  /** Backend the workflow rules were last tailored to in this server session ('all' = untailored). */
+  rulesBackend?: string;
 
   register<T extends z.ZodRawShape>(def: {
     name: string;
@@ -93,6 +95,19 @@ export class BrowserToolRegistry {
     const set = new Set<BrowserToolCategory>();
     for (const t of this.tools.values()) set.add(t.category);
     return Array.from(set);
+  }
+
+  /**
+   * Validate arguments exactly as `call` would (same relocation and strict schema) without running
+   * the tool. Lets a tool check every step of a sequence before the first one takes effect.
+   */
+  check(name: string, rawArgs: unknown): { ok: true; data: Record<string, unknown> } | { ok: false; issues: string[] } {
+    const def = this.tools.get(name);
+    if (!def) return { ok: false, issues: [`unknown tool: ${name}`] };
+    const input = rawArgs && typeof rawArgs === 'object' && def.normalizeArgs ? def.normalizeArgs(rawArgs as Record<string, unknown>) : rawArgs;
+    const parsed = z.strictObject(def.inputShape).safeParse(input ?? {});
+    if (parsed.success) return { ok: true, data: parsed.data as Record<string, unknown> };
+    return { ok: false, issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`) };
   }
 
   async call(name: string, rawArgs: unknown): Promise<BrowserToolResult> {

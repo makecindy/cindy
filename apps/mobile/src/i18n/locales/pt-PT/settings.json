@@ -135,11 +135,16 @@
     "permissionDenied": "Permita as notificações da Cindy nas definições do sistema.",
     "unregisterQueued": "Desativado. A anulação do registo será concluída quando voltar a estar online.",
     "preview": "Mostrar pré-visualizações de conversas",
-    "background": "Manter a conversa ligada em segundo plano",
-    "backgroundActive": "A receber mensagens de conversas em segundo plano",
+    "background": "Notificações em segundo plano",
+    "backgroundActive": "A receber notificações em segundo plano",
     "backgroundStop": "Parar de receber",
-    "backgroundHint": "A ligação em segundo plano funciona sem Google e apresenta uma notificação permanente. Pode interrompê-la a partir dessa notificação.",
-    "googleUnavailable": "As notificações push da Google estão indisponíveis. Ative a ligação de conversas em segundo plano para receber mensagens."
+    "backgroundHint": "A Cindy mantém uma ligação automaticamente quando o Google Push pode estar indisponível. É apresentada uma notificação permanente durante a ligação.",
+    "googleUnavailable": "O Google Push está indisponível. A ligação em segundo plano segue as suas definições de notificações.",
+    "backgroundModes": {
+      "auto": "Automático",
+      "on": "Sempre ativas",
+      "off": "Desativadas"
+    }
   },
   "about": {
     "sectionTitle": "Acerca deste telemóvel",

@@ -72,6 +72,7 @@ const DEFAULT_SETTINGS = {
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
+  modelUseRevokedControllers: [],
   disabledControlDeviceIds: [],
   lastKnownDeviceNames: {},
 };
@@ -144,6 +145,7 @@ describe('readDeviceLinkSettings', () => {
       remoteDesktopEnabled: false,
       keepAwake: false,
       revokedControllers: ['dev-1', 'dev-2'],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
