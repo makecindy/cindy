@@ -320,6 +320,15 @@ describe('resolveSoleSteerableQueuedMessage', () => {
     expect(resolveSoleSteerableQueuedMessage([queuedMessage()], idle)).toBe('client-1');
   });
 
+  it('never targets a hidden answered question reply, but still targets a supplement', () => {
+    const answered = queuedMessage({ clientId: 'question-reply:answered:request-1:digest' });
+    expect(getPendingQueueRowPresentation(answered)).toMatchObject({ canEdit: false, canSteer: false });
+    expect(resolveSoleSteerableQueuedMessage([answered], idle)).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage([queuedMessage({ clientId: 'question-reply:request-2:digest' })], idle),
+    ).toBe('question-reply:request-2:digest');
+  });
+
   it('declines when the target is ambiguous or the row cannot steer right now', () => {
     expect(
       resolveSoleSteerableQueuedMessage(
