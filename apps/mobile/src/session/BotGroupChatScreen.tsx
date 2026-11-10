@@ -123,7 +123,6 @@ import {
   BotGroupPlanCard,
   BotGroupPlanEndDivider,
   BotGroupPlanFollowUpRow,
-  type BotGroupFollowUpAction,
   type BotGroupIdentityLookup,
   type BotGroupPlanCardAction,
 } from './BotGroupPlan';
@@ -139,15 +138,16 @@ import { botGroupRoute } from './botGroupNavigation';
 import { BotGroupThreadEntry, BotGroupThreadFollow, BotGroupThreadShare, BotGroupThreadPosted, BotGroupMessageActions } from './BotGroupThreadViews';
 import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
 
-/** Toast copy when a plan action fails without a more specific cause. */
-const PLAN_ACTION_FAILED: Record<BotGroupPlanAction, string> = {
+type MobilePlanAction = BotGroupPlanAction | 'auto-continue';
+const PLAN_ACTION_FAILED: Record<MobilePlanAction, string> = {
   start: 'groupChat.plan.startFailed',
   dismiss: 'groupChat.plan.dismissFailed',
   continue: 'groupChat.timeline.continuePlanFailed',
   retry: 'groupChat.timeline.retryFailed',
+  'auto-continue': 'groupChat.plan.autoContinueSaveFailed',
 };
 
-type PlanPending = { planId: string; action: BotGroupPlanAction | 'edit' };
+type PlanPending = { planId: string; action: MobilePlanAction | 'edit' };
 /** Follow new messages while the reader is within this distance of the bottom. */
 const STICK_TO_BOTTOM_PX = 48;
 /** Teammate replies hang 10pt right of the 28pt portrait, as in the 1:1 chat. */
@@ -200,8 +200,18 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const chat = useBotGroupChat(host, groupId, threadRootId);
   const identity = useBotGroupIdentities(deviceId);
   const resolveMedia = useBotGroupRemoteMedia(deviceId);
-  const stopPendingRef = useRef(false);
-  const [stopping, setStopping] = useState(false);
+  const focused = useIsFocused();
+  // Direct stops are cancelled on blur; the computer bridge keeps its request in flight.
+  const stopFocused = !!deviceId || focused;
+  const stopOwner = useMemo(() => ({ accountGeneration, deviceId, groupId, threadRootId }), [accountGeneration, deviceId, groupId, threadRootId, stopFocused]);
+  const stopOwnerRef = useRef<typeof stopOwner | null>(stopOwner); stopOwnerRef.current = stopOwner;
+  const stopPendingRef = useRef<{ owner: typeof stopOwner } | null>(null);
+  const [stopAttempt, setStopAttempt] = useState<{ owner: typeof stopOwner } | null>(null);
+  const stopping = stopAttempt?.owner === stopOwner;
+  useEffect(() => {
+    stopOwnerRef.current = stopOwner;
+    return () => { if (stopOwnerRef.current === stopOwner) stopOwnerRef.current = null; };
+  }, [stopOwner]);
   const [settings, setSettings] = useState(false);
   const [maskSettings, setMaskSettings] = useState(false), [catchup, setCatchup] = useState(false);
   const openMaskAfterSettings = useRef(false), locateAfterCatchup = useRef<ChatMaskMention | null>(null);
@@ -245,7 +255,6 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const pauseReadUntilInteraction = useRef(false);
   const group = chat.state.kind === 'ready' ? chat.state.group : null;
   const mask = useGroupPersonalMask(groupId, deviceId, !!group?.serverBacked && group.conversationKind !== 'direct' && (!deviceId || group.supportsPersonalMask === true), chat.act, group);
-  const focused = useIsFocused();
   const [foreground, setForeground] = useState(() => AppState.currentState === 'active');
   const previewVisibility = useScrollViewMessageVisibility(
     `${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? ''}`,
@@ -325,15 +334,16 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const processUserScrolling = useRef(false);
   const processLeading = useRef(0);
   const [processLeadingSpace, setProcessLeadingSpace] = useState<number | null>(null);
-  const [processResumeRequest, setProcessResumeRequest] = useState(0);
   const processViewport = useProcessDisclosureViewport(() => viewport.current, () => {
     setProcessLeadingSpace(previous => previous ?? processLeading.current);
     jumpingToBottom.current = false;
     stickToBottom.current = false;
   }, () => {
     setProcessLeadingSpace(null);
-    setProcessResumeRequest(request => request + 1);
   });
+  // Live executions now share this viewport; release their reserved range when
+  // the round ends instead of carrying it into the next execution.
+  useEffect(processViewport.resume, [group?.round.status, processViewport.resume]);
   if (viewport.current.owner !== viewportOwner) {
     processViewport.resume();
     viewport.current = { owner: viewportOwner, group, measuredGroup: null, contentHeight: 0, viewportHeight: 0, offsetY: 0 };
@@ -569,13 +579,18 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   }, [continuing, processViewport.resume, chat.act, report]);
 
   /** 开始 / 不用了 / 继续 / 重试 / 结束分工; both transports re-read the authoritative state. */
-  const runPlanAction = useCallback(async (action: BotGroupPlanAction, planId: string, expectedRevision?: number) => {
+  const runPlanAction = useCallback(async (action: MobilePlanAction, planId: string, expectedRevision?: number, autoContinue?: boolean) => {
     if (planPendingRef.current) return;
+    if (action === 'auto-continue' && !deviceId) return;
     const pending = {}; planPendingRef.current = pending;
     setPlanPending({ planId, action });
-    processViewport.resume();
-    stickToBottom.current = true;
-    try { await chat.act(`plan-${action}`, { planId, ...(!deviceId ? { expectedRevision } : {}) }); } catch (error) {
+    if (action !== 'auto-continue') {
+      processViewport.resume();
+      stickToBottom.current = true;
+    }
+    try { await chat.act(`plan-${action}`, action === 'auto-continue'
+      ? { planId, autoContinue, ...(expectedRevision !== undefined ? { expectedPlanRevision: expectedRevision } : {}) }
+      : { planId, ...(!deviceId ? { expectedRevision } : {}) }); } catch (error) {
       if (planPendingRef.current === pending) report(error, PLAN_ACTION_FAILED[action]);
     } finally {
       if (planPendingRef.current === pending) { planPendingRef.current = null; setPlanPending(null); }
@@ -660,11 +675,16 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     } catch { return false; }
   }, [group?.archived, group?.dissolvedAt, chat.online, chat.canQueue, chat.act]);
 
-  const stop = async () => {
-    if (stopPendingRef.current) return;
-    stopPendingRef.current = true; setStopping(true);
-    try { await chat.act('stop'); } catch (error) { report(error, 'groupChat.composer.stopFailed'); }
-    finally { stopPendingRef.current = false; setStopping(false); }
+  const stop = async (scope?: 'all') => {
+    if (stopOwnerRef.current !== stopOwner || stopPendingRef.current?.owner === stopOwner) return;
+    const attempt = { owner: stopOwner };
+    stopPendingRef.current = attempt; setStopAttempt(attempt);
+    try { await (scope ? chat.act('stop', { scope }) : chat.act('stop')); }
+    catch (error) { if (stopOwnerRef.current === stopOwner) report(error, 'groupChat.composer.stopFailed'); }
+    finally {
+      if (stopPendingRef.current === attempt) stopPendingRef.current = null;
+      if (stopOwnerRef.current === stopOwner) setStopAttempt(current => current === attempt ? null : current);
+    }
   };
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -826,7 +846,6 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
           />
         </SessionQuickSendProvider>
       {!imageSelectionActive && !threadRootId ? <BotGroupWorkArea onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
-        resumeRequest={processResumeRequest}
         onError={message => { if (message) Alert.alert(message); }} /> : null}
       {processViewport.footerHeight > 0 && <View style={{ height: processViewport.footerHeight, marginTop: -spacing.sm }} />}
       </ComposerPullThroughScrollView>
@@ -880,6 +899,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         <BotGroupComposer pullThrough={composerPullThrough} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={mask.participate} maskIndicator={mask.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
+        stopPending={stopping || group.round.status === 'running' && group.round.speakers.length > 0 && group.round.speakers.every(speaker => speaker.stopping || speaker.executionStatus === 'stopping')}
         running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
         divisionSupported={!threadRootId && !chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={group.supportsAttachments === true} uploadAttachment={chat.uploadAttachment} onSend={send} onStop={stop} />
       </View>
@@ -936,14 +956,6 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   </View></RichContentContext.Provider>;
 }
 
-function planCardPending(action: PlanPending['action'] | null): BotGroupPlanCardAction | null {
-  return action === 'start' || action === 'dismiss' || action === 'edit' ? action : null;
-}
-
-function followUpPending(action: PlanPending['action'] | null): BotGroupFollowUpAction | null {
-  return action === 'continue' || action === 'retry' || action === 'dismiss' ? action : null;
-}
-
 const EMPTY_PENDING: readonly DurableOutboxRecord[] = [];
 
 export const BotGroupTimeline = memo(function BotGroupTimeline({
@@ -965,7 +977,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   continuing: boolean;
   planPending: PlanPending | null;
   onContinue(): void;
-  onPlanAction(action: BotGroupPlanAction, planId: string, revision?: number): void;
+  onPlanAction(action: MobilePlanAction, planId: string, revision?: number, autoContinue?: boolean): void;
   onEditStep(planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string, revision?: number): void;
   onMessageLayout?: (id: string, y: number, height: number) => void;
   onLocateMessage?: (id: string) => void;
@@ -1044,6 +1056,13 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
       const isRoot = message.id === threadRootId;
       const longRoot = isRoot && message.content.length > 600;
       const displayMessage = longRoot && !expandedRoot ? { ...message, content: `${message.content.slice(0, 600)}…` } : message;
+      const messagePlan = message.planId ? planById.get(message.planId) : undefined;
+      const currentStep = messagePlan?.status === 'running' ? messagePlan.steps.find(step => step.position === messagePlan.currentStep && step.status === 'running') : undefined;
+      const stepSpeakers = group.round.status === 'running' && currentStep ? group.round.speakers.filter(speaker => speaker.activity === 'step'
+        && speaker.botId === currentStep.botId && !speaker.stopping && speaker.executionStatus !== 'queued' && speaker.executionStatus !== 'stopping'
+        && (!currentStep.executionId || speaker.executionId === currentStep.executionId)) : [];
+      const stepStartedAt = stepSpeakers.length === 1 ? stepSpeakers[0].startedAt : undefined;
+      const runningSince = stepStartedAt !== undefined && Number.isFinite(stepStartedAt) && stepStartedAt > 0 ? stepStartedAt : null;
       const queued = pendingById.get(message.id);
       const groupTime = timeGroups.get(message.id);
       const previous = index > 0 ? messages[index - 1] : undefined;
@@ -1089,10 +1108,14 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
             onPress: onMentionPress }}
           resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia}
           canContinue={message.id === continueId} continuing={continuing} onContinue={onContinue}
-          plan={message.planId ? planById.get(message.planId) : undefined}
+          planMessages={group.messages} runningSince={runningSince}
+          plan={messagePlan}
           planActionable={!group.archived && !group.dissolvedAt && openPlan?.canManage !== false && message.kind === 'plan' && openPlan?.id === message.planId && openPlan.status === 'proposed'}
           planReassignable={!group.archived && !group.dissolvedAt && openPlan?.canManage !== false && openPlan?.kind !== 'talk' && message.kind === 'plan' && openPlan?.id === message.planId && openPlan.status === 'waiting'}
-          planPending={planCardPending(pendingFor(message.planId))}
+          planPending={pendingFor(message.planId)}
+          onPlanAutoContinue={deviceId && !group.archived && !group.dissolvedAt && message.kind === 'plan'
+            && openPlan?.id === message.planId && openPlan.kind === 'work' && openPlan.canManage === true
+            && openPlan.canSetAutoContinue === true ? on => onPlanAction('auto-continue', openPlan.id, openPlan.revision, on) : undefined}
           onPlanAction={(action) => { if (message.planId) onPlanAction(action, message.planId, planById.get(message.planId)?.revision); }}
           onEditStep={(step, action, botId) => { if (message.planId) onEditStep(message.planId, step, action, botId, planById.get(message.planId)?.revision); }} />
         </CompanionEntering>
@@ -1114,9 +1137,8 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
     })}
     <BotGroupMentionIdentity member={mentionedMember} anchor={mentioned?.anchor ?? null} deviceId={deviceId} onClose={() => setMentioned(null)} />
     {!threadRootId && !group.archived && !group.dissolvedAt && openPlan && openPlan.canManage !== false && followUp ? <View style={styles.indented}>
-      <BotGroupPlanFollowUpRow followUp={followUp} identityFor={identityFor} deviceId={deviceId} online={online}
-        stepNumber={openPlan.steps.indexOf(followUp.kind === 'continue' ? followUp.next : followUp.failed) + 1} stepTotal={openPlan.steps.length}
-        pending={followUpPending(pendingFor(openPlan.id))}
+      <BotGroupPlanFollowUpRow plan={openPlan} followUp={followUp} identityFor={identityFor} deviceId={deviceId} online={online}
+        pending={pendingFor(openPlan.id)}
         onContinue={() => onPlanAction('continue', openPlan.id, openPlan.revision)}
         onRetry={() => onPlanAction('retry', openPlan.id, openPlan.revision)}
         onEnd={() => onPlanAction('dismiss', openPlan.id, openPlan.revision)} />
@@ -1126,7 +1148,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
 
 function BotGroupTimelineItem({
   groupId, message, footer, topic = false, isRoot = false, onRetrySource, continued = false, quoteDisplay, onLocateQuote, member, members, deviceId, online, identityFor, mentionLabels, mentionContext, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
-  plan, planActionable, planReassignable, planPending, onPlanAction, onEditStep, onOpenDiagram, interactive = true, active = true,
+  plan, planMessages, runningSince, planActionable, planReassignable, planPending, onPlanAction, onEditStep, onPlanAutoContinue, onOpenDiagram, interactive = true, active = true,
 }: {
   groupId: string;
   onOpenDiagram?: (source: string) => void;
@@ -1155,10 +1177,13 @@ function BotGroupTimelineItem({
   onContinue(): void;
   /** Snapshot of the plan this message belongs to (安排卡, hand-off or plan end). */
   plan: BotGroupPlanView | undefined;
+  planMessages: readonly BotGroupMessageView[];
+  runningSince: number | null;
   planActionable: boolean;
   planReassignable: boolean;
   planPending: BotGroupPlanCardAction | null;
   onPlanAction(action: 'start' | 'dismiss'): void;
+  onPlanAutoContinue?: (on: boolean) => void;
   onEditStep(step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string): void;
 }) {
   const { t } = useTranslation();
@@ -1227,6 +1252,17 @@ function BotGroupTimelineItem({
       {message.maskAttribution ? <GroupMaskAvatar {...message.maskAttribution} deviceId={deviceId} /> : null}
     </View>;
   }
+  const planCard = message.kind === 'plan' ? <BotGroupPlanCard plan={plan} fallback={message.content} members={members} identityFor={identityFor} deviceId={deviceId} online={online}
+          runningSince={runningSince} doneAt={new Map(plan?.steps.flatMap(step => {
+            const message = step.resultMessageId ? planMessages.find(message => message.id === step.resultMessageId && message.planId === plan.id) : undefined;
+            return message ? [[step.position, message.createdAt] as const] : [];
+          }))}
+          actionable={planActionable} reassignable={planReassignable} pending={planPending}
+          onStart={() => onPlanAction('start')} onDismiss={() => onPlanAction('dismiss')} onEditStep={onEditStep} onAutoContinueChange={onPlanAutoContinue} /> : null;
+  if (message.kind === 'plan' && plan?.kind === 'talk') return <View style={styles.botRow} testID="botGroup.message.plan">
+    <View style={styles.avatarSpacer} />
+    <View style={styles.botColumn}>{planCard}</View>
+  </View>;
   // Server plans retain the human creator as author, but the card belongs to its organizer.
   const isPlanCard = message.kind === 'plan';
   const organizer = isPlanCard ? members.find(candidate => candidate.botId === plan?.organizerBotId) : undefined;
@@ -1243,16 +1279,19 @@ function BotGroupTimelineItem({
         <Text numberOfLines={1} style={styles.authorName}>{author.name}</Text>
         {topic ? <Text style={styles.threadCaption}>{new Date(message.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</Text> : null}
         {isRoot ? <Text style={styles.threadCaption}>{t('groupChat.thread.root')}</Text> : null}
-        {isPlanCard ? <BotGroupOrganizerTag /> : null}
+        {isPlanCard && plan?.kind !== 'talk' ? <BotGroupOrganizerTag /> : null}
       </View>}
       {message.process && message.process.groupId === groupId ? <BotGroupProcess process={message.process} owned={member?.isOwned === true}
         deviceId={member?.homeDeviceId || deviceId || ''} /> : null}
       {isPlanCard
-        ? <BotGroupPlanCard plan={plan} fallback={message.content} members={members} identityFor={identityFor} deviceId={deviceId} online={online}
-          actionable={planActionable} reassignable={planReassignable} pending={planPending}
-          onStart={() => onPlanAction('start')} onDismiss={() => onPlanAction('dismiss')} onEditStep={onEditStep} />
+        ? planCard
         : <>
           {quoteDisplay ? <BotGroupQuote display={quoteDisplay} onPress={onLocateQuote} /> : null}
+          <View style={styles.botMessageContent}>
+            {renderAttachments('left')}
+            {message.threadShare && !authoredShare ? <BotGroupThreadShare messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.threadShare.messageId}`} active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
+              : content.trim() ? <BotGroupMarkdownText readOnly={!!message.threadShare} messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.id}`} richContent active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
+          </View>
           {/* A task this teammate started from the group; mine is live, another owner's is a snapshot.
               An author no longer in the group is unknown: its task may run on another computer, so it
               stays a snapshot rather than a lookup on this one (same rule as the desktop timeline).
@@ -1261,11 +1300,6 @@ function BotGroupTimelineItem({
               the computer the group was opened through. */}
           {message.task ? <BotGroupTaskCard task={message.task} owned={member !== undefined && member.isOwned !== false}
             deviceId={member?.homeDeviceId || deviceId || ''} /> : null}
-          <View style={styles.botMessageContent}>
-            {renderAttachments('left')}
-            {message.threadShare && !authoredShare ? <BotGroupThreadShare messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.threadShare.messageId}`} active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
-              : content.trim() ? <BotGroupMarkdownText readOnly={!!message.threadShare} messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.id}`} richContent active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
-          </View>
           <BotGroupHandoffFiles files={message.files} />
           {shareFooter}
           {footer}
@@ -1336,5 +1370,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   botColumn: { flex: 1, minWidth: 0, gap: spacing.xs },
   topicAuthorRow: { alignItems: 'baseline' },
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: BOT_GROUP_MESSAGE_AVATAR_SIZE },
-  authorName: { flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
+  authorName: { flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.regular },
 });

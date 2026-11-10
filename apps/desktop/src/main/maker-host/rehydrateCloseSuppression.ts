@@ -41,7 +41,14 @@ export function createRehydrateCloseSuppression(
   async function runOnCloseSideEffects(
     sessionId: string,
     fn: () => Promise<void>,
+    opts?: { forceSkip?: boolean },
   ): Promise<void> {
+    if (opts?.forceSkip === true) {
+      // 关闭方在首个 await 前取样的抑制态:Maker.close 不等 onClose,调用方的
+      // 窗口可能在本钩子跑到这里之前就已释放 —— 时序上必须信入口取样,不能重查。
+      log.debug('skip onClose side-effects: suppression captured at close entry', { sessionId });
+      return;
+    }
     if (shutdownSuppressed) {
       log.debug('skip onClose side-effects during shutdown', { sessionId });
       return;

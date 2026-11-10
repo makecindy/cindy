@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
-import { appendAutoReviewUserIntent, AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '@cindy/maker-core';
+import { appendAutoReviewUserIntent, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '@cindy/maker-core';
 import { HOST_ONLY_AGENT_PREFIX, buildMakerUserMessage, sanitizeQueuedMessageForPersistence, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { buildPluginMessage } from '../../../shared/pluginMessage.js';
@@ -11,7 +11,7 @@ import { redactInputProjectionForSharedGuest } from '../../device-link/sharedTas
 import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import { captureAgentRequest } from '../forwardedRequest.js';
 import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
-import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
 import { createPluginTargetReviewLoader } from '../../cindy-brain/pluginTargetReview.js';
 import { createPluginTaskReviewResolver } from '../pluginTaskReviewContext.js';
 
@@ -112,7 +112,7 @@ it.each(['Do not publish.', '', undefined])('keeps live authority through the fi
   expect(start).toBeGreaterThan(0);
   const end = source.indexOf('\n      });', start) + '\n      });'.length;
   const deliver = new Function('sess', 'steerPayload', 'so', 'meta', 'restoredSteerIntent',
-    'MAIN_OWNED_SEND_CONTEXT', 'AUTO_REVIEW_SOURCE_CONTENT', 'AUTO_REVIEW_USER_INTENT', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'MCP_APP_MESSAGE_GUARD', 'appContext',
+    'MAIN_OWNED_SEND_CONTEXT', 'AUTO_REVIEW_SOURCE_CONTENT', 'AUTO_REVIEW_USER_INTENT', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'ASYNC_QUESTION_ANSWER', 'SUPERSEDE_ASYNC_QUESTIONS', 'MCP_APP_MESSAGE_GUARD', 'appContext',
     compile(`return (async () => { ${source.slice(start, end)} })();`));
   const invoke = async (delegated: boolean) => {
     let result;
@@ -121,7 +121,7 @@ it.each(['Do not publish.', '', undefined])('keeps live authority through the fi
     });
     await deliver({ steer }, 'Publish now', { [AUTO_REVIEW_SOURCE_CONTENT]: '',
       ...(delegated ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true } : {}) }, {}, 'Old persisted permission',
-      MAIN_OWNED_SEND_CONTEXT, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, MCP_APP_MESSAGE_GUARD);
+      MAIN_OWNED_SEND_CONTEXT, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, MCP_APP_MESSAGE_GUARD);
     expect(steer).toHaveBeenCalledOnce();
     return result;
   };
@@ -138,7 +138,7 @@ it.each(['context', 'message', 'none'] as const)(
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const deliver = new Function('sess', 'steerPayload', 'so', 'meta', 'restoredSteerIntent',
-      'MAIN_OWNED_SEND_CONTEXT', 'AUTO_REVIEW_SOURCE_CONTENT', 'AUTO_REVIEW_USER_INTENT', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'MCP_APP_MESSAGE_GUARD', 'appContext',
+      'MAIN_OWNED_SEND_CONTEXT', 'AUTO_REVIEW_SOURCE_CONTENT', 'AUTO_REVIEW_USER_INTENT', 'AUTO_REVIEW_DELEGATED_CONTINUATION', 'ASYNC_QUESTION_ANSWER', 'SUPERSEDE_ASYNC_QUESTIONS', 'MCP_APP_MESSAGE_GUARD', 'appContext',
       compile(`return (async () => { ${source.slice(start, end)} })();`));
     let prepared = false;
     const provider = vi.fn();
@@ -159,7 +159,7 @@ it.each(['context', 'message', 'none'] as const)(
       provider();
     });
     const pending = deliver({ steer }, 'Continue', { [MCP_APP_MESSAGE_GUARD]: messageGuard }, {}, '',
-      MAIN_OWNED_SEND_CONTEXT, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, MCP_APP_MESSAGE_GUARD, context);
+      MAIN_OWNED_SEND_CONTEXT, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, MCP_APP_MESSAGE_GUARD, context);
     if (revocation === 'none') {
       await pending;
       expect(provider).toHaveBeenCalledOnce();

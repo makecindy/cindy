@@ -729,21 +729,34 @@
     "remoteDirPathHint": "A pasta é verificada no dispositivo de execução. Uma pasta inexistente causa um erro; a pasta do Lead nunca é usada como alternativa.",
     "remoteDirInvalid": "Insira um caminho absoluto no dispositivo de execução.",
     "roleLabel": "Nome da função",
-    "roleHint": "Apenas um nome para diferenciar os colaboradores. Não altera os recursos.",
-    "customRole": "Personalizado",
-    "customRolePlaceholder": "Nome de função personalizado",
-    "customRolePredefinedError": "Um nome de função personalizado não pode ser igual a uma função predefinida",
+    "taskLabel": "O que o Worker faz",
+    "enableHint": "Esta tarefa passa a ser o Lead: distribui o trabalho e confere os resultados. O Worker é outro Agent independente, que executa o trabalho e relata o resultado.",
+    "roles": {
+      "reviewer": {
+        "name": "Revisar",
+        "task": "Dê uma olhada no trabalho do Lead e faça algumas sugestões."
+      },
+      "developer": {
+        "name": "Desenvolver"
+      },
+      "tester": {
+        "name": "Testar",
+        "task": "Teste o trabalho do Lead até agora e relate as falhas com os passos para reproduzi-las."
+      }
+    },
+    "addRole": "Adicionar função",
+    "removeRoleHint": "Toque e segure para remover",
+    "removeRoleConfirmTitle": "Remover “{{role}}”?",
+    "removeRoleConfirmDesc": "Você pode adicioná-la de novo quando quiser em “Adicionar função”.",
+    "removeRoleConfirm": "Remover função",
+    "moreSettings": "Mais configurações",
     "agentLabel": "Agent",
-    "modelLabel": "Modelo",
     "modelDefault": "Padrão",
     "modelDefaultHint": "Usa o modelo padrão de Worker do computador",
-    "permissionLabel": "Modo de permissão",
     "permissionAuto": "Revisão automática",
     "permissionFull": "Acesso total",
-    "permissionAutoHint": "Lê e grava no espaço de trabalho e revisa automaticamente solicitações de elevação. Ações de alto risco podem ser negadas ou exigir confirmação.",
-    "permissionFullHint": "Pode alterar qualquer arquivo e executar comandos com acesso à rede sem perguntar novamente. Risco máximo; use apenas para tarefas confiáveis.",
     "initialTaskLabel": "Tarefa inicial (opcional)",
-    "initialTaskPlaceholder": "Uma primeira tarefa opcional para este Worker",
+    "initialTaskPlaceholder": "Escreva a primeira coisa a passar para ele ou deixe em branco para o Lead distribuir o trabalho",
     "workerCountSummary_one": "{{count}} Worker · {{running}} em execução",
     "workerCountSummary_other": "{{count}} Workers · {{running}} em execução",
     "loading": "Carregando Workers…",
@@ -820,12 +833,6 @@
     "hint": "Ambas as regras usam o cartão que expira primeiro. Ignora quando todas as cotas estão cheias. Executado neste computador enquanto o Cindy está aberto.",
     "failed": "Não foi possível salvar. Tente novamente.",
     "restore": "Restaurar padrões"
-  },
-  "followUp": {
-    "title": "Quer que eu acompanhe suas sessões?",
-    "start": "Começar acompanhamento",
-    "notNow": "Agora não",
-    "saveFailed": "Não foi possível salvar. Tente novamente."
   },
   "providerGroupRebalance": {
     "title": "Continuar em {{label}}?",

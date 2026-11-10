@@ -714,21 +714,34 @@
     "remoteDirPathHint": "在執行裝置上檢查目錄；不存在時報錯，不會改用 Lead 所在電腦的目錄。",
     "remoteDirInvalid": "請輸入執行裝置上的絕對路徑。",
     "roleLabel": "角色名稱",
-    "roleHint": "只是一個名稱，方便多個協作者時分辨角色，不改變能力",
-    "customRole": "自訂",
-    "customRolePlaceholder": "自訂角色名稱",
-    "customRolePredefinedError": "自訂角色名稱不能使用預設角色名稱",
+    "taskLabel": "讓 Worker 做什麼",
+    "enableHint": "目前任務作為 Lead 分派與驗收，另一個 Agent 作為 Worker 執行並回報。",
+    "roles": {
+      "reviewer": {
+        "name": "審查",
+        "task": "看一下 Lead 的工作，給出一些建議。"
+      },
+      "developer": {
+        "name": "開發"
+      },
+      "tester": {
+        "name": "測試",
+        "task": "測試 Lead 目前的成果，回報未通過的地方與重現步驟。"
+      }
+    },
+    "addRole": "新增角色",
+    "removeRoleHint": "長按可移除",
+    "removeRoleConfirmTitle": "移除「{{role}}」？",
+    "removeRoleConfirmDesc": "隨時可以用「新增角色」加回來。",
+    "removeRoleConfirm": "移除角色",
+    "moreSettings": "更多設定",
     "agentLabel": "Agent",
-    "modelLabel": "模型",
     "modelDefault": "預設",
     "modelDefaultHint": "沿用電腦端的 Worker 預設模型",
-    "permissionLabel": "權限模式",
     "permissionAuto": "自動審批",
     "permissionFull": "完全存取",
-    "permissionAutoHint": "允許在工作區內讀寫，並自動審批提權請求；高風險操作可能被拒絕或要求確認。",
-    "permissionFullHint": "允許修改任意檔案並執行連網指令，無需再次確認。風險最高，只適合可信任務。",
     "initialTaskLabel": "初始任務（選填）",
-    "initialTaskPlaceholder": "給這個 Worker 的選填第一則任務",
+    "initialTaskPlaceholder": "寫下交給它的第一件事；留空則先待命，由 Lead 分派",
     "workerCountSummary_one": "{{count}} 個 Worker · {{running}} 執行中",
     "workerCountSummary_other": "{{count}} 個 Worker · {{running}} 執行中",
     "loading": "正在讀取 Worker…",
@@ -803,12 +816,6 @@
     "hint": "任一條件滿足時，優先用最早到期的卡。配額全滿時略過。由這台電腦執行，需保持 Cindy 執行。",
     "failed": "儲存失敗，請重試。",
     "restore": "恢復預設"
-  },
-  "followUp": {
-    "title": "要我幫你跟進任務嗎？",
-    "start": "開始跟進",
-    "notNow": "暫不開啟",
-    "saveFailed": "沒能儲存，請重試"
   },
   "providerGroupRebalance": {
     "title": "換到 {{label}} 繼續？",

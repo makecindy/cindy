@@ -729,21 +729,34 @@
     "remoteDirPathHint": "La carpeta se verifica en el dispositivo de ejecución. Una carpeta faltante provoca un error; En su lugar, la carpeta Lead nunca se utiliza.",
     "remoteDirInvalid": "Ingrese una ruta absoluta en el dispositivo de ejecución.",
     "roleLabel": "Nombre del rol",
-    "roleHint": "Sólo un nombre para distinguir a los colaboradores. No cambia las capacidades.",
-    "customRole": "Personalizado",
-    "customRolePlaceholder": "Nombre de rol personalizado",
-    "customRolePredefinedError": "El nombre de un rol personalizado no puede coincidir con un rol preestablecido",
+    "taskLabel": "Qué hace el Worker",
+    "enableHint": "Esta tarea pasa a ser el Lead: reparte el trabajo y revisa los resultados. El Worker es otro Agent independiente que hace el trabajo e informa del resultado.",
+    "roles": {
+      "reviewer": {
+        "name": "Revisar",
+        "task": "Échale un vistazo al trabajo del Lead y da algunas sugerencias."
+      },
+      "developer": {
+        "name": "Desarrollar"
+      },
+      "tester": {
+        "name": "Probar",
+        "task": "Prueba el trabajo del Lead hasta ahora e informa de los fallos con los pasos para reproducirlos."
+      }
+    },
+    "addRole": "Añadir rol",
+    "removeRoleHint": "Mantén pulsado para quitar",
+    "removeRoleConfirmTitle": "¿Quitar «{{role}}»?",
+    "removeRoleConfirmDesc": "Puedes volver a añadirlo cuando quieras con «Añadir rol».",
+    "removeRoleConfirm": "Quitar rol",
+    "moreSettings": "Más configuración",
     "agentLabel": "Agent",
-    "modelLabel": "Modelo",
     "modelDefault": "Predeterminado",
     "modelDefaultHint": "Utiliza el modelo Worker predeterminado de la computadora.",
-    "permissionLabel": "Modo de permiso",
     "permissionAuto": "Revisión automática",
     "permissionFull": "Acceso completo",
-    "permissionAutoHint": "Lee y escribe dentro del espacio de trabajo y revisa automáticamente las solicitudes de elevación. Las acciones de alto riesgo pueden ser negadas o necesitar confirmación.",
-    "permissionFullHint": "Puede cambiar cualquier archivo y ejecutar comandos en red sin volver a preguntar. Mayor riesgo; Úselo solo para tareas confiables.",
     "initialTaskLabel": "Tarea inicial (opcional)",
-    "initialTaskPlaceholder": "Una primera tarea opcional para este Worker",
+    "initialTaskPlaceholder": "Escribe lo primero que quieres encargarle o déjalo en blanco para que el Lead reparta el trabajo",
     "workerCountSummary_one": "{{count}} Worker · {{running}} funcionando",
     "workerCountSummary_other": "{{count}} Workers · {{running}} funcionando",
     "loading": "Cargando Workers…",
@@ -820,12 +833,6 @@
     "hint": "Cualquiera de las reglas utiliza la tarjeta que vence más pronto. Saltar cuando todas las cuotas estén llenas. Se ejecuta en esta computadora mientras se ejecuta Cindy.",
     "failed": "No se pudo guardar. Intentar otra vez.",
     "restore": "Restaurar valores predeterminados"
-  },
-  "followUp": {
-    "title": "¿Quieres que haga un seguimiento de tus sesiones?",
-    "start": "Comience a realizar un seguimiento",
-    "notNow": "Ahora no",
-    "saveFailed": "No se pudo guardar. Intentar otra vez."
   },
   "providerGroupRebalance": {
     "title": "¿Continuar en {{label}}?",

@@ -42,6 +42,7 @@ const SWITCH_ERROR_KEYS: Record<CompanionCloudFailureCode, string> = {
   BUSY: 'bots.cloud.transferBusy',
   HOME_OUTDATED: 'bots.cloud.homeOutdated',
   PAUSED: 'bots.cloud.resumeToMove',
+  TARGET_OUTDATED: 'bots.cloud.targetOutdated',
 };
 
 /** How long a companion moved here from its online home may take to be built on this computer. */
@@ -200,7 +201,9 @@ function HomeMenuItems({ bot, state }: { bot: CompanionHomeBot; state: HomeSwitc
       {choices.targets.map((target) => (
         <DropdownMenuItem key={target.deviceId} onSelect={() => { state.setError(null); state.setPending(target); }}>
           <span className="min-w-0 truncate">
-            {target.isSelf ? t('bots.cloud.switchHere') : t('bots.cloud.switchTo', { device: state.targetName(target) })}
+            {target.isSelf ? t('bots.cloud.switchHere')
+              // An older Cindy: it can take the teammate, which then runs there the older way.
+              : t(target.outdated ? 'bots.cloud.targetOutdatedItem' : 'bots.cloud.switchTo', { device: state.targetName(target) })}
           </span>
         </DropdownMenuItem>
       ))}
@@ -236,6 +239,9 @@ export function HomeSwitchConfirm({ bot, state }: { bot: CompanionHomeBot; state
       onOpenChange={(open) => { if (!open && !state.inFlight.current) state.setPending(null); }}
       title={t('bots.cloud.switchTitle', { name: bot.name, device })}
       description={t('bots.cloud.switchDescription', { name: bot.name, device })}
+      // An older Cindy there: say what the teammate keeps and what does not apply.
+      content={state.pending?.outdated
+        ? <p className="text-base text-[var(--confirm-desc)]">{t('bots.cloud.olderTargetNote', { name: bot.name, device })}</p> : undefined}
       confirmText={t('bots.cloud.switchAction', { device })}
       cancelText={t('bots.cancel')}
       loading={state.busy}

@@ -162,12 +162,7 @@
   },
   "taskActionConfirmation": {
     "title": "確認任務操作",
-    "once": "請核對下方的目標、動作與完整內容。允許僅對本次操作生效。",
-    "remove": "這會釋放自動化的接收位址。請核對目標，僅允許這一次。",
-    "permission": "這會代你回答另一個任務的授權請求。請核對操作，僅允許這一次。",
-    "resume": "這會恢復已暫停的執行。請核對目標，僅允許這一次。",
-    "command": "這會在電腦上儲存或執行命令，執行時不經過 Agent 的工具審批。請核對命令與工作目錄，僅允許這一次。",
-    "authority": "這會建立或改寫自動執行的指令，後續執行將沿用這份授權。請核對完整指令，批准僅用於本次儲存。"
+    "once": "請核對下方的目標、動作與完整內容。允許僅對本次操作生效。"
   },
   "logSupport": {
     "title": "日誌與回饋",
@@ -4195,7 +4190,18 @@
           "ariaLabel": "允許你的其他電腦和你分享的人呼叫此供應商",
           "writeFailed": "遠端呼叫設定未能儲存，請重試"
         },
-        "moreActionsAria": "更多操作"
+        "moreActionsAria": "更多操作",
+        "runLocation": {
+          "label": "在哪台電腦執行",
+          "optionLocal": "這台電腦",
+          "notSignedIn": "未登入",
+          "autoBorrowing": "這台電腦還沒登入，新任務在 {{device}} 上執行，不用再登入。",
+          "local": "新任務在這台電腦執行。也可以改選你另一台已登入的電腦。",
+          "pinned": "新任務在 {{device}} 上執行，使用那台電腦的登入。已在執行的任務不受影響。",
+          "inline": "執行於",
+          "signInHere": "在這台電腦登入",
+          "writeFailed": "「執行於」未能儲存，請重試"
+        }
       },
       "detect": {
         "groupLabel": "檢測到本機 CLI",
@@ -4699,7 +4705,7 @@
     },
     "discordBot": {
       "title": "Discord 機器人",
-      "description": "繫結你自建的 Discord Bot，在 Discord 私聊裡連線 {{appName}}。",
+      "description": "繫結你自建的 Discord Bot，在 Discord 私聊和你選定的伺服器頻道裡連線 {{appName}}。",
       "statusAria": "Discord 機器人狀態：{{status}}",
       "status": {
         "needsConfig": "需要配置",
@@ -4743,6 +4749,64 @@
         "cellLabel": "訊息通知",
         "hint": "上下線時由 Discord Bot 傳送通知訊息"
       },
+      "channels": {
+        "title": "伺服器頻道",
+        "summary": {
+          "unknown": "讀取中…",
+          "off": "未開啟",
+          "on": "已開啟 {{count}} 個伺服器"
+        },
+        "hint": "預設不開放。開啟一個伺服器後，在它的文字頻道裡 @ 機器人即可召喚；每個頻道、每個話題各有獨立的上下文，機器人也只會收到 @ 它的訊息。",
+        "ownerOnly": "目前只有你本人能召喚。",
+        "offline": "機器人未連線，連上後才能選擇頻道；已啟用的頻道維持不變。",
+        "members": {
+          "label": "允許頻道成員使用",
+          "notice": "頻道成員預設關閉。允許後，在該頻道 @ 機器人的成員會用到{{name}}已設定的工具，並共用{{name}}的記憶；權限沿用{{name}}的權限設定，指令仍只有你能用。",
+          "aria": "允許 #{{channel}} 的成員使用",
+          "guildAria": "允許 {{guild}} 的成員使用"
+        },
+        "loading": "正在讀取機器人所在的伺服器…",
+        "refresh": "重新整理",
+        "empty": "機器人還沒有加入任何伺服器。請在 Discord Developer Portal 產生邀請連結把它加入伺服器，再點重新整理。",
+        "noTextChannels": "沒有文字頻道",
+        "toggleAria": "啟用 {{guild}} 的 #{{channel}}",
+        "error": {
+          "load": "讀取伺服器列表失敗。",
+          "save": "這次修改沒有儲存成功，已顯示目前實際儲存的設定。",
+          "unsupported": "那台電腦上的 Cindy 版本較舊，暫不支援在這裡設定伺服器頻道。請先把那台電腦上的 Cindy 升級到最新版。"
+        },
+        "permission": {
+          "cannotSend": "機器人在此頻道無法檢視或發言",
+          "limited": "缺少權限：{{list}}",
+          "separator": "、",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "已不可用的伺服器或頻道",
+          "hint": "這些已被刪除，或機器人已不在對應伺服器，可以從列表中移除。",
+          "remove": "移除"
+        },
+        "ownerOnlyCardNotice": "只有這個機器人的主人才能點這個按鈕。",
+        "guild": {
+          "summary": {
+            "off": "未開啟",
+            "all": "全部頻道",
+            "selected": "已選 {{count}} 個頻道",
+            "none": "未選擇頻道"
+          },
+          "toggleAria": "開啟 {{guild}}",
+          "more": "更多",
+          "modeAria": "{{guild}} 涵蓋的頻道",
+          "mode": {
+            "all": "全部頻道",
+            "selected": "僅指定頻道"
+          },
+          "allHint": "包含之後新增的文字頻道；機器人只會在有檢視和發言權限的頻道裡回應。"
+        }
+      },
       "ownerNotice": {
         "linked": "✅ 關聯好啦，直接開聊就行~",
         "disconnected": "🔌 已斷開關聯啦，需要時再連上就行~",
@@ -4759,11 +4823,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "P1 私聊能力無需開啟任何 Privileged Intent。"
+          "body": "無需開啟任何 Privileged Intent（保持 Message Content 關閉）。在伺服器裡，機器人只會收到 @ 它的訊息。"
         },
         "step3": {
           "title": "邀請 Bot",
-          "body": "在 OAuth2 URL Generator 勾選 scope bot，並授予 Send Messages、Read Message History、Attach Files 權限，把 Bot 邀請到任一你所在的 server；DM 需要你和 Bot 有共同 server。"
+          "body": "在 OAuth2 URL Generator 勾選 scope bot，並授予 View Channels、Send Messages、Send Messages in Threads、Embed Links、Attach Files、Read Message History、Add Reactions 權限，把 Bot 邀請到任一你所在的 server；DM 需要你和 Bot 有共同 server。"
         },
         "step4": {
           "title": "複製使用者 ID",
@@ -5198,6 +5262,15 @@
         "hint": "開啟後按 {{shortcut}} 傳送訊息；關閉後按 Enter 傳送訊息，按 Shift+Enter 換行。",
         "ariaLabel": "使用 {{shortcut}} 傳送訊息"
       }
+    },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任務預設工作目錄",
+      "label": "本機預設工作目錄",
+      "hint": "建立本機任務且未選擇專案時，預先選取此目錄。明確選擇的專案、對話或遠端裝置仍優先。",
+      "unset": "未設定（不預選目錄）",
+      "choose": "選擇目錄",
+      "clear": "清除預設目錄",
+      "failed": "儲存預設工作目錄失敗，請重試"
     },
     "linkOpen": {
       "title": "開啟連結",
@@ -6151,13 +6224,18 @@
         "allowInboundAria": "切換是否允許 {{name}} 控制本機",
         "peerControlOff": "對方未允許遠端控制",
         "masterOffHint": "需先開啟上方總開關",
-        "controllingThisMac": "已連接到 Cindy"
+        "controllingThisMac": "已連接到 Cindy",
+        "useThisDeviceModels": "用本機模型",
+        "allowModelUseAria": "允許 {{name}} 用本機的模型"
       },
       "toast": {
         "revoked": "已撤銷該裝置的訪問權限",
         "revokeFailed": "撤銷失敗",
         "restored": "已恢復該裝置的訪問權限",
-        "restoreFailed": "恢復失敗"
+        "restoreFailed": "恢復失敗",
+        "modelUseRestored": "已允許這台電腦用本機的模型",
+        "modelUseRevoked": "這台電腦不能再用本機的模型",
+        "modelUseFailed": "「用本機模型」未能儲存，請重試"
       },
       "sections": {
         "myDevices": "我的裝置",
@@ -9016,6 +9094,8 @@
       "daysWindow": "{{days}}天"
     },
     "claude": {
+      "totalWeeklyLabel": "總週",
+      "temporarilyLimited": "暫時受限",
       "waitingDetail": "Claude 訂閱餘量會在下一輪完成後更新。",
       "weeklyLabel": "週限",
       "modelWeeklyLabel": "{{model}} 週限",
@@ -10164,70 +10244,20 @@
     },
     "glance": {
       "open": "{{name}}的近況",
-      "dueUnseen": "有待辦到期",
       "computers": "電腦",
       "runningHere": "正在這台上執行",
       "online": "線上",
       "offline": "離線",
       "current": "目前",
       "offlineCount_other": "離線 {{count}} 台",
-      "todos": "待辦",
       "showMore": "顯示更多",
       "showLess": "收起",
       "doneCount_other": "已完成 {{count}}",
-      "delete": "刪除",
-      "deleted": "已刪除，同一件事之後不再記錄",
-      "undo": "復原",
-      "undoFailed": "無法復原，請重試",
-      "deleteFailed": "無法刪除，請重試",
-      "check": "幫我查查",
-      "checkMeta": "在已連接的郵件和訊息裡找新待辦",
-      "checkPrompt": "幫我查查已連接的信箱、訊息等來源裡，有沒有需要我處理的新事項，有就記成待辦。",
-      "checkFailed": "沒能傳送，請重試",
-      "dailyCheck": "每天幫我查一次",
-      "dailyCheckMeta": "工作日 9:00，沒有新待辦不打擾",
       "recentTasks": "近期任務",
       "unread": "未讀結果",
-      "stopDailyCheck": "停止每天檢查",
-      "loadFailed": "待辦載入失敗，點擊重試",
-      "dailyCheckFailed": "沒能儲存，請重試",
       "outputs": "輸出內容",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "無法開啟檔案",
-      "source": {
-        "conversation": "你交代的",
-        "mail": "來自郵件",
-        "feishu": "來自飛書",
-        "github": "來自 GitHub",
-        "community": "來自社群",
-        "task": "來自任務"
-      }
-    },
-    "autonomy": {
-      "title": "跟進我的任務",
-      "descriptionOn": "{{name}}會在任務有變化時查看摘要並提醒你。",
-      "movedFrom": "已從{{name}}移到這裡",
-      "heldBy": "現在由{{name}}負責，打開就移到這裡。",
-      "routineScopeHint": "把你自己建立的任務也交給我跟進；下方內建跟進負責回應這些任務的變化。",
-      "heldByNobody": "尚未開啟",
-      "restoreDefault": "恢復預設（{{name}}）",
-      "saveFailed": "沒能儲存，請重試",
-      "turnOff": {
-        "title": "關閉自動跟進所有任務？",
-        "description": "關閉後沒有夥伴統一跟進所有任務。",
-        "confirm": "關閉",
-        "cancel": "取消"
-      },
-      "allowSchedulerFollow": {
-        "title": "它開的任務也交給{{name}}跟進",
-        "description": "預設{{scheduler}}只看不跟。打開後，{{name}}開的任務沒做完時，{{scheduler}}也會接著跟進。"
-      },
-      "consent": "開啟後，我會讀取這台電腦上你建立的任務摘要，分析進度並提醒你重要變化。這會使用模型額度，你可以隨時關閉。",
-      "invitation": {
-        "title": "要我幫你跟進任務嗎？",
-        "start": "開始跟進",
-        "notNow": "暫不開啟"
-      }
+      "openFailed": "無法開啟檔案"
     },
     "remoteSettings": {
       "empty": "暫無內容",
@@ -10249,9 +10279,6 @@
     },
     "creationName": "名字",
     "settingsBack": "返回設定",
-    "sidebar": {
-      "newTaskWith": "和{{name}}開個新任務"
-    },
     "title": "夥伴",
     "add": "新增夥伴",
     "createWizard": {
@@ -10262,7 +10289,22 @@
       "description": "夥伴會自己維護記憶與學會的做法。只有需要修正時，才直接開啟它的資料夾。",
       "contents": "包含 SOUL.md、USER.md、system_prompt.md，以及 Skill 和記憶資料夾。模型、權限和連線仍由 Cindy 管理。",
       "open": "開啟資料夾",
-      "openFailed": "無法開啟夥伴資料夾。"
+      "openFailed": "無法開啟夥伴資料夾。",
+      "projectMode": {
+        "memoryReviewName": "{{name}} · 整理記憶",
+        "carryover": {
+          "title": "升級前沒做完的事",
+          "intro": "夥伴升級時還沒完成的事項。還有用的接著做，沒用的直接刪掉。舊版完整紀錄保存在夥伴資料夾的 v1-archive 裡。",
+          "todos": "待辦",
+          "work": "工作台",
+          "threads": "進行中",
+          "commitments": "答應過的",
+          "waiting": "在等",
+          "corrections": "你糾正過的做法",
+          "routines": "需要看一下的例行任務",
+          "upgrade": "升級時沒能自動帶過來的"
+        }
+      }
     },
     "profile": {
       "title": "資料",
@@ -10321,9 +10363,6 @@
     "model": {
       "description": "選擇這位夥伴使用的模型。",
       "primary": "主模型",
-      "task": "任務模型",
-      "inheritPrimary": "繼承主模型",
-      "inheritingPrimary": "繼承主模型，用於新建背景任務",
       "restoreDefault": "恢復預設模型"
     },
     "modelChain": {
@@ -10451,11 +10490,10 @@
       "showReplyTargetHint": "夥伴回覆上方標出它回的是你哪則訊息。較早的回覆不顯示。"
     },
     "session": {
-      "ownedByBot": "{{name}} 的背景任務",
+      "ownedByBot": "{{name}} 開的",
       "backToBot": "回到 {{name}}"
     },
     "collab": {
-      "deliveryFailed": "結果未能送達原對話，已保存在本任務中",
       "backgroundTask": "背景任務",
       "trackedTask": "獨立執行並自動回傳結果",
       "stopTask": "停止任務",
@@ -10472,8 +10510,6 @@
       "actionFailed": "沒送出去，再試一次。",
       "retrying": "還沒開始，正在重試…",
       "status": {
-        "queued": "正在開始",
-        "waiting": "等待處理",
         "running": "正在做",
         "completed": "已完成",
         "failed": "失敗了",
@@ -10489,13 +10525,6 @@
       },
       "viewResult": "查看結果",
       "noWrittenResult": "沒有文字結果。",
-      "addNote": "補一句",
-      "addNotePlaceholder": "補充給背景任務的話，按 Enter 傳送",
-      "addNoteSent": "已傳給背景任務",
-      "stop": "停止",
-      "lookAt": "看看",
-      "awaitingConfirm": "等你確認：{{summary}}",
-      "awaitingConfirmGeneric": "等你確認",
       "elapsed": "已做 {{duration}}",
       "tookTime": "用時 {{duration}}",
       "expandResult": "展開結果",
@@ -10879,7 +10908,6 @@
         "planning": "正在安排…"
       },
       "task": {
-        "label": "任務",
         "state": {
           "started": "進行中",
           "waiting": "等你確認",
@@ -11235,30 +11263,6 @@
           }
         }
       },
-      "system": {
-        "group": "系統技能",
-        "meta": "已開 {{on}} / 共 {{total}}",
-        "pageMeta": "系統技能 · 隨 Cindy 更新",
-        "use": "為這位夥伴開啟",
-        "whenOff": "關閉後",
-        "items": {
-          "todo": {
-            "name": "待辦",
-            "hint": "記下你交代的事和它發現的事，到期提醒你。",
-            "off": "不再記錄、整理和提醒待辦；已有待辦保留，重新開啟後繼續。"
-          },
-          "routine": {
-            "name": "例行任務",
-            "hint": "幫你建立和維護定期執行的例行任務。",
-            "off": "不再新建或修改例行任務；已有例行任務照常執行，你仍可在「例行任務」頁管理。"
-          },
-          "follow": {
-            "name": "工作台與追蹤",
-            "hint": "關注你所有任務的近況，追蹤你交給它的任務。",
-            "off": "不再主動查看和追蹤你的任務；你仍可以在對話裡直接問它。"
-          }
-        }
-      },
       "learned": {
         "group": "學會的技能",
         "empty": "還沒有學會的技能。夜間學習會把反覆用到的做法整理成技能，你也可以在對話裡請它記下來。",
@@ -11293,11 +11297,8 @@
       "toolSettings": "工具設定",
       "notTurnedOn": "這台電腦尚未開啟",
       "turnOn": "去開啟",
-      "permissions": "權限"
-    },
-    "systemSkills": {
-      "followOffHint": "{{name}} 的系統技能「工作台與追蹤」已關閉，在能力頁重新開啟後才能使用。",
-      "offHint": "系統技能「{{skill}}」已關閉，在能力頁重新開啟後才會執行。"
+      "permissions": "權限",
+      "officialInherited": "Cindy 官方 · 跟隨本機啟停"
     },
     "guided": {
       "title": "建立夥伴",
@@ -11444,6 +11445,10 @@
       "resumeToMove": "先恢復 {{name}}，再換到另一台電腦",
       "transferBusy": "{{name}} 還在回覆，等這一輪結束再換電腦",
       "targetUnavailable": "「{{device}}」現在無法使用，它需要上線並開啟遠端控制",
+      "targetOutdated": "「{{device}}」上的 Cindy 版本較舊，還不能執行「{{name}}」，請先在那台電腦上更新 Cindy",
+      "targetOutdatedItem": "換到「{{device}}」· 舊版 Cindy",
+      "targetOutdatedMeta": "舊版 Cindy",
+      "olderTargetNote": "「{{device}}」上是舊版 Cindy，{{name}} 在那裡按舊方式執行：對話記錄照常同步，專案規則和自動化在那裡不生效。",
       "shadowTitle": "這個夥伴已在「{{device}}」上執行",
       "shadowHint": "這裡的對話只能檢視。",
       "openOnHome": "開啟「{{device}}」上的夥伴",
@@ -11471,7 +11476,7 @@
       "mergeLabel": "合併重複的 Cindy",
       "mergeHint": "你有 {{count}} 個 Cindy：{{devices}}",
       "mergeTitle": "把 {{count}} 個 Cindy 合成一個？",
-      "mergeDescription": "合併後只留下一個 Cindy。其他 Cindy 的對話紀錄、記憶、技能、待辦和例行任務會併進來；同名但內容不同的記憶和技能另存一份，不會覆蓋。其他 Cindy 會停用，它們的資料仍保留在雲端和原來的電腦上。",
+      "mergeDescription": "合併後只留下一個 Cindy。其他 Cindy 的對話紀錄、記憶、技能和例行任務會併進來；同名但內容不同的記憶和技能另存一份，不會覆蓋。其他 Cindy 會停用，它們的資料仍保留在雲端和原來的電腦上。",
       "mergeKeep": "保留哪一個的名字、個性和設定",
       "mergeAction": "合成一個",
       "merged": "{{count}} 個 Cindy 已合成一個，帶過來 {{messages}} 則訊息",
@@ -11886,6 +11891,15 @@
       "unavailable": "目錄暫不可用",
       "failed": "專案未能更新，請重新載入核對儲存結果。",
       "noAvailable": "更多專案可先在專案列表中新增。"
+    },
+    "automations": {
+      "title": "自動化",
+      "description": "{{name}} 專案裡的自動化。在這裡開關，編輯請到自動化頁面。",
+      "empty": "{{name}} 還沒有自動化。",
+      "failed": "自動化讀取失敗。",
+      "toggle": "啟用「{{name}}」",
+      "manage": "在自動化頁面管理",
+      "create": "去自動化頁面新建"
     }
   },
   "common": {
@@ -13042,6 +13056,11 @@
     "jumpToBottom": "跳到底部",
     "prevMessageJump": "跳到上一則提問：{{preview}}",
     "askUserQuestion": {
+    "unanswered": "未回答",
+    "withdrawn": "無需再回答",
+    "withdrawnDraft": "這個問題已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作為補充傳送。",
+    "sendSupplement": "傳送補充",
+
       "voice": {
         "hint": "可以說「第一項」或選項名稱；多選後請說「確認選擇」。",
         "freeTextHint": "可以直接說出回答，檢查後說「確認選擇」提交。",
@@ -13305,8 +13324,10 @@
     },
     "backgroundActivity": {
       "status": "後臺子任務執行中，模型用量仍在消耗…",
-      "bashStatus_one": "後臺任務執行中（{{count}} 個）…",
-      "bashStatus_other": "後臺任務執行中（{{count}} 個）…",
+      "bashWorkStatus_one": "正在後臺工作（{{count}} 個命令）…",
+      "bashServiceStatus_one": "後臺服務執行中（{{count}} 個）",
+      "bashWorkStatus_other": "正在後臺工作（{{count}} 個命令）…",
+      "bashServiceStatus_other": "後臺服務執行中（{{count}} 個）",
       "stopAll": "全部停止",
       "stopAllTitle": "關閉該任務的後臺處理程序，停止全部後臺作業（任務可繼續使用）",
       "stopBashTitle": "停止該任務仍在執行的後臺作業（不關閉會話處理程序）",
@@ -14199,6 +14220,19 @@
       "closeDescription": "將停止並刪除本次追問，主任務不受影響。",
       "closeConfirm": "關閉並刪除",
       "closeFailed": "刪除追問失敗，請稍後重試。"
+    },
+    "botStartedTasks": {
+      "started": "開出的任務",
+      "handedTo": "交出的任務",
+      "open": "開啟任務「{{title}}」",
+      "untitled": "未命名任務",
+      "startedOne": "開了任務",
+      "handedToOne": "交給任務"
+    },
+    "botTaskLetter": {
+      "replied": "回信",
+      "toggle": "展開或收合「{{title}}」的回信",
+      "openTask": "開啟任務"
     }
   },
   "ccAgent": {
@@ -15397,7 +15431,8 @@
         "openConfigAria": "開啟專案自動化配置檔案",
         "openConfigFailed": "開啟檔案失敗",
         "reload": "重新載入",
-        "reloadAria": "重新載入專案自動化配置"
+        "reloadAria": "重新載入專案自動化配置",
+        "teammate": "{{name}} · 夥伴"
       },
       "promote": {
         "menu": "提升為專案自動化",
@@ -16299,7 +16334,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "提交反饋",
-      "cancel": "取消"
+      "cancel": "取消",
+      "previewLabel": "GitHub · 公開回饋",
+      "edit": "修改",
+      "doneEditing": "完成修改",
+      "publicSubmit": "公開提交回饋",
+      "publicationNotice": "提交後，內容和署名將公開在 GitHub。",
+      "attribution": "署名：{{name}}",
+      "environment": "附帶執行環境",
+      "identitySettings": "署名與帳號"
     },
     "redirect": {
       "descriptionBefore": "在對話中輸入 ",
@@ -17351,15 +17394,37 @@
       "customRolePlaceholder": "+ 自定義角色名（可選）",
       "customRolePredefinedError": "自定義角色名不能使用預設角色名",
       "agentLabel": "Agent",
-      "modelLabel": "模型",
       "permissionLabel": "權限模式",
       "noAvailableModels": "沒有可用的 {{agent}} 模型，請在設定中檢查供應商連線和憑證。",
       "effortLabel": "推理強度",
       "initialTaskLabel": "初始任務",
-      "optional": "（可選）",
-      "initialTaskPlaceholder": "給這個 Worker 的可選第一條任務",
+      "initialTaskPlaceholder": "寫下交給它的第一件事；留空則先待命，由 Lead 分派",
       "enableCollabTitle": "開啟協同",
       "enableCollabSubmit": "開啟協同",
+      "enableCollabDescription": "目前任務作為 Lead 分派與驗收，另一個 Agent 作為 Worker 執行並回報。",
+      "templateLabel": "讓 Worker 做什麼",
+      "templates": {
+        "developer": {
+          "name": "開發"
+        },
+        "reviewer": {
+          "name": "審查",
+          "task": "看一下 Lead 的工作，給出一些建議。"
+        },
+        "tester": {
+          "name": "測試",
+          "task": "測試 Lead 目前的成果，回報未通過的地方與重現步驟。"
+        }
+      },
+      "removePreset": "移除 {{role}}",
+      "removePresetConfirm": {
+        "title": "移除「{{role}}」？",
+        "description": "隨時可以用「新增角色」加回來。",
+        "confirm": "移除角色",
+        "cancel": "取消"
+      },
+      "addRole": "新增角色",
+      "moreSettings": "更多設定",
       "executionDeviceLabel": "執行裝置",
       "thisComputer": "本機",
       "deviceOnline": "線上",
@@ -18114,168 +18179,10 @@
     "compression": "用於精簡冗長內容。"
   },
   "routines": {
-    "deliveryLabel": "最終送達",
-    "deliveryDirect": "直接顯示在夥伴對話裡",
-    "deliveryProcess": "交給夥伴處理後回覆",
-    "deliveryIm": "傳送到訊息機器人",
-    "deliveryNone": "只保留在執行任務裡",
-    "deliveryHint": "預設直接顯示結果，不額外呼叫模型。開啟靜默檢查後，無事時不送達。",
-    "deliveryRecipient": "接收位置",
-    "deliveryUnavailable": "目前接收位置無法使用",
-    "deliveryNoRecipients": "請先連接訊息機器人，並與它聊過一次，再重新開啟此設定。",
-    "deliveryFailed": "已完成，送達失敗",
-    "deliveryFailedHint": "執行結果已保留。請檢查送達設定；不要為了補發而重新執行任務。",
-    "deliveryDelivered": "結果已送達",
-    "onEvent": "事件：{{source}} · {{event}}",
-    "triggerDetails": "查看觸發條件（{{count}} 項，符合任一項即執行）",
-    "noTriggers": "尚未設定觸發條件",
-    "unsavedTitle": "尚有未儲存的修改",
-    "unsavedDescription": "離開後會捨棄這次對例行任務的修改。",
-    "discard": "放棄修改",
-    "continueEditing": "繼續編輯",
-    "title": "例行任務",
-    "add": "新增例行任務",
-    "back": "返回例行任務",
-    "error": "無法更新例行任務，請檢查設定後重試",
-    "empty": "新增例行任務，告訴夥伴做什麼、何時執行",
-    "enabled": "已啟用",
-    "paused": "已暫停",
-    "runNow": "立即執行",
-    "running": "執行中…",
-    "name": "名稱",
-    "instructions": "指令",
-    "when": "何時執行",
-    "addTrigger": "再新增一個",
-    "removeTrigger": "移除觸發器",
-    "schedule": "定時",
     "hourly": "每小時",
-    "daily": "每天",
-    "weekdays": "工作日",
-    "weekly": "每週",
-    "monthly": "每月",
-    "interval": "間隔",
-    "advanced": "進階…",
     "everyMinutes": "每 {{count}} 分鐘",
-    "minutes": "分鐘",
-    "expression": "Cron 表達式",
-    "timezone": "時區",
-    "delete": "刪除例行任務",
-    "save": "儲存例行任務",
-    "saved": "例行任務已儲存",
-    "deleteConfirm": "刪除這條例行任務，並取消等待中的執行？",
-    "keep": "保留例行任務",
-    "openTask": "查看任務",
-    "history": "執行歷史",
-    "noRuns": "這條例行任務尚未執行",
-    "field": "欄位",
-    "operator": "條件",
-    "value": "值",
-    "addFilter": "新增條件",
-    "removeFilter": "移除條件",
     "pluginCapability": "向例行任務提交已宣告的事件，只觸發你設定的例行任務",
-    "time": "時間",
-    "day": "日期",
-    "weekday": "星期",
-    "status": {
-      "queued": "等待中",
-      "running": "執行中",
-      "success": "已完成",
-      "failed": "執行失敗",
-      "interrupted": "已中斷",
-      "cancelled": "已取消",
-      "skipped": "已檢查 · 未喚醒模型"
-    },
-    "sourceStatus": {
-      "listening": "監聽中",
-      "disconnected": "未監聽",
-      "error": "來源需要檢查"
-    },
-    "operators": {
-      "equals": "等於",
-      "contains": "包含",
-      "not-equals": "不等於"
-    },
-    "quiet": "檢查沒事不說話",
-    "sessionMode": "執行方式",
-    "sessionModePersistent": "沿用同一任務（保留上下文）",
-    "sessionModeFresh": "每次新建任務（隔離上下文）",
-    "sessionModeHint": "沿用同一任務會在同一個例行任務的對話裡繼續；每次新建會為每次觸發建立一個獨立任務，執行結束後關閉。",
-    "quietHint": "僅回報變化或問題。提醒和定時傳送可關閉此項。",
-    "checkSource": "檢查方式",
-    "checkCommand": "前置檢查命令",
-    "checkHint": "選填。在電腦上先檢查：結束代碼 2 跳過本次執行，0 繼續執行，異常仍會回報。清空可移除。",
-    "timeoutMs": "檢查逾時（毫秒，留空不限時）",
-    "advancedSettings": "進階設定",
-    "builtinFollowUp": {
-      "name": "跟進已接手的任務（內建）",
-      "hint": "任務卡住、等你、出錯、達到用量上限或完成時跟進。只處理已交給我的任務。"
-    },
-    "todoCheck": {
-      "name": "每天查待辦"
-    },
-    "builtinNightlyLearning": {
-      "name": "夜間學習（內建）",
-      "title": "夜間學習",
-      "hint": "每天 3:30 整理和你的對話：合併記憶，把反覆用到的做法總結成技能。沒有新對話就略過，不呼叫模型。",
-      "hintWeekly": "每週一 3:30 整理這一週和你的對話：合併記憶，把反覆用到的做法總結成技能。沒有新對話就略過，不呼叫模型。"
-    },
-    "nightly": {
-      "switchLabel": "到點自動整理",
-      "paused": "已暫停。對話照常計數，開啟後到點開始整理。",
-      "running": "正在整理…",
-      "memoryOff": "記憶已關閉，只整理技能。",
-      "pending": "待整理",
-      "pendingTurns_one": "{{count}} 輪對話",
-      "pendingTurns_other": "{{count}} 輪對話",
-      "pendingNone": "沒有新對話，到點會略過",
-      "last": "上次",
-      "lastNever": "還沒整理過",
-      "lastFailed": "沒整理完，下次會再試",
-      "lastLearned_one": "整理了 {{count}} 項",
-      "lastLearned_other": "整理了 {{count}} 項",
-      "nothing": "沒有需要整理的",
-      "viewHistory": "查看紀錄",
-      "notHere": "夜間學習只在夥伴的主力電腦上執行。",
-      "switchHint": "沒有新對話就略過，不呼叫模型",
-      "frequency": "頻率",
-      "daily": "每天",
-      "weekly": "每週",
-      "dailyHint": "每天 3:30",
-      "weeklyHint": "每週一 3:30",
-      "runNow": "現在整理",
-      "history": "紀錄",
-      "empty": "還沒有整理過。有新對話後，到點會第一次整理。",
-      "manual": "手動整理",
-      "readTurns_one": "看了 {{count}} 輪對話",
-      "readTurns_other": "看了 {{count}} 輪對話",
-      "undone": "已復原",
-      "undo": "復原",
-      "redo": "恢復",
-      "watching": "觀察中的做法",
-      "watchingHint": "只出現過一次的做法先放在這裡，不會載入。再遇到同類事才會總結成技能。",
-      "promote": "現在記成技能",
-      "decline": "不用學",
-      "changedSince": "這一條之後被改過，無法復原",
-      "failed": "沒能完成，請重試",
-      "item": {
-        "memoryCreated": "新記住「{{title}}」",
-        "memoryUpdated": "整理了記憶「{{title}}」",
-        "memoryDeleted": "刪除了記憶「{{title}}」",
-        "memoryMerged": "把記憶「{{title}}」併入「{{into}}」",
-        "skillCreated": "新學技能「{{title}}」",
-        "skillUpdated": "更新了技能「{{title}}」",
-        "skillDisabled": "停用了技能「{{title}}」",
-        "skillMerged": "把技能「{{title}}」併入「{{into}}」並停用"
-      }
-    },
-    "remote": {
-      "pause": "暫停例行任務",
-      "resume": "恢復例行任務",
-      "addSchedule": "新增定時條件",
-      "addInterval": "新增間隔條件",
-      "addEvent": "新增事件觸發器",
-      "filterField": "篩選欄位"
-    }
+    "advancedSettings": "進階設定"
   },
   "cindyMakeDoctor": {
     "description": "檢查本機建置 Cindy 所需的環境。用法：/cindy-make-doctor",
@@ -19618,10 +19525,7 @@
     "sourcePresent": "[來源] 使用者原話由宿主原樣保留，作為請求背景；目前的請求在 Agent補充。",
     "sourceMissing": "[來源] 未找到可核驗的使用者原話。",
     "userPrefix": "使用者原話：",
-    "agentPrefix": "Agent補充：",
-    "taskSource": "[任務來源] 本任務由夥伴發起。",
-    "taskId": "任務 ID：",
-    "contextReferences": "參考資料："
+    "agentPrefix": "Agent補充："
   },
   "sharing": {
     "loginRequired": "登入後分享",
@@ -19747,6 +19651,8 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "unassigned": "帳號待分配",
+    "providerManagedAuth": "Codex 目前的供應商未提供 ChatGPT 帳號資訊。請在新增供應商時選擇「$t(subscriptionAccounts.signIn.anotherAccount)」，使用獨立目錄",
     "signIn": {
       "checking": "正在偵測本機帳號…",
       "detected": "偵測到已登入帳號",
@@ -19775,6 +19681,10 @@
     "loginAgain": "重新登入",
     "login": "登入"
   },
+  "sessionNotify": {
+    "finished": "這個任務這一輪做完了，最終答覆如下：",
+    "ended": "這個任務這一輪沒有正常結束，最後的輸出如下："
+  },
   "crashDiagnosis": {
     "title": "Cindy 上次意外結束了",
     "description": "要診斷原因嗎？我們會把結束資訊和去識別化日誌整理成任務草稿，供你檢查後傳送。強制結束或斷電也可能造成意外結束。",
@@ -19795,5 +19705,21 @@
     "browserFallback": "前往 GitHub 為 Cindy 點 Star",
     "openGithub": "開啟 GitHub",
     "openFailed": "無法開啟 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正在連線 Cindy 後台…",
+    "restoring": "正在恢復任務狀態…",
+    "retrying": "任務狀態尚未同步，正在重試…",
+    "pairing": "需要重新授權連線",
+    "pairingHelp": "請保留此頁。在啟動 Cindy 後台的終端重新執行開啟網頁的命令，完成新頁面的配對，再回到此頁。",
+    "keepDraft": "已輸入的草稿會保留。連線恢復後將自動同步任務狀態。",
+    "retry": "重試連線",
+    "desktopAuthHelp": "請在啟動終端更新後台連線設定，然後重新開啟這個實驗客戶端。"
+  },
+  "remoteControlConsent": {
+    "title": "允許遠端控制這台電腦？",
+    "detail": "請求來自「{{device}}」\n用途：{{purpose}}\n\n開啟後，同帳號裝置可以遠端控制這台電腦，包括執行任務和存取檔案。此設定持續有效，可隨時在設定中關閉。",
+    "decline": "暫不開啟",
+    "enable": "開啟遠端控制"
   }
 }

@@ -1,0 +1,20 @@
+// Loaded only by the Windows simulator build command, not by app prebuild.
+// App codegen target names leave too little room for CMake's path hashing under
+// apps/mobile/android/app/.cxx. Prefer a short, reusable per-worktree cache.
+gradle.beforeProject { project ->
+    if (project.path == ':app') {
+        project.pluginManager.withPlugin('com.android.application') {
+            project.extensions.getByName('androidComponents').finalizeDsl { android ->
+                if (android.externalNativeBuild.cmake.buildStagingDirectory == null) {
+                    def worktreeCache = new File(project.rootProject.projectDir, '../../../.cxx').canonicalFile
+                    def cacheKey = java.security.MessageDigest.getInstance('SHA-256')
+                        .digest(project.projectDir.canonicalPath.getBytes('UTF-8'))
+                        .encodeHex().toString().take(12)
+                    def tempCache = new File(System.getProperty('java.io.tmpdir'), "cx-${cacheKey}").canonicalFile
+                    android.externalNativeBuild.cmake.buildStagingDirectory =
+                        worktreeCache.path.length() <= tempCache.path.length() ? worktreeCache : tempCache
+                }
+            }
+        }
+    }
+}

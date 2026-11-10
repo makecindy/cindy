@@ -10,6 +10,7 @@ import { listProjectAliases, upsertProjectAlias } from '../localDb/ipc/projectAl
 import { recentWorkdirs, sessions } from '../localDb/schema.js';
 import { loadSidebarSettingsSnapshot, setLocalProjectHidden } from '../sidebarSettingsStore.js';
 import { projectKeyComparisonKey } from '../../shared/projectKeys.js';
+import { workingDirEquals } from '../../shared/workingDir.js';
 import type { ProjectsRootState } from '../../shared/projectsRoot.js';
 import { readProjectsRootDirectory } from '../projects-root-settings.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
@@ -66,19 +67,68 @@ async function requireRegisteredProject(
   return match.path;
 }
 
+/**
+ * A projectless source has no membership to hand down, so a task that will run inside a
+ * visible registered project joins the nearest one. Only catalog entries match: nothing is
+ * registered or restored, and removed or unavailable projects are skipped.
+ */
+async function nearestVisibleProject(
+  context: LocalProjectContext,
+  workingDir: string,
+): Promise<string | null> {
+  // Same path shape an explicit project_path accepts; anything else simply has no project.
+  if (!path.isAbsolute(workingDir) || workingDir.includes('\0')) return null;
+  if (process.platform !== 'win32' && workingDir.includes('\\')) return null;
+  const rows = await context.client.drizzle
+    .select({ path: recentWorkdirs.path })
+    .from(recentWorkdirs);
+  context.assertCurrent();
+  const hidden = new Set(
+    loadSidebarSettingsSnapshot().hiddenProjectKeys.map((key) =>
+      projectKeyComparisonKey(key, process.platform),
+    ),
+  );
+  // Walk up the real ancestors and compare exact paths. The grouping identity used elsewhere
+  // folds sibling worktrees into their repository, which would place the task in a project
+  // that does not contain the directory.
+  for (let directory = path.normalize(workingDir); ; ) {
+    const match = rows.find((row) => workingDirEquals(row.path, directory));
+    if (match && !hidden.has(identity(match.path))) {
+      // Same availability rules as an explicit project_path; a failing candidate is skipped.
+      const checked = await validateExistingLocalProjectDirectory(match.path).catch(() => null);
+      context.assertCurrent();
+      if (checked?.ok) return match.path;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+
 /** Selecting a task's project is read-only: never register or restore a directory. */
 export async function resolveSessionProject(params: {
   callerSessionId: string;
   /** undefined inherits the persisted source; null explicitly creates a dialogue. */
   projectDir?: string | null;
+  /**
+   * Requested execution directory. Only consulted when membership is omitted and the
+   * source is projectless; it never overrides an inherited or explicit choice.
+   */
+  workingDir?: string;
 }) {
   return withLocalProjectContext(params.callerSessionId, async (context) => {
     let selected = params.projectDir;
     if (selected === undefined) {
       const source = await readCurrentSessionProject(params.callerSessionId);
       context.assertCurrent();
-      if (source.workspaceKind === 'dialogue') selected = null;
-      else if (source.workspaceKind === 'project' && source.projectDir) selected = source.projectDir;
+      if (source.workspaceKind === 'dialogue') {
+        const containing = params.workingDir
+          ? await nearestVisibleProject(context, params.workingDir)
+          : null;
+        if (containing)
+          return { ok: true as const, projectDir: containing, projectFromWorkingDir: true as const };
+        selected = null;
+      } else if (source.workspaceKind === 'project' && source.projectDir) selected = source.projectDir;
       else return { ok: false as const, errorCode: 'INVALID_ARGS',
         message: '无法确定来源任务的项目。请指定已有项目的 project_path，或传 null 创建不绑项目的任务。' };
     }

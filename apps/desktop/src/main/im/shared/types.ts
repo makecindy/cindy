@@ -89,8 +89,11 @@ export interface ImSessionNamespace {
    * workingDir 是 app 托管目录(im-working-dir),不该以它聚成假项目组。
    */
   workspaceKind?: 'project' | 'dialogue';
-  /** 该渠道 session 的工作目录(必须已创建好)。 */
-  ensureWorkingDir(botContextId: string): string;
+  /**
+   * 该渠道 session 的工作目录(必须已创建好)。`userId` 只给「一个路由键一个独立目录」的会话
+   * 用(Discord 服务器频道 / thread lane); 其余渠道忽略它, 私聊目录保持 botContextId 一个。
+   */
+  ensureWorkingDir(botContextId: string, userId?: string): string;
   /** 渠道专属列(feishu: feishuBotAppId/feishuOpenId;slack: imBotContextId/imUserId)。 */
   extraInsertColumns(botContextId: string, userId: string): Record<string, unknown>;
   /**
@@ -156,6 +159,11 @@ export interface ImChannelAdapter {
    * 实现; 缺省 = 这个渠道的连接不能交给伙伴, 保持原有路由。
    */
   companionLane?: (userId: string) => ImCompanionLane;
+  /**
+   * 公共对话(服务器频道 / thread)不接入本机桌面任务与项目: /ctr /exctr /session /project 及其卡片
+   * 按钮对这个 userId 一律不执行。接管会把主人私人桌面任务挂到公共场合, 与频道隔离的承诺冲突。
+   */
+  blocksLocalTaskAccess?: (userId: string) => boolean;
   /** Resolve an authenticated private notification topic before any default-session or command routing. */
   resolveNotificationReply?: (event: IMMessageEvent) => Promise<string | null>;
   notificationReplyText?: { unavailable: string; commands: string };
@@ -348,6 +356,8 @@ export interface ImUiTextPack {
       effort: string;
       permission: string;
     }) => string;
+    /** blocksLocalTaskAccess 的会话里收到接管 / 项目类命令时的提示。缺省回 unknownCommand。 */
+    localTaskAccessUnavailable?: (cmd: string) => string;
     detachedBySlash: string;
     detachedByRevoke: string;
     notAttached: string;

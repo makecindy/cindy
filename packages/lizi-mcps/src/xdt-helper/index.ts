@@ -169,16 +169,10 @@ export {
   type BotSkillToolDeps,
 } from './bot_skills.js';
 export {
-  registerBotWorkbenchTools,
-  glanceForModel,
-  WORKBENCH_MESSAGE_MAX_CHARS,
-  type BotGlanceWire,
-  type BotWorkbenchCallbacks,
-  type BotWorkbenchToolDeps,
-  type GlanceKindWire,
-  type GlanceRowWire,
-  type WorkbenchTranscriptWire,
-} from './bot_workbench.js';
+  registerTeammateProjectTools,
+  type TeammateProjectsCallback,
+  type TeammateProjectToolDeps,
+} from './teammate_projects.js';
 export {
   registerGetTaskDigestTool,
   boundTaskDigest,

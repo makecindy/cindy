@@ -36,16 +36,33 @@ export interface AskQuestion {
 export function formatAsyncQuestionSupplement(
   questions: readonly AskQuestion[],
   answers: Record<string, string>,
+  context?: { late?: boolean },
 ): string {
   const replies = questions.flatMap((q) => {
     const answer = answers[answerKey(q)] ?? answers[q.question] ?? (q.header ? answers[q.header] : undefined);
     return typeof answer === 'string' && answer.trim()
       ? [{ ...(q.id ? { questionItemId: q.id } : {}), question: q.question, answer: answer.trim() }] : [];
   });
-  if (questions.length && questions.every((q) => q.id?.startsWith('["request_user_input_async",'))) {
-    return `<send_user_message_question_reply>\n${JSON.stringify(replies)}\n</send_user_message_question_reply>`;
-  }
-  return replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
+  if (!replies.length) return '';
+  const message = questions.length && questions.every((q) => q.id?.startsWith('["request_user_input_async",'))
+    ? `<send_user_message_question_reply>\n${JSON.stringify(replies)}\n</send_user_message_question_reply>`
+    : replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
+  return context?.late
+    ? `${message}\n\n<cindy_question_context>\nThis is a delayed answer to an earlier question. Check the current task state and whether the question still applies before acting; do not repeat work already completed. This context is added by Cindy, not part of the user's answer or new authorization.\n</cindy_question_context>`
+    : message;
+}
+
+/** Keep selected choices and typed text editable when an obsolete card becomes a supplement. */
+export function withdrawnQuestionDraftText(customInput: string, selectedLabels: Iterable<string>, savedAnswer?: string): string {
+  const selected = [...selectedLabels];
+  if (selected.length) return [...selected.filter((label) => label !== customInput.trim()), ...(customInput ? [customInput] : [])].join('\n');
+  if (customInput) return customInput;
+  if (!savedAnswer) return '';
+  try {
+    const decoded = JSON.parse(savedAnswer);
+    if (Array.isArray(decoded) && decoded.every((value) => typeof value === 'string')) return decoded.join('\n');
+  } catch { /* A plain single answer needs no decoding. */ }
+  return savedAnswer;
 }
 
 /** Only a confirmed cancellation permits delivery as a new user message. A
@@ -507,9 +524,9 @@ export function interactionKindLabel(kind: string, localizer?: PresentationLocal
  * 控制端(手机 / 另一台桌面)对一张待处理交互卡实际能做什么。
  *
  * 被控桌面会把**所有** pending interaction 经 device-link 推给控制端,但控制端
- * 能给出终局决定的只有权限 / 提问 / 计划三类。其余必须回被控端完成:
+ * 权限 / 提问 / 计划和显式声明支持远程确认的反馈可以在控制端完成:
  * plugin_setup 的 run_action 要开 OAuth 或写可信本地设置(被控端 IPC 边界只放
- * cancel 过来,见 desktop `interactionResolveOrigin`),issue_confirm 只在桌面提交。
+ * cancel 过来,见 desktop `interactionResolveOrigin`);旧宿主的 issue_confirm 仍须回电脑提交。
  *
  * - `resolvable`:控制端能终结这张卡。
  * - `cancel-only`:控制端做不完,但能取消,把会话从等待里放出来。
@@ -522,6 +539,7 @@ const REMOTE_RESOLVABLE_KINDS = new Set(['permission', 'ask_user_question', 'pla
 export function remoteInteractionHandling(item: PendingInteractionLike): RemoteInteractionHandling {
   const kind = interactionKind(item);
   if (REMOTE_RESOLVABLE_KINDS.has(kind)) return 'resolvable';
+  if (kind === 'issue_confirm' && item.request.remoteConfirmSupported === true) return 'resolvable';
   // 代输入: the controller fills each step through the signed per-step channel
   // and sends value-less decisions (done / cancel / stay / refresh) through resolve.
   if (kind === 'input_handoff') return item.request.terminal === true ? 'desktop-only' : 'resolvable';
@@ -544,8 +562,9 @@ export function remoteInteractionHandling(item: PendingInteractionLike): RemoteI
  * 死锁:任何被控端新增的 interaction kind 默认都落进「不阻塞」这一侧。
  */
 export function interactionBlocksRemoteComposer(item: PendingInteractionLike | null | undefined): boolean {
-  // 代输入 is a Host-owned wait that outlives the turn; the owner keeps the composer.
-  if (item && interactionKind(item) === 'input_handoff') return false;
+  // Host-owned input and feedback review keep normal conversation available.
+  // Sending a message does not resolve either confirmation.
+  if (item && ['input_handoff', 'issue_confirm'].includes(interactionKind(item))) return false;
   return !!item && remoteInteractionHandling(item) === 'resolvable';
 }
 
@@ -555,7 +574,7 @@ export function interactionBlocksRemoteComposer(item: PendingInteractionLike | n
  * 判据必须是**整个 pending 集合**,不能是「当前正在看的那张卡」:队列里同时有
  * 权限卡和 plugin_setup 时,用户切到 plugin_setup 只是换了查看对象,那张权限卡
  * 仍在等回答 —— 若按当前卡放开 composer,用户就绕过了仍待处理的阻塞交互
- * (#530 review P1)。只有整批都是本端终结不了的卡时,输入框才回来。
+ * (#530 review P1)。只有整批都是不独占输入的卡（含反馈审阅）时,输入框才回来。
  */
 export function pendingInteractionsBlockRemoteComposer(
   interactions: readonly PendingInteractionLike[],
@@ -865,6 +884,7 @@ const INTERACTION_PRIORITY: Record<string, number> = {
 };
 
 export function interactionPriority(item: PendingInteractionLike): number {
+  if (interactionKind(item) === 'ask_user_question' && item.request.delivery === 'async') return 2.5;
   return INTERACTION_PRIORITY[interactionKind(item)] ?? 100;
 }
 
@@ -873,8 +893,8 @@ export function sortPendingInteractions(
 ): PendingInteractionLike[] {
   return interactions
     .map((item, index) => ({ item, index }))
-    .sort((a, b) => Number(b.item.retainedDraft === true) - Number(a.item.retainedDraft === true)
-      || interactionPriority(a.item) - interactionPriority(b.item) || a.index - b.index)
+    .sort((a, b) => interactionPriority(a.item) - interactionPriority(b.item)
+      || Number(b.item.retainedDraft === true) - Number(a.item.retainedDraft === true) || a.index - b.index)
     .map(({ item }) => item);
 }
 

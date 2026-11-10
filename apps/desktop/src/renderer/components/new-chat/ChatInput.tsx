@@ -126,7 +126,6 @@ import {
   subscribeComposerSubmitRequest,
   subscribePromptInsert,
   subscribeSessionLinkInsert,
-  subscribeTodoReferenceInsert,
   takeComposerSubmitRequest,
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
@@ -3204,18 +3203,6 @@ export function ChatInput({
       appendMentionChip(editor, pastedSessionChipAttrs({ href, label: null }), { at });
       lastComposerSelectionFromRef.current = editor.state.selection.from;
       resolveSessionChipTitles(editor);
-    });
-  }, [editor, sessionId]);
-
-  // 伙伴近况里点一条待办：把它作为引用 chip 放进输入框，用户自己写一句再发。
-  useEffect(() => {
-    if (!editor || !sessionId) return;
-    return subscribeTodoReferenceInsert(({ targetSessionId, href, title }) => {
-      if (targetSessionId !== sessionId || editor.isDestroyed) return;
-      if (composerMutationLockedRef.current) return;
-      const at = lastComposerSelectionFromRef.current ?? editor.state.selection.from;
-      appendMentionChip(editor, { kind: 'todo', label: title, path: href }, { at });
-      lastComposerSelectionFromRef.current = editor.state.selection.from;
     });
   }, [editor, sessionId]);
 
@@ -10178,6 +10165,7 @@ export function ChatInput({
                     // 已建会话按实际路由口径解析当前来源(含停用拷贝,跟真实扣费路由);
                     // 草稿是新路由选择,保持准入口径(PR #744 review 第十轮)。
                     actualRoute={!!sessionId}
+            previewSubscriptionPool={!sessionId}
                     // 有过 Agent 回复 = 供应商组已为这个任务选好电脑,组那一项的用量按那台显示。
                     taskStarted={taskStarted}
                     onProviderChange={(providerId, modelId, effort, fast) =>

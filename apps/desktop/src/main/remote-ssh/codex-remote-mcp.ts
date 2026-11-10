@@ -40,7 +40,7 @@ import {
   withMcpRouteIdentity,
   computeRemoteMcpFingerprint,
   selectRemoteInjectableServerNames,
-} from '../mcp-integrations/codexHttpBridge.js';
+} from '../mcp-integrations/codexHttpBridge.desktop.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import { appServerIds } from '../mcp-apps/runtime.js';
 import { isFrozenBuiltinPluginAllowed, isFrozenMcpServerAllowed } from '../mcp-integrations/codexBuiltinToolPolicy.js';

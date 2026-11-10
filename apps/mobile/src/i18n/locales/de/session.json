@@ -726,21 +726,34 @@
     "remoteDirPathHint": "Der Ordner wird auf dem Ausführungsgerät geprüft. Ein fehlender Ordner führt zu einem Fehler. Der Ordner des Lead wird niemals ersatzweise verwendet.",
     "remoteDirInvalid": "Gib einen absoluten Pfad auf dem Ausführungsgerät ein.",
     "roleLabel": "Rollenname",
-    "roleHint": "Nur ein Name, um Beteiligte zu unterscheiden. Er ändert keine Fähigkeiten.",
-    "customRole": "Benutzerdefiniert",
-    "customRolePlaceholder": "Eigener Rollenname",
-    "customRolePredefinedError": "Ein eigener Rollenname darf keiner vordefinierten Rolle entsprechen",
+    "taskLabel": "Was der Worker übernimmt",
+    "enableHint": "Diese Aufgabe wird zum Lead: Sie verteilt die Arbeit und prüft die Ergebnisse. Der Worker ist ein eigenständiger Agent, der die Arbeit ausführt und Bericht erstattet.",
+    "roles": {
+      "reviewer": {
+        "name": "Review",
+        "task": "Sieh dir die Arbeit des Leads an und mach ein paar Vorschläge."
+      },
+      "developer": {
+        "name": "Entwickeln"
+      },
+      "tester": {
+        "name": "Testen",
+        "task": "Teste die bisherige Arbeit des Leads und melde Fehler mit Schritten zur Reproduktion."
+      }
+    },
+    "addRole": "Rolle hinzufügen",
+    "removeRoleHint": "Zum Entfernen gedrückt halten",
+    "removeRoleConfirmTitle": "„{{role}}“ entfernen?",
+    "removeRoleConfirmDesc": "Über „Rolle hinzufügen“ kannst du sie jederzeit wieder hinzufügen.",
+    "removeRoleConfirm": "Rolle entfernen",
+    "moreSettings": "Weitere Einstellungen",
     "agentLabel": "Agent",
-    "modelLabel": "Modell",
     "modelDefault": "Standard",
     "modelDefaultHint": "Verwendet das Standardmodell für Worker des Computers",
-    "permissionLabel": "Berechtigungsmodus",
     "permissionAuto": "Automatische Prüfung",
     "permissionFull": "Vollzugriff",
-    "permissionAutoHint": "Liest und schreibt im Arbeitsbereich und prüft automatisch Anfragen nach erweiterten Rechten. Aktionen mit hohem Risiko können abgelehnt werden oder eine Bestätigung erfordern.",
-    "permissionFullHint": "Kann jede Datei ändern und Befehle mit Netzwerkzugriff ohne erneute Rückfrage ausführen. Höchstes Risiko; nur für vertrauenswürdige Aufgaben verwenden.",
     "initialTaskLabel": "Erste Aufgabe (optional)",
-    "initialTaskPlaceholder": "Eine optionale erste Aufgabe für diesen Worker",
+    "initialTaskPlaceholder": "Erste Aufgabe für den Worker eingeben oder leer lassen, dann verteilt der Lead die Arbeit",
     "workerCountSummary_one": "{{count}} Worker · {{running}} aktiv",
     "workerCountSummary_other": "{{count}} Workers · {{running}} aktiv",
     "loading": "Workers werden geladen…",
@@ -815,12 +828,6 @@
     "hint": "Beide Regeln verwenden die Karte, die zuerst abläuft. Überspringen, wenn alle Kontingente ausgeschöpft sind. Läuft auf diesem Computer, solange Cindy läuft.",
     "failed": "Speichern fehlgeschlagen. Versuch es erneut.",
     "restore": "Standardwerte wiederherstellen"
-  },
-  "followUp": {
-    "title": "Soll ich deine Sitzungen weiterverfolgen?",
-    "start": "Nachverfolgung starten",
-    "notNow": "Nicht jetzt",
-    "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut."
   },
   "providerGroupRebalance": {
     "title": "Auf {{label}} fortsetzen?",

@@ -33,7 +33,7 @@ import { NodeDeviceAuthorizationClient } from './nodeDeviceAuthorizationClient.j
 import { NodeHostServicesClient } from './nodeHostServicesClient.js';
 import { NodeAuthorizationClient } from './nodeAuthorizationClient.js';
 
-interface ParentPortLike {
+export interface NodeWorkerParentPort {
   postMessage(message: unknown): void;
   on(event: 'message', listener: (event: { data: unknown }) => void): void;
 }
@@ -42,10 +42,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-const parentPort = (process as unknown as { parentPort?: ParentPortLike }).parentPort;
-const entryPath = process.argv[2];
-const childMode = process.argv[3] === GHOST_NODE_CHILD_MODE_FLAG;
-const childArgs = childMode ? process.argv.slice(4) : [];
+export function runNodeRuntimeWorker(parentPort: NodeWorkerParentPort, entryPath: string, args: string[] = []) {
+const childMode = args[0] === GHOST_NODE_CHILD_MODE_FLAG;
+const childArgs = childMode ? args.slice(1) : [];
 
 if (!parentPort) throw new Error('Node 插件工作进程缺少 parentPort');
 if (
@@ -262,5 +261,7 @@ if (childMode) {
   });
 }
 
-const requireFromWorker = createRequire(__filename);
+const requireFromWorker = createRequire(entryPath);
 requireFromWorker(entryPath);
+
+}

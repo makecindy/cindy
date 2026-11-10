@@ -38,7 +38,7 @@ import { getModelVisibilityOverride } from './model-visibility-mirror.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createMakerLogger } from './logger-adapter.js';
-import { outboundFetch } from './outbound-fetch.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { buildRouteDecision, providerRoutingForModel } from './provider-route.js';
 
@@ -337,7 +337,7 @@ async function runProviderProbeUnlogged(
     throw new TypeError('no-auth provider probes require a loopback URL');
   }
   const start = Date.now();
-  const presetRow = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, spec.api);
+  const presetRow = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, spec.api, spec.baseUrl);
   const row = spec.nativeModel
     ?? providerModelRecord(spec.modelId, spec.baseUrl, spec.api ?? spec.wireProtocol)
     ?? (presetRow && (spec.api || !spec.wireProtocol || providerWireProtocolForApi(presetRow.execution.pi.api) === spec.wireProtocol)

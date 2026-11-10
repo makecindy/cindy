@@ -155,7 +155,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 > **Additional narrowly-scoped exceptions** (documented in their respective component specs, do NOT generalize as system semantic colors):
 >
 > - **Screenshot toolbar Cindy icon** — the star icon before “Cindy” in Desktop's `ScreenshotModeBar` uses the existing gold foreground `--warning-fg` (`#F3A115` in Light and Dark; user decision 2026-10-28). Only this entry icon is gold; its label and button keep their standard theme colors and disabled treatment.
-> - **Quota colors, one rule everywhere** (owner decision 2026-10-31) — every surface that colors a quota (Desktop usage card, composer chip and model picker; Mobile model picker and session menu; macOS menu bar panel; iPhone widgets) judges the window it shows (the panel and widget tubes show each account's weekly window) by `@cindy/maker-shared/quota-level`: **30% or less left is yellow `#F3A115`, 10% or less is red `#EF4444`**; a provider verdict only raises the level (a warning is at least yellow, exceeded/rejected is red). A balance is judged by its share left and is red when empty. Desktop `--quota-bar-warn` aliases `--warning-fg`, `--quota-bar-crit` aliases `--error-flat` (`#EF4444`, unchanged; owner decision 2026-10-31: `#D91F37` read too dark on dark widgets); Mobile `quotaBarWarn` / `quotaBarCrit`. When plenty is left, App bars and the Mac panel stay neutral; only the iPhone widget liquid is teal (`#14B8A6` / `#2DD4BF`). On tube surfaces (Mac panel, iPhone widgets) the percentage and amount keep their ink at every level; only the liquid, its glow and the detail ring carry the color (owner decision 2026-10-31). The reset time has its own rule there: it colors only when a window longer than a day will reset with quota still unused at the current pace (used so far ÷ elapsed time, extended to the reset; the Cindy period quota is a budget and never colors its time) — a day or less to go is yellow, six hours or less is red, otherwise ink. It is independent of the liquid color, and 5-hour windows never color their time (`resetTimeLevel` / `willLeaveQuotaUnused` in the same module; the widget counts it from the current time). Text-only indicators with no bar (Desktop composer chip, model-picker row percentage, Mobile session menu) color the number itself, since it is their only signal. Pace (running out before reset) does not change a color; it only drives the menu bar headline.
+> - **Quota colors, one rule everywhere** (owner decision 2026-10-31) — every surface that colors a quota (Desktop usage card, composer chip and model picker; Mobile model picker and session menu; macOS menu bar panel; iPhone widgets) judges the window it shows (the panel and widget tubes show each account's weekly window) by `@cindy/maker-shared/quota-level`: **30% or less left is yellow `#F3A115`, 10% or less is red `#EF4444`**; a provider verdict only raises the level (a warning is at least yellow, exceeded/rejected is red). A balance is judged by its share left and is red when empty. Desktop `--quota-bar-warn` aliases `--warning-fg`, `--quota-bar-crit` aliases `--error-flat` (`#EF4444`, unchanged; owner decision 2026-10-31: `#D91F37` read too dark on dark widgets); Mobile `quotaBarWarn` / `quotaBarCrit`. When plenty is left, App bars and the Mac panel stay neutral; only the iPhone widget liquid is teal (`#14B8A6` / `#2DD4BF`). On tube surfaces (Mac panel, iPhone widgets) the percentage and amount keep their ink at every level; only the liquid, its glow and the detail ring carry the color (owner decision 2026-10-31). The reset time has its own rule there: it colors only when a window longer than a day will reset with quota still unused at the current pace (used so far ÷ elapsed time, extended to the reset; the Cindy period quota is a budget and never colors its time) — a day or less to go is yellow, six hours or less is red, otherwise ink. It is independent of the liquid color, and 5-hour windows never color their time (`resetTimeLevel` / `willLeaveQuotaUnused` in the same module; the widget counts it from the current time). Text-only indicators with no bar (Desktop composer chip, model-picker row percentage, Mobile session menu) color the number itself, since it is their only signal. The Claude composer chip temporarily includes the total weekly window when a model-specific week would otherwise hide an alerting total. Only each remaining percentage carries its quota color; separators and task value stay neutral. A rejected request adds a separate red “Temporarily limited” segment, with the existing quota popover showing the limit notice and known reset times. Missing severity in incremental headers does not clear a still-valid window warning; full snapshots, explicit severity or window rollover confirm recovery (user decision 2026-11-11). Pace (running out before reset) does not change a color; it only drives the menu bar headline.
 > - **Mobile model-picker account quota bars** — owner-approved desktop parity (2026-10-23): `quotaBarWarn` marks remaining quota at or below 30% and above 10%; `quotaBarCrit` marks remaining quota at or below 10%. Both are quota-only semantic fills registered in §10, independent of the owner-crown and task-error roles. Normal quota remains neutral (`textSecondary`), and the track uses `surfaceChip`. iOS / Android share the real remaining proportion without a minimum fill width; 0% is empty. Keep the numerical percentage alongside the bar, so color is supplementary and never the only information. These colors do not apply to the account title, percentage text or row background.
 > - **Cindy Make source comparison** — the owner-approved source overview (2026-09-20, refined 2026-09-21) combines local main and the online target in one row, with personal below. Matching main hashes appear once in `--status-success`; differing hashes show the local value in `--text-secondary` → the verified online target in `--status-success`, with a `--text-tertiary` arrow. The online green identifies the official target even when local main is behind; difference counts remain explicit. Personal uses an icon-first label flush with the main row's left edge, without chip fill or inset padding: status icon, then `cindy-personal` with the localized status in parentheses, followed by the SHA and change count. The icon, name and parenthesized status inherit one color. Latest uses a check and `--status-success`; missing official updates use a download icon and the existing Light/Dark update foreground `--upgrade-banner-fg`; an inconclusive comparison uses a help icon and `--text-secondary`. The status stays visible; the shared hover/focus `Tip` may explain it further. This is informational, with no click action. During operations that replace the comparison, keep the name neutral and omit the status icon, suffix and tooltip. Personal-only changes do not invalidate latest; unavailable lookups never imply latest or an available update. Each source row wraps independently. Both modes use existing tokens; no other version surface inherits this treatment. Since 2026-10-01 (owner-approved plain-language Settings, [cindy-make-upstream.md](../cindy-make-upstream.md)), this hash comparison, the source path and its open/clear buttons sit inside the default-collapsed native `details` disclosure “Technical details (for developers)”; the visible overview is the plain-language `CindyMakeVersionSummary` (personal: official version + N changes; latest official: release/beta/dev label + included / not yet / can't confirm). The summary reuses the same verified comparison, the same check / download / help icons and `--status-success` / `--upgrade-banner-fg` / `--text-secondary` colors, shows no hash, branch or main, and is plain text because the technical comparison keeps the single live status region.
 > - **Shared-task mobile confirmations** — only the management page is full-screen. Remove, leave, close-current and close-all use compact confirmations. iOS retains `showConfirm` and the system Alert with supported Liquid Glass / older-system fallback. On 2026-09-20 the user rejected Android's default green-text system Alert: Android uses a centered content-height card, container radius 12, themed elevated surface, neutral outlined Cancel and pill-shaped solid danger action using `sharedTaskConfirmBackground/Foreground`. Reuse Mobile action primitives, minimum target 44, wrap actions when needed, and scroll long descriptions. Android Back cancels; the scrim does not dismiss. Cancellation preserves the task, page, tab and scroll position. An in-task guest exits directly from task details, without another management page. No native configuration changes or simulated iOS glass. Desktop retains the Plan B shared window.
@@ -167,7 +167,7 @@ The grayscale rule is near-absolute. The following are the **only** sanctioned n
 > - **Bot Avatar Hues** — the Bots feature may fill a Bot's round avatar with one of nine registered tints so a list of persistent assistants can be told apart at a glance (registered 2026-08-17). The hue encodes **which Bot this is** — an identity cue like the file-type badges above, never health, status, or channel. Light mode uses soft tints, Dark mode the matching deep tints; the emoji and the initial-letter fallback (always `--text-primary`) stay legible in both. Tokens: `--bot-avatar-red-bg` / `-orange-` / `-amber-` / `-green-` / `-teal-` / `-blue-` / `-violet-` / `-pink-` / `-graphite-bg` (the last is the neutral step, and is where legacy `graphite` avatar data lands). Scope is strictly the Bot avatar fill in `features/bots` — do not reuse these tints for status dots, badges, row backgrounds, or any other surface. External theme import never touches them (the import template is allow-list only), so Bot identity colors do not drift between themes.
 > - **Bot Unread Badge** — information blue `#417CDD` with white text (`--bot-unread-bg` / `--bot-unread-fg`) encodes IM unread messages, not execution or connection health. In the 2026-11-04 Desktop list preview, private-Bot unread and completed-unread indicators use green `--card-status-done`, including the Cindy device row; these sidebar rows no longer draw unread counts or @ glyphs. The Cindy computer picker and computer rows in 近况 retain the production blue unread marks, including numeric counts where the picker already has them. Expanded list status dots and count badges align to the vertical center of the subtitle line while retaining the existing timestamp column. Expanded private-Bot running previews (local, remote and merged Cindy) use the group row’s orange progress text and 11px breathing sparkles, with no additional trailing running dot; idle previews retain their original muted text. Group completed-unread without a mention shows only a green trailing dot when expanded, and a green mark on the collapsed avatar and overflow. Group ordinary unread without completion retains a muted expanded count and uses a blue mark on the collapsed avatar and overflow; unread group mentions use a blue count badge (the existing total group unread count, not a separate mention count) when expanded and a blue dot when collapsed or in overflow, without an @ glyph. Running groups retain a muted unread count beside progress text, including unread mentions; no additional dot is shown in expanded running rows. Read acknowledgements clear collapsed unread marks when no work needs attention. Execution states retain the shared production precedence: awaiting, error, running, completed-unread, unread, idle; this also applies to merged Cindy and overflow. Replies without an explicit mention are not yet classified by this preview. See [Desktop list status](./desktop-bot-list-status.md). This does not change the existing blue 6px unread dots for group topics (root entry, composer hint and its rows, and the thread panel’s new-replies divider); adjacent text remains `--text-primary`. Mobile is unchanged: `botUnread` remains blue for companion-list unread dots and the approved 6px group-topic marks, excluding the in-thread divider. Same blue value in both themes; the foreground remains standalone white because the CTA foreground changes in Dark. Do not reuse these tokens for unrelated badges, execution-status dots or row backgrounds.
 > - **Mobile thread new-reply divider (owner-requested 2026-10-29)** — one horizontal 0.5pt line followed by the localized “New” label, both using Mobile `threadUnreadDivider` (`#D91F37` Light / `#FF667A` Dark). This replaces the blue dot and border above the label only inside the thread timeline. Existing unread detection, visibility and dismissal remain unchanged; list and topic-summary dots retain `botUnread`.
-> - **Teammate todo due dot (registered 2026-10-21, owner request)** — a static 6px `--error-fg` dot (Mobile `statusError`, 7pt) meaning "this todo's own deadline is today or already passed". Exactly two placements, one shared component per platform (`TodoDueDot` in `features/bots/BotGlancePopover.tsx`): before the deadline text of the due row inside the teammate 近况 popover, and at the top-right of the chat-header 近况 entry (Mobile: the header avatar) while the owner has not opened 近况 since that item became due. The row dot stays until the item is handled or rescheduled; the entry dot clears on opening. No text, no breathing; the entry's accessible name carries the same information. It is not an error state and must not be reused for task errors, unread, or other badges.
+> - **Retired: Teammate todo due dot (registered 2026-10-21, removed 2026-11-08)** — the static 6px `--error-fg` deadline dot in the teammate 近况 popover and on its entry (Mobile: header avatar) left with V2 teammate todos; 近况 no longer has a todo section. `--error-fg` keeps no teammate-specific consumer here; do not re-add the dot or reuse it for task errors, unread or other badges.
 > - **Task import result marks (registered 2026-10-30)** — the import results list (Desktop Settings 「从其他工具导入」 and the Mobile computer page sheet) colors only the 14px/sm status icon before each result line: can continue `--status-success` (Mobile `statusDone`), needs your action `--warning-fg` (Mobile `warningFg`), not imported `--error-fg` (Mobile `statusError`); queued, running and cancelled stay `--text-tertiary`. The summary counts at the top reuse the same three icons. Titles, result text, rows and buttons stay neutral, and the text always states the outcome, so color is never the only signal. No new tokens.
 > - **ConfirmDialog Danger** — the theme's semantic destructive color (`--destructive`, via Button `tone="danger-solid"`) used inside ConfirmDialog only on the confirm button background of the destructive variant (the token's general use is in §10); the value differs between Light and Dark only; it is a theme-invariant exemption that imported themes cannot override. The cancel button and rest of the dialog remain grayscale.
 > - **Screenshot overlay and annotation ink (registered 2026-10-26, owner-approved)** — the global screenshot overlay and its pinned images draw on top of arbitrary screen content, so two small fixed sets live in `features/region-screenshot/screenshotColors.ts` and are the same in Light and Dark. **Annotation ink** (`SCREENSHOT_INK`): red `#FF3B30` (the `annotation-accent` value), yellow `#FFCC00`, green `#34C759`, blue `#007AFF`, black `#000000`, white `#FFFFFF`. Ink is burned into the user's screenshot; it is user content, not UI color. The color swatches in the annotation style bar show the ink itself, each inside a `--border-default` ring so black and white stay visible in both modes. **Functional overlay pixels** (`SCREENSHOT_OVERLAY`): the dim layer `rgba(0,0,0,0.45)` outside the selection, the 1px white selection edge with a `rgba(0,0,0,0.6)` outer ring, white resize handles, the dashed selected-annotation box, the magnifier crosshair band and the black backdrop under the frozen frame. These must stay legible over any wallpaper, window or video. Everything else in the screenshot UI (toolbar, style bar, AI menu, magnifier card and its text, size label, hint pill, pin zoom badge and pin border) uses theme tokens and the standard icon-button and CTA treatments. Do not reuse these values outside the screenshot overlay and pinned images.
@@ -425,12 +425,11 @@ actions retain their shared Button treatment. Model and connection logic remain 
 
 ### Teammate model settings
 
-The existing model page groups the primary model and task model by purpose. Both use the shared
-model picker, retaining provider account, Harness, thinking level and Fast. The primary backup chain
-stays folded; the task model is a single route. Task settings start in “Inherit Primary Model” and
-provide a compact restore action after an explicit selection. Desktop separates the two groups with
-the semantic border token; mobile uses the existing grouped spacing and inheritance switch.
-Reuse themed controls for Light/Dark; this contract does not claim runtime visual verification.
+The model page shows the primary model with its backup chain, using the shared model picker and
+retaining provider account, Harness, thinking level and Fast; the backup chain stays folded. The
+separate task model group was removed with the setting (2026-11-09): a teammate chooses a new task's
+model when it starts the task. Reuse themed controls for Light/Dark; this contract does not claim
+runtime visual verification.
 
 ### Teammate capability page (owner-approved r2, 2026-11-01)
 
@@ -438,8 +437,7 @@ The teammate's Capabilities page follows the Memory page's grouped list: a quiet
 heading with a tabular count or summary (`1 of 3 on`, `Following this computer · 11`), then one
 12px-radius card per group with 13px/500 names, one-line 12px descriptions (full text on hover)
 and inset dividers. Groups in order: Core skill (always on, opens a read-only page with a
-plain-language summary and the original text folded), System skills (switch per item; the page
-explains what turning it off stops), Learned skills (switch; the page shows the content with Edit
+plain-language summary and the original text folded), Learned skills (switch; the page shows the content with Edit
 and Delete), Skills on this computer, Built-in tools, MCP, Permissions (Input Handoff). A group
 shows at most four rows, enabled first and unavailable last; the rest unfold under "Show N more"
 with the shared grid `0fr ↔ 1fr` motion. Configuration lives in one heading link per group
@@ -447,7 +445,57 @@ with the shared grid `0fr ↔ 1fr` motion. Configuration lives in one heading li
 note line with a "Turn on" link. Rows that open a page carry a trailing chevron and keep the switch
 as a separate control. Light and Dark use the existing tokens; prototype and screenshots live in
 the design archive for Cindy-伙伴能力页重设计-2026-11-01. Product rules: cindy-bots-runtime.md §6
-「伙伴技能分层」.
+「伙伴技能分层」. (2026-11-08: the System skills group — todo, routine, follow — was removed with
+V2 teammates; the page no longer shows it.)
+
+### Worker creation dialog (owner-requested simplification, 2026-11-10; layout pending sign-off)
+
+Desktop `CreateWorkerPopover` serves Start Collaboration and Add Worker with one form of three
+blocks plus the primary button:
+
+- **Introduction.** Start Collaboration shows one secondary sentence under the title explaining
+  that the current task assigns and checks the work while the Worker does it. Add Worker omits it.
+- **Roles.** A single-select row of the dialog's existing pill chips answers what the Worker
+  does. It starts as Review, Develop and Test (owner request, 2026-11-10: few built-in roles,
+  Review first); roles the user adds join the row. Roles are ordered by most recent use and the
+  dialog opens on the first one. Selecting a role brings back the task text, model and permission
+  last submitted with it. Roles carry no description line. The row label contains the product
+  term Worker and is therefore not uppercased.
+- **Add role.** The row ends with a 32px round icon chip (plus) with a localized accessible name
+  and `Tip` (§14.6). Activating it replaces the chip in place with a pill input for the role name,
+  which takes focus; choosing another role restores the plus chip. There is no separate input row
+  or hint line.
+- **Remove role (owner decisions, 2026-11-10).** Every role, built-in or user-added, can be
+  removed. The control is an 18px round badge on the chip's top-right corner, panel-filled with a
+  1px border so it masks the chip outline. It is hidden at rest and appears only while the pointer
+  is over that chip or keyboard focus is inside it (opacity only, `--motion-fast`), so the row
+  never shifts. It has a localized accessible name and `Tip` naming the role. Removal always goes
+  through the shared `ConfirmDialog`. Removal is lightweight, so its copy stays low-key (owner
+  request): it only says the role can be added back anytime with Add Role. It does not list or
+  mention what is cleared; no warning tone, no destructive button.
+- **First task with permission and model.** One 12px container holds a frameless textarea and,
+  below it, one toolbar row in the composer's order (owner decision, 2026-11-10): the
+  `PermissionSelector` chip trigger on the left, the standard `ModelSelector` toolbar trigger on the
+  right. The dialog is modal, so the permission chip opens an anchored menu inside the dialog
+  (`useMorphPopover={false}`); the morphing menu mounts outside the dialog, where it cannot be
+  clicked. The container border takes `--text-secondary` only while the textarea has focus. There
+  are no separate Model or Permission field labels; the permission keeps its label as the
+  accessible context.
+- **More Settings.** Project and execution device sit in a frameless text disclosure that reuses
+  the Provider dialog disclosure treatment above (left chevron, 13px/500 section title color,
+  minimum 32px hit height, pill focus ring, 20px indent). While collapsed, the row shows the current
+  values in tertiary text. It opens by itself when a field inside needs the user (project
+  directory missing or unreadable, invalid folder on another computer) and cannot be collapsed
+  while that lasts. The expanded state is not remembered between openings.
+
+Initial focus goes to the first-task textarea, the form's primary input; choosing Custom moves
+focus to the role-name input. Tab containment, Esc, focus return and the blocked dismissal during
+creation are unchanged. Light and Dark use existing semantic tokens only.
+
+Mobile shows the same form in the "+" panel (`OrcaWorkerFormView`), rules in
+`apps/mobile/docs/mobile-design-guide.md` §4: one card with the role chips, the first task, and a
+toolbar row in the same order. On the phone the permission shrinks to the composer's icon-only
+button (owner request, 2026-11-10) and roles are removed by touch and hold.
 
 ### Inputs & Forms
 
@@ -477,6 +525,14 @@ input/text
 `Button loading` retains its accessible label and dimensions, exposes `aria-busy`, disables activation, and reuses `Spinner` (static under reduced motion). The form owns the request and a synchronous duplicate-submit guard: actual saving blocks Cancel/Esc/scrim; success closes through the original callback, failure restores editing. Independent connection tests/model fetching remain independent. No change to cancellation, settlement, configuration, secrets or payload contracts.
 
 Ordinary confirmations opt into standard buttons with `presentation="standard"` on the shared `ConfirmDialog` / provider. DS-6 selects only custom-provider and custom-MCP deletion. Standard confirmation actions keep a 36px minimum height; long labels wrap within the panel and may grow vertically instead of overflowing or truncating. Keep `confirm-btn-*` local styling, default/destructive choice, focus branches and no scrim dismissal. Unselected callers, Permission, Full Access and plugin authorization keep their existing presentation.
+
+**Interaction answer composers (user decision, 2026-11-10):** Free-text answers, custom-choice answers,
+withdrawn-question supplements and plan feedback use a full-width input frame. Text occupies its own
+full-width area; existing microphone and submit controls sit inside the frame in a trailing toolbar
+below the text, never squeeze the textarea into a narrow side column. Submission uses the main
+composer's paper-plane glyph, with the actual action retained in localized accessible names and
+Desktop tooltips. Multi-select custom input has one submit control, not a second footer submit.
+Question navigation, close/skip, validation, voice finalization and approval semantics stay unchanged.
 
 ### Typography roles and control pairing (DS-11)
 
@@ -677,6 +733,9 @@ The expanded teammate section previews five chats (local teammates, remote teamm
 The sidebar's existing Filter submenu adds Teammates. All (全部) is the default and includes personal tasks and all teammates' tasks;
 choosing one teammate selects only its created tasks, then further choices add or remove teammates.
 Hide all (都不显示) excludes teammate-created tasks and teammate routine/IM tasks while retaining personal tasks.
+Since V2 (2026-11-08) a task belongs to a teammate here when it runs in that teammate's project or the
+teammate opened it with `send_to_session` (children of its old V1 background tasks still count, read from
+the stored rows); V1 workbench takeovers no longer count, and teammate projects are left out of the sidebar and search project filters.
 Selecting a teammate from Hide all switches to that teammate; removing the last choice restores All. Reset Filters also clears this dimension, preserving task status,
 grouping and sorting. Pinned entries retain their existing exemption from content filters.
 Use the existing menu rows, avatar component and check marks; keep the menu open for multiple choices.
@@ -1610,8 +1669,9 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 
 ### 伙伴私聊消息下操作（2026-10-29）
 
-伙伴私聊的工作过程区（运行中与完成后）和最终回复各显示一个当前伙伴头像，三端一致。
-复用回复头像的尺寸、间距和正文列；展开的中间文字与工具明细不重复头像，成果卡仍与正文对齐。
+伙伴私聊同一轮的工作过程区与最终回复共用一个当前伙伴头像，三端一致。
+头像在本轮开头显示，右侧依次呈现处理记录与回复正文；执行中转为完成态时保持同组，不再给回复重复头像。
+复用回复头像的尺寸、间距和正文列；展开的中间文字与工具明细不重复头像，成果卡仍与正文对齐。没有过程的回复照常显示头像，新一轮重新显示头像。
 
 常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。群聊操作及主对话914px宽度规则不变，手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；各语言及明暗模式均不得溢出。
 
@@ -1623,3 +1683,4 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 不铺两行摘要、不另放展开/完整对话按钮。点击直接打开原只读往来页，返回原主任务位置。
 长名字在可用宽度内省略，完整标签保留在可访问名称和悬停提示。手机沿用已有触摸热区。
 内部往来不制造用户未读；执行与提醒边界见 `cindy-bots-runtime.md` §6.1。
+2026-11-08 起伙伴私信已移除（伙伴之间改用 `send_to_session`），不再产生新入口；历史入口照常打开只读往来页。
