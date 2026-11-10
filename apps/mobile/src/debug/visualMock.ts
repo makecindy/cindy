@@ -877,6 +877,15 @@ function message(
 }
 
 function visualMockPendingInteractions(sessionId: string): PendingInteraction[] {
+  if (sessionId === 'visual-issue-confirm') return [{ request: {
+    kind: 'issue_confirm', requestId: 'visual-issue-confirm-request', remoteConfirmSupported: true,
+    draft: { title: '手机无法完成问题反馈确认', type: 'bug',
+      body: '## 问题描述\n在 iPhone 上反馈问题时，确认卡提示只能回电脑处理。\n\n## 预期行为\n可以直接在手机上检查内容、确认并提交反馈。' },
+    env: { appVersion: '开发预览', platform: 'darwin', arch: 'arm64', osVersion: 'macOS',
+      harness: 'Claude Code', modelId: 'claude-sonnet-5', region: 'global' },
+    submissionIdentity: { kind: 'platform', login: 'cindy-bot' },
+    githubUserIdentity: { kind: 'github-user', login: 'demo-user' }, suggestedPublicName: '匿名用户',
+  } }];
   if (sessionId === codexFormSession) return codexFormAnswers === null ? [{ request: {
     kind: 'ask_user_question', requestId: 'visual-codex-form-request', questions: codexFormQuestions(),
   } }] : [];
