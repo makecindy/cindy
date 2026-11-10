@@ -66,6 +66,7 @@ export * from "./sessionMessageReuse.js";
 export * from "./historyViewDelta.js";
 export * from "./toolBodyStub.js";
 export * from "./historyRelinkFolded.js";
+export * from "./toolResultLiveLimit.js";
 
 export * from "./clipboardSync.js";
 export * from "./clipboardSyncFailure.js";

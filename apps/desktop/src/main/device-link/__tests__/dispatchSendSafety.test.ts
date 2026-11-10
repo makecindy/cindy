@@ -22,6 +22,7 @@ import {
   SessionMessageReuse,
   CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
   CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1,
   CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
 } from '@cindy/device-link';
 import { versionMessageBody } from '../sessionMessageReuse';
@@ -50,7 +51,7 @@ vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
-import { __testing, dropAllControllers, runInvoke, wireInboundDispatch, setRemoteTurnChangeAction } from '../dispatch.desktop';
+import { __testing, dropAllControllers, runInvoke, wireInboundDispatch, setHistoryToolNameReader, setRemoteTurnChangeAction } from '../dispatch.desktop';
 import { __testing as registry } from '../invoke-registry';
 import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 import { currentDbRpcAdmissionClass } from '../../localDb/client/rpcAdmission';
@@ -213,6 +214,50 @@ describe('negotiated mobile tool projection', () => {
     expect(mobileUse.event.data).toEqual({ toolUseId: 'use', toolName: 'Bash', input: null });
     expect(mobileResult).toEqual({ sessionId: 's1', persistId: 'r', event: { type: 'tool_result_full', data: { toolUseId: 'use' } } });
     expect(mobilePlan.event.data).toEqual(plan);
+  });
+
+  // Protocol contract (protocol-compatibility/device-link-tool-result-live-limit.md): only a controller
+  // that declared tool-result-live-limit-v1 gets a large ordinary live result as head + marker within
+  // 256 KB; results the Desktop row parses whole (cards, process media) and non-detail tools stay
+  // whole. Otherwise an old Desktop would show cut logs, or a card / process-media result would
+  // stop rendering. Unit tier: production forwardPush with an in-memory client.
+  it('limits large ordinary live results only for controllers that declared it', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    const names: Record<string, string> = { bash: 'Bash', failed: 'Bash', card: 'mcp__docs__search', media: 'Bash', agent: 'Agent' };
+    setHistoryToolNameReader((_sessionId, toolUseId) => names[toolUseId] ?? '');
+    try {
+      subscriptions.subscribe('old', ['session:s1'], 'old', []);
+      subscriptions.subscribe('limited', ['session:s1'], 'limited', [CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+        CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1]);
+      subscriptions.subscribe('limit-only', ['session:s1'], 'limit-only', [CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1]);
+      const log = '编译输出 line\n'.repeat(30_000);
+      const card = JSON.stringify({ xdt_card_id: 'card-1', ok: true, rows: 'r'.repeat(300_000) });
+      const media = JSON.stringify({ text: 'x'.repeat(300_000), cindy_process_media: [{ kind: 'image', url: 'https://example.com/a.png' }] });
+      const result = (toolUseId: string, body: string) => ({ sessionId: 's1', persistId: `p-${toolUseId}`, resolvedContent: body,
+        event: { type: 'tool_result_full', data: { toolUseId, fullText: body } } });
+      const failure = `<tool_use_error>${log}</tool_use_error>`;
+      const pushes = [result('bash', log), result('card', card), result('media', media), result('agent', log), result('failed', failure)];
+      for (const payload of pushes) __testing.forwardPush('maker:event', payload);
+      const to = (dst: string) => client.sendPush.mock.calls.filter((call) => call[0] === dst).map((call) => call[2]);
+
+      expect(to('old')).toEqual(pushes);
+      const [bash, cardPush, mediaPush, agentPush, failed] = to('limited');
+      const whole = [cardPush, mediaPush, agentPush];
+      const marker = '\n\n[remote content truncated: live result shows first 256KB]';
+      expect(bash.resolvedContent.endsWith(marker)).toBe(true);
+      expect(Buffer.byteLength(bash.resolvedContent)).toBeLessThanOrEqual(256 * 1024);
+      expect(log.startsWith(bash.resolvedContent.slice(0, -marker.length))).toBe(true);
+      expect(bash.event.data).toEqual({ toolUseId: 'bash' });
+      expect(whole.map((push) => push.resolvedContent)).toEqual([card, media, log]);
+      // A cut failure keeps its marker and the diagnostics the persisted copy would carry.
+      expect(failed.resolvedContent.startsWith('<tool_use_error>')).toBe(true);
+      expect(failed.resolvedContent).toContain('[tool result diagnostics: {"isError":true}]');
+      const [onlyLimited] = to('limit-only');
+      expect(onlyLimited.event.data.fullText).toBe(bash.resolvedContent);
+    } finally {
+      setHistoryToolNameReader(() => '');
+    }
   });
 });
 

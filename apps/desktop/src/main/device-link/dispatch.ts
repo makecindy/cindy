@@ -135,6 +135,7 @@ import { mapHistoryViewMessages, type HistoryMessageSource, type HistoryViewItem
 import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
 import { createToolBodyPushProjector } from './toolBodyProjection';
+import { createToolResultLiveLimiter } from './toolResultLiveLimit';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import type { readDeviceLinkSettings } from './settings-store.desktop';
 import type { noteControllerAccessAllowed, noteControllerAccessDenied, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
@@ -2425,10 +2426,14 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   // Tool-body rules follow each controller's own declaration; guests keep their existing path.
   // The Mobile projection follows and sees the already projected event.
   const projectToolBodies = createToolBodyPushProjector(channel, remotePayload);
+  // tool-result-live-limit-v1: an ordinary live result over 256 KB keeps its head and a marker.
+  const limitLiveResult = createToolResultLiveLimiter(channel, remotePayload,
+    (sessionId, toolUseId) => readHistoryToolName(sessionId, toolUseId));
   const mobilePayloads = new Map<unknown, unknown>();
   const projectedPayloadFor = (dst: string): unknown => {
+    const supports = (capability: string) => subscriptions.controllerSupports(dst, capability);
     const base = isSharedTaskPeer(dst) || isProviderSharePeer(dst) ? remotePayload
-      : projectToolBodies((capability) => subscriptions.controllerSupports(dst, capability));
+      : limitLiveResult(projectToolBodies(supports), supports);
     if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return base;
     if (!mobilePayloads.has(base)) mobilePayloads.set(base, projectMobileToolPush(channel, base));
     return mobilePayloads.get(base);

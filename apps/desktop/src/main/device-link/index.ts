@@ -50,6 +50,7 @@ import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
   CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1,
   MAKER_EVENT_BATCH_CHANNEL,
   expandMakerEventBatchPayload,
   RETIRED_CONTACTS_SYNC_CHANNEL,
@@ -636,6 +637,9 @@ const CONTROLLER_CAPABILITIES = [
   // 订阅重放后重读仍在显示的远程任务的最新页(useRemoteSessionSync);被控端因此把重连前
   // 已读且折叠的任务保持折叠到重读完成,离线积压不留历史详情。
   CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
+  // 展开运行中的组时，超过 256 KB 的普通工具结果只收开头加截断标记(用户能看出的变化，
+  // 结束后本来也只剩落库的 8 KB)。卡片、媒体、过程媒体、MCP App 与非详情工具照旧收全文。
+  CONTROLLER_CAPABILITY_TOOL_RESULT_LIVE_LIMIT_V1,
   // 供应商分享：受邀者连分享者电脑时声明，分享者只接受声明了它的控制端。
   PROVIDER_SHARE_RELAY_CAPABILITY,
 ] as const;
