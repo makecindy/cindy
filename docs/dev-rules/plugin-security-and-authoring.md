@@ -1157,7 +1157,7 @@ create / setModel 接受 `PluginTaskRoute.agentDeviceId`，send/accept 重读精
 留在插件。每次请求和回执重新核验 owner、安装 revision、namespace 与 peer。
 不向插件提供设备私钥、账号 token 或其他插件数据，不为通道增加远程 Renderer IPC。
 接口和失败语义见 `FORGE_GUIDE` §4.10.2，协议与兼容边界见
-[协议兼容](protocol-compatibility.md#插件资料设备同步)。
+[协议兼容](protocol-compatibility/plugin-data-device-sync.md)。
 
 ## 社区插件贡献入口
 
@@ -1207,4 +1207,4 @@ Node 工作进程的方向：用户从手机经远程桌面打开设备画面时
 任何手机或远程桌面凭证。回复是插件数据，逐字段校验后才交给远程桌面；帧流地址只接受
 `http://127.0.0.1:<端口>`，由 Main 读取，采集页与手机都拿不到地址。旧版插件的权限不变；
 声明该字段的更新属于能力增加，按 3.1 节处理。接口见 `FORGE_GUIDE` §4.22.1，协议与兼容边界见
-[协议兼容](protocol-compatibility.md)的「插件实时屏幕」。
+[协议兼容 · 代输入](protocol-compatibility/input-handoff.md)的「插件实时屏幕」。

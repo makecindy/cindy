@@ -443,7 +443,7 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
 | Codex 侧对应实现 | `packages/maker-core/src/agents/codex/`（对应 index／translator） |
 | vendor 事件到 `AgentEvent` 的映射 | `packages/maker-core/src/agents/*/translator.ts` |
 | 缓存率／token 计量 | `packages/maker-core/src/agents/shared/usage-tracker.ts` |
-| 实时生成速度（tok/s） | `packages/maker-core/src/agents/shared/calibrated-token-speed.ts`，Claude Code、Codex、Pi 的 translator 各自接入。口径见[协议兼容](protocol-compatibility.md#实时生成速度)；读数用 `scripts/token-speed-replay.ts` 对照真实录制 |
+| 实时生成速度（tok/s） | `packages/maker-core/src/agents/shared/calibrated-token-speed.ts`，Claude Code、Codex、Pi 的 translator 各自接入。口径见[协议兼容](protocol-compatibility/live-generation-speed.md)；读数用 `scripts/token-speed-replay.ts` 对照真实录制 |
 | Agent 抽象与共用逻辑 | `packages/maker-core` 的 `BaseAgent` 及子类 |
 
 文档与实现冲突时以代码为准，但必须在同一改动内同步修正本文。

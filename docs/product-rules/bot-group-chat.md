@@ -937,7 +937,7 @@ Desktop 群聊只对 `TOKEN_EXPIRED`、`INVALID_TOKEN`、`AUTH_REQUIRED` 的 401
 「输入邀请链接…」与手机剪贴板识别也接受新分享链接，只提取编号，再向自身配置的分享服务取口令，
 不向链接域名发请求。随后走原预览、明确确认加入流程；手机取口令与预览共用原超时及中止窗口，
 成功后归一为 `cindy://chat-invite/<token>`，不改变不确定结果同一 operationId 重试的行为。
-规则见 [跨端协议兼容 · 群聊邀请公开链接](../dev-rules/protocol-compatibility.md)。
+规则见 [跨端协议兼容 · 群聊邀请公开链接](../dev-rules/protocol-compatibility/bot-group-invite-public-link.md)。
 「复制邀请链接」复制创建接口返回的 HTTPS 链接。网页始终只有一个「打开 Cindy」按钮，加载时取口令。
 取口令并填好按钮后，电脑与手机均自动尝试拉起一次，保留同一按钮供手动重试。电脑沿用统一 `cindy://`；
 手机按链接的可信区域入口选择国内 `cindycn://` 或海外 `cindy://`，失败不切换版本。

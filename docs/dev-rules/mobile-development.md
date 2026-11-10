@@ -191,7 +191,7 @@ Desktop 仅在官方连接在线时上传本机完整活动摘要，排除远程
 本地降级模式的 `staleDate` 为更新时加 120 秒，前台每分钟续期，检测到连接中断则立即标记过期；
 账号清理与无任务结束不等待一秒合并。
 
-接口与发布顺序见[协议兼容的任务汇总与实时活动](protocol-compatibility.md#任务汇总与-activitykit-push2026-11-10未发布)。
+接口与发布顺序见[协议兼容的任务汇总与实时活动](protocol-compatibility/task-activity-summary-activitykit-push.md)。
 定向验证覆盖 token 轮换、旧服务端、自建中转跳过、账号切换与在途注册后注销；服务端另有真实
 PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成测试。原生编译不是系统
 推送验收：后台／冷启动、跨端已读与真实 APNs 仍需在部署后的签名安装包上核验。
