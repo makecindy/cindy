@@ -5364,6 +5364,15 @@
         "ariaLabel": "Utilice {{shortcut}} para enviar mensajes"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Directorio de trabajo predeterminado para tareas nuevas",
+      "label": "Directorio predeterminado en este equipo",
+      "hint": "Se preselecciona para tareas locales nuevas sin proyecto elegido. Tienen prioridad los proyectos, diálogos o equipos remotos seleccionados explícitamente.",
+      "unset": "Sin configurar (no se preselecciona ningún directorio)",
+      "choose": "Elegir directorio",
+      "clear": "Borrar valor predeterminado",
+      "failed": "No se pudo guardar el directorio de trabajo predeterminado. Inténtalo de nuevo."
+    },
     "linkOpen": {
       "title": "Enlaces abiertos",
       "description": "Elija dónde se abren los enlaces en los mensajes. Haga clic derecho en un enlace para usar otra opción solo para ese enlace.",
@@ -13131,6 +13140,11 @@
     "prevMessageJump": "Ir al prompt anterior: {{preview}}",
     "sessionLoading": "Cargando tarea",
     "askUserQuestion": {
+    "unanswered": "Sin respuesta",
+    "withdrawn": "Ya no necesita respuesta",
+    "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",
+    "sendSupplement": "Enviar información adicional",
+
       "voice": {
         "hint": "Di el número o el nombre de una opción. Para seleccionar varias, di después «confirmar selección».",
         "freeTextHint": "Di tu respuesta, revísala y luego di «confirmar selección» para enviarla.",
@@ -14441,7 +14455,7 @@
       "running": "En ejecución…",
       "waitingWorkflow": "Esperando a Workflow…",
       "waitingWorkflowProgress": "Esperando a Workflow · {{done}}/{{total}} Agents",
-      "turnStart": "{{status}}",
+      "turnStart": "Procesando, {{name}}…",
       "issueTip": "{{name}}, prueba /issue para enviarnos comentarios o sugerencias",
       "runningTool": "{{tool}} en ejecución…"
     },
@@ -20021,5 +20035,15 @@
     "browserFallback": "Abre GitHub para darle una estrella a Cindy.",
     "openGithub": "Abrir GitHub",
     "openFailed": "No se pudo abrir GitHub."
+  },
+  "hostConnection": {
+    "connecting": "Conectando con Cindy…",
+    "restoring": "Restaurando el estado de las tareas…",
+    "retrying": "Las tareas aún no están sincronizadas. Reintentando…",
+    "pairing": "Se necesita autorizar la conexión",
+    "pairingHelp": "Mantén esta página abierta. En el terminal donde iniciaste Cindy Host, repite el comando para abrir el cliente web. Vincula la nueva página y vuelve aquí.",
+    "keepDraft": "Tu borrador se conserva. Las tareas se sincronizarán cuando se restablezca la conexión.",
+    "retry": "Reconectar",
+    "desktopAuthHelp": "Actualiza la configuración de conexión en el terminal de inicio y vuelve a abrir este cliente experimental."
   }
 }

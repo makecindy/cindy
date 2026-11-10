@@ -2,7 +2,25 @@ import { groupTeammateProcess } from '@cindy/maker-shared/message-render';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
+import { collectBotTurnContinuations } from '@cindy/maker-shared/botTimeline';
 import type { MobileMessageRenderItem, MobileWorkGroupItem, MobileWorkChildItem } from './messageRenderModel';
+
+export function companionTurnContinuations(items: readonly MobileMessageRenderItem[]): ReadonlySet<string> {
+  return collectBotTurnContinuations(items, item => {
+    const start = item.type === 'work_group' ? item.startedAtMs
+      : 'message' in item ? Date.parse(item.message.createdAt) : undefined;
+    return {
+      kind: item.type === 'work_group' ? 'process'
+        : item.type === 'message' && item.message.kind === 'assistant' && !item.message.systemCardType
+          && !item.message.companion ? 'reply'
+        : item.type === 'message' && item.message.companion ? 'artifact'
+        : item.type === 'message' || item.type === 'pending_send' || item.type === 'fork_origin' ? 'boundary' : 'artifact',
+      completed: item.type === 'message' && item.message.turnCompleted === true,
+      start,
+      end: item.type === 'work_group' && start !== undefined ? start + (item.durationMs ?? 0) : start,
+    };
+  });
+}
 
 const expandWorkGroups = (items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] =>
   items.flatMap(item => item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);

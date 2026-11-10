@@ -71,6 +71,15 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('@cindy/maker-core', () => ({}));
+// File ownership/invalidation does not require the plugin UI or skill discovery.
+// Their own fixtures cover discovery; keep this one on the real auth-file path.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({
+  disableShareAvailability: () => { throw new Error('Unexpected standby-share mutation in credential test'); },
+}));
 
 vi.mock('../codex-auth-file-move', () => ({
   moveCodexAuthFile: async (from: string, to: string) => {
@@ -3035,7 +3044,7 @@ describe('deferred Codex OAuth dispatch proof', () => {
     const { bindNativeProviderAuth } = await import('../nativeProviderAuthBinding.js');
     const { desktopCodexAuthAdapter: adapter } = await import('../auth-adapters.js');
     const reader = await import('../anthropic-responses-bridge-host.js');
-    const proxy = await import('../codex-proxy-host.js');
+    const proxy = await import('../codex-proxy-host.desktop.js');
     proxy.setCodexSubagentOAuthReader(reader.getChatgptBridgeAuthForDispatch);
     proxy.registerComposed('http-parent', 'http-parent-thread', 'fixture', {
       subagentRoute: { providerId: 'openai', catalogModel: 'gpt-5.4', reasoningEffort: 'high' },
@@ -3103,7 +3112,7 @@ describe('deferred Codex OAuth dispatch proof', () => {
       id: 'openai-child', name: 'Synthetic child account', auth: { method: 'oauth', native: 'codex' },
       runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-5.4', name: 'Fixture' }] } },
     })]);
-    const accounts = await import('../codex-account-auth.js');
+    const accounts = await import('../codex-account-auth.desktop.js');
     const home = accounts.codexAccountHome('openai-child');
     fs.mkdirSync(home, { recursive: true });
     const expiry = Math.floor(Date.now() / 1000) + 3600;
@@ -3113,7 +3122,7 @@ describe('deferred Codex OAuth dispatch proof', () => {
       fs.writeFileSync(path.join(home, 'account.json'), JSON.stringify(accounts.parseCodexAccountIdentity(raw)));
     };
     const reader = await import('../anthropic-responses-bridge-host.js');
-    const proxy = await import('../codex-proxy-host.js');
+    const proxy = await import('../codex-proxy-host.desktop.js');
     const routes = await import('../provider-route.js');
     write('synthetic-a');
     proxy.setCodexSubagentOAuthReader(reader.getChatgptBridgeAuthForDispatch);
@@ -3166,7 +3175,7 @@ describe('deferred Codex OAuth dispatch proof', () => {
     const a = await reader.getChatgptBridgeAuthForDispatch();
     expect(a.accountId).toBe('account-a');
     expect(a.canDispatch()).toBe(true);
-    const proxy = await import('../codex-proxy-host.js');
+    const proxy = await import('../codex-proxy-host.desktop.js');
     proxy.setCodexSubagentOAuthReader(reader.getChatgptBridgeAuthForDispatch);
     proxy.registerComposed('reader-parent', 'reader-parent-thread', 'fixture', {
       subagentRoute: { providerId: 'openai', catalogModel: 'gpt-5.4', reasoningEffort: 'high' },

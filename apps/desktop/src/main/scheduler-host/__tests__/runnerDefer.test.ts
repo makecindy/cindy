@@ -38,7 +38,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
 vi.mock('../workdir-resolver', () => ({ resolveWorkingDir: mocks.resolveWorkingDir }));
 vi.mock('../runners/_shared', () => ({ backfillSessionMeta: mocks.backfillSessionMeta }));
 
-import { MakerScheduleRunner, buildScheduledRunPrompt } from '../runner';
+import { MakerScheduleRunner, buildScheduledRunPrompt } from '../runner.desktop';
 import { CredentialModeSwitchBusyError } from '../../maker-host/codex-credential-switch.js';
 
 type SendImpl = (

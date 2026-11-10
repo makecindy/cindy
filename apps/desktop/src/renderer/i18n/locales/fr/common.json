@@ -5364,6 +5364,15 @@
         "ariaLabel": "Utiliser {{shortcut}} pour envoyer les messages"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Répertoire de travail par défaut des nouvelles tâches",
+      "label": "Répertoire par défaut sur cet ordinateur",
+      "hint": "Présélectionné pour les nouvelles tâches locales sans projet choisi. Un projet, une discussion ou un ordinateur distant choisi explicitement reste prioritaire.",
+      "unset": "Non défini (aucun répertoire présélectionné)",
+      "choose": "Choisir un répertoire",
+      "clear": "Effacer la valeur par défaut",
+      "failed": "Impossible d’enregistrer le répertoire de travail par défaut. Réessayez."
+    },
     "linkOpen": {
       "title": "Ouverture des liens",
       "description": "Choisissez où s'ouvrent les liens des messages. Faites un clic droit sur un lien pour utiliser une autre option pour ce lien uniquement.",
@@ -13131,6 +13140,11 @@
     "prevMessageJump": "Aller au prompt précédent : {{preview}}",
     "sessionLoading": "Chargement de la tâche",
     "askUserQuestion": {
+    "unanswered": "Sans réponse",
+    "withdrawn": "Réponse désormais inutile",
+    "withdrawnDraft": "Cette question ne nécessite plus de réponse.\n{{reason}}\nVotre brouillon est conservé et peut être envoyé en complément.",
+    "sendSupplement": "Envoyer un complément",
+
       "voice": {
         "hint": "Dites le numéro ou le nom d'une option. Pour un choix multiple, dites ensuite « confirmer la sélection ».",
         "freeTextHint": "Dites votre réponse, relisez-la, puis dites « confirmer la sélection » pour l'envoyer.",
@@ -14441,7 +14455,7 @@
       "running": "Exécution…",
       "waitingWorkflow": "En attente du Workflow…",
       "waitingWorkflowProgress": "En attente du Workflow · {{done}}/{{total}} Agents",
-      "turnStart": "{{status}}",
+      "turnStart": "Traitement en cours, {{name}}…",
       "issueTip": "{{name}}, essayez /issue pour nous envoyer vos retours ou suggestions",
       "runningTool": "{{tool}} en cours d'exécution…"
     },
@@ -20021,5 +20035,15 @@
     "browserFallback": "Ouvrez GitHub pour ajouter une étoile à Cindy.",
     "openGithub": "Ouvrir GitHub",
     "openFailed": "Impossible d’ouvrir GitHub."
+  },
+  "hostConnection": {
+    "connecting": "Connexion à Cindy…",
+    "restoring": "Restauration de l’état des tâches…",
+    "retrying": "État des tâches non synchronisé. Nouvelle tentative…",
+    "pairing": "Autorisation de connexion requise",
+    "pairingHelp": "Gardez cette page ouverte. Dans le terminal utilisé pour lancer Cindy Host, relancez la commande d’ouverture du client web. Associez la nouvelle page, puis revenez ici.",
+    "keepDraft": "Votre brouillon est conservé. L’état des tâches sera synchronisé au rétablissement de la connexion.",
+    "retry": "Reconnecter",
+    "desktopAuthHelp": "Mettez à jour les paramètres de connexion dans le terminal de lancement, puis rouvrez ce client expérimental."
   }
 }
