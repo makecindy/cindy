@@ -69,8 +69,7 @@ export async function applyPluginAppearance(settings: AppearanceSettings, option
       const entry: PendingFont = { key: resourceKey, current: options.current, promise: Promise.resolve(bridge.loadPluginFont?.(role)).then(loaded => {
         // A reset, new resource or unmount cancels decoding of the superseded read.
         if (pending.get(role) !== entry || !entry.current() || !loaded || loaded.family !== resource.family) return undefined;
-        const bytes = Uint8Array.from(atob(loaded.base64), char => char.charCodeAt(0));
-        return new FontFace(resource.family, bytes).load();
+        return new FontFace(resource.family, loaded.bytes).load();
       }) };
       entry.promise = entry.promise.finally(() => { if (pending.get(role) === entry) pending.delete(role); });
       pending.set(role, entry); loading = entry;

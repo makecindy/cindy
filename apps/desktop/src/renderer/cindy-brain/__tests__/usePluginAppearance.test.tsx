@@ -19,6 +19,30 @@ function options() {
     current: () => true, applyFonts: applyFontSettings };
 }
 describe('plugin appearance renderer', () => {
+  // Opus F2：大字体逐字节 base64 解码阻塞 UI；原覆盖只验证字体加载次数。
+  // 最小输入：含非 ASCII 字节的字体读取结果，观察 FontFace 收到原二进制。tier: unit。
+  it('passes binary font bytes directly to the browser without base64 decoding', async () => {
+    const h = options(), hash = 'b'.repeat(64), family = `CindyPlugin_${hash}`;
+    const bytes = new Uint8Array([0, 1, 127, 255]).buffer, create = vi.fn();
+    const decode = vi.spyOn(globalThis, 'atob');
+    vi.stubGlobal('FontFace', class {
+      constructor(...args: unknown[]) { create(...args); }
+      load = async () => ({} as FontFace);
+    });
+    h.bridge.loadPluginFont = vi.fn(async () => ({ family, bytes }));
+    const descriptor = Object.getOwnPropertyDescriptor(document, 'fonts');
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { add: vi.fn(), delete: vi.fn() } });
+    const settings = normalizeAppearanceSettings({ uiFamily: family,
+      uiFontResource: { family, hash, reference: 'asset:font', source: { instanceId: 'example', key: 'a'.repeat(64) } } });
+    try {
+      expect(await applyPluginAppearance(settings, h)).toBe('applied');
+      expect(create).toHaveBeenCalledWith(family, bytes);
+      expect(decode).not.toHaveBeenCalled();
+    } finally {
+      if (descriptor) Object.defineProperty(document, 'fonts', descriptor);
+      else Reflect.deleteProperty(document, 'fonts');
+    }
+  });
   it('applies light and dark content styles without changing unrelated page regions', async () => {
     const content = document.createElement('div'); content.dataset.pluginAppearanceRegion = 'message';
     const other = document.createElement('div'); document.body.append(content, other);
@@ -42,13 +66,13 @@ describe('plugin appearance renderer', () => {
     expect(await applyPluginAppearance(settings, h)).toBe('applied');
   });
   it('discards a late font read after the viewing generation changes', async () => {
-    const h = options(); let resolve!: (value: { family: string; base64: string }) => void;
+    const h = options(); let resolve!: (value: { family: string; bytes: ArrayBuffer }) => void;
     h.bridge.loadPluginFont = () => new Promise(done => { resolve = done; });
     let current = true; h.current = () => current;
     const hash = 'b'.repeat(64), family = `CindyPlugin_${hash}`;
     const settings = normalizeAppearanceSettings({ uiFamily: family,
       uiFontResource: { family, hash, reference: 'asset:font', source: { instanceId: 'example', key: 'a'.repeat(64) } } });
-    const pending = applyPluginAppearance(settings, h); current = false; resolve({ family, base64: '' });
+    const pending = applyPluginAppearance(settings, h); current = false; resolve({ family, bytes: new ArrayBuffer(0) });
     expect(await pending).toBe('saved'); expect(h.style.textContent).toBe(''); expect(h.faces.size).toBe(0);
   });
   it('reuses the loaded font across other appearance changes and releases it on reset', async () => {
@@ -58,7 +82,7 @@ describe('plugin appearance renderer', () => {
     Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
     const load = vi.fn(async () => ({} as FontFace));
     vi.stubGlobal('FontFace', class { load = load; });
-    h.bridge.loadPluginFont = vi.fn(async () => ({ family, base64: 'AA==' }));
+    h.bridge.loadPluginFont = vi.fn(async () => ({ family, bytes: new Uint8Array([0]).buffer }));
     try {
       const settings = normalizeAppearanceSettings({ uiFamily: family,
         uiFontResource: { family, hash, reference: 'asset:font', source: { instanceId: 'example', key: 'a'.repeat(64) } } });
@@ -91,8 +115,8 @@ describe('plugin appearance renderer', () => {
     const settings = normalizeAppearanceSettings({ uiFamily: family,
       uiFontResource: { family, hash, reference: 'asset:font', source: { instanceId: 'example', key: 'a'.repeat(64) } } });
     let publish!: (next: typeof settings) => void;
-    let finishRead!: (value: { family: string; base64: string }) => void;
-    const read = new Promise<{ family: string; base64: string }>(resolve => { finishRead = resolve; });
+    let finishRead!: (value: { family: string; bytes: ArrayBuffer }) => void;
+    const read = new Promise<{ family: string; bytes: ArrayBuffer }>(resolve => { finishRead = resolve; });
     let finishLoad!: () => void;
     const decoding = new Promise<FontFace>(resolve => { finishLoad = () => resolve({} as FontFace); });
     const loadPluginFont = vi.fn(() => read), load = vi.fn(() => decoding);
@@ -105,12 +129,12 @@ describe('plugin appearance renderer', () => {
     const applyFonts = vi.fn();
     try {
       const hook = renderHook(() => usePluginAppearance(applyFonts));
-      if (phase === 'decode') await act(async () => finishRead({ family, base64: 'AA==' }));
+      if (phase === 'decode') await act(async () => finishRead({ family, bytes: new Uint8Array([0]).buffer }));
       await act(async () => {
         for (let messageRadius = 1; messageRadius <= 3; messageRadius++) publish({ ...settings, contentStyle: { messageRadius } });
       });
       expect(loadPluginFont).toHaveBeenCalledTimes(1);
-      if (phase === 'read') await act(async () => finishRead({ family, base64: 'AA==' }));
+      if (phase === 'read') await act(async () => finishRead({ family, bytes: new Uint8Array([0]).buffer }));
       await act(async () => finishLoad());
       expect(load).toHaveBeenCalledTimes(1); expect(fonts.add).toHaveBeenCalledTimes(1);
       expect(applyFonts).toHaveBeenLastCalledWith(expect.objectContaining({ contentStyle: { messageRadius: 3 } }));

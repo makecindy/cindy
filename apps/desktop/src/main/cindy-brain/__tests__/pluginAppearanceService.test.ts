@@ -35,6 +35,18 @@ function fixture(fields = ['uiFont', 'reading', 'theme']) {
     replaceInstance: (id: string, key: string) => { instance = { id, key, token: 'replacement', dir: '/unused', appearance: { fields } }; } };
 }
 describe('plugin appearance calls', () => {
+  // Opus F2：内部字体 IPC 应交接二进制，避免编码膨胀和 Renderer 逐字符解码。
+  // 真实 service，仅替换资源读取边界；已有用例未覆盖 font() 返回值。tier: unit。
+  it('returns the selected font bytes without base64 encoding', async () => {
+    const h = fixture(), hash = 'b'.repeat(64), family = `CindyPlugin_${hash}`;
+    const bytes = Buffer.from([0, 1, 127, 255]);
+    h.replace({ uiFontResource: { family, hash, reference: 'asset:font', source: { instanceId: 'example', key: 'a'.repeat(64) } } });
+    const read = vi.spyOn(appearanceResources, 'loadPluginAppearanceResource').mockResolvedValueOnce({
+      kind: 'font', bytes, mimeType: 'font/woff2', hash,
+    });
+    try { expect(await h.service.font('uiFont')).toEqual({ family, bytes: new Uint8Array(bytes).buffer }); }
+    finally { read.mockRestore(); }
+  });
   it('never sets an application icon for an unconfigured startup or ordinary reconciliation', async () => {
     const h = fixture(['appIcon']);
     await h.restart().restoreAppIcon();

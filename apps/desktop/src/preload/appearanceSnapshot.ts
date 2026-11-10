@@ -4,7 +4,7 @@ import { createWallpaperAssetsBridge } from './wallpaperAssets';
 
 /** Only the current selected font role, never a renderer-provided path or plugin ID. */
 export function createPluginFontReader() {
-  return { loadPluginFont: (role: string): Promise<{ family: string; base64: string }> => ipcRenderer.invoke('appearance-settings:plugin-font', role) };
+  return { loadPluginFont: (role: string): Promise<{ family: string; bytes: ArrayBuffer }> => ipcRenderer.invoke('appearance-settings:plugin-font', role) };
 }
 
 /** Read-only appearance for lazy detached renderers; no settings mutation IPC. */

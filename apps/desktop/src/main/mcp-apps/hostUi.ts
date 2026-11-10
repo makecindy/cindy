@@ -108,9 +108,10 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
   let draft: Record<string, unknown> | null = null;
   const tools: Tool[] = [tool('open', 'Open another approved view of this plugin.', { viewId: { type: 'string' }, input: { type: 'object' } }, ['viewId'])];
   if (capabilities.includes('draft') && sessionId !== null) tools.push(tool('draft',
-    'Edit the bound task draft. Replacing requires the revision from hostContext.cindy.draft; never sends a message.', {
-      mode: { enum: ['append', 'replace', 'replace-selection'] }, text: { type: 'string', maxLength: 128000 }, revision: { type: 'string' },
-    }, ['mode', 'text']));
+    'Read or edit the bound task draft. Read returns a JSON document chunk and nextOffset; subsequent chunks require revision. Replacing requires revision; never sends a message.', {
+      mode: { enum: ['read', 'append', 'replace', 'replace-selection'] }, text: { type: 'string', maxLength: 128000 }, revision: { type: 'string' },
+      offset: { type: 'integer', minimum: 0 },
+    }, ['mode']));
   if (capabilities.includes('appearance')) tools.push(tool('appearance', 'Read or patch Cindy appearance through its settings owner.', {
     patch: { type: 'object' }, reset: { type: 'array', items: { type: 'string' } }, ifRevision: { type: 'string' },
   }));
@@ -131,7 +132,9 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
         if (signal.aborted) stop();
         try {
           await rendererAction(caller, { kind: 'draft-watch', sessionId }, watching.signal, assertCurrent, value => {
-            assertCurrent(); draft = { ...draft, ...value as Record<string, unknown> }; changed();
+            assertCurrent();
+            const snapshot = value as Record<string, unknown>;
+            draft = { revision: snapshot.revision, selection: snapshot.selection ?? null }; changed();
           });
           return stop;
         } catch (failure) { stop(); throw failure; }
@@ -161,6 +164,13 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
             sessionId: target.scope === 'task' ? sessionId : null, input: args.input }, signal, assertOperation));
         }
         case 'cindy.ui.draft':
+          if (args.mode === 'read') {
+            if (args.offset !== undefined && (!Number.isSafeInteger(args.offset) || (args.offset as number) < 0) ||
+              args.revision !== undefined && typeof args.revision !== 'string' || (args.offset as number) > 0 && typeof args.revision !== 'string')
+              throw new Error('MCP_APP_INVALID_REQUEST');
+            return result(await rendererAction(caller, { kind: 'draft-read', sessionId, offset: args.offset ?? 0,
+              revision: args.revision }, signal, assertOperation));
+          }
           if (!['append', 'replace', 'replace-selection'].includes(String(args.mode)) || typeof args.text !== 'string' || args.text.length > 128000 ||
               args.mode !== 'append' && typeof args.revision !== 'string') throw new Error('MCP_APP_INVALID_REQUEST');
           return result(await rendererAction(caller, { kind: 'draft', sessionId, mode: args.mode,

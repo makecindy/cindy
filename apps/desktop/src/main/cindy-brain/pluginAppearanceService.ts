@@ -218,7 +218,7 @@ export class PluginAppearanceService {
     if (this.deps.ready() && this.deps.read().appIconResource) await this.applyIcon(this.deps.read());
   }
 
-  async font(role: string): Promise<{ family: string; base64: string }> {
+  async font(role: string): Promise<{ family: string; bytes: ArrayBuffer }> {
     if (!fontRoles.includes(role as typeof fontRoles[number])) throw new Error('INVALID_PARAMS');
     const resource = this.deps.read()[`${role}Resource` as 'uiFontResource'];
     if (!resource) throw new Error('RESOURCE_UNAVAILABLE');
@@ -226,7 +226,7 @@ export class PluginAppearanceService {
     if (!fields.includes(role as PluginAppearanceField) || instance.key !== resource.source.key) throw new Error('RESOURCE_UNAVAILABLE');
     const loaded = await loadPluginAppearanceResource({ instanceId: instance.id, ghost: instance, files: this.deps.files, assertCurrent }, resource.reference, 'font');
     if (loaded.hash !== resource.hash) throw new Error('RESOURCE_UNAVAILABLE');
-    return { family: resource.family, base64: loaded.bytes.toString('base64') };
+    return { family: resource.family, bytes: new Uint8Array(loaded.bytes).buffer };
   }
 
   async reconcile(released?: string): Promise<void> {

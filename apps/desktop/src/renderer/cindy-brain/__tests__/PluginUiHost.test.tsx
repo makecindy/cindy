@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { getDraft, plainTextToTiptapDoc, registerDraftFlush, saveDraft } from '@/lib/composerDraftStore';
 import { createComposerDraftSaveScheduler } from '@/lib/composerDraftSaveScheduler';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { pluginUiDraftSnapshot, subscribePluginUiDraft, registerPluginUiDraftEditor } from '../pluginUiContext';
+import { pluginUiDraftSnapshot, subscribePluginUiDraft, registerPluginUiDraftEditor, readPluginUiDraftDocument } from '../pluginUiContext';
 vi.mock('../PluginUiContributions', () => ({ usePluginUiLaunchers: () => [], runPluginUiLauncher: vi.fn() }));
 vi.mock('@/features/right-sidebar/lib/openPluginUiView', () => ({ openPluginUiView: vi.fn() }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -161,7 +161,34 @@ it('keeps the mounted editor registered across a same-owner projection refresh',
   } finally { release(); editor.destroy(); }
 });
 
-it('streams the original draft with one in-flight reply and releases the subscription on unwatch', async () => {
+// Opus F1：140 万中文字符的粘贴草稿使上下文超过 4MB；旧覆盖只验证选区更新。
+// 真实草稿 store 与 Host，只替换 IPC，观察订阅载荷预算而不限制原文长度。tier: unit。
+it('keeps a large draft out of subscription notifications', async () => {
+  const text = plainTextToTiptapDoc('中'.repeat(1_400_000));
+  saveDraft('large-draft', { text, attachments: [] });
+  render(<PluginUiHost />);
+  await act(async () => receive({ requestId: 'large-watch', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+    kind: 'draft-watch', sessionId: 'large-draft' }));
+  const reply = invoke.mock.calls[0] as unknown as [null, { result: Record<string, unknown> }];
+  expect(Buffer.byteLength(JSON.stringify(reply[1]))).toBeLessThan(6_000);
+  expect(reply[1].result).not.toHaveProperty('text');
+  const revision = reply[1].result.revision, parts: string[] = [];
+  let offset: number | null = 0;
+  do {
+    await act(async () => receive({ requestId: 'read', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+      kind: 'draft-read', sessionId: 'large-draft', revision, offset }));
+    const read = invoke.mock.calls.at(-1) as unknown as [null, { result: { chunk: string; nextOffset: number | null } }];
+    expect(Buffer.byteLength(JSON.stringify(read[1]))).toBeLessThan(1_000_000);
+    parts.push(read[1].result.chunk); offset = read[1].result.nextOffset;
+  } while (offset !== null);
+  expect(JSON.parse(parts.join(''))).toEqual(text);
+  await act(async () => saveDraft('large-draft', { text: plainTextToTiptapDoc('New input'), attachments: [] }, { silent: true }));
+  await act(async () => receive({ requestId: 'stale-read', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+    kind: 'draft-read', sessionId: 'large-draft', revision, offset: 128000 }));
+  expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ error: 'MCP_APP_DRAFT_CHANGED' }));
+});
+
+it('notifies draft revisions with one in-flight reply, keeps document reads current, and releases on unwatch', async () => {
   const { timers } = draftWithPendingTyping('watched-task');
   let accept!: () => void;
   invoke.mockImplementationOnce(() => new Promise(resolve => { accept = () => resolve({}); }));
@@ -171,7 +198,8 @@ it('streams the original draft with one in-flight reply and releases the subscri
   expect(timers.size).toBe(0);
   expect(invoke).toHaveBeenCalledTimes(1);
   expect(invoke).toHaveBeenCalledWith(null, expect.objectContaining({ requestId: 'watch',
-    result: expect.objectContaining({ text: plainTextToTiptapDoc('Latest typing') }) }));
+    result: { revision: expect.any(String), selection: null } }));
+  expect(JSON.parse(readPluginUiDraftDocument('watched-task').chunk)).toEqual(plainTextToTiptapDoc('Latest typing'));
   await act(async () => {
     for (let i = 0; i < 1000; i++) saveDraft('watched-task', { text: plainTextToTiptapDoc(`Typing ${i}`), attachments: [] }, { silent: true });
   });
@@ -179,7 +207,8 @@ it('streams the original draft with one in-flight reply and releases the subscri
   await act(async () => accept());
   expect(invoke).toHaveBeenCalledTimes(2);
   expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ requestId: 'watch',
-    result: expect.objectContaining({ text: plainTextToTiptapDoc('Typing 999') }) }));
+    result: { revision: expect.any(String), selection: null } }));
+  expect(JSON.parse(readPluginUiDraftDocument('watched-task').chunk)).toEqual(plainTextToTiptapDoc('Typing 999'));
   await act(async () => receive({ requestId: 'watch', kind: 'draft-unwatch' }));
   await act(async () => saveDraft('watched-task', { text: plainTextToTiptapDoc('After close'), attachments: [] }, { silent: true }));
   expect(invoke).toHaveBeenCalledTimes(2);
@@ -217,7 +246,8 @@ it.each([1, 3])('avoids full draft transfers for caret and selection changes wit
     const updated = plainTextToTiptapDoc('Changed');
     await act(async () => saveDraft(sessionId, { text: updated, attachments: [] }, { silent: true }));
     expect(invoke).toHaveBeenCalledTimes(consumers);
-    expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ result: expect.objectContaining({ text: updated }) }));
+    expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ result: expect.not.objectContaining({ text: expect.anything() }) }));
+    expect(JSON.parse(readPluginUiDraftDocument(sessionId).chunk)).toEqual(updated);
     invoke.mockClear();
     await act(async () => editor.commands.setTextSelection(24));
     expect(invoke).toHaveBeenCalledTimes(consumers);

@@ -88,6 +88,21 @@ it('does not let a page override the bound task or the operation through tool ar
   expect(action).toMatchObject({ kind: 'draft', sessionId: 'task-a', mode: 'append', text: 'Hello' });
 });
 
+// Opus F1：草稿正文按需沿现有工具读取，仍绑定原编辑器且每页必须有一致版本。tier: unit。
+it('routes an explicit draft read to the owning editor and validates continuation arguments', async () => {
+  const binding = bindPluginUiResource('renderer:2', 'task-a', 'plugin', 'task', () => 'rev');
+  for (const args of [{ mode: 'read', offset: -1 }, { mode: 'read', offset: 128000 }])
+    await expect(binding.callHostTool!('cindy.ui.draft', args, new AbortController().signal)).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+  expect(boundary.send).not.toHaveBeenCalled();
+  const pending = binding.callHostTool!('cindy.ui.draft', { mode: 'read', offset: 128000, revision: 'current' }, new AbortController().signal);
+  await vi.waitFor(() => expect(boundary.send).toHaveBeenCalledTimes(1));
+  const action = boundary.send.mock.calls[0][1];
+  expect(action).toMatchObject({ kind: 'draft-read', sessionId: 'task-a', offset: 128000, revision: 'current' });
+  const response = { revision: 'current', chunk: 'document tail', nextOffset: null };
+  finishPluginUiAction('renderer:1', action.requestId, response);
+  expect(await pending).toEqual({ content: [{ type: 'text', text: JSON.stringify(response) }] });
+});
+
 it('checks the task lifetime before a write and rejects acknowledgements from another window', async () => {
   let active = true;
   const scope = vi.fn(async () => { if (!active) throw new Error('MCP_APP_SESSION_UNAVAILABLE'); });
@@ -147,8 +162,8 @@ it('takes draft context from the original composer stream and releases it with t
     await vi.waitFor(() => expect(boundary.send).toHaveBeenCalledTimes(1));
     const action = boundary.send.mock.calls[0][1];
     expect(action).toMatchObject({ kind: 'draft-watch', sessionId: 'task-a' });
-    const first = { revision: 'one', text: { type: 'doc', content: [] } };
-    finishPluginUiAction('renderer:1', action.requestId, first);
+    const first = { revision: 'one', selection: null };
+    finishPluginUiAction('renderer:1', action.requestId, { ...first, text: { type: 'doc', content: [] } });
     stop = await watching;
     expect(binding.projectContext!({ cindy: { draft: { revision: 'popup-stale' } } }).draft).toEqual(first);
     const selection = { from: 1, to: 3, text: 'xx' };
@@ -156,7 +171,7 @@ it('takes draft context from the original composer stream and releases it with t
     expect(binding.projectContext!({}).draft).toEqual({ ...first, revision: 'two', selection });
     expect(changed).toHaveBeenCalledTimes(2);
     finishPluginUiAction('renderer:1', action.requestId, { revision: 'three', text: null, selection: null });
-    expect(binding.projectContext!({}).draft).toEqual({ revision: 'three', text: null, selection: null });
+    expect(binding.projectContext!({}).draft).toEqual({ revision: 'three', selection: null });
     stop();
     expect(boundary.send).toHaveBeenLastCalledWith('plugin-ui:action', expect.objectContaining({ kind: 'draft-unwatch', requestId: action.requestId }));
     expect(() => finishPluginUiAction('renderer:1', action.requestId, first)).toThrow('MCP_APP_ACTION_UNAVAILABLE');
@@ -175,7 +190,7 @@ it.each([
   try {
     await vi.waitFor(() => expect(boundary.send).toHaveBeenCalledTimes(1));
     const watch = boundary.send.mock.calls[0][1];
-    const draft = { revision: `editor-${editorId}`, text: { type: 'doc', content: [] } };
+    const draft = { revision: `editor-${editorId}`, selection: null };
     finishPluginUiAction(`renderer:${editorId}`, watch.requestId, draft);
     stop = await watching;
     expect(binding.projectContext!({}).draft).toEqual(draft);

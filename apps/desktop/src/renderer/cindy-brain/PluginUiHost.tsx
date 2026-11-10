@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { getDraft, saveDraft, plainTextToTiptapDoc } from '@/lib/composerDraftStore';
-import { pluginUiDraftSnapshot, subscribePluginUiDraft, replacePluginUiDraftSelection } from './pluginUiContext';
+import { pluginUiDraftSnapshot, subscribePluginUiDraft, replacePluginUiDraftSelection, readPluginUiDraftDocument } from './pluginUiContext';
 import { openPluginUiView } from '@/features/right-sidebar/lib/openPluginUiView';
 import { usePluginUiLaunchers, runPluginUiLauncher } from './PluginUiContributions';
 import { matchesPluginAppShortcut } from '@/lib/appShortcutStore';
@@ -58,7 +58,6 @@ export function PluginUiHost() {
             const sessionId = action.sessionId;
             let disposed = false, queued = false, forwarding = false, dirty = false;
             let lastRevision: string | undefined;
-            let lastText: ReturnType<typeof pluginUiDraftSnapshot>['text'] | undefined;
             const stop = () => { disposed = true; unsubscribe(); watches.delete(requestId); };
             const changed = () => {
               dirty = true;
@@ -76,10 +75,7 @@ export function PluginUiHost() {
                   const snapshot = pluginUiDraftSnapshot(sessionId);
                   if (snapshot.revision === lastRevision) continue;
                   lastRevision = snapshot.revision;
-                  // Main retains the full document; selection-only changes need no text transfer.
-                  const result = snapshot.text === lastText ? { revision: snapshot.revision, selection: snapshot.selection } : snapshot;
-                  lastText = snapshot.text;
-                  await window.electronAPI.maker.mcpApps(null, { op: 'host-result', requestId, result });
+                  await window.electronAPI.maker.mcpApps(null, { op: 'host-result', requestId, result: snapshot });
                 }
               } catch {
                 stop();
@@ -90,6 +86,8 @@ export function PluginUiHost() {
             watches.set(requestId, stop);
             changed();
             return;
+          } else if (action.kind === 'draft-read' && typeof action.sessionId === 'string') {
+            result = readPluginUiDraftDocument(action.sessionId, action.offset as number | undefined, action.revision as string | undefined);
           } else if (action.kind === 'open' && typeof action.instanceId === 'string' && typeof action.viewId === 'string') {
             await openPluginUiView(action.instanceId, action.viewId, typeof action.sessionId === 'string' ? action.sessionId : null,
               action.input && typeof action.input === 'object' && !Array.isArray(action.input) ? action.input as Record<string, unknown> : undefined);

@@ -74,13 +74,17 @@
 - `input`：开页输入，不需要 context 权限。
 - `capabilities`：实际已批准能力，用于探测支持情况。
 - `context`、`selection`：仅任务页面获准 context 后提供。正文页面可含 message/tool 投影；task 为开页时的标题、目录、模型快照。
-- `draft:{revision,text,selection}`：仅获准 draft 后提供；text 为编辑器文档，不是普通字符串。
+- `draft:{revision,selection}`：仅获准 draft 后提供；订阅只发版本与选区，不反复复制整份文档。
   `selection` 为当前草稿选区的 `{from,to,text}`，无选区时为 null。
 
 草稿读取和修改均由原任务编辑器处理，独立窗口中的页面也订阅同一份草稿。
 完整任务副窗使用自身编辑器的草稿，分离侧栏和弹出页签使用主窗编辑器的草稿。
 读取或修改前先保存编辑器待处理的输入；旧 revision 的替换会被拒绝。
 只有打开的获准任务页面订阅草稿，页面关闭即释放，连续变更合并为最新快照。
+需要正文时调用 `cindy.ui.draft({mode:"read",revision?,offset?})`，返回 `{revision,chunk,nextOffset}`。
+`chunk` 是编辑器文档 JSON 的一段（最多 128000 个字符），不是普通草稿字符串；从 offset 0 开始，
+将返回的 nextOffset 和 revision 用于后续读取，直到 nextOffset 为 null，再拼接各 chunk 并 JSON.parse。
+完整文档不截断；读取期间版本变化会拒绝旧 revision，应重新从 0 读取。仅实际读取时序列化，关闭页面释放缓存。
 
 ```js
 import { App } from '@modelcontextprotocol/ext-apps';
@@ -98,7 +102,7 @@ if (app.getHostContext()?.cindy?.capabilities?.includes('draft')) {
 | --- | --- |
 | 页面批准 | `cindy.ui.open({viewId,input?})`，只打开同插件已批准视图 |
 | `context` | 向标准 host context 推送获准的任务/正文投影和任务区域选中文字 |
-| `draft` | `cindy.ui.draft({mode:"append"|"replace"|"replace-selection",text,revision?})`；替换整份草稿或选区须带最新 revision，冲突拒绝，不发送消息 |
+| `draft` | `cindy.ui.draft({mode:"read",revision?,offset?})` 按需完整读取；`{mode:"append"|"replace"|"replace-selection",text,revision?}` 编辑，替换整份草稿或选区须带最新 revision，冲突拒绝，不发送消息 |
 | `appearance` | `cindy.ui.appearance({patch?,reset?,ifRevision?})`，沿原外观设置读写，图标由独立能力控制 |
 | `visibility` | `cindy.ui.visibility({visible?,regions?})`，读取或修改窗口及 workspace/sidebar/header/messages/composer/tools/windowControls 的显隐 |
 | `app-icon` | `cindy.ui.app-icon({icon:"default"|"cat"|"wordmark"|"mark"})` 或 `{resource:"asset:icon"}`，选择内置图标或获准图片 |
