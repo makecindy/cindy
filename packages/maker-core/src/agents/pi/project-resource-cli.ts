@@ -242,8 +242,9 @@ export interface PiProjectResourceLaunchSnapshot {
    * 同 mtime 的孪生树时,解析身份是唯一信号;与 watchRootMtimes 同 key 同批。 */
   readonly watchRootsResolved: Map<string, string | null>;
   /** 每个 watch root 的 readdir 条目名指纹:时间戳粒度盲区(同一 tick 内增删,
-   * mtime 与基线逐位相等)的第二信号;与 watchRootMtimes 同 key 同批。 */
-  readonly watchRootEntries: Map<string, string>;
+   * mtime 与基线逐位相等)的第二信号;与 watchRootMtimes 同 key 同批。null =
+   * collector 不枚举的键(软链 namespace/越界子树),快检跳读。 */
+  readonly watchRootEntries: Map<string, string | null>;
   /** 受邀者裁剪口径(非受邀者恒 null):重扫后的 fresh 集合先经它裁剪再与 paths
    * 比较 —— 缺了会拿全量比裁剪基线恒判漂移,回收死循环。 */
   readonly restrict: ((paths: PiProjectResourceCliPaths) => PiProjectResourceCliPaths) | null;
@@ -259,19 +260,22 @@ export interface PiProjectResourceLaunchWatch {
   /** workingDir 的解析身份,先于所有键采样(键路径都从它拼出)。 */
   readonly scanRootResolved: string | null;
   readonly mtimes: Map<string, number>;
-  /** key → readdir 条目名指纹(排序拼接;文件键/缺失恒 '')。时间戳粒度盲区
-   * (同一 tick 内增删,mtime 与基线逐位相等)的第二信号;变化只作重扫信号,
-   * 判决仍归路径集合。 */
-  readonly entries: Map<string, string>;
+  /** key → readdir 条目名指纹(排序拼接;文件键/缺失恒 '';collector 不枚举的键
+   * —— 软链 namespace/越界子树 —— 为 null,快检跳读:readdir 跟随软链,外部大
+   * 目录的完整列表是每条消息一次的纯开销)。时间戳粒度盲区(同一 tick 内增删,
+   * mtime 与基线逐位相等)的第二信号;变化只作重扫信号,判决仍归路径集合。 */
+  readonly entries: Map<string, string | null>;
   /** key → realpath 解析身份(缺失 null),与 mtimes 同 key 同批。 */
   readonly resolved: Map<string, string | null>;
 }
 
-function recordWatchKey(sample: PiProjectResourceLaunchWatch, target: string): void {
+function recordWatchKey(sample: PiProjectResourceLaunchWatch, target: string, enumerateEntries = true): void {
   // 解析身份先行:身份与 mtime/条目之间的窗口不一致只会多一次重扫,不会固化。
   sample.resolved.set(target, realpathOrNull(target));
   sample.mtimes.set(target, statMtimeMs(target));
-  sample.entries.set(target, readDirEntryFingerprint(target));
+  // enumerateEntries=false:collector 不枚举该键的子树(软链 namespace/越界),
+  // 条目基线存 null,快检跳读(Greptile P2)。
+  sample.entries.set(target, enumerateEntries ? readDirEntryFingerprint(target) : null);
 }
 
 /**
@@ -298,14 +302,14 @@ export function collectPiProjectResourceLaunchWatch(workingDir: string, repoRoot
   const repoRoot = repoRootHint ?? (findNearestGitRoot(scanRoot) ?? scanRoot);
   const piDir = path.join(scanRoot, '.pi');
   recordWatchKey(sample, piDir);
-  watchPiSkillTreeMtimes(sample, path.join(piDir, 'skills'));
+  watchPiSkillTreeMtimes(sample, repoRoot, path.join(piDir, 'skills'));
   watchPiPromptTargets(sample, path.join(piDir, 'prompts'), repoRoot);
-  watchPiExtensionChildMtimes(sample, path.join(piDir, 'extensions'));
+  watchPiExtensionChildMtimes(sample, repoRoot, path.join(piDir, 'extensions'));
   let current = scanRoot;
   while (true) {
     const agentsDir = path.join(current, '.agents');
     recordWatchKey(sample, agentsDir);
-    watchPiSkillTreeMtimes(sample, path.join(agentsDir, 'skills'));
+    watchPiSkillTreeMtimes(sample, repoRoot, path.join(agentsDir, 'skills'));
     if (current === repoRoot) break;
     const parent = path.dirname(current);
     if (parent === current) break;
@@ -320,33 +324,41 @@ export function collectPiProjectResourceLaunchWatch(workingDir: string, repoRoot
  * 目录 mtime 捕获,与 realpath 收集口径一致。跳过 collector 不枚举的子树
  * (隐藏/bak、软链 namespace、剪枝名),避免无关变化触发无谓重扫。
  */
-function watchPiSkillTreeMtimes(sample: PiProjectResourceLaunchWatch, skillsDir: string): void {
-  recordWatchKey(sample, skillsDir);
-  if (!isDir(skillsDir)) return;
+function watchPiSkillTreeMtimes(sample: PiProjectResourceLaunchWatch, repoRoot: string, skillsDir: string): void {
+  // 与 collector 同一门禁:缺失/越界(repoRoot 外)的 skills 根不枚举 —— 条目
+  // 基线存 null(快检跳读;readdir 跟随软链,外部大目录的完整列表是每条消息
+  // 一次的纯开销,Greptile P2),下行枚举一并跳过;改指信号由解析身份承担。
+  const skillsResolved = realpathOrNull(skillsDir);
+  const enumerated = !!skillsResolved && isDir(skillsResolved) && isWithinRoot(repoRoot, skillsResolved);
+  recordWatchKey(sample, skillsDir, enumerated);
+  if (!enumerated) return;
   for (const entry of listDir(skillsDir)) {
     if (entry.name.startsWith('.') || /\.bak\.\d+$/.test(entry.name)) continue;
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const childPath = path.join(skillsDir, entry.name);
-    recordWatchKey(sample, childPath);
     const realChild = realpathOrNull(childPath);
-    if (!realChild || !isDir(realChild)) continue;
+    const childInRepo = !!realChild && isDir(realChild) && isWithinRoot(repoRoot, realChild);
+    // 软链 namespace/越界子树:collector 不枚举其内部,不读条目基线(纯开销);
+    // 解析身份与 mtime 仍记录(改指/悬空链落地仍能检出)。
+    const childIsSymlink = isSymlinkEntry(entry, childPath);
+    recordWatchKey(sample, childPath, childInRepo && !childIsSymlink);
+    if (!childInRepo || !realChild) continue;
     // 清单本体无论当前是否解析都盯住:悬空链(目标尚不存在)落地成 skill 时,
     // 改动的只是未盯视的目标处,盯住链接自身才能检出(与 prompts 同款)。
     // 直链 skill 根同样适用:其 SKILL.md 为二级软链时,目标移动/删除只改目标处,
     // 跟随后的目录与 skills 根 mtime 都不动,必须先记清单本体再跳过软链目录。
     watchPiSkillManifestTargets(sample, realChild);
-    // 与 collector 同口径判定软链(含 readdir 把 junction 报成目录的形态):
-    // 软链 namespace collector 明文不枚举,盯视面不得混入目标树内的键。
-    if (isSymlinkEntry(entry, childPath)) continue;
+    if (childIsSymlink) continue;
     if (hasSkillFile(realChild)) continue; // skill 目录:collector 不再往里枚举
     if (shouldPruneSkillScanDirectory(entry.name)) continue; // collector 剪枝的 namespace
     for (const nested of listDir(realChild)) {
       if (nested.name.startsWith('.') || /\.bak\.\d+$/.test(nested.name)) continue;
       if (!nested.isDirectory() && !nested.isSymbolicLink()) continue;
       const nestedPath = path.join(realChild, nested.name);
-      recordWatchKey(sample, nestedPath);
       const realNested = realpathOrNull(nestedPath);
-      if (!realNested || !isDir(realNested)) continue;
+      const nestedInRepo = !!realNested && isDir(realNested) && isWithinRoot(repoRoot, realNested);
+      recordWatchKey(sample, nestedPath, nestedInRepo && !isSymlinkEntry(nested, nestedPath));
+      if (!nestedInRepo || !realNested) continue;
       // 同上层:悬空的嵌套清单(.pi/skills/@scope/foo/SKILL.md 为悬空软链)也要盯住本体
       watchPiSkillManifestTargets(sample, realNested);
     }
@@ -372,15 +384,21 @@ function watchPiSkillManifestTargets(sample: PiProjectResourceLaunchWatch, realF
 }
 
 /** stat 一个 extensions 根及其子目录:已有扩展目录内 index.ts 增删只改子目录 mtime。 */
-function watchPiExtensionChildMtimes(sample: PiProjectResourceLaunchWatch, extDir: string): void {
-  recordWatchKey(sample, extDir);
-  if (!isDir(extDir)) return;
+function watchPiExtensionChildMtimes(sample: PiProjectResourceLaunchWatch, repoRoot: string, extDir: string): void {
+  // 与 collector 同一门禁:缺失/越界的 extensions 根不枚举(条目基线 null,快检跳读)。
+  const extResolved = realpathOrNull(extDir);
+  const enumerated = !!extResolved && isDir(extResolved) && isWithinRoot(repoRoot, extResolved);
+  recordWatchKey(sample, extDir, enumerated);
+  if (!enumerated) return;
   for (const entry of listDir(extDir)) {
     if (entry.name.startsWith('.')) continue;
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const childPath = path.join(extDir, entry.name);
-    recordWatchKey(sample, childPath);
     const realChild = realpathOrNull(childPath);
+    // collector 只 readdir extensions 自身,不枚举子目录:软链/越界子键不读条目基线。
+    recordWatchKey(
+      sample, childPath,
+      !!realChild && isDir(realChild) && isWithinRoot(repoRoot, realChild) && !isSymlinkEntry(entry, childPath));
     if (!realChild || !isDir(realChild)) continue;
     // 软链 index.ts 的目标增删只改目标处,collector 按解析路径收集,盯住解析后的本体。
     const realIndex = path.join(realChild, 'index.ts');
@@ -395,8 +413,11 @@ function watchPiExtensionChildMtimes(sample: PiProjectResourceLaunchWatch, extDi
  * realpath 收集口径一致。枚举条件与 collector 逐条对应(隐藏/非 .md 跳过)。
  */
 function watchPiPromptTargets(sample: PiProjectResourceLaunchWatch, promptsDir: string, repoRoot: string): void {
-  recordWatchKey(sample, promptsDir);
-  if (!isDir(promptsDir)) return;
+  // 与 collector 同一门禁:缺失/越界的 prompts 根不枚举(条目基线 null,快检跳读)。
+  const promptsResolved = realpathOrNull(promptsDir);
+  const enumerated = !!promptsResolved && isDir(promptsResolved) && isWithinRoot(repoRoot, promptsResolved);
+  recordWatchKey(sample, promptsDir, enumerated);
+  if (!enumerated) return;
   for (const entry of listDir(promptsDir)) {
     if (entry.name.startsWith('.') || !entry.name.endsWith('.md')) continue;
     const entryPath = path.join(promptsDir, entry.name);
@@ -499,8 +520,10 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
     }
   }
   // 条目名指纹:时间戳粒度盲区(同一 tick 内增删,mtime 逐位不变)的第二信号。
+  // null = collector 不枚举的键(软链 namespace/越界子树),跳读(Greptile P2)。
   let entriesChanged = false;
   for (const [dir, fingerprintAtLaunch] of snapshot.watchRootEntries) {
+    if (fingerprintAtLaunch === null) continue;
     if (readDirEntryFingerprint(dir) !== fingerprintAtLaunch) {
       entriesChanged = true;
       break;

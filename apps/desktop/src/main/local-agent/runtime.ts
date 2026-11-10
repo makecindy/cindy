@@ -207,7 +207,7 @@ export function createEventProjection(
 }
 
 export async function openLocalAgentRuntime(
-  maker: Pick<Maker, 'startLocalAgentSession'>,
+  maker: Pick<Maker, 'startLocalAgentSession' | 'recyclePiRuntimeIfResourcesDrifted'>,
   directory: string,
   input: LocalAgentOpen,
   bridge: { url: string; token: string; emit(event: unknown): void },
@@ -575,7 +575,14 @@ export async function openLocalAgentRuntime(
         // hasRecyclableProjectResourceDrift,非 pi agent 恒 false 跳过。
         if (handle.hasRecyclableProjectResourceDrift()) {
           const previous = handle;
-          await previous.close();
+          // 可见变体的 Session 由 Maker 托管:必须走 Maker 的 runtime-refresh 关闭
+          // (实例方法自带 rehydrate 抑制窗口)。直接 Session.close 不登记原因,会
+          // 被按 unexpected 丢掉排队回合,未抑制的 onClose 会在重建前清掉暂存附件
+          // (Codex P1,2026-11-10)。不可见变体不在 activeSessions,Maker 回收恒
+          // false,回退直关。
+          if (!(await maker.recyclePiRuntimeIfResourcesDrifted(previous).catch(() => false))) {
+            await previous.close();
+          }
           assertCurrent(current);
           handle = await start(previous.sdkSessionId, current);
         }

@@ -311,6 +311,31 @@ describe('piProjectResourcesDrifted', () => {
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
+  it('stores null entries baseline for collector-excluded keys (symlink namespace to outside-repo target)', () => {
+    // Greptile P2:collector 不枚举越界/软链 namespace 子树,条目基线存 null ——
+    // 快检不 readdir 其目标(readdir 跟随软链,外部大目录完整列表是每条消息一次
+    // 的纯开销);改指信号由解析身份承担。
+    mkdirSync(path.join(project, 'repo'), { recursive: true });
+    writeFileSync(path.join(project, 'repo', '.git'), '');
+    writeSkill(path.join('repo', '.pi', 'skills'), 'alpha');
+    writeSkill(path.join('outside', 'big'), 'huge'); // repoRoot 外的目标树
+    mkdirSync(path.join(project, 'repo', '.pi', 'skills'), { recursive: true });
+    symlinkSync(path.join(project, 'outside', 'big'), path.join(project, 'repo', '.pi', 'skills', '@scope'), 'junction');
+    const wd = path.join(project, 'repo');
+    const launchRepoRoot = resolvePiResourceRepoRoot(wd);
+    const watch = collectPiProjectResourceLaunchWatch(wd, launchRepoRoot);
+    // 前提:软链 namespace 键的条目基线为 null(快检将跳读)。键是链接路径本体,
+    // 不能用 canon 查(canonical 化会把键解析成目标路径)
+    expect(watch.entries.get(path.join(realpathSync(wd), '.pi', 'skills', '@scope'))).toBeNull();
+    const baseline = snapshotPiProjectResourceLaunch(
+      wd, collectPiProjectResourceCliPaths(wd, launchRepoRoot), launchRepoRoot, watch);
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    // 目标树内部增删:集合不变 → 不漂移(mtime 跟随目标会触发一次重扫后收敛)
+    writeSkill(path.join('outside', 'big'), 'more');
+    bumpMtime(path.join(project, 'outside', 'big'));
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+  });
+
   it('rebuilds the watch map after an unchanged rescan so new child dirs are watched', () => {
     mkdirSync(path.join(project, '.pi', 'extensions'), { recursive: true });
     const baseline = snapshot();
