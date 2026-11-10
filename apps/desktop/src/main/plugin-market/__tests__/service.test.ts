@@ -806,7 +806,7 @@ it('finds canonical root and organization instance keys without listing', () => 
     approval: { state: 'approved', revision: 'root-revision' } } as unknown as InstalledGhost;
   const organization = { ...ghostEntry('hello'), namespace: 'acme', dir: '/ghosts/_ns/acme/hello',
     approval: { state: 'approved', revision: 'org-revision' } } as unknown as InstalledGhost;
-  runtime.ghosts = [root, organization];
+  runtime.ghosts = [root, organization] as unknown as typeof runtime.ghosts;
   runtime.findInstalledInstance = vi.fn((id: string) =>
     id === '_root__hello' ? root : id === '_ns__acme__hello' ? organization : undefined);
   runtime.listScans = 0;

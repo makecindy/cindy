@@ -312,7 +312,7 @@ export function installedGhostMatchingMarketPluginNow(
       } catch { /* invalid logical identity falls back to the full list */ }
     }
     for (const candidate of candidates) {
-      let exact: InstalledGhost | null = null;
+      let exact: InstalledGhost | undefined;
       try { exact = manager.findInstalledInstance(candidate); } catch { /* fall through */ }
       if (exact && exact.namespace === expectedNamespace && exact.manifest.id === plugin.ghostId) return exact;
     }

@@ -155,10 +155,8 @@ describe('usage binding instance revalidation', () => {
       log: { warn: vi.fn() },
     });
     await api.bindPluginUsage(organization);
-    expect(captureBound).toHaveBeenCalledWith(
-      installedGhostStoragePart(organization),
-      organization.approval.revision,
-    );
+    const approvedRevision = organization.approval.state === 'approved' ? organization.approval.revision : '';
+    expect(captureBound).toHaveBeenCalledWith(installedGhostStoragePart(organization), approvedRevision);
     expect(withGhostInstallLock).not.toHaveBeenCalled();
     expect(bind).not.toHaveBeenCalled();
   });
