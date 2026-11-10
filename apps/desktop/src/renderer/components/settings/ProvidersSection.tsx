@@ -1,5 +1,6 @@
 import { providersSettings } from './ProvidersSection.settings-search';
-import { ProviderRunLocationSubtitle, useProviderBorrow } from './ProviderRunLocationRow';
+import { ProviderRunLocationSubtitle } from './ProviderRunLocationRow';
+import { useProviderBorrow } from '@/hooks/useProviderBorrow';
 import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
 import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';

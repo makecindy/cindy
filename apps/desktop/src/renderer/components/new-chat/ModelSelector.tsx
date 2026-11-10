@@ -1869,9 +1869,11 @@ function ModelSelectorContentView({
   const remoteAgentLabelOf = useCallback(
     (targetDeviceId: string, providerId: string): string => {
       const device = remoteAgentDevices?.find((entry) => entry.deviceId === targetDeviceId);
+      // 左栏收起的(本机就能用、只列一处)供应商浏览那台的目录时照样出现，名字从那台的完整目录取。
       const provider = remoteAgentGroups
         .find((group) => group.deviceId === targetDeviceId)
-        ?.providers.find((entry) => entry.id === providerId);
+        ?.providers.find((entry) => entry.id === providerId)
+        ?? remoteDeviceCatalogs.get(targetDeviceId)?.providers.find((entry) => entry.id === providerId);
       // 组只写有几台，不写是哪几台(2026-10-10 用户要求)；分享来的组目录里本来就只有台数。
       // 台数按电脑算：一台电脑上的几个账号算一台。
       const groupMembers = remoteProviderGroups.groups.get(remoteProviderEntryKey(targetDeviceId, providerId))?.members;
@@ -1887,7 +1889,7 @@ function ModelSelectorContentView({
         })
         : t('newChat.modelSelector.unified.railRemoteProvider', values);
     },
-    [remoteAgentDevices, remoteAgentGroups, remoteProviderGroups, t],
+    [remoteAgentDevices, remoteAgentGroups, remoteDeviceCatalogs, remoteProviderGroups, t],
   );
   // 供应商组那一项的用量跟着任务实际运行的那台(provider-groups.md §10)：组分好电脑后任务记录改成那台的
   // 位置与供应商，与输入框下方的用量同一份；还没分到电脑(草稿、没运行过、用的不是这个组)时不显示某一台

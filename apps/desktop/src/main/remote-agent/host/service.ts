@@ -896,6 +896,8 @@ export function installRemoteAgentHost(options: {
     ownerModelAllowed: (hostSessionId, providerId, kind, model) => hasHostedSessionModelAccess(hostSessionId)
       && hostedProviderOffersModel(hostSessionId, providerId, kind, model),
     isControllerAuthorized,
+    isControllerModelUseRevoked: (controller) => !isProviderSharePeer(controller)
+      && (readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(controller),
     controllerTrust: (controller) => (isProviderSharePeer(controller) ? 'guest' : 'owner'),
     providerAccess: {
       models: async (kind, providerId, controller, sessionId) => {
