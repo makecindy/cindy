@@ -512,6 +512,9 @@ describe('manageWindowStatePreservingNormalBounds', () => {
       {};
     manageWindowStatePreservingNormalBounds(
       {
+        // updateState reads the rectangle, then isMaximized(). A relocated size is
+        // handed over as normal once and maximized on the following read, so the
+        // stand-in reads twice, the same way a resize and the later close do.
         manage: (win) => {
           const read = win.getBounds.bind(win);
           const write = () => {
@@ -520,7 +523,10 @@ describe('manageWindowStatePreservingNormalBounds', () => {
             saved.isMaximized = win.isMaximized();
           };
           win.on?.('resize', write);
-          win.on?.('close', write);
+          win.on?.('close', () => {
+            write();
+            write();
+          });
         },
       },
       window.win,
@@ -599,5 +605,114 @@ describe('manageWindowStatePreservingNormalBounds', () => {
     expect((saved.y ?? 0) + (saved.height ?? 0)).toBeLessThanOrEqual(
       surviving.workArea.y + surviving.workArea.height,
     );
+  });
+
+  // #9572 复审：工作区高 640、记下的高 800。留 64px 空隙得到 576，但窗口最小高度是 600，
+  // 下次启动会被抬回 600，按 576 算的 y 让底边落到任务栏下面。生产入口同上。
+  // 最小输入：矮到刚能放下 600 的工作区。保存高度必须不低于 600，底边不超出工作区。Tier: unit。
+  it('keeps the window minimum when a short display can still hold it', () => {
+    const tall = {
+      bounds: { x: 0, y: 0, width: 1536, height: 864 },
+      workArea: { x: 0, y: 19, width: 1536, height: 845 },
+    };
+    const short = {
+      bounds: { x: 1920, y: 0, width: 1280, height: 680 },
+      workArea: { x: 1920, y: 40, width: 1280, height: 640 },
+    };
+    const screens: WorkAreaScreen = {
+      getPrimaryDisplay: () => tall,
+      getDisplayMatching: (rect) => (rect.x >= 1920 ? short : tall),
+    };
+    const window = createWindow({ x: 128, y: 41, width: 1280, height: 800 });
+    const saved: { x?: number; y?: number; width?: number; height?: number } = {};
+    manageWindowStatePreservingNormalBounds(
+      {
+        manage: (win) => {
+          const read = win.getBounds.bind(win);
+          const write = () => {
+            if (!win.isMaximized() && !win.isMinimized() && !win.isFullScreen()) {
+              Object.assign(saved, read());
+            }
+          };
+          win.on?.('resize', write);
+          win.on?.('close', () => {
+            write();
+            write();
+          });
+        },
+      },
+      window.win,
+      screens,
+      'win32',
+    );
+
+    window.emit('resize');
+    window.win.isSnapped = () => true;
+    window.setBounds(short.workArea);
+    window.emit('move');
+    window.emit('close');
+
+    expect(saved.height).toBeGreaterThanOrEqual(600);
+    expect(saved.height).toBeLessThan(short.workArea.height);
+    expect((saved.y ?? 0) + (saved.height ?? 0)).toBeLessThanOrEqual(
+      short.workArea.y + short.workArea.height,
+    );
+  });
+
+  // #9572 复审：1279×679 落在 1280×680 里面，差 1px，早退会原样保留。贴满判断的容差是 2px，
+  // 这条仍会被记成最大化，planWindowRestore 于是跳过替换。生产入口同上。
+  // 最小输入：宽高都只比工作区少 1px。保存结果不能原样留下，也不能再被 2px 容差判成贴满。
+  // Tier: unit。
+  it('shrinks a restore rectangle that is only one pixel short of the work area', () => {
+    const screen = {
+      bounds: { x: 0, y: 0, width: 1280, height: 720 },
+      workArea: { x: 0, y: 0, width: 1280, height: 680 },
+    };
+    const screens: WorkAreaScreen = {
+      getPrimaryDisplay: () => screen,
+      getDisplayMatching: () => screen,
+    };
+    const window = createWindow({ x: 0, y: 0, width: 1279, height: 679 });
+    const saved: { x?: number; y?: number; width?: number; height?: number; isMaximized?: boolean } =
+      {};
+    manageWindowStatePreservingNormalBounds(
+      {
+        manage: (win) => {
+          const read = win.getBounds.bind(win);
+          const write = () => {
+            const normal = !win.isMaximized() && !win.isMinimized() && !win.isFullScreen();
+            if (normal) Object.assign(saved, read());
+            saved.isMaximized = win.isMaximized();
+          };
+          win.on?.('resize', write);
+          win.on?.('close', () => {
+            write();
+            write();
+          });
+        },
+      },
+      window.win,
+      screens,
+      'win32',
+    );
+
+    window.emit('resize');
+    window.win.isSnapped = () => true;
+    window.setBounds(screen.workArea);
+    window.emit('move');
+    window.emit('close');
+
+    expect(saved).not.toMatchObject({ width: 1279, height: 679 });
+    expect(
+      boundsFillWorkArea(
+        {
+          x: saved.x ?? 0,
+          y: saved.y ?? 0,
+          width: saved.width ?? 0,
+          height: saved.height ?? 0,
+        },
+        screen.workArea,
+      ),
+    ).toBe(false);
   });
 });

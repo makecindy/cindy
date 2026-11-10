@@ -22,9 +22,13 @@ const WORK_AREA_FILL_TOLERANCE_PX = 2;
 /**
  * A restore rectangle that equals the work area is the bug this file exists for:
  * unmaximize then has nowhere smaller to go. When a saved size is moved onto a
- * shorter monitor it must stay strictly inside, so each side keeps this gap.
- * Below the window minimum (800×600) the gap still wins: forcing the minimum
- * there would make the rectangle fill that work area again.
+ * shorter monitor it must stay strictly inside. The window minimum (800×600) is
+ * the floor whenever the work area can hold it: relaunch grows a smaller size back
+ * up to the minimum, and a y computed for the smaller size then drops the bottom
+ * under the taskbar. Only a work area smaller than the minimum uses this gap,
+ * because forcing the minimum there would fill that work area again. The extreme
+ * where the minimum itself equals the work area may fill it; there is no smaller
+ * legal size.
  */
 const RESTORE_INSET = 64;
 /** BrowserWindow minWidth / minHeight in bootstrap-electron. */
@@ -186,13 +190,16 @@ function rectInsideWorkArea(rect: WorkAreaRect, workArea: WorkAreaRect): boolean
 
 function fitRestoreSize(size: number, workAreaSize: number, minimum: number): number {
   if (size < workAreaSize) return size;
-  // Clamping onto the work area itself recreates the unmaximize target. Keep a gap
-  // on the side that would otherwise fill it. The window cannot be created below
-  // its minimum, so prefer that when the work area can hold it. A work area smaller
-  // than the minimum cannot: clamping up would fill it, so the gap wins instead.
-  const room = Math.max(0, workAreaSize - RESTORE_INSET);
-  const floor = workAreaSize >= minimum ? minimum : 0;
-  return Math.min(Math.max(floor, Math.min(size, room)), room);
+  // The window is created at its minimum even when a smaller size was saved, so a
+  // work area that can hold the minimum must keep it. Clamping onto the work area
+  // itself recreates the unmaximize target, unless the minimum is already the whole
+  // work area: nothing smaller is legal then. A work area below the minimum cannot
+  // keep the floor (that would fill it), so the gap wins instead.
+  if (workAreaSize >= minimum) {
+    const capped = Math.min(Math.max(minimum, Math.min(size, workAreaSize)), workAreaSize);
+    return capped === workAreaSize && minimum < workAreaSize ? capped - 1 : capped;
+  }
+  return Math.min(size, Math.max(0, workAreaSize - RESTORE_INSET));
 }
 
 /**
@@ -203,8 +210,14 @@ function fitRestoreSize(size: number, workAreaSize: number, minimum: number): nu
  *
  * "Same monitor" requires the saved rectangle to be fully inside the work area it
  * matched. A disconnected monitor's coordinates also match the surviving display,
- * and treating that as the same monitor would keep the off-screen position.
+ * and treating that as the same monitor would keep the off-screen position. A size
+ * within the fill tolerance is not "already small enough" either: the fill check
+ * would still call it maximized, and the next launch would skip replacing it.
  */
+function nearWorkAreaSize(size: number, workAreaSize: number): boolean {
+  return size >= workAreaSize - WORK_AREA_FILL_TOLERANCE_PX;
+}
+
 function placeOntoLiveDisplay(
   bounds: WorkAreaRect,
   live: WorkAreaRect,
@@ -212,7 +225,10 @@ function placeOntoLiveDisplay(
 ): WorkAreaRect {
   const from = screenApi.getDisplayMatching(bounds).workArea;
   const to = screenApi.getDisplayMatching(live).workArea;
-  if (rectInsideWorkArea(bounds, from) && rectInsideWorkArea(bounds, to)) return bounds;
+  const inside = rectInsideWorkArea(bounds, from) && rectInsideWorkArea(bounds, to);
+  const closeEnoughToFill =
+    nearWorkAreaSize(bounds.width, to.width) && nearWorkAreaSize(bounds.height, to.height);
+  if (inside && !closeEnoughToFill) return bounds;
   const width = fitRestoreSize(bounds.width, to.width, MIN_RESTORE_WIDTH);
   const height = fitRestoreSize(bounds.height, to.height, MIN_RESTORE_HEIGHT);
   const maxX = to.x + Math.max(0, to.width - width);
@@ -322,12 +338,15 @@ export function manageWindowStatePreservingNormalBounds(
   ).reportMaximized;
   const originalGetBounds = win.getBounds.bind(win);
   // electron-window-state reads getBounds() and then, while isMaximized() is
-  // true, leaves x/y alone. A filled window dragged onto another monitor never
-  // gets a smaller rectangle, so the flag stays true and the old monitor is what
-  // gets saved. After handing over the relocated rectangle, the next
-  // isMaximized() says "normal" once so this update copies the new coordinates;
-  // the read after that still reports maximized.
-  let copyBoundsOnce = false;
+  // true, leaves x/y/width/height alone. A filled window dragged onto another
+  // monitor never gets a smaller rectangle, so the flag stays true and the old
+  // monitor is what gets saved. The next two isMaximized() answers therefore
+  // split the job: the first says "normal", so the update that just read the new
+  // rectangle copies it, and the second says "maximized" again, so the mark is
+  // put back. One answer cannot do both, and nothing here calls the keeper — the
+  // second answer waits for its next read. A size shrunk to fit is no longer
+  // filling by itself, so that second answer has to come from the live window.
+  let copyBoundsReads = 0;
   const boundsForKeeper = () => {
     const live = originalGetBounds();
     if (win.isMinimized()) return previousNormalBounds ?? live;
@@ -341,7 +360,7 @@ export function manageWindowStatePreservingNormalBounds(
     const relocated = placeOntoLiveDisplay(decision.bounds, live, screenApi);
     if (relocated !== decision.bounds) {
       previousNormalBounds = relocated;
-      copyBoundsOnce = true;
+      copyBoundsReads = 2;
     }
     return relocated;
   };
@@ -358,25 +377,28 @@ export function manageWindowStatePreservingNormalBounds(
       const relocated = placeOntoLiveDisplay(previousNormalBounds, live, screenApi);
       if (relocated !== previousNormalBounds) {
         previousNormalBounds = relocated;
-        copyBoundsOnce = true;
+        copyBoundsReads = 2;
       }
     }
     syntheticMaximized = filling;
     if (filling) return;
     previousNormalBounds = live;
   };
-  const reportMaximized = () => {
-    if (copyBoundsOnce) {
-      copyBoundsOnce = false;
-      return false;
-    }
-    if (win.isMinimized()) return syntheticMaximized;
-    return persistedBoundsDecision(
+  const liveFillsWorkArea = () =>
+    persistedBoundsDecision(
       windowStateView(win, originalGetBounds),
       previousNormalBounds,
       screenApi,
       platform,
     ).reportMaximized;
+  const reportMaximized = () => {
+    if (win.isMinimized()) return syntheticMaximized;
+    if (copyBoundsReads > 0) {
+      copyBoundsReads -= 1;
+      // First of the pair: "normal", so this update copies the relocated size.
+      if (copyBoundsReads === 1) return false;
+    }
+    return liveFillsWorkArea();
   };
   const view = windowStateView(win, boundsForKeeper, reportMaximized);
   windowState.manage(view);
