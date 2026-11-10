@@ -303,6 +303,108 @@ async function runTurn(userId: string, text = 'hello'): Promise<void> {
 }
 
 describe('turnRunner: connection handed to a companion bot', () => {
+  it.each([
+    { userId: OWNER, warm: false },
+    { userId: 'g/-100123', warm: false },
+    { userId: OWNER, warm: true },
+    { userId: 'g/-100123', warm: true },
+  ])('uses the newly selected companion route after the old provider disconnects: %j', async ({ userId, warm }) => {
+    const id = userId === OWNER ? 'mimi-main' : 'lane:im:telegram:777:g:-100123';
+    const originalResolve = companion.resolveSession.getMockImplementation()!;
+    companion.resolveSession.mockImplementation(async (input) => {
+      const result = await originalResolve(input);
+      botRows.set(id, rowFor(id, { model: 'old-model', providerId: 'disconnected' }));
+      return result;
+    });
+    const oldSession = warm ? makeSessionHarness(id) : null;
+    if (oldSession) harnesses.set(id, oldSession);
+    const selected = rowFor(id, { model: 'bot-model', providerId: 'xd', sdkSessionId: null });
+    companion.prepareSend.mockImplementation(async () => {
+      botRows.set(id, selected);
+      return null;
+    });
+    const maker = mocks.getMaker();
+    const create = maker.createSession.getMockImplementation();
+    maker.createSession.mockImplementation(async (args: { id: string; model: string }) => {
+      // A cold start against the disconnected route must not be attempted.
+      // Warm createSession calls reuse Maker's existing singleton without booting.
+      if (!warm) expect(args.model).toBe('bot-model');
+      return create(args);
+    });
+    mocks.dbSelect.mockImplementation(() => ({ from: () => ({ where: () => ({
+      limit: async () => [{ ...botRows.get(id), status: 'active' }],
+    }) }) }));
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      companion: companion as unknown as ImCompanionRouteDeps,
+      acquirePendingAgentSwitch,
+    });
+
+    await runTurn(userId);
+
+    expect(companion.prepareSend).toHaveBeenCalledWith(id);
+    expect(harnesses.get(id)!.send).toHaveBeenCalledTimes(1);
+    expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.im.sendText).not.toHaveBeenCalledWith(
+      userId, expect.stringContaining('old-model'), expect.anything(),
+    );
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledWith(id, { channelOwned: false });
+  });
+
+  it('checks the landed companion route even if it changed again under the send lock', async () => {
+    const id = 'mimi-main';
+    harnesses.set(id, makeSessionHarness(id));
+    acquirePendingAgentSwitch.mockImplementation(async () => {
+      botRows.set(id, rowFor(id, { model: 'latest-unavailable', providerId: 'disconnected' }));
+      return () => undefined;
+    });
+    mocks.dbSelect.mockImplementation(() => ({ from: () => ({ where: () => ({
+      limit: async () => [{ ...botRows.get(id), status: 'active' }],
+    }) }) }));
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      companion: companion as unknown as ImCompanionRouteDeps,
+      acquirePendingAgentSwitch,
+    });
+
+    await runTurn(OWNER);
+
+    expect(harnesses.get(id)!.send).not.toHaveBeenCalled();
+    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+    expect(mocks.im.sendText).toHaveBeenCalledWith(
+      OWNER, expect.stringContaining('latest-unavailable'), expect.anything(),
+    );
+  });
+
+  it('queues input while the old companion turn runs and authenticates the new route only at dispatch', async () => {
+    const id = 'mimi-main';
+    const h = makeSessionHarness(id);
+    harnesses.set(id, h);
+    botRows.set(id, rowFor(id, { model: 'old-model', providerId: 'disconnected' }));
+    vi.mocked(h.session.isTurnRunning).mockReturnValue(true);
+    companion.prepareSend.mockImplementation(async () => {
+      botRows.set(id, rowFor(id, { model: 'bot-model', providerId: 'xd' }));
+      return null;
+    });
+    mocks.dbSelect.mockImplementation(() => ({ from: () => ({ where: () => ({
+      limit: async () => [{ ...botRows.get(id), status: 'active' }],
+    }) }) }));
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      companion: companion as unknown as ImCompanionRouteDeps,
+      acquirePendingAgentSwitch,
+    });
+
+    await runTurn(OWNER);
+    expect(h.send).not.toHaveBeenCalled();
+    expect(companion.prepareSend).not.toHaveBeenCalled();
+    expect(mocks.im.sendText).not.toHaveBeenCalled();
+
+    vi.mocked(h.session.isTurnRunning).mockReturnValue(false);
+    h.emit({ type: 'done', data: {} } as AgentEvent);
+
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    expect(companion.prepareSend).toHaveBeenCalledWith(id);
+    expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the channel’s own routing for an unbound connection', async () => {
     binding = null;
     await runTurn(OWNER, 'first');
@@ -394,6 +496,7 @@ describe('turnRunner: connection handed to a companion bot', () => {
     // the send lock's own suppression window. The runner must not forget the task.
     const listeners: Array<(event: MakerEvent) => void> = [];
     const switched = makeSessionHarness('mimi-main');
+    harnesses.set('mimi-main', makeSessionHarness('mimi-main'));
     let live: Session | undefined;
     const base = mocks.getMaker() as {
       createSession: (args: { id?: string }) => Promise<Session>;
@@ -540,7 +643,8 @@ describe('turnRunner: connection handed to a companion bot', () => {
   it('replies with a notice and does not send when the bot guard blocks the turn', async () => {
     companion.prepareSend.mockResolvedValue('Bot 当前未启用，请先恢复 Bot 后再发送消息');
     await runTurn(OWNER);
-    expect(harnesses.get('mimi-main')!.send).not.toHaveBeenCalled();
+    expect(harnesses.has('mimi-main')).toBe(false);
+    expect(createSessionArgs).toHaveLength(0);
     expect(mocks.im.sendText).toHaveBeenCalledWith(
       OWNER,
       expect.stringContaining('伙伴现在接不了消息'),
