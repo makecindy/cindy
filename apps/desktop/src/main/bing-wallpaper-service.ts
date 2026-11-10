@@ -19,6 +19,7 @@ export interface BingWallpaperServiceDeps {
     checkedAt: number,
     nextCheckAt: number,
     isCurrent: () => boolean,
+    expectedCache: BingWallpaperCache,
   ): Promise<void>;
   status(status: BingWallpaperStatus): void;
   now?: () => number;
@@ -118,7 +119,7 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
           if (!current()) return;
           const checkedAt = now();
           const nextCheckAt = nextNormalCheck(checkedAt);
-          await deps.publish(metadata, bytes, checkedAt, nextCheckAt, current);
+          await deps.publish(metadata, bytes, checkedAt, nextCheckAt, current, cache);
           if (!current()) return;
           failures = 0;
           lastFailureStatus = null;

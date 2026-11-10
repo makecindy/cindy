@@ -44,11 +44,19 @@ export function startBingWallpaperService(onChanged: () => void): void {
     },
     metadata: fetchBingMetadata,
     image: fetchBingImage,
-    publish: (metadata, bytes, checkedAt, nextCheckAt, isCurrent) =>
+    publish: (metadata, bytes, checkedAt, nextCheckAt, isCurrent, expectedCache) =>
       withClientWallpaperLock(async () => {
         if (!isCurrent()) return;
         const existing = readBingWallpaperCache();
-        if (existing.checkedAt > checkedAt) return;
+        // Wall time can move backwards. Detect a competing write by comparing
+        // the cache observed before fetching, not by ordering wall-clock values.
+        if (
+          existing.checkedAt !== expectedCache.checkedAt ||
+          existing.nextCheckAt !== expectedCache.nextCheckAt ||
+          existing.current?.url !== expectedCache.current?.url ||
+          existing.current?.imageKey !== expectedCache.current?.imageKey ||
+          existing.previous?.url !== expectedCache.previous?.url
+        ) throw new Error('Bing wallpaper cache changed during refresh');
         if (!bytes && existing.current?.imageKey !== metadata.imageKey)
           throw new Error('Bing wallpaper changed during refresh');
         const media = bytes

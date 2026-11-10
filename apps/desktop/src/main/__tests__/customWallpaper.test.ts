@@ -92,6 +92,37 @@ const parent = {} as never;
 // mutable third-party source. A daily image must survive custom import/removal;
 // corrupt reference metadata must forbid recycling. Unit tier, unique temporary userData.
 describe('daily wallpaper media ownership', () => {
+  // #9758 clock rollback: production host must replace a future-dated cache,
+  // but retain a cache written during the request. Service-only tests mock publish.
+  // Unit tier; minimal input is a valid cached image with checkedAt > Date.now().
+  it.each([false, true])('handles future cache timestamps without losing concurrent publication (%s)', async (concurrent) => {
+    const oldBytes = await prepareWallpaperImage(await selectImage('red'));
+    const old = await writeBlob({ buffer: oldBytes, mimeType: 'image/webp', scope: 'client-wallpaper' });
+    const info = { imageKey: 'old', market: 'en-US', date: '20261109', title: '', copyright: '', sourceUrl: '' };
+    const future = Date.now() + 24 * 3600_000;
+    await bingWallpaperStore.writePatchAtomic({
+      current: { ...info, url: old.url }, checkedAt: future, nextCheckAt: future + 3600_000,
+    });
+    const newBytes = await prepareWallpaperImage(await selectImage('blue'));
+    vi.mocked(fetchBingMetadata).mockImplementationOnce(async () => {
+      if (concurrent) await bingWallpaperStore.writePatchAtomic({
+        current: { ...info, imageKey: 'concurrent', url: old.url }, checkedAt: future + 1,
+      });
+      return { ...info, imageKey: 'refreshed', imageUrl: 'https://www.bing.com/th?id=OHR.Test.jpg' };
+    });
+    vi.mocked(fetchBingImage).mockResolvedValue(newBytes);
+    await writeAppearanceSettingsPatch({ wallpaperId: 'bing-daily' });
+    startBingWallpaperService(() => {});
+    await refreshBingWallpaper();
+    const cache = readBingWallpaperCache();
+    expect(cache.current?.imageKey).toBe(concurrent ? 'concurrent' : 'refreshed');
+    expect(readAppearanceSettings().bingWallpaper?.status).toBe(concurrent ? 'stale' : 'ready');
+    if (!concurrent) {
+      expect(cache.checkedAt).toBeLessThan(future);
+      expect((await readClientWallpaperFile(cache.current!.url)).buffer).toEqual(newBytes);
+      expect(cache.previous?.url).toBe(old.url);
+    }
+  });
   it.each([{ wallpaperVisibility: 0 }, { wallpaperOverlay: 1 }])(
     'does not request Bing while the saved wallpaper is fully hidden: %j', async (hidden) => {
       vi.mocked(fetchBingMetadata).mockClear();
