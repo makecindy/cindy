@@ -133,13 +133,15 @@ function buildUserReport(params: {
 }): string {
   const notCreatedCount = params.failureCount + params.skippedCount;
   const base = `本批请求创建 ${params.requestCount} 个 Worker，实际创建成功 ${params.successCount} 个，创建失败 ${params.failureCount} 个，未尝试 ${params.skippedCount} 个，共 ${notCreatedCount} 个未创建`;
+  // 提前结束的批次里，已创建的 Worker 同样要说明首条任务到了哪一步（Lead 逐字转告这句汇总）。
+  const tasks = describeInitialTasks(params.initialTaskStates);
   if (params.stopReason === 'WORKER_LIMIT_HARD_EXCEEDED' && params.limit) {
-    return `${base}；当前 hard limit 为 ${params.limit.workerHardLimit}，已占用 ${params.limit.occupiedSlots} 个槽位。可在协同设置中提高 hard limit、复用已有 Worker，或归档不再需要的 Worker 后分批执行剩余任务。`;
+    return `${base}；当前 hard limit 为 ${params.limit.workerHardLimit}，已占用 ${params.limit.occupiedSlots} 个槽位。可在协同设置中提高 hard limit、复用已有 Worker，或归档不再需要的 Worker 后分批执行剩余任务。${tasks}`;
   }
   if (params.stopReason === 'HOST_NOT_READY') {
-    return `${base}；${BRAND_NAME} 主进程协同服务尚未就绪，请等待服务就绪后只重试未创建项。`;
+    return `${base}；${BRAND_NAME} 主进程协同服务尚未就绪，请等待服务就绪后只重试未创建项。${tasks}`;
   }
-  return `${base}。${describeInitialTasks(params.initialTaskStates)}`;
+  return `${base}。${tasks}`;
 }
 
 export function registerCreateWorkersTool(

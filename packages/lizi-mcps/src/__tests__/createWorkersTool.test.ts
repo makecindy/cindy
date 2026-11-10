@@ -174,7 +174,7 @@ describe('create_workers tool', () => {
       stopped_early: true,
       stop_reason: 'WORKER_LIMIT_HARD_EXCEEDED',
       limit: { hard_limit: 3, occupied_slots: 3, remaining_slots: 0 },
-      user_report: '本批请求创建 9 个 Worker，实际创建成功 3 个，创建失败 1 个，未尝试 5 个，共 6 个未创建；当前 hard limit 为 3，已占用 3 个槽位。可在协同设置中提高 hard limit、复用已有 Worker，或归档不再需要的 Worker 后分批执行剩余任务。',
+      user_report: '本批请求创建 9 个 Worker，实际创建成功 3 个，创建失败 1 个，未尝试 5 个，共 6 个未创建；当前 hard limit 为 3，已占用 3 个槽位。可在协同设置中提高 hard limit、复用已有 Worker，或归档不再需要的 Worker 后分批执行剩余任务。已创建的 Worker 首条任务：3 个未送达。',
     });
     expect(createWorker).toHaveBeenCalledTimes(4);
     expect(result.success_count + result.failure_count + result.skipped_count).toBe(result.request_count);
@@ -333,6 +333,19 @@ describe('create_workers tool', () => {
       'failed', 'skipped', 'skipped',
     ]);
     expect(createWorker).toHaveBeenCalledTimes(1);
+  });
+
+  // 评审（Greptile P2）：提前结束的批次也要说明已创建 Worker 的首条任务状态，Lead 会逐字转告这句汇总。
+  it('still reports the first-task state of already created workers when the batch stops early on HOST_NOT_READY', async () => {
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>()
+      .mockResolvedValueOnce({ ...created(1, 8), queuedMessageId: 'q1' })
+      .mockResolvedValueOnce({ ok: false, errorCode: 'HOST_NOT_READY', message: 'host booting' });
+
+    const result = parse(await setup(createWorker).call('create_workers', { workers: [worker(1), worker(2), worker(3)] }));
+
+    expect(result.data.user_report).toContain('实际创建成功 1 个，创建失败 1 个，未尝试 1 个，共 2 个未创建；');
+    expect(result.data.user_report).toContain('协同服务尚未就绪，请等待服务就绪后只重试未创建项。');
+    expect(result.data.user_report).toMatch(/已创建的 Worker 首条任务：1 个已排队、尚未开始。任务送达不代表已完成，各 Worker 完成后会回报。$/);
   });
 });
 
