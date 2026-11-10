@@ -130,7 +130,7 @@ export class PortableAgentNetClient implements SocketClient {
     }
     return result.devices;
   }
-  private async mediaRequest(method: string, resource: string, body?: Uint8Array, range?: string, signal?: AbortSignal): Promise<Response> {
+  private async mediaRequest<T>(method: string, resource: string, consume: (response: Response) => Promise<T>, body?: Uint8Array, range?: string, signal?: AbortSignal): Promise<T> {
     const path = this.path(resource), authorization = await this.header(method, path, body);
     this.options.assertCurrent();
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60_000);
@@ -142,16 +142,22 @@ export class PortableAgentNetClient implements SocketClient {
         ...(range ? { range } : {}) }, ...(body ? { body: new Uint8Array(body) } : {}), redirect: 'error', signal: controller.signal });
       this.options.assertCurrent();
       if (!response.ok) throw new PortableAgentNetClientError(response.status, 'AGENT_NET_MEDIA_REQUEST_FAILED');
-      return response;
-    } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+      const result = await consume(response); this.options.assertCurrent(); return result;
+    } finally {
+      clearTimeout(timer); signal?.removeEventListener('abort', abort);
+      // Release an unread/failed response as well as the request. Keep the
+      // caller and deadline attached until the consumer has finished the body.
+      controller.abort();
+    }
   }
   async putMediaChunk(id: string, offset: number, body: Uint8Array, signal?: AbortSignal): Promise<{ received: number; complete: boolean }> {
     if (!Number.isSafeInteger(offset) || offset < 0 || body.length < 1 || body.length > MAX_MEDIA_BINARY_CHUNK_BYTES) throw new Error('INVALID_MEDIA_CHUNK');
-    const response = await this.mediaRequest('PUT', '/media/' + encodeURIComponent(id) + '?offset=' + offset, body, undefined, signal);
-    const result = await response.json(); this.options.assertCurrent(); return result;
+    return this.mediaRequest('PUT', '/media/' + encodeURIComponent(id) + '?offset=' + offset,
+      response => response.json(), body, undefined, signal);
   }
-  mediaResponse(id: string, range: string, signal?: AbortSignal): Promise<Response> {
-    return this.mediaRequest('GET', '/media/' + encodeURIComponent(id), undefined, range, signal);
+  /** Consume the body within this scope so abort/timeout outlive the headers. */
+  withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    return this.mediaRequest('GET', '/media/' + encodeURIComponent(id), consume, undefined, range, signal);
   }
   async connect(): Promise<SocketUplink> {
     const path = this.path('/ws'), header = await this.header('GET', path);

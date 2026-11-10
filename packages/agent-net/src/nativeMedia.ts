@@ -5,7 +5,8 @@ import type { NativeEnginePort } from './nativeTransport.js';
 export interface NativeMediaApi {
   request<T>(method: string, resource: string, input?: unknown, options?: { signal?: AbortSignal }): Promise<T>;
   putMediaChunk(id: string, offset: number, bytes: Uint8Array, signal?: AbortSignal): Promise<{ received: number; complete: boolean }>;
-  mediaResponse(id: string, range: string, signal?: AbortSignal): Promise<Response>;
+  /** Keep cancellation and the range deadline through the consumer's body read. */
+  withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T>;
 }
 export interface NativeMediaOptions { signal?: AbortSignal; assertCurrent?(): void; onProgress?(bytes: number, total: number): void; binding?: string; }
 interface MediaSession { id: number; header: string; size: number; encryptedSize: number; headerSha256: string; binding?: string; }
@@ -72,27 +73,31 @@ export async function uploadNativeMedia(api: NativeMediaApi, engine: NativeEngin
 async function range(api: NativeMediaApi, engine: NativeEnginePort, id: string, start: number, end: number,
   total: number | undefined, options: NativeMediaOptions): Promise<{ bytes: Uint8Array; total: number }> {
   check(options, engine);
-  const response = await api.mediaResponse(id, `bytes=${start}-${end}`, options.signal); check(options, engine);
-  const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
-  if (response.status !== 206 || !match || Number(match[1]) !== start || Number(match[2]) !== end
-    || !Number.isSafeInteger(Number(match[3])) || Number(match[3]) > MAX_MEDIA_OBJECT_BYTES
-    || (total !== undefined && Number(match[3]) !== total)) {
-    await response.body?.cancel(); throw new Error('INVALID_MEDIA_RANGE');
-  }
-  const needed = end - start + 1, reader = response.body?.getReader?.();
-  let bytes: Uint8Array;
-  if (reader) {
-    bytes = new Uint8Array(needed); let received = 0;
-    try { for (;;) {
-      const chunk = await reader.read(); check(options, engine);
-      if (chunk.done) break;
-      if (received + chunk.value.length > needed) throw new Error('INVALID_MEDIA_CHUNK');
-      bytes.set(chunk.value, received); received += chunk.value.length;
-    } if (received !== needed) throw new Error('MEDIA_INCOMPLETE'); }
-    finally { await reader.cancel().catch(() => undefined); }
-  } else { bytes = new Uint8Array(await response.arrayBuffer()); check(options, engine); }
-  if (bytes.length !== needed) throw new Error('MEDIA_INCOMPLETE');
-  return { bytes, total: Number(match[3]) };
+  const consume = async (response: Response) => {
+    check(options, engine);
+    const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
+    if (response.status !== 206 || !match || Number(match[1]) !== start || Number(match[2]) !== end
+      || !Number.isSafeInteger(Number(match[3])) || Number(match[3]) > MAX_MEDIA_OBJECT_BYTES
+      || (total !== undefined && Number(match[3]) !== total)) {
+      await response.body?.cancel(); throw new Error('INVALID_MEDIA_RANGE');
+    }
+    const needed = end - start + 1, reader = response.body?.getReader?.();
+    let bytes: Uint8Array;
+    if (reader) {
+      bytes = new Uint8Array(needed); let received = 0;
+      try { for (;;) {
+        const chunk = await reader.read(); check(options, engine);
+        if (chunk.done) break;
+        if (received + chunk.value.length > needed) throw new Error('INVALID_MEDIA_CHUNK');
+        bytes.set(chunk.value, received); received += chunk.value.length;
+      } if (received !== needed) throw new Error('MEDIA_INCOMPLETE'); }
+      finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+    } else { bytes = new Uint8Array(await response.arrayBuffer()); check(options, engine); }
+    if (bytes.length !== needed) throw new Error('MEDIA_INCOMPLETE');
+    return { bytes, total: Number(match[3]) };
+  };
+  const requestRange = `bytes=${start}-${end}`;
+  return api.withMediaResponse(id, requestRange, consume, options.signal);
 }
 /** Authenticated, seekable blocks. The sink owns file IO and its cancellation
  * cleanup. No partial plaintext is returned before its AEAD tag is verified. */

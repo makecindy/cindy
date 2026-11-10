@@ -179,6 +179,14 @@ export class AgentNetClient {
     if (!response.ok) await responseBody(response);
     return response;
   }
+  /** Native media reads are bounded ranges; retain their deadline until consumed. */
+  async withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 60_000); timer.unref();
+    try {
+      const response = await this.mediaResponse(id, range, signal ? AbortSignal.any([signal, controller.signal]) : controller.signal);
+      return await consume(response);
+    } finally { clearTimeout(timer); controller.abort(); }
+  }
 }
 /** Coalesced host-side grant issuance. Directory hints carry public CSRs only;
  * signatures stay on the host and never enter the relay or a worker broker. */

@@ -346,11 +346,12 @@ it.skipIf(!library)('runs real DeviceLinkClient requests and a multi-megabyte re
   await expect(readNativeMedia(controllerApi, mediaPort, nodeUpload.id, '0'.repeat(64),
     async () => { throw new Error('UNAUTHENTICATED_PLAINTEXT'); })).rejects.toThrow('INVALID_MEDIA_HEADER');
   const tamperedApi = { request: controllerApi.request.bind(controllerApi), putMediaChunk: controllerApi.putMediaChunk.bind(controllerApi),
-    async mediaResponse(id: string, range: string, signal?: AbortSignal) {
-      const response = await controllerApi.mediaResponse(id, range, signal);
-      if (range === 'bytes=0-220') return response;
-      const body = new Uint8Array(await response.arrayBuffer()); body[body.length - 1] ^= 1;
-      return new Response(body, { status: response.status, headers: response.headers });
+    async withMediaResponse<T>(id: string, range: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal) {
+      return controllerApi.withMediaResponse(id, range, async response => {
+        if (range === 'bytes=0-220') return consume(response);
+        const body = new Uint8Array(await response.arrayBuffer()); body[body.length - 1] ^= 1;
+        return consume(new Response(body, { status: response.status, headers: response.headers }));
+      }, signal);
     } };
   await expect(readNativeMedia(tamperedApi, mediaPort, nodeUpload.id, nodeUpload.headerSha256,
     async () => { throw new Error('UNAUTHENTICATED_PLAINTEXT'); }, { binding })).rejects.toThrow('MEDIA_AUTHENTICATION_FAILED');
