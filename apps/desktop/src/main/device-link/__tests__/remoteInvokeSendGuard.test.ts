@@ -50,6 +50,7 @@ function loadAdapters(overrides: Record<string, unknown>) {
     foregroundInvokesInFlight: new Map<string, { epoch: number; count: number }>(),
     hasForegroundInvokeInCurrentEpoch: () => false,
     hasForegroundLinkHoldInCurrentEpoch: () => false,
+    hasExplicitForegroundOpenInCurrentEpoch: () => false,
     ensureOnlineForRequest: async () => {},
     isScopedPeer: () => false,
     tryPeerInvoke: async () => null,
@@ -116,7 +117,7 @@ function loadRemoteSubscribe(overrides: Record<string, unknown>) {
 function loadLegacyBackgroundOpen(overrides: Record<string, unknown> = {}) {
   const names = new Set([
     'hasForegroundInvokeInCurrentEpoch', 'hasForegroundLinkHoldInCurrentEpoch',
-    'hasOutboundControlSubscription', 'closeLegacyBackgroundLinkIfIdle',
+    'hasExplicitForegroundOpenInCurrentEpoch', 'hasOutboundControlSubscription', 'closeLegacyBackgroundLinkIfIdle',
     'retainForegroundLink', 'openRemoteLink',
   ]);
   const declarations = source.statements.filter((node): node is ts.FunctionDeclaration =>
