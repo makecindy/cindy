@@ -1,5 +1,5 @@
 import { dialog, type BrowserWindow } from 'electron';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { consentDisplayText } from './remoteControlConsent.js';
 
 /** Parent-owned native sheet: on macOS an unparented message box ignores AbortSignal. */

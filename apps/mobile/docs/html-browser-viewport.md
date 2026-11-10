@@ -89,8 +89,8 @@ Page-local properties are not a security boundary.
 The WebView dependency patch adds the prop to Fabric, Paper and TypeScript with
 an iOS 26 SDK/runtime guard and zero default. Existing selection-menu changes are
 preserved. This changes the native fingerprint: ship a new binary; an OTA update
-cannot add this native capability to an old binary. Release/merge still requires
-the repository's explicit cold-update review.
+cannot add this native capability to an old binary. The PR must document the
+cold-update reason, existing-install impact and release plan.
 
 ## Address editing
 

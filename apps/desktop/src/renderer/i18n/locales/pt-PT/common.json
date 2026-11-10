@@ -5364,6 +5364,15 @@
         "ariaLabel": "Usar {{shortcut}} para enviar mensagens"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Diretório de trabalho predefinido para novas tarefas",
+      "label": "Diretório predefinido neste computador",
+      "hint": "Pré-selecionado para novas tarefas locais sem projeto escolhido. Um projeto, uma conversa ou um computador remoto selecionado explicitamente tem prioridade.",
+      "unset": "Não definido (nenhum diretório pré-selecionado)",
+      "choose": "Escolher diretório",
+      "clear": "Limpar predefinição",
+      "failed": "Não foi possível guardar o diretório de trabalho predefinido. Tenta novamente."
+    },
     "linkOpen": {
       "title": "Abrir ligações",
       "description": "Escolha onde abrir as ligações nas mensagens. Clique com o botão direito numa ligação para usar outra opção apenas nessa ligação.",
@@ -14446,7 +14455,7 @@
       "running": "Em execução…",
       "waitingWorkflow": "A aguardar o Workflow…",
       "waitingWorkflowProgress": "A aguardar o Workflow · {{done}}/{{total}} Agents",
-      "turnStart": "{{status}}",
+      "turnStart": "A processar, {{name}}…",
       "issueTip": "{{name}}, experimente /issue para nos enviar comentários ou sugestões",
       "runningTool": "{{tool}} em execução…"
     },
@@ -20026,6 +20035,16 @@
     "browserFallback": "Abre o GitHub para dar uma estrela ao Cindy.",
     "openGithub": "Abrir GitHub",
     "openFailed": "Não foi possível abrir o GitHub."
+  },
+  "hostConnection": {
+    "connecting": "A ligar ao Cindy…",
+    "restoring": "A restaurar o estado das tarefas…",
+    "retrying": "Tarefas ainda não sincronizadas. A tentar novamente…",
+    "pairing": "É necessário autorizar a ligação",
+    "pairingHelp": "Mantenha esta página aberta. No terminal usado para iniciar o Cindy Host, execute novamente o comando para abrir o cliente web. Faça o emparelhamento na nova página e volte aqui.",
+    "keepDraft": "O rascunho será mantido. As tarefas serão sincronizadas quando a ligação for restabelecida.",
+    "retry": "Voltar a ligar",
+    "desktopAuthHelp": "Atualize as definições de ligação no terminal de arranque e reabra este cliente experimental."
   },
   "remoteControlConsent": {
     "title": "Permitir o controlo remoto deste computador?",

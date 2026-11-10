@@ -92,7 +92,7 @@ import {
   uninstallRelayFromServer,
 } from './selfHostedRelayDeploy.js';
 import { refreshRelayCertificatesSoon } from './selfHostedRelayFrameAuth.js';
-import { readDeviceLinkSettings } from './settings-store.js';
+import { readDeviceLinkSettings } from './settings-store.desktop.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 
 const log = createLogger('self-hosted-relay');

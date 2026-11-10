@@ -5,7 +5,7 @@ import type { BrowserWindow } from 'electron';
 
 const nativeDialog = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({ dialog: { showMessageBox: nativeDialog } }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 
 // Test value: new pre-control entry had no coverage. A request must never grant access
 // without a local decision; late/replayed/foreign replies must not resume work. Unit tier,

@@ -10,7 +10,7 @@ import {
   refreshClaudeCliLoginStatus,
   readClaudeCliPlanUsage,
   runClaudeCliLogin,
-} from '../maker-host/claude-native-cli.js';
+} from '../maker-host/claude-native-cli.desktop.js';
 import { parseClaudeOAuthUsageResponse } from '../../shared/claudeSubscriptionUsage.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';

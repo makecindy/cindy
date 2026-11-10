@@ -15,15 +15,15 @@ import { MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION } from '../../shared/media
 import { imageParameterSchema, normalizeImageParameters, type ImageParameters } from './imageParameters.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import * as authManager from '../authManager.js';
-import * as imageCacheStore from '../imageCacheStore.js';
+import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import * as videoCacheStore from '../videoCacheStore.js';
 import { createLogger } from '../logger.js';
-import { ServerApiError } from '../serverApiClient.js';
+import { ServerApiError } from '../serverApiClient.desktop.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import {
   fetchMediaInvocationGuide,
   listAvailableMediaModels,
@@ -32,7 +32,7 @@ import {
   MediaModelCatalogError,
 } from '../model-access/mediaModels.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
-import * as blobStore from './blobStore.js';
+import * as blobStore from './blobStore.desktop.js';
 import { ingestMedia } from './ingest.js';
 import { downloadMediaResult, MediaDownloadError, type MediaDownloadContext } from './mediaDownload.js';
 import { mediaErrorForLog, mediaErrorStackForLog, mediaRequestParamsForLog, mediaRequestUrlForLog } from './mediaRequestLog.js';
