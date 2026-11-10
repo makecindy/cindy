@@ -15,6 +15,16 @@ import type {
   RoutineSource,
 } from "./routines.js";
 
+function builtinInputSignature(input: RoutineInput): string {
+  // Editors may explicitly clear an absent check. Compare the effective checks,
+  // while retaining every configured check and all other host-owned fields.
+  return JSON.stringify(parseRoutineInput({
+    ...input,
+    preRunHook: input.preRunHook ?? null,
+    preRunPlugin: input.preRunPlugin ?? null,
+  }));
+}
+
 /** Durable receipt and execution history share one identity across all trigger kinds. */
 export interface RoutineRun {
   id: string;
@@ -359,9 +369,9 @@ export class RoutineEngine {
       if ((creationId || options.builtin) && state.routines.some(row => row.id === id && row.botId !== botId)) throw new Error("Routine creation ID already used");
       // Host-owned instructions and triggers stay fixed; callers may pause or choose the execution model.
       if (existing?.builtin && !options.builtin &&
-        JSON.stringify(parseRoutineInput({ ...existing, enabled: input.enabled,
+        builtinInputSignature({ ...existing, enabled: input.enabled,
           ...(existing.builtin !== 'nightly-learning' ? { modelOverride: input.modelOverride } : {}),
-          sessionMode: input.sessionMode })) !== JSON.stringify(input))
+          sessionMode: input.sessionMode }) !== builtinInputSignature(input))
         throw new Error(`${BUILTIN_ROUTINE_ERROR}: built-in instructions and triggers cannot be edited`);
       const builtin = options.builtin ?? existing?.builtin;
       const builtinVersion = options.builtinVersion ?? existing?.builtinVersion;

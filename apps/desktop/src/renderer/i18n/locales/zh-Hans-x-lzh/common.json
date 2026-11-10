@@ -19729,6 +19729,7 @@
     }
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 账号资讯。请于新增供方时选「$t(subscriptionAccounts.signIn.anotherAccount)」，另用独立目录",
     "signIn": {
       "checking": "正察本机账号…",
       "detected": "已有账号登录",

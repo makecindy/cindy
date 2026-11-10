@@ -19988,6 +19988,7 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "O fornecedor atual do Codex não disponibiliza informações da conta ChatGPT. Ao adicionar o fornecedor, selecione «$t(subscriptionAccounts.signIn.anotherAccount)» para usar uma pasta separada.",
     "signIn": {
       "checking": "A verificar a conta local…",
       "detected": "Conta com sessão iniciada encontrada",

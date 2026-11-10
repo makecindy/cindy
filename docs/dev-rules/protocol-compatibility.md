@@ -70,6 +70,12 @@ notification 对象绕过账号过滤。角标分支独立挂载，不放进 iOS
 
 ## 供应商内多订阅账号（2026-11-07，未发布）
 
+Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号时，管理操作使用追加的
+`SUBSCRIPTION_CODEX_PROVIDER_AUTH` 错误码。新版控制端显示独立账号指引，旧控制端仍按通用账号失败呈现；
+新版连接旧宿主仍接受旧错误。账号视图可选追加 `authIssue: 'codex-provider-managed-auth'`，让新向导
+在首次检测时显示原因和独立账号入口；旧端忽略、缺省或未知值沿用原显示。沿用原 IPC 包，无新 channel、allowlist 或 relay 行为，
+官方及自建中转无需适配。错误只含固定诊断，不带供应商配置、目录、账号或 CLI 原始响应。
+
 同账号远控新增 `maker:subscription-accounts`（查看、添加、重连、取消、移出、策略）及
 `maker:subscription-pool:quota`（只读、无账号身份的池配额）。管理请求只接受内置供应商及
 不含路径的账号 id，宿主按当前 owner 推导目录；共享任务访客不能使用。

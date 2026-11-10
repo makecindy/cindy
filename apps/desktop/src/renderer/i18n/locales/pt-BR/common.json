@@ -13857,7 +13857,7 @@
         },
         "agentSwitch": {
           "usage-limit": "{{from}} atingiu o limite de uso; continuou em {{to}}",
-          "auth": "{{from}} está sem login; continuou em {{to}}",
+          "auth": "{{from}} não está autenticado; continuou em {{to}}",
           "unavailable": "Não foi possível acessar {{from}}; continuou em {{to}}",
           "overload": "{{from}} estava sobrecarregado; continuou em {{to}}",
           "failed": "{{from}} teve um problema; continuou em {{to}}"
@@ -19988,6 +19988,7 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "O provedor atual do Codex não disponibiliza informações da conta do ChatGPT. Ao adicionar o provedor, selecione “$t(subscriptionAccounts.signIn.anotherAccount)” para usar uma pasta separada.",
     "signIn": {
       "checking": "Verificando a conta local…",
       "detected": "Conta conectada encontrada",
