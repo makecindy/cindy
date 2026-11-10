@@ -166,7 +166,7 @@ export function UsageHeatmap({
   windowDays: number | 'auto';
   /** 格子深浅按哪一维分桶。'tokens' 下 tooltip 也只显示 token, 不出现金额。 */
   metric?: 'money' | 'tokens';
-  /** Fill the plot with square cells for the requested history window (aligned to weeks). */
+  /** Fill the plot width, keeping row height consistent across history windows. */
   fillWidth?: boolean;
   selectedDay?: string | null;
   onDayClick?: (day: string) => void;
@@ -285,7 +285,14 @@ export function UsageHeatmap({
   const cellWidth = fillWidth
     ? Math.max(cellSize, (availableWidth - GAP_PX * 2 - (visibleWeeks - 1) * GAP_PX) / visibleWeeks)
     : cellSize;
-  const cellHeight = cellWidth;
+  // Shorter windows use wider cells, but keep the same row height as the annual view.
+  const annualWeeks = heatmapWeeksForWindow(todayKey, 365);
+  const cellHeight = fillWidth
+    ? Math.min(
+        cellWidth,
+        Math.max(cellSize, (availableWidth - GAP_PX * 2 - (annualWeeks - 1) * GAP_PX) / annualWeeks),
+      )
+    : cellSize;
   const colPitch = cellWidth + GAP_PX;
 
   useLayoutEffect(() => {
