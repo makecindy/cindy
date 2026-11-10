@@ -135,6 +135,7 @@ export function UsageHeatmap({
   todayKey,
   windowDays,
   metric = 'money',
+  fillWidth = false,
   selectedDay,
   onDayClick,
   onVisibleWeeksChange,
@@ -144,6 +145,8 @@ export function UsageHeatmap({
   windowDays: number;
   /** 格子深浅按哪一维分桶。'tokens' 下 tooltip 也只显示 token, 不出现金额。 */
   metric?: 'money' | 'tokens';
+  /** Fill the plot with square cells for the requested history window (aligned to weeks). */
+  fillWidth?: boolean;
   selectedDay?: string | null;
   onDayClick?: (day: string) => void;
   onVisibleWeeksChange?: (weeks: number) => void;
@@ -162,7 +165,7 @@ export function UsageHeatmap({
     if (!element) return undefined;
 
     const updateWidth = (width: number): void => {
-      const nextWidth = Math.max(0, Math.round(width));
+      const nextWidth = Math.max(0, Math.floor(width));
       setAvailableWidth((previous) => (previous === nextWidth ? previous : nextWidth));
     };
     updateWidth(element.clientWidth);
@@ -178,15 +181,17 @@ export function UsageHeatmap({
   const minimumWeeks = Math.max(MIN_HEATMAP_WEEKS, Math.ceil(windowDays / 7));
   // Data geometry stays compact when a cell also acts as a date filter (DESIGN.md §4).
   const cellSize = CELL_PX;
-  const visibleWeeks = resolveHeatmapWeeks({
-    days,
-    todayKey,
-    availableWidth: Math.max(0, availableWidth - GAP_PX * 2),
-    minimumWeeks,
-    windowDays,
-    metric,
-    cellSize,
-  });
+  const visibleWeeks = fillWidth
+    ? heatmapWeeksForWindow(todayKey, windowDays)
+    : resolveHeatmapWeeks({
+        days,
+        todayKey,
+        availableWidth: Math.max(0, availableWidth - GAP_PX * 2),
+        minimumWeeks,
+        windowDays,
+        metric,
+        cellSize,
+      });
 
   useLayoutEffect(() => {
     onVisibleWeeksChange?.(visibleWeeks);
@@ -253,94 +258,122 @@ export function UsageHeatmap({
     return { columns: cols, monthLabels: labels };
   }, [days, todayKey, visibleWeeks, i18n.language, metric]);
 
-  const colPitch = cellSize + GAP_PX;
+  // Keep the history window intact on narrow screens; only surplus space stretches.
+  const cellWidth = fillWidth
+    ? Math.max(cellSize, (availableWidth - GAP_PX * 2 - (visibleWeeks - 1) * GAP_PX) / visibleWeeks)
+    : cellSize;
+  const cellHeight = cellWidth;
+  const colPitch = cellWidth + GAP_PX;
+
+  useLayoutEffect(() => {
+    // A narrow annual timeline opens at the most recent dates, not the empty past.
+    if (fillWidth && plotRef.current) {
+      plotRef.current.scrollLeft = plotRef.current.scrollWidth;
+    }
+  }, [fillWidth, availableWidth, visibleWeeks]);
+
+  const monthFormatter = new Intl.DateTimeFormat(i18n.language, {
+    year: 'numeric',
+    month: 'short',
+  });
 
   return (
-    <div ref={plotRef} className="w-full min-w-0 overflow-x-auto">
-      {/* Reserve the outside indicator stroke inside the scrolling viewport. */}
-      <div className="flex min-w-max flex-col gap-1.5 p-[3px]">
-        {/* 月份标签行。nowrap 防止最右侧月份被挤成上下两行。 */}
-        <div
-          className="usage-heatmap-months relative h-[14px]"
-          style={{ width: columns.length * colPitch - GAP_PX }}
-        >
-          {monthLabels.map((m) => (
-            <span
-              key={`${m.col}-${m.text}`}
-              className="usage-heatmap-month-label absolute top-0 whitespace-nowrap text-10 leading-[1.4] text-[var(--text-tertiary)]"
-              style={{ left: m.col * colPitch }}
-            >
-              {m.text}
-            </span>
-          ))}
-        </div>
-        {/* 网格 */}
-        <div className="flex" style={{ gap: GAP_PX }}>
-          {columns.map((col, ci) => (
-            <div key={ci} className="flex flex-col" style={{ gap: GAP_PX }}>
-              {col.map((cell, ri) => {
-                if (cell.placeholder) {
-                  return <div key={ri} style={{ width: cellSize, height: cellSize }} />;
-                }
+    <div className="w-full min-w-0">
+      <div ref={plotRef} className="w-full min-w-0 overflow-x-auto">
+        {/* Reserve the outside indicator stroke inside the scrolling viewport. */}
+        <div className="flex min-w-max flex-col gap-1.5 p-[3px]">
+          {/* 月份标签行。nowrap 防止最右侧月份被挤成上下两行。 */}
+          <div
+            className="usage-heatmap-months relative h-[14px]"
+            style={{ width: columns.length * colPitch - GAP_PX }}
+          >
+            {monthLabels.map((m) => (
+              <span
+                key={`${m.col}-${m.text}`}
+                className="usage-heatmap-month-label absolute top-0 whitespace-nowrap text-10 leading-[1.4] text-[var(--text-tertiary)]"
+                style={{
+                  left: columns.length - m.col < 3 ? undefined : m.col * colPitch,
+                  right: columns.length - m.col < 3 ? 0 : undefined,
+                }}
+              >
+                {m.text}
+              </span>
+            ))}
+          </div>
+          {/* 网格 */}
+          <div className="flex" style={{ gap: GAP_PX }}>
+            {columns.map((col, ci) => (
+              <div key={ci} className="flex flex-col" style={{ gap: GAP_PX }}>
+                {col.map((cell, ri) => {
+                  if (cell.placeholder) {
+                    return <div key={ri} style={{ width: cellWidth, height: cellHeight }} />;
+                  }
 
-                const usageSummary =
-                  metric === 'tokens'
-                    ? cell.tokens > 0
-                      ? t('usageDashboard.tokensOnly', {
-                          tokens: formatCompactTokens(cell.tokens),
-                        })
-                      : t('usageHistory.heatmap.emptyCell')
-                    : `${formatMoney(cell.money)}${
-                        cell.tokens > 0
-                          ? ` · ${t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(cell.tokens) })}`
-                          : ''
-                      }`;
-                const title = `${cell.day} · ${usageSummary}`;
-                const accessibleLabel = `${dateFormatter.format(parseDayKey(cell.day))} · ${usageSummary}`;
-                // DESIGN §5: usage-heatmap-day, independent of its interaction wrapper.
-                const visualClassName = 'usage-chart-mark shrink-0 rounded-[2px]';
-                const visualStyle = {
-                  width: `calc(${CELL_PX}px + var(--usage-mark-grow, 0px))`,
-                  height: `calc(${CELL_PX}px + var(--usage-mark-grow, 0px))`,
-                  backgroundColor:
-                    cell.level === 0
-                      ? 'var(--surface-chip)'
-                      : `color-mix(in srgb, var(--usage-heatmap-accent, var(--accent-emphasis)) ${LEVEL_MIX[cell.level - 1] * 100}%, var(--surface-chip))`,
-                };
-                const visual = (
-                  <div
-                    data-usage-mark="usage-heatmap-day"
-                    title={title}
-                    className={visualClassName}
-                    style={visualStyle}
-                  />
-                );
-
-                return onDayClick ? (
-                  <button
-                    key={ri}
-                    type="button"
-                    aria-label={accessibleLabel}
-                    title={title}
-                    aria-pressed={selectedDay === cell.day}
-                    onClick={() => onDayClick(cell.day)}
-                    className="usage-chart-target usage-heatmap-target group relative flex cursor-pointer items-center justify-center rounded-none border-0 bg-transparent p-0 outline-none"
-                    style={{ width: cellSize, height: cellSize }}
-                  >
-                    {visual}
-                    <span
-                      aria-hidden="true"
-                      className="usage-chart-indicator pointer-events-none absolute inset-0 rounded-[2px]"
+                  const usageSummary =
+                    metric === 'tokens'
+                      ? cell.tokens > 0
+                        ? t('usageDashboard.tokensOnly', {
+                            tokens: formatCompactTokens(cell.tokens),
+                          })
+                        : t('usageHistory.heatmap.emptyCell')
+                      : `${formatMoney(cell.money)}${
+                          cell.tokens > 0
+                            ? ` · ${t('usageDashboard.tokensOnly', { tokens: formatCompactTokens(cell.tokens) })}`
+                            : ''
+                        }`;
+                  const title = `${cell.day} · ${usageSummary}`;
+                  const accessibleLabel = `${dateFormatter.format(parseDayKey(cell.day))} · ${usageSummary}`;
+                  // DESIGN §5: usage-heatmap-day, independent of its interaction wrapper.
+                  const visualClassName = 'usage-chart-mark shrink-0 rounded-[2px]';
+                  const visualStyle = {
+                    width: `calc(${cellWidth}px + var(--usage-mark-grow, 0px))`,
+                    height: `calc(${cellHeight}px + var(--usage-mark-grow, 0px))`,
+                    backgroundColor:
+                      cell.level === 0
+                        ? 'var(--surface-chip)'
+                        : `color-mix(in srgb, var(--usage-heatmap-accent, var(--accent-emphasis)) ${LEVEL_MIX[cell.level - 1] * 100}%, var(--surface-chip))`,
+                  };
+                  const visual = (
+                    <div
+                      data-usage-mark="usage-heatmap-day"
+                      title={title}
+                      className={visualClassName}
+                      style={visualStyle}
                     />
-                  </button>
-                ) : (
-                  <div key={ri}>{visual}</div>
-                );
-              })}
-            </div>
-          ))}
+                  );
+
+                  return onDayClick ? (
+                    <button
+                      key={ri}
+                      type="button"
+                      aria-label={accessibleLabel}
+                      title={title}
+                      aria-pressed={selectedDay === cell.day}
+                      onClick={() => onDayClick(cell.day)}
+                      className="usage-chart-target usage-heatmap-target group relative flex cursor-pointer items-center justify-center rounded-none border-0 bg-transparent p-0 outline-none"
+                      style={{ width: cellWidth, height: cellHeight }}
+                    >
+                      {visual}
+                      <span
+                        aria-hidden="true"
+                        className="usage-chart-indicator pointer-events-none absolute inset-0 rounded-[2px]"
+                      />
+                    </button>
+                  ) : (
+                    <div key={ri}>{visual}</div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
+      {fillWidth && columns[0]?.[0] && todayKey ? (
+        <div className="mt-2 flex justify-between px-[3px] text-11 text-[var(--text-tertiary)]">
+          <span>{monthFormatter.format(parseDayKey(columns[0][0].day))}</span>
+          <span>{monthFormatter.format(parseDayKey(todayKey))}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

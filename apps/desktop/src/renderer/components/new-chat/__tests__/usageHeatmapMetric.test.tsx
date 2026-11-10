@@ -118,6 +118,28 @@ describe('UsageHeatmap metric', () => {
     expect(monthLabel).toBeTruthy();
   });
 
+  // User-selected annual view: older history must not extend the window on wide screens.
+  // Unit: the real component must expose a full year, without exposing older dates.
+  it('全年视图在宽屏也固定为一年，不随更早记录扩展日期', () => {
+    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1600);
+    const { getByRole, queryByRole } = render(
+      <UsageHeatmap
+        days={[{ day: '2024-01-01', money: money(1), tokens: 10 }, ...days]}
+        todayKey="2026-08-22"
+        windowDays={365}
+        fillWidth
+        metric="tokens"
+        onDayClick={vi.fn()}
+      />,
+    );
+    width.mockRestore();
+    expect(queryByRole('button', { name: /Aug 23, 2024/ })).toBeNull();
+    expect(getByRole('button', { name: /Aug 23, 2025/ })).toBeTruthy();
+    expect(getByRole('button', { name: /Aug 22, 2026/ })).toBeTruthy();
+    expect(queryByRole('button', { name: /Jan 1, 2024/ })).toBeNull();
+    expect(queryByRole('button', { name: /Aug 23, 2026/ })).toBeNull();
+  });
+
   it('分桶取值随 metric 切换 (金额口径与 token 口径给出不同深浅)', () => {
     const asMoney = render(<UsageHeatmap days={days} todayKey="2026-08-22" windowDays={7} />);
     const moneyStyles = cellStyles(asMoney.container);
