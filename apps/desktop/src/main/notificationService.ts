@@ -215,6 +215,19 @@ const NOTIFIED_ALERTS_PER_KEY = 8;
  */
 const CROSS_WINDOW_ALERT_WINDOW_MS = 1_000;
 const notifiedAlerts = new Map<string, NotifiedAlert[]>();
+/**
+ * preview 还没读完、因此还没写进账本的投递。按账本 key 再按内容尾分桶。
+ * 进入异步 preview 之前就推进来，所以跨窗比的是到达顺序，不是读完顺序。
+ * 同一内容尾里，轮次时钟差超过两扇窗采样抖动的是另一轮失败，不跟这一桶里的别轮互认。
+ */
+interface PendingAlertDelivery {
+  alertEventId: string;
+  order: NotifiedAlert['order'];
+  arrivedAt: number;
+  senderId: number | undefined;
+  kind: 'error' | 'needs-reply';
+}
+const pendingAlertDeliveries = new Map<string, Map<string, PendingAlertDelivery[]>>();
 /** 没有 turn 时间的告警，在投递入口同步分配的单调序号。只和同样没有 turn 时间的告警比先后。 */
 let nextAlertDeliveryOrder = 0;
 const pendingFeishuReplies = new Set<string>();
@@ -289,6 +302,85 @@ function anchorIdForAlert(alert: NotifiedAlert): string {
   return alert.alias === true && alert.anchorId !== undefined ? alert.anchorId : alert.id;
 }
 
+function pendingDeliveriesFor(key: string, content: string): PendingAlertDelivery[] {
+  return pendingAlertDeliveries.get(key)?.get(content) ?? [];
+}
+
+/** 进入异步 preview 之前记下这一份。新建数组，不改已经在途的那一份。 */
+function trackPendingAlertDelivery(key: string, delivery: PendingAlertDelivery): void {
+  const byContent = new Map(pendingAlertDeliveries.get(key) ?? []);
+  const content = alertContentKey(delivery.alertEventId);
+  const bucket = byContent.get(content) ?? [];
+  byContent.set(content, [...bucket, delivery]);
+  pendingAlertDeliveries.set(key, byContent);
+}
+
+/** preview 结束（弹了、并掉了、或中途退出）后把这一份从在途桶里拿走。拿不到就不动账。 */
+function releasePendingAlertDelivery(key: string, delivery: PendingAlertDelivery): void {
+  const current = pendingAlertDeliveries.get(key);
+  if (!current) return;
+  const content = alertContentKey(delivery.alertEventId);
+  const bucket = current.get(content);
+  if (!bucket) return;
+  const nextBucket = bucket.filter(item => item !== delivery);
+  const byContent = new Map(current);
+  if (nextBucket.length === 0) byContent.delete(content);
+  else byContent.set(content, nextBucket);
+  if (byContent.size === 0) pendingAlertDeliveries.delete(key);
+  else pendingAlertDeliveries.set(key, byContent);
+}
+
+/**
+ * 两扇窗给同一帧各采一次 `Date.now()`，轮次时钟可以差几毫秒，内容尾却一样。
+ * 差得比这个多就是另一轮失败：在途配对和已记账的跨窗合并都不跨过它。
+ * 1 秒到达窗仍是「两扇窗可以隔多远」；这一位只拆轮次，不放宽到达窗。
+ */
+const SAME_FAILURE_TURN_SKEW_MS = 50;
+
+function sameFailureTurn(leftId: string, rightId: string): boolean {
+  const left = alertOrder(leftId, 0);
+  const right = alertOrder(rightId, 0);
+  if (left.source !== 'turn' || right.source !== 'turn') return true;
+  return Math.abs(left.value - right.value) <= SAME_FAILURE_TURN_SKEW_MS;
+}
+
+/**
+ * 还在读 preview 的同内容尾、同一轮次里，和本份是另一扇窗的那一份。
+ * 同一窗口永不合并。没有窗口 id 就不合并。到达相差 1 秒及以上的是下一次失败。
+ * 轮次时钟差超过采样抖动的不在这一对里，所以 1200 不会把 1000 记成自己的别名。
+ * 一对里先读完的弹，后读完的并进去；读完顺序不决定它们是不是同一轮。
+ */
+function inflightCrossWindowPartner(
+  key: string,
+  delivery: PendingAlertDelivery,
+): PendingAlertDelivery | undefined {
+  const content = alertContentKey(delivery.alertEventId);
+  const ordered = pendingDeliveriesFor(key, content)
+    .filter(pending => pending.kind === delivery.kind && sameFailureTurn(pending.alertEventId, delivery.alertEventId))
+    .slice()
+    .sort((left, right) => left.arrivedAt - right.arrivedAt || left.alertEventId.localeCompare(right.alertEventId));
+  const partnerOf = new Map<PendingAlertDelivery, PendingAlertDelivery>();
+  for (const pending of ordered) {
+    const partner = ordered.find(earlier =>
+      earlier !== pending
+      && earlier.arrivedAt <= pending.arrivedAt
+      && !partnerOf.has(earlier)
+      && differentAlertSender(earlier.senderId, pending.senderId)
+      && Math.abs(pending.arrivedAt - earlier.arrivedAt) < CROSS_WINDOW_ALERT_WINDOW_MS,
+    );
+    if (partner) {
+      partnerOf.set(pending, partner);
+      partnerOf.set(partner, pending);
+    }
+  }
+  return partnerOf.get(delivery);
+}
+
+/** 两扇窗的 webContents id 都拿得到且不相同，才算跨窗。缺一个就不合并。 */
+function differentAlertSender(left: number | undefined, right: number | undefined): boolean {
+  return left !== undefined && right !== undefined && left !== right;
+}
+
 /**
  * 同一告警标识只弹一次。没有标识的调用不去重，照常通知：宁可多弹一次，
  * 也不能把新的提问或失败吞掉。
@@ -322,6 +414,7 @@ function matchNotifiedAlert(
     alert.alias !== true
     && alert.kind === kind
     && alert.content === content
+    && sameFailureTurn(alert.id, alertEventId)
     && senderHasNotJoinedAlert(alert, senderId)
     && Math.abs(arrivedAt - alert.arrivedAt) < CROSS_WINDOW_ALERT_WINDOW_MS,
   );
@@ -513,10 +606,29 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // 来源边界靠上面那道 assertTrustedAppRendererEvent。
       if (markAttention && isSessionNotificationsMutedSync(sessionId)) return;
 
+      // 到达即参与：在进入异步 preview 之前把这一份绑到它自己的内容尾上。
+      // 完成顺序不再决定谁是锚点。不同轮次时钟各占一桶，交错读完也不会互相当别名。
+      const pendingAlert = kind !== 'done' && wantDesktop && alertEventId !== undefined && alertArrivedAt !== undefined && alertDeliveryOrder !== undefined
+        ? {
+            alertEventId,
+            order: alertOrder(alertEventId, alertDeliveryOrder),
+            arrivedAt: alertArrivedAt,
+            senderId: alertSenderId,
+            kind,
+          } satisfies PendingAlertDelivery
+        : undefined;
+      const pendingAlertKey = pendingAlert === undefined
+        ? undefined
+        : replyNotificationKey(ownerScope.ownerScopeKey ?? JSON.stringify(ownerScope.ownerStamp ?? null), sessionId, 'desktop');
+      if (pendingAlert && pendingAlertKey) trackPendingAlertDelivery(pendingAlertKey, pendingAlert);
+
       // Content is read from main's transcript. Bound only enrichment, not delivery;
       // a timeout is not a dedupe window and never causes a second late toast.
       void (async () => {
         let preview: SessionNotificationPreview | undefined;
+        const releasePending = () => {
+          if (pendingAlert && pendingAlertKey) releasePendingAlertDelivery(pendingAlertKey, pendingAlert);
+        };
         // Only routes the phone to the teammate chat; titles and fallbacks stay per kind.
         let teammateBotId: string | undefined;
         let postDrainPreviewReady = false;
@@ -573,17 +685,26 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             clearTimeout(timer);
           }
         }
-        if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+        if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) {
+          releasePending();
+          return;
+        }
         // Preview enrichment can outlive an entire later turn. Never send that
         // later reply under the terminal signal captured for this IPC event.
         const currentSignal = kind === 'done' ? getSessionNotificationTurnSignal(sessionId) : undefined;
         if (kind === 'done') {
-          if (currentSignal?.id !== signal?.id || (currentSignal && !currentSignal.ended)) return;
+          if (currentSignal?.id !== signal?.id || (currentSignal && !currentSignal.ended)) {
+            releasePending();
+            return;
+          }
         }
         if (postDrainPreviewReady && preview?.suppress) {
           // The terminal marker write may have failed after the in-memory turn
           // already ended. Keep its generic notice, but never use old DB text.
-          if (kind !== 'done' || !signal?.ended || currentSignal?.id !== signal.id) return;
+          if (kind !== 'done' || !signal?.ended || currentSignal?.id !== signal.id) {
+            releasePending();
+            return;
+          }
           detail = undefined;
         }
         const teammate = !!preview?.teammateName;
@@ -604,17 +725,29 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const desktopKey = replyNotificationKey(ownerKey, sessionId, 'desktop');
         const mobileKey = replyNotificationKey(generation, sessionId, 'mobile');
         const feishuKey = replyNotificationKey(ownerKey, sessionId, 'feishu');
-        // 取正文期间用户可能刚开了免打扰:真正发之前再确认一次。
+        // 取正文 / 等交接判定期间用户可能刚开了免打扰:真正发之前再确认一次。
         // 手机通道在 sendMobileSessionNotify 内另有同一道门。
-        if (markAttention && isSessionNotificationsMutedSync(sessionId)) return;
+        if (markAttention && isSessionNotificationsMutedSync(sessionId)) {
+          releasePending();
+          return;
+        }
         const fallbackBody = teammate && kind === 'done' ? getTeammateNotificationFallback() : undefined;
         const mobileTeammateBotId = preview?.teammateBotId ?? teammateBotId;
+        // 账本只含已经决定过的投递。还在读 preview 的另一扇窗按到达配对，
+        // 不按读完顺序：先读完的弹，后读完的并成别名。配不到上一轮已经配完的窗口。
+        const inflightPartner = pendingAlert
+          ? inflightCrossWindowPartner(desktopKey, pendingAlert)
+          : undefined;
         const priorAlert = kind !== 'done' && usableAlertEventId !== undefined && alertArrivedAt !== undefined
           ? matchNotifiedAlert(desktopKey, usableAlertEventId, alertArrivedAt, alertSenderId, kind)
           : undefined;
+        const partnerAlreadyDecided = inflightPartner !== undefined && (notifiedAlerts.get(desktopKey)?.some(alert =>
+          alert.id === inflightPartner.alertEventId || alert.anchorId === inflightPartner.alertEventId,
+        ) ?? false);
+        const collapsedIntoInflight = priorAlert === undefined && partnerAlreadyDecided;
         if (wantDesktop && (kind === 'done'
           ? !wasReplyNotified(desktopKey, eventId)
-          : priorAlert === undefined)) {
+          : priorAlert === undefined && !collapsedIntoInflight)) {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
               sessionId, title: notificationTitle, kind, teammate, markAttention, avatarJpeg,
@@ -634,27 +767,30 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         } else if (
           wantDesktop
           && kind !== 'done'
-          && priorAlert?.matched === 'cross-window'
           && usableAlertEventId
           && alertArrivedAt !== undefined
+          && (priorAlert?.matched === 'cross-window' || collapsedIntoInflight)
         ) {
-          // 另一扇窗已经弹过同一条。这条不弹，但标识要进账本，否则 1 秒后再投一次
-          // 对不上精确标识，窗口也过期了，会再弹。记成别名：精确标识仍然压住重放，
-          // 跨窗查找会跳过它，下一轮失败不会被这扇窗的别名吞掉。顺序沿用已弹那条，
-          // 不用本条自己的轮次时钟，免得这条晚到的副本变成「最近一条」、盖过真正更新的告警。
+          // 另一扇窗已经弹过，或同一对里的另一扇已经先读完并弹过。这条不弹，
+          // 但标识要进账本，否则 1 秒后再投一次对不上精确标识，窗口也过期了，会再弹。
+          // 记成别名：精确标识仍然压住重放，跨窗查找会跳过它，下一轮失败不会被这扇窗的别名吞掉。
+          // 锚点是已经决定过的那一条，不是本条自己的轮次时钟，也不是另一轮先读完的失败。
           // 当前窗口也要并进锚点：只留下条的那一个 sender 时，这扇窗下一轮失败仍会撞上旧锚点。
-          rememberJoinedSender(desktopKey, priorAlert.anchorId, alertSenderId);
+          const anchorId = priorAlert?.matched === 'cross-window' ? priorAlert.anchorId : inflightPartner!.alertEventId;
+          const anchorOrder = priorAlert?.matched === 'cross-window' ? priorAlert.order : inflightPartner!.order;
+          rememberJoinedSender(desktopKey, anchorId, alertSenderId);
           rememberAlert(
             desktopKey,
             usableAlertEventId,
-            priorAlert.order,
+            anchorOrder,
             alertArrivedAt,
             alertSenderId,
             kind,
             true,
-            priorAlert.anchorId,
+            anchorId,
           );
         }
+        releasePending();
         if (channels?.mobile === true && (kind !== 'done' || !wasReplyNotified(mobileKey, eventId))) {
           try {
             const accepted = sendMobileSessionNotify({

@@ -1571,6 +1571,71 @@ describe('notificationService — channels 分发', () => {
     }
   });
 
+  // #9575 review / unit: dedupe used to wait until preview finished, so the ledger
+  // only knew deliveries whose reads had returned. Two background windows each
+  // report two failures. Arrival is 1000/w1, 1000/w2, 1200/w2, 1200/w1 at
+  // 0/2/200/202ms, but the reads finish 1200/w2, 1000/w1, 1000/w2, 1200/w1.
+  // The old 1000/w1 write then landed as an alias of the already-toasted 1200,
+  // and exact-id dedupe swallowed the rest: one real failure never toasted.
+  // Each turn keeps its own arrival, so Notification.show runs twice — once for
+  // turn 1000, once for turn 1200 — no matter which preview returns first.
+  // 生产入口：notification:show-session-event。可观察结果：两次桌面 toast。
+  // 缺口：此前的 [1,1,2,2] 按到达顺序读完，盖不住「后一轮先读完」。
+  // 最小失败输入：上面这四次到达与相反的 preview 完成序。tier：unit。
+  it('toasts each turn once when a later failure preview finishes before the earlier one', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const pending: Array<() => void> = [];
+    readSessionNotificationPreview.mockImplementation(() => new Promise(resolve => {
+      pending.push(() => resolve({}));
+    }));
+    const handler = registeredHandlers.get('notification:show-session-event')!;
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const deliver = (alertEventId: string, senderId: number) => handler(windowEvent(senderId), {
+      sessionId: 's1', title: 'Task', kind: 'error', alertEventId, channels,
+    });
+    try {
+      const started = [deliver('turn:1000:error', 1)];
+      now += 2;
+      started.push(deliver('turn:1000:error', 2));
+      now += 198;
+      started.push(deliver('turn:1200:error', 2));
+      now += 2;
+      started.push(deliver('turn:1200:error', 1));
+      await vi.waitFor(() => expect(pending).toHaveLength(4));
+      // Finish order: 1200/w2, 1000/w1, 1000/w2, 1200/w1.
+      const finish = [pending[2]!, pending[0]!, pending[1]!, pending[3]!];
+      finish[0]!();
+      await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(1));
+      finish[1]!();
+      await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(2));
+      finish[2]!();
+      finish[3]!();
+      await Promise.all(started);
+      await flushAsync();
+      // First finished read is turn 1200 window 2; second is turn 1000 window 1.
+      // Each is its own toast. The two later reads are the other window of that turn.
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      // Replaying either turn's id still does not toast. A ledger that aliased
+      // 1000 onto 1200 would already have failed the count above; this pins the
+      // exact ids so a later delivery of the swallowed turn cannot come back.
+      readSessionNotificationPreview.mockImplementation(async () => ({}));
+      for (const releaseLeft of pending.splice(0)) releaseLeft();
+      await flushAsync();
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+      }, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   // Same window, two needs-reply request keys. Different content must not merge
   // even inside the 1s window.
   it('toasts twice when the same window reports two different requests', async () => {
