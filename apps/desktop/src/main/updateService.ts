@@ -203,6 +203,8 @@ function writeReloginFlag(targetVersion: string): void {
 const FIRST_CHECK_DELAY_MS = 10_000;         // first background check delay
 const POLL_INTERVAL_MS = 30 * 60 * 1000; // 30min polling
 const AUTO_RELAUNCH_POLL_INTERVAL_MS = 30_000;
+/** abortApply(): 安装还没开始就放弃。补丁仍在,但这一轮自动重启已取消。 */
+const UPDATE_APPLY_ABORTED_ERROR_CODE = 'update_apply_aborted';
 // 启动态 manifest 短超时（#26）：probe 最坏 1.5s + external CDN P99 < 5s，8s 留足余量
 const STARTUP_MANIFEST_TIMEOUT_MS = 8_000;
 
@@ -231,6 +233,8 @@ let autoRelaunchPollTimer: ReturnType<typeof setInterval> | null = null;
 let isRelaunching = false;
 let lastErrorCode: string | undefined;
 let autoRelaunchInProgress = false;
+/** The auto-relaunch decision kicked off by the latest `ready` broadcast, if any. */
+let pendingStatusReadyDecision: Promise<void> | null = null;
 /** 资格检查(含异步 busyProbe)进行中的次数。这段窗口暂缓清补丁。 */
 let autoRelaunchDecisionDepth = 0;
 /**
@@ -283,12 +287,21 @@ function broadcastChannelSettings(): void {
 }
 
 function setStatus(status: UpdateStatus, extra?: Partial<UpdateStatusPayload>): void {
+  const unchanged = currentStatus === status
+    && (extra?.version === undefined || extra.version === readyVersion)
+    && extra?.errorCode === lastErrorCode
+    && extra?.progress === undefined;
   currentStatus = status;
   if (status !== 'downloading' && status !== 'superseding') downloadingVersion = undefined;
   lastErrorCode = extra?.errorCode;
+  // A repeated abort lands back on the same `ready` payload. Broadcasting it
+  // again restarts the auto-relaunch decision and tells the renderer something
+  // changed when nothing did.
+  if (unchanged) return;
   broadcastStatus({ status, ...extra });
   if (status === 'ready' && !startupUpdateCheckInProgress && !extra?.errorCode) {
-    void evaluateAutoRelaunch('status-ready');
+    pendingStatusReadyDecision = evaluateAutoRelaunch('status-ready');
+    void pendingStatusReadyDecision;
   }
 }
 
@@ -394,6 +407,7 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
   if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return 'not-ready';
+  if (lastErrorCode === UPDATE_APPLY_ABORTED_ERROR_CODE) return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
   const hasBusyTasksNow = await hasBusyTasks();
 
@@ -442,6 +456,7 @@ async function getStartupRelaunchBlockReason(): Promise<AutoRelaunchBlockReason 
   if (isDev()) return 'dev';
   if (currentStatus !== 'ready') return 'not-ready';
   if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return 'not-ready';
+  if (lastErrorCode === UPDATE_APPLY_ABORTED_ERROR_CODE) return 'not-ready';
   if (isRelaunching || autoRelaunchInProgress) return 'relaunching';
   // pkexec 必须用户在场输入密码，启动时不能自己装。
   if (process.platform === 'linux') return 'interactive-auth';
@@ -633,6 +648,7 @@ export function isUpdateRelaunchImminent(): boolean {
   // A missing VC++ Runtime requires an explicit user install. Treating that
   // indefinite wait as imminent would keep startup side-effects disabled.
   if (lastErrorCode === WINDOWS_UPDATER_RUNTIME_MISSING_ERROR_CODE) return false;
+  if (lastErrorCode === UPDATE_APPLY_ABORTED_ERROR_CODE) return false;
   // Linux 安装要 pkexec 密码，不会在空闲/启动时自己装。
   if (process.platform === 'linux') return false;
   // Respecting the user's switch: with auto-relaunch off the patch just sits
@@ -1478,37 +1494,89 @@ async function doCheckForUpdate(manifestOverride?: Manifest | null): Promise<Che
   }
 }
 
-// ── Spawn failure handler ─────────────────────────────────────────────────
+// ── Apply exits ────────────────────────────────────────────────────────────
 
-function handleApplyFailure(reason: string): void {
+/**
+ * Drop the relaunch flags and the Subagent launch fence.
+ *
+ * `executeRelaunch` raises `isRelaunching` before any platform work. The outer
+ * `finally` only releases the fence when that flag is already down, and the
+ * Windows / Linux spawn callbacks fire *after* `executeRelaunch` has returned,
+ * so a late failure used to leave the fence up for the rest of the process and
+ * every durable Subagent launch was refused as "Cindy is restarting". Both
+ * exits below reset the flag first; releasing here is redundant on the
+ * synchronous refusals (`clearSubagentLaunchFence` nulls the handle, so the
+ * outer `finally` finds nothing left) and required on the late ones.
+ *
+ * Not awaited: these handlers are `void` and one of them is called from a
+ * child-process event. Nothing reads the outcome — the next launch attempt is
+ * the only consumer — and the release is serialised behind the fence's own
+ * per-file work chain. The success path never reaches either function: a
+ * spawned updater ends in `forceQuit()`, and the fence is meant to stand.
+ */
+function releaseApplyAttempt(): void {
   cancelStartupBinaryUpdateCheck?.();
   cancelStartupBinaryUpdateCheck = undefined;
+  isRelaunching = false;
+  autoRelaunchInProgress = false;
+  void clearSubagentLaunchFence().catch((err: unknown) => {
+    log.error('clearing the Subagent launch fence after a failed apply failed: %s', String(err));
+  });
+}
+
+/**
+ * The updater was never spawned. The staged patch is still the right one, so
+ * patch-info and the ready* fields stay.
+ *
+ * A plain abort goes back to `ready` with `update_apply_aborted`. That error
+ * code is what stops the splash and the idle poller from immediately trying
+ * again: `setStatus` only starts `evaluateAutoRelaunch` when the payload has
+ * no errorCode, so `pendingStatusReadyDecision` stays unset and the await
+ * below resolves at once. A manual retry clears the code inside
+ * `executeRelaunch` before `isRelaunching` is raised.
+ *
+ * While a newer build is still downloading (`superseding`), dropping to `ready`
+ * would also clear `downloadingVersion` and let a retry install the old patch
+ * under the replacement guard. Keep `superseding` and only record the abort.
+ *
+ * `releaseApplyAttempt()` runs before any status change. The await stays so a
+ * caller that returns early cannot leave `isRelaunching` up across a decision
+ * that was already in flight.
+ */
+async function abortApply(reason: string): Promise<void> {
+  log.info('Update apply aborted before spawn (reason=%s); staged candidate kept', reason);
+  const supersedingInFlight = currentStatus === 'superseding' && downloadingVersion !== undefined;
+  releaseApplyAttempt();
+  if (supersedingInFlight) {
+    // 新版 B 还在下,保持 superseding 与 downloadingVersion,只在错误码里表达这次安装已取消。
+    // 重复 abort 落到同一个错误码时不再广播,和 setStatus 对未变化 payload 的处理一致。
+    if (lastErrorCode !== UPDATE_APPLY_ABORTED_ERROR_CODE) {
+      lastErrorCode = UPDATE_APPLY_ABORTED_ERROR_CODE;
+      broadcastStatus({
+        status: 'superseding',
+        version: readyVersion,
+        errorCode: UPDATE_APPLY_ABORTED_ERROR_CODE,
+      });
+    }
+    return;
+  }
+  setStatus('ready', { version: readyVersion, errorCode: UPDATE_APPLY_ABORTED_ERROR_CODE });
+  await pendingStatusReadyDecision?.catch(() => undefined);
+}
+
+/**
+ * The updater was spawned and failed, the staged file is already gone, or this
+ * platform can never apply an in-app update. The staged candidate cannot be
+ * reused, so it is cleared and the renderer is told the apply failed.
+ */
+function handleApplyFailure(reason: string): void {
   log.error('Update apply failed (reason=%s), clearing patch and notifying renderer', reason);
   removePatchInfo();
   readyVersion = undefined;
   readyFilePath = undefined;
   readyChannelEpoch = undefined;
   readyTargetArch = undefined;
-  isRelaunching = false;
-  autoRelaunchInProgress = false;
-  // Every failure exit converges here, including the two that fire *after*
-  // `executeRelaunch` has already returned: the Windows updater registers its
-  // `error` and 5s spawn-timeout callbacks and returns immediately, so
-  // `isRelaunching` was still true when the outer `finally` checked it and the
-  // fence was skipped. It then stood for the rest of the process's life, and
-  // every durable Subagent launch this host attempted was refused as "Cindy is
-  // restarting". Releasing here covers the synchronous refusals too, where it
-  // is simply redundant — `clearSubagentLaunchFence` nulls the handle first, so
-  // the outer `finally` finds nothing left to do.
-  //
-  // Not awaited, because nothing here can: this is a `void` handler called from
-  // a child-process event. Nothing reads the outcome — the only consumer is the
-  // next launch attempt — and the release itself is serialised behind the
-  // fence's per-file work chain. The success path never reaches this function:
-  // a spawned updater ends in `forceQuit()`, and the fence is meant to stand.
-  void clearSubagentLaunchFence().catch((err: unknown) => {
-    log.error('clearing the Subagent launch fence after a failed apply failed: %s', String(err));
-  });
+  releaseApplyAttempt();
   setStatus('error', { errorCode: 'updater_spawn_failed' });
 }
 
@@ -2002,6 +2070,12 @@ async function executeRelaunchUnguarded(
     return;
   }
   isRelaunching = true;
+  // A previous abort recorded update_apply_aborted so the splash and the idle
+  // poller would not immediately retry. This attempt is that retry, so the code
+  // must not keep blocking it. Cleared after the in-progress guard, matching
+  // ensureWindowsUpdaterPrerequisites (which also drops its own error code only
+  // once this attempt has passed the early refusals and is really applying).
+  if (lastErrorCode === UPDATE_APPLY_ABORTED_ERROR_CODE) lastErrorCode = undefined;
 
   // translocated bundle 的临时路径不能写入 updater marker，也不能从该只读位置
   // 执行普通热更。
@@ -2106,7 +2180,13 @@ async function executeRelaunchUnguarded(
       'executeRelaunch() cancelled — PI Subagent runners could not be confirmed stopped; '
       + 'update relaunch aborted rather than leaving them running unsupervised',
     );
-    handleApplyFailure('subagent_reclaim_unconfirmed');
+    // Nothing has been spawned yet, so the downloaded patch stays staged.
+    // Awaited, unlike the fire-and-forget exits: abortApply broadcasts `ready`,
+    // and that re-enters the auto-relaunch decision. Leaving isRelaunching up
+    // across that re-entry makes the decision report "already in progress" and
+    // drop the retry, so a second click while the first abort is still settling
+    // never reaches the staged patch.
+    await abortApply('subagent_reclaim_unconfirmed');
     return;
   }
 
@@ -2148,6 +2228,9 @@ async function executeRelaunchUnguarded(
       executeUpdateLinux(readyFilePath, linuxInstallation);
       break;
     default:
+      // win32 / darwin / linux are the only platforms with an executor, so
+      // anything else can never apply the staged file. Clearing it avoids a
+      // cold start that would stage the same unusable patch again.
       log.error(`Unsupported platform: ${process.platform}`);
       handleApplyFailure('unsupported_platform');
   }
