@@ -14,7 +14,7 @@ export default {
     'src/renderer/hooks/useCodexAuth': 'export const useCodexAuth = () => ({ state: { kind: "unauthenticated" }, recoveryCheck: "idle" }); export const isChatGptConnectionConnected = () => false;',
     'src/renderer/hooks/useApiKey': 'export const useApiKey = () => ({ key: "", hasSavedKey: false });',
     'src/renderer/hooks/useModelAccessStatus': 'export const useModelAccessStatus = () => ({ state: "failed" });',
-    'src/renderer/components/settings/useProviderSubscriptionCard': 'export const useProviderSubscriptionCard = () => null; export const useDeviceProviderSubscriptionCard = () => null;',
+    'src/renderer/components/settings/useProviderSubscriptionCard': 'export const useProviderSubscriptionCard = () => null; export const useDeviceProviderSubscriptionCard = () => null; export const useLiveQuotaForeground = () => true;',
     'src/renderer/components/settings/ProviderAccountUsageModule': 'export const ProviderAccountUsageModule = () => null;',
     'src/renderer/features/provider-share/providerShareStore': { partial: 'export const useProviderShareReceived = () => window.providerSourcesFixture.received;' },
   },
