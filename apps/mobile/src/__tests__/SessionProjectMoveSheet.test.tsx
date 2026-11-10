@@ -60,6 +60,7 @@ async function open(target = session) {
   expect(h.picker).toBeNull();
   await act(async () => move.parentClosed());
   expect(h.picker?.workspaces.map(({ title, workingDir }) => ({ title, workingDir }))).toEqual([{ title: 'project', workingDir: '/project' }]);
+  return h.picker;
 }
 
 it('opens only after dismissal, sends to the current computer, and updates the physical shard only after success', async () => {
@@ -237,4 +238,25 @@ it('can assign a dialogue to a project even when the execution directory is alre
   h.invoke.mockResolvedValueOnce({ projectMove: { sessionId: 'task-a', workingDir: '/project', workspaceKind: 'project' } });
   await act(async () => h.picker!.onProject('/project'));
   expect(h.patch).toHaveBeenCalledOnce();
+});
+
+// PR #9826: host moves clear explicit membership even if the execution cwd is unchanged.
+it.each(['project', 'dialogue'] as const)('clears the previous explicit membership after moving to %s with the same cwd', async workspaceKind => {
+  const original = { ...session, workspaceKind: 'project' as const, projectDir: '/project', workingDir: '/project/subdir' };
+  await open(original);
+  h.invoke.mockResolvedValueOnce({ projectMove: { sessionId: 'task-a', workingDir: original.workingDir, workspaceKind } });
+  await act(async () => {
+    if (workspaceKind === 'project') h.picker!.onProject(original.workingDir);
+    else h.picker!.onDialogue();
+  });
+  expect(h.patch).toHaveBeenCalledExactlyOnceWith('old-shard', 'task-a', {
+    workingDir: '/project/subdir', workspaceKind, projectDir: null,
+  });
+  expect(h.reseed).toHaveBeenCalledWith('old-shard');
+  await act(async () => h.picker!.onClosed?.());
+  h.picker = null;
+  h.invoke.mockResolvedValue({ supported: true, projects: ['/project'] });
+  const reopened = await open({ ...original, ...h.patch.mock.calls[0]![2] });
+  expect(reopened?.workspaces[0].disabled).toBe(false); // the old project is now available
+  expect(reopened?.workingDir).toBe('/project/subdir');
 });

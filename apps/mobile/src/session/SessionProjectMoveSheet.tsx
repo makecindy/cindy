@@ -157,7 +157,8 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
       remoteSessionStore.applySessionPatch(devices.shardId, session.id, {
         workingDir: moved.workingDir,
         workspaceKind: moved.workspaceKind,
-        projectDir: moved.workingDir === session.workingDir ? session.projectDir : null,
+        // Explicit host moves clear membership, including when cwd stays unchanged.
+        projectDir: null,
       });
       remoteSessionStore.requestReseed(devices.shardId);
       active.current = false;
