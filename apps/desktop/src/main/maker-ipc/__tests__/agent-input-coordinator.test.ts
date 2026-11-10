@@ -16715,6 +16715,44 @@ describe('queue message hold (stop point)', () => {
     expect(rejected).toBe(true);
   });
 
+  it('ignores a forged stop point that arrives with enqueued input', async () => {
+    // 共享任务访客没有 set-hold 权限,但可以走允许的 enqueue;wire 载荷里的 held
+    // 不能让队列停在访客选的位置。
+    const h = createHarness();
+    const sid = 'hold-forged-enqueue';
+    await h.coordinator.ensureQueueRestored(sid);
+
+    h.coordinator.enqueue(sid, makeItem('forged', 'guest message', { held: true }));
+    await flush();
+
+    expect(h.coordinator.getProjection(sid).pendingQueue).toHaveLength(0);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(
+      h.coordinator.getProjection(sid).pendingQueue.some((item) => item.held === true),
+    ).toBe(false);
+  });
+
+  it('keeps a host-owned stop point through an edit and drops a forged one', async () => {
+    const { h, sid } = await withQueued(['a', 'b']);
+    h.coordinator.hold(sid, 'a');
+    const held = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[0]!;
+
+    // 编辑已挂起的那条:正文变了,停点必须还在。
+    expect(
+      h.coordinator.replaceQueuedMessage(sid, 'a', { ...held, text: 'edited', persistedContent: 'edited' }),
+    ).toBe(true);
+    expect(h.coordinator.getProjection(sid).pendingQueue[0]?.held).toBe(true);
+
+    // 编辑未挂起的那条:载荷里带 held 也不算。
+    const plain = h.coordinator.getQueueControlSnapshot(sid).pendingQueue[1]!;
+    expect(
+      h.coordinator.replaceQueuedMessage(sid, 'b', { ...plain, held: true as const }),
+    ).toBe(true);
+    expect(
+      h.coordinator.getProjection(sid).pendingQueue.filter((item) => item.held === true).map((item) => item.clientId),
+    ).toEqual(['a']);
+  });
+
   it('restores a cold queue before writing the stop point', async () => {
     const h = createHarness();
     const sid = 'hold-cold-restore';

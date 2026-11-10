@@ -1018,6 +1018,19 @@ export function isMatchingFencedStaleTerminal(
  * 首次进入 main 队列边界时冻结原始合成指令意图。IPC payload 属不可信输入，
  * 因此即使 renderer 带了同名字段也必须从当下原始 text 重新计算。
  */
+/**
+ * 停点(held)只能由宿主的 hold/release 与崩溃快照恢复写入。
+ *
+ * 入队/替换的正文都来自 renderer、device-link 控制端或共享任务访客,`held` 一旦
+ * 跟着 wire 载荷进来就会挡住这条及之后的派发(访客没有 set-hold 权限,却能用
+ * 允许的 enqueue 达到同样效果)。所以在每个外部入口剥掉它。
+ */
+function stripHostOwnedQueueMarkers(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+  if (item.held === undefined) return item;
+  const { held: _held, ...rest } = item;
+  return rest;
+}
+
 function captureOriginalSyntheticTrigger(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
   return {
     ...item,
@@ -1956,7 +1969,7 @@ export class AgentInputCoordinator {
     },
   ): AgentInputProjection {
     const state = this.getState(sessionId);
-    item = captureOriginalSyntheticTrigger(item);
+    item = captureOriginalSyntheticTrigger(stripHostOwnedQueueMarkers(item));
     assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.send');
     // 幂等去重(弱网重发防线,PR #881):同 clientId 重复投递说明是控制端(手机
     // 断连自动重试 / 用户对 ack 丢失的消息重发)在补发同一条消息,不是新消息。
@@ -2148,7 +2161,7 @@ export class AgentInputCoordinator {
     opts?: { onDuplicate?: () => void; onReserved?: () => void },
   ): { projection: AgentInputProjection; reserved: boolean } {
     const state = this.getState(sessionId);
-    item = captureOriginalSyntheticTrigger(item);
+    item = captureOriginalSyntheticTrigger(stripHostOwnedQueueMarkers(item));
     if (this.isDuplicateEnqueueClientId(state, item.clientId)) {
       log.info('priority enqueue ignored: duplicate clientId', {
         sessionId,
@@ -3866,9 +3879,11 @@ export class AgentInputCoordinator {
     // of public projections. Never let an edit erase or forge the clear/restart
     // recovery boundary even if a future caller accidentally rebuilds from a
     // projected row again.
-    const replacement = { ...next };
+    const replacement = { ...stripHostOwnedQueueMarkers(next) };
     if (current.hostAcceptedAtMs === undefined) delete replacement.hostAcceptedAtMs;
     else replacement.hostAcceptedAtMs = current.hostAcceptedAtMs;
+    // 停点是宿主状态:外部载荷带不进来,而编辑一条已经挂起的消息必须保留停点。
+    if (current.held === true) replacement.held = true;
     const nextQueue = [...state.pendingQueue];
     nextQueue[index] = this.preserveRestoredQueueProvenance(current, replacement);
     state.pendingQueue = nextQueue;
