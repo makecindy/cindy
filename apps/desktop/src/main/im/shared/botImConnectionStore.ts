@@ -16,6 +16,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessi
 import { desktopMakerLogger } from '../../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../../maker-host/override-settings-file.js';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage.js';
+import { discordFinalTextGrantStamp, discordGrantHash, discordGrantTarget, discordGrantTargets, discordGrantValue, reconcileDiscordFinalTextGrants, type DiscordFinalTextGrants } from '../discord/authorizationGrants';
 import {
   BOT_IM_CHANNELS,
   isBotImGroupChatId,
@@ -34,6 +35,8 @@ export function isBotImChannel(value: unknown): value is BotImChannel {
 
 interface BotImConnectionDocument {
   connections: Record<string, Omit<BotImConnectionRecord, 'id'>>;
+  /** Host-local recovery generations; not part of BotImConnectionRecord or any remote projection. */
+  discordFinalTextGrants?: DiscordFinalTextGrants;
 }
 
 const ID_PATTERN = /^[a-f0-9]{12}$/;
@@ -146,13 +149,28 @@ function normalizeDocument(raw: unknown): BotImConnectionDocument {
     const record = normalizeRecord(id, value);
     if (record) connections[id] = record;
   }
-  return { connections };
+  const keys = Object.entries(connections).flatMap(([id, record]) => record.channel === 'discord'
+    ? discordGrantTargets(record.discordChannelAccess ?? { channels: [] }).map(target => `${id}:${target}`) : []);
+  const grants = reconcileDiscordFinalTextGrants(r.discordFinalTextGrants as DiscordFinalTextGrants | undefined, keys,
+    key => connectionGrantValue(connections, key));
+  return { connections, discordFinalTextGrants: grants };
+}
+
+function connectionGrantValue(connections: BotImConnectionDocument['connections'], key: string): string {
+  const [id, target] = key.split(':');
+  const record = connections[id];
+  if (!record || record.channel !== 'discord') return discordGrantHash('missing');
+  // botContextId is hydrated after READY; the transport/credential generation owns the actual Discord identity.
+  const binding = discordGrantHash(JSON.stringify([id, record.botId, record.channel, record.createdAt]));
+  return discordGrantValue(record.discordChannelAccess ?? { channels: [] }, target, binding);
 }
 
 const file = createOverrideSettingsFile<BotImConnectionDocument>({
   filePath: () => ownerScopedImUserDataPath('bot-im-connections.json'),
   defaults: () => ({ connections: {} }),
   normalize: normalizeDocument,
+  mergeOverrides: ({ next, overrides }) => ({ ...overrides, connections: next.connections,
+    ...(Object.keys(next.discordFinalTextGrants!.targets).length ? { discordFinalTextGrants: next.discordFinalTextGrants } : {}) }),
   log,
   label: 'bot-im-connections',
   scopeKey: activeOwnerScopeKey,
@@ -175,6 +193,15 @@ export function readBotImConnection(id: string): BotImConnectionRecord | null {
   if (!isBotImConnectionId(id)) return null;
   const record = readDocument().connections[id];
   return record ? { id, ...record } : null;
+}
+
+export function botDiscordFinalTextAuthorization(id: string, lane: string): string {
+  const document = readDocument();
+  const record = document.connections[id];
+  const target = discordGrantTarget(record?.discordChannelAccess ?? { channels: [] }, lane);
+  const key = `${id}:${target}`;
+  const value = connectionGrantValue(document.connections, key);
+  return discordFinalTextGrantStamp(document.discordFinalTextGrants ?? reconcileDiscordFinalTextGrants(undefined, [], () => value), key, value);
 }
 
 export function listBotImConnectionsForBot(botId: string): BotImConnectionRecord[] {

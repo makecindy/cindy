@@ -643,6 +643,60 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
+  // unit: shared production terminal entry must use the durable sink even when initial progress failed.
+  // Existing streaming fallback tests never install a durable rich-channel sink. Minimal input: one text + done.
+  it.each(['stream', 'start-failed', 'storage-failed'] as const)('commits terminal text to the channel sink before terminal delivery: %s', async mode => {
+    const previous = fakeAdapter.output;
+    const handle = { messageId: 'progress', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    const commitFinal = vi.fn(async () => { if (mode === 'storage-failed') throw new Error('DISCORD_OUTBOX_STORAGE_UNAVAILABLE'); });
+    fakeAdapter.output = { kind: 'rich-card', im: mocks.feishuIm as unknown as ChannelIM, commitFinal };
+    if (mode === 'start-failed') mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('offline'));
+    else mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      await runDefaultTurn(vi.fn(), { userMessageId: '30|8' });
+      h.emit({ type: 'text', data: { text: 'finished', isFinal: true } });
+      await flushMicrotasks(); h.emit({ type: 'done', data: {} });
+      await waitForAssertion(() => expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ inputMessageId: '30|8', text: 'finished', terminal: 'done' })));
+      await flushMicrotasks();
+      expect(h.send).toHaveBeenCalledTimes(1); expect(handle.finalize).not.toHaveBeenCalled(); expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+      if (mode !== 'start-failed') expect(handle.close).toHaveBeenCalled();
+    } finally { fakeAdapter.output = previous; }
+  });
+
+  // unit: terminal errors used to bypass the optional durable sink, losing both offline
+  // delivery and completed-input dedup. Cover progress present/absent and storage failure.
+  it.each(['stream', 'start-failed', 'storage-failed'] as const)('commits terminal errors once and releases the next turn: %s', async mode => {
+    const previous = fakeAdapter.output;
+    const handle = { messageId: 'progress', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    const commitFinal = vi.fn(async () => { if (mode === 'storage-failed') throw new Error('DISCORD_OUTBOX_STORAGE_UNAVAILABLE'); });
+    fakeAdapter.output = { kind: 'rich-card', im: mocks.feishuIm as unknown as ChannelIM, commitFinal };
+    if (mode === 'start-failed') mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('offline'));
+    else mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      const complete = vi.fn();
+      const args = { botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: '30|8', text: 'question', attachments: [], queueMode: 'external' as const, beforeProviderStart: async () => undefined, onTurnComplete: complete };
+      const first = await getRunner().dispatchAgentTurn(args);
+      expect(first.kind).toBe('accepted');
+      h.emit({ type: 'text', data: { text: 'partial answer', isFinal: true } });
+      await flushMicrotasks();
+      h.emit({ type: 'error', data: { message: 'terminal failure', isTerminal: true } });
+      if (first.kind === 'accepted') await expect(first.terminal).resolves.toMatchObject({ kind: 'error', errorCode: 'agent_turn_error' });
+      expect(commitFinal).toHaveBeenCalledTimes(1);
+      expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ inputMessageId: '30|8', terminal: 'error', errorCode: 'agent_turn_error', text: expect.stringContaining('terminal failure') }));
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).not.toHaveBeenCalled();
+      expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+      if (mode !== 'start-failed') expect(handle.close).toHaveBeenCalled();
+      const next = await getRunner().dispatchAgentTurn({ ...args, userMessageId: '30|9' });
+      expect(next.kind).toBe('accepted');
+      expect(h.send).toHaveBeenCalledTimes(2);
+      h.emit({ type: 'done', data: {} });
+      if (next.kind === 'accepted') await next.terminal;
+    } finally { fakeAdapter.output = previous; }
+  });
+
   it('keeps IM persistence, ack, card, and completion exactly-once when Maker recovery is transparent', async () => {
     const streamingHandle = {
       messageId: 'stream-recovered',

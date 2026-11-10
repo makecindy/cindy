@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { IMHost, IMStatus } from '../../types.js';
 import { DiscordIM } from '../index.js';
 import type { DiscordGateway, DiscordGatewayEvents } from '../gateway.js';
+import type { DiscordFinalTextStorage } from '../finalTextOutbox.js';
 
 function makeHost() {
   const secrets = new Map<string, string>();
@@ -125,5 +126,56 @@ describe('DiscordIM teammate instance', () => {
     expect(im.getStatus()).toEqual({ kind: 'idle' });
     expect([...secrets.keys()].filter((key) => key.includes('token') || key.includes('owner'))).toEqual([]);
     expect(broadcasts).toEqual([]);
+  });
+});
+
+// unit: true ingress -> terminal persistence -> restart. Streaming and pure ledger tests cannot verify
+// that the original inbound identity is retained or that completed gateway messages never re-enter the model.
+describe('Discord completed-input delivery identity', () => {
+  function terminalHarness() {
+    const { host, secrets } = makeHost();
+    secrets.set('discord-bot-token', 'invalid-test-token'); secrets.set('discord-owner-user-id', '1'); secrets.set('discord-bot-lifecycle-announcement', 'false');
+    let contents: string | null = null;
+    const storage: DiscordFinalTextStorage = { key: 'owner-test', read: () => contents, write: value => { contents = value; }, assertCurrent() {}, authorizationStamp: () => 'grant-1' };
+    const post = vi.fn(async (_route: string, _options: unknown) => ({ id: '90' }));
+    const channel = { id: '30', type: 11, guildId: '10', parentId: '20', isTextBased: () => true, messages: {}, permissionsFor: () => ({ has: () => true }) };
+    const sdk = { user: { id: '2' }, channels: { fetch: async () => channel }, rest: { post } };
+    let events: DiscordGatewayEvents;
+    const create = () => new DiscordIM(host, { finalTextStorage: () => storage, channelAccess: { read: () => ({ channels: [{ guildId: '10', channelId: '20' }] }) }, gatewayFactory: ev => {
+      events = ev;
+      return { appId: '2', botTag: 'fake', client: sdk, connect: async () => ev.onStatus({ kind: 'connected', appId: 'fake' }), destroy: async () => {} } as unknown as DiscordGateway;
+    } });
+    const trigger = (mention = true) => events.onGuildMessage({ id: '8', guildId: '10', channelId: '30', channel, author: { id: '1', username: 'Owner' }, content: '<@2> question', mentions: { has: () => mention } } as never);
+    return { create, trigger, post, offline: () => events.onStatus({ kind: 'connecting' }), get json() { return contents ? JSON.parse(contents) : null; } };
+  }
+  it('records completion before POST and suppresses a completed input on gateway redelivery', async () => {
+    const h = terminalHarness(); const im = h.create(); const inbound = vi.fn(); im.onMessage(inbound); await im.init();
+    try {
+      h.trigger(false); for (let i = 0; i < 8; i++) await Promise.resolve(); expect(inbound).not.toHaveBeenCalled();
+      const received = new Promise<void>(resolve => im.onMessage(() => resolve())); h.trigger(); await received;
+      h.post.mockImplementationOnce(async () => { expect(h.json.entries[0].segments[0].state).toBe('sending'); return { id: '90' }; });
+      expect((await im.commitFinalText('30|8', 'g/10/20/30', 'answer')).state).toBe('delivered');
+      h.trigger(); for (let i = 0; i < 8; i++) await Promise.resolve(); expect(inbound).toHaveBeenCalledTimes(1); expect(h.post).toHaveBeenCalledTimes(1);
+    } finally { await im.dispose(); }
+  });
+  it.each(['answer', '❌ 错误：terminal failure'])('recovers offline terminal text on a new process without replaying the input or model: %s', async text => {
+    const h = terminalHarness(); const im = h.create(); await im.init();
+    const received = new Promise<void>(resolve => im.onMessage(() => resolve())); h.trigger(); await received; h.offline();
+    expect((await im.commitFinalText('30|8', 'g/10/20/30', text)).state).toBe('pending'); await im.dispose();
+    const restarted = h.create(); const inbound = vi.fn(); restarted.onMessage(inbound);
+    try {
+      await restarted.init(); await vi.waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+      expect(h.post.mock.calls[0]?.[1]).toMatchObject({ body: { content: text } });
+      h.trigger(); for (let i = 0; i < 8; i++) await Promise.resolve(); expect(inbound).not.toHaveBeenCalled();
+    } finally { await restarted.dispose(); }
+  });
+  it('rejects the old model final after a binding is replaced, even with the same bot and owner IDs', async () => {
+    const h = terminalHarness(); const im = h.create(); await im.init();
+    try {
+      const received = new Promise<void>(resolve => im.onMessage(() => resolve())); h.trigger(); await received;
+      await im.setConfig({ token: 'another-invalid-test-token', ownerUserId: '1' });
+      await expect(im.commitFinalText('30|8', 'g/10/20/30', 'old answer')).rejects.toMatchObject({ code: 'DISCORD_REPLY_ANCHOR_CHANGED' });
+      expect(h.post).not.toHaveBeenCalled();
+    } finally { await im.dispose(); }
   });
 });

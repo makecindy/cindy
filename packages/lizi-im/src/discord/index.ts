@@ -47,6 +47,8 @@ import {
 } from './components.js';
 import type { ButtonInteractionLike } from './components.js';
 import { startStreaming } from './streamingText.js';
+import { createDiscordOperations, DiscordOperationError, type DiscordHistoryMessage } from './operations.js';
+import { DiscordFinalTextOutbox, type DiscordFinalTextStorage } from './finalTextOutbox.js';
 
 const TOKEN_SECRET_KEY = 'discord-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'discord-owner-user-id';
@@ -89,6 +91,8 @@ interface DiscordFilePayload {
 }
 
 export interface DiscordIMOptions {
+  /** Owner-scoped atomic storage supplied by the host. Text only; never contains credentials. */
+  finalTextStorage?: () => DiscordFinalTextStorage;
   /** 凭证键名前缀(伙伴自有连接各一个, 缺省空 = 设置页那份)。 */
   secretKeyPrefix?: string;
   /** 是否注册 `discordBot:*` 设置卡 IPC 并广播状态(缺省 true; 伙伴连接关掉)。 */
@@ -147,9 +151,20 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private lifecycleNoticeVersion = 0;
   private disposing = false;
   private readonly connectionRetry = new ConnectionRetry();
+  private readonly finalTextOutbox: DiscordFinalTextOutbox;
+  private deliveryBotId = '';
+  private deliveryBindingGeneration = 0;
+  private readonly finalTextAnchors = new Map<string, { assertCurrent(): void }>();
 
   constructor(host: IMHost, private readonly opts: DiscordIMOptions = {}) {
     super('discord', host);
+    this.finalTextOutbox = new DiscordFinalTextOutbox({
+      storage: () => this.opts.finalTextStorage?.() ?? null,
+      identity: () => `${this.deliveryBotId}:${this.ownerUserId}`,
+      ready: () => !this.disposing && this.status.kind === 'connected',
+      prepare: lane => this.captureTools(lane).prepareSend(lane),
+      warn: code => this.log.warn(code),
+    });
     this.gateway = (opts.gatewayFactory ?? createDiscordGateway)({
       onStatus: (s) => this.setStatus(s),
       onDmMessage: (m) => {
@@ -166,6 +181,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   async init(): Promise<void> {
     this.disposing = false;
+    this.finalTextOutbox.start();
     this.suppressNextOnlineNotice = false;
     this.runtimeOnlineNotice = null;
     this.runtimeOnlineAnnounced = false;
@@ -173,6 +189,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     this.lifecycleAnnouncementEnabled = this.readLifecycleAnnouncement();
     const token = this.host.secrets.read(this.key(TOKEN_SECRET_KEY))?.trim() ?? '';
     this.ownerUserId = this.host.secrets.read(this.key(OWNER_USER_ID_SECRET_KEY))?.trim() ?? '';
+    void this.finalTextOutbox.drain();
     if (!this.lifecycleAnnouncementEnabled) {
       this.clearRuntimeActiveMarker();
     }
@@ -190,6 +207,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   async dispose(): Promise<void> {
     this.disposing = true;
+    this.finalTextOutbox.stop();
     this.connectionRetry.reset();
     const noticeDeadline = Date.now() + RUNTIME_NOTICE_SHUTDOWN_BUDGET_MS;
     await this.waitForRuntimeOnlineNotice(noticeDeadline);
@@ -223,6 +241,66 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return this.ownerUserId;
   }
 
+  getFinalTextDeliveryStatus(laneId?: string) { return this.finalTextOutbox.summary(laneId); }
+
+  /** Final text is durable before any terminal send; media is not pinned by this ledger. */
+  async commitFinalText(requestId: string, laneId: string, markdown: string) {
+    const anchor = this.finalTextAnchors.get(`${laneId}:${requestId}`);
+    if (!anchor) throw new DiscordOperationError('DISCORD_REPLY_ANCHOR_UNAVAILABLE');
+    anchor.assertCurrent();
+    const { text } = markdownToDiscord(markdown);
+    const state = await this.finalTextOutbox.complete(requestId, laneId, text);
+    anchor.assertCurrent();
+    this.finalTextAnchors.delete(`${laneId}:${requestId}`);
+    return { state, assertCurrent: anchor.assertCurrent };
+  }
+
+  /** A bounded bridge over this exact connection, with no token or arbitrary REST access. */
+  captureTools(boundLane?: string, assertAccess: () => void = () => undefined, requesterIsOwner = true) {
+    const appId = this.botContextId || this.deliveryBotId;
+    const generation = this.deliveryBindingGeneration;
+    const account = this.host.accountScope?.capture();
+    const ownerId = this.ownerUserId;
+    return createDiscordOperations({
+      client: () => this.status.kind === 'connected' ? this.gateway.client : null,
+      ownerId,
+      boundLane,
+      ...(this.opts.finalTextStorage ? { authorizationStamp: (lane: string) => this.opts.finalTextStorage!().authorizationStamp(lane) } : {}),
+      laneEnabled: lane => isDiscordLaneAdmitted(this.readChannelAccess(), lane, requesterIsOwner),
+      assertCurrent: () => {
+        assertAccess();
+        if (this.disposing || this.ownerUserId !== ownerId || (this.botContextId || this.deliveryBotId) !== appId || generation !== this.deliveryBindingGeneration ||
+            (this.host.accountScope && (!account || !this.host.accountScope.isCurrent(account)))) {
+          throw new DiscordOperationError('DISCORD_IDENTITY_CHANGED');
+        }
+      },
+    });
+  }
+
+  /** Historical bytes use the same staging/media path as the trigger, never a legacy cache. */
+  async downloadHistoryAttachments(laneId: string, message: DiscordHistoryMessage): Promise<Pick<IMMessageEvent, 'attachments' | 'unsupported'>> {
+    const tools = this.captureTools(laneId);
+    tools.assertCurrent();
+    const lane = decodeDiscordLaneUserId(laneId);
+    if (!lane || discordLaneTargetChannelId(lane) !== message.channelId) throw new DiscordOperationError('DISCORD_LANE_DENIED');
+    const stagedDiscards: Array<() => Promise<void>> = [];
+    try {
+      const event = await normalizeInboundMessage({
+        id: message.id, channelId: message.channelId, author: { id: message.author.id },
+        attachments: message.attachments,
+      }, {
+        contextId: this.botContextId,
+        download: async url => { tools.assertCurrent(); const bytes = await downloadUrl(url); tools.assertCurrent(); return bytes; },
+        media: this.host.media, files: this.host.files, stagedDiscards,
+      });
+      tools.assertCurrent();
+      return event ?? { attachments: [], unsupported: [{ type: 'download', label: 'Historical message unavailable' }] };
+    } catch (error) {
+      for (const discard of stagedDiscards) await discard().catch(() => undefined);
+      throw error;
+    }
+  }
+
   /**
    * 保存 token / 主人 id 并重连(设置卡与伙伴连接共用)。失败时回滚到之前的凭证并在
    * 返回值里带 saveErrorStatus。
@@ -240,6 +318,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
       return configResult();
     }
+    try { this.finalTextOutbox.invalidate(); } catch { this.log.warn('DISCORD_OUTBOX_INVALIDATION_FAILED'); }
+    this.deliveryBindingGeneration++;
 
     const previousToken = this.host.secrets.read(this.key(TOKEN_SECRET_KEY));
     const previousOwnerUserId = this.host.secrets.read(this.key(OWNER_USER_ID_SECRET_KEY));
@@ -311,6 +391,8 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   /** 通知主人、断开并清掉本实例的全部凭证。 */
   async disconnect(): Promise<{ status: IMStatus }> {
+    try { this.finalTextOutbox.invalidate(); } catch { this.log.warn('DISCORD_OUTBOX_INVALIDATION_FAILED'); }
+    this.deliveryBindingGeneration++;
     this.connectionRetry.reset();
     this.configVersion += 1;
     const disconnectedNoticeConfigVersion = this.configVersion;
@@ -669,6 +751,10 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   private setStatus(s: IMStatus): void {
     const previous = this.status;
     this.status = s;
+    if (s.kind === 'connected' && !this.disposing) {
+      this.deliveryBotId = this.botContextId;
+      void this.finalTextOutbox.drain();
+    }
     if (this.opts.ipc !== false) {
       this.host.ipc.broadcast('discordBot:status-change', { status: s });
     }
@@ -973,6 +1059,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (this.disposing) return;
     const acceptedOwnerUserId = this.ownerUserId;
     if (m.author.id !== acceptedOwnerUserId) return;
+    if (this.isCompletedInput(m, m.author.id)) return;
 
     const acceptedContext = this.acceptedContext(acceptedOwnerUserId);
     return this.enqueueInbound(
@@ -1000,6 +1087,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
     const acceptedContext = this.acceptedContext(ownerUserId);
     const laneUserId = encodeDiscordLaneUserId(lane);
+    if (this.isCompletedInput(m, laneUserId)) return;
     return this.enqueueInbound(
       acceptedContext,
       laneUserId,
@@ -1009,6 +1097,11 @@ export class DiscordIM extends BaseIM implements ChannelIM {
 
   private acceptedContext(ownerUserId: string): AcceptedContext {
     return { appId: this.gateway.appId, configVersion: this.configVersion, ownerUserId };
+  }
+
+  private isCompletedInput(message: MessageLike, laneId: string): boolean {
+    try { return this.finalTextOutbox.hasCompleted(encodeMessageId(message.channelId ?? message.channel?.id ?? '', message.id), laneId); }
+    catch { this.log.warn('DISCORD_OUTBOX_DEDUP_UNAVAILABLE'); return true; }
   }
 
   /** 同一队列键（私聊：发言人+私聊频道；服务器：整条 lane）串行处理，下载慢的附件不乱序。 */
@@ -1040,6 +1133,22 @@ export class DiscordIM extends BaseIM implements ChannelIM {
   }
 
   private emitInbound(event: IMMessageEvent): void {
+    if (this.opts.finalTextStorage) {
+      const store = this.opts.finalTextStorage();
+      const authorization = store.authorizationStamp(event.senderId);
+      const identity = `${this.deliveryBotId}:${this.ownerUserId}`;
+      const generation = this.deliveryBindingGeneration;
+      const lane = decodeDiscordLaneUserId(event.senderId);
+      const requesterIsOwner = event.speaker?.isOwner === true;
+      this.finalTextAnchors.set(`${event.senderId}:${event.messageId}`, { assertCurrent: () => {
+        store.assertCurrent();
+        if (this.disposing || generation !== this.deliveryBindingGeneration || identity !== `${this.deliveryBotId}:${this.ownerUserId}` ||
+            authorization !== store.authorizationStamp(event.senderId) || (lane && !isDiscordLaneAdmitted(this.readChannelAccess(), lane, requesterIsOwner))) {
+          throw new DiscordOperationError('DISCORD_REPLY_ANCHOR_CHANGED');
+        }
+      } });
+      while (this.finalTextAnchors.size > 1000) this.finalTextAnchors.delete(this.finalTextAnchors.keys().next().value!);
+    }
     for (const h of this.messageHandlers) {
       try {
         h(event);
@@ -1355,26 +1464,31 @@ export class DiscordIM extends BaseIM implements ChannelIM {
    * 都复核白名单与连接代次（缓存命中走发消息时记下的复核函数，未命中按取到的频道自身判定，await 之后再复核）。
    * `cleanup` 只用于撤掉机器人自己发出的占位 / 过期卡片：撤销白名单后也允许删除，但不允许改内容。
    */
-  private async fetchMessage(messageId: string, opts: { cleanup?: boolean } = {}): Promise<FetchedMessage> {
+  private async fetchMessage(messageId: string, opts: { cleanup?: boolean } = {}): Promise<Pick<FetchedMessage, 'edit' | 'delete'>> {
     const cached = this.messageCache.get(messageId);
+    let message: FetchedMessage;
+    let assertCurrent: () => void;
     if (cached) {
-      if (!opts.cleanup) cached.assertCurrent();
-      return cached.message;
+      message = cached.message;
+      assertCurrent = cached.assertCurrent;
+    } else {
+      const identity = this.captureIdentityGuard();
+      const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
+      const channel = await this.fetchChannel(channelId);
+      assertCurrent = () => {
+        identity();
+        this.assertFetchedChannelAdmitted(channel);
+      };
+      if (!opts.cleanup) assertCurrent();
+      message = await channel.messages.fetch(nativeMessageId);
     }
-    // 缓存没命中：本次操作开始时的 bot 身份在每个 await 之后都要复核，取频道 / 取消息在途换了 bot 就不再返回旧对象。
-    const identity = this.captureIdentityGuard();
-    const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
-    const channel = await this.fetchChannel(channelId);
-    if (!opts.cleanup) {
-      identity();
-      this.assertFetchedChannelAdmitted(channel);
-    }
-    const message = await channel.messages.fetch(nativeMessageId);
-    if (!opts.cleanup) {
-      identity();
-      this.assertFetchedChannelAdmitted(channel);
-    }
-    return message;
+    if (opts.cleanup) return message;
+    assertCurrent();
+    return {
+      // 调用方 await 返回后仍可能撤权或换身份，复核必须紧邻真正的编辑 I/O。
+      edit: (payload) => { assertCurrent(); return message.edit(payload); },
+      delete: () => message.delete(),
+    };
   }
 
   private async uploadImages(messageId: string, absPaths: string[], assertCurrent?: () => void): Promise<void> {

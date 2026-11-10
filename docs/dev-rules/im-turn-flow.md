@@ -12,7 +12,7 @@ Telegram / Slack / X / 飞书 / Lark）是同一件事的两套实现：把渠�
 [`../product-rules/telegram-bot-parity.md`](../product-rules/telegram-bot-parity.md)；
 台账里标「有意不同」的项以策略参数表达，合并时不抹平。
 
-连接恢复由渠道 transport 持有，不重放任务或发送内容。Telegram、Discord 的启动网络失败与
+连接恢复由渠道 transport 持有，不重放模型任务。Discord 的已完成文本终稿可由本机持久出箱补送（见下节）；其它个人渠道不重放发送内容。Telegram、Discord 的启动网络失败与
 钉钉的连接失败使用可取消的指数退避（约 1 秒起、30 秒封顶，带抖动）；Telegram 429 尊重
 服务端完整等待时间。飞书保留 SDK 重连，仅在 SDK 耗尽重试或启动抛错后补重试；就绪日志须
 与 SDK 真实连接状态一致。微信、企业微信保留已有重试循环。恢复成功立即更新状态，
@@ -83,7 +83,7 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
 | `pendingInteractions.pending` / `interactions.ts pending` | 两侧 | requestId / interactionId | 并入（批次 5：交互挂起表合一，超时策略按渠道参数） |
 | `groupHistoryAccess.activeBySession` | `im/shared` | sessionId | 已同源，不动 |
 | 群消息本地窗口（`hook_group_messages`）与上下文游标（`hook_group_context_cursors`） | `im/shared/groupWindowCore.ts`；个人渠道经 `im/shared/channelGroupWindow.ts`（Telegram / 企业微信 / 钉钉各一份 provider 前缀，`<渠道>-personal:<botContextId>`），官方经 `hook-control/groupWindow.ts` | provider + chat / cursorKey | 已同源，不另建存储：新渠道接群上下文时复用 `createChannelGroupWindow`，在 `prepareAgentTurnText` 入窗并拼前缀、受理后 `commit`，终稿发出后把机器人回复入窗 |
-| `channelToolScope.activeBySession`（`cindy_telegram_bot` / `cindy_feishu_bot` 轮次内工具的逐轮作用域） | `im/shared` | sessionId | 个人渠道能力；与群历史租约同一生命周期（`beforeProviderStart` 登记、`releaseTurnInteractionRoute` 释放）。Telegram、飞书 / Lark 各一种作用域，带着触发本轮那条连接自己的 transport；企业微信 / 钉钉 / Discord 没有渠道直通工具，伙伴专线轮次由 `messageHandler` 登记不带 transport 的 `LaneTurnScope`（只给触发者身份与当前对话）；`cindy_feishu_bot` 的 `send_*_to_user` 优先按它选出站 bot，无租约时按下述主人通知规则解析 |
+| `channelToolScope.activeBySession`（`cindy_telegram_bot` / `cindy_feishu_bot` / `cindy_discord` 轮次内工具的逐轮作用域） | `im/shared` | sessionId | 个人渠道能力；与群历史租约同一生命周期（`beforeProviderStart` 登记、`releaseTurnInteractionRoute` 释放）。Telegram、飞书 / Lark、Discord 各一种作用域，带着触发本轮那条连接自己的 transport；企业微信 / 钉钉没有渠道直通工具，伙伴专线轮次由 `messageHandler` 登记不带 transport 的 `LaneTurnScope`（只给触发者身份与当前对话）；`cindy_feishu_bot` 的 `send_*_to_user` 优先按它选出站 bot，无租约时按下述主人通知规则解析 |
 | Telegram 传输层（`chatQueues` / `typingLoops` / 回挂目标） | `packages/lizi-im/src/telegram/index.ts` | chat | 保留（个人出站载体） |
 
 **飞书主人通知的无租约路径**：`send_message_to_user` / `send_file_to_user` 在伙伴 canonical
@@ -275,8 +275,8 @@ Dispatcher 只接受宿主解析的专线 ID 和精确工作目录，忽略入�
 `packages/lizi-im/src/discord/{lane,gateway,inbound,index}.ts` 与 `apps/desktop/src/main/im/discord/**`）：
 
 - **召唤**：网关只多请求标准 `GuildMessages` intent，不请求 `MessageContent`。只有直接 @ 机器人的消息会被处理
-  （@everyone / 角色提及不算）；机器人、webhook、系统消息一律忽略。没有被 @ 的频道正文既收不到也不假装收集，
-  上下文只来自主人实际 @ 过的往来。
+  （@everyone / 角色提及不算）；机器人、webhook、系统消息一律忽略。未 @ 消息不触发模型、不后台收集；被 @ 时才用当前连接按同 lane 读取一页最近历史与精确引用。
+  REST 正文受应用 MESSAGE_CONTENT 和频道 ViewChannel / ReadMessageHistory 限制，与 Gateway Identify 的 intents 独立；不为 REST 给旧连接追加特权 intent。
 - **lane**：userId = `g/{guild}/{channel}[/{thread}]`，同频道共享一个会话，thread 独立一个会话，白名单只认父频道。
   私聊 userId / session id 不变，不迁移存量。出站按 lane 解析到对应频道 / thread，每次发送复核白名单与 guild 归属。
 - **白名单（服务器级准入）**：owner-scoped `discord-channel-access.json`，默认空 = 不开放；设置页「服务器频道」每个服务器一行
@@ -301,6 +301,19 @@ Dispatcher 只接受宿主解析的专线 ID 和精确工作目录，忽略入�
   不再发出内容（只放行删除机器人自己的占位消息）；终稿编辑失败的兜底改发也经同一复核。
 - **流式回复**：发到频道的 Message 对象放进有界缓存，机器人没有「读取消息历史」时仍可编辑；编辑失败终稿改发新消息。
 
+## Discord 上下文、工具与文本终稿恢复（2026-11-10）
+
+- 宿主只掌握已配置 bot 的凭证、身份、白名单、逐轮租约与出站边界；不增加 Token 配置、任意 REST、插件权限旁路或业务流程。`cindy_discord` 在三个 Harness 保持稳定注册，普通账号任务在执行时核实真实任务与账号后使用个人 bot；公开频道/thread 只给当前 lane，伙伴必须有触发轮的 transport，租约释放后不回退个人 bot。成员仍按原 allowMembers 与权限档，不新增本机任务/项目接管能力。
+- `status` / `list_tools` 发现连接与范围；`call_tool` 提供缓存频道/已知 thread、公开归档 thread 分页、历史、单条、服务器搜索、发送/回复、自己的表情与消息编辑/撤回、受授权本机文件发送。缓存清单/归档列表不冒充完整私有 thread 清单；私有 thread 仍要求平台可见与成员身份。聚合调用按次使用任务原权限流程，发现授权不成为后续发送授权；修改/撤回自己消息仍要求主人轮次。
+- 历史只在触发时读取同 lane 的最近一页，落入既有 `hook_group_messages` 窗口，受理后提交 `hook_group_context_cursors`。provider 按稳定账号、连接、bot/主人隔离，lane 独立；进程/adapter 重建从同一持久游标恢复，内存缓存另按当前账号代次隔离。未 @ 不启动模型，也不后台扫描全服。
+- 官方 [消息接口](https://docs.discord.com/developers/resources/message) 现已提供 Search Guild Messages；锁定的 discord.js 14.27 没有高级搜索 helper，薄适配使用同一 SDK 的固定 REST 端点与限流队列，始终限定 channel_id 并再次过滤原生 channel_id。`202/code=110000` 返回 `DISCORD_SEARCH_INDEXING` 与 retryAfter，不轮询；`429` 与权限错误结构化报告。MESSAGE_CONTENT 的 [HTTP 与 Gateway 边界](https://docs.discord.com/developers/events/gateway#http-restrictions) 分别检查，不把缺正文误报为完整历史。
+- 共享 runner 的成功收尾与明确 terminal error 文本都先调用 Discord 的 durable terminal sink，无论进度卡是否创建成功；流式卡只作进度。终稿文本先原子落在账号隔离 `discord-final-text/<连接摘要>.json` 再发送，原始触发 ID 的摘要立即成为“已完成模型轮次”墓碑，与分段送达状态分开。当前进程、连接恢复与重启只补未确认分段，不再调用模型；进行中崩溃不自动恢复执行。文字转为平台文本后分段，禁止隐式 @ 提醒。
+- 待送正文最多 256 份 / 总账 4 MiB，创建后 24 小时只结束补送并清正文；完成输入墓碑独立于投递期限，最多 4096 份，容量不足时先回收最老的无正文墓碑，不挤掉仍待送的正文。送达后立即清正文，送达 ID 最多保留 1 小时。读路径和恢复路径清理过期正文与回执；容量不足、原子写失败明确记录错误，不绕过出箱发送。状态工具可查原 lane 的 pending / uncertain，不读其它公开 lane 的记录。
+- 发起轮的账号、bot/主人、连接绑定与授权代次随输入锚定，await 后再核对。凭证仅检查文件元数据、不读回 Token。解绑、换 bot/主人/伙伴绑定或撤销目标 grant 使旧结果失效。目标 grant 代次作为宿主私有元数据随原白名单/连接文档原子保存，不进远端协议；撤销再授权仍推进代次，修改其它连接、其它服务器或不影响目标的频道选择不取消本目标积压。凭证文件代次仍仅归当前连接。
+- POST 前持久记 sending；收到分段回执后记 sent。断线前已确认的分段不重复，明确 429 尊重等待时间；POST 回执丢失或崩溃遗留 sending 转 uncertain，留待主人通过历史核实，**不自动重发**。Discord enforce_nonce 只覆盖几分钟，不承诺 24 小时 exactly-once。附件沿用即时发送且没有持久 pin，发送使用原触发的 receipt 租约，在取频道的 await 后、发送前仍复核成员资格与目标 grant 代次；不能宣称附件必达，普通进程重启恢复仅承诺文本补送。并发打开同一账号资料的多个宿主尚未做出箱互斥验收。
+
+实现与回归：`discord/context.ts`、`mcp-integrations/discordMcpServer.ts`、`discord/finalTextStorage.ts`、`packages/lizi-im/src/discord/{operations,finalTextOutbox}.ts` 及各自测试；共享终态接线由 `turnRunnerSendOutcome.test.ts` 验证。
+
 ## 入站历史窗口与附件（2026-11-07）
 
 历史选择不调用辅助模型：不做相关性二分类，也不扫描正文后删除消息或跳过附件。历史与引用仍是低信任数据；现有权限、平台受保护内容、账号/群/话题隔离保持不变。
@@ -315,7 +328,7 @@ Dispatcher 只接受宿主解析的专线 ID 和精确工作目录，忽略入�
 | 官方 Telegram | 桌面本地群窗口，加服务端提供的精确引用 | 现有签名图片读取链路与引用附件；不声称所有历史文件都有原件 |
 | 企业微信、钉钉 | 已收到的同群本地窗口；企业微信另保留平台提供的精确引用，钉钉目前无引用入口 | 历史池只有文件名时明确只提供记录，当前附件维持原链路 |
 | 微信 | 现有私聊连续对话；平台提供的引用按统一单条上限 | 不伪造群历史或无法读取的附件；本改动不扩展渠道接收范围 |
-| Discord | 私聊为现有连续对话；服务器频道 / thread 是各自的 lane 会话，只含主人 @ 机器人的消息，不收集未 @ 的频道正文，不做群窗口 | 只收到被 @ 的消息（无 MessageContent intent）；原件按统一附件通道，不伪造历史 |
+| Discord | 私聊沿用连续对话；服务器频道 / thread 在 @ 触发时只读同 lane 最近一页与精确引用，游标受理后推进 | 当前附件优先，引用优先于最近历史，所选历史原件走同一媒体/文件暂存通道；无权限、空正文、缺失原件与预算省略写入同一展示快照 |
 | Slack | 当前 thread 内按用户游标补增量 | 所选历史文件下载状态同时写入模型上下文与展示记录 |
 | X | 只沿当前帖的祖先回复链，近祖先优先；仍受原有付费读取预算约束 | 保留现有媒体读取能力，不扩大月度读取额度 |
 

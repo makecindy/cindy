@@ -542,6 +542,31 @@ describe('DiscordIM guild channel outbound after the allowlist or bot identity c
     expect(channel.send).toHaveBeenCalledTimes(1);
   });
 
+  // Public card edits must recheck after the cached lookup yields. Earlier tests
+  // revoked before the call or during a network fetch, missing this microtask. Tier: unit.
+  it.each(([
+    ['channel revoked', (h: Harness) => { h.access.config = { channels: [] }; }, 'not enabled'],
+    ['bot replaced', (h: Harness) => h.setAppId('app-2'), 'connection changed'],
+    ['owner changed', (h: Harness) => {
+      (h.im as unknown as { ownerUserId: string }).ownerUserId = '999999999999999999';
+    }, 'owner changed'],
+  ] as const).flatMap(([reason, change, error]) =>
+    (['interactive', 'markdown'] as const).map(kind => ({ reason, change, error, kind })),
+  ))('does not edit a cached $kind card when $reason before its continuation', async ({ kind, change, error }) => {
+    const h = await harness();
+    const channel = h.channels.get(CHANNEL)!;
+    const { messageId } = await h.im.sendInteractiveCard(LANE, { title: 'Allow?', body: 'rm', buttons: [] });
+
+    const pending = kind === 'interactive'
+      ? h.im.updateInteractiveCard(messageId, { title: 'Done', body: 'ok', buttons: [] })
+      : h.im.patchMarkdownCard(messageId, 'Done');
+    change(h);
+
+    await expect(pending).rejects.toThrow(error);
+    expect(channel.sent[0].message.edit).not.toHaveBeenCalled();
+    expect(channel.messages.fetch).not.toHaveBeenCalled();
+  });
+
   it('stops uploading images when the bot is replaced while the channel fetch is in flight', async () => {
     const h = await harness();
     const channel = h.channels.get(CHANNEL)!;

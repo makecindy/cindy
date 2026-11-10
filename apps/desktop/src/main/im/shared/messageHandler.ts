@@ -533,7 +533,7 @@ export function createMessageHandler(
         agentText: buildInboundMessageFacts({
           text: event.text,
           invoked: event.invoked,
-          hasReply: !!event.replyContext,
+          hasReply: !!deliveredReply,
           attachmentCount: event.attachments.length + (prepared?.contextAttachments?.length ?? 0),
           unavailable: [
             ...event.unsupported.map((entry) => `${entry.type}：${entry.label}`),

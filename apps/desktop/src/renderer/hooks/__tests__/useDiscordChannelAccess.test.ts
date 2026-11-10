@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 import { DiscordChannelAccessUnsupportedError, useDiscordChannelAccess } from '../useDiscordChannelAccess';
-import { setChannelSelected } from '@/lib/discordChannelAccess';
+import { setChannelSelected, setGuildEnabled } from '@/lib/discordChannelAccess';
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }),
@@ -127,6 +127,38 @@ describe('useDiscordChannelAccess queued saves', () => {
     expect(hook.result.current.access).toBeNull();
     expect(hook.result.current.guilds).toBeNull();
     expect(api.setChannelAccess).toHaveBeenCalledTimes(queued ? 1 : 0);
+  });
+
+  // Retry can overlap a completed save: an older snapshot must not restore a revoked guild
+  // or become the base of the next write. Existing tests only kept saves in flight. Tier: unit.
+  it('keeps a completed revocation when an earlier retry snapshot arrives later', async () => {
+    const initial = {
+      channels: [entry('21')],
+      guilds: [{ guildId: '11', enabled: true, mode: 'selected' as const }],
+    };
+    const revokedGuild = {
+      guildId: '11', enabled: false, mode: 'selected', savedChannels: [{ channelId: '21' }],
+    };
+    api.getChannelAccess.mockResolvedValue(initial);
+    api.setChannelAccess.mockRejectedValueOnce(new Error('save failed'));
+    api.setChannelAccess.mockImplementation(async (access: unknown) => access);
+    const hook = renderHook(() => useDiscordChannelAccess(true));
+    await waitFor(() => expect(hook.result.current.access).toEqual(initial));
+    act(() => hook.result.current.update((a) => setChannelSelected(a, '11', '22', true)));
+    await waitFor(() => expect(hook.result.current.error).toBe('save'));
+
+    const retry = deferred<typeof initial>();
+    api.getChannelAccess.mockImplementationOnce(() => retry.promise);
+    act(() => hook.result.current.reload());
+    await waitFor(() => expect(api.getChannelAccess).toHaveBeenCalledTimes(3));
+    await act(async () => hook.result.current.update((a) => setGuildEnabled(a, '11', false)));
+    expect(api.setChannelAccess).toHaveBeenCalledTimes(2);
+
+    await act(async () => retry.resolve(initial));
+    expect(hook.result.current.access).toEqual({ channels: [], guilds: [revokedGuild] });
+    await act(async () => hook.result.current.update((a) => setGuildEnabled(a, '12', true)));
+    expect(api.setChannelAccess.mock.calls[2][0].guilds).toContainEqual(revokedGuild);
+    expect(hook.result.current.loading).toBe(false);
   });
 
   it.each([false, true])('invalidates editing after unsupported save recovery (queued during recovery: %s)', async (queued) => {

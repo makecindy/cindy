@@ -188,6 +188,8 @@ export type ImOutputDriver =
   | {
       kind: 'rich-card';
       im: RichChannelIM;
+      /** Optional durable terminal sink; streaming remains a disposable progress surface. */
+      commitFinal?(output: ImFinalOutput & { inputMessageId: string; progressMessageId?: string }): Promise<void>;
     }
   | {
       kind: 'chunked-text';

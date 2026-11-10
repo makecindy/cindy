@@ -19,6 +19,8 @@ import { receivedHistoryScope } from '../shared/receivedImageHistory';
 import { claimLegacyImPath, ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { createDiscordChannelTurnPermissionPolicy } from './permissionPolicy';
 import { ui, PROCESSING_EMOJI } from './uiText';
+import { createDiscordContext } from './context';
+import { imChannelNoteSourceFromEvent } from '../shared/channelNote';
 
 /** 目录名 / 会话 id 里不放 lane 的 `/`。 */
 function pathSafe(value: string): string {
@@ -40,15 +42,10 @@ function ensureWorkingDir(appId: string, userId?: string): string {
   return dir;
 }
 
-/** 发言人显示名是平台可改字段(不可信输入): 去控制字符与换行防注入, 截断。 */
-function sanitizeSpeakerText(value: string): string {
-  // eslint-disable-next-line no-control-regex
-  return value.replace(/[\u0000-\u001f\u007f\u200b]/g, ' ').trim().slice(0, 64);
-}
-
 export interface DiscordAdapterOptions {
   /** 伙伴自有连接：主人私聊进伙伴主任务，频道 / thread 进各自群专线。 */
   companionBotId?: string;
+  connectionKey?: string;
 }
 
 export function buildDiscordAdapter(
@@ -60,11 +57,20 @@ export function buildDiscordAdapter(
   // 完全访问是主人对这条任务的明确授权: 只有主人触发的轮次取缔逐轮确认策略,
   // 对象身份记录这批 policy(WeakSet 不延长排队 policy 的生命周期)。
   const ownerTurnPolicies = new WeakSet<object>();
+  const prepareContext = createDiscordContext(discordIm, options.connectionKey);
   return {
     channel: 'discord',
     im: discordIm,
     getBotContextId: () => discordIm.botContextId,
-    output: { kind: 'rich-card', im: discordIm },
+    output: { kind: 'rich-card', im: discordIm, commitFinal: async result => {
+      const receipt = await discordIm.commitFinalText(result.inputMessageId, result.userId, result.text);
+      if (receipt.state !== 'delivered') return;
+      // Text is durable; media keeps the existing best-effort lifecycle (no persistent pin).
+      const media = discordIm.captureTools(result.userId, receipt.assertCurrent);
+      for (const file of result.mediaAbsPaths ?? []) await media.sendFile(result.userId, file);
+      receipt.assertCurrent();
+      if (result.progressMessageId) await discordIm.patchMarkdownCard(result.progressMessageId, '').catch(() => undefined);
+    } },
     config,
     ui,
     sessions: {
@@ -91,6 +97,21 @@ export function buildDiscordAdapter(
     processingEmoji: PROCESSING_EMOJI,
     queuedEmoji: '👀',
     buildVendorOptions: (userId) => ({ discordChatId: userId, source: 'discord' }),
+    channelNoteSourceFor: event => ({
+      ...imChannelNoteSourceFromEvent(event),
+      toolsHint: '本轮可使用 cindy_discord 的 status / list_tools / call_tool；频道和 thread 工具仅限当前 lane。',
+    }),
+    channelToolScopeFor: event => {
+      const requesterIsOwner = event.speaker ? event.speaker.isOwner : event.senderId === discordIm.getOwnerUserId();
+      const origin = discordIm.captureTools(event.senderId, undefined, requesterIsOwner);
+      return {
+        channel: 'discord', im: discordIm, botId: event.contextId,
+        laneUserId: event.senderId, chatId: event.chatId ?? event.senderId,
+        chatKind: decodeDiscordLaneUserId(event.senderId) ? 'group' : 'direct', requesterIsOwner,
+        triggerMessageId: event.messageId.split('|').at(-1) ?? '', companion,
+        assertCurrent: origin.assertCurrent,
+      };
+    },
     // 伙伴自有连接: 只有填进去的主人能私聊(传输层丢弃其他人), 主人私聊进伙伴主任务;
     // 仍按 id 判一次, 不靠「传输层一定挡住」。
     // 频道 / thread 进入 group 专线，不能落到主人私聊主任务。
@@ -126,10 +147,7 @@ export function buildDiscordAdapter(
     // 频道里多人场景由发言人行写明谁在说话(含主人标记); 私聊保持原样。
     prepareAgentTurnText: async (event) => {
       if (!event.speaker || !decodeDiscordLaneUserId(event.senderId)) return null;
-      const name = sanitizeSpeakerText(event.speaker.name) || 'user';
-      return {
-        agentText: `[发言人] ${name} · id:${event.speaker.id}${event.speaker.isOwner ? ' · 主人' : ''}\n${event.text}`,
-      };
+      return prepareContext(event);
     },
   };
 }

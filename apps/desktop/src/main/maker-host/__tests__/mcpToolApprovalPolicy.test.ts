@@ -10,6 +10,11 @@ import {
 afterEach(() => setGhostToolApprovalResolver(null));
 
 describe('desktop Claude read-only allowlist', () => {
+  // unit: the real approval policy must not reuse a read grant for a later external Discord write.
+  it('keeps Discord discovery quiet and multiplexed operations on per-call approval', () => {
+    for (const toolName of ['status', 'list_tools']) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName })).toBe('auto-approve');
+    for (const toolName of ['call_tool', undefined]) expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_discord', toolName, toolParams: { name: 'send_message', args: { text: 'external' } } })).toBe('prompt-each-time');
+  });
   // PR #9145: removing redundant Host consent must not let trusted MCP servers
   // bypass the task's normal review. Public policy entry, unit tier; both dispatch routes.
   it.each([

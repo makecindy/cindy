@@ -1,4 +1,6 @@
 import { createIMessageMcpServer } from './imessageMcpServer';
+import { createDiscordMcpServer } from './discordMcpServer';
+import { DiscordOperationError } from '@cindy/im';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
@@ -68,7 +70,7 @@ import { inspectPdf } from '../doc-tools/pdfInspector.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.js';
 import { getComputerMcpDeps } from './computer.js';
-import { feishuIm, wechatIm } from '../im';
+import { discordIm, feishuIm, wechatIm } from '../im';
 import { getBotFeishuTransport } from '../im/shared/botImConnectionRuntime';
 import { createFeishuTransportResolver } from './feishuTransportRouting';
 import { readChannelToolScope } from '../im/shared/channelToolScope';
@@ -1713,6 +1715,43 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       || ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir),
     toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_imessage',
       instance: createIMessageMcpServer({ getSessionContext: () => resolveLiziMcpSessionContext(ctx) }) }),
+  });
+
+  gated.push({
+    name: 'cindy_discord',
+    capability: { title: 'Discord', description: 'Use the already configured Discord bot: allowed channels and threads, history, search, messages, reactions and attachments.', source: 'builtin', discovery: { tool: 'list_tools' } },
+    // Stable for all three harnesses; authorization is checked at every invocation.
+    isEnabled: () => true,
+    toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_discord', instance: createDiscordMcpServer({
+      getSessionContext: () => resolveLiziMcpSessionContext(ctx),
+      personalAccess: async context => {
+        const db = tryGetDbClient();
+        const owner = activeOwnerScopeKey();
+        const sessionId = context.sessionId;
+        if (!db || !sessionId || !context.sessionInstanceId) throw new DiscordOperationError('DISCORD_CALLER_UNAVAILABLE');
+        const input = getTaskActionInputState(sessionId);
+        const assertCurrent = () => {
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner || db !== tryGetDbClient() ||
+              getTaskActionSession(sessionId)?.instanceId !== context.sessionInstanceId ||
+              getTaskActionInputState(sessionId).boundary !== input.boundary || !isActiveInputAccountScoped(sessionId)) {
+            throw new DiscordOperationError('DISCORD_CALLER_CHANGED');
+          }
+        };
+        assertCurrent();
+        const row = await db.queryOne<{ source: string; status: string; botId: string | null }>(
+          'SELECT s.source, s.status, b.bot_id AS botId FROM sessions s LEFT JOIN bot_session_links b ON b.session_id = s.id WHERE s.id = ? LIMIT 1', [sessionId]);
+        assertCurrent();
+        if (!row || row.botId || !['active', 'archived'].includes(row.status) || !['desktop', 'scheduler', 'plugin', 'cindy-make', 'learn'].includes(row.source)) {
+          throw new DiscordOperationError('DISCORD_TRIGGER_TRANSPORT_REQUIRED');
+        }
+        return { im: discordIm, assertCurrent };
+      },
+      authorizeFile: async (context, file) => (await authorizeDesktopSessionPath({
+        sessionId: context.sessionId, sessionInstanceId: context.sessionInstanceId,
+        workingDir: context.workingDir ?? '', remoteHostId: context.remoteHostId,
+        path: file, toolName: 'cindy_discord.send_file', operation: 'read',
+      }, deps.getLiveSessionGrantState)).allowed,
+    }) }),
   });
 
   // cindy_telegram_bot: 个人 / 伙伴 Telegram bot 轮次里的 Bot API 直通。只挂在带 Telegram 渠道

@@ -3803,7 +3803,16 @@ export function createTurnRunner(
       await ensureStreamingHandle(turn);
     }
     const finalView = composeStreamingView(turn);
-    if (turn.streamingHandle) {
+    if (output.kind === 'rich-card' && output.commitFinal && turn.userMessageId) {
+      turn.streamingHandle?.close();
+      try {
+        await output.commitFinal({ userId, text: finalView, terminal: turn.terminalKind,
+          inputMessageId: turn.userMessageId, progressMessageId: turn.streamingHandle?.messageId,
+          mediaAbsPaths: turn.mediaAbsPaths, allowedFileRoots: turn.allowedFileRoots, threadTs: turn.scopeKey });
+      } catch (error) {
+        log.warn(`[${channel}/turn] durable final output failed: ${error instanceof Error ? error.message : 'unknown'}`);
+      }
+    } else if (turn.streamingHandle) {
       await finalizeTurnStream(turn, finalView.trim() ? finalView : '');
     } else if (!finalView.trim() && turn.mediaAbsPaths.length === 0) {
       try {
@@ -3921,7 +3930,18 @@ export function createTurnRunner(
         supportsModelCommand: richIm !== null,
       } : undefined,
     );
-    if (turn?.streamingHandle) {
+    if (output.kind === 'rich-card' && output.commitFinal && turn.userMessageId) {
+      const view = composeStreamingView(turn, true);
+      const text = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
+      turn.streamingHandle?.close();
+      try {
+        await output.commitFinal({ userId, text, terminal: 'error', errorCode: turn.terminalErrorCode ?? 'agent_turn_error',
+          inputMessageId: turn.userMessageId, progressMessageId: turn.streamingHandle?.messageId,
+          mediaAbsPaths: turn.mediaAbsPaths, allowedFileRoots: turn.allowedFileRoots, threadTs: turn.scopeKey });
+      } catch (error) {
+        log.warn(`[${channel}/turn] durable final output failed: ${error instanceof Error ? error.message : 'unknown'}`);
+      }
+    } else if (turn?.streamingHandle) {
       const view = composeStreamingView(turn, true);
       const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
       await finalizeTurnStream(turn, body);
