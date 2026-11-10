@@ -666,18 +666,23 @@ describe("sender source labels", () => {
 });
 
 describe("IM source card", () => {
-  it("renders local IM rows as a left-aligned Cindy card with the localized platform name", () => {
+  // #9266 unit/jsdom regression: render a real local iMessage row through the
+  // model and MessageRenderer; the existing Feishu case missed this platform.
+  it.each([
+    ["feishu", "飞书"],
+    ["imessage", "iMessage"],
+  ])("renders local %s rows as a left-aligned Cindy card", (im, platform) => {
     const html = render([
       msg("im", "clean text", {
         imSource: {
-          im: "feishu",
+          im,
           userText: "clean text",
           contentFormat: "user-text",
         },
       }),
     ]);
     expect(html).toContain("message.hookSource");
-    expect(html).toContain("Cindy · 来自 飞书");
+    expect(html).toContain(`Cindy · 来自 ${platform}`);
     expect(html).toContain("message.agentBubble");
     expect(html).not.toContain("message.userBubble");
   });
@@ -694,7 +699,7 @@ describe("IM source card", () => {
         first,
         msg("im", "clean text", {
           imSource: {
-            im: "slack",
+            im: "imessage",
             userText: "clean text",
             contentFormat: "user-text",
           },
