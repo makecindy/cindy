@@ -10,6 +10,7 @@ import { listProjectAliases, upsertProjectAlias } from '../localDb/ipc/projectAl
 import { recentWorkdirs, sessions } from '../localDb/schema.js';
 import { loadSidebarSettingsSnapshot, setLocalProjectHidden } from '../sidebarSettingsStore.js';
 import { projectKeyComparisonKey } from '../../shared/projectKeys.js';
+import { workingDirEquals } from '../../shared/workingDir.js';
 import type { ProjectsRootState } from '../../shared/projectsRoot.js';
 import { readProjectsRootDirectory } from '../projects-root-settings.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
@@ -87,9 +88,11 @@ async function nearestVisibleProject(
       projectKeyComparisonKey(key, process.platform),
     ),
   );
+  // Walk up the real ancestors and compare exact paths. The grouping identity used elsewhere
+  // folds sibling worktrees into their repository, which would place the task in a project
+  // that does not contain the directory.
   for (let directory = path.normalize(workingDir); ; ) {
-    const key = identity(directory);
-    const match = key === null ? undefined : rows.find((row) => identity(row.path) === key);
+    const match = rows.find((row) => workingDirEquals(row.path, directory));
     if (match && !hidden.has(identity(match.path))) {
       // Same availability rules as an explicit project_path; a failing candidate is skipped.
       const checked = await validateExistingLocalProjectDirectory(match.path).catch(() => null);
