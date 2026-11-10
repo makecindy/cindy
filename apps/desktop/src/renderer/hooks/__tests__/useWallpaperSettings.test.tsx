@@ -447,6 +447,7 @@ describe('application wallpaper lifecycle', () => {
   it('keeps the original Windows backdrop at 0% desktop transparency', () => {
     vi.stubGlobal('electronAPI', {
       platform: 'win32',
+      osRelease: '10.0.22631',
       appearanceSettings: {
         getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'none' }),
         setPatch: vi.fn().mockResolvedValue(undefined),

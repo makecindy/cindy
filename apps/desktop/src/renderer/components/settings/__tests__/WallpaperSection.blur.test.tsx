@@ -184,6 +184,29 @@ describe('wallpaper blur gesture persistence', () => {
       expect(setPatch).not.toHaveBeenCalled();
     },
   );
+  // 2026-11-10 Windows report: desktop transparency with blur 0 showed the desktop
+  // unblurred behind the sidebar. Windows uses fixed-strength Acrylic, so its blur
+  // slider is unavailable; systems without that material have no desktop to reveal.
+  it.each([
+    ['10.0.22631', true],
+    ['10.0.19045', false],
+  ] as const)('Windows %s desktop controls follow the native material', (osRelease, supported) => {
+    const api = (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI;
+    vi.stubGlobal('electronAPI', { ...api, platform: 'win32', osRelease });
+    saved = { ...saved, wallpaperId: 'none', desktopVisibility: 0.5, wallpaperBlur: 0 };
+    render(view());
+    const root = document.documentElement;
+    const desktopBlur = screen.queryByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' });
+    if (!supported) {
+      expect(desktopBlur).toBeNull();
+      expect(screen.queryByRole('slider', { name: 'settings.appearance.wallpaper.desktopVisibilityLabel' })).toBeNull();
+      expect(root.dataset.desktopBackground).toBeUndefined();
+      return;
+    }
+    expect(root.dataset.desktopBackground).toBe('true');
+    expect(desktopBlur!.closest('.cindy-slider')!.hasAttribute('data-disabled')).toBe(true);
+    expect(screen.getByText('settings.appearance.wallpaper.desktopBlurSystemHint')).toBeTruthy();
+  });
   it('previews all intermediate values and saves only the released value', async () => {
     render(view());
     const slider = track();

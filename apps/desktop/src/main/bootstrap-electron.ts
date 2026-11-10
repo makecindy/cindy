@@ -4402,7 +4402,10 @@ const createWindow = () => {
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
-    transparent: true,
+    // Only macOS needs a transparent window for its native material. On Windows
+    // Electron drops the thick frame of transparent windows (resize/snap); Acrylic
+    // composes without it, and other systems have no desktop material to reveal.
+    ...(process.platform === 'darwin' ? { transparent: true } : {}),
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
           backgroundMaterial: winBackdropConfig.backgroundMaterial,

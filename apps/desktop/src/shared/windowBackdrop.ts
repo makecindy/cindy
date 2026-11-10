@@ -9,6 +9,25 @@ export const CINDY_ACRYLIC_WINDOW_BACKING = {
 } as const;
 // END GENERATED DS-8: window-backing
 
+/** Electron applies Windows system backdrops only from Windows 11 22H2 (build 22621). */
+const WINDOWS_SYSTEM_BACKDROP_MIN_BUILD = 22621;
+
+/**
+ * Whether a window can reveal the desktop behind it with a native material: macOS
+ * always, Windows only where whole-window Acrylic is available. Elsewhere a clear
+ * window would show the desktop unblurred behind the sidebar, so callers keep it opaque.
+ * `osRelease` is `os.release()` / `process.getSystemVersion()` (e.g. `10.0.22631`).
+ */
+export function supportsDesktopBackdrop(
+  platform: string | undefined,
+  osRelease: string | null | undefined,
+): boolean {
+  if (platform === 'darwin') return true;
+  if (platform !== 'win32' || !osRelease) return false;
+  const build = Number.parseInt(osRelease.trim().split('.')[2] ?? '', 10);
+  return Number.isFinite(build) && build >= WINDOWS_SYSTEM_BACKDROP_MIN_BUILD;
+}
+
 export const WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL =
   'window-backdrop-material:changed';
 

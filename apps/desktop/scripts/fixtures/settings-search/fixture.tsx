@@ -36,7 +36,9 @@ void mountPage({
           : forbid('appearance.setPatch'),
       },
     } : {}),
-    platform: ctx.data.tab === 'agent-island' ? 'darwin' : ctx.platform, osRelease: '24.0.0',
+    platform: ctx.data.tab === 'agent-island' ? 'darwin' : ctx.platform,
+    // A Windows 11 22H2+ build, so win32 runs show the Acrylic desktop controls.
+    osRelease: ctx.platform === 'win32' ? '10.0.22631' : '24.0.0',
     agentIsland: { getDisplayOptions: read([]) },
     appVersion: '0.0.0', appDisplayVersion: 'UI fixture', supportsBetaUpdateChannel: true,
     windowBehavior: { getWindowsCloseBehavior: read('minimize'), getLinuxCloseBehavior: read('minimize') },

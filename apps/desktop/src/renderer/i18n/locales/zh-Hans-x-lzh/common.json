@@ -2264,6 +2264,7 @@
         "desktopVisibilityHint": "透见 Cindy 后之桌面与窗口，文字控件仍清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗后桌面；0 则关闭，值愈大则愈朦胧。系统若不可调，仍用预设之效。",
+        "desktopBlurSystemHint": "Windows 用系统磨砂之效，浓淡由系统定之；侧栏常保磨砂。",
         "blurLabel": "壁纸朦胧",
         "blurHint": "仅朦胧壁纸，0 为阖。动态壁纸启朦胧则增显卡之负。",
         "motionLabel": "展示之式",

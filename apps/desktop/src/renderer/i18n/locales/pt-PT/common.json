@@ -2332,6 +2332,7 @@
         "desktopVisibilityHint": "Mostra o ambiente de trabalho e as janelas atrás da Cindy. O texto e os controlos mantêm-se nítidos.",
         "desktopBlurLabel": "Desfoque do ambiente de trabalho",
         "desktopBlurHint": "Desfoca o ambiente de trabalho atrás da janela. 0 desativa; valores maiores aumentam o desfoque. Sistemas sem ajuste de intensidade usam o efeito predefinido.",
+        "desktopBlurSystemHint": "O Windows usa o efeito fosco do sistema com intensidade fixa. A barra lateral mantém-se sempre fosca.",
         "blurLabel": "Desfoque da imagem de fundo",
         "blurHint": "Desfocar apenas a imagem de fundo. Defina como 0 para desativar. Desfocar fundos animados aumenta a utilização da GPU.",
         "motionLabel": "Apresentação",

@@ -2294,6 +2294,7 @@
         "desktopVisibilityHint": "Zeigt den Desktop und Fenster hinter Cindy. Text und Bedienelemente bleiben klar.",
         "desktopBlurLabel": "Desktop-Unschärfe",
         "desktopBlurHint": "Verwischt den Desktop hinter dem Fenster. 0 schaltet den Effekt aus, höhere Werte verstärken ihn. Systeme ohne einstellbare Stärke verwenden ihren Standardeffekt.",
+        "desktopBlurSystemHint": "Windows verwendet seinen System-Milchglaseffekt mit fester Stärke. Die Seitenleiste bleibt immer mattiert.",
         "blurLabel": "Unschärfe des Hintergrundbilds",
         "blurHint": "Nur das Hintergrundbild weichzeichnen. Zum Deaktivieren auf 0 setzen. Das Weichzeichnen animierter Hintergrundbilder erhöht die GPU-Auslastung.",
         "motionLabel": "Anzeige",
