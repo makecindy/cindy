@@ -30,6 +30,12 @@ describe('classifyBackgroundCommand', () => {
     ['nohup pnpm dev > dev.log 2>&1 & pnpm test', 'work'],
     ['pnpm dev &', 'work'],
     ['timeout 60 pnpm dev', 'work'],
+    // 控制流和命令组：执行顺序无法静态判断，整条命令不猜，按工作（范围声明）
+    ['if false; then\npnpm dev\nfi\npnpm test', 'work'],
+    ['while true; do pnpm dev; done', 'work'],
+    ['for p in a b; do pnpm --filter $p dev; done', 'work'],
+    ['(cd apps/web && pnpm dev)', 'work'],
+    ['pnpm test && { pnpm dev; }', 'work'],
     // heredoc 正文是数据，不是命令
     ["cat <<'EOF' > /tmp/example-script\npnpm dev\nEOF\npnpm test", 'work'],
     ['cat <<-EOF > run.sh\n\tpnpm dev\n\tEOF\npnpm test', 'work'],

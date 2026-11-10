@@ -20,10 +20,11 @@
  *     （`cat <<'EOF' > script` … `EOF`）是数据，不是命令。
  *  4. 单一判断入口：splitCommandSegments 拆段，isLongLivedCommand 汇总，isLongLivedSegment
  *     判单段；shell -c 递归复用同一套，不另写第二份。
- *  5. 看不懂的结构（子 shell、`$(…)`、控制流）不猜，按 work。外层命令不认识（`nice`、`ionice`、
+ *  5. 看不懂的结构（子 shell / 命令组、`if`/`while`/`for`/`case` 等控制流）不猜，整条命令按 work：
+ *     哪个分支会执行、循环几次都无从得知，不能把其中某一段单拿出来判断。外层命令不认识（`nice`、`ionice`、
  *     `timeout` 等）同理：不让内层参数（`--watch`）越过它直接决定结果。
  *
- * 范围（有意不处理，按 work）：子 shell / 命令组 / `$(…)`、`while`/`for` 等控制流、`xargs`、
+ * 范围（有意不处理，按 work）：子 shell / 命令组、控制流（整条命令）、`$(…)`、`xargs`、
  * shell 别名与函数、不在下面各表里的程序。这些写法启动的服务会多亮一段时间（最多到 SDK 的后台
  * 命令超时），不会让工作被误显示为已结束。新增判断必须是某条不变量的缺口，不为单个写法加特例。
  */
@@ -123,6 +124,8 @@ function isLongLivedCommand(command: string, depth: number): boolean {
   const segments = splitCommandSegments(command);
   // 有 `wait` 才会等后台作业；没有时，单个 `&` 结尾的段不决定命令的存活时间。
   const waitsForJobs = segments.some((segment) => tokenize(segment.text)[0] === 'wait');
+  // 控制流和命令组：执行哪些段取决于运行时，整条命令不猜，按工作。
+  if (segments.some((segment) => startsUnparsedStructure(tokenize(segment.text)[0]))) return false;
   for (const segment of segments) {
     if (segment.background && !waitsForJobs) continue;
     if (isLongLivedSegment(tokenize(segment.text), depth)) return true;
@@ -220,6 +223,17 @@ function skipHeredocBody(command: string, start: number, delimiter: string): num
     lineStart = lineEnd + 1;
   }
   return command.length;
+}
+
+/** 控制流关键字与命令组/子 shell 的起止符：出现在段首就说明这条命令里的执行顺序无法静态判断。 */
+const CONTROL_FLOW_WORDS = new Set([
+  'if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'for', 'do', 'done', 'case', 'esac',
+  'select', 'function', '{', '}',
+]);
+
+function startsUnparsedStructure(firstToken: string | undefined): boolean {
+  if (firstToken === undefined) return false;
+  return CONTROL_FLOW_WORDS.has(firstToken) || firstToken.startsWith('(') || firstToken.startsWith(')');
 }
 
 function tokenize(segment: string): string[] {
