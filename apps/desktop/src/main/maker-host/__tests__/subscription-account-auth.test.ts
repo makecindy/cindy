@@ -36,7 +36,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
     },
   },
 }));
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   runGrokOAuthLogin: (...args: unknown[]) => state.login(...args),
   getGrokAccessToken: async (id: string) => JSON.parse(state.secrets.get(`${state.scope}:${id}`) ?? 'null')?.access_token,
   peekGrokAccessToken: (id: string) => JSON.parse(state.secrets.get(`${state.scope}:${id}`) ?? 'null')?.access_token ?? null,
@@ -46,7 +46,7 @@ vi.mock('../grok-oauth-login.js', () => ({
   logoutGrok: (id: string) => { state.secrets.delete(`${state.scope}:${id}`); },
   resetGrokOAuthMemoryCache: vi.fn(),
 }));
-vi.mock('../outbound-fetch.js', () => ({ outboundFetch: (...args: unknown[]) => state.fetch(...args) }));
+vi.mock('../outbound-fetch.desktop.js', () => ({ outboundFetch: (...args: unknown[]) => state.fetch(...args) }));
 import {
   loginSubscriptionAccount,
   cancelSubscriptionAccountLogin,

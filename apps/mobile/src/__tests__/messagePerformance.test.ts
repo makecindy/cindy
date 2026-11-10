@@ -1404,3 +1404,28 @@ describe('message render performance', () => {
     expect(result.items.some((item) => item.type === 'tool_media')).toBe(false);
   });
 });
+
+// Question lifetime changes without a message patch must invalidate the stable history prefix.
+it('refreshes cached history when an unanswered question leaves the live queue', () => {
+  const messages = [
+    message({ id: 'u', role: 'user', content: 'start', createdAt: timestamp(1) }),
+    message({ id: 'ask', role: 'ask_user', content: { requestId: 'q', status: 'pending',
+      questions: [{ question: 'Still needed?' }] }, createdAt: timestamp(2) }),
+    message({ id: 'done', role: 'assistant', content: 'Done', agentMeta: { turnCompleted: true }, createdAt: timestamp(3) }),
+    message({ id: 'next', role: 'user', content: 'next', createdAt: timestamp(4) }),
+    message({ id: 'stream', role: 'assistant', content: 'Working', agentMeta: { isStreaming: true }, createdAt: timestamp(5) }),
+  ];
+  const prefixCache = { current: null as ReturnType<typeof buildMobileStreamingRenderWindow>['prefix'] };
+  const messageStructureToken = {};
+  const build = (pendingQuestionIds: Set<string>) => buildMobileStreamingRenderWindow({
+    cacheKey: 'en', messages, messageStructureToken, prefixCache,
+    options: { isSessionStreaming: true, sessionId: 's1', pendingQuestionIds },
+  });
+  const before = build(new Set(['q']));
+  expect(before.prefix).not.toBeNull();
+  const after = build(new Set());
+  expect(after.items).toEqual(buildMobileMessageRenderItems(messages, {
+    isSessionStreaming: true, sessionId: 's1', pendingQuestionIds: new Set(),
+  }));
+  expect(after.items).not.toEqual(before.items);
+});

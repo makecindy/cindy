@@ -10,7 +10,7 @@ import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
-import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
+import { providerDisplayName } from '@/lib/providerDisplayName';
 import { modelSupplierLabel } from '@cindy/model-providers';
 import type { Effort } from '@/lib/userPreferences.types';
 
@@ -356,11 +356,11 @@ export function UnifiedModelRow({
         !measurementOnly && (
           <ModelSourceDetails
             providerId={entry.providerId}
-            label={providerAccountLabel(
-              sourceDisplayLabel ?? sourceLabel,
+            label={sourceDisplayLabel ?? sourceLabel}
+            accountIdentity={
               provider?.openAiAccount?.identity?.trim() ||
-                provider?.subscriptionAccount?.identity?.trim(),
-            )}
+                provider?.subscriptionAccount?.identity?.trim()
+            }
             modelId={config.wireModelId ?? entry.modelId}
           />
         )

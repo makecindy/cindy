@@ -554,6 +554,7 @@ export function createOrcaMcpServer(
     getSessionContext,
     sendToWorker: deps.sendToWorker,
     interruptWorker: deps.interruptWorker,
+    listWorkerQueuedMessages: deps.listWorkerQueuedMessages,
   });
   registerGetWorkerQueueStatusTool(sink, {
     getSessionContext,

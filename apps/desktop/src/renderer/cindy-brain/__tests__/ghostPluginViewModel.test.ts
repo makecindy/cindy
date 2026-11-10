@@ -288,7 +288,7 @@ describe('ghostPluginViewModel', () => {
       canUse: true,
     });
     const detail = toGhostPluginDetail(ghost, presentation);
-    expect(detail.author).toBe('Xindong Design');
+    expect(detail.author).toBeNull();
     expect(detail.permissions.map((item) => item.kind)).toEqual([
       'network',
       'network',

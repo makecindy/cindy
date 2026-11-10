@@ -40,15 +40,25 @@ export class RecoveryJournal {
     durableWrite(path.join(path.dirname(this.file), 'known-good.json'), good);
     durableWrite(this.file, s); return s;
   }
-  begin(candidate, evidence) {
+  begin(candidate, evidence, manual = false) {
     const s = this.read();
     assert(s.phase === 'stable', 'Finish recovery before another update');
     assert(candidate.id !== s.good.id && !s.rejected.some(r => r.id === candidate.id), 'Candidate is unchanged or rejected');
-    assert(evidence?.compatible && evidence?.prepared && evidence?.idle && evidence?.stopped, 'Candidate must be prepared, compatible, idle and old process fully stopped');
+    assert(evidence?.prepared && evidence?.stopped && (manual
+      ? evidence?.manualRequested && evidence?.smokeVerified && evidence?.profileVerified
+      : evidence?.compatible && evidence?.idle), 'Candidate must be prepared with verified shutdown and activation evidence');
     assert(candidate.directory !== s.good.directory, 'Candidate must use a separate directory');
-    const next = { ...s, phase: 'trial', selected: candidate, generation: this.nonce(), startedAt: this.now(), readyAt: null };
+    const next = { ...s, phase: 'trial', rollbackPolicy: manual ? 'manual' : 'automatic', selected: candidate, generation: this.nonce(), startedAt: this.now(), readyAt: null };
     // One durable pointer/journal commit: interruption selects recovery, never an unrecorded candidate.
     durableWrite(this.file, next); return next;
+  }
+  beginManual(candidate, evidence) {
+    const state = this.begin(candidate, evidence, true);
+    // A corrupt main journal must not make the independent rescue receipt
+    // silently roll old code onto data touched by a manual candidate.
+    durableWrite(path.join(path.dirname(this.file), 'known-good.json'),
+      { ...state.good, rollbackSafe: false, manualCandidate: candidate.id });
+    return state;
   }
   observe({ generation, id, healthy, processAlive }, probationMs) {
     const s = this.read();
@@ -67,7 +77,8 @@ export class RecoveryJournal {
     const s = this.read();
     assert(s.phase === 'trial', 'Only an uncommitted trial can be rejected');
     const rejected = [...s.rejected.filter(r => r.id !== s.selected.id), { id: s.selected.id, reason, at: this.now() }];
-    const next = { ...s, phase: 'recovering', failed: s.selected, selected: s.good, generation: this.nonce(), rejected };
+    const next = { ...s, phase: s.rollbackPolicy === 'manual' ? 'blocked' : 'recovering', failed: s.selected, selected: s.good, generation: this.nonce(), rejected };
+    if (s.rollbackPolicy === 'manual') next.error = 'Manual upgrade failed; data compatibility is unknown. Inspect before any code rollback.';
     durableWrite(this.file, next); return next;
   }
   recoverInterrupted() {

@@ -10,9 +10,8 @@ import { errorPayload, okPayload } from './_payload.js';
  * of their devices; values never come back here. A sign-in QR code is
  * handed to the owner to scan. Buttons and options stay with the agent.
  *
- * The model reaches this through `ask_owner` (kind fill / scan). The original
- * `request_input_handoff` name stays callable for saved calls but is no longer
- * listed, so the model sees one way to ask the owner.
+ * Independent of question tools: the model supplies a window or a screenshot
+ * containing a sign-in QR code. Both use the existing host handoff lifecycle.
  */
 
 export interface InputHandoffToolRequest {
@@ -42,12 +41,16 @@ export interface InputHandoffCallbacks {
   startImage?(context: LiziMcpSessionContext, request: InputHandoffImageRequest): Promise<InputHandoffToolResult>;
 }
 
+export const INPUT_HANDOFF_TOOL_NAME = 'request_input_handoff';
+
 const DESCRIPTION =
   'Hand the owner what you must never see on this computer\'s screen: a sign-in, or a password, API key, token or verification code. '
-  + 'Anything else the owner can tell you (an email address, a name) is not for this: ask in your reply and enter it yourself. '
+  + 'For non-secret questions (an email address, a name, a choice), use your question tools. '
   + 'The owner does a sign-in on the window itself; for other secret fields Cindy shows just those fields, types the answer in and confirms with the page\'s own main button. '
   + 'It follows the flow across windows and browsers while fields keep appearing. '
   + 'A sign-in QR code on screen is handed to the owner to scan, and the task continues once they are signed in. '
+  + 'Pass `target` for a window on this computer, or `image` for a fresh screenshot containing a sign-in QR code '
+  + '(for example a simulator inside Cindy). Never target the Cindy window itself. '
   + 'Buttons, options and consent pages are yours to handle: a screen with neither a field to type nor a sign-in QR code ends at once with failure nothing_to_fill. '
   + 'Do not type, click or read secrets in that window yourself while it is pending. '
   + 'Returns a pending receipt; a hidden "[Input handoff ended]" message continues this task later. '
@@ -93,7 +96,7 @@ export function toHandoffCompleteWhen(
 }
 
 /**
- * Shared by `ask_owner` and the legacy name: the caller checks, the start, and
+ * Shared host admission: the caller checks, the start, and
  * the receipt. Failures the host can see right away come back here, not later.
  */
 export async function runInputHandoff(
@@ -126,25 +129,37 @@ export function registerInputHandoffTool(
   callbacks: InputHandoffCallbacks,
 ): void {
   registry.register({
-    name: 'request_input_handoff',
+    name: INPUT_HANDOFF_TOOL_NAME,
     category: 'auth',
-    hidden: true,
     description: DESCRIPTION,
     inputShape: {
       purpose: HANDOFF_PURPOSE.describe('One short sentence for the owner, e.g. "Sign in to Example to continue setup".'),
       note: HANDOFF_NOTE.optional().describe('Optional extra context for the owner, e.g. "I do not know which sign-in option your organization uses". Shown labelled as from you.'),
-      target: HANDOFF_TARGET.describe('The window that shows the step. Omit everything to use the frontmost app.'),
+      target: HANDOFF_TARGET.optional().describe('The window that shows the step. Pass {} for the frontmost app. Mutually exclusive with image.'),
+      image: STRING(4096).optional().describe('A fresh screenshot containing the sign-in QR code: local image path (relative to the task folder or absolute) or cindy-media:// URL. Mutually exclusive with target; completion is confirmed by the owner.'),
       complete_when: HANDOFF_COMPLETE_WHEN.optional().describe('Optional signs that the step is done. Cindy also detects completion itself.'),
       timeout_minutes: HANDOFF_TIMEOUT.optional(),
     },
-    handler: async ({ purpose, note, target, complete_when, timeout_minutes }) => {
+    handler: async ({ purpose, note, target, image, complete_when, timeout_minutes }) => {
       const context = getContext();
-      return runInputHandoff(context, () => callbacks.start(context, {
+      if (!!target === !!image)
+        return errorPayload('INVALID_ARGS', 'Pass exactly one of `target` (a window) or `image` (a screenshot containing the sign-in QR code).');
+      const common = {
         purpose,
         ...(note ? { note } : {}),
-        target: toHandoffTarget(target),
-        ...toHandoffCompleteWhen(complete_when),
         ...(timeout_minutes ? { timeoutMinutes: timeout_minutes } : {}),
+      };
+      if (image) {
+        if (complete_when)
+          return errorPayload('INVALID_ARGS', '`complete_when` observes a window and cannot be used with a screenshot. The owner confirms completion.');
+        if (!callbacks.startImage)
+          return errorPayload('CAPABILITY_NOT_AVAILABLE', 'Scanning from a picture is not available here; pass the window as `target`.');
+        return runInputHandoff(context, () => callbacks.startImage!(context, { ...common, image }));
+      }
+      return runInputHandoff(context, () => callbacks.start(context, {
+        ...common,
+        target: toHandoffTarget(target!),
+        ...toHandoffCompleteWhen(complete_when),
       }));
     },
   });

@@ -44,7 +44,7 @@ import {
   interruptedTurnResumeDelayMs,
   type InterruptedTurnErrorSignals,
 } from '../maker-ipc/interruptedTurnAutoResume.js';
-import type { ProviderGroupBinding, ProviderGroupRef } from './bindings.js';
+import type { ProviderGroupBinding, ProviderGroupRef } from './bindings.desktop.js';
 import type { ProviderGroupDirectory } from './directory.js';
 import type { ProviderGroupGuestSwitch } from './guestSwitch.js';
 import { isProviderGroupLocalCapacityError } from './localCapacity.js';
@@ -216,6 +216,8 @@ export interface ProviderGroupServiceDeps {
   readAutoRebalance?(sessionId: string): boolean;
   /** 记下这个任务以后自动换号。 */
   writeAutoRebalance?(sessionId: string): Promise<void>;
+  readRebalanceDisabled?(sessionId: string): boolean;
+  writeRebalanceEnabled?(sessionId: string, enabled: boolean): Promise<void>;
   /**
    * 分享的人这边的「需要换一台」凭证(guestSwitch.ts)；不提供 = 分享来的供应商出错时一律交回原有处理。
    */
@@ -323,6 +325,7 @@ export interface ProviderGroupService {
    * `remember` = 以后自动换。`memberKey` 不在组里返回 false。
    */
   rebalanceDecision(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+  rebalancePreference(sessionId: string, enabled: boolean): Promise<boolean>;
 }
 
 export interface ProviderGroupBeforeSendOptions {
@@ -1042,7 +1045,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
    * 只读，不改绑定(核对与修正留给发送前检查)。
    */
   async function rebalanceContext(sessionId: string) {
-    if (!deps.readBinding(sessionId) || deps.isTurnRunning(sessionId)) return null;
+    if (deps.readRebalanceDisabled?.(sessionId) || !deps.readBinding(sessionId) || deps.isTurnRunning(sessionId)) return null;
     const bound = await withTimeout(loadBound(sessionId), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
     if (!bound?.config || !(await deps.isFailoverEligible(sessionId, { kind: 'rebalance' }))) return null;
     const { binding, source, config } = bound;
@@ -1071,7 +1074,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     options: ProviderGroupBeforeSendOptions | undefined,
   ): Promise<boolean> {
     const { run, done } = trackRun(sessionId);
-    const isCurrent = () => !run.superseded && options?.signal?.aborted !== true;
+    const isCurrent = () => !run.superseded && options?.signal?.aborted !== true && !deps.readRebalanceDisabled?.(sessionId);
     const backoff = () => rebalanceBackoff.set(backoffKey(source, groupProviderId, target), deps.now() + PROVIDER_GROUP_REBALANCE_BACKOFF_MS);
     try {
       options?.progress?.('switching');
@@ -2026,6 +2029,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
       if (cached === null) return;
       // 用户确认过换号、这台也没出问题：换到确认的那台。那台出了问题时交给下面出问题换电脑的流程。
       if (cached === false && accepted && await deps.isFailoverEligible(sessionId, { kind: 'rebalance' })
+        && !deps.readRebalanceDisabled?.(sessionId)
         && config.members.some((m) => m.key === accepted.memberKey)
         && !switchExclusion(config, current, new Set()).has(accepted.memberKey)) {
         const moved = await rebalanceBeforeSend(
@@ -2145,7 +2149,7 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
         binding.providerId, config, current.key, row.model, row.agentKind,
         rebalanceExclusion(source, binding.providerId, config, current),
       );
-      if (!target) return null;
+      if (!target || deps.readRebalanceDisabled?.(sessionId)) return null;
       const member = config.members.find((candidate) => candidate.key === target.memberKey);
       const route = member ? source.routeOf(member, row.providerId) : null;
       const ownDevices = route && !isProviderShareAgentDeviceId(row.agentDeviceId)
@@ -2156,9 +2160,9 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
     },
 
     async rebalanceDecision(sessionId, memberKey, remember, clientId) {
-      if (!clientId || !/^[A-Za-z0-9_-]{1,128}$/.test(clientId)) return false;
+      if (deps.readRebalanceDisabled?.(sessionId) || !clientId || !/^[A-Za-z0-9_-]{1,128}$/.test(clientId)) return false;
       const loaded = deps.readBinding(sessionId) ? await withTimeout(loadBound(sessionId), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS) : undefined;
-      if (!loaded?.config?.members.some((m) => m.key === memberKey)) return false;
+      if (deps.readRebalanceDisabled?.(sessionId) || !loaded?.config?.members.some((m) => m.key === memberKey)) return false;
       pruneAcceptedRebalance();
       const messages = acceptedRebalance.get(sessionId) ?? new Map();
       messages.set(clientId, { memberKey, at: deps.now() });
@@ -2171,6 +2175,18 @@ export function createProviderGroupService(deps: ProviderGroupServiceDeps): Prov
           deps.log.warn('provider group: remembering automatic balancing failed', { sessionId, error: errorText(error) });
         }
       }
+      return true;
+    },
+
+    async rebalancePreference(sessionId, enabled) {
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId) || !deps.readBinding(sessionId) || !deps.writeRebalanceEnabled) return false;
+      const bound = await withTimeout(loadBound(sessionId), PROVIDER_GROUP_BEFORE_SEND_TIMEOUT_MS);
+      if (!bound?.config) return false;
+      const row = await deps.readSessionRow(sessionId);
+      if (!row || !(await actualMemberKey(bound.source, bound.binding.providerId, bound.config, row))) return false;
+      await deps.writeRebalanceEnabled(sessionId, enabled);
+      // 另一控制端此前确认的换号也不能越过本任务的新选择。
+      acceptedRebalance.delete(sessionId);
       return true;
     },
 

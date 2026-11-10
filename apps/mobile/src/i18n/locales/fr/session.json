@@ -834,7 +834,10 @@
     "quotaReset": "{{left}} % restant · réinitialisation dans {{reset}}",
     "confirm": "Changer",
     "remember": "Changer, et le faire automatiquement désormais (cette tâche uniquement)",
-    "cancel": "Annuler"
+    "cancel": "Annuler",
+    "disable": "Ne pas changer automatiquement (cette tâche)",
+    "disableFailed": "Impossible de confirmer si votre choix a été enregistré. Vérifiez la connexion et que Cindy est à jour sur l’ordinateur où se trouve la tâche, puis réessayez. Ce message sera envoyé normalement.",
+    "moreOptions": "Plus d’options"
   },
   "messageEdit": {
     "editing": "Modification du message",

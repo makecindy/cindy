@@ -10,11 +10,7 @@ export const providersSettings = defineSettings({
     fallbackTargetId: 'settings-panel-providers',
     titleKey: 'subscriptionAccounts.title',
     sectionKey: 'settings.tabs.providers',
-    keywordKeys: [
-      'subscriptionAccounts.add',
-      'subscriptionAccounts.strategy',
-      'subscriptionAccounts.note',
-    ],
+    keywordKeys: ['subscriptionAccounts.add', 'subscriptionAccounts.strategy'],
     aliases: [
       '多账号',
       '订阅账号',
@@ -59,8 +55,9 @@ export const providersSettings = defineSettings({
       'settings.providers.detail.remoteAccess.label',
       'settings.providers.detail.remoteAccess.description',
       'providerGroup.section.title',
+      'settings.providers.detail.runLocation.label',
     ],
-    aliases: ['供应商分享', '供应商组', 'provider group', 'provider sharing'],
+    aliases: ['供应商分享', '供应商组', 'provider group', 'provider sharing', '运行于', '借用', 'run on', 'borrow'],
   },
   modelCompaction: {
     id: 'model-compaction',

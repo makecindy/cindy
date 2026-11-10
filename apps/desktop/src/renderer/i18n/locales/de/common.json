@@ -865,8 +865,8 @@
       "runningCount_one": "{{count}} Aufgabe läuft",
       "runningCount_other": "{{count}} Aufgaben laufen",
       "limitAria": "Aufgabenlimit für {{name}}",
-      "limitOption_one": "Max. {{count}}",
-      "limitOption_other": "Max. {{count}}",
+      "limitOption_one": "Bis {{count}}",
+      "limitOption_other": "Bis {{count}}",
       "weightAria": "Gewichtung für {{name}}",
       "weightOption": "Gewichtung {{weight}}",
       "assignAria": "Aufgaben {{name}} zuweisen",
@@ -881,6 +881,7 @@
         "pausedLocal": "Nimmt keine neuen Aufgaben von anderen Computern an",
         "cooling": "In Abkühlphase",
         "coolingUntil": "In Abkühlphase · etwa {{time}} wieder verfügbar",
+        "quotaExhausted": "Kontingent aufgebraucht",
         "offline": "Offline",
         "unreachableHere": "Von diesem Computer aus nicht erreichbar",
         "unavailable": {
@@ -922,9 +923,13 @@
       "description": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Die letzten Nachrichten und eine Zusammenfassung werden übernommen; ältere Details können verloren gehen.",
       "quota": "{{left}} % übrig",
       "quotaReset": "{{left}} % übrig · {{reset}}",
-      "confirm": "Wechseln",
-      "cancel": "Abbrechen",
-      "remember": "Ab jetzt automatisch wechseln (nur für diese Aufgabe)"
+      "confirm": "Nur dieses Mal wechseln",
+      "cancel": "Jetzt nicht",
+      "remember": "Künftig ohne Nachfrage automatisch wechseln",
+      "disable": "Nicht automatisch wechseln und nicht erneut fragen",
+      "disableFailed": "Es konnte nicht bestätigt werden, ob deine Auswahl gespeichert wurde. Prüfe die Verbindung und ob Cindy auf dem Computer mit dieser Aufgabe aktuell ist, und versuche es erneut. Diese Nachricht wird wie gewohnt gesendet.",
+      "choiceLabel": "Wechselverhalten (nur diese Aufgabe)",
+      "send": "Nachricht senden"
     },
     "deleteConfirm": {
       "title": "Anbietergruppe {{provider}} löschen?",
@@ -4234,7 +4239,18 @@
           "ariaLabel": "Deinen anderen Computern und den Personen, mit denen du teilst, die Nutzung dieses Anbieters erlauben",
           "writeFailed": "Die Fernzugriffseinstellung konnte nicht gespeichert werden. Bitte versuche es erneut."
         },
-        "moreActionsAria": "Weitere Aktionen"
+        "moreActionsAria": "Weitere Aktionen",
+        "runLocation": {
+          "label": "Ausführen auf",
+          "optionLocal": "Dieser Computer",
+          "notSignedIn": "Nicht angemeldet",
+          "autoBorrowing": "Dieser Computer ist nicht angemeldet, daher laufen neue Aufgaben auf {{device}}. Keine Anmeldung nötig.",
+          "local": "Neue Aufgaben laufen auf diesem Computer. Du kannst stattdessen einen deiner anderen angemeldeten Computer wählen.",
+          "pinned": "Neue Aufgaben laufen auf {{device}} mit dessen Anmeldung. Laufende Aufgaben bleiben, wo sie sind.",
+          "inline": "Läuft auf",
+          "signInHere": "Auf diesem Computer anmelden",
+          "writeFailed": "Der Ausführungsort konnte nicht gespeichert werden. Bitte versuche es erneut."
+        }
       },
       "detect": {
         "groupLabel": "Auf diesem Gerät erkannt",
@@ -5302,6 +5318,15 @@
         "ariaLabel": "Mit {{shortcut}} Nachrichten senden"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Standard-Arbeitsverzeichnis für neue Aufgaben",
+      "label": "Standardverzeichnis auf diesem Computer",
+      "hint": "Für neue lokale Aufgaben ohne ausgewähltes Projekt wird dieses Verzeichnis vorausgewählt. Ein ausdrücklich gewähltes Projekt, ein Dialog oder ein Remote-Computer hat Vorrang.",
+      "unset": "Nicht festgelegt (kein Verzeichnis vorausgewählt)",
+      "choose": "Verzeichnis auswählen",
+      "clear": "Standardverzeichnis löschen",
+      "failed": "Das Standard-Arbeitsverzeichnis konnte nicht gespeichert werden. Bitte erneut versuchen."
+    },
     "linkOpen": {
       "title": "Links öffnen",
       "description": "Wähle, wo Links in Nachrichten geöffnet werden. Klicke mit der rechten Maustaste auf einen Link, um nur für diesen Link eine andere Option zu verwenden.",
@@ -6188,13 +6213,18 @@
         "allowInboundAria": "Umschalten, ob {{name}} dieses Gerät steuern darf",
         "peerControlOff": "Die Fernsteuerung ist auf diesem Gerät nicht aktiviert",
         "masterOffHint": "Aktiviere zuerst den Hauptschalter oben",
-        "controllingThisMac": "Mit Cindy verbunden"
+        "controllingThisMac": "Mit Cindy verbunden",
+        "useThisDeviceModels": "Modelle hier nutzen",
+        "allowModelUseAria": "{{name}} die Modelle dieses Computers nutzen lassen"
       },
       "toast": {
         "revoked": "Zugriff für dieses Gerät widerrufen",
         "revokeFailed": "Zugriff konnte nicht widerrufen werden",
         "restored": "Zugriff für dieses Gerät wiederhergestellt",
-        "restoreFailed": "Zugriff konnte nicht wiederhergestellt werden"
+        "restoreFailed": "Zugriff konnte nicht wiederhergestellt werden",
+        "modelUseRestored": "Dieser Computer kann die Modelle wieder nutzen",
+        "modelUseRevoked": "Dieser Computer kann die Modelle nicht mehr nutzen",
+        "modelUseFailed": "„Modelle hier nutzen“ konnte nicht gespeichert werden. Bitte versuche es erneut."
       },
       "sections": {
         "myDevices": "Meine Geräte",
@@ -7411,6 +7441,11 @@
         "installedExpand": "Alle {{count}} installierten Plugins anzeigen",
         "installedCollapse": "Weitere installierte Plugins ausblenden",
         "recommendedSection": "Empfohlen",
+        "todayRecommendations": "Heutige Empfehlungen",
+        "marketSection": "Plugin-Marktplatz",
+        "browseMarket": "Plugin-Marktplatz durchsuchen",
+        "searching": "Suche läuft…",
+        "allLoaded": "Alle {{count}} Plugins angezeigt",
         "updatesAvailable": "{{count}} Plugin-Updates verfügbar",
         "updateAll": "Alle aktualisieren",
         "ignoreRound": "Diese Runde überspringen",
@@ -7440,7 +7475,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Offiziell"
+          "official": "Offiziell",
+          "community": "Community"
+        },
+        "publisherDescription": {
+          "official": "Von Cindy veröffentlicht und gepflegt",
+          "community": "Von Community-Entwicklern veröffentlicht und gepflegt",
+          "team": "Von deiner Organisation mit berechtigten Mitgliedern geteilt",
+          "custom": "Aus einem hinzugefügten Git- oder lokalen Ordner-Marktplatz",
+          "local": "Aus einer lokalen Datei installiert oder auf diesem Computer entwickelt"
         },
         "scopeAria": "Plugin-Quellen filtern",
         "scope": {
@@ -9040,6 +9083,8 @@
       "daysWindow": "{{days}} T"
     },
     "claude": {
+      "totalWeeklyLabel": "Woche gesamt",
+      "temporarilyLimited": "Vorübergehend begrenzt",
       "waitingDetail": "Die Claude-Abonutzung wird nach Abschluss der nächsten Gesprächsrunde aktualisiert.",
       "weeklyLabel": "Wöchentlich",
       "modelWeeklyLabel": "{{model}} wöchentlich",
@@ -11416,6 +11461,9 @@
       "databaseDriver": "Der Datenbanktreiber konnte nicht geladen werden. Aktualisiere oder repariere Cindy und versuch es erneut.",
       "databaseUnavailable": "Die Quelldatenbank konnte nicht gelesen werden. Die Originaldaten sind unverändert. Versuch es nach der Reparatur erneut.",
       "fileTooLarge": "Eine Datei oder dieser Import überschreitet das Leselimit. Inhalte wurden nicht gekürzt.",
+      "sourceFileTooLarge": "Eine einzelne Datei überschreitet das Leselimit. Dieses Element wurde nicht vollständig importiert.",
+      "snapshotTooLarge": "Die Gesamtdatenmenge dieses Lesevorgangs überschreitet das Limit. Der Import ist unvollständig.",
+      "itemTooLarge": "Die Dateien dieses Elements überschreiten insgesamt 128 MiB. Dieses Element wurde nicht vollständig importiert.",
       "memoryMetadata": "Die Zusammenfassung oder der Titel der Erinnerung überschreitet die Speichergrenzen.",
       "memoryWrite": "Das Speichern der Erinnerung oder die Integritätsprüfung ist fehlgeschlagen. Du kannst es erneut versuchen.",
       "memoryChanged": "Die gespeicherte Erinnerung wurde geändert und nicht überschrieben.",
@@ -13006,6 +13054,11 @@
     "prevMessageJump": "Zum vorherigen Prompt springen: {{preview}}",
     "sessionLoading": "Aufgabe wird geladen",
     "askUserQuestion": {
+    "unanswered": "Unbeantwortet",
+    "withdrawn": "Keine Antwort mehr nötig",
+    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
+    "sendSupplement": "Ergänzung senden",
+
       "voice": {
         "hint": "Sag die Nummer oder den Namen einer Option. Sag bei Mehrfachauswahl anschließend „Auswahl bestätigen“.",
         "freeTextHint": "Sag deine Antwort, prüfe sie und sag dann „Auswahl bestätigen“, um sie abzusenden.",
@@ -14130,6 +14183,7 @@
       "taskAutoArchived": "„{{title}}“ archiviert",
       "taskAutoArchivedUndo": "Rückgängig",
       "taskAutoArchivePending": "Wird beim Verlassen dieser Aufgabe archiviert",
+      "taskAutoArchiveBlockedDirty": "„{{title}}“ wurde nicht automatisch archiviert: Der Arbeitsbereich enthält nicht committete Änderungen",
       "taskAutoArchiveCancel": "Abbrechen",
       "taskAutoArchiveCancelled": "Diesmal keine automatische Archivierung",
       "taskArchiveNow": "Jetzt archivieren"
@@ -14288,7 +14342,7 @@
       "running": "Wird ausgeführt…",
       "waitingWorkflow": "Warten auf Workflow…",
       "waitingWorkflowProgress": "Warten auf Workflow · {{done}}/{{total}} Agents",
-      "turnStart": "{{status}}",
+      "turnStart": "Wird verarbeitet, {{name}}…",
       "issueTip": "{{name}}, nutze /issue, um uns Feedback oder Vorschläge zu senden",
       "runningTool": "{{tool}} läuft…"
     },
@@ -19765,6 +19819,8 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "unassigned": "Konto nicht zugewiesen",
+    "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",
     "signIn": {
       "checking": "Lokales Konto wird geprüft…",
       "detected": "Angemeldetes Konto gefunden",
@@ -19776,10 +19832,10 @@
       "useCodex": "Mit Codex anmelden"
     },
     "title": "Abonnementkonten",
-    "note": "Das erste Konto verwendet den Standardordner der CLI. Weitere Konten melden sich separat an. Neue Aufgaben werden verteilt; bestehende Aufgaben behalten ihr Konto.",
     "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
     "default": "Standardordner",
+    "defaultTag": "Standard",
     "ready": "Verbunden",
     "signedOut": "Anmeldung erforderlich",
     "unavailable": "Status nicht verfügbar",
@@ -19813,5 +19869,15 @@
     "browserFallback": "Öffne GitHub, um Cindy einen Stern zu geben.",
     "openGithub": "GitHub öffnen",
     "openFailed": "GitHub konnte nicht geöffnet werden."
+  },
+  "hostConnection": {
+    "connecting": "Verbindung mit Cindy wird hergestellt…",
+    "restoring": "Aufgabenstatus wird wiederhergestellt…",
+    "retrying": "Aufgabenstatus noch nicht synchronisiert. Neuer Versuch…",
+    "pairing": "Verbindung erneut autorisieren",
+    "pairingHelp": "Lass diese Seite geöffnet. Führe im Terminal, in dem du Cindy Host gestartet hast, den Befehl zum Öffnen des Webclients erneut aus. Kopple die neue Seite und kehre hierher zurück.",
+    "keepDraft": "Dein Entwurf bleibt erhalten. Der Aufgabenstatus wird nach Wiederherstellung der Verbindung synchronisiert.",
+    "retry": "Erneut verbinden",
+    "desktopAuthHelp": "Aktualisiere die Host-Verbindungseinstellungen im Startterminal und öffne diesen experimentellen Client erneut."
   }
 }

@@ -478,6 +478,63 @@ describe('Orca lead/worker dispatcher', () => {
     expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
   });
 
+  // Regression: collaboration started from the panel marks an already-live session as Lead
+  // without rebuilding it. A Worker report then started a Lead turn that had no Lead
+  // instructions or Orca tools, and the Lead ended the turn with an empty answer.
+  it('rebuilds a live target that lacks Orca hydration and delivers to the rebuilt runtime', async () => {
+    const accept = async (_message: UserMessage, opts?: SessionSendOptions): Promise<SessionSendResult> => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    };
+    const staleSession = createLiveSession(accept);
+    const hydratedSession = createLiveSession(accept);
+    let current = staleSession;
+    const hydrateOrcaSessionIfNeeded = vi.fn(async () => {
+      current = hydratedSession;
+    });
+    const h = createHarness({
+      getLiveSession: vi.fn(() => current),
+      hydrateOrcaSessionIfNeeded,
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Review finished',
+      source: 'worker',
+      senderLabel: 'Worker',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'hydrate-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(hydrateOrcaSessionIfNeeded).toHaveBeenCalledWith(
+      'target-session',
+      expect.objectContaining({ agentKind: 'codex' }),
+    );
+    expect(staleSession.send).not.toHaveBeenCalled();
+    expect(hydratedSession.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('still delivers the message when the hydration rebuild fails', async () => {
+    const h = createHarness({
+      hydrateOrcaSessionIfNeeded: vi.fn(async () => {
+        throw new Error('bootstrap failed');
+      }),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Review finished',
+      source: 'worker',
+      senderLabel: 'Worker',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'hydrate-failure-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(h.liveSession.send).toHaveBeenCalledTimes(1);
+  });
+
   it('serializes concurrent live prepare/send on the per-session lock', async () => {
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => {

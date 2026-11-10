@@ -1,4 +1,7 @@
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
+import { Tip } from '@/components/ui/tooltip';
 import { FormField } from '@/components/ui/form-field';
 import { SSH_HOST_ID_PATTERN } from '../../../shared/selfHostedRelay';
 import { SettingsTextInput } from './SettingsTextInput';
@@ -190,23 +193,21 @@ function HostRow({
             在 action chips 区第一位最容易扫到, 也方便快速切换。disabled 仅在
             busy(connect/disconnect 进行中)时锁住, 避免与正在进行的 transition
             竞态。 */}
-        <label
-          className={cn(
-            'flex items-center gap-1.5 cursor-pointer select-none px-2 h-8 rounded-full transition-colors',
-            busy && 'cursor-not-allowed opacity-60',
-          )}
-          title={t('settings.remote.button.autoConnectTip')}
-          style={{ color: 'var(--settings-integration-subtitle)' }}
-        >
-          <input
-            type="checkbox"
-            checked={snap.autoConnect}
-            disabled={busy}
-            onChange={(e) => onToggleAutoConnect(e.target.checked)}
-            className="cursor-pointer accent-[var(--settings-menu-text-selected)]"
-          />
-          <span className="text-12">{t('settings.remote.button.autoConnect')}</span>
-        </label>
+        {/* Applies immediately → Switch (CONTROLS decision 1). */}
+        <Tip text={t('settings.remote.button.autoConnectTip')}>
+          <div
+            className="flex h-8 select-none items-center gap-2 px-2"
+            style={{ color: 'var(--settings-integration-subtitle)' }}
+          >
+            <span className="text-12">{t('settings.remote.button.autoConnect')}</span>
+            <Switch data-settings-search-action="Toggle auto-connect for this SSH host"
+              checked={snap.autoConnect}
+              disabled={busy}
+              onCheckedChange={onToggleAutoConnect}
+              aria-label={t('settings.remote.button.autoConnect')}
+            />
+          </div>
+        </Tip>
         {keyMismatch && (
           <Button variant="secondary" size="md" compact type="button" onClick={onReviewHostKey} disabled={busy}>
             {t('settings.remote.hostKey.review')}
@@ -254,34 +255,36 @@ function HostRow({
             在 action chips 区第一位最容易扫到, 也方便快速切换。disabled 仅在
             busy(connect/disconnect 进行中)时锁住, 避免与正在进行的 transition
             竞态。 */}
-        <button
-          type="button"
-          onClick={onEdit}
-          disabled={busy}
-          aria-label={t('settings.remote.button.edit')}
-          title={t('settings.remote.button.edit')}
-          className={cn(
-            'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
-            busy && 'cursor-not-allowed opacity-60',
-          )}
-          style={{ color: 'var(--settings-integration-subtitle)' }}
-        >
-          <Pencil size={14} />
-        </button>
-        {snap.config.managedByCindy && (
-          <button
+        <Tip text={t('settings.remote.button.edit')}>
+          <Button data-settings-search-action="Edit this SSH host configuration"
+            variant="secondary"
+            tone="quiet"
+            size="md"
             type="button"
-            onClick={onRemove}
+            onClick={onEdit}
             disabled={busy}
-            aria-label={t('settings.remote.button.remove')}
-            className={cn(
-              'flex h-8 w-8 items-center justify-center rounded-full transition-colors',
-              busy && 'cursor-not-allowed opacity-60',
-            )}
-            style={{ color: 'var(--settings-integration-subtitle)' }}
+            aria-label={t('settings.remote.button.edit')}
+            className="w-8 px-0"
           >
-            <Trash2 size={16} />
-          </button>
+            <Pencil size={14} aria-hidden />
+          </Button>
+        </Tip>
+        {snap.config.managedByCindy && (
+          // Removing a host deletes its saved config (CONTROLS decision 4) → danger tone.
+          <Tip text={t('settings.remote.button.remove')}>
+            <Button data-settings-search-action="Remove this SSH host configuration"
+              variant="secondary"
+              tone="danger"
+              size="md"
+              type="button"
+              onClick={onRemove}
+              disabled={busy}
+              aria-label={t('settings.remote.button.remove')}
+              className="w-8 px-0"
+            >
+              <Trash2 size={16} aria-hidden />
+            </Button>
+          </Tip>
         )}
       </div>
     </div>
@@ -750,11 +753,10 @@ function HostForm({
           className="flex items-center gap-2 cursor-pointer select-none"
           title={t('settings.remote.add.agentProxyTip')}
         >
-          <input
-            type="checkbox"
+          {/* Draft field, applied on Save → shared Checkbox (CONTROLS decision 1). */}
+          <Checkbox data-settings-search-action="Toggle the agent proxy in the host form draft"
             checked={form.agentProxyEnabled}
             onChange={(e) => setForm({ ...form, agentProxyEnabled: e.target.checked })}
-            className="cursor-pointer accent-[var(--settings-menu-text-selected)]"
           />
           <span
             className="text-12 font-medium"
@@ -1301,15 +1303,17 @@ export function RemoteSection({ showTitle = true }: { showTitle?: boolean } = {}
           <div />
         )}
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleReload}
-            aria-label={t('settings.remote.button.reload')}
-            className="flex h-8 w-8 items-center justify-center rounded-full transition-colors"
-            style={{ color: 'var(--settings-integration-subtitle)' }}
-          >
-            <RefreshCw size={16} />
-          </button>
+          <Tip text={t('settings.remote.button.reload')} side="top">
+            <button
+              type="button"
+              onClick={handleReload}
+              aria-label={t('settings.remote.button.reload')}
+              className="flex h-8 w-8 items-center justify-center rounded-full transition-colors"
+              style={{ color: 'var(--settings-integration-subtitle)' }}
+            >
+              <RefreshCw size={16} aria-hidden />
+            </button>
+          </Tip>
           {/* AutoConnect — 启动时是否自动连这个 host. 控件本身不算"动作", 但放
               在 action chips 区第一位最容易扫到, 也方便快速切换。disabled 仅在
               busy(connect/disconnect 进行中)时锁住, 避免与正在进行的 transition

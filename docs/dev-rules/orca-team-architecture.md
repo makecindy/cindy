@@ -132,6 +132,8 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 
 排队消息控制 6 工具让 Lead 在消息被 worker 消费前管理自己发出的排队消息：`send_to_worker` / `create_worker`（initial_task）在 `wakeKind='queued'` 时回传 `queued_message_id`（coordinator 队列内的 clientId），Lead 可据此查看工作态和完整队列、整条改写、撤回、原子合并连续的 Lead 消息、转为插话或调整顺序。`get_worker_queue_status` / `steer_queued_message` / `move_queued_message` 省略 `worker_id` 时作用于调用方自己的队列（Lead 忙时 Worker 回报排在这里）。实现走 `OrcaTeamService.listWorkerQueuedMessages / updateWorkerQueuedMessage / cancelWorkerQueuedMessage / mergeWorkerQueuedMessages / steerWorkerQueuedMessage / moveWorkerQueuedMessage`，语义约束见「协同运行时行为契约 · 消息派发与 auto-bridge」第 1b、6–9 条。
 
+反方向由 `orca_worker_bridge` 承接：除 `send_to_lead` / `read_lead_history` / `read_lead` / `lead_status` 外，Worker 另有 `get_lead_queue_status` / `update_queued_report` / `cancel_queued_report` / `merge_queued_reports` 四个工具，管理自己发给 Lead、仍在 Lead 队列里等待的回报。两个方向的排队回执与送达提示见同一小节第 11 条，Worker 侧队列管理见第 12 条。Worker 提示词的 `Tools:` 一行必须与 bridge 实际注册的工具名逐个一致（`orca-bridge-mcp.test.ts` 有对应用例）。
+
 诊断 3 工具是纯只读，实现走 host `apps/desktop/src/main/maker-ipc/orcaDiagnostics.ts`（读 active team + DB worker 列表 + live session 状态 + 最近 assistant 消息），**无建 team 写副作用**——这是与旧 `orca_bridge` 版本的关键差异（旧版经 `ensureWorkflowForLead` 会顺手建 team）。早期 Lead 侧 `orca_bridge`（门面 + 私有 registry/restore/auto-bridge）已整体删除：Lead→worker/team 工具面唯 `cindy_orca`（C）一套，worker→lead 唯 `orca_worker_bridge`（B，在 `packages/orca-workflow`）一套；`@cindy/orca-workflow` 包通过 B provider 与 `renderOrcaLeadSystemPrompt`/`renderOrcaWorkerSystemPrompt` 两个 render 函数继续被 host 依赖。
 
 `cindy_orca` 直接注册到顶层，而不是藏在 `list_tools/call_tool` 后面；模型在“开协同 / 派 worker”时需要稳定发现 `start_team/create_worker`。实现见 `packages/lizi-mcps/src/orca/server.ts` 的 `createOrcaMcpServer`、`DirectToolSink`、`OrcaMcpDeps`。
@@ -389,6 +391,9 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 1a. **空闲 live 直发前必须先做换窗预检（状态：不变量）**<br>
 目标空闲且已有 live session 时，dispatcher 仍走 `session.send()`，不经过 `sendToSessionInternal()`。这条直发必须先调用与用户发送相同的 `prepareUnhealthySession`：满窗或当前进程内 `needsRollover` 锁存时关闭旧原生窗口，再 `getLiveSession`。不能把 inter-agent 消息打进应被丢弃的旧窗口。prepare → 重新取 live → send 整段必须复用 `sendToSessionInternal` 的 per-session 锁；锁已被占用时先排队，不要把 in-flight prepare 当成健康状态继续直发。没有 live 后释放锁再走 `sendToSessionInternal`，避免自己把自己排队。实现指针：`orcaInterAgentDispatcher.ts` 的 live 分支，以及 `register.ts` 注入的 `prepareUnhealthySession` / `withSendToSessionLock`。
 
+1d. **空闲 live 直发前必须先补齐 Orca 装载（状态：不变量）**<br>
+runtime 已在线的 session 之后才成为 Lead（例如从协同面板开启协同）时，宿主只写 role 并对 live handle 调 `setVendorOptions`；Lead 说明要到 runtime 重建时才由 `bootstrapSession` 注入，`isOrcaMcpHydrated` 在此之前为 false。用户发送在 `sendToAgentAccepted` 内按该标记重建；inter-agent 直发不经过这个事务，必须在 `prepareUnhealthySession` 之后、重新取 live 之前调用同一套重建（`MakerSendTransaction.hydrateActiveOrcaSession`），并留在同一把 per-session 锁内。漏掉这一步，Worker 回报会开启一个没有 Lead 说明的 turn，Lead 可能直接以空回复结束（2026-11-10 实报：面板新建的 Worker 回报后，Lead 等到用户发话才响应）。已装载时不读库、不重建；重建失败不阻断投递：旧 runtime 仍在就照旧直发，已关闭则落到 `sendToSessionInternal` 的 lazy-resume，由它按持久化 role 启动。实现指针：`orcaInterAgentDispatcher.ts` 的 `hydrateOrcaSessionIfNeeded`、`makerSendTransaction.ts` 的 `hydrateActiveOrcaSessionIfNeeded`，以及 `register.ts` 的注入。
+
 1c. **图片附件仅限本机目标，走既有附件通道（状态：不变量）**<br>
    `send_to_worker` 与 `create_worker` / `create_workers` 的 `images` 参数接受两类地址：
    用户在会话里贴的图用受管地址（`cindy-media://blobs/` / `xdt-image://`，即上下文
@@ -478,6 +483,77 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
     `dispatchResolvedWorker.onAccepted` 与 `deferDoneAcknowledgement`；回归见
     `orcaTeamService.test.ts` 的 queued／deferred 用例。
 
+11. **消息排队时，收发双方都要被告知（状态：不变量，2026-11-10）**<br>
+    起因：一个 reviewer Worker 往忙碌的 Lead 连发三条回报，之后发现都已过时，却既看不到也撤不回，
+    只能再发一条「请跳过前面三条」；Lead 则在不知道后面还有消息的情况下逐条各跑一轮。排队本身不是
+    问题，问题是双方都不知道队列里有什么。宿主在两处陈述事实，判断交给模型：
+    - **发送回执**：`send_to_lead` 排队时回传 `queued_message_id`、`queue_position`、
+      `lead_queued_count` 与 `other_queued_reports`（该 Worker 此前发出、Lead 还没读到的其他回报，
+      只给编号、位置与开头一行）；`send_to_worker` 排队时在既有 `queued_message_id` 之外回传
+      `queue_position`、`queued_count` 与 `other_queued_messages`（Lead 自己发的其他未读消息）。
+      读队列失败不影响已经成立的投递，只是回执里没有这部分；队列快照里找不到刚排进去的这条时
+      （运行设备 Worker 的队列在那台电脑上，本机读到的是空快照）同样不附带，不对队列下结论。
+    - **送达提示（Queue note）**：一条排队的协同消息经 drain 送达时，若它后面还有协同消息在等待，
+      在发给模型的 wire 正文末尾追加 `(Queue note: …)`，逐条列出编号、发送方（与本条同一发送方时
+      标 `same sender`）与开头一行，最多 5 条，其余只报数量。
+    约束：提示只进这一次派发的 wire 消息，不写回队列项，因此不进排队正文、落库正文与系统提示词，
+    派发失败重新入队后也不残留（与「消息来源」说明同一口径）。它同样不能进落库行的
+    `agentFacingWireContent` 重放副本：那份副本经 `read_lead_history` 的 `agent_meta` 对所有 Worker
+    可读，带上提示等于把别的 Worker 尚在排队（甚至之后撤回）的消息泄漏出去，所以 drain 把不带提示的
+    消息交给落库、带提示的只交给 `sendToAgent`。只有送达的这条本身是协同消息才触发，且只列协同
+    消息——用户手打与定时任务的排队项既不触发也不出现，派发内容保持逐字不变。失败轮的 Retry／
+    自动续跑会复制原条目连同 `origin`，那是接收方自己的恢复输入，不算协同消息
+    （`isOrcaCollaborationMessage`）。预览压成一行并限长，不在代理对中间截断，括号转全角、其他发送方
+    的名字加引号，不让正文或 role 伪造提示结构。空闲直发与同轮插话不经 drain，不带提示；生成提示
+    出错只记日志，不能挡住队首派发。
+    收到之后怎么办写在两份协同提示词里：发送方看到自己有未读旧消息时合并、改写或撤回，不再发
+    「请忽略前面几条」；接收方用 `steer_queued_message`（省略 `worker_id`）把列出的消息拉进当前轮
+    一并读完再行动。实现指针：`packages/maker-shared/src/orcaQueue.ts`、`orcaQueueNote.ts`、
+    `AgentInputCoordinator` 的 `describeQueueBehindDispatch`、`agentInputQueue.ts` 的
+    `appendNoteToMakerUserMessage`、`orca-bridge-mcp.ts` 的 `describeQueuedReport`、
+    `send_to_worker.ts` 的 `describeQueuedMessage`；回归见 `agent-input-coordinator.test.ts`、
+    `orca-bridge-mcp.test.ts`、`sessionContext.test.ts` 与 `maker-shared` 的 `orcaQueue.test.ts`。
+
+12. **Worker 只能看到、改动自己排在 Lead 队列里的回报（状态：不变量，2026-11-10）**<br>
+    `get_lead_queue_status` / `update_queued_report` / `cancel_queued_report` /
+    `merge_queued_reports` 的调用方身份只认 `resolveWorkerLink` 核实出的 worker link，模型参数里的
+    `worker_id` 与实际会话不符即拒绝；三个写工具与 `send_to_lead` 一样只允许 Worker 本体调用
+    （`authorizeSendToLeadCaller`），子代理不能绕过 Worker 改写它的回报。宿主再按排队项是真正的
+    协同消息（`isOrcaCollaborationMessage`，排除第 11 条所说的恢复副本）且 `origin.senderSessionId`
+    等于该 Worker 会话把关（老快照没有 `senderSessionId` 的条目一律不开放）。
+    可见范围比 Lead 侧窄（2026-11-10 产品决策）：Worker 只拿到自己回报的正文与在整个队列里的下标，
+    用户与其他 Worker 的排队消息只计入 `lead_queued_count`，不给正文；对非本人条目的改写与撤回回
+    `NOT_YOUR_MESSAGE`。Worker 不能调序，也不能强行中断 Lead 当前轮——要让 Lead 立刻看到，只有发送时
+    的 `delivery=steer`（1b），由 Lead 自己决定是否停手，因为那一轮可能是用户本人发起的。
+    - **改写**整条正文替换，经 `rebuildQueuedOrcaWorkerMessage` 按 worker→lead 原派发格式重建四处
+      正文，clientId、位置与 `hostAcceptedAtMs` 不变（与第 6 条同一套 `createSessionQueueControlService`）。
+    - **撤回**走 coordinator `remove`，结清该条排队时登记的 accepted 回调。回报被接收（含入队）时
+      已经结清「这次派活欠 Lead 一份回报」（第 4 条），撤回后不会再自动补报；所以判断以**当前这次
+      派活**为范围（`OrcaTeamService.workerReportWithdrawalStanding`），不能只数队列里还有几条——
+      上一次派活的回报还在排队，并不代表这一次有回报：
+      - 这条属于当前派活：该派活另有被接收的回报（仍在排队、已被 Lead 读走，或直发／同轮插话
+        送达）才放行，否则回 `LAST_REPORT`，让 Worker 改用改写；
+      - 这条属于更早的派活：放行，当前派活的回报义务不受影响；
+      - 没有派活在跑（用户直接对话的轮次，或重启后运行时状态已丢）：无账可查，队列里至少还留着
+        该 Worker 的另一条回报才放行。
+      账目由 `captureLocalWorkerReport` 的回执入参累计（送达计数、入队回报的 clientId），随新派活
+      重置；排队回报没送达就被丢弃（撤回、合并、Stop、清空）时，由 coordinator 的
+      `onDiscardedQueuedMessage` 统一销账，被 Lead 读走的不销。同一 Worker 的写操作在宿主内串行，
+      避免同一批并行撤回互相把对方当成「还留着一条」。
+    - **合并**复用 `mergeQueuedMessagesAtomically`，同样要求目标在 Lead 队列里连续且按队列顺序给出
+      （第 8 条）；不满足或含非本人条目时零修改，回 `QUEUE_CHANGED` 与该 Worker 最新的排队回报。
+      跨过他人消息合并会把较晚的内容挪到那条消息之前，所以不放宽。被合并掉的回报若属于当前派活，保留下来的那条
+      接替它的账目（`adoptWorkerQueuedReport`，合并前判断、合并成功后过户）：否则合并后的回报会被
+      当成更早派活的而放行撤回，Lead 就收不到本次结果。
+    运行设备上的 Worker 暂不支持这四个工具：跨设备只转发四个既有桥接工具，其余在运行设备侧直接回
+    `REMOTE_WORKER_NOT_SUPPORTED`（不触发远程调用）；排队回执由 Lead 所在电脑生成，远端 Worker 照常
+    拿到。实现指针：`orcaWorkerReportQueue.ts`、`orcaInterAgentDispatcher.ts` 的
+    `rebuildQueuedOrcaWorkerMessage`、`orcaRemoteWorkerBridge.ts` 的 `forwardTool`；回归见
+    `orcaWorkerReportQueue.test.ts`、`orcaTeamService.test.ts`、`orcaRemoteWorkerBridge.test.ts`，
+    以及 `agent-input-coordinator.test.ts` 里经真实 coordinator 的改写／撤回／合并用例。
+    已知边界：Worker 处于 Plan 模式的自动轮次里，第 11 条所说的 `steer_queued_message` 会被行动授权
+    拒绝，后面的消息照常作为后续轮次送达。
+
 #### Worker 运行态
 
 1. **worker 终态不被失败回滚覆盖（状态：不变量）**<br>
@@ -527,7 +603,7 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    Lead 派完活结束本轮时，团队仍在干活，这一轮不是完成：灵动岛保持 Lead 为运行中（不出完成卡片、不响完成音、不记未读），Work Louder 键盘、侧栏卡片与远程会话列表读同一份活动快照，因此一起保持运行中；renderer 不发完成通知（桌面／手机／飞书）、不亮完成角标。Worker 回报送达后 Lead 被唤起，那一轮的 done 才是团队完成。判据只有一份，在 Main：以「仍有 accepted 派活欠 Lead 回报」（auto-bridge pending）为准，最后一份回报送达或被丢弃（手动停止、归档等）时，若 Lead 空闲则补发被推迟的完成；renderer 不自行推算 Worker 状态，完成去抖落地时读灵动岛活动快照，Main 仍把该会话保持为 `running` 就不算完成（暂停的输入队列同样会让灵动岛保持运行中，但保留原有完成提醒，故排除）。Worker 自身仍不进灵动岛；Worker 的完成不单独通知，出错与需要确认以「Lead 标题 · Worker 标题」单独通知（桌面 / 飞书 / 手机推送，走同一个 `sendSessionEventNotification`；找不到 Lead 时退回 Worker 标题；只覆盖本机 Worker），点击按 Worker id 经 `resolveSessionRoute` 落到 Lead 并打开该 Worker。Worker 出错后 Lead 被唤起处理完还会有一条 Lead 完成通知，两条都保留。已知空档（用户接受）：开启灵动岛时渲染端不弹系统横幅，而 Worker 不进灵动岛，这段时间 Worker 的出错 / 确认收不到桌面弹窗，飞书 / 手机推送不受影响。实现指针：`CCAgentSidebarUpper.tsx` 的 `fireSessionNotification`，`orcaLeadWorkerAttention.ts` 的 `shouldNotifyOrcaWorkerEvent` / `formatOrcaWorkerNotificationTitle` / `findOrcaLeadSessionIdForWorker`。已知边界（刻意不处理，保持简单）：派给正忙 Worker、尚在其队列里未被接收的任务还没有待回报记录（Worker 正忙通常意味着已有同一 Lead 的待回报记录）；静默完成（如静默的自动运行）不走推迟，Lead 活动会直接变为完成。实现指针：`orcaTeamService.ts` 的 `hasPendingWorkerReports` / `deletePendingReport` / `onLeadWorkerReportsSettled`，`register.ts` 的 `setCompletionDeferResolver` 与 `onLeadWorkerReportsSettled` wiring，`agent-island/service.ts` 的 `notifyQueueEmptied`，renderer `state/agentIslandActivity.ts` 的 `isSessionCompletionHeldByAgentIsland` 与 `useSessionRunningStatus.ts` 的 done debounce。
 
 10. **远端 Worker 只在运行设备上跑（状态：不变量）**
-   Worker 可以放到同账号另一台电脑（运行设备）上运行：真实任务在那台，本机只有一条不跑 Agent、`working_dir` 为空的代理任务行，`orca_workers.execution_device_id` / `remote_session_id` 记录位置。代理行承接计槽、状态机、auto-bridge 与归档，任何路径都不得在本机为它起 Agent（`bootstrapSession` 对远端 Worker 直接拒绝）、不得把它复制到其他电脑；派活、停止与存活查询经 `orcaRemoteWorkers.ts` 的 `wrapTeamDeps` 分流到运行设备，其余依赖原样透传，不另造状态机。回报靠轮询：派出的消息已进入对话（投递回执 accepted）且设备不在跑时，分页读取 user / assistant 历史，按派活 user 的 clientId 定位对应的最后一条 assistant 回复并按消息 id 去重；后续用户插话的回复和异常状态不得归给此前派活，历史读取期间的新派活不得被旧回报清除。每轮最多扫描 2000 行，预算不足时保留游标下一轮续读，不误判缺少回复；宿主 onAccepted / onAcceptedCommit 完成后才冻结回报身份并允许轮询收尾，accepted 回调失败恢复上一代等待状态，保存旧结果期间不得消费新派活身份或写入其捕获文本。同一远端 Worker 的 enqueue、accepted / commit 和身份确认复用现成 session 发送锁串行执行，避免并发回调与投递顺序错位。用户在运行设备上直接发的消息算插话，不触发回报。设备不可达只是运行期投影（`executionDevice.reachable`），不扩展 `OrcaWorkerStatus`；派活时不可达直接失败，不回退到本机。远端 Worker 通过运行设备转发四个既有 Worker 桥接工具，Lead 按同账号来源设备、真实任务、Worker 与 active team 核对归属；旧端没有该通道时保留自动回报。远端队列编辑仍不支持；send_to_lead 的 steer 由 Lead 所在电脑沿本机原有守卫判定。界面：创建弹窗的「运行设备」适用于桌面本机任务及手机控制的非 SSH Lead；桌面远控视角保留原目录读取边界，控制端自身不能经 device-link 读取自己的目录，跨设备派发仍可由 Lead 的 MCP 执行；Lead 的 Agent 在其他电脑运行也可派发跨设备 Worker。工作电脑与 Agent 所在电脑可独立选择，后者需工作电脑声明 `agentDevice` 能力。入口由 `CreateWorkerPopover.executionDevicesEnabled` 控制，复用标准下拉列表，以有界滚动和键盘按名称定位应对多设备；选了其他电脑后，工作目录提供「对话 / 指定目录」，「对话」不传 `workingDir`、在运行设备创建不绑定项目的任务，「指定目录」只使用那台电脑上的绝对路径。手机版的新任务「开启协同」与 Lead「创建 Worker」共用设备下拉列表和两种目录模式；设备列表从 Lead 所在电脑读取，Agent、模型和供应商目录从所选运行设备读取。协同面板对远端 Worker 展示运行设备上的真实任务（`RemoteWorkerSessionPane`，先登记归属再读写）。实现指针：`orcaRemoteWorkerRuntime.ts`、`orcaRemoteWorkers.ts`、`orcaWorkerCreationService.ts` 的 `createRemoteWorkerInTeam`、运行设备侧 `orcaRemoteWorkerHost.ts`；协议见 `protocol-compatibility.md`「协同远端 Worker」。
+   Worker 可以放到同账号另一台电脑（运行设备）上运行：真实任务在那台，本机只有一条不跑 Agent、`working_dir` 为空的代理任务行，`orca_workers.execution_device_id` / `remote_session_id` 记录位置。代理行承接计槽、状态机、auto-bridge 与归档，任何路径都不得在本机为它起 Agent（`bootstrapSession` 对远端 Worker 直接拒绝）、不得把它复制到其他电脑；派活、停止与存活查询经 `orcaRemoteWorkers.ts` 的 `wrapTeamDeps` 分流到运行设备，其余依赖原样透传，不另造状态机。回报靠轮询：派出的消息已进入对话（投递回执 accepted）且设备不在跑时，分页读取 user / assistant 历史，按派活 user 的 clientId 定位对应的最后一条 assistant 回复并按消息 id 去重；后续用户插话的回复和异常状态不得归给此前派活，历史读取期间的新派活不得被旧回报清除。每轮最多扫描 2000 行，预算不足时保留游标下一轮续读，不误判缺少回复；宿主 onAccepted / onAcceptedCommit 完成后才冻结回报身份并允许轮询收尾，accepted 回调失败恢复上一代等待状态，保存旧结果期间不得消费新派活身份或写入其捕获文本。同一远端 Worker 的 enqueue、accepted / commit 和身份确认复用现成 session 发送锁串行执行，避免并发回调与投递顺序错位。用户在运行设备上直接发的消息算插话，不触发回报。设备不可达只是运行期投影（`executionDevice.reachable`），不扩展 `OrcaWorkerStatus`；派活时不可达直接失败，不回退到本机。远端 Worker 通过运行设备转发四个既有 Worker 桥接工具，Lead 按同账号来源设备、真实任务、Worker 与 active team 核对归属；旧端没有该通道时保留自动回报。远端队列编辑仍不支持（Worker 管理自己排队回报的四个工具在运行设备侧回 `REMOTE_WORKER_NOT_SUPPORTED`，见「消息派发与 auto-bridge」第 12 条）；send_to_lead 的 steer 由 Lead 所在电脑沿本机原有守卫判定。界面：创建弹窗的「运行设备」适用于桌面本机任务及手机控制的非 SSH Lead；桌面远控视角保留原目录读取边界，控制端自身不能经 device-link 读取自己的目录，跨设备派发仍可由 Lead 的 MCP 执行；Lead 的 Agent 在其他电脑运行也可派发跨设备 Worker。工作电脑与 Agent 所在电脑可独立选择，后者需工作电脑声明 `agentDevice` 能力。入口由 `CreateWorkerPopover.executionDevicesEnabled` 控制，复用标准下拉列表，以有界滚动和键盘按名称定位应对多设备；选了其他电脑后，工作目录提供「对话 / 指定目录」，「对话」不传 `workingDir`、在运行设备创建不绑定项目的任务，「指定目录」只使用那台电脑上的绝对路径。手机版的新任务「开启协同」与 Lead「创建 Worker」共用设备下拉列表和两种目录模式；设备列表从 Lead 所在电脑读取，Agent、模型和供应商目录从所选运行设备读取。协同面板对远端 Worker 展示运行设备上的真实任务（`RemoteWorkerSessionPane`，先登记归属再读写）。实现指针：`orcaRemoteWorkerRuntime.ts`、`orcaRemoteWorkers.ts`、`orcaWorkerCreationService.ts` 的 `createRemoteWorkerInTeam`、运行设备侧 `orcaRemoteWorkerHost.ts`；协议见 `protocol-compatibility.md`「协同远端 Worker」。
 
 11. **改名只改身份元数据，不重建执行单元（状态：不变量）**
    Worker 的展示角色名 `role`（1-32 字符）与 team 内唯一标识 `label`（slug，`/^[a-z0-9_-]+$/i`，≤32）在创建后可通过 `update_worker` / `maker:worker:update` 修改。改名不是换执行单元：Agent、模型、权限、工作目录与已发起的 turn 都不受影响，也**不允许**借改名实施中途换模型（见坑点 #6）。`label` 唯一性由 `uniq_orca_workers_team_label` 最终把关（约束范围含已归档 worker），冲突必须回 `DUPLICATE_LABEL` 且零副作用；空操作必须 idempotent。同一 Worker 的读-改-写必须按 worker id 串行化，避免 UI 改 role 与 Lead 改 label 的并发请求互相完整回写覆盖；UI 保存时也只能提交用户实际改过的字段（服务端锁拦不住请求自带的旧值）。当 worker session 标题仍是 `orcaWorkerSessionTitle` 生成形态（`Worker · role · label`，role 与 label 相同时去重为 `Worker · role`）时同步改写为新形态；用户自定义/重命名过的标题不得被覆盖。插件 `releaseWorker` 同样按稳定的 Worker ID、团队归属与完成凭据归档，不按计划标签识别；改名不影响释放。成功的改名必须广播 `ORCA_WORKER_CHANGED`，并同步 worker session 的 `local-db:sessions:patched`（若标题被改写）。实现指针：`orcaTeamService.ts` 的 `updateWorker`、`orcaTeamStore.ts` 的 `updateWorkerIdentity`、`orcaWorkerCreationService.ts` 的 `orcaWorkerTitle`、`packages/lizi-mcps/src/xdt-helper/update_worker.ts`。

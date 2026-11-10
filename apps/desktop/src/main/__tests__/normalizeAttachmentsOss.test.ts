@@ -35,7 +35,7 @@ const extractChatFolder = vi.hoisted(() => vi.fn());
 vi.mock('../file-browser/chat-folder-transfer.js', () => ({ extractChatFolder }));
 const removeFile = vi.hoisted(() => vi.fn(async () => {}));
 const resolveSafe = vi.hoisted(() => vi.fn());
-vi.mock('../imageCacheStore.js', () => ({
+vi.mock('../imageCacheStore.desktop.js', () => ({
   copyFromPath,
   removeFile,
   resolveSafe,
@@ -52,7 +52,7 @@ const deleteZeroRefBlobRecord = vi.hoisted(() => vi.fn(async () => false));
 vi.mock('../cindy-media/ledger.js', () => ({ removeRefById, deleteZeroRefBlobRecord }));
 const blobResolveSafe = vi.hoisted(() => vi.fn());
 const deleteBlobFile = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../cindy-media/blobStore.js', () => ({
+vi.mock('../cindy-media/blobStore.desktop.js', () => ({
   deleteBlobFile,
   resolveSafe: blobResolveSafe,
   mimeForExt: (ext: string) =>
