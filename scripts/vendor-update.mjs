@@ -229,6 +229,9 @@ export async function updateVendors({ target = 'latest', kinds = VENDOR_KINDS, m
       for (const kind of ['claude', 'codex', 'codex-cli', 'pi', 'ripgrep', 'claude-sdk'].filter((k) => kinds.includes(k))) {
         const from = pinnedVersion(kind);
         const to = await desired(kind);
+        // No eligible release on the newest page (all prereleases, still soaking, or Codex past the
+        // verified list): the current pin is still tested by the gate, so keep it instead of blocking.
+        if (!to && target === 'latest') { log(`${kind}: keeping ${from} (no eligible newer release)`); continue; }
         if (!to) fail(`${kind}: no upstream release found${minAgeHours ? ` older than ${minAgeHours}h` : ''}`);
         if (to === from) { log(`${kind}: ${from} is current`); continue; }
         // Floating never moves backwards: the soak window can hide a release newer than the pin.
