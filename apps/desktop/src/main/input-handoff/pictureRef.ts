@@ -7,7 +7,7 @@ import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.
 import * as imageCacheStore from '../imageCacheStore.js';
 
 /**
- * Reads the screenshot an agent passes to ask_owner(kind="scan"): a local
+ * Reads the screenshot an agent passes to request_input_handoff(image): a local
  * image path (relative to the task folder) or a managed media URL. The bytes
  * only feed the host's QR reader; nothing from them goes back to the agent.
  * A file outside the task folder goes through the task's file grant first,

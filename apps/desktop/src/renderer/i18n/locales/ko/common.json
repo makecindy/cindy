@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}}개 실행 중",
       "limitAria": "{{name}}의 동시 실행 한도",
-      "limitOption_other": "한도 {{count}}",
+      "limitOption_other": "동시 {{count}}개",
       "weightAria": "{{name}}의 가중치",
       "weightOption": "가중치 {{weight}}",
       "assignAria": "{{name}}에 배정",
