@@ -685,6 +685,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。",
     "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
     "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "这是旧版分享，开启「仅使用 Agent-Net」后暂时不能用。关闭这个开关就能继续，也可以换成其他模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。"
   },

@@ -190,6 +190,10 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
   `docs/dev-rules/protocol-compatibility.md`。
+- 新增或修改 agent-net（Agent 网络）的传输核心、节点模型、能力清单、加密、中继选择、网络分享或拓扑界面前，
+  必须先读 `docs/product-rules/agent-net.md` 与 `docs/agent-net-plan.md`：两节点之间任何路径都必须
+  端到端加密、不允许明文降级，用户自建中继是一等能力，现有 device-link 能力不得退化；
+  `packages/agent-net-core` 是通用的可靠 UDP 协议层，不得写入 Cindy 专属设计。
 - 修改 Device Link 客户端、协议、relay、设备／媒体接口、能力协商或连接恢复行为前，必须先读
   `docs/dev-rules/protocol-compatibility.md` 的「自建中转同步维护」：凡影响自建中转的改动，
   必须在同一次改动中完成必要的同步适配与互通验证，不得留到后续。

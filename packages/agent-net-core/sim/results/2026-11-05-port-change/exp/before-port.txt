@@ -1,0 +1,3 @@
+== before-port exp_port（new-ping 副本，sim/src/migration.rs 里 same_route 恒为 false：两端都从头量、不补确认）
+RESULT up 20000000 down 1: runs 48 time 357.6s retransmitted 34509 client timeout losses 9710
+RESULT up 0 down 20000000: runs 48 time 410.8s retransmitted 84464 client timeout losses 18
