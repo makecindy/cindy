@@ -6430,7 +6430,9 @@
           "tenantId": "連線企業識別碼",
           "accountRemark": "本機帳號備註",
           "linkingBot": "正在關聯至機器人 {{name}}",
-          "botSummary": "{{bots}} 個機器人 · {{accounts}} 個帳號"
+          "botSummary": "{{bots}} 個機器人 · {{accounts}} 個帳號",
+          "workingDevice": "工作電腦：{{name}}",
+          "workingDeviceUnknown": "待確認"
         }
       },
       "summary": {

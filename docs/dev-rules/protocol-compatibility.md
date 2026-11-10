@@ -273,6 +273,11 @@ App ID、绑定 ID、身份配对与非嵌套规则由两仓校验器验证；�
 备注和已绑定机器人资料可离线显示；目录变化、跨组织登录、旧服务端降级不授予缓存中的任何工作权限。
 额外机器人配置使用服务端新增表，旧服务端的唯一性检查不了解该表；必须全部副本升级后才通过新版 Console 添加机器人。
 
+工作电脑状态：confirmed 状态可选 `workingDevice = { name, isCurrent }`。设置页按绑定显示工作电脑名称；只有明确 `isCurrent=false` 时显示“设为工作电脑”，本机已选中或状态未知时隐藏。
+双方协商 `provider-working-device-v1` 后，`provider.bind.selection` 允许专用于展示更新的 null requestId，必须同时包含 Feishu provider、ok=true、bindingId、scopeId、principalId 和 workingDevice。
+主进程只更新当前快照中完全匹配的既有绑定；初始快照前的元数据先暂存再按快照配对合并，不产生绑定、不授权任务、不结束 pending 关联或选择请求、不触发配置镜像。
+正常选择 ack 保留非空 requestId；旧客户端不收到 null requestId 的展示更新，服务端从既有工作电脑指针读信息，无新 migration、轮询或远控能力。新关联、跨电脑/飞书卡片切换、解绑回退与电脑改名后主动更新，断线后通过权威快照恢复。
+
 ## 群内能力提示（非执行终态）
 
 复用现有通用 card 消息合同，新增 `cindy.capability-notice` / `schemaRevision: 1`：data 只带固定 code（`GROUP_AUTHORIZATION_REQUIRED`、`GROUP_AUTHORIZATION_UNAVAILABLE`、`ATTACHMENTS_UNAVAILABLE`），fallback 为执行电脑本地化的完整可读提示。以伙伴 actor 发往原主群或话题；同执行 ID、epoch、类别复用同一稳定幂等 ID，并按既有消息 POST 合同放入 `operationId`（不发送本地 `clientId` 字段）；投递重试不创建执行、不结算模型轮次。

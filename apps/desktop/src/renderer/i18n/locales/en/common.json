@@ -6473,7 +6473,9 @@
           "tenantId": "Connection tenant ID",
           "accountRemark": "Local account note",
           "linkingBot": "Linking an account to {{name}}",
-          "botSummary": "{{bots}} bots · {{accounts}} accounts"
+          "botSummary": "{{bots}} bots · {{accounts}} accounts",
+          "workingDevice": "Working computer: {{name}}",
+          "workingDeviceUnknown": "Not yet confirmed"
         }
       },
       "summary": {

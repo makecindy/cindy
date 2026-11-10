@@ -923,8 +923,14 @@ export const PROVIDER_BIND_SELECT_TIMEOUT_MS = 10_000;
 
 /** Select this confirmed binding as the working device; requires the select_device action. */
 export type ProviderBindSelectPayload = ProviderBindRevokePayload;
-/** Acknowledges only the requested selection; does not change any device’s binding state. */
-export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload { ok: boolean }
+/** Selection acknowledgment, or presentation-only metadata (null requestId). Never creates a binding. */
+export interface ProviderBindSelectionPayload extends Omit<ProviderBindRevokePayload, 'requestId'> {
+  requestId: string | null;
+  ok: boolean;
+  scopeId?: string;
+  principalId?: string;
+  workingDevice?: { name: string | null; isCurrent: boolean };
+}
 
 /**
  * Shared payload for provider.bind.update and provider.bind.state. update is an
@@ -974,6 +980,8 @@ export interface ProviderBindStatusPayload {
   /** Full authorized bot catalog, negotiated separately from same-bot multi-bind. */
   apps?: ProviderAppBindingState[];
   tenantKey?: string | null;
+  /** Presentation only; selection is still authorized by bindingId. */
+  workingDevice?: { name: string | null; isCurrent: boolean };
 }
 
 export type ProviderBindUpdatePayload = ProviderBindStatusPayload;
@@ -1408,6 +1416,7 @@ export const HOOK_FEATURE_PROVIDER_BIND = 'provider-bind-v1';
 /** Multiple Feishu identities on one desktop; both peers must advertise it. */
 export const HOOK_FEATURE_PROVIDER_MULTI_BIND = 'provider-multi-bind-v1';
 export const HOOK_FEATURE_PROVIDER_MULTI_APP = 'provider-multi-app-v1';
+export const HOOK_FEATURE_PROVIDER_WORKING_DEVICE = 'provider-working-device-v1';
 
 /** Both peers must advertise this before using provider.prefs.* frames. */
 export const HOOK_FEATURE_PROVIDER_PREFS = 'provider-prefs-v1';

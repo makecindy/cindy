@@ -6538,7 +6538,9 @@
           "tenantId": "ID de organización de la conexión",
           "accountRemark": "Nota local de la cuenta",
           "linkingBot": "Vinculando cuenta a {{name}}",
-          "botSummary": "{{bots}} bots · {{accounts}} cuentas"
+          "botSummary": "{{bots}} bots · {{accounts}} cuentas",
+          "workingDevice": "Equipo de trabajo: {{name}}",
+          "workingDeviceUnknown": "Sin confirmar"
         }
       },
       "summary": {

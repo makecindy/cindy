@@ -864,6 +864,12 @@ function validateProviderBindSelect(p: Record<string, unknown>): string | null {
   return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.select') ?? null;
 }
 function validateProviderBindSelection(p: Record<string, unknown>): string | null {
+  if (p.requestId === null) {
+    if (p.provider !== 'feishu' || p.ok !== true || !isNonEmptyString(p.bindingId) || !isNonEmptyString(p.scopeId)
+      || !isNonEmptyString(p.principalId) || !isPlainObject(p.workingDevice) || !isNullableNonEmptyString(p.workingDevice.name)
+      || typeof p.workingDevice.isCurrent !== 'boolean') return 'provider.bind.selection working device metadata is invalid';
+    return null;
+  }
   return validateProviderBindRevoke(p)?.replaceAll('provider.bind.revoke', 'provider.bind.selection')
     ?? (typeof p.ok === 'boolean' ? null : 'provider.bind.selection.ok must be boolean');
 }
@@ -928,6 +934,8 @@ function validateProviderBindStatus(
     return `${label}.actions must not contain duplicates`;
   }
 
+  if (p.workingDevice !== undefined && (p.provider !== 'feishu' || p.state !== 'confirmed' || !isPlainObject(p.workingDevice)
+    || !isNullableNonEmptyString(p.workingDevice.name) || typeof p.workingDevice.isCurrent !== 'boolean')) return `${label}.workingDevice is invalid`;
   if (p.tenantKey !== undefined && !isNullableNonEmptyString(p.tenantKey)) return `${label}.tenantKey is invalid`;
   if (p.apps !== undefined) {
     if (label !== 'provider.bind.state' || p.provider !== 'feishu' || !Array.isArray(p.apps)) return `${label}.apps is only valid on Feishu state`;

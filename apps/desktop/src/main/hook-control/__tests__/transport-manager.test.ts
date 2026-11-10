@@ -20,6 +20,7 @@ import {
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_MULTI_BIND,
   HOOK_FEATURE_PROVIDER_MULTI_APP,
+  HOOK_FEATURE_PROVIDER_WORKING_DEVICE,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -3371,7 +3372,7 @@ describe('官方飞书 / Lark provider lane', () => {
     if (opts === undefined) throw new Error('Feishu transport was not created');
     expect(opts.url).toBe('ws://127.0.0.1:8794');
     // 第一里程碑由服务端排版: 不得声明 msg.op 或任何 Telegram 专属能力。
-    expect(opts.buildHello().features).toEqual([...FEISHU_FEATURES, HOOK_FEATURE_PROVIDER_MULTI_BIND, HOOK_FEATURE_PROVIDER_MULTI_APP]);
+    expect(opts.buildHello().features).toEqual([...FEISHU_FEATURES, HOOK_FEATURE_PROVIDER_MULTI_BIND, HOOK_FEATURE_PROVIDER_MULTI_APP, HOOK_FEATURE_PROVIDER_WORKING_DEVICE]);
     expect(opts.buildHello().features).not.toContain(HOOK_FEATURE_MESSAGE_OPS);
     expect(opts.buildHello().statusReactions).toBeUndefined();
 
@@ -5002,4 +5003,30 @@ it('authorizes exact bot-account pairs, chooses the requested bot, and rejects u
   expect(manager.setFeishuAccountLabel(b.bindingId, 'Partner work')).toBe(true);
   expect(manager.snapshot().feishu.bindings?.find((row) => row.bindingId === b.bindingId)?.localLabel).toBe('Partner work');
   expect(manager.setFeishuAccountLabel('foreign-binding', 'x')).toBe(false);
+});
+
+// Unit: work-computer metadata updates an existing row only, preserves pending linking, and cannot grant task access.
+it('merges working computer metadata around the initial snapshot without changing binding authority', () => {
+  const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+  manager.sync(); const opts = transports[0]!;
+  opts.onWelcome?.({ serverName: 'feishu', features: [...FEISHU_FEATURES, HOOK_FEATURE_PROVIDER_MULTI_BIND, HOOK_FEATURE_PROVIDER_WORKING_DEVICE] });
+  opts.onStatus('connected', null);
+  const a = { ...FEISHU_CONFIRMED, actions: ['revoke', 'select_device'], workingDevice: { name: 'Office PC', isCurrent: false } };
+  const metadata = (bindingId: string, scopeId: string, isCurrent: boolean) => makeProviderBindSelection({ requestId: null, provider: 'feishu', ok: true,
+    bindingId, scopeId, principalId: a.principalId!, workingDevice: { name: 'MacBook', isCurrent } });
+  opts.onMessage(metadata(a.bindingId!, a.scopeId!, true), () => true);
+  opts.onMessage(makeProviderBindState({ ...a, bindings: [a] }), () => true);
+  expect(manager.snapshot().feishu.bindings?.[0]?.workingDevice).toEqual({ name: 'MacBook', isCurrent: true });
+  expect(manager.snapshot().feishu.bindings?.[0]?.actions).not.toContain('select_device');
+  expect(manager.providerBindStart('feishu')).toBe(true);
+  const start = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
+  opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: start.payload.requestId }), () => true);
+  opts.onMessage(metadata(a.bindingId!, a.scopeId!, false), () => true);
+  expect(manager.snapshot().feishu.binding?.attemptId).toBe(FEISHU_PENDING.attemptId);
+  expect(manager.snapshot().feishu.bindings?.[0]?.workingDevice?.isCurrent).toBe(false);
+  expect(manager.snapshot().feishu.bindings?.[0]?.actions).toContain('select_device');
+  opts.onMessage(metadata('foreign-binding', a.scopeId!, true), () => true);
+  opts.onMessage(metadata(a.bindingId!, 'cli_foreign', true), () => true);
+  expect(manager.snapshot().feishu.bindings).toHaveLength(1);
+  expect(manager.snapshot().feishu.bindings?.[0]?.workingDevice?.isCurrent).toBe(false);
 });

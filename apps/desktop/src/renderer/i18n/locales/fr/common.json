@@ -6538,7 +6538,9 @@
           "tenantId": "Locataire de la connexion",
           "accountRemark": "Note locale du compte",
           "linkingBot": "Association du compte à {{name}}",
-          "botSummary": "{{bots}} bots · {{accounts}} comptes"
+          "botSummary": "{{bots}} bots · {{accounts}} comptes",
+          "workingDevice": "Ordinateur de travail : {{name}}",
+          "workingDeviceUnknown": "Pas encore confirmé"
         }
       },
       "summary": {

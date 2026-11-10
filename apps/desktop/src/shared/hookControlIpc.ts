@@ -126,6 +126,7 @@ export type ProviderBindingState =
 
 /** renderer 可见的 provider-neutral 绑定快照；不含任何 token/secret。 */
 export interface ProviderBindingView {
+  workingDevice?: { name: string | null; isCurrent: boolean };
   tenantKey?: string | null;
   localLabel?: string;
   provider: HookProvider;

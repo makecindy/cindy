@@ -562,3 +562,13 @@ it('validates a multi-app Feishu catalog with independently scoped identities', 
   expectReject({ ...message, payload: { ...message.payload, apps: [{ ...apps[0], avatarUrl: 'http://unsafe.example.test/avatar' }, apps[1]] } }, 'apps');
   expectReject({ ...message, payload: { ...message.payload, principalId: 'other-user' } }, 'apps');
 });
+
+// Presentation-only updates identify an existing bot/account/binding and cannot acknowledge a pending selection.
+it('round-trips working computer snapshots and strictly validates unsolicited selection metadata', () => {
+  roundTrip(makeProviderBindState({ ...CONFIRMED, provider: 'feishu', workingDevice: { name: 'Office PC', isCurrent: false } }));
+  const payload = { provider: 'feishu' as const, requestId: null, bindingId: 'b1', scopeId: 'cli_a', principalId: 'ou_a', ok: true, workingDevice: { name: 'MacBook', isCurrent: true } };
+  roundTrip(makeProviderBindSelection(payload));
+  for (const patch of [{ scopeId: undefined }, { workingDevice: undefined }, { ok: false }, { provider: 'telegram' }]) {
+    expectReject({ ...makeProviderBindSelection(payload), payload: { ...payload, ...patch } }, 'working device');
+  }
+});

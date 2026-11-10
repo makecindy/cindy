@@ -1644,7 +1644,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                       {t(`settings.remoteControl.hook.${provider}.addToGroup`)}
                     </Button>
                   ) : null}
-                  {provider === 'feishu' && cs.actions.includes('select_device') ? (
+                  {provider === 'feishu' && cs.actions.includes('select_device') && cs.binding?.workingDevice?.isCurrent === false ? (
                     <Button id={imBotSettings.cindyFeishuWorkingDevice.targetId} data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
                       variant="secondary" size="xs" compact type="button"
                       disabled={selectingWorkingDevice || !view.available || view.status !== 'connected'}
@@ -1682,6 +1682,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </div>
           ) : null}
 
+          {provider === 'feishu' && !multiBot && !multiAccount && cs.confirmed ? <span className="break-words text-11 text-[var(--text-secondary)]">{t('settings.remoteControl.hook.feishu.workingDevice', { name: cs.binding?.workingDevice?.name ?? t('settings.remoteControl.hook.feishu.workingDeviceUnknown') })}</span> : null}
           {!multiBot && multiAccount && accountRows.length > 0 ? (
             <div className="flex flex-col gap-2">
               {accountRows.map((account, index) => (
@@ -1689,9 +1690,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-default)] pt-2">
                   <span className="min-w-0 break-all text-12 text-[var(--text-primary)]">
                     {account.principalName ?? account.principalId}
+                    <span className="block text-11 text-[var(--text-secondary)]">{t('settings.remoteControl.hook.feishu.workingDevice', { name: account.workingDevice?.name ?? t('settings.remoteControl.hook.feishu.workingDeviceUnknown') })}</span>
                   </span>
                   <div className="flex flex-wrap items-center gap-2">
-                    {account.actions.includes('select_device') ? (
+                    {account.actions.includes('select_device') && account.workingDevice?.isCurrent === false ? (
                       <Button id={index === 0 ? imBotSettings.cindyFeishuWorkingDevice.targetId : undefined}
                         data-setting-id={index === 0 ? imBotSettings.cindyFeishuWorkingDevice.id : undefined}
                         variant="secondary" size="xs" compact type="button"
@@ -1719,7 +1721,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </div>
           ) : null}
 
-          {multiBot ? <FeishuOfficialBotsPanel view={view} run={runHookAction}
+          {multiBot ? <FeishuOfficialBotsPanel view={view} run={runHookAction} selecting={selectingWorkingDevice}
             onSelect={(id) => void selectWorkingDevice(id)} onUnlink={(id) => void handleProviderUnlink('feishu', id)}
             onOpen={(action, scopeId) => handleProviderOpen('feishu', action, scopeId)} onCopyCode={() => void handleCopyBindCode('feishu')} onCopyLink={() => void handleCopyProviderLink('feishu')} /> : null}
 

@@ -602,7 +602,7 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
       binding: { provider: 'feishu', state: 'confirmed', attemptId: null, bindingId: 'local-feishu',
         principalId: 'ou_user', principalName: 'Alice', scopeId: 'cli_app', scopeName: 'Cindy',
         connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null,
-        actions: outcome === 'old-server' ? ['revoke'] : ['revoke', 'select_device'] },
+        workingDevice: { name: 'Office PC', isCurrent: false }, actions: outcome === 'old-server' ? ['revoke'] : ['revoke', 'select_device'] },
     } };
     ipc.get.mockResolvedValue({ hook });
     let resolve!: (value: { hook: SlackHookView }) => void; let reject!: (error: Error) => void;
@@ -2470,7 +2470,7 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
 it('adds another Feishu account and applies per-account actions without unlinking the other account', async () => {
   const account = (bindingId: string, name: string) => ({ provider: 'feishu' as const, state: 'confirmed' as const,
     bindingId, principalId: `ou_${bindingId}`, principalName: name, attemptId: null, scopeId: 'cli_app', scopeName: 'Cindy',
-    connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null, actions: ['revoke', 'select_device'] });
+    connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null, workingDevice: { name: 'Workstation', isCurrent: false }, actions: ['revoke', 'select_device'] });
   const a = account('a', 'Account A'); const b = account('b', 'Account B');
   const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu, enabled: true, available: true,
     status: 'connected', url: 'wss://feishu.example.test', binding: a, bindings: [a, b], multiBindAvailable: true } };
@@ -2495,7 +2495,7 @@ it('adds another Feishu account and applies per-account actions without unlinkin
 it('shows bot and account identifiers and sends actions for the selected bot', async () => {
   const a = { provider: 'feishu' as const, state: 'confirmed' as const, bindingId: 'a', principalId: 'ou_a', principalName: 'Alice',
     attemptId: null, scopeId: 'cli_product', scopeName: 'Product bot', connectUrl: null, bindCode: null, expiresAt: null,
-    reason: null, remediationUrl: null, tenantKey: 'tenant_product', actions: ['revoke', 'select_device'] };
+    reason: null, remediationUrl: null, tenantKey: 'tenant_product', workingDevice: { name: 'Workstation', isCurrent: false }, actions: ['revoke', 'select_device'] };
   const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu, enabled: true, available: true, status: 'connected',
     url: 'wss://feishu.example.test', binding: a, bindings: [a], apps: [
       { scopeId: 'cli_product', scopeName: 'Product bot', brand: 'feishu', avatarUrl: null, multiBindAvailable: true },
@@ -2514,4 +2514,26 @@ it('shows bot and account identifiers and sends actions for the selected bot', a
   await waitFor(() => expect(ipc.providerBindStart).toHaveBeenCalledWith('feishu', 'cli_partner'));
   fireEvent.click(partner.getByRole('button', { name: 'settings.remoteControl.hook.feishu.openBot' }));
   await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('feishu', 'provider', 'cli_partner'));
+});
+
+// Unit/jsdom: only non-current accounts expose selection; the working computer name stays visible per account.
+it('shows each account working computer and hides selection when this computer is selected', async () => {
+  const account = (id: string, isCurrent: boolean, name: string) => ({ provider: 'feishu' as const, state: 'confirmed' as const,
+    bindingId: id, principalId: `ou_${id}`, principalName: id, attemptId: null, scopeId: 'cli_product', scopeName: 'Product bot',
+    connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null, actions: ['select_device', 'revoke'], workingDevice: { name, isCurrent } });
+  const a = account('a', true, 'MacBook'); const b = account('b', false, 'Office PC');
+  const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu, enabled: true, available: true, status: 'connected', url: 'wss://feishu.example.test',
+    binding: a, bindings: [a, b], apps: [{ scopeId: 'cli_product', scopeName: 'Product bot', brand: 'feishu', avatarUrl: null, multiBindAvailable: true }] } };
+  ipc.get.mockResolvedValue({ hook }); render(<HookConnectionsSection />); await expandChannelCard(FEISHU_CARD);
+  await screen.findByRole('region', { name: 'Product bot' });
+  const button = screen.getByRole('button', { name: 'settings.remoteControl.hook.feishu.setWorkingDevice' });
+  expect(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.setWorkingDevice' })).toHaveLength(1);
+  ipc.providerBindSelect.mockResolvedValue({ hook });
+  fireEvent.click(button);
+  await waitFor(() => expect(ipc.providerBindSelect).toHaveBeenCalledWith('feishu', 'b'));
+  const listener = ipc.onStatusChanged.mock.calls.at(-1)![0];
+  act(() => listener({ ...hook, feishu: { ...hook.feishu, bindings: [a, { ...b, workingDevice: { name: 'MacBook', isCurrent: true } }] } }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'settings.remoteControl.hook.feishu.setWorkingDevice' })).toBeNull());
+  expect(tCalls.some(({ key, vars }) => key === 'settings.remoteControl.hook.feishu.workingDevice' && vars?.name === 'MacBook')).toBe(true);
+  expect(tCalls.some(({ key, vars }) => key === 'settings.remoteControl.hook.feishu.workingDevice' && vars?.name === 'Office PC')).toBe(true);
 });

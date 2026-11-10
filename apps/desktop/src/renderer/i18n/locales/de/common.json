@@ -6473,7 +6473,9 @@
           "tenantId": "Verbindungsmandant-ID",
           "accountRemark": "Lokale Kontonotiz",
           "linkingBot": "Konto mit {{name}} verknüpfen",
-          "botSummary": "{{bots}} Bots · {{accounts}} Konten"
+          "botSummary": "{{bots}} Bots · {{accounts}} Konten",
+          "workingDevice": "Arbeitscomputer: {{name}}",
+          "workingDeviceUnknown": "Noch nicht bestätigt"
         }
       },
       "summary": {

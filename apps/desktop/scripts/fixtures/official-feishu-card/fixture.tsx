@@ -24,6 +24,7 @@ function view(kind: string): SlackHookView {
       { scopeId: 'cli_project', scopeName: 'Cindy · 项目团队', brand: 'lark', avatarUrl: null, multiBindAvailable: true },
     ];
     base.feishu.bindings = base.feishu.bindings!.map((row, index) => ({ ...row,
+      workingDevice: { name: index % 2 === 0 ? '当前电脑 · MacBook' : '工作站 · Studio', isCurrent: index % 2 === 0 },
       scopeId: index < 2 ? 'cli_app' : 'cli_partner', tenantKey: index < 2 ? 'tenant_product' : 'tenant_partner',
       localLabel: index === 1 ? '外部协作账号' : undefined,
     }));
@@ -42,7 +43,7 @@ function view(kind: string): SlackHookView {
       base.feishu.binding.actions.push('open_provider');
     }
     base.feishu.bindings = [
-      { ...first, principalName: '产品团队账号' },
+      { ...first, principalName: '产品团队账号', workingDevice: { name: '当前电脑 · MacBook', isCurrent: true } },
       { ...first, bindingId: 'partner', principalId: 'ou_partner', principalName: '合作伙伴账号' },
       { ...first, bindingId: 'project', principalId: 'ou_project', principalName: '项目团队账号' },
       { ...first, bindingId: 'personal', principalId: 'ou_personal', principalName: '个人飞书账号' },

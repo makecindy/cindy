@@ -6430,7 +6430,9 @@
           "tenantId": "连接企业标识",
           "accountRemark": "本机账号备注",
           "linkingBot": "正在关联到机器人 {{name}}",
-          "botSummary": "{{bots}} 个机器人 · {{accounts}} 个账号"
+          "botSummary": "{{bots}} 个机器人 · {{accounts}} 个账号",
+          "workingDevice": "工作电脑：{{name}}",
+          "workingDeviceUnknown": "待确认"
         }
       },
       "summary": {

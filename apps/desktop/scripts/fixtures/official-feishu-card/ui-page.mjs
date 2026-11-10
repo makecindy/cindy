@@ -49,6 +49,7 @@ export default {
       assert.equal(await card.getByRole('region').count(), 3);
       assert.ok(await card.getByText('Cindy · 合作伙伴', { exact: true }).isVisible());
       assert.equal(await card.getByRole('textbox').count(), 4);
+      assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.setWorkingDevice'), exact: true }).count(), 2);
       await ui.capture('bot-identity', { locator: card.getByRole('region').first() });
       if (ui.data.kind === 'bots-pending') {
         await card.getByRole('region', { name: 'Cindy · 项目团队' }).scrollIntoViewIfNeeded();

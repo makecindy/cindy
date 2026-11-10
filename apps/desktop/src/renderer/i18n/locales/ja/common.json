@@ -6430,7 +6430,9 @@
           "tenantId": "接続先テナント ID",
           "accountRemark": "この端末のアカウントメモ",
           "linkingBot": "{{name}} にアカウントを連携中",
-          "botSummary": "ボット {{bots}} 件 · アカウント {{accounts}} 件"
+          "botSummary": "ボット {{bots}} 件 · アカウント {{accounts}} 件",
+          "workingDevice": "作業用コンピューター：{{name}}",
+          "workingDeviceUnknown": "未確認"
         }
       },
       "summary": {

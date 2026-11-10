@@ -5,8 +5,9 @@ import { Input } from '@/components/ui/input';
 import type { ProviderHookView, SlackHookView } from '../../../shared/hookControlIpc';
 
 /** Bot identity and Feishu identity are separate: every action retains both keys. */
-export function FeishuOfficialBotsPanel({ view, run, onSelect, onUnlink, onCopyCode, onCopyLink, onOpen }: {
+export function FeishuOfficialBotsPanel({ view, run, selecting, onSelect, onUnlink, onCopyCode, onCopyLink, onOpen }: {
   view: ProviderHookView;
+  selecting: boolean;
   run: (action: () => Promise<{ hook: SlackHookView }>) => void;
   onOpen: (action: 'connect' | 'provider', scopeId?: string) => void;
   onSelect: (bindingId: string) => void;
@@ -37,10 +38,11 @@ export function FeishuOfficialBotsPanel({ view, run, onSelect, onUnlink, onCopyC
           {account.localLabel && account.principalName ? <div className="break-words text-11 text-[var(--text-secondary)]">{account.principalName}</div> : null}
           <div className="select-text break-all text-11 text-[var(--text-tertiary)]">Open ID: {account.principalId}</div>
           {account.tenantKey ? <div className="select-text break-all text-11 text-[var(--text-tertiary)]">{t(`${key}.tenantId`)}: {account.tenantKey}</div> : null}
+          <div className="break-words text-11 text-[var(--text-secondary)]">{t(`${key}.workingDevice`, { name: account.workingDevice?.name ?? t(`${key}.workingDeviceUnknown`) })}</div>
           <AccountRemark key={`${account.bindingId}:${account.localLabel ?? ''}`} label={account.localLabel ?? ''} placeholder={t(`${key}.accountRemark`)}
             onSave={(label) => run(() => window.electronAPI.hookControl.setFeishuAccountLabel(account.bindingId!, label))} />
           <div className="flex flex-wrap gap-2">
-            {account.actions.includes('select_device') ? <Button variant="secondary" size="xs" compact disabled={!connected}
+            {account.actions.includes('select_device') && account.workingDevice?.isCurrent === false ? <Button variant="secondary" size="xs" compact disabled={!connected || selecting}
               onClick={() => onSelect(account.bindingId!)}>{t(`${key}.setWorkingDevice`)}</Button> : null}
             {account.actions.includes('revoke') ? <Button variant="secondary" size="xs" compact disabled={!connected || inProgress}
               onClick={() => onUnlink(account.bindingId!)}>{t(`${key}.unlink`)}</Button> : null}

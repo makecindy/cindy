@@ -28,6 +28,7 @@ import {
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_MULTI_BIND,
   HOOK_FEATURE_PROVIDER_MULTI_APP,
+  HOOK_FEATURE_PROVIDER_WORKING_DEVICE,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -566,6 +567,7 @@ interface NeutralProviderLane {
   /** Provider-neutral state; confirmed cache survives provider disable/restart. */
   binding: ProviderBindingView | null;
   apps?: ProviderHookView['apps'];
+  workingDeviceChanges: Map<string, { scopeId: string; principalId: string; workingDevice: NonNullable<ProviderBindingView['workingDevice']> }>;
   confirmedBindings: ProviderBindingView[];
   revokedBindingIds: Set<string>;
   snapshotChanges: Map<string, ProviderBindingView>;
@@ -841,7 +843,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     requiredFeatures: feishuProviderFeatures,
     // 与 Telegram 相同: 服务端按 hello.features 判定 provider 协商结果, 客户端
     // 要求的基础能力必须全部自报。
-    helloFeatures: [...feishuProviderFeatures, HOOK_FEATURE_PROVIDER_MULTI_BIND, HOOK_FEATURE_PROVIDER_MULTI_APP],
+    helloFeatures: [...feishuProviderFeatures, HOOK_FEATURE_PROVIDER_MULTI_BIND, HOOK_FEATURE_PROVIDER_MULTI_APP, HOOK_FEATURE_PROVIDER_WORKING_DEVICE],
     isEnabled: () => store.get().feishuEnabled,
     setEnabled: (enabled) => {
       store.setProviderEnabled('feishu', enabled);
@@ -909,6 +911,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       status: null,
       lastError: null,
       binding: config.restoreCachedBinding(),
+      workingDeviceChanges: new Map(),
       confirmedBindings: [],
       revokedBindingIds: new Set(),
       snapshotChanges: new Map(),
@@ -1051,6 +1054,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       lane.confirmedBindings = [];
       lane.revokedBindingIds.clear();
       lane.snapshotChanges.clear();
+      lane.workingDeviceChanges.clear();
     }
     restoreFeishuBindings();
     startEnabledProviders();
@@ -1446,7 +1450,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       capabilityPending: enabled && url.length > 0 && !lane.serverWelcomeReceived,
       ...(lane.config.provider === 'feishu' ? {
         ...(lane.apps === undefined ? {} : { apps: lane.apps.map((app) => ({ ...app })) }),
-        bindings: lane.confirmedBindings.map((row) => ({ ...row, localLabel: labels.get(JSON.stringify([row.scopeId, row.principalId])), actions: row.actions.filter((action) => action !== 'select_device' || selectionReady) })),
+        bindings: lane.confirmedBindings.map((row) => ({ ...row, localLabel: labels.get(JSON.stringify([row.scopeId, row.principalId])), actions: row.actions.filter((action) => action !== 'select_device' || (selectionReady && !row.workingDevice?.isCurrent)) })),
         multiBindAvailable: multiBindReady(lane),
       } : {}),
       behaviorAvailable:
@@ -1454,7 +1458,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         lane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_BEHAVIOR),
       binding:
         lane.binding === null ? null : { ...lane.binding, actions: lane.binding.actions.filter(
-          (action) => action !== 'select_device' || selectionReady) },
+          (action) => action !== 'select_device' || (selectionReady && !lane.binding?.workingDevice?.isCurrent)) },
       // store 侧已保证读出来的别名仍然有效(目录删掉即归零), 这里直投。
       defaultWorkspace: defaultWorkspaceOf(store.get(), lane.config.provider),
       ...(lane.config.provider === 'x' ? { companionBotId: store.get().xCompanionBotId ?? null } : {}),
@@ -1580,6 +1584,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       principalId: payload.principalId,
       principalName: payload.principalName,
       tenantKey: payload.tenantKey,
+      ...(payload.workingDevice ? { workingDevice: { ...payload.workingDevice } } : {}),
       scopeId: payload.scopeId,
       scopeName: payload.scopeName,
       connectUrl: payload.connectUrl,
@@ -1863,7 +1868,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
             if (change.state === 'confirmed' && (!lane.apps || lane.apps.some((app) => app.scopeId === change.scopeId))) lane.confirmedBindings.push(change);
             else lane.revokedBindingIds.add(id);
           }
+          for (const row of lane.confirmedBindings) {
+            const change = row.bindingId ? lane.workingDeviceChanges.get(row.bindingId) : undefined;
+            if (change?.scopeId === row.scopeId && change.principalId === row.principalId) row.workingDevice = { ...change.workingDevice };
+          }
           lane.snapshotChanges.clear();
+          lane.workingDeviceChanges.clear();
         } else if (view.state === 'confirmed' && view.bindingId) {
           const index = lane.confirmedBindings.findIndex((row) => row.bindingId === view.bindingId);
           if (index < 0) lane.confirmedBindings.push(view);
@@ -2527,6 +2537,20 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     }
     if (msg.type === 'provider.bind.selection') {
       if (lane === null || msg.payload.provider !== lane.config.provider) return;
+      if (msg.payload.requestId === null) {
+        const { bindingId, scopeId, principalId, workingDevice } = msg.payload;
+        if (lane.config.provider !== 'feishu' || !lane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_WORKING_DEVICE) || !scopeId || !principalId || !workingDevice) return;
+        if (lane.awaitingStateSnapshot) {
+          lane.workingDeviceChanges.set(bindingId, { scopeId, principalId, workingDevice: { ...workingDevice } });
+          return;
+        }
+        const row = lane.confirmedBindings.find((item) => item.bindingId === bindingId && item.scopeId === scopeId && item.principalId === principalId);
+        if (!row) return;
+        row.workingDevice = { ...workingDevice };
+        if (lane.binding?.state === 'confirmed' && lane.binding.bindingId === bindingId) lane.binding.workingDevice = { ...workingDevice };
+        notifyStatus(toView());
+        return;
+      }
       const pending = lane.pendingSelection;
       if (pending === null || msg.payload.requestId !== pending.requestId || msg.payload.bindingId !== pending.bindingId) return;
       lane.pendingSelection = null;
@@ -3122,6 +3146,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         const supported = laneCapabilityReady(lane);
         lane.awaitingStateSnapshot = supported;
         lane.snapshotChanges.clear();
+        lane.workingDeviceChanges.clear();
         if (!supported) {
           // A rolling deployment may briefly route this enabled client to an
           // older node. Preserve the user's explicit preference and keep the
@@ -3704,6 +3729,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           lane.confirmedBindings = [];
           lane.revokedBindingIds.clear();
           lane.snapshotChanges.clear();
+          lane.workingDeviceChanges.clear();
           lane.serverFeatures = [];
           lane.serverWelcomeReceived = false;
         }
