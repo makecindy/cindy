@@ -246,6 +246,7 @@ import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
   emptyPiProjectResourceCliPaths,
+  type PiProjectResourceCliPaths,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
   piProjectResourcesDrifted,
@@ -4071,27 +4072,25 @@ export class PiAgent extends BaseAgent {
     // 复用同一个 collector 重新采集后逐项比较(见 piProjectResourcesDrifted),
     // 不另存任何基线 —— 存基线就等于手写一份「collector 消费什么」的镜像,
     // 镜像与实现必然分歧(2026-11-10 六轮漏检全部出在这里)。
-    const collectedProjectResources = loadProjectResourcesInPlace
-      ? guestRoot
-        ? restrictPiGuestProjectResources(collectPiProjectResourceCliPaths(opts.workingDir), guestRoot)
-        : collectPiProjectResourceCliPaths(opts.workingDir)
-      : emptyPiProjectResourceCliPaths();
+    // spawn 时冻结的停用清单:argv 与漂移比较都必须用这一份,否则「删掉一个
+    // 从未加载的停用 skill」会被当成漂移,白等一次冷启动(Greptile P2)。
+    const disabledSkillPathsAtLaunch = currentDisabledSkillLaunchPaths(disabledSkillLaunch);
+    // 采集 → argv 资源集合的唯一口径(受邀者裁剪 + 停用过滤)。启动与漂移比较
+    // 共用它,所以「比较口径」不可能与「实际 argv」分叉。
+    const projectResourceToCliPaths = (collected: PiProjectResourceCliPaths): PiProjectResourceCliPaths => {
+      const scoped = guestRoot ? restrictPiGuestProjectResources(collected, guestRoot) : collected;
+      return {
+        ...scoped,
+        skills: filterPiProjectCliSkills(scoped.skills, disabledSkillPathsAtLaunch),
+      };
+    };
     const projectResourceCli = loadProjectResourcesInPlace
-      ? {
-          ...collectedProjectResources,
-          skills: filterPiProjectCliSkills(
-            collectedProjectResources.skills,
-            currentDisabledSkillLaunchPaths(disabledSkillLaunch),
-          ),
-        }
-      : collectedProjectResources;
+      ? projectResourceToCliPaths(collectPiProjectResourceCliPaths(opts.workingDir))
+      : emptyPiProjectResourceCliPaths();
     // 启动快照:供运行时空闲时的资源漂移检测(见 handle.hasProjectResourceDrift)。
-    // 只存 argv 实际用的集合与受邀者裁剪口径 —— 没有第二份基线。
+    // 只存 argv 实际用的集合与该口径 —— 没有第二份基线。
     const projectResourceLaunchSnapshot = loadProjectResourcesInPlace
-      ? snapshotPiProjectResourceLaunch(
-        opts.workingDir,
-        collectedProjectResources,
-        guestRoot ? (paths) => restrictPiGuestProjectResources(paths, guestRoot) : undefined)
+      ? snapshotPiProjectResourceLaunch(opts.workingDir, projectResourceCli, projectResourceToCliPaths)
       : null;
 
     // Own the entire managed-skill setup in the existing startup rollback:

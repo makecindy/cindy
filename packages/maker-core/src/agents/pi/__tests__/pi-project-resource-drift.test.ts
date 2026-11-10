@@ -36,8 +36,8 @@ function writeSkill(relativeDir: string, name: string): void {
 }
 
 /** 生产调用点同序:快照 = 当前采集结果(采集即 argv)。 */
-function snapshot(restrict?: (paths: PiProjectResourceCliPaths) => PiProjectResourceCliPaths) {
-  return snapshotPiProjectResourceLaunch(project, collectPiProjectResourceCliPaths(project), restrict);
+function snapshot(toCliPaths?: (paths: PiProjectResourceCliPaths) => PiProjectResourceCliPaths) {
+  return snapshotPiProjectResourceLaunch(project, collectPiProjectResourceCliPaths(project), toCliPaths);
 }
 
 function real(target: string): string {
@@ -223,6 +223,27 @@ describe('piProjectResourcesDrifted', () => {
     const baseline = snapshot();
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     writeFileSync(target, '---\ndescription: t\n---\n');
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('disabled skills do not affect argv, so their removal is not drift', () => {
+    // argv 只含未被停用的项目技能;删掉一个从未加载的停用技能不应触发冷启动。
+    // 停用清单在 spawn 时冻结,启动与比较共用同一口径(toCliPaths)。
+    writeSkill(path.join('.pi', 'skills'), 'alpha');
+    writeSkill(path.join('.pi', 'skills'), 'disabled');
+    const disabled = [real(path.join(project, '.pi', 'skills', 'disabled'))];
+    const toCliPaths = (paths: PiProjectResourceCliPaths): PiProjectResourceCliPaths => ({
+      ...paths,
+      skills: Object.freeze(paths.skills.filter((entry) => !disabled.includes(entry))),
+    });
+    const collected = collectPiProjectResourceCliPaths(project);
+    const baseline = snapshotPiProjectResourceLaunch(project, toCliPaths(collected), toCliPaths);
+    expect(baseline.paths.skills).toEqual([real(path.join(project, '.pi', 'skills', 'alpha'))]);
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    rmSync(path.join(project, '.pi', 'skills', 'disabled'), { recursive: true, force: true });
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    // 未被停用的技能变化仍然必须检出
+    writeSkill(path.join('.pi', 'skills'), 'beta');
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 

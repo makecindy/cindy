@@ -214,17 +214,18 @@ export interface PiProjectResourceLaunchSnapshot {
   readonly workingDir: string;
   /** spawn 时 argv 里的资源路径集合。漂移 = 现在采集一遍是否仍等于它。 */
   readonly paths: PiProjectResourceCliPaths;
-  /** 受邀者裁剪口径(非受邀者 null):fresh 必须先经同一裁剪再比,否则拿全量比
-   * 裁剪基线恒判漂移 → 回收死循环。 */
-  readonly restrict: ((paths: PiProjectResourceCliPaths) => PiProjectResourceCliPaths) | null;
+  /** 采集 → argv 的唯一口径(受邀者裁剪 + 停用技能过滤)。启动与比较都用它:
+   * 少了它,受邀者会拿全量比裁剪基线恒判漂移(回收死循环),停用技能的增删会
+   * 被当成漂移(白等一次冷启动)。 */
+  readonly toCliPaths: ((collected: PiProjectResourceCliPaths) => PiProjectResourceCliPaths) | null;
 }
 
 export function snapshotPiProjectResourceLaunch(
   workingDir: string,
   paths: PiProjectResourceCliPaths,
-  restrict?: (paths: PiProjectResourceCliPaths) => PiProjectResourceCliPaths,
+  toCliPaths?: (collected: PiProjectResourceCliPaths) => PiProjectResourceCliPaths,
 ): PiProjectResourceLaunchSnapshot {
-  return Object.freeze({ workingDir, paths, restrict: restrict ?? null });
+  return Object.freeze({ workingDir, paths, toCliPaths: toCliPaths ?? null });
 }
 
 function samePiResourceList(left: readonly string[], right: readonly string[]): boolean {
@@ -247,7 +248,7 @@ function samePiResourceList(left: readonly string[], right: readonly string[]): 
  */
 export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnapshot): boolean {
   const fresh = collectPiProjectResourceCliPaths(snapshot.workingDir);
-  const compare = snapshot.restrict ? snapshot.restrict(fresh) : fresh;
+  const compare = snapshot.toCliPaths ? snapshot.toCliPaths(fresh) : fresh;
   return !(
     samePiResourceList(compare.skills, snapshot.paths.skills)
     && samePiResourceList(compare.promptTemplates, snapshot.paths.promptTemplates)
