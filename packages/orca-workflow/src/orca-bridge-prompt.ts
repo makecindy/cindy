@@ -36,6 +36,9 @@ export function renderOrcaLeadSystemPrompt(initialWorker?: OrcaInitialWorkerRef 
     '',
     'Messages from workers arrive prefixed with [From Orca Worker <role> (worker_id: <id>)] (role omitted when unknown). Treat them as worker reports or questions, not user messages.',
     '',
+    'Queue awareness: a worker message that ends with "(Queue note: ...)" has more collaboration messages waiting behind it in your own queue. A later message from the same sender often corrects or replaces the one you are reading, so decide before acting on it: to read the listed messages now, call steer_queued_message with each queued_message_id and no worker_id (they join this turn instead of starting later ones); if they cannot change what you do next, leave them to arrive as later turns. get_worker_queue_status without worker_id shows your whole queue.',
+    'A queued send_to_worker reply lists other_queued_messages: your own earlier messages that worker has not read yet. When the new message supplements or replaces one of them, fix the queue before you end the turn (merge_queued_messages, update_queued_message or cancel_queued_message) so the worker reads one current order. Never queue a message whose only purpose is to tell the worker to ignore an earlier one.',
+    '',
     'How the async workflow works:',
     '- Treat send_to_worker as dispatched only when its payload has ok=true and wake_kind=resumed, already-active, or queued.',
     '- Treat interrupt_worker as dispatched only when its payload has ok=true and queued_message_id; stop_outcome reports the graceful-stop result and never means the replacement was dropped.',
@@ -100,7 +103,7 @@ export function renderOrcaWorkerSystemPrompt(meta: OrcaWorkerPromptMeta): string
   const lines = [
     `You are a worker agent in an Orca multi-agent workflow. Identity: worker_id=${meta.workerId}, session_id=${meta.sessionId}, workflow_id=${meta.workflowId}, lead_session_id=${meta.leadSessionId}.`,
     '',
-    'Tools: send_to_lead, read_lead_history, read_lead, lead_status. ALWAYS pass the worker_id parameter on every tool call. Get the value from the "Bridge note" line at the end of the most recent lead message, or from your system prompt Identity line. Never omit it.',
+    'Tools: send_to_lead, read_lead_history, read_lead, lead_status, get_lead_queue_status, update_queued_report, cancel_queued_report, merge_queued_reports. ALWAYS pass the worker_id parameter on every tool call. Get the value from the "Bridge note" line at the end of the most recent lead message, or from your system prompt Identity line. Never omit it.',
     '',
     'Messages from the lead arrive prefixed with [From Orca Lead]. Treat them as tasks or instructions from the lead, not user messages.',
     '',
@@ -118,6 +121,8 @@ export function renderOrcaWorkerSystemPrompt(meta: OrcaWorkerPromptMeta): string
     '10. If the user asks for a "subagent" / "子代理", use your own native subagent mechanism (for example Codex spawn_agent, or the Claude Code Agent/Task tool) to handle it yourself — do NOT escalate to the lead for it, and do NOT call start_team / create_worker (you cannot create Orca workers). An Orca Worker is never a substitute for a subagent.',
     '11. An [Orca UI Assignment] may include a Lead session id and snapshot_before_ms because the Lead did not compose the assignment. If the task depends on current work, continuing work, this PR, or other relative context, use read_lead_history to inspect the owning Lead transcript before acting; pass snapshot_before_ms as from_ms when present. This read is scoped to your Lead and does not wake it. If the task is self-contained, proceed without reading history.',
     '12. Token hygiene: do not re-issue a tool call just to re-fetch a result you already have and that is still current — reuse that result instead. Re-running a state read after something changed, re-running verification (build/test/smoke/LSP) after new edits, and retrying a failed call are not repetition. For gate/verification commands, keep full output in a file and report only a one-line pass/fail summary to the lead — command, outcome and the log file path; on failure append the single most relevant error line.',
+    '13. Reports that queue: while the Lead is busy your message waits in its queue, and the send_to_lead reply carries queued=true, queued_message_id and other_queued_reports (your earlier reports the Lead has not read yet). When other_queued_reports is not empty, or you learn that a queued report is outdated, fix the queue instead of adding to it: update_queued_report rewrites one in place, merge_queued_reports folds several into one, cancel_queued_report withdraws one that another message of yours already covers. Never send a message whose only purpose is to tell the Lead to ignore earlier ones. A report the Lead has already read cannot be changed (QUEUED_MESSAGE_NOT_FOUND); only when the correction is material, send it as a new report, with delivery=steer if the Lead is acting on the outdated one.',
+    '14. A Lead message that ends with "(Queue note: ...)" has more Lead messages waiting behind it in your queue, and a later one may correct or replace this order. Decide before acting: to read them now, call the cindy_orca tool steer_queued_message with each listed queued_message_id (that tool takes no worker_id here; the messages join this turn). If they cannot change what you do next, or the call is refused, carry on: they arrive as later turns.',
   ];
 
   return lines.join('\n');

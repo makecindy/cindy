@@ -21,6 +21,7 @@ vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null })
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock('react-native', async () => {
   const React = await import('react');
+  const window = { width: 402, height: 874, scale: 3, fontScale: 1 };
   const view = ({ children, testID, accessibilityLabel, onPress }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress }, children);
   class Value { constructor(public value: number) {} interpolate() { return 0; } setValue() {} stopAnimation() {} }
   return {
@@ -32,6 +33,7 @@ vi.mock('react-native', async () => {
     StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
     Easing: { linear: (n: number) => n, bezier: () => (n: number) => n },
     AccessibilityInfo: { isReduceMotionEnabled: () => Promise.resolve(true), addEventListener: () => ({ remove() {} }) }, Alert: {}, Linking: {}, StatusBar: {},
+    Dimensions: { get: () => window, addEventListener: () => ({ remove() {} }) },
     useWindowDimensions: () => ({ width: 402, height: 874, scale: 3, fontScale: 1 }),
   };
 });
@@ -92,29 +94,32 @@ import { companionConversationItems } from '@/session/companionConversationPrese
 import type { RemoteMessage } from '@/session/types';
 const msg = (id: string, role: RemoteMessage['role'], content: unknown, extra: Partial<RemoteMessage> = {}): RemoteMessage => ({ id, clientId: id, sessionId: 's', role, content, toolUseId: null, agentMeta: null, createdAt: '2026-01-01T00:00:00Z', ...extra });
 
-function render(showPluginInvocations = true, settled = false, withCall = true, kind: 'file' | 'image' = 'file') {
+function render(companion = false, settled = false, withCall = true, kind: 'file' | 'image' = 'file') {
   const messages = [msg('u', 'user', JSON.stringify(kind === 'file' ? { text: '', files: [{ name: 'sample.txt', path: '/tmp/sample.txt' }] } : { text: '', images: [{ url: 'https://example.com/sample.png', originalName: 'sample.png', mimeType: 'image/png' }] }))];
   if (withCall) messages.push(msg('c', 'tool_use', { toolName: 'mcp__cindy__ghost_call', toolUseId: 'c', input: { ghost_id: 'art', tool: 'generate' } }, { toolUseId: 'c' }));
   if (settled) messages.push(msg('r', 'tool_result', 'done', { toolUseId: 'c' }));
   const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: true }).filter((item) => item.type === 'message');
   expect(items[0]).toMatchObject({ message: { body: '', attachments: [{ kind }] } });
-  return renderToStaticMarkup(<MessageRenderer items={items} isSessionStreaming showPluginInvocations={showPluginInvocations} />);
+  return renderToStaticMarkup(<MessageRenderer items={items} isSessionStreaming companion={companion} />);
 }
 
+// Unit regression, 2026-11-07: real normalizer/model/renderer; a plugin call
+// must not create a header or an empty user bubble around attachment-only input.
+// Existing expectations incorrectly required the whole-turn calling label.
 describe('attachment-only user plugin bubble', () => {
-  it.each(['file', 'image'] as const)('renders a %s-only plugin header through completion', (kind) => {
+  it.each(['file', 'image'] as const)('does not turn a %s-only user message into a plugin execution bubble', (kind) => {
     for (const settled of [false, true]) {
-      const html = render(true, settled, true, kind);
-      expect(html).toContain('message.userBubble');
-      expect(html).toContain('Art');
-      expect(html).toContain(settled ? 'Called' : 'Calling…');
+      const html = render(false, settled, true, kind);
+      expect(html).not.toContain('message.userBubble');
+      expect(html).not.toContain('Art');
+      expect(html).not.toContain(settled ? 'Called' : 'Calling…');
     }
   });
   it('keeps partner attachment messages free of plugin shells', () => {
-    expect(render(false)).not.toContain('message.userBubble');
+    expect(render(true)).not.toContain('message.userBubble');
   });
   it('does not add an empty bubble to ordinary attachments', () => {
-    expect(render(true, false, false)).not.toContain('message.userBubble');
+    expect(render(false, false, false)).not.toContain('message.userBubble');
   });
 });
 
@@ -284,9 +289,10 @@ describe('partner conversation presentation', () => {
     for (const element of cases) expect(renderClient(element)).not.toContain('companion.taskResult');
   });
 
-  // Regression: the process and final reply each own one portrait; nested details do not.
-  // Exercise the production projection and renderer, including nested work groups.
-  it('shows one process portrait and one reply portrait without repeating them in expanded details', () => {
+  // #8864 regression: one user -> process -> final reply looked like two replies.
+  // Production projection + renderer, unit tier: the entire turn owns one portrait,
+  // including expanded details. The old test explicitly required the duplicate.
+  it('shares one portrait between the process and final reply, including expanded details', () => {
     const items = companionConversationItems(buildMobileMessageRenderItems([
       msg('u', 'user', 'Check it'),
       msg('p', 'assistant', 'Checking the details', { agentMeta: { assistantPhase: 'commentary' } }),
@@ -300,10 +306,30 @@ describe('partner conversation presentation', () => {
       expect(html).toContain('message.toolRow');
       expect(html.match(/companion\.replyRow/g)).toHaveLength(1);
       expect(html.match(/companion\.processRow/g)).toHaveLength(1);
-      expect(html.match(/partner-portrait/g)).toHaveLength(2);
+      expect(html.match(/partner-portrait/g)).toHaveLength(1);
     } finally {
       viewportHarness.expanded = false;
     }
+  });
+
+  // Same production entry as above: seals must reset the portrait even when a
+  // proactive turn has no new user message; a reply-only turn still has a face.
+  it.each([true, false])('retains one portrait for each subsequent turn (user boundary=%s)', userBoundary => {
+    const items = companionConversationItems(buildMobileMessageRenderItems([
+      msg('u', 'user', 'First request'),
+      msg('t1', 'tool_use', { toolName: 'Bash', toolUseId: 't1', input: { command: 'pwd' } }, { toolUseId: 't1' }),
+      msg('f1', 'assistant', 'First result', { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+      ...(userBoundary ? [msg('u2', 'user', 'Second request')] : []),
+      msg('t2', 'tool_use', { toolName: 'Bash', toolUseId: 't2', input: { command: 'pwd' } }, { toolUseId: 't2' }),
+      msg('f2', 'assistant', 'Second result', { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+      msg('u3', 'user', 'A quick question'),
+      msg('f3', 'assistant', 'Direct result', { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+    ], { isSessionStreaming: false }));
+    const host = document.createElement('div');
+    host.innerHTML = renderClient(<MessageRenderer items={items} companion companionAvatar={<i data-testid="partner-portrait" />} />);
+    expect(host.querySelectorAll('[data-testid="partner-portrait"]')).toHaveLength(3);
+    expect([...host.querySelectorAll('[data-testid="companion.replyRow"]')].map(row =>
+      row.querySelectorAll('[data-testid="partner-portrait"]').length)).toEqual([0, 0, 1]);
   });
 
   // PR #8864: an Agent's nested tool work must not inherit the main partner's
@@ -488,3 +514,6 @@ describe('companion native read position', () => {
 });
 
 vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+
+// Native blur rendering is outside the attachment layout contract.
+vi.mock('expo-blur', () => ({ BlurView: () => null }));

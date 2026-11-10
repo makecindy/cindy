@@ -128,7 +128,7 @@ import { ChatVideoView } from './ChatVideoView';
 import { isManagedMarkdownVideoUrl, markdownMediaFilename } from './markdownMedia';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ModelLightbox } from './ModelLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import {
@@ -513,10 +513,9 @@ function useStreamingThrottle(value: string, enabled: boolean): string {
 }
 
 /**
- * CodeBlockPre — fenced code block with a hover-revealed copy button at the
+ * CodeBlockPre — fenced code block with a persistent copy button at the
  * top-right corner. The button reads `innerText` from the live <pre>, so it
- * always copies the latest text even mid-stream. We use group-hover to keep
- * the chrome out of the way until the user reaches for it.
+ * always copies the latest text even mid-stream.
  */
 function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
   const { t } = useTranslation();
@@ -553,7 +552,8 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
         className={cn(
           CHAT_CODE_SURFACE_CLASS,
           CHAT_CODE_CLASS,
-          'p-4',
+          // Keep the persistent copy button above the code, including wrapped first lines.
+          'p-4 pt-10',
           // 取消横向滚动:长行/长 token 自动折行,避免出现横滚条
           'whitespace-pre-wrap break-all',
         )}
@@ -565,13 +565,13 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
         <button
           type="button"
           onClick={handleCopy}
+          data-chat-copy-exclude
           aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
           className={cn(
             CHAT_ICON_BUTTON_CLASS,
             'absolute right-2 top-2 h-7 w-7 border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
-            'opacity-0 transition-[color,background-color,opacity] duration-[var(--motion-fast)]',
-            'group-hover:opacity-100 focus-visible:opacity-100',
+            'transition-[color,background-color] duration-[var(--motion-fast)]',
             'enabled:hover:bg-[var(--cmd-palette-item-hover)] enabled:hover:text-[var(--msg-assistant-text)]',
           )}
         >
@@ -925,6 +925,7 @@ function LightboxImage({
   return (
     <>
       <button
+        data-chat-image-preview
         type="button"
         aria-label={zoomLabel}
         title={t('chat.media.clickToZoom')}
@@ -1081,6 +1082,7 @@ function FileTargetChip({
   return (
     <>
       <code
+        data-chat-copy-content
         ref={chipRef}
         role="button"
         tabIndex={0}

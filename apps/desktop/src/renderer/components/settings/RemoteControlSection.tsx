@@ -36,17 +36,12 @@ import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
 import { CollapsibleSubSection } from './CollapsibleSubSection';
 import { useRemoteDevicesDeepLink } from './useRemoteDevicesDeepLink';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-} from './settingsRowClasses';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { useRemoteConnectionV2 } from '@/features/remote-connection-v2/useRemoteConnectionV2';
 import { RemoteConnectionV2Section } from '@/features/remote-connection-v2/RemoteConnectionV2Section';
 import { toast } from '@/lib/toast';
+import { SETTINGS_SECTION_TITLE_CLASS, SettingsCard, SettingsPageHeader, SettingsRow } from '@/components/ui/settings-rows';
 
 export { CollapsibleSubSection } from './CollapsibleSubSection';
 
@@ -173,40 +168,34 @@ export function RemoteControlSection() {
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.remoteControl.title')}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.remoteControl.description')}
-        </p>
-      </div>
+      <SettingsPageHeader
+        title={t('settings.remoteControl.title')}
+        description={t('settings.remoteControl.description')}
+      />
 
       <div className="mt-4 flex flex-col gap-6">
         {deviceLinkAvailable ? (
-          <div id={remoteControlSettings.v2.targetId} className={SETTINGS_CARD_CLASS}>
-            <div className={SETTINGS_ROW_CLASS}>
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <span className={SETTINGS_ROW_LABEL_CLASS}>{t(remoteControlSettings.v2.titleKey)}</span>
-                <span className={SETTINGS_ROW_HINT_CLASS}>{t(remoteControlSettings.v2.descriptionKey)}</span>
-              </div>
-              <Switch
-                data-setting-id={remoteControlSettings.v2.id}
-                checked={v2.enabled}
-                onCheckedChange={v2.setEnabled}
-                aria-label={t(remoteControlSettings.v2.titleKey)}
-              />
-            </div>
+          <SettingsCard id={remoteControlSettings.v2.targetId}>
+            <SettingsRow
+              title={t(remoteControlSettings.v2.titleKey)}
+              hint={t(remoteControlSettings.v2.descriptionKey)}
+              trailing={
+                <Switch
+                  data-setting-id={remoteControlSettings.v2.id}
+                  checked={v2.enabled}
+                  onCheckedChange={v2.setEnabled}
+                  aria-label={t(remoteControlSettings.v2.titleKey)}
+                />
+              }
+            />
             {v2.enabled ? (
-              <div className={SETTINGS_ROW_CLASS}>
-                <div className="flex min-w-0 flex-col gap-0.5">
-                  <span className={SETTINGS_ROW_LABEL_CLASS}>{t('settings.remoteControl.v2.onlyEncrypted')}</span>
-                  <span className={SETTINGS_ROW_HINT_CLASS}>{t('settings.remoteControl.v2.onlyEncryptedHint')}</span>
-                </div>
-                <Switch checked={v2.onlyEncrypted} onCheckedChange={v2.setOnlyEncrypted} aria-label={t('settings.remoteControl.v2.onlyEncrypted')} />
-              </div>
+              <SettingsRow
+                title={t('settings.remoteControl.v2.onlyEncrypted')}
+                hint={t('settings.remoteControl.v2.onlyEncryptedHint')}
+                trailing={<Switch data-settings-search-action="Toggle encrypted-only Agent-Net connections" checked={v2.onlyEncrypted} onCheckedChange={v2.setOnlyEncrypted} aria-label={t('settings.remoteControl.v2.onlyEncrypted')} />}
+              />
             ) : null}
-          </div>
+          </SettingsCard>
         ) : null}
 
         {deviceLinkAvailable && v2.enabled ? (
@@ -257,7 +246,7 @@ export function RemoteControlSection() {
             {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}
             <section id={remoteControlSettings.relay.targetId} className="flex flex-col gap-3">
               <div className="flex flex-col gap-0.5">
-                <h3 className="text-14 font-medium text-[var(--text-primary)]">
+                <h3 className={SETTINGS_SECTION_TITLE_CLASS}>
                   {t(remoteControlSettings.relay.titleKey)}
                 </h3>
                 <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">

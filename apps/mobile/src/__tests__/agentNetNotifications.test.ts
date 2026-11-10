@@ -32,6 +32,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 } }));
 vi.mock('@/auth/authOwnerGeneration', () => ({ getMobileAuthOwner: () => ({ accountKey: 'global:unit-owner' }) }));
 vi.mock('@/config/env', () => ({ AUTH_REGION: 'global' }));
+vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: vi.fn(async () => 'development') }));
 vi.mock('@/device-link/agentNetPreferences', () => ({ getMobileAgentNetPreferences: () => ({ onlyEncrypted: true }) }));
 
 const rootSeed = new Uint8Array(32).fill(21), signerSeed = new Uint8Array(32).fill(22);

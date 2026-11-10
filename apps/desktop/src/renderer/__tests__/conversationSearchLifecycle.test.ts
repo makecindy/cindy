@@ -1,3 +1,4 @@
+import { setSearchDraft } from '@/features/cc-agent/sidebar/conversationSearchDraft';
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -79,6 +80,7 @@ async function start(view: ReturnType<typeof mount>) {
   });
 }
 beforeEach(() => {
+  setSearchDraft('');
   vi.useFakeTimers();
   vi.mocked(searchConversations).mockReset();
   Object.defineProperty(window, 'electronAPI', {
@@ -141,7 +143,7 @@ describe('dialogue group search scope', () => {
     expect(vi.mocked(searchConversations).mock.lastCall?.[1]?.origins).toEqual([]);
     view.rerender({ machineSelection: ['remote'] });
     expect(view.result.current.lockedSessionGroupName).toBeNull();
-    expect(view.result.current.query).toBe('');
+    expect(view.result.current.query).toBe('needle');
   });
 });
 
@@ -328,5 +330,30 @@ describe('conversation search request lifecycle', () => {
       searchDevices: devices,
     });
     expect(view.result.current.status).toBe('searching');
+  });
+});
+
+// Regression: closing search used to erase user input. Exercise real hook state,
+// filter changes and remounts without IPC or wall-clock search delays.
+describe('search draft retention', () => {
+  it('retains the exact draft on dismiss, filter changes and remount; clears only on editing', () => {
+    const view = mount();
+    act(() => view.result.current.setQuery('  保留 needle  '));
+    act(() => view.result.current.dismiss());
+    expect(view.result.current.query).toBe('  保留 needle  ');
+    expect(view.result.current.trimmed).toBe('');
+    act(() => view.result.current.setStatusFilter('archived'));
+    act(() => view.result.current.resetFilters());
+    act(() => view.result.current.resume());
+    expect(view.result.current.trimmed).toBe('保留 needle');
+    view.unmount();
+    const reopened = mount();
+    expect(reopened.result.current.query).toBe('  保留 needle  ');
+    act(() => reopened.result.current.resume());
+    expect(reopened.result.current.trimmed).toBe('保留 needle');
+    const other = mount();
+    act(() => reopened.result.current.setQuery(''));
+    expect(other.result.current.query).toBe('');
+    expect(reopened.result.current.trimmed).toBe('');
   });
 });

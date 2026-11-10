@@ -16,6 +16,8 @@ const sourceSkips = [
 ];
 
 module.exports = {
+  // Hash patched native sources, not just dependency versions.
+  preset: "strict",
   sourceSkips,
   // These entry points are outside the iOS podspec's source glob, and these
   // six core files are wholly guarded by #if os(macOS). Keep this an explicit

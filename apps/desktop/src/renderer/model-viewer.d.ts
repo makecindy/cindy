@@ -1,6 +1,6 @@
 /**
  * `<model-viewer>` Web Component (Google) JSX intrinsic — registered at
- * runtime in `index.tsx` via `import '@google/model-viewer'`.
+ * runtime when ModelLightbox first lazy-loads `@google/model-viewer`.
  *
  * The package ships HTMLElement-level types but doesn't auto-augment React's
  * JSX namespace, so we declare just the props that ModelLightbox uses.

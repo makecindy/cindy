@@ -36,7 +36,9 @@ function configureProject(project, config, platformRoot, projectRoot) {
   fs.copyFileSync(path.resolve(projectRoot, 'modules/cindy-agent-net/ios/AgentNetNotifications.swift'), path.join(directory, 'AgentNetNotifications.swift'));
   const keychainGroup = `$(AppIdentifierPrefix)${config.ios.bundleIdentifier}.agent-net-notifications`;
   fs.writeFileSync(path.join(directory, 'Info.plist'), plist.default.build({ ...extensionInfo(), CindyAgentNetKeychainGroup: keychainGroup }));
-  fs.writeFileSync(path.join(directory, `${TARGET}.entitlements`), plist.default.build({ [ENTITLEMENT]: true, 'keychain-access-groups': [keychainGroup] }));
+  // Communication Notifications belongs to the containing app target. Xcode
+  // cannot provision this capability for a notification service extension.
+  fs.writeFileSync(path.join(directory, `${TARGET}.entitlements`), plist.default.build({ 'keychain-access-groups': [keychainGroup] }));
   for (const [name, file] of Object.entries(portraits)) {
     fs.copyFileSync(path.resolve(projectRoot, file), path.join(directory, `teammate-${name}.png`));
   }
@@ -104,7 +106,7 @@ module.exports = function withCommunicationNotifications(config) {
       ...experimental.ios,
       appExtensions: [
         ...(experimental.ios?.appExtensions ?? []).filter(item => item.targetName !== TARGET),
-        { targetName: TARGET, bundleIdentifier: `${config.ios.bundleIdentifier}.${TARGET}`, entitlements: { [ENTITLEMENT]: true,
+        { targetName: TARGET, bundleIdentifier: `${config.ios.bundleIdentifier}.${TARGET}`, entitlements: {
           'keychain-access-groups': [`$(AppIdentifierPrefix)${config.ios.bundleIdentifier}.agent-net-notifications`] } },
       ],
     } },

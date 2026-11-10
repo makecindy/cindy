@@ -7,6 +7,7 @@ import { mobileRelayAuthCrypto } from './relayAuthCrypto';
 import { agentNetNative } from '../../modules/cindy-agent-net/src';
 import { getMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import Notifications from '@/notifications/nativeNotifications';
+import { readIosPushEnvironment } from '@/notifications/nativePushEnvironment';
 import { buildPushTokenRegistrationBody } from '@/notifications/pushRegistrationModel';
 import { AUTH_REGION } from '@/config/env';
 import { Platform } from 'react-native';
@@ -103,8 +104,9 @@ export function updateMobileAgentNetNotificationTrust(
       if ((await Notifications.getPermissionsAsync()).status !== 'granted') return;
       assertCurrent(value);
       const token = await Notifications.getDevicePushTokenAsync(); assertCurrent(value);
+      const apnsEnvironment = Platform.OS === 'ios' ? await readIosPushEnvironment() : undefined; assertCurrent(value);
       const body = buildPushTokenRegistrationBody({ token: typeof token.data === 'string' ? token.data : '',
-        platform: Platform.OS === 'android' ? 'android' : 'ios', region: AUTH_REGION, isDevBuild: __DEV__ });
+        platform: Platform.OS === 'android' ? 'android' : 'ios', region: AUTH_REGION, apnsEnvironment });
       if (body) await mutateMobileAgentNetNotificationRegistration('PUT', body);
     } finally { if (registeringFor === value) registeringFor = null; }
   })().catch(() => undefined);

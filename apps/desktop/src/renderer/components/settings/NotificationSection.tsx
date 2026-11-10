@@ -5,13 +5,13 @@ import { notificationSettings } from './NotificationSection.settings-search';
  * 桌面通知 — CC Agent session 完成 / 待回复时弹系统 toast(默认开)。
  * 飞书通知与企业微信群通知已迁移至「IM 机器人」页各自对应的渠道卡片内。
  *
- * 沿用 AppearanceSection 的卡片样式(rounded 12 / Card bg / 1px Board / padding 20)。
+ * 版式用 settings-rows 的分区/卡片/行。
  */
 
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
-import { cn } from '@/lib/utils';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useNotificationSettings } from '@/hooks/useNotificationSettings';
 
 export function NotificationSection() {
@@ -19,38 +19,24 @@ export function NotificationSection() {
   const { t } = useTranslation();
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      {/* 标题与 Appearance 同级 */}
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.notifications.title')}
-      </h2>
-
-      {/* 桌面通知 — 沿用原有卡片样式 */}
-      <div
-        className={cn(
-          'flex items-center justify-between gap-3 rounded-xl px-4 py-4',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex min-w-0 flex-col gap-1">
-          <p id={notificationSettings.notificationsSessionDoneLabel.targetId}
-            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-            style={{ letterSpacing: '0.12px' }}
-          >
-            {t(notificationSettings.notificationsSessionDoneLabel.titleKey)}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t(notificationSettings.notificationsSessionDoneLabel.descriptionKey)}
-          </p>
-        </div>
-
-        <Switch data-setting-id={notificationSettings.notificationsSessionDoneLabel.id}
-          checked={enabled}
-          onCheckedChange={setEnabled}
-          aria-label={t('settings.notifications.sessionDoneAria')}
+    <SettingsSection title={t('settings.notifications.title')}>
+      <SettingsCard>
+        <SettingsRow
+          title={
+            <span id={notificationSettings.notificationsSessionDoneLabel.targetId}>
+              {t(notificationSettings.notificationsSessionDoneLabel.titleKey)}
+            </span>
+          }
+          hint={t(notificationSettings.notificationsSessionDoneLabel.descriptionKey)}
+          trailing={
+            <Switch data-setting-id={notificationSettings.notificationsSessionDoneLabel.id}
+              checked={enabled}
+              onCheckedChange={setEnabled}
+              aria-label={t('settings.notifications.sessionDoneAria')}
+            />
+          }
         />
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

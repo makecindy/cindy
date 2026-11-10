@@ -19,7 +19,7 @@ import { useTranslation } from 'react-i18next';
 import { History } from 'lucide-react';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { SETTINGS_CARD_CLASS } from '@/components/settings/settingsRowClasses';
+import { SettingsCard } from '@/components/ui/settings-rows';
 import type { SelfHostedRelayController } from '@/components/settings/RelayServicePanel';
 import { resolveActiveConnectionIssue } from '@/components/settings/myDevicesModel';
 import type { RemoteDevicesDeepLink } from '@/components/settings/useRemoteDevicesDeepLink';
@@ -164,7 +164,7 @@ export function RemoteConnectionV2Section({
             <RecentActivity events={recent} />
           </span>
         </div>
-        <div className={SETTINGS_CARD_CLASS}>
+        <SettingsCard>
           <div className="px-2 py-3">
             {model.nodes.length === 0 ? (
               <p className="px-2 py-6 text-center text-13 text-[var(--text-secondary)]">
@@ -198,7 +198,7 @@ export function RemoteConnectionV2Section({
               </button>
             </div>
           ) : null}
-        </div>
+        </SettingsCard>
       </section>
     </>
   );

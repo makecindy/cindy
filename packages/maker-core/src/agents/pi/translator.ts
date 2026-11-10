@@ -34,7 +34,7 @@ import {
 import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
-import { TokenSpeedMeter } from '../shared/token-speed.js';
+import { CalibratedTokenSpeedMeter, estimateWordTokens } from '../shared/calibrated-token-speed.js';
 import { RequestUsageTracker, type UsageSegment } from '../shared/usage-tracker.js';
 import {
   UPSTREAM_OVERLOAD_REASON,
@@ -216,8 +216,8 @@ export interface PiTranslateContext {
   terminalAssistantErrorEmitted: boolean;
   /** 整轮 wall-clock 起点；只用于诊断，不参与 TPS。 */
   turnWallClockStartedAt: number;
-  /** Live tok/s shown in the status bar (Pi extension algorithm). */
-  tokenSpeed: TokenSpeedMeter;
+  /** Live tok/s shown in the status bar: the stream, corrected by each message's reported usage. */
+  tokenSpeed: CalibratedTokenSpeedMeter;
   /** Last running status text, reused by speed-only refreshes. */
   lastRunningStatus: string;
   generationDurationMs: number;
@@ -294,7 +294,8 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     finalAssistantText: '',
     finalAssistantStopReason: null,
     turnWallClockStartedAt: 0,
-    tokenSpeed: new TokenSpeedMeter(),
+    // Pi providers mostly stream thinking in full: count it as streamed until usage says otherwise.
+    tokenSpeed: new CalibratedTokenSpeedMeter({ estimate: estimateWordTokens, thinkingScale: 1 }),
     lastRunningStatus: 'Working…',
     generationDurationMs: 0,
     generationOpenAt: 0,
@@ -876,10 +877,8 @@ export function translatePiEvent(
       const bridgedPriceVariant = priceVariantFromServiceTier(message?.usage?.service_tier);
       ctx.pendingPriceVariants.push(bridgedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard');
       startPiGenerationHeartbeat(ctx);
-      const startAt = typeof message?.timestamp === 'number' && Number.isFinite(message.timestamp) && message.timestamp > 0
-        ? message.timestamp
-        : Date.now();
-      ctx.tokenSpeed.start(startAt);
+      // The speed clock runs from the first streamed block, not from here: the wait for
+      // the first byte is not generation.
       // Activity may advance before usage; the rate retains the last completed sample.
       pushStatus(queue, ctx, 'Working…', true);
       return;
@@ -988,7 +987,8 @@ export function translatePiEvent(
         // The calibrated value holds the whole turn (every reported message plus
         // every estimated one), so a later retry cannot drop earlier estimates.
         const targetTokens = ctx.turnMainOutput + ctx.unreportedEstimatedOutput;
-        ctx.tokenSpeed.syncOutputTokens(targetTokens);
+        ctx.tokenSpeed.settle(targetTokens, Date.now(), message.usage.reasoning,
+          messageDurationMs > 0 ? messageDurationMs : undefined);
         ctx.lastCalibratedTokens = targetTokens;
       } else {
         // A message without output usage means `turnMainOutput` no longer covers
@@ -1427,7 +1427,7 @@ export function translatePiEvent(
   }
 }
 
-/** Mirrors pi-token-speed's message_update handlers. */
+/** Feeds the parent model's stream to the speed meter. */
 function observePiTokenSpeed(
   delta: Record<string, unknown>,
   queue: AsyncQueue<AgentEvent>,
@@ -1438,12 +1438,13 @@ function observePiTokenSpeed(
     case 'text_start':
     case 'thinking_start':
     case 'toolcall_start':
-      ctx.tokenSpeed.start();
+      ctx.tokenSpeed.start(Date.now(), delta.type === 'thinking_start' ? 'thinking' : 'visible');
       return;
     case 'toolcall_delta':
     case 'text_delta':
     case 'thinking_delta':
-      if (typeof delta.delta === 'string' && ctx.tokenSpeed.recordDelta(delta.delta)) {
+      if (typeof delta.delta === 'string' &&
+        ctx.tokenSpeed.recordDelta(delta.delta, Date.now(), delta.type === 'thinking_delta' ? 'thinking' : 'visible')) {
         pushStatus(queue, ctx, ctx.lastRunningStatus, true);
       }
       return;

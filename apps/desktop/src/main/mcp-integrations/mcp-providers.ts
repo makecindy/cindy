@@ -1,7 +1,9 @@
+import { createIMessageMcpServer } from './imessageMcpServer';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
 import { manageAppModels } from '../app-settings/models.js';
+import { classifyOrigin } from '../input-handoff/originPolicy.js';
 import { captureBotSettingsAccess } from '../maker-ipc/botCapabilityService.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { hostname } from 'node:os';
@@ -157,6 +159,7 @@ import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } fr
 
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
+  manageUserQuestions?: XdtHelperMcpDeps['manageUserQuestions'];
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel'>>;
   createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
@@ -862,7 +865,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             sessionInstanceId: context.sessionInstanceId,
             workingDir: context.workingDir ?? '',
             path: absPath,
-            toolName: 'cindy_helper.ask_owner',
+            toolName: 'cindy_helper.request_input_handoff',
             operation: 'read',
           }, deps.getLiveSessionGrantState));
           if (!picture.ok) return picture;
@@ -1038,6 +1041,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }
       },
       askUserQuestionAsync: deps.askUserQuestionAsync,
+      manageUserQuestions: deps.manageUserQuestions,
       sessionImport: sessionImportCallbacks,
       renameSessions: async ({ changes, dryRun }) => {
         if (!tryGetDbClient()) {
@@ -1102,6 +1106,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         model,
         effort,
         fast,
+        agentDeviceId,
       }) => {
         // deviceId::sessionId → 目标在另一台电脑:交给那台电脑按它本机的同一条通路投递。
         const svc = tryGetOrcaCollabService();
@@ -1134,6 +1139,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
                   },
                 }
               : {}),
+            ...(agentDeviceId !== undefined ? { agentDeviceId } : {}),
           });
           if (result.ok && result.wakeKind === 'created' && recordCreation) {
             try { await recordCreation(result.targetSessionId); }
@@ -1155,11 +1161,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
           try {
-            const project = await resolveSessionProject({ callerSessionId: params.callerSessionId, projectDir: params.projectDir });
+            const project = await resolveSessionProject({ callerSessionId: params.callerSessionId,
+              projectDir: params.projectDir, workingDir: params.workingDir });
             if (!project.ok) return project;
             const result = await svc.startSessionTask({ ...params, projectDir: project.projectDir,
               workingDir: params.workingDir ?? project.projectDir ?? undefined });
-            return result.ok ? { ...result, projectDir: project.projectDir } : result;
+            return result.ok ? { ...result, projectDir: project.projectDir,
+              ...('projectFromWorkingDir' in project ? { projectFromWorkingDir: true } : {}) } : result;
           } catch (err) {
             return {
               ok: false,
@@ -1382,16 +1390,36 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       },
       // 伙伴自己沉淀的真技能。归属同样由 callerSessionId 反查,工具面不收 botId。
       modelSettings: {
-        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+        call: ({ callerSessionId, ...input }, signal) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
           const surface = await resolveHelperSurface(tryGetDbClient()!, callerSessionId);
           const botGuard = surface === 'bot' || surface === 'bot-main'
             ? await captureBotSettingsAccess(callerSessionId)
             : undefined;
-          return manageAppModels(input, async () => {
+          const guard = async () => {
             await assertCurrent();
             if (botGuard) await botGuard();
-            if (input.operation === 'set' || input.operation === 'provider') await assertTaskActionCurrent();
-          });
+            if (input.operation === 'set' || input.operation === 'provider' || input.operation === 'connection') await assertTaskActionCurrent();
+          };
+          return manageAppModels(input, guard, async (name, endpoints, lifetime) => {
+            await guard();
+            if (await isInputHandoffDisabledForSession(callerSessionId)) throw new Error('DISABLED_BY_OWNER');
+            await guard();
+            const service = getInputHandoffService();
+            if (!service) throw new Error('SECRET_INPUT_UNAVAILABLE');
+            return new Promise<string | null>((resolve, reject) => {
+              const started = service.startHostSecretPrompt({
+                sessionId: callerSessionId,
+                ...lifetime,
+                step: {
+                  purpose: `${name.slice(0, 128)} · API key${endpoints[1] ? ` · ${new URL(endpoints[1]).origin}` : ''}`,
+                  source: { app: 'Cindy', ...classifyOrigin(endpoints[0], true) },
+                  controls: [{ id: 'answer', kind: 'text', label: 'API key', contentType: 'password' }],
+                },
+                answer: resolve,
+              });
+              if (!started.ok) reject(new Error(started.errorCode));
+            });
+          }, signal);
         }),
       },
       piRuntime: {
@@ -1681,6 +1709,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         getSessionContext: () => resolveLiziMcpSessionContext(ctx),
       }),
     }),
+  });
+
+  gated.push({
+    name: 'cindy_imessage',
+    isEnabled: ctx => hasImChannelVendorOptions(ctx.vendorOptions, 'imessage')
+      || ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir),
+    toClaudeSdkConfig: ctx => ({ type: 'sdk', name: 'cindy_imessage',
+      instance: createIMessageMcpServer({ getSessionContext: () => resolveLiziMcpSessionContext(ctx) }) }),
   });
 
   // cindy_telegram_bot: 个人 / 伙伴 Telegram bot 轮次里的 Bot API 直通。只挂在带 Telegram 渠道

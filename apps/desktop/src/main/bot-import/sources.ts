@@ -6,6 +6,7 @@ import { redactEnvironmentValues } from './process.js';
 import yaml from 'js-yaml';
 import { parse as parseEnv } from 'dotenv';
 import { createImportBudget, fingerprint, optionalText, readImportFile, readImportTree, snapshotFingerprintAsync, type ImportReadBudget } from './files.js';
+import { scanImportSkillReferences } from './skillFileStreams.js';
 import { discoverImportSkills } from './skills.js';
 import { indexAutomationDependencies, normalizeAutomation } from './sourceAutomations.js';
 import { memoryFileContent } from './memoryFiles.js';
@@ -620,7 +621,8 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
       jobs = (Array.isArray(data.jobs) ? data.jobs : []).map(object).filter(job => (job.agentId ?? (defaultAgent ? source.agentId : undefined)) === source.agentId);
     }
   }
-  items.push(...await discoverImportSkills(source, values, deps.home, deps.env, budget, new Set(jobs.flatMap(job => [string(job.skill), ...(Array.isArray(job.skills) ? job.skills.map(string) : [])]).filter(Boolean))));
+  const usedSkills = new Set(jobs.flatMap(job => [string(job.skill), ...(Array.isArray(job.skills) ? job.skills.map(string) : [])]).filter(Boolean));
+  items.push(...await discoverImportSkills(source, values, deps.home, deps.env, budget));
   // Credential alternatives must not deselect the skill that owns them.
   for (const item of [...items]) if (item.view.category === 'skills' && item.env && Object.keys(item.env).length) {
     const id = entryId('skill-env', item.view.id);
@@ -634,6 +636,14 @@ export async function inspectImportSource(source: ImportSource, deps: SourceRead
   }
   const row = source.kind === 'openclaw' ? agentRows(values).find(row => row.id === source.agentId) ?? {} : values;
   sourceConfiguration(items, source, values);
+  const envNames = new Set(items.flatMap(item => Object.keys(item.env ?? {})));
+  const referenceNames = [...new Set(items.flatMap(item => [...Object.keys(item.env ?? {}), ...(item.mcp ? [item.mcp.name] : [])]))];
+  for (const item of items) if (item.sourceDirectory && (usedSkills.has(item.view.name) || usedSkills.has(item.sourceAlias ?? ''))) {
+    try {
+      item.resourceReferences = await scanImportSkillReferences(item.sourceDirectory, referenceNames, envNames);
+      budget.reserve(Buffer.byteLength(item.resourceReferences));
+    } catch (error) { item.captureIssue = error instanceof CompanionImportError ? error.code : 'IMPORT_ITEM_FAILED'; }
+  }
   const automationDependencies = indexAutomationDependencies(items);
   const timezone = string(values.timezone) || deps.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
   for (const [index, job] of jobs.entries()) {

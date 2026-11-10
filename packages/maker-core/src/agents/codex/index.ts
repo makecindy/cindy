@@ -137,7 +137,7 @@ import {
 } from '../shared/auto-review-decision.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
-import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
+import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS } from '../shared/sensitive-credential-paths.js';
@@ -213,6 +213,9 @@ import {
   finishCodexSamplingTurn,
   pauseCodexGeneration,
   resetCodexGenerationTiming,
+  codexSpeedSnapshot,
+  resetCodexSpeed,
+  settleCodexSpeedUsage,
   resumeCodexGeneration,
   translateAgentMessageDelta,
   translateReasoningSummaryTextDelta,
@@ -260,6 +263,7 @@ import {
   terminalRateLimitRetryDelayMs,
 } from './terminal-rate-limit-retry.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
+import { parseMcpElicitationForm, mcpElicitationFormContent, mcpElicitationUrl } from './mcp-elicitation.js';
 import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { nativeAutoReviewContinuationConfig } from './native-auto-review-policy.js';
@@ -398,6 +402,33 @@ function clampEffortForCodex(model: string, e: Effort): CodexEffort | undefined 
   if (!e) return undefined;
   if (e === 'minimal' && !CODEX_MINIMAL_EFFORT_MODELS.has(model)) return 'low';
   return e;
+}
+
+/**
+ * A resumed thread can echo an empty effort (`null` / `''` / `'none'`) from
+ * thread/settings. That is "not carried on this snapshot", not a user choice
+ * to drop the level already stored on the task. An explicit level still wins,
+ * including a later setEffort on this turn.
+ */
+function isStoredCodexEffort(value: unknown): value is Effort {
+  return value === 'minimal'
+    || value === 'low'
+    || value === 'medium'
+    || value === 'high'
+    || value === 'xhigh'
+    || value === 'max'
+    || value === 'ultra';
+}
+
+function reconcileMutableEffortFromThreadSettings(
+  current: Effort,
+  reported: unknown,
+): Effort {
+  // null / '' / 'none' / anything outside the stored levels: keep the task's level.
+  if (!isStoredCodexEffort(reported)) return current;
+  // A persisted no-effort choice stays empty; a server default must not fill it.
+  if (!current) return current;
+  return reported;
 }
 
 function normalizeTailTurnsToDrop(value: number | undefined): number {
@@ -746,9 +777,8 @@ const ASK_USER_DYNAMIC_TOOL: DynamicToolSpec = {
   type: 'function',
   name: ASK_USER_DYNAMIC_TOOL_CANONICAL_NAME,
   description: [
-    'Use this tool instead of listing choices or asking in prose when the user asks to choose, pick a direction, select an approach, or narrow options before you continue.',
-    'Use it for product preferences, game/design/business directions, business judgments, and choices between materially different approaches.',
-    'Use it when the next useful step depends on the user selecting among options, even if you could provide a generic list yourself.',
+    'Compatibility fallback for a question that must wait for the user when native request_user_input is unavailable in the current mode, or a free-form question that its schema cannot represent.',
+    'Prefer native request_user_input when it supports the question in the current mode. Use native request_user_input_async when independent work can continue while waiting.',
     'Ask 1 to 3 short questions in a single call when those questions are independent; do not make several back-to-back calls for independent clarification questions.',
     'Use a later follow-up call only when the next question depends on the user answer to an earlier question.',
     'Do not use it for routine implementation details; choose a reasonable default.',
@@ -851,7 +881,6 @@ interface LiveAskUserRequest {
   questions: ToolRequestUserInputQuestion[];
   detached: boolean;
   continuationStarted: boolean;
-  delivery?: 'async';
   permissionPolicy: TurnPermissionPolicy | null;
   capabilitySelectionText: string;
   autoReviewIntent: AutoReviewUserIntent;
@@ -3667,6 +3696,10 @@ assertRouteCurrent();
       : opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
     const makerMemory = this.deps.makerMemory;
     const makerMemoryEnabled = makerMemoryFlag === true && !!makerMemory;
+    // A memory override is only meaningful when this host actually bridged the
+    // cindy_memory server; a bare entry makes Codex reject the thread.
+    const memoryBridgeAvailable = (this.deps.mcpProviders ?? [])
+      .some((provider) => provider.name === 'cindy_memory');
     // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key;
     // 本地会话额外做 git worktree 归一化 (#2379)。已注入的 makerMemoryScopeKey
     // (含 bot:) 原样透传。Maker Memory 关闭时跳过 git 探测 (Codex #2399 P1):
@@ -3714,7 +3747,7 @@ assertRouteCurrent();
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
     const liveUsageSnapshot = () => {
-      const speed = translatorRt.generationTimingReliable ? translatorRt.tokenSpeed.snapshot() : undefined;
+      const speed = codexSpeedSnapshot(translatorRt);
       return attachLiveGeneration({ ...usageTracker.snapshot(), requestUsage: usageTracker.getRequestMetering() }, {
         tokenSpeed: speed,
         // Legacy clients use these fields: they must share the speed snapshot's
@@ -4919,6 +4952,16 @@ assertRouteCurrent();
      * server 的 wire 规范化只动 mutableModel。
      */
     let mutableCatalogModel: string | undefined = opts.model;
+    // Only a task that never stored an effort may fall through to the catalog
+    // default (`high`). Restoring a task passes the persisted level in
+    // opts.effort, including the empty no-effort sentinel; a missing field is
+    // the one case that still means "never chosen".
+    // hasSelectedEffort is that distinction: the catalog default still fills
+    // mutableEffort so the parent turn keeps its old behavior, but it must not
+    // be registered as the parent's reasoning level. The host stamps whatever
+    // is registered onto this thread's smart subagent routes, which would
+    // override a subagent's own low and make "never stored" look chosen.
+    let hasSelectedEffort = opts.effort !== undefined;
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode =
       reviewMode ? 'ask' : opts.permissionMode ?? 'ask';
@@ -6605,8 +6648,11 @@ assertRouteCurrent();
         // Its host omits Cindy's MCP bridge, so a bare memory override would
         // create an invalid transport even though the entry is disabled.
         // 设备托管：只停用本机确实配置了的 cindy_memory(没有传输配置的空条目会让 Codex 拒绝配置)。
+        // A bare `enabled` override for a server the host never bridged makes Codex
+        // reject the whole thread ("invalid transport in mcp_servers.cindy_memory").
+        // Hosts without the memory bridge (for example cindy-host) must omit it.
         ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT] && !makerMemoryEnabled && !opts.botRuntimeProfile
-          && (!hosted || hostedLocalMcpNames.includes('cindy_memory'))
+          && (hostedLocalMcpNames.includes('cindy_memory') || memoryBridgeAvailable)
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
         // Local custom-context hosts carry per-model budgets in their catalog.
@@ -6915,6 +6961,7 @@ assertRouteCurrent();
       && typeof this.deps.registerCodexSystemPromptForThread === 'function';
 
     let registeredDeveloperInstructions = '';
+    let codexProxyPromptRegistered = false;
     const registerCodexDeveloperInstructions = (threadId: string, text: string): void => {
       registeredDeveloperInstructions = text;
       const register = this.deps.registerCodexSystemPromptForThread;
@@ -6926,8 +6973,17 @@ assertRouteCurrent();
         threadId,
         text,
         ...(subagentRoute ? { subagentRoute } : {}),
-        ...(smartSubagentRoutes ? { smartSubagentRoutes } : {}),
+        // 共享的 app-server 目录不带档位。只有存档或当轮显式选过的档位
+        // 才交给宿主：宿主会用它给本线程的智能路由盖章。目录默认 high
+        // 不算已选，留空后宿主不盖章，子代理保留自己选的档位。
+        ...(smartSubagentRoutes
+          ? {
+              smartSubagentRoutes,
+              ...(hasSelectedEffort ? { reasoningEffort: mutableEffort } : {}),
+            }
+          : {}),
       });
+      codexProxyPromptRegistered = true;
     };
     const refreshCodexAutoReviewerRoute = (targetThreadId: string): void => {
       const routeCredentialMode = this.deps.isCodexAccountProvider?.(mutableProviderId) ? 'oauth-bearer' : resolveAgentCredentialMode({
@@ -7830,6 +7886,8 @@ assertRouteCurrent();
     const seenGuardianReviewIds = new Set<string>();
     const userInputBroker = new CodexInteractionBroker<ToolRequestUserInputResponse>();
     const dynamicToolBroker = new CodexInteractionBroker<DynamicToolCallResponse>();
+    const elicitationBroker = new CodexInteractionBroker<McpServerElicitationRequestResponse>();
+    const cancelledElicitation = (): McpServerElicitationRequestResponse => ({ action: 'cancel', content: null, _meta: null });
     const activeToolContexts = new Map<string, ActiveToolContext>();
     const approvalDenials = new Map<string, { turnId: string; reason: string }>();
     const approvalDenialKey = (thread: string, turn: string, item: string) => JSON.stringify([thread, turn, item]);
@@ -8340,6 +8398,9 @@ assertRouteCurrent();
       predicate: (meta: { threadId?: string; turnId?: string | null }) => boolean,
     ): void {
       const dismissed = new Set<string>();
+      for (const meta of elicitationBroker.cancelWhere(predicate, cancelledElicitation())) {
+        dismissLiveAskUser(serverInteractionId(meta.requestId), reason);
+      }
       const cancelledUserInput = userInputBroker.cancelWhere(
         predicate,
         { answers: {} },
@@ -8367,6 +8428,9 @@ assertRouteCurrent();
     }
 
     function detachPendingAskUserForSuccessfulTurn(turnId: string): void {
+      for (const meta of elicitationBroker.cancelWhere((meta) => meta.turnId === turnId, cancelledElicitation())) {
+        dismissLiveAskUser(serverInteractionId(meta.requestId), 'turn_completed');
+      }
       const cancelledUserInput = userInputBroker.cancelWhere(
         (meta) => meta.turnId === turnId,
         { answers: {} },
@@ -8375,11 +8439,10 @@ assertRouteCurrent();
         (meta) => meta.turnId === turnId,
         cancelledDynamicToolResponse('turn_completed'),
       );
-      // Desktop 只有一个 pendingAskUser，只保留最后一张同步提问。
-      // 异步提问不阻塞结束：未回答的卡片随原 turn 到期，不代选或续跑。
+      // Only synchronous RPCs belong to this provider continuation. Async items are Session-owned.
       const lives = [...liveAskUserByRequestId.values()].filter((live) => live.turnId === turnId);
       const latest = lives.at(-1);
-      const keep = latest?.delivery === 'async' ? null : latest ?? null;
+      const keep = latest ?? null;
       if (keep) {
         keep.detached = true;
         retainInteractionContinuation(turnId, keep.requestId);
@@ -8393,7 +8456,7 @@ assertRouteCurrent();
       };
       for (const live of lives) {
         if (keep && live.requestId === keep.requestId) continue;
-        dismiss(live.requestId, live.delivery === 'async' ? 'turn_completed' : 'superseded');
+        dismiss(live.requestId, 'superseded');
       }
       for (const meta of [...cancelledUserInput, ...cancelledDynamicTools]) {
         dismiss(serverInteractionId(meta.requestId), 'turn_completed');
@@ -8423,7 +8486,7 @@ assertRouteCurrent();
       autoReviewIntent?: AutoReviewUserIntent,
     ): Promise<void> {
       if (closed) return;
-      if (live.delivery !== 'async' && await waitForYieldContinuationIdle()) return;
+      if (await waitForYieldContinuationIdle()) return;
       if (closed) return;
       const message = formatAskUserContinuationMessage(live.questions, answers);
       const sendOptions: CodexInternalSendOptions = {
@@ -8436,7 +8499,7 @@ assertRouteCurrent();
       };
       try {
         await sendInteractionContinuation(live.requestId, { type: 'user', content: message }, sendOptions,
-          'ask_user continuation turn failed to start', live.delivery === 'async' ? live.turnId : null);
+          'ask_user continuation turn failed to start', null);
       } catch (error) {
         emitAskUserContinuationStartFailure(error);
       }
@@ -9226,26 +9289,35 @@ assertRouteCurrent();
     // ── ServerRequest handlers (Phase 2 approval, Phase 5 dismiss-on-mode-change) ──
     const commandExecutionApproval = async (
       params: CommandExecutionRequestApprovalParams,
+      rpc?: { requestId: string | number },
     ): Promise<CommandExecutionRequestApprovalResponse> => {
       if (reviewMode) return { decision: 'decline' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
-      // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
-      const requestId = params.approvalId ?? params.itemId;
+      // RPC identity owns cancellation; itemId remains the execution identity.
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : params.approvalId ?? params.itemId;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { decision: 'cancel' };
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
         toolUseId: params.itemId,
-        toolName: 'exec',
-        input: commandExecutionDisplayInput(params.command ?? '', params.cwd ?? ''),
-        title: 'Allow Codex to run this command?',
+        toolName: params.kind === 'writeStdin' ? 'write_stdin' : 'exec',
+        input: {
+          ...commandExecutionDisplayInput(params.command ?? '', params.cwd ?? ''),
+          ...(params.kind ? { approvalKind: params.kind } : {}),
+          ...(params.environmentId ? { environmentId: params.environmentId } : {}),
+          ...(params.networkApprovalContext ? { networkApprovalContext: params.networkApprovalContext } : {}),
+        },
+        title: params.kind === 'writeStdin' ? 'Allow Codex to send input to this terminal?' : 'Allow Codex to run this command?',
         description: params.reason ?? undefined,
         suggestions: commandSupportsAcceptForSession(params) ? codexSessionApprovalSuggestions() : undefined,
         metadata: params.reason ? { reason: params.reason } : undefined,
       }, {
-        autoReviewAction: {
+        autoReviewAction: params.kind === 'writeStdin' || params.networkApprovalContext || params.environmentId
+          ? { kind: 'other', description: JSON.stringify({ kind: params.kind ?? 'command', command: params.command, cwd: params.cwd, environmentId: params.environmentId, networkApprovalContext: params.networkApprovalContext }) }
+          : {
           kind: 'exec',
           command: params.command ?? '',
           ...(opts.remoteHostId ? { destructivePathResolution: 'unavailable' as const } : {}),
@@ -9264,13 +9336,15 @@ assertRouteCurrent();
 
     const fileChangeApproval = async (
       params: FileChangeRequestApprovalParams,
+      rpc?: { requestId: string | number },
     ): Promise<FileChangeRequestApprovalResponse> => {
       if (reviewMode) return { decision: 'decline' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
-      const requestId = params.itemId;
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : params.itemId;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { decision: 'cancel' };
       const activeChange = activeToolContexts.get(params.itemId);
       const changes = params.changes ?? (activeChange?.type === 'fileChange' && activeChange.turnId === params.turnId
         ? activeChange.changes : undefined);
@@ -9451,6 +9525,7 @@ assertRouteCurrent();
 
     const mcpServerElicitation = async (
       params: McpServerElicitationRequestParams,
+      rpc?: { requestId: string | number },
     ): Promise<McpServerElicitationRequestResponse> => {
       if (reviewMode) return { action: 'decline', content: null, _meta: null };
       // buffered/墓碑 turn 的 elicitation 不得上 UI / auto-approve (codex R12 P1)。
@@ -9460,11 +9535,32 @@ assertRouteCurrent();
         return { action: 'decline', content: null, _meta: null };
       }
       if (!isMcpToolApprovalElicitation(params)) {
-        log.warn('unsupported MCP server elicitation -> decline', {
-          serverName: params.serverName,
-          mode: params.mode,
+        const rawId = rpc?.requestId ?? `mcp-elicitation:${++mcpElicitationSeq}`;
+        const requestId = serverInteractionId(rawId);
+        if (resolvedWhileBufferedRequestIds.delete(String(rawId))) return cancelledElicitation();
+        const form = params.mode === 'form' ? parseMcpElicitationForm(params.requestedSchema, params.message) : undefined;
+        const url = params.mode === 'url' ? mcpElicitationUrl(params.url) : undefined;
+        if (!form && !url) {
+          eventQueue.push({ type: 'error', data: {
+            message: `Cindy cannot display this MCP request from ${params.serverName} (${params.mode}). Ask the server to use an ordinary non-secret text, boolean or single-choice form, or an HTTP(S) link. Unsupported schema constraints (including pattern/format) cannot be accepted.`,
+            isTerminal: false,
+          }, source: 'codex' });
+          return cancelledElicitation();
+        }
+        // Elicitation asks for information/completion, never permission to run a
+        // tool: Full access, Auto review and mode changes must not answer it.
+        return elicitationBroker.track({ connectionId, requestId: rawId, kind: 'mcp_elicitation',
+          threadId: params.threadId, turnId: params.turnId }, async (settle) => {
+          const decision = await dispatchInteraction(form ? {
+            kind: 'ask_user_question', requestId, questions: form.questions,
+          } : {
+            kind: 'permission', requestId, toolName: 'mcp_url',
+            title: params.serverName, description: params.message, input: { url: url!, serverName: params.serverName },
+          });
+          const content = form ? mcpElicitationFormContent(form, decision) : null;
+          const accepted = form ? content !== undefined : decision.kind === 'permission' && decision.behavior === 'allow';
+          settle({ action: accepted ? 'accept' : 'cancel', content: content ?? null, _meta: null });
         });
-        return { action: 'decline', content: null, _meta: null };
       }
 
       const capabilityRoute = findCapabilityRouteOverride(
@@ -9539,7 +9635,8 @@ assertRouteCurrent();
       const toolTitle = stringFromMeta(meta, 'tool_title');
       const innerToolName = mcpInnerToolName(params);
       const toolUseId = activeMcpToolUseId(params);
-      const requestId = `mcp-elicitation:${params.serverName}:${params.turnId ?? params.threadId}:${++mcpElicitationSeq}`;
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : `mcp-elicitation:${params.serverName}:${params.turnId ?? params.threadId}:${++mcpElicitationSeq}`;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { action: 'cancel', content: null, _meta: null };
       const decision = await awaitApprovalDecision(
         params.threadId,
         params.turnId,
@@ -9589,6 +9686,7 @@ assertRouteCurrent();
 
     const permissionsApproval = async (
       params: PermissionsRequestApprovalParams,
+      rpc?: { requestId: string | number },
     ): Promise<PermissionsRequestApprovalResponse> => {
       if (reviewMode) return { permissions: {}, scope: 'turn' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒
@@ -9596,7 +9694,8 @@ assertRouteCurrent();
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { permissions: {}, scope: 'turn' };
       if (turnGate instanceof Promise && !(await turnGate)) return { permissions: {}, scope: 'turn' };
-      const requestId = params.itemId ?? params.turnId;
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : params.itemId ?? params.turnId;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { permissions: {}, scope: 'turn' };
       // Capability changes share the same decision lifecycle as command approvals.
       // Auto reviews their complete permission payload rather than inventing a command.
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
@@ -9763,7 +9862,7 @@ assertRouteCurrent();
       turnId?: string | null,
       isRequestPending: () => boolean = () => true,
       toolUseId?: string,
-      delivery?: 'async',
+      isBlocking?: boolean,
     ): Promise<ToolRequestUserInputResponse> {
       if (questions.some((q) => q.isSecret)) {
         log.warn('requestUserInput secret question refused', {
@@ -9772,21 +9871,8 @@ assertRouteCurrent();
         });
         return emptyUserInputResponse(questions);
       }
-      // A blocking tool must remain answerable; optional cards may not cover it.
-      if (delivery === 'async') {
-        if ([...liveAskUserByRequestId.values()].some((live) => live.delivery !== 'async')) {
-          return emptyUserInputResponse(questions);
-        }
-      }
-      // The shared card has one slot: either kind of new question replaces an
-      // unanswered async card. Answered cards have already left this map.
-      for (const live of liveAskUserByRequestId.values()) {
-        if (live.delivery === 'async') dismissLiveAskUser(live.requestId, 'superseded');
-      }
-      // Async items already deduplicate lifecycle notifications by item id.
-      // Only synchronous protocol aliases may share pending/submitted answers
-      // by content: distinct async items must always own their own decisions.
-      const fingerprint = turnId && delivery !== 'async' ? userInputQuestionsFingerprint(questions) : null;
+      // Synchronous aliases may share a pending/submitted response by content.
+      const fingerprint = turnId ? userInputQuestionsFingerprint(questions) : null;
       const submittedForTurn = turnId ? submittedUserInputByTurn.get(turnId) : undefined;
       const replay = fingerprint ? submittedForTurn?.get(fingerprint) : undefined;
       if (replay) {
@@ -9819,7 +9905,7 @@ assertRouteCurrent();
             turnId,
           });
           return isRequestPending()
-            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending, toolUseId, delivery)
+            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending, toolUseId, isBlocking)
             : emptyUserInputResponse(questions);
         }
         return responseFromUserInputAnswersByPosition(questions, joined.answersByPosition);
@@ -9832,7 +9918,6 @@ assertRouteCurrent();
           questions,
           detached: false,
           continuationStarted: false,
-          delivery,
           permissionPolicy: activeTurnPermissionPolicy,
           capabilitySelectionText: (
             (turnId ? capabilitySelectionTextByTurnId.get(turnId) : undefined)
@@ -9845,8 +9930,8 @@ assertRouteCurrent();
           kind: 'ask_user_question',
           requestId,
           ...(toolUseId ? { toolUseId } : {}),
-          ...(delivery ? { delivery } : {}),
           questions: questionsToAskUserItems(questions),
+          ...(isBlocking === false ? { isBlocking: false } : {}),
         });
         if (decision.kind !== 'ask_user_question') {
           log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
@@ -9863,29 +9948,20 @@ assertRouteCurrent();
           questions,
           responseFromAskUserAnswers(questions, decision.answers),
         );
-        // Optional skips/cancellations settle the card without changing intent,
-        // claiming a continuation, or sending synthetic "no answer" input.
-        if (live.delivery === 'async'
-          && (decision.dismissed === true || !hasSubmittedUserInput(answersByPosition))) {
-          return answersByPosition;
-        }
         // 澄清必须锚在发起提问那一轮的审查意图上。卡片挂起期间后续 turn 可能改写
         // currentAutoReviewIntent；plan_review 已用 planRequestAutoReviewIntent 防漂。
         const continuationAutoReviewIntent = composeAutoReviewIntentWithClarification(
           live?.autoReviewIntent ?? currentAutoReviewIntent,
-          Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
+          questions.map((q) => ({ question: q.question, answer: decision.answers[q.id] ?? decision.answers[q.question] ?? '' })),
         );
         setAutoReviewIntent(continuationAutoReviewIntent);
         if (
           live
-          && (live.detached || live.delivery === 'async')
+          && live.detached
           && !live.continuationStarted
           && decision.dismissed !== true
         ) {
           live.continuationStarted = true;
-          if (live.delivery === 'async' && live.turnId) {
-            retainInteractionContinuation(live.turnId, requestId);
-          }
           // Pass the applied, normalized snapshot so send can reuse this transition.
           void startAskUserContinuation(live, decision.answers ?? {}, currentAutoReviewIntent);
         } else if (live?.detached && decision.dismissed === true) {
@@ -9959,15 +10035,17 @@ assertRouteCurrent();
     ): boolean {
       const rawQuestions = asyncUserInputQuestions(params.item);
       if (!rawQuestions) return false;
-      // Do not render the fallback prose as a final answer or open child-agent cards.
+      // The question card owns the question text and answer history; suppress duplicate fallback prose.
       if (phase !== 'completed' || reviewMode || params.threadId !== threadId) return true;
       let seen = asyncQuestionItemsByTurn.get(params.turnId);
       if (seen?.has(params.item.id)) return true;
       if (!seen) asyncQuestionItemsByTurn.set(params.turnId, seen = new Set());
       seen.add(params.item.id);
       const requestId = serverInteractionId(`async:${params.turnId}:${params.item.id}`);
-      void askUserViaInteraction(requestId, normalizeRequestUserInputQuestions(rawQuestions),
-        params.turnId, () => !closed && !completedTurnIds.has(params.turnId), undefined, 'async')
+      // Native async messages have no response RPC. Session owns their lifetime and
+      // delivers accepted answers through the same input path as every other harness.
+      void dispatchInteraction({ kind: 'ask_user_question', requestId, delivery: 'async',
+        questions: questionsToAskUserItems(normalizeRequestUserInputQuestions(rawQuestions)) })
         .catch((error: unknown) => log.warn('async user input interaction failed', { requestId, error: String(error) }));
       return true;
     }
@@ -10074,6 +10152,7 @@ assertRouteCurrent();
                 params.turnId,
                 () => userInputBroker.has({ connectionId, requestId: meta.requestId }),
                 params.itemId,
+                params.isBlocking,
               );
           settle(response);
         },
@@ -10190,17 +10269,20 @@ assertRouteCurrent();
     function handleServerRequestResolved(params: ServerRequestResolvedNotification['params']): void {
       const requestId = String(params.requestId);
       const uiRequestId = serverInteractionId(params.requestId);
-      const pendingApproval = pendingApprovals.get(requestId);
+      const approvalKey = pendingApprovals.has(uiRequestId) ? uiRequestId : requestId;
+      const pendingApproval = pendingApprovals.get(approvalKey);
       let approvalCancelled = false;
       if (pendingApproval && !pendingApproval.settled) {
         pendingApproval.settled = true;
-        pendingApprovals.delete(requestId);
+        pendingApprovals.delete(approvalKey);
         pendingApproval.resolve('decline');
         approvalCancelled = true;
       }
       const brokerKey = { connectionId, requestId: params.requestId };
       const userInputPending = userInputBroker.has(brokerKey);
       const dynamicPending = dynamicToolBroker.has(brokerKey);
+      const elicitationCancelled = elicitationBroker.cancel(brokerKey, cancelledElicitation());
+      if (elicitationCancelled) dismissLiveAskUser(uiRequestId, 'server_request_resolved');
       if (userInputPending || dynamicPending) {
         // Wake joined duplicates before settling the owner's outer broker
         // response. Also remove the live question synchronously: turn/completed
@@ -10222,11 +10304,11 @@ assertRouteCurrent();
       if (approvalCancelled) {
         eventQueue.push({
           type: 'interaction_dismissed',
-          data: { requestId, reason: 'server_request_resolved', resolvedAs: 'deny' },
+          data: { requestId: approvalKey, reason: 'server_request_resolved', resolvedAs: 'deny' },
           source: 'codex',
         });
       }
-      if (!approvalCancelled && !userInputCancelled && !dynamicCancelled && bufferedOrphanTurnIds.size > 0) {
+      if (!approvalCancelled && !userInputCancelled && !dynamicCancelled && !elicitationCancelled && bufferedOrphanTurnIds.size > 0) {
         // cancel 未命中且有 buffered turn: 可能是挂起中的请求 (尚未注册到
         // broker) 被服务端取消 (greptile R13 P1) — 记下 requestId, 对账放行
         // 后 handler 自查回空响应, 不上 UI。requestId 是一次性的 (消费即删),
@@ -11113,7 +11195,7 @@ assertRouteCurrent();
       const realTurnUsageSegments = usageTracker.getTurnUsageSegments();
       finalizeCodexGenerationTurn(translatorRt, turn.id);
       translatorRt.tokenSpeed.stop();
-      const generationDurationMs = translatorRt.tokenSpeed.isSegmentComplete()
+      const generationDurationMs = translatorRt.generationSegmentComplete
         ? codexGenerationDurationMs(translatorRt) : undefined;
       const codexDoneUsage = {
         promptTokens: realTurnUsage.input,
@@ -12399,19 +12481,8 @@ assertRouteCurrent();
           // Input/cache-only segments still belong in the ledger, but cannot
           // pair already reported output with a later generation denominator.
           if (last.outputTokens > 0) {
-            translatorRt.generationOutputTokens += last.outputTokens;
-            translatorRt.generationOutputDurationMs = sampleGenerationDuration(
-              translatorRt.generationDurationMs,
-              translatorRt.generationStartedAt,
-            );
-            if (translatorRt.generationTimingReliable) {
-              translatorRt.tokenSpeed.recordUsage(
-                translatorRt.generationOutputTokens,
-                translatorRt.generationOutputDurationMs,
-              );
-            } else {
-              translatorRt.tokenSpeed.invalidate();
-            }
+            const calibration = settleCodexSpeedUsage(translatorRt, last);
+            if (calibration) log.debug('SDK ▷ token speed calibration', { turnId: params.turnId, ...calibration });
           }
           maybePushUsageRefresh();
           // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
@@ -12780,9 +12851,22 @@ assertRouteCurrent();
         if (mutableModel !== beforeModel) {
           refreshCodexAutoReviewerRoute(params.threadId);
         }
-        // ReasoningEffort 的 'none' 不属于 Effort; 排除后其余值都是合法 Effort, 无需 cast。
-        // A server default must not replace an explicit no-effort session choice.
-        if (mutableEffort && s.effort && s.effort !== 'none') mutableEffort = s.effort;
+        // ReasoningEffort 的 'none' 不属于 Effort。恢复后的快照经常把 effort 留空
+        // (null / '' / 'none')——那只表示这条通知没带档位，不能把任务已存的档位
+        // 清掉，否则下一轮子代理会掉回目录默认 low。显式档位(含本轮 setEffort)
+        // 仍然覆盖；空字符串是「这个模型不用推理」的持久哨兵，server 默认值不得填上。
+        const nextEffort = reconcileMutableEffortFromThreadSettings(mutableEffort, s.effort);
+        const effortChanged = nextEffort !== mutableEffort;
+        mutableEffort = nextEffort;
+        // 快照里的真实档位是这条线程实际在用的档，算已选。空快照
+        // （null / '' / 'none'）不会改 mutableEffort，也不能把「从未存过」
+        // 提升成已选，否则目录默认 high 又会被登记给宿主。
+        if (effortChanged && isStoredCodexEffort(s.effort)) hasSelectedEffort = true;
+        // 快照真的改了档位时，已经登记过的智能路由要跟上。还没登记过就别写：
+        // 空的 prompt 会先占位，随后的 thread/start 会用对齐后的档位正式登记。
+        if (effortChanged && codexProxyPromptRegistered) {
+          registerCodexDeveloperInstructions(params.threadId, registeredDeveloperInstructions);
+        }
         if (before !== (serviceTierState.value ?? null)) {
           log.debug('thread/settings/updated reconciled serviceTier', {
             threadId: params.threadId,
@@ -13299,7 +13383,7 @@ assertRouteCurrent();
         // 不再影响判定, 也不会再被别的 turn(含被 Stop 的旧 send 的孤儿)污染。
         const mySendGen = ++sendGeneration;
         isTurnStartPending = true;
-        if (!isContinuation) translatorRt.tokenSpeed.reset();
+        if (!isContinuation) resetCodexSpeed(translatorRt);
         usageTracker.beginTurn();
         log.debug('send ▶ user message', {
           model: mutableModel,
@@ -14470,13 +14554,25 @@ assertRouteCurrent();
 
       async setEffort(newEffort: Effort) {
         if (reviewMode) return;
-        if (newEffort === mutableEffort) return; // 去重: 值没变不重推
+        // 启动没传 effort 时 mutableEffort 被填成目录默认 high，但 hasSelectedEffort
+        // 仍是 false。当轮显式选同一个 high 也是「未选 → 已选」，不能在这里返回：
+        // 否则标记永远立不起来，当轮拉起的跨供应商子代理不会继承这个档位。
+        const becameSelected = !hasSelectedEffort;
+        if (newEffort === mutableEffort && !becameSelected) return; // 去重: 值没变且已选过，不重推
         const clamped = clampEffortForCodex(mutableModel, newEffort);
         log.debug('setEffort', { from: mutableEffort, to: newEffort, clamped });
         mutableEffort = newEffort;
+        // 当轮显式改档（含改成「不用推理」的空字符串，以及首次选中与默认相同的 high）
+        // 算已选，后面的重登才会把这个档位交给宿主。
+        hasSelectedEffort = true;
         // thread 已启动 → 立即经 thread/settings/update 生效; 未启动由首个 turn/start
         // 携带 (TurnStartParams.effort, v2.rs:5800)。发 clamp 后的值, 与 turn/start 一致。
         if (clamped !== undefined) await pushThreadSettings({ effort: clamped });
+        // 回执经常不带档位，对不齐 mutableEffort，上面的重登不会跑。当轮显式
+        // 改档要在这里把新档位写进已经登记的智能路由，后面拉起的子代理才跟父任务一致。
+        if (threadId && hostUsesCodexProxy) {
+          registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
+        }
       },
 
       getEffort() {

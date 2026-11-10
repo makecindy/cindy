@@ -353,6 +353,7 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
   项目使用 Cindy 已有目录分组（id 为目录路径），普通任务和伙伴使用其 ID。最近活动只排序，插件自行展示和选择。
 - `resolve({target:{kind,id}})` 返回最新目标元数据，供插件校验保存的固定目标；无写入、弹窗或隐式选中。
   `send` 同样重新校验目标，不要求先 list/resolve，也不接受任意不可用路径或目标；失效返回 TARGET_UNAVAILABLE，不降级改投。
+- `resolve({session:sessionId})` 与 `target` 二选一，返回相同 `{kind,id,label,detail}`。普通任务沿用候选筛选并返回 task；伙伴只接受唯一、未归档的 canonical 注册，返回 bot 与伙伴 ID。其他伙伴会话、冲突或不可用目标返回 TARGET_UNAVAILABLE；不使用兼容镜像，不回退到其他会话，查询继续复核账号与批准。
 - `send({target,requestKey,text,context?,title?,autoTitle?,route?,permissionMode?,delivery?,attachments?})` 在指定项目中新建普通任务，或向指定普通任务/伙伴投递。
   新任务经现有 `PluginTaskService.create` 登记归属后使用 `createPluginTaskSession`，沿用插件模型选择、受限动手权限及卸载撤销流程，可传统一模型目录的 route，以及当前授权范围内的 permissionMode。
   存量任务和伙伴保留其模型、权限、目录，不接受 route 或 permissionMode；伙伴通过唯一 canonical 注册解析，不使用兼容镜像或伪造伙伴身份。

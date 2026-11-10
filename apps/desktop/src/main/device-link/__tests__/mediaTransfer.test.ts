@@ -21,6 +21,7 @@ const netFetchMock = vi.hoisted(() => vi.fn());
 /** globalThis.fetch(Node undici):OSS PUT 主路径。 */
 const undiciFetchMock = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({ net: { fetch: netFetchMock } }));
+vi.mock('../agentNetDeviceDirectory.js', () => ({ readCurrentDeviceDirectory: vi.fn() }));
 vi.stubGlobal('fetch', undiciFetchMock);
 
 const apiFetch = vi.hoisted(() => vi.fn());

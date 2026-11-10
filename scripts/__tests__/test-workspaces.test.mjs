@@ -70,6 +70,51 @@ import {
 	requireDatabasePlatform,
 } from "../ci-database-tests.mjs";
 
+import { detectHostChanges, needsHostTests } from "../ci-host-tests.mjs";
+
+// Runner tier: the experimental Host must not allocate three OS jobs for a
+// mobile/docs-only change, or silently skip shared inputs/deletions/unknown
+// event ranges. Existing DB selection tests do not cover this new CI entry.
+test("Host CI selects shared runtime and infrastructure but skips unrelated changes", () => {
+	for (const file of [
+		"apps/host/src/main.ts", "apps/web/shim.js",
+		"apps/desktop/src/main/localDb/schema.ts", "apps/desktop/src/renderer/main.tsx",
+		"apps/desktop/drizzle/0145.sql", "apps/desktop/native/sqlite-vec/vec0.dll",
+		"apps/codex-package-bin/package.json", "packages/maker-core/src/index.ts",
+		"packages/auth-client/src/index.ts", "scripts/ci-host-tests.mjs",
+		"scripts/shared/pnpm-invocation.mjs", "patches/tsx.patch",
+		"pnpm-lock.yaml", "package.json", "pnpm-workspace.yaml", ".npmrc", ".github/workflows/ci.yml",
+	]) assert.equal(needsHostTests([file]), true, file);
+	assert.equal(needsHostTests(["README.md", "docs/host/basic-web.md", "apps/mobile/app/index.tsx", ".github/ISSUE_TEMPLATE/bug.yml"]), false);
+	assert.equal(needsHostTests([]), false);
+});
+
+test("Host CI compares PR, merge queue and push ranges without losing deleted paths", () => {
+	const base = "a".repeat(40), head = "b".repeat(40);
+	for (const [eventName, event] of [
+		["pull_request", { pull_request: { base: { sha: base } } }],
+		["merge_group", { merge_group: { base_sha: base } }],
+		["push", { before: base }],
+	]) {
+		const result = detectHostChanges({ eventName, event, head, git(command, args) {
+			assert.equal(command, "git");
+			assert.deepEqual(args, ["diff", "--name-only", "--no-renames", "-z", base, head, "--"]);
+			return "apps/host/removed.mjs\0docs/moved file\nname.mjs\0";
+		} });
+		assert.equal(result.required, true);
+		assert.deepEqual(result.files, ["apps/host/removed.mjs", "docs/moved file\nname.mjs"]);
+		assert.equal(detectHostChanges({ eventName, event, head, git: () => "apps/mobile/app/index.tsx\0" }).required, false);
+	}
+});
+
+test("Host CI runs manual or unknown ranges and never treats Git errors as unrelated", () => {
+	for (const [eventName, event] of [["workflow_dispatch", {}], ["pull_request", {}], ["push", { before: "0".repeat(40) }]]) {
+		assert.equal(detectHostChanges({ eventName, event, git() { assert.fail("absent base"); } }).required, true);
+	}
+	assert.throws(() => detectHostChanges({ eventName: "push", event: { before: "bad" }, head: "b".repeat(40) }), /complete event base\/head/);
+	assert.throws(() => detectHostChanges({ eventName: "push", event: { before: "a".repeat(40) }, head: "b".repeat(40), git() { throw new Error("missing commit"); } }), /missing commit/);
+});
+
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 // Runner tier regression: db:validate is static and Linux silently skips replay.

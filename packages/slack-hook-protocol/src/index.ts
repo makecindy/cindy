@@ -60,3 +60,5 @@ export {
   serializeHookMessage,
   type HelloInput,
 } from './build';
+
+export * from './channelHistory';

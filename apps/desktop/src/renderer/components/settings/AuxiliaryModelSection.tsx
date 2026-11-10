@@ -4,8 +4,8 @@ import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown } from 'lucide-react';
-import { SelectParts as Select } from '@/components/ui/select';
+import { Select } from '@/components/ui/select';
+import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 import { OneshotModelPinPicker } from '@/cindy-brain/OneshotModelPinPicker';
 import { useAuth } from '@/contexts/AuthContext';
@@ -158,106 +158,48 @@ export function AuxiliaryModelSection() {
   };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t(personalizationDetailsSettings.auxiliaryModelsTitle.descriptionKey)}
-        </p>
-      </div>
-
-      <div className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
-        <div className="flex items-center justify-between gap-4 px-4 py-4">
-          <div className="min-w-0 flex-1 text-14 font-medium text-[var(--text-primary)]">
-            {t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
-          </div>
-          <div className="flex min-w-0 max-w-full items-center justify-end gap-2">
-            {showCustom ? (
-              <DefaultOverrideControls
-                isCustomized={customized || drafting}
-                showCustomizedBadge={customized}
+    <SettingsSection
+      title={t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
+      description={t(personalizationDetailsSettings.auxiliaryModelsTitle.descriptionKey)}
+    >
+      <SettingsCard>
+        <SettingsRow
+          title={t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
+          trailing={
+            <div className="flex min-w-0 max-w-full items-center justify-end gap-2">
+              {showCustom ? (
+                <DefaultOverrideControls
+                  isCustomized={customized || drafting}
+                  showCustomizedBadge={customized}
+                  disabled={pending}
+                  onReset={() => {
+                    if (!customized) {
+                      setDrafting(false);
+                      return;
+                    }
+                    void persistModels([]);
+                  }}
+                />
+              ) : null}
+              <Select data-setting-id={personalizationDetailsSettings.auxiliaryModelsTitle.id}
+                label={t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
+                value={mode}
+                options={(['automatic', 'custom'] as const).map((option) => ({
+                  value: option,
+                  label: t(
+                    option === 'automatic'
+                      ? 'settings.auxiliaryModels.automatic'
+                      : 'settings.auxiliaryModels.customize',
+                  ),
+                }))}
+                onValueChange={(value) => selectMode(value as AuxiliaryModelMode)}
                 disabled={pending}
-                onReset={() => {
-                  if (!customized) {
-                    setDrafting(false);
-                    return;
-                  }
-                  void persistModels([]);
-                }}
+                width="sm"
+                className="shrink"
               />
-            ) : null}
-            <Select.Root
-              value={mode}
-              onValueChange={(value) => selectMode(value as AuxiliaryModelMode)}
-              disabled={pending}
-            >
-              <Select.Trigger data-setting-id={personalizationDetailsSettings.auxiliaryModelsTitle.id}
-                aria-label={t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
-                className={cn(
-                  'flex h-9 w-[220px] max-w-full min-w-0 shrink items-center justify-between gap-3 rounded-full border px-3.5 text-13 outline-none transition-colors',
-                  'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                  'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                  'disabled:cursor-not-allowed disabled:opacity-55',
-                )}
-              >
-                <span className="min-w-0 truncate text-left">
-                  <Select.Value />
-                </span>
-                <Select.Icon asChild>
-                  <ChevronDown
-                    size={14}
-                    className="shrink-0 text-[var(--settings-eye-icon)]"
-                    aria-hidden="true"
-                  />
-                </Select.Icon>
-              </Select.Trigger>
-              <Select.Portal>
-                <Select.Content
-                  position="popper"
-                  side="bottom"
-                  align="start"
-                  sideOffset={6}
-                  className={cn(
-                    'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl p-2',
-                    'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
-                  )}
-                >
-                  <Select.Viewport className="flex flex-col gap-[2px]">
-                    {(['automatic', 'custom'] as const).map((option) => (
-                      <Select.Item
-                        key={option}
-                        value={option}
-                        className={cn(
-                          'flex h-9 w-full cursor-pointer select-none items-center justify-between gap-3 rounded-[8px] px-3 text-left text-13 outline-none transition-colors',
-                          'text-[var(--settings-input-text)]',
-                          'data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]',
-                        )}
-                      >
-                        <Select.ItemText className="min-w-0 flex-1 whitespace-nowrap">
-                          {t(
-                            option === 'automatic'
-                              ? 'settings.auxiliaryModels.automatic'
-                              : 'settings.auxiliaryModels.customize',
-                          )}
-                        </Select.ItemText>
-                        <Select.ItemIndicator>
-                          <Check
-                            size={16}
-                            className="shrink-0 text-[var(--settings-theme-icon-active)]"
-                          />
-                        </Select.ItemIndicator>
-                      </Select.Item>
-                    ))}
-                  </Select.Viewport>
-                </Select.Content>
-              </Select.Portal>
-            </Select.Root>
-          </div>
-        </div>
-
-        <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
+            </div>
+          }
+        />
 
         {showCustom ? (
           <>
@@ -271,19 +213,11 @@ export function AuxiliaryModelSection() {
                 (option) => option.id === pin || !selectedByOtherSlot.has(option.id),
               );
               return (
-                <div key={slotKey}>
-                  {index > 0 ? (
-                    <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
-                  ) : null}
-                  <div className="flex items-center justify-between gap-4 px-4 py-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-14 font-medium text-[var(--text-primary)]">
-                        {t(definition.titleKey)}
-                      </div>
-                      <p className="mt-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
-                        {t(`settings.auxiliaryModels.${slotKey}.description`)}
-                      </p>
-                    </div>
+                <SettingsRow
+                  key={slotKey}
+                  title={t(definition.titleKey)}
+                  hint={t(`settings.auxiliaryModels.${slotKey}.description`)}
+                  trailing={
                     <div className="w-[min(100%,320px)] shrink-0">
                       {/* One-shot pins already carry the exact provider + agent route. The
                           provider-first picker exposes every routable supplier without
@@ -305,12 +239,12 @@ export function AuxiliaryModelSection() {
                         disabled={pending || (index > 0 && !activeModels[index - 1])}
                       />
                     </div>
-                  </div>
-                </div>
+                  }
+                />
               );
             })}
 
-            <p className="px-4 pb-4 text-12 leading-[1.5] text-[var(--text-secondary)]">
+            <p className={cn('px-4 pb-4', SETTINGS_HINT)}>
               {authMode !== 'cloud' ? (
                 <span className="mb-1 block text-[var(--text-tertiary)]">
                   {t('settings.auxiliaryModels.signInHint')}
@@ -320,7 +254,7 @@ export function AuxiliaryModelSection() {
             </p>
           </>
         ) : (
-          <div className="px-4 py-4">
+          <SettingsBlock>
             <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
               {automaticChain}
             </p>
@@ -329,9 +263,9 @@ export function AuxiliaryModelSection() {
                 {t('settings.auxiliaryModels.signInHint')}
               </p>
             ) : null}
-          </div>
+          </SettingsBlock>
         )}
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

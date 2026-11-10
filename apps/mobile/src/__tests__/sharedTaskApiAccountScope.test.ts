@@ -16,7 +16,7 @@ import {
 type ApiFetch = <T>(path: string, opts: Omit<ApiFetchOptions, 'token'>) => Promise<T>;
 const auth = vi.hoisted(() => ({ apiFetch: null as unknown as ApiFetch, accountGeneration: 1 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
-vi.mock('react', () => ({ useMemo: (factory: () => unknown) => factory() }));
+vi.mock('react', async (importOriginal) => ({ ...(await importOriginal<typeof import('react')>()), useMemo: (factory: () => unknown) => factory() }));
 // This suite isolates the official HTTP refresh/account fence. V2 invitation
 // signing and secure native state have their own adapter integration coverage.
 vi.mock('@/device-link/agentNetSharing', () => ({ joinMobileAgentNetSharedTask: async () => null,

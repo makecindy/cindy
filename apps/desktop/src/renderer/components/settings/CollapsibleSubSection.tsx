@@ -6,6 +6,7 @@
 
 import type { ReactNode } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { SETTINGS_SECTION_TITLE_CLASS } from '@/components/ui/settings-rows';
 
 export function CollapsibleSubSection({
   id,
@@ -37,7 +38,7 @@ export function CollapsibleSubSection({
         aria-expanded={open}
         className="group flex w-full items-center justify-between gap-3 text-left"
       >
-        <span className="shrink-0 text-14 font-medium text-[var(--text-primary)]">{title}</span>
+        <span className={`shrink-0 ${SETTINGS_SECTION_TITLE_CLASS}`}>{title}</span>
         <div className="flex min-w-0 items-center gap-2">
           {!open && summary ? (
             <>

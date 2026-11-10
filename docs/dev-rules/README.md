@@ -11,10 +11,11 @@
 | --- | --- |
 | Desktop、Mobile、maker-core 模块内的触发条件 | [Desktop](../../apps/desktop/AGENTS.md)、[Mobile](../../apps/mobile/AGENTS.md)、[maker-core](../../packages/maker-core/AGENTS.md) 的嵌套 AGENTS.md；专题正文不在模块内重复 |
 | 目录职责、按用户行为定位公共入口与测试、开发环境 | [仓库地图](repo-map.md)、[环境准备](environment-setup.md) |
+| 通用个人开发版：组合自己的 PR、插件源码与验证报告 | [个人开发版脚本](personal-build.md) |
 | 已发生过的任务体验回归、测试入口与运行命令 | [任务回归台账](session-regressions.md) |
 | Desktop 启动、重启与验证 | [桌面开发](desktop-development.md) |
 | 免登录 UI 模拟数据、`--mock` 启动、数据正本与写入边界 | [UI 模拟数据](ui-mock-data.md) |
-| Mobile 开发、模拟器、原生配置／依赖与冷更确认 | [手机开发](mobile-development.md) |
+| Mobile 开发、模拟器、原生配置／依赖与冷更边界 | [手机开发](mobile-development.md) |
 | Renderer、preload、窗口、IPC、CSP 与特权边界 | [Electron 进程边界](electron-security-and-process-boundaries.md) |
 | 凭证、持久数据、临时文件与测试目录 | [本地存储](credentials-and-local-storage.md) |
 | 媒体生成、导入、附件、缓存、协议与回收 | [媒体存储](media-storage-and-protocols.md) |

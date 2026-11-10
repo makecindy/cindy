@@ -88,13 +88,25 @@ export async function readNativeAccountUsage(provider: SubscriptionProvider, dir
       claudeUsage: usage ? parseClaudeOAuthUsageResponse(usage.rateLimits, Date.now()) : null,
     };
   }
+  const rateLimits = await codexAccountRpc(directory, 'account/rateLimits/read', {});
   return {
-    codexUsage: providerGroupCodexUsageFromReads(
-      null,
-      await codexAccountRpc(directory, 'account/rateLimits/read', {}),
-      Date.now(),
-    ),
+    codexUsage: providerGroupCodexUsageFromReads(null, rateLimits, Date.now()),
+    codexCredits: codexCredits(rateLimits),
   };
+}
+
+/** Settings shows the balance line of the provider usage card; scheduling ignores it. */
+function codexCredits(raw: unknown) {
+  const credits = (raw as { rateLimits?: { credits?: unknown } } | null)?.rateLimits?.credits;
+  if (!credits || typeof credits !== 'object') return null;
+  const { hasCredits, unlimited, balance } = credits as Record<string, unknown>;
+  return typeof hasCredits === 'boolean'
+    ? {
+        hasCredits,
+        unlimited: unlimited === true,
+        balance: typeof balance === 'string' ? balance.slice(0, 64) : null,
+      }
+    : null;
 }
 
 const codexRefreshes = new Map<string, Promise<unknown>>();

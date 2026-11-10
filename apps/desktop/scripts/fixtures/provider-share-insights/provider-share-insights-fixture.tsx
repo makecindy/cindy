@@ -124,6 +124,15 @@ void mountPage({
         },
       ],
     };
+    // A second account in the owner's subscription pool, with a model-specific weekly window.
+    const pooledAccount: ProviderShareQuotaAccount = {
+      ...subscriptionAccount,
+      windows: [
+        { ...subscriptionAccount.windows[0], remainingPercent: 98 },
+        { ...subscriptionAccount.windows[1], remainingPercent: 14 },
+        { kind: 'scoped', label: 'Fable', windowMinutes: 10080, remainingPercent: 84, resetsAt: now + 86_400_000 },
+      ],
+    };
     const displayedAccount: ProviderShareQuotaAccount =
       ctx.case === 'subscription'
         ? subscriptionAccount
@@ -167,10 +176,14 @@ void mountPage({
             },
             quota: quota
               ? {
-                  group: ctx.case === 'group',
+                  group: ctx.case === 'group' || ctx.case === 'subscription-pool',
                   partial: ctx.case === 'group',
                   accounts:
-                    ctx.case === 'group' ? [account, subscriptionAccount] : [displayedAccount],
+                    ctx.case === 'group'
+                      ? [account, subscriptionAccount]
+                      : ctx.case === 'subscription-pool'
+                        ? [subscriptionAccount, pooledAccount]
+                        : [displayedAccount],
                 }
               : null,
             usage: allowUsage && cmd.includeUsage ? usage : null,

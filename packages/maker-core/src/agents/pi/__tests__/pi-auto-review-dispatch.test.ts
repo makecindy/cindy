@@ -3847,6 +3847,45 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     rmSync(replacementWritableDir, { recursive: true, force: true });
   });
 
+  it('sends extra dir full paths in the startup append and per-turn prefix, refreshing after mid-session additions (#8812)', async () => {
+    const referenceDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-reference-'));
+    const writableDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-writable-'));
+    const addedDir = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-added-'));
+    try {
+      const handle = await start('bypassPermissions', undefined, false, undefined, {
+        extraDirs: [referenceDir],
+        writableDirs: [writableDir],
+      });
+      // 会话启动的 --append-system-prompt 段即带完整路径。
+      const appended = readAppendedSystemPrompt();
+      expect(appended).toContain(`- ${referenceDir}`);
+      expect(appended).toContain(`- ${writableDir}`);
+
+      const lastPromptMessage = () =>
+        String(captured.requests.findLast((r) => r.type === 'prompt')?.message ?? '');
+      await handle.send({ type: 'user', content: 'hello' });
+      expect(lastPromptMessage()).toContain(`- ${referenceDir}`);
+      expect(lastPromptMessage()).toContain(`- ${writableDir}`);
+
+      // 运行中追加目录:下一轮用户轮前缀即带新路径,无需重建会话。
+      await handle.setExtraDirs!([referenceDir, addedDir]);
+      await handle.send({ type: 'user', content: 'again' });
+      expect(lastPromptMessage()).toContain(`- ${addedDir}`);
+
+      // steer 前缀与 send 同一 compose 口径。
+      captured.onEvent?.({ type: 'agent_start' });
+      await handle.steer({ type: 'user', content: 'steer' });
+      expect(String(captured.requests.findLast((r) => r.type === 'steer')?.message ?? ''))
+        .toContain(`- ${addedDir}`);
+
+      await handle.close();
+    } finally {
+      rmSync(referenceDir, { recursive: true, force: true });
+      rmSync(writableDir, { recursive: true, force: true });
+      rmSync(addedDir, { recursive: true, force: true });
+    }
+  });
+
   it('forces an explicit decision for agent-home writes even under Full Access', async () => {
     const review = vi.fn(async () => ({ verdict: 'allow' as const }));
     const handle = await start('bypassPermissions', review);
