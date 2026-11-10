@@ -77,6 +77,7 @@ export function buildDiscordAdapter(
         const name = discordIm.describeLane(userId);
         return name ? `Discord · ${name}` : null;
       },
+      skipOneshotTitleFor: (userId) => decodeDiscordLaneUserId(userId) !== null,
       generatedTitlePrefix: 'Discord · ',
       // Discord personal DMs use Cindy-managed working directories just like
       // Feishu/Telegram DMs. Keep them in the global "dialogue" bucket instead

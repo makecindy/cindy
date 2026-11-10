@@ -23,8 +23,9 @@ import type {
   SessionSendResult,
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
-import type { ChannelIM } from '@cindy/im';
+import type { ChannelIM, DiscordIM } from '@cindy/im';
 import { setMainLocale } from '../../../i18n.desktop';
+import { buildDiscordAdapter } from '../../discord/adapter';
 import { createTelegramGuestTurnPermissionPolicy } from '../../telegram/permissionPolicy';
 import { createDingTalkTurnPermissionPolicy } from '../../dingtalk/permissionPolicy';
 import { createFeishuGroupTurnPermissionPolicy } from '../../feishu/permissionPolicy';
@@ -4531,6 +4532,46 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   // 或 /new 重置后的新上下文首条消息)。threadScoped(slack)路径的回归在
   // turnRunnerThreadRouting.test.ts。
   describe('non-threadScoped generatedTitlePrefix title generation', () => {
+    it.each([
+      { userId: 'g/200000000000000001/300000000000000001', source: 'Studio #general', expected: 'Discord · Studio #general', generates: false },
+      { userId: 'g/200000000000000001/300000000000000001/400000000000000001', source: 'Studio #general › release', expected: 'Discord · Studio #general › release', generates: false },
+      { userId: '9876543210', source: null, expected: 'Discord · Generated summary', generates: true },
+    ])('preserves Discord source titles while keeping DM summaries ($userId)', async ({ userId, source, expected, generates }) => {
+      const discordAdapter = buildDiscordAdapter({
+        ...mocks.feishuIm,
+        describeLane: () => source,
+      } as unknown as DiscordIM, fakeAdapter.config);
+      const localRunner = createTurnRunner({
+        ...discordAdapter,
+        sessions: { ...discordAdapter.sessions, ensureWorkingDir: fakeAdapter.sessions.ensureWorkingDir },
+      }, fakeRepo, fakeCards);
+      let storedTitle = await discordAdapter.sessions.resolveSessionTitle!(userId)
+        ?? discordAdapter.sessions.defaultTitle(userId);
+      const h = setupSession(async () => ({ accepted: true }));
+      const backgroundTasks: Promise<void>[] = [];
+      try {
+        await mocks.generateAndPersistFbotTitle.withImplementation(async (...args: unknown[]) => {
+          storedTitle = `${args[2]}Generated summary`;
+          return storedTitle;
+        }, async () => {
+          const dispatch = await localRunner.dispatchAgentTurn({
+            botContextId: 'cli_test_bot', userId, userMessageId: 'first-message',
+            text: 'summarize this request', attachments: [], queueMode: 'external',
+            beforeProviderStart: async () => {},
+            trackBackgroundTask: (operation) => { backgroundTasks.push(operation()); },
+          });
+          if (dispatch.kind !== 'accepted') throw new Error('expected accepted dispatch');
+          await Promise.all(backgroundTasks);
+          h.emit({ type: 'done', data: {} });
+          await expect(dispatch.terminal).resolves.toMatchObject({ kind: 'done' });
+          expect(storedTitle).toBe(expected);
+          expect(mocks.generateAndPersistFbotTitle).toHaveBeenCalledTimes(generates ? 1 : 0);
+        });
+      } finally {
+        await localRunner.disposeAllSessions();
+      }
+    });
+
     function makePrefixedRunner(): ImTurnRunner {
       return createTurnRunner(
         {
