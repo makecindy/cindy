@@ -270,7 +270,7 @@
     "completeWithSkipped_many": "Copié, {{count}} éléments ignorés"
   },
   "sharedTask": {
-    "officialRelayNote": "Vous utilisez votre propre relais. Le contenu des tâches partagées continue de passer par le relais Cindy.",
+    "officialRelayNote": "Les partages Agent-Net utilisent le relais de l’invitation ; les anciens partages utilisent toujours le relais Cindy.",
     "selfJoin": "Vous avez lancé cette tâche partagée, vous n'avez donc pas besoin de la rejoindre. Ouvrez-la depuis « Partagées par moi ».",
     "manageSharing": "Gérer le partage",
     "manageMembers": "Gérer les membres…",
@@ -372,7 +372,7 @@
     "closeAllDescription": "Les invités perdront l'accès. L'historique des tâches est conservé."
   },
   "providerShare": {
-    "officialRelayNote": "Vous utilisez votre propre relais. Le contenu du partage de fournisseurs continue de passer par le relais Cindy.",
+    "officialRelayNote": "Les partages Agent-Net utilisent le relais de l’invitation ; les anciens partages utilisent toujours le relais Cindy.",
     "owned": {
       "title": "Fournisseurs que je partage"
     },
@@ -1382,6 +1382,7 @@
     "REMOTE_AGENT_SHARE_PAUSED": "Modèle non changé : le propriétaire a suspendu ce partage pour vous. Choisissez un autre modèle.",
     "REMOTE_AGENT_SHARE_REMOVED": "Modèle non changé : ce partage n'est plus disponible (le propriétaire l'a supprimé ou vous l'avez quitté). Choisissez un autre modèle.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modèle non changé : le fournisseur partagé est temporairement indisponible (l'ordinateur du propriétaire est hors ligne ou le partage est désactivé pour le moment). Réessayez plus tard ou choisissez un autre modèle.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modèle non changé : ceci est un ancien partage, inutilisable tant que « Utiliser uniquement Agent-Net » est activé. Désactivez cette option ou choisissez un autre modèle.",
     "SSH_HOST_KEY_MISMATCH": "La clé d'hôte SSH a changé",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy ne peut pas lire la pièce jointe d'origine ; le message n'a pas été envoyé. Enregistrez-en une copie dans Téléchargements ou un autre dossier accessible, retirez la pièce jointe d'origine et ajoutez la copie avec le bouton de pièce jointe avant de renvoyer le message."
   },
@@ -2459,12 +2460,12 @@
         "previewStarting": "Lâchez la souris et le clavier. L'écran est masqué dans 3 secondes ; appuyez sur une touche pour le verrouiller, puis déverrouillez-le.",
         "previewUnavailable": "Impossible de masquer l'écran. Redémarrez Cindy et réessayez.",
         "delay": {
-          "label": "Masquer l'écran après",
-          "hint": "Durée sans toucher le clavier ni la souris avant que le cache n'apparaisse. Par défaut, la même que la mise en veille de l'écran.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Masquer l'écran après",
+          "hint": "Durée sans toucher le clavier ni la souris avant que le cache n'apparaisse. Par défaut, la même que la mise en veille de l'écran.",
           "system": "Système"
         }
       }
@@ -6059,7 +6060,7 @@
         "current": "Utilisé",
         "ownerName": "Cet ordinateur",
         "unavailable": "Pour utiliser votre propre relais, connectez-vous à Cindy et vérifiez que le trousseau du système est disponible.",
-        "limits": "Tant que vous utilisez votre propre relais, les notifications push sur téléphone ne sont pas disponibles. Le partage de fournisseurs et les tâches partagées continuent de passer par le relais Cindy.",
+        "limits": "Les partages Agent-Net utilisent le relais indiqué dans l’invitation. Les notifications système nécessitent un service d’envoi configuré sur ce relais. Les anciens partages utilisent toujours le relais Cindy.",
         "actions": {
           "join": "Rejoindre un autre relais",
           "useOfficial": "Revenir au relais Cindy",
@@ -6085,29 +6086,77 @@
           "cancel": "Annuler",
           "running": "Le relais fonctionne. Les autres appareils se connectent à {{address}}"
         },
-        "add": {
-          "intro": "Créez un lien d'invitation pour qu'un téléphone ou un autre ordinateur rejoigne ce relais.",
-          "create": "Ajouter un appareil",
-          "hint": "Scannez-le avec l'appareil photo de votre téléphone, ou envoyez le lien à un autre ordinateur et collez-le dans « Rejoindre un autre relais ». Le lien ne sert qu'une fois et expire au bout de 10 minutes.",
-          "qrAlt": "QR code pour rejoindre le relais",
+        "share": {
+          "action": "Partager ce relais",
+          "title": "Lien de partage de « {{name}} » créé",
+          "description": "Envoyez le lien à l’autre personne. Une fois sa demande approuvée, les ordinateurs et téléphones de son compte pourront utiliser ce relais pour connecter leurs propres appareils.",
+          "descriptionOwn": "Envoyez le lien à un autre de vos ordinateurs ou scannez-le avec l’appareil photo de votre téléphone. Une fois que vous acceptez, cet appareil rejoint ce relais.",
+          "fieldLabel": "Lien de partage",
           "copy": "Copier le lien",
-          "copied": "Lien d'invitation copié",
-          "newLink": "Nouveau lien",
-          "waiting": "En attente d'une demande d'un appareil…"
+          "copied": "Copié",
+          "copyFailed": "Impossible de copier le lien. Sélectionnez-le et copiez-le manuellement.",
+          "oneTime": "Utilisable une seule fois",
+          "expiresIn": "Expire dans {{time}}",
+          "expired": "Expiré",
+          "regenerateHint": "Vous pourrez en créer un nouveau après son expiration",
+          "generating": "Création du lien…",
+          "scanHint": "S’il est scanné avec un téléphone, la personne est invitée à l’ouvrir d’abord sur son ordinateur. Une fois son ordinateur ajouté, ses téléphones voient ce relais automatiquement.",
+          "scanHintOwn": "Votre téléphone peut le rejoindre en scannant le code avec l’appareil photo.",
+          "ownAccountOnly": "Pour l’instant, ce relais ne fonctionne que pour vos propres appareils. Pour le partager avec d’autres comptes, activez d’abord Agent-Net (Beta) dans « Connexion à distance » ; un relais sur votre serveur doit aussi passer à la dernière version.",
+          "qrAlt": "Code QR pour partager le relais",
+          "calloutIsolation": "L’autre personne ne peut joindre que ses propres appareils et ne voit pas les vôtres. Pour qu’elle utilise vos Agents ou modèles, partagez-les séparément.",
+          "calloutPrivacy": "Les connexions sont chiffrées de bout en bout : vous ne voyez pas leur contenu. En tant que propriétaire du relais, vous voyez quand ses appareils communiquent et quel volume de données ils utilisent.",
+          "calloutOwnDevices": "Vos propres appareils n’ont pas besoin de ce lien : une fois connectés au même compte, ils voient ce relais dans leur liste d’itinéraires.",
+          "calloutOwnFallback": "Les appareils connectés à votre compte voient généralement ce relais dans la liste sans lien. Utilisez ce lien quand le service de compte Cindy est injoignable.",
+          "done": "Terminé",
+          "regenerate": "Créer un nouveau lien",
+          "regenerated": "Nouveau lien créé"
         },
         "requests": {
-          "item": "{{name}} souhaite rejoindre",
-          "verify": "Code d'appairage",
-          "verifyHint": "N'approuvez que si ce code correspond à celui affiché sur cet appareil.",
+          "title_one": "{{count}} demande en attente",
+          "title_other": "{{count}} demandes en attente",
+          "title_many": "{{count}} demandes en attente",
+          "waiting": "Souhaite rejoindre · En attente de votre réponse",
+          "waitingAccount": "Autre compte · {{device}}, en attente",
+          "open": "Examiner"
+        },
+        "tenants": {
+          "title": "Partagé avec",
+          "devices_one": "{{count}} appareil",
+          "devices_many": "{{count}} appareils",
+          "devices_other": "{{count}} appareils",
+          "online": "En ligne",
+          "offline": "Hors ligne",
+          "revoke": "Arrêter le partage",
+          "revokeTitle": "Arrêter le partage avec {{account}} ?",
+          "revokeDescription": "La ligne de {{account}} sur ce relais est supprimée et ses appareils sont déconnectés immédiatement. Pour lui permettre de l’utiliser à nouveau, partagez-le de nouveau."
+        },
+        "approve": {
+          "title": "{{device}} demande à rejoindre « {{relay}} »",
+          "requestedAt": "Demande envoyée {{time}} via votre lien de partage",
+          "requestedViaLink": "Demande envoyée via votre lien de partage",
+          "pairingHint": "N’approuvez que si le code d’appairage correspond à celui affiché sur cet appareil.",
+          "unverified": "Cette demande ne peut pas être vérifiée : elle ne correspond à aucun lien de partage de cet ordinateur et a peut-être été falsifiée. Elle ne peut donc qu'être refusée. S'il s'agit de votre appareil, créez un nouveau lien de partage et réessayez.",
+          "callout": "Une fois approuvé, cet appareil rejoint « {{relay}} » et se connecte par son intermédiaire à vos autres appareils.",
           "replaces": "Cet appareil s'est déjà connecté. L'approuver révoque son ancien identifiant.",
+          "calloutUnknown": "Si vous ne reconnaissez pas cet appareil, refusez. Le refus rend ce lien inutilisable.",
           "approve": "Approuver",
-          "reject": "Refuser",
-          "unverified": "Cette demande ne peut pas être vérifiée : elle ne correspond à aucun lien d'invitation de cet ordinateur et a peut-être été falsifiée. Elle ne peut donc qu'être refusée. S'il s'agit de votre appareil, créez un nouveau lien d'invitation et réessayez."
+          "reject": "Refuser la demande",
+          "later": "Décider plus tard",
+          "toastApproved": "{{device}} peut rejoindre « {{relay}} »",
+          "toastRejected": "Demande de {{device}} refusée",
+          "titleAccount": "{{account}} souhaite utiliser « {{relay}} »",
+          "otherAccountDevice": "Autre compte · {{device}}",
+          "calloutAccount": "Si vous acceptez, ce compte obtient sa propre ligne sur « {{relay}} » : il n’atteint que ses propres appareils et ne voit ni vous ni vos appareils. Ses autres appareils le rejoignent ensuite directement, sans nouvelle demande.",
+          "calloutAccountRevoke": "Vous pouvez arrêter le partage à tout moment depuis la page du relais ; ses appareils sont déconnectés immédiatement.",
+          "calloutUnknownAccount": "Si vous ne reconnaissez pas ce compte, refusez. Le lien devient alors invalide.",
+          "toastApprovedAccount": "{{account}} peut maintenant utiliser « {{relay}} »",
+          "toastRejectedAccount": "Demande de {{account}} refusée"
         },
         "join": {
           "title": "Rejoindre un autre relais",
-          "hint": "Collez le lien d'invitation obtenu avec « Ajouter un appareil » sur l'ordinateur du relais. Cindy bascule dès que la demande est approuvée.",
-          "placeholder": "Collez le lien d'invitation",
+          "hint": "Collez le lien de partage que vous avez reçu. Cindy bascule dès que la demande est approuvée.",
+          "placeholder": "Collez le lien de partage",
           "submit": "Rejoindre",
           "connecting": "Connexion au relais…",
           "waiting": "Demande envoyée. Sur {{name}}, vérifiez que ces chiffres correspondent, puis approuvez :",
@@ -6122,17 +6171,19 @@
           "ownerTitle": "Arrêter le relais sur cet ordinateur ?",
           "ownerDescription": "Les appareils qui l'ont rejoint seront déconnectés et prévenus que le relais a été arrêté. Cet ordinateur revient au relais Cindy.",
           "memberTitle": "Revenir au relais Cindy ?",
-          "memberDescription": "Cet ordinateur quitte « {{name}} » et utilise le relais Cindy. Pour le rejoindre à nouveau, demandez un nouveau lien d'invitation.",
+          "memberDescription": "Cet ordinateur quitte « {{name}} » et utilise le relais Cindy. Pour le rejoindre à nouveau, demandez un nouveau lien de partage.",
+          "sharedOwnerTitle": "Revenir au relais Cindy ?",
+          "sharedOwnerDescription": "Cet ordinateur quitte « {{name}} » et utilise le relais Cindy ; vos appareils qui l’ont rejoint par son intermédiaire sont aussi déconnectés. Pour l’utiliser à nouveau, demandez un nouveau partage.",
           "serverTitle": "Revenir au relais Cindy ?",
           "serverDescription": "Le relais « {{name}} » continue de fonctionner sur votre serveur, et les appareils qui l'ont rejoint peuvent toujours communiquer par son intermédiaire. Vous pouvez y rebasculer cet ordinateur à tout moment."
         },
         "errors": {
-          "INVALID_LINK": "Le lien d'invitation ou l'adresse n'est pas valide.",
+          "INVALID_LINK": "Le lien de partage ou l'adresse n'est pas valide.",
           "UNREACHABLE": "Impossible de joindre ce relais. Vérifiez que cet ordinateur peut ouvrir l'adresse du lien.",
           "NOT_A_RELAY": "Cette adresse n'est pas un relais Cindy.",
           "INCOMPATIBLE": "La version de ce relais n'est pas compatible. Mettez à jour Cindy sur les deux ordinateurs.",
           "ACCOUNT_MISMATCH": "Ce relais appartient à un autre compte Cindy.",
-          "CODE_INVALID": "Ce lien d'invitation a expiré ou a déjà été utilisé. Demandez-en un nouveau.",
+          "CODE_INVALID": "Ce lien de partage a expiré ou a déjà été utilisé. Demandez-en un nouveau.",
           "RATE_LIMITED": "Trop de tentatives. Réessayez dans quelques minutes.",
           "REJECTED": "La demande a été refusée.",
           "EXPIRED": "Délai dépassé en attendant l'approbation. Rejoignez à nouveau.",
@@ -6155,15 +6206,21 @@
           "RELAY_MISMATCH": "Le relais de ce serveur n'a pas été déployé depuis cet ordinateur : Cindy n'y touche donc pas.",
           "CERTIFICATE_FAILED": "Impossible d'obtenir un certificat HTTPS. En général, le port 80 n'est pas autorisé dans le groupe de sécurité cloud, ou le domaine ne pointe pas encore vers ce serveur. Corrigez-le, puis réessayez.",
           "CA_UNREACHABLE": "Le serveur n'a pas pu joindre l'autorité de certification Let's Encrypt, même après plusieurs minutes de nouvelles tentatives. Vérifiez que le serveur a accès à Internet, puis réessayez plus tard.",
-          "NOT_REACHABLE": "Le relais fonctionne sur le serveur, mais cet ordinateur ne parvient pas à le joindre. Autorisez le port 443 dans le groupe de sécurité cloud.",
+          "NOT_REACHABLE": "Impossible de vérifier la connexion au relais depuis cet ordinateur. Vérifiez l’adresse HTTPS, le certificat et l’accès au port 443.",
+          "AGENT_NET_START_FAILED": "Le service Agent-Net du serveur n’est pas prêt. Vérifiez ses journaux et si les ports 3348/TCP et 3479/UDP sont occupés.",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS est accessible, mais l’identité et le répertoire Agent-Net n’ont pas pu être vérifiés. Vérifiez le service V2, le chemin du proxy inverse et les informations d’association.",
           "BUNDLE_MISSING": "Cette version de Cindy n'inclut pas le relais. Mettez Cindy à jour.",
           "DEPLOY_FAILED": "Le déploiement n'a pas abouti.",
-          "PAIR_PROOF_INVALID": "La demande de cet appareil ne peut pas être vérifiée, elle ne peut donc pas être approuvée. Créez un nouveau lien d'invitation.",
+          "PAIR_PROOF_INVALID": "La demande de cet appareil ne peut pas être vérifiée, elle ne peut donc pas être approuvée. Créez un nouveau lien de partage.",
           "NOT_OWNER": "Seul l'ordinateur qui a déployé ou démarré ce relais peut le gérer.",
           "BUSY": "Un déploiement est en cours. Veuillez patienter.",
           "INVALID_ADDRESS": "Saisissez une IP publique ou un domaine, sans http:// ni port.",
           "NO_DEPLOYMENT": "Rien n'a encore été déployé sur un serveur.",
-          "OWNER_MISMATCH": "Le relais a renvoyé un certificat qui n'a pas été émis par le propriétaire indiqué dans le lien d'invitation. Vous êtes peut-être connecté à un faux relais : la connexion a donc été interrompue."
+          "OWNER_MISMATCH": "Le relais a renvoyé un certificat qui n'a pas été émis par le propriétaire indiqué dans le lien de partage. Vous êtes peut-être connecté à un faux relais : la connexion a donc été interrompue.",
+          "OWNER_UNAVAILABLE": "« {{device}} » n’a pas répondu. Vérifiez que Cindy y est ouvert et en ligne, ou demandez un lien de partage.",
+          "RELAY_UNAVAILABLE": "« {{device}} » n’utilise plus ce relais.",
+          "ACCOUNT_DIRECTORY_UNAVAILABLE": "Le service de compte Cindy est injoignable : impossible de charger les relais de votre compte. Vous pouvez demander un lien de partage.",
+          "SHARE_UNSUPPORTED": "Ce relais appartient à un autre compte et ne peut pas encore être partagé avec d’autres comptes. Demandez à la personne d’activer Agent-Net (Beta) (un relais sur son serveur doit aussi passer à la dernière version), puis de le partager à nouveau."
         },
         "deploy": {
           "title": "Déployer sur mon serveur",
@@ -6206,7 +6263,7 @@
             "uninstall": "Suppression du relais de votre serveur…"
           },
           "done": {
-            "deploy": "Déployé. Basculez dessus dans « Itinéraire de connexion », puis vous pourrez ajouter des appareils.",
+            "deploy": "Déployé. Basculez dessus dans « Itinéraire de connexion » : vos autres appareils pourront alors le voir et le rejoindre.",
             "upgrade": "Le relais de votre serveur est maintenant en version {{version}}.",
             "uninstall": "Relais supprimé de votre serveur"
           },
@@ -6249,13 +6306,15 @@
           "removeDescription": "Le relais et ses enregistrements d'appareils sont supprimés du serveur, et les appareils qui l'utilisent sont déconnectés. Si vous redéployez, chaque appareil devra le rejoindre à nouveau.",
           "forget": "Retirer de cet ordinateur uniquement",
           "forgetTitle": "Retirer de cet ordinateur uniquement ?",
-          "forgetDescription": "Le relais continue de fonctionner sur le serveur, mais cet ordinateur cesse de le gérer et ne peut plus y ajouter d'appareils. Ne le faites que si vous n'utilisez plus ce serveur."
+          "forgetDescription": "Le relais continue de fonctionner sur le serveur, mais cet ordinateur cesse de le gérer et ne peut plus le partager. Ne le faites que si vous n’utilisez plus ce serveur."
         },
         "route": {
           "title": "Itinéraire de connexion",
           "hint": "Le contrôle à distance entre vos appareils passe par cet itinéraire",
           "kindServer": "Mon serveur",
           "kindJoined": "Rejoint",
+          "kindComputer": "Mon ordinateur",
+          "kindShared": "Partagé avec vous",
           "hostTitle": "Cet ordinateur comme relais",
           "hostHint": "Les autres appareils doivent pouvoir joindre directement cet ordinateur. Ils sont déconnectés s'il se met en veille ou si Cindy se ferme",
           "officialHint": "Aucune configuration nécessaire. Toutes les fonctions sont disponibles",
@@ -6273,9 +6332,18 @@
           "statusOffline": "Injoignable",
           "switchTitle": "Passer à {{name}} ?",
           "switchFromHost": "Le relais de cet ordinateur s'arrête, et les appareils qui l'ont rejoint sont déconnectés.",
-          "switchFromMember": "Cet ordinateur quitte {{name}}. Pour le rejoindre plus tard, son propriétaire devra créer un nouveau lien d'invitation.",
+          "switchFromMember": "Cet ordinateur quitte {{name}}. Pour le rejoindre plus tard, son propriétaire devra créer un nouveau lien de partage.",
+          "switchFromShared": "Cet ordinateur quitte « {{name}} », et vos appareils qui l’ont rejoint par son intermédiaire sont aussi déconnectés. Pour l’utiliser à nouveau, demandez un nouveau partage.",
           "switchConfirm": "Basculer",
-          "switchFromOfficial": "Le contrôle à distance entre vos appareils passera par {{name}}. Les notifications push sur téléphone ne sont pas disponibles tant que vous utilisez votre propre relais. Le partage de fournisseurs et les tâches partagées continuent de passer par le relais Cindy."
+          "switchFromOfficial": "Le contrôle à distance entre appareils passera par « {{name}} ». Les partages Agent-Net utilisent le relais de l’invitation ; les anciens partages utilisent toujours le relais Cindy.",
+          "switchToAccount": "Ce relais appartient à votre compte. « {{device}} » autorise automatiquement cet ordinateur, sans lien de partage.",
+          "accountJoining": "Connexion en cours, en attente de l’accord de « {{device}} »…",
+          "accountManagedOn": "Géré sur « {{device}} »",
+          "accountJoinedOn": "Rejoint sur « {{device}} »",
+          "sharedBy": "Partagé par {{name}}",
+          "sharedByOther": "Partagé par un autre compte",
+          "ownDevicesHint": "Vos autres ordinateurs et téléphones voient ce relais une fois connectés au même compte et peuvent basculer dessus sans lien. Pour le partager avec un autre compte, cliquez sur Partager à côté du relais.",
+          "sharedOwnDevicesHint": "Vos autres ordinateurs et téléphones voient ce relais une fois connectés au même compte et peuvent y basculer. Ils n’atteignent que vos propres appareils."
         },
         "dialog": {
           "steps": {
@@ -6311,7 +6379,13 @@
           "remove": "Supprimer ce relais",
           "deviceCount_many": "{{count}} appareils",
           "onlineCount_many": "{{count}} en ligne",
-          "certificateDays_many": "Expire dans {{count}} jours"
+          "certificateDays_many": "Expire dans {{count}} jours",
+          "protocolsBoth": "Prend en charge Device Link et Agent-Net",
+          "protocolsLegacy": "Prend en charge Device Link uniquement",
+          "upgradeForSharing": "Mettez à jour pour partager avec d’autres comptes",
+          "connection": "Connexion de cet ordinateur",
+          "connectionEncrypted": "Chiffrée de bout en bout si l’autre appareil utilise aussi Agent-Net",
+          "connectionLegacy": "Non chiffrée de bout en bout"
         }
       },
       "title": "Connexion à distance",
@@ -6622,6 +6696,82 @@
         "title": "Révoquer l'accès ?",
         "description": "Une fois l'accès révoqué, cet appareil est immédiatement déconnecté et ne peut plus contrôler cette machine à distance. Vous devrez rétablir son accès dans Paramètres → Connexion à distance avant qu'il puisse se reconnecter.",
         "confirm": "Révoquer l'accès"
+      },
+      "v2": {
+        "switch": {
+          "title": "Agent-Net (Beta)",
+          "hint": "Affiche la topologie des connexions et l’activité récente. La connexion est chiffrée si Agent-Net est activé sur les deux appareils et qu’ils sont associés via Agent-Net. Les autres appareils conservent leur connexion habituelle. Ce réglage concerne uniquement cet ordinateur."
+        },
+        "empty": "Pas encore d’autres appareils. Connectez-vous avec le même compte sur un autre ordinateur ou téléphone et il apparaîtra ici.",
+        "stats": {
+          "online": "{{online}} / {{total}} en ligne",
+          "direct": "{{count}} direct",
+          "relay": "{{count}} via relais",
+          "unlinked": "{{count}} non liés",
+          "attention": "{{count}} à vérifier",
+          "offline": "{{count}} hors ligne"
+        },
+        "node": {
+          "thisComputer": "Cet ordinateur"
+        },
+        "path": {
+          "direct": "Direct",
+          "relay": "Via {{name}}",
+          "unlinked": "En ligne, non lié",
+          "offline": "Hors ligne"
+        },
+        "attention": {
+          "unresponsive": "Ne répond pas, nouvel essai"
+        },
+        "relay": {
+          "official": "Relais Cindy"
+        },
+        "ms": "{{value}} ms",
+        "flow": {
+          "out": "Envoi en cours",
+          "in": "Réception en cours",
+          "both": "Échange en cours"
+        },
+        "offlineFold": "{{count}} hors ligne",
+        "offlineShow": "Afficher les appareils hors ligne",
+        "offlineHide": "Masquer les appareils hors ligne",
+        "group": {
+          "direct": "Direct",
+          "relay": "Via relais",
+          "unlinked": "Non lié",
+          "attention": "À vérifier",
+          "offline": "Hors ligne"
+        },
+        "recent": {
+          "title": "Activité récente",
+          "online": "{{name}} est en ligne",
+          "offline": "{{name}} est hors ligne",
+          "empty": "Aucun appareil n’est arrivé ou parti depuis l’ouverture de cette page"
+        },
+        "popover": {
+          "status": "État",
+          "path": "Chemin",
+          "activity": "Messages",
+          "latency": "Latence",
+          "lastSeen": "Vu pour la dernière fois",
+          "controlling": "Contrôle cet ordinateur",
+          "rttNote": "dernière mesure",
+          "manage": "Gérer l’appareil…",
+          "linkStatus": "Vers {{name}}",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "Impossible d’ouvrir le bureau à distance",
+          "encryption": "Chiffrement",
+          "encrypted": "Chiffrée de bout en bout",
+          "legacyConnection": "Ancienne connexion",
+          "encryptionUnknown": "Non confirmé",
+          "legacyEncryptionHint": "Le chemin via le relais de l’ancienne connexion n’est pas chiffré de bout en bout."
+        },
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "Utiliser uniquement Agent-Net",
+        "onlyEncryptedHint": "Les anciens appareils et les partages utilisant encore l’ancienne connexion seront indisponibles. Désactivé par défaut."
       }
     },
     "tina": {
@@ -6705,6 +6855,7 @@
         "renameFailed": "Échec du renommage",
         "deleted": "Appareil supprimé",
         "deleteOnline": "Ce serveur ne permet pas encore de retirer des appareils en ligne. Réessayez après la mise à niveau du service.",
+        "deleteRejectedWhileOffline": "Impossible de supprimer l'appareil : le serveur l'indique encore en ligne, alors qu'il apparaît hors ligne ici.",
         "deleteFailed": "Échec de la suppression",
         "disconnected": "Toutes les connexions à distance ont été coupées",
         "disconnectFailed": "Échec de la déconnexion à distance",
@@ -13145,11 +13296,10 @@
     "prevMessageJump": "Aller au prompt précédent : {{preview}}",
     "sessionLoading": "Chargement de la tâche",
     "askUserQuestion": {
-    "unanswered": "Sans réponse",
-    "withdrawn": "Réponse désormais inutile",
-    "withdrawnDraft": "Cette question ne nécessite plus de réponse.\n{{reason}}\nVotre brouillon est conservé et peut être envoyé en complément.",
-    "sendSupplement": "Envoyer un complément",
-
+      "unanswered": "Sans réponse",
+      "withdrawn": "Réponse désormais inutile",
+      "withdrawnDraft": "Cette question ne nécessite plus de réponse.\n{{reason}}\nVotre brouillon est conservé et peut être envoyé en complément.",
+      "sendSupplement": "Envoyer un complément",
       "voice": {
         "hint": "Dites le numéro ou le nom d'une option. Pour un choix multiple, dites ensuite « confirmer la sélection ».",
         "freeTextHint": "Dites votre réponse, relisez-la, puis dites « confirmer la sélection » pour l'envoyer.",
@@ -14153,6 +14303,7 @@
       "REMOTE_AGENT_SHARE_PAUSED": "Le propriétaire a suspendu ce partage pour vous : ces modèles ne peuvent donc pas être utilisés tant qu'il n'est pas réactivé. Passez à un autre modèle pour continuer.",
       "REMOTE_AGENT_SHARE_REMOVED": "Ce partage n'est plus disponible (le propriétaire l'a supprimé ou vous l'avez quitté). Passez à un autre modèle pour continuer.",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "Le fournisseur partagé est temporairement indisponible. L'ordinateur du propriétaire est peut-être hors ligne, ou le partage est désactivé pour le moment. Réessayez plus tard ou passez à un autre modèle pour continuer.",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Ceci est un ancien partage, inutilisable tant que « Utiliser uniquement Agent-Net » est activé. Désactivez cette option pour continuer, ou passez à un autre modèle.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Les comptes disponibles pour ce modèle ont atteint leur limite d'utilisation. Changez de modèle ou continuez lorsque le quota sera réinitialisé.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "Aucun ordinateur du groupe de fournisseurs ne peut exécuter cette tâche pour le moment. Ils sont peut-être hors ligne, en pause, en période de refroidissement ou ne disposent pas de ce modèle. Vérifiez le groupe sur la page Accès distant et partage de ce fournisseur.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Cet appareil a atteint sa limite de sessions distantes. Archivez les sessions inutilisées ou demandez au propriétaire du fournisseur de relever la limite dans Accès distant et partage.",
@@ -15012,6 +15163,7 @@
         "compactSuccess": "Contexte compacté",
         "compactSuccessWithTokens": "Contexte compacté : {{before}}k → {{after}}k jetons",
         "compactFailed": "Échec de la compaction",
+        "compactResumeFirst": "Envoyez un message pour reprendre cette tâche avant de compacter son contexte.",
         "compactNothing": "Rien à compacter pour l'instant",
         "sessionBranches": "Branches de la session",
         "copySessionLink": "Copier le lien de la session"
@@ -16516,7 +16668,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "Envoyer le retour",
-      "cancel": "Annuler"
+      "cancel": "Annuler",
+      "previewLabel": "GitHub · Retour public",
+      "edit": "Modifier",
+      "doneEditing": "Terminer",
+      "publicSubmit": "Publier le retour",
+      "publicationNotice": "Le contenu et votre nom seront publics sur GitHub.",
+      "attribution": "Par {{name}}",
+      "environment": "Environnement inclus",
+      "identitySettings": "Nom et compte"
     },
     "redirect": {
       "descriptionBefore": "Saisissez ",
@@ -17584,15 +17744,37 @@
       "customRolePlaceholder": "+ nom de rôle personnalisé (facultatif)",
       "customRolePredefinedError": "Le nom de rôle personnalisé ne peut pas reprendre un nom de rôle prédéfini",
       "agentLabel": "Agent",
-      "modelLabel": "Modèle",
       "permissionLabel": "Mode d'autorisation",
       "noAvailableModels": "Aucun modèle {{agent}} disponible. Vérifiez la connexion au fournisseur et les identifiants dans les Paramètres.",
       "effortLabel": "Effort de raisonnement",
       "initialTaskLabel": "Tâche initiale",
-      "optional": "(facultatif)",
-      "initialTaskPlaceholder": "Première tâche facultative pour ce Worker",
+      "initialTaskPlaceholder": "Indiquez la première chose à lui confier, ou laissez vide pour que le Lead répartisse le travail",
       "enableCollabTitle": "Démarrer la collaboration",
       "enableCollabSubmit": "Démarrer la collaboration",
+      "enableCollabDescription": "Cette tâche devient le Lead : elle répartit le travail et vérifie les résultats. Le Worker est un autre Agent indépendant qui exécute le travail et rend compte.",
+      "templateLabel": "Ce que fait le Worker",
+      "templates": {
+        "developer": {
+          "name": "Développer"
+        },
+        "reviewer": {
+          "name": "Revue",
+          "task": "Jetez un œil au travail du Lead et faites quelques suggestions."
+        },
+        "tester": {
+          "name": "Tester",
+          "task": "Testez le travail effectué jusqu'ici par le Lead et signalez les échecs avec les étapes pour les reproduire."
+        }
+      },
+      "removePreset": "Retirer {{role}}",
+      "removePresetConfirm": {
+        "title": "Retirer « {{role}} » ?",
+        "description": "Vous pourrez le rajouter à tout moment avec « Ajouter un rôle ».",
+        "confirm": "Retirer le rôle",
+        "cancel": "Annuler"
+      },
+      "addRole": "Ajouter un rôle",
+      "moreSettings": "Autres paramètres",
       "executionDeviceLabel": "Exécuter sur",
       "thisComputer": "Local",
       "deviceOnline": "En ligne",

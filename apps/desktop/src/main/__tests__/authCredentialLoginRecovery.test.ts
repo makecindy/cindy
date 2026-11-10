@@ -24,12 +24,16 @@ function setup({
   passive = false,
   code = 'CREDENTIAL_STORE_UNAVAILABLE',
   retryAt = undefined as number | undefined,
+  serverCode = undefined as string | undefined,
+  requestId = undefined as string | undefined,
   initialError = false,
   passwordStoreSwitchPresent = false,
 } = {}) {
   class AuthApiError extends Error {
     statusCode = 503;
     retryAt = retryAt;
+    serverCode = serverCode;
+    requestId = requestId;
     constructor(public code: string) {
       super(code);
     }
@@ -220,6 +224,44 @@ describe('credential failure during fresh sign-in', () => {
     });
     expect(harness.needsRecovery()).toBe(false);
   });
+
+  // #9356: the failure line must say whether the server named its own code, gave a
+  // wait, and a correlation id. The old line only had action/status/code, so two
+  // different 429s looked identical. Missing fields stay the literal "none"/"no".
+  it.each([
+    {
+      label: 'names the server code, the wait and the request id',
+      serverCode: 'SMS_DAILY_LIMIT',
+      requestId: 'req-9356',
+      retryAt: 1_800_000_000_000,
+      expected: 'serverCode=SMS_DAILY_LIMIT retryKnown=yes requestId=req-9356',
+    },
+    {
+      label: 'marks every diagnostic as absent instead of guessing',
+      serverCode: undefined,
+      requestId: undefined,
+      retryAt: undefined,
+      expected: 'serverCode=none retryKnown=no requestId=none',
+    },
+  ])('logs rate-limit diagnostics when $label', async (row) => {
+    const harness = setup({
+      code: 'RATE_LIMITED',
+      retryAt: row.retryAt,
+      serverCode: row.serverCode,
+      requestId: row.requestId,
+      backendUnavailable: false,
+    });
+    await harness.run({
+      type: 'verify-code',
+      kind: 'email',
+      identifier: 'user@example.invalid',
+      code: '123456',
+    });
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`login action failed action=verify-code status=503 code=RATE_LIMITED ${row.expected}`),
+    );
+  });
+
   it.each([
     { backendUnavailable: true, authenticated: false, passive: false, recovery: true },
     { backendUnavailable: false, authenticated: false, passive: false, recovery: false },

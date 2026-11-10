@@ -995,6 +995,13 @@ export interface AgentDeps {
     modelId: string,
   ) => number | null;
 
+  /** Output limit for this exact provider/model route. Missing retains native defaults;
+   * never resolve from the provider-deduplicated availableModels table. */
+  resolveModelMaxOutputTokens?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => number | null;
+
   /** Host-resolved model percentage. Hosts without a policy retain their runtime defaults. */
   resolveModelCompactionPct?: (
     providerId: string | null | undefined,

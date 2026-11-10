@@ -244,6 +244,7 @@ import {
 import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
+import { ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX } from '@cindy/maker-shared/interaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   isProductTurnCompletionTailEvent,
@@ -280,6 +281,7 @@ import { initializePluginOauthCards } from '../plugin-oauth/cards.js';
 import { currentOauthIdentityScope, loadOauthSigningKey } from '../plugin-oauth/desktopIdentity.js';
 import { readDeviceLinkSettings, readLastKnownDeviceNames } from '../device-link/settings-store.desktop.js';
 import { getDeviceLinkStatus, getMobileNotifyGeneration, sendMobileBotGroupNotify, sendMobileSessionNotify } from '../device-link/index.js';
+import { notifyRelayAccountPreferenceChanged } from '../device-link/selfHostedRelayRuntime.js';
 import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
   deriveAutoTitleSeed,
@@ -763,6 +765,7 @@ import {
   getRemoteNewMakerDefaultsByVendor,
   getWorkerDefaultsFromNewMaker,
   getWorkerCreationSelection,
+  getWorkerRolesMirror,
   getSelectedNewMakerRoute,
   getWorkerPermissionModeFromCreationPrefs,
   type ProviderModelMemorySnapshot,
@@ -1009,6 +1012,11 @@ import {
 import { readLatestWorkerTurnError } from './orcaTurnErrorQuery.js';
 import { startOrcaTeamWithPermissionGate } from './orcaStartTeamPermissionGate.js';
 import { createWorkerCreationPrefsSyncHandler } from './workerCreationPrefsSyncHandler.js';
+import {
+  ORCA_WORKER_ROLES_APPLY,
+  ORCA_WORKER_ROLES_GET,
+  createWorkerRolesHandlers,
+} from './workerRolesSync.js';
 import {
   containsManagedAttachment,
   createMakerSendTransaction,
@@ -3823,7 +3831,7 @@ type BotCompactRuntimeRefreshHandler = (
  * needs the register-time Maker/bootstrap closure, so keep one narrow holder
  * and let the instance-scoped coordinator own all compact settle signals.
  */
-let asyncQuestionInputDispatcher: ((session: NonNullable<ReturnType<Maker['getSession']>>, text: string, signal: AbortSignal, requestId: string) => Promise<void>) | undefined;
+let asyncQuestionInputDispatcher: ((session: NonNullable<ReturnType<Maker['getSession']>>, text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>) | undefined;
 let botCompactRuntimeRefreshHandler: BotCompactRuntimeRefreshHandler | null = null;
 /**
  * 逐轮环境说明(界面语言 / 客户端设备 / 个人版制作说明)的去重记忆:同一原生上下文里内容
@@ -3857,7 +3865,6 @@ function attemptBotCompactRuntimeRefresh(session: WiredSession, trigger: string)
 function isPendingDesktopOnlyConfirmation(requestId: string): boolean {
   return (
     mcpSetupBridge.has(requestId) ||
-    issueConfirmBridge.pendingSnapshots().some(({ request }) => request.requestId === requestId) ||
     renameSessionsConfirmBridge
       .pendingSnapshots()
       .some(({ request }) => request.requestId === requestId) ||
@@ -4726,7 +4733,14 @@ let pendingAgentSwitchApplyHolder:
   ) => Promise<{ release: () => void; selection?: ScheduledModelSelection }>) | null = null;
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let prepareScheduledModelPreferencesHolder: ((sessionId: string, override: boolean) => Promise<void>) | null = null;
+let scheduledSessionBootstrapHolder: ((options: Parameters<Maker['createSession']>[0], signal?: AbortSignal) => ReturnType<Maker['createSession']>) | null = null;
 let recordDispatchedModelHolder: ((sessionId: string, clientId: string) => void) | null = null;
+
+/** Automations use the same startup/allocation boundary as ordinary tasks. */
+export function bootstrapScheduledSession(options: Parameters<Maker['createSession']>[0], signal?: AbortSignal): ReturnType<Maker['createSession']> {
+  if (!scheduledSessionBootstrapHolder) throw new Error('Scheduled session startup is not initialized');
+  return scheduledSessionBootstrapHolder(options, signal);
+}
 
 export function recordDispatchedModel(sessionId: string, clientId: string): void {
   recordDispatchedModelHolder?.(sessionId, clientId);
@@ -6419,9 +6433,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   const registration = sessionBindings.beginBinding(session);
   if (!registration) return;
 
-  session.setAsyncQuestionAnswerDispatcher((text, signal, requestId) => {
+  session.setAsyncQuestionAnswerDispatcher((text, signal, requestId, displayText) => {
     if (!asyncQuestionInputDispatcher) throw new Error('Question input dispatcher is unavailable');
-    return asyncQuestionInputDispatcher(session, text, signal, requestId);
+    return asyncQuestionInputDispatcher(session, text, signal, requestId, displayText);
   });
 
   registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session));
@@ -7025,11 +7039,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         setWorkerCreationPrefsCache({ workerPermissionMode }),
       getActiveOwner: getActiveDataOwnerPushStamp,
       isBoundaryPending: isAppSessionBoundaryPending,
-      setSelection: (selection, ownerStamp) => setWorkerCreationPrefsCache({
-        workerPermissionMode: getWorkerPermissionModeFromCreationPrefs(), selection, ownerStamp,
+      setSelection: (selection, ownerStamp, roles) => setWorkerCreationPrefsCache({
+        workerPermissionMode: getWorkerPermissionModeFromCreationPrefs(), selection, roles, ownerStamp,
       }),
     }),
   );
+
+  // 协同角色清单的远程读写：真源仍是这台电脑 renderer 的 workerCreationPrefs，main 只读镜像、
+  // 把手机或远程控制的电脑发来的改动转给本机 renderer 写回。
+  const workerRoles = createWorkerRolesHandlers<Electron.IpcMainInvokeEvent>({
+    isDeviceLinkInvoke,
+    assertTrustedSender: (event) =>
+      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+    getActiveOwner: getActiveDataOwnerPushStamp,
+    isBoundaryPending: isAppSessionBoundaryPending,
+    getRoles: getWorkerRolesMirror,
+    forwardMutation: (mutation, ownerStamp) =>
+      broadcastToAllWindows(MAKER_PUSH.WORKER_ROLES_APPLY_REQUEST, { mutation, ownerStamp }),
+  });
+  ipcMain.handle(ORCA_WORKER_ROLES_GET, (event) => workerRoles.get(event));
+  ipcMain.handle(ORCA_WORKER_ROLES_APPLY, (event, mutation: unknown) => workerRoles.apply(event, mutation));
 
   const applyWorkerPermissionModePreference = (
     workerPermissionMode: OrcaWorkerPermissionMode,
@@ -8872,7 +8901,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (rejection.startsWith('REMOTE_AGENT_SHARE_')) {
       // 分享来的供应商：给出分享专属原因(device-link 控制端同样降级为 PRECONDITION_FAILED)。
       throwIpcError(
-        isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : rejection as 'REMOTE_AGENT_SHARE_PAUSED' | 'REMOTE_AGENT_SHARE_REMOVED' | 'REMOTE_AGENT_SHARE_UNAVAILABLE',
+        isDeviceLinkInvoke() ? 'PRECONDITION_FAILED' : rejection as 'REMOTE_AGENT_SHARE_PAUSED' | 'REMOTE_AGENT_SHARE_REMOVED' | 'REMOTE_AGENT_SHARE_UNAVAILABLE' | 'REMOTE_AGENT_SHARE_LEGACY_DISABLED',
         'the shared provider is not available; the model was not changed',
       );
     }
@@ -12087,6 +12116,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (override) await scheduledModelScope.begin(sessionId);
     else await scheduledModelScope.restore(sessionId);
   };
+  const scheduledSessionOwnerScope = captureDataOwnerBroadcastScope();
+  scheduledSessionBootstrapHolder = async (createOpts, signal) => {
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      if (!isDataOwnerBroadcastScopeCurrent(scheduledSessionOwnerScope)) throw new Error('Scheduled session owner changed');
+    };
+    assertCurrent();
+    const prepared: MakerSessionCreateOpts = { ...createOpts };
+    const { session } = await bootstrapSession(prepared, assertCurrent);
+    // Keep the caller's routing metadata aligned with the group-selected member.
+    createOpts.agentDeviceId = prepared.agentDeviceId;
+    createOpts.providerId = prepared.providerId;
+    return session;
+  };
   let recoverRenamedSessionModelOnSend: (sessionId: string) => Promise<void> = async () => {
     throw new Error('session model recovery is not ready');
   };
@@ -13707,6 +13750,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onChatGroupAttention: (groupId, input, current) => {
       if (current()) getAgentIslandService()?.setGroupChat(groupId, input);
     },
+    // 同账号中转目录(自建中转):另一台设备列出或申请加入这台电脑的中转。
+    onAccountPreferenceChanged: notifyRelayAccountPreferenceChanged,
     onChatMessageNotification: (event, current) => {
       if (!current() || !getDesktopNotificationsEnabled()) return;
       if (event.conversationKind !== 'direct' && getAgentIslandService()?.notifyGroupChat(event.groupId)) return;
@@ -20759,7 +20804,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;
-  asyncQuestionInputDispatcher = async (session, text, signal, requestId) => {
+  asyncQuestionInputDispatcher = async (session, text, signal, requestId, displayText) => {
     const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
     const pausedBeforeAnswer = inputCoordinator.getProjection(session.id).queuePaused;
     const inputGeneration = inputCoordinator.getGeneration(session.id);
@@ -20775,8 +20820,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertCurrent();
     if (!meta) throw new Error('Question session is no longer available');
     const digest = createHash('sha256').update(text).digest('hex');
+    // The question card already shows this answer: history keeps the readable copy for
+    // search, previews and older clients, and this identity keeps it out of the conversation.
     let item = await buildSessionControlInputItem({ targetSessionId: session.id, message: text,
-      persistedContent: text, clientId: `question-reply:${requestId}:${digest}`, meta, inheritTargetPlanMode: true });
+      persistedContent: displayText, clientId: `${ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX}${requestId}:${digest}`, meta, inheritTargetPlanMode: true });
     item = stampSharedTaskInput(item, sharedTask, item.createOpts);
     item = stampTrustedDeviceLinkQueuedOrigin(
       stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(item, isMobileControllerInvoke()), isDeviceLinkInvoke()),
@@ -22645,7 +22692,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // permission / ask / plan and setup cancellation remain remotely
       // resolvable. Host-owned setup side effects and Desktop-only confirmations
       // may only originate from the trusted local Desktop.
-      assertResolveInteractionOrigin(decision, isPendingDesktopOnlyConfirmation(requestId));
+      assertResolveInteractionOrigin(
+        decision,
+        isPendingDesktopOnlyConfirmation(requestId),
+        issueConfirmBridge.pendingSnapshots().some(({ request }) => request.requestId === requestId),
+      );
       const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
       if (sharedTask) {
         // The initial dispatch check may be separated from this handler by an
@@ -22726,9 +22777,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.GET_PENDING_INTERACTIONS, (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) return [];
     let pending = getPendingInteractionsForSession(sessionId);
-    // Shared-task guests never see the owner's input handoff.
+    // Owner-only input and unpublished feedback/identity stay out of guest snapshots.
     if (getDeviceLinkInvokeContext()?.sharedTask)
-      pending = pending.filter(({ request }) => request.kind !== 'input_handoff');
+      pending = pending.filter(({ request }) => request.kind !== 'input_handoff' && request.kind !== 'issue_confirm');
     return projectPendingInteractionsForRemote(pending, isDeviceLinkInvoke());
   });
 
@@ -25166,16 +25217,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       const sess = maker.getSession(sessionId);
       if (!sess) {
-        log.debug('compact-session: session not found, no-op', { sessionId });
-        return null;
+        throwIpcError('NOT_FOUND', 'Resume the task before compacting its context');
       }
       if (!sess.capabilities.manualCompact?.supported) {
-        // 调用方应先按 capabilities 隐藏入口,这里兜底 no-op。
-        log.debug('compact-session: agent does not support manual compact, no-op', {
-          sessionId,
-          agentKind: sess.agentKind,
-        });
-        return null;
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
       }
       return sess.compactSession(instructions);
     },

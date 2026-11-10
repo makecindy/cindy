@@ -1,0 +1,224 @@
+--- a/src/congestion.rs
++++ b/src/congestion.rs
+@@ -86,6 +86,14 @@
+ const DELIVERY_ROUNDS: usize = 4;
+ /// 最近几轮平均送达速率至少是窗口能送速率的这么多百分比，才算真的被窗口限住。
+ const WINDOW_DELIVERY_PERCENT: u64 = 85;
++/// 加速探测发的包丢得比随机丢包率的两倍还多这么多：队列很浅，加速 25% 每次都把它挤爆，
++/// 接下来改成只加 10%。窄带浅队列上这部分丢包占到传输量的 3% 左右，是重传的大头。
++const PROBE_EXCESS_LOSS_PPM: u64 = 30_000;
++const GENTLE_PROBE_GAIN: u64 = 1100;
++/// 发现浅队列后，接下来这么多次探测都只加 10%，之后再按 25% 试一次，路径变了还能发现。
++const GENTLE_PROBES: u32 = 8;
++/// 一次探测至少要有这么多个包的结果，才拿来判断。
++const PROBE_MIN_PACKETS: u64 = 8;
+ /// 启动刚结束时最近两轮丢包率都低于这个值，才跳过第一个降速阶段。
+ const SKIP_CALM_MAX_LOSS_PPM: u64 = 100_000;
+ 
+@@ -129,6 +137,10 @@
+     probe_bw_rounds: u32,
+     /// 最近两轮的丢包率，单位百万分之一。
+     round_loss_ppm: [u64; 2],
++    /// 加速探测阶段发出的包：丢了几个、一共几个。
++    probe_lost: u64,
++    probe_total: u64,
++    gentle_probes: u32,
+     round_lost: u64,
+     btl_bw: u64,
+     min_rtt_us: u64,
+@@ -179,6 +191,9 @@
+     last_period_rate: u64,
+     /// 第一批包的第一个确认到达时的时间和送达量。
+     train_start: Option<(u64, u64)>,
++    /// 相邻两个 RTT 样本之差的平滑平均，衡量抖动。
++    rtt_jitter_us: u64,
++    last_rtt_us: u64,
+ }
+ 
+ impl Bbr {
+@@ -199,6 +214,9 @@
+             round_rates: [0; DELIVERY_ROUNDS],
+             probe_bw_rounds: 0,
+             round_loss_ppm: [0; 2],
++            probe_lost: 0,
++            probe_total: 0,
++            gentle_probes: 0,
+             round_lost: 0,
+             btl_bw: 0,
+             min_rtt_us: 0,
+@@ -240,6 +258,8 @@
+             period_calm_lost: 0,
+             last_period_rate: 0,
+             train_start: None,
++            rtt_jitter_us: 0,
++            last_rtt_us: 0,
+         }
+     }
+ 
+@@ -273,6 +293,22 @@
+             && self.btl_bw > 0
+             && self.bdp().saturating_mul(ROOM_RATIO_DENOMINATOR) >= self.max_cwnd.saturating_mul(ROOM_RATIO_NUMERATOR)
+             && !self.queue_is_building()
++    }
++
++    /// 巡航周期里当前阶段的增益。发现浅队列以后，加速探测只加 10%。
++    fn cycle_gain(&self) -> u64 {
++        if self.cycle_index == 0 && self.gentle_probes > 0 { GENTLE_PROBE_GAIN } else { PROBE_CYCLE[self.cycle_index] }
++    }
++
++    /// 正处在加速探测阶段。
++    pub(crate) fn is_probing_up(&self) -> bool {
++        self.mode == Mode::ProbeBw && self.cycle_index == 0
++    }
++
++    /// 加速探测阶段发出的一个包有了结果。
++    pub(crate) fn on_probe_outcome(&mut self, lost: bool) {
++        self.probe_total += 1;
++        self.probe_lost += lost as u64;
+     }
+ 
+     /// 已经确认撞上限速。这时再多发冗余只会丢得更多。
+@@ -536,7 +572,7 @@
+             Mode::ProbeBw if self.settled_window_limited() => {
+                 WINDOW_LIMITED_CALM_GAIN
+             }
+-            Mode::ProbeBw => PROBE_CYCLE[self.cycle_index],
++            Mode::ProbeBw => self.cycle_gain(),
+             Mode::ProbeRtt => 1000,
+         };
+         // 降速阶段不能被抬上去：这段时间的丢包要用来判断是不是随机丢包。
+@@ -690,6 +726,10 @@
+             self.round_rtt_samples = 0;
+         }
+         if sample.rtt_us > 0 {
++            if self.last_rtt_us > 0 {
++                self.rtt_jitter_us = (self.rtt_jitter_us * 7 + sample.rtt_us.abs_diff(self.last_rtt_us)) / 8;
++            }
++            self.last_rtt_us = sample.rtt_us;
+             self.round_min_rtt_us = self.round_min_rtt_us.min(sample.rtt_us);
+             self.round_rtt_samples += 1;
+         }
+@@ -728,6 +768,18 @@
+         }
+         if self.mode == Mode::ProbeBw && self.cycle_phase_done(now_us, sample, bytes_in_flight) {
+             self.cycle_index = (self.cycle_index + 1) % PROBE_CYCLE.len();
++            // 新一轮探测开始前，看上一次探测发的包丢了多少：中间隔了好几个往返，结果都回来了。
++            if self.cycle_index == 0 {
++                self.gentle_probes = self.gentle_probes.saturating_sub(1);
++            }
++            if self.cycle_index == 0 && self.probe_total >= PROBE_MIN_PACKETS {
++                let loss = self.probe_lost * 1_000_000 / self.probe_total;
++                if loss > (self.random_loss_ppm as u64).saturating_mul(2).saturating_add(PROBE_EXCESS_LOSS_PPM) {
++                    self.gentle_probes = GENTLE_PROBES;
++                }
++                self.probe_lost = 0;
++                self.probe_total = 0;
++            }
+             self.cycle_started = now_us;
+         }
+         // 流量稀疏时队列本来就是空的，刚才的样本已经是干净的 RTT，不用再专门探测。
+@@ -765,12 +817,14 @@
+ 
+     fn queue_is_building(&self) -> bool {
+         let floor = if self.round_rtt_samples >= ROUND_RTT_SAMPLES { self.round_min_rtt_us } else { self.last_round_min_rtt_us };
+-        let margin = (self.min_rtt_us / 8).clamp(QUEUE_MARGIN_MIN_US, QUEUE_MARGIN_MAX_US);
++        // 余量要盖过抖动：抖动小的链路上按往返的十六分之一算，10 毫秒的浅队列排到一半就能发现；
++        // 抖动大的链路上按抖动的三倍算，不把抖动当成排队。
++        let margin = (self.min_rtt_us / 16).max(self.rtt_jitter_us * 3).clamp(QUEUE_MARGIN_MIN_US, QUEUE_MARGIN_MAX_US);
+         floor != u64::MAX && floor >= self.min_rtt_us.saturating_add(margin)
+     }
+ 
+     fn cycle_phase_done(&self, now_us: u64, sample: &RateSample, bytes_in_flight: u64) -> bool {
+-        let gain = PROBE_CYCLE[self.cycle_index];
++        let gain = self.cycle_gain();
+         let full_length = now_us.saturating_sub(self.cycle_started) >= self.min_rtt_us;
+         if gain > 1000 {
+             // 没真正把在途数据加上去就结束的话，这次探测什么也没测到。
+--- a/src/connection.rs
++++ b/src/connection.rs
+@@ -80,6 +80,8 @@
+ const REORDER_DECAY_RTTS: u64 = 16;
+ /// 空闲分片缓冲的数量上限，避免收发路径上反复申请内存。
+ const MAX_SPARE_BUFFERS: usize = 256;
++/// 待发和没确认的数据加起来不超过这么多个分片，算零散消息。
++const SPARSE_BACKLOG_SEGMENTS: u64 = 64;
+ 
+ /// 传输策略；只影响发送节奏和冗余，不改变线格式。
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+@@ -215,6 +217,8 @@
+     below_capacity: bool,
+     /// 发送时随机丢包的估计不会被限速丢包污染，结果可以算进去。
+     calm_trusted: bool,
++    /// 发送时正处在加速探测阶段。
++    probing: bool,
+     app_idle: bool,
+     // 发送时的送达进度，确认到达时用来计算实际送达速率。
+     delivered: u64,
+@@ -1003,6 +1007,9 @@
+         if packet.below_capacity {
+             self.congestion.on_calm_outcome(lost, packet.calm_trusted);
+         }
++        if packet.probing {
++            self.congestion.on_probe_outcome(lost);
++        }
+     }
+ 
+     /// 序号落后不一定堵窗口：抖动让包的先后错开几毫秒是常事。比平时慢一半才算。
+@@ -1184,7 +1191,8 @@
+         if self.consecutive_timeouts == 0 {
+             return Some(aged);
+         }
+-        let backoff = self.rtt.timeout_us(self.consecutive_timeouts, self.long_outage(self.last_timeout_at));
++        let sparse = self.snd_end - self.snd_una <= SPARSE_BACKLOG_SEGMENTS;
++        let backoff = self.rtt.timeout_us(self.consecutive_timeouts, self.long_outage(self.last_timeout_at), sparse);
+         Some(aged.max(self.last_timeout_at + backoff + self.reorder_delay_us))
+     }
+ 
+@@ -1196,7 +1204,7 @@
+ 
+     /// 超时也要算上学到的乱序余量，否则乱序的包全被超时判丢，放宽判丢窗口也没用。
+     fn timeout_age_us(&self) -> u64 {
+-        self.rtt.timeout_us(0, false) + self.reorder_delay_us
++        self.rtt.timeout_us(0, false, false) + self.reorder_delay_us
+     }
+ 
+     fn loss_deadline(&self) -> Option<u64> {
+@@ -1585,6 +1593,7 @@
+                 bundled,
+                 below_capacity,
+                 calm_trusted: self.congestion.trusts_calm_samples(),
++                probing: self.congestion.is_probing_up(),
+                 app_idle,
+                 delivered: self.delivered,
+                 delivered_at: self.delivered_at,
+--- a/src/rtt.rs
++++ b/src/rtt.rs
+@@ -2,6 +2,8 @@
+ 
+ /// 短中断时退避不超过这么多档，网络一恢复很快就能重连上。
+ const SHORT_BACKOFF_STEPS: u32 = 2;
++/// 只有零散小消息在等时，短中断里只退避一档：重发它们很便宜，网络一恢复就要尽快补上。
++const SPARSE_BACKOFF_STEPS: u32 = 1;
+ /// 连续超时这么多次、并且已经长时间没有任何回应，才算长断网，放慢探测省流量。
+ /// 只看次数的话，短中断里重试一快就会提前进入长断网，网络恢复后要多等好几百毫秒。
+ const LONG_OUTAGE_TIMEOUTS: u32 = 8;
+@@ -58,15 +60,16 @@
+     }
+ 
+     /// 连续超时 n 次之后的超时时间。沿用 KCP 快速模式的 1.5 倍退避，不翻倍，丢包时恢复更快。
+-    /// `long_outage` 由调用方按多久没收到对端的包判断。
++    /// `long_outage` 由调用方按多久没收到对端的包判断；`sparse` 表示只有零散小消息在等。
+     /// 这时连接已经只发少量探测，继续退避省不了多少流量，只会让网络恢复后多等。
+-    pub(crate) fn timeout_us(&self, consecutive_timeouts: u32, long_outage: bool) -> u64 {
++    pub(crate) fn timeout_us(&self, consecutive_timeouts: u32, long_outage: bool, sparse: bool) -> u64 {
+         let base = self.base_rto_us();
+         // 上限只约束退避，不能低于当前 RTT 的估算，否则高延迟链路上每个包都会被误判丢失。
+         let ceiling = self.max_rto_us.max(base);
+         let mut rto = base;
+         let long = consecutive_timeouts >= LONG_OUTAGE_TIMEOUTS && long_outage;
+-        let steps = if !long { consecutive_timeouts.min(SHORT_BACKOFF_STEPS) } else { MAX_BACKOFF_STEPS };
++        let short_steps = if sparse { SPARSE_BACKOFF_STEPS } else { SHORT_BACKOFF_STEPS };
++        let steps = if !long { consecutive_timeouts.min(short_steps) } else { MAX_BACKOFF_STEPS };
+         for _ in 0..steps {
+             rto += rto / 2;
+             if rto >= ceiling {

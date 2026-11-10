@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
 import { useSelfHostedRelay } from '@/device-link/selfHostedRelay';
+import { useMobileAgentNetPreferences } from '@/device-link/agentNetPreferences';
+import { mobileAgentNetPushScope, mobileAgentNetPushSelected, subscribeMobileAgentNetPushScope } from '@/device-link/agentNetPushRegistry';
 import Notifications from './nativeNotifications';
 import { ChatBackgroundBridge } from './ChatBackgroundBridge';
 import { notificationRecoveryRoute, parseNotificationResponseDeepLink } from './pushRegistrationModel';
@@ -39,6 +41,7 @@ export function PushNotificationsBridge() {
   routerRef.current = router;
   /** 冷启动点通知时 auth 可能未就绪,先存下待路由的深链。 */
   const pendingDeepLinkRef = useRef<string | null>(null);
+  const pendingAgentNetScopeRef = useRef<string | null>(null);
   const authStateRef = useRef({
     initialized: auth.initialized,
     isAuthenticated: auth.isAuthenticated,
@@ -50,7 +53,8 @@ export function PushNotificationsBridge() {
   const apiFetchRef = useRef(auth.apiFetch);
   apiFetchRef.current = auth.apiFetch;
   // 自建中转下不登记 device-link 推送;切回官方中转后按本机开关重新同步一次。
-  const selfHostedRelay = useSelfHostedRelay() !== null;
+  const selfHostedRelay = useSelfHostedRelay();
+  const agentNetPreferences = useMobileAgentNetPreferences();
 
   useEffect(() => {
     if (!isPushSupported()) return;
@@ -77,7 +81,7 @@ export function PushNotificationsBridge() {
     return () => {
       cancelled = true;
     };
-  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated, auth.user, selfHostedRelay]);
+  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated, auth.user, selfHostedRelay, agentNetPreferences.generation]);
 
   // APNs token 轮换 → 重新上报(仅开关开启且已登录时)
   useEffect(() => {
@@ -106,9 +110,17 @@ export function PushNotificationsBridge() {
     if (!target) return;
     const { initialized, isAuthenticated } = authStateRef.current;
     if (!initialized || !isAuthenticated) return; // 待 auth 就绪后由下方 effect 重放
+    const scope = pendingAgentNetScopeRef.current;
+    if (scope) {
+      const current = mobileAgentNetPushScope();
+      if (!current && mobileAgentNetPushSelected()) return; // Wait for this account's V2 identity.
+      if (scope !== current) { pendingDeepLinkRef.current = null; pendingAgentNetScopeRef.current = null; return; }
+    }
     pendingDeepLinkRef.current = null;
+    pendingAgentNetScopeRef.current = null;
     routerRef.current.push(target as never);
   }, []);
+  useEffect(() => subscribeMobileAgentNetPushScope(flushPendingDeepLink), [flushPendingDeepLink]);
 
   // 通知点击路由:后台点击经 response listener,冷启动 / 回前台经 last response 补偿
   useEffect(() => {
@@ -122,6 +134,8 @@ export function PushNotificationsBridge() {
       consumedNotificationResponseKeys.add(dedupeKey);
       void Notifications.clearLastNotificationResponseAsync?.()?.catch(() => undefined);
       pendingDeepLinkRef.current = notificationRecoveryRoute(deepLink, dedupeKey);
+      const data = response.notification.request.content.data;
+      pendingAgentNetScopeRef.current = typeof data?.agentNetScope === 'string' ? data.agentNetScope : null;
       flushPendingDeepLink();
     };
 

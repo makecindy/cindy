@@ -972,6 +972,8 @@ const fanOutDeviceLinkOwnershipChanged = createIpcFanOut('device-link:ownership-
 const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:responsiveness-changed');
 const fanOutDeviceLinkPeerLinkReopened = createIpcFanOut(DEVICE_LINK_PUSH.PEER_LINK_REOPENED);
 const fanOutDeviceLinkPeerLinkReset = createIpcFanOut(DEVICE_LINK_PUSH.PEER_LINK_RESET);
+// 远程连接拓扑:对端链路变化(payload = 全量快照)
+const fanOutDeviceLinkPeerLinksChanged = createIpcFanOut(DEVICE_LINK_PUSH.PEER_LINKS_CHANGED);
 const fanOutDeviceLinkDeviceDirectoryInvalidated = createIpcFanOut(DEVICE_LINK_PUSH.DEVICE_DIRECTORY_INVALIDATED);
 
 // device-link 模型列表写穿:被控端本地 main → 自身 renderer,把控制端写穿的草稿 / 会话 pref
@@ -982,6 +984,7 @@ const fanOutNewMakerWorktreeBranchChanged = createIpcFanOut(
   'maker:new-maker-worktree-branch:changed',
 );
 const fanOutWorkerCreationPrefsApply = createIpcFanOut('maker:worker-creation-prefs:apply');
+const fanOutWorkerRolesApplyRequest = createIpcFanOut('maker:worker-roles:apply-request');
 const fanOutMakerSessionPrefApply = createIpcFanOut('maker:session-pref:apply');
 const fanOutAppearanceSettingsChanged = createIpcFanOut('appearance-settings:changed');
 
@@ -2977,6 +2980,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   syncWorkerCreationPrefs: (snapshot: {
     workerPermissionMode: 'auto' | 'bypassPermissions';
     selection?: import('../shared/workerCreationSelection').WorkerCreationSelection | null;
+    /** 当前账号的协同角色清单与每个角色的记忆(main 校验后镜像，供手机与远程控制的电脑读取)。 */
+    roles?: unknown;
     ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp;
   }): void => ipcRenderer.send('maker:sync-worker-creation-prefs', snapshot),
 
@@ -3035,6 +3040,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onNewMakerWorktreeBranchChanged: fanOutNewMakerWorktreeBranchChanged,
   /** Orca tool 显式修改 Worker 默认权限后，回写 renderer localStorage。 */
   onWorkerCreationPrefsApply: fanOutWorkerCreationPrefsApply,
+  /** 手机或远程控制的电脑改了这台电脑的协同角色清单后，回写 renderer localStorage。 */
+  onWorkerRolesApplyRequest: fanOutWorkerRolesApplyRequest,
   onMakerSessionPrefApply: fanOutMakerSessionPrefApply,
 
   binding: {
@@ -5167,6 +5174,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       enabled: boolean,
     ): Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }> =>
       ipcRenderer.invoke('device-link:set-device-control-enabled', { deviceId, enabled }),
+    /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照(轮询 + onPeerLinksChanged) */
+    getPeerLinks: (): Promise<{
+      links: Array<{ deviceId: string; path: 'direct' | 'relay'; rttMs: number | null; open: boolean }>;
+      relayRttMs: number | null;
+    }> => ipcRenderer.invoke('device-link:get-peer-links'),
+    /** 对端链路拓扑变化(建链 / 断链 / 直连↔relay),payload 为全量快照 */
+    onPeerLinksChanged: fanOutDeviceLinkPeerLinksChanged,
     listDevices: (): Promise<{
       devices: Array<{
         deviceId: string;

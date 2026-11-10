@@ -265,7 +265,7 @@
     "estimateTooManyFiles": "Das Projekt enthält mehr als {{limit, number}} Dateien und kann nicht kopiert werden. Kopiere stattdessen ein Projekt mit weniger Dateien."
   },
   "sharedTask": {
-    "officialRelayNote": "Du nutzt dein eigenes Relay. Inhalte geteilter Aufgaben laufen weiterhin über das Cindy-Relay.",
+    "officialRelayNote": "Agent-Net-Freigaben verwenden das Relay der Einladung; ältere Freigaben verwenden weiterhin das Cindy-Relay.",
     "selfJoin": "Du hast diese geteilte Aufgabe gestartet und musst daher nicht beitreten. Öffne sie unter „Von mir geteilt“.",
     "manageSharing": "Freigabe verwalten",
     "manageMembers": "Mitglieder verwalten…",
@@ -367,7 +367,7 @@
     "closeAllDescription": "Gäste verlieren den Zugriff. Der Aufgabenverlauf bleibt erhalten."
   },
   "providerShare": {
-    "officialRelayNote": "Du nutzt dein eigenes Relay. Inhalte von Anbieterfreigaben laufen weiterhin über das Cindy-Relay.",
+    "officialRelayNote": "Agent-Net-Freigaben verwenden das Relay der Einladung; ältere Freigaben verwenden weiterhin das Cindy-Relay.",
     "owned": {
       "title": "Von mir geteilte Anbieter"
     },
@@ -1364,6 +1364,7 @@
     "REMOTE_AGENT_SHARE_PAUSED": "Modell nicht geändert: Der Eigentümer hat diese Freigabe für dich pausiert. Wähle ein anderes Modell.",
     "REMOTE_AGENT_SHARE_REMOVED": "Modell nicht geändert: Diese Freigabe ist nicht mehr verfügbar (der Eigentümer hat sie entfernt oder du hast sie verlassen). Wähle ein anderes Modell.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modell nicht geändert: Der geteilte Anbieter ist vorübergehend nicht verfügbar (der Computer des Eigentümers ist offline oder die Freigabe ist derzeit deaktiviert). Versuch es später erneut oder wähle ein anderes Modell.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modell nicht geändert: Dies ist eine ältere Freigabe und nicht nutzbar, solange „Nur Agent-Net verwenden“ aktiviert ist. Schalte die Option aus oder wähle ein anderes Modell.",
     "SSH_HOST_KEY_MISMATCH": "SSH-Hostschlüssel geändert",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy kann den ursprünglichen Anhang nicht lesen; die Nachricht wurde nicht gesendet. Speichere eine Kopie im Ordner Downloads oder einem anderen zugänglichen Ordner, entferne den ursprünglichen Anhang und füge die Kopie über die Anhang-Schaltfläche hinzu, bevor du erneut sendest."
   },
@@ -2421,12 +2422,12 @@
         "previewStarting": "Nimm die Hände von Maus und Tastatur. In 3 Sekunden wird der Bildschirm verdeckt; drücke eine Taste, um ihn zu sperren, und entsperre ihn dann.",
         "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut.",
         "delay": {
-          "label": "Bildschirm verdecken nach",
-          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "30": "30 s",
           "60": "1 Min.",
           "120": "2 Min.",
           "300": "5 Min.",
+          "label": "Bildschirm verdecken nach",
+          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "system": "System"
         }
       }
@@ -6001,7 +6002,7 @@
         "current": "In Verwendung",
         "ownerName": "Dieser Computer",
         "unavailable": "Um dein eigenes Relay zu nutzen, melde dich bei Cindy an und stelle sicher, dass der Systemschlüsselbund verfügbar ist.",
-        "limits": "Solange du dein eigenes Relay nutzt, sind Push-Mitteilungen auf dem Smartphone nicht verfügbar. Anbieterfreigaben und geteilte Aufgaben laufen weiterhin über das Cindy-Relay.",
+        "limits": "Agent-Net-Freigaben verwenden das in der Einladung angegebene Relay. Systembenachrichtigungen benötigen dort einen Push-Dienst. Ältere Freigaben verwenden weiterhin das Cindy-Relay.",
         "actions": {
           "join": "Anderem Relay beitreten",
           "useOfficial": "Zurück zum Cindy-Relay wechseln",
@@ -6019,37 +6020,83 @@
           "scopeAllHint": "Geräte in deinem lokalen Netzwerk können sich direkt verbinden. Die Verbindung ist nicht verschlüsselt. Nutze sie daher nur in vertrauenswürdigen Netzwerken. Smartphones benötigen eine https-Adresse.",
           "externalUrl": "Adresse für andere Geräte",
           "externalUrlPlaceholder": "z. B. https://relay.example.com",
-          "externalUrlHintAll": "Wird in Beitrittslinks aufgenommen. Falls leer, wird die lokale Netzwerkadresse dieses Computers verwendet.",
-          "externalUrlHintLocal": "Wird in Beitrittslinks aufgenommen. Gib die öffentliche Adresse deines Proxys oder Tunnels ein.",
+          "externalUrlHintAll": "Wird in Freigabelinks aufgenommen. Falls leer, wird die lokale Netzwerkadresse dieses Computers verwendet.",
+          "externalUrlHintLocal": "Wird in Freigabelinks aufgenommen. Gib die öffentliche Adresse deines Proxys oder Tunnels ein.",
           "suggested": "Adressen dieses Computers:",
           "start": "Starten",
           "save": "Speichern und Relay neu starten",
           "cancel": "Abbrechen",
           "running": "Relay läuft. Andere Geräte verbinden sich mit {{address}}"
         },
-        "add": {
-          "intro": "Erstelle einen Beitrittslink, damit ein Smartphone oder ein anderer Computer diesem Relay beitreten kann.",
-          "create": "Gerät hinzufügen",
-          "hint": "Scanne ihn mit der Kamera deines Smartphones oder sende den Link an einen anderen Computer und füge ihn unter „Anderem Relay beitreten“ ein. Der Link ist einmal verwendbar und läuft nach 10 Minuten ab.",
-          "qrAlt": "QR-Code zum Beitreten zum Relay",
+        "share": {
+          "action": "Dieses Relay teilen",
+          "title": "Freigabelink für „{{name}}“ erstellt",
+          "description": "Sende den Link an die andere Person. Sobald du ihre Anfrage genehmigst, können die Computer und Smartphones ihres Kontos über dieses Relay ihre eigenen Geräte verbinden.",
+          "descriptionOwn": "Sende den Link an einen anderen deiner Computer oder scanne ihn mit der Handykamera. Nach deiner Zustimmung tritt das Gerät diesem Relay bei.",
+          "fieldLabel": "Freigabelink",
           "copy": "Link kopieren",
-          "copied": "Beitrittslink kopiert",
-          "newLink": "Neuer Link",
-          "waiting": "Warten auf eine Geräteanfrage…"
+          "copied": "Kopiert",
+          "copyFailed": "Der Link konnte nicht kopiert werden. Markiere ihn und kopiere ihn manuell.",
+          "oneTime": "Einmal verwendbar",
+          "expiresIn": "Läuft in {{time}} ab",
+          "expired": "Abgelaufen",
+          "regenerateHint": "Nach Ablauf kannst du einen neuen erstellen.",
+          "generating": "Link wird erstellt…",
+          "scanHint": "Wer den Code mit dem Handy scannt, wird gebeten, ihn zuerst am Computer zu öffnen. Sobald dessen Computer beigetreten ist, sehen seine Handys dieses Relay automatisch.",
+          "scanHintOwn": "Dein Handy kann beitreten, indem es den Code mit der Kamera scannt.",
+          "ownAccountOnly": "Dieses Relay funktioniert gerade nur für deine eigenen Geräte. Um es mit anderen Konten zu teilen, aktiviere zuerst Agent-Net (Beta) unter „Fernverbindung“; ein Relay auf deinem Server braucht außerdem die neueste Version.",
+          "qrAlt": "QR-Code zum Teilen des Relays",
+          "calloutIsolation": "Die andere Person erreicht nur ihre eigenen Geräte und sieht deine nicht. Damit sie deine Agents oder Modelle nutzen kann, musst du diese separat teilen.",
+          "calloutPrivacy": "Verbindungen sind Ende-zu-Ende-verschlüsselt, du siehst keine Inhalte. Als Eigentümer des Relays siehst du aber, wann ihre Geräte kommunizieren und wie viele Daten sie übertragen.",
+          "calloutOwnDevices": "Deine eigenen Geräte brauchen diesen Link nicht: Sind sie mit demselben Konto angemeldet, sehen sie dieses Relay direkt in ihrer Routenliste.",
+          "calloutOwnFallback": "Geräte, die mit deinem Konto angemeldet sind, sehen dieses Relay meist ohne Link in der Liste. Nutze den Link, wenn der Cindy-Kontodienst nicht erreichbar ist.",
+          "done": "Fertig",
+          "regenerate": "Neuen Link erstellen",
+          "regenerated": "Neuer Link erstellt"
         },
         "requests": {
-          "item": "{{name}} möchte beitreten",
-          "verify": "Kopplungscode",
-          "verifyHint": "Genehmige nur, wenn er mit dem Code auf dem anderen Gerät übereinstimmt.",
+          "title_one": "{{count}} offene Anfrage",
+          "title_other": "{{count}} offene Anfragen",
+          "waiting": "Möchte beitreten · wartet auf dich",
+          "waitingAccount": "Anderes Konto · {{device}}, wartet auf dich",
+          "open": "Prüfen"
+        },
+        "tenants": {
+          "title": "Geteilt mit",
+          "devices_one": "{{count}} Gerät",
+          "devices_other": "{{count}} Geräte",
+          "online": "Online",
+          "offline": "Offline",
+          "revoke": "Freigabe beenden",
+          "revokeTitle": "Freigabe für {{account}} beenden?",
+          "revokeDescription": "Die Leitung von {{account}} auf diesem Relay wird gelöscht, und die Geräte werden sofort getrennt. Damit das Konto es wieder nutzen kann, gib es erneut frei."
+        },
+        "approve": {
+          "title": "{{device}} möchte „{{relay}}“ beitreten",
+          "requestedAt": "Angefragt {{time}} über deinen Freigabelink",
+          "requestedViaLink": "Über deinen Freigabelink angefragt",
+          "pairingHint": "Genehmige nur, wenn er mit dem Kopplungscode auf diesem Gerät übereinstimmt.",
+          "unverified": "Diese Anfrage lässt sich nicht verifizieren: Sie passt zu keinem Freigabelink von diesem Computer und wurde möglicherweise manipuliert. Daher kann sie nur abgelehnt werden. Falls es dein Gerät ist, erstelle einen neuen Freigabelink und versuche es erneut.",
+          "callout": "Nach der Genehmigung tritt dieses Gerät „{{relay}}“ bei und verbindet sich darüber mit deinen anderen Geräten.",
           "replaces": "Dieses Gerät ist schon einmal beigetreten. Durch die Genehmigung wird sein alter Zugangsnachweis widerrufen.",
+          "calloutUnknown": "Wenn du dieses Gerät nicht kennst, lehne ab. Durch das Ablehnen wird der Link ungültig.",
           "approve": "Genehmigen",
-          "reject": "Ablehnen",
-          "unverified": "Diese Anfrage lässt sich nicht verifizieren: Sie passt zu keinem Beitrittslink von diesem Computer und wurde möglicherweise manipuliert. Daher kann sie nur abgelehnt werden. Falls es dein Gerät ist, erstelle einen neuen Beitrittslink und versuche es erneut."
+          "reject": "Anfrage ablehnen",
+          "later": "Später entscheiden",
+          "toastApproved": "{{device}} darf „{{relay}}“ beitreten",
+          "toastRejected": "Anfrage von {{device}} abgelehnt",
+          "titleAccount": "{{account}} möchte „{{relay}}“ nutzen",
+          "otherAccountDevice": "Anderes Konto · {{device}}",
+          "calloutAccount": "Wenn du zustimmst, bekommt das Konto eine eigene Leitung auf „{{relay}}“: Es erreicht nur seine eigenen Geräte und sieht weder dich noch deine Geräte. Seine weiteren Geräte treten danach direkt bei, ohne erneut anzufragen.",
+          "calloutAccountRevoke": "Du kannst die Freigabe jederzeit auf der Relay-Seite beenden; die Geräte des Kontos werden sofort getrennt.",
+          "calloutUnknownAccount": "Wenn du dieses Konto nicht kennst, lehne ab. Danach ist dieser Link ungültig.",
+          "toastApprovedAccount": "{{account}} kann „{{relay}}“ jetzt nutzen",
+          "toastRejectedAccount": "Anfrage von {{account}} abgelehnt"
         },
         "join": {
           "title": "Anderem Relay beitreten",
-          "hint": "Füge den Beitrittslink aus „Gerät hinzufügen“ auf dem Relay-Computer ein. Nach der Genehmigung wechselt Cindy zum Relay.",
-          "placeholder": "Beitrittslink einfügen",
+          "hint": "Füge den Freigabelink ein, den du erhalten hast. Nach der Genehmigung wechselt Cindy zum Relay.",
+          "placeholder": "Freigabelink einfügen",
           "submit": "Beitreten",
           "connecting": "Verbindung zum Relay wird hergestellt…",
           "waiting": "Anfrage gesendet. Prüfe auf {{name}}, ob diese Ziffern übereinstimmen, und genehmige die Anfrage:",
@@ -6064,17 +6111,19 @@
           "ownerTitle": "Relay auf diesem Computer stoppen?",
           "ownerDescription": "Beigetretene Geräte werden getrennt und erhalten die Meldung, dass das Relay gestoppt wurde. Dieser Computer schaltet zurück auf das Cindy-Relay.",
           "memberTitle": "Zurück zum Cindy-Relay wechseln?",
-          "memberDescription": "Dieser Computer verlässt „{{name}}“ und nutzt das Cindy-Relay. Um erneut beizutreten, fordere einen neuen Beitrittslink an.",
+          "memberDescription": "Dieser Computer verlässt „{{name}}“ und nutzt das Cindy-Relay. Um erneut beizutreten, fordere einen neuen Freigabelink an.",
+          "sharedOwnerTitle": "Zum Cindy-Relay zurückwechseln?",
+          "sharedOwnerDescription": "Dieser Computer verlässt „{{name}}“ und nutzt das Cindy-Relay; deine Geräte, die darüber beigetreten sind, werden ebenfalls getrennt. Um es wieder zu nutzen, lass es dir erneut freigeben.",
           "serverTitle": "Zurück zum Cindy-Relay wechseln?",
           "serverDescription": "Das Relay „{{name}}“ läuft auf deinem Server weiter. Beigetretene Geräte können einander darüber weiterhin erreichen. Du kannst diesen Computer jederzeit wieder zurückwechseln."
         },
         "errors": {
-          "INVALID_LINK": "Der Beitrittslink oder die Adresse ist ungültig.",
+          "INVALID_LINK": "Der Freigabelink oder die Adresse ist ungültig.",
           "UNREACHABLE": "Dieses Relay ist nicht erreichbar. Stelle sicher, dass dieser Computer die Adresse im Link öffnen kann.",
           "NOT_A_RELAY": "Diese Adresse ist kein Cindy-Relay.",
           "INCOMPATIBLE": "Die Version dieses Relays ist nicht kompatibel. Aktualisiere Cindy auf beiden Computern.",
           "ACCOUNT_MISMATCH": "Dieses Relay gehört zu einem anderen Cindy-Konto.",
-          "CODE_INVALID": "Dieser Beitrittslink ist abgelaufen oder wurde bereits verwendet. Fordere einen neuen an.",
+          "CODE_INVALID": "Dieser Freigabelink ist abgelaufen oder wurde bereits verwendet. Fordere einen neuen an.",
           "RATE_LIMITED": "Zu viele Versuche. Versuche es in ein paar Minuten erneut.",
           "REJECTED": "Die Anfrage wurde abgelehnt.",
           "EXPIRED": "Zeitüberschreitung beim Warten auf die Genehmigung. Erneut beitreten.",
@@ -6097,15 +6146,21 @@
           "RELAY_MISMATCH": "Das Relay auf diesem Server wurde nicht von diesem Computer aus bereitgestellt, daher lässt Cindy es in Ruhe.",
           "CERTIFICATE_FAILED": "Es konnte kein HTTPS-Zertifikat abgerufen werden. Meist ist Port 80 in der Cloud-Sicherheitsgruppe nicht freigegeben oder die Domain verweist noch nicht auf diesen Server. Behebe das und versuche es erneut.",
           "CA_UNREACHABLE": "Der Server konnte die Zertifizierungsstelle Let's Encrypt auch nach mehreren Minuten mit erneuten Versuchen nicht erreichen. Prüfe, ob der Server auf das Internet zugreifen kann, und versuche es später erneut.",
-          "NOT_REACHABLE": "Das Relay läuft auf dem Server, ist aber von diesem Computer aus nicht erreichbar. Gib Port 443 in der Cloud-Sicherheitsgruppe frei.",
+          "NOT_REACHABLE": "Die Relay-Verbindung konnte von diesem Computer aus nicht geprüft werden. Prüfe die HTTPS-Adresse, das Zertifikat und den Zugriff auf Port 443.",
+          "AGENT_NET_START_FAILED": "Der Agent-Net-Dienst auf dem Server ist nicht bereit. Prüfe die Dienstprotokolle und ob die Ports 3348/TCP und 3479/UDP belegt sind.",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS ist erreichbar, aber die Identität und das Verzeichnis von Agent-Net konnten nicht geprüft werden. Prüfe den V2-Dienst, den Reverse-Proxy-Pfad und die Kopplungsdaten.",
           "BUNDLE_MISSING": "Diese Version von Cindy enthält das Relay nicht. Aktualisiere Cindy.",
           "DEPLOY_FAILED": "Die Bereitstellung wurde nicht abgeschlossen.",
-          "PAIR_PROOF_INVALID": "Die Anfrage dieses Geräts kann nicht überprüft und daher nicht genehmigt werden. Erstelle einen neuen Beitrittslink.",
+          "PAIR_PROOF_INVALID": "Die Anfrage dieses Geräts kann nicht überprüft und daher nicht genehmigt werden. Erstelle einen neuen Freigabelink.",
           "NOT_OWNER": "Nur der Computer, der dieses Relay bereitgestellt oder gestartet hat, kann es verwalten.",
           "BUSY": "Eine Bereitstellung läuft. Bitte warte.",
           "INVALID_ADDRESS": "Gib eine öffentliche IP-Adresse oder Domain ein, ohne http:// oder Port.",
           "NO_DEPLOYMENT": "Es wurde noch nichts auf einem Server bereitgestellt.",
-          "OWNER_MISMATCH": "Das Relay hat ein Zertifikat zurückgegeben, das nicht vom Eigentümer im Beitrittslink ausgestellt wurde. Du bist möglicherweise mit einem gefälschten Relay verbunden. Der Beitritt wurde daher gestoppt."
+          "OWNER_MISMATCH": "Das Relay hat ein Zertifikat zurückgegeben, das nicht vom Eigentümer im Freigabelink ausgestellt wurde. Du bist möglicherweise mit einem gefälschten Relay verbunden. Der Beitritt wurde daher gestoppt.",
+          "OWNER_UNAVAILABLE": "„{{device}}“ hat nicht geantwortet. Prüfe, ob Cindy dort geöffnet und online ist, oder lass dir einen Freigabelink schicken.",
+          "RELAY_UNAVAILABLE": "„{{device}}“ verwendet dieses Relay nicht mehr.",
+          "ACCOUNT_DIRECTORY_UNAVAILABLE": "Der Cindy-Kontodienst ist gerade nicht erreichbar, daher lassen sich die Relays deines Kontos nicht laden. Lass dir stattdessen einen Freigabelink schicken.",
+          "SHARE_UNSUPPORTED": "Dieses Relay gehört einem anderen Konto und kann noch nicht mit anderen Konten geteilt werden. Bitte die Person, Agent-Net (Beta) zu aktivieren (ein Relay auf ihrem Server braucht die neueste Version) und es erneut zu teilen."
         },
         "deploy": {
           "title": "Auf meinem Server bereitstellen",
@@ -6148,7 +6203,7 @@
             "uninstall": "Relay wird von deinem Server entfernt…"
           },
           "done": {
-            "deploy": "Bereitgestellt. Wechsle unter „Verbindungsroute“ zu diesem Relay. Danach kannst du Geräte hinzufügen.",
+            "deploy": "Bereitgestellt. Wechsle unter „Verbindungsroute“ zu diesem Relay. Danach sehen deine anderen Geräte es und können beitreten.",
             "upgrade": "Das Relay auf deinem Server hat jetzt die Version {{version}}.",
             "uninstall": "Relay von deinem Server entfernt"
           },
@@ -6191,13 +6246,15 @@
           "removeDescription": "Das Relay und seine Gerätedatensätze werden vom Server gelöscht und Geräte, die es verwenden, werden getrennt. Bei einer erneuten Bereitstellung muss jedes Gerät erneut beitreten.",
           "forget": "Nur von diesem Computer entfernen",
           "forgetTitle": "Nur von diesem Computer entfernen?",
-          "forgetDescription": "Das Relay läuft auf dem Server weiter, aber dieser Computer verwaltet es nicht mehr und kann keine Geräte mehr hinzufügen. Tu dies nur, wenn du diesen Server nicht mehr nutzt."
+          "forgetDescription": "Das Relay läuft auf dem Server weiter, aber dieser Computer verwaltet es nicht mehr und kann es nicht mehr teilen. Tu dies nur, wenn du diesen Server nicht mehr nutzt."
         },
         "route": {
           "title": "Verbindungsroute",
           "hint": "Die Fernsteuerung zwischen deinen Geräten läuft über diese Route",
           "kindServer": "Mein Server",
           "kindJoined": "Beigetreten",
+          "kindComputer": "Mein Computer",
+          "kindShared": "Mit dir geteilt",
           "hostTitle": "Dieser Computer als Relay",
           "hostHint": "Andere Geräte müssen diesen Computer direkt erreichen können. Die Verbindung wird getrennt, wenn er in den Ruhezustand wechselt oder Cindy beendet wird",
           "officialHint": "Keine Einrichtung nötig. Alle Funktionen sind verfügbar",
@@ -6215,9 +6272,18 @@
           "statusOffline": "Nicht erreichbar",
           "switchTitle": "Zu {{name}} wechseln?",
           "switchFromHost": "Das Relay auf diesem Computer wird gestoppt und die Verbindung zu den beigetretenen Geräten getrennt.",
-          "switchFromMember": "Dieser Computer verlässt {{name}}. Um später erneut beizutreten, muss der Eigentümer einen neuen Beitrittslink erstellen.",
+          "switchFromMember": "Dieser Computer verlässt {{name}}. Um später erneut beizutreten, muss der Eigentümer einen neuen Freigabelink erstellen.",
+          "switchFromShared": "Dieser Computer verlässt „{{name}}“, und deine Geräte, die darüber beigetreten sind, werden ebenfalls getrennt. Um es wieder zu nutzen, lass es dir erneut freigeben.",
           "switchConfirm": "Wechseln",
-          "switchFromOfficial": "Die Fernsteuerung zwischen deinen Geräten läuft über {{name}}. Push-Benachrichtigungen auf dem Smartphone sind nicht verfügbar, solange du dein eigenes Relay nutzt. Das Teilen von Anbietern und gemeinsame Aufgaben laufen weiterhin über das Cindy-Relay."
+          "switchFromOfficial": "Die Fernsteuerung zwischen Geräten läuft künftig über „{{name}}“. Agent-Net-Freigaben folgen dem Relay der Einladung; ältere Freigaben verwenden weiterhin das Cindy-Relay.",
+          "switchToAccount": "Dieses Relay gehört zu deinem Konto. „{{device}}“ gibt diesen Computer automatisch frei, ein Freigabelink ist nicht nötig.",
+          "accountJoining": "Wird beigetreten, wartet auf die Freigabe durch „{{device}}“…",
+          "accountManagedOn": "Verwaltet auf „{{device}}“",
+          "accountJoinedOn": "Beigetreten auf „{{device}}“",
+          "sharedBy": "Geteilt von {{name}}",
+          "sharedByOther": "Von einem anderen Konto geteilt",
+          "ownDevicesHint": "Deine anderen Computer und Smartphones sehen dieses Relay, sobald sie mit demselben Konto angemeldet sind, und können ohne Link wechseln. Um es einem anderen Konto bereitzustellen, klicke neben dem Relay auf Teilen.",
+          "sharedOwnDevicesHint": "Deine anderen Computer und Handys sehen dieses Relay, sobald sie mit demselben Konto angemeldet sind, und können darauf wechseln. Sie erreichen nur deine eigenen Geräte."
         },
         "dialog": {
           "steps": {
@@ -6250,7 +6316,13 @@
           "certificateSite": "Verwendet das Zertifikat der Website",
           "version": "Relay-Version",
           "latest": "Auf dem neuesten Stand",
-          "remove": "Dieses Relay entfernen"
+          "remove": "Dieses Relay entfernen",
+          "protocolsBoth": "Unterstützt Device Link und Agent-Net",
+          "protocolsLegacy": "Unterstützt nur Device Link",
+          "upgradeForSharing": "Nach dem Update mit anderen Konten teilbar",
+          "connection": "Verbindung dieses Computers",
+          "connectionEncrypted": "Ende-zu-Ende-verschlüsselt, wenn die Gegenseite auch Agent-Net nutzt",
+          "connectionLegacy": "Nicht Ende-zu-Ende-verschlüsselt"
         }
       },
       "title": "Remote-Verbindung",
@@ -6557,6 +6629,82 @@
         "title": "Zugriff widerrufen?",
         "description": "Nach dem Widerruf wird dieses Gerät sofort getrennt und kann diesen Computer nicht mehr fernsteuern. Du musst den Zugriff unter Einstellungen → Remote-Verbindung wiederherstellen, bevor es sich erneut verbinden kann.",
         "confirm": "Zugriff widerrufen"
+      },
+      "v2": {
+        "switch": {
+          "title": "Agent-Net (Beta)",
+          "hint": "Zeigt die Verbindungstopologie und die letzte Aktivität. Verbindungen sind verschlüsselt, wenn Agent-Net auf beiden Geräten aktiviert ist und die Geräte über Agent-Net gekoppelt wurden. Andere Geräte verwenden die bisherige Verbindung. Gilt nur für diesen Computer."
+        },
+        "empty": "Noch keine anderen Geräte. Melde dich auf einem anderen Computer oder Telefon mit demselben Konto an, dann erscheint es hier.",
+        "stats": {
+          "online": "{{online}} / {{total}} online",
+          "direct": "{{count}} direkt",
+          "relay": "{{count}} über Relay",
+          "unlinked": "{{count}} nicht verbunden",
+          "attention": "{{count}} zu prüfen",
+          "offline": "{{count}} offline"
+        },
+        "node": {
+          "thisComputer": "Dieser Computer"
+        },
+        "path": {
+          "direct": "Direkt",
+          "relay": "Über {{name}}",
+          "unlinked": "Online, nicht verbunden",
+          "offline": "Offline"
+        },
+        "attention": {
+          "unresponsive": "Keine Antwort, neuer Versuch"
+        },
+        "relay": {
+          "official": "Cindy-Relay"
+        },
+        "ms": "{{value}} ms",
+        "flow": {
+          "out": "Sendet",
+          "in": "Empfängt",
+          "both": "Sendet und empfängt"
+        },
+        "offlineFold": "{{count}} offline",
+        "offlineShow": "Offline-Geräte anzeigen",
+        "offlineHide": "Offline-Geräte ausblenden",
+        "group": {
+          "direct": "Direkt",
+          "relay": "Über Relay",
+          "unlinked": "Nicht verbunden",
+          "attention": "Zu prüfen",
+          "offline": "Offline"
+        },
+        "recent": {
+          "title": "Letzte Aktivität",
+          "online": "{{name}} ist online",
+          "offline": "{{name}} ist offline",
+          "empty": "Seit dem Öffnen dieser Seite hat sich kein Gerät an- oder abgemeldet"
+        },
+        "popover": {
+          "status": "Status",
+          "path": "Pfad",
+          "activity": "Nachrichten",
+          "latency": "Latenz",
+          "lastSeen": "Zuletzt gesehen",
+          "controlling": "Steuert diesen Computer",
+          "rttNote": "zuletzt gemessen",
+          "manage": "Gerät verwalten …",
+          "linkStatus": "Zu {{name}}",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "Remote-Desktop konnte nicht geöffnet werden",
+          "encryption": "Verschlüsselung",
+          "encrypted": "Ende-zu-Ende-verschlüsselt",
+          "legacyConnection": "Ältere Verbindung",
+          "encryptionUnknown": "Nicht bestätigt",
+          "legacyEncryptionHint": "Der Relay-Pfad der älteren Verbindung ist nicht Ende-zu-Ende-verschlüsselt."
+        },
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "Nur Agent-Net verwenden",
+        "onlyEncryptedHint": "Ältere Geräte und Freigaben über die bisherige Verbindung sind dann nicht verfügbar. Standardmäßig deaktiviert."
       }
     },
     "tina": {
@@ -6640,6 +6788,7 @@
         "renameFailed": "Umbenennen fehlgeschlagen",
         "deleted": "Gerät gelöscht",
         "deleteOnline": "Dieser Server unterstützt das Entfernen von Online-Geräten noch nicht. Versuche es nach der Aktualisierung des Dienstes erneut.",
+        "deleteRejectedWhileOffline": "Gerät konnte nicht gelöscht werden: Der Server führt es noch als online, obwohl es hier als offline angezeigt wird.",
         "deleteFailed": "Löschen fehlgeschlagen",
         "disconnected": "Alle Remote-Verbindungen getrennt",
         "disconnectFailed": "Remote-Verbindung konnte nicht getrennt werden",
@@ -13040,11 +13189,10 @@
     "prevMessageJump": "Zum vorherigen Prompt springen: {{preview}}",
     "sessionLoading": "Aufgabe wird geladen",
     "askUserQuestion": {
-    "unanswered": "Unbeantwortet",
-    "withdrawn": "Keine Antwort mehr nötig",
-    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
-    "sendSupplement": "Ergänzung senden",
-
+      "unanswered": "Unbeantwortet",
+      "withdrawn": "Keine Antwort mehr nötig",
+      "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
+      "sendSupplement": "Ergänzung senden",
       "voice": {
         "hint": "Sag die Nummer oder den Namen einer Option. Sag bei Mehrfachauswahl anschließend „Auswahl bestätigen“.",
         "freeTextHint": "Sag deine Antwort, prüfe sie und sag dann „Auswahl bestätigen“, um sie abzusenden.",
@@ -14030,6 +14178,7 @@
       "REMOTE_AGENT_SHARE_PAUSED": "Der Eigentümer hat diese Freigabe für dich pausiert. Diese Modelle können erst wieder genutzt werden, wenn sie fortgesetzt wird. Wechsle zu einem anderen Modell, um fortzufahren.",
       "REMOTE_AGENT_SHARE_REMOVED": "Diese Freigabe ist nicht mehr verfügbar (der Eigentümer hat sie entfernt oder du hast sie verlassen). Wechsle zu einem anderen Modell, um fortzufahren.",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "Der freigegebene Anbieter ist vorübergehend nicht verfügbar. Der Computer des Eigentümers ist möglicherweise offline oder die Freigabe ist derzeit deaktiviert. Versuch es später erneut oder wechsle zu einem anderen Modell, um fortzufahren.",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Dies ist eine ältere Freigabe; sie ist nicht nutzbar, solange „Nur Agent-Net verwenden“ aktiviert ist. Schalte die Option aus, um fortzufahren, oder wechsle zu einem anderen Modell.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Die verfügbaren Konten für dieses Modell haben ihr Nutzungslimit erreicht. Wechsle das Modell oder fahre fort, wenn das Kontingent zurückgesetzt wird.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "Derzeit kann kein Computer in der Anbietergruppe diese Aufgabe ausführen. Sie sind möglicherweise offline, pausiert, in einer Abkühlphase oder haben dieses Modell nicht. Prüfe die Gruppe auf der Seite „Remote & Freigabe“ dieses Anbieters.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Dieses Gerät hat sein Limit für Remote-Sitzungen erreicht. Archiviere ungenutzte Sitzungen oder bitte den Eigentümer des Anbieters, das Limit unter „Remote & Freigabe“ zu erhöhen.",
@@ -14868,6 +15017,7 @@
         "compactSuccess": "Kontext komprimiert",
         "compactSuccessWithTokens": "Kontext komprimiert: {{before}}k → {{after}}k Tokens",
         "compactFailed": "Komprimierung fehlgeschlagen",
+        "compactResumeFirst": "Sende zuerst eine Nachricht, um diese Aufgabe fortzusetzen, bevor du den Kontext komprimierst.",
         "compactNothing": "Noch nichts zu komprimieren",
         "sessionBranches": "Sitzungszweige",
         "copySessionLink": "Sitzungslink kopieren"
@@ -16368,7 +16518,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "Feedback absenden",
-      "cancel": "Abbrechen"
+      "cancel": "Abbrechen",
+      "previewLabel": "GitHub · Öffentliches Feedback",
+      "edit": "Bearbeiten",
+      "doneEditing": "Fertig",
+      "publicSubmit": "Öffentlich senden",
+      "publicationNotice": "Feedback und Name werden auf GitHub veröffentlicht.",
+      "attribution": "Von {{name}}",
+      "environment": "Laufzeitumgebung enthalten",
+      "identitySettings": "Name und Konto"
     },
     "redirect": {
       "descriptionBefore": "Gib ",
@@ -17420,15 +17578,37 @@
       "customRolePlaceholder": "+ eigener Rollenname (optional)",
       "customRolePredefinedError": "Ein eigener Rollenname darf keinem vordefinierten Rollennamen entsprechen",
       "agentLabel": "Agent",
-      "modelLabel": "Modell",
       "permissionLabel": "Berechtigungsmodus",
       "noAvailableModels": "Kein {{agent}}-Modell verfügbar. Prüfe die Anbieterverbindung und die Zugangsdaten in den Einstellungen.",
       "effortLabel": "Denkintensität",
       "initialTaskLabel": "Erste Aufgabe",
-      "optional": "(optional)",
-      "initialTaskPlaceholder": "Optionale erste Aufgabe für diesen Worker",
+      "initialTaskPlaceholder": "Erste Aufgabe für den Worker eingeben oder leer lassen, dann verteilt der Lead die Arbeit",
       "enableCollabTitle": "Zusammenarbeit starten",
       "enableCollabSubmit": "Zusammenarbeit starten",
+      "enableCollabDescription": "Diese Aufgabe wird zum Lead: Sie verteilt die Arbeit und prüft die Ergebnisse. Der Worker ist ein eigenständiger Agent, der die Arbeit ausführt und Bericht erstattet.",
+      "templateLabel": "Was der Worker übernimmt",
+      "templates": {
+        "developer": {
+          "name": "Entwickeln"
+        },
+        "reviewer": {
+          "name": "Review",
+          "task": "Sieh dir die Arbeit des Leads an und mach ein paar Vorschläge."
+        },
+        "tester": {
+          "name": "Testen",
+          "task": "Teste die bisherige Arbeit des Leads und melde Fehler mit Schritten zur Reproduktion."
+        }
+      },
+      "removePreset": "{{role}} entfernen",
+      "removePresetConfirm": {
+        "title": "„{{role}}“ entfernen?",
+        "description": "Über „Rolle hinzufügen“ kannst du sie jederzeit wieder hinzufügen.",
+        "confirm": "Rolle entfernen",
+        "cancel": "Abbrechen"
+      },
+      "addRole": "Rolle hinzufügen",
+      "moreSettings": "Weitere Einstellungen",
       "executionDeviceLabel": "Ausführen auf",
       "thisComputer": "Lokal",
       "deviceOnline": "Online",

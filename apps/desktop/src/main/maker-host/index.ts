@@ -228,6 +228,7 @@ import {
   resolvePiGatewayDescriptorProviderId,
   resolveVerifiedContextWindow,
   resolveModelDefaultContextWindow,
+  resolveModelMaxOutputTokens,
 } from './catalog-to-descriptors.js';
 import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
@@ -1505,6 +1506,11 @@ export function getMaker(): Maker {
         const source = resolveDesktopModelContextProviderId(catalog, 'claude-code', providerId, modelId);
         return source ? readModelContextLimit('claude-code', source, modelId)
           ?? resolveModelDefaultContextWindow(catalog, 'claude-code', source, modelId) : null;
+      },
+      resolveModelMaxOutputTokens: (providerId, modelId) => {
+        const catalog = getDesktopSelectableCatalog();
+        const source = resolveDesktopModelContextProviderId(catalog, 'claude-code', providerId, modelId);
+        return resolveModelMaxOutputTokens(catalog, 'claude-code', source, modelId);
       },
       resolveModelCompactionPct: (providerId, modelId) => {
         const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId);

@@ -9880,7 +9880,6 @@ export function ChatInput({
                         onBack={() => setAddDirViewOpen(false)}
                         onSelectRecent={handleAddRecentDir}
                         onBrowse={handleBrowseExtraDir}
-                        maxHeight={paletteMaxHeight}
                       />
                     ) : (
                       <AtMentionPanel
@@ -9927,6 +9926,7 @@ export function ChatInput({
                       />
                     )
                   }
+                  maxContentHeight={paletteMaxHeight}
                   disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}

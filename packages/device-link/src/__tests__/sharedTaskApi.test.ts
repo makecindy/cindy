@@ -23,6 +23,18 @@ it('reads extended host device IDs in the shared task list', async () => {
   await expect(api.list()).resolves.toEqual([expect.objectContaining({ hostDeviceId: ' 主机~1 ' })]);
 });
 describe('sharedTask management client', () => {
+  // Multi-relay lists: unavailable IDs reach the Host without becoming task rows.
+  // Previous coverage only exercised one complete list. Unit, no real waits.
+  it('preserves unavailable authority IDs for reconciliation and validates them', async () => {
+    const { api, request } = setup();
+    request.mockResolvedValue({ sharedTasks: [], unavailableSharedTaskIds: ['private-task'], authorityIncomplete: true });
+    const result = await api.list();
+    expect(result.unavailableSharedTaskIds).toEqual(['private-task']);
+    expect(result.authorityIncomplete).toBe(true);
+    expect(JSON.stringify(result)).toBe('[]');
+    request.mockResolvedValue({ sharedTasks: [], unavailableSharedTaskIds: ['bad/id'] });
+    await expect(api.list()).rejects.toThrow('identifier');
+  });
   it('observes a late create ID for host cleanup but never returns stale UI success', async () => {
     const { api, request, changeAccountOrRegion } = setup();
     const observed = vi.fn();
