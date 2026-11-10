@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   BUNDLED_CATALOG,
+  bindProviderPresetRuntime,
   buildUserProvider,
   type CustomProviderConfig,
 } from '@cindy/model-providers';
@@ -234,6 +235,58 @@ describe('Codex custom Provider identity', () => {
       },
     });
     expect(deriveCodexCustomProviderRoutes(catalog(textOnly))).toHaveLength(1);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：deriveCodexCustomProviderRoutes。
+  //   Cloudflare AI Gateway 预设的 Responses 模型不再登记成 cindy_custom 路由；
+  //   同一目录里普通自定义供应商仍然登记。
+  // - Bug／规则依据：#9759。命名空间路由只发普通 Bearer，
+  //   而这类预设靠原生适配器把密钥写进 cf-aig-authorization 并删掉 Authorization。
+  //   它们没有 auth.native，旧判断会把它们登记进去，连接认证直接失败。
+  // - 现有覆盖缺口：上面只排除 auth.native 的订阅账号。
+  // - 最小失败输入：绑定账号后的 cloudflare-ai-gateway 预设，加一条普通 Responses 供应商。
+  // - tier：unit。调公开函数，不启 Electron、不访问网络。
+  it('does not register Cloudflare AI Gateway Responses models on the custom route', () => {
+    const preset = BUNDLED_CATALOG.presets!.find((item) => item.id === 'cloudflare-ai-gateway')!;
+    const runtimes = Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
+      ...bindProviderPresetRuntime(
+        runtime!,
+        runtime!.baseUrl
+          .replace('{CLOUDFLARE_ACCOUNT_ID}', 'fixture-account')
+          .replace('{CLOUDFLARE_GATEWAY_ID}', 'fixture-gateway'),
+      ),
+      catalogPresetId: preset.id,
+    }]));
+    const gateway = buildUserProvider(
+      { id: 'my-cloudflare', name: 'My Cloudflare', runtimes },
+      { presets: BUNDLED_CATALOG.presets },
+    );
+    expect(gateway.auth.native).toBeUndefined();
+    expect(gateway.models.codex?.some((model) => model.id === 'gpt-4.1')).toBe(true);
+
+    const routes = deriveCodexCustomProviderRoutes(catalog(gateway));
+    expect(routes.find((route) => route.providerId === 'my-cloudflare')).toBeUndefined();
+    expect(routes.flatMap((route) => route.responseModels)).not.toContain('gpt-4.1');
+
+    const ordinary = customProvider({
+      id: 'ordinary-responses',
+      name: 'Ordinary Responses',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          requestPath: '/v1/responses',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'chat-text-only', name: 'Chat Text Only' }],
+        },
+      },
+    });
+    const ordinaryRoutes = deriveCodexCustomProviderRoutes(catalog(ordinary));
+    expect(ordinaryRoutes).toHaveLength(1);
+    expect(ordinaryRoutes[0]).toMatchObject({
+      providerId: 'ordinary-responses',
+      responseModels: ['chat-text-only'],
+    });
   });
 
   it('uses the applied Host snapshot to identify only real dynamic identity crossings', () => {

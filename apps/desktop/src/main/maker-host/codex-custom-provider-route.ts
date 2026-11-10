@@ -18,6 +18,10 @@ import {
   type CodexProxySpawnAuthMode,
 } from './codex-gateway-config.js';
 import { getProviderRouteCredentialRevision } from './provider-route.js';
+import {
+  invocationModelRecord,
+  requiresNativeProviderAuth,
+} from './pi-provider-transport.js';
 
 export const CODEX_IMAGE_GENERATION_ACTOR_HEADER = 'x-openai-actor-authorization';
 export const CODEX_IMAGE_GENERATION_ACTOR_VALUE = 'local-image-extension';
@@ -148,9 +152,18 @@ function routeForProvider(provider: Provider): CodexCustomProviderRoute | null {
   // A text-only Responses provider still needs its cindy_custom_<hash> identity.
   // Image generation only adds the actor header; it is not an admission ticket.
   // Dropping the route makes thread/resume fail with -32600 (#9611).
-  const responseModels = (provider.models.codex ?? []).filter(
-    (model) => effectiveModelWireProtocol(model, routing) === 'openai-responses',
-  );
+  // Cloudflare AI Gateway / GitHub Copilot have no auth.native, but their adapter
+  // rewrites the key (cf-aig-authorization, Copilot headers) and drops Authorization.
+  // The namespace route only sends a plain Bearer, so those models stay on the
+  // ordinary native-adapter branch. Same identity as requiresNativeProviderAuth.
+  const responseModels = (provider.models.codex ?? []).filter((model) => {
+    if (effectiveModelWireProtocol(model, routing) !== 'openai-responses') return false;
+    // 供应商级 routing.upstream 可能是另一个协议的默认地址（Cloudflare 默认落在
+    // anthropic）。鉴权身份必须按这个模型自己的上游来认，否则适配器对不上，
+    // requiresNativeProviderAuth 会漏掉仍要走原生改写的 Responses 模型。
+    const modelUpstream = model.route?.baseUrl ?? routing.upstream;
+    return !requiresNativeProviderAuth(invocationModelRecord(model, modelUpstream));
+  });
   const responseModelIds = responseModels.map((model) => model.id);
   if (responseModelIds.length === 0) return null;
   const routeId = stableRouteId(storedCustomProviderId(provider.id));
