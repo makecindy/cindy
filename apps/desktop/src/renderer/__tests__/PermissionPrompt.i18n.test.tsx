@@ -26,7 +26,8 @@ describe('PermissionPrompt i18n', () => {
     expect(screen.getByText('git push origin draft')).toBeTruthy();
     expect(screen.queryByText('本任务总是允许')).toBeNull();
     fireEvent.click(screen.getByText('允许一次'));
-    expect(onRespond).toHaveBeenCalledExactlyOnceWith({ behavior: 'allow' });
+    // P1: the component freezes and reports the requestId it was mounted for.
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith({ behavior: 'allow', requestId: 'writer-permission' });
   });
 
   it('uses the selected UI language for Cindy-owned permission copy', () => {
@@ -118,7 +119,7 @@ describe('PermissionPrompt i18n', () => {
     expect(screen.getByText('schedule_delete {"id":"completed-followup"}')).toBeTruthy();
     expect(screen.queryByText(/允许使用插件/)).toBeNull();
     fireEvent.click(screen.getByText('允许一次'));
-    expect(onRespond).toHaveBeenCalledExactlyOnceWith({ behavior: 'allow' });
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith({ behavior: 'allow', requestId: 'mcp-permission' });
   });
 
   it('keeps the session boundary explicit in the English approval label', async () => {
