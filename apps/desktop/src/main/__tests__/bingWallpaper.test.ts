@@ -311,6 +311,65 @@ describe('daily wallpaper lifecycle', () => {
     await vi.advanceTimersByTimeAsync(14 * 60_000);
     expect(h.metadata).toHaveBeenCalledTimes(2);
   });
+  // #9640, unit: a failed manual refresh may leave an unexpired cache. Existing
+  // failure fixtures all expire the cache, hiding a TTL hit that swallows retries.
+  it('actually retries a failed manual update even while its old cache TTL is valid', async () => {
+    const at = Date.now();
+    h.cache({ current: saved(), previous: null, checkedAt: at, nextCheckAt: at + 5 * 3600_000 });
+    h.active('en-US');
+    await h.service.refresh();
+    h.metadata.mockRejectedValueOnce(new BingWallpaperRequestError(15 * 60_000));
+    await h.service.refresh();
+    expect(h.status).toHaveBeenLastCalledWith('stale');
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    expect(h.metadata).toHaveBeenCalledTimes(2);
+    expect(h.status).toHaveBeenLastCalledWith('ready');
+  });
+  // #9758 clock correction must not bypass Retry-After or minimum request gaps.
+  // The startup-cache rollback case has no failure/backoff and cannot catch this.
+  it('preserves remaining server backoff when the wall clock moves backwards', async () => {
+    h.metadata.mockRejectedValueOnce(new BingWallpaperRequestError(15 * 60_000));
+    h.active('en-US');
+    await h.service.refresh();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    h.service.reconcile();
+    vi.setSystemTime(Date.now() - 24 * 3600_000);
+    h.service.reconcile();
+    await vi.advanceTimersByTimeAsync(0);
+    await h.service.refresh();
+    expect(h.metadata).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(h.metadata).toHaveBeenCalledTimes(2);
+    expect(h.status).toHaveBeenLastCalledWith('ready');
+  });
+  it('retains the minimum request interval across clock rollback after success', async () => {
+    h.active('en-US');
+    await h.service.refresh();
+    vi.setSystemTime(Date.now() - 24 * 3600_000);
+    h.service.reconcile();
+    await h.service.refresh();
+    expect(h.metadata).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(h.metadata).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.metadata).toHaveBeenCalledTimes(2);
+  });
+  it('starts server backoff in the corrected clock when a pending request fails', async () => {
+    let fail!: (error: Error) => void;
+    h.metadata.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    h.active('en-US');
+    await vi.advanceTimersByTimeAsync(0);
+    vi.setSystemTime(Date.now() - 24 * 3600_000);
+    fail(new BingWallpaperRequestError(15 * 60_000));
+    await h.service.refresh();
+    h.service.reconcile();
+    await h.service.refresh();
+    expect(h.metadata).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(14 * 60_000);
+    expect(h.metadata).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.metadata).toHaveBeenCalledTimes(2);
+  });
   it.each([
     [true, 'stale'],
     [false, 'failed'],

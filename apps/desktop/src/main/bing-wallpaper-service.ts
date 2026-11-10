@@ -67,15 +67,21 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
     const jitter = Math.min(1, Math.max(0, (deps.jitter ?? Math.random)())) * 60_000;
     return Math.floor(Math.min(at + 6 * HOUR, midnight.getTime()) + jitter);
   }
-  async function check(force = false): Promise<void> {
-    if (disposed || !market || pending) return pending ?? undefined;
-    const at = now();
+  function observeClock(at: number): void {
     if (at < lastCheckAt) {
-      lastAttemptAt = -Infinity;
-      nextAttemptAt = 0;
+      const rollback = lastCheckAt - at;
+      // Rebase relative request limits instead of erasing them. A clock
+      // correction must not bypass Retry-After or the minimum request interval.
+      lastAttemptAt -= rollback;
+      nextAttemptAt = failures > 0 ? nextAttemptAt - rollback : 0;
     }
     // Cache hits and deadline-gated checks also establish a wall-clock baseline.
     lastCheckAt = at;
+  }
+  async function check(force = false): Promise<void> {
+    if (disposed || !market || pending) return pending ?? undefined;
+    const at = now();
+    observeClock(at);
     if (
       ((!force || failures > 0) && at < nextAttemptAt) ||
       at - lastAttemptAt < MIN_CHECK_INTERVAL
@@ -102,6 +108,7 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
           if (!current()) return;
           if (
             !force &&
+            failures === 0 &&
             valid &&
             cache.current?.market === runMarket &&
             cache.nextCheckAt > at &&
@@ -123,6 +130,7 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
               : await deps.image(metadata, abort.signal);
           if (!current()) return;
           const checkedAt = now();
+          observeClock(checkedAt);
           const nextCheckAt = nextNormalCheck(checkedAt);
           await deps.publish(metadata, bytes, checkedAt, nextCheckAt, current, cache);
           if (!current()) return;
@@ -137,7 +145,9 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
             error instanceof BingWallpaperRequestError && Number.isFinite(error.retryAfterMs)
               ? error.retryAfterMs
               : 0;
-          nextAttemptAt = now() + Math.max(retry, serverDelay);
+          const failedAt = now();
+          observeClock(failedAt);
+          nextAttemptAt = failedAt + Math.max(retry, serverDelay);
           lastFailureStatus = valid ? 'stale' : 'failed';
           status(lastFailureStatus);
         }
