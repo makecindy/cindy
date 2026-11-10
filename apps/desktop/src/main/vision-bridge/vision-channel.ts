@@ -88,9 +88,13 @@ export const DEFAULT_VISION_PROMPT =
   'Describe this image accurately and factually. Do NOT guess or fabricate details. ' +
   'Report visible text verbatim. If the image contains UI elements, lists their labels and state.';
 
-/** anthropic-messages 视觉请求的 max_tokens（/v1/messages 强制要求，缺省 400）。
- *  描述文本通常远小于此，取有界值防超长输出。 */
-const VISION_ANTHROPIC_MAX_TOKENS = 1024;
+/**
+ * anthropic-messages 视觉请求的 max_tokens（/v1/messages 缺省会 400）。
+ * 思考模型会先输出 thinking / redacted_thinking，1024 常被思考吃光，正文为空，
+ * 视觉桥误判「图片不可用」（#4580）。4096 够一段思考加图片描述，同时保持有界，
+ * 避免把输出预算开成无上限、把单次转图的费用和延迟拉满。
+ */
+export const VISION_ANTHROPIC_MAX_TOKENS = 4096;
 
 /** 允许直接转为 data URL 的图片 mime（对齐 vision_client.py）。 */
 const ALLOWED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
@@ -410,17 +414,19 @@ export function extractChatContent(parsed: unknown): string | null {
   return null;
 }
 
-/** 从 Anthropic Messages 响应抽 content[].text 拼接。 */
+/**
+ * 从 Anthropic Messages 响应抽正文。跳过 thinking / redacted_thinking：思考块不是图片描述。
+ * 只有思考、没有 text 时返回 null，调用方仍走空描述失败，不把空串当成成功（#4580）。
+ */
 export function extractAnthropicContent(parsed: unknown): string | null {
   const content = (parsed as { content?: unknown })?.content;
   if (!Array.isArray(content)) return null;
   const parts = content
     .map((block) => {
-      if (block && typeof block === 'object') {
-        const t = (block as { type?: unknown; text?: unknown }).text;
-        return typeof t === 'string' ? t : '';
-      }
-      return '';
+      if (!block || typeof block !== 'object') return '';
+      const b = block as { type?: unknown; text?: unknown };
+      if (b.type === 'thinking' || b.type === 'redacted_thinking') return '';
+      return typeof b.text === 'string' ? b.text : '';
     })
     .join('');
   return parts.trim().length > 0 ? parts : null;
@@ -496,7 +502,7 @@ function buildVisionRequestBody(
   const source = imageUrl.startsWith('data:')
     ? dataUrlToAnthropicSource(imageUrl)
     : { type: 'url', url: imageUrl };
-  // /v1/messages 强制要求 max_tokens，缺省会 400（视觉桥描述文本短，1024 足够且有界）。
+  // /v1/messages 强制要求 max_tokens。过小会被 thinking 块吃光，正文为空（#4580）。
   return {
     model,
     max_tokens: VISION_ANTHROPIC_MAX_TOKENS,

@@ -22,7 +22,7 @@ import {
   restartContextFromArgv,
   SHARED_USERDATA_ARG,
 } from './desktop-dev-verdict.mjs';
-import { PROCESS_TABLE_MAX_BYTES, collectDesktopWhoamiReport } from './desktop-whoami.mjs';
+import { PROCESS_TABLE_MAX_BYTES, collectDesktopWhoamiReport, identifyDesktopProcesses } from './desktop-whoami.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -521,6 +521,59 @@ function forceKillProcess(pid) {
     return false;
   }
   return true;
+}
+
+export function requestWindowsDesktopQuit(instance, now = Date.now()) {
+  if (!instance.userDataDir) return null;
+  const dir = path.join(instance.userDataDir, '.dev-instances');
+  try {
+    const record = JSON.parse(fs.readFileSync(path.join(dir, `${instance.pid}.json`), 'utf8'));
+    if (record.quitRequestProtocol !== 1 || record.pid !== instance.pid
+      || typeof record.rootDir !== 'string' || normalize(record.rootDir) !== normalize(instance.rootDir)
+      || typeof record.instanceId !== 'string' || !/^[a-f0-9-]{36}$/.test(record.instanceId)) return null;
+    const requestPath = path.join(dir, `${record.pid}-${record.instanceId}.quit`);
+    fs.writeFileSync(requestPath, JSON.stringify({ action: 'quit', pid: record.pid,
+      instanceId: record.instanceId, expiresAt: now + 30_000 }), { mode: 0o600 });
+    return () => { try { fs.rmSync(requestPath, { force: true }); } catch { /* Best effort. */ } };
+  } catch {
+    return null; // Older dev builds or unavailable provenance use the bounded force fallback.
+  }
+}
+
+/** Do not terminate launchers or renderers until main has finished normal disposal.
+ * Wait past lifecycle's 16s async budget / 20s watchdog, then reclaim survivors. */
+export async function stopWindowsDesktopDevProcesses(targets, targetRoot, {
+  requestQuit = requestWindowsDesktopQuit,
+  waitForExit = waitForDesktopDevProcessesToExit,
+  listProcesses = listDesktopDevProcesses,
+  forceKill = forceKillProcess,
+  log = console.log,
+} = {}) {
+  const instances = identifyDesktopProcesses(targets, [{ rootDir: targetRoot }]);
+  const requested = new Set();
+  const cleanups = [];
+  try {
+    for (const instance of instances) {
+      const cleanup = requestQuit(instance);
+      if (!cleanup) {
+        log(`    normal quit unavailable for ${instance.pid}; using force fallback`);
+        continue;
+      }
+      requested.add(instance.pid);
+      cleanups.push(cleanup);
+      log(`    requesting normal quit: ${instance.pid}`);
+    }
+    if (requested.size) await waitForExit(25_000, (proc) => requested.has(proc.pid));
+    // Re-scan: an exited parent must never be killed using the old PID snapshot.
+    const original = new Map(targets.map((proc) => [proc.pid, proc.command]));
+    for (const proc of listProcesses()) {
+      if (original.get(proc.pid) !== proc.command) continue;
+      log(`    taskkill /F /T ${proc.pid}: ${proc.command.slice(0, 180)}`);
+      forceKill(proc.pid);
+    }
+  } finally {
+    for (const cleanup of cleanups) cleanup();
+  }
 }
 
 function sleep(ms) {
@@ -1643,9 +1696,13 @@ async function main() {
       console.log('==> No running desktop dev processes were found for the requested replacement root.');
     } else {
       console.log(`==> Stopping ${targets.length} desktop dev process(es) from the requested replacement root...`);
-      for (const target of targets) {
-        console.log(`    kill ${target.pid}: ${target.command.slice(0, 180)}`);
-        killProcess(target.pid);
+      if (process.platform === 'win32') {
+        await stopWindowsDesktopDevProcesses(targets, replaceRunningRoot);
+      } else {
+        for (const target of targets) {
+          console.log(`    kill ${target.pid}: ${target.command.slice(0, 180)}`);
+          killProcess(target.pid);
+        }
       }
 
       const matchesReplacementRoot = (proc) => commandContainsPath(proc.command, replaceRunningRoot);
@@ -1682,9 +1739,13 @@ async function main() {
     console.log('==> No existing Cindy desktop dev processes found for this checkout.');
   } else {
     console.log(`==> Stopping ${targets.length} existing Cindy desktop dev process(es) from this checkout...`);
-    for (const target of targets) {
-      console.log(`    kill ${target.pid}: ${target.command.slice(0, 180)}`);
-      killProcess(target.pid);
+    if (process.platform === 'win32') {
+      await stopWindowsDesktopDevProcesses(targets, rootDir);
+    } else {
+      for (const target of targets) {
+        console.log(`    kill ${target.pid}: ${target.command.slice(0, 180)}`);
+        killProcess(target.pid);
+      }
     }
 
     // 等待/强杀同样限定在本 checkout —— 不带过滤器会把其他 checkout 仍在跑的

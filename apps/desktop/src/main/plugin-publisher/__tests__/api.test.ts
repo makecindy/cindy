@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { ServerApiError } from '../../serverApiClient.js';
+import { ServerApiError } from '../../serverApiClient.desktop.js';
 import {
   createUnknownFailureCodeReporter,
   PluginPublisherApi,

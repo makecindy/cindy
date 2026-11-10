@@ -27,7 +27,7 @@ vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => io.owner
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => io.realm }));
 vi.mock('../../device-link/index.js', () => ({ getRemoteLinkCloseEpoch: () => 0,
   getSelfDeviceId: () => io.self, remoteBackgroundInvoke: io.invoke }));
-vi.mock('../../device-link/settings-store.js', () => ({
+vi.mock('../../device-link/settings-store.desktop.js', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: io.remoteControl,
     revokedControllers: io.revokedControllers }),
 }));

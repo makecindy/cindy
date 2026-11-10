@@ -13,7 +13,7 @@ import {
   pluginInstallStoragePart,
   pluginNewInstallRelId,
 } from '../../shared/pluginIdentity.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { getActiveAppSession, activeOwnerScopeKey } from '../appSessionState.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';

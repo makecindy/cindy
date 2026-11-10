@@ -28,7 +28,7 @@ vi.mock('../../authManager.js', () => ({
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: vi.fn(() => 'https://voice.example.com'),
 }));
-vi.mock('../../serverApiClient.js', () => ({
+vi.mock('../../serverApiClient.desktop.js', () => ({
   ServerApiError,
   serverApiFetch,
 }));

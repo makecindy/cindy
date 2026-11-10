@@ -18,7 +18,7 @@
  */
 
 import { app, ipcMain, BrowserWindow, dialog } from 'electron';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';

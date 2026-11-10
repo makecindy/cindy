@@ -11,6 +11,29 @@ Webhook 服务的 `GET /api/v1/github` 可选返回 `prSubscriptions: true`、`d
 回滚客户端只会扩大为原仓库订阅，不丢弃连接。官方／自建 Device Link 协议和手机原生层均无变更。
 本地回归覆盖新旧能力组合、同仓库换 PR、跨区域过滤、旧 ACK 与新变化、部分接收失败后的独立重试。
 
+## 实验性 Host 网页适配层（2026-11-10，未发布）
+
+网页 shim 与显式 `CINDY_HOST_API` 桌面代理共用 `hostChannelContract`；这是客户端
+参数与返回形状的统一，不新增 HTTP 路径、认证方式、Device Link 帧或 relay 要求。
+`maker.resolveInteraction` 保留 preload 的 `{ accepted: boolean }`，不把请求成功的
+`ok` 当作回答已接受；`input.steer` 返回布尔值；`authRefresh` 只认认证状态，不认一般
+`ok`。旧 Host 已提供相应字段，新客户端仍可连接；普通桌面 IPC 实现保持原行为。
+消息查询保留可选 `before`，旧调用不传时保持默认。网页新增调用已有的任务改动摘要接口，
+不再把 `maker.listTurnChangeSets` 当作空占位；后端 API 不变。
+共享脚本仅在实验 Host 中编译和提供，未实现的网页写操作明确拒绝。
+接口与恢复验收见 [Host 维护计划](../host/maintenance-plan.md)。
+
+### 实验性 Host 事件恢复
+
+Host SSE v2 由 `protocol=2` 和 `x-cindy-event-protocol: 2` 双向确认，新增 start/ready
+控制帧携带进程运行标识、序号和恢复原因。只有同一运行且游标仍在历史窗口内才补收事件；
+重启或缺口必须读权威快照。旧客户端不请求 v2 时仍收到原事件格式，新客户端连接旧 Host
+时每次重连补读快照。浏览器和显式 Host 桌面客户端共用 `hostEventStream`，不各写一套解析器。
+
+连接恢复仅重试读取：不重发输入、不重放点击、不延长配对授权。renderer 的恢复读取须同时
+受连接、账号、任务窗口代次约束，不能让旧连接结果覆盖新状态。RPC/SSE 401 保留原页面并
+等待显式重新配对，恢复不以刷新页面或清空草稿为手段。普通桌面默认启动不安装 Host 连接处理器。
+
 ## 任务汇总与 ActivityKit Push（2026-11-10，未发布）
 
 官方 Device Link 新增同账号、设备绑定 Bearer 路由：`PUT /api/device-link/task-activity`
@@ -57,6 +80,12 @@ notification 对象绕过账号过滤。角标分支独立挂载，不放进 iOS
 授权，官方和自建中转均只透传既有 payload，无需服务端或 relay 升级。
 
 ## 供应商内多订阅账号（2026-11-07，未发布）
+
+Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号时，管理操作使用追加的
+`SUBSCRIPTION_CODEX_PROVIDER_AUTH` 错误码。新版控制端显示独立账号指引，旧控制端仍按通用账号失败呈现；
+新版连接旧宿主仍接受旧错误。账号视图可选追加 `authIssue: 'codex-provider-managed-auth'`，让新向导
+在首次检测时显示原因和独立账号入口；旧端忽略、缺省或未知值沿用原显示。沿用原 IPC 包，无新 channel、allowlist 或 relay 行为，
+官方及自建中转无需适配。错误只含固定诊断，不带供应商配置、目录、账号或 CLI 原始响应。
 
 同账号远控新增 `maker:subscription-accounts`（查看、添加、重连、取消、移出、策略）及
 `maker:subscription-pool:quota`（只读、无账号身份的池配额）。管理请求只接受内置供应商及
@@ -846,7 +875,9 @@ Renderer → Main 输入附带可选 `projectDir`，旧输入缺字段时回落�
 
 本机 Agent 工具的新建模式中，省略 `project_path` 继承来源归属，字符串选择已有项目，
 显式 `null` 创建不绑项目的任务；适配层必须保留缺省与 null 的区别。
-无法确定来源归属时明确失败，不以新执行目录猜测或登记项目。
+无法确定来源归属时明确失败，不以新执行目录登记项目。来源不绑项目且省略 `project_path` 时，
+宿主按请求的 `working_dir` 向上匹配最近的已登记可见项目（`resolveSessionProject`），匹配不到
+仍不绑项目；创建回执新增可选 `project_note`，旧调用方忽略即可。
 不绑项目且未传 `working_dir` 时复用既有托管目录创建流程；传目录或使用 worktree 也不改变归属。
 创建回执返回 `project_path`、实际 `working_dir` 与 `workspace_kind`；
 `list_projects` / `create_project` 保留 `working_dir` 并新增 `project_path` 回执。
@@ -1441,19 +1472,33 @@ schema、数据库或 Mobile 原生指纹。完整管理需要两端客户端更
 ## 实时生成速度
 
 既有 maker status 可选携带 `tokenSpeed`（`rate`、`average`、`tokens`、`elapsedMs`、
-`streaming`），由主机计算；Codex 使用真实输出用量与配对生成时长，最近三个有效区间按
-时长加权（包含请求后的首响应等待，排除工具与审批等待）。Claude Code / Pi 使用基于
-`pi-token-speed` 的流式文字／思考／所有工具参数估算，从首个内容块开始，工具调用生成
-结束即暂停。两种口径不能直接作为模型性能横向排名。收尾 `rate` 仍携带平均值以兼容旧端；
-新端只更新本轮平均，保留最近速度及曲线，不把最终校准当作新的速度样本。
+`streaming`），由主机计算。Claude Code、Codex、Pi 共用同一口径：**从每个请求的首字节起算的
+生成速度**，等待首字节、工具执行与审批不计入。流式内容用于实时读数，请求结束时供应商报告的
+真实输出（含思考／推理 token 数）替换估算并校准后续估算：
+
+- 正文与工具参数按文字估算（Claude Code 按字符，Codex 与 Pi 按词），比例随真实用量学习；
+- 思考按摘要文字或供应商给出的 token 估计折算到真实思考量；完全不流出的思考（Codex 推理）
+  按已完成请求测得的思考节奏以时间计；
+- 首字节之前已生成的内容（首包、整条到达的工具调用、报告了却从未流出的推理）不进入任何
+  速度，其生成时间按已测得的速度补回 `elapsedMs`，且不超过该请求等待首字节的时长；本轮尚未
+  测得速度时先以等待时长计，测得后替换。
+
+`rate` 是最近 5 秒（思考摘要为 30 秒）的速度，至少 3 秒的请求结束时取该请求的真实速度；
+工具执行或等待首字节期间 `streaming` 为 false。任意时刻 `tokens / elapsedMs` 等于 `average`，
+自行相除的旧端读到同一数值。收尾 `rate` 仍携带平均值以兼容旧端；新端只更新本轮平均，保留
+最近速度及曲线，不把最终校准当作新的速度样本。
+口径来自真实录制的流：改动计数、窗口或校准前后，用 `pnpm exec tsx scripts/token-speed-replay.ts`
+回放（不带参数时回放测试用的 Claude Code 与 Codex 录制，也可传入 `scripts/token-speed-capture.ts`
+新录的一轮），对照运行中显示值与真实用量之比。Pi 的供应商凭证只在应用内注入，无法在应用外
+录制，目前以会话记录回测计数，流式节奏尚未实测。
 仅用于显示，不参与费用、缓存或上下文计数。新客户端校验数值，非法即丢弃；旧主机省略时
 沿用原 usage 计数路径，旧客户端忽略新增字段。主机检测到挂起或时钟异常时，本轮后续帧不再携带该字段并标记
 `generationReliable: false`，客户端据此丢弃已保留的速度。无需服务端更新、新通道、权限或
 数据库 migration。
 
-Codex 的速度累计独立于计费桶：同一产品轮次中的原生接续保留已配对的输出与时长，
-用户新消息同时清零；原生 turn 的测速源计数从零开始。计时未增加但输出增加的区间不进入
-速度分子或分母，暂时发 `generationReliable: false`，下一个有效区间恢复；费用仍完整记账。
+Codex 的速度累计独立于计费桶：同一产品轮次中的原生接续保留已测得的输出与时长，
+用户新消息同时清零。工具占用轮次期间到达的输出（code mode、后台工具）没有自己的模型时长，
+不进入速度分子或分母，暂时发 `generationReliable: false`，下一个可配对的响应恢复；费用仍完整记账。
 旧客户端使用的 `outputTokens` / `generationDurationMs` 与速度快照同源，不能用计费桶
 补速度分子。若某个原生 turn 丢失过配对区间，其结束用量不附完整输出的生成时长。
 `tokenSpeed.peak` 是新增可选字段，保存产品轮次内已测最近速度的峰值；新端跨重连读取，
@@ -4228,6 +4273,10 @@ PC 同源 ghostPermissionItems 声明摘要投影并排除 tool，以请求 loca
 拒绝非空输入（`INVALID_PARAMS`）才进入既有 v1 快照路径；普通读取失败不得回退全量。
 旧控制端的空输入仍返回原有 v1 全量快照，旧 Host 的历史网络限制保留。推荐池由页面持有，
 切换列表、搜索及详情返回不重新请求；没有新增远程 channel、授权或 relay 配置。
+Host 访问 plugin-server 的按需读取接口（`catalog`、`defaults`、`resolve`、`recommendations`）可能先于
+服务端上线：只有旧服务端的「接口不存在」才回退到改版前的整份目录读取（`resolve` 404/405；`defaults`
+首页 404/405 或被旧路由当成插件 ID 返回 400；`catalog` / `recommendations` 的 400 先用 `defaults` 首页
+确认），按市场地址在进程内记住 10 分钟；网络、鉴权、5xx 与组织变更等错误照旧失败，不回退。
 `management:snapshot` 的可选 `projects` 字段投影目标 Host 的最近项目 ID、显示名及可选只读
 `path`，用于复用本机 Project Scope 的目录展示（含暂时不存在的最近目录，不按任务归档过滤）；
 控制端以 Host 生成的项目 ID 请求 `management:project-state`，返回该项目的禁用实例和
@@ -5117,6 +5166,8 @@ X 属于公开帖子接入，本轮不新增付费历史抓取；其已有推文
 
 ## 插件伙伴委派协议与回执（未发布）
 
+`targets.resolve` 增量接受 `{session:sessionId}`，与原 `{target:{kind,id}}` 互斥；返回同样的目标元数据。普通可用任务返回 task，伙伴唯一 canonical 主对话返回 bot 与伙伴 ID，其他伙伴会话返回 TARGET_UNAVAILABLE。旧调用、批准与持久数据不变；旧 Host 不支持新参数时返回 INVALID_PARAMS，不应自动改投其他目标。仅复用本机插件管子，无 device-link、官方或自建 relay 改动。
+
 agent.delegation 为可选独立能力，依赖 tasks + targets，只有 Host 确认的
 delegationCapabilityApproved 才授予；历史未知字段、旧 tasks/targets 批准不推断新授权。
 缺省不改变旧权限项、批准、配置或回执摘要；已安装的历史字段保留，不因新校验停用。
@@ -5373,3 +5424,39 @@ executionId 调用 `complete`；打开任务的无 executionId `accept` 只确�
 已接受任务的容量。完成回执在准入请求发出前捕获，响应丢失时也会尝试释放原轮次，失败沿原任务收尾路径重试；
 撤权后仍可释放原轮次，旧回执不能释放后续轮次。服务端记录取消标识，先到的释放回执可阻止迟到准入。
 这是本次备用执行能力的配套接口，需使用包含上述接线的 Desktop；不改变既有在线 O 的委派路径。
+
+### 异步问答按 Codex 原生终端保留（2026-11-10）
+
+复用现有 `ask_user_question` / `delivery=async` 和 `resolveInteraction` 通道。新执行端将
+同批问题拆成独立 requestId；保留原生问题 id（旧端仍可按题干回答），新批次累积。
+完成、失败、Stop 不撤掉未答题；关闭／清空或接受普通新输入才撤销。回答当前题保留其他题，
+空答案只跳过当前题。执行端收到回答后先由既有输入队列接纳，再返回 accepted；明确失败
+仍保留问题，结果未知不自动重放。权限、账户和远控来源检查沿用既有边界。
+桌面新端提供逐题切换，手机复用问题队列。旧桌面可能只显示最近一题，升级后通过原 pending
+快照恢复完整集合；新版查看端连接旧执行端仍接受旧的撤题事件及已编辑草稿补充，不推断
+旧宿主具备保留能力。不新增 IPC、relay 帧或要求中转升级。
+
+
+### 异步问题主动撤回（2026-11-10）
+
+三种 Harness 共用直接发现的 `cindy_helper.manage_user_questions`（Pi 同名直接工具）：
+`list` 返回当前任务逐题 request_id、题干和 pending／answer_in_flight；`withdraw` 必须给
+精确 ID 与用户语言的原因，返回逐题 withdrawn／not_pending／answer_in_flight。仅当前活跃
+Session 实例的已证实根代理可调用；不提供通用 call_tool 别名，不涉及同步问题或权限审批。
+既有 `interaction_dismissed` 增加 `reason=question_withdrawn` 和可选 `withdrawalReason`；
+持久化沿用 `status=cancelled`，只增加同名原因字段，无 schema migration。旧查看端仍按
+cancelled 处理，新端显示「无需再回答」及原因；当前正在编辑的本地草稿保留为补充发送入口。
+撤回不发送输入、不重开任务；已进入提交的答案优先。手机复用已确认撤卡的旧快照抑制。
+结束、超时不自动撤题；模型根据工具说明审查是否仍有价值，明确撤回已过时问题。
+
+共享 `ask_user_question_async` 的回执保持 request_id／status，增补逐题
+`questions: [{request_id, question}]` 和当前 `pending_count`，旧消费者可忽略。
+撤回仍须显式 request_ids；漏传不等于撤回全部。Codex 原生回执不改，可先 list 获取逐题 ID。
+清题来源由宿主判断；自动输入不会撤题。`SUPERSEDE_ASYNC_QUESTIONS` 是进程内 Symbol，
+不接受来自 Renderer／Device Link 的同名字符串参数，不新增跨端权限或协议字段。
+
+撤回原因限制 200 字符。未答失效的历史行显示题干与「未回答」；手机须等权威 pending
+快照后才判断持久 pending 行是否失效，未知状态保持隐藏，待答集合变化须使历史渲染缓存失效。
+撤回后保留本端草稿，选项转为可编辑的补充文本，不再提供原选项、跳过等旧动作。
+原轮次结束后才交付的回答在原回复格式外附带 `cindy_question_context`，提醒核对适用性与
+不要重复已完成工作；运行中同轮回答不添加。该上下文不是用户新授权，不新增 RPC 字段。

@@ -6,16 +6,14 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 // Regression: optional questions must be independently discoverable from login handoff.
 // Exercise real MCP listing/calls (unit); a choose-only host previously listed ask_owner.
-// Entry: tools/list and tools/call on the cindy_helper server. Choice cases preserve
-// (root-only, no call_tool alias, request-time identity); the handoff and
-// connect cases guard the 2026-10-30 incident where the agent never found
-// input handoff and a bad target only failed minutes later. Tier: unit.
+// Entry: tools/list and tools/call preserve root-only provenance, no call_tool alias,
+// and request-time identity. Handoff coverage lives in lizi_xdtHelperMcpServer.test.ts.
 
 const parse = (result: unknown) => JSON.parse((result as { content: Array<{ text: string }> }).content[0].text);
 
 async function connect(deps: XdtHelperMcpDeps, factoryKind: 'claude-code' | 'codex' | 'pi', getContext: () => LiziMcpSessionContext | undefined) {
   const server = createXdtHelperMcpServer(deps, { agentKind: factoryKind, workingDir: '', getSessionContext: getContext });
-  const client = new Client({ name: 'ask-owner-test', version: '1' });
+  const client = new Client({ name: 'async-question-test', version: '1' });
   const [ct, st] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(st), client.connect(ct)]);
   return { client, close: async () => { await client.close(); await server.close(); } };
@@ -29,7 +27,8 @@ describe.each(['claude-code', 'pi'] as const)('%s independent async question', (
       agentKind, workingDir: '/repo', sessionId: 'task-1', sessionInstanceId: 'instance-1',
       mcpCallerKind: 'root', mcpCallerAttested: true, remoteHostId: 'ssh-host',
     };
-    const ask = vi.fn(() => 'question-1');
+    const receipt = { request_id: 'question-1', questions: [{ request_id: 'question-1', question: 'Which scope?' }], pending_count: 1 };
+    const ask = vi.fn(() => receipt);
     const { client, close } = await connect({ askUserQuestionAsync: ask }, agentKind, () => context);
     const call = (args: Record<string, unknown>) => client.callTool({ name: 'ask_user_question_async', arguments: args });
     try {
@@ -38,7 +37,7 @@ describe.each(['claude-code', 'pi'] as const)('%s independent async question', (
       expect(prefix.tools.some((tool) => tool.name === 'ask_user_question_async')).toBe(true);
       const bypass = await client.callTool({ name: 'call_tool', arguments: { name: 'ask_user_question_async', args: { questions } } });
       expect(bypass.isError).toBe(true);
-      expect(parse(await call({ questions }))).toEqual({ ok: true, request_id: 'question-1', status: 'pending' });
+      expect(parse(await call({ questions }))).toEqual({ ok: true, ...receipt, status: 'pending' });
       expect(ask).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'task-1', remoteHostId: 'ssh-host' }), questions);
       context = { ...context!, sessionId: 'task-2', sessionInstanceId: 'instance-2' };
       const freeform = [{ question: 'What is the context?' }];
@@ -59,10 +58,10 @@ describe.each(['claude-code', 'pi'] as const)('%s independent async question', (
       // Tool arguments cannot supply the missing host provenance.
       expect((await call({ questions, mcpCallerKind: 'root', mcpCallerAttested: true })).isError).toBe(true);
       context = { ...context!, mcpCallerKind: 'root', mcpCallerAttested: true };
-      expect((await call({ questions: [...questions, ...questions] })).isError).toBe(true);
+      expect(parse(await call({ questions: [...questions, ...questions] })).status).toBe('pending');
       expect((await call({ questions, sessionId: 'spoofed' })).isError).toBe(true);
       expect((await call({})).isError).toBe(true);
-      expect(ask).toHaveBeenCalledTimes(2);
+      expect(ask).toHaveBeenCalledTimes(3);
       ask.mockImplementationOnce(() => { throw new Error('stale instance'); });
       expect(parse(await call({ questions })).errorCode).toBe('QUESTION_UNAVAILABLE');
       expect(await client.listTools()).toEqual(prefix);
@@ -77,7 +76,7 @@ it.each(['codex', 'claude-code'] as const)('keeps one choice entry per harness w
     agentKind: 'claude-code', workingDir: '/repo', sessionId: 'task', sessionInstanceId: 'instance',
     mcpCallerKind: 'root', mcpCallerAttested: true,
   };
-  const ask = vi.fn(() => 'question');
+  const ask = vi.fn(() => ({ request_id: 'question', questions: [{ request_id: 'question', question: 'Which scope?' }], pending_count: 1 }));
   const { client, close } = await connect({ askUserQuestionAsync: ask }, factoryKind, () => context);
   try {
     const claudePrefix = await client.listTools();
@@ -98,65 +97,37 @@ it.each(['codex', 'claude-code'] as const)('keeps one choice entry per harness w
     expect(await client.listTools()).toEqual(claudePrefix);
   } finally { await close(); }
 });
-
-describe('ask_owner fill / scan / connect', () => {
-  const root: LiziMcpSessionContext = {
-    agentKind: 'codex', workingDir: '/repo', sessionId: 'task', sessionInstanceId: 'instance',
-    mcpCallerKind: 'root', mcpCallerAttested: true,
-  };
-  const setup = async (context: () => LiziMcpSessionContext) => {
-    const start = vi.fn(async () => ({ ok: true as const, requestId: 'handoff-1' }));
-    const startImage = vi.fn(async () => ({ ok: true as const, requestId: 'handoff-2' }));
-    const grok = { start: vi.fn(async () => ({ status: 'pending' as const, verificationUrl: 'https://accounts.x.ai/device', userCode: 'WDJB-MJHT', expiresAt: 1 })), status: vi.fn(), cancel: vi.fn() };
-    const conn = await connect({ inputHandoff: { start, startImage }, grokLogin: grok }, 'codex', context);
-    const call = async (args: Record<string, unknown>) => parse(await conn.client.callTool({ name: 'ask_owner', arguments: args }));
-    return { ...conn, start, startImage, grok, call };
-  };
-
-  it.each(['codex', 'claude-code', 'pi'])('keeps %s handoff separate from ordinary questions', async (agentKind) => {
-    const { client, close } = await setup(() => ({ ...root, agentKind }));
-    try {
-      const tool = (await client.listTools()).tools.find((t) => t.name === 'ask_owner')!;
-      expect((tool.inputSchema.properties as Record<string, { enum?: string[] }>).kind.enum).toEqual(['fill', 'scan', 'connect']);
-      expect(tool.inputSchema.properties).not.toHaveProperty('questions');
-      // The old names keep working for saved calls but are no longer offered.
-      const auth = parse(await client.callTool({ name: 'list_tools', arguments: { category: 'auth' } }));
-      expect(auth.tools.map((t: { name: string }) => t.name)).toEqual(['get_grok_login_status', 'cancel_grok_device_login']);
-    } finally { await close(); }
-  });
-
-  it('routes each kind to the existing host flow and reports missing parts at once', async () => {
-    let context = root;
-    const { client, close, call, start, startImage, grok } = await setup(() => context);
-    try {
-      expect(await call({ kind: 'fill', title: 'Sign in to Feishu', target: { app: 'Google Chrome' } }))
-        .toMatchObject({ ok: true, request_id: 'handoff-1', status: 'pending' });
-      expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'task' }),
-        { purpose: 'Sign in to Feishu', target: { app: 'Google Chrome' } });
-      expect(await call({ kind: 'scan', title: 'Scan to sign in', image: 'shots/qr.png' }))
-        .toMatchObject({ ok: true, request_id: 'handoff-2' });
-      expect(startImage).toHaveBeenLastCalledWith(expect.anything(), { purpose: 'Scan to sign in', image: 'shots/qr.png' });
-      expect(await call({ kind: 'connect', service: 'grok' })).toMatchObject({ status: 'pending', userCode: 'WDJB-MJHT' });
-      expect(grok.start).toHaveBeenCalledTimes(1);
-
-      // Failures the host can see right away come back in this call.
-      start.mockResolvedValueOnce({ ok: false, errorCode: 'TARGET_IS_CINDY', message: 'That window is Cindy itself.' } as never);
-      expect(await call({ kind: 'fill', title: 'x', target: { app: 'Cindy' } })).toMatchObject({ ok: false, errorCode: 'TARGET_IS_CINDY' });
-      for (const args of [
-        { kind: 'fill', target: { app: 'Chrome' } },
-        { kind: 'fill', title: 'x' },
-        { kind: 'scan', title: 'x' },
-        { kind: 'scan', title: 'x', image: 'a.png', target: { app: 'Chrome' } },
-        { kind: 'connect' },
-      ]) expect((await call(args)).errorCode).toBe('INVALID_ARGS');
-      expect((await client.callTool({ name: 'ask_owner', arguments: { kind: 'choose', questions } })).isError).toBe(true);
-
-      context = { ...root, mcpCallerKind: 'descendant' };
-      expect((await call({ kind: 'fill', title: 'x', target: { app: 'Chrome' } })).errorCode).toBe('ROOT_REQUIRED');
-      context = { ...root, remoteHostId: 'ssh-host' };
-      expect((await call({ kind: 'scan', title: 'x', image: 'a.png' })).errorCode).toBe('CAPABILITY_NOT_AVAILABLE');
-      expect(start).toHaveBeenCalledTimes(2);
-      expect(startImage).toHaveBeenCalledTimes(1);
-    } finally { await close(); }
-  });
+// Regression: all native harnesses must find one root-scoped management entry;
+// generic aliases and child identities may not withdraw the parent's questions.
+// Entry: actual MCP server list/call; tier: unit.
+it.each(['codex', 'claude-code', 'pi'] as const)('%s discovers and calls scoped question management', async (agentKind) => {
+  let context: LiziMcpSessionContext = { agentKind, workingDir: '/repo', sessionId: 'task',
+    sessionInstanceId: 'instance', mcpCallerKind: 'root', mcpCallerAttested: true };
+  const manage = vi.fn(() => ({ questions: [{ request_id: 'q1', question: 'Useful?', status: 'pending' as const }] }));
+  const { client, close } = await connect({ manageUserQuestions: manage }, agentKind, () => context);
+  const call = async (args: Record<string, unknown>) => parse(await client.callTool({ name: 'manage_user_questions', arguments: args }));
+  try {
+    const prefix = await client.listTools();
+    expect(prefix.tools.some((t) => t.name === 'manage_user_questions')).toBe(true);
+    expect(await call({ action: 'list' })).toMatchObject({ ok: true, questions: [{ request_id: 'q1' }] });
+    await call({ action: 'withdraw', request_ids: ['q1'], reason: '已确认' });
+    expect(manage).toHaveBeenLastCalledWith(context, { action: 'withdraw', request_ids: ['q1'], reason: '已确认' });
+    expect(await call({ action: 'withdraw', request_ids: ['q1'] })).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    expect(await call({ action: 'withdraw', reason: '已确认' })).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    const tooLong = await client.callTool({ name: 'manage_user_questions',
+      arguments: { action: 'withdraw', request_ids: ['q1'], reason: '长'.repeat(201) } });
+    expect(tooLong.isError).toBe(true);
+    expect(await call({ action: 'list', request_ids: ['q1'] })).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    const alias = await client.callTool({ name: 'call_tool', arguments: { name: 'manage_user_questions', args: { action: 'list' } } });
+    expect(alias.isError).toBe(true);
+    for (const mcpCallerKind of ['descendant', 'unknown', undefined] as const) {
+      context = { ...context, mcpCallerKind };
+      expect(await call({ action: 'withdraw', request_ids: ['q1'], reason: '已确认' })).toMatchObject({ errorCode: 'ROOT_REQUIRED' });
+    }
+    expect(manage).toHaveBeenCalledTimes(2);
+    context = { ...context, mcpCallerKind: 'root' };
+    manage.mockImplementationOnce(() => { throw new Error('stale instance'); });
+    expect(await call({ action: 'list' })).toMatchObject({ errorCode: 'QUESTION_UNAVAILABLE' });
+    expect(await client.listTools()).toEqual(prefix);
+  } finally { await close(); }
 });

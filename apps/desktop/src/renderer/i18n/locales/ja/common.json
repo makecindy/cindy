@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件実行中",
       "limitAria": "{{name}} の同時実行数の上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同時 {{count}}",
       "weightAria": "{{name}} の重み",
       "weightOption": "重み {{weight}}",
       "assignAria": "{{name}} に割り当てる",
@@ -5263,6 +5263,15 @@
         "ariaLabel": "{{shortcut}}でメッセージを送信"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新しいタスクの既定の作業ディレクトリ",
+      "label": "このコンピューターの既定の作業ディレクトリ",
+      "hint": "プロジェクトを選んでいない新しいローカルタスクでは、このディレクトリを事前に選択します。明示的に選んだプロジェクト、対話、リモートコンピューターが優先されます。",
+      "unset": "未設定（ディレクトリを事前選択しない）",
+      "choose": "ディレクトリを選択",
+      "clear": "既定を解除",
+      "failed": "既定の作業ディレクトリを保存できませんでした。もう一度お試しください。"
+    },
     "linkOpen": {
       "title": "リンクを開く",
       "description": "メッセージ内のリンクの開き先を選びます。右クリックで、そのリンクだけ別の開き先を選べます。",
@@ -6101,7 +6110,7 @@
           "switchFromHost": "このコンピュータのリレーは停止し、参加しているデバイスは切断されます。",
           "switchFromMember": "このコンピュータは「{{name}}」から退出します。再参加するには、相手に新しい参加リンクを作ってもらう必要があります。",
           "switchConfirm": "切り替える",
-          "switchFromOfficial": "デバイス間のリモート操作は「{{name}}」経由になります。自分のリレーを使っている間は、スマホのシステム通知は使えません。プロバイダーの共有と共有タスクは引き続き Cindy 公式リレーを経由します。"
+          "switchFromOfficial": "デバイス間のリモート操作は「{{name}}」経由になります。自分のリレーを使っている間は、スマホのプッシュ通知は使えません。プロバイダー共有と共有タスクは引き続き Cindy 公式リレーを経由します。"
         },
         "dialog": {
           "steps": {
@@ -11388,6 +11397,9 @@
       "databaseDriver": "データベースドライバーを読み込めません。Cindy を更新または修復して再試行してください。",
       "databaseUnavailable": "元のデータベースを読み込めません。元データは変更されていません。修復後に再試行できます。",
       "fileTooLarge": "ファイルまたはインポート全体が読み取り上限を超えています。内容は切り捨てていません。",
+      "sourceFileTooLarge": "単一のファイルが読み取り上限を超えています。この項目は完全にはインポートされていません。",
+      "snapshotTooLarge": "今回読み取るデータの合計が上限を超えています。インポートは未完了です。",
+      "itemTooLarge": "この項目のファイルの合計が 128 MiB を超えています。この項目は完全にはインポートされていません。",
       "memoryMetadata": "メモリの概要またはタイトルが保存要件を満たしていません。",
       "memoryWrite": "メモリの保存または整合性確認に失敗しました。再試行できます。",
       "memoryChanged": "保存済みのメモリが変更されているため、上書きしていません。",
@@ -13007,6 +13019,11 @@
     "prevMessageJump": "前の質問へ移動：{{preview}}",
     "sessionLoading": "セッションを読み込み中",
     "askUserQuestion": {
+    "unanswered": "未回答",
+    "withdrawn": "回答は不要になりました",
+    "withdrawnDraft": "この質問への回答は不要になりました。\n{{reason}}\n下書きは保存されています。補足として送信できます。",
+    "sendSupplement": "補足を送信",
+
       "voice": {
         "hint": "選択肢の番号または名前を話してください。複数選択後は「選択を確定」と言ってください。",
         "freeTextHint": "回答を話し、内容を確認してから「選択を確定」と言って送信してください。",
@@ -19721,6 +19738,7 @@
     "lineNumbers": "行番号"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "現在の Codex プロバイダーでは ChatGPT アカウント情報を取得できません。プロバイダーの追加時に「$t(subscriptionAccounts.signIn.anotherAccount)」を選ぶと、別のフォルダーを使用できます。",
     "signIn": {
       "checking": "ローカルアカウントを確認中…",
       "detected": "ログイン済みのアカウントが見つかりました",
@@ -19769,5 +19787,15 @@
     "browserFallback": "GitHub を開いて Cindy にスターを付けてください。",
     "openGithub": "GitHub を開く",
     "openFailed": "GitHub を開けませんでした。"
+  },
+  "hostConnection": {
+    "connecting": "Cindy に接続中…",
+    "restoring": "タスクの状態を復元中…",
+    "retrying": "タスクの状態を再同期しています…",
+    "pairing": "接続の再認証が必要です",
+    "pairingHelp": "このページを開いたまま、Cindy Host を起動したターミナルでウェブ画面を開くコマンドを再実行してください。新しいページでペアリングし、このページに戻ってください。",
+    "keepDraft": "入力中の下書きは保持されます。接続が回復すると、タスクの状態が同期されます。",
+    "retry": "再接続",
+    "desktopAuthHelp": "起動用ターミナルで接続設定を更新してから、この実験的なクライアントを開き直してください。"
   }
 }

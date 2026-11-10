@@ -10,7 +10,7 @@ import { botProfiles, botSessionLinks, messages, sessions } from '../localDb/sch
 import { createMessage } from '../localDb/ipc/messages.js';
 import { visibleMessageText } from '../localDb/conversationSearch.pure.js';
 import { parseBotGroupThreadRouteKey } from '../../shared/botGroupChat.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import type { BotGroupTaskPostInput, BotGroupTaskPostResult } from './botGroupChatService.js';
 import { createTaskCompletionDelivery, type TaskCompletionOrigin, type TaskCompletionRecord } from './taskCompletionDelivery.js';
