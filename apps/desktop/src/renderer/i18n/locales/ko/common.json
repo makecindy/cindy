@@ -19719,6 +19719,7 @@
     "lineNumbers": "줄 번호"
   },
   "subscriptionAccounts": {
+    "unassigned": "계정 미배정",
     "signIn": {
       "checking": "로컬 계정 확인 중…",
       "detected": "로그인된 계정을 찾았습니다",

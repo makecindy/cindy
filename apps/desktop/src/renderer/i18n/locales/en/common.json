@@ -19791,6 +19791,7 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "unassigned": "Account not assigned",
     "signIn": {
       "checking": "Checking local account…",
       "detected": "Signed-in account found",

@@ -19719,6 +19719,7 @@
     }
   },
   "subscriptionAccounts": {
+    "unassigned": "账号待定",
     "signIn": {
       "checking": "正察本机账号…",
       "detected": "已有账号登录",

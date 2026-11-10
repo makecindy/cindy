@@ -19978,6 +19978,7 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "unassigned": "Conta não atribuída",
     "signIn": {
       "checking": "Verificando a conta local…",
       "detected": "Conta conectada encontrada",

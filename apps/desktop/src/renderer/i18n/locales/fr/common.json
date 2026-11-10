@@ -19978,6 +19978,7 @@
     "lineNumbers": "Numéros de ligne"
   },
   "subscriptionAccounts": {
+    "unassigned": "Compte non attribué",
     "signIn": {
       "checking": "Vérification du compte local…",
       "detected": "Compte connecté détecté",

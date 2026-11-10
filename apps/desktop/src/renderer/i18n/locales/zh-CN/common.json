@@ -19719,6 +19719,7 @@
     "lineNumbers": "行号"
   },
   "subscriptionAccounts": {
+    "unassigned": "账号待分配",
     "signIn": {
       "checking": "正在检测本机账号…",
       "detected": "检测到已登录账号",

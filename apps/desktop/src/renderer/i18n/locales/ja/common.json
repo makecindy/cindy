@@ -19719,6 +19719,7 @@
     "lineNumbers": "行番号"
   },
   "subscriptionAccounts": {
+    "unassigned": "アカウント未割り当て",
     "signIn": {
       "checking": "ローカルアカウントを確認中…",
       "detected": "ログイン済みのアカウントが見つかりました",

@@ -12,6 +12,7 @@ import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-lin
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage';
 import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
+import type { SubscriptionPoolView } from '../../shared/subscriptionAccounts';
 
 // #8010: quota reads also consult the controller identity. These component
 // fixtures have no auth host; keep its app bootstrap outside the mocked i18n.
@@ -131,6 +132,113 @@ afterEach(() => {
 });
 
 describe('model source second line', () => {
+  // #9711 (unit): the production menu reader used the paused native Pro account
+  // even when the only assignable pool account was Max. Existing tests only
+  // exercised the default-account usage API, not a configured pool or its changes.
+  it('uses one assignable draft account and invalidates it when the pool changes', async () => {
+    const usage = (used: number) => ({ sevenDay: { utilization: used, resetsAt: now / 1000 + 86400 } });
+    reads.claudeSnapshot = { ...usage(93), subscriptionType: 'pro' };
+    let pool: SubscriptionPoolView = {
+      providerId: 'anthropic', configured: true, strategy: 'round',
+      accounts: [
+        { id: 'default', identity: 'a@example.test', plan: 'pro', paused: true, status: 'ready', running: 0, limit: 4, weight: 1, directory: '', usage: { claude: usage(93) } },
+        { id: 'b', identity: 'b@example.test', plan: 'max', paused: false, status: 'ready', running: 0, limit: 4, weight: 1, directory: '', usage: { claude: usage(0) } },
+      ],
+    };
+    let changed: ((event: { providerId: string }) => void) | undefined;
+    const unsubscribe = vi.fn();
+    const command = vi.fn(async () => pool);
+    Object.assign(window, { electronAPI: { subscriptionAccounts: {
+      command, onChanged: (callback: typeof changed) => { changed = callback; return unsubscribe; },
+    } } });
+    const view = render(
+      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null, previewSubscriptionPool: true }}>
+        <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
+      </ModelSourceUsageProvider>,
+    );
+    expect(view.container.textContent).not.toContain('Pro');
+    await act(async () => {});
+    expect(view.container.textContent).toContain('b@example.test · Max');
+    expect(view.container.textContent).toContain('100%');
+    expect(view.container.textContent).not.toContain('a@example.test');
+    expect(command).toHaveBeenCalledTimes(1);
+    // Pausing B removes its identity, plan and quota together, before the read returns.
+    pool = { ...pool, accounts: pool.accounts.map(account => ({ ...account, paused: true })) };
+    act(() => changed?.({ providerId: 'anthropic' }));
+    expect(view.container.textContent).not.toContain('b@example.test');
+    await act(async () => {});
+    expect(view.container.textContent).toContain('subscriptionAccounts.unassigned');
+    expect(view.container.textContent).not.toMatch(/Pro|Max|%|@/);
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it.each(['multiple', 'signed-out', 'unavailable', 'limited', 'busy', 'unknown-identity'] as const)(
+    'keeps an unassigned draft pool honest when %s', async (state) => {
+      reads.claudeSnapshot = { subscriptionType: 'pro', sevenDay: { utilization: 93 } };
+      const account = { id: 'b', identity: state === 'unknown-identity' ? '' : 'b@example.test', plan: 'max', paused: false,
+        status: state === 'signed-out' || state === 'unavailable' || state === 'limited' ? state : 'ready',
+        running: state === 'busy' ? 4 : 0, limit: 4, weight: 1, directory: '',
+        usage: { claude: { sevenDay: { utilization: 0 } } } };
+      const command = vi.fn().mockResolvedValue({ providerId: 'anthropic', configured: true,
+        accounts: state === 'multiple' ? [account, { ...account, id: 'c', identity: 'c@example.test' }] : [account] });
+      Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
+      const view = render(
+        <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null, previewSubscriptionPool: true }}>
+          <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
+        </ModelSourceUsageProvider>,
+      );
+      await act(async () => {});
+      expect(view.container.textContent).toBe('Claude · subscriptionAccounts.unassigned');
+      expect(reads.claude).not.toHaveBeenCalledWith(true, 'anthropic');
+    },
+  );
+
+  it('ignores superseded pool reads and never restores the native account on read failure', async () => {
+    let finish!: (pool: SubscriptionPoolView) => void;
+    const command = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockRejectedValue(new Error('unavailable'));
+    let changed!: (event: { providerId: string }) => void;
+    Object.assign(window, { electronAPI: { subscriptionAccounts: {
+      command, onChanged: (callback: typeof changed) => { changed = callback; return () => {}; },
+    } } });
+    const view = render(
+      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null, previewSubscriptionPool: true }}>
+        <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
+      </ModelSourceUsageProvider>,
+    );
+    await act(async () => { changed({ providerId: 'anthropic' }); });
+    await act(async () => { finish({ providerId: 'anthropic', configured: false, strategy: 'round', accounts: [] }); });
+    expect(view.container.textContent).toBe('Claude · subscriptionAccounts.unassigned');
+    expect(command).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves existing task and remote readers and falls back only for an unconfigured local pool', async () => {
+    reads.claudeSnapshot = { subscriptionType: 'pro', sevenDay: { utilization: 93 } };
+    reads.remoteClaude.mockReturnValue({ subscriptionType: 'max', sevenDay: { utilization: 40 } });
+    const command = vi.fn().mockResolvedValue({ providerId: 'anthropic', configured: false, accounts: [] });
+    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
+    const menu = (deviceId: string | null, previewSubscriptionPool: boolean) => (
+      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId, previewSubscriptionPool }}>
+        <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
+      </ModelSourceUsageProvider>
+    );
+    const view = render(menu(null, false));
+    expect(view.container.textContent).toContain('a@example.test · Pro');
+    expect(view.container.textContent).toContain('7%');
+    expect(command).not.toHaveBeenCalled();
+    view.rerender(menu('other-device', true));
+    expect(view.container.textContent).toContain('Max');
+    expect(view.container.textContent).toContain('60%');
+    expect(command).not.toHaveBeenCalled();
+    view.rerender(menu(null, true));
+    expect(view.container.textContent).not.toContain('a@example.test');
+    await act(async () => {});
+    expect(view.container.textContent).toContain('a@example.test · Pro');
+    expect(view.container.textContent).toContain('7%');
+    expect(command).toHaveBeenCalledExactlyOnceWith({ action: 'read', providerId: 'anthropic' });
+  });
+
   // §7.5: model rows do not read shared subscription quota. E2E found this
   // forbidden IPC after selecting a share; exercise the real Claude mirror (unit).
   it('does not invoke device usage when browsing a shared directory', async () => {

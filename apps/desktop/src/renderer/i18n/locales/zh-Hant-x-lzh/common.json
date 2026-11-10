@@ -19719,6 +19719,7 @@
     }
   },
   "subscriptionAccounts": {
+    "unassigned": "帳號待定",
     "signIn": {
       "checking": "正察本機帳號…",
       "detected": "已有帳號登入",

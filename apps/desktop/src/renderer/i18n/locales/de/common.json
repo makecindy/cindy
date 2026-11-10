@@ -19791,6 +19791,7 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "unassigned": "Konto nicht zugewiesen",
     "signIn": {
       "checking": "Lokales Konto wird geprüft…",
       "detected": "Angemeldetes Konto gefunden",
