@@ -132,9 +132,12 @@ PR #101 之后，Orca 的 main 侧业务由独立 service 承接，`register.ts`
 
 归档释放 Worker 名额，但不释放 team 内的 label：`workers` / `worker_count` 只投影活动任务，
 `get_workspace_info.reserved_labels` 则列出当前 active team 的持久标签及其 `worker_id`、
-`session_id`、`role`、`session_status`（含 archived / deleted；历史任务行缺失时为 null）。
+`session_id`、`role`、`session_status`（含 archived / deleted；历史任务行缺失时为 null），
+每次最多返回 100 条。`reserved_labels_complete=false` 表示摘要未列完，不能据此认定标签未占用；
+可传 `reserved_label` 不区分大小写精确查询候选名，`reserved_label_query` 标明所查标签，
+完整性标记只针对该次查询。成功结果（含无活动团队）自带 `scope=lead-host-current-team`。
 因此活动 Worker 为 0 不代表标签可复用。该字段仅用于发现占名，不将归档 Worker 当作可派发目标，
-不唤醒 runtime、不读历史正文；旧宿主缺少该字段时保持缺省，不能解释为空。
+不唤醒 runtime、不读历史正文；旧宿主缺少标签或完整性／筛选字段时保持缺省，不能解释为空或查询已完整执行。
 `create_worker` / `create_workers` 的 `DUPLICATE_LABEL` 说明归档仍占名，并指向此字段：
 用户要求重新创建时保持 role、换未使用的 label，无需覆盖旧 Worker 或更换 team。
 首次能力索引的 `collab-mode` 与 `get_workspace_info` 工具描述也必须说明历史占名和
@@ -143,6 +146,8 @@ Lead 所属电脑的当前团队范围，让 Agent 在创建前即可发现查�
 实现见 `orcaTeamStore.ts` 的 `listWorkerLabelsByTeam`、`orcaDiagnostics.ts`、
 `orcaWorkerCreationService.ts` 与 `packages/lizi-mcps/src/orca/server.ts`；回归见对应 store、
 diagnostics、creation service 测试及 `packages/lizi-mcps/src/__tests__/sessionContext.test.ts`。
+普通任务取消归档的身份、原生历史引用与广播由 `localDb/ipc/__tests__/sessionsUpdate.test.ts`
+经生产 `patchSessionMetaInDb` 入口验证，不以直接 SQL 修改状态替代生命周期验证。
 
 排队消息控制 6 工具让 Lead 在消息被 worker 消费前管理自己发出的排队消息：`send_to_worker` / `create_worker`（initial_task）在 `wakeKind='queued'` 时回传 `queued_message_id`（coordinator 队列内的 clientId），Lead 可据此查看工作态和完整队列、整条改写、撤回、原子合并连续的 Lead 消息、转为插话或调整顺序。`get_worker_queue_status` / `steer_queued_message` / `move_queued_message` 省略 `worker_id` 时作用于调用方自己的队列（Lead 忙时 Worker 回报排在这里）。实现走 `OrcaTeamService.listWorkerQueuedMessages / updateWorkerQueuedMessage / cancelWorkerQueuedMessage / mergeWorkerQueuedMessages / steerWorkerQueuedMessage / moveWorkerQueuedMessage`，语义约束见「协同运行时行为契约 · 消息派发与 auto-bridge」第 1b、6–9 条。
 

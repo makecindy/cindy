@@ -281,7 +281,7 @@ export interface OrcaMcpDeps {
   /** 列出 agent 可用 model 清单。 */
   listAvailableModels: ListAvailableModelsDeps['listAvailableModels'];
   /** 只读诊断：列出当前 Orca workflow 与 worker sessions。 */
-  getWorkspaceInfo: (params: { leadSessionId: string }) => Promise<
+  getWorkspaceInfo: (params: { leadSessionId: string; reservedLabel?: string }) => Promise<
     ControlResult<OrcaWorkspaceInfo, 'LEAD_NOT_SUPPORTED'>
   >;
   /** 只读诊断：读取 worker 当前状态。 */
@@ -295,6 +295,7 @@ export interface OrcaMcpDeps {
 }
 
 export interface OrcaWorkspaceInfo {
+  scope?: 'lead-host-current-team';
   workflow: {
     workflow_id: string;
     lead_session_id: string;
@@ -302,7 +303,7 @@ export interface OrcaWorkspaceInfo {
   } | null;
   ui_capacity: number;
   worker_count: number;
-  /** Persisted label owners, including archived/deleted tasks; absent on older hosts. */
+  /** Bounded persisted label owners, including archived/deleted tasks; absent on older hosts. */
   reserved_labels?: Array<{
     label: string | null;
     worker_id: string;
@@ -310,6 +311,9 @@ export interface OrcaWorkspaceInfo {
     role: string;
     session_status: string | null;
   }>;
+  /** Absent on older hosts: neither completeness nor label filtering is established. */
+  reserved_labels_complete?: boolean;
+  reserved_label_query?: string | null;
   workers: Array<{
     worker_id: string;
     session_id: string;
@@ -449,19 +453,25 @@ function registerOrcaDiagnosticTools(
     name: 'get_workspace_info',
     category: 'control',
     description:
-      'List the current Lead\'s Orca team and active worker sessions on the Lead\'s host computer, including whether each worker queue is paused. reserved_labels lists persisted label owners and task statuses, including archived/deleted tasks; archived labels stay reserved, so recreate with the same role and an unused label. Older hosts may omit reserved_labels. owns_worktree is true only for a Worker-owned checkout recycled on archive; worktree then includes its path and branch. Inheriting the Lead directory does not grant ownership. execution_devices lists other same-account computers a worker can run on (pass device_id as create_worker.execution_device_id only when supported=true); workers running on another computer carry execution_device.',
-    inputShape: {},
-    handler: async () => {
+      'List the current Lead\'s Orca team and active worker sessions on the Lead\'s host computer, including whether each worker queue is paused. reserved_labels lists up to 100 persisted label owners and task statuses, including archived/deleted tasks; archived labels stay reserved, so recreate with the same role and an unused label. When reserved_labels_complete=false, use reserved_label to check a candidate label case-insensitively. reserved_label_query identifies the filter; this read is not a reservation. Older hosts may omit labels or completeness/filter fields; absence does not prove a label is unused. owns_worktree is true only for a Worker-owned checkout recycled on archive; worktree then includes its path and branch. Inheriting the Lead directory does not grant ownership. execution_devices lists other same-account computers a worker can run on (pass device_id as create_worker.execution_device_id only when supported=true); workers running on another computer carry execution_device.',
+    inputShape: {
+      reserved_label: z.string().trim().min(1).max(32).optional().describe('精确查询候选 label 的历史占用，不区分大小写；省略时返回有界摘要。'),
+    },
+    handler: async ({ reserved_label }) => {
       const ctx = resolveLeadSessionContext(getSessionContext);
       if (!ctx) return errorPayload('LEAD_NOT_SUPPORTED', '当前 session 类型不支持作为 Lead。');
-      const result = await deps.getWorkspaceInfo({ leadSessionId: ctx.sessionId });
+      const result = await deps.getWorkspaceInfo({ leadSessionId: ctx.sessionId,
+        ...(reserved_label === undefined ? {} : { reservedLabel: reserved_label }) });
       if (!result.ok) return controlErrorPayload(result);
       return okPayload({
+        scope: result.scope ?? 'lead-host-current-team',
         workflow: result.workflow,
         ui_capacity: result.ui_capacity,
         worker_count: result.worker_count,
         workers: result.workers,
         ...(result.reserved_labels ? { reserved_labels: result.reserved_labels } : {}),
+        ...(result.reserved_labels_complete === undefined ? {} : { reserved_labels_complete: result.reserved_labels_complete }),
+        ...(result.reserved_label_query === undefined ? {} : { reserved_label_query: result.reserved_label_query }),
         ...(result.execution_devices ? { execution_devices: result.execution_devices } : {}),
       });
     },

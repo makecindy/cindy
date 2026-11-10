@@ -1,7 +1,7 @@
 import type { WorkerOwnedWorktree } from '../../shared/orca-worker-project';
 import type { AgentKind } from '@cindy/maker-core';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
-import type { OrcaWorkerLabelRecord } from '../localDb/orcaTeamStore.js';
+import type { OrcaWorkerLabelLookup } from '../localDb/orcaTeamStore.js';
 
 export interface OrcaDiagnosticTeamSnapshot {
   id: string;
@@ -118,7 +118,7 @@ function redactTurnErrorSummary(summary: OrcaTurnErrorSummary): OrcaTurnErrorSum
 export interface OrcaDiagnosticsDeps {
   readActiveTeam(leadSessionId: string): Promise<OrcaDiagnosticTeamSnapshot | null>;
   listWorkersByLead(leadSessionId: string): Promise<OrcaDiagnosticWorkerSnapshot[]>;
-  listWorkerLabelsByTeam(teamId: string): Promise<OrcaWorkerLabelRecord[]>;
+  listWorkerLabelsByTeam(teamId: string, label?: string): Promise<OrcaWorkerLabelLookup>;
   getSessionStatus(sessionId: string): string;
   getWorkerFlowStatus(sessionId: string): Promise<{
     isWorking: boolean;
@@ -212,7 +212,9 @@ async function findDiagnosticWorker(
 export async function getOrcaWorkspaceInfoReadOnly(
   deps: OrcaDiagnosticsDeps,
   leadSessionId: string,
+  reservedLabel?: string,
 ): Promise<OrcaDiagnosticResult<{
+  scope: 'lead-host-current-team';
   workflow: {
     workflow_id: string;
     lead_session_id: string;
@@ -221,7 +223,7 @@ export async function getOrcaWorkspaceInfoReadOnly(
   ui_capacity: number;
   worker_count: number;
   workers: OrcaWorkerSummary[];
-  /** All persisted label owners; archived/deleted tasks stay out of workers and worker_count. */
+  /** Bounded persisted label owners; archived/deleted tasks stay out of active counts. */
   reserved_labels: {
     label: string | null;
     worker_id: string;
@@ -229,24 +231,31 @@ export async function getOrcaWorkspaceInfoReadOnly(
     role: string;
     session_status: string | null;
   }[];
+  reserved_labels_complete: boolean;
+  /** Null means an unfiltered summary; otherwise completeness applies to this exact label. */
+  reserved_label_query: string | null;
 }>> {
   const active = await deps.readActiveTeam(leadSessionId);
   if (!active) {
     return {
       ok: true,
+      scope: 'lead-host-current-team',
       workflow: null,
       ui_capacity: 1,
       worker_count: 0,
       workers: [],
       reserved_labels: [],
+      reserved_labels_complete: true,
+      reserved_label_query: reservedLabel ?? null,
     };
   }
   const [workers, labels] = await Promise.all([
     readDiagnosticWorkers(deps, leadSessionId),
-    deps.listWorkerLabelsByTeam(active.id),
+    deps.listWorkerLabelsByTeam(active.id, reservedLabel),
   ]);
   return {
     ok: true,
+    scope: 'lead-host-current-team',
     workflow: {
       workflow_id: active.id,
       lead_session_id: active.leadSessionId,
@@ -255,13 +264,15 @@ export async function getOrcaWorkspaceInfoReadOnly(
     ui_capacity: 1,
     worker_count: workers.length,
     workers,
-    reserved_labels: labels.map((entry) => ({
+    reserved_labels: labels.items.map((entry) => ({
       label: entry.label,
       worker_id: entry.workerId,
       session_id: entry.sessionId,
       role: entry.role,
       session_status: entry.sessionStatus,
     })),
+    reserved_labels_complete: labels.complete,
+    reserved_label_query: reservedLabel ?? null,
   };
 }
 

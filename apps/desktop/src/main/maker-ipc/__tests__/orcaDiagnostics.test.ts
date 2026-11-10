@@ -40,7 +40,7 @@ function createDeps(overrides: Partial<OrcaDiagnosticsDeps> = {}): OrcaDiagnosti
         workingDir: '/repo',
       },
     }]),
-    listWorkerLabelsByTeam: vi.fn(async () => []),
+    listWorkerLabelsByTeam: vi.fn(async () => ({ items: [], complete: true })),
     getSessionStatus: vi.fn((sessionId) => sessionId === 'worker-session-1' ? 'not_running' : 'active'),
     getWorkerFlowStatus: vi.fn(async () => ({
       isWorking: false,
@@ -61,21 +61,24 @@ describe('orca diagnostics read-only helpers', () => {
   it('exposes archived label owners separately from available Workers', async () => {
     const deps = createDeps({
       listWorkersByLead: vi.fn(async () => []),
-      listWorkerLabelsByTeam: vi.fn(async () => [{
+      listWorkerLabelsByTeam: vi.fn(async () => ({ items: [{
         workerId: 'worker-old', sessionId: 'session-old', label: 'reviewer',
         role: 'reviewer', sessionStatus: 'archived',
-      }]),
+      }], complete: true })),
     });
 
     await expect(getOrcaWorkspaceInfoReadOnly(deps, 'lead-1')).resolves.toMatchObject({
       worker_count: 0,
       workers: [],
+      scope: 'lead-host-current-team',
+      reserved_labels_complete: true,
+      reserved_label_query: null,
       reserved_labels: [{
         worker_id: 'worker-old', session_id: 'session-old', label: 'reviewer',
         role: 'reviewer', session_status: 'archived',
       }],
     });
-    expect(deps.listWorkerLabelsByTeam).toHaveBeenCalledWith('team-1');
+    expect(deps.listWorkerLabelsByTeam).toHaveBeenCalledWith('team-1', undefined);
     expect(deps.getWorkerFlowStatus).not.toHaveBeenCalled();
     expect(deps.getSessionStatus).not.toHaveBeenCalled();
   });
@@ -95,11 +98,30 @@ describe('orca diagnostics read-only helpers', () => {
       worker_count: 0,
       workers: [],
       reserved_labels: [],
+      scope: 'lead-host-current-team',
+      reserved_labels_complete: true,
+      reserved_label_query: null,
     });
 
     expect(deps.readActiveTeam).toHaveBeenCalledWith('lead-without-active-team');
     expect(deps.listWorkersByLead).not.toHaveBeenCalled();
     expect(deps.listWorkerLabelsByTeam).not.toHaveBeenCalled();
+  });
+
+  // PR #8801: a partial history is not proof that a candidate label is unused.
+  // Unit tier; verify the production projection preserves both the query and its
+  // completeness, which the previous archived-label-only case did not cover.
+  it('reports incomplete history and forwards a candidate label lookup', async () => {
+    const deps = createDeps({
+      listWorkerLabelsByTeam: vi.fn(async (_teamId, label) => ({ items: [], complete: !!label })),
+    });
+    await expect(getOrcaWorkspaceInfoReadOnly(deps, 'lead-1')).resolves.toMatchObject({
+      reserved_labels: [], reserved_labels_complete: false, reserved_label_query: null,
+    });
+    await expect(getOrcaWorkspaceInfoReadOnly(deps, 'lead-1', 'candidate')).resolves.toMatchObject({
+      reserved_labels: [], reserved_labels_complete: true, reserved_label_query: 'candidate',
+    });
+    expect(deps.listWorkerLabelsByTeam).toHaveBeenLastCalledWith('team-1', 'candidate');
   });
 
   it('matches legacy workspace diagnostic fields', async () => {

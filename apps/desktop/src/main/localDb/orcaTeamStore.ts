@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron';
-import { and, desc, eq, gt, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
 import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
@@ -511,8 +511,11 @@ export async function listWorkersByLead(
 }
 
 /** Persisted label owners, including archived/deleted tasks that still occupy the unique index. */
-export async function listWorkerLabelsByTeam(teamId: string): Promise<OrcaWorkerLabelRecord[]> {
-  return getDbClient().drizzle
+export async function listWorkerLabelsByTeam(teamId: string, label?: string): Promise<OrcaWorkerLabelLookup> {
+  // Bound the diagnostic payload, not the team's capacity or retained history.
+  // One extra row distinguishes a complete result from a truncated summary.
+  const limit = 100;
+  const rows = await getDbClient().drizzle
     .select({
       workerId: orcaWorkers.id,
       sessionId: orcaWorkers.sessionId,
@@ -522,8 +525,19 @@ export async function listWorkerLabelsByTeam(teamId: string): Promise<OrcaWorker
     })
     .from(orcaWorkers)
     .leftJoin(sessions, eq(sessions.id, orcaWorkers.sessionId))
-    .where(and(eq(orcaWorkers.teamId, teamId), isNotNull(orcaWorkers.label)))
-    .orderBy(orcaWorkers.createdAt, orcaWorkers.id);
+    .where(and(
+      eq(orcaWorkers.teamId, teamId),
+      isNotNull(orcaWorkers.label),
+      label === undefined ? undefined : sql`lower(${orcaWorkers.label}) = lower(${label})`,
+    ))
+    .orderBy(orcaWorkers.createdAt, orcaWorkers.id)
+    .limit(limit + 1);
+  return { items: rows.slice(0, limit), complete: rows.length <= limit };
+}
+
+export interface OrcaWorkerLabelLookup {
+  items: OrcaWorkerLabelRecord[];
+  complete: boolean;
 }
 
 export interface OrcaWorkerLabelRecord {

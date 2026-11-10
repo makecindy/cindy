@@ -2924,7 +2924,7 @@ interface OrcaCollabService {
       }
     | { ok: false; errorCode: string; message: string }
   >;
-  getWorkspaceInfo: (params: { leadSessionId: string }) => Promise<
+  getWorkspaceInfo: (params: { leadSessionId: string; reservedLabel?: string }) => Promise<
     | {
         ok: true;
         workflow: { workflow_id: string; lead_session_id: string; status: string } | null;
@@ -18442,9 +18442,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
       }
     },
-    getWorkspaceInfo: async ({ leadSessionId }) => {
+    getWorkspaceInfo: async ({ leadSessionId, reservedLabel }) => {
       try {
-        const info = await getOrcaWorkspaceInfoReadOnly(createOrcaDiagnosticsDeps(), leadSessionId);
+        const info = await getOrcaWorkspaceInfoReadOnly(createOrcaDiagnosticsDeps(), leadSessionId, reservedLabel);
         if (!info.ok || !orcaRemoteWorkersForHost) return info;
         // 运行设备目录只给 Lead 选 execution_device_id 用；探测失败不影响其余诊断。
         const devices = await orcaRemoteWorkersForHost.listExecutionDevices().catch(() => []);

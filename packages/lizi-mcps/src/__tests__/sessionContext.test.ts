@@ -1835,6 +1835,33 @@ describe('dynamic lizi MCP session context', () => {
     });
   });
 
+  // PR #8801, unit: querying a label must reach the host and identify the result's
+  // scope/completeness. Legacy or empty-team replies must not imply global absence.
+  it.each(['query', 'legacy', 'empty-team'] as const)('preserves workspace lookup boundaries for %s', async kind => {
+    const deps = createOrcaDeps({
+      getWorkspaceInfo: vi.fn(async () => ({
+        ok: true as const, workflow: null, ui_capacity: 1, worker_count: 0, workers: [],
+        ...(kind === 'legacy' ? {} : { reserved_labels: [], reserved_labels_complete: true,
+          reserved_label_query: kind === 'query' ? 'reviewer-101' : null }),
+      })),
+    });
+    const server = createOrcaMcpServer(deps, { agentKind: 'codex', workingDir: '/repo', sessionId: 'lead-1' });
+    const result = parse(await tools(server).get_workspace_info.handler(
+      kind === 'query' ? { reserved_label: 'reviewer-101' } : {},
+    ) as never);
+    expect(result).toMatchObject({ ok: true, scope: 'lead-host-current-team', workflow: null });
+    if (kind === 'legacy') {
+      expect(result).not.toHaveProperty('reserved_labels');
+      expect(result).not.toHaveProperty('reserved_labels_complete');
+      expect(result).not.toHaveProperty('reserved_label_query');
+    } else {
+      expect(result).toMatchObject({ reserved_labels: [], reserved_labels_complete: true,
+        reserved_label_query: kind === 'query' ? 'reviewer-101' : null });
+    }
+    expect(deps.getWorkspaceInfo).toHaveBeenCalledWith({ leadSessionId: 'lead-1',
+      ...(kind === 'query' ? { reservedLabel: 'reviewer-101' } : {}) });
+  });
+
   it('routes cindy_orca diagnostic tools through the current lead session context', async () => {
     // Unit regression: the host can report historical label owners, but the MCP
     // projection used to drop them. Existing active-worker assertions missed this.
@@ -1844,6 +1871,8 @@ describe('dynamic lizi MCP session context', () => {
       getWorkspaceInfo: vi.fn(async () => ({
         ok: true as const,
         reserved_labels: reservedLabels,
+        reserved_labels_complete: true,
+        reserved_label_query: null,
         workflow: {
           workflow_id: 'team-1',
           lead_session_id: 'codex-lead-session',
@@ -1923,6 +1952,9 @@ describe('dynamic lizi MCP session context', () => {
           ui_capacity: 1,
           worker_count: 1,
           reserved_labels: reservedLabels,
+          scope: 'lead-host-current-team',
+          reserved_labels_complete: true,
+          reserved_label_query: null,
           workers: [{
             worker_id: 'worker-1',
             session_id: 'worker-session-1',

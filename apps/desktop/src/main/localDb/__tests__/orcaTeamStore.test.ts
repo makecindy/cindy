@@ -58,7 +58,7 @@ describe('orcaTeamStore', () => {
   // Regression: archived label owners were absent from workspace diagnostics, so a
   // Lead with zero Workers could not plan a replacement. Existing archive tests only
   // checked status/broadcasts. Unit tier, real in-memory SQLite + production store and
-  // diagnostic: archive two reviewers, discover occupied labels, recreate, then restore.
+  // diagnostic: archive two reviewers, discover occupied labels, then recreate.
   it('discovers archived labels and recreates without changing the original Worker identities', async () => {
     const client = createTestDbClient();
     setCurrentDbClient(client, 'test-user');
@@ -108,9 +108,8 @@ describe('orcaTeamStore', () => {
       reservationId: 'active-duplicate', teamId: 'team-1', label: 'REVIEWER-3', hardLimit: 5, leaseMs: 60_000,
     })).resolves.toEqual({ ok: false, errorCode: 'DUPLICATE_LABEL' });
 
-    // Simulate the ordinary unarchive status transition. Old IDs and the native
-    // history reference must still resolve to the old Worker, never its replacement.
-    await client.exec("UPDATE sessions SET status = 'active' WHERE id = 'worker-session-1'");
+    // Recreating must not change the archived identity or its native history.
+    // The real unarchive entry is covered in sessionsUpdate.test.ts.
     expect(await orcaTeamStore.getWorkerLink({ workerId: 'worker-1' })).toEqual(originalLink);
     expect(await client.queryOne('SELECT sdk_session_id FROM sessions WHERE id = ?', ['worker-session-1']))
       .toEqual({ sdk_session_id: 'original-history' });
@@ -118,8 +117,35 @@ describe('orcaTeamStore', () => {
       id: worker.id, sessionId: worker.sessionId, label: worker.label,
     }))).toEqual([
       { id: 'new-worker', sessionId: 'new-session', label: 'reviewer-3' },
-      { id: 'worker-1', sessionId: 'worker-session-1', label: 'reviewer' },
     ]);
+  });
+
+  // PR #8801: a cycled team's history can exceed a tool response. Existing tests
+  // only had two labels. Unit tier: 101 persisted owners exercise the production
+  // query's bound, completeness signal, and exact case-insensitive lookup beyond it.
+  it('bounds label history while finding an archived owner beyond the summary', async () => {
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    for (let i = 0; i < 101; i++) {
+      await client.exec('INSERT INTO sessions (id, status, created_at, updated_at) VALUES (?, ?, ?, ?)',
+        [`session-${i}`, i === 100 ? 'archived' : 'deleted', i, i]);
+      await client.exec('INSERT INTO orca_workers (id, team_id, session_id, label, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [`worker-${i}`, 'team-1', `session-${i}`, `reviewer-${i}`, 'reviewer', i, i]);
+    }
+    await client.exec('INSERT INTO orca_workers (id, team_id, session_id, label, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['other-worker', 'team-2', 'missing-session', 'reviewer-100', 0, 0]);
+    const summary = await orcaTeamStore.listWorkerLabelsByTeam('team-1');
+    expect(summary.items).toHaveLength(100);
+    expect(summary.complete).toBe(false);
+    expect(summary.items.some(entry => entry.label === 'reviewer-100')).toBe(false);
+    await expect(orcaTeamStore.listWorkerLabelsByTeam('team-1', 'REVIEWER-100')).resolves.toEqual({
+      items: [{ workerId: 'worker-100', sessionId: 'session-100', label: 'reviewer-100',
+        role: 'reviewer', sessionStatus: 'archived' }],
+      complete: true,
+    });
+    await expect(orcaTeamStore.listWorkerLabelsByTeam('team-1', 'unused')).resolves.toEqual({ items: [], complete: true });
+    await client.exec("DELETE FROM orca_workers WHERE id = 'worker-100'");
+    expect((await orcaTeamStore.listWorkerLabelsByTeam('team-1')).complete).toBe(true);
   });
 
   // F6-B, integration: real SQLite role writes stay in their captured owner.

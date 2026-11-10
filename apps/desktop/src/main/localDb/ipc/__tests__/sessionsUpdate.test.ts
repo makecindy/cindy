@@ -1283,6 +1283,31 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
   });
 
+  // PR #8801 / engineering-conventions §3.2: the old store test restored with SQL,
+  // bypassing lifecycle guards and broadcasts. Unit tier, real in-memory SQLite:
+  // restore an archived Worker after its replacement exists through patchSessionMetaInDb.
+  it('restores the original Worker identity and history through the metadata lifecycle', async () => {
+    h.sqlite!.exec(`
+      CREATE TABLE orca_workers (id TEXT PRIMARY KEY, team_id TEXT, session_id TEXT, label TEXT, role TEXT);
+      INSERT INTO orca_workers VALUES ('old-worker', 'team-1', 'codex-local', 'reviewer', 'reviewer');
+      INSERT INTO orca_workers VALUES ('new-worker', 'team-1', 'pi-local', 'reviewer-2', 'reviewer');
+      UPDATE sessions SET status = 'archived', orca_role = 'worker', sdk_session_id = 'original-history' WHERE id = 'codex-local';
+      UPDATE sessions SET orca_role = 'worker', sdk_session_id = 'replacement-history' WHERE id = 'pi-local';
+    `);
+    const identities = h.sqlite!.prepare('SELECT * FROM orca_workers ORDER BY id').all();
+
+    const restored = await patchSessionMetaInDb('codex-local', { status: 'active' });
+
+    expect(restored).toMatchObject({ id: 'codex-local', status: 'active', orcaRole: 'worker', sdkSessionId: 'original-history' });
+    expect(h.sqlite!.prepare('SELECT * FROM orca_workers ORDER BY id').all()).toEqual(identities);
+    expect(h.sqlite!.prepare('SELECT status, sdk_session_id FROM sessions WHERE id = ?').get('pi-local'))
+      .toEqual({ status: 'active', sdk_session_id: 'replacement-history' });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local', patch: { status: 'active' },
+    });
+    expect(h.runtimeCleanup).not.toHaveBeenCalled();
+  });
+
   // setStatus 的归档形是 { status, pinnedAt: null }:广播沿用置顶合并逻辑,
   // 归档一并清 pin 与摘要(归档列表不该保留 pin 标记)。
   it('broadcasts local archive status patches with the unpin merge (#3175)', async () => {
