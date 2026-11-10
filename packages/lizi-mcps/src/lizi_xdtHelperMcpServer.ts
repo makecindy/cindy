@@ -56,6 +56,8 @@ import {
 } from './xdt-helper/ask_owner.js';
 import {
   registerAsyncQuestionTool,
+  registerManageUserQuestionsTool,
+  type ManageUserQuestionsCallback,
   supportsAsyncQuestionTool,
   type AskUserQuestionAsyncCallback,
 } from './xdt-helper/ask_user_question_async.js';
@@ -910,6 +912,7 @@ export interface XdtHelperMcpDeps {
   setCurrentSessionTitle?: SetCurrentSessionTitleDeps['setCurrentSessionTitle'];
   taskDelivery?: TaskDeliveryCallbacks;
   askUserQuestionAsync?: AskUserQuestionAsyncCallback;
+  manageUserQuestions?: ManageUserQuestionsCallback;
   /**
    * 批量 session 标题更新回调。host 注入后, control 类工具 rename_sessions 会被注册。
    * 工具层负责 dry-run token 护栏; host 负责读取当前标题、校验前置条件和写库。
@@ -1246,13 +1249,25 @@ export function createXdtHelperMcpServer(
       description: definition.description, inputSchema: z.strictObject(definition.inputShape),
     }, async (args) => questions.call(definition.name, args));
   }
+  if (deps.manageUserQuestions) {
+    registerManageUserQuestionsTool(questions, () => resolveLiziMcpSessionContext(sessionCtx),
+      deps.manageUserQuestions, async () => (await allowedSurface()).categories);
+    const definition = questions.get('manage_user_questions')!;
+    server.registerTool(definition.name, {
+      description: definition.description, inputSchema: z.strictObject(definition.inputShape),
+    }, async (args) => questions.call(definition.name, args));
+  }
   const asyncQuestionListing = async (): Promise<Tool[]> => {
-    const definition = questions.get('ask_user_question_async');
     const allowed = await allowedSurface();
-    if (!definition || !supportsAsyncQuestionTool(resolveLiziMcpSessionContext(sessionCtx))
-      || (allowed.categories && !allowed.categories.has('cindy'))) return [];
-    return [{ name: definition.name, description: definition.description,
-      inputSchema: z.toJSONSchema(z.strictObject(definition.inputShape)) as Tool['inputSchema'] }];
+    const context = resolveLiziMcpSessionContext(sessionCtx);
+    if (allowed.categories && !allowed.categories.has('cindy')) return [];
+    return ['ask_user_question_async', 'manage_user_questions'].flatMap((name) => {
+      const definition = questions.get(name);
+      if (!definition || (name === 'ask_user_question_async' ? !supportsAsyncQuestionTool(context)
+        : !['codex', 'claude-code', 'pi'].includes(context.agentKind ?? ''))) return [];
+      return [{ name, description: definition.description,
+        inputSchema: z.toJSONSchema(z.strictObject(definition.inputShape)) as Tool['inputSchema'] }];
+    });
   };
 
   // list_machines: the first step of any work across computers, so it is listed

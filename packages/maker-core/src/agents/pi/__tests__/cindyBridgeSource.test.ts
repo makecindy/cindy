@@ -2427,7 +2427,7 @@ it('re-surfaces the disclosure set once after compaction instead of editing ever
 
 // Regression: optional questions need the same direct discoverability as sync questions.
 // Unit: execute the production gateway and verify real MCP routing and permission identity.
-it.each(['list_machines', 'ask_user_question_async'])('registers %s directly without MCP discovery', async (name) => {
+it.each(['list_machines', 'ask_user_question_async', 'manage_user_questions'])('registers %s directly without MCP discovery', async (name) => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(
     source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))

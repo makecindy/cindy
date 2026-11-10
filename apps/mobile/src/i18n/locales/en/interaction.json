@@ -36,6 +36,11 @@
     "exit": "Exit plan mode"
   },
   "panel": {
+    "questionUnanswered": "Unanswered",
+    "questionWithdrawn": "No longer needs an answer",
+    "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
+    "sendSupplement": "Send additional information",
+
     "readOnlyKind": "Pending",
     "readOnlyTitle": "Waiting for confirmation on your computer",
     "pendingRequests": "Pending requests",

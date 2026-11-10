@@ -13131,6 +13131,11 @@
     "prevMessageJump": "Ir al prompt anterior: {{preview}}",
     "sessionLoading": "Cargando tarea",
     "askUserQuestion": {
+    "unanswered": "Sin respuesta",
+    "withdrawn": "Ya no necesita respuesta",
+    "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",
+    "sendSupplement": "Enviar información adicional",
+
       "voice": {
         "hint": "Di el número o el nombre de una opción. Para seleccionar varias, di después «confirmar selección».",
         "freeTextHint": "Di tu respuesta, revísala y luego di «confirmar selección» para enviarla.",

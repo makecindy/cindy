@@ -273,6 +273,17 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it.each(['superseded', 'resolved', 'session_closed'])('releases an edited async question on %s', (reason) => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const item: PendingInteraction = { request: { kind: 'ask_user_question', requestId: 'q1', delivery: 'async', questions: [{ question: 'Q?' }] } };
+    remoteSessionStore.setPendingInteractions('s1', [item]);
+    remoteSessionStore.protectAsyncQuestion('s1', item);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+      sessionId: 's1', requestId: 'q1', reason, decision: { dismissed: true },
+    });
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toHaveLength(0);
+  });
+
   it('keeps an edited async question across disconnection but removes it on explicit history clearing', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     const item: PendingInteraction = { persistId: 'p1',
@@ -280,7 +291,7 @@ describe('remoteSessionStore', () => {
     remoteSessionStore.setPendingInteractions('s1', [item]);
     remoteSessionStore.protectAsyncQuestion('s1', item);
     remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
-      sessionId: 's1', requestId: 'q1', reason: 'resolved', decision: { dismissed: true },
+      sessionId: 's1', requestId: 'q1', reason: 'turn_completed', decision: { dismissed: true },
     });
     const visible = remoteSessionStore.getVisiblePendingInteractions('s1');
     expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toBe(visible);

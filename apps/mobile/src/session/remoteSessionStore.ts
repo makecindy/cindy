@@ -5001,8 +5001,19 @@ export const remoteSessionStore = {
       const sessionId = readString(payload, 'sessionId');
       const requestId = readString(payload, 'requestId');
       if (sessionId && requestId && acceptSessionStateSource(sessionId, deviceId, sessionInteractionSources)) {
-        if (payload.reason === 'resolved' && !(isRecord(payload.decision) && payload.decision.dismissed === true)) {
+        if (payload.reason === 'question_withdrawn' && typeof payload.withdrawalReason === 'string') {
+          this.settleOptimisticInteractionDismiss(sessionId, requestId, { kind: 'confirmed' });
+          const retained = protectedQuestions.get(sessionId);
+          if (retained?.request.requestId === requestId) {
+            protectedQuestions.set(sessionId, { ...retained,
+              request: { ...retained.request, withdrawalReason: payload.withdrawalReason } });
+            visibleInteractionCache.delete(sessionId);
+            emit();
+          }
+        }
+        if (payload.reason === 'resolved' || payload.reason === 'superseded' || payload.reason === 'session_closed') {
           this.confirmProtectedQuestion(sessionId, requestId);
+          clearAskUserDraft(requestId);
         }
         // 注意:这里**不**提前回收延长抑制条目——push 到达只说明被控端已确认,
         // 不排除仍有「决定提交前发出、此刻还在途」的旧 getPendingInteractions

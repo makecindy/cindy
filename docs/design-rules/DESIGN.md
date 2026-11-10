@@ -478,6 +478,14 @@ input/text
 
 Ordinary confirmations opt into standard buttons with `presentation="standard"` on the shared `ConfirmDialog` / provider. DS-6 selects only custom-provider and custom-MCP deletion. Standard confirmation actions keep a 36px minimum height; long labels wrap within the panel and may grow vertically instead of overflowing or truncating. Keep `confirm-btn-*` local styling, default/destructive choice, focus branches and no scrim dismissal. Unselected callers, Permission, Full Access and plugin authorization keep their existing presentation.
 
+**Interaction answer composers (user decision, 2026-11-10):** Free-text answers, custom-choice answers,
+withdrawn-question supplements and plan feedback use a full-width input frame. Text occupies its own
+full-width area; existing microphone and submit controls sit inside the frame in a trailing toolbar
+below the text, never squeeze the textarea into a narrow side column. Submission uses the main
+composer's paper-plane glyph, with the actual action retained in localized accessible names and
+Desktop tooltips. Multi-select custom input has one submit control, not a second footer submit.
+Question navigation, close/skip, validation, voice finalization and approval semantics stay unchanged.
+
 ### Typography roles and control pairing (DS-11)
 
 - Preserve the accepted hierarchy: ordinary ConfirmDialog title 18/500; provider/MCP form title 18/600; compact prompt title 15/600 where already specified. Different roles are not interchangeable merely because their font size matches.
