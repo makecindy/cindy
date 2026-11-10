@@ -709,6 +709,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Ese ordenador no ha permitido el uso remoto de este proveedor. En esa computadora, active \"Permitir uso remoto\" en Configuración → Proveedores, o elija otro modelo.",
     "REMOTE_AGENT_FORK_FAILED": "La computadora que ejecuta el Agent no pudo iniciar una nueva sesión desde aquí. Inténtalo de nuevo o prueba con un mensaje diferente.",
     "REMOTE_AGENT_SHARE_PAUSED": "El propietario ha pausado este intercambio por usted, por lo que estos modelos no se pueden usar hasta que se reanude. Cambie a otro modelo para continuar.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Este es un recurso compartido antiguo y no se puede usar mientras «Usar solo Agent-Net» esté activado. Desactívelo para continuar o cambie a otro modelo.",
     "REMOTE_AGENT_SHARE_REMOVED": "Este recurso compartido ya no está disponible (el propietario lo eliminó o usted se fue). Cambie a otro modelo para continuar.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "El proveedor compartido no está disponible temporalmente. Es posible que la computadora del propietario esté desconectada o que el uso compartido esté desactivado por ahora. Inténtalo de nuevo más tarde o cambia a otro modelo para continuar."
   },

@@ -1,4 +1,5 @@
 import { SHARED_TASK_CAPABILITY, type DeviceLinkClient } from '@cindy/device-link';
+import type { DelegationRequest } from '@cindy/agent-net-protocol';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import {
   closeSharedTasksInJournalForSession,
@@ -146,6 +147,20 @@ export function stopSharedTaskRuntime(): Promise<void> {
 export function tryGetSharedTaskHost(): SharedTaskHost | null {
   binding?.rebindIfStable();
   return binding?.current() ? binding.host : null;
+}
+
+/** Transport authority reuses the current local task/journal admission. A CSR
+ * cannot create a task, revive a terminal session or broaden device access. */
+export async function authorizeSharedTaskTransportRequest(request: DelegationRequest): Promise<boolean> {
+  if (request.kind !== 'shared-task') return false;
+  const host = tryGetSharedTaskHost();
+  if (!host?.detail(request.resourceId)) return false;
+  await host.refresh(request.resourceId);
+  if (tryGetSharedTaskHost() !== host) return false;
+  const detail = host.detail(request.resourceId), member = detail?.guests.find(g => g.memberId === request.scope.memberId);
+  return !!detail && detail.hostDeviceId === request.hostDeviceId && member?.accountId === request.scope.guestSubject
+    && member.version === request.scope.memberVersion && member.deviceIds.includes(request.guestDeviceId)
+    && host.authorize(request.resourceId, { accountId: member.accountId, deviceId: request.guestDeviceId }, detail.sessionId, 'history.read').allowed;
 }
 
 export function requireSharedTaskHost(): SharedTaskHost {

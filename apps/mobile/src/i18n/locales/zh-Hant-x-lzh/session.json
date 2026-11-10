@@ -706,6 +706,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼機未允遠端呼叫此供方。請於彼機之「設定 → 模型供應商」中開啟「允許遠端呼叫」，或易一模型。",
     "REMOTE_AGENT_FORK_FAILED": "行 Agent 之機未能自此另開差事。請再試，或換一則訊再試。",
     "REMOTE_AGENT_SHARE_PAUSED": "對方已暫停對君之分享，復之前不能用此等模型。可易他模型以續。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "此乃舊版分享，啟「唯用 Agent-Net」時暫不可用。關此開關即可續之，亦可易他模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "此分享已不可用（對方刪之或君已退出）。可易他模型以續。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "所分享之供方暫不可用：對方之機或不在線，或對方暫闔分享。可稍後再試，或易他模型以續。"
   },

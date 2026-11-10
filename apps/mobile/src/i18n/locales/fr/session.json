@@ -709,6 +709,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur n'a pas autorisé l'utilisation à distance de ce fournisseur. Sur cet ordinateur, activez « Autoriser l'utilisation à distance » dans Paramètres → Fournisseurs, ou choisissez un autre modèle.",
     "REMOTE_AGENT_FORK_FAILED": "L'ordinateur qui exécute l'Agent n'a pas pu démarrer une nouvelle session à partir d'ici. Réessayez, ou essayez avec un autre message.",
     "REMOTE_AGENT_SHARE_PAUSED": "Le propriétaire a suspendu ce partage pour vous : ces modèles ne peuvent donc pas être utilisés tant qu'il n'est pas réactivé. Passez à un autre modèle pour continuer.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Ceci est un ancien partage, inutilisable tant que « Utiliser uniquement Agent-Net » est activé. Désactivez cette option pour continuer, ou passez à un autre modèle.",
     "REMOTE_AGENT_SHARE_REMOVED": "Ce partage n'est plus disponible (le propriétaire l'a supprimé ou vous l'avez quitté). Passez à un autre modèle pour continuer.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Le fournisseur partagé est temporairement indisponible. L'ordinateur du propriétaire est peut-être hors ligne, ou le partage est désactivé pour le moment. Réessayez plus tard ou passez à un autre modèle pour continuer."
   },

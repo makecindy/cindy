@@ -1,10 +1,18 @@
 {
+  "agentNet": {
+    "enabled": "Ativar Agent-Net",
+    "onlyEncrypted": "Usar apenas ligações encriptadas",
+    "hint": "Os dispositivos usam encriptação ponto a ponto. O modo apenas encriptado requer Agent-Net nos dois dispositivos.",
+    "updateRequired": "Instale a versão mais recente da aplicação para usar o Agent-Net.",
+    "notConfigured": "Este relay ainda não disponibiliza Agent-Net. Atualize-o ou adira a um relay V2.",
+    "failed": "Não foi possível alterar as definições do Agent-Net. Verifique a ligação ao relay e tente novamente."
+  },
   "settings": {
     "sectionTitle": "Serviço de retransmissão",
     "currentLabel": "Serviço de retransmissão",
     "official": "Retransmissão oficial de {{appName}}",
     "switchToOfficial": "Voltar à retransmissão oficial",
-    "officialHint": "Os seus dispositivos ligam-se através da retransmissão oficial de {{appName}}. Para usar a sua própria retransmissão, apresente o respetivo código QR de adesão no computador onde é executada e leia-o com a câmara do telemóvel.",
+    "officialHint": "Os seus dispositivos ligam-se através da retransmissão oficial de {{appName}}. Quando um dos seus computadores usa uma retransmissão própria, aparece aqui: toque para aderir. Para aderir a uma retransmissão que alguém partilhou consigo, leia o código QR com a câmara do telemóvel.",
     "selfHostedHint": "Os seus dispositivos ligam-se através da sua própria retransmissão em {{address}}. O início de sessão, os modelos, as tarefas partilhadas e outros serviços continuam a usar {{appName}}.",
     "removedHint": "Este telemóvel foi removido da retransmissão ou a retransmissão foi desativada. Volte à retransmissão oficial ou adira novamente a partir do computador.",
     "credentialMissingHint": "A credencial de retransmissão já não está neste telemóvel. Adira novamente a partir do computador ou volte à retransmissão oficial.",
@@ -12,7 +20,15 @@
     "confirmBody": "Este telemóvel vai sair de “{{name}}” e usar o relay oficial de {{appName}}. Para voltar a usar esse relay, adira novamente a partir do computador.",
     "confirmAction": "Voltar ao oficial",
     "switchFailed": "Não foi possível voltar ao relay oficial. Tente novamente dentro de momentos.",
-    "pushUnavailable": "Enquanto usar o seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este telemóvel."
+    "pushUnavailable": "Enquanto usar o seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este telemóvel.",
+    "accountManagedOn": "Gerido em «{{device}}»",
+    "accountSwitchTitle": "Aderir a «{{name}}»?",
+    "accountSwitchBody": "Esta retransmissão é da sua conta. «{{device}}» autoriza este telemóvel automaticamente, sem ligação de partilha. Enquanto usar uma retransmissão própria, este telemóvel não recebe as notificações de tarefas do computador.",
+    "accountSwitchAction": "Aderir",
+    "sharedHint": "Os seus dispositivos ligam-se através de uma retransmissão partilhada consigo em {{address}} e só chegam aos seus próprios dispositivos. O início de sessão, os modelos, as tarefas partilhadas e outros serviços continuam a usar {{appName}}.",
+    "sharedCurrent": "{{name}} (partilhada por {{owner}})",
+    "accountSharedBy": "Partilhada por {{owner}} · adesão em «{{device}}»",
+    "accountSharedOn": "Adesão em «{{device}}»"
   },
   "issue": {
     "removedTitle": "Removido do relay",
@@ -34,22 +50,28 @@
     "retry": "Tentar novamente",
     "signedOut": "Inicie sessão em {{appName}} primeiro e depois adira a este relay.",
     "signIn": "Iniciar sessão",
-    "invalidLink": "Esta ligação de adesão não é válida ou expirou. Crie uma nova no computador.",
-    "cancelled": "A adesão foi cancelada. Para aderir a este relay, crie uma nova ligação de adesão no computador."
+    "invalidLink": "Esta ligação de partilha não é válida ou expirou. Crie uma nova no computador.",
+    "cancelled": "A adesão foi cancelada. Para aderir a este relay, crie uma nova ligação de partilha no computador.",
+    "accountRequesting": "A pedir autorização a «{{device}}»…",
+    "accountWaiting": "A aderir, à espera de «{{device}}»…",
+    "openOnComputer": "Esta retransmissão foi partilhada por outra conta. Abra esta ligação no seu computador para aderir. Depois de o computador aderir, este telemóvel vê-a em Definições > Retransmissão e pode aderir com um toque."
   },
   "errors": {
     "unreachable": "Não é possível aceder a este relay. Certifique-se de que o telemóvel e o computador estão na mesma rede ou de que o telemóvel consegue abrir este endereço.",
-    "insecureUnreachable": "Não é possível aceder a este relay. Os telemóveis só podem aderir a um relay por HTTPS. Configure um certificado para o relay no computador e crie uma nova ligação de adesão.",
-    "notRelay": "Este endereço não é um relay de {{appName}}. Verifique a ligação de adesão.",
+    "insecureUnreachable": "Não é possível aceder a este relay. Os telemóveis só podem aderir a um relay por HTTPS. Configure um certificado para o relay no computador e crie uma nova ligação de partilha.",
+    "notRelay": "Este endereço não é um relay de {{appName}}. Verifique a ligação de partilha.",
     "incompatible": "Este relay não funciona com esta versão de {{appName}}. Atualize o relay e {{appName}}.",
     "accountMismatch": "Este relay pertence a outra conta de {{appName}}.",
-    "codeInvalid": "Esta ligação de adesão expirou. Crie uma nova no computador.",
+    "codeInvalid": "Esta ligação de partilha expirou. Crie uma nova no computador.",
     "rateLimited": "Demasiadas tentativas. Tente novamente mais tarde.",
     "rejected": "O pedido de adesão foi recusado no computador.",
-    "expired": "O pedido excedeu o tempo limite enquanto aguardava aprovação. Crie uma nova ligação de adesão no computador.",
-    "ownerMismatch": "O relay devolveu um certificado que não foi emitido pelo proprietário indicado na ligação de adesão. Pode estar ligado a um relay falso, pelo que a adesão foi interrompida.",
+    "expired": "O pedido excedeu o tempo limite enquanto aguardava aprovação. Crie uma nova ligação de partilha no computador.",
+    "ownerMismatch": "O relay devolveu um certificado que não foi emitido pelo proprietário indicado na ligação de partilha. Pode estar ligado a um relay falso, pelo que a adesão foi interrompida.",
     "failed": "Não foi possível aderir ao relay. Tente novamente mais tarde.",
-    "saveFailed": "O pedido foi aprovado, mas não foi possível guardar a credencial do relay neste telemóvel. Crie uma nova ligação de adesão no computador e tente novamente.",
-    "credentialUnavailable": "Este telemóvel não tem uma credencial de relay utilizável. Adira novamente ou volte ao relay oficial nas Definições."
+    "saveFailed": "O pedido foi aprovado, mas não foi possível guardar a credencial do relay neste telemóvel. Crie uma nova ligação de partilha no computador e tente novamente.",
+    "credentialUnavailable": "Este telemóvel não tem uma credencial de relay utilizável. Adira novamente ou volte ao relay oficial nas Definições.",
+    "ownerUnavailable": "«{{device}}» não respondeu. Verifique se a {{appName}} está aberta e online nesse computador, ou peça uma ligação de partilha.",
+    "relayUnavailable": "«{{device}}» já não usa esta retransmissão.",
+    "accountDirectoryUnavailable": "Não foi possível contactar o serviço de contas de {{appName}}, pelo que as retransmissões da sua conta não foram carregadas. Tente mais tarde ou peça uma ligação de partilha."
   }
 }
