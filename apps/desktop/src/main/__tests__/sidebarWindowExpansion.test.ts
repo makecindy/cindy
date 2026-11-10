@@ -143,4 +143,15 @@ describe('sidebar window expansion', () => {
     expect(restored.x + restored.width).toBeLessThanOrEqual(1280);
     expect(restored.width).toBe(900);
   });
+  it('returns to the original connected display when the window was moved to another one', () => {
+    const { win, native, area } = fixture();
+    const controller = new SidebarWindowExpansion();
+    controller.update(native, 400, area);
+    const other = { x: 0, y: 0, width: 1920, height: 1080 };
+    win.setBounds({ x: 300, y: 50, width: 1300, height: 700 });
+    const screenApi = { getPrimaryDisplay: () => ({ bounds: area, workArea: area }),
+      getDisplayMatching: (r: { x: number }) => { const d = r.x < 0 ? area : other; return { bounds: d, workArea: d }; } };
+    controller.update(native, 0, other, screenApi);
+    expect(win.getBounds()).toEqual({ x: -1600, y: 40, width: 900, height: 800 });
+  });
 });

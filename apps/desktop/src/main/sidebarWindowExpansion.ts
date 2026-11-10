@@ -37,9 +37,12 @@ export class SidebarWindowExpansion {
       if (previous) {
         // Divider and native-window edits while open are temporary allocation only.
         // A display removed or shrunk while open can leave the old rectangle off-screen.
+        // Judge it against the display it belongs to, not the one the window is on now:
+        // a window moved to another connected display still returns to where it was.
+        const home = screenApi?.getDisplayMatching(previous.before).workArea;
         win.setBounds(
-          screenApi && previous.contained && !rectInsideWorkArea(previous.before, workArea)
-            ? placeOntoLiveDisplay(previous.before, bounds, screenApi)
+          screenApi && home && previous.contained && !rectInsideWorkArea(previous.before, home)
+            ? placeOntoLiveDisplay(previous.before, previous.before, screenApi)
             : previous.before,
         );
       }
