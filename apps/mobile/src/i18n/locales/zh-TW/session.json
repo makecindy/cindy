@@ -470,6 +470,11 @@
     "worktreeCleanupPending": "上一次 worktree 仍待回收，請重新連線裝置後再試。"
   },
   "menu": {
+    "moveToProject": "移動任務",
+    "moveFailed": "移動任務失敗",
+    "moveRunning": "任務正在執行，結束後再移動",
+    "moveWorktree": "此任務的工作目錄是 worktree，暫不支援移動到其他專案",
+    "moveUnsupported": "請更新所連接電腦上的 Cindy 後再移動任務。",
     "details": "任務詳情",
     "chipPinned": "已置頂",
     "chipArchived": "已歸檔",

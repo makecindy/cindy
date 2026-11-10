@@ -482,6 +482,11 @@
     "worktreeCleanupPending": "Der vorherige Worktree wartet noch auf die Bereinigung. Verbinde das Gerät erneut und versuch es noch einmal."
   },
   "menu": {
+    "moveToProject": "Aufgabe verschieben",
+    "moveFailed": "Aufgabe konnte nicht verschoben werden",
+    "moveRunning": "Diese Aufgabe läuft. Verschiebe sie, sobald sie beendet ist.",
+    "moveWorktree": "Das Arbeitsverzeichnis dieser Aufgabe ist ein Worktree. Sie kann daher noch nicht in ein anderes Projekt verschoben werden.",
+    "moveUnsupported": "Aktualisiere Cindy auf dem verbundenen Computer, um Aufgaben zu verschieben.",
     "details": "Sitzungsdetails",
     "chipPinned": "Angeheftet",
     "chipArchived": "Archiviert",

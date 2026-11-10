@@ -94,7 +94,7 @@
 > 交互设计稿见 [`docs/design-previews/provider-groups/index.html`](../design-previews/provider-groups/index.html)。
 > 读取时机：新增或修改供应商组、组策略、组内电脑的添加与状态、经供应商组的任务分配或转发、
 > 供应商组用量与「远程与分享」页之前。
-> 相关规则：[供应商分享](provider-sharing.md)、远程 Agent 协议（`docs/dev-rules/protocol-compatibility.md`
+> 相关规则：[供应商分享](provider-sharing.md)、远程 Agent 协议（`docs/dev-rules/protocol-compatibility/remote-agent.md`
 > 「远程 Agent」）、[用量上限自动继续](usage-limit-auto-continue.md)、[跨电脑复制任务](task-device-migration.md)。
 
 ## 1. 定位
@@ -214,7 +214,7 @@
     接收端以字节预算保护内存；已完成片段重发仍幂等。旧版不能安全接收大名单时显示需要更新，不发送部分名单。
     那台的 Cindy 太旧、给不出同意时不分给分享的人。分享的人看到的匿名状态里这台写「暂不
     可用」(或「需要更新」)，组的台数不变。同账号的电脑经组使用(组所在电脑自己与我的其他电脑)不需要同意。
-    协议见 `docs/dev-rules/protocol-compatibility.md`「供应商组：转分享需原主人逐人同意」。
+    协议见 `docs/dev-rules/protocol-compatibility/provider-group-reshare-owner-consent.md`「供应商组：转分享需原主人逐人同意」。
   - 被中转过来的任务，组内电脑一律按受邀者隔离运行（即使来自同账号的组所在电脑）：受邀者目录、会话索引按
     （组所在电脑, 受邀者）分开，受邀者在那台的身份是组所在电脑为它取的不透明键，任务 id 也按受邀者派生，两个受邀者
     用同一个任务 id 不会撞车。数量上限独立于数据隔离：组内电脑按直接连接的组所在电脑合计，
@@ -229,7 +229,7 @@
     （离线等）记在组所在电脑上，之后自动再通知（约每 10 分钟一次，重启后继续），通知到才划掉。
 - **防转圈**：经组分配到组内电脑的任务，在那台电脑上直接运行，不再进入那台电脑自己的供应商组。
   打开任务时带一个可选标记 `groupAssigned` 说明「已由供应商组分配」；旧版本不认识这个标记，也是直接运行。
-  登记见 `docs/dev-rules/protocol-compatibility.md`「供应商组」。
+  登记见 `docs/dev-rules/protocol-compatibility/` 下 `provider-group-*.md`「供应商组」。
 
 ## 5. 组策略
 
@@ -375,7 +375,7 @@
 是否允许自动恢复沿用既有资格检查；Stop、新输入、删除／归档均可取消。
 供应商主人主动断开或关闭远程控制属于用户撤销，新版通过 `controller-disconnected` 转为既有
 `user-revoked`，不自动接回、换电脑或发中转切换凭证。旧版 host 只发 `aborted` 的歧义与取舍见
-`protocol-compatibility.md`「远程 Agent」；不能借重启兼容覆盖新版的明确断开意图。
+`protocol-compatibility/remote-agent.md`「远程 Agent」；不能借重启兼容覆盖新版的明确断开意图。
 实现：`remote-agent/controller/startRemote.ts`、`provider-group/service.ts`、
 `maker-ipc/agent-input-coordinator.ts`；测试并入对应模块的既有测试文件。
 
@@ -602,7 +602,7 @@
   `rebalanceDecision`、`beforeSend`），尺子是 `usage.ts` 的 `providerGroupRebalanceTarget`；「以后自动换」存在
   `provider-group/sessionPrefs.ts`。电脑在 `features/provider-group/sessionRebalancePrompt.ts`（发送前由
   `CCAgentSessionView` 调用），手机在 `apps/mobile/src/session/sessionRebalancePrompt.ts`（会话页发送前调用）；
-  协议见 protocol-compatibility.md「供应商组任务进行中换号」。回归见 `provider-group/__tests__/service.test.ts`、
+  协议见 protocol-compatibility/provider-group-mid-task-account-switch.md「供应商组任务进行中换号」。回归见 `provider-group/__tests__/service.test.ts`、
   `usage.test.ts`、两端的 `sessionRebalancePrompt.test.ts` 与分隔条的 `SystemCard.i18n.test.tsx`、手机 `systemCard.test.ts`。
 
 ## 7. 用量
@@ -909,7 +909,7 @@
   声明了的电脑在事件流里发出凭证状态(`providerGroupSwitch`)，重新打开时带回(`groupSwitchToken`)。手机与远程控制问任务所在的电脑
   「这个任务归哪个组」用同一通道的只读动作 `session-group`(§10)。同账号任意电脑管理组与分享用同一通道的
   `manage-group` / `manage-share`(§10)。其余沿用现有协议，不改服务端。兼容做法见 §14，登记见
-  `docs/dev-rules/protocol-compatibility.md`「供应商组」。
+  `docs/dev-rules/protocol-compatibility/` 下 `provider-group-*.md`「供应商组」。
 - [跨电脑复制任务](task-device-migration.md) 与已建任务换 Agent 所在电脑：§6.1 的自动换电脑与手动「换一台继续」
   复用原生转录的导入／导出与有界交接兜底；仅迁移 Agent 时不复制任务、工作文件或凭证。
 - [用量上限自动继续](usage-limit-auto-continue.md)：冷却的重置时刻口径与之一致；有组时先换电脑，组里所有电脑都失败且其中有
