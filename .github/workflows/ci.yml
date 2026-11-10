@@ -52,6 +52,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Check built-in Skill bundle versions
+        env:
+          SKILLS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD' }}
+        run: node scripts/check-built-in-skills.mjs --base-ref "$SKILLS_BASE_REF"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -63,8 +68,7 @@ jobs:
       - name: Check settings search coverage
         env:
           SETTINGS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
-          SETTINGS_PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: pnpm check:settings-search --base-ref "$SETTINGS_BASE_REF" --pr-head "$SETTINGS_PR_HEAD"
+        run: pnpm check:settings-search --base-ref "$SETTINGS_BASE_REF"
 
       # test:unit 的 runner 自测不能跟着 Vitest 分片重复执行；在检查 job 中跑一次，
       # Linux 单测分片只负责 workspace unit tier。
@@ -383,6 +387,9 @@ jobs:
       # Keep real PowerShell compilation outside the parallel unit workload.
       - name: Run Windows packaged-instance barrier regression
         run: pnpm --filter desktop exec vitest run src/main/__tests__/windowsPackagedInstanceBarrier.test.ts --maxWorkers=1
+
+      - name: Check Windows Codex credential publication
+        run: node --experimental-strip-types apps/desktop/scripts/check-windows-codex-auth-move.mjs
 
       # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
       - name: Run companion database regressions

@@ -1,3 +1,4 @@
+import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { useComposerDragOpen } from '@/session/useComposerDragOpen';
 import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
 import type { ViewInstance, TextInputInstance, ScrollViewInstance } from 'react-native';
@@ -5609,6 +5610,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   ) : null}
                 </View>
               ) : null}
+              <TaskArchiveUndoSlot active={isShareTargetFocused} />
               <View style={[styles.composerToolbarWrap, composerCardActive && {
                 minHeight: COMPOSER_CARD_CHROME_HEIGHT + MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
               }]}>
