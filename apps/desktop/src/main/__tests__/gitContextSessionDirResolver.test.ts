@@ -166,7 +166,7 @@ describe('resolveSessionGitDir', () => {
     expect(res).toEqual({
       workdir: path.resolve('/Users/x/wt-b'),
       head: branchHead('fix/new'),
-      source: 'workingDir',
+      source: 'worktree',
     });
   });
 

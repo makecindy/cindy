@@ -354,13 +354,14 @@ export async function resolveSessionGitDir(
     }
   }
   // A selected linked worktree is an explicit session setting. Old tool-use rows
-  // can still point at another *valid* checkout after the task is moved.
+  // can still point at another *valid* checkout after the task is moved. Mark it
+  // as a trusted worktree source so an associated PR cannot override its branch.
   if (candidate && input.fallbackWorkingDir &&
       path.resolve(candidate) !== path.resolve(input.fallbackWorkingDir) && deps.isLinkedWorktree &&
       await deps.isLinkedWorktree(input.fallbackWorkingDir).catch(() => false)) {
     const head = await deps.probeGitDir(input.fallbackWorkingDir);
     if (head !== null) {
-      return { workdir: path.resolve(input.fallbackWorkingDir), head, source: 'workingDir' };
+      return { workdir: path.resolve(input.fallbackWorkingDir), head, source: 'worktree' };
     }
   }
 
