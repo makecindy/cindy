@@ -370,7 +370,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const save = (target: ProfilePanel, blocked: boolean) => <MainWindowActionButton action={{ label: t('devices.companionProfile.save'), busy,
     disabled: blocked || !online || !dirty || conflict?.page === page, onPress: () => void submit(target) }} />;
   const formPanel = (target: ProfilePanel | undefined) => target?.action ? <>
-    {(target.id === 'capability' || target.id === 'follow-up' || target.id === 'project') && target.text ? noteText(target.text) : null}
+    {['capability', 'follow-up', 'project', 'automation'].includes(target.id) && target.text ? noteText(target.text) : null}
     <CompanionProfileForm panel={target} values={editing ? values : target.values} onChange={changeValues} disabled={busy || !online || !!target.action.disabled} />
     {save(target, !!target.action.disabled)}
   </> : target?.text ? <Text selectable style={styles.body}>{target.text}</Text> : !data && online ? spinner : note('hostUpgrade');

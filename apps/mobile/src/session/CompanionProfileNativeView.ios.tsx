@@ -63,7 +63,7 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
     <HStack spacing={ROW_GAP} modifiers={[frame({ maxWidth: Infinity, minHeight: 44 }), contentShape(shapes.rectangle())]}><Image systemName={symbol as never} size={iconSize.action} modifiers={[foregroundStyle(colors.textSecondary), frame({ width: ROW_ICON_WIDTH })]} /><Text>{tr(id)}</Text><Spacer /><Image systemName="chevron.right" size={iconSize.xs} /></HStack>
   </Button>;
   const panel = (target?: ProfilePanel) => target?.action ? <>
-    {(target.id === 'capability' || target.id === 'follow-up' || target.id === 'project') && target.text ? note(target.text) : null}
+    {['capability', 'follow-up', 'project', 'automation'].includes(target.id) && target.text ? note(target.text) : null}
     {target.action.fields?.map(field => <Field key={field.id} field={field} values={p.values} onChange={p.onChange} busy={p.busy || !p.online || !!target.action?.disabled} />)}
     <Section>{action(tr('save'), () => p.onSubmit(target), !p.online || !p.dirty || p.conflict || !!target.action.disabled)}</Section>
   </> : note(target?.text || tr('hostUpgrade'));
