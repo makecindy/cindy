@@ -776,7 +776,6 @@ export const MAKER_INVOKE = {
   RSB_WINDOW_CLOSE: 'maker:rsb-window:close',
   RSB_WINDOW_SET_DETACHED: 'maker:rsb-window:set-detached',
   RSB_WINDOW_GET_CONTEXT: 'maker:rsb-window:get-context',
-  RSB_WINDOW_ALLOW_BOT_WORKBENCH_PERMISSION: 'maker:rsb-window:allow-bot-workbench-permission',
   RSB_WINDOW_READY: 'maker:rsb-window:ready',
   RSB_WINDOW_SEND_COMMAND: 'maker:rsb-window:send-command',
   /**
@@ -808,15 +807,10 @@ export const MAKER_INVOKE = {
   GOAL_PAUSE: 'maker:goal:pause',
   GOAL_RESUME: 'maker:goal:resume',
   GOAL_UPDATE: 'maker:goal:update',
-  /** Cindy Bot 父任务列出自己发起的 Bot 间委派。 */
+  /** Read-only: the V1 background tasks (delegations) a teammate conversation started, for old task cards. */
   BOT_DELEGATIONS_LIST: 'maker:bot-delegations:list',
-  /** Cindy Bot 父任务取消仍在运行或等待中的委派。 */
+  /** Kept for older controllers over device-link; answers UNSUPPORTED_CAPABILITY. */
   BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
-  /**
-   * 主人在伙伴聊天的任务卡上「补一句」后，给伙伴聊天留一条「已告诉后台任务：「…」」。
-   * 消息本身由渲染端以主人身份发进子任务；只本机可用，不进 device-link 白名单。
-   */
-  BOT_DELEGATION_NOTE_TRACE: 'maker:bot-delegation:note-trace',
   /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
   /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
@@ -1029,10 +1023,6 @@ export const MAKER_PUSH = {
   CINDY_MAKE_STATE_CHANGED: 'maker:cindy-make:state-changed',
   /** multi-worker: worker 增删改 / focus 切换时 broadcast, renderer useWorkers hook 订阅刷新。 */
   ORCA_WORKER_CHANGED: 'maker:orca:worker-changed',
-  /** Bot 间委派状态改变；payload 带父/子任务 id，广播自动附 owner generation。 */
-  BOT_DELEGATION_CHANGED: 'maker:bot-delegation:changed',
-  /** Hidden Bot pair conversation accepted another message or reached its limit. */
-  BOT_DIRECT_MESSAGE_CHANGED: 'maker:bot-direct-message:changed',
   /** A Bot group, its members, messages or running round changed. */
   BOT_GROUP_CHANGED: 'maker:bot-group:changed',
   /** Local complete-app windows only; never forwarded to Device Link. */
@@ -1042,11 +1032,9 @@ export const MAKER_PUSH = {
   COMPANION_CLOUD_CHANGED: 'maker:companion-cloud:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
   BOT_PROFILE_CHANGED: 'maker:bot-profile:changed',
-  /** 伙伴工作台已接手的项目变化(payload: { botId });renderer 收到后重读项目列表。 */
+  /** A teammate's linked projects or the tasks it opened changed (payload: { botId }); the name is kept from the V1 workbench. */
   BOT_WORKBENCH_CHANGED: 'maker:bot-workbench:changed',
   BOT_LIFECYCLE_CHANGED: 'maker:bot-lifecycle:changed',
-  /** 伙伴自主跟进状态表或「自动跟进所有任务」设置变化（节流 ≤1 次/秒，payload: { botIds?: string[] }，缺省 = 全部伙伴）；renderer 重读「一眼」。 */
-  BOT_AUTONOMY_CHANGED: 'maker:bot-autonomy:changed',
   /**
    * 被控端「当前 New Maker 草稿」全量变更广播。SYNC_NEW_MAKER_DRAFT 落 main 缓存后随即发,
    * 经 device-link tap 转发给控制端(account 级 → sessions topic),控制端刷新远程草稿显示镜像。
@@ -1083,6 +1071,11 @@ export const MAKER_PUSH = {
    * workerCreationPrefs localStorage。只在本机消费，不进入 device-link 转发。
    */
   WORKER_CREATION_PREFS_APPLY: 'maker:worker-creation-prefs:apply',
+  /**
+   * 手机或远程控制的电脑改了这台电脑的协同角色清单(记下一次创建 / 移除一个角色)：交给本机
+   * renderer 写回 workerCreationPrefs localStorage。只在本机消费，不进入 device-link 转发。
+   */
+  WORKER_ROLES_APPLY_REQUEST: 'maker:worker-roles:apply-request',
   /**
    * 被控端本地 main → 自身 renderer:把控制端写穿的会话 pref 交给 renderer,renderer 调它原来的
    * 本地 setter 写真实会话记忆。仅本地窗口消费(不转发)。payload = SET_SESSION_MODEL_PREF 入参。

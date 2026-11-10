@@ -467,6 +467,8 @@ export interface ChatMessage {
   replyQuote?: import('../../shared/chatReplyQuote').ChatReplyQuote;
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   botTaskResults?: import('@cindy/maker-shared/botCollaboration').BotCollaborationMeta[];
+  /** Teammate chat, display only: the tasks this reply's turn started or handed work to (BotStartedTasks). */
+  botStartedTasks?: { sessionId: string; title: string | null; created: boolean }[];
   clientId: string;
   /** Server message id when this row came from history; used as a pagination cursor. */
   id?: string;

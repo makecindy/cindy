@@ -126,7 +126,6 @@ import {
   subscribeComposerSubmitRequest,
   subscribePromptInsert,
   subscribeSessionLinkInsert,
-  subscribeTodoReferenceInsert,
   takeComposerSubmitRequest,
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
@@ -3204,18 +3203,6 @@ export function ChatInput({
       appendMentionChip(editor, pastedSessionChipAttrs({ href, label: null }), { at });
       lastComposerSelectionFromRef.current = editor.state.selection.from;
       resolveSessionChipTitles(editor);
-    });
-  }, [editor, sessionId]);
-
-  // 伙伴近况里点一条待办：把它作为引用 chip 放进输入框，用户自己写一句再发。
-  useEffect(() => {
-    if (!editor || !sessionId) return;
-    return subscribeTodoReferenceInsert(({ targetSessionId, href, title }) => {
-      if (targetSessionId !== sessionId || editor.isDestroyed) return;
-      if (composerMutationLockedRef.current) return;
-      const at = lastComposerSelectionFromRef.current ?? editor.state.selection.from;
-      appendMentionChip(editor, { kind: 'todo', label: title, path: href }, { at });
-      lastComposerSelectionFromRef.current = editor.state.selection.from;
     });
   }, [editor, sessionId]);
 
