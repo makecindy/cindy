@@ -27,6 +27,7 @@ export default {
       about: 'Server lacks provider:feishu: the organization has not set up the bot',
       data: { kind: 'unavailable' },
     },
+    unlinked: { about: 'Unlinked account with a live server socket: unbound badge and relink action', data: { kind: 'revoked' } },
     confirmed: { about: 'Linked: open bot and unlink actions', data: { kind: 'confirmed' } },
     narrow: {
       about: 'Pending bind at 360px: code and actions wrap',
@@ -39,6 +40,11 @@ export default {
   },
   async check(page, ui) {
     const card = page.locator('#cindy-im-feishu-panel');
+    if (ui.data.kind === 'revoked') {
+      const row = page.locator('#cindy-im-feishu');
+      assert.equal(await row.getByRole('status').textContent(), await ui.t('settings.remoteControl.hook.feishu.status.none'));
+      assert.ok(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.retry'), exact: true }).isVisible());
+    }
     if (ui.data.kind === 'confirmed') {
       assert.ok(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.setWorkingDevice'), exact: true }).isVisible());
     }
