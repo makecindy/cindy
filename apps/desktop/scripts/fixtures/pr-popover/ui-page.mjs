@@ -27,14 +27,26 @@ export default {
     hover: { about: 'Following, pointer over the follow row', data: { stopAfter: 'following' } },
     settings: { about: 'Separate PR settings dialog', data: { stopAfter: 'settings' } },
     uninstalled: { about: 'Historical PR card remains but its plugin is uninstalled' },
+    reference: { about: 'Another task follows this PR: its state and the link to that task' },
   },
   async ready(page) {
+    const name = await page.evaluate(() => window.__uiPage.ctx.case);
     await page.locator('[data-pr-chip]').hover();
     await page.locator('[data-pr-manage]').waitFor();
-    if ((await page.evaluate(() => window.__uiPage.ctx.case)) !== 'uninstalled')
-      await page.frameLocator('iframe').locator('[data-ghost-action="pr:follow"]').waitFor();
+    if (name !== 'uninstalled')
+      await page
+        .frameLocator('iframe')
+        .locator(`[data-ghost-action="${name === 'reference' ? 'pr:open-task' : 'pr:follow'}"]`)
+        .waitFor();
   },
   async check(page, ui) {
+    if ((await page.evaluate(() => window.__uiPage.ctx.case)) === 'reference') {
+      const frame = page.frameLocator('iframe');
+      await frame.getByText('其他任务正在跟进', { exact: true }).waitFor();
+      assert.equal(await frame.locator('[data-ghost-action="pr:follow"]').count(), 0);
+      await ui.capture('reference');
+      return;
+    }
     if ((await page.evaluate(() => window.__uiPage.ctx.case)) === 'uninstalled') {
       assert.equal(await page.locator('iframe').count(), 0);
       await ui.capture('uninstalled');
