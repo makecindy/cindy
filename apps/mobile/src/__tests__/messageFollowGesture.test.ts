@@ -1,3 +1,7 @@
+// @vitest-environment jsdom
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { useProcessDisclosureViewport } from '@/session/useProcessDisclosureViewport';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
@@ -42,13 +46,7 @@ const compiled = ts.transpileModule([
   `return { ${callbackNames.join(', ')} };`,
 ].join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
-const opacityDeclaration = renderer!.body!.statements.flatMap(node => (
-  ts.isVariableStatement(node) ? [...node.declarationList.declarations] : []
-)).find(node => ts.isIdentifier(node.name) && node.name.text === 'initialRevealOpacity')!;
-const renderOpacity = new Function('listRevealed', 'initialRevealProgress',
-  `return ${opacityDeclaration.initializer!.getText(source)};`) as (revealed: boolean, progress: object) => unknown;
-
-function harness(richContent: RichContentRuntime | null = new RichContentRuntime()) {
+function harness(richContent: RichContentRuntime | null = new RichContentRuntime(), inspection?: ReturnType<typeof useProcessDisclosureViewport>) {
   const ref = <T>(current: T) => ({ current });
   const state = {
     historyActiveRef: ref(true),
@@ -78,8 +76,14 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     const metrics = state.scrollMetricsRef.current;
     metrics.offsetY = metrics.contentHeight - metrics.viewportHeight;
   });
+  const processViewport = inspection ?? {
+    inspecting: ref(false),
+    scroll: vi.fn(),
+    resume: vi.fn(() => { processViewport.inspecting.current = false; }),
+  };
   const environment = {
     richContent,
+    processViewport,
     remoteDeviceId: 'remote-device', scrollResetKey: 'session',
     readingPosition: { write: vi.fn() }, reopeningPosition: undefined,
     captureCurrentHistoryAnchor: vi.fn((): { key: string; viewportOffset: number } | null => null),
@@ -114,7 +118,7 @@ function harness(richContent: RichContentRuntime | null = new RichContentRuntime
     contentOffset: { y: offsetY }, layoutMeasurement: { height: 800 },
   } });
   return {
-    ...callbacks, state, tailScroll, scrollEvent,
+    ...callbacks, state, tailScroll, scrollEvent, processViewport,
     readingPosition: environment.readingPosition,
     captureCurrentHistoryAnchor: environment.captureCurrentHistoryAnchor,
     initialRevealProgress: environment.initialRevealProgress,
@@ -135,6 +139,57 @@ beforeEach(() => {
 afterEach(() => { setMobileDebugSink(undefined); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('streaming follow yields to the reader', () => {
+  // Unit / #9249 r4500877064: actual hook + production handleScroll. The old
+  // harness only mocked inspection and never reached the tail with sub-1pt steps.
+  // 2000/800 range, inspect at1100, then1160->1198.5->1199->1200 must restore
+  // follow so later2500pt content remains visible, without an explicit jump.
+  it('restores process follow when the final downward samples are smaller than 1pt', () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    let viewport!: ReturnType<typeof useProcessDisclosureViewport>;
+    let h!: ReturnType<typeof harness>;
+    function Screen() {
+      viewport = useProcessDisclosureViewport(() => h.state.scrollMetricsRef.current, () => {
+        h.state.nearBottomRef.current = false;
+        h.state.userScrollForOlderRef.current = true;
+      });
+      return null;
+    }
+    const root = createRoot(document.createElement('div'));
+    try {
+      act(() => root.render(createElement(Screen)));
+      h = harness(undefined, viewport);
+      h.state.scrollMetricsRef.current.offsetY = 1100;
+      act(() => viewport.inspect(0));
+      h.handleScrollBeginDrag(h.scrollEvent(1100));
+      act(() => { for (const y of [1160, 1198.5]) h.handleScroll(h.scrollEvent(y)); });
+      expect(viewport.inspecting.current).toBe(true);
+      expect(h.state.nearBottomRef.current).toBe(false);
+      act(() => { for (const y of [1199, 1200]) h.handleScroll(h.scrollEvent(y)); });
+      expect(viewport.inspecting.current).toBe(false);
+      expect(h.state.nearBottomRef.current).toBe(true);
+      expect(h.state.userScrollForOlderRef.current).toBe(false);
+      h.handleScrollEndDrag();
+      h.handleContentSize(400, 2500);
+      settle();
+      expect(h.tailScroll).toHaveBeenCalled();
+      expect(h.state.scrollMetricsRef.current.offsetY).toBe(1700);
+    } finally { act(() => root.unmount()); }
+  });
+
+  // A layout-only tail sample cannot relinquish an existing browse intent. This executes
+  // the production callback instead of asserting its historyBrowseIntent source expression.
+  it.each(['history', 'process'] as const)('preserves %s browsing through a layout-only tail sample', (owner) => {
+    const h = harness();
+    h.state.nearBottomRef.current = false;
+    h.state.userScrollForOlderRef.current = owner === 'history';
+    h.processViewport.inspecting.current = owner === 'process';
+    h.state.scrollMetricsRef.current.offsetY = 900;
+    h.handleScroll(h.scrollEvent(1200));
+    h.handleContentSize(400, 2500);
+    settle();
+    expect(h.state.nearBottomRef.current).toBe(false);
+    expect(h.tailScroll).not.toHaveBeenCalled();
+  });
   it('defers rich content during a drag without preventing reader ownership', () => {
     const richContent = new RichContentRuntime();
     const h = harness(richContent);
@@ -220,7 +275,9 @@ describe('streaming follow yields to the reader', () => {
     settle();
     expect(h.tailScroll).not.toHaveBeenCalled();
   });
-  it('keeps revealed history opaque after a delayed native stop value and keyboard rerenders', () => {
+  // Native visibility is exercised by the mounted renderer regression in
+  // messageSourceLabelsRender; a scalar opacity expression cannot prove it.
+  it('keeps reveal state settled after a delayed native stop value and keyboard rerenders', () => {
     const h = harness();
     const progress = { value: 0 };
     let revealed = false;
@@ -229,20 +286,17 @@ describe('streaming follow yields to the reader', () => {
     h.state.initialRevealAnimationRef.current!.stop = () => {
       setTimeout(() => { progress.value = 0; }, 1);
     };
-    expect(renderOpacity(revealed, progress)).toBe(progress);
+    expect(revealed).toBe(false);
     h.revealPositionedHistory();
     expect(progress.value).toBe(1);
-    expect(renderOpacity(revealed, progress)).toBe(1);
+    expect(revealed).toBe(true);
     vi.advanceTimersByTime(1);
     expect(progress.value).toBe(0); // Native completion delivers its old hidden value.
     for (const viewportHeight of [500, 912]) {
       h.state.scrollMetricsRef.current.viewportHeight = viewportHeight;
       h.handleContentSize(400, 2000);
-      expect(renderOpacity(revealed, progress)).toBe(1);
+      expect(revealed).toBe(true);
     }
-    // A task switch resets revealed state and uses a fresh animation value.
-    const nextProgress = { value: 0 };
-    expect(renderOpacity(false, nextProgress)).toBe(nextProgress);
   });
   it.each(['off', 'on', 'failed'])('preserves reader ownership with Debug recording %s', (recording) => {
     const sink = vi.fn(() => { if (recording === 'failed') throw new Error('storage unavailable'); });

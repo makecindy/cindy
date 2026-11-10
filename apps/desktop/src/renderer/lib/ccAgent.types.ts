@@ -1,3 +1,4 @@
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type { ImMessageSource } from '../../shared/imMessageSource';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
@@ -127,6 +128,8 @@ export interface CcMeta {
   assistantPhase?: string;
   /** Native text item identity, used to reconcile streamed and imported history. */
   agentMessageId?: string;
+  /** Codex item text is durable but its sampling request has not yet been accepted. */
+  samplingAttemptPending?: false | { runtimeId: string };
   /** Exact native sampling attempt that failed before response completion. Original text is retained. */
   failedSamplingAttempt?: { threadId: string; turnId: string; attempt: number; itemId: string; error?: string };
   uuid?: string;
@@ -595,5 +598,6 @@ export interface Message {
   agentKind?: 'cc' | 'codex' | 'pi' | null;
   /** Structured guard details for a persisted tool-loop terminal error. */
   toolLoop?: ToolLoopErrorDetails;
+  outputLimit?: OutputLimitDetails;
   createdAt: string; // ISO 8601
 }

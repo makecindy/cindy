@@ -13,10 +13,15 @@ const h = vi.hoisted(() => ({
   resolveError: null as Error | null,
   bridge: vi.fn(async () => 'http://127.0.0.1:5555'),
   spawn: vi.fn(),
+  workers: [] as EventEmitter[],
 }));
 
 vi.mock('electron', () => ({ app: { isPackaged: true, getPath: () => '/tmp/cindy-test-user-data' } }));
-vi.mock('@cindy/maker-core', () => ({ cleanProcessEnv: () => ({ PATH: '/usr/bin' }) }));
+vi.mock('@cindy/maker-core', async () => {
+  // Keep the real status parser under test; only the ambient env is stubbed.
+  const actual = await vi.importActual<typeof import('@cindy/maker-core')>('@cindy/maker-core');
+  return { cleanProcessEnv: () => ({ PATH: '/usr/bin' }), parseClaudeCliLoginStatus: actual.parseClaudeCliLoginStatus };
+});
 vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => h.binary }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -32,7 +37,22 @@ vi.mock('@cindy/anthropic-compat-proxy', async (original) => ({
   hasProxyEnvConfig: () => h.envProxy,
 }));
 vi.mock('../claude-cli-proxy-bridge.js', () => ({ ensureClaudeCliProxyBridge: h.bridge }));
-vi.mock('node:child_process', () => ({ spawn: h.spawn }));
+vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
+vi.mock('node:worker_threads', () => ({
+  Worker: class extends EventEmitter {
+    constructor(_file: string, { workerData }: { workerData: { binary: string; env: NodeJS.ProcessEnv } }) {
+      super();
+      h.workers.push(this);
+      // The worker transport is simulated; existing status/login cases still
+      // drive the production client and observe the public authentication result.
+      const child = h.spawn(workerData.binary, ['auth', 'status', '--json'], { env: workerData.env });
+      let stdout = '';
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.once('error', (error: Error) => this.emit('error', error));
+      child.once('close', () => { this.emit('message', { stdout }); this.emit('exit', 0); });
+    }
+  },
+}));
 
 import {
   claudeCliNetworkEnv,
@@ -92,9 +112,24 @@ beforeEach(() => {
   h.bridge.mockClear();
   h.bridge.mockImplementation(async () => 'http://127.0.0.1:5555');
   h.spawn.mockReset();
+  h.workers.length = 0;
 });
 
 describe('parseClaudeCliLoginStatus', () => {
+  it('isolates concurrent custom profiles without publishing them as the default CLI login', async () => {
+    h.spawn.mockImplementation((_binary: string, _args: string[], options: { env: Record<string, string> }) =>
+      fakeChild({ stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: options.env.CLAUDE_CONFIG_DIR ?? 'default' }) }));
+    const [a, b] = await Promise.all([
+      refreshClaudeCliLoginStatus({ configDir: '/profiles/a' }),
+      refreshClaudeCliLoginStatus({ configDir: '/profiles/b' }),
+    ]);
+    expect(a.email).toBe('/profiles/a');
+    expect(b.email).toBe('/profiles/b');
+    expect(peekClaudeCliLoginStatus()).toBeNull();
+    await refreshClaudeCliLoginStatus();
+    expect(peekClaudeCliLoginStatus()?.email).toBe('default');
+    expect(h.spawn.mock.calls[2][2].env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
+  });
   it('只把 Claude.ai 订阅账号的 OAuth 登录当作 Claude 订阅', () => {
     expect(parseClaudeCliLoginStatus(SUBSCRIPTION)).toEqual({
       loggedIn: true,
@@ -167,6 +202,19 @@ describe('claudeCliNetworkEnv', () => {
 });
 
 describe('登录态读取', () => {
+  // KFJS unit regression: a worker dying before its response must release the
+  // in-flight status query and keep the previous login result (no hung refresh).
+  it('worker 提前退出时保留上次状态，force 可以重新查询', async () => {
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: SUBSCRIPTION }));
+    await refreshClaudeCliLoginStatus();
+    h.spawn.mockImplementationOnce(() => fakeChild('hang'));
+    const pending = refreshClaudeCliLoginStatus({ force: true });
+    await vi.waitFor(() => expect(h.workers).toHaveLength(2));
+    h.workers[1]!.emit('exit', 1);
+    await expect(pending).resolves.toMatchObject({ loggedIn: true });
+    h.spawn.mockImplementationOnce(() => fakeChild({ stdout: LOGGED_OUT, code: 1 }));
+    await expect(refreshClaudeCliLoginStatus({ force: true })).resolves.toMatchObject({ loggedIn: false });
+  });
   it('读失败后退避,期间不再反复拉起 CLI;force 绕过退避', async () => {
     h.spawn.mockImplementation(() => fakeChild({ error: new Error('ENOENT') }));
     await expect(refreshClaudeCliLoginStatus()).resolves.toEqual({ loggedIn: false });

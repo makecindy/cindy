@@ -1059,7 +1059,17 @@ export async function awaitBackgroundCheckout(sessionId: string): Promise<void> 
   await backgroundCheckouts.get(sessionId)?.catch(() => undefined);
 }
 
-export async function createWorktree(req: CreateWorktreeReq, options?: { trackBackgroundCheckout?: boolean }): Promise<CreateWorktreeResp> {
+export interface CreateWorktreeOptions {
+  /** Keep a handle on the background checkout so failure compensation can wait for it. */
+  trackBackgroundCheckout?: boolean;
+  /**
+   * Return only after the whole tree is checked out, and fail (with rollback) if that checkout fails.
+   * For callers that hand the directory to a running agent, which must not see a half-written tree.
+   */
+  awaitFullCheckout?: boolean;
+}
+
+export async function createWorktree(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
   const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
     assertPrecreatedSessionNotCancelled(req.sessionId);
     return createWorktreeInner(req, options);
@@ -1067,7 +1077,7 @@ export async function createWorktree(req: CreateWorktreeReq, options?: { trackBa
   return withPrecreatedWorktreeOperationQueue(req.sessionId, create);
 }
 
-async function createWorktreeInner(req: CreateWorktreeReq, options?: { trackBackgroundCheckout?: boolean }): Promise<CreateWorktreeResp> {
+async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
@@ -1279,6 +1289,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: { trackBack
         await bgPromise?.catch(() => undefined);
         throw error;
       }
+      if (options?.awaitFullCheckout && bgPromise) await bgPromise;
       // store + DB
       const meta: WorktreeMeta = {
         sessionId: req.sessionId,

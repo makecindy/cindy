@@ -352,6 +352,22 @@ describe('GhostInstallReceiptStore cleanup', () => {
   });
 
   // Rule: approved control points persist across reads, keep only names this manifest still declares,
+  // Contract: old receipts stay approved without auto grants; only still-declared grants persist.
+  it('round trips explicit auto tool grants without granting predeclared tools', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.tools = [{ name: 'read', description: 'Read', approval: 'auto' },
+      { name: 'write', description: 'Write', approval: 'each-call' }];
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.approvedAutoTools).toBeUndefined();
+    await store.write({ ...old.receipt, approvedAutoTools: ['read', 'read', 'write', 'unknown'] });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: {
+      approvedAutoTools: ['read'], revision: receipt.revision,
+    } });
+  });
+
+  // Rule: approved control points persist across reads, keep only names this manifest still declares,
   // and an older receipt without the field stays approved with no control point granted.
   it('round trips approved control points and keeps older receipts approved without them', async () => {
     const receipt = createSetupReceipt();
@@ -379,6 +395,19 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(old.receipt.observeCapabilityApproved).toBeUndefined();
     await store.write({ ...old.receipt, observeCapabilityApproved: true });
     expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { observeCapabilityApproved: true, revision: receipt.revision } });
+  });
+
+  it('round trips companions approval without inferring it from other grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, observe: true, companions: true };
+    receipt.taskCapabilityApproved = true;
+    receipt.observeCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt).not.toHaveProperty('companionsCapabilityApproved');
+    await store.write({ ...old.receipt, companionsCapabilityApproved: true });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { companionsCapabilityApproved: true, revision: receipt.revision } });
   });
 
   it('writes setup in the author format accepted by the v0.1.48 receipt reader', async () => {

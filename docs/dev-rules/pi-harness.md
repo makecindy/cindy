@@ -102,6 +102,13 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 超时或回复无效时使用普通档；已开启的正常请求仍发送 `service_tier: priority`。
 这修复偏好文件被改写或重放的路径，不改变 Pi Full Access 的原生 shell 权限边界。
 
+### 普通提问与操作交接
+
+同步提问继续使用 `ask_user_question`；异步提问直接展示 `ask_user_question_async`，
+从宿主 `cindy_helper` 已注册的定义获取说明与参数，执行仍走同一 MCP 通道及真实权限身份。
+宿主未提供时不注册，不另建卡片或答案队列。独立的 `request_input_handoff` 直接注册并复用宿主 schema，处理窗口与截图二维码；
+不承接普通提问。异步问题随本轮结束或被替换而失效，用户答案经同轮 steer 交回。
+
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
 ### 请求计时与档位核验
@@ -142,6 +149,20 @@ low→low、声明的 medium→high，以及不支持 low→默认 high；它验
 主干已有 `SendOptions.toolsDisabled`，通过 host-owned 输入标记阻止本轮工具执行；
 它不是移除请求工具 schema 的优化，不能描述成“只给模型两个工具”或“无工具请求”。
 是否精简工具与 system prompt 需实际请求单变量对照；不借诊断改动删掉 Pi 原生能力。
+
+Pi 的答案交付说明常驻可直接执行的基础协议，覆盖图表、媒体、布局、统计与 Mermaid，
+基础富媒体不依赖模型主动读取。交互控件、计算、SVG 等进阶能力使用前经现有 MCP 网关调用
+`cindy_helper.call_tool({name:"get_capabilities",args:{key:"rich-answers"}})` 获取完整协议；
+完整协议仍由 `RICH_ANSWER_GUIDE` 维护，常驻子集需与其保持一致；普通 Markdown 和基础
+组件无需读取。只调整 Pi 的 Host 追加段，不替换 Pi 原生提示词、不裁剪用户／项目规则、
+不增减工具。新运行实例采用精简协议；
+不为精简而重启活动实例或改写原生历史。
+
+上下文详情的 `textEstimate` 是可选诊断：按需读取原生 `get_messages` 的活动投影，合并
+system section 与工具增删，按启动时实际追加文本匹配来源；匹配不到的追加段归其他指令。
+分项采用 ASCII 四字符／非 ASCII 一字符一 token 的粗估，明确排除图片和供应商格式开销；
+不与原生总量强行配平，不参与计费、压缩或窗口判断。仅返回来源类别与数值，不将提示词／
+工具正文传到界面。旧 Pi 缺 system 快照或诊断读取失败时保留原生总量，不伪造分项。
 
 图片能力未声明时，Pi 的模型配置与发送校验默认允许图片输入，不因新型号缺少能力资料而
 提前拦截。目录、原生模型资料或用户配置明确声明 `supportsImageInput: false` / `input: ['text']`

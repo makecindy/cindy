@@ -53,6 +53,16 @@ import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { AuthRefreshBackoff } from './authRefreshBackoff';
+import {
+  ACCOUNT_DELETION_RECEIPT_KEY,
+  AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
+  AUTH_ACCOUNT_VAULT_KEY,
+  AUTH_SESSION_KEY,
+  LEGACY_ACCOUNT_REFRESH_TOKEN_KEY,
+  LEGACY_REFRESH_TOKEN_KEY,
+  LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
+  PERSISTED_AUTH_CREDENTIAL_KEYS,
+} from './authCredentialKeys';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
 import {
   runRefreshWithReplacementRetry,
@@ -203,20 +213,14 @@ const AUTH_REGION: AuthRegion =
 function authServerUrl(realm: AuthRegion = activeAuthRealm): string {
   return getClientEndpointForRealm(realm, 'authApiBaseUrl');
 }
-const AUTH_SESSION_KEY = 'cindy_auth_session_v1';
-const AUTH_ACCOUNT_VAULT_KEY = 'cindy_auth_accounts_v1';
 const AUTH_ACCOUNT_VAULT_LOCK_FILE = '.cindy-auth-accounts-v1.lock';
-const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY = 'cindy_auth_account_logout_tombstones_v1';
 // The aggregate vault stays readable by v1 clients for explicit-login
 // compatibility. Per-membership logout tombstones live in a separate key that
 // older clients never read or rewrite, so their Passport sync cannot resurrect
 // an account explicitly logged out by a newer client.
 const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;
 const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;
-const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy_auth_refresh_token';
-const ACCOUNT_DELETION_RECEIPT_KEY = 'cindy_auth_account_deletion_receipt';
-const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'cindy_auth_account_refresh_token';
-const LEGACY_REFRESH_TOKEN_KEY = 'refresh_token';
+
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_EFFORT = 'medium';
 
@@ -513,6 +517,34 @@ export function isPassiveSharedUserDataInstance(): boolean {
   return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
 }
 
+let delegatedAuthState: AuthState | null = null;
+let authRefreshOverride: ((options?: { serverRejectedToken?: boolean }) => Promise<AuthState>) | null = null;
+/**
+ * In host client mode, the background cindy-host is the single writer that
+ * owns token refresh and rotation. This override delegates refresh without
+ * touching persisted credentials on disk.
+ */
+export function setAuthRefreshOverride(
+  fn: ((options?: { serverRejectedToken?: boolean }) => Promise<AuthState>) | null,
+): void {
+  authRefreshOverride = fn;
+  delegatedAuthState = null;
+}
+
+export function receiveHostAuthState(state: AuthState): void {
+  if (!authRefreshOverride) throw new Error('Host auth state requires explicit client mode');
+  // The Host owns durable credentials and owner selection. This client only
+  // commits its in-memory owner so local readers never fall back to a stale
+  // account (and a remote logout clears that owner before notifying windows).
+  if (state.isAuthenticated && state.user?.id) {
+    commitVolatileAppSession('cloud', state.user.id);
+  } else {
+    commitVolatileAppSession('signed-out');
+  }
+  delegatedAuthState = state;
+  notifyRenderer();
+}
+
 /**
  * passive 实例「本进程已登出」的墓碑(进程内,不落盘)。
  *
@@ -640,14 +672,7 @@ function readSafe(key: string): string | null {
 // logout tombstones. Only definite absence permits the fresh-profile login UI;
 // checking filenames does not probe the encryption backend or decrypt anything.
 function hasPotentiallyPersistedAuthCredentials(): boolean {
-  return [
-    AUTH_SESSION_KEY,
-    AUTH_ACCOUNT_VAULT_KEY,
-    AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
-    LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
-    LEGACY_ACCOUNT_REFRESH_TOKEN_KEY,
-    LEGACY_REFRESH_TOKEN_KEY,
-  ].some((key) =>
+  return PERSISTED_AUTH_CREDENTIAL_KEYS.some((key) =>
     ['', '.bak'].some((suffix) => {
       try {
         fs.accessSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc${suffix}`), fs.constants.F_OK);
@@ -3220,7 +3245,6 @@ function scheduleRefresh(token: string): void {
  * 系统 resume 或冷启动)。失败采用带随机抖动的指数退避,避免全体客户端集中重试;
  * 确定性凭据失效不走这里(直接 clearAuth + 弹重登)。
  */
-const RUNTIME_REFRESH_RETRY_MS = 60_000;
 const REFRESH_TOKEN_REPLACEMENT_RETRY_LIMIT = 2;
 const COLD_START_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [100, 250] as const;
 const RUNTIME_REFRESH_TOKEN_REPLACEMENT_RECHECK_DELAYS_MS = [250, 1000] as const;
@@ -3476,9 +3500,18 @@ function stopColdStartRecovery(): void {
   coldStartRetryWait?.(true);
 }
 
-function scheduleRefreshRetryAfterTransientFailure(epoch: number, retryAt?: number): void {
+function scheduleRefreshRetryAfterTransientFailure(
+  epoch: number,
+  retryAt?: number,
+  networkFailure = false,
+): void {
   if (epoch !== authStateEpoch) return;
-  const delay = refreshBackoff.defer(epoch, retryAt);
+  refreshBackoff.defer(epoch, retryAt, networkFailure);
+  scheduleRefreshRetry(epoch);
+}
+
+function scheduleRefreshRetry(epoch: number): void {
+  const delay = refreshBackoff.runtimeRemaining(epoch);
   if (refreshTimer !== null) {
     clearTimeout(refreshTimer);
     refreshTimer = null;
@@ -3487,7 +3520,7 @@ function scheduleRefreshRetryAfterTransientFailure(epoch: number, retryAt?: numb
   // retry; re-arm it in bounded chunks without extending the original wait.
   const retry = () => {
     if (authStateEpoch !== epoch) return;
-    const remaining = refreshBackoff.remaining(epoch);
+    const remaining = refreshBackoff.runtimeRemaining(epoch);
     if (remaining > 0) refreshTimer = setTimeout(retry, Math.min(remaining, 2_147_483_647));
     else {
       refreshTimer = null;
@@ -3594,6 +3627,7 @@ function broadcastToRenderers(channel: string, payload: unknown): void {
  * 修改直接写 auth-server(updateServerProfile),本地覆写层已退役。
  */
 function snapshotAuthState(): AuthState {
+  if (delegatedAuthState) return delegatedAuthState;
   const appSession = getActiveAppSession();
   const isCloudAuthenticated =
     appSession.mode === 'cloud' && accessToken !== null && currentUser !== null;
@@ -3696,6 +3730,25 @@ function notifyAuthListeners(): void {
       l(state);
     } catch (err) {
       log.error('auth state listener threw (non-fatal)', err);
+    }
+  }
+}
+
+// Token rotation does not imply an identity change. Connections rejected with 401
+// need this synchronous signal even when the retry was started by our timer.
+const accessTokenRefreshListeners = new Set<() => void>();
+
+export function onAccessTokenRefreshed(listener: () => void): () => void {
+  accessTokenRefreshListeners.add(listener);
+  return () => accessTokenRefreshListeners.delete(listener);
+}
+
+function notifyAccessTokenRefreshed(): void {
+  for (const listener of accessTokenRefreshListeners) {
+    try {
+      listener();
+    } catch (err) {
+      log.error('access token refresh listener threw (non-fatal)', err);
     }
   }
 }
@@ -4667,6 +4720,10 @@ export async function updateServerProfile(
 }
 
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
+  if (authRefreshOverride) {
+    receiveHostAuthState(await authRefreshOverride());
+    return delegatedAuthState!;
+  }
   const initializeStartEpoch = authStateEpoch;
   const settledLoginsAtInitialize = settledLoginCommitCount;
   // A renderer can mount after the boundary-pending broadcast. Keep startup
@@ -4829,14 +4886,10 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   // 进程内去重:主窗流程还挂着(黑洞网络)时,副窗 / 右侧栏窗口 mount 触发的
   // initialize() 复用同一个 in-flight promise,避免并发轮换同一枚 refresh token。
   if (coldStartAuthInFlight === null) {
-    coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(
-      () => {
-        // Keep every fallback edge until the shared refresh settles: sibling renderer
-        // timeouts may append another edge while the network flow is still pending.
-        coldStartTimeoutFallbacks.clear();
-        coldStartAuthInFlight = null;
-      },
-    );
+    coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(() => {
+      coldStartTimeoutFallbacks.clear();
+      coldStartAuthInFlight = null;
+    });
   }
   // 黑洞 / captive-portal 网络护栏:限时等待,超时先以未登录返回解锁 splash,
   // 流程继续后台跑;迟到成功由流程内部广播登录态(renderer 自动跳回主界面)。
@@ -6046,7 +6099,11 @@ export async function dispatchLoginAction(action: unknown): Promise<DesktopLogin
   }
 }
 
-export async function refresh(_options?: { networkRecovered?: boolean }): Promise<boolean> {
+export async function refresh(options?: { serverRejectedToken?: boolean }): Promise<boolean> {
+  if (authRefreshOverride !== null) {
+    receiveHostAuthState(await authRefreshOverride(options));
+    return delegatedAuthState!.isAuthenticated;
+  }
   if (getActiveAppSession().mode === 'local') {
     log.debug('runtime refresh skipped in local mode');
     return false;
@@ -6054,13 +6111,19 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
   // Cold-start recovery owns rotation until it settles. Runtime callers must
   // not consume the same saved refresh token concurrently, or wait indefinitely.
   if (coldStartAuthInFlight !== null && (!accessToken || !currentUser)) return false;
-  // A fleet may observe relay recovery at once. Keep accepting the legacy hint,
-  // but never let it reset the failure count or bypass the randomized deadline.
-  if (refreshPromise !== null) return refreshPromise;
   // Explicit callers (including chat polling and resume) share the same wait
   // as the retry timer; skipped calls must not move the deadline forward.
-  if (refreshBackoff.remaining(authStateEpoch) > 0) return false;
+  if (options?.serverRejectedToken && refreshBackoff.serverRejectedToken(authStateEpoch)) {
+    scheduleRefreshRetry(authStateEpoch);
+  }
+  if (refreshPromise !== null) return refreshPromise;
+  if (refreshBackoff.runtimeRemaining(authStateEpoch) > 0) return false;
+  if (refreshTimer !== null) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
 
+  refreshBackoff.startRuntimeAttempt(authStateEpoch);
   refreshPromise = (async () => {
     const refreshEpoch = authStateEpoch;
     const refreshWasSuperseded = (point: string): boolean => {
@@ -6180,14 +6243,14 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
           });
         } else if (action.kind === 'replacement-retry') {
           log.warn(
-            `runtime refresh failed for a stale token after replacement retries status=${result.status} code=${code ?? '<none>'} — retrying no sooner than ${RUNTIME_REFRESH_RETRY_MS / 1000}s`,
+            `runtime refresh failed for a stale token after replacement retries status=${result.status} code=${code ?? '<none>'} — scheduling retry`,
           );
-          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt);
+          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt, result.status === 0);
         } else {
           log.warn(
-            `runtime refresh failed transiently status=${result.status} code=${code ?? '<none>'} — retrying no sooner than ${RUNTIME_REFRESH_RETRY_MS / 1000}s`,
+            `runtime refresh failed transiently status=${result.status} code=${code ?? '<none>'} — scheduling retry`,
           );
-          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt);
+          scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt, result.status === 0);
         }
         return false;
       }
@@ -6300,6 +6363,7 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
           expectedUserId: nextUser.id,
         });
         scheduleRefresh(data.accessToken);
+        notifyAccessTokenRefreshed();
         notifyRenderer();
         if (previousUserId !== nextUser.id || authRealmChanged || membershipKindChanged) {
           notifyAuthListeners();
@@ -6335,6 +6399,7 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
       await migrateLocalProviderBindingsAfterCloudCommit(nextUser.id);
       persistedRefreshTokenNeedsIdentityCheck = false;
       scheduleRefresh(data.accessToken);
+      notifyAccessTokenRefreshed();
       notifyRenderer();
       if (authRealmChanged || membershipKindChanged) {
         notifyAuthListeners();

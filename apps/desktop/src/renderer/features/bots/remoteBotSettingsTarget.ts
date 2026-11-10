@@ -1,3 +1,4 @@
+import { BOT_IM_CHANNELS } from '../../../shared/botImConnection';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
@@ -76,6 +77,12 @@ export function createRemoteProfileStore(deviceId: string, botId: string, accept
         ...(capabilityBaseline ? { capabilityBaseline } : {}),
         ...(profilePatch.avatar !== undefined ? { expectedAvatar: before.avatar } : {}),
       };
+      if (Array.isArray(profilePatch.capabilities?.modelChain)) {
+        // The chain carries every execution location. Its scalar mirror is
+        // host-derived; older settings hosts reject that newer top-level field.
+        const { agentDeviceId: _locationMirror, ...capabilities } = profilePatch.capabilities;
+        body.capabilities = capabilities;
+      }
       let saved = 0;
       try {
         let raw: unknown;
@@ -212,7 +219,8 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
     autonomyListeners.forEach((listener) => listener());
   };
 
-  const call2 = <T>(op: BotSettingsOp, args?: Record<string, unknown>) => invokeBotSettings<T>(deviceId, op, botId, args);
+  const call2 = <T>(op: BotSettingsOp, args?: Record<string, unknown>) => invokeBotSettings<T>(deviceId, op, botId,
+    op.startsWith('channels.im.') ? { ...args, supportedChannels: [...BOT_IM_CHANNELS] } : args);
   const im: BotSettingsTarget['channels']['im'] = {
     list: () => call2('channels.im.list'),
     // Tokens and secrets are typed where they are stored; a remote page never takes or sends them.

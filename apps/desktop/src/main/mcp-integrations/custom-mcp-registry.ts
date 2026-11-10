@@ -13,6 +13,7 @@
  * refresh 会把数组里旧的 CustomMcpProvider 全部移除、按当前 DB 重新追加。
  */
 
+import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { createLogger } from '../logger.js';
 import type { McpProvider } from '@cindy/maker-core';
 
@@ -64,6 +65,13 @@ export function getBuiltinMcpServerNames(): string[] {
   return [...names];
 }
 
+/** Read current rows using the same admission rules as provider registration. */
+export async function listRegistrableCustomMcpServers() {
+  const configs = await listCustomMcpServers();
+  const reservedIds = getBuiltinMcpServerNames();
+  return configs.filter(config => validateCustomMcpConfig(config, reservedIds).ok);
+}
+
 /** @deprecated 测试别名，直接用 resetCustomMcpRegistry。 */
 export const __resetCustomMcpRegistryForTest = resetCustomMcpRegistry;
 
@@ -72,11 +80,16 @@ export const __resetCustomMcpRegistryForTest = resetCustomMcpRegistry;
  * (移除旧 CustomMcpProvider,追加新的)。任何一步失败只 warn,不抛。
  */
 export async function refreshCustomMcpProviders(): Promise<void> {
+  // Maker may be constructed before localDb. onReady refreshes again before
+  // publishing account-provider readiness; a missing DB is not an empty registry.
+  const owner = getCurrentDbClientSnapshot();
+  if (!owner) return;
   let providers: CustomMcpProvider[] = [];
   // 按名字去重统计：同一个撞名配置会在每个已注册数组各命中一次，累加会虚报。
   const skippedNames = new Set<string>();
   try {
     const configs = await listCustomMcpServers();
+    if (getCurrentDbClientSnapshot() !== owner) return;
     const reservedIds = getBuiltinMcpServerNames();
     providers = configs.flatMap((config) => {
       const validation = validateCustomMcpConfig(config, reservedIds);

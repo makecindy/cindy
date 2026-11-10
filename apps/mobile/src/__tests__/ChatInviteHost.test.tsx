@@ -1,3 +1,4 @@
+import { stackState, reduceStack } from './navigationFixture';
 // @vitest-environment jsdom
 // Test value: real Host + intent/native entry; a controlled sheet substitutes only
 // the separately-owned preview/accept UI. Protects A2's login, single-presentation
@@ -11,13 +12,21 @@ import type { ComponentProps } from 'react';
 import { StackRouter } from 'expo-router/build/react-navigation/routers/StackRouter';
 
 const h = vi.hoisted(() => ({
-  push: vi.fn(), resetRoot: vi.fn(), wrapped: false,
+  push: vi.fn(), reset: vi.fn(), wrapped: false,
   routes: [] as Array<{ name: string; key: string; params?: Record<string, unknown> }>,
   auth: { user: null as { id: string } | null },
   sheets: [] as any[],
 }));
+function appState() {
+  return { key: 'app-stack', type: 'stack', routeKeySeq: 10, stale: false,
+    routeNames: ['index', 'devices/index', 'settings/index', 'sessions/[sessionId]', 'companions/groups/[groupId]'],
+    index: h.routes.length - 1, routes: h.routes };
+}
 vi.mock('expo-router', () => ({ useRouter: () => ({ push: h.push }),
-  useNavigationContainerRef: () => ({ getRootState: () => h.wrapped ? ({ index: 0, routes: [{ name: "__root", key: "expo-root", state: { index: h.routes.length - 1, routes: h.routes } }] }) : ({ index: h.routes.length - 1, routes: h.routes }), resetRoot: h.resetRoot }),
+  useNavigationContainerRef: () => ({ getRootState: () => h.wrapped
+    ? { key: 'root-stack', routeKeySeq: 1, stale: false, routeNames: ['__root'], index: 0, routes: [{ name: '__root', key: 'expo-root', state: appState() }] }
+    : appState(),
+    dispatch: (action: any) => { expect(action.target).toBe('app-stack'); h.reset(action.payload); } }),
 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
 vi.mock('@/chat/useClipboardChatInvite', () => ({ useClipboardChatInvite: vi.fn() }));
@@ -48,7 +57,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(() => {
   const pending = getChatInviteIntent();
   if (pending) closeChatInvite(pending.id);
-  setMobileAuthOwner(null); h.auth.user = null; h.sheets = []; h.push.mockClear(); h.resetRoot.mockClear();
+  setMobileAuthOwner(null); h.auth.user = null; h.sheets = []; h.push.mockClear(); h.reset.mockClear();
   h.wrapped = false; h.routes = [{ name: 'devices/index', key: 'home-existing' }];
   ready = false; container = document.createElement('div'); root = createRoot(container);
 });
@@ -80,21 +89,21 @@ describe('the single mobile invitation host', () => {
     const home = { name: 'devices/index', key: 'home-existing', params: { scroll: 'preserved' } };
     h.routes = [home, { name: 'sessions/[sessionId]', key: 'task', params: { sessionId: 'old-task' } }];
     signIn('owner'); ready = true; render(); openLink();
-    expect(h.resetRoot).not.toHaveBeenCalled();
+    expect(h.reset).not.toHaveBeenCalled();
     act(() => latest().onClose());
-    expect(h.resetRoot).not.toHaveBeenCalled();
+    expect(h.reset).not.toHaveBeenCalled();
     act(() => latest().onJoined(groupId));
     expect(h.push).not.toHaveBeenCalled();
-    expect(h.resetRoot).toHaveBeenCalledOnce();
-    const reset = h.resetRoot.mock.calls[0]![0];
+    expect(h.reset).toHaveBeenCalledOnce();
+    const reset = h.reset.mock.calls[0]![0];
     expect(reset.routes[0]).toEqual(home);
     expect(reset.routes).toHaveLength(2);
     expect(reset.routes[1]).toEqual({ name: 'companions/groups/[groupId]', params: { groupId } });
     // Execute the actual Expo stack reducer: native/system GO_BACK must land on home.
     const stack = StackRouter({});
-    const config = { routeNames: ['devices/index', 'sessions/[sessionId]', 'companions/groups/[groupId]'], routeParamList: {}, routeGetIdList: {} };
-    const joined = stack.getRehydratedState({ ...reset, stale: true } as never, config);
-    const back = stack.getStateForAction(joined, { type: 'GO_BACK' }, config);
+    const config = { routeNames: appState().routeNames, routeParamList: {}, routeGetIdList: {} };
+    const joined = reduceStack(stack, stackState(config), { type: 'RESET', payload: reset }, config);
+    const back = reduceStack(stack, joined, { type: 'GO_BACK' }, config);
     expect(back?.routes[back.index ?? 0].key).toBe(home.key);
   });
 
@@ -102,7 +111,7 @@ describe('the single mobile invitation host', () => {
     h.routes = [{ name: 'settings/index', key: 'settings' }];
     signIn('owner'); ready = true; render(); openLink();
     act(() => latest().onClose()); act(() => latest().onJoined(groupId));
-    expect(h.resetRoot).toHaveBeenCalledExactlyOnceWith({ index: 1, routes: [
+    expect(h.reset).toHaveBeenCalledExactlyOnceWith({ ...appState(), index: 1, routes: [
       { name: 'devices/index' }, { name: 'companions/groups/[groupId]', params: { groupId } },
     ] });
   });
@@ -111,7 +120,7 @@ describe('the single mobile invitation host', () => {
     h.routes = [{ name: 'devices/index', key: 'home' }, { name: 'settings/index', key: 'settings' }];
     signIn('owner'); ready = true; render(); openLink();
     act(() => latest().onClose());
-    expect(h.push).not.toHaveBeenCalled(); expect(h.resetRoot).not.toHaveBeenCalled();
+    expect(h.push).not.toHaveBeenCalled(); expect(h.reset).not.toHaveBeenCalled();
   });
 
   it('retains the target but ignores stale success/close callbacks across account switching', () => {
@@ -174,16 +183,16 @@ it.each([false, true])('opens the group inside the real Expo root (warm=%s)', wa
   signIn('owner'); ready = true; render(); openLink();
   act(() => latest().onClose()); act(() => latest().onJoined(groupId));
   if (!warm) {
-    expect(h.resetRoot).not.toHaveBeenCalled();
+    expect(h.reset).not.toHaveBeenCalled();
     expect(h.push).toHaveBeenCalledExactlyOnceWith({ pathname: '/companions/groups/[groupId]', params: { groupId } });
     return;
   }
-  const reset = h.resetRoot.mock.calls[0]?.[0];
-  expect(reset.routes[0]).toMatchObject({ name: '__root', key: 'expo-root' });
+  const reset = h.reset.mock.calls[0]?.[0];
+  expect(reset.key).toBe('app-stack');
   const stack = StackRouter({});
-  const config = { routeNames: ['index', 'settings/index', 'companions/groups/[groupId]'], routeParamList: {}, routeGetIdList: {} };
-  const joined = stack.getRehydratedState({ ...reset.routes[0].state, stale: true } as never, config);
+  const config = { routeNames: appState().routeNames, routeParamList: {}, routeGetIdList: {} };
+  const joined = reduceStack(stack, stackState(config), { type: 'RESET', payload: reset }, config);
   expect(joined.routes[joined.index]).toMatchObject({ name: 'companions/groups/[groupId]', params: { groupId } });
-  const back = stack.getStateForAction(joined, { type: 'GO_BACK' }, config);
+  const back = reduceStack(stack, joined, { type: 'GO_BACK' }, config);
   expect(back?.routes[back.index ?? 0].key).toBe(home.key);
 });

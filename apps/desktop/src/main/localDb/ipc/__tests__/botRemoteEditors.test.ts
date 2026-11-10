@@ -147,7 +147,7 @@ describe('portable teammate editors', () => {
     expect(f.entries(shelf, 'skills')).toMatchObject([{ resourceId: 'settings:bot-a/skills/learned', subtitle: { fallback: 'Off' } }]);
     const core = await f.resource('settings:bot-a/skills/_core');
     expect(core.actions ?? []).toEqual([]);
-    expect(core.blocks!.map(block => block.fallbackMarkdown)).toEqual([expect.stringContaining('了解自己'), '## teammate-guide\nOff: routine']);
+    expect(core.blocks!.map(block => block.fallbackMarkdown)).toEqual([expect.stringContaining('了解与设置 Cindy'), '## teammate-guide\nOff: routine']);
     expect(f.deps.coreGuide).toHaveBeenCalledWith(['routine']);
     // `_` never collides with a learned slug, and only the three system ids exist.
     await expect(f.resource('settings:bot-a/skills/_memory')).rejects.toThrow();

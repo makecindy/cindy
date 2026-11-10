@@ -27,6 +27,15 @@ function message(patch: Partial<RemoteMessage> & Pick<RemoteMessage, 'id' | 'rol
 }
 
 describe('normalizeRemoteMessages', () => {
+  it('localizes reasoning usage in persisted output-limit messages', () => {
+    const items = normalizeRemoteMessages([message({ id: 'limited', role: 'error', content: JSON.stringify({
+      message: 'limit', reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 },
+    }) })]);
+    expect(items[0]).toMatchObject({ kind: 'system', label: 'error' });
+    expect((items[0] as { body: string }).body).toContain('131064');
+    expect((items[0] as { body: string }).body).toContain(i18n.t('session.tail.outputLimitReasoning'));
+  });
+
   it('renders a host model-change record as one separator, without an empty reply', () => {
     const output = normalizeRemoteMessages([message({
       id: 'model-boundary', role: 'assistant', content: '',
@@ -900,6 +909,14 @@ describe('normalizeRemoteMessages', () => {
     ]);
 
     expect(items).toEqual([]);
+  });
+
+  it('keeps distinct answers in history when question titles are identical', () => {
+    const items = normalizeRemoteMessages([message({ id: 'answered-ids', role: 'ask_user', content: {
+      status: 'answered', questions: [{ id: 'first', question: 'Choose?' }, { id: 'second', question: 'Choose?' }],
+      answers: { first: 'A', second: 'B' },
+    } })]);
+    expect(items[0]).toMatchObject({ kind: 'ask_user', body: 'Q: Choose?\nA: A\n\nQ: Choose?\nA: B' });
   });
 
   it('renders only answered ask_user history as question and answer pairs', () => {

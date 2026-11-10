@@ -80,6 +80,20 @@ export function parseSvgIntrinsicSize(svgText: string): { width: number; height:
   return null;
 }
 
+/** 半透明背景(壁纸模式下的页面内面)叠在主题页底上合成为不透明色。 */
+function flattenOverSurface(bg: string): string {
+  if (bg.startsWith('rgb(')) return bg;
+  const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  const surface = window.getComputedStyle(document.documentElement).getPropertyValue('--surface').trim();
+  if (!ctx || !surface) return bg;
+  ctx.fillStyle = surface;
+  ctx.fillRect(0, 0, 1, 1);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 /**
  * 导出实底色:从触发元素向上找第一个非透明 computed backgroundColor
  * (即块自己所在的主题底色,天然走 token 不硬编码);全透明时回退
@@ -91,7 +105,7 @@ export function resolveExportBackground(from?: Element | null): string {
   while (el) {
     const bg = window.getComputedStyle(el).backgroundColor;
     if (bg && bg !== 'transparent' && !/^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0\s*\)$/.test(bg)) {
-      return bg;
+      return flattenOverSurface(bg);
     }
     el = el.parentElement;
   }

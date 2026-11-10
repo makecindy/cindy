@@ -6,7 +6,9 @@ import { app, safeStorage } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { migrateGhostSecretAliases } from './ghostSecretAliasMigration.js';
 import { readChunkedSecret, writeChunkedSecret } from './chunkedSecretFile.js';
+import { readStreamedSecret, writeStreamedSecret } from './streamedSecretFile.js';
 
 import { storedCustomProviderId } from '@cindy/model-providers';
 
@@ -40,34 +42,6 @@ import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
 
 const log = createLogger('providerSecretStore');
 let mcpAppRevisionKeyCache: { path: string; key: string } | undefined;
-
-let canUseMivoAlias: ((instanceKey: string) => boolean) | null = null;
-
-export function setMivoSecretAliasVerifier(verifier: ((instanceKey: string) => boolean) | null): void {
-  canUseMivoAlias = verifier;
-}
-
-// Only this historical key can use the Mivo alias. Loading install facts for
-// unrelated secrets rescans the full plugin list during Renderer projection.
-function isHistoricalMivoSecret(instanceKey: string, secretKey: string): boolean {
-  return instanceKey === 'xd-mivo' && secretKey === 'mivo_api_key';
-}
-
-function approvedGhostSecretStorageKey(instanceKey: string, secretKey: string): string {
-  const allowMivoAlias = isHistoricalMivoSecret(instanceKey, secretKey) &&
-    canUseMivoAlias?.(instanceKey) === true;
-  return ghostSecretStorageKey(instanceKey, secretKey, allowMivoAlias);
-}
-
-function approvedGhostSecretHintKey(instanceKey: string, secretKey: string): string {
-  // The historical hint stays on the standard key only while the same install
-  // fact maps the secret onto the historical Mivo key. Otherwise the hint
-  // follows the non-alias key, so read, write, and delete stay together.
-  if (isHistoricalMivoSecret(instanceKey, secretKey) && canUseMivoAlias?.(instanceKey) !== true) {
-    return 'ghost_hint__local__' + instanceKey + '_' + secretKey;
-  }
-  return ghostSecretHintStorageKey(instanceKey, secretKey);
-}
 
 /**
  * 记录「本机这批 provider 密钥归属哪个账号」的标记键(非密钥,存同目录便于统一管理)。
@@ -115,6 +89,7 @@ function secretDir(): string {
 }
 
 const DYNAMIC_SECRET_PREFIXES = [
+  'ghost_alias_migration_',
   'bot_environment_',
   'byok_cache_',
   CUSTOM_MCP_SECRET_PREFIX,
@@ -419,6 +394,19 @@ export function createProviderSecretStore(
       return { cleared };
     },
   };
+}
+
+/** Setup consent only: check the current owner's standard slot without opening the keychain. */
+export function providerSecretSavedForSetup(id: ProviderSecretId): boolean {
+  const physicalKey = resolveOwnerScopedSecretStorageKey(providerSecretStorageKey(id));
+  if (!physicalKey) return false;
+  try {
+    fs.statSync(path.join(secretDir(), `${physicalKey}.enc`));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 let singleton: ProviderSecretStore | null = null;
@@ -737,10 +725,68 @@ export function readCustomMcpToken(mcpId: string): string | null {
   }
 }
 
+/** Writes a custom MCP access token under the same key the settings page uses (main-only callers). */
+export function storeCustomMcpToken(mcpId: string, value: string): boolean {
+  try {
+    const scopedKey = resolveOwnerScopedSecretStorageKey(customMcpSecretStorageKey(mcpId));
+    if (!scopedKey || !safeStorage.isEncryptionAvailable()) return false;
+    // Freeze the owner and directory before encryption. Keep the existing base64 format.
+    const directory = secretDir();
+    const target = path.join(directory, `${scopedKey}.enc`);
+    const encrypted = safeStorage.encryptString(value).toString('base64');
+    fs.mkdirSync(directory, { recursive: true });
+    const temporary = `${target}.${randomBytes(16).toString('hex')}.tmp`;
+    // Open outside the cleanup block: an exclusive-open collision is not our file.
+    const fd = fs.openSync(temporary, 'wx', 0o600);
+    try {
+      try {
+        fs.writeFileSync(fd, encrypted, 'utf-8');
+      } finally {
+        fs.closeSync(fd);
+      }
+      // Never delete the old target first, including when replacement is refused.
+      fs.renameSync(temporary, target);
+      return true;
+    } finally {
+      try {
+        fs.unlinkSync(temporary);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          log.warn('custom mcp token temporary ciphertext cleanup failed');
+        }
+      }
+    }
+  } catch (err) {
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'write custom mcp token failed',
+    );
+    return false;
+  }
+}
+
 /**
  * 通用 OAuth 供应商凭证 blob 的 main 侧存储 IO（`provider_oauth_<id>`，机制同上）。
  * generic-oauth Runner 经 setter 注入消费（保持 Runner 可脱 Electron 单测）。
  */
+/** Startup-only, under the original installation lock; ordinary reads never use aliases. */
+export function migrateInstalledGhostSecretAliases(target: Parameters<typeof migrateGhostSecretAliases>[0]): boolean {
+  return migrateGhostSecretAliases(target, {
+    ...electronSecretIo,
+    read(key) {
+      const physicalKey = resolveOwnerScopedSecretStorageKey(key);
+      if (!physicalKey) throw new Error('Credential migration owner is unavailable');
+      let encoded: string;
+      try { encoded = fs.readFileSync(path.join(secretDir(), `${physicalKey}.enc`), 'utf8'); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+      return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+    },
+  });
+}
+
 /**
  * 读取某意识的某条 network 槽凭证(**main 侧 networkSlot 注入专用**)。
  * 不存在 / safeStorage 不可用 / 读失败均返回 null。与 renderer 经通用
@@ -748,7 +794,7 @@ export function readCustomMcpToken(mcpId: string): string | null {
  */
 export function readGhostSecret(instanceKey: string, secretKey: string): string | null {
   try {
-    return electronSecretIo.read(approvedGhostSecretStorageKey(instanceKey, secretKey));
+    return electronSecretIo.read(ghostSecretStorageKey(instanceKey, secretKey));
   } catch (err) {
     log.warn(
       { ghostId: instanceKey, secretKey, err: err instanceof Error ? err.message : String(err) },
@@ -765,7 +811,7 @@ export function readGhostSecret(instanceKey: string, secretKey: string): string 
  */
 export function readGhostSecretStrict(instanceKey: string, secretKey: string): string | null {
   const physicalKey = resolveOwnerScopedSecretStorageKey(
-    approvedGhostSecretStorageKey(instanceKey, secretKey),
+    ghostSecretStorageKey(instanceKey, secretKey),
   );
   if (!physicalKey) return null;
   const filepath = path.join(secretDir(), `${physicalKey}.enc`);
@@ -794,7 +840,7 @@ export function readGhostSecretStrict(instanceKey: string, secretKey: string): s
 export function ghostSecretSaved(instanceKey: string, secretKey: string): boolean {
   try {
     const physicalKey = resolveOwnerScopedSecretStorageKey(
-      approvedGhostSecretStorageKey(instanceKey, secretKey),
+      ghostSecretStorageKey(instanceKey, secretKey),
     );
     if (!physicalKey) return false;
     fs.statSync(path.join(secretDir(), `${physicalKey}.enc`));
@@ -813,13 +859,13 @@ export function ghostSecretSaved(instanceKey: string, secretKey: string): boolea
  */
 export function storeGhostSecret(instanceKey: string, secretKey: string, value: string): boolean {
   try {
-    const ok = electronSecretIo.write(approvedGhostSecretStorageKey(instanceKey, secretKey), value);
+    const ok = electronSecretIo.write(ghostSecretStorageKey(instanceKey, secretKey), value);
     if (ok) {
       // 入库即截尾 4 位指纹(分键保管,读路径永不碰明文);值太短不产指纹,
       // 且要清掉旧值可能留下的指纹。指纹写失败不连坐主凭证(best-effort)。
       try {
         const tail = deriveGhostSecretTail(value);
-        const hintKey = approvedGhostSecretHintKey(instanceKey, secretKey);
+        const hintKey = ghostSecretHintStorageKey(instanceKey, secretKey);
         if (tail) electronSecretIo.write(hintKey, tail);
         else electronSecretIo.remove(hintKey);
       } catch (err) {
@@ -852,10 +898,10 @@ export function readGhostSecretTailFromIo(
   secretKey: string,
 ): string | null {
   try {
-    const hintKey = approvedGhostSecretHintKey(instanceKey, secretKey);
+    const hintKey = ghostSecretHintStorageKey(instanceKey, secretKey);
     const existing = io.read(hintKey);
     if (existing !== null) return existing;
-    const value = io.read(approvedGhostSecretStorageKey(instanceKey, secretKey));
+    const value = io.read(ghostSecretStorageKey(instanceKey, secretKey));
     if (value === null) return null;
     const tail = deriveGhostSecretTail(value);
     if (tail) io.write(hintKey, tail);
@@ -877,8 +923,8 @@ export function readGhostSecretTail(instanceKey: string, secretKey: string): str
 /** 清除某意识的单条 network 槽凭证(/secrets DELETE 用;幂等,连同尾指纹)。 */
 export function removeGhostSecret(instanceKey: string, secretKey: string): void {
   try {
-    electronSecretIo.remove(approvedGhostSecretStorageKey(instanceKey, secretKey));
-    electronSecretIo.remove(approvedGhostSecretHintKey(instanceKey, secretKey));
+    electronSecretIo.remove(ghostSecretStorageKey(instanceKey, secretKey));
+    electronSecretIo.remove(ghostSecretHintStorageKey(instanceKey, secretKey));
     // Older builds wrote untrusted Mivo hints under a third key. Delete covers it too.
     electronSecretIo.remove('ghost_hint__local__' + instanceKey + '_' + secretKey);
   } catch (err) {
@@ -1086,7 +1132,7 @@ export const botEnvironmentSecretIo = {
     if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) throw new Error('Invalid companion secret key');
     const scoped = resolveOwnerScopedSecretStorageKey(key);
     if (!scoped) throw new Error('Companion credential storage unavailable');
-    try { return fs.readdirSync(secretDir()).some(name => name === `${scoped}.enc` || companionTemporaryFile(name, scoped)); }
+    try { return fs.readdirSync(secretDir()).some(name => name === `${scoped}.enc` || name === `${scoped}.resources` || companionTemporaryFile(name, scoped)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
   },
   async read(key: string, assertCurrent?: () => void): Promise<string | null> {
@@ -1097,6 +1143,22 @@ export const botEnvironmentSecretIo = {
     const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
     await writeChunkedSecret(path.join(secretDir(), `${scoped}.enc`), scoped, value, companionCipher, assertOwner);
     return true;
+  },
+  async writeResource(key: string, id: string, chunks: AsyncIterable<string>, assertCurrent: () => void): Promise<string> {
+    if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('Invalid companion resource id');
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
+    return writeStreamedSecret(path.join(secretDir(), `${scoped}.resources`, `${id}.enc`), `${scoped}:${id}`, chunks, companionCipher, assertOwner);
+  },
+  async *readResource(key: string, id: string, digest: string, assertCurrent: () => void): AsyncGenerator<string> {
+    if (!/^[a-f0-9]{64}$/.test(id) || !/^[a-f0-9]{64}$/.test(digest)) throw new Error('Invalid companion resource id');
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
+    yield* readStreamedSecret(path.join(secretDir(), `${scoped}.resources`, `${id}.enc`), `${scoped}:${id}`, digest, companionCipher, assertOwner);
+  },
+  async removeResourceFiles(key: string, assertCurrent: () => void): Promise<void> {
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent, false);
+    assertOwner();
+    await fs.promises.rm(path.join(secretDir(), `${scoped}.resources`), { recursive: true, force: true });
+    assertOwner();
   },
   remove(key: string): boolean {
     if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) return false;
@@ -1114,7 +1176,7 @@ const companionCipher = { encrypt: (value: string) => safeStorage.encryptString(
 function companionTemporaryFile(name: string, scoped: string): boolean {
   return name.startsWith(`${scoped}.enc.`) && /^[a-f0-9-]{36}\.tmp$/.test(name.slice(scoped.length + 5));
 }
-function companionSecretScope(key: string, assertCurrent: () => void = () => {}) {
+function companionSecretScope(key: string, assertCurrent: () => void = () => {}, requireEncryption = true) {
   if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) throw new Error('Invalid companion secret key');
   const scoped = resolveOwnerScopedSecretStorageKey(key);
   const generation = getActiveAppSession().generation;
@@ -1122,7 +1184,7 @@ function companionSecretScope(key: string, assertCurrent: () => void = () => {})
     assertCurrent();
     if (!scoped || isAppSessionBoundaryPending() || resolveOwnerScopedSecretStorageKey(key) !== scoped || getActiveAppSession().generation !== generation)
       throw new Error('Companion credential owner changed');
-    if (!safeStorage.isEncryptionAvailable()) throw new Error('Companion credential storage unavailable');
+    if (requireEncryption && !safeStorage.isEncryptionAvailable()) throw new Error('Companion credential storage unavailable');
   };
   assertOwner(); return { scoped: scoped!, assertOwner };
 }

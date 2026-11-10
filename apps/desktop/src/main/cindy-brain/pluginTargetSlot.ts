@@ -9,7 +9,7 @@ import type {
 } from '../../shared/pluginTargets.js';
 import { isPluginTaskPermissionMode, type PluginTaskPermissionMode, type PluginTaskRoute } from '../../shared/pluginTasks.js';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
-import { pluginMessageText, validPluginMessageContext } from '../../shared/pluginMessage.js';
+import { validPluginMessageContext } from '../../shared/pluginMessage.js';
 import { getActiveDataOwnerPushStamp, activeOwnerScopeKey } from '../appSessionState.js';
 import { withParsedPluginMessageAttachments, type PluginMessageImage } from '../cindy-media/pluginMessageAttachments.js';
 
@@ -47,6 +47,7 @@ export interface PluginTargetAdapter {
   /** Set only after the live Auto review resolver is installed. */
   delegationReviewAvailable?(): boolean;
   candidates(kind: PluginTargetKind): Promise<PluginTargetCandidate[]>;
+  targetForSession(sessionId: string): Promise<PluginTargetRef>;
   assertCreatePermission(pluginId: string, permissionMode: PluginTaskPermissionMode): void;
   assertProjectDispatch(pluginId: string, taskId: string): Promise<void>;
   create(
@@ -143,6 +144,16 @@ export class PluginTargetSlot {
       return { targets: candidates.map((item) => ({ ...item, kind: request.targetKind })) };
     }
     if (request.kind === 'resolve') {
+      if (request.session !== undefined) {
+        if (request.target !== undefined || !keyString(request.session)) return fail('INVALID_PARAMS');
+        const target = await adapter.targetForSession(request.session);
+        authorized();
+        const view = await resolve(target);
+        if (target.kind === 'bot' && await adapter.session('bot', target.id) !== request.session)
+          return fail('TARGET_UNAVAILABLE');
+        authorized();
+        return view;
+      }
       if (!isTarget(request.target)) return fail('INVALID_PARAMS');
       return resolve(request.target);
     }
@@ -304,7 +315,8 @@ export class PluginTargetSlot {
           return fail('SUPERSEDED');
         }
         if (request.autoTitle) {
-          try { adapter.scheduleAutoTitle?.(pluginId, taskId, pluginMessageText(request.text, request.context), request.text); }
+          // Reference material must not consume the title model's limited input budget.
+          try { adapter.scheduleAutoTitle?.(pluginId, taskId, request.text, request.text); }
           catch { /* Naming failure never retries an accepted message. */ }
         }
         return { taskId, accepted: true, delivery: actualDelivery,

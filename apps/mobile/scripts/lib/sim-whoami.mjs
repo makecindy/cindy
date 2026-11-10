@@ -15,7 +15,7 @@ const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SIMULATOR_UDID_PATTERN = /^[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}$/;
 
 /** Parse one optional exact Simulator target without changing sim:start arguments. */
-export function extractSimWhoamiUdidArgs(args) {
+export function extractSimWhoamiUdidArgs(args, platform = 'ios') {
   let simulatorUdid = null;
   const passthrough = [];
 
@@ -32,10 +32,9 @@ export function extractSimWhoamiUdidArgs(args) {
     }
 
     if (simulatorUdid !== null) throw new Error("Simulator UDID 只能传一次");
-    const normalized = String(value ?? "")
-      .trim()
-      .toUpperCase();
-    if (!SIMULATOR_UDID_PATTERN.test(normalized)) {
+    const trimmed = String(value ?? "").trim();
+    const normalized = platform === 'android' ? trimmed : trimmed.toUpperCase();
+    if (!(platform === 'android' ? /^emulator-\d+$/.test(normalized) : SIMULATOR_UDID_PATTERN.test(normalized))) {
       throw new Error(`Simulator UDID 无效: ${value ?? "(缺失)"}`);
     }
     simulatorUdid = normalized;
@@ -155,7 +154,7 @@ export function simulatorBackendNotice({
   }
   return {
     code: "cindy-idle",
-    message: "Cindy 模拟器可用，但没有已开机设备：用 baguette-simulator 插件启动或新建一台。只有用户明确要求或插件不可用时，才传 --udid 或设 CINDY_MOBILE_SIMULATOR=system 使用系统模拟器。",
+    message: "Cindy 模拟器可用，但没有已开机设备：用 cindy-simulator 插件启动或新建一台。只有用户明确要求或插件不可用时，才传 --udid 或设 CINDY_MOBILE_SIMULATOR=system 使用系统模拟器。",
     reusable,
   };
 }
@@ -512,9 +511,10 @@ export function resolveMobileSimulatorBundleId(region, options = {}) {
       cause: error,
     });
   }
-  const bundleId = config?.ios?.bundleIdentifier;
+  const android = options.platform === 'android';
+  const bundleId = android ? config?.android?.package : config?.ios?.bundleIdentifier;
   if (typeof bundleId !== "string" || !bundleId.trim()) {
-    throw new Error(`Expo config 缺少 ios.bundleIdentifier(region=${region})`);
+    throw new Error(`Expo config 缺少 ${android ? 'android.package' : 'ios.bundleIdentifier'}(region=${region})`);
   }
   return bundleId.trim();
 }

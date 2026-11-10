@@ -1,4 +1,5 @@
 /**
+ * 无壁纸时采用用户的桌面模糊数值；以下为没有桌面覆盖状态的主题默认值。
  * E4D 毛玻璃 vibrancy 配置(R1 audit,用户裁决透壁纸 2026-07-17)。
  * 仅 CINDY family 启用 macOS vibrancy + 透明底(透出桌面壁纸);其他 family 恢复
  * 不透明。Windows 11 CINDY family 启用 Electron backgroundMaterial;Windows 10/Linux
@@ -20,16 +21,25 @@ export interface VibrancyConfig {
   vibrancy: string | null;
   backgroundColor: string;
   backgroundMaterial?: WindowsBackdropMaterial;
+  desktopBlurRadius?: number;
+  sidebarMaterial?: 'light' | 'dark';
 }
 
 export interface ResolveVibrancyConfigOptions {
   getSystemVersion?: () => string;
   wallpaperCovered?: boolean;
+  desktopBlur?: number | null;
 }
 
 // Coverage belongs to the rendered window, not the shared wallpaper selection:
 // another window may still be loading its canvas. Never persist this display state.
 const wallpaperCoveredWindows = new WeakSet<BrowserWindow>();
+const desktopBlurWindows = new WeakMap<BrowserWindow, number>();
+
+export function setWindowDesktopBlur(win: BrowserWindow, blur: number | null): void {
+  if (blur === null) desktopBlurWindows.delete(win);
+  else desktopBlurWindows.set(win, blur);
+}
 
 export function setWindowWallpaperCovered(win: BrowserWindow, covered: boolean): void {
   if (covered) wallpaperCoveredWindows.add(win);
@@ -46,6 +56,7 @@ export function resolveWindowVibrancyConfig(
   return resolveVibrancyConfig(familyId, isDark, platform, {
     ...options,
     wallpaperCovered: wallpaperCoveredWindows.has(win),
+    desktopBlur: desktopBlurWindows.get(win),
   });
 }
 
@@ -92,6 +103,19 @@ export function resolveVibrancyConfig(
   platform: string,
   options?: ResolveVibrancyConfigOptions,
 ): VibrancyConfig {
+  if (!options?.wallpaperCovered && typeof options?.desktopBlur === 'number') {
+    return {
+      vibrancy: platform === 'darwin' && options.desktopBlur ? 'under-window' : null,
+      backgroundColor: '#00000000',
+      ...(platform === 'darwin' ? { desktopBlurRadius: options.desktopBlur } : {}),
+      ...(platform === 'darwin' && familyId === 'cindy'
+        ? { sidebarMaterial: isDark ? 'dark' as const : 'light' as const } : {}),
+      ...(platform === 'win32' ? {
+        backgroundMaterial: options.desktopBlur && (parseWindowsBuild(readWindowsSystemVersion(options)) ?? 0) >= 22621
+          ? 'acrylic' : 'none',
+      } : {}),
+    };
+  }
   const isCindy = familyId === 'cindy' && !options?.wallpaperCovered;
   const opaqueBg = isDark ? '#1f1f1e' : '#f8f8f6';
   if (platform === 'darwin') {

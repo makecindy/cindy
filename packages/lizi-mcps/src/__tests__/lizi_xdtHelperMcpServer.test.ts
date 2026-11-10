@@ -3,6 +3,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { createXdtHelperMcpServer } from "../lizi_xdtHelperMcpServer.js";
+import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -44,6 +45,59 @@ function parsePayload(result: unknown): Record<string, unknown> {
 }
 
 describe("cindy_helper MCP server", () => {
+  // Unit through real MCP wire. Shared-task mode requires an authoritative current
+  // task, never a selected window or caller-supplied target. Existing control tests
+  // did not cover invitation discovery, live context loss or transferable receipts.
+  it.each(['codex', 'claude-code', 'pi'] as const)('offers native current-task invitations to %s with live context and restricted-surface checks', async (agentKind) => {
+    let context: LiziMcpSessionContext | undefined = {
+      agentKind, workingDir: '/fixture', sessionId: 'current-task', sessionInstanceId: 'instance',
+    };
+    let restricted = false;
+    const invitationLink = 'https://relay.example.test/shared-task/join#' + 'A'.repeat(43);
+    const sharedTask = vi.fn(async (ctx: LiziMcpSessionContext, action: 'state' | 'invite') => ({
+      ok: true as const, sessionId: ctx.sessionId!, device: 'local' as const, available: true, sharedTaskId: 'share',
+      ...(action === 'invite' ? { invitationLink } : {}),
+    }));
+    const server = createXdtHelperMcpServer({ sharedTask, resolveSurface: async () => restricted ? 'restricted' : 'default' }, {
+      ...context, agentKind, getSessionContext: () => context,
+    });
+    const client = new Client({ name: 'native-task-invitation-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = async (name: string, args: Record<string, unknown> = {}) => parsePayload(await client.callTool({
+      name: 'call_tool', arguments: { name, args },
+    }));
+    try {
+      const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      expect(overview.categories).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'control', description: expect.stringContaining('create_shared_task_invitation') }),
+      ]));
+      const listed = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'control' } }));
+      expect(listed.tools).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'create_shared_task_invitation' }), expect.objectContaining({ name: 'get_shared_task_state' }),
+      ]));
+      expect(await call('create_shared_task_invitation')).toMatchObject({ ok: true, sessionId: 'current-task', sharedTaskId: 'share', invitationLink });
+      expect(sharedTask).toHaveBeenLastCalledWith(context, 'invite');
+      expect(await call('get_shared_task_state')).toMatchObject({ ok: true, sharedTaskId: 'share' });
+      expect(await call('create_shared_task_invitation', { session_id: 'another-task' })).toMatchObject({ ok: false });
+      expect(sharedTask).toHaveBeenCalledTimes(2);
+      context = undefined;
+      expect(await call('create_shared_task_invitation')).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+      expect(sharedTask).toHaveBeenCalledTimes(2);
+      context = { agentKind, workingDir: '/fixture', sessionId: 'mobile-controlled-task', sessionInstanceId: 'next-instance' };
+      expect(await call('get_shared_task_state')).toMatchObject({ ok: true, sessionId: 'mobile-controlled-task' });
+      expect(sharedTask).toHaveBeenLastCalledWith(context, 'state');
+      restricted = true;
+      expect(await call('create_shared_task_invitation')).toMatchObject({ ok: false });
+      expect(sharedTask).toHaveBeenCalledTimes(3);
+      restricted = false;
+      sharedTask.mockRejectedValue(new Error('private invitation ' + invitationLink));
+      const failed = await call('create_shared_task_invitation');
+      expect(failed).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_RESULT_UNKNOWN' });
+      expect(JSON.stringify(failed)).not.toContain(invitationLink);
+    } finally { await client.close(); await server.close(); }
+  });
+
   // Rule (cindy-bots-runtime.md §6「伙伴技能分层」, 2026-11-01): a system Skill the owner turned off loses its
   // tools and its text together. Unit: the live switch hides and denies the todo tools for every
   // entry (category list, call_tool, direct tool) while other teammate tools keep working.
@@ -90,37 +144,73 @@ describe("cindy_helper MCP server", () => {
 
   // The agent never found input handoff behind list_tools(auth) (2026-10-30).
   // Unit: a fresh client sees it in tools/list, with the window/title arguments,
-  // before its first call; the old name stays callable for saved calls but unlisted.
-  it('offers input handoff in the tool list itself and keeps the old name callable', async () => {
+  // before its first call. Removing ask_owner must preserve screenshot QR input,
+  // which the old target-only entry could not accept. Minimal input: image without target.
+  it.each(['codex', 'claude-code', 'pi'] as const)('offers %s independent input handoff for windows and screenshot QR codes', async (agentKind) => {
     const start = vi.fn(async () => ({ ok: true as const, requestId: 'handoff-1' }));
-    const server = createXdtHelperMcpServer({ inputHandoff: { start } }, {
-      agentKind: 'codex', workingDir: '/repo', sessionId: 'current-task',
-      getSessionContext: () => ({
-        agentKind: 'codex', workingDir: '/repo', sessionId: 'current-task', sessionInstanceId: 'instance-1',
-      }),
+    const startImage = vi.fn(async () => ({ ok: true as const, requestId: 'handoff-image' }));
+    let context: LiziMcpSessionContext = {
+      agentKind, workingDir: '/repo', sessionId: 'current-task', sessionInstanceId: 'instance-1',
+    };
+    const server = createXdtHelperMcpServer({ inputHandoff: { start, startImage } }, {
+      agentKind, workingDir: '/repo', sessionId: 'current-task',
+      getSessionContext: () => context,
     });
     const client = new Client({ name: 'handoff-discovery-test', version: '1' });
     const [ct, st] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(st), client.connect(ct)]);
     try {
-      const owner = (await client.listTools()).tools.find((tool) => tool.name === 'ask_owner')!;
+      const owner = (await client.listTools()).tools.find((tool) => tool.name === 'request_input_handoff')!;
       expect(owner.description).toContain('password');
       expect(owner.inputSchema).toMatchObject({
-        required: ['kind'],
+        required: ['purpose'],
         properties: {
-          kind: { enum: ['fill', 'scan'] },
-          title: { type: 'string' },
+          purpose: { type: 'string' },
+          image: { type: 'string' },
           target: { type: 'object', properties: { app: { type: 'string' } } },
         },
       });
       const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
-      expect(overview.categories).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'auth' })]));
+      expect(overview.categories).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'auth' })]));
       expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
         name: 'request_input_handoff', args: { purpose: 'Sign in to continue', target: { app: 'Google Chrome' } },
       } }))).toMatchObject({ ok: true, request_id: 'handoff-1', status: 'pending' });
       expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'current-task' }), {
         purpose: 'Sign in to continue', target: { app: 'Google Chrome' },
       });
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Scan the simulator sign-in code', image: 'shots/qr.png',
+      } }))).toMatchObject({ ok: true, request_id: 'handoff-image', status: 'pending' });
+      expect(startImage).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'current-task' }), {
+        purpose: 'Scan the simulator sign-in code', image: 'shots/qr.png',
+      });
+      for (const args of [{}, { image: 'qr.png', target: {} }, { image: 'qr.png', complete_when: { window_closed: true } }]) {
+        expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+          purpose: 'Sign in', ...args,
+        } }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      }
+      // Preserve admission and immediate host failures when switching from the wrapper.
+      context = { ...context, mcpCallerKind: 'descendant' };
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Sign in', image: 'qr.png',
+      } }))).toMatchObject({ errorCode: 'ROOT_REQUIRED' });
+      context = { ...context, mcpCallerKind: 'root', remoteHostId: 'ssh-host' };
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Sign in', image: 'qr.png',
+      } }))).toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      context = { ...context, remoteHostId: undefined, sessionInstanceId: undefined };
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Sign in', target: {},
+      } }))).toMatchObject({ errorCode: 'NO_SESSION_CONTEXT' });
+      context = { ...context, sessionInstanceId: 'instance-2', sessionId: 'next-task' };
+      start.mockResolvedValueOnce({ ok: false, errorCode: 'TARGET_IS_CINDY', message: 'That window is Cindy itself.' } as never);
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Sign in', target: { app: 'Cindy' },
+      } }))).toMatchObject({ errorCode: 'TARGET_IS_CINDY' });
+      expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'next-task', sessionInstanceId: 'instance-2' }),
+        { purpose: 'Sign in', target: { app: 'Cindy' } });
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(startImage).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   });
 
@@ -283,15 +373,13 @@ describe("cindy_helper MCP server", () => {
     await Promise.all([server.connect(st), client.connect(ct)]);
     try {
       const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
-      // Starting is listed through ask_owner (connect); status and cancel stay here.
+      // The dedicated sign-in entry is discoverable with its status and cancel tools.
       expect(overview.categories).toEqual([
         { name: 'cindy', tool_count: 2, description: expect.stringContaining('self-management') },
-        { name: 'auth', tool_count: 2, description: expect.any(String) },
+        { name: 'auth', tool_count: 3, description: expect.any(String) },
       ]);
-      const owner = (await client.listTools()).tools.find((tool) => tool.name === 'ask_owner')!;
-      expect((owner.inputSchema.properties as Record<string, { enum?: string[] }>).kind.enum).toEqual(['connect']);
+      expect((await client.listTools()).tools.some((tool) => tool.name === 'ask_owner')).toBe(false);
       for (const request of [
-        { name: 'ask_owner', arguments: { kind: 'connect', service: 'grok' } },
         { name: 'call_tool', arguments: { name: 'start_grok_device_login', args: {} } },
       ]) {
         const result = parsePayload(await client.callTool(request));
@@ -306,7 +394,7 @@ describe("cindy_helper MCP server", () => {
         name: 'call_tool', arguments: { name: 'start_grok_device_login', args: {} },
       }));
       expect(stale).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
-      expect(start).toHaveBeenCalledTimes(2);
+      expect(start).toHaveBeenCalledTimes(1);
     } finally {
       await client.close();
       await server.close();
@@ -1013,6 +1101,8 @@ describe("cindy_helper MCP server", () => {
       );
       for (const description of Object.values(described)) expect(description).toMatch(/\S/);
       for (const name of ['history', 'handoff', 'bots']) expect(described[name]).toContain('可跨电脑');
+      expect(described.handoff).toContain('agent_device_id');
+      expect(described.handoff).not.toContain('新建只在本机');
       expect(described.control).toMatch(/本机。$/);
       const controlTools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'control' } }));
       const controlNames = controlTools.tools as Array<{ name: string; description: string }>;
@@ -1440,5 +1530,187 @@ it.each(['claude-code', 'codex', 'pi'] as const)('opens MCP Settings through the
     request.mockClear();
     await client.callTool({ name: 'call_tool', arguments: { name: 'request_mcp_setup', args: { url: 'https://example.test/mcp?token=test-invalid-token' } } });
     expect(request).not.toHaveBeenCalled();
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit, real MCP wire: ordinary tasks could not discover app defaults/settings.
+// Cover all harnesses, schema failure without writes, and live visitor denial.
+it('discovers native app settings in all three harnesses and rejects invalid or guest writes', async () => {
+  for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+    let restricted = false;
+    const settings = vi.fn(async () => ({ section: 'appearance', state: { uiSize: 16 } }));
+    const models = vi.fn(async () => ({ scope: 'local', providers: [] }));
+    const defaults = vi.fn(async () => ({ ok: true as const, current: null, available: [] }));
+    const server = createXdtHelperMcpServer({ appSettings: { call: settings }, modelSettings: { call: models },
+      appModels: { models: defaults }, resolveSurface: async () => restricted ? 'restricted' : 'default' },
+      { agentKind, workingDir: '/fixture', sessionId: 'settings-owner' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'settings-test', version: '1' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      expect(overview.categories).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'settings' })]));
+      const catalog = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'settings' } }));
+      expect(catalog.tools).toEqual(expect.arrayContaining(['list_app_settings', 'get_app_default_model', 'list_model_providers', 'set_model_configuration', 'configure_model_connection']
+        .map(name => expect.objectContaining({ name }))));
+      const call = (name: string, args = {}) => client.callTool({ name: 'call_tool', arguments: { name, args } });
+      expect(parsePayload(await call('get_app_default_model'))).toMatchObject({ ok: true, available: [] });
+      expect(defaults).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'settings-owner' });
+      expect(parsePayload(await call('get_app_settings', { section: 'appearance' }))).toMatchObject({ ok: true, state: { uiSize: 16 } });
+      const invalid = await call('set_model_configuration', { target: { providerId: 'p', agent: 'pi', modelId: 'm' },
+        change: { setting: 'contextLimit', value: -1 } });
+      expect(invalid.isError).toBe(true);
+      expect(models).not.toHaveBeenCalled();
+      for (const change of [
+        { action: 'setKey', providerId: 'example', agent: 'pi', apiKey: 'synthetic-secret' },
+        { action: 'create', name: 'Example', runtimes: { pi: { baseUrl: 'https://example.test/?token=synthetic-secret', wireProtocol: 'openai-chat', models: [] } } },
+        { action: 'create', name: 'Example', runtimes: { pi: { baseUrl: 'not-a-url', wireProtocol: 'openai-chat', models: [] } } },
+      ]) expect((await call('configure_model_connection', { change })).isError).toBe(true);
+      if (agentKind === 'codex') expect(parsePayload(await call('configure_model_connection', { change: {
+        action: 'setKey', providerId: 'example', agent: 'codex', interruptCodex: true,
+      } }))).toMatchObject({ ok: false, errorCode: 'CODEX_CALLER_WOULD_STOP' });
+      expect(models).not.toHaveBeenCalled();
+      await call('configure_model_connection', { change: { action: 'presets' } });
+      expect(models).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'settings-owner', operation: 'connection', change: { action: 'presets' } }, expect.any(AbortSignal));
+      restricted = true;
+      expect(parsePayload(await call('configure_model_connection', { change: { action: 'presets' } })).ok).toBe(false);
+      expect(models).toHaveBeenCalledTimes(1);
+      expect(parsePayload(await call('update_app_settings', { section: 'appearance', patch: { uiSize: 17 } })).ok).toBe(false);
+      expect(settings).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
+// #9276, unit real MCP: cancellation previously stopped the caller but left Main
+// waiting for a key. Existing discovery tests never cancelled an in-flight call.
+it('forwards connection tool cancellation to the host in all three harnesses', async () => {
+  for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+    let entered!: () => void;
+    let cancelled!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const aborted = new Promise<void>(resolve => { cancelled = resolve; });
+    const server = createXdtHelperMcpServer({ modelSettings: { call: async (_input, signal) => {
+      expect(signal).toBeDefined();
+      signal!.addEventListener('abort', cancelled, { once: true });
+      entered();
+      await aborted;
+      return { saved: false };
+    } } }, { agentKind, workingDir: '/fixture', sessionId: 'owner' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'model-cancel-test', version: '1' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const controller = new AbortController();
+      const pending = client.callTool({ name: 'call_tool', arguments: { name: 'configure_model_connection',
+        args: { change: { action: 'setKey', providerId: 'example', agent: 'pi' } } } }, undefined, { signal: controller.signal });
+      const rejected = expect(pending).rejects.toBeDefined();
+      await waiting;
+      controller.abort();
+      await rejected;
+      await aborted;
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
+// Regression: settings discovery was buried behind a second-level tool. Unit,
+// real MCP transport: a fresh client follows returned calls, reads the exact
+// schema without executing it, then saves through the original authorized tool.
+it.each(['default', 'bot-main'] as const)('discovers controls from the root and executes their returned binding in %s', async surface => {
+  for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+    let restricted = false;
+    const settings = vi.fn(async (input: { operation: string; patch?: Record<string, unknown> }) => ({ state: input.patch ?? { uiSize: 16 } }));
+    const server = createXdtHelperMcpServer({ appSettings: { call: settings },
+      resolveSurface: async () => restricted ? 'restricted' : surface },
+      { agentKind, workingDir: '/fixture', sessionId: 'owner' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'control-discovery-test', version: '1' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const follow = (binding: any) => client.callTool({ name: binding.tool, arguments: binding.args });
+    try {
+      const root = (await client.listTools()).tools.find(tool => tool.name === 'list_tools')!;
+      expect(root.inputSchema.properties).toHaveProperty('query');
+      const search = parsePayload(await client.callTool({ name: root.name, arguments: { query: '修改壁纸' } }));
+      const item = (search.items as any[]).find(item => item.key === 'appearance.wallpaper');
+      expect(item.availability).toBe('available');
+      const detail = parsePayload(await follow(item.next)).control as any;
+      const write = detail.operations.find((op: any) => op.name === 'update_app_settings');
+      expect(write.call.args.args).toEqual({ section: 'appearance' });
+      const schema = (parsePayload(await follow(write.describe)).control as any).operations[0];
+      expect(schema).toMatchObject({ schemaComplete: true, inputSchema: { required: ['section', 'patch'] } });
+      // Preferences has per-field writes only; appearance still offers reset.
+      // Follow the actual catalog contract, including explicit operation lookup.
+      expect(detail.operations.map((op: any) => op.name)).toContain('reset_app_settings');
+      const preferences = parsePayload(await client.callTool({ name: root.name, arguments: { key: 'application.preferences' } })).control as any;
+      expect(preferences.operations.map((op: any) => op.name)).toEqual(['get_app_settings', 'update_app_settings']);
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_capabilities', args: { scope: 'control', key: 'application.preferences', operation: 'reset_app_settings' } } })))
+        .toMatchObject({ ok: false, errorCode: 'UNKNOWN_OPERATION' });
+      expect(settings).not.toHaveBeenCalled();
+      expect(parsePayload(await follow({ ...write.call, args: { ...write.call.args, args: { ...write.call.args.args, patch: { uiSize: 17 } } } })))
+        .toMatchObject({ ok: true, state: { uiSize: 17 } });
+      expect(settings).toHaveBeenCalledExactlyOnceWith({ callerSessionId: 'owner', operation: 'update', section: 'appearance', patch: { uiSize: 17 } });
+      restricted = true;
+      expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '壁纸' } }))).toMatchObject({ ok: false });
+      expect(parsePayload(await follow(write.describe))).toMatchObject({ ok: false });
+      expect(parsePayload(await follow(write.call))).toMatchObject({ ok: false });
+      expect(settings).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
+// Unit: distinguish an unexposed control from an available one, and keep a
+// cursor tied to its query. Neither a bad key nor a bad cursor starts a write.
+it('keeps the control directory compact and reports gaps and invalid continuations', async () => {
+  const rename = vi.fn(async (input: { sessionId: string; title: string }) => ({ ok: true as const, ...input }));
+  const server = createXdtHelperMcpServer({ setCurrentSessionTitle: rename }, { agentKind: 'codex', workingDir: '/fixture', sessionId: 'owner' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'control-pagination-test', version: '1' });
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  const read = async (args = {}) => parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_capabilities', args: { scope: 'control', ...args } } }));
+  try {
+    const root = await read();
+    expect((root.domains as unknown[]).length).toBe(14);
+    expect(JSON.stringify(root).length).toBeLessThan(2500);
+    expect(await read({ key: 'mobile.preferences' })).toMatchObject({ control: { availability: 'not_exposed', operations: [] } });
+    expect(await read({ key: 'teammates.profile' })).toMatchObject({ control: { availability: 'unavailable_in_context', operations: [] } });
+    expect(await read({ key: 'native.set_current_session_title' })).toMatchObject({ control: { operations: [expect.objectContaining({ name: 'set_current_session_title' })] } });
+    expect(rename).not.toHaveBeenCalled();
+    expect(await read({ key: 'missing' })).toMatchObject({ ok: false, errorCode: 'UNKNOWN_CONTROL' });
+    const page = await read({ toolQuery: '模型' });
+    expect(page.complete).toBe(false);
+    const next = await read({ toolQuery: '模型', cursor: page.nextCursor });
+    expect((next.items as any[]).every(item => !(page.items as any[]).some(first => first.key === item.key))).toBe(true);
+    expect(await read({ toolQuery: '壁纸', cursor: page.nextCursor })).toMatchObject({ ok: false, errorCode: 'INVALID_CURSOR' });
+    expect(await read({ key: 'appearance.wallpaper', operation: 'schedule_run_now' })).toMatchObject({ ok: false, errorCode: 'UNKNOWN_OPERATION' });
+  } finally { await client.close(); await server.close(); }
+});
+
+// Unit: Pi management is one device-local native operation. Discovery and
+// checks never install; malformed versions and remote callers cannot mutate it.
+it('routes Pi version checks and exact-version installs to the managed runtime', async () => {
+  let remoteHostId: string | undefined;
+  const call = vi.fn(async () => ({ currentVersion: '1.4.0' }));
+  const server = createXdtHelperMcpServer({ piRuntime: { call } }, {
+    agentKind: 'pi', workingDir: '/fixture', sessionId: 'owner',
+    getSessionContext: () => ({ agentKind: 'pi', workingDir: '/fixture', sessionId: 'owner', remoteHostId }),
+  });
+  const client = new Client({ name: 'pi-control-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  const invoke = async (name: string, args = {}) => parsePayload(await client.callTool({ name: 'call_tool', arguments: { name, args } }));
+  try {
+    expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '更新 pi' } })))
+      .toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ key: 'runtimes.pi', availability: 'available' })]) });
+    expect(call).not.toHaveBeenCalled();
+    expect(await invoke('get_pi_runtime', { check: true })).toMatchObject({ ok: true, currentVersion: '1.4.0' });
+    expect(call).toHaveBeenLastCalledWith('owner', { check: true });
+    expect(await invoke('update_pi_runtime', { source: 'upstream', version: 'latest' })).toMatchObject({ ok: false });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(await invoke('update_pi_runtime', { source: 'upstream', version: '1.4.0' })).toMatchObject({ ok: true });
+    expect(call).toHaveBeenLastCalledWith('owner', { install: { source: 'upstream', version: '1.4.0' } });
+    remoteHostId = 'ssh-target';
+    expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: 'runtimes.pi' } })))
+      .toMatchObject({ control: { availability: 'requires_local_task', operations: [] } });
+    expect(await invoke('update_pi_runtime', { source: 'upstream', version: '1.4.0' })).toMatchObject({ ok: false });
+    expect(call).toHaveBeenCalledTimes(2);
   } finally { await client.close(); await server.close(); }
 });

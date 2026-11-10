@@ -11,8 +11,6 @@ const ROOT = resolve(__dirname, '..');
 
 const LOCAL_ONLY_ENTRIES: Record<string, string[]> = {
   'cindy-brain/OneshotModelPinPicker.tsx': ['one-shot-local-request'],
-  // #8460 合并后这一项改走 ModelRouteSelectorContent，从清单移除。
-  'cindy-brain/PluginModelPickerHost.tsx': ['plugin-task-local-route'],
   'cindy-brain/PluginTaskPrefs.tsx': ['plugin-task-local-route', 'one-shot-local-request'],
   'components/settings/SubagentModelSection.tsx': ['subagent-in-parent-task'],
   'components/settings/VisionBridgeSection.tsx': ['vision-bridge-local-proxy'],

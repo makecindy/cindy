@@ -34,7 +34,7 @@ import { evictTaskTagCatalog } from '../task-tags/taskTagEvents';
  */
 
 import { useEffect, useRef } from 'react';
-import { isSharedTaskPeer } from '@cindy/device-link';
+import { isSharedTaskPeer, readProviderMetadataContinuity } from '@cindy/device-link';
 import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
 import { historyTurnEnded } from '@cindy/maker-shared/message-window';
 import { PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
@@ -43,7 +43,6 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { createLogger } from '@/lib/logger';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
-  requestRemoteSessionStatus,
   remoteProjectsStore,
   retryRemoteSessionStatus,
   setRemoteReseedImpl,
@@ -57,7 +56,12 @@ import {
 import { revokedDevicesStore } from './revokedDevicesStore';
 import { unresponsiveDevicesStore } from './unresponsiveDevicesStore';
 import { subscribeDeviceLinkDeviceRemoval } from './useDeviceLinkDeviceList';
-import { collectSessionListSnapshot, refreshRemoteDeviceSessions } from './refreshRemoteSessions';
+import {
+  collectSessionListSnapshot,
+  refreshRemoteDeviceSessions,
+  remoteScheduleIndexLastRead,
+  remoteScheduleIndexReadSeq,
+} from './refreshRemoteSessions';
 import {
   cancelSessionListPersist,
   clearCachedDevice,
@@ -137,6 +141,21 @@ const RESEED_DEBOUNCE_MS = 300;
 // Limit only the startup route's discovery wait, not the request or peer lifetime.
 // Matches the background device directory's 10s budget; late results still apply.
 const INITIAL_DISCOVERY_WAIT_MS = 10_000;
+/**
+ * Schedule events from another computer arrive in pairs (fired, then completed or
+ * skipped, usually seconds apart). Each refresh pulls the whole run index, and the
+ * index alternates between "running" and "not running", so the content cache never
+ * hits. Wait for a quiet period so a pair costs one read whose content is usually
+ * unchanged; the max wait keeps a steady stream of events from postponing it forever.
+ */
+const SCHEDULE_EVENT_QUIET_MS = 10_000;
+const SCHEDULE_EVENT_MAX_WAIT_MS = 30_000;
+/**
+ * Live schedule events already keep the run index current, so the 60 s safety-net
+ * reconcile only re-reads it every few minutes, or at once after events were skipped
+ * while the window was hidden or idle.
+ */
+const PERIODIC_SCHEDULE_INDEX_MS = 5 * 60_000;
 /**
  * 「检测中」最多撑多久:冷启动缓存种入 / relay 重连期间分片标 connecting,link 过了这么久
  * 还没上线就降为 disconnected,免得 relay 长时间不可用时侧栏一直显示检测中。
@@ -435,6 +454,11 @@ export function useDeviceLinkRemoteProjects(
     }
 
     let disposed = false;
+    const scheduleEventRefreshes = new Map<string, { timer: ReturnType<typeof setTimeout>; firstAt: number }>();
+    /** Count of schedule events skipped while the window was hidden or idle. */
+    const scheduleEventsMissed = new Map<string, number>();
+    const markScheduleEventMissed = (deviceId: string) =>
+      scheduleEventsMissed.set(deviceId, (scheduleEventsMissed.get(deviceId) ?? 0) + 1);
     const finishInitialDiscovery = remoteProjectsStore.beginInitialDiscovery();
     const initialDiscoveryTimer = setTimeout(finishInitialDiscovery, INITIAL_DISCOVERY_WAIT_MS);
     /**
@@ -446,6 +470,8 @@ export function useDeviceLinkRemoteProjects(
     let directoryGeneration = 0;
     /** relay 在线时才跑 anti-entropy；初始状态未知时保守暂停，避免离线失败重试。 */
     let linkOnline: boolean | null = null;
+    let directDataDevices = new Set<string>();
+    const peerReadable = (deviceId: string) => linkOnline !== false || directDataDevices.has(deviceId);
     /** push 一旦到达即权威：迟到的 getState 快照不得覆盖更新的 link status。 */
     let linkStatusPushSeen = false;
     /**
@@ -464,12 +490,12 @@ export function useDeviceLinkRemoteProjects(
       connectingGraceTimer = null;
     };
     const markAllConnecting = (): void => {
-      remoteProjectsStore.markAllConnecting((deviceId) => !isSharedTaskPeer(deviceId));
+      remoteProjectsStore.markAllConnecting((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
       clearConnectingGrace();
       connectingGraceTimer = setTimeout(() => {
         connectingGraceTimer = null;
         if (disposed || linkOnline) return;
-        remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
+        remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
       }, CONNECTING_GRACE_MS);
     };
     /** 当前合格设备:deviceId → 友好名 */
@@ -545,7 +571,7 @@ export function useDeviceLinkRemoteProjects(
         deviceId,
         setTimeout(() => {
           archivedRetryTimers.delete(deviceId);
-          if (disposed || !eligible.has(deviceId) || !linkOnline) return;
+          if (disposed || !eligible.has(deviceId) || !peerReadable(deviceId)) return;
           retryRemoteSessionStatus(deviceId, 'archived');
         }, delay),
       );
@@ -581,7 +607,7 @@ export function useDeviceLinkRemoteProjects(
      * 任一步返回 ACCESS_REVOKED → 标记已撤销并移除该设备;全程无撤销 → 清掉残留标记(恢复收尾)。
      */
     const canBootstrap = (deviceId: string, lifecycleEpoch: number): boolean =>
-      !disposed && linkOnline !== false && eligible.has(deviceId) && !unresponsiveDevicesStore.has(deviceId) &&
+      !disposed && peerReadable(deviceId) && eligible.has(deviceId) && !unresponsiveDevicesStore.has(deviceId) &&
       remoteProjectsStore.getDeviceLifecycleEpoch(deviceId) === lifecycleEpoch;
     const refreshAliases = (deviceId: string, invalidate = false): Promise<void> => {
       const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(deviceId);
@@ -716,7 +742,7 @@ export function useDeviceLinkRemoteProjects(
         // Link 还没上线(冷启动 / 重连中):只记下合格性,不发 subscribe。上线那一刻按 eligible
         // 直接 bootstrap,不再等 reseed 的那次 REST 往返——这正是启动时「先离线再在线」里
         // 多出来的一跳。Unknown(getState 失败且没收到 status push)保留原有的直接 bootstrap。
-        if (linkOnline === false) {
+        if (!peerReadable(d.deviceId)) {
           eligible.set(d.deviceId, d.name);
           return;
         }
@@ -771,7 +797,7 @@ export function useDeviceLinkRemoteProjects(
       const generation = directoryGeneration;
       return window.electronAPI.deviceLink
         .listDevices()
-        .then(({ devices }) => {
+        .then(({ devices, stale }) => {
           if (disposed || generation !== directoryGeneration) return;
           for (const d of devices) {
             applyDevice({
@@ -791,22 +817,26 @@ export function useDeviceLinkRemoteProjects(
           // 必须遍历 `getAllDeviceIds()`:缓存种入的分片一律标 disconnected,而
           // `getDeviceIds()` 只返回 connected —— 用它的话这个收敛循环恰好**永远看不到**
           // 要收的那些分片(review: codex 指出上一轮的修复因此无效)。
-          const authoritative = new Set(devices.map((d) => d.deviceId));
-          for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
-            // SharedTask shards are reconciled against membership, not the own-device directory.
-            if (isSharedTaskPeer(deviceId)) continue;
-            if (authoritative.has(deviceId) || eligible.has(deviceId)) continue;
-            log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
-            cancelDeviceReseeds(deviceId);
-            clearArchivedSessionRetry(deviceId);
-            remoteProjectsStore.removeDevice(deviceId);
-            remoteProjectAliases.remove(deviceId);
-            removeRemoteSessionActivityForDevice(deviceId);
-            // 权威列表里没有它 = 明确离场,和撤销 / 关被控同一档:登记进 hydration 黑名单,
-            // 否则在途的那次 readCachedSessionList 落地后又把它种回来,而紧随的 reseed 在
-            // listDevices 离线时纠正不了(review: codex P1)。
-            cacheHydrationBlocked.add(deviceId);
-            clearCachedDevice(deviceId);
+          // A bounded last-known directory cannot prove absence. Keep cached
+          // shards until a fresh REST answer or an explicit permission event.
+          if (!stale) {
+            const authoritative = new Set(devices.map((d) => d.deviceId));
+            for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
+              // SharedTask shards are reconciled against membership, not the own-device directory.
+              if (isSharedTaskPeer(deviceId)) continue;
+              if (authoritative.has(deviceId) || eligible.has(deviceId)) continue;
+              log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
+              cancelDeviceReseeds(deviceId);
+              clearArchivedSessionRetry(deviceId);
+              remoteProjectsStore.removeDevice(deviceId);
+              remoteProjectAliases.remove(deviceId);
+              removeRemoteSessionActivityForDevice(deviceId);
+              // 权威列表里没有它 = 明确离场,和撤销 / 关被控同一档:登记进 hydration 黑名单,
+              // 否则在途的那次 readCachedSessionList 落地后又把它种回来,而紧随的 reseed 在
+              // listDevices 离线时纠正不了(review: codex P1)。
+              cacheHydrationBlocked.add(deviceId);
+              clearCachedDevice(deviceId);
+            }
           }
         })
         .catch((err) => log.debug('listDevices reseed failed', err));
@@ -833,7 +863,7 @@ export function useDeviceLinkRemoteProjects(
       // 预期收口:不会去连(待命 / 关闭远程控制)直接标离线,会去连或未知则进宽限计时。
       if (linkOnline !== true) {
         if (linkExpectedToConnect === false) {
-          remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
+          remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
         } else {
           markAllConnecting();
         }
@@ -865,7 +895,7 @@ export function useDeviceLinkRemoteProjects(
         timerKey,
         setTimeout(() => {
           reseedTimers.delete(timerKey);
-          if (!disposed && linkOnline && eligible.has(deviceId)) {
+          if (!disposed && peerReadable(deviceId) && eligible.has(deviceId)) {
             void refreshRemoteDeviceSessions(deviceId, name, {
               snapshotMode: 'merge',
               status,
@@ -890,7 +920,7 @@ export function useDeviceLinkRemoteProjects(
       );
     });
     const periodicReconcile = startRemoteSessionsReconciler(
-      () => (linkOnline ? [...eligible].filter(([id]) => !unresponsiveDevicesStore.has(id)) : []),
+      () => [...eligible].filter(([id]) => peerReadable(id) && !unresponsiveDevicesStore.has(id)),
       async (deviceId, name) => {
         log.debug(`sessions refresh trigger=periodic window=${windowRole} peer=${deviceId.slice(0, 8)} visible=${periodicReconcileActiveRef.current}`);
         if (sessionsSubscribeRetry.has(deviceId)) {
@@ -901,11 +931,22 @@ export function useDeviceLinkRemoteProjects(
         // sessions:list 是 200 条有界窗口；refresh 层会保留窗口外 active 行，并有界补查
         // 缺席缓存 id 的终态，不能直接把响应缺席解释成删除。
         void refreshAliases(deviceId);
+        const seqBefore = remoteScheduleIndexReadSeq();
+        const missed = scheduleEventsMissed.get(deviceId) ?? 0;
+        // A negative age means the clock moved back; read rather than trust it.
+        const indexAge = Date.now() - (remoteScheduleIndexLastRead(deviceId)?.startedAt ?? 0);
+        const withSchedule = missed > 0 || indexAge < 0 || indexAge >= PERIODIC_SCHEDULE_INDEX_MS;
         const result = await refreshRemoteDeviceSessions(deviceId, name, {
-          scope: 'both',
+          scope: withSchedule ? 'both' : 'sessions',
           snapshotMode: 'merge',
           coalescingMode: 'weak',
         });
+        // Only a read started after these events were skipped covers them; events
+        // skipped during this read stay pending for the next reconcile.
+        if (missed > 0 && (remoteScheduleIndexLastRead(deviceId)?.seq ?? 0) > seqBefore
+          && scheduleEventsMissed.get(deviceId) === missed) {
+          scheduleEventsMissed.delete(deviceId);
+        }
         if (result === 'revoked' && !disposed) handleRevoked(deviceId);
         // 回传结果供 reconciler 的失败退避记账('gave-up' 加深退避,'ok' 复位)。
         return result;
@@ -940,6 +981,7 @@ export function useDeviceLinkRemoteProjects(
       .then((state) => {
         if (disposed) return;
         if (!linkStatusPushSeen) linkOnline = state.linkStatus === 'online';
+        if (!linkStatusPushSeen) directDataDevices = new Set(state.directDataDeviceIds ?? []);
         // Presence can start bootstrap before this initial snapshot settles.
         // Reuse disconnect cleanup to clear loading and invalidate in-flight snapshots.
         if (!linkStatusPushSeen && !linkOnline) {
@@ -947,8 +989,8 @@ export function useDeviceLinkRemoteProjects(
           // 冷启动时 auth 还没完成,linkStatus 多半还是 stopped,但下一步就是 connecting。
           linkExpectedToConnect = state.remoteControlEnabled && !state.standby;
           if (linkExpectedToConnect) markAllConnecting();
-          else remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
-          for (const deviceId of eligible.keys()) remoteProjectAliases.suspend(deviceId);
+          else remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
+          for (const deviceId of eligible.keys()) if (!directDataDevices.has(deviceId)) remoteProjectAliases.suspend(deviceId);
         }
         if (!controlTargetPushSeen) disabledControlDeviceIds = new Set(state.disabledControlDeviceIds ?? []);
         // 「无响应」熔断镜像的初值:按设备合并,已被 push 覆盖的设备以 push 为准
@@ -1011,18 +1053,41 @@ export function useDeviceLinkRemoteProjects(
         // 推送照收；闲着不跟事件去拉整份自动化索引。人回来 / 窗口重新可见时 wake 用 scope both 补上。
         const watching =
           periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true);
-        if (!watching) return;
+        if (!watching) {
+          markScheduleEventMissed(push.deviceId);
+          return;
+        }
         // 与手机同一份事件投影：运行诊断、静默提醒这类不改索引的事件不重拉，
         // 否则 run 进行期间高频推送会反复取消在途的列表 / 索引读取。
         const { refresh } = projectScheduleEvent(push.payload);
         if (!refresh.sessionIndex && !refresh.scheduleList && !refresh.unreadSummary) return;
-        void refreshRemoteDeviceSessions(push.deviceId, eligible.get(push.deviceId), { scope: 'schedule' }).then((result) => {
-          if (result === 'revoked' && !disposed) handleRevoked(push.deviceId);
-        });
+        const deviceId = push.deviceId;
+        const pending = scheduleEventRefreshes.get(deviceId);
+        if (pending) clearTimeout(pending.timer);
+        const firstAt = pending?.firstAt ?? Date.now();
+        const delay = Math.min(SCHEDULE_EVENT_QUIET_MS, Math.max(0, firstAt + SCHEDULE_EVENT_MAX_WAIT_MS - Date.now()));
+        const timer = setTimeout(() => {
+          scheduleEventRefreshes.delete(deviceId);
+          if (disposed || !eligible.has(deviceId)) return;
+          // Hidden again: the wake refresh (scope both) catches up instead.
+          if (!(periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true))) {
+            markScheduleEventMissed(deviceId);
+            return;
+          }
+          void refreshRemoteDeviceSessions(deviceId, eligible.get(deviceId), { scope: 'schedule' }).then((result) => {
+            if (result === 'revoked' && !disposed) handleRevoked(deviceId);
+          });
+        }, delay);
+        scheduleEventRefreshes.set(deviceId, { timer, firstAt });
         return;
       }
       if (push.channel !== 'maker:provider:changed') return;
-      void refreshRemoteCatalogSnapshot(push.deviceId);
+      if (readProviderMetadataContinuity(push.payload)?.remainingMs === 0) {
+        // A Main-observed denial or expired budget must not reopen the target.
+        void refreshRemoteCatalogSnapshot(push.deviceId, push.payload, { retireOnly: true });
+        return;
+      }
+      void refreshRemoteCatalogSnapshot(push.deviceId, push.payload);
     });
 
     // WS 重连后:presence 重新对齐 + 对每个已合格设备重新 subscribe + 重新 bootstrap
@@ -1031,9 +1096,18 @@ export function useDeviceLinkRemoteProjects(
       const wasOnline = linkOnline;
       linkStatusPushSeen = true;
       linkOnline = p.status === 'online';
+      directDataDevices = new Set(p.directDataDeviceIds ?? []);
+      if (p.dataPathChangedDeviceId) {
+        const deviceId = p.dataPathChangedDeviceId;
+        if (!linkOnline && !directDataDevices.has(deviceId)) {
+          remoteProjectsStore.markDeviceDisconnected(deviceId);
+          remoteProjectAliases.suspend(deviceId);
+        }
+        return; // One data path changes no other peer's retry/grace lifetime.
+      }
       if (p.status !== 'online') {
         clearAllArchivedSessionRetries();
-        for (const deviceId of eligible.keys()) remoteProjectAliases.suspend(deviceId);
+        for (const deviceId of eligible.keys()) if (!directDataDevices.has(deviceId)) remoteProjectAliases.suspend(deviceId);
         // relay 瞬时重连(connecting):保留远程会话镜像,只标记 disconnected,让 All Sessions
         // 不因网络抖动反复增删/重排。eligible 保留不动 → 重连 online 时下面的分支自动
         // 重 subscribe+bootstrap。stopped(登出 / 停服)才清空。
@@ -1048,12 +1122,12 @@ export function useDeviceLinkRemoteProjects(
         // (非登出)」会在约 1.2s 后抹掉侧边栏冷缓存 —— 而「停服后重启、relay 仍未恢复」
         // 正是这份缓存要解决的场景(review: P2)。整体删除只归 owner 边界的 clearAll。
         clearTimeout(initialDiscoveryTimer);
-        remoteProjectsStore.clear((deviceId) => !isSharedTaskPeer(deviceId));
+        remoteProjectsStore.clear((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
         for (const deviceId of new Set([...eligible.keys(), ...remoteProjectAliases.getSnapshot().keys()])) {
-          if (!isSharedTaskPeer(deviceId)) remoteProjectAliases.remove(deviceId);
+          if (!isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId)) remoteProjectAliases.remove(deviceId);
         }
         cancelSessionListPersist();
-        clearRemoteSessionActivity((deviceId) => !isSharedTaskPeer(deviceId));
+        clearRemoteSessionActivity((deviceId) => !isSharedTaskPeer(deviceId) && !directDataDevices.has(deviceId));
         // 'stopped'(登出 / 停服)还要清掉「已撤销」标记:否则切换栏的 buildSwitcherDevices 仍会拿
         // revoked 集合单独撑起一颗 rejected chip,停服后切换栏残留陈旧被拒 chip。'connecting' 是瞬态
         // 重连,被拒状态应跨重连保留(正常在线期一直可见),故不清。登出 unmount 时的 clearAll 仍是兜底。
@@ -1077,9 +1151,13 @@ export function useDeviceLinkRemoteProjects(
     });
 
     // A peer reset can lose invalidations while relay presence stays online.
-    const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.(({ deviceId }) => {
+    const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.(({ deviceId, offline }) => {
+      if (offline) {
+        directDataDevices.delete(deviceId);
+        remoteProjectsStore.markDeviceDisconnected(deviceId);
+      }
       remoteProjectAliases.suspend(deviceId);
-      if (!disposed) void refreshAliases(deviceId);
+      if (!disposed && !offline) void refreshAliases(deviceId);
     });
 
     const offControlTarget = window.electronAPI.deviceLink.onControlTargetChanged((p) => {
@@ -1149,6 +1227,8 @@ export function useDeviceLinkRemoteProjects(
     return () => {
       disposed = true;
       clearTimeout(initialDiscoveryTimer);
+      for (const { timer } of scheduleEventRefreshes.values()) clearTimeout(timer);
+      scheduleEventRefreshes.clear();
       clearConnectingGrace();
       setRemoteReseedImpl(null);
       setRemoteSessionBootstrapRetryImpl(null);

@@ -5,6 +5,8 @@ import {
   botGroupErrorVariant,
   botGroupNoticeVariant,
   botGroupPlanFollowUp,
+  botGroupPlanStepState,
+  canSkipBotGroupPlanStep,
   isBotGroupDivisionBlocked,
   mergeBotGroupMessages,
   projectBotGroupExecutionFailures,
@@ -57,6 +59,23 @@ it('counts only new messages from other people and companions below the observed
     { ...message, id: 'read', sequence: 2, serverSequence: '9007199254740992' },
     { ...message, id: 'arrival', sequence: 3, serverSequence: '9007199254740993' },
   ], '9007199254740992')).toBe(1);
+});
+
+// #8443 P2 / unit: delayed capability notices need the same return-to-tail
+// affordance in both clients; ordinary notices must not inflate the count.
+it.each([undefined, 'root'])('counts delayed capability notices in their lane (%s)', threadRootId => {
+  const notice = { id: 'capability', sequence: 11, kind: 'notice', authorKind: 'bot',
+    capabilityNoticeCode: 'GROUP_AUTHORIZATION_REQUIRED', threadRootId } as BotGroupMessageView;
+  expect(botGroupNewMessageCount([notice, notice], 10, threadRootId)).toBe(1);
+  expect(botGroupNewMessageCount([notice], 11, threadRootId)).toBe(0);
+  expect(botGroupNewMessageCount([notice], null, threadRootId)).toBe(0);
+  const excluded = [
+    { ...notice, deleted: true }, { ...notice, isSelf: true },
+    { ...notice, authorKind: 'system' }, { ...notice, authorKind: 'user', isSelf: false },
+    { ...notice, capabilityNoticeCode: undefined }, { ...notice, capabilityNoticeCode: 'UNKNOWN' },
+    { ...notice, threadRootId: threadRootId ? undefined : 'other' },
+  ] as BotGroupMessageView[];
+  expect(botGroupNewMessageCount(excluded, 10, threadRootId)).toBe(0);
 });
 
 describe('server group membership affordances', () => {
@@ -124,6 +143,22 @@ describe('execution failures are a projection of the current snapshot', () => {
 describe('public failure snapshot decoder', () => {
   const row = { id: 'run', conversation_id: 'room', source_message_id: 'source', bot_id: 'bot', epoch: 2,
     plan_id: 'plan', updated_at: '2026-10-10T00:00:00Z', detail: 'private diagnostic' };
+  it('carries the server-owned unclaimed timeout reason through the source notice', () => {
+    const failure = readBotGroupExecutionFailure({ ...row, failure_code: 'RUNTIME_TIMEOUT',
+      failure_reason: 'unclaimed_timeout' }, 'room')!;
+    expect(failure).toHaveProperty('reason', 'unclaimed_timeout');
+    const source = { id: 'source', sequence: 1, createdAt: 1, threadRootId: 'thread' } as BotGroupMessageView;
+    expect(projectBotGroupExecutionFailures([source], [failure])[1]).toMatchObject({
+      runtimeFailureCode: 'RUNTIME_TIMEOUT', runtimeFailureReason: 'unclaimed_timeout', threadRootId: 'thread',
+    });
+  });
+  it.each([
+    ['RUNTIME_TIMEOUT', undefined], ['RUNTIME_TIMEOUT', 'private diagnostic'],
+    ['AUTH_REQUIRED', 'unclaimed_timeout'], ['future-code', 'unclaimed_timeout'],
+  ])('ignores absent, unknown or mismatched reasons (%s, %s)', (code, reason) => {
+    const failure = readBotGroupExecutionFailure({ ...row, failure_code: code, failure_reason: reason }, 'room')!;
+    expect(failure).not.toHaveProperty('reason');
+  });
   it.each(BOT_GROUP_RUNTIME_FAILURE_CODES)('reads a new server snapshot without requiring legacy status: %s', code => {
     const view = readBotGroupExecutionFailure({ ...row, failure_code: code }, 'room');
     expect(view).toEqual({ executionId: 'run', epoch: 2, sourceMessageId: 'source', botId: 'bot', botName: '',
@@ -323,5 +358,46 @@ describe('group body component display', () => {
       { kind: 'text', content: 'Summary' }, { kind: 'text', content: 'Updated' },
       { kind: 'text', content: 'Diagram' },
     ]);
+  });
+});
+
+// An assigned talk turn may still be waiting for its device. Both UIs use these facts.
+describe('unclaimed talk turn controls', () => {
+  it('allows future pending turns only on capable hosts and leaves running turns protected', () => {
+    const current = { position: 0, botId: 'a', botName: 'A', task: '', status: 'running' as const, executionId: 'run', executionStatus: 'running' };
+    const future = { position: 1, botId: 'b', botName: 'B', task: '', status: 'pending' as const };
+    const value = plan({ kind: 'talk', status: 'running', currentStep: 0, canManage: true, supportsPendingSkip: true, steps: [current, future] });
+    expect(canSkipBotGroupPlanStep(value, current)).toBe(false);
+    expect(canSkipBotGroupPlanStep(value, future)).toBe(true);
+    expect(canSkipBotGroupPlanStep({ ...value, status: 'waiting' }, future)).toBe(true);
+    for (const overrides of [{ supportsPendingSkip: undefined }, { kind: 'work' as const }, { canManage: false }, { status: 'stopped' as const }]) {
+      expect(canSkipBotGroupPlanStep({ ...value, ...overrides }, future)).toBe(false);
+    }
+    expect(canSkipBotGroupPlanStep(value, { ...future, status: 'skipped' })).toBe(false);
+  });
+  const queued = () => plan({ kind: 'talk', status: 'running', canManage: true,
+    steps: [{ position: 0, botId: 'a', botName: 'A', task: '', status: 'running', executionId: 'run', executionStatus: 'queued' }],
+  });
+  it('labels queued work without claiming that the device started it', () => {
+    const value = queued();
+    expect(botGroupPlanStepState(value, value.steps[0])).toBe('queued');
+    expect(canSkipBotGroupPlanStep(value, value.steps[0])).toBe(true);
+    expect(botGroupPlanStepState({ ...value, status: 'stopped' }, value.steps[0])).toBe('stopped');
+    expect(botGroupPlanStepState(value, { ...value.steps[0], executionStatus: 'running' })).toBe('running');
+  });
+  it('offers no skip for legacy snapshots, running devices, work plans or viewers', () => {
+    const value = queued();
+    for (const overrides of [{ kind: 'work' as const }, { canManage: false }, { status: 'stopped' as const }, { currentStep: 1 }]) {
+      expect(canSkipBotGroupPlanStep({ ...value, ...overrides }, value.steps[0])).toBe(false);
+    }
+    for (const overrides of [{ executionId: undefined }, { executionStatus: undefined }, { executionStatus: 'running' }]) {
+      expect(canSkipBotGroupPlanStep(value, { ...value.steps[0], ...overrides })).toBe(false);
+    }
+  });
+  it('continues a skipped talk turn without treating a work dependency as complete', () => {
+    const value = plan({ kind: 'talk' });
+    value.steps[0].status = 'skipped';
+    expect(botGroupPlanFollowUp(value)?.kind).toBe('continue');
+    expect(botGroupPlanFollowUp({ ...value, kind: 'work' })).toBeNull();
   });
 });

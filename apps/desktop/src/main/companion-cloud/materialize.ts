@@ -13,7 +13,8 @@ import { directRoomSourceId } from './directRoom.js';
 import { readAllRoomMessages } from './room.js';
 import type { BotSkillFile } from '../maker-ipc/botSkillFiles.js';
 import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
-import type { CompanionCloudState } from './state.js';
+import type { CompanionBotState, CompanionCloudState } from './state.js';
+import { readCompanionRows, storedValueHash, type CompanionStore } from './store.js';
 import { errorCode, isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import {
   COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
@@ -31,6 +32,8 @@ export interface CompanionWriteFence {
 /** Local profile, Bot Home and Session operations, all through the existing services. */
 export interface CompanionMaterializeHost {
   readProfile: (botId: string) => Promise<CompanionLocalProfile | null>;
+  /** A different, non-archived Cindy identity; never match by display name. */
+  findConflictingCindy?: (botId: string) => Promise<string | null>;
   /**
    * The cloud avatar is restored when its bytes are still available. A temporary download failure
    * rejects; a permanent one stores the default avatar together with durable local-only provenance.
@@ -117,8 +120,25 @@ const text = (value: unknown) => typeof value === 'string' ? value : undefined;
 const record = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const noFence: CompanionWriteFence = { assertCurrent: () => undefined };
 
+/** A local identity conflict needs a deliberate merge or move, not another creation attempt. */
+export class CompanionIdentityConflict extends Error {
+  constructor(readonly conflictingBotId: string) { super('LOCAL_CINDY_CONFLICT'); }
+}
+
+export async function assertCompanionIdentity(
+  host: Pick<CompanionMaterializeHost, 'findConflictingCindy'>,
+  botId: string, templateId: unknown, fence: CompanionWriteFence,
+): Promise<void> {
+  fence.assertCurrent();
+  if (templateId !== 'cindy' || !host.findConflictingCindy) return;
+  const conflict = await host.findConflictingCindy(botId);
+  fence.assertCurrent();
+  if (conflict) throw new CompanionIdentityConflict(conflict);
+}
+
 export async function materializeCompanion(input: {
   api: CompanionApi;
+  store?: CompanionStore;
   state: CompanionCloudState;
   host: CompanionMaterializeHost;
   actor: CompanionMaterializeActor;
@@ -140,10 +160,24 @@ export async function materializeCompanion(input: {
     return value;
   };
   const botId = actor.externalId;
-  const rows = await step(() => api<Array<{ key: string; value: unknown; revision: number }>>('/preferences', 'GET', undefined, actor.id));
-  const prefs = new Map((Array.isArray(rows) ? rows : []).map(row => [row.key, row]));
+  const rows = await step(() => readCompanionRows(api, input.store, actor.id));
+  const prefs = new Map(rows.map(row => [row.key, row]));
   const profileValue = prefs.get(COMPANION_PROFILE_KEY)?.value;
   const profile = isCompanionProfileSnapshot(profileValue) ? profileValue : null;
+  /** A restored value is recorded under the revisions of where it came from. */
+  const remember = (entry: CompanionBotState, key: string, value: { hash: string; revision: number }) => {
+    // The other location's record is from before another computer changed the value: drop it, or a
+    // later edit back to that old value would look already uploaded there (and be lost).
+    const row = prefs.get(key);
+    if (row?.fromStore) {
+      const hash = value.hash === TOMBSTONE_HASH ? value.hash : storedValueHash(row.value, row.prefRevision ?? 0);
+      entry.stored = { ...entry.stored, [key]: { hash, revision: value.revision, local: true, ...(row.prefRevision !== undefined ? { prefRevision: row.prefRevision } : {}) } };
+      delete entry.prefs[key];
+    } else {
+      entry.prefs[key] = { ...value, local: true };
+      if (entry.stored?.[key]) { const { [key]: _old, ...rest } = entry.stored; entry.stored = rest; }
+    }
+  };
   const known = state.bot(botId);
   const knownPrefs = known?.actorId === actor.id ? known.prefs : {};
 
@@ -157,6 +191,10 @@ export async function materializeCompanion(input: {
   // Without the home's profile snapshot this copy's own (or empty) profile would be published as
   // the companion's identity: wait (demoted, retried) until the home has uploaded one.
   if (!profile) throw new Error('PROFILE_SNAPSHOT_MISSING');
+  const templateId = text(record(profile)?.templateId);
+  // The cloud externalId is the only reusable local identity. Another Cindy (even one with
+  // the same name) must not be overwritten, re-keyed or silently merged into this actor.
+  await assertCompanionIdentity(host, botId, templateId, fence);
   // An existing local copy is saved before the cloud copy replaces (or deletes) its files.
   let backup: string | null | undefined;
   if (local && !(known?.actorId === actor.id && known.backedUp) && host.backupHome) {
@@ -166,7 +204,6 @@ export async function materializeCompanion(input: {
     state.update(botId, actor.id, entry => { entry.backedUp = true; });
   }
   const name = text(profile?.name)?.trim() || actor.name || local?.displayName || '伙伴';
-  const templateId = text(record(profile)?.templateId);
   if (!local) {
     await step(() => host.createProfile({ id: botId, name, description: text(profile?.description) ?? '',
       identitySource: text(profile?.soul) ?? '', userContextSource: text(profile?.user) ?? '', avatar: actor.avatar,
@@ -293,7 +330,7 @@ export async function materializeCompanion(input: {
   // a folder or judgment removed meanwhile (or all of them) stays removed. One that never synced
   // (an old copy of its own) joins, and goes up with the rest.
   const workbench = prefs.get(COMPANION_WORKBENCH_KEY);
-  const replaceWorkbench = !!knownPrefs[COMPANION_WORKBENCH_KEY];
+  const replaceWorkbench = !!knownPrefs[COMPANION_WORKBENCH_KEY] || (known?.actorId === actor.id && !!known.stored?.[COMPANION_WORKBENCH_KEY]);
   if (workbench && host.applyWorkbench && (workbench.value !== null || replaceWorkbench)) {
     await apply('workbench', async () => {
       await step(() => host.applyWorkbench!(botId, workbench.value, fence, { replace: replaceWorkbench }));
@@ -304,7 +341,7 @@ export async function materializeCompanion(input: {
   if (failures > 0) {
     // Keep what was restored (so the retry does not back the copy up again) and stay demoted.
     state.update(botId, actor.id, entry => {
-      for (const [key, value] of applied) entry.prefs[key] = { ...value, local: true };
+      for (const [key, value] of applied) remember(entry, key, value);
       // The copy now exists: the retry no longer sees it as new, so remember what it could not keep.
       if (notices.length) entry.arrivalNotices = notices;
     });
@@ -326,7 +363,8 @@ export async function materializeCompanion(input: {
   state.update(botId, actor.id, entry => {
     // Revisions may have moved on while another computer was the home.
     entry.prefsSeeded = false;
-    for (const [key, value] of applied) entry.prefs[key] = { ...value, local: true };
+    entry.storeSeeded = false;
+    for (const [key, value] of applied) remember(entry, key, value);
     if (!keepCursor) entry.mirror = { sessionId, ...cursor };
     if (needsRebuild) entry.pendingRebuild = true;
     if (notices.length) entry.arrivalNotices = notices; else delete entry.arrivalNotices;

@@ -1,12 +1,21 @@
 // @vitest-environment jsdom
-import { act, createElement as el, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { act, createContext, createElement as el, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { chatGroupView, chatRoomRow, createChatServerClient, type ChatMessage, type ChatPage } from '@/chat/chatServerClient';
 import { shareSelectionStore } from '@/session/shareSelectionStore';
+import { i18n, SUPPORTED_LOCALES } from '@/i18n';
+import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
+import { ProcessDisclosureViewport } from '@/session/useProcessDisclosureViewport';
+
+const testThemeContext = createContext('light');
 
 const h = vi.hoisted(() => ({
+  window: { width: 390, height: 844, fontScale: 1, scale: 3 },
   processRead: vi.fn(),
+  textRender: vi.fn(),
+  translate: null as null | ((key: string, options?: Record<string, unknown>) => string),
   chat: null as any, pngExport: vi.fn(async () => 'encoded'), sharedImage: vi.fn(async () => {}), exported: [] as any[],
   management: null as any,
   openTeammate: vi.fn(),
@@ -16,7 +25,7 @@ const h = vi.hoisted(() => ({
   leaveDecision: (async () => false) as () => Promise<boolean>,
   confirm: vi.fn(),
   leave: vi.fn(),
-  focused: true,
+  focused: true, themeMode: 'light',
   nativeMenus: true,
   appState: 'active',
   appStateListeners: new Set<(state: string) => void>(),
@@ -32,6 +41,8 @@ const h = vi.hoisted(() => ({
   cloudRows: null as any[] | null,
   uuid: 0,
   scroll: null as any,
+  scrolls: {} as Record<string, any>,
+  speakerDisclosure: false,
   scrollToEnd: vi.fn(),
   markRead: vi.fn(),
   push: vi.fn(), replace: vi.fn(), back: vi.fn(), scrollTo: vi.fn(),
@@ -43,7 +54,8 @@ const h = vi.hoisted(() => ({
   discarded: [] as any[],
   deleted: [] as string[],
   keyboardAvoidingView: null as any,
-  platform: { OS: 'ios' }, headerBlur: [] as number[], headerFade: [] as (number | undefined)[],
+  spacer: null as any, platform: { OS: 'ios' }, insets: { top: 59, bottom: 34, left: 0, right: 0 },
+  headerBlur: [] as number[], headerFade: [] as (number | undefined)[], screenOptions: [] as any[],
 }));
 
 // Keep production message components; adapt native surfaces for jsdom.
@@ -56,21 +68,35 @@ vi.mock('@/session/ConversationShareWebView', () => ({ cleanupConversationShareP
 vi.mock('expo-sharing', () => ({ shareAsync: h.sharedImage }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
 vi.mock('react-native-uitextview', () => ({
-  UITextView: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children),
+  UITextView: ({ children, testID, onPress, onTouchStart, style }: any) => {
+    h.textRender();
+    return el('span', { 'data-testid': testID, onClick: onPress, onTouchStart,
+      'data-style': JSON.stringify(Object.assign({}, ...[style].flat(Infinity).filter(Boolean))) }, children);
+  },
 }));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'file:///test-cache' } }));
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('@/components/ChatReplyIcon', () => ({ ChatReplyIcon: () => null }));
 vi.mock('react-native', () => {
-  const box = (tag: string) => ({ children, testID, accessibilityLabel, style, onLayout }: any) =>
+  const box = (tag: string) => ({ children, testID, accessibilityLabel, style, onLayout, onTouchStart, ref }: any) =>
     el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel,
-      ref: (node: any) => { if (node) node.nativeLayout = onLayout; },
-      style: { opacity: [style].flat().filter(Boolean).findLast((item: any) => item.opacity !== undefined)?.opacity,
+      onTouchStart, ref: (node: any) => {
+        if (node) { node.nativeLayout = onLayout; node.measureInWindow = (callback: any) => callback(0, 62, 402, 812); }
+        if (typeof ref === 'function') ref(node); else if (ref) ref.current = node;
+      },
+      style: { paddingBottom: [style].flat().filter(Boolean).findLast((item: any) => item.paddingBottom !== undefined)?.paddingBottom,
+        paddingLeft: [style].flat().filter(Boolean).findLast((item: any) => item.paddingLeft !== undefined)?.paddingLeft,
+        paddingRight: [style].flat().filter(Boolean).findLast((item: any) => item.paddingRight !== undefined)?.paddingRight,
+        opacity: [style].flat().filter(Boolean).findLast((item: any) => item.opacity !== undefined)?.opacity,
+        height: [style].flat().filter(Boolean).findLast((item: any) => item.height !== undefined)?.height,
         display: [style].flat().filter(Boolean).findLast((item: any) => item.display !== undefined)?.display } }, children);
   return {
+    PanResponder: { create: () => ({ panHandlers: {} }) },
+    UIManager: {}, LayoutAnimation: { configureNext() {} },
     View: box('div'), ScrollView: ({ ref, children, ...props }: any) => {
       h.scroll = props;
+      h.scrolls[props.testID] = props;
       useImperativeHandle(ref, () => ({ scrollToEnd: h.scrollToEnd, scrollTo: h.scrollTo }));
       return el('div', { 'data-testid': props.testID }, children);
     }, KeyboardAvoidingView: ({ children, ...props }: any) => {
@@ -84,21 +110,24 @@ vi.mock('react-native', () => {
     StyleSheet: { create: (value: unknown) => value, flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)), hairlineWidth: 1 },
     Platform: { get OS() { return h.platform.OS; }, select: (value: any) => value[h.platform.OS] },
     Alert: { alert: h.alert },
-    useWindowDimensions: () => ({ width: 390, height: 844, fontScale: 1, scale: 3 }),
+    useWindowDimensions: () => h.window,
+    Dimensions: { get: () => h.window, addEventListener: () => ({ remove() {} }) },
     AppState: { get currentState() { return h.appState; }, addEventListener: (_event: string, listener: (state: string) => void) => {
       h.appStateListeners.add(listener); return { remove: () => h.appStateListeners.delete(listener) };
     } },
     BackHandler: { addEventListener: (_event: string, fn: () => boolean) => { h.hardwareBack = fn; return { remove() {} }; } },
     Keyboard: { dismiss: () => {}, isVisible: () => h.keyboardVisible },
-    Animated: { View: box('div'), Value: class { setValue() {} interpolate() { return this; } }, timing: () => ({ start() {}, stop() {} }),
+    Animated: { createAnimatedComponent: (component: any) => component, View: box('div'), Value: class { setValue() {} interpolate() { return this; } }, timing: () => ({ start() {}, stop() {} }),
       loop: () => ({ start() {}, stop() {} }), sequence: () => ({}) },
     Easing: { inOut: () => undefined, ease: undefined, bezier: () => undefined },
   };
 });
-vi.mock('expo-router', () => ({
+vi.mock('expo-router', () => {
+  const router = { back: h.back, replace: h.replace, push: h.push };
+  return {
   useIsFocused: () => h.focused,
   Stack: {
-    Screen: ({ options }: any) => typeof options.headerTitle === 'function' ? options.headerTitle() : null,
+    Screen: ({ options }: any) => { h.screenOptions.push(options); return typeof options.headerTitle === 'function' ? options.headerTitle() : null; },
     Toolbar: Object.assign(({ children }: any) => children, {
       View: ({ children }: any) => children,
       Button: ({ children, accessibilityLabel, onPress, disabled, selected }: any) => el('button', {
@@ -106,36 +135,43 @@ vi.mock('expo-router', () => ({
       }, children),
     }),
   },
-  useRouter: () => ({ back: h.back, replace: h.replace, push: h.push }),
+  useRouter: () => router,
   useNavigation: () => ({ getState: () => h.navigation }),
   useFocusEffect: (effect: () => void) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]),
-}));
+}; });
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 72 }));
-vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: any) => el('main', null, children), useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }) }));
-vi.mock('@/session/SessionHeaderNativeControls', () => ({ SessionHeaderNativeBlur: ({ height, fadeInside }: any) => { h.headerBlur.push(height); h.headerFade.push(fadeInside); return null; } }));
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...await importOriginal<typeof import('react-i18next')>(),
-  useTranslation: () => ({
-    t: (key: string, options?: Record<string, unknown>) => options
+vi.mock('react-native-safe-area-context', () => ({ SafeAreaInsetsContext: createContext(h.insets),
+  SafeAreaView: ({ children, testID }: any) => el('main', { 'data-testid': testID }, children), useSafeAreaInsets: () => h.insets }));
+vi.mock('@/session/SessionHeaderNativeControls', () => ({ SessionHeaderNativeBlur: ({ height, fadeInside }: any) => {
+  h.headerBlur.push(height); h.headerFade.push(fadeInside);
+  return el('div', { 'data-testid': 'headerBlur', 'data-height': height });
+} }));
+vi.mock('react-i18next', async (importOriginal) => {
+  const t = (key: string, options?: Record<string, unknown>) => h.translate ? h.translate(key, options) : options
       ? `${key}(${Object.entries(options).map(([name, value]) => `${name}=${String(value)}`).join(',')})`
-      : key,
-    i18n: { language: 'zh-CN' },
-  }),
-}));
+      : key;
+  return { ...await importOriginal<typeof import('react-i18next')>(),
+    useTranslation: () => ({ t, i18n: { language: 'zh-CN' } }),
+  };
+});
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'Bell', 'ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
-    'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
+    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
     .map((name) => [name, () => null]),
 ));
-vi.mock('@/theme', async () => ({
-  ...await import('@/theme/tokens'), useThemedStyles: (makeStyles: any) => makeStyles({}), useTheme: () => ({ colors: {} }), monoFont: 'mono',
-}));
+vi.mock('@/theme', async () => {
+  const tokens = await import('@/theme/tokens');
+  const useColors = () => tokens.palettes[useContext(testThemeContext) as keyof typeof tokens.palettes];
+  return { ...tokens, useThemedStyles: (makeStyles: any) => makeStyles(useColors()),
+    useTheme: () => ({ mode: useContext(testThemeContext), colors: useColors() }), monoFont: 'mono' };
+});
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, getPresenceAvailability: () => true }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: h.leave }));
+vi.mock('@/utils/useTaskListBack', () => ({ useTaskListBack: () => h.leave }));
 vi.mock('@/platform/chrome/AnchoredPullDownMenu', () => ({ AnchoredPullDownMenu: ({ children }: any) => children }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
@@ -177,27 +213,72 @@ vi.mock('@/session/CompanionSheet', () => ({
     const was = useRef(visible);
     useEffect(() => { if (was.current && !visible) onClosed?.(); was.current = visible; }, [visible]);
     return visible ? el('div', { 'data-testid': testID, 'data-prevent-dismiss': String(!!preventDismiss) },
+      el('button', { 'data-testid': `${testID}.close`, onClick: onClose }, 'Close'),
       onBack ? el('button', { 'data-testid': `${testID}.back`, onClick: onBack }) : null,
       trailingAction ? el('button', { 'data-testid': trailingAction.testID, disabled: trailingAction.disabled || trailingAction.busy, onClick: trailingAction.onPress }, trailingAction.label) : null,
       children, footer) : null;
   },
 }));
-vi.mock('@/session/BotGroupAvatars', () => ({
-  BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_STEP_AVATAR_SIZE: 24, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BOT_GROUP_ROW_AVATAR_SIZE: 32,
-  BotGroupAvatar: () => null, BotGroupDuoAvatar: () => null,
-  useBotGroupIdentities: () => (botId: string, fallbackName = '', member?: { name: string }) => ({ botId, name: fallbackName || member?.name || botId }),
+vi.mock('@/session/BotGroupMentionPopover', () => ({
+  BotGroupMentionPopover: ({ position, onClose, name, displayName, caption }: any) => el('div', {
+    'data-testid': 'mentionPopover', 'data-position': JSON.stringify(position),
+  }, el('div', { 'data-testid': 'botGroup.mention.identity' }, name, displayName, caption), el('button', { 'data-testid': 'botGroup.mention.identity.close', onClick: onClose }, 'Close')),
 }));
+vi.mock('@/session/BotGroupAvatars', () => {
+  const identity = (botId: string, fallbackName = '', member?: { name: string }) => ({ botId, name: fallbackName || member?.name || botId });
+  return {
+  BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_STEP_AVATAR_SIZE: 24, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BOT_GROUP_ROW_AVATAR_SIZE: 32, BOT_GROUP_MENTION_AVATAR_SIZE: 48,
+  BotGroupAvatar: () => null, BotGroupDuoAvatar: () => null,
+  useBotGroupIdentities: () => identity,
+}; });
 vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, title, children) }));
 vi.mock('@/session/BotGroupSpeakerRow', () => ({
-  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending }: any) => el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name, onStop ? el('button', { 'data-testid': 'botGroup.work.stop', disabled: stopPending, onClick: onStop }, 'stop') : null),
+  BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending }: any) => {
+    const inspect = useContext(ProcessDisclosureViewport);
+    return el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name,
+      h.speakerDisclosure ? el('button', { 'data-testid': 'fixture.processCollapse', onClick: () => inspect?.(300) }, 'Collapse process') : null,
+      onStop ? el('button', { 'data-testid': 'botGroup.work.stop', disabled: stopPending, onClick: onStop }, 'stop') : null);
+  },
 }));
+vi.mock('expo-constants', () => ({ default: { executionEnvironment: 'bare' }, ExecutionEnvironment: { StoreClient: 'storeClient' } }));
+// Native animation/gesture adapters; the production resize hook and row still run.
+vi.mock('react-native-reanimated', async () => {
+  const { useRef } = await import('react');
+  return {
+    default: { View: ({ children }: any) => el('div', null, children) },
+    useSharedValue: (value: unknown) => useRef({ value }).current,
+    useAnimatedRef: () => useRef(null),
+    useDerivedValue: (calculate: () => unknown) => ({ get value() { return calculate(); } }),
+    useAnimatedStyle: (calculate: () => any) => new Proxy({}, { get: (_target, key) => calculate()[key] }),
+    useAnimatedReaction: () => {}, measure: () => null,
+    runOnUI: (fn: any) => fn, runOnJS: (fn: any) => fn,
+  };
+});
+vi.mock('@/platform/gestureHandler', () => {
+  const gesture = () => { const chain: any = new Proxy({}, { get: () => () => chain }); return chain; };
+  return { Gesture: { Pan: gesture, Native: gesture, Manual: gesture },
+    GestureDetector: ({ children }: any) => children };
+});
+vi.mock('@/session/useMobileKeyboardState', () => ({ useMobileKeyboardState: () => ({ visible: false, height: 0, transition: { current: null } }) }));
+vi.mock('@/session/ComposerDockKeyboardFollow', () => ({ DockKeyboardBottomSpacer: (props: any) => { h.spacer = props; return null; } }));
+vi.mock('@/session/composerPullThrough', async () => {
+  const { useMemo } = await import('react');
+  const { ScrollView } = await import('react-native');
+  return {
+    useComposerPullThroughBridge: () => useMemo(() => ({ armed: { value: false }, event: { value: null }, grabberRef: { current: null } }), []),
+    ComposerPullThroughScrollView: ({ bridge, ...props }: any) => el(ScrollView, props),
+  };
+});
 vi.mock('@/session/MobileComposerInputRow', () => ({
   // Like the real row: the card shows the tray above the input and the toolbar below it.
+  MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT: 28,
+  MOBILE_COMPOSER_INPUT_MAX_HEIGHT: 160,
+  ComposerResizeGrabber: ({ onAdjust }: any) => el('button', { 'data-testid': 'fixture.resize', onClick: () => onAdjust(1) }),
   MobileComposerInputRow: (props: any) => {
     h.row = props;
     if (props.inputRef) props.inputRef.current = { focus: h.inputFocus, blur: h.inputBlur, isFocused: () => h.inputFocused };
     return el('div', { 'data-testid': 'composer-row', 'data-card': props.cardActive ? 'true' : 'false' },
-      props.cardActive ? props.accessoryAbove : props.leading,
+      props.resizeHandle, props.cardActive ? props.accessoryAbove : props.leading,
       el('span', { 'data-testid': 'placeholder' }, props.placeholder),
       props.cardActive ? props.toolbar : props.trailing);
   },
@@ -249,7 +330,19 @@ vi.mock('@/session/ImageLightbox', () => ({
     return el('div', { 'data-testid': 'lightbox', 'data-url': url, 'data-count': String(images.length) });
   },
 }));
-vi.mock('@/session/MessageRenderer', () => ({
+vi.mock('@/session/MessageRenderer', async () => {
+  const { useSessionQuickSend } = await import('@/session/SessionQuickSendContext');
+  const { richAnswerText } = await import('@cindy/maker-shared/rich-answer');
+  const { createContext } = await import('react');
+  return { MessageHeavyContentVisibilityContext: createContext(true),
+  MarkdownBody: ({ text }: any) => {
+    const send = useSessionQuickSend();
+    return el('button', { 'data-testid': 'rich-group-send', disabled: !send, onClick: () => send?.('Visible rich reply') }, richAnswerText(text));
+  },
+  MessagePayloadModal: ({ payload, onClose }: any) => payload
+    ? el('div', { 'data-testid': 'diagramModal', 'data-source': payload.body },
+      el('button', { 'data-testid': 'diagramModal.close', onClick: onClose }, '关闭'))
+    : null,
   AttachmentStrip: ({ attachments, onOpen, onOpenFile, align }: any) => el('div', { 'data-testid': 'attachmentStrip', 'data-align': align },
     attachments.map((item: any, index: number) => el('button', {
       key: index, 'data-testid': `attachment.${item.kind}`, 'data-uri': item.uri ?? '',
@@ -259,8 +352,12 @@ vi.mock('@/session/MessageRenderer', () => ({
         ? { kind: 'media', media: { kind: 'image', url: item.uri, previewable: false } }
         : { kind: 'file', title: item.name, body: '' }),
     }, item.name))),
-}));
-vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () => async (media: any) => ({ url: media.url, previewable: true, mimeType: 'image/png' }) }));
+};
+});
+vi.mock('@/session/useBotGroupRemoteMedia', () => {
+  const resolve = async (media: any) => ({ url: media.url, previewable: true, mimeType: 'image/png' });
+  return { useBotGroupRemoteMedia: () => resolve };
+});
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: (_host: unknown, _enabled: boolean, query = '') => { h.teammateQuery = query; return h.teammates; } }));
 vi.mock('@/session/useBotGroupChat', () => ({ useBotGroupChat: (...args: unknown[]) => { h.hookCalls(...args); return h.chat; } }));
 vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsManagement: () => h.management ?? ({
@@ -281,7 +378,10 @@ vi.mock('@/session/ThinkingDots', () => ({ ThinkingDots: () => null }));
 const taskCardDevices = vi.hoisted(() => [] as string[]);
 vi.mock('@/session/CompanionMessageCard', () => ({ CompanionTaskCard: ({ deviceId }: { deviceId: string }) => { taskCardDevices.push(deviceId); return null; } }));
 import { BotGroupChatScreen } from '@/session/BotGroupChatScreen';
+import { BotGroupComposer } from '@/session/BotGroupComposer';
 import { parseBotGroupChatData } from '@/session/botGroupRemote';
+import { GeometryContext } from '@/platform/AdaptiveWindowContext';
+import { CHAT_HEADER_MIN_HEIGHT } from '@/session/ChatIdentityHeader';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -345,10 +445,13 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
     ...h.chat,
     state: kind === 'ready' ? { kind, group: data } : kind === 'error' ? { kind, message: 'x' } : { kind },
   };
-  await act(async () => root.render(el(BotGroupChatScreen, { deviceId, deviceName: deviceId ? 'Mac' : '', groupId: 'g1', threadRootId })));
+  await act(async () => root.render(el(testThemeContext.Provider, { value: h.themeMode },
+    el(BotGroupChatScreen, { deviceId, deviceName: deviceId ? 'Mac' : '', groupId: 'g1', threadRootId }))));
 }
 
 beforeEach(() => {
+  h.translate = null; h.themeMode = 'light';
+  h.scrolls = {}; h.speakerDisclosure = false;
   h.nativeMenus = true;
   shareSelectionStore.exit();
   h.management = null;
@@ -358,7 +461,8 @@ beforeEach(() => {
   h.exported = []; h.pngExport.mockResolvedValue('encoded');
   h.uuid = 0; h.inputs = {}; h.teammateQuery = ''; h.teammates = { rows: [], loading: false, failed: false };
   h.appState = 'active'; h.appStateListeners.clear();
-  h.platform.OS = 'ios'; h.focused = true; h.inputFocused = false; h.keyboardVisible = false; h.keyboardAvoidingView = null; h.headerBlur = []; h.headerFade = [];
+  h.platform.OS = 'ios'; h.focused = true; h.inputFocused = false; h.keyboardVisible = false; h.keyboardAvoidingView = null; h.headerBlur = []; h.headerFade = []; h.screenOptions = [];
+  h.insets = { top: 59, bottom: 34, left: 0, right: 0 };
   h.chat = { pending: [], reload: vi.fn(), act: vi.fn(async () => ({ effects: [] })), online: true };
   h.discarded = []; h.deleted = []; h.leaveGuard = []; h.leaveDecision = async () => false;
   h.local = {
@@ -373,6 +477,219 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
 describe('group timeline', () => {
+  // Unit / A04：从生产群页面打开图表，关闭或离开群后不应保留查看器；仅替换原生弹层边界。
+  it('opens the group diagram source and dismisses its viewer on close or blur', async () => {
+    const source = 'flowchart LR\nA --> B';
+    const data = group({ messages: [message('diagram', 1, { authorBotId: 'mimi', content: '```mermaid\n' + source + '\n```' })] });
+    await render(data);
+    expect(byId('diagramModal')).toBeNull();
+    await click('botGroup.openDiagram');
+    expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+    await click('diagramModal.close');
+    expect(byId('diagramModal')).toBeNull();
+    await click('botGroup.openDiagram');
+    h.focused = false;
+    await render(data);
+    expect(byId('diagramModal')).toBeNull();
+    h.focused = true;
+    await render(data);
+    expect(byId('diagramModal')).toBeNull();
+  });
+
+  // #8955 P1 / unit: §8.4 revocation must clear the viewer too; blur coverage never loses access.
+  it('clears an open diagram on group access loss without reopening it when access returns', async () => {
+    h.chat.server = true;
+    const source = 'flowchart LR\nA --> B';
+    const data = group({ serverBacked: true, messages: [message('diagram', 1, { authorBotId: 'mimi', content: '```mermaid\n' + source + '\n```' })] });
+    await render(data, 'ready', undefined, '');
+    await click('botGroup.openDiagram');
+    expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+    await render(null, 'missing', undefined, '');
+    expect(byId('botGroup.unavailable')).not.toBeNull();
+    expect(byId('diagramModal')).toBeNull();
+    await render(data, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await click('botGroup.openDiagram');
+    expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+  });
+
+  // #8955 P1 / unit: source denial keeps the group ready, unlike whole-group revocation.
+  it.each(['deleted', 'unavailable'] as const)('closes a posted-reply diagram when its source is %s while the group stays ready', async status => {
+    h.chat.server = true;
+    const source = 'flowchart LR\nA --> B';
+    const share = { messageId: 'source', threadRootId: 'thread-root', status: 'available' as const,
+      authorKind: 'bot' as const, authorBotId: 'mimi', authorName: 'Bot', sharedByAuthor: false,
+      content: '```mermaid\n' + source + '\n```', attachments: [], createdAt: 1000, edited: false };
+    const posted = message('posted-diagram', 1, { threadShare: share });
+    const data = group({ serverBacked: true, messages: [posted] });
+    await render(data, 'ready', undefined, '');
+    await click('botGroup.openDiagram');
+    expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+    await render({ ...data, messages: [status === 'deleted' ? { ...posted, deleted: true }
+      : { ...posted, threadShare: { ...share, status: 'unavailable', content: '' } }] }, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await render(data, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await click('botGroup.openDiagram');
+    expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+  });
+
+  function diagramPostFixture() {
+    const source = 'flowchart LR\nA --> B';
+    const share = { messageId: 'source', threadRootId: 'thread-root', status: 'available' as const,
+      authorKind: 'bot' as const, authorBotId: 'mimi', authorName: 'Bot', sharedByAuthor: false,
+      content: '```mermaid\n' + source + '\n```', attachments: [], createdAt: 1000, edited: false };
+    const posted = message('posted-diagram', 1, { threadShare: share });
+    return { source, share, posted, data: group({ serverBacked: true, messages: [posted] }) };
+  }
+
+  // #8955 P2 / unit: unavailable coverage missed hydration's temporary loading projection.
+  it('temporarily hides a posted diagram during source loading and restores the unchanged viewer', async () => {
+    h.chat.server = true;
+    const { source, share, posted, data } = diagramPostFixture();
+    await render(data, 'ready', undefined, '');
+    await click('botGroup.openDiagram');
+    await render({ ...data, messages: [{ ...posted, threadShare: { ...share, status: 'loading', content: '' } }] }, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await render(data, 'ready', undefined, '');
+    expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+  });
+
+  // #8955 P2 / unit: stable source IDs do not prove the displayed content is still current.
+  it.each(['edited', 'removed'])('clears a posted diagram when the source Mermaid is %s', async change => {
+    h.chat.server = true;
+    const { share, posted, data } = diagramPostFixture();
+    await render(data, 'ready', undefined, '');
+    await click('botGroup.openDiagram');
+    const nextSource = 'flowchart LR\nA --> C';
+    const updated = { ...data, messages: [{ ...posted, threadShare: { ...share, edited: true,
+      content: change === 'edited' ? '```mermaid\n' + nextSource + '\n```' : 'Diagram removed' } }] };
+    await render(updated, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await render(data, 'ready', undefined, '');
+    expect(byId('diagramModal')).toBeNull();
+    await render(updated, 'ready', undefined, '');
+    if (change === 'edited') {
+      await click('botGroup.openDiagram');
+      expect(byId('diagramModal')?.getAttribute('data-source')).toBe(nextSource);
+    } else expect(byId('botGroup.openDiagram')).toBeNull();
+  });
+
+  // PR #8818 / component: the identity matcher cannot reject a complete foreign
+  // broadcast if the real Timeline splits it at a shorter member name first.
+  // French send parser + English Screen: @Tous is personal, the longer broadcast is not.
+  it.each([true, false])('keeps a French broadcast whole beside a shorter personal mention (own=%s)', async own => {
+    h.translate = (key, options) => i18n.t(key, { ...options, lng: 'en' });
+    const name = 'Tous';
+    const broadcastLabel = i18n.t('groupChat.mention.allBots', { lng: 'fr' });
+    const content = `@${name} @${broadcastLabel}`;
+    const mentions = resolveBotGroupMentions(content, { members: [{ botId: 'mimi', name }],
+      allLabels: [i18n.t('groupChat.mention.all', { lng: 'fr' })], allBotLabels: [broadcastLabel] });
+    expect(mentions).toEqual({ all: false, allBots: true, botIds: ['mimi'] });
+    const data = group({ serverBacked: true, messages: [message('prefix-broadcast', 1, {
+      authorKind: 'user', isSelf: own, content, mentions,
+    })] });
+    data.members[0] = { ...data.members[0]!, name };
+    await render(data);
+    const spans = () => [...node.querySelectorAll('span')];
+    const broadcast = spans().find(span => span.textContent === `@${broadcastLabel}`)!;
+    expect(broadcast).toBeDefined();
+    expect(spans().filter(span => span.textContent === '@Tous')).toHaveLength(1);
+    await act(async () => broadcast.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    await act(async () => spans().find(span => span.textContent === '@Tous')!.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain(name);
+    await click('botGroup.mention.identity.close');
+    data.messages[0]!.mentions = { all: false, botIds: [] };
+    await render(data);
+    await act(async () => spans().find(span => span.textContent === `@${broadcastLabel}`)!.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
+  // PR #8818 / component: Chinese-only broadcast coverage missed localized
+  // labels colliding with a member name. Use the real send parser and Timeline:
+  // a sender-locale broadcast must stay inert in English, while its qualified @ can open.
+  it.each([['es', 'es'], ...SUPPORTED_LOCALES.map(lng => [lng, 'en'])])('keeps %s teammate broadcasts out of personal identity when read in %s', async (senderLocale, readerLocale) => {
+    h.translate = (key, options) => i18n.t(key, { ...options, lng: readerLocale });
+    const name = i18n.t('groupChat.mention.allBots', { lng: senderLocale });
+    const allLabel = i18n.t('groupChat.mention.all', { lng: senderLocale });
+    const qualified = `${name} (Ana)`;
+    const content = `@${qualified} @${name}`;
+    const mentions = resolveBotGroupMentions(content, {
+      members: [{ botId: 'mimi', name: qualified }], allLabels: [allLabel], allBotLabels: [name],
+    });
+    expect(mentions).toEqual({ all: false, allBots: true, botIds: ['mimi'] });
+    const data = group({ serverBacked: true, messages: [message('broadcast', 1, {
+      authorKind: 'user', isSelf: true, content, mentions,
+    })] });
+    data.members[0] = { ...data.members[0]!, name, nickname: name, ownerName: 'Ana', isOwned: false, actorKind: 'bot' };
+    await render(data);
+    const spans = [...node.querySelectorAll('span')];
+    const broadcast = spans.find(span => span.textContent === `@${name}`)!;
+    expect(broadcast).toBeDefined();
+    await act(async () => broadcast.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    await act(async () => spans.find(span => span.textContent === `@${qualified}`)!.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain(qualified);
+    await click('botGroup.mention.identity.close');
+    // A legacy projection without targets still must not turn a broadcast into
+    // the uniquely named member via the server's name fallback.
+    data.messages[0]!.mentions = { all: false, botIds: [] };
+    await render(data);
+    await act(async () => [...node.querySelectorAll('span')].find(span => span.textContent === `@${name}`)!.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
+  });
+
+  // A01 / unit: real screen -> sent mention -> public identity -> close. Existing
+  // composer tests never exercised sent-text taps; minimal failure is @咪咪.
+  it.each([[true, false], [false, false], [true, true]])('opens the named member from sent text (own=%s, topic=%s) and returns to the message', async (own, topic) => {
+    // Native acceptance found the owner caption leaking its translation key.
+    // Use the production catalog here so the complete identity text is observable.
+    h.translate = (key, options) => i18n.t(key, { ...options, lng: 'zh-CN' });
+    const data = group({ serverBacked: true, messages: [message('mention', 1, {
+      authorKind: 'user', isSelf: own, content: '@咪咪 看看这段正文', mentions: { all: false, botIds: ['mimi'] }, threadRootId: topic ? 'topic-root' : undefined,
+    })] });
+    data.members[0] = { ...data.members[0]!, actorKind: 'bot', ownerName: '王悦', isOwned: false, nickname: '咪咪', displayName: 'Cindy', status: 'paused' };
+    if (topic) {
+      data.messages.unshift(message('topic-root', 0, { content: '话题根消息' }));
+      h.chat = { ...h.chat, server: true };
+    }
+    // Topics are supported by the direct Chat Server route; the computer projection intentionally rejects them.
+    await render(topic ? data : parseBotGroupChatData(data)!, 'ready', topic ? 'topic-root' : undefined, topic ? '' : 'mac');
+    const mention = [...node.querySelectorAll('span')].find(span => span.textContent === '@咪咪')!;
+    expect(mention).toBeDefined();
+    expect(JSON.parse(mention.getAttribute('data-style')!).textDecorationLine).toBeUndefined();
+    const tapMention = async () => act(async () => {
+      const touch = new Event('touchstart', { bubbles: true });
+      Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
+      mention.dispatchEvent(touch); mention.click();
+    });
+    await tapMention();
+    expect(JSON.parse(byId('mentionPopover')!.getAttribute('data-position')!)).toMatchObject({ x: 108, y: 184 });
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Cindy');
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('王悦 的伙伴');
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('咪咪 (王悦)');
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('已暂停');
+    expect(byId('botGroup.mention.identity')?.textContent).not.toContain('groupChat.');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    // Native acceptance: a presented UIKit material retains its old appearance.
+    // Dismiss on theme changes rather than rendering new text over stale material.
+    h.themeMode = 'dark';
+    await render(topic ? data : parseBotGroupChatData(data)!, 'ready', topic ? 'topic-root' : undefined, topic ? '' : 'mac');
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    await tapMention();
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Cindy');
+    await click('botGroup.mention.identity.close');
+    expect(byId('botGroup.mention.identity')).toBeNull();
+    expect(node.textContent).toContain('@咪咪 看看这段正文');
+    // PR #8818 / component: screen-reader activation has no touchstart. The
+    // real Timeline used to drop this press because it had no measured anchor.
+    await act(async () => mention.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('咪咪 (王悦)');
+    expect(JSON.parse(byId('mentionPopover')!.getAttribute('data-position')!)).toMatchObject({ x: 201, y: 406 });
+  });
+
   it('shows a 引用回复 block from the loaded original, and only the author once it is deleted', async () => {
     // Server message ids are UUIDs; the parser rejects a quote that points at anything else.
     const originalId = '11111111-1111-4111-8111-111111111111';
@@ -481,6 +798,164 @@ describe('group timeline', () => {
     expect(h.headerFade.at(-1)).toBe(0);
   });
 
+  // #8443: exercise the production projection, measured viewport and read client.
+  // A late capability notice must clear the unread count in both main and followed threads.
+  it.each([false, true])('acknowledges a displayed capability notice only at the measured tail (thread=%s)', async thread => {
+    vi.useFakeTimers();
+    const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const roomId = id(1), selfId = id(2), botId = id(3), rootId = id(4), noticeId = id(5);
+    const rootMessage: ChatMessage = { id: rootId, seq: '1', authorId: botId, author: { kind: 'bot', name: 'Bot' },
+      origin: 'bot', createdAt: '2026-11-03T00:00:00Z', deleted: false, threadRootId: null,
+      content: [{ type: 'text', text: 'Earlier reply' }] };
+    const notice: ChatMessage = { ...rootMessage, id: noticeId, seq: '2', threadRootId: thread ? rootId : null,
+      content: [buildBotGroupCapabilityNotice('ATTACHMENTS_UNAVAILABLE', 'Attachment unavailable')] };
+    const page: ChatPage = { threadRootId: thread ? rootId : undefined, before: null, messages: [rootMessage, notice],
+      snapshot: { room: { id: roomId, name: 'Group', kind: 'group', state: 'joined', archived: false,
+        revision: 1, created_at: '2026-11-03', updated_at: '2026-11-03', response_mode: 'all', speaking_mode: 'auto' },
+        members: [], cursor: '2', messages: [rootMessage, notice], reads: [
+          { thread_key: 'main', read_seq: '1' }, ...(thread ? [{ thread_key: rootId, read_seq: '1', following: true }] : []),
+        ] } };
+    const unread = () => chatRoomRow(page.snapshot.room, page.snapshot, selfId).chatUnread?.count;
+    expect(unread()).toBe(1);
+    const request = vi.fn().mockResolvedValue({ readSeq: '2' });
+    const client = createChatServerClient(request);
+    h.chat = { ...h.chat, server: true, markRead: (ids: string[]) => client.markRead(roomId, page, ids),
+      state: { kind: 'ready', group: chatGroupView(page, selfId) } };
+    await act(async () => root.render(el(BotGroupChatScreen, { deviceId: '', deviceName: '', groupId: roomId,
+      threadRootId: page.threadRootId })));
+    expect(node.textContent).toContain('groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(32);
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
+      h.scroll.onContentSizeChange(400, 2000);
+    });
+    expect(request).not.toHaveBeenCalled();
+    expect(unread()).toBe(1);
+    await act(async () => h.scroll.onScroll({ nativeEvent: { contentOffset: { y: 1500 },
+      contentSize: { height: 2000 }, layoutMeasurement: { height: 500 } } }));
+    expect(request).toHaveBeenCalledWith(`/conversations/${roomId}/read`, 'POST', {
+      operationId: `read-${thread ? rootId : 'main'}:2`, readSeq: '2', ...(thread ? { threadRootId: rootId } : {}),
+    });
+    expect(unread()).toBe(0);
+  });
+
+  it('returns from history without new messages and resumes following the tail', async () => {
+    await render();
+    await act(async () => h.scroll.onScroll({ nativeEvent: {
+      contentOffset: { y: 200 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
+    } }));
+    const jump = byId('botGroup.jumpToLatest') as HTMLButtonElement;
+    expect(jump).not.toBeNull();
+    expect(byId('botGroup.newMessages')).toBeNull();
+    h.scrollToEnd.mockClear();
+    await act(async () => jump.click());
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: true });
+    await act(async () => h.scroll.onScroll({ nativeEvent: {
+      contentOffset: { y: 400 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
+    } }));
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(400, 2200));
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    await act(async () => h.scroll.onScrollBeginDrag());
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(400, 2300));
+    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    await act(async () => h.scroll.onScrollEndDrag({ nativeEvent: {
+      contentOffset: { y: 1500 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
+    } }));
+    expect(byId('botGroup.jumpToLatest')).toBeNull();
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(400, 2100));
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+  });
+
+  // Unit regression: a ready group first used no bottom clearance, then lost 34pt
+  // after the native SafeAreaView attached. Header clearance likewise arrived late.
+  // Existing header tests skipped the first layout. The window snapshot is already
+  // authoritative even while an older safe-area broadcast describes another posture.
+  it('reserves the group viewport from the window snapshot before native layout callbacks', async () => {
+    h.insets = { top: 59, bottom: 0, left: 0, right: 0 };
+    const geometry = { width: 951, height: 669, insets: { top: 0, right: 84, bottom: 34, left: 0 },
+      regularWidth: true, regularHeight: true, barEdge: 'right' as const, regions: [], reservedRegionsSupported: false };
+    h.chat = { ...h.chat, state: { kind: 'ready', group: group() } };
+    const screen = () => act(async () => root.render(el(GeometryContext.Provider, { value: geometry },
+      el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' }))));
+    await screen();
+    // iOS keeps the bottom inset in the composer dock's spacer, not in the screen padding.
+    expect(byId('botGroup.screen')?.style.paddingBottom).toBe('0px');
+    expect(h.spacer.restingBottom).toBe(34);
+    expect(byId('botGroup.screen')?.style.paddingRight).toBe('0px');
+    expect(h.scroll.scrollIndicatorInsets.top).toBeGreaterThan(0);
+    const clearance = h.scroll.scrollIndicatorInsets.top;
+    h.insets = { ...geometry.insets };
+    await screen();
+    expect(h.spacer.restingBottom).toBe(34);
+    expect(h.scroll.scrollIndicatorInsets.top).toBe(clearance);
+  });
+
+  // #8303: beside the persistent task list the system bar would span both panes,
+  // so the wide iOS window uses the in-pane header; narrowing restores the native bar.
+  it('uses the in-pane iOS header beside the persistent sidebar and the native bar when narrow', async () => {
+    const window = (width: number) => ({ width, height: 800, insets: { top: 59, right: 0, bottom: 34, left: 0 },
+      regularWidth: width >= 600, regularHeight: true, barEdge: 'none' as const, regions: [], reservedRegionsSupported: false });
+    h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: group() } };
+    const screen = (width: number) => act(async () => root.render(el(GeometryContext.Provider, { value: window(width) },
+      el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' }))));
+    await screen(1000);
+    expect(h.headerBlur.at(-1)).toBe(59 + CHAT_HEADER_MIN_HEIGHT);
+    let header = byId('botGroup.header') as HTMLElement & { nativeLayout?: (event: unknown) => void };
+    while (!header.nativeLayout) header = header.parentElement as typeof header;
+    await act(async () => header.nativeLayout!({ nativeEvent: { layout: { height: 59 + CHAT_HEADER_MIN_HEIGHT } } }));
+    await screen(430);
+    expect(h.headerBlur.at(-1)).toBe(72);
+  });
+
+  // #8303, component/unit: Duo's side rail adds no horizontal navigation bar.
+  // Reserve only the in-page identity header, including before its first measurement.
+  it.each(['left', 'right'] as const)('keeps Duo %s controls native and limits clearance to the identity header', async barEdge => {
+    h.insets = { top: 0, right: barEdge === 'right' ? 59 : 0, bottom: 0, left: barEdge === 'left' ? 59 : 0 };
+    const geometry = { width: 1000, height: 800, insets: h.insets,
+      regularWidth: true, regularHeight: true, barEdge, regions: [], reservedRegionsSupported: false };
+    h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: group() } };
+    await act(async () => root.render(el(GeometryContext.Provider, { value: geometry },
+      el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' }))));
+    expect(node.querySelectorAll('button[aria-label="shared.back"]')).toHaveLength(1);
+    expect(node.querySelectorAll('button[aria-label="groupChat.settings.open"]')).toHaveLength(1);
+    expect(byId('botGroup.back')).toBeNull();
+    expect(byId('botGroup.settingsButton')).toBeNull();
+    expect(h.screenOptions.some(options => options.headerTitle === group().name)).toBe(false);
+    expect(node.textContent).toContain(group().name);
+    expect(Number(byId('headerBlur')!.dataset.height)).toBe(CHAT_HEADER_MIN_HEIGHT);
+    expect(h.scroll.scrollIndicatorInsets.top).toBe(CHAT_HEADER_MIN_HEIGHT);
+  });
+
+  // Vertical navigation can still have in-page chrome. Its measured height must
+  // match both blur and content clearance, then restore the identity when dismissed.
+  it.each(['offline notice', 'image selection'] as const)('sizes Duo blur to the %s and restores the identity afterwards', async content => {
+    vi.useFakeTimers();
+    h.insets = { top: 0, right: 59, bottom: 0, left: 0 };
+    const geometry = { width: 1000, height: 800, insets: h.insets,
+      regularWidth: true, regularHeight: true, barEdge: 'right' as const, regions: [], reservedRegionsSupported: false };
+    h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: group() }, online: content !== 'offline notice' };
+    const screen = () => act(async () => root.render(el(GeometryContext.Provider, { value: geometry },
+      el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' }))));
+    await screen();
+    if (content === 'offline notice') await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    else await act(async () => shareSelectionStore.enter('bot-group:owner:1:mac:g1:main', 'm1'));
+    let header = byId(content === 'offline notice' ? 'botGroup.offlineNote' : 'session.shareImage.selectAll') as HTMLElement & { nativeLayout?: (event: unknown) => void };
+    expect(header).not.toBeNull();
+    while (!header.nativeLayout) header = header.parentElement as typeof header;
+    const height = content === 'offline notice' ? CHAT_HEADER_MIN_HEIGHT + 24 : 44;
+    await act(async () => header.nativeLayout!({ nativeEvent: { layout: { height } } }));
+    expect(Number(byId('headerBlur')!.dataset.height)).toBe(height);
+    expect(h.scroll.scrollIndicatorInsets.top).toBe(height);
+    if (content === 'offline notice') { h.chat.online = true; await screen(); }
+    else await act(async () => shareSelectionStore.exit());
+    await act(async () => header.nativeLayout!({ nativeEvent: { layout: { height: CHAT_HEADER_MIN_HEIGHT } } }));
+    expect(Number(byId('headerBlur')!.dataset.height)).toBe(CHAT_HEADER_MIN_HEIGHT);
+    expect(h.scroll.scrollIndicatorInsets.top).toBe(CHAT_HEADER_MIN_HEIGHT);
+  });
+
   it('waits for measured tail positioning before acknowledging replies, including new snapshots', async () => {
     vi.useFakeTimers();
     await render();
@@ -517,13 +992,40 @@ describe('group timeline', () => {
     expect(h.markRead).not.toHaveBeenCalled();
     // The reader stays in history, sees the arrival, and can explicitly return to it.
     const jump = byId('botGroup.newMessages') as HTMLButtonElement;
-    expect(jump.textContent).toContain('count=1');
+    expect(byId('botGroup.newMessageDot')).not.toBeNull();
+    expect(byId('botGroup.jumpToLatest')).toBeNull();
     h.scrollToEnd.mockClear();
     await act(async () => jump.click());
-    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: true });
+    expect(h.markRead).not.toHaveBeenCalled();
+    await act(async () => scroll(500, 3000));
+    expect(byId('botGroup.newMessages')).not.toBeNull();
     expect(h.markRead).not.toHaveBeenCalled();
     await act(async () => scroll(2500, 3000));
     expect(byId('botGroup.newMessages')).toBeNull();
+  });
+
+  it('cancels a delayed notification locate when the reader jumps to the tail', async () => {
+    const data = { ...group(), hasMoreBefore: true };
+    let finish!: () => void;
+    h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: data },
+      loadOlder: vi.fn(() => new Promise<void>(resolve => { finish = resolve; })) };
+    const props = { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1', messageId: 'old-notification' };
+    await act(async () => root.render(el(BotGroupChatScreen, props)));
+    expect(h.chat.loadOlder).toHaveBeenCalledOnce();
+    await act(async () => h.scroll.onScroll({ nativeEvent: {
+      contentOffset: { y: 200 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
+    } }));
+    await click('botGroup.jumpToLatest');
+    h.scrollTo.mockClear();
+    h.chat = { ...h.chat, state: { kind: 'ready', group: { ...data, hasMoreBefore: false,
+      messages: [message('old-notification', 0, {}), ...data.messages] } } };
+    await act(async () => { finish(); root.render(el(BotGroupChatScreen, props)); });
+    await act(async () => (byId('botGroup.row.old-notification') as any).nativeLayout({ nativeEvent: { layout: { y: 100, height: 100 } } }));
+    expect(h.scrollTo).not.toHaveBeenCalled();
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(400, 2500));
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
   });
 
   it('notices arrivals after a notification opens history without acknowledging the tail', async () => {
@@ -539,7 +1041,7 @@ describe('group timeline', () => {
     h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: { ...data, messages: [...data.messages, message('arrival', 20, {})] } } };
     await act(async () => root.render(el(BotGroupChatScreen, props)));
     await act(async () => h.scroll.onContentSizeChange(400, 2500));
-    expect(byId('botGroup.newMessages')?.textContent).toContain('count=1');
+    expect(byId('botGroup.newMessageDot')).not.toBeNull();
     expect(h.markRead).not.toHaveBeenCalled();
     expect(h.scrollToEnd).not.toHaveBeenCalled();
   });
@@ -589,6 +1091,22 @@ describe('group timeline', () => {
     expect(h.chat.act).not.toHaveBeenCalled();
     await act(async () => toggle.click());
     expect(all('botGroup.notice')[0]?.textContent).not.toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}.details`);
+  });
+
+  it.each([false, true])('shows unclaimed timeout guidance in main and thread without model setup advice (thread=%s)', async thread => {
+    h.chat.server = true;
+    await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',
+      authorName: 'Bot', noticeCode: 'member-timeout', runtimeFailureCode: 'RUNTIME_TIMEOUT',
+      runtimeFailureReason: 'unclaimed_timeout', ...(thread ? { threadRootId: 'thread-root' } : {}) })] }),
+      'ready', thread ? 'thread-root' : '', '');
+    const notice = all('botGroup.notice')[0]!;
+    expect(notice.textContent).toContain('groupChat.notice.runtimeFailureReason.unclaimed_timeout.summary(name=Bot)');
+    expect(notice.textContent).not.toContain('runtimeFailure.RUNTIME_TIMEOUT');
+    const toggle = [...notice.querySelectorAll('button')].find(button => button.textContent === 'session.tail.showErrorDetails')!;
+    await act(async () => toggle.click());
+    expect(notice.textContent).toContain('groupChat.notice.runtimeFailureReason.unclaimed_timeout.details');
+    expect(notice.textContent).not.toContain('runtimeFailureSetupHint');
+    expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   // #7769: model-switch advice must retain its computer location after disclosure.
@@ -734,9 +1252,8 @@ describe('group timeline', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-start', { planId: 'p1' });
     await click('botGroup.plan.dismiss');
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-dismiss', { planId: 'p1' });
-    data.plans[0]!.status = 'superseded';
-    data.openPlan = null;
-    await render(data);
+    await render({ ...data, openPlan: null,
+      plans: data.plans.map((plan, index) => index === 0 ? { ...plan, status: 'superseded' } : plan) });
     expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.superseded');
     expect(byId('botGroup.plan.start')).toBeNull();
   });
@@ -809,14 +1326,40 @@ describe('group timeline', () => {
     expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.superseded');
     // #5759 runtime: stopping a queued execution can leave its step running.
     // The real card must not continue to claim active work after the plan stops.
-    data.plans[0] = { ...data.plans[0]!, status: 'stopped', currentStep: 1,
-      steps: [{ ...data.plans[0]!.steps[0]!, status: 'done' }, { ...data.plans[0]!.steps[1]!, status: 'running' }] };
-    await render(data);
+    // Remote projections replace arrays; keep the fixture immutable like the real producer.
+    await render({ ...data, plans: [{ ...data.plans[0]!, status: 'stopped', currentStep: 1,
+      steps: [{ ...data.plans[0]!.steps[0]!, status: 'done' }, { ...data.plans[0]!.steps[1]!, status: 'running' }] }, ...data.plans.slice(1)] });
     expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.stopped');
     expect(byId('botGroup.plan.running')).toBeNull();
     expect(byId('botGroup.message.plan')?.textContent).not.toContain('groupChat.plan.stepRunning');
     expect(byId('botGroup.message.plan')?.textContent).toContain('groupChat.plan.stepDone');
     expect(byId('botGroup.plan.start')).toBeNull();
+  });
+
+  // The real card folds the queue, sends future positions without an execution, and protects running turns (unit).
+  it('folds a talk queue and sends the exact queued turn when skipping', async () => {
+    const data = group();
+    data.openPlan = { id: 'p1', status: 'running', currentStep: 1, stepCount: 6, currentBotName: '阿布', currentStepStatus: 'running' };
+    const plan = { ...data.plans[0]!, kind: 'talk' as const, status: 'running' as const, currentStep: 1, canManage: true, supportsPendingSkip: true,
+      steps: Array.from({ length: 6 }, (_, position) => ({ ...data.plans[0]!.steps[position === 0 ? 0 : 1]!, position,
+        status: position === 0 ? 'done' as const : position === 1 ? 'running' as const : 'pending' as const,
+        ...(position === 1 ? { executionId: 'queued-turn', executionStatus: 'queued' as const } : {}),
+      })),
+    };
+    data.plans[0] = plan;
+    await render(data);
+    const card = byId('botGroup.plan')!;
+    expect(card.textContent).toContain('groupChat.plan.talkTitle');
+    expect(card.textContent).not.toContain('groupChat.plan.intro');
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')).toHaveLength(3);
+    await click('botGroup.plan.fold');
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')).toHaveLength(6);
+    await click('botGroup.plan.skipTurn');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 1, action: 'skip', executionId: 'queued-turn' });
+    await render({ ...data, plans: [{ ...plan, steps: plan.steps.map(step => step.position === 1 ? { ...step, executionStatus: 'running' } : step) }, ...data.plans.slice(1)] });
+    expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')[1]?.querySelector('[data-testid="botGroup.plan.skipTurn"]')).toBeNull();
+    await click('botGroup.plan.skipTurn');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 2, action: 'skip', executionId: undefined });
   });
 
   it('shows one row per speaker with its lane session', async () => {
@@ -843,6 +1386,53 @@ describe('group timeline', () => {
 });
 
 describe('group composer', () => {
+  // Unit regression: topic and maskIndicator each used to force an idle composer open.
+  // The ordinary draft test below cannot catch either branch. Render the production composer
+  // with only that distinguishing input; its toolbar/resize affordance must wait for focus.
+  it.each(['topic', 'mask'] as const)('keeps the %s composer collapsed until interaction', async variant => {
+    await act(async () => root.render(el(BotGroupComposer, {
+      members: group().members,
+      identityFor: (botId, name) => ({ botId, name: name ?? botId }),
+      deviceId: 'mac', online: true, running: false, planState: null,
+      attachmentsSupported: false, onSend: async () => {}, onStop: async () => {},
+      topic: variant === 'topic',
+      maskIndicator: variant === 'mask' ? el('span', null, 'Companion identity') : undefined,
+    })));
+    expect(h.inputFocus).not.toHaveBeenCalled();
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    expect(byId('fixture.resize')).toBeNull();
+    expect(h.row.toolbar).toBeUndefined();
+    await act(async () => h.row.onFocus());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('true');
+    expect(byId('fixture.resize')).not.toBeNull();
+    await act(async () => h.row.onBlur());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    expect(h.row.toolbar).toBeUndefined();
+  });
+
+  // Unit regression: an ordinary focused draft used to stay a pill with no resize affordance.
+  // Exercise the real group composer and shared resize row; native gesture math has its own suite.
+  it('expands a text-only draft, resizes it, and collapses without losing the draft', async () => {
+    await render(group());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    await act(async () => { h.row.onFocus(); h.row.onChangeText('Keep this draft'); });
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('true');
+    await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { width: 300, height: 100 } } }));
+    await click('fixture.resize');
+    expect(h.row.value).toBe('Keep this draft');
+    const resizedHeight = h.row.inputFrameAnimatedStyle.height;
+    expect(resizedHeight).toBeGreaterThan(34);
+    await act(async () => h.row.onBlur());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    expect(byId('fixture.resize')).toBeNull();
+    await act(async () => h.row.onFocus());
+    expect(h.row.value).toBe('Keep this draft');
+    expect(byId('fixture.resize')).not.toBeNull();
+    expect(h.row.inputFrameAnimatedStyle.height).toBe(resizedHeight);
+    await act(async () => h.row.onChangeText(''));
+    expect(h.row.inputFrameAnimatedStyle.height).toBe('auto');
+  });
+
   async function type(text: string) {
     await act(async () => {
       h.row.onFocus();
@@ -1067,6 +1657,35 @@ describe('group attachments', () => {
   }
   async function focusComposer() { await act(async () => { h.row.onFocus(); }); }
 
+  // Unit regression: the real screen hid both attachment support and + in topics.
+  // Main-group cases below never entered a topic. A supported topic must open the
+  // shared pickers, without exposing the unsupported arrangement action.
+  it('opens topic attachments beside also-send and removes unavailable actions', async () => {
+    h.chat.server = true;
+    const data = group({ supportsAttachments: true });
+    await render(data, 'ready', 'm1', '');
+    await focusComposer();
+    expect(byId('botGroup.thread.alsoSend')).not.toBeNull();
+    await click('botGroup.composer.more');
+    expect(byId('botGroup.contextSheetDivisionRow')).toBeNull();
+    await click('botGroup.contextSheetPhotoRow');
+    expect(h.local.addImages).toHaveBeenLastCalledWith('library');
+    await click('botGroup.contextSheetCameraRow');
+    expect(h.local.addImages).toHaveBeenLastCalledWith('camera');
+    await click('botGroup.contextSheetFileRow');
+    expect(h.local.addDocument).toHaveBeenCalledOnce();
+    await act(async () => h.row.onPasteImages(['file:///cache/cindy-composer-paste-topic.png']));
+    expect(h.local.addPastedImages).toHaveBeenCalledOnce();
+    h.chat.online = false;
+    await render(data, 'ready', 'm1', '');
+    expect(byId('botGroup.composer.more')?.disabled).toBe(true);
+    expect(byId('botGroup.contextSheetPhotoRow')).toBeNull();
+    expect(byId('botGroup.contextSheetDivisionRow')).toBeNull();
+    expect(byId('botGroup.composer.menu')).toBeNull();
+    await render({ ...data, supportsAttachments: undefined }, 'ready', 'm1', '');
+    expect(byId('botGroup.composer.more')).toBeNull();
+  });
+
   it('offers no attachments when the computer does not support them, and ignores pasted images', async () => {
     await render(group({ openPlan: null }));
     expect(byId('botGroup.composer.menu.action.division')).not.toBeNull();
@@ -1091,7 +1710,9 @@ describe('group attachments', () => {
     for (const row of ['botGroup.contextSheetPhotos', 'botGroup.contextSheetPhotoRow', 'botGroup.contextSheetCameraRow', 'botGroup.contextSheetFileRow']) {
       expect(byId(row)).not.toBeNull();
     }
-    expect(node.textContent).toContain('session.common.photo');
+    expect(node.textContent).toContain('session.common.photosAndVideos');
+    await click('botGroup.contextSheetPhotoRow');
+    expect(h.local.addImages).toHaveBeenLastCalledWith('library');
     await click('botGroup.contextSheetCameraRow');
     expect(h.local.addImages).toHaveBeenLastCalledWith('camera');
     await click('botGroup.contextSheetFileRow');
@@ -1111,18 +1732,31 @@ describe('group attachments', () => {
     expect(byId('botGroup.contextSheetDivisionRow')?.textContent).toContain('groupChat.composer.divisionBusy');
   });
 
-  it('shows a picked photo as pending, then sends the upload with the text', async () => {
+  // A topic with attachments must retain the same collapsed badge as the main group.
+  // Otherwise blur hides the tray while send still includes those invisible attachments.
+  it.each([false, true])('shows a picked photo as pending, then sends the upload with the text (topic=%s)', async topic => {
+    vi.useFakeTimers();
+    h.chat.server = topic;
     h.local.addImages.mockImplementation(async () => {
       h.local.setPending([{ localId: 'l1', kind: 'image', previewUri: 'file:///tmp/a.jpg', name: 'a.jpg', size: 10 }]);
       h.local.options.onPicked();
     });
-    await render(group({ openPlan: null, supportsAttachments: true }));
+    await render(group({ openPlan: null, supportsAttachments: true }), 'ready', topic ? 'm1' : undefined, topic ? '' : 'mac');
+    await focusComposer();
     await click('botGroup.composer.more');
     await click('botGroup.contextSheetPhotoRow');
     expect(h.local.addImages).toHaveBeenLastCalledWith('library');
     expect(byId('botGroup.contextSheet')).toBeNull();
+    // Finish the picker's next-frame focus before collapsing and testing the badge's focus.
+    await act(async () => { await vi.advanceTimersToNextFrame(); });
     // Collapsed: a badge next to +; focused: the tray inside the card.
+    await act(async () => h.row.onBlur());
+    expect(byId('botGroup.attachmentTray')).toBeNull();
     expect(byId('botGroup.attachmentCollapsedBadge')?.textContent).toBe('1');
+    h.inputFocus.mockClear();
+    await click('botGroup.attachmentCollapsedBadge');
+    await act(async () => { await vi.advanceTimersToNextFrame(); });
+    expect(h.inputFocus).toHaveBeenCalledOnce();
     await focusComposer();
     expect(byId('composer-row')?.getAttribute('data-card')).toBe('true');
     expect(byId('tray.pending.l1')?.textContent).toBe('a.jpg');
@@ -1140,8 +1774,11 @@ describe('group attachments', () => {
     expect(h.discarded).toEqual([]);
   });
 
-  it('sends attachments without text and keeps them when the send fails', async () => {
-    await render(group({ openPlan: null, supportsAttachments: true, round: { status: 'running', speakers: [], canContinue: false } }));
+  it.each([false, true])('sends attachments without text and keeps them when the send fails (topic=%s)', async topic => {
+    h.chat.server = topic;
+    await render(group({ openPlan: null, supportsAttachments: true, round: { status: 'running', speakers: [], canContinue: false } }), 'ready', topic ? 'm1' : undefined, topic ? '' : 'mac');
+    await focusComposer();
+    if (topic) await click('botGroup.thread.alsoSend');
     const file = uploaded('att-2', 'spec.pdf', 'pdf');
     await finishUpload(file);
     await focusComposer();
@@ -1151,16 +1788,22 @@ describe('group attachments', () => {
     h.chat.act.mockRejectedValueOnce(new Error('[NOT_CONNECTED] offline'));
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ text: '', clientId: 'uuid-1', attachments: [file] }));
+    expect(h.chat.act.mock.calls.at(-1)?.[1].alsoSendToMain).toBe(topic ? true : undefined);
     expect(h.alert).toHaveBeenCalledWith('groupChat.composer.sendFailed');
     expect(byId('tray.attachment.att-2')).not.toBeNull();
     // The retry is the same message.
+    await act(async () => h.row.onBlur());
+    expect(byId('botGroup.attachmentTray')).toBeNull();
+    expect(byId('botGroup.attachmentCollapsedBadge')?.textContent).toBe('1');
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ clientId: 'uuid-1', attachments: [file] }));
     expect(byId('tray.attachment.att-2')).toBeNull();
+    expect(byId('botGroup.attachmentCollapsedBadge')).toBeNull();
   });
 
-  it('does not send while an upload failed, and reclaims a removed upload', async () => {
-    await render(group({ openPlan: null, supportsAttachments: true }));
+  it.each([false, true])('does not send while an upload failed, and reclaims a removed upload (topic=%s)', async topic => {
+    h.chat.server = topic;
+    await render(group({ openPlan: null, supportsAttachments: true }), 'ready', topic ? 'm1' : undefined, topic ? '' : 'mac');
     const photo = uploaded('att-3', 'b.jpg');
     await finishUpload(photo);
     await focusComposer();
@@ -1172,6 +1815,23 @@ describe('group attachments', () => {
     await click('tray.attachment.att-3');
     expect(h.discarded).toEqual([photo]);
     expect(byId('botGroup.attachmentTray')).toBeNull();
+  });
+
+  it('does not carry topic attachments or draft into another topic or the main group', async () => {
+    h.chat.server = true;
+    const data = group({ supportsAttachments: true });
+    await render(data, 'ready', 'm1', '');
+    await focusComposer();
+    await finishUpload(uploaded('topic-photo', 'photo.jpg'));
+    await act(async () => h.row.onChangeText('Only for the first topic'));
+    await click('botGroup.thread.alsoSend');
+    await render(data, 'ready', 'm2', '');
+    expect(byId('botGroup.attachmentTray')).toBeNull();
+    expect(h.row.value).toBe('');
+    expect(byId('botGroup.composer.send')?.disabled).toBe(true);
+    await render(data, 'ready', undefined, '');
+    expect(byId('botGroup.attachmentTray')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   // Leaving mid-upload drops the photo: ask first, and never send the text alone.
@@ -1695,7 +2355,8 @@ describe('direct server group presentation', () => {
     await render(group({ messages: [message('other', 1, { authorKind: 'user', authorName: 'Other member', isSelf: false, content: 'hello' })], plans: [], openPlan: null, hasMoreBefore: true }));
     expect(all('botGroup.message.user')).toHaveLength(0);
     expect(node.textContent).toContain('Other member');
-    expect(h.scroll.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 1 });
+    // Skip the leading-space marker and load-older control when anchoring history.
+    expect(h.scroll.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 2 });
     await click('botGroup.loadOlder'); expect(h.chat.loadOlder).toHaveBeenCalledOnce();
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings.delete')?.disabled).toBe(true);
@@ -1785,6 +2446,137 @@ it('renders component body as readable text without changing the message', async
   expect(reply.content).toBe(content);
 });
 
+// Unit regression for PR #9249 r4500548321: existing fold tests release a single
+// viewport only. Keep the real group page + WorkArea mounted in the same running
+// round; the native process boundary reports a 300pt collapse in its inner list.
+// Explicit outer navigation must remove the rendered inner footer, not just follow.
+it.each(['jump', 'send'])('releases nested work-area space on outer %s without collapsing the work area', async action => {
+  h.speakerDisclosure = true;
+  const active = group({ round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
+  ] } });
+  await render(active);
+  await click('botGroup.work.toggle');
+  await act(async () => {
+    h.scrolls['botGroup.work.details'].onLayout({ nativeEvent: { layout: { height: 220 } } });
+    h.scrolls['botGroup.work.details'].onContentSizeChange(390, 500);
+    h.scrolls['botGroup.work.details'].onScroll({ nativeEvent: {
+      contentOffset: { y: 280 }, contentSize: { height: 500 }, layoutMeasurement: { height: 220 },
+    } });
+  });
+  await click('fixture.processCollapse');
+  const footer = () => byId('botGroup.work.details')!.querySelector('[style*="height: 300px"]');
+  expect(footer()).not.toBeNull();
+  if (action === 'jump') {
+    await act(async () => h.scrolls['botGroup.timeline'].onContentSizeChange(390, 1000));
+    await click('botGroup.jumpToLatest');
+  } else {
+    await act(async () => h.row.onChangeText('Continue this round'));
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenCalledWith('send', expect.objectContaining({ text: 'Continue this round' }));
+  }
+  expect(footer()).toBeNull();
+  expect(byId('botGroup.work.details')).not.toBeNull();
+  expect(byId('botGroup.work.toggle')!.getAttribute('aria-label')).toContain('groupChat.work.collapse');
+});
+
+// Unit / keyboard-dismiss scroll interruption: mounted timeline callbacks must
+// not issue an imperative tail scroll while native drag/deceleration owns it.
+// Existing history tests start away from the tail; this reproduces resize at the
+// tail before the first scroll sample has arrived.
+it.each(['drag', 'momentum'])('keeps keyboard resize from interrupting %s', async phase => {
+  await render(group());
+  const event = { nativeEvent: { contentOffset: { y: 1200 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 800 } } };
+  await act(async () => {
+    h.scroll.onLayout({ nativeEvent: { layout: { height: 800 } } });
+    h.scroll.onContentSizeChange(390, 2000);
+    h.scroll.onScroll(event);
+    h.scroll.onScrollBeginDrag();
+    if (phase === 'momentum') {
+      h.scroll.onScrollEndDrag(event);
+      h.scroll.onMomentumScrollBegin();
+    }
+  });
+  h.scrollToEnd.mockClear();
+  await act(async () => {
+    h.scroll.onLayout({ nativeEvent: { layout: { height: 850 } } });
+    h.scroll.onContentSizeChange(390, 2010);
+  });
+  expect(h.scrollToEnd).not.toHaveBeenCalled();
+  await act(async () => {
+    h.scroll[phase === 'drag' ? 'onScrollEndDrag' : 'onMomentumScrollEnd'](event);
+    h.scroll.onContentSizeChange(390, 2020);
+  });
+  expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+});
+
+// Unit / #9249 r4501133784: the final native position can arrive first in an
+// end event. Real screen+WorkArea must resume before losing gesture ownership.
+// Older coverage only sends positions via onScroll, so it misses end-before-scroll.
+it.each(['timeline', 'work.details'].flatMap(target => ['onScrollEndDrag', 'onMomentumScrollEnd'].map(end => ({ target, end }))))(
+  'consumes final $target metrics from $end before ending process navigation', async ({ target, end }) => {
+    h.speakerDisclosure = true;
+    await render(group({ round: { status: 'running', canContinue: false, speakers: [
+      { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
+    ] } }));
+    await click('botGroup.work.toggle');
+    const nested = target === 'work.details';
+    const height = nested ? 500 : 2000, viewport = nested ? 220 : 800;
+    const tail = height - viewport;
+    const event = (y: number) => ({ nativeEvent: { contentOffset: { y }, contentSize: { height }, layoutMeasurement: { height: viewport } } });
+    await act(async () => {
+      h.scrolls[`botGroup.${target}`].onLayout({ nativeEvent: { layout: { height: viewport } } });
+      h.scrolls[`botGroup.${target}`].onContentSizeChange(390, height);
+      h.scrolls[`botGroup.${target}`].onScroll(event(tail - 10));
+    });
+    await click('fixture.processCollapse');
+    const footer = () => byId('botGroup.work.details')!.querySelector(`[style*="height: ${nested ? 290 : 300}px"]`);
+    expect(footer()).not.toBeNull();
+    await act(async () => {
+      const callbacks = h.scrolls[`botGroup.${target}`];
+      callbacks[end === 'onScrollEndDrag' ? 'onScrollBeginDrag' : 'onMomentumScrollBegin']();
+      callbacks.onScroll(event(tail - 10));
+      callbacks[end](event(tail));
+      callbacks.onScroll(event(tail)); // matching notice arrives after ownership ends
+    });
+    if (nested) expect(footer()).toBeNull();
+    else {
+      expect(byId('botGroup.jumpToLatest')).toBeNull();
+      h.scrollToEnd.mockClear();
+      await act(async () => h.scrolls['botGroup.timeline'].onContentSizeChange(390, height + 500));
+      expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    }
+  },
+);
+
+// Unit / #9249 r4500619904: a null-rendered WorkArea stays mounted across idle.
+// The next member's round must not inherit the previous process's reserved footer.
+it('releases nested process space across idle and the next round without outer navigation', async () => {
+  h.speakerDisclosure = true;
+  const active = group({ round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
+  ] } });
+  await render(active);
+  await click('botGroup.work.toggle');
+  await act(async () => {
+    h.scrolls['botGroup.work.details'].onLayout({ nativeEvent: { layout: { height: 220 } } });
+    h.scrolls['botGroup.work.details'].onContentSizeChange(390, 500);
+    h.scrolls['botGroup.work.details'].onScroll({ nativeEvent: {
+      contentOffset: { y: 280 }, contentSize: { height: 500 }, layoutMeasurement: { height: 220 },
+    } });
+  });
+  await click('fixture.processCollapse');
+  expect(byId('botGroup.work.details')!.querySelector('[style*="height: 300px"]')).not.toBeNull();
+  await render(group());
+  expect(byId('botGroup.work')).toBeNull();
+  await render({ ...active, round: { ...active.round, speakers: [
+    { botId: 'mimi', sessionId: 's-next', activity: 'reply', executionStatus: 'running' },
+  ] } });
+  expect(byId('botGroup.work.details')!.querySelector('[style*="height: 300px"]')).toBeNull();
+  expect(byId('botGroup.work.toggle')!.getAttribute('aria-label')).toContain('groupChat.work.expand');
+  expect(h.chat.act).not.toHaveBeenCalled();
+});
+
 // PR #7806 integration fixture: the real screen/work area consumes server state.
 // A stop receipt alone must not hide work; only the next idle snapshot clears both surfaces.
 it('keeps one group stop for concurrent work and clears header and strip on the idle snapshot', async () => {
@@ -1859,6 +2651,38 @@ describe('mobile group threads', () => {
     messages: [rootMessage()], plans: [], openPlan: null, serverBacked: true, ...overrides,
   });
 
+  it.each(['user', 'bot'] as const)('shows copy feedback for a %s message and restores the action after 1.5 seconds', async authorKind => {
+    vi.useFakeTimers();
+    const clipboard = vi.mocked((await import('expo-clipboard')).setStringAsync);
+    let finish!: () => void;
+    clipboard.mockReturnValueOnce(new Promise<boolean>(resolve => { finish = () => resolve(true); }));
+    await render(threadGroup({ messages: [message(rootId, 1, { authorKind, isSelf: authorKind === 'user', content: 'Copy this message' })] }), 'ready', undefined, '');
+    const id = `botGroup.thread.context.${rootId}.action.copy`;
+    await click(id);
+    expect(byId(id)!.disabled).toBe(true);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateCopying');
+    await click(id);
+    expect(clipboard).toHaveBeenCalledExactlyOnceWith('Copy this message');
+    await act(async () => finish());
+    expect(byId(id)!.disabled).toBe(false);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateCopied');
+    await act(async () => vi.advanceTimersByTime(1500));
+    expect(byId(id)!.getAttribute('aria-label')).toBe('groupChat.thread.copy');
+  });
+
+  it('does not report success when clipboard writing fails and lets the user retry', async () => {
+    const clipboard = vi.mocked((await import('expo-clipboard')).setStringAsync);
+    clipboard.mockRejectedValueOnce(new Error('Clipboard unavailable'));
+    await render(threadGroup(), 'ready', undefined, '');
+    const id = `botGroup.thread.context.${rootId}.action.copy`;
+    await click(id);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateFailed');
+    expect(byId(id)!.disabled).toBe(false);
+    await click(id);
+    expect(clipboard).toHaveBeenCalledTimes(2);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateCopied');
+  });
+
   // Unit: attachment-only messages retain footer actions without wrapping the attachment.
   it.each(['user', 'bot'] as const)('opens a thread from an attachment-only %s message using More', async authorKind => {
     h.chat.server = true;
@@ -1908,6 +2732,44 @@ describe('mobile group threads', () => {
     expect(byId('botGroup.row.mine')?.textContent).toContain('**literal**');
     expect(byId('botGroup.row.other')?.textContent).toContain('Other member');
     expect(byId('botGroup.row.other')?.querySelector('[data-testid="botGroup.message.userBubble"]')).toBeNull();
+  });
+
+  // PR #8818 / component: the displayed reply must use its own mention IDs,
+  // not the main share's self-addressed delivery metadata. Earlier share tests
+  // had no mentions. Minimal failure: sharer and target both named Ann.
+  it.each([true, false])('opens the source mention from a share without mistaking the sharer for its namesake (authored=%s)', async sharedByAuthor => {
+    h.chat.server = true;
+    const share = { messageId: 'source', threadRootId: rootId, status: 'available' as const, authorKind: 'user' as const,
+      authorBotId: 'self', authorName: 'Ann', sharedByAuthor, content: '@Ann 看看原回复',
+      mentions: { all: false, botIds: ['abu'] }, attachments: [], createdAt: 1000, edited: false };
+    const posted = message('posted', 2, { authorKind: 'user', isSelf: true, content: '',
+      mentions: { all: false, botIds: ['self'] }, threadShare: share });
+    const members = [{ ...group().members[0]!, botId: 'self', name: 'Ann', actorKind: 'human' as const, role: 'member' as const },
+      { ...group().members[1]!, name: 'Ann', nickname: 'Ann', displayName: 'Target' }];
+    const data = threadGroup({ serverBacked: true, members, messages: [posted] });
+    await render(data, 'ready', undefined, '');
+    const mention = [...node.querySelectorAll('span')].find(span => span.textContent === '@Ann' && span.getAttribute('data-style'))!;
+    expect(mention).toBeDefined();
+    const { palettes } = await import('@/theme/tokens');
+    expect(JSON.parse(mention.getAttribute('data-style')!).color).toBe(palettes.light.groupMentionText);
+    await act(async () => {
+      const touch = new Event('touchstart', { bubbles: true });
+      Object.defineProperties(touch, { pageX: { value: 108 }, pageY: { value: 246 } });
+      mention.dispatchEvent(touch); mention.click();
+    });
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Target');
+    await click('botGroup.mention.identity.close');
+    h.themeMode = 'dark';
+    await render(data, 'ready', undefined, '');
+    const darkMention = [...node.querySelectorAll('span')].find(span => span.textContent === '@Ann' && span.getAttribute('data-style'))!;
+    expect(JSON.parse(darkMention.getAttribute('data-style')!).color).toBe(palettes.dark.groupMentionText);
+    await act(async () => darkMention.click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Target');
+    await click('botGroup.mention.identity.close');
+    await render({ ...data, messages: [{ ...posted, threadShare: { ...share, mentions: undefined } }] }, 'ready', undefined, '');
+    const legacyMention = [...node.querySelectorAll('span')].find(span => span.textContent === '@Ann' && span.getAttribute('data-style'))!;
+    await act(async () => legacyMention.click());
+    expect(byId('botGroup.mention.identity')).toBeNull();
   });
 
   it('renders my resolved own post as a user message with the same thread summary as every thread share', async () => {
@@ -2012,6 +2874,30 @@ describe('mobile group threads', () => {
     } }));
     expect(h.chat.markRead).toHaveBeenLastCalledWith(['reply']);
     expect(h.markRead).not.toHaveBeenCalled();
+  });
+
+  // #8955 P2 / unit: the plain-text root test missed fences cut at 600 characters.
+  // Only the expanded production body may copy code or open the complete diagram.
+  it.each(['typescript', 'mermaid'])('enables %s block actions only after expanding the complete thread root', async language => {
+    h.chat.server = true;
+    const source = language === 'mermaid' ? `flowchart LR\nA["${'a'.repeat(650)}"] --> B`
+      : `const value = "${'a'.repeat(650)}";\nconsole.log(value);`;
+    const content = `\`\`\`${language}\n${source}\n\`\`\``;
+    await render(threadGroup({ messages: [{ ...rootMessage(), authorKind: 'bot', authorBotId: 'mimi', content }] }), 'ready', rootId, '');
+    expect(byId('message.markdownCodeCopyButton')).toBeNull();
+    expect(byId('botGroup.openDiagram')).toBeNull();
+    await click('botGroup.thread.expandRoot');
+    if (language === 'mermaid') {
+      await click('botGroup.openDiagram');
+      expect(byId('diagramModal')?.getAttribute('data-source')).toBe(source);
+      await click('diagramModal.close');
+    } else {
+      await click('message.markdownCodeCopyButton');
+      expect((await import('expo-clipboard')).setStringAsync).toHaveBeenCalledWith(source);
+    }
+    await click('botGroup.thread.expandRoot');
+    expect(byId('message.markdownCodeCopyButton')).toBeNull();
+    expect(byId('botGroup.openDiagram')).toBeNull();
   });
 
   it('keeps an empty thread writable, expands long roots, and disables replies when the root is unavailable', async () => {
@@ -2123,6 +3009,7 @@ describe('mobile group threads', () => {
     const follow = () => node.querySelector<HTMLButtonElement>('button[aria-label="groupChat.thread.follow"], button[aria-label="groupChat.thread.following"]')!;
     expect(follow()).not.toBeNull();
     await act(async () => follow().click()); expect(h.chat.followThread).toHaveBeenCalledWith(true);
+    await act(async () => h.row.onFocus());
     await click('botGroup.thread.alsoSend'); await act(async () => h.row.onChangeText('Both destinations'));
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ text: 'Both destinations', alsoSendToMain: true }));
@@ -2147,6 +3034,29 @@ describe('mobile group threads', () => {
     await click('botGroup.thread.shared.reply');
     expect(h.replace).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', messageId: 'my-share' } });
     expect(all('botGroup.row.reply')).toHaveLength(1);
+  });
+
+  it('does not auto-page during a thread jump until the user drags again', async () => {
+    h.chat.server = true;
+    h.chat.loadOlder = vi.fn(async () => {});
+    h.chat.loadingOlder = true;
+    const data = threadGroup({ hasMoreBefore: true, messages: [rootMessage(),
+      message('visible', 2, { threadRootId: rootId, serverSequence: '10', isSelf: false }),
+    ] });
+    await render(data, 'ready', rootId, '');
+    const event = { nativeEvent: { contentOffset: { y: 100 }, contentSize: { height: 1200 }, layoutMeasurement: { height: 500 } } };
+    await act(async () => { h.scroll.onScrollBeginDrag(); h.scroll.onScroll(event); });
+    await act(async () => h.scroll.onScrollEndDrag(event));
+    h.chat.loadingOlder = false;
+    await render(data, 'ready', rootId, '');
+    await click('botGroup.jumpToLatest');
+    await act(async () => h.scroll.onScroll(event));
+    expect(h.chat.loadOlder).not.toHaveBeenCalled();
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scroll.onContentSizeChange(390, 1400));
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+    await act(async () => { h.scroll.onScrollBeginDrag(); h.scroll.onScroll(event); });
+    expect(h.chat.loadOlder).toHaveBeenCalledTimes(1);
   });
 
   it('loads old replies on upward browsing once and preserves the visible reply, not the changed tail height', async () => {
@@ -2181,6 +3091,7 @@ describe('mobile group threads', () => {
     h.chat.server = true;
     await render(threadGroup({ messages: [rootMessage(), message('reply', 2, { threadRootId: rootId, content: 'Only this reply' })] }), 'ready', rootId, '');
     await act(async () => h.row.onChangeText('Keep my draft'));
+    await act(async () => h.row.onFocus());
     await click('botGroup.thread.alsoSend');
     await openTopicMenu('reply');
     await click('botGroup.thread.context.reply.action.image');
@@ -2250,3 +3161,60 @@ vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => n
 vi.mock('@/session/BotGroupTextAttachmentPreview', () => ({ BotGroupTextAttachmentPreview: () => null, botGroupTextAttachmentPreviewKind: () => null }));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
+
+// Unit: verify the group screen supplies its own sender in both main and thread surfaces.
+// Rich controls themselves are exercised in BotGroupMarkdownText.test.tsx.
+it.each([undefined, 'thread-root'])('sends a rich answer independently of the composer in %s', async threadRootId => {
+  h.chat.server = true;
+  const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Reply', send: 'Visible rich reply' } }) + '\n```';
+  const data = group({ openPlan: null, plans: [], messages: [message('rich-screen', 1, { authorBotId: 'mimi', content, threadRootId })] });
+  await render(data, 'ready', threadRootId, '');
+  await act(async () => h.row.onChangeText('Keep composer draft'));
+  expect(h.chat.act).not.toHaveBeenCalled();
+  await click('rich-group-send');
+  expect(h.chat.act).toHaveBeenCalledWith('send', { text: 'Visible rich reply', clientId: 'uuid-1', mentions: { all: false, botIds: [] } });
+  expect(h.row.value).toBe('Keep composer draft');
+  await render({ ...data, archived: true }, 'ready', threadRootId, '');
+  expect(byId('rich-group-send')!.disabled).toBe(true);
+});
+
+it('keeps a shared rich thread answer readable without inheriting the main group sender', async () => {
+  h.chat.server = true;
+  const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Reply', send: 'Visible rich reply' } }) + '\n```';
+  await render(group({ openPlan: null, plans: [], messages: [message('rich-share', 1, { authorKind: 'user', isSelf: false, threadShare: {
+    messageId: 'rich-original', threadRootId: 'thread-root', status: 'available', authorKind: 'bot', authorBotId: 'mimi',
+    authorName: 'Mimi', sharedByAuthor: false, content, attachments: [], createdAt: 1000, edited: false,
+  } })] }), 'ready', undefined, '');
+  expect(byId('rich-group-send')!.disabled).toBe(true);
+  expect(h.chat.act).not.toHaveBeenCalled();
+});
+
+// Behavior/performance: UI-only rerenders must not regroup the whole history; new data must.
+it('reuses history time grouping across unrelated UI renders and invalidates for messages', async () => {
+  const timeline = await import('@cindy/maker-shared/botTimeline');
+  const grouping = vi.spyOn(timeline, 'collectBotMessageTimeGroups');
+  const data = group();
+  await render(data);
+  const before = grouping.mock.calls.length;
+  for (let i = 0; i < 10; i++) await render(data);
+  expect(grouping.mock.calls.length - before).toBe(0);
+  await render({ ...data, messages: [...data.messages, message('fresh', 99, { content: 'Fresh reply' })] });
+  expect(grouping.mock.calls.length).toBeGreaterThan(before);
+  expect(node.textContent).toContain('Fresh reply');
+  grouping.mockRestore();
+});
+
+// Regression: first native layout/scroll notifications must not redraw unchanged
+// message text. Exercise the production screen, then verify new content still renders.
+it('keeps message text mounted through initial viewport updates', async () => {
+  const data = group({ messages: [message('first', 1, { content: 'Existing reply' })] });
+  await render(data);
+  const before = h.textRender.mock.calls.length;
+  expect(before).toBeGreaterThan(0);
+  await act(async () => h.scrolls['botGroup.timeline'].onLayout({ nativeEvent: { layout: { height: 700 } } }));
+  await act(async () => h.scrolls['botGroup.timeline'].onContentSizeChange(390, 1500));
+  expect(h.textRender.mock.calls.length).toBe(before);
+  await render({ ...data, messages: [...data.messages, message('next', 2, { content: 'New reply' })] });
+  expect(node.textContent).toContain('New reply');
+  expect(h.textRender.mock.calls.length).toBeGreaterThan(before);
+});

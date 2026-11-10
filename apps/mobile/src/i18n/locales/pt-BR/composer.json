@@ -66,7 +66,7 @@
     "pasteTimeout": "O tempo para colar a imagem esgotou. Tente novamente.",
     "clipboardReadFailed": "Não foi possível ler a imagem da área de transferência. Copie-a novamente e cole.",
     "maxAttachments": "Adicione até {{count}} anexos.",
-    "simulatorNoCamera": "O simulador não tem câmera. Use \"Fotos\" para escolher da biblioteca.",
+    "simulatorNoCamera": "O simulador não tem câmera. Use «Fotos e vídeos» para escolher na galeria.",
     "cameraPermission": "O acesso à câmera está desativado. Permita que {{appName}} use a câmera nas configurações do sistema.",
     "photoPermission": "O acesso às fotos está desativado. Permita que {{appName}} acesse as fotos nas configurações do sistema.",
     "noFileRead": "Nenhum arquivo que possa ser enviado foi lido."

@@ -3,7 +3,7 @@ import { previousModelGenerations } from '../modelGeneration.js';
 import { buildUserProvider } from '../user-provider.js';
 import { isChatEligible } from '../classification.js';
 import { BUNDLED_CATALOG } from '../builtin.js';
-import { providerModelGenerationRecord, providerModelRecord, providerModelAdapterId } from '../providerModelCatalog.js';
+import { providerModelGenerationRecord, providerModelRecord, providerPresetModelRecord, providerModelAdapterId } from '../providerModelCatalog.js';
 import { parseModelsListResponse } from '../modelDiscovery.js';
 import { mergeDiscoveredRuntimeModels } from '../modelMetadataLayers.js';
 import type { ProviderRuntimeModelConfig, ProviderWireProtocol } from '../types.js';
@@ -190,6 +190,38 @@ describe('new model generation defaults', () => {
     expect(relay.cost).toBeUndefined();
     expect(relay.execution.pi.headers).toBeUndefined();
     expect(providerModelGenerationRecord('gpt-5.4', 'https://relay.example/v1', 'anthropic-messages')).toBeUndefined();
+  });
+
+  // #9630, unit: a relay may accept Messages without supporting message-scoped
+  // effort. Existing inheritance tests only checked ordinary serializer fields.
+  it.each(['claude-opus-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-fable-5-2'])(
+    'keeps message-scoped effort local to the declared endpoint for %s', (id) => {
+      const official = providerModelGenerationRecord(id, 'https://api.anthropic.com/', 'anthropic-messages')!;
+      const original = structuredClone(official);
+      const relay = providerModelGenerationRecord(id, 'https://relay.example/v1', 'anthropic-messages')!;
+      expect(relay.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+      expect(relay.execution.pi.compat).toMatchObject({ forceAdaptiveThinking: true });
+      expect(relay.execution.pi.thinkingLevelMap).toEqual(official.execution.pi.thinkingLevelMap);
+      expect(official.execution.pi.compat).toMatchObject({ supportsMidConvoEffort: true });
+      expect(providerModelGenerationRecord(id, 'https://api.anthropic.com/', 'anthropic-messages')).toEqual(original);
+      const preset = providerModelGenerationRecord(id, 'https://account.example', 'anthropic-messages', 'anthropic-api')!;
+      expect(preset.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+    },
+  );
+
+  // Editing a preset URL retains its ID; exact catalog rows must enforce the
+  // same channel boundary as generation fallback, without mutating the catalog.
+  it('does not treat a saved Anthropic preset ID as a message-scoped effort declaration', () => {
+    const official = providerPresetModelRecord('anthropic-api', 'claude-opus-5', 'anthropic-messages')!;
+    const original = structuredClone(official);
+    for (const endpoint of ['https://relay.example', 'https://api.anthropic.com/proxy']) {
+      const relay = providerPresetModelRecord('anthropic-api', 'claude-opus-5', 'anthropic-messages', endpoint)!;
+      expect(relay.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+      expect(relay.execution.pi.compat).toMatchObject({ forceAdaptiveThinking: true });
+    }
+    expect(providerPresetModelRecord('anthropic-api', 'claude-opus-5', 'anthropic-messages', 'https://api.anthropic.com/')!
+      .execution.pi.compat).toMatchObject({ supportsMidConvoEffort: true });
+    expect(official).toEqual(original);
   });
 
   it('retains exact adapter metadata across engines even without Registry entries', () => {

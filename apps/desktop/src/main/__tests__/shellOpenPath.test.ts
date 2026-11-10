@@ -23,6 +23,26 @@ describe('resolveShellOpenPathTarget', () => {
     }
   });
 
+  // #8726: `/D:/x` 是盘符路径的 URI pathname 写法;不剥离时 normalize 产出
+  // 当前盘下的非法 `\D:\x`,shell.openPath 必败。注入平台 + path.win32 模拟
+  // Windows 语义(engineering-conventions §3.3),不靠 mock process.platform。
+  it('strips the URI-pathname slash on a Windows drive path (injected win32)', () => {
+    expect(resolveShellOpenPathTarget('/D:/Java', 'win32')).toBe('D:\\Java');
+    expect(resolveShellOpenPathTarget('/d:/a/b 文档.txt', 'win32')).toBe('d:\\a\\b 文档.txt');
+    // 裸盘符归一到盘根目录:目录链接尾斜杠被剥落后以 /D: 到达
+    expect(resolveShellOpenPathTarget('/D:', 'win32')).toBe('D:\\');
+    // UNC 与 POSIX 形态不受影响
+    expect(resolveShellOpenPathTarget('//server/share/x.txt', 'win32')).toBe(
+      '\\\\server\\share\\x.txt',
+    );
+  });
+
+  it('keeps a /D: root directory name untouched on POSIX hosts', () => {
+    expect(resolveShellOpenPathTarget('/D:/Java', 'linux')).toBe('/D:/Java');
+    expect(resolveShellOpenPathTarget('/D:/Java', 'darwin')).toBe('/D:/Java');
+    expect(resolveShellOpenPathTarget('/D:', 'linux')).toBe('/D:');
+  });
+
   it('resolves a valid cindy-media reference inside the main process', () => {
     const hash = 'a'.repeat(64);
     expect(resolveShellOpenPathTarget(`cindy-media://blobs/${hash}.ogg`)).toBe(

@@ -221,6 +221,7 @@ const marketPlugin: PluginMarketItem = {
   name: 'Google Calendar',
   description: 'Connect Google Calendar',
   author: 'Cindy',
+  publisherKind: 'official',
   scope: 'public',
   organizationId: null,
   defaultInstall: false,
@@ -572,6 +573,40 @@ describe('GhostPluginCard', () => {
 });
 
 describe('MarketPluginCard', () => {
+  // 用户确认：推荐也展示可信身份和已有下载统计；公开社区保持匿名。
+  // unit：现有真实卡片入口缺少 compact 分支的身份、统计和匿名保护覆盖。
+  it('shows identity and exact download counts on recommendations without publishing community names', () => {
+    const { rerender } = render(<MarketPluginCard compact
+      item={{ ...marketPlugin, downloadStatistics: { requestCount: '9007199254740993' } }}
+      busy={false} onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.getByText('settings.ghosts.market.publisherKind.official')).toBeTruthy();
+    expect(screen.getByText('9,007,199,254,740,993 settings.ghosts.usage.downloadsValue')).toBeTruthy();
+    rerender(<MarketPluginCard compact item={{ ...marketPlugin, publisherKind: 'personal', author: 'Private contributor' }}
+      busy={false} onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.getByText('settings.ghosts.market.publisherKind.community')).toBeTruthy();
+    expect(screen.queryByText(/Private contributor/)).toBeNull();
+    expect(screen.queryByText(/settings.ghosts.usage.downloadsValue/)).toBeNull();
+  });
+
+  it.each([
+    [{ sourceType: 'server', scope: 'organization' }, 'settings.ghosts.page.origin.organization'],
+    [{ sourceType: 'git-market' }, 'settings.ghosts.page.origin.custom'],
+    [{ sourceType: 'local-market' }, 'settings.ghosts.page.origin.custom'],
+  ] as const)('prioritizes actual source over an official publisher field: %j', (source, label) => {
+    render(<MarketPluginCard item={{ ...marketPlugin, ...source }} busy={false}
+      onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.getAllByText(label).length).toBeGreaterThan(1);
+    expect(screen.queryByText('settings.ghosts.market.publisherKind.official')).toBeNull();
+  });
+
+  it('does not guess a public identity from author text when provenance is missing', () => {
+    render(<MarketPluginCard item={{ ...marketPlugin, publisherKind: undefined }} busy={false}
+      onSelect={vi.fn()} onIconLoadError={vi.fn()} />);
+    expect(screen.queryByText('settings.ghosts.market.publisherKind.official')).toBeNull();
+    expect(screen.queryByText('settings.ghosts.market.publisherKind.community')).toBeNull();
+    expect(screen.queryByText('Cindy')).toBeNull();
+  });
+
   it('uses an icon-only details action in the card-level right action rail', () => {
     render(
       <MarketPluginCard

@@ -18,7 +18,7 @@ import {
 } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import { DEVICE_HOSTED_GUEST_CLAUDE_TOOLS } from '../../shared/device-hosted.js';
+import { DEVICE_HOSTED_GUEST_CLAUDE_TOOLS, DEVICE_HOSTED_MCP_TIMEOUT_MS } from '../../shared/device-hosted.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -139,6 +139,7 @@ async function startHostedSession(
     local?: boolean;
     ghostRosterSnapshot?: string;
     mcpServers?: string[];
+    controllerManagedSkills?: { claudePluginRoots: string[] };
   } = {},
 ): Promise<{ options: CapturedOptions; sessionRoot: string }> {
   const configDir = await makeTempDir();
@@ -196,6 +197,7 @@ async function startHostedSession(
     mirrorRoot,
     ...(guest ? { guest: true } : {}),
     ...(guest && overrides.guestProvider !== null ? { guestProvider: overrides.guestProvider ?? GUEST_PROVIDER } : {}),
+    ...(overrides.controllerManagedSkills ? { controllerManagedSkills: overrides.controllerManagedSkills } : {}),
   };
   const handle = await new ClaudeCodeAgent(deps).startSession({
     sessionId: 'hosted-session',
@@ -257,6 +259,18 @@ describe('Claude Code device-hosted guest sessions', () => {
     expect(empty.options.systemPrompt?.append).not.toContain(GHOST_ROSTER);
   });
 
+  // 内置与插件带的 Skill 以任务所在电脑为准(工具与脚本都在那台)：挂它带来的插件目录，本机的不加载；受邀者也一样。
+  it('mounts the task computer managed skills instead of this computer ones', async () => {
+    for (const guest of [true, false]) {
+      const shadow = await makeTempDir();
+      const root = path.join(shadow, '.cindy', 'managed-skills', 'cindy');
+      const { options } = await startHostedSession(guest, { controllerManagedSkills: { claudePluginRoots: [root] } });
+      expect(options.plugins).toEqual([{ type: 'local', path: root }]);
+      // 插件目录属于影子目录，随任务清理；这里提前删掉，好让公共收尾只核对本机临时挂载的插件。
+      await fs.rm(path.join(shadow, '.cindy'), { recursive: true, force: true });
+    }
+  });
+
   it('routes only through the shared provider: route token, shared models, no host subagent model', async () => {
     const { options } = await startHostedSession(true);
     const header = `${DEVICE_HOSTED_GUEST_ROUTE_HEADER}: guest-route-token`;
@@ -314,5 +328,14 @@ describe('Claude Code device-hosted guest sessions', () => {
     expect((await startHostedSession(true)).options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBeUndefined();
     const { options } = await startHostedSession(false, { local: true });
     expect(options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBe('route-hosted-session');
+  });
+
+  // 2026-11-04: on a slow relay, Claude Code's default 30s MCP connect limit dropped all
+  // 91 tunnelled tools at the start of a turn. Local tasks keep Claude Code's default.
+  it('waits for tunnelled tools on a slow link, only for tasks hosted for another computer', async () => {
+    for (const guest of [true, false]) {
+      expect((await startHostedSession(guest)).options.env?.MCP_TIMEOUT).toBe(String(DEVICE_HOSTED_MCP_TIMEOUT_MS));
+    }
+    expect((await startHostedSession(false, { local: true })).options.env?.MCP_TIMEOUT).toBeUndefined();
   });
 });

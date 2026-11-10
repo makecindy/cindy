@@ -1,4 +1,5 @@
-import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
+import { hasAgentIslandNotificationSound } from '../../shared/agentIsland';
+import { getAgentIslandEnabled, getAgentIslandSoundSettings, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
@@ -203,7 +204,7 @@ function deliverSessionEventNotification(
   title: string,
   kind: SessionEventNotificationKind,
   remoteDevice: boolean,
-  options: { mobile?: boolean; feishu?: boolean },
+  options: { mobile?: boolean; feishu?: boolean; remoteDeviceId?: string | null },
 ): void {
   // A handoff can finish after the user has opened Cindy or changed preferences.
   if (typeof document !== 'undefined' && document.hasFocus()) return;
@@ -215,8 +216,9 @@ function deliverSessionEventNotification(
     title,
     kind,
     ...(remoteDevice ? { markAttention: false } : {}),
+    ...(options.remoteDeviceId ? { remoteDeviceId: options.remoteDeviceId } : {}),
     channels: {
-      desktop: !remoteDevice && getNotificationsEnabled() && !islandActive,
+      desktop: !remoteDevice && getNotificationsEnabled() && (!islandActive || !hasAgentIslandNotificationSound(getAgentIslandSoundSettings(), kind)),
       feishu: options.feishu !== false && getFeishuNotificationsEnabled(),
       // Mobile owns registration/unregistration of its push token. There is
       // deliberately no second desktop setting for the same channel.

@@ -35,6 +35,10 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:review:start')).toBe(true);
   });
 
+  it('allows the read-only OpenCode Go quota query', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:usage:opencode-go')).toBe(true);
+  });
+
   it('allows the read-only task context-window bounds query but no generic session write', () => {
     // 只读边界查询：控制端据此才能在远程任务上给出「更大」的档位。
     expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-context-window-bounds')).toBe(true);

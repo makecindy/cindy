@@ -49,9 +49,16 @@ export interface ContributionReleaseView {
     manifestView: Record<string, unknown>;
   } | null;
 }
+export interface MyPluginLocalInstance {
+  instanceId: string;
+  version: string;
+  origin: 'local' | 'public';
+  enabled: boolean;
+}
 export type MyPluginLocalInstallation =
-  | { state: 'installed'; instanceId: string; version: string; origin: 'local' | 'public'; enabled: boolean }
-  | { state: 'missing' | 'unavailable' };
+  | ({ state: 'installed' } & MyPluginLocalInstance)
+  // Older readers retain their unavailable fallback until an instance is selected.
+  | { state: 'missing' | 'unavailable'; candidates?: MyPluginLocalInstance[] };
 export interface MyPluginView {
   pluginId: string;
   name: string;

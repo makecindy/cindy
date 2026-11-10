@@ -57,6 +57,8 @@ export interface AgentIslandNativeScreenMetrics {
   displayId: number;
   frame: Rectangle;
   hasNotch: boolean;
+  /** Older helpers omit it; parsed as false. */
+  hasSystemIsland: boolean;
   notchWidth: number;
   topBarHeight: number;
   menuBarHeight: number;
@@ -750,6 +752,7 @@ function parseNativeScreenMetrics(input: unknown): AgentIslandNativeScreenMetric
       displayId: record.displayId,
       frame,
       hasNotch: record.hasNotch,
+      hasSystemIsland: record.hasSystemIsland === true,
       notchWidth: record.notchWidth,
       topBarHeight: record.topBarHeight,
       menuBarHeight: record.menuBarHeight,

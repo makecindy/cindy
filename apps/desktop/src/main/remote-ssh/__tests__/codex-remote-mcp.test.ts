@@ -1560,13 +1560,14 @@ describe('codex-connector R27 regressions', () => {
 });
 
 
-describe('remote Bot helper transport', () => {
+describe('remote helper transport', () => {
   const helperConfigOpts = {
     bridgeInstanceId: 'helper-bridge', serverNames: ['cindy_helper'],
     collabEnabled: false, makerMemoryEnabled: false,
   };
 
-  it('keeps the shared helper disabled and binds per-thread URLs with collab and memory off', async () => {
+  // #8406: a plain SSH thread must enable its bound helper without a Bot policy.
+  it('keeps the shared helper disabled and enables a bound ordinary thread with collab and memory off', async () => {
     const { host, inputs } = fakeHost('host-helper-only', '');
     const ensured = await ensureRemoteCodexMcpBridge(host, {
       ensureBridgeStarted: async () => ({ port: 38991, serverNames: ['cindy_helper'], bridgeInstanceId: 'helper-bridge' }),
@@ -1579,8 +1580,12 @@ describe('remote Bot helper transport', () => {
     expect(config).toMatchObject({
       'mcp_servers.cindy_helper.url': 'http://127.0.0.1:47921/mcp/cindy_helper?instance=bot-instance',
       'mcp_servers.cindy_helper.bearer_token_env_var': 'LIZI_MCP_TOKEN',
-      'mcp_servers.cindy_helper.enabled': false,
+      'mcp_servers.cindy_helper.enabled': true,
     });
+    expect(buildRemoteCodexSessionMcpConfig(host.id, '', helperConfigOpts)).toEqual({});
+    expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', {
+      ...helperConfigOpts, vendorOptions: { __cindyDisabledBuiltinPluginIds: ['xdt_helper'] },
+    })['mcp_servers.cindy_helper.enabled']).toBe(false);
     expect(buildRemoteCodexSessionMcpConfig('missing-host', 'bot-instance', helperConfigOpts)).toEqual({});
     expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', { ...helperConfigOpts, serverNames: [] })).toEqual({});
     expect(hasPendingRemoteMcpDrift(host.id, {
@@ -1657,7 +1662,7 @@ describe('remote App transports', () => {
       vendorOptions.cindyRuntimeMcpServerNames = ['example'];
       expect(buildRemoteCodexSessionMcpConfig(host.id, 'bot-instance', { ...opts, vendorOptions }))
         .toHaveProperty('mcp_servers.example.enabled', true);
-      if (helper) expect(ordinary['mcp_servers.cindy_helper.enabled']).toBe(false);
+      if (helper) expect(ordinary['mcp_servers.cindy_helper.enabled']).toBe(true);
     } finally { clearAppServerConfigs(); }
   });
 });

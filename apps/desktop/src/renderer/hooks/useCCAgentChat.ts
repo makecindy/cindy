@@ -1,3 +1,4 @@
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * useCCAgentChat — thin subscription layer over `makerChatStore`.
  * ---------------------------------------------------------------------------
@@ -103,6 +104,9 @@ interface UseCCAgentChatReturn {
   steeringQueueClientIds: string[];
   /** Queue was paused by Stop and resumes only after the user clicks Continue. */
   queuePaused: boolean;
+  queueEditLocks: string[];
+  queueInteractionLocks: string[];
+  queueAbortPending: boolean;
   /** F-QUEUE-DEFER: 队列面板是否显示三条以后的尾部，仅影响展示。 */
   queueExpanded: boolean;
   /** F-QUEUE-DEFER: 切换队列面板的展开 / 折叠态，仅影响展示。 */
@@ -198,6 +202,7 @@ interface UseCCAgentChatReturn {
   errorReason: string | null;
   /** Structured details for a tool-loop terminal error, when available. */
   toolLoop: ToolLoopErrorDetails | null;
+  outputLimit: OutputLimitDetails | null;
   /** error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):ErrorBanner
    *  网络分支据此显示「正在自动重试…」而非「可点击重试」。 */
   errorIsRecoverable: boolean;
@@ -863,6 +868,9 @@ export function useCCAgentChat(
     pendingQueue: lightState.pendingQueue,
     steeringQueueClientIds: lightState.steeringQueueClientIds,
     queuePaused: lightState.queuePaused,
+    queueEditLocks: lightState.queueEditLocks,
+    queueInteractionLocks: lightState.queueInteractionLocks,
+    queueAbortPending: lightState.queueAbortPending,
     queueExpanded: lightState.queueExpanded,
     setQueueExpanded,
     resumeQueue,
@@ -897,6 +905,7 @@ export function useCCAgentChat(
           ? (lightState.errorReason ?? null)
           : null,
     toolLoop: lightState.error ? (lightState.toolLoop ?? null) : null,
+    outputLimit: lightState.error ? (lightState.outputLimit ?? null) : null,
     // 当前 error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):
     // ErrorBanner 网络分支据此显示「正在自动重试…」而非「可点击重试」。
     errorIsRecoverable: !lightState.error && lightState.recoverableError != null,

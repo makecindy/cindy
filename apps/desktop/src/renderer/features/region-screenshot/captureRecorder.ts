@@ -13,11 +13,12 @@ export class CaptureRecorder {
   private stopped = false;
   private failure: Error | null = null;
 
-  constructor(private readonly canvas: HTMLCanvasElement, readonly format: 'webm' | 'gif', private readonly onLimit: () => void, createGifWorker?: () => Worker) {
+  constructor(private readonly canvas: HTMLCanvasElement, readonly format: 'webm' | 'gif', private readonly onLimit: () => void, createGifWorker?: () => Worker, audioTrack?: MediaStreamTrack) {
     this.gif = format === 'gif' ? new GifWorker(canvas.width, canvas.height, createGifWorker) : null;
     this.stream = format === 'webm' ? canvas.captureStream(0) : null;
     if (this.stream) {
-      const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((type) => MediaRecorder.isTypeSupported(type));
+      if (audioTrack) this.stream.addTrack(audioTrack);
+      const mimeType = (audioTrack ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'] : ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']).find((type) => MediaRecorder.isTypeSupported(type));
       if (!mimeType) { this.dispose(); throw new Error('WebM recording unavailable'); }
       this.recorder = new MediaRecorder(this.stream, { mimeType, videoBitsPerSecond: 5_000_000 });
       this.recorder.ondataavailable = ({ data }) => {

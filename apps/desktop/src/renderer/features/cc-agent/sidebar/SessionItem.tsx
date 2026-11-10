@@ -1321,6 +1321,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
       prRefs={prRefs}
       isAutomationSession={showAutomationTooltip}
       controlledOpen={rowTooltipOpen}
+      onOpenChange={setRowTooltipOpen}
     >
       {row}
     </SessionTooltip>
