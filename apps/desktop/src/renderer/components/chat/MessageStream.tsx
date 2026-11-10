@@ -1980,11 +1980,9 @@ export function buildRenderItems(
       turnStartIdx = i;
     }
 
-    // ask_user: pending lives in the bottom input overlay; expired/unanswered
-    // questions have no user selection to show. Only the answered state surfaces
-    // in the stream — rendered by AskUserQuestionBubble so the choice the user
-    // made stays visible after the agent moves on.
-    if (msg.role === 'ask_user' && msg.askUserStatus !== 'answered') {
+    // Pending questions live in the input overlay. Settled questions preserve
+    // their prompt and answer, withdrawal reason, or unanswered status in history.
+    if (msg.role === 'ask_user' && msg.askUserStatus !== 'answered' && msg.askUserStatus !== 'expired') {
       i++;
       continue;
     }
