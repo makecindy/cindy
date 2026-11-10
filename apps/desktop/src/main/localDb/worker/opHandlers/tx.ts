@@ -1212,6 +1212,9 @@ function botsDeleteProfile(
   }
   const keepTaskHistory = p.keepTaskHistory;
   const at = expectNumber(p.at, 'at');
+  const projectSessionIds = [...new Set((p.projectSessionIds === undefined ? [] : expectArray(p.projectSessionIds, 'projectSessionIds'))
+    .map((value, index) => expectString(value, `projectSessionIds.${index}`)))]
+    .filter((id) => !sessionIds.includes(id));
   const status: 'archived' | 'deleted' = keepTaskHistory ? 'archived' : 'deleted';
   return db.transaction(() => {
     const profile = db.prepare('SELECT status FROM bot_profiles WHERE id = ?').get(botId) as
@@ -1255,6 +1258,17 @@ function botsDeleteProfile(
           (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('group', 'channel'))` : ''}`)
         .run(status, at, ...sessionIds, ...(hasLinkRoles ? [botId] : []));
     }
+    // The teammate's project goes with it: its other tasks follow the same keep-or-delete choice.
+    let projectChanged: string[] = [];
+    if (projectSessionIds.length > 0) {
+      const placeholders = projectSessionIds.map(() => '?').join(',');
+      projectChanged = (db.prepare(`SELECT id FROM sessions WHERE status != 'deleted' AND id IN (${placeholders})`)
+        .all(...projectSessionIds) as Array<{ id: string }>).map((row) => row.id);
+      if (projectChanged.length > 0) {
+        db.prepare(`UPDATE sessions SET status = ?, updated_at = ? WHERE id IN (${projectChanged.map(() => '?').join(',')})`)
+          .run(status, at, ...projectChanged);
+      }
+    }
 
     const hasMediaRefs = Boolean(db.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_refs'",
@@ -1271,7 +1285,7 @@ function botsDeleteProfile(
       new Error('Bot 生命周期已被另一处操作更新'),
       { code: 'PRECONDITION_FAILED' },
     );
-    return { sessionIds: allSessionIds, status };
+    return { sessionIds: [...allSessionIds, ...projectChanged], status };
   })();
 }
 

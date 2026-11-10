@@ -24,6 +24,8 @@ vi.mock('../botRemoteResourceInvalidation.js', () => ({
 }));
 
 import { createBotLifecycleService } from '../botLifecycleService.js';
+import { teammateWorkspaceDir } from '../botProjectMemory.js';
+import { ownerScopedUserDataPath } from '../../appSessionState.js';
 import { tx as runWorkerTx } from '../../localDb/worker/opHandlers/tx.js';
 
 function createDatabase(): Database.Database {
@@ -33,8 +35,11 @@ function createDatabase(): Database.Database {
       id TEXT PRIMARY KEY,
       source TEXT NOT NULL,
       status TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      working_dir TEXT,
+      project_dir TEXT
     );
+    CREATE TABLE recent_workdirs (path TEXT PRIMARY KEY);
     CREATE TABLE bot_profiles (
       id TEXT PRIMARY KEY,
       display_name TEXT NOT NULL,
@@ -81,7 +86,7 @@ function createDatabase(): Database.Database {
     INSERT INTO bot_session_links VALUES
       ('link-canonical', 'bot-1', 'canonical', 1, 'canonical', NULL, 1, NULL),
       ('link-delegation', 'bot-1', 'delegation-session', 1, 'delegation', 'delegation:d-1', 1, NULL);
-    INSERT INTO sessions VALUES
+    INSERT INTO sessions (id, source, status, updated_at) VALUES
       ('canonical', 'bot', 'active', 1),
       ('delegation-session', 'bot', 'active', 1);
   `);
@@ -356,6 +361,7 @@ describe('Bot lifecycle coordinator', () => {
       'bot-1',
       expect.arrayContaining(['canonical', 'delegation-session']),
       true,
+      [],
     );
     expect(row(sqlite, 'sessions', 'canonical')).toMatchObject({
       source: 'desktop',
@@ -376,7 +382,30 @@ describe('Bot lifecycle coordinator', () => {
       'bot-1',
       expect.arrayContaining(['canonical', 'delegation-session']),
       false,
+      [],
     );
     expect(result).toMatchObject({ action: 'delete', status: 'deleted' });
+  });
+
+  // Tier: behavior. Deleting a teammate left its project in the project list and the tasks in it
+  // (automation runs, tasks it opened there) in the task list (2026-11-10).
+  it('takes the teammate project and the tasks in it along when deleting', async () => {
+    const project = teammateWorkspaceDir(ownerScopedUserDataPath(), 'bot-1');
+    sqlite.prepare('INSERT INTO sessions (id, source, status, updated_at, working_dir, project_dir) VALUES (?, ?, ?, 1, ?, ?)')
+      .run('automation-run', 'scheduler', 'active', project, null);
+    sqlite.prepare('INSERT INTO sessions (id, source, status, updated_at, working_dir, project_dir) VALUES (?, ?, ?, 1, ?, ?)')
+      .run('opened-task', 'desktop', 'active', `${project}/notes`, project);
+    sqlite.prepare('INSERT INTO sessions (id, source, status, updated_at, working_dir, project_dir) VALUES (?, ?, ?, 1, ?, ?)')
+      .run('neighbour', 'desktop', 'active', `${project}-other`, `${project}-other`);
+    sqlite.prepare('INSERT INTO recent_workdirs (path) VALUES (?), (?)').run(project, `${project}-other`);
+
+    const result = await service().run({ botId: 'bot-1', action: 'delete', confirmName: 'Helper', keepTaskHistory: false });
+
+    expect(deleteProfileAndDetachSessions).toHaveBeenCalledWith('bot-1', expect.arrayContaining(['canonical']), false,
+      ['automation-run', 'opened-task']);
+    expect(closeSession).toHaveBeenCalledWith('automation-run');
+    expect(closeSession).not.toHaveBeenCalledWith('neighbour');
+    expect(sqlite.prepare('SELECT path FROM recent_workdirs').pluck().all()).toEqual([`${project}-other`]);
+    expect(result).toMatchObject({ status: 'deleted', affected: { sessions: 4 } });
   });
 });

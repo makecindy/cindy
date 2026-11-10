@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 
 import { app, BrowserWindow, ipcMain } from 'electron';
-import { eq } from 'drizzle-orm';
+import { and, eq, like, ne, or } from 'drizzle-orm';
 import type { Maker } from '@cindy/maker-core';
 
 import type {
@@ -10,11 +11,14 @@ import type {
 } from '../../shared/botLifecycle.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { deleteBotProfileAndDetachSessionsInDb } from '../localDb/ipc/sessions.js';
+import { removeRecentWorkdir } from '../localDb/ipc/recentWorkdirsCore.js';
 import {
   botLifecycleEvents,
   botProfiles,
   botSessionLinks,
+  sessions,
 } from '../localDb/schema.js';
+import { teammateWorkspaceDir } from './botProjectMemory.js';
 import { removeBotProfileFolder } from './botProfileFolder.js';
 import { withBotProfileLocks } from './botProfileLock.js';
 import { createLogger } from '../logger.js';
@@ -38,6 +42,7 @@ export interface BotLifecycleServiceDeps {
     botId: string,
     sessionIds: string[],
     keepTaskHistory: boolean,
+    projectSessionIds?: string[],
   ) => Promise<void>;
   /** Rebuild only the canonical runtime; retain the product task and all Bot data. */
   restartRuntime?: (sessionId: string, assertOwnerCurrent: () => void) => Promise<void>;
@@ -326,7 +331,21 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       .from(botSessionLinks)
       .where(eq(botSessionLinks.botId, request.botId));
     const sessionIds = [...new Set(links.map((row) => row.sessionId))];
+    // Its project goes with it (2026-11-10): automation runs and tasks the teammate opened in its own
+    // project follow the same keep-or-delete choice, and the project leaves the project list.
+    const projectDir = teammateWorkspaceDir(ownerRootAtEntry, request.botId);
+    const projectSessionIds = (await db
+      .select({ id: sessions.id, projectDir: sessions.projectDir, workingDir: sessions.workingDir })
+      .from(sessions)
+      .where(and(ne(sessions.status, 'deleted'),
+        or(eq(sessions.projectDir, projectDir), like(sessions.workingDir, `${projectDir}%`)))))
+      .filter((row) => !sessionIds.includes(row.id) && (row.projectDir === projectDir
+        || row.workingDir === projectDir || (row.workingDir ?? '').startsWith(`${projectDir}${path.sep}`)))
+      .map((row) => row.id);
     const closed = await closeBotSessions(request.botId);
+    const projectClosed = await Promise.allSettled(projectSessionIds.map((sessionId) => deps.maker.closeSession(sessionId)));
+    closed.warnings.push(...projectClosed.flatMap((result, index) => result.status === 'rejected'
+      ? [`SESSION_CLOSE_FAILED:${projectSessionIds[index]}:${String(result.reason)}`] : []));
 
     assertOwnerUnchanged();
     await deps.onBeforeDelete?.(request.botId);
@@ -335,6 +354,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       request.botId,
       sessionIds,
       request.keepTaskHistory === true,
+      projectSessionIds,
     );
     try {
       assertOwnerUnchanged();
@@ -367,8 +387,18 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       });
     }
 
+    try {
+      if ((await removeRecentWorkdir(projectDir)).deleted) {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send('local-db:recent-workdirs:changed', { path: projectDir });
+        }
+      }
+    } catch (cause) {
+      log.warn('remove teammate project from project list failed', { botId: request.botId, error: String(cause) });
+    }
+
     const result = lifecycleResult(request.botId, 'delete', 'deleted', {
-      sessions: sessionIds.length,
+      sessions: sessionIds.length + projectSessionIds.length,
     }, [...preparationWarnings, ...closed.warnings]);
     await notifyLifecycleChanged(request.botId, 'delete');
     return result;

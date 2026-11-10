@@ -943,6 +943,8 @@ export interface BotsDeleteProfileArgs {
   sessionIds: string[];
   keepTaskHistory: boolean;
   at: number;
+  /** Tasks in the teammate's own project (automation runs, tasks it opened there); kept or deleted like its own. */
+  projectSessionIds?: string[];
 }
 export interface ImRotateSessionArgs {
   previousSessionId: string | null;
