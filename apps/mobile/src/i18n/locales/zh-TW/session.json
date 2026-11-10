@@ -809,12 +809,6 @@
     "failed": "儲存失敗，請重試。",
     "restore": "恢復預設"
   },
-  "followUp": {
-    "title": "要我幫你跟進任務嗎？",
-    "start": "開始跟進",
-    "notNow": "暫不開啟",
-    "saveFailed": "沒能儲存，請重試"
-  },
   "providerGroupRebalance": {
     "title": "換到 {{label}} 繼續？",
     "body": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。換過去會帶上最近幾輪對話和摘要，更早的細節可能記不全。",

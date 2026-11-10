@@ -162,12 +162,7 @@
   },
   "taskActionConfirmation": {
     "title": "セッション操作の確認",
-    "once": "以下の対象、操作、全文を確認してください。許可は今回の操作にのみ適用されます。",
-    "remove": "自動化の受信アドレスを解放します。対象を確認してください。許可は今回の操作にのみ適用されます。",
-    "permission": "別のタスクの権限リクエストに、あなたに代わって回答します。操作を確認してください。許可は今回のみ有効です。",
-    "resume": "一時停止中の実行を再開します。対象を確認してください。許可は今回のみ有効です。",
-    "command": "エージェントのツール承認を経ずに、コンピューター上でコマンドを保存または実行します。コマンドと作業フォルダーを確認してください。許可は今回のみ有効です。",
-    "authority": "自動実行の指示を新規作成または変更します。以後の実行はこの指示への許可に基づきます。指示全体を確認してください。許可は今回の保存に適用されます。"
+    "once": "以下の対象、操作、全文を確認してください。許可は今回の操作にのみ適用されます。"
   },
   "logSupport": {
     "title": "ログとフィードバック",
@@ -4710,7 +4705,7 @@
     },
     "discordBot": {
       "title": "Discord ボット",
-      "description": "自分で作成した Discord ボットを連携し、Discord の DM から {{appName}} を使えるようにします。",
+      "description": "自分で作成した Discord ボットを連携し、Discord の DM と選んだサーバーのチャンネルから {{appName}} を使えるようにします。",
       "statusAria": "Discord ボットの状態: {{status}}",
       "status": {
         "needsConfig": "設定が必要",
@@ -4754,6 +4749,64 @@
         "cellLabel": "メッセージ通知",
         "hint": "このデバイスのオンライン・オフライン時に Discord Bot から通知メッセージを送信します"
       },
+      "channels": {
+        "title": "サーバーのチャンネル",
+        "summary": {
+          "unknown": "確認中…",
+          "off": "オフ",
+          "on": "有効なサーバー: {{count}}"
+        },
+        "hint": "初期状態では何も開放されていません。サーバーを有効にすると、そのテキストチャンネルで Bot に @ メンションして呼び出せます。チャンネルごと、スレッドごとにコンテキストは別々で、Bot が受け取るのは @ メンションされたメッセージだけです。",
+        "ownerOnly": "現在呼び出せるのはあなただけです。",
+        "offline": "Bot が接続されていません。接続するとチャンネルを選べます。有効にしたチャンネルはそのままです。",
+        "members": {
+          "label": "チャンネルのメンバーに許可",
+          "notice": "チャンネルのメンバーは初期状態でオフです。許可すると、そのチャンネルで Bot に @ メンションしたメンバーは {{name}} に設定済みのツールを使い、{{name}} のメモリを共有します。権限は {{name}} の権限設定に従い、コマンドは引き続きあなただけが使えます。",
+          "aria": "#{{channel}} のメンバーに許可",
+          "guildAria": "{{guild}} のメンバーに許可"
+        },
+        "loading": "Bot が参加しているサーバーを読み込み中…",
+        "refresh": "更新",
+        "empty": "Bot はまだどのサーバーにも参加していません。Discord Developer Portal で招待リンクを作って追加してから、更新してください。",
+        "noTextChannels": "テキストチャンネルがありません",
+        "toggleAria": "{{guild}} の #{{channel}} を有効にする",
+        "error": {
+          "load": "サーバー一覧を読み込めませんでした。",
+          "save": "変更を保存できませんでした。現在保存されている設定を表示しています。",
+          "unsupported": "そのパソコンの Cindy は古いバージョンのため、ここではサーバーのチャンネルを設定できません。先にそのパソコンの Cindy を最新版に更新してください。"
+        },
+        "permission": {
+          "cannotSend": "Bot はこのチャンネルを表示または発言できません",
+          "limited": "不足している権限: {{list}}",
+          "separator": "、",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "利用できないサーバーまたはチャンネル",
+          "hint": "削除されたか、Bot がそのサーバーにいません。一覧から削除できます。",
+          "remove": "削除"
+        },
+        "ownerOnlyCardNotice": "このボタンを使えるのは Bot のオーナーだけです。",
+        "guild": {
+          "summary": {
+            "off": "オフ",
+            "all": "すべてのチャンネル",
+            "selected": "{{count}} チャンネルを選択中",
+            "none": "チャンネル未選択"
+          },
+          "toggleAria": "{{guild}} を有効にする",
+          "more": "詳細",
+          "modeAria": "{{guild}} の対象チャンネル",
+          "mode": {
+            "all": "すべてのチャンネル",
+            "selected": "指定したチャンネルのみ"
+          },
+          "allHint": "あとから追加されたテキストチャンネルも含みます。Bot が表示と発言をできるチャンネルでのみ応答します。"
+        }
+      },
       "ownerNotice": {
         "linked": "✅ 連携できました。準備できたらそのまま話しかけてください。",
         "disconnected": "🔌 連携を解除しました。必要になったらまたつないでください。",
@@ -4770,11 +4823,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "P1 の DM 機能では Privileged Intent を有効にする必要はありません。"
+          "body": "Privileged Intent は不要です（Message Content はオフのままにします）。サーバーでは、Bot は @ メンションされたメッセージだけを受け取ります。"
         },
         "step3": {
           "title": "Bot を招待",
-          "body": "OAuth2 URL Generator で scope bot を選択し、Send Messages、Read Message History、Attach Files 権限を付与します。自分が参加している任意の server に Bot を招待してください。DM には自分と Bot が同じ server にいる必要があります。"
+          "body": "OAuth2 URL Generator で scope bot を選択し、View Channels、Send Messages、Send Messages in Threads、Embed Links、Attach Files、Read Message History、Add Reactions 権限を付与します。自分が参加している任意の server に Bot を招待してください。DM には自分と Bot が同じ server にいる必要があります。"
         },
         "step4": {
           "title": "ユーザー ID をコピー",
@@ -10189,70 +10242,20 @@
     },
     "glance": {
       "open": "{{name}}の近況",
-      "dueUnseen": "期限が来た Todo があります",
       "computers": "コンピュータ",
       "runningHere": "このコンピュータで実行中",
       "online": "オンライン",
       "offline": "オフライン",
       "current": "現在",
       "offlineCount_other": "オフライン {{count}} 台",
-      "todos": "Todo",
       "showMore": "さらに表示",
       "showLess": "閉じる",
       "doneCount_other": "完了 {{count}}",
-      "delete": "削除",
-      "deleted": "削除しました。同じ件は今後記録しません",
-      "undo": "元に戻す",
-      "undoFailed": "元に戻せませんでした。もう一度お試しください",
-      "deleteFailed": "削除できませんでした。もう一度お試しください",
-      "check": "確認して",
-      "checkMeta": "接続済みのメールやメッセージから新しい Todo を探します",
-      "checkPrompt": "接続済みのメールやメッセージなどに、私が対応すべき新しい用件がないか確認して、あれば Todo に追加して。",
-      "checkFailed": "送信できませんでした。もう一度お試しください",
-      "dailyCheck": "毎日確認する",
-      "dailyCheckMeta": "平日 9:00、新しい Todo がなければ通知しません",
       "recentTasks": "最近のセッション",
       "unread": "未読の結果",
-      "stopDailyCheck": "毎日の確認を停止",
-      "loadFailed": "To-do を読み込めませんでした。再試行してください。",
-      "dailyCheckFailed": "保存できませんでした。もう一度お試しください",
       "outputs": "成果物",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "ファイルを開けませんでした",
-      "source": {
-        "conversation": "あなたの依頼",
-        "mail": "メールから",
-        "feishu": "Feishu から",
-        "github": "GitHub から",
-        "community": "コミュニティから",
-        "task": "タスクから"
-      }
-    },
-    "autonomy": {
-      "title": "自分のセッションをフォロー",
-      "descriptionOn": "{{name}}がセッションの変化に応じて要約を確認し、お知らせします。",
-      "movedFrom": "{{name}}からここに移しました",
-      "heldBy": "現在は{{name}}が担当しています。オンにするとここに移ります。",
-      "routineScopeHint": "あなたが作成したセッションも担当します。下の標準フォローが、担当セッションの変化に対応します。",
-      "heldByNobody": "未設定",
-      "restoreDefault": "デフォルトに戻す（{{name}}）",
-      "saveFailed": "保存できませんでした。もう一度お試しください",
-      "turnOff": {
-        "title": "すべてのセッションの自動フォローをオフにしますか？",
-        "description": "オフにすると、すべてのセッションをまとめてフォローする仲間がいなくなります。",
-        "confirm": "オフにする",
-        "cancel": "キャンセル"
-      },
-      "allowSchedulerFollow": {
-        "title": "始めたセッションも{{name}}にフォローしてもらう",
-        "description": "既定では{{scheduler}}は見るだけでフォローしません。オンにすると、{{name}}が始めたセッションが終わっていないとき、{{scheduler}}もフォローします。"
-      },
-      "consent": "有効にすると、このコンピューターであなたが作成したセッションの要約を読み、進捗を確認して重要な変化をお知らせします。モデルの利用枠を消費します。いつでも無効にできます。",
-      "invitation": {
-        "title": "セッションのフォローを始めましょうか？",
-        "start": "フォローを開始",
-        "notNow": "今はしない"
-      }
+      "openFailed": "ファイルを開けませんでした"
     },
     "remoteSettings": {
       "empty": "まだ項目がありません。",
@@ -10274,9 +10277,6 @@
     },
     "creationName": "名前",
     "settingsBack": "設定に戻る",
-    "sidebar": {
-      "newTaskWith": "{{name}}と新しいタスクを始める"
-    },
     "title": "仲間",
     "add": "仲間を追加",
     "createWizard": {
@@ -10287,7 +10287,22 @@
       "description": "仲間は記憶と身につけた手順を自分で管理します。修正が必要なときだけフォルダを直接開いてください。",
       "contents": "SOUL.md、USER.md、system_prompt.md、skills/、memories/ が入っています。モデル、権限、接続は Cindy が管理します。",
       "open": "フォルダを開く",
-      "openFailed": "仲間のフォルダを開けませんでした。"
+      "openFailed": "仲間のフォルダを開けませんでした。",
+      "projectMode": {
+        "memoryReviewName": "{{name}} · 記憶を整理",
+        "carryover": {
+          "title": "アップグレード前の未完了事項",
+          "intro": "このチームメイトをアップグレードした時点で未完了だった事項です。必要なものは続け、不要なものは削除してください。旧版の記録はチームメイトのフォルダ内の v1-archive に残っています。",
+          "todos": "未完了のToDo",
+          "work": "ワークベンチ",
+          "threads": "進行中",
+          "commitments": "約束したこと",
+          "waiting": "待っていること",
+          "corrections": "あなたが訂正したこと",
+          "routines": "確認が必要な定期タスク",
+          "upgrade": "自動では引き継げなかったもの"
+        }
+      }
     },
     "profile": {
       "title": "プロフィール",
@@ -10346,9 +10361,6 @@
     "model": {
       "description": "このパートナーが使用するモデルを選びます。",
       "primary": "メインモデル",
-      "task": "セッション用モデル",
-      "inheritPrimary": "メインモデルを継承",
-      "inheritingPrimary": "新しいバックグラウンドセッションはメインモデルを継承します",
       "restoreDefault": "デフォルトのモデルに戻す"
     },
     "modelChain": {
@@ -10476,11 +10488,10 @@
       "showReplyTargetHint": "チームメイトの返信の上に、どのメッセージへの返信かを表示します。以前の返信には表示されません。"
     },
     "session": {
-      "ownedByBot": "{{name}} のバックグラウンドタスク",
+      "ownedByBot": "{{name}} が開いたタスク",
       "backToBot": "{{name}} に戻る"
     },
     "collab": {
-      "deliveryFailed": "元のチャットに結果を送信できませんでした。結果はこのセッションに保存されています。",
       "backgroundTask": "バックグラウンドタスク",
       "trackedTask": "独立して実行し、結果を自動で返します",
       "stopTask": "タスクを停止",
@@ -10497,8 +10508,6 @@
       "actionFailed": "送信できませんでした。もう一度お試しください。",
       "retrying": "まだ開始できていません。再試行中…",
       "status": {
-        "queued": "開始しています",
-        "waiting": "対応待ち",
         "running": "作業中",
         "completed": "完了",
         "failed": "失敗",
@@ -10514,13 +10523,6 @@
       },
       "viewResult": "結果を見る",
       "noWrittenResult": "テキストの結果はありません。",
-      "addNote": "ひとこと追加",
-      "addNotePlaceholder": "バックグラウンドタスクに伝える内容（Enter で送信）",
-      "addNoteSent": "バックグラウンドタスクに送信しました",
-      "stop": "停止",
-      "lookAt": "確認する",
-      "awaitingConfirm": "あなたの確認待ち：{{summary}}",
-      "awaitingConfirmGeneric": "あなたの確認待ち",
       "elapsed": "経過 {{duration}}",
       "tookTime": "所要 {{duration}}",
       "expandResult": "結果を表示",
@@ -10904,7 +10906,6 @@
         "planning": "役割分担を考えています…"
       },
       "task": {
-        "label": "タスク",
         "state": {
           "started": "進行中",
           "waiting": "確認待ち",
@@ -11260,30 +11261,6 @@
           }
         }
       },
-      "system": {
-        "group": "システムスキル",
-        "meta": "{{total}} 件中 {{on}} 件オン",
-        "pageMeta": "システムスキル · Cindy と一緒に更新",
-        "use": "このチームメイトでオンにする",
-        "whenOff": "オフにすると",
-        "items": {
-          "todo": {
-            "name": "ToDo",
-            "hint": "頼まれたことや気づいたことを記録し、期限に知らせます。",
-            "off": "ToDo の記録、整理、通知をやめます。既存の ToDo は残り、オンに戻すと再開します。"
-          },
-          "routine": {
-            "name": "ルーティン",
-            "hint": "定期的に実行するルーティンを作成・管理します。",
-            "off": "ルーティンの作成や変更をやめます。既存のルーティンはそのまま動き、「ルーティン」ページで管理できます。"
-          },
-          "follow": {
-            "name": "ワークベンチとフォロー",
-            "hint": "あなたのすべてのタスクの近況を見守り、任されたタスクをフォローします。",
-            "off": "自分からタスクを確認・フォローしなくなります。チャットで直接聞くことはできます。"
-          }
-        }
-      },
       "learned": {
         "group": "覚えたスキル",
         "empty": "まだ覚えたスキルはありません。夜間学習が繰り返し使うやり方をスキルにまとめます。チャットで覚えるよう頼むこともできます。",
@@ -11320,10 +11297,6 @@
       "turnOn": "オンにする",
       "permissions": "権限",
       "officialInherited": "Cindy 公式 · このコンピューターの設定に従う"
-    },
-    "systemSkills": {
-      "followOffHint": "{{name}} のシステムスキル「ワークベンチとフォロー」はオフです。機能ページでオンに戻すと使えます。",
-      "offHint": "システムスキル「{{skill}}」はオフです。機能ページでオンに戻すと実行されます。"
     },
     "guided": {
       "title": "パートナーを作成",
@@ -11470,6 +11443,10 @@
       "resumeToMove": "{{name}} を再開してから別のパソコンに移動してください",
       "transferBusy": "{{name}} はまだ返信中です。返信が終わってから移動してください",
       "targetUnavailable": "「{{device}}」は今は使えません。オンラインでリモート操作がオンになっている必要があります",
+      "targetOutdated": "「{{device}}」の Cindy は古いバージョンのため、まだ「{{name}}」を動かせません。先にそのパソコンで Cindy を更新してください",
+      "targetOutdatedItem": "「{{device}}」に移す · 旧バージョンの Cindy",
+      "targetOutdatedMeta": "旧バージョンの Cindy",
+      "olderTargetNote": "「{{device}}」の Cindy は旧バージョンのため、{{name}} はそこで従来どおりに動きます。チャット履歴は同期されますが、プロジェクトのルールと自動化はそこでは適用されません。",
       "shadowTitle": "この仲間は「{{device}}」で動作しています",
       "shadowHint": "ここの会話は閲覧のみできます。",
       "openOnHome": "「{{device}}」で開く",
@@ -11497,7 +11474,7 @@
       "mergeLabel": "重複した Cindy を統合",
       "mergeHint": "Cindy が {{count}} 人います：{{devices}}",
       "mergeTitle": "{{count}} 人の Cindy を1人に統合しますか？",
-      "mergeDescription": "統合後は Cindy が1人だけ残ります。ほかの Cindy のチャット履歴、記憶、スキル、ToDo、ルーティンが引き継がれます。同じ名前で内容が違う記憶とスキルは別に保存され、上書きされません。ほかの Cindy はオフになり、データはクラウドと元のパソコンに残ります。",
+      "mergeDescription": "統合後は Cindy が1人だけ残ります。ほかの Cindy のチャット履歴、記憶、スキル、ルーティンが引き継がれます。同じ名前で内容が違う記憶とスキルは別に保存され、上書きされません。ほかの Cindy はオフになり、データはクラウドと元のパソコンに残ります。",
       "mergeKeep": "名前、性格、設定を残す Cindy",
       "mergeAction": "統合",
       "merged": "{{count}} 人の Cindy を1人に統合し、{{messages}} 件のメッセージを引き継ぎました",
@@ -11881,6 +11858,15 @@
       "unavailable": "ディレクトリを利用できません",
       "failed": "プロジェクトを更新できませんでした。再読み込みして保存状態を確認してください。",
       "noAvailable": "他のプロジェクトは、先にプロジェクト一覧に追加してください。"
+    },
+    "automations": {
+      "title": "自動化",
+      "description": "{{name}} のプロジェクトの自動化です。ここでオン／オフを切り替え、編集は自動化ページで行います。",
+      "empty": "{{name}} にはまだ自動化がありません。",
+      "failed": "自動化を読み込めませんでした。",
+      "toggle": "「{{name}}」をオンにする",
+      "manage": "自動化ページで管理",
+      "create": "自動化ページで作成"
     }
   },
   "common": {
@@ -13306,8 +13292,10 @@
     },
     "backgroundActivity": {
       "status": "バックグラウンドのサブタスクが実行中、モデル使用量を消費しています…",
-      "bashStatus_one": "バックグラウンドタスク実行中（{{count}} 件）…",
-      "bashStatus_other": "バックグラウンドタスク実行中（{{count}} 件）…",
+      "bashWorkStatus_one": "バックグラウンドで作業中（コマンド {{count}} 件）…",
+      "bashServiceStatus_one": "バックグラウンドサービス実行中（{{count}} 件）",
+      "bashWorkStatus_other": "バックグラウンドで作業中（コマンド {{count}} 件）…",
+      "bashServiceStatus_other": "バックグラウンドサービス実行中（{{count}} 件）",
       "stopAll": "すべて停止",
       "stopAllTitle": "このセッションのバックグラウンドプロセスを終了し、すべてのサブタスクを停止します（セッションは引き続き使用できます）",
       "stopBashTitle": "このセッションで実行中のバックグラウンドタスクを停止します（セッションのプロセスは終了しません）",
@@ -14199,6 +14187,19 @@
       "closeDescription": "このサイドチャットを停止して削除します。メインタスクには影響しません。",
       "closeConfirm": "閉じて削除",
       "closeFailed": "削除できませんでした。もう一度お試しください。"
+    },
+    "botStartedTasks": {
+      "started": "開始したタスク",
+      "handedTo": "引き継いだタスク",
+      "open": "タスク「{{title}}」を開く",
+      "untitled": "名称未設定のタスク",
+      "startedOne": "開始したタスク",
+      "handedToOne": "引き継ぎ先"
+    },
+    "botTaskLetter": {
+      "replied": "からの返信",
+      "toggle": "「{{title}}」からの返信を開閉",
+      "openTask": "タスクを開く"
     }
   },
   "ccAgent": {
@@ -15397,7 +15398,8 @@
         "openConfigAria": "プロジェクト自動化設定を開く",
         "openConfigFailed": "ファイルを開けませんでした",
         "reload": "再読み込み",
-        "reloadAria": "プロジェクト自動化を再読み込み"
+        "reloadAria": "プロジェクト自動化を再読み込み",
+        "teammate": "{{name}} · 仲間"
       },
       "promote": {
         "menu": "プロジェクト自動化に昇格",
@@ -18114,168 +18116,10 @@
     "compression": "長い内容を短くまとめるために。"
   },
   "routines": {
-    "deliveryLabel": "結果の送信先",
-    "deliveryDirect": "パートナーのチャットに直接表示",
-    "deliveryProcess": "パートナーが処理して返信",
-    "deliveryIm": "メッセージボットで送信",
-    "deliveryNone": "実行タスクにのみ保存",
-    "deliveryHint": "直接表示では追加のモデル呼び出しは行いません。静かなチェックでは、変化がない場合は送信しません。",
-    "deliveryRecipient": "送信先",
-    "deliveryUnavailable": "送信先を利用できません",
-    "deliveryNoRecipients": "メッセージボットを接続して一度チャットした後、この設定を開き直してください。",
-    "deliveryFailed": "実行完了・送信失敗",
-    "deliveryFailedHint": "結果は保存されています。送信設定を確認してください。再送のために処理を再実行しないでください。",
-    "deliveryDelivered": "結果を送信しました",
-    "onEvent": "イベント：{{source}} · {{event}}",
-    "triggerDetails": "実行条件を表示（{{count}} 件・いずれかで実行）",
-    "noTriggers": "実行条件は未設定",
-    "unsavedTitle": "未保存の変更があります",
-    "unsavedDescription": "戻ると、このルーチンへの変更が破棄されます。",
-    "discard": "変更を破棄",
-    "continueEditing": "編集を続ける",
-    "title": "ルーティン",
-    "add": "ルーティンを追加",
-    "back": "ルーティンに戻る",
-    "error": "ルーティンを更新できませんでした。設定を確認して再試行してください。",
-    "empty": "ルーティンを追加して、実行する内容とタイミングを指定します。",
-    "enabled": "有効",
-    "paused": "一時停止中",
-    "runNow": "今すぐ実行",
-    "running": "実行中…",
-    "name": "名前",
-    "instructions": "指示",
-    "when": "実行タイミング",
-    "addTrigger": "トリガーを追加",
-    "removeTrigger": "トリガーを削除",
-    "schedule": "スケジュール",
     "hourly": "毎時",
-    "daily": "毎日",
-    "weekdays": "平日",
-    "weekly": "毎週",
-    "monthly": "毎月",
-    "interval": "間隔",
-    "advanced": "詳細設定…",
     "everyMinutes": "{{count}} 分ごと",
-    "minutes": "分",
-    "expression": "Cron 式",
-    "timezone": "タイムゾーン",
-    "delete": "ルーティンを削除",
-    "save": "ルーティンを保存",
-    "saved": "ルーティンを保存しました",
-    "deleteConfirm": "このルーティンを削除し、待機中の実行をキャンセルしますか？",
-    "keep": "ルーティンを残す",
-    "openTask": "セッションを開く",
-    "history": "実行履歴",
-    "noRuns": "このルーティンはまだ実行されていません。",
-    "field": "フィールド",
-    "operator": "条件",
-    "value": "値",
-    "addFilter": "条件を追加",
-    "removeFilter": "条件を削除",
     "pluginCapability": "宣言されたイベントを発行し、設定済みのルーティンのみを実行します。",
-    "time": "時刻",
-    "day": "日",
-    "weekday": "曜日",
-    "status": {
-      "queued": "待機中",
-      "running": "実行中",
-      "success": "完了",
-      "failed": "失敗",
-      "interrupted": "中断",
-      "cancelled": "キャンセル済み",
-      "skipped": "確認済み · モデル起動なし"
-    },
-    "sourceStatus": {
-      "listening": "受信中",
-      "disconnected": "未接続",
-      "error": "接続元を確認してください"
-    },
-    "operators": {
-      "equals": "一致",
-      "contains": "含む",
-      "not-equals": "一致しない"
-    },
-    "quiet": "確認で変化がなければ通知しない",
-    "sessionMode": "実行セッション",
-    "sessionModePersistent": "永続セッション（文脈を保持）",
-    "sessionModeFresh": "トリガーごとに新規作成（文脈を分離）",
-    "sessionModeHint": "永続セッションは同じルーティン会話を続けます。新規作成ではトリガーごとに独立した会話を作成して閉じます。",
-    "quietHint": "変化や問題のみ報告します。リマインダーや定時送信ではオフにできます。",
-    "checkSource": "チェック方法",
-    "checkCommand": "事前確認コマンド",
-    "checkHint": "任意。コンピューターで先に確認します。終了コード 2 は今回の実行をスキップし、0 は続行します。エラーは報告されます。空欄で解除します。",
-    "timeoutMs": "確認のタイムアウト（ミリ秒、空欄は無制限）",
-    "advancedSettings": "詳細設定",
-    "builtinFollowUp": {
-      "name": "担当セッションのフォロー（標準）",
-      "hint": "担当セッションの停滞、返答待ち、エラー、利用上限、完了を受けてフォローします。"
-    },
-    "todoCheck": {
-      "name": "毎日の Todo 確認"
-    },
-    "builtinNightlyLearning": {
-      "name": "夜間の学習（組み込み）",
-      "title": "夜間の学習",
-      "hint": "毎日 3:30 にあなたとの会話を振り返り、メモリを整理し、繰り返し使うやり方をスキルにまとめます。新しい会話がなければ、モデルを呼び出さずにスキップします。",
-      "hintWeekly": "毎週月曜 3:30 にその週の会話を振り返り、メモリを整理し、繰り返し使うやり方をスキルにまとめます。新しい会話がなければ、モデルを呼び出さずにスキップします。"
-    },
-    "nightly": {
-      "switchLabel": "予定の時刻に自動で整理",
-      "paused": "一時停止中です。会話は引き続き数え、オンにすると予定の時刻から整理します。",
-      "running": "整理中…",
-      "memoryOff": "メモリがオフのため、スキルだけを整理します。",
-      "pending": "未整理",
-      "pendingTurns_one": "{{count}} 回のやり取り",
-      "pendingTurns_other": "{{count}} 回のやり取り",
-      "pendingNone": "新しい会話はありません。次回はスキップします",
-      "last": "前回",
-      "lastNever": "まだ整理していません",
-      "lastFailed": "完了しませんでした。次回もう一度試します",
-      "lastLearned_one": "{{count}} 件を整理",
-      "lastLearned_other": "{{count}} 件を整理",
-      "nothing": "整理するものはありませんでした",
-      "viewHistory": "履歴を見る",
-      "notHere": "夜間の学習は仲間のメインのパソコンでのみ実行されます。",
-      "switchHint": "新しい会話がなければ、モデルを呼び出さずにスキップします",
-      "frequency": "頻度",
-      "daily": "毎日",
-      "weekly": "毎週",
-      "dailyHint": "毎日 3:30",
-      "weeklyHint": "毎週月曜 3:30",
-      "runNow": "今すぐ整理",
-      "history": "履歴",
-      "empty": "まだ整理していません。新しい会話があれば、予定の時刻に最初の整理を行います。",
-      "manual": "手動で整理",
-      "readTurns_one": "{{count}} 回のやり取りを確認",
-      "readTurns_other": "{{count}} 回のやり取りを確認",
-      "undone": "元に戻しました",
-      "undo": "元に戻す",
-      "redo": "復元",
-      "watching": "様子見中のやり方",
-      "watchingHint": "一度しか出てきていないやり方はここで待機し、読み込まれません。同じようなことがもう一度あればスキルにまとめます。",
-      "promote": "今すぐスキルにする",
-      "decline": "学ばない",
-      "changedSince": "この項目はその後変更されたため、元に戻せません",
-      "failed": "完了できませんでした。もう一度お試しください",
-      "item": {
-        "memoryCreated": "「{{title}}」を記憶",
-        "memoryUpdated": "メモリ「{{title}}」を整理",
-        "memoryDeleted": "メモリ「{{title}}」を削除",
-        "memoryMerged": "メモリ「{{title}}」を「{{into}}」に統合",
-        "skillCreated": "スキル「{{title}}」を習得",
-        "skillUpdated": "スキル「{{title}}」を更新",
-        "skillDisabled": "スキル「{{title}}」をオフに",
-        "skillMerged": "スキル「{{title}}」を「{{into}}」に統合してオフに"
-      }
-    },
-    "remote": {
-      "pause": "ルーティンを一時停止",
-      "resume": "ルーティンを再開",
-      "addSchedule": "スケジュールを追加",
-      "addInterval": "間隔を追加",
-      "addEvent": "イベントトリガーを追加",
-      "filterField": "絞り込みフィールド"
-    }
+    "advancedSettings": "詳細設定"
   },
   "cindyMakeDoctor": {
     "description": "Cindy のビルドに必要なローカル環境を確認します。使い方：/cindy-make-doctor",
@@ -19618,10 +19462,7 @@
     "sourcePresent": "[出典] ホストがユーザーの原文を依頼の背景としてそのまま保持しています。現在の依頼は Agent の補足にあります。",
     "sourceMissing": "[出典] 確認可能なユーザーの原文が見つかりません。",
     "userPrefix": "ユーザーの原文：",
-    "agentPrefix": "Agent の補足：",
-    "taskSource": "[タスクの出典] このタスクはパートナーが開始しました。",
-    "taskId": "タスク ID：",
-    "contextReferences": "参考資料："
+    "agentPrefix": "Agent の補足："
   },
   "sharing": {
     "loginRequired": "ログインして共有",
@@ -19776,6 +19617,10 @@
     "openDirectoryFailed": "アカウントフォルダーを開けませんでした。移動または削除された可能性があります。",
     "loginAgain": "再ログイン",
     "login": "ログイン"
+  },
+  "sessionNotify": {
+    "finished": "このタスクは今回のターンを終えました。最終回答：",
+    "ended": "このタスクの今回のターンは正常に終了しませんでした。最後の出力："
   },
   "crashDiagnosis": {
     "title": "Cindy が予期せず終了しました",

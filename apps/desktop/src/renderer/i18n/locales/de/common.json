@@ -162,12 +162,7 @@
   },
   "taskActionConfirmation": {
     "title": "Sitzungsaktion bestätigen",
-    "once": "Prüfe unten das Ziel, die Aktion und den vollständigen Inhalt. Die Erlaubnis gilt einmalig für diese Aktion.",
-    "remove": "Die Empfangsadresse der Automatisierung wird freigegeben. Prüfe das Ziel; die Zustimmung gilt nur für diese Aktion.",
-    "permission": "Dadurch wird in deinem Namen eine Berechtigungsanfrage in einer anderen Aufgabe beantwortet. Prüfe die Aktion; die Genehmigung gilt nur einmal.",
-    "resume": "Dadurch wird eine pausierte Ausführung fortgesetzt. Prüfe das Ziel; die Genehmigung gilt nur einmal.",
-    "command": "Dadurch wird ein Befehl auf deinem Computer außerhalb der Tool-Genehmigung des Agent gespeichert oder ausgeführt. Prüfe den Befehl und den Arbeitsordner; die Genehmigung gilt nur einmal.",
-    "authority": "Dadurch werden Automatisierungsanweisungen erstellt oder geändert, die bei künftigen Ausführungen als dauerhafte Autorisierung gelten. Prüfe die vollständigen Anweisungen; die Genehmigung gilt für diesen Speichervorgang."
+    "once": "Prüfe unten das Ziel, die Aktion und den vollständigen Inhalt. Die Erlaubnis gilt einmalig für diese Aktion."
   },
   "logSupport": {
     "title": "Protokolle und Feedback",
@@ -4753,7 +4748,7 @@
     },
     "discordBot": {
       "title": "Discord Bot",
-      "description": "Verbinde deinen eigenen Discord-Bot, damit {{appName}} über Discord-Direktnachrichten arbeiten kann.",
+      "description": "Verbinde deinen eigenen Discord-Bot, damit {{appName}} über Discord-DMs und die von dir gewählten Server-Kanäle arbeiten kann.",
       "statusAria": "Discord-Bot-Status: {{status}}",
       "status": {
         "needsConfig": "Konfiguration erforderlich",
@@ -4797,6 +4792,64 @@
         "cellLabel": "Nachrichtenbenachrichtigungen",
         "hint": "Den Discord-Bot eine Nachricht senden lassen, wenn dieses Gerät online oder offline geht"
       },
+      "channels": {
+        "title": "Server-Kanäle",
+        "summary": {
+          "unknown": "Wird geprüft…",
+          "off": "Aus",
+          "on": "Aktivierte Server: {{count}}"
+        },
+        "hint": "Standardmäßig ist nichts freigegeben. Aktiviere einen Server und erwähne den Bot in dessen Textkanälen mit @, um ihn aufzurufen. Jeder Kanal und jeder Thread hat seinen eigenen, getrennten Kontext, und der Bot erhält nur Nachrichten, die ihn mit @ erwähnen.",
+        "ownerOnly": "Derzeit kannst nur du ihn aufrufen.",
+        "offline": "Der Bot ist nicht verbunden. Verbinde ihn, um Kanäle auszuwählen; bereits aktivierte Kanäle bleiben aktiv.",
+        "members": {
+          "label": "Kanalmitglieder erlauben",
+          "notice": "Kanalmitglieder sind standardmäßig ausgeschaltet. Wenn du sie erlaubst, nutzen Mitglieder, die den Bot mit @ erwähnen, die Tools, die {{name}} bereits hat, und teilen sich den Speicher von {{name}}. Die Berechtigungen folgen der Berechtigungseinstellung von {{name}}, und Befehle bleiben nur dir vorbehalten.",
+          "aria": "Mitglieder von #{{channel}} erlauben",
+          "guildAria": "Mitglieder von {{guild}} erlauben"
+        },
+        "loading": "Server, auf denen dein Bot ist, werden gelesen…",
+        "refresh": "Aktualisieren",
+        "empty": "Der Bot ist noch auf keinem Server. Lade ihn über das Discord Developer Portal ein und aktualisiere dann.",
+        "noTextChannels": "Keine Textkanäle",
+        "toggleAria": "#{{channel}} auf {{guild}} aktivieren",
+        "error": {
+          "load": "Deine Server konnten nicht geladen werden.",
+          "save": "Die Änderung konnte nicht gespeichert werden. Angezeigt wird der aktuell gespeicherte Stand.",
+          "unsupported": "Auf diesem Computer läuft eine ältere Cindy-Version, die Server-Kanäle von hier aus nicht verwalten kann. Aktualisiere zuerst Cindy auf diesem Computer."
+        },
+        "permission": {
+          "cannotSend": "Der Bot kann diesen Kanal weder sehen noch dort Nachrichten senden",
+          "limited": "Fehlende Berechtigungen: {{list}}",
+          "separator": ", ",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "Nicht verfügbare Server oder Kanäle",
+          "hint": "Sie wurden gelöscht, oder der Bot ist nicht mehr auf dem Server. Du kannst sie aus der Liste entfernen.",
+          "remove": "Entfernen"
+        },
+        "ownerOnlyCardNotice": "Nur der Besitzer dieses Bots kann diese Schaltfläche verwenden.",
+        "guild": {
+          "summary": {
+            "off": "Aus",
+            "all": "Alle Kanäle",
+            "selected": "{{count}} Kanäle ausgewählt",
+            "none": "Keine Kanäle ausgewählt"
+          },
+          "toggleAria": "{{guild}} aktivieren",
+          "more": "Mehr",
+          "modeAria": "Abgedeckte Kanäle in {{guild}}",
+          "mode": {
+            "all": "Alle Kanäle",
+            "selected": "Nur ausgewählte Kanäle"
+          },
+          "allHint": "Schließt später hinzugefügte Textkanäle ein. Der Bot antwortet nur in Kanälen, in denen er Nachrichten sehen und senden kann."
+        }
+      },
       "ownerNotice": {
         "linked": "✅ Alles verknüpft. Sende einfach eine Nachricht, wenn du bereit bist.",
         "disconnected": "🔌 Verknüpfung aufgehoben. Verknüpfe mich wieder, wenn du mich brauchst.",
@@ -4813,11 +4866,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "P1-Direktnachrichten erfordern keinen Privileged Intent."
+          "body": "Es wird kein Privileged Intent benötigt (Message Content bleibt aus). Auf Servern erhält der Bot nur Nachrichten, die ihn mit @ erwähnen."
         },
         "step3": {
           "title": "Bot einladen",
-          "body": "Wähle im OAuth2 URL Generator den Scope „bot“ aus und gewähre „Send Messages“, „Read Message History“ und „Attach Files“. Lade den Bot auf einen Server ein, auf dem du Mitglied bist. Für Direktnachrichten müsst ihr einen gemeinsamen Server haben."
+          "body": "Wähle im OAuth2 URL Generator den Scope bot und erteile View Channels, Send Messages, Send Messages in Threads, Embed Links, Attach Files, Read Message History und Add Reactions. Lade den Bot auf einen beliebigen Server ein, auf dem du bist; für DMs müssen du und der Bot einen gemeinsamen Server haben."
         },
         "step4": {
           "title": "Eigene Nutzer-ID kopieren",
@@ -10232,7 +10285,6 @@
     },
     "glance": {
       "open": "{{name}} auf einen Blick",
-      "dueUnseen": "Ein To-do ist fällig",
       "computers": "Computer",
       "runningHere": "Läuft hier",
       "online": "Online",
@@ -10240,64 +10292,15 @@
       "current": "Aktuell",
       "offlineCount_one": "{{count}} offline",
       "offlineCount_other": "{{count}} offline",
-      "todos": "To-dos",
       "showMore": "Mehr anzeigen",
       "showLess": "Weniger anzeigen",
       "doneCount_one": "{{count}} erledigt",
       "doneCount_other": "{{count}} erledigt",
-      "delete": "Löschen",
-      "deleted": "Gelöscht. Wird nicht erneut hinzugefügt.",
-      "undo": "Rückgängig",
-      "undoFailed": "Rückgängig machen fehlgeschlagen. Versuche es erneut.",
-      "deleteFailed": "Löschen fehlgeschlagen. Versuche es erneut.",
-      "check": "Für mich prüfen",
-      "checkMeta": "In verbundenen E-Mails und Chats nach neuen To-dos suchen",
-      "checkPrompt": "Prüfe meine verbundenen Quellen wie E-Mails und Nachrichten auf Neues, um das ich mich kümmern muss, und füge es meinen To-dos hinzu.",
-      "checkFailed": "Senden fehlgeschlagen. Versuche es erneut.",
-      "dailyCheck": "Täglich prüfen",
-      "dailyCheckMeta": "Werktags um 9:00, keine Meldung ohne Neuigkeiten",
       "recentTasks": "Letzte Aufgaben",
       "unread": "Ungelesenes Ergebnis",
-      "stopDailyCheck": "Tägliche Prüfung beenden",
-      "loadFailed": "To-dos konnten nicht geladen werden. Versuche es erneut.",
-      "dailyCheckFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
       "outputs": "Ergebnisse",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "Datei konnte nicht geöffnet werden",
-      "source": {
-        "conversation": "Deine Anfrage",
-        "mail": "Aus E-Mails",
-        "feishu": "Aus Feishu",
-        "github": "Aus GitHub",
-        "community": "Aus der Community",
-        "task": "Aus einer Aufgabe"
-      }
-    },
-    "autonomy": {
-      "title": "Meine Sitzungen weiterverfolgen",
-      "descriptionOn": "{{name}} prüft Zusammenfassungen, wenn sich Sitzungen ändern, und hält dich auf dem Laufenden.",
-      "movedFrom": "Von {{name}} hierher verschoben",
-      "heldBy": "{{name}} übernimmt das jetzt. Aktiviere es, um es hierher zu verschieben.",
-      "routineScopeHint": "Auch Sitzungen einbeziehen, die du selbst erstellst. Die integrierte Nachverfolgung unten reagiert auf Änderungen an zugewiesenen Sitzungen.",
-      "heldByNobody": "Nicht aktiviert",
-      "restoreDefault": "Standard wiederherstellen ({{name}})",
-      "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
-      "turnOff": {
-        "title": "Nachverfolgung aller Sitzungen beenden?",
-        "description": "Wenn du dies ausschaltest, verfolgt kein Teammitglied mehr alle Sitzungen.",
-        "confirm": "Ausschalten",
-        "cancel": "Abbrechen"
-      },
-      "allowSchedulerFollow": {
-        "title": "{{name}} eigene gestartete Sitzungen weiterverfolgen lassen",
-        "description": "Standardmäßig beobachtet {{scheduler}} nur. Wenn dies aktiviert ist und eine von {{name}} gestartete Sitzung noch nicht abgeschlossen ist, verfolgt {{scheduler}} sie ebenfalls weiter."
-      },
-      "consent": "Nach der Aktivierung lese ich Zusammenfassungen der Sitzungen, die du auf diesem Computer erstellst, bewerte den Fortschritt und informiere dich über wichtige Änderungen. Das verbraucht dein Modellkontingent. Du kannst es jederzeit deaktivieren.",
-      "invitation": {
-        "title": "Soll ich deine Sitzungen weiterverfolgen?",
-        "start": "Nachverfolgung starten",
-        "notNow": "Nicht jetzt"
-      }
+      "openFailed": "Datei konnte nicht geöffnet werden"
     },
     "remoteSettings": {
       "empty": "Hier ist noch nichts.",
@@ -10319,9 +10322,6 @@
     },
     "creationName": "Name",
     "settingsBack": "Zurück zu den Einstellungen",
-    "sidebar": {
-      "newTaskWith": "Eine Aufgabe mit {{name}} starten"
-    },
     "title": "Teammitglieder",
     "add": "Teammitglied hinzufügen",
     "createWizard": {
@@ -10332,7 +10332,22 @@
       "description": "Das Teammitglied pflegt eigene Erinnerungen und wiederverwendbare Arbeitsweisen. Öffne seinen Ordner nur, wenn etwas korrigiert werden muss.",
       "contents": "Enthält SOUL.md, USER.md, system_prompt.md, skills/ und memories/. Modelle, Berechtigungen und Verbindungen werden weiterhin von Cindy verwaltet.",
       "open": "Ordner öffnen",
-      "openFailed": "Der Ordner des Teammitglieds konnte nicht geöffnet werden."
+      "openFailed": "Der Ordner des Teammitglieds konnte nicht geöffnet werden.",
+      "projectMode": {
+        "memoryReviewName": "{{name}} · Erinnerungen ordnen",
+        "carryover": {
+          "title": "Aus der Zeit vor dem Upgrade übernommen",
+          "intro": "Was beim Upgrade dieses Teammitglieds noch offen war. Mach weiter, was noch wichtig ist, und lösche den Rest. Die vollständigen alten Daten bleiben im Ordner v1-archive des Teammitglieds.",
+          "todos": "Offene Aufgaben",
+          "work": "Werkbank",
+          "threads": "In Arbeit",
+          "commitments": "Zugesagt",
+          "waiting": "Wartet auf",
+          "corrections": "Deine Korrekturen",
+          "routines": "Zu prüfende Routinen",
+          "upgrade": "Nicht automatisch übernommen"
+        }
+      }
     },
     "profile": {
       "title": "Profil",
@@ -10391,9 +10406,6 @@
     "model": {
       "description": "Wähle die Modelle für dieses Teammitglied.",
       "primary": "Primäres Modell",
-      "task": "Aufgabenmodell",
-      "inheritPrimary": "Primäres Modell übernehmen",
-      "inheritingPrimary": "Übernimmt das primäre Modell für neue Hintergrundaufgaben",
       "restoreDefault": "Standardmodell wiederherstellen"
     },
     "modelChain": {
@@ -10521,11 +10533,10 @@
       "showReplyTargetHint": "Zeige über der Antwort eines Teammitglieds, auf welche deiner Nachrichten sie sich bezieht. Bei älteren Antworten wird das nicht angezeigt."
     },
     "session": {
-      "ownedByBot": "Hintergrundaufgabe von {{name}}",
+      "ownedByBot": "Von {{name}} geöffnet",
       "backToBot": "Zurück zu {{name}}"
     },
     "collab": {
-      "deliveryFailed": "Das Ergebnis konnte nicht an den ursprünglichen Chat übermittelt werden. Es ist in dieser Sitzung gespeichert.",
       "backgroundTask": "Hintergrundaufgabe",
       "trackedTask": "Läuft unabhängig und liefert das Ergebnis zurück",
       "stopTask": "Aufgabe stoppen",
@@ -10542,8 +10553,6 @@
       "actionFailed": "Das hat nicht geklappt. Versuch es erneut.",
       "retrying": "Noch nicht gestartet – neuer Versuch…",
       "status": {
-        "queued": "Erste Schritte",
-        "waiting": "Wartet auf Eingabe",
         "running": "In Arbeit",
         "completed": "Fertig",
         "failed": "Fehlgeschlagen",
@@ -10559,13 +10568,6 @@
       },
       "viewResult": "Ergebnis ansehen",
       "noWrittenResult": "Kein schriftliches Ergebnis.",
-      "addNote": "Notiz hinzufügen",
-      "addNotePlaceholder": "Schreib der Hintergrundaufgabe… mit Enter senden",
-      "addNoteSent": "An die Hintergrundaufgabe gesendet",
-      "stop": "Stoppen",
-      "lookAt": "Schau mal rein",
-      "awaitingConfirm": "Wartet auf dich: {{summary}}",
-      "awaitingConfirmGeneric": "Wartet auf dich",
       "elapsed": "Bisher {{duration}}",
       "tookTime": "Dauer: {{duration}}",
       "expandResult": "Ergebnis anzeigen",
@@ -10949,7 +10951,6 @@
         "planning": "Arbeit wird aufgeteilt…"
       },
       "task": {
-        "label": "Aufgabe",
         "state": {
           "started": "In Bearbeitung",
           "waiting": "Warten auf deine Bestätigung",
@@ -11305,30 +11306,6 @@
           }
         }
       },
-      "system": {
-        "group": "System-Skills",
-        "meta": "{{on}} von {{total}} an",
-        "pageMeta": "System-Skill · Wird mit Cindy aktualisiert",
-        "use": "Für diesen Teammate einschalten",
-        "whenOff": "Wenn aus",
-        "items": {
-          "todo": {
-            "name": "To-dos",
-            "hint": "Hält fest, worum du bittest und was ihm auffällt, und erinnert dich rechtzeitig.",
-            "off": "Er erfasst, ordnet und meldet keine To-dos mehr. Bestehende To-dos bleiben erhalten und gehen weiter, sobald du wieder einschaltest."
-          },
-          "routine": {
-            "name": "Routinen",
-            "hint": "Richtet regelmäßig laufende Routinen ein und pflegt sie.",
-            "off": "Er legt keine Routinen mehr an und ändert keine. Bestehende Routinen laufen weiter und bleiben auf der Seite „Routinen“ verwaltbar."
-          },
-          "follow": {
-            "name": "Arbeitsplatz und Nachverfolgung",
-            "hint": "Behält den Stand all deiner Aufgaben im Blick und verfolgt die nach, die du ihm gibst.",
-            "off": "Er prüft und verfolgt deine Aufgaben nicht mehr von sich aus. Im Chat kannst du ihn weiterhin fragen."
-          }
-        }
-      },
       "learned": {
         "group": "Gelernte Skills",
         "empty": "Noch keine gelernten Skills. Das nächtliche Lernen macht aus wiederkehrenden Vorgehensweisen Skills, oder du bittest ihn im Chat, sich eine zu merken.",
@@ -11365,10 +11342,6 @@
       "turnOn": "Einschalten",
       "permissions": "Berechtigungen",
       "officialInherited": "Offiziell von Cindy · Folgt den Einstellungen dieses Computers"
-    },
-    "systemSkills": {
-      "followOffHint": "Der System-Skill „Arbeitsplatz und Nachverfolgung“ von {{name}} ist aus. Schalte ihn unter „Fähigkeiten“ wieder ein, um dies zu nutzen.",
-      "offHint": "Der System-Skill „{{skill}}“ ist aus. Er läuft wieder, sobald du ihn unter „Fähigkeiten“ einschaltest."
     },
     "guided": {
       "title": "Teammitglied erstellen",
@@ -11515,6 +11488,10 @@
       "resumeToMove": "Setze {{name}} fort, bevor du auf einen anderen Computer wechselst",
       "transferBusy": "{{name}} arbeitet noch an einer Antwort. Warte mit dem Wechsel, bis die Antwort fertig ist",
       "targetUnavailable": "„{{device}}“ ist nicht verfügbar. Das Gerät muss online sein und die Fernsteuerung muss aktiviert sein",
+      "targetOutdated": "Auf „{{device}}“ läuft eine ältere Cindy-Version, die {{name}} noch nicht ausführen kann. Aktualisiere Cindy dort zuerst",
+      "targetOutdatedItem": "Auf „{{device}}“ verschieben · ältere Cindy",
+      "targetOutdatedMeta": "Ältere Cindy",
+      "olderTargetNote": "Auf „{{device}}“ läuft eine ältere Cindy-Version, daher arbeitet {{name}} dort wie bisher: Der Chatverlauf wird weiter synchronisiert, Projektregeln und Automatisierungen gelten dort aber nicht.",
       "shadowTitle": "Dieses Teammitglied läuft jetzt auf „{{device}}“",
       "shadowHint": "Das Gespräch hier ist schreibgeschützt.",
       "openOnHome": "Auf „{{device}}“ öffnen",
@@ -11542,7 +11519,7 @@
       "mergeLabel": "Doppelte Cindys zusammenführen",
       "mergeHint": "Du hast {{count}} Cindys: {{devices}}",
       "mergeTitle": "{{count}} Cindys zu einer zusammenführen?",
-      "mergeDescription": "Nur eine Cindy bleibt bestehen. Chatverläufe, Erinnerungen, Skills, To-dos und Routinen der anderen werden übernommen. Erinnerungen oder Skills mit gleichem Namen, aber anderem Inhalt bleiben als zweite Kopie erhalten und werden nie überschrieben. Die anderen Cindys werden deaktiviert; ihre Daten bleiben in der Cloud und auf ihren Computern.",
+      "mergeDescription": "Nur eine Cindy bleibt bestehen. Chatverläufe, Erinnerungen, Skills und Routinen der anderen werden übernommen. Erinnerungen oder Skills mit gleichem Namen, aber anderem Inhalt bleiben als zweite Kopie erhalten und werden nie überschrieben. Die anderen Cindys werden deaktiviert; ihre Daten bleiben in der Cloud und auf ihren Computern.",
       "mergeKeep": "Name, Persönlichkeit und Einstellungen übernehmen von",
       "mergeAction": "Zusammenführen",
       "merged": "{{count}} Cindys zu einer zusammengeführt und {{messages}} Nachrichten übernommen",
@@ -11927,6 +11904,15 @@
       "unavailable": "Verzeichnis nicht verfügbar",
       "failed": "Projekte konnten nicht aktualisiert werden. Lade neu, um den gespeicherten Stand zu prüfen.",
       "noAvailable": "Füge zuerst weitere Projekte aus der Projektliste hinzu."
+    },
+    "automations": {
+      "title": "Automatisierungen",
+      "description": "Automatisierungen im Projekt von {{name}}. Hier ein- oder ausschalten, bearbeiten unter Automatisierungen.",
+      "empty": "{{name}} hat noch keine Automatisierungen.",
+      "failed": "Automatisierungen konnten nicht geladen werden.",
+      "toggle": "„{{name}}“ einschalten",
+      "manage": "Unter Automatisierungen verwalten",
+      "create": "Unter Automatisierungen erstellen"
     }
   },
   "common": {
@@ -13326,8 +13312,10 @@
     },
     "backgroundActivity": {
       "status": "Hintergrund-Unteraufgaben laufen und verbrauchen weiterhin Modellkontingent…",
-      "bashStatus_one": "{{count}} Hintergrundaufgabe läuft…",
-      "bashStatus_other": "{{count}} Hintergrundaufgaben laufen…",
+      "bashWorkStatus_one": "Arbeitet im Hintergrund ({{count}} Befehl)…",
+      "bashServiceStatus_one": "{{count}} Hintergrunddienst läuft",
+      "bashWorkStatus_other": "Arbeitet im Hintergrund ({{count}} Befehle)…",
+      "bashServiceStatus_other": "{{count}} Hintergrunddienste laufen",
       "stopAll": "Alle stoppen",
       "stopAllTitle": "Hintergrundprozess dieser Sitzung beenden und alle Hintergrund-Unteraufgaben stoppen (die Sitzung bleibt nutzbar)",
       "stopBashTitle": "Noch laufende Hintergrundaufgaben dieser Sitzung stoppen (der Sitzungsprozess bleibt erhalten)",
@@ -14265,6 +14253,19 @@
           "plan": "Plan aktualisiert"
         }
       }
+    },
+    "botStartedTasks": {
+      "started": "Gestartete Aufgaben",
+      "handedTo": "Übergebene Aufgaben",
+      "open": "Aufgabe „{{title}}“ öffnen",
+      "untitled": "Unbenannte Aufgabe",
+      "startedOne": "Gestartet",
+      "handedToOne": "Übergeben an"
+    },
+    "botTaskLetter": {
+      "replied": "hat geantwortet",
+      "toggle": "Antwort von „{{title}}“ ein- oder ausblenden",
+      "openTask": "Aufgabe öffnen"
     }
   },
   "ccAgent": {
@@ -15463,7 +15464,8 @@
         "openConfigAria": "Konfiguration der Projektautomatisierung öffnen",
         "openConfigFailed": "Datei konnte nicht geöffnet werden",
         "reload": "Neu laden",
-        "reloadAria": "Projektautomatisierung neu laden"
+        "reloadAria": "Projektautomatisierung neu laden",
+        "teammate": "{{name}} · Teammitglied"
       },
       "promote": {
         "menu": "In Projektautomatisierung umwandeln",
@@ -18182,168 +18184,10 @@
     "compression": "Zum Kürzen langer Inhalte."
   },
   "routines": {
-    "deliveryLabel": "Endgültige Ausgabe",
-    "deliveryDirect": "Direkt im Companion-Chat anzeigen",
-    "deliveryProcess": "Companion um Verarbeitung und Antwort bitten",
-    "deliveryIm": "Über einen Messaging-Bot senden",
-    "deliveryNone": "Nur in der ausführenden Aufgabe behalten",
-    "deliveryHint": "Die direkte Zustellung benötigt keinen zusätzlichen Modellaufruf. Stille Prüfungen unterdrücken weiterhin Ergebnisse ohne Aktivität.",
-    "deliveryRecipient": "Empfänger",
-    "deliveryUnavailable": "Ziel nicht verfügbar",
-    "deliveryNoRecipients": "Verbinde einen Messaging-Bot und chatte mit ihm. Öffne dann diese Einstellungen erneut.",
-    "deliveryFailed": "Abgeschlossen, Zustellung fehlgeschlagen",
-    "deliveryFailedHint": "Das Ergebnis ist gespeichert. Prüfe die Zustellungseinstellungen. Führe die Aufgabe nicht erneut aus, nur um das Ergebnis noch einmal zu senden.",
-    "deliveryDelivered": "Ergebnis zugestellt",
-    "onEvent": "Ereignis: {{source}} · {{event}}",
-    "triggerDetails": "Auslöser anzeigen ({{count}}; jeder kann einen Lauf starten)",
-    "noTriggers": "Keine Auslöser festgelegt",
-    "unsavedTitle": "Ungespeicherte Änderungen",
-    "unsavedDescription": "Wenn du diese Ansicht verlässt, werden die Änderungen an der Routine verworfen.",
-    "discard": "Änderungen verwerfen",
-    "continueEditing": "Weiter bearbeiten",
-    "title": "Routinen",
-    "add": "Routine hinzufügen",
-    "back": "Zurück zu Routinen",
-    "error": "Routinen konnten nicht aktualisiert werden. Prüfe die Einstellungen und versuche es erneut.",
-    "empty": "Füge eine Routine hinzu, um diesem Teammitglied mitzuteilen, was es wann tun soll.",
-    "enabled": "Aktiviert",
-    "paused": "Pausiert",
-    "runNow": "Jetzt ausführen",
-    "running": "Wird ausgeführt…",
-    "name": "Name",
-    "instructions": "Anweisungen",
-    "when": "Ausführungszeitpunkt",
-    "addTrigger": "Auslöser hinzufügen",
-    "removeTrigger": "Auslöser entfernen",
-    "schedule": "Zeitplan",
     "hourly": "Stündlich",
-    "daily": "Täglich",
-    "weekdays": "Wochentage",
-    "weekly": "Wöchentlich",
-    "monthly": "Monatlich",
-    "interval": "Intervall",
-    "advanced": "Erweitert…",
     "everyMinutes": "Alle {{count}} Minuten",
-    "minutes": "Minuten",
-    "expression": "Cron-Ausdruck",
-    "timezone": "Zeitzone",
-    "delete": "Routine löschen",
-    "save": "Routine speichern",
-    "saved": "Routine gespeichert",
-    "deleteConfirm": "Diese Routine löschen und ihre ausstehenden Läufe abbrechen?",
-    "keep": "Routine behalten",
-    "openTask": "Sitzung öffnen",
-    "history": "Ausführungsverlauf",
-    "noRuns": "Diese Routine wurde noch nicht ausgeführt.",
-    "field": "Feld",
-    "operator": "Bedingung",
-    "value": "Wert",
-    "addFilter": "Bedingung hinzufügen",
-    "removeFilter": "Bedingung entfernen",
     "pluginCapability": "Veröffentlicht deklarierte Ereignisse für deine Routinen. Nur von dir konfigurierte Routinen können ausgeführt werden.",
-    "time": "Uhrzeit",
-    "day": "Tag",
-    "weekday": "Wochentag",
-    "status": {
-      "queued": "In der Warteschlange",
-      "running": "Wird ausgeführt",
-      "success": "Abgeschlossen",
-      "failed": "Fehlgeschlagen",
-      "interrupted": "Unterbrochen",
-      "cancelled": "Abgebrochen",
-      "skipped": "Geprüft · Modell übersprungen"
-    },
-    "sourceStatus": {
-      "listening": "Hört zu",
-      "disconnected": "Lauscht nicht",
-      "error": "Quelle erfordert Aufmerksamkeit"
-    },
-    "operators": {
-      "equals": "Ist gleich",
-      "contains": "Enthält",
-      "not-equals": "Ist ungleich"
-    },
-    "quiet": "Keine Meldung, wenn Prüfungen nichts finden",
-    "sessionMode": "Ausführungssitzung",
-    "sessionModePersistent": "Dauerhafte Sitzung (Kontext behalten)",
-    "sessionModeFresh": "Neue Sitzung bei jedem Auslöser (Kontext isolieren)",
-    "sessionModeHint": "Dauerhaft behält eine Unterhaltung für die Routine bei. Eine neue Sitzung erstellt und schließt bei jedem Auslöser eine isolierte Unterhaltung.",
-    "quietHint": "Nur Änderungen oder Probleme melden. Für Erinnerungen und geplante Nachrichten deaktivieren.",
-    "checkSource": "Prüfen mit",
-    "checkCommand": "Prüfbefehl vor der Ausführung",
-    "checkHint": "Optional. Prüft vor jeder Ausführung auf dem Computer: Exit-Code 2 überspringt die Ausführung, Exit-Code 0 setzt sie fort, Fehler bleiben sichtbar. Zum Entfernen leeren.",
-    "timeoutMs": "Zeitlimit für die Prüfung (ms, leer für unbegrenzt)",
-    "advancedSettings": "Erweiterte Einstellungen",
-    "builtinFollowUp": {
-      "name": "Zugewiesene Sitzungen verfolgen (integriert)",
-      "hint": "Verfolge zugewiesene Sitzungen, wenn sie stocken, dich brauchen, fehlschlagen, ein Nutzungslimit erreichen oder fertig sind."
-    },
-    "todoCheck": {
-      "name": "Tägliche To-do-Prüfung"
-    },
-    "builtinNightlyLearning": {
-      "name": "Nächtliches Lernen (integriert)",
-      "title": "Nächtliches Lernen",
-      "hint": "Prüft jede Nacht um 3:30 Uhr deine Unterhaltungen: räumt Erinnerungen auf und speichert wiederkehrende Ansätze als Skills. Wird ohne Modellaufruf übersprungen, wenn es nichts Neues gibt.",
-      "hintWeekly": "Prüft montags um 3:30 Uhr die Unterhaltungen der Woche: räumt Erinnerungen auf und speichert wiederkehrende Ansätze als Skills. Wird ohne Modellaufruf übersprungen, wenn es nichts Neues gibt."
-    },
-    "nightly": {
-      "switchLabel": "Nach Zeitplan prüfen",
-      "paused": "Pausiert. Unterhaltungen werden weiter gezählt; die Prüfungen werden nach Zeitplan fortgesetzt, sobald du es wieder einschaltest.",
-      "running": "Wird geprüft…",
-      "memoryOff": "Erinnerungen sind deaktiviert, daher werden nur Skills geprüft.",
-      "pending": "Zu prüfen",
-      "pendingTurns_one": "{{count}} Austausch",
-      "pendingTurns_other": "{{count}} Austausche",
-      "pendingNone": "Nichts Neues; die nächste Ausführung wird übersprungen",
-      "last": "Letzte Ausführung",
-      "lastNever": "Noch nicht ausgeführt",
-      "lastFailed": "Nicht abgeschlossen; wird beim nächsten Mal erneut versucht",
-      "lastLearned_one": "{{count}} Änderung",
-      "lastLearned_other": "{{count}} Änderungen",
-      "nothing": "Nichts zu ändern",
-      "viewHistory": "Verlauf anzeigen",
-      "notHere": "Nächtliches Lernen läuft nur auf dem Hauptcomputer des Teammitglieds.",
-      "switchHint": "Wird ohne Modellaufruf übersprungen, wenn es nichts Neues gibt",
-      "frequency": "Häufigkeit",
-      "daily": "Täglich",
-      "weekly": "Wöchentlich",
-      "dailyHint": "Täglich um 3:30 Uhr",
-      "weeklyHint": "Montags um 3:30 Uhr",
-      "runNow": "Jetzt prüfen",
-      "history": "Verlauf",
-      "empty": "Noch nichts geprüft. Sobald es neue Unterhaltungen gibt, startet die erste Prüfung nach Zeitplan.",
-      "manual": "Von dir ausgeführt",
-      "readTurns_one": "{{count}} Austausch gelesen",
-      "readTurns_other": "{{count}} Austausche gelesen",
-      "undone": "Rückgängig gemacht",
-      "undo": "Rückgängig",
-      "redo": "Wiederherstellen",
-      "watching": "Beobachtete Ansätze",
-      "watchingHint": "Ansätze, die erst einmal aufgetreten sind, warten hier und werden nicht geladen. Sie werden erst zu Skills, wenn etwas Ähnliches erneut auftritt.",
-      "promote": "Als Skill speichern",
-      "decline": "Nicht lernen",
-      "changedSince": "Dieser Eintrag wurde nachträglich geändert und kann daher nicht rückgängig gemacht werden",
-      "failed": "Konnte nicht abgeschlossen werden. Versuch es erneut.",
-      "item": {
-        "memoryCreated": "„{{title}}“ gemerkt",
-        "memoryUpdated": "Erinnerung „{{title}}“ aufgeräumt",
-        "memoryDeleted": "Erinnerung „{{title}}“ gelöscht",
-        "memoryMerged": "Erinnerung „{{title}}“ mit „{{into}}“ zusammengeführt",
-        "skillCreated": "Skill „{{title}}“ gelernt",
-        "skillUpdated": "Skill „{{title}}“ aktualisiert",
-        "skillDisabled": "Skill „{{title}}“ deaktiviert",
-        "skillMerged": "Skill „{{title}}“ mit „{{into}}“ zusammengeführt und deaktiviert"
-      }
-    },
-    "remote": {
-      "pause": "Routine pausieren",
-      "resume": "Routine fortsetzen",
-      "addSchedule": "Zeitplan hinzufügen",
-      "addInterval": "Intervall hinzufügen",
-      "addEvent": "Ereignisauslöser hinzufügen",
-      "filterField": "Filterfeld"
-    }
+    "advancedSettings": "Erweiterte Einstellungen"
   },
   "cindyMakeDoctor": {
     "description": "Lokale Umgebung zum Bauen von Cindy prüfen. Verwendung: /cindy-make-doctor",
@@ -19690,10 +19534,7 @@
     "sourcePresent": "[Quelle] Der Host hat den ursprünglichen Wortlaut des Nutzers unverändert als Hintergrund der Anfrage beibehalten. Die aktuelle Anfrage steht in der Agent-Ergänzung.",
     "sourceMissing": "[Quelle] Es wurde kein überprüfbarer ursprünglicher Nutzertext gefunden.",
     "userPrefix": "Ursprünglicher Wortlaut des Nutzers:",
-    "agentPrefix": "Agent-Ergänzung:",
-    "taskSource": "[Aufgabenquelle] Ein Teammitglied hat diese Aufgabe gestartet.",
-    "taskId": "Aufgaben-ID:",
-    "contextReferences": "Kontextverweise:"
+    "agentPrefix": "Agent-Ergänzung:"
   },
   "sharing": {
     "loginRequired": "Zum Teilen anmelden",
@@ -19848,6 +19689,10 @@
     "openDirectoryFailed": "Der Kontoordner konnte nicht geöffnet werden. Er wurde möglicherweise verschoben oder gelöscht.",
     "loginAgain": "Erneut anmelden",
     "login": "Anmelden"
+  },
+  "sessionNotify": {
+    "finished": "Diese Aufgabe hat ihren Durchgang abgeschlossen. Ihre endgültige Antwort:",
+    "ended": "Der Durchgang dieser Aufgabe wurde nicht normal beendet. Letzte Ausgabe:"
   },
   "crashDiagnosis": {
     "title": "Cindy wurde unerwartet beendet",

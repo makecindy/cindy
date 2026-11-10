@@ -826,12 +826,6 @@
     "failed": "Não foi possível guardar. Tenta novamente.",
     "restore": "Repor predefinições"
   },
-  "followUp": {
-    "title": "Queres que acompanhe as tuas sessões?",
-    "start": "Iniciar acompanhamento",
-    "notNow": "Agora não",
-    "saveFailed": "Não foi possível guardar. Tente novamente."
-  },
   "providerGroupRebalance": {
     "title": "Continuar em {{label}}?",
     "body": "Para usar a quota de todas as contas de forma equilibrada, envia esta mensagem a partir de {{label}} ({{quota}}). As últimas mensagens e um resumo são transferidos; os detalhes mais antigos podem perder-se.",

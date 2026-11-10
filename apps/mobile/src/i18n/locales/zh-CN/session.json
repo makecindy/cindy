@@ -805,12 +805,6 @@
     "failed": "保存失败，请重试。",
     "restore": "恢复默认"
   },
-  "followUp": {
-    "title": "要我帮你跟进任务吗？",
-    "start": "开始跟进",
-    "notNow": "暂不开启",
-    "saveFailed": "没能保存，请重试"
-  },
   "providerGroupRebalance": {
     "title": "换到 {{label}} 继续？",
     "body": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几轮对话和摘要，更早的细节可能记不全。",
