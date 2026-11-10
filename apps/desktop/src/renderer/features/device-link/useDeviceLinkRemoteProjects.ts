@@ -1261,6 +1261,12 @@ export function useDeviceLinkRemoteProjects(
         return;
       }
       clearConnectingGrace();
+      // 权威作废标记只对**当前这次连接**有效:重连说明 relay 侧动过了,再读一轮 ——
+      // 还是被拒就再等下一次作废事件(它会把标记重新立起来),不再自己按 5–60 秒追问。
+      // 不清的话:作废 → 重连(connecting → online)→ 首次目录读撞上瞬时失败 →
+      // catch 里看到旧标记就 return,恢复节奏被永久压住(always-online 的对端不会再有
+      // 状态事件,目录就一直停在「不可用」上)(Codex review #9360)。
+      directoryInvalidated = false;
       for (const [deviceId, name] of eligible) void subscribeAndBootstrap(deviceId, name);
       reseed();
     });

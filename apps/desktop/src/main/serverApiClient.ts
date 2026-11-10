@@ -100,6 +100,31 @@ interface RawResponse<T> {
   servedBaseUrl: string;
 }
 
+/**
+ * 把这一跳已经拿到的限流期限贴到调用方的中止原因上。
+ *
+ * 期限来自**响应头**:头部到了、正文卡住时,调用方的总期限可能先到(设备目录那一路
+ * 给整条读框了 8 秒总期限,比 rawFetch 的单跳超时更早),此时抛出去的是光秃秃的中止
+ * 原因,不含任何期限 —— 上层只知道「失败了」,不知道服务端让它等多久,只能按自己的
+ * 节奏继续追问,把限流窗口越推越远(Codex review #9360)。所以在重新抛出之前把期限
+ * (以及真正服务了这次响应的线路)补上;中止本身照样成立。
+ */
+function attachAbortMetadata(
+  signal: AbortSignal | undefined,
+  retryAt: number | undefined,
+  servedBaseUrl: string | undefined,
+): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason === null || typeof reason !== 'object') return;
+  try {
+    if (retryAt !== undefined) Object.assign(reason, { retryAt });
+    if (servedBaseUrl !== undefined) Object.assign(reason, { servedBaseUrl });
+  } catch {
+    // 冻结的中止原因带不上元数据:中止本身照样成立,上层退回自己的节奏。
+  }
+}
+
 async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawResponse<T>> {
   opts.signal?.throwIfAborted();
   const baseUrl = typeof opts.baseUrl === 'function' ? opts.baseUrl() : opts.baseUrl;
@@ -144,6 +169,8 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     try {
       data = (await response.json()) as T;
     } catch (error) {
+      // 调用方的总期限在这一跳到期:中止原因里要带着这一跳拿到的限流期限。
+      attachAbortMetadata(opts.signal, responseRetryAt, baseUrl);
       opts.signal?.throwIfAborted();
       // 自己的超时把响应体掐断了:这是**超时**,不是「服务端返回了空体」。
       // 吞掉它会让上层拿到 200 + 空体(EMPTY_RESPONSE),被当成一次权威响应 ——
@@ -157,6 +184,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     }
     return { ok: response.ok, status: response.status, data, retryAt, servedBaseUrl: baseUrl };
   } catch (err) {
+    attachAbortMetadata(opts.signal, responseRetryAt, baseUrl);
     opts.signal?.throwIfAborted();
     if (opts.redactErrorDetails) {
       log.error(

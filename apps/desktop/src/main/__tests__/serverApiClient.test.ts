@@ -194,6 +194,40 @@ describe('serverApiFetch', () => {
     expect((error as ServerApiError).servedBaseUrl).toBe('https://resource.global.example.com');
   });
 
+  // Unit: a 429 whose **headers** arrived but whose body stalls must still hand the
+  // caller its rate-limit deadline when the **caller's** own deadline fires. The
+  // device-link reader arms a signal for the whole read and registers it first, so
+  // rawFetch rethrows the bare abort reason — without the deadline the caller keeps
+  // polling inside the server's window (Codex review #9360).
+  it('keeps the 429 retry deadline when the caller deadline fires while the body stalls', async () => {
+    const now = Date.now();
+    const headers = new Headers({ 'Retry-After': '120' });
+    mocks.netFetch.mockImplementationOnce((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: false,
+      status: 429,
+      headers,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    const controller = new AbortController();
+    const expired = Object.assign(new Error('device directory read deadline'), { name: 'TimeoutError' });
+    const pending = serverApiFetch('/api/device-link/devices', {
+      baseUrl: 'https://api.example.invalid', signal: controller.signal,
+    }).then(() => { throw new Error('the aborted request must not succeed'); }, (error: unknown) => error);
+    await vi.waitFor(() => expect(mocks.netFetch).toHaveBeenCalledTimes(1));
+    controller.abort(expired);
+    const error = await pending;
+    // 中止本身照样是调用方给的那个原因(身份不变),只是上面补了期限与线路。
+    expect(error).toBe(expired);
+    expect(error).toHaveProperty('retryAt', expect.any(Number));
+    expect((error as { retryAt: number }).retryAt).toBeGreaterThanOrEqual(now + 120_000);
+  });
+
   // Unit: exercise the real quota reader through the HTTP client. Previously its
   // mocked client hid recurring warnings for a successful legacy fallback.
   it.each([
