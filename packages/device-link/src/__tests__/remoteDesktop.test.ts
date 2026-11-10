@@ -12,6 +12,15 @@ import {
 } from "../remoteDesktop";
 import { REMOTE_INVOKE_ALLOWLIST, PUSH_FORWARD_ALLOWLIST } from "../allowlist";
 describe("remote desktop wire boundary", () => {
+  it('accepts bounded address-proof leases without accepting arbitrary commands or IDs', () => {
+    for (const action of ['begin', 'end']) {
+      const request = { op: 'systemSharingProbe', action, id: '1'.repeat(32) };
+      expect(parseRemoteDesktopRequest(request)).toEqual(request);
+    }
+    for (const patch of [{ id: '' }, { id: '../x' }, { id: 'f'.repeat(33) }, { action: 'exec' }]) {
+      expect(() => parseRemoteDesktopRequest({ op: 'systemSharingProbe', action: 'begin', id: '1'.repeat(32), ...patch })).toThrow('INVALID_REQUEST');
+    }
+  });
   it.each([
     { op: "start", displayId: "1" },
     { op: "heartbeat", lease: "a" },

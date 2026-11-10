@@ -28,6 +28,7 @@ import { MyDevicesPanel } from './MyDevicesPanel';
 import { RelayServicePanel, useSelfHostedRelayState } from './RelayServicePanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
+import { SystemScreenSharingSetting } from './SystemScreenSharingSetting';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { SETTINGS_SECTION_TITLE_CLASS, SettingsPageHeader } from '@/components/ui/settings-rows';
@@ -294,6 +295,8 @@ export function RemoteControlSection() {
                 focusRequestKey={focusRequestKey}
               />
             </CollapsibleSubSection>
+            {/* 本机作为控制端打开其他 Mac 时的方式,只在 macOS 上出现。 */}
+            <SystemScreenSharingSetting />
             {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}
             <section id={remoteControlSettings.relay.targetId} className="flex flex-col gap-3">
               <div className="flex flex-col gap-0.5">

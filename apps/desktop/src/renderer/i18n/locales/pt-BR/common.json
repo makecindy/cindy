@@ -6569,6 +6569,17 @@
         "title": "Revogar acesso?",
         "description": "Após a revogação, este dispositivo será desconectado imediatamente e não poderá mais controlar esta máquina remotamente. Você precisará restaurar o acesso dele em Configurações → Conexão remota antes que ele possa se reconectar.",
         "confirm": "Revogar acesso"
+      },
+      "systemSharing": {
+        "title": "Usar o Compartilhamento de Tela entre Macs",
+        "description": "Ao abrir a área de trabalho remota de outro Mac a partir deste Mac, usa o app integrado Compartilhamento de Tela para uma imagem mais fluida. O outro Mac precisa ter Ajustes do Sistema → Geral → Compartilhamento → Compartilhamento de Tela ativado, e os dois computadores precisam estar acessíveis por uma rede local ou VPN. Caso contrário, abre a área de trabalho remota do Cindy.",
+        "toggleAria": "Usar o Compartilhamento de Tela entre Macs",
+        "saveFailed": "Não foi possível salvar o ajuste. Tente novamente.",
+        "modeTitle": "Modo de conexão",
+        "modeDescription": "Usado ao conectar a partir deste Mac. Alto desempenho por padrão; Padrão se um dos Macs não oferecer suporte.",
+        "modeHigh": "Alto desempenho",
+        "modeStandard": "Padrão",
+        "limits": "Conexões abertas no Compartilhamento de Tela não usam Tela de privacidade do computador, Bloquear computador ao sair nem Desconectar e bloquear por inatividade. Em Alto desempenho, a tela do outro Mac pode ficar preta. Enquanto houver uma conexão do Compartilhamento de Tela, Desbloquear computador automaticamente pode não funcionar."
       }
     },
     "tina": {

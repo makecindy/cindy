@@ -150,6 +150,13 @@ export interface DesktopControllerDeps {
    */
   authenticationSession?(peer: string): string | null;
   capabilities(): Promise<RemoteDesktopCapabilities>;
+  systemSharingProbe?(
+    peer: string,
+    action: 'begin' | 'end',
+    id: string,
+    current: () => boolean,
+  ): Promise<unknown>;
+  stopSystemSharingProbes?(peer?: string, id?: string): void;
   permissions?(action: 'check' | 'guide'): Promise<RemoteDesktopPermissions>;
   frame(
     displayId: string,
@@ -461,6 +468,7 @@ export class RemoteDesktopController {
     lockScreen = this.exitLockEnabled(),
     reason: DesktopStopReason = 'host-stop',
   ): Promise<void> {
+    this.deps.stopSystemSharingProbes?.(peer);
     if (peer && this.active?.peer !== peer) {
       // Cancelling a takeover candidate must not revoke the current owner's work.
       if (this.startingPeer === peer) this.startingPeer = null;
@@ -910,6 +918,17 @@ export class RemoteDesktopController {
       };
     }
     if (!this.deps.authorized(peer)) throw new Error('DESKTOP_DISABLED');
+    if (request.op === 'systemSharingProbe') {
+      const session = this.authenticationSession(peer);
+      if (!this.deps.systemSharingProbe) throw new Error('DESKTOP_UNAVAILABLE');
+      const current = () => this.deps.authorized(peer) && this.authenticationCurrent(peer, session);
+      const result = await this.deps.systemSharingProbe(peer, request.action, request.id, current);
+      if (!current()) {
+        this.deps.stopSystemSharingProbes?.(peer, request.id);
+        throw new Error('DESKTOP_STOPPED');
+      }
+      return result;
+    }
     if (request.op === 'permissions') {
       const session = this.authenticationSession(peer);
       if (!this.deps.permissions) throw new Error('DESKTOP_PERMISSIONS_UNAVAILABLE');
@@ -1162,7 +1181,7 @@ export class RemoteDesktopController {
     peer: string,
     request: Exclude<
       ReturnType<typeof parseRemoteDesktopRequest>,
-      { op: 'capabilities' | 'permissions' | 'screens' | 'start' }
+      { op: 'capabilities' | 'permissions' | 'screens' | 'start' | 'systemSharingProbe' }
     >,
   ): Promise<unknown> {
     const active = this.require(peer, request.lease);

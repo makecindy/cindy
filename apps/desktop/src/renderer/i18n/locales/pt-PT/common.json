@@ -6569,6 +6569,17 @@
         "title": "Revogar acesso?",
         "description": "Após a revogação, este dispositivo é desligado imediatamente e deixa de poder controlar esta máquina remotamente. Terá de restaurar o acesso em Definições → Ligação remota para que possa voltar a ligar-se.",
         "confirm": "Revogar acesso"
+      },
+      "systemSharing": {
+        "title": "Usar a Partilha de ecrã entre Macs",
+        "description": "Ao abrir o ambiente de trabalho remoto de outro Mac a partir deste Mac, usa a app integrada Partilha de ecrã para uma imagem mais fluida. O outro Mac tem de ter Definições do Sistema → Geral → Partilha → Partilha de ecrã ativada, e os dois computadores têm de estar acessíveis através de uma rede local ou VPN. Caso contrário, abre o ambiente de trabalho remoto do Cindy.",
+        "toggleAria": "Usar a Partilha de ecrã entre Macs",
+        "saveFailed": "Não foi possível guardar a definição. Tente novamente.",
+        "modeTitle": "Modo de ligação",
+        "modeDescription": "Usado nas ligações a partir deste Mac. Alto desempenho por predefinição; Padrão se algum dos Macs não o suportar.",
+        "modeHigh": "Alto desempenho",
+        "modeStandard": "Padrão",
+        "limits": "As ligações abertas na Partilha de ecrã não usam Ecrã de privacidade do computador, Bloquear computador ao sair nem Desligar e bloquear por inatividade. Em Alto desempenho, o ecrã do outro Mac pode ficar preto. Durante uma ligação da Partilha de ecrã, Desbloquear computador automaticamente pode não funcionar."
       }
     },
     "tina": {

@@ -12,6 +12,7 @@ import {
   DeviceLinkError,
   parseClipboardContent,
   parseRemoteDesktopRequest,
+  type RemoteDesktopCapabilities,
 } from '@cindy/device-link';
 import { createHash } from 'node:crypto';
 import { desktopDiagnosticCode } from '../../shared/remoteDesktopDiagnostics';
@@ -49,8 +50,15 @@ import { readViewerResolution, writeViewerResolution } from './resolutionMemory.
 import { resolveDesktopInputBinary } from '../remote-desktop/inputHost.js';
 import { ClipboardCounter } from '../remote-desktop/clipboardCounter.js';
 import { transferDesktopClipboardContent } from '../remote-desktop/clipboard.js';
+import {
+  openWithSystemScreenSharing,
+  readSystemScreenSharingSettings,
+  writeSystemScreenSharingSettings,
+} from './systemScreenSharing.js';
 
 const log = createLogger('remote-viewer');
+/** How long the system Screen Sharing route waits for the computer before using Cindy's viewer. */
+const SYSTEM_SHARING_CAPS_MS = 4000;
 
 async function requestRemote<T>(device: string, request: unknown, check: () => void): Promise<T> {
   check();
@@ -127,7 +135,7 @@ export class RemoteDesktopViewerWindows {
     if (![...this.entries].some((e) => e.connection.target === null))
       this.create().controller.prewarm();
   }
-  open(sender: WebContents, target: RemoteViewerTarget): void {
+  private assertOpenable(sender: WebContents, target: RemoteViewerTarget): void {
     if (
       !this.isOpenSender(sender) ||
       !getAppCapabilities().canUseDeviceLink ||
@@ -146,6 +154,65 @@ export class RemoteDesktopViewerWindows {
         (typeof target.handoff !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(target.handoff)))
     )
       throwIpcError('INVALID_PARAMS', 'Invalid remote desktop target');
+  }
+  /** Targets whose system Screen Sharing check or launch is in progress. */
+  private systemSharing = new Set<string>();
+  /**
+   * The owner's choice of viewer: a reachable Mac opens in system Screen Sharing
+   * when that is turned on; everything else, including any failure on the way,
+   * opens Cindy's viewer. An already open Cindy viewer is simply focused.
+   */
+  async openPreferred(sender: WebContents, target: RemoteViewerTarget): Promise<void> {
+    this.assertOpenable(sender, target);
+    const viewing = [...this.entries].some(
+      (e) =>
+        e.connection.active &&
+        e.connection.target?.deviceId === target.deviceId &&
+        e.connection.target.handoff === undefined,
+    );
+    if (
+      process.platform !== 'darwin' ||
+      target.handoff !== undefined ||
+      viewing ||
+      !readSystemScreenSharingSettings().enabled
+    )
+      return this.open(sender, target);
+    if (this.systemSharing.has(target.deviceId)) return;
+    this.systemSharing.add(target.deviceId);
+    const owner = activeOwnerScopeKey();
+    const current = () =>
+      owner === activeOwnerScopeKey() &&
+      !sender.isDestroyed() &&
+      getAppCapabilities().canUseDeviceLink &&
+      !isAppSessionBoundaryPending();
+    try {
+      const check = () => {
+        if (!current()) throw new Error('DESKTOP_STOPPED');
+      };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      // An offline or slow computer goes straight to Cindy's viewer, which explains it.
+      const caps = await Promise.race([
+        requestRemote<RemoteDesktopCapabilities>(target.deviceId, { op: 'capabilities' }, check),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), SYSTEM_SHARING_CAPS_MS);
+        }),
+      ])
+        .catch(() => null)
+        .finally(() => clearTimeout(timer));
+      if (!current()) return;
+      const outcome = await openWithSystemScreenSharing({
+        caps,
+        current,
+        requestProbe: (request) => requestRemote(target.deviceId, request, check),
+      });
+      if (outcome !== 'fallback' || !current()) return;
+    } finally {
+      this.systemSharing.delete(target.deviceId);
+    }
+    this.open(sender, target);
+  }
+  open(sender: WebContents, target: RemoteViewerTarget): void {
+    this.assertOpenable(sender, target);
     // A 代输入 window view is its own window, separate from a whole-desktop viewer.
     let entry = [...this.entries].find(
       (e) =>
@@ -340,7 +407,21 @@ export class RemoteDesktopViewerWindows {
     powerMonitor.on('suspend', this.endForLocalLock);
     ipcMain.handle(REMOTE_VIEWER.OPEN, (event, target) => {
       assertTrustedAppRendererEvent(event);
-      this.open(event.sender, target);
+      return this.openPreferred(event.sender, target);
+    });
+    ipcMain.handle(REMOTE_VIEWER.SYSTEM_SHARING, (event) => {
+      assertTrustedAppRendererEvent(event);
+      return readSystemScreenSharingSettings();
+    });
+    ipcMain.handle(REMOTE_VIEWER.SET_SYSTEM_SHARING, (event, enabled: unknown, mode?: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (mode !== undefined) {
+        if (enabled !== undefined || (mode !== 'high' && mode !== 'standard'))
+          throwIpcError('INVALID_PARAMS', 'Invalid screen sharing mode');
+        return writeSystemScreenSharingSettings({ mode });
+      }
+      if (typeof enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'Invalid setting');
+      return writeSystemScreenSharingSettings({ enabled });
     });
     ipcMain.handle(REMOTE_VIEWER.STATE, (event) => this.entry(event).connection.snapshot());
     ipcMain.handle(REMOTE_VIEWER.READY, (event) => {

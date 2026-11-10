@@ -6504,6 +6504,17 @@
         "title": "Revoke access?",
         "description": "Once revoked, this device is disconnected immediately and can no longer control this machine remotely. You will need to restore its access under Settings → Remote Connection before it can reconnect.",
         "confirm": "Revoke access"
+      },
+      "systemSharing": {
+        "title": "Use Screen Sharing between Macs",
+        "description": "When you open another Mac's remote desktop from this Mac, use the built-in Screen Sharing app for smoother video. The other Mac needs System Settings → General → Sharing → Screen Sharing turned on, and both computers must be reachable over a local network or VPN. Otherwise Cindy remote desktop opens instead.",
+        "toggleAria": "Use Screen Sharing between Macs",
+        "saveFailed": "Couldn’t save this setting. Try again.",
+        "modeTitle": "Connection mode",
+        "modeDescription": "Used when connecting from this Mac. High Performance is the default; Standard is used if either Mac does not support it.",
+        "modeHigh": "High Performance",
+        "modeStandard": "Standard",
+        "limits": "Connections opened in Screen Sharing don't use Computer privacy screen, Lock Computer on Exit, or Disconnect and lock when idle. In High Performance, the other Mac's display may go dark. While a Screen Sharing connection is active, Automatically unlock computer may not work."
       }
     },
     "tina": {

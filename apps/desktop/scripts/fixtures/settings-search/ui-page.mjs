@@ -41,6 +41,20 @@ export default {
     const panel = page.getByRole('tabpanel');
     await panel.waitFor();
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
+    // Real switch + response handling; the fixture never writes local preferences.
+    if (ui.data.tab === 'remote-control' && ui.data.cloud && ui.platform === 'darwin') {
+      const sharing = panel.getByRole('switch', { name: await ui.t('settings.remoteControl.systemSharing.toggleAria') });
+      await sharing.click();
+      await page.waitForFunction(() => document.querySelector('[data-setting-id="remoteControl.systemScreenSharing"]')?.getAttribute('aria-checked') === 'true');
+      await ui.capture('system-screen-sharing-enabled');
+      const mode = panel.getByRole('combobox', { name: await ui.t('settings.remoteControl.systemSharing.modeTitle') });
+      assert.ok((await mode.innerText()).includes(await ui.t('settings.remoteControl.systemSharing.modeHigh')));
+      await mode.click();
+      await ui.capture('system-screen-sharing-modes');
+      await page.getByRole('option', { name: await ui.t('settings.remoteControl.systemSharing.modeStandard'), exact: true }).click();
+      await page.waitForFunction(label => document.querySelector('[data-setting-id="remoteControl.systemScreenSharingMode"]')?.textContent?.includes(label), await ui.t('settings.remoteControl.systemSharing.modeStandard'));
+      await ui.capture('system-screen-sharing-standard');
+    }
     if (ui.data.previewBackground) {
       const label = ui.data.previewBackground === 'none' ? 'desktopVisibilityLabel' : 'visibilityLabel';
       const slider = panel.getByRole('slider', { name: await ui.t(`settings.appearance.wallpaper.${label}`) });
