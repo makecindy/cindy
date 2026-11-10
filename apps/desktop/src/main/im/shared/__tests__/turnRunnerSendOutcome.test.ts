@@ -5115,7 +5115,7 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
   describe('session runtime liveness (#9636)', () => {
     const SESSION_ID = 'feishu-session';
 
-    function createLivenessSetup() {
+    function createLivenessSetup(options: { onRebuild?: (previous: Session) => void } = {}) {
       const previous = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
       const replacement = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
       let live: Session = previous.session;
@@ -5123,7 +5123,13 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         getSession: vi.fn(() => live),
         // Maker 的真实语义：同一 business id 重建后 activeSessions 里是新实例。
         createSession: vi.fn(async () => {
-          live = maker.createSession.mock.calls.length === 1 ? previous.session : replacement.session;
+          if (maker.createSession.mock.calls.length === 1) {
+            live = previous.session;
+          } else {
+            // 重建路径会重试旧实例的 close；close 事件在 createSession 返回前就送达宿主。
+            options.onRebuild?.(previous.session);
+            live = replacement.session;
+          }
           return live;
         }),
         on: vi.fn((listener: (event: MakerEvent) => void) => {
@@ -5137,15 +5143,16 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
         acquirePendingAgentSwitch: vi.fn(async () => () => {}),
       });
+      const onTurnComplete = vi.fn();
       const runTurn = () => localRunner.runAgentTurn({
         botContextId: 'cli_test_bot',
         userId: 'ou_user',
         userMessageId: 'msg-liveness',
         text: 'hello',
         attachments: [],
-        onTurnComplete: vi.fn(),
+        onTurnComplete,
       });
-      return { previous, replacement, maker, localRunner, runTurn };
+      return { previous, replacement, maker, localRunner, runTurn, onTurnComplete };
     }
 
     it('keeps a coded runtime failure diagnosable instead of collapsing it to "Error"', async () => {
@@ -5208,6 +5215,78 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
         expect(previous.send).not.toHaveBeenCalled();
         expect(replacement.send).toHaveBeenCalledTimes(1);
         expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    it('keeps the turn alive when the replaced runtime closes during the rebuild', async () => {
+      let closedDuringRebuild = false;
+      const { previous, replacement, localRunner, runTurn, onTurnComplete } = createLivenessSetup({
+        onRebuild: (replaced) => {
+          closedDuringRebuild = true;
+          // 重建期间旧实例的 close 事件到达：不能把正在派发的这一轮清掉。
+          emitMakerEvent({
+            type: 'session:closed',
+            sessionId: SESSION_ID,
+            session: replaced,
+            reason: 'unexpected',
+          } as MakerEvent);
+        },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        expect(closedDuringRebuild).toBe(true);
+        expect(previous.send).not.toHaveBeenCalled();
+        expect(replacement.send).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+
+        // state 还在（观察者已换绑到新运行时）：这一轮的回复能回到渠道并正常收口。
+        await waitForAssertion(() => expect(replacement.session).toBeDefined());
+        replacement.emit({ type: 'text', data: { text: '重建后的回答', isFinal: true } });
+        replacement.emit({ type: 'done', data: {} });
+        await flushMicrotasks();
+
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    it('fails visibly when the task is archived while its runtime is rebuilt', async () => {
+      const { previous, replacement, localRunner, runTurn } = createLivenessSetup();
+      previous.hasStartedClosing.mockReturnValue(true);
+      const activeRow = {
+        id: SESSION_ID,
+        status: 'active',
+        agentKind: 'claude-code',
+        workingDir: 'F:\\XDMaker',
+        model: 'claude-opus-4-7',
+        effort: 'xhigh',
+        permissionMode: 'bypassPermissions',
+        fastMode: false,
+        sdkSessionId: null,
+        providerId: null,
+      };
+      // 重建前读一次（可用），重建后再读一次（用户已关任务 → archived）。
+      mocks.desktopSessionRows
+        .mockReturnValueOnce([{ ...activeRow }])
+        .mockReturnValueOnce([{ ...activeRow, status: 'archived' }]);
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        // 忽略 close 事件不等于可以继续跑：任务已归档，这条消息必须明确失败。
+        expect(replacement.send).not.toHaveBeenCalled();
+        expect(mocks.logger.info).toHaveBeenCalledWith(
+          expect.stringContaining('rebuilding closing runtime before send'),
+        );
+        expect(mocks.feishuIm.sendText.mock.calls.map((call) => String(call[1]))).toContain(
+          '❌ 启动 agent 失败：SESSION_CLOSED',
+        );
       } finally {
         localRunner.disposeAllSessions();
       }
