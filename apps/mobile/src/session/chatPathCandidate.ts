@@ -285,27 +285,54 @@ export function classifyChatPathLinkTarget(url: string): ChatPathCandidate | nul
   };
 }
 
+function safeDecodeChatPath(value: string): string {
+  // 非法百分号序列(`50%off.md` 的 `%of`)会让 decodeURIComponent 抛 URIError,
+  // 而 resolveChatAbsPath 在 chip 组件 useMemo 里同步跑,异常会崩整条消息渲染——
+  // 解码失败回退原文(bot review 实捉);路径若真不存在由远端 stat 判 nonfile 兜底。
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * `file://` URL → 路径文本(与桌面 localPathResolver 的 fileUrlToPath 同语义,两端需同步):
+ *   - `file:///abs`、`file://localhost/abs` → `/abs`;`/C:/x` → `C:/x`
+ *   - `file://C:/x`(常见的盘符误写)→ `C:/x`
+ *   - `file://host/share/x` → UNC `\\host\share\x`:host 是另一台机器,**不是** workdir
+ *     下的相对路径——拼到 workdir 上会打开一个无关的本地文件。
+ *   - host(原文或解码后)为 `.` / `..`(模型常见的相对链接误写 `file://./docs/a.md`)
+ *     或 `?`:不当 UNC,维持改 UNC 前的解码原文——否则会拼出 Windows 设备命名空间
+ *     `\\.\` / `\\?\`。
+ */
+function fileUrlToChatPath(href: string): string {
+  const rest = href.slice('file://'.length);
+  const authorityEnd = rest.search(/[\\/]/);
+  const host = authorityEnd >= 0 ? rest.slice(0, authorityEnd) : rest;
+  const stripDriveSlash = (p: string) => (/^\/[A-Za-z]:[\\/]/.test(p) ? p.slice(1) : p);
+  if (!host) return stripDriveSlash(safeDecodeChatPath(rest));
+  if (/^[A-Za-z]:$/.test(host)) return safeDecodeChatPath(rest);
+  if (host.toLowerCase() === 'localhost') {
+    return stripDriveSlash(safeDecodeChatPath(rest.slice(host.length) || '/'));
+  }
+  // host 单独解码,转义出的分隔符不得挪动共享边界。
+  const decodedHost = safeDecodeChatPath(host);
+  if (decodedHost === '.' || decodedHost === '..' || decodedHost === '?') return safeDecodeChatPath(rest);
+  const uncHost = /[\\/]/.test(decodedHost) ? host : decodedHost;
+  return `\\\\${uncHost}${safeDecodeChatPath(rest.slice(host.length)).replace(/\//g, '\\')}`;
+}
+
 /**
  * href → 被控端绝对路径(与桌面 resolveLocalPath 同语义):
- * file:// 解包;Windows workdir 下 /C:/… 去多余前导斜杠;其余绝对路径原样;
+ * file:// 解包(带 host 的 `file://host/share/…` → UNC);Windows workdir 下 /C:/… 去多余
+ * 前导斜杠;其余绝对路径(含 UNC)原样;
  * 相对路径按 workdir 分隔符风格 join
  * (workdir 含 `\` → Windows join 并把 href 的 `/` 归一为 `\`)。
  * 不做存在性检查——那是 remotePathVerdict 的事。
  */
 export function resolveChatAbsPath(href: string, workdir: string): string {
-  if (href.startsWith('file://')) {
-    // 非法百分号序列(`50%off.md` 的 `%of`)会让 decodeURIComponent 抛 URIError,
-    // 而本函数在 chip 组件 useMemo 里同步跑,异常会崩整条消息渲染——解码失败
-    // 回退原文(bot review 实捉);路径若真不存在由远端 stat 判 nonfile 兜底。
-    let p: string;
-    try {
-      p = decodeURIComponent(href.slice(7));
-    } catch {
-      p = href.slice(7);
-    }
-    if (/^\/[A-Za-z]:[\\/]/.test(p)) p = p.slice(1);
-    return p;
-  }
+  if (href.startsWith('file://')) return fileUrlToChatPath(href);
   // Match Desktop's model-authored /C:/ compatibility using the file owner's
   // workdir, not the phone OS. POSIX hosts may have a literal /C: directory.
   const windowsWorkdir = WIN_ABS_RE.test(workdir) || workdir.startsWith('\\\\') || workdir.startsWith('//');
@@ -314,6 +341,8 @@ export function resolveChatAbsPath(href: string, workdir: string): string {
   if (windowsWorkdir && /^\/[A-Za-z]:[\\/]/.test(href)) return href.slice(1);
   if (href.startsWith('/')) return href;
   if (WIN_ABS_RE.test(href)) return href;
+  // UNC 共享(`\\server\share\…`)本身就是绝对路径,拼到 workdir 上只会得到错误地址。
+  if (href.startsWith('\\\\')) return href;
 
   const isWin = workdir.includes('\\');
   const sep = isWin ? '\\' : '/';
@@ -322,6 +351,17 @@ export function resolveChatAbsPath(href: string, workdir: string): string {
   const base = trimmed || (workdir.startsWith('/') ? '/' : workdir);
   const normalizedHref = isWin ? href.replace(/\//g, '\\') : href;
   return base === '/' ? `/${normalizedHref}` : `${base}${sep}${normalizedHref}`;
+}
+
+/**
+ * resolveChatAbsPath 得到的 `\\host\…`(含 `\\.\` / `\\?\`)且不在 workdir 内 → true。
+ * 这类路径不得在渲染时自动 stat / 取件:被控 Windows 桌面会向消息内容点名的主机发起 SMB
+ * 连接(可能送出 NTLM 凭据);只在用户显式点开时访问。workdir 本身在共享上时,其子路径照常。
+ */
+export function isUncPathOutsideWorkdir(workdir: string, absPath: string): boolean {
+  if (!absPath.startsWith('\\\\')) return false;
+  const base = workdir.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+  return !(base.startsWith('\\\\') && absPath.toLowerCase().startsWith(`${base}\\`));
 }
 
 /** 去掉路径里的 `.` 段(`/w/./a` → `/w/a`),避免同路径两形态。 */
