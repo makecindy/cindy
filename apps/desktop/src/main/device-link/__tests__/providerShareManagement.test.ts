@@ -331,6 +331,9 @@ it('propagates a per-share provider denial as an empty zero-budget catalog and k
   expect(producerById.get('a')?.catalog).toEqual({ providers: [],
     providerContinuity: { stale: true, remainingMs: 0 } });
   expect((producerById.get('b')?.catalog as { providers?: unknown[] } | null)?.providers).toHaveLength(1);
+  expect(producerById.get('b')).toMatchObject({
+    favoriteSource: { shareId: 'b', memberId: 'm-b', providerId: 'anthropic', owner: { region: 'global' } },
+  });
   expect(producerById.get('c')?.catalog).toBeNull();
   expect(producerById.get('d')?.catalog).toEqual({ providers: [],
     providerContinuity: { stale: true, remainingMs: 0 } });
