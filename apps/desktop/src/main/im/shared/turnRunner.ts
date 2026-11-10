@@ -1070,12 +1070,38 @@ export function createTurnRunner(
     const coldCompanion = target.botOwned && !sessionStates.has(target.row.id)
       && !wiringInFlight.has(target.row.id) && !getMaker().getSession(target.row.id);
     if (coldCompanion && deps.companion?.prepareSend) {
-      if (target.botOwned?.lane === 'channel') {
-        coldWiringVendorOptions.set(target.row.id, adapter.buildVendorOptions(userId, target.scopeKey));
-      }
       let blocked: string | null;
       try {
+        if (target.botOwned?.lane === 'channel') {
+          coldWiringVendorOptions.set(target.row.id, adapter.buildVendorOptions(userId, target.scopeKey));
+        }
         blocked = await deps.companion.prepareSend(target.row.id);
+        if (!blocked) {
+          const refreshed = await repo.peekSessionById(target.row.id);
+          if (!refreshed) throw new Error(`companion session ${target.row.id} missing after route preparation`);
+          target = { ...target, row: refreshed };
+        }
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        const normalized = normalizeSendError(err);
+        log.error(`${channel} companion preparation failed before dispatch`, {
+          kind: 'session-dispatch',
+          source: 'companion.prepareSend',
+          sessionId: hashLogSessionId(target.row.id),
+          reason: normalized.reason,
+          error: normalized.error,
+        });
+        await waitForAckCleanupBounded(discardHandedOverAck(userMessageId, args.ackReactionIdPromise));
+        if (args.queueMode === 'internal') {
+          try {
+            const text = ui.agent.sendInternalError(normalized.reason);
+            const consumed = (await args.onEarlyReject?.(normalized.reason, text)) ?? false;
+            if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+          } catch {
+            /* A failed notice must still return a definite pre-dispatch rejection. */
+          }
+        }
+        return { kind: 'rejected', reason: normalized.reason };
       } finally {
         coldWiringVendorOptions.delete(target.row.id);
       }
@@ -1088,9 +1114,6 @@ export function createTurnRunner(
         await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
         return { kind: 'rejected', reason: 'companion_unavailable' };
       }
-      const refreshed = await repo.peekSessionById(target.row.id);
-      if (!refreshed) throw new Error(`companion session ${target.row.id} missing after route preparation`);
-      target = { ...target, row: refreshed };
     }
     const row = target.row;
     const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
@@ -1503,7 +1526,6 @@ export function createTurnRunner(
         await item.turn.revalidateNotificationReply?.();
         await resolveNotificationTarget(rowId, item.turn.scopeKey);
       }
-      await beginChunkedReply(item.turn);
       // 伙伴任务: 与桌面发送同源的伙伴守卫(暂停 / 归档 → 回一句提示不发送),
       // 再对齐伙伴模型链、刷新能力纪元。要在拿 send 锁之前做 —— 对齐登记的切换
       // 意图由下面的锁内应用落实。
@@ -1617,6 +1639,10 @@ export function createTurnRunner(
           }
         }
       }
+
+      // Only claim a passive reply after preparation and route authentication.
+      // Rejected input must not leave a pending chunked response for the next turn.
+      await beginChunkedReply(item.turn);
 
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),
       // 交接注入自己接——切换后首条消息若来自 IM 渠道,新引擎同样需要交接上下文

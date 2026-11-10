@@ -303,6 +303,81 @@ async function runTurn(userId: string, text = 'hello'): Promise<void> {
 }
 
 describe('turnRunner: connection handed to a companion bot', () => {
+  // Durable transports settle receipts only from dispatch outcomes. Preparation
+  // must reject before provider start even when there is no TurnState to clean up.
+  it.each([
+    { failure: 'prepare', external: false },
+    { failure: 'read', external: false },
+    { failure: 'missing', external: false },
+    { failure: 'prepare', external: true },
+    { failure: 'read', external: true },
+    { failure: 'missing', external: true },
+  ])('settles cold preparation failure and clears the handed-over ack: %j', async ({ failure, external }) => {
+    companion.prepareSend.mockImplementation(async () => {
+      if (failure === 'prepare') throw new Error('MODEL_ROUTE_FAILED');
+      if (failure === 'read') vi.mocked(fakeRepo.peekSessionById).mockRejectedValueOnce(new Error('DB_READ_FAILED'));
+      else vi.mocked(fakeRepo.peekSessionById).mockResolvedValueOnce(null);
+      return null;
+    });
+    const beforeProviderStart = vi.fn(async () => undefined);
+    const onEarlyReject = vi.fn(() => true);
+    const args = {
+      botContextId: BOT_CONTEXT, userId: OWNER, requesterIsOwner: true,
+      userMessageId: 'cold-failure', text: 'hello', attachments: [],
+      ackReactionIdPromise: Promise.resolve('ack'), onEarlyReject,
+    };
+
+    if (external) {
+      await expect(runner.dispatchAgentTurn({ ...args, queueMode: 'external', beforeProviderStart }))
+        .resolves.toMatchObject({ kind: 'rejected', reason: expect.any(String) });
+      expect(onEarlyReject).not.toHaveBeenCalled();
+      expect(mocks.im.sendText).not.toHaveBeenCalled();
+    } else {
+      await expect(runner.runAgentTurn(args)).resolves.toBeUndefined();
+      expect(onEarlyReject).toHaveBeenCalledOnce();
+    }
+    expect(mocks.im.removeMessageReaction).toHaveBeenCalledWith('cold-failure', 'ack');
+    expect(beforeProviderStart).not.toHaveBeenCalled();
+    expect(createSessionArgs).toHaveLength(0);
+    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not reserve a chunked reply for rejected auth or consume it on the next turn', async () => {
+    const id = 'mimi-main';
+    const h = makeSessionHarness(id);
+    harnesses.set(id, h);
+    const beginReply = vi.fn(async () => undefined);
+    const commitFinal = vi.fn(async () => undefined);
+    runner = createTurnRunner({
+      ...fakeAdapter,
+      channel: 'wecom',
+      output: { kind: 'chunked-text', im: fakeAdapter.im, beginReply, commitFinal },
+    }, fakeRepo, fakeCards, { companion: companion as unknown as ImCompanionRouteDeps });
+    companion.prepareSend.mockImplementation(async () => {
+      botRows.set(id, rowFor(id, { model: 'unavailable', providerId: 'disconnected' }));
+      return null;
+    });
+
+    await runTurn(OWNER, 'rejected');
+    expect(h.send).not.toHaveBeenCalled();
+    expect(beginReply).not.toHaveBeenCalled();
+    expect(commitFinal).not.toHaveBeenCalled();
+    expect(mocks.im.sendText).toHaveBeenCalledWith(OWNER, expect.stringContaining('unavailable'), expect.anything());
+
+    companion.prepareSend.mockImplementation(async () => {
+      botRows.set(id, rowFor(id, { model: 'bot-model', providerId: 'xd' }));
+      return null;
+    });
+    await runTurn(OWNER, 'accepted');
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(beginReply).toHaveBeenCalledOnce();
+    expect(beginReply.mock.invocationCallOrder[0]!).toBeLessThan(h.send.mock.invocationCallOrder[0]!);
+    h.emit({ type: 'text', data: { text: 'answer', isFinal: true } } as AgentEvent);
+    h.emit({ type: 'done', data: {} } as AgentEvent);
+    await vi.waitFor(() => expect(commitFinal).toHaveBeenCalledOnce());
+    expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ userId: OWNER, text: 'answer', terminal: 'done' }));
+  });
+
   it.each([
     { userId: OWNER, warm: false },
     { userId: 'g/-100123', warm: false },
