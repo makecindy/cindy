@@ -237,6 +237,8 @@
       "panelTab": "Panel „{{title}}“ · wird innerhalb der Seite „Plugins“ geöffnet",
       "mainView": "Kann einen Eintrag „{{title}}“ zu Cindys Seitenleiste hinzufügen",
       "mainViewDetail": "Beim Öffnen wird die Hauptansicht in der Plugin-Sandbox angezeigt. Es wird kein Zugriff auf Dateien, Netzwerk oder Zugangsdaten gewährt.",
+      "wallpaper": "Cindy-Hintergrundbild ändern",
+      "wallpaperDetail": "Kann das Hintergrundbild dieses Cindy-Desktopprofils für alle darin verwendeten Konten ersetzen und aktivieren. Das System-Hintergrundbild bleibt unverändert. Bilder werden geprüft; Sichtbarkeit und Unschärfe bleiben erhalten.",
       "code": "Ausführbarer Code",
       "codeDetail": "Läuft in einer isolierten Sandbox ohne Zugriff auf deine Dateien oder das Netzwerk.",
       "resident": "Dauerhaft aktiv (startet beim Aktivieren und behält auch im Leerlauf einen Hintergrundprozess bei)",

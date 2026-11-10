@@ -110,6 +110,7 @@ export const LEGACY_GHOST_SLOTS = [
   'fs',
   'library',
   'device-sync',
+  'wallpaper',
   'session-context',
   'pick',
   'preview',
@@ -1049,6 +1050,8 @@ export interface GhostManifest {
   library?: true;
   /** Encrypted opaque exchange with this plugin on same-account desktops. */
   deviceSync?: true;
+  /** May replace the local Desktop profile wallpaper after explicit installation consent. */
+  wallpaper?: true;
   sessionContext?: true;
   pick?: true;
   workspace?: true;
@@ -1259,6 +1262,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'fs',
   'library',
   'deviceSync',
+  'wallpaper',
   'sessionContext',
   'pick',
   'workspace',
@@ -1273,6 +1277,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'fs',
   'library',
   'deviceSync',
+  'wallpaper',
   'sessionContext',
   'pick',
   'workspace',
@@ -1302,6 +1307,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   fs: 'fs',
   library: 'library',
   deviceSync: 'device-sync',
+  wallpaper: 'wallpaper',
   sessionContext: 'session-context',
   pick: 'pick',
   workspace: 'workspace',
@@ -1319,6 +1325,7 @@ type PreparedGhostManifest = {
 
 function prepareGhostManifestForValidation(
   value: unknown,
+  preserveHistoricalWallpaper = false,
 ): { ok: true; prepared: PreparedGhostManifest } | { ok: false; reason: string } {
   if (!isPlainObject(value)) return { ok: false, reason: '清单不是对象' };
   if (value.schemaVersion !== 2 && value.schemaVersion !== 3) {
@@ -1348,6 +1355,7 @@ function prepareGhostManifestForValidation(
     return { ok: false, reason: 'schemaVersion 3 必须声明 minCindyVersion' };
   }
   for (const field of V3_BOOLEAN_CAPABILITY_FIELDS) {
+    if (field === 'wallpaper' && preserveHistoricalWallpaper) continue;
     if (value[field] !== undefined && value[field] !== true) {
       return { ok: false, reason: `${field} 出现时必须是 true；不需要时请省略` };
     }
@@ -1375,7 +1383,9 @@ function prepareGhostManifestForValidation(
       v3BaseAgent,
       unknownV3Fields: Object.fromEntries(
         Object.entries(value).filter(
-          ([key]) => key === 'model' || !GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS.has(key),
+          ([key]) => key === 'model' ||
+            (key === 'wallpaper' && preserveHistoricalWallpaper && value.wallpaper !== true) ||
+            !GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS.has(key),
         ),
       ),
     },
@@ -1416,7 +1426,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
 }
 
 function validateGhostManifestInput(value: unknown, preserveHistoricalParameterSize: boolean): ManifestValidation {
-  const preparation = prepareGhostManifestForValidation(value);
+  const preparation = prepareGhostManifestForValidation(value, preserveHistoricalParameterSize);
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;
@@ -3997,6 +4007,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(prepared.schemaVersion === 3 && slots.includes('confirm') ? { confirm: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('fs') ? { fs: true as const } : {}),
       ...(slots.includes('device-sync') ? { deviceSync: true as const } : {}),
+      ...(slots.includes('wallpaper') ? { wallpaper: true as const } : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('library')
         ? { library: true as const }
         : {}),

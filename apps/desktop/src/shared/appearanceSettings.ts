@@ -1,5 +1,8 @@
 import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
 
+/** Shared by native import and plugin wallpaper application; checked before reading or decoding. */
+export const MAX_WALLPAPER_IMAGE_BYTES = 20 * 1024 * 1024;
+
 /**
  * Desktop appearance preferences shared by main, preload and renderer.
  *

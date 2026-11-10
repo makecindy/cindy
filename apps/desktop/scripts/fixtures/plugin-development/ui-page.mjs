@@ -12,10 +12,13 @@ export default {
     narrow: { about: 'Development details at phone width', viewport: { width: 360, height: 900 } },
     authoring: { about: 'Choose the exact local or market instance before submission', viewport: { width: 360, height: 900 } },
     market: { about: 'Market details do not offer in-place file updates' },
-    permissions: { about: 'Explicit auto-tool and native-host permission rows', viewport: { width: 360, height: 900 } },
+    permissions: { about: 'Explicit auto-tool, native-host and global wallpaper permission rows', viewport: { width: 360, height: 900 } },
   },
   async check(page, ui) {
-    if (ui.case === 'permissions') return;
+    if (ui.case === 'permissions') {
+      assert.ok((await page.locator('main').innerText()).includes(await ui.t('settings.ghosts.perm.wallpaper')));
+      return;
+    }
     if (ui.case === 'authoring') {
       const local = page.getByRole('region', { name: await ui.t('settings.ghosts.contribution.localVersion'), exact: true });
       await local.getByRole('combobox').click();

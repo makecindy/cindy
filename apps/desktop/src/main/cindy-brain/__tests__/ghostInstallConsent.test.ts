@@ -13,6 +13,7 @@ import {
   confirmedControlPoints,
   confirmedAutoTools,
   confirmedTaskCapability,
+  confirmedWallpaperCapability,
   confirmedUiCapability,
   type GhostInstallConsentPrompt,
   isGhostInstallConsentRequiredError,
@@ -440,4 +441,20 @@ it('records companions consent only when that capability was shown', async () =>
   expect(confirmedTaskCapability(decision, before, next, 'companions')).toBe(true);
   expect(confirmedTaskCapability(decision, before, next, 'observe')).toBeUndefined();
   expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'companions')).toBeUndefined();
+});
+
+// New wallpaper capability: old manifests may retain unknown fields, but must not silently gain authority.
+it('shows wallpaper consent on install and on old-Host updates, without re-prompting existing grants', async () => {
+  const next = { ...manifest(['api.weather.test']), wallpaper: true as const };
+  const policy = { mode: 'prompt' as const, prompt: userPrompt(true), initiator: 'user' as const, origin: 'market' as const };
+  const old = installed(next);
+  for (const before of [null, old]) {
+    const decision = await obtainGhostInstallConsent(policy, before, next, reviewedDigest);
+    expect(confirmedWallpaperCapability(decision, before, next)).toBe(true);
+  }
+  expect(old.enabled).toBe(true);
+  expect(confirmedWallpaperCapability({ mode: 'unprompted' }, old, next)).toBeUndefined();
+  expect(confirmedWallpaperCapability({ mode: 'exempt', reason: 'server-default-install' }, null, next)).toBeUndefined();
+  const approved = { ...old, wallpaperCapabilityApproved: true as const };
+  expect(await obtainGhostInstallConsent(policy, approved, next, reviewedDigest)).toEqual({ mode: 'unprompted' });
 });

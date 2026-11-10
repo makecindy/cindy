@@ -7892,6 +7892,8 @@
         "confirmDetail": "Antes de agir, pode abrir uma caixa de diálogo com o aspeto da Cindy para lhe fazer uma pergunta. A pergunta é do plugin, e a caixa de diálogo identifica-o pelo nome. Só o utilizador pode confirmar ou cancelar; o plugin não pode. Só pode haver uma caixa de diálogo de cada vez, e os pedidos demasiado frequentes são bloqueados.",
         "fsWrite": "Pode escrever ficheiros (criar / modificar)",
         "fsWriteDetail": "A sua própria pasta de dados privados permite sempre escrita. A escrita no diretório de trabalho da sessão atual segue o modo de permissões da sessão (os modos de aprovação automática escrevem diretamente; os modos por ação pedem-lhe autorização primeiro). Qualquer outra pasta exige sempre a sua confirmação. Os ficheiros são sempre escritos pelo anfitrião — o próprio plugin nunca toca no seu sistema de ficheiros.",
+        "wallpaper": "Alterar o papel de parede do Cindy",
+        "wallpaperDetail": "Pode substituir e ativar o papel de parede deste perfil de ambiente de trabalho do Cindy para todas as suas contas. Não altera o papel de parede do sistema. As imagens são validadas; a visibilidade e a desfocagem são preservadas.",
         "deviceSync": "Sincronizar dados do plugin entre os seus computadores",
         "deviceSyncDetail": "Troca dados deste plugin com o mesmo plugin nos seus outros computadores online com sessão iniciada na mesma conta Cindy. As transferências são encriptadas. O plugin controla a união e a eliminação de dados; não são partilhadas credenciais nem dados de outros plugins.",
         "libraryPersist": "Pode usar uma biblioteca persistente (ficheiros grandes e bases de dados)",

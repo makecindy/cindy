@@ -235,6 +235,8 @@
       "panelTab": "面板「{{title}}」· 於法器頁內啟",
       "mainView": "可於 Cindy 側欄增「{{title}}」之入口",
       "mainViewDetail": "點之則於法器沙箱中啟主視圖，不因此得卷、網路或憑證之存取權柄。",
+      "wallpaper": "更易 Cindy 桌布",
+      "wallpaperDetail": "可更易並啟用本 Cindy 用戶端之桌布，各帳號共用。不改系統桌面桌布。宿主驗圖，可見度與模糊設定如故。",
       "code": "可行之程式碼",
       "codeDetail": "於獨立沙箱中行，不能訪君之卷與網路。",
       "resident": "常駐而行(生效即啟，不喚亦守幕後之程序)",

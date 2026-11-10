@@ -172,6 +172,7 @@ const LEGACY_GHOST_SLOTS = [
   'fs',
   'library',
   'device-sync',
+  'wallpaper',
   'session-context',
   'pick',
   'preview',
@@ -1812,6 +1813,8 @@ export interface GhostManifest {
   library?: true;
   /** Encrypted opaque exchange with this plugin on same-account desktops. */
   deviceSync?: true;
+  /** May replace the local Desktop profile wallpaper after explicit installation consent. */
+  wallpaper?: true;
   sessionContext?: true;
   pick?: true;
   workspace?: true;
@@ -1917,6 +1920,7 @@ export interface InstalledGhost {
   observeCapabilityApproved?: true;
   /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
   companionsCapabilityApproved?: true;
+  wallpaperCapabilityApproved?: true;
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2092,6 +2096,7 @@ export interface GhostPermissionItem {
     | 'fs'
     | 'library'
     | 'deviceSync'
+    | 'wallpaper'
     | 'session-context'
     | 'pick'
     | 'preview'
@@ -2461,6 +2466,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
   // library 能力:持久作品库(用户数据语义,不是临时缓存)。详情页必须讲清
   // 卸载不删、删除走独立确认、会打开系统文件夹/另存为对话框,以及可把 PNG
   // 位图写入系统剪贴板(无确认框,会覆盖当前剪贴板)。
+  if (manifest.wallpaper === true) {
+    items.push({ key: 'wallpaper', kind: 'wallpaper', labelKey: 'wallpaper', detailKey: 'wallpaperDetail' });
+  }
   if (manifest.deviceSync === true) {
     items.push({ key: 'deviceSync', kind: 'deviceSync', labelKey: 'deviceSync', detailKey: 'deviceSyncDetail' });
   }
@@ -2904,6 +2912,7 @@ export function diffInstalledGhostPermissionItems(
     // Older Hosts preserved ui without granting page capabilities.
     const previous = {
       ...installed.manifest,
+      wallpaper: installed.wallpaperCapabilityApproved === true ? installed.manifest.wallpaper : undefined,
       mcpApps: installed.uiCapabilityApproved === true ? installed.manifest.mcpApps : undefined,
       // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
       subscribe: withoutUnapprovedControlPoints(installed),
@@ -3295,7 +3304,9 @@ export function ghostUnknownV3FieldsWithinCap(
   if (actual.schemaVersion !== 3) return true;
   return Object.entries(actual)
     .filter(
-      ([key]) => key === 'model' || !GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS.has(key),
+      ([key]) => key === 'model' ||
+        (key === 'wallpaper' && actual.wallpaper !== true) ||
+        !GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS.has(key),
     )
     .every(
       ([key, value]) =>
@@ -3449,6 +3460,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'fs',
   'library',
   'deviceSync',
+  'wallpaper',
   'sessionContext',
   'pick',
   'workspace',
@@ -3466,6 +3478,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'fs',
   'library',
   'deviceSync',
+  'wallpaper',
   'sessionContext',
   'pick',
   'workspace',
@@ -3495,6 +3508,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   fs: 'fs',
   library: 'library',
   deviceSync: 'device-sync',
+  wallpaper: 'wallpaper',
   sessionContext: 'session-context',
   pick: 'pick',
   workspace: 'workspace',
@@ -3513,6 +3527,7 @@ type PreparedGhostManifest = {
 
 function prepareGhostManifestForValidation(
   value: unknown,
+  preserveHistoricalWallpaper = false,
 ): { ok: true; prepared: PreparedGhostManifest } | { ok: false; reason: string } {
   if (!isPlainObject(value)) return { ok: false, reason: '清单不是对象' };
   if (value.schemaVersion !== 2 && value.schemaVersion !== 3) {
@@ -3553,6 +3568,7 @@ function prepareGhostManifestForValidation(
     return { ok: false, reason: 'schemaVersion 3 必须声明 minCindyVersion' };
   }
   for (const field of V3_BOOLEAN_CAPABILITY_FIELDS) {
+    if (field === 'wallpaper' && preserveHistoricalWallpaper) continue;
     if (value[field] !== undefined && value[field] !== true) {
       return { ok: false, reason: `${field} 出现时必须是 true；不需要时请省略` };
     }
@@ -3575,7 +3591,9 @@ function prepareGhostManifestForValidation(
   };
   const unknownV3Fields = Object.fromEntries(
     Object.entries(value).filter(
-      ([key]) => key === 'model' || !GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS.has(key),
+      ([key]) => key === 'model' ||
+        (key === 'wallpaper' && preserveHistoricalWallpaper && value.wallpaper !== true) ||
+        !GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS.has(key),
     ),
   );
   return {
@@ -4332,7 +4350,7 @@ function validateGhostManifestInput(
   preserveHistoricalTasks: boolean,
   preserveHistoricalParameterSize: boolean,
 ): ManifestValidation {
-  const preparation = prepareGhostManifestForValidation(value);
+  const preparation = prepareGhostManifestForValidation(value, preserveHistoricalTasks);
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
   const raw = prepared.raw;
@@ -6773,6 +6791,7 @@ function validateGhostManifestInput(
       ...(slots.includes('confirm') ? { confirm: true as const } : {}),
       ...(slots.includes('fs') ? { fs: true as const } : {}),
       ...(slots.includes('device-sync') ? { deviceSync: true as const } : {}),
+      ...(slots.includes('wallpaper') ? { wallpaper: true as const } : {}),
       ...(slots.includes('library') ? { library: true as const } : {}),
       ...(slots.includes('session-context') ? { sessionContext: true as const } : {}),
       ...(slots.includes('pick') ? { pick: true as const } : {}),
@@ -6985,6 +7004,9 @@ export const GHOST_PIPE_CALL_MAX_TOTAL_MS = 30 * 60_000;
 
 /** 主机公开给意识的构建区域。与 desktop CURRENT_CINDY_REGION 同口径。 */
 export type GhostAppRegion = 'cn' | 'global';
+
+/** Apply a plugin-owned image to the execution Desktop profile. */
+export type GhostPipeWallpaperRequest = { type: 'wallpaper-request'; mediaUrl: string };
 
 /**
  * 上行:读取宿主公开上下文。`cindy.request({kind:'app-context'})` 是 preload

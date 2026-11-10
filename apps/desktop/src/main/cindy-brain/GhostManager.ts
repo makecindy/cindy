@@ -3056,6 +3056,7 @@ export class GhostManager {
           ...approvedAutoToolsProjection(receipt),
           ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
           ...(receipt.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
+          ...(receipt.wallpaperCapabilityApproved === true ? { wallpaperCapabilityApproved: true as const } : {}),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
             ? {
@@ -4012,6 +4013,7 @@ export class GhostManager {
       approvedAutoTools?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
+      wallpaperCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -4047,6 +4049,7 @@ export class GhostManager {
       approvedAutoTools?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
+      wallpaperCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -4227,6 +4230,7 @@ export class GhostManager {
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
+          ...(opts?.wallpaperCapabilityApproved === true && approvedManifest.wallpaper === true ? { wallpaperCapabilityApproved: true as const } : {}),
           trust,
           // 指纹取自包投影而不是刚发布的 finalDir:发布后被换的字节应当在快照
           // 对账时被拒,而不是被首读钉成批准基线(P0-8)。
@@ -4360,6 +4364,7 @@ export class GhostManager {
       approvedAutoTools?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
+      wallpaperCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -4392,6 +4397,7 @@ export class GhostManager {
       approvedAutoTools?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
+      wallpaperCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -4687,6 +4693,8 @@ export class GhostManager {
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...((opts.companionsCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.companionsCapabilityApproved === true)) &&
           approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
+        ...((opts.wallpaperCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.wallpaperCapabilityApproved === true)) &&
+          approvedManifest.wallpaper === true ? { wallpaperCapabilityApproved: true as const } : {}),
         trust,
         // 同 install:指纹取自包投影,发布后的目录漂移在快照对账时 fail closed(P0-8)。
         skillContentSha256: await this.hashSkillContentFromPackage(
@@ -5108,6 +5116,8 @@ export class GhostManager {
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&
           approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
+        ...(current.state === 'approved' && current.receipt.wallpaperCapabilityApproved === true &&
+          approvedManifest.wallpaper === true ? { wallpaperCapabilityApproved: true as const } : {}),
         ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
         namespace: null,
       }),

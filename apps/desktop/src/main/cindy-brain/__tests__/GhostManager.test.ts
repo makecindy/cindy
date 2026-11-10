@@ -605,6 +605,25 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     expect(result).not.toHaveProperty('ghost.delegationCapabilityApproved');
   });
 
+  // Unit: wallpaper permission follows the existing install/update transaction.
+  // The consent helper test cannot detect a missing receipt/list projection here.
+  it('persists explicit wallpaper consent across same-instance updates and drops it when removed', async () => {
+    const { slots: _slots, ...base } = goodManifest();
+    const manifest = { ...base, schemaVersion: 3, minCindyVersion: '0.1.129', wallpaper: true };
+    const pkg = await makeCindy('wallpaper.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { wallpaperCapabilityApproved: true });
+    const selected = manager.list()[0]!;
+    expect(selected).toMatchObject({ enabled: true, wallpaperCapabilityApproved: true });
+    const update = await makeCindy('wallpaper-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    expect(updated).toHaveProperty('ghost.wallpaperCapabilityApproved', true);
+    if (!('ghost' in updated)) throw new Error('fixture update failed');
+    const { wallpaper: _wallpaper, ...withoutWallpaper } = manifest;
+    const removed = await makeCindy('wallpaper-removed.cindy', { ...withoutWallpaper, version: '1.0.2' }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).not.toHaveProperty('ghost.wallpaperCapabilityApproved');
+  });
+
   it('approves observe without tasks and preserves it only while the same instance still declares it', async () => {
     const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { observe: true } };
     const pkg = await makeCindy('observe.cindy', manifest, { 'main.js': '// plugin' });

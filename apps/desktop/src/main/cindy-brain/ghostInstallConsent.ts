@@ -77,6 +77,18 @@ export function confirmedTaskCapability(
   return shown?.some(item => item.key === `agent:${capability}`) ? true : undefined;
 }
 
+/** Only a wallpaper permission row actually shown to the user grants this new capability. */
+export function confirmedWallpaperCapability(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): true | undefined {
+  if (decision.mode !== 'confirmed') return undefined;
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.some(item => item.key === 'wallpaper') ? true : undefined;
+}
+
 /**
  * 本次确认里用户看到过的控制节点。服务端默认安装(exempt)与随包种子一样由发行方
  * 负责，视为已批准声明的全部节点；未确认/无需确认时返回空，已批准节点由 update 延续。

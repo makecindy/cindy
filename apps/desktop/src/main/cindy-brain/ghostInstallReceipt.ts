@@ -145,6 +145,7 @@ export interface GhostInstallReceipt {
   approvedAutoTools?: string[];
   observeCapabilityApproved?: true;
   companionsCapabilityApproved?: true;
+  wallpaperCapabilityApproved?: true;
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
@@ -1312,6 +1313,7 @@ export function createGhostInstallReceipt(input: {
   approvedAutoTools?: readonly string[];
   observeCapabilityApproved?: true;
   companionsCapabilityApproved?: true;
+  wallpaperCapabilityApproved?: true;
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
   enabled: boolean;
@@ -1351,6 +1353,7 @@ export function createGhostInstallReceipt(input: {
     ...approvedAutoToolsField(input.approvedAutoTools, input.manifest),
     ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
     ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
+    ...(input.wallpaperCapabilityApproved === true ? { wallpaperCapabilityApproved: true as const } : {}),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
@@ -1571,6 +1574,7 @@ function validateReceipt(
       ...approvedAutoToolsField(value.approvedAutoTools, manifestResult.manifest),
       ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
       ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
+      ...(value.wallpaperCapabilityApproved === true ? { wallpaperCapabilityApproved: true as const } : {}),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),
