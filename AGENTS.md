@@ -204,6 +204,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   或修改 device-link 的重试／超时／断链恢复逻辑前，必须先读
   `docs/dev-rules/remote-and-mobile-adaptation.md`；其中恢复路径改动必须回答该文件的
   「故障半径三问」。
+- 需要对已有修复做分阶段验收、复盘或移交原现场验证时，先读
+  `docs/dev-rules/engineering-acceptance.md`：区分核心验收与补证，先准备证据和环境预算；
+  补充风险不自动成为合并门禁，小改动不自动扩成完整现场实验。
 - 在 Cindy 内嵌 worktree 会话里工作、准备提交或直推、或做 code review 前，必须先读
   `docs/dev-rules/development-workflow.md`。
 
