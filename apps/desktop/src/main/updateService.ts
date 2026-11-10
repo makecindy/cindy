@@ -1589,6 +1589,11 @@ async function abortApply(reason: string): Promise<void> {
     // Flags are down, so this call deletes. A manifest withdrawal beats both the
     // ready rollback and the superseding hold: the candidate is no longer valid.
     discardStagedPatchFiles();
+    // 自动重启 IPC 已经返回 accepted。启动页只能靠状态里的错误码从「等待自动重启」恢复，
+    // 否则会一直等一个不会发生的重启。discard 内部会先把状态落回 idle 并清掉 lastErrorCode，
+    // 所以必须在它之后再写回本次取消。
+    lastErrorCode = UPDATE_APPLY_ABORTED_ERROR_CODE;
+    broadcastStatus({ status: 'idle', errorCode: UPDATE_APPLY_ABORTED_ERROR_CODE });
     await pendingStatusReadyDecision?.catch(() => undefined);
     return;
   }

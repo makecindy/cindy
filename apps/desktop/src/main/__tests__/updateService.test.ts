@@ -1762,6 +1762,16 @@ describe('app update forward-only policy', () => {
         'skipping staged patch discard — update apply already in flight',
       );
 
+      const statusBroadcasts: { status: string; version?: string; errorCode?: string }[] = [];
+      browserWindowGetAllWindows.mockReturnValue([{
+        isDestroyed: () => false,
+        webContents: {
+          send: (channel: string, payload: { status: string; version?: string; errorCode?: string }) => {
+            if (channel === 'update-status') statusBroadcasts.push(payload);
+          },
+        },
+      } as never]);
+
       finishReclaim?.(false);
       await vi.waitFor(() => {
         expect(service.getUpdateStatus()).toBe('idle');
@@ -1770,7 +1780,11 @@ describe('app update forward-only policy', () => {
       expect(fs.existsSync(patchInfoPath)).toBe(false);
       expect(ipcHandlers.get('update-get-status')?.()).toMatchObject({
         status: 'idle',
-        errorCode: undefined,
+        errorCode: 'update_apply_aborted',
+      });
+      expect(statusBroadcasts.at(-1)).toEqual({
+        status: 'idle',
+        errorCode: 'update_apply_aborted',
       });
       expect(spawnProcess).not.toHaveBeenCalled();
     } finally {
