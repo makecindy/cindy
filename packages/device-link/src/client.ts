@@ -357,7 +357,7 @@ export interface DeviceLinkClientOptions {
   invokeMetrics?: {
     enabled(): boolean;
     record(event: { channel: string; phase: 'sent' | 'result' | 'decoded'; payloadBytes?: number;
-      notModified?: boolean; gzip?: boolean; inflateMs?: number; parseMs?: number }): void;
+      notModified?: boolean; gzip?: boolean; delta?: boolean; inflateMs?: number; parseMs?: number }): void;
     /** Coarser or finer metric row than the channel. Must return fixed names only, never ids or content. */
     label?(channel: string, args: unknown[] | undefined): string;
   };
@@ -2243,6 +2243,7 @@ export class DeviceLinkClient {
         channel, phase: 'result', payloadBytes: byteLength(JSON.stringify(result)),
         notModified: result.ok && result.transfer?.notModified === true,
         gzip: result.ok && typeof result.transfer?.gzipBase64 === 'string',
+        delta: result.ok && result.transfer?.delta !== undefined,
       });
     } catch { /* Diagnostics must never affect delivery or response decoding. */ }
   }
