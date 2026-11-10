@@ -30,6 +30,8 @@ interface FakePty extends IPty {
   __dataListenersDisposed: boolean;
   __exitListenersDisposed: boolean;
   __spawnEnv: Record<string, string | undefined>;
+  __command: string;
+  __args: string[];
 }
 
 function makeFakePty(spawnArgs: { command: string; args: string[]; cols?: number; rows?: number; env?: Record<string, string | undefined> }): FakePty {
@@ -85,6 +87,8 @@ function makeFakePty(spawnArgs: { command: string; args: string[]; cols?: number
     __dataListenersDisposed: false,
     __exitListenersDisposed: false,
     __spawnEnv: spawnArgs.env ?? {},
+    __command: spawnArgs.command,
+    __args: spawnArgs.args,
   };
   return fake;
 }
@@ -162,6 +166,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe('PtyManager.create', () => {
@@ -235,6 +240,81 @@ describe('PtyManager.create', () => {
     mgr.create({ id: 't1', cwd: '/tmp', owner });
     lastSpawn!.__triggerExit({ exitCode: 0 });
     expect(() => mgr.create({ id: 't1', cwd: '/tmp', owner })).toThrow(/already exists/);
+  });
+});
+
+// 生产入口与价值：复用界面 PTY 的 create/read/list/stop，允许断开后凭游标续读。
+// 需求 22 要求宿主托管命令与作业；旧覆盖只有窗口推送，未覆盖续读、内存上限或无窗口 owner。
+// 最小失败输入：两次读取同一游标、缓冲溢出、replace 环境及停止后写入；tier: unit，注入 fake PTY。
+describe('PtyManager host process lifecycle', () => {
+  it('starts a program with an exact environment and keeps it across restart', () => {
+    vi.stubEnv('CINDY_PRIVATE_TEST_TOKEN', 'host-only');
+    const mgr = makeManager();
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    const program = { command: '/usr/bin/example', args: ['--version'] };
+    const env = { PATH: '/usr/bin', EXPLICIT: 'allowed' };
+    mgr.create({ id: 'p', cwd: '/tmp', owner, program, inheritEnv: false, env });
+    expect(lastSpawn!.__command).toBe('/usr/bin/example');
+    expect(lastSpawn!.__args).toEqual(['--version']);
+    expect(lastSpawn!.__spawnEnv).toMatchObject({ PATH: '/usr/bin', EXPLICIT: 'allowed' });
+    expect(lastSpawn!.__spawnEnv.CINDY_PRIVATE_TEST_TOKEN).toBeUndefined();
+    program.args.push('--changed'); env.EXPLICIT = 'changed';
+    lastSpawn!.__triggerExit({ exitCode: 0 });
+    mgr.restart('p', owner);
+    expect(lastSpawn!.__args).toEqual(['--version']);
+    expect(lastSpawn!.__spawnEnv.EXPLICIT).toBe('allowed');
+    expect(lastSpawn!.__spawnEnv.CINDY_PRIVATE_TEST_TOKEN).toBeUndefined();
+  });
+
+  it('retains non-consuming output and exit state across reattachment, with owner-scoped lists', () => {
+    const mgr = makeManager();
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    const other = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 'p', cwd: '/tmp', owner });
+    lastSpawn!.__triggerData('hello'); lastSpawn!.__triggerData('中文');
+    const first = mgr.read('p');
+    expect(first.chunks.map(chunk => chunk.data)).toEqual(['hello', '中文']);
+    expect(mgr.read('p')).toEqual(first);
+    expect(mgr.read('p', first.cursor, first.generation).chunks).toEqual([]);
+    mgr.create({ id: 'p', cwd: '/ignored', owner: other });
+    expect(mgr.list(owner)).toEqual([]);
+    expect(mgr.list(other)).toMatchObject([{ id: 'p', cwd: '/tmp', status: 'running' }]);
+    lastSpawn!.__triggerExit({ exitCode: 3 });
+    expect(mgr.read('p', first.cursor, first.generation)).toMatchObject({ exit: { code: 3 }, chunks: [] });
+    expect(mgr.list(other)).toMatchObject([{ id: 'p', status: 'exited' }]);
+  });
+
+  it('reports gaps for bounded output and resets a cursor from a previous process generation', () => {
+    const mgr = makeManager();
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 'p', cwd: '/tmp', owner });
+    const initial = mgr.read('p');
+    for (let i = 0; i < 300; i++) lastSpawn!.__triggerData('界'.repeat(10000));
+    const retained = mgr.read('p', 0, initial.generation);
+    expect(retained.resetRequired).toBe(true);
+    expect(retained.hasMore).toBe(true);
+    expect(Buffer.byteLength(retained.chunks.map(chunk => chunk.data).join(''))).toBeLessThanOrEqual(65536);
+    expect(mgr.read('p', retained.cursor, retained.generation).chunks[0]?.sequence).toBeGreaterThan(retained.cursor);
+    lastSpawn!.__triggerExit({ exitCode: 0 });
+    mgr.restart('p', owner); lastSpawn!.__triggerData('new');
+    expect(mgr.read('p', retained.cursor, retained.generation)).toMatchObject({ resetRequired: true, chunks: [{ data: 'new' }] });
+    expect(() => mgr.read('p', -1)).toThrow();
+  });
+
+  it('stops input while retaining output, then disposes all resources for its owner', async () => {
+    const mgr = makeManager();
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 'p', cwd: '/tmp', owner });
+    lastSpawn!.__triggerData('retained');
+    mgr.write('p', 'queued'); mgr.stop('p'); await Promise.resolve();
+    expect(lastSpawn!.__killed).toBe(true);
+    expect(lastSpawn!.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(lastSpawn!.__writes).toEqual([]);
+    expect(mgr.list(owner)).toMatchObject([{ id: 'p', status: 'stopping' }]);
+    expect(mgr.read('p').chunks).toMatchObject([{ data: 'retained' }]);
+    mgr.disposeOwner(owner);
+    expect(mgr.list(owner)).toEqual([]);
+    expect(lastSpawn!.__dataListenersDisposed).toBe(true);
   });
 });
 
