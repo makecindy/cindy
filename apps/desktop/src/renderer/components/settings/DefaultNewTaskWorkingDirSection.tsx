@@ -3,19 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { Folder, RotateCcw } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { isDataOwnerIdCurrent, getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
 import {
   setDefaultNewTaskWorkingDir,
   useDefaultNewTaskWorkingDir,
 } from '@/state/defaultNewTaskWorkingDir';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from './settingsRowClasses';
 import { generalSettings } from './GeneralSettings.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 
@@ -49,27 +43,18 @@ export function DefaultNewTaskWorkingDirSection({ ownerId }: { ownerId: string |
   };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className={SETTINGS_SECTION_TITLE_CLASS}>
-        {setting.title}
-      </h2>
-      <div className={SETTINGS_CARD_CLASS}>
-        <div className={`${SETTINGS_ROW_CLASS} flex-wrap`}>
-          <div className="w-full min-w-0 sm:w-auto sm:flex-1">
-            <p className={SETTINGS_ROW_LABEL_CLASS}>
-              {t('settings.defaultNewTaskWorkingDir.label')}
-            </p>
-            <p className={`${SETTINGS_ROW_HINT_CLASS} mt-1`}>
-              {t('settings.defaultNewTaskWorkingDir.hint')}
-            </p>
-            <p
-              className="mt-2 break-all text-12 text-[var(--text-secondary)]"
-              title={path ?? undefined}
-            >
+    <SettingsSection title={setting.title}>
+      <SettingsCard>
+        <SettingsRow
+          wrap
+          title={t('settings.defaultNewTaskWorkingDir.label')}
+          hint={<>
+            <span className="block">{t('settings.defaultNewTaskWorkingDir.hint')}</span>
+            <span className="mt-2 block break-all" title={path ?? undefined}>
               {path ?? t('settings.defaultNewTaskWorkingDir.unset')}
-            </p>
-          </div>
-          <div className="flex w-full min-w-0 flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
+            </span>
+          </>}
+          trailing={<div className="flex w-full min-w-0 flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
             {path && (
               <Button
                 {...setting.controlProps}
@@ -94,9 +79,9 @@ export function DefaultNewTaskWorkingDirSection({ ownerId }: { ownerId: string |
               <Folder size={14} aria-hidden />
               {t('settings.defaultNewTaskWorkingDir.choose')}
             </Button>
-          </div>
-        </div>
-      </div>
-    </div>
+          </div>}
+        />
+      </SettingsCard>
+    </SettingsSection>
   );
 }
