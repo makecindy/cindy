@@ -207,6 +207,45 @@ describe('create_workers tool', () => {
     });
   });
 
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：create_workers 的逐项结果与 user_report（Lead 逐字转告用户）。
+   * - Bug 依据：2026-11-10 协同任务，五个 Worker「创建成功、首条任务已排队」被说成「五个在跑」，
+   *   随后全部因读不到 Lead 的文件而受阻；旧 user_report 只让用户自己去核对终态。
+   * - 现有覆盖缺口：相邻用例只断言创建数量，不区分首条任务到了哪一步，也不说明文件可见范围。
+   * - 最小失败输入：一批里各有一个已送达、已排队、未送达、未附任务的 Worker。
+   * - tier：unit。
+   */
+  it('reports where each first task stands and which files each worker can see', async () => {
+    const dispatched = { kind: 'session-dispatch' as const, source: 'test', dispatched: true as const };
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>()
+      .mockResolvedValueOnce({ ...created(1, 8), dispatched: true, dispatchOutcome: dispatched,
+        workingDir: '/tree', worktree: { path: '/tree', branch: 'cindy/new' } })
+      .mockResolvedValueOnce({ ...created(2, 8), queuedMessageId: 'q1',
+        dispatchOutcome: { ...dispatched, wakeKind: 'queued' }, executionDeviceId: 'device-2' })
+      .mockResolvedValueOnce({ ...created(3, 8), dispatched: false, dispatchOutcome: {
+        kind: 'session-dispatch', source: 'test', dispatched: false, reason: 'AGENT_NOT_READY', message: 'not ready', context: 'c' } })
+      .mockResolvedValueOnce(created(4, 8));
+    const { initial_task: _omitted, ...withoutTask } = worker(4);
+
+    const result = parse(await setup(createWorker).call('create_workers', {
+      workers: [{ ...worker(1), new_worktree: {} }, worker(2), worker(3), withoutTask],
+    }));
+
+    expect(result.results).toMatchObject([
+      { initial_task_state: 'delivered', file_access: 'own_worktree', handoff_hint: expect.stringContaining('not committed') },
+      { initial_task_state: 'queued', file_access: 'other_computer', handoff_hint: expect.stringContaining('cannot read any file') },
+      { initial_task_state: 'not_delivered', file_access: 'lead_working_directory' },
+      { initial_task_state: 'none', file_access: 'lead_working_directory' },
+    ]);
+    expect(result.results[2]).not.toHaveProperty('handoff_hint');
+    expect(result.user_report).toBe(
+      '本批请求创建 4 个 Worker，实际创建成功 4 个，创建失败 0 个，未尝试 0 个，共 0 个未创建。'
+      + '已创建的 Worker 首条任务：1 个已送达，1 个已排队、尚未开始，1 个未送达，1 个未附任务。'
+      + '任务送达不代表已完成，各 Worker 完成后会回报。',
+    );
+  });
+
   it('keeps real per-item outcomes when a non-limit failure occurs between successes', async () => {
     const outcomes = [
       created(1, 8),
@@ -227,7 +266,7 @@ describe('create_workers tool', () => {
       skipped_count: 0,
       not_created_count: 1,
       stopped_early: false,
-      user_report: '本批请求创建 3 个 Worker，实际创建成功 2 个，创建失败 1 个，未尝试 0 个，共 1 个未创建。请按逐项结果核对每个 Worker 的真实终态。',
+      user_report: '本批请求创建 3 个 Worker，实际创建成功 2 个，创建失败 1 个，未尝试 0 个，共 1 个未创建。已创建的 Worker 首条任务：2 个未送达。',
     });
     expect(result.results).toEqual([
       expect.objectContaining({ label: 'worker_1', status: 'created', worker_id: 'worker-id-1' }),

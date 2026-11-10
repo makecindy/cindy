@@ -3053,7 +3053,8 @@ interface OrcaCollabService {
     callerLeadSessionId: string;
     workerId: string;
   }) => Promise<
-    { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string }
+    | { ok: true; workerId?: string; withdrawnFailureNotices?: number }
+    | { ok: false; errorCode: string; message: string }
   >;
   updateWorker: (params: {
     callerLeadSessionId: string;
