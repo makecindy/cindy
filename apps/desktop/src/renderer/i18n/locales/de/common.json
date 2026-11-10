@@ -5306,6 +5306,15 @@
         "ariaLabel": "Mit {{shortcut}} Nachrichten senden"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Standard-Arbeitsverzeichnis für neue Aufgaben",
+      "label": "Standardverzeichnis auf diesem Computer",
+      "hint": "Für neue lokale Aufgaben ohne ausgewähltes Projekt wird dieses Verzeichnis vorausgewählt. Ein ausdrücklich gewähltes Projekt, ein Dialog oder ein Remote-Computer hat Vorrang.",
+      "unset": "Nicht festgelegt (kein Verzeichnis vorausgewählt)",
+      "choose": "Verzeichnis auswählen",
+      "clear": "Standardverzeichnis löschen",
+      "failed": "Das Standard-Arbeitsverzeichnis konnte nicht gespeichert werden. Bitte erneut versuchen."
+    },
     "linkOpen": {
       "title": "Links öffnen",
       "description": "Wähle, wo Links in Nachrichten geöffnet werden. Klicke mit der rechten Maustaste auf einen Link, um nur für diesen Link eine andere Option zu verwenden.",
