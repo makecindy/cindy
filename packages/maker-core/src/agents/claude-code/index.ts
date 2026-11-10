@@ -2917,6 +2917,17 @@ export class ClaudeCodeAgent extends BaseAgent {
         : undefined;
     };
 
+    // API connections own their output limit; native Claude subscriptions retain
+    // the CLI's model defaults. Do not read the flattened, cross-provider catalog.
+    const resolveMaxOutputTokens = (model: string, providerId = mutableProviderId): number | null => {
+      if (effectiveCredentialMode === 'oauth-bearer') return null;
+      const value = this.deps.resolveModelMaxOutputTokens?.(providerId, model);
+      return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
+    };
+    const originalOutputTokenEnv = env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+    const originalRemoteOutputTokenEnv = remoteEnv?.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+    let appliedMaxOutputTokens: number | null = null;
+
     // SDK settings 对象 (优先级最高, 覆盖 user/project/local 文件层) — 本地分支
     // 和远端分支必须**保持一致** , 否则同 session setting 跨本地 / 远端表现不同
     // (eg. summarized reasoning UI 本地有 remote 没)。getter 让 memOverride /
@@ -2955,6 +2966,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         botSkillPolicy: reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
         capabilityRouting: reviewMode ? undefined : capabilityRouting,
       });
+      if (appliedMaxOutputTokens !== null) {
+        // --settings wins over settings.json.env without changing that file.
+        // Process env alone can be overwritten by the user's global settings.
+        settings.env = { ...settings.env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(appliedMaxOutputTokens) };
+      }
       if (duplicateMcpChoices.denyNativeServers.length) {
         settings.deniedMcpServers = [...(settings.deniedMcpServers ?? []),
           ...duplicateMcpChoices.denyNativeServers.map(serverName => ({ serverName }))];
@@ -3255,11 +3271,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     let activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
     let activeQueryReadonlyDirs = [...mutableExtraDirs];
     let extraDirsRebuildAttempted = false;
-    // 本机热切跨过 Explore inherit-cap 策略后,子进程 env 必须随 Query 重建。
+    // 本机热切改变输出上限或 Explore inherit-cap 后,子进程 env 必须随 Query 重建。
     // 代际与 extraDirs 同款:setModel 只加代,buildQuery 才把当前 Query 标成已吃进
     // 该代。await buildQuery 期间再切一次不会被这次 spawn 误标成已同步。
-    let exploreInheritCapEnvGeneration = 0;
-    let activeQueryExploreInheritCapGeneration = exploreInheritCapEnvGeneration;
+    let modelEnvGeneration = 0;
+    let activeQueryModelEnvGeneration = modelEnvGeneration;
     // 拷贝进工作目录只允许作 Claude resume 不吃新 additionalDirectories 时的临时缺口。
     // 默认关闭;启用条件:extraDirsRebuildAttempted 且下一 Query 代际仍落后。落地后
     // library extraDirs 重建成功即删副本,不得把拷贝写成架构。
@@ -3733,6 +3749,13 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (override) throw new Error(workspaceSettingsOverrideMessage(override));
       }
       const currentSdkModel = sdkModelFor(mutableModel);
+      appliedMaxOutputTokens = resolveMaxOutputTokens(mutableModel);
+      for (const [targetEnv, fallback] of [[env, originalOutputTokenEnv], [remoteEnv, originalRemoteOutputTokenEnv]] as const) {
+        if (!targetEnv) continue;
+        const value = appliedMaxOutputTokens === null ? fallback : String(appliedMaxOutputTokens);
+        if (value === undefined) delete targetEnv.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+        else targetEnv.CLAUDE_CODE_MAX_OUTPUT_TOKENS = value;
+      }
       const workingWindow = resolveModelContextWindow(mutableModel);
       appliedContextWindow = workingWindow;
       applyClaudeContextWindow(env, workingWindow, getAutoCompactThresholdPct());
@@ -4405,7 +4428,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
       activeQueryReadonlyDirs = [...mutableExtraDirs];
       extraDirsRebuildAttempted = false;
-      activeQueryExploreInheritCapGeneration = exploreInheritCapEnvGeneration;
+      activeQueryModelEnvGeneration = modelEnvGeneration;
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
       sdkInPlanMode = sdkStartPermissionMode === 'plan';
       // Review 会话不带任何 Bot 身份/能力(与 botSkillPolicy 同口径)。
@@ -6614,7 +6637,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           pendingRewindTo = durableSdkSessionId;
           extraDirsRebuildAttempted = true;
         } else if (
-          activeQueryExploreInheritCapGeneration !== exploreInheritCapEnvGeneration
+          activeQueryModelEnvGeneration !== modelEnvGeneration
           && !pendingRewindTo
           && !activeBridgeRewindResumeAt
           && durableSdkSessionId
@@ -7556,7 +7579,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         applyClaudeContextWindow(expected, window, getAutoCompactThresholdPct(model, provider));
         const liveEnv = opts.remoteHostId ? remoteEnv : env;
         return expected.CLAUDE_CODE_AUTO_COMPACT_WINDOW !== liveEnv?.CLAUDE_CODE_AUTO_COMPACT_WINDOW
-          || expected.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE !== liveEnv?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+          || expected.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE !== liveEnv?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+          || resolveMaxOutputTokens(model, provider) !== appliedMaxOutputTokens;
       },
 
       async setModel(
@@ -7660,6 +7684,12 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 误拒(codex P2 #1035)。
         }
         const sdkModel = sdkModelFor(newModel);
+        const outputLimitNeedsRebuild = resolveMaxOutputTokens(newModel, targetProviderId) !== appliedMaxOutputTokens;
+        if (outputLimitNeedsRebuild && opts.remoteHostId) {
+          throw new Error(
+            `[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] switching to "${newModel}" requires a different output limit; close and recreate the remote session to apply it`,
+          );
+        }
         const isControlBlocked = controlRequestsBlocked();
         const liveEnv = opts.remoteHostId ? remoteEnv : env;
         const exploreInheritCapNeedsRebuild = liveEnv
@@ -7763,7 +7793,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 下一轮 send 再走 extraDirs 同款 resume+fork 重建。这里不碰
           // pendingRewindTo:热切若落在 in-flight turn / rewind 接受窗,提前设标记
           // 会让 forward loop 把当前 Query 当成过渡态静音。
-          exploreInheritCapEnvGeneration += 1;
+        }
+        if ((exploreInheritCapNeedsRebuild || outputLimitNeedsRebuild) && !opts.remoteHostId) {
+          modelEnvGeneration += 1;
         }
       },
 

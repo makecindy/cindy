@@ -212,6 +212,8 @@ async function startRewindableSession(
     effort?: Effort;
     availableModels?: ModelDescriptor[];
     resolveModelContextLimit?: AgentDeps['resolveModelContextLimit'];
+    resolveModelMaxOutputTokens?: AgentDeps['resolveModelMaxOutputTokens'];
+    providerId?: string;
     resolveModelCompactionPct?: AgentDeps['resolveModelCompactionPct'];
     resolveModelEfforts?: AgentDeps['resolveModelEfforts'];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
@@ -246,6 +248,7 @@ async function startRewindableSession(
     ),
     capabilityAdditions: { availableModels: options.availableModels ?? TEST_MODELS },
     resolveModelContextLimit: options.resolveModelContextLimit,
+    resolveModelMaxOutputTokens: options.resolveModelMaxOutputTokens,
     resolveModelCompactionPct: options.resolveModelCompactionPct,
     ...(options.resolveModelEfforts ? { resolveModelEfforts: options.resolveModelEfforts } : {}),
     ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
@@ -253,6 +256,7 @@ async function startRewindableSession(
   const handle = await agent.startSession({
     sessionId: 'session-rewind',
     model: options.model ?? 'claude-opus-4-6',
+    ...(options.providerId ? { providerId: options.providerId } : {}),
     ...(options.effort ? { effort: options.effort } : {}),
     workingDir,
     permissionMode: 'acceptEdits',
@@ -283,6 +287,68 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  // Regression: connection metadata reached the catalog, but never the Claude spawn.
+  // Existing window tests do not exercise output limits. Unit SDK-boundary assertions
+  // cover two same-name routes, refresh/removal and the settings-file precedence layer.
+  it.each([undefined, 'ssh-test'])('scopes output limits to the current route (%s)', async (remoteHostId) => {
+    let limit: number | null = 48_000;
+    const { handle, remoteStartParams } = await startRewindableSession({
+      remoteHostId, providerId: 'connection-a',
+      resolveModelMaxOutputTokens: (provider) => provider === 'connection-a' ? limit : 96_000,
+    });
+    try {
+      const start = remoteHostId ? remoteStartParams[0] : sdkMock.query.mock.calls[0][0].options;
+      expect(start.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('48000');
+      const settings = remoteHostId ? start.extraOptions.settings : start.settings;
+      expect(settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('48000');
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(false);
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6', { providerId: 'connection-b' })).toBe(true);
+      if (remoteHostId) {
+        await expect(handle.setModel?.('claude-opus-4-6', { providerId: 'connection-b' }))
+          .rejects.toThrow('REMOTE_MODEL_SWITCH_ROUTE_CHANGE');
+      }
+      limit = 64_000;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+      limit = null;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+    } finally { await handle.close(); }
+  });
+
+  it('restores the original output environment when a live model switch removes the route limit', async () => {
+    const original = process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+    process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = '20000';
+    const { handle, firstQuery } = await startRewindableSession({
+      providerId: 'connection-a',
+      resolveModelMaxOutputTokens: (_provider, model) => model === 'claude-opus-4-6' ? 48_000 : null,
+    });
+    try {
+      void (async () => { for await (const _event of handle.events()) { /* drain */ } })();
+      firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-output-limit' });
+      await vi.waitFor(() => expect(handle.id).toBe('sdk-output-limit'));
+      await handle.setModel?.('claude-sonnet-5');
+      sdkMock.query.mockReturnValue(createFakeQuery());
+      await handle.send({ type: 'user', content: 'continue with the other model' });
+      const restarted = sdkMock.query.mock.calls[1][0].options;
+      expect(restarted.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('20000');
+      expect(restarted.settings.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
+      expect(restarted.forkSession).toBe(true);
+      expect(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('20000');
+    } finally {
+      await handle.close();
+      if (original === undefined) delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+      else process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = original;
+    }
+  });
+
+  it('leaves native subscription output defaults alone', async () => {
+    const { handle } = await startRewindableSession({
+      providerId: 'anthropic', resolveModelMaxOutputTokens: () => 384_000,
+    });
+    try {
+      expect(sdkMock.query.mock.calls[0][0].options.settings.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
+    } finally { await handle.close(); }
+  });
+
   it('keeps the explicit standard override when a suppressed task restarts after relaxation', async () => {
     const policy = { isAllowed: () => true, isRequestAllowed: () => false, subscribe: () => () => {} };
     const { handle } = await startRewindableSession({ fastMode: false, fastModePolicy: policy });
