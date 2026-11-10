@@ -23,8 +23,8 @@ export function withPeerAttachmentUpload<T>(upload: PeerUpload, operation: () =>
 }
 
 import { createLogger } from '../logger';
-import * as imageCacheStore from '../imageCacheStore';
-import * as cindyMediaBlobStore from '../cindy-media/blobStore';
+import * as imageCacheStore from '../imageCacheStore.desktop';
+import * as cindyMediaBlobStore from '../cindy-media/blobStore.desktop';
 import { uploadLocalFile, uploadBuffer, removeRemote, mimeOf, type UploadResult } from './mediaTransfer';
 import { sharedTaskMediaId } from './sharedTaskMediaContext.js';
 import {

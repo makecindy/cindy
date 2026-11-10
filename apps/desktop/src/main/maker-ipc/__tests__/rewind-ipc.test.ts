@@ -37,7 +37,7 @@ vi.mock('../../maker-orchestration/rewind.js', () => ({
   commitRewindAtMessage: mocks.commitRewindAtMessage,
 }));
 
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   drainPersistQueue: mocks.drainPersistQueue,
 }));
 

@@ -103,7 +103,7 @@ import {
   type AgentIslandCompanionIdentity,
 } from './companionIdentity.js';
 import { createLogger } from '../logger.js';
-import { t, tCount } from '../i18n.js';
+import { t, tCount } from '../i18n.desktop.js';
 import { isAppContentWindow, isFocusedAppContentWindow } from '../windowFocusClassifier.js';
 import {
   acknowledgeAgentIslandSessionRead,
@@ -2080,6 +2080,11 @@ export class AgentIslandService {
   /** Current public activity only; avoids scanning historical Bot Session links. */
   getSessionActivitySnapshots(): SessionActivitySnapshot[] {
     return this.buildSessionActivityPayload().map(canonicalSessionActivity);
+  }
+
+  /** Complete owned-host list, including unread results past the island's display TTL. */
+  getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
+    return buildAllSessionActivitySnapshots(this.state);
   }
 
   /** Read the same canonical snapshot used by sidebar and device-list relays. */

@@ -53,6 +53,25 @@ async function fillBothQuestions(view: ReturnType<typeof render>) {
 }
 
 describe('AskUserQuestionPrompt identity', () => {
+  // A mid-edit withdrawal must retain text and choices as an editable supplement, without stale actions.
+  // Entry: real prompt rerender; tier: unit.
+  it('turns selected choices and text into a supplement when withdrawn', () => {
+    const props = { ...makeProps(), pending: { requestId: 'withdrawn', delivery: 'async' as const,
+      questions: [{ question: 'Choose?', options: [{ label: 'A' }, { label: 'B' }], multiSelect: true }] },
+      draft: { requestId: 'withdrawn', currentIndex: 0, answers: {}, started: true,
+        customInput: 'More detail', selectedLabels: ['A'], showCustomInput: true },
+    };
+    const view = render(createElement(AskUserQuestionPrompt, props));
+    view.rerender(createElement(AskUserQuestionPrompt, { ...props,
+      pending: { ...props.pending, withdrawalReason: 'Already found' } }));
+    expect(view.queryByRole('button', { name: 'Skip' })).toBeNull();
+    expect(view.queryByText('B')).toBeNull();
+    expect((view.getByPlaceholderText('Type your answer…') as HTMLTextAreaElement).value).toBe('A\nMore detail');
+    fireEvent.click(view.getByRole('button', { name: 'Send additional information' }));
+    expect(props.onAnswer).toHaveBeenCalledWith('withdrawn', { 'Choose?': 'A\nMore detail' });
+    expect(view.getByRole('button', { name: 'Close' })).toBeTruthy();
+  });
+
   it('submits distinct ids for two identical question titles', async () => {
     const props = { ...makeProps(), pending: { requestId: 'duplicate-titles', questions: [
       { id: 'first', question: 'Choose', options: [{ label: 'A' }] },
@@ -91,6 +110,20 @@ describe('AskUserQuestionPrompt identity', () => {
     expect(props.onAnswer).toHaveBeenLastCalledWith('request-1', {
       'Final?': multiSelect ? JSON.stringify(['Keep this answer']) : 'Keep this answer',
     });
+  });
+
+  it('navigates independent pending questions without submitting the current draft', () => {
+    const props = makeProps();
+    const first: PendingAskUser = { requestId: 'first', delivery: 'async', questions: [{ question: 'First?' }] };
+    const second: PendingAskUser = { requestId: 'second', delivery: 'async', questions: [{ question: 'Second?' }] };
+    const onSelectQuestion = vi.fn();
+    const view = render(createElement(AskUserQuestionPrompt, { ...props, pending: first,
+      pendingQuestions: [first, second], onSelectQuestion }));
+    fireEvent.change(view.getByPlaceholderText('Type your answer…'), { target: { value: 'Draft' } });
+    fireEvent.click(view.getByRole('button', { name: 'Next' }));
+    expect(onSelectQuestion).toHaveBeenCalledExactlyOnceWith('second');
+    expect(props.onAnswer).not.toHaveBeenCalled();
+    expect(props.onDraftChange.mock.lastCall?.[0]).toMatchObject({ requestId: 'first', customInput: 'Draft' });
   });
 
   it('starts protection on IME composition, but not focus or opening the text field', () => {

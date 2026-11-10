@@ -47,6 +47,8 @@ export interface SubscriptionAccountView extends SubscriptionAccountConfig {
   plan?: string;
   directory: string;
   status: 'ready' | 'signed-out' | 'unavailable' | 'limited';
+  /** Advisory diagnosis only; absent on older hosts. Never includes CLI output. */
+  authIssue?: 'codex-provider-managed-auth';
   running: number;
   usage?: SubscriptionAccountUsage;
 }

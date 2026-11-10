@@ -307,24 +307,25 @@ describe('sendToSession ordering', () => {
       'agentInputCoordinatorHolder = inputCoordinator;',
     );
 
-    expect(orcaInterAgentDispatcherSource).toContain('interface QueuedOrcaInterAgentAcceptedCallback');
-    expect(orcaInterAgentDispatcherSource).toMatch(
-      /const queuedOrcaInterAgentAcceptedCallbacks = new Map<\s*string,\s*QueuedOrcaInterAgentAcceptedCallback\s*>\(\);/,
-    );
+    // Callback lifetime is exercised by acceptedCallbackRunner.test.ts; this
+    // guard only verifies that Orca and the coordinator use that shared service.
+    expect(orcaInterAgentDispatcherSource).toContain('const queuedAccepted = createQueuedAcceptedCallbacks(log);');
+    for (const [name, method] of [
+      ['register', 'register'], ['rollback', 'rollback'], ['settle', 'settle'],
+      ['run', 'run'], ['discard', 'discard'],
+    ]) {
+      expect(orcaInterAgentDispatcherSource).toContain(
+        `const ${name}QueuedOrcaInterAgentAcceptedCallback = queuedAccepted.${method};`,
+      );
+    }
     expect(dispatchBlock).toMatch(
       /registerQueuedOrcaInterAgentAcceptedCallback\(\s*clientId,\s*params\.onAccepted,\s*params\.onAcceptedRollback,\s*params\.onAcceptedCommit,?\s*\);/,
     );
-    expect(orcaInterAgentDispatcherSource).toContain('rollback,');
-    expect(orcaInterAgentDispatcherSource).toContain('commit,');
-    expect(orcaInterAgentDispatcherSource).toContain('didRun: false,');
     expect(coordinatorBlock).toContain('await orcaInterAgentDispatcher.settleQueuedOrcaInterAgentAcceptedCallback(');
     expectOrder(coordinatorBlock, 'sessionId,', 'sendOpts,');
     expectOrder(coordinatorBlock, 'sendOpts,', 'result.outcome');
     expect(coordinatorBlock).toContain('await orcaInterAgentDispatcher.rollbackQueuedOrcaInterAgentAcceptedCallback(');
-    expect(orcaInterAgentDispatcherSource).toContain('callback.didRun = true;');
-    expect(orcaInterAgentDispatcherSource).toContain('return runAcceptedCallback(callback.accepted, sessionId, item.clientId, log);');
     expect(coordinatorBlock).toContain('orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);');
-    expectOrder(orcaInterAgentDispatcherSource, 'callback.didRun = true;', 'return runAcceptedCallback(callback.accepted, sessionId, item.clientId, log);');
   });
 
   it('keeps queued Orca lead/worker items structured-cloneable', () => {

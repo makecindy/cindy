@@ -36,16 +36,33 @@ export interface AskQuestion {
 export function formatAsyncQuestionSupplement(
   questions: readonly AskQuestion[],
   answers: Record<string, string>,
+  context?: { late?: boolean },
 ): string {
   const replies = questions.flatMap((q) => {
     const answer = answers[answerKey(q)] ?? answers[q.question] ?? (q.header ? answers[q.header] : undefined);
     return typeof answer === 'string' && answer.trim()
       ? [{ ...(q.id ? { questionItemId: q.id } : {}), question: q.question, answer: answer.trim() }] : [];
   });
-  if (questions.length && questions.every((q) => q.id?.startsWith('["request_user_input_async",'))) {
-    return `<send_user_message_question_reply>\n${JSON.stringify(replies)}\n</send_user_message_question_reply>`;
-  }
-  return replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
+  if (!replies.length) return '';
+  const message = questions.length && questions.every((q) => q.id?.startsWith('["request_user_input_async",'))
+    ? `<send_user_message_question_reply>\n${JSON.stringify(replies)}\n</send_user_message_question_reply>`
+    : replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
+  return context?.late
+    ? `${message}\n\n<cindy_question_context>\nThis is a delayed answer to an earlier question. Check the current task state and whether the question still applies before acting; do not repeat work already completed. This context is added by Cindy, not part of the user's answer or new authorization.\n</cindy_question_context>`
+    : message;
+}
+
+/** Keep selected choices and typed text editable when an obsolete card becomes a supplement. */
+export function withdrawnQuestionDraftText(customInput: string, selectedLabels: Iterable<string>, savedAnswer?: string): string {
+  const selected = [...selectedLabels];
+  if (selected.length) return [...selected.filter((label) => label !== customInput.trim()), ...(customInput ? [customInput] : [])].join('\n');
+  if (customInput) return customInput;
+  if (!savedAnswer) return '';
+  try {
+    const decoded = JSON.parse(savedAnswer);
+    if (Array.isArray(decoded) && decoded.every((value) => typeof value === 'string')) return decoded.join('\n');
+  } catch { /* A plain single answer needs no decoding. */ }
+  return savedAnswer;
 }
 
 /** Only a confirmed cancellation permits delivery as a new user message. A
@@ -865,6 +882,7 @@ const INTERACTION_PRIORITY: Record<string, number> = {
 };
 
 export function interactionPriority(item: PendingInteractionLike): number {
+  if (interactionKind(item) === 'ask_user_question' && item.request.delivery === 'async') return 2.5;
   return INTERACTION_PRIORITY[interactionKind(item)] ?? 100;
 }
 
@@ -873,8 +891,8 @@ export function sortPendingInteractions(
 ): PendingInteractionLike[] {
   return interactions
     .map((item, index) => ({ item, index }))
-    .sort((a, b) => Number(b.item.retainedDraft === true) - Number(a.item.retainedDraft === true)
-      || interactionPriority(a.item) - interactionPriority(b.item) || a.index - b.index)
+    .sort((a, b) => interactionPriority(a.item) - interactionPriority(b.item)
+      || Number(b.item.retainedDraft === true) - Number(a.item.retainedDraft === true) || a.index - b.index)
     .map(({ item }) => item);
 }
 

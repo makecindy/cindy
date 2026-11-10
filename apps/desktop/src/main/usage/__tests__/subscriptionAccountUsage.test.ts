@@ -13,14 +13,14 @@ vi.mock('../../appSessionState.js', () => ({
 vi.mock('../../maker-host/subscription-account-auth.js', () => ({
   subscriptionAccountKind: (id: string) => (id.startsWith('claude') ? 'claude' : 'xai'),
 }));
-vi.mock('../../maker-host/grok-oauth-login.js', () => ({
+vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({
   hasGrokOAuthLogin: (id: string) => state.tokens.has(id),
   getGrokAccessToken: async (id: string) => state.tokens.get(id),
 }));
 vi.mock('../../maker-host/provider-route.js', () => ({
   isProviderRouteMutationInProgress: () => false,
 }));
-vi.mock('../../maker-host/outbound-fetch.js', () => ({
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({
   outboundFetch: (...args: unknown[]) => state.outboundFetch(...args),
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({

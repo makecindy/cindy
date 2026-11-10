@@ -17,7 +17,7 @@ import {
 import {
   AgentInputCoordinator,
   type AgentInputCoordinatorDeps,
-} from '../agent-input-coordinator.js';
+} from '../agent-input-coordinator.desktop.js';
 import { SessionTurnActivityTracker } from '../sessionTurnActivityTracker.js';
 import { createRehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';

@@ -898,7 +898,7 @@ function DetailHeader({
                   {resolvedDelete && (
                     <>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={resolvedDelete.onClick} disabled={management.busy}>
+                      <DropdownMenuItem variant="danger" onClick={resolvedDelete.onClick} disabled={management.busy}>
                         <Trash2 size={18} className="mr-2.5" />
                         {resolvedDelete.label}
                       </DropdownMenuItem>
@@ -995,7 +995,11 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
       }
       onChanged();
     } catch (error) {
-      if (!String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED')) toast.error(t('subscriptionAccounts.failed'));
+      const code = extractIpcError(error)?.code;
+      if (code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
+        toast.error(t(code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
+          ? 'subscriptionAccounts.providerManagedAuth'
+          : 'subscriptionAccounts.failed'));
     } finally { login.current = null; setBusy(false); }
   };
   return <DetailHeader provider={provider ? { ...provider, connected } : provider} children={children}
@@ -1940,8 +1944,8 @@ function XdGatewayHeader({
         </DropdownMenuItem>
       )}
       {connected && (
-        <DropdownMenuItem onClick={() => void handleDisconnect()}>
-          <LogOut size={14} className="mr-2.5 text-[var(--text-tertiary)]" />
+        <DropdownMenuItem variant="danger" onClick={() => void handleDisconnect()}>
+          <LogOut size={14} className="mr-2.5" />
           {t('settings.providers.button.disconnect')}
         </DropdownMenuItem>
       )}

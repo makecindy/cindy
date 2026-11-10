@@ -19,7 +19,7 @@ import { decodeBotAvatarImage } from './botAvatarSelection.js';
 import { runRegisteredBotLifecycleAction } from '../../maker-ipc/botLifecycleService.js';
 import { listBotSettingsCapabilities, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import { isProviderSharePeer, isSharedTaskPeer } from '@cindy/device-link';
-import { readDeviceLinkSettings } from '../../device-link/settings-store.js';
+import { readDeviceLinkSettings } from '../../device-link/settings-store.desktop.js';
 import { readRemoteBotSessionAccess } from './botRemoteSessionAccess.js';
 import { createBotRemoteSettingsHost } from './botRemoteSettingsHost.js';
 import { createBotRemoteSettingsOps } from './botRemoteSettingsOps.js';

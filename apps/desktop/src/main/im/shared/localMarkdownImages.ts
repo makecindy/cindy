@@ -6,9 +6,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
+import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore.desktop';
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
-import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
+import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore.desktop';
 import { materializeTaskImageText } from '../../cindy-media/taskImageDelivery';
 import {
   localTaskImagePath,

@@ -171,4 +171,36 @@ describe('claude-session-background-activity', () => {
     }
     expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
   });
+
+  // #8671: /context 卡片(getContextUsage,默认 detail:'full')让 CLI 对每类输入各发
+  // 一笔 count_tokens 计量请求 —— 不生成 token、也不是后台子 agent 的采样流量。
+  // 观察器与请求侧路由 transform(anthropic-compat-proxy-host)共用同一判据:这类
+  // 探测不得点亮「后台子任务运行中」;真实 /v1/messages 采样仍照常点亮。URL 带
+  // ?beta=true 是 SDK 实际发出的形态(providerUpstreamErrorObserver.test 已录),
+  // 判据必须剥 query 后按后缀匹配。
+  it('count_tokens 用量探测不点亮横幅;真实采样仍点亮', () => {
+    const sid = 's7';
+    runTurn(sid, 'sdk-7');
+    const observer = createClaudeSessionActivityResponseObserver(() => sid);
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/v1/messages/count_tokens?beta=true',
+      upstreamBase: 'https://up',
+      status: 200,
+      responseHeaders: {},
+      requestBody: Buffer.alloc(0),
+      requestHeaders: { 'x-claude-code-session-id': 'sdk-7' },
+    };
+    vi.advanceTimersByTime(TURN_END_GRACE_MS + 100);
+    expect(observer(ctx)).toBeNull();
+    // 探测后立刻核查:若被误记为活动,此刻(宽限外的首笔)就会点亮。
+    expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+    expect(broadcasts).not.toContainEqual({ sessionId: sid, active: true });
+
+    // 对照:同一时刻的真实采样请求照常建 sink 并点亮。
+    const sink = observer({ ...ctx, url: '/v1/messages' });
+    expect(sink).not.toBeNull();
+    expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+  });
 });

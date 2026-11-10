@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from '@/lib/toast';
 import type { SubscriptionPoolView } from '../../../../shared/subscriptionAccounts';
@@ -60,6 +60,19 @@ beforeEach(() => {
 });
 
 describe('SubscriptionAccountsSection usage', () => {
+  // #9517, unit: existing settings tests never exercised an account operation
+  // failure. A serialized provider-auth error must show the recovery instruction.
+  it('explains provider-managed authentication when account login fails', async () => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async command => {
+      if (command.action === 'add') throw new Error('[SUBSCRIPTION_CODEX_PROVIDER_AUTH] Account unavailable');
+      return { ...view, providerId: 'openai' };
+    });
+    render(<SubscriptionAccountsSection providerId="openai" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'subscriptionAccounts.add' }));
+    await waitFor(() => expect(error).toHaveBeenCalledWith('subscriptionAccounts.providerManagedAuth'));
+  });
+
   it('keeps the provider card on the default account and shows every window of added accounts', async () => {
     render(
       <SubscriptionAccountsSection
@@ -104,6 +117,51 @@ describe('SubscriptionAccountsSection usage', () => {
     const trigger = await screen.findByRole('button', { name: 'providerGroup.member.moreAria' });
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' });
     expect(await screen.findByRole('menuitem', { name: label })).toBeTruthy();
+  });
+  // Regression: with nothing signed in, the CLI default slot showed as "Account 1 · Needs sign-in"
+  // with a strategy picker, limit and switch, as if an account existed.
+  it('lists no account and no strategy before anything signs in', async () => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      ...view,
+      configured: false,
+      accounts: [{ ...view.accounts[0], identity: undefined, status: 'signed-out' }],
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    // The loading spinner goes once the read lands.
+    await vi.waitFor(() => expect(document.querySelector('.animate-spinner')).toBeNull());
+    expect(screen.queryAllByTestId('subscription-account')).toHaveLength(0);
+    expect(screen.queryByRole('radiogroup')).toBeNull();
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.queryByText('1')).toBeNull();
+    expect(screen.getByRole('button', { name: 'subscriptionAccounts.add' })).toBeTruthy();
+  });
+  // An account that needs signing in again is still an account: known, busy, or beside another.
+  const unknown = { ...view.accounts[0], identity: undefined, status: 'signed-out' as const };
+  it.each([
+    ['its identity is known', [{ ...unknown, identity: 'first@example.test' }]],
+    ['another account exists', [unknown, view.accounts[1]]],
+    ['a task still runs on it', [{ ...unknown, running: 1 }]],
+  ])('keeps a signed-out default account when %s', async (_, accounts) => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, accounts });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    expect(await screen.findAllByTestId('subscription-account')).toHaveLength(accounts.length);
+  });
+  it('shows the strategy only when there are accounts to choose between', async () => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      ...view,
+      strategy: 'weight',
+      accounts: [view.accounts[0]],
+    });
+    const { unmount } = render(<SubscriptionAccountsSection providerId="anthropic" />);
+    expect(await screen.findAllByTestId('subscription-account')).toHaveLength(1);
+    expect(screen.queryByRole('radiogroup')).toBeNull();
+    expect(screen.queryByLabelText('providerGroup.member.weightAria')).toBeNull();
+    expect(screen.getByLabelText('providerGroup.member.limitAria')).toBeTruthy();
+    unmount();
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, strategy: 'weight' });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    expect(await screen.findByRole('radiogroup', { name: 'subscriptionAccounts.strategy' })).toBeTruthy();
+    expect(screen.getAllByLabelText('providerGroup.member.weightAria')).toHaveLength(2);
   });
   // The folder path used to be an always-visible disclosure under every account; it is now a menu action.
   it('opens the account folder from the account menu and reports a failure', async () => {

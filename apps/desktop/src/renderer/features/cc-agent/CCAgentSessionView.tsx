@@ -1447,7 +1447,7 @@ function CCAgentSessionContent({
     }
   }, [session?.status, sessionId, navigate, ownsWindowRoute]);
   const vendorAuthGate = useVendorAuthGate();
-  const { confirmWithCheckbox } = useConfirmDialog();
+  const { confirm: confirmRebalance } = useConfirmDialog();
   const [workerRouteChecked, setWorkerRouteChecked] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1904,6 +1904,8 @@ function CCAgentSessionContent({
     pendingPermission,
     respondToPermission,
     pendingAskUser,
+    pendingAskUserQueue,
+    selectAskUserQuestion,
     answerUserQuestion,
     pendingPluginSetup,
     pluginSetupViewerState,
@@ -4315,7 +4317,7 @@ function CCAgentSessionContent({
         recordRebalance = await offerSessionRebalance({
           sessionId,
           ...(remoteDeviceId ? { hostDeviceId: remoteDeviceId } : {}),
-          confirmWithCheckbox,
+          confirm: confirmRebalance,
           t,
         });
       }
@@ -4421,7 +4423,7 @@ function CCAgentSessionContent({
       vendorAuthGate,
       displayAgentKind,
       agentSwitchIntent,
-      confirmWithCheckbox,
+      confirmRebalance,
       remoteDeviceId,
       sessionHandoffPreparing,
       cindyMakeInputLocked,
@@ -6073,6 +6075,8 @@ function CCAgentSessionContent({
                     workingDir={session?.workingDir ?? ''}
                     remoteHostId={session?.remoteHostId}
                     pending={pendingAskUser}
+                    pendingQuestions={pendingAskUserQueue}
+                    onSelectQuestion={selectAskUserQuestion}
                     onAnswer={answerUserQuestion}
                     viewerState={askUserViewerState}
                     onViewerStateChange={setAskUserViewerState}

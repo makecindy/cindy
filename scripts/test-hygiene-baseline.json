@@ -192,9 +192,6 @@
     "apps/desktop/src/main/cindy-brain/__tests__/ghostUserDataRelocation.test.ts": {
       "sourceReads": 1
     },
-    "apps/desktop/src/main/cindy-brain/__tests__/nodeRuntimePackaging.test.ts": {
-      "sourceReads": 14
-    },
     "apps/desktop/src/main/cindy-brain/__tests__/pluginModelPrefsIpc.test.ts": {
       "sourceReads": 1
     },

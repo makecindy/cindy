@@ -185,6 +185,11 @@ function latestToolResultContent(request: Record<string, unknown>): string {
 
 function scriptedAnthropicTurn(requestBody: string): string {
   const toolResultCount = countToolResults(requestBody);
+  if (requestBody.includes('hand off simulator QR directly')) {
+    return toolResultCount === 0
+      ? anthropicToolTurn(1, 'request_input_handoff', { purpose: 'Scan to sign in', image: 'simulator-qr.png' })
+      : anthropicTextTurn(2, 'Handoff requested');
+  }
   if (requestBody.includes('discover Cindy controls')) {
     const call = (tool: string, args: Record<string, unknown>) => ({ name: 'cindy_mcp_call_tool', input: { server: 'cindy_helper', tool, args } });
     const calls = [
@@ -427,6 +432,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   let agentHome = '';
   const orcaCalls: Array<Record<string, unknown>> = [];
   const controlCalls: Array<Record<string, unknown>> = [];
+  const handoffCalls: Array<Record<string, unknown>> = [];
   let controlSize = 16;
   const echoCalls: Array<{ text: unknown }> = [];
   const statusCalls: Array<Record<string, never>> = [];
@@ -673,11 +679,20 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         return;
       }
       if (req.url?.includes('/controls')) {
-        const server = createXdtHelperMcpServer({ appSettings: { call: async input => {
+        const server = createXdtHelperMcpServer({ inputHandoff: {
+          start: async () => ({ ok: true, requestId: 'window-handoff' }),
+          startImage: async (_context, input) => {
+            handoffCalls.push({ ...input });
+            return { ok: true, requestId: 'image-handoff' };
+          },
+        }, appSettings: { call: async input => {
           controlCalls.push(input);
           if (input.operation === 'update') controlSize = Number(input.patch?.uiSize);
           return { state: { uiSize: controlSize } };
-        } } }, { agentKind: 'pi', workingDir: '/fixture', sessionId: 'control-owner' });
+        } } }, { agentKind: 'pi', workingDir: '/fixture', sessionId: 'control-owner',
+          getSessionContext: () => ({ agentKind: 'pi', workingDir: '/fixture', sessionId: 'control-owner',
+            sessionInstanceId: 'control-instance', mcpCallerKind: 'root', mcpCallerAttested: true }),
+        });
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
         res.on('close', () => { void transport.close(); void server.close(); });
         await server.connect(transport);
@@ -1150,6 +1165,22 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     expect(latestToolResultContent(requests.at(-1)!)).toContain('17');
     expect(approvals).toContain('mcp__cindy_helper__call_tool');
     expect(events.some(event => event.type === 'text' && (event.data as { text?: string }).text?.includes('Controls verified'))).toBe(true);
+  });
+
+  // Integration: production helper -> real Pi bridge -> host callback. The old
+  // gateway-only entry required discovery and had no image schema; verify direct
+  // discovery and real permission identity, not online model selection quality.
+  it('calls screenshot handoff directly with its real MCP permission identity', { timeout: 90_000 }, async () => {
+    handoffCalls.length = 0;
+    const approvals: string[] = [];
+    const { requests } = await runOneTurn('ask', async request => {
+      if (request.kind === 'permission') approvals.push(request.toolName);
+      return { kind: 'permission', behavior: 'allow' };
+    }, 'controls', 'hand off simulator QR directly', false, 'input-handoff-first-use');
+    expect(handoffCalls).toEqual([{ purpose: 'Scan to sign in', image: 'simulator-qr.png' }]);
+    expect(approvals).toEqual(['mcp__cindy_helper__request_input_handoff']);
+    expect(latestToolResultContent(requests.at(-1)!)).toContain('image-handoff');
+    expect(requests).toHaveLength(2);
   });
 
   it.each(['disconnect', 'expired', 'sse-eof'] as const)('recovers MCP %s through real Pi without replaying a write', { timeout: 90_000 }, async (mode) => {

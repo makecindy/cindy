@@ -54,7 +54,7 @@ import {
 import type { RemoteHost, ExecStreamHandle } from '@cindy/maker-remote-ssh';
 
 import { createLogger } from '../logger.js';
-import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 
 const log = createLogger('cc-manager-client');
 
