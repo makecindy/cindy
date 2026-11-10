@@ -4294,7 +4294,18 @@
           "ariaLabel": "Permitir que os seus outros computadores e as pessoas com quem partilha usem este fornecedor",
           "writeFailed": "Não foi possível guardar a definição de acesso remoto. Tente novamente."
         },
-        "moreActionsAria": "Mais ações"
+        "moreActionsAria": "Mais ações",
+        "runLocation": {
+          "label": "Executar em",
+          "optionLocal": "Este computador",
+          "notSignedIn": "Sem sessão",
+          "autoBorrowing": "Este computador não tem sessão iniciada, por isso as novas tarefas são executadas em {{device}}. Não é preciso iniciar sessão.",
+          "local": "As novas tarefas são executadas neste computador. Pode escolher outro dos seus computadores com sessão iniciada.",
+          "pinned": "As novas tarefas são executadas em {{device}} com a sessão desse computador. As tarefas em curso ficam onde estão.",
+          "inline": "Executa em",
+          "signInHere": "Iniciar sessão neste computador",
+          "writeFailed": "Não foi possível guardar onde este fornecedor é executado. Tente novamente."
+        }
       },
       "detect": {
         "groupLabel": "Detetado neste dispositivo",
@@ -6262,13 +6273,18 @@
         "allowInboundAria": "Alternar permissão para {{name}} controlar este dispositivo",
         "peerControlOff": "Controlo remoto não ativado nesse dispositivo",
         "masterOffHint": "Ative primeiro o interruptor principal acima",
-        "controllingThisMac": "Ligado à Cindy"
+        "controllingThisMac": "Ligado à Cindy",
+        "useThisDeviceModels": "Usar os modelos daqui",
+        "allowModelUseAria": "Permitir que {{name}} use os modelos deste computador"
       },
       "toast": {
         "revoked": "Acesso revogado para este dispositivo",
         "revokeFailed": "Falha ao revogar o acesso",
         "restored": "Acesso restaurado para este dispositivo",
-        "restoreFailed": "Falha ao restaurar o acesso"
+        "restoreFailed": "Falha ao restaurar o acesso",
+        "modelUseRestored": "Esse computador pode voltar a usar os modelos deste",
+        "modelUseRevoked": "Esse computador já não pode usar os modelos deste",
+        "modelUseFailed": "Não foi possível guardar “Usar os modelos daqui”. Tente novamente."
       },
       "sections": {
         "myDevices": "Os meus dispositivos",
@@ -9136,6 +9152,8 @@
       "daysWindow": "{{days}}d"
     },
     "claude": {
+      "totalWeeklyLabel": "Semana total",
+      "temporarilyLimited": "Temporariamente limitado",
       "waitingDetail": "A utilização da subscrição Claude será atualizada após a conclusão do próximo turno.",
       "weeklyLabel": "Semanal",
       "modelWeeklyLabel": "{{model}} semanal",
@@ -11442,7 +11460,8 @@
       "toolSettings": "Definições das ferramentas",
       "notTurnedOn": "Ainda não ativado neste computador",
       "turnOn": "Ativar",
-      "permissions": "Permissões"
+      "permissions": "Permissões",
+      "officialInherited": "Oficial da Cindy · Segue as definições deste computador"
     },
     "systemSkills": {
       "followOffHint": "A Skill do sistema “Painel e acompanhamento” de {{name}} está desativada. Volta a ativá-la em Capacidades para usar isto.",
@@ -13423,15 +13442,18 @@
     },
     "backgroundActivity": {
       "status": "Subtarefas em segundo plano em execução, ainda a consumir utilização do modelo…",
-      "bashStatus_one": "{{count}} tarefa em segundo plano em execução…",
-      "bashStatus_other": "{{count}} tarefas em segundo plano em execução…",
+      "bashWorkStatus_one": "A trabalhar em segundo plano ({{count}} comando)…",
+      "bashServiceStatus_one": "{{count}} serviço em segundo plano em execução",
+      "bashWorkStatus_other": "A trabalhar em segundo plano ({{count}} comandos)…",
+      "bashServiceStatus_other": "{{count}} serviços em segundo plano em execução",
       "stopAll": "Parar tudo",
       "stopAllTitle": "Encerrar o processo em segundo plano desta sessão e parar todas as subtarefas em segundo plano (a sessão continua utilizável)",
       "stopBashTitle": "Parar as tarefas em segundo plano ainda em execução nesta sessão (mantém o processo da sessão)",
       "stopping": "A parar…",
       "remoteStopUnsupported": "A versão do {{appName}} no computador remoto é demasiado antiga para parar tarefas em segundo plano a partir daqui. Atualize-a e tente novamente",
       "remoteStopUnreachable": "O computador remoto não está a responder neste momento, pelo que a tarefa em segundo plano não foi parada. Tente mais tarde",
-      "bashStatus_many": "{{count}} tarefas em segundo plano em execução…"
+      "bashWorkStatus_many": "A trabalhar em segundo plano ({{count}} comandos)…",
+      "bashServiceStatus_many": "{{count}} serviços em segundo plano em execução"
     },
     "interruptedBanner": {
       "text": "Esta tarefa foi interrompida porque a aplicação foi encerrada durante a execução.",
@@ -19987,6 +20009,7 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "unassigned": "Conta por atribuir",
     "providerManagedAuth": "O fornecedor atual do Codex não disponibiliza informações da conta ChatGPT. Ao adicionar o fornecedor, selecione «$t(subscriptionAccounts.signIn.anotherAccount)» para usar uma pasta separada.",
     "signIn": {
       "checking": "A verificar a conta local…",
@@ -20046,5 +20069,11 @@
     "keepDraft": "O rascunho será mantido. As tarefas serão sincronizadas quando a ligação for restabelecida.",
     "retry": "Voltar a ligar",
     "desktopAuthHelp": "Atualize as definições de ligação no terminal de arranque e reabra este cliente experimental."
+  },
+  "remoteControlConsent": {
+    "title": "Permitir o controlo remoto deste computador?",
+    "detail": "Pedido de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e aceder a ficheiros. A opção mantém-se ativa até a desativar nas definições.",
+    "decline": "Agora não",
+    "enable": "Ativar controlo remoto"
   }
 }

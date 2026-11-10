@@ -9,6 +9,9 @@ import type { withAvailabilityPolicyMutation } from './providerShareAvailability
  *    开关打开即授权,同账号设备无需逐次批准;详见 device-link 设计稿)
  *  - revokedControllers: 逐设备访问黑名单(被撤销访问权限的控制端 deviceId 列表)。
  *    全局开着时,名单内的设备单独被挡;持久化,被控端重启 / 离线后仍生效(恢复才解除)。
+ *  - modelUseRevokedControllers: 被单独关掉「用本机模型」的同账号控制端 deviceId 列表。
+ *    「用本机模型」跟着「控制本机」：控制本机开着时默认可用，名单内的设备借不到本机的模型
+ *    (远程 Agent)，其余远程控制不受影响。
  *  - disabledControlDeviceIds: 本机不再主动控制的目标设备 deviceId 列表。它只影响本机
  *    控制其它设备的镜像 / 入口,不改变对方的被控授权。
  *  - lastKnownDeviceNames: 本机最后一次看见的有效设备名缓存。relay 离线后 Redis presence
@@ -41,6 +44,8 @@ export interface DeviceLinkSettings {
   keepAwake: boolean;
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单)。 */
   revokedControllers: string[];
+  /** 单独关掉「用本机模型」的同账号控制端 deviceId 列表(远程 Agent 拒绝它们)。 */
+  modelUseRevokedControllers: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   /** deviceId → last known non-placeholder display name, local-only cache. */
@@ -61,6 +66,7 @@ const DEFAULTS: DeviceLinkSettings = {
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
+  modelUseRevokedControllers: [],
   disabledControlDeviceIds: [],
   lastKnownDeviceNames: {},
 };
@@ -79,6 +85,7 @@ function normalize(raw: unknown): DeviceLinkSettings {
     revokedControllers: Array.isArray(r.revokedControllers)
       ? r.revokedControllers.filter((x): x is string => typeof x === 'string')
       : [],
+    modelUseRevokedControllers: normalizeStringList(r.modelUseRevokedControllers),
     disabledControlDeviceIds: normalizeStringList(r.disabledControlDeviceIds),
     lastKnownDeviceNames: normalizeDeviceNameMap(r.lastKnownDeviceNames),
   };
@@ -250,7 +257,7 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
 
 /**
  * 以 updater 形式更新某个 key:updater 在写锁内基于盘上最新值执行。
- * 数组 / map 类 key(revokedControllers / disabledControlDeviceIds /
+ * 数组 / map 类 key(revokedControllers / modelUseRevokedControllers / disabledControlDeviceIds /
  * lastKnownDeviceNames)的增删改**必须**走本函数,不要在锁外算好整值再
  * writeDeviceLinkSetting(见 writeMergedOnce 注释)。返回最终写入的值。
  */

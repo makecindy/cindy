@@ -2351,6 +2351,26 @@ export class Session {
     );
   }
 
+  /**
+   * 项目资源漂移且满足回收空闲口径时返回 true(仅 pi 本地根任务实现,其余 agent
+   * 恒 false)。只判定不执行 close:close 必须由持有 Maker 的调用方走
+   * closeSessionIfCurrent(session, 'runtime-refresh'),让 session:closed 带上 Maker
+   * 认识的刷新原因 —— 直接 Session.close 绕过 Maker 的 closeReasons 登记,IM
+   * runner 会按 unexpected 清掉排队中的回合、丢失已接受的派发。空闲口径与
+   * closeIfIdle 一致:turn 运行中、结束未收口的 turn、换代续接、手动压缩 /
+   * rewind 等宿主排他操作进行中绝不回收。回收后由既有 lazy bootstrap 在下次
+   * 发送时重扫项目资源、重算 argv。
+   */
+  hasRecyclableProjectResourceDrift(): boolean {
+    if (this.status !== 'active' || this.closePromise) return false;
+    if (this.isTurnRunning() || this.hasUnsettledTurn()
+      || this.retirementContinuationGeneration === this.turnGeneration
+      || this.hasPendingHostOperation()) {
+      return false;
+    }
+    return this.handle.hasProjectResourceDrift?.() === true;
+  }
+
   getCurrentTurnId(): string | null {
     return this.handle.getCurrentTurnId?.() ?? null;
   }
@@ -2745,7 +2765,13 @@ export class Session {
     isBackgroundEvent: boolean,
     isCurrentGeneration: boolean,
   ): boolean {
-    if (isBackgroundEvent || !isCurrentGeneration || !this.isNewTurnProgressEvent(event)) return false;
+    // Claude knows a top-level automatic turn started even when the first
+    // response is only an API-error envelope. Ordinary running/child statuses
+    // are not evidence: they can be leftover activity from the preceding turn.
+    const providerStart = event.source === 'claude-code' && event.type === 'status' &&
+      (event.data as { isRunning?: unknown; providerInitiatedTurn?: unknown } | null)?.isRunning === true &&
+      (event.data as { providerInitiatedTurn?: unknown } | null)?.providerInitiatedTurn === true;
+    if (isBackgroundEvent || !isCurrentGeneration || (!providerStart && !this.isNewTurnProgressEvent(event))) return false;
     const parentUuid = event.agentMeta?.parentUuid;
     if (typeof parentUuid === 'string' && parentUuid.length > 0) return false;
     const generation = this.turnGeneration;

@@ -171,6 +171,7 @@
 | apps/mobile/app/+native-intent.ts | native intent routing; no screen |
 | apps/mobile/app/_layout.tsx | layout; visible mounted feedback is a separate overlay surface |
 | apps/mobile/app/automations/[deviceId].tsx | legacy automation link redirect; no screen |
+| apps/mobile/app/group-execution-preview.tsx | MOBILE_VISUAL_MOCK_ENABLED group execution fixture; not production UI |
 | apps/mobile/app/listperf.tsx | __DEV__ list performance harness; not production UI |
 | apps/mobile/app/plugin-management-preview.tsx | gated plugin settings visual fixture; not production UI |
 | apps/mobile/app/splash-preview.tsx | MOBILE_VISUAL_MOCK_ENABLED preview; not production UI |

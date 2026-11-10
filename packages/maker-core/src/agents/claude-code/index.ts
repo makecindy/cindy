@@ -186,6 +186,7 @@ import { normalizeClaudeSessionJsonlToolIds } from './jsonl-tool-id-normalize.js
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
 import { resetClaudeGenerationTiming } from './generation-timing.js';
+import { classifyBackgroundCommand, type BackgroundCommandKind } from './background-command-kind.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
 import { clampEffortToSupported } from '@cindy/model-providers/effort-resolution';
 import type {
@@ -4830,8 +4831,33 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 快照(renderer 挂载/重载后重新水合任务卡)依赖这些字段还原展示。
     const runningBackgroundTasks = new Map<
       string,
-      { wake: boolean; taskType?: string; toolUseId?: string; title?: string; outputFile?: string }
+      {
+        wake: boolean;
+        taskType?: string;
+        toolUseId?: string;
+        title?: string;
+        outputFile?: string;
+        commandKind?: BackgroundCommandKind;
+      }
     >();
+    // Bash 工具调用的命令文本(按 tool_use id)。task_started 只带描述不带命令,后台命令
+    // 是「工作」还是「长驻服务」要靠启动它的命令写法判断。有界:只为紧随其后的
+    // task_started 服务,超限丢最老的。
+    const bashCommandByToolUseId = new Map<string, string>();
+    const BASH_COMMAND_CACHE_LIMIT = 64;
+    function noteBashToolUse(e: AgentEvent): void {
+      if (e.type !== 'tool_use') return;
+      const data = e.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown } | null | undefined;
+      if (data?.toolName !== 'Bash' || typeof data.toolUseId !== 'string') return;
+      const command = (data.input as { command?: unknown } | null | undefined)?.command;
+      if (typeof command !== 'string') return;
+      bashCommandByToolUseId.delete(data.toolUseId);
+      bashCommandByToolUseId.set(data.toolUseId, command);
+      if (bashCommandByToolUseId.size > BASH_COMMAND_CACHE_LIMIT) {
+        const oldest = bashCommandByToolUseId.keys().next().value;
+        if (oldest !== undefined) bashCommandByToolUseId.delete(oldest);
+      }
+    }
     // SDK task progress can race behind its terminal notification. Once a task
     // is terminal within the current Query generation, a late running/progress
     // patch must not resurrect it into runningBackgroundTasks and manufacture
@@ -5143,16 +5169,30 @@ export class ClaudeCodeAgent extends BaseAgent {
         const wake =
           prev?.wake === true ||
           (typeof data?.taskType === 'string' && WAKE_BACKGROUND_TASK_TYPES.has(data.taskType));
+        const taskType =
+          typeof data?.taskType === 'string' && data.taskType ? data.taskType : prev?.taskType;
+        const toolUseId =
+          typeof data?.parentToolUseId === 'string' && data.parentToolUseId
+            ? data.parentToolUseId
+            : prev?.toolUseId;
+        // 后台命令的种类只判一次并锁存;命令文本未知(没见过对应 Bash 调用)时不标,下游按 work。
+        const launchCommand = toolUseId ? bashCommandByToolUseId.get(toolUseId) : undefined;
+        const commandKind =
+          prev?.commandKind ??
+          (taskType === 'local_bash' && launchCommand !== undefined
+            ? classifyBackgroundCommand(launchCommand)
+            : undefined);
+        if (commandKind && data) {
+          (data as { backgroundCommandKind?: BackgroundCommandKind }).backgroundCommandKind = commandKind;
+        }
         runningBackgroundTasks.set(taskId, {
           wake,
-          taskType: typeof data?.taskType === 'string' && data.taskType ? data.taskType : prev?.taskType,
-          toolUseId:
-            typeof data?.parentToolUseId === 'string' && data.parentToolUseId
-              ? data.parentToolUseId
-              : prev?.toolUseId,
+          taskType,
+          toolUseId,
           title: typeof data?.title === 'string' && data.title ? data.title : prev?.title,
           outputFile:
             typeof data?.outputFile === 'string' && data.outputFile ? data.outputFile : prev?.outputFile,
+          ...(commandKind ? { commandKind } : {}),
         });
         const claim = activeContinuationClaim();
         if ((claim?.state === 'awaiting' || claim?.state === 'active') && wake) {
@@ -5441,6 +5481,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           return true;
         }
         // 后台任务表旁路观察(O(1) type check,task 事件低频,不碰热路径逻辑)。
+        noteBashToolUse(e);
         const cancelledContinuation = noteBackgroundTaskEvent(e);
         if (ignoredLateTerminalTaskEvents.delete(e)) return true;
         if (e.type === 'error' && isTerminalAgentErrorEvent(e)) queuedAsyncAnswer = false;
@@ -5840,6 +5881,14 @@ export class ClaudeCodeAgent extends BaseAgent {
               beginNewTurn(mutableFastMode ? 'priority' : 'standard');
               resetToolLoopGuards();
               turnInFlight = true;
+              // An API-error envelope produces no text/thinking/tool event. Tell
+              // Session that this is a new provider turn before translating it,
+              // or its terminal error looks like the previous done's stale tail.
+              forwardEventSink.push({
+                type: 'status',
+                source: 'claude-code',
+                data: { status: 'Thinking', isRunning: true, providerInitiatedTurn: true },
+              });
             }
             noteUpstreamResponseActivity(typeof rawType === 'string' ? rawType : 'unknown');
             const shouldCorrelateResumeFailure =
@@ -7391,6 +7440,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(info.toolUseId ? { toolUseId: info.toolUseId } : {}),
           ...(info.title ? { title: info.title } : {}),
           ...(info.outputFile ? { outputFile: info.outputFile } : {}),
+          ...(info.commandKind ? { backgroundCommandKind: info.commandKind } : {}),
         }));
       },
 
@@ -8062,6 +8112,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         // turn 没在跑了, 清守卫标记 (rewind 必然在 idle 时调, 但兜底一把)
         turnInFlight = false;
+        // close 会连 CLI 子进程一起杀,后台任务(含后台命令)随之终止:与其它 close 路径同口径立即清表。
+        // 不等下次 send 换 Query 时清,否则宿主在这段空窗里读到的快照仍带着已死的任务。
+        runningBackgroundTasks.clear();
+        terminalBackgroundTaskIds.clear();
         // bridge counter 兜底: rewind idle 时应该已经归零, 但如果上一轮 bridge 中途异常
         // (SDK 崩 / abort 未 drain result) counter 可能残留, 会污染 rebuild 后的第一 turn。
         clearBridgeState();

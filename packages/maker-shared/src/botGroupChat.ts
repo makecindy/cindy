@@ -451,6 +451,8 @@ export interface BotGroupPlanView {
    * A choice of the computer that made it, not shared chat state; absent where unsupported.
    */
   autoContinue?: boolean;
+  /** Remote host can change its local handoff setting for this open work plan. Absent on older hosts. */
+  canSetAutoContinue?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -537,6 +539,8 @@ export interface BotGroupSummary {
   canInvite?: boolean;
   /** Server groups: an owner or admin may also stop everyone's work, not only their own. */
   canStopAll?: boolean;
+  /** Explicit host/client support for stop scope; older hosts ignore scope and must not offer all. */
+  supportsScopedStop?: boolean;
   /**
    * Server groups whose server gives each request one teammate (the lead when nobody is named)
    * and arranges turns itself; no speaking modes (bot-group-chat.md §4).
@@ -799,6 +803,7 @@ export type BotGroupRemoteActionId =
   | 'plan-dismiss'
   | 'plan-continue'
   | 'plan-retry'
+  | 'plan-auto-continue'
   | 'plan-edit';
 
 /**
