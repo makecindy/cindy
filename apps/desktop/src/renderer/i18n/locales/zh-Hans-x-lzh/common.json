@@ -7985,6 +7985,8 @@
         "hostTools_schedulerDetail": "批准后，法器可建、查、改、停、复、删及执行自动任务，并阅执行记录。由 Agent 执行的定时任务使用任务默认权限，包含完全访问（Full Access）。高风险宿主操作每次确认。",
         "hostTools_terminal": "终端与命令",
         "codeDetailFiles": "法器页面仍隔离；所许文件之操作，由 Cindy 于主人亲择目录内行之。",
+        "hostTools_discovery": "察宿主之能",
+        "hostTools_discoveryDetail": "惟得察执行之机所供服务，及本法器所声明、所获准之工具组。不得借此装卸、停用他法器，亦不得夺其所许。",
         "hostTools_browser": "御浏览器",
         "hostTools_browserDetail": "得读写 Cindy 所择浏览器之网页。改用“吾之浏览器”、上传文件诸敏行，仍须 Cindy 请主人亲允。",
         "hostTools_computer": "御本机",

@@ -3,6 +3,8 @@ import type { HostToolCaller, HostToolRuntime, LiziMcpProvider, LiziMcpSessionCo
 import { admitPluginTaskAction, runTaskActionRequest } from '../maker-ipc/taskActionAuthorization.js';
 import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import type { ScheduleMutationGuard } from '@cindy/maker-scheduler';
+import { HostServiceCatalog } from '../cindy-brain/hostServiceCatalog.js';
+import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 
 /** Attested by the plugin gateway, never reconstructed from tool arguments. */
 export interface PluginHostToolCaller {
@@ -20,6 +22,7 @@ const callerScope = new AsyncLocalStorage<PluginHostToolCaller>();
 let activeCallers = 0;
 let providers: readonly LiziMcpProvider[] = [];
 let providerOwner: DataOwnerPushStamp | null = null;
+export const hostServiceCatalog = new HostServiceCatalog();
 // Computer element/snapshot references survive individual calls, scoped to the plugin.
 const computerRuntimes = new Map<string, { runtime: HostToolRuntime; revision: string }>();
 
@@ -41,6 +44,7 @@ export function setHostToolProviders(current: readonly LiziMcpProvider[], owner:
   }
   providers = current;
   providerOwner = owner;
+  if (hostServiceCatalog.replace(current)) getGhostSetupChangeBus().emitAll({ source: 'host_config', ref: 'host-services' });
 }
 
 export function getPluginHostToolCaller(): PluginHostToolCaller | undefined {

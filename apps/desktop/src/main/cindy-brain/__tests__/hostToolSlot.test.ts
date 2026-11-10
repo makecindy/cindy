@@ -86,6 +86,8 @@ describe('plugin Host tool entry', () => {
       call: async () => ({ content: [{ type: 'text' as const, text: String(++count) }] }), close,
     }; });
     setHostToolProviders([{ name: 'cindy_computer', isEnabled: () => enabled, toClaudeSdkConfig: () => null, toHostTools: create }], owner);
+    // Catalog inspection closes its own detached descriptor before active calls.
+    create.mockClear(); close.mockClear();
     try {
       const first = createHostToolRuntime('cindy_computer', caller)!;
       expect((await first.call('status')).content[0]).toMatchObject({ text: '1' });

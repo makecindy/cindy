@@ -7,6 +7,19 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Item 28, unit: the ordinary helper registry and public plugin entry must
+// expose the same read-only catalog, with no self-reported caller fields.
+it('discovers Host services through the common validated registry', async () => {
+  const list = vi.fn(() => ({ scope: 'local', services: [{ group: 'scheduler', available: false }] }));
+  const server = createXdtHelperMcpServer({ hostServices: { list } }, { agentKind: 'codex', workingDir: '' });
+  try {
+    expect(server.hostTools.describe('host_services')).toMatchObject({ category: 'discovery' });
+    expect(parsePayload(await server.hostTools.call('host_services', {}))).toMatchObject({ ok: true, services: [{ available: false }] });
+    expect(parsePayload(await server.hostTools.call('host_services', { pluginId: 'someone-else' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    expect(list).toHaveBeenCalledOnce();
+  } finally { await server.close(); }
+});
+
 // Unit production dispatcher, parity #13: deletion was absent. An explicit target must
 // reach the same Host operation for task/plugin callers, while the current task stays protected.
 it('deletes an explicit target through the shared lifecycle handler and protects the caller', async () => {

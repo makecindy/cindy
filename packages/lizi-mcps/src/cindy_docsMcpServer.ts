@@ -213,6 +213,7 @@ export function createCindyDocsMcpServer(
   });
 
   return Object.assign(server, { hostTools: {
+    list: () => registry.list().map(({ name, category }) => ({ name, category })),
     describe: (name: string) => registry.list().find(tool => tool.name === name),
     call: (name: string, args?: Record<string, unknown>) => registry.call(name, args),
     close: () => server.close(),

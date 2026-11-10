@@ -8114,6 +8114,8 @@
         "hostTools_schedulerDetail": "Tras la aprobación, el complemento puede crear, consultar, editar, pausar, reanudar, eliminar y ejecutar tareas automáticas, y consultar su historial. Las tareas programadas que ejecuta Agent usan los permisos predeterminados de la tarea, incluido Acceso completo. Las operaciones de alto riesgo del sistema anfitrión requieren confirmación cada vez.",
         "hostTools_terminal": "Terminal y comandos",
         "codeDetailFiles": "La página del complemento permanece aislada. Cindy realiza las operaciones de archivos autorizadas dentro de los directorios que selecciones.",
+        "hostTools_discovery": "Ver capacidades del anfitrión",
+        "hostTools_discoveryDetail": "Consultar los servicios del equipo ejecutor y los grupos declarados y aprobados de este complemento. No permite instalar, desactivar ni revocar otros complementos.",
         "hostTools_browser": "Control del navegador",
         "hostTools_browserDetail": "Leer y usar páginas del navegador elegido en Cindy. Cambiar a Mi navegador, subir archivos y otras acciones sensibles mantienen las confirmaciones de Cindy.",
         "hostTools_computer": "Control del equipo",

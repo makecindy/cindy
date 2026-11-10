@@ -8042,6 +8042,8 @@
         "hostTools_schedulerDetail": "After approval, the plugin can create, list, edit, pause, resume, delete and run automated tasks, and read run history. Agent-run scheduled tasks use the task’s default permissions, including Full Access. High-risk host operations require confirmation each time.",
         "hostTools_terminal": "Terminal and Commands",
         "codeDetailFiles": "The plugin page stays isolated. Cindy performs approved file operations within the directories you select.",
+        "hostTools_discovery": "View Host Capabilities",
+        "hostTools_discoveryDetail": "Read the services provided by the execution computer and this plugin’s declared and approved tool groups. Cannot install, disable or revoke other plugins.",
         "hostTools_browser": "Browser Control",
         "hostTools_browserDetail": "Read and operate pages in Cindy’s selected browser. Switching to My Browser, uploading files and other sensitive actions keep Cindy’s confirmations.",
         "hostTools_computer": "Computer Control",

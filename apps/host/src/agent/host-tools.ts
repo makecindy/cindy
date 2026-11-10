@@ -22,6 +22,7 @@ import { createFileToolExecutor } from '../../../desktop/src/main/cindy-brain/fi
 import type { GhostFsSlot } from '../../../desktop/src/main/cindy-brain/fsSlot.js';
 import type { HostStorageService } from '../../../desktop/src/main/cindy-brain/storageService.js';
 import { createStorageToolExecutor } from '../../../desktop/src/main/cindy-brain/storageToolAccess.js';
+import { HostServiceCatalog, createHostServiceToolExecutor } from '../../../desktop/src/main/cindy-brain/hostServiceCatalog.js';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
 import type { createHostConfirmations } from '../host-confirmations.js';
 
@@ -71,8 +72,10 @@ export function createHostToolService(options: Options) {
       return decision.run ? decision.run(run) : run();
     } };
   };
+  const services = new HostServiceCatalog();
   const providers = createLiziMcpProviders({
     xdtHelper: { authorizeCall,
+      hostServices: createHostServiceToolExecutor(services, { pluginCall: getPluginHostToolCaller, getGhost: options.getGhost }),
       resolveSurface: async ({ sessionId }) => {
         const db = current() ? tryGetDbClient() : null;
         return db ? resolveHelperSurface(db, sessionId) : 'restricted';
@@ -105,8 +108,9 @@ export function createHostToolService(options: Options) {
     }, `host-tools:${group}`));
   }
 
+  services.replace(providers);
   return {
-    providers, terminal, approveGroup,
+    providers, terminal, services, approveGroup,
     request(id: string, payload: unknown, pageCurrent: () => boolean) {
       return handlePluginHostToolRequest(id, payload, () => current() && pageCurrent(), {
         owner: options.owner, getGhost: options.getGhost,
@@ -124,6 +128,6 @@ export function createHostToolService(options: Options) {
       });
     },
     stopPlugin(id: string) { options.confirmations.cancelPlugin(id); terminal.disposePlugin(id); },
-    close() { closed = true; terminal.disposeScoped(); },
+    close() { closed = true; services.replace([]); terminal.disposeScoped(); },
   };
 }

@@ -8042,6 +8042,8 @@
         "hostTools_schedulerDetail": "Nach der Genehmigung kann das Plugin automatische Aufgaben erstellen, anzeigen, ändern, pausieren, fortsetzen, löschen und ausführen sowie den Verlauf lesen. Von Agent ausgeführte geplante Aufgaben verwenden die Standardberechtigungen der Aufgabe, einschließlich Vollzugriff. Host-Vorgänge mit hohem Risiko erfordern jedes Mal eine Bestätigung.",
         "hostTools_terminal": "Terminal und Befehle",
         "codeDetailFiles": "Die Plugin-Seite bleibt isoliert. Cindy führt genehmigte Dateiaktionen in den von dir ausgewählten Verzeichnissen aus.",
+        "hostTools_discovery": "Host-Fähigkeiten anzeigen",
+        "hostTools_discoveryDetail": "Dienste des ausführenden Computers sowie deklarierte und genehmigte Werkzeuggruppen dieses Plugins lesen. Andere Plugins werden damit weder installiert noch deaktiviert oder widerrufen.",
         "hostTools_browser": "Browser bedienen",
         "hostTools_browserDetail": "Seiten im von Cindy gewählten Browser lesen und bedienen. Der Wechsel zu Mein Browser, Datei-Uploads und andere sensible Aktionen behalten Cindys Bestätigungen bei.",
         "hostTools_computer": "Computer bedienen",

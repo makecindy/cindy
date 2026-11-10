@@ -37,7 +37,7 @@ function installed(
 }
 
 describe('plugin install consent', () => {
-  it.each(['browser', 'computer', 'ssh', 'docs'] as const)('requires explicit approval for a newly recognized %s group', group => {
+  it.each(['browser', 'computer', 'ssh', 'docs', 'discovery'] as const)('requires explicit approval for a newly recognized %s group', group => {
     const next = manifest({ agent: { hostTools: [group] } });
     const old = installed(next);
     expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',

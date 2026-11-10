@@ -22,6 +22,7 @@
 | `computer` | `cindy_computer` | 本机窗口、键盘和鼠标工具 |
 | `ssh` | `cindy_ssh` | 已配置 SSH 连接与远程命令 |
 | `docs` | `cindy_docs` | 插件私有目录内的文档生成、转换与读取 |
+| `discovery` | `cindy_helper` | 查询执行宿主提供的服务与本插件的声明、批准事实 |
 
 每组在安装、更新确认和详情页各列一行权限。新增组需要批准；移除组立即收权。旧安装记录不会自动获得新能力，首次调用可请求宿主确认。用户拒绝后由详情页手动重试，插件不要循环请求。未知组按 Manifest v3 原样保存，当前宿主不授权。
 
@@ -47,6 +48,23 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 本入口仅支持表中服务的已声明组。插件管理（`ghost_*` 等）、主人代输入或 `ask_owner`、应用更新和反馈不开放。Node 子进程不提供此 API；应由声明的插件 Node 工作进程调用。
 
 底层管子消息为 `{type:'host-tool-request',server,tool,args}`。身份由宿主从逻辑页或 Node 私有通道核验，不接受参数中的 `pluginId`、`sessionId` 或账号作为调用方身份。旧宿主和未提供此能力的执行宿主应按不支持处理。
+
+## 查询执行宿主的能力
+
+声明并获准 `agent.hostTools:['discovery']` 后调用：
+
+```js
+const result = await cindy.host.call('cindy_helper', 'host_services', {});
+const { scope, services } = JSON.parse(result.content.find(item => item.type === 'text').text);
+```
+
+`scope:'local'` 指执行插件的电脑，`services[]` 含 `group/server/tools/available`，有工具时另有示例 `entryTool`。
+不可用时 `reason` 为 `unsupported`（未提供）或 `disabled`（宿主开关关闭）；无法读取开关时为 `unavailable`。
+插件调用另含每组 `declared` / `approved`；这是宿主现查的本实例事实，不接受自报身份，也不查询其他插件数据。
+`entryTool` 是该服务的一个现有工具入口；目录查询不执行工具、不启动服务、不读取凭证或内部路径。
+`available:true` 只说明宿主已接入且允许使用该服务；外部账号、浏览器连接、驱动安装和系统权限仍由原工具检查。
+服务注册替换后目录重建，开关、声明和批准每次现查。Node Host 缺少生产调度器等服务时明确返回不可用。
+普通 Agent 使用同一个 helper 工具查询服务，不附插件批准字段。查询能力不会赋予安装、停用或撤销其他插件的权限。
 
 ## 使用与提供宿主服务
 

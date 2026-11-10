@@ -7999,6 +7999,8 @@
         "hostTools_schedulerDetail": "批准後，插件可建立、查詢、修改、暫停、繼續、刪除及執行自動任務，並檢視執行記錄。由 Agent 執行的定時任務使用任務預設權限，包含完全訪問（Full Access）。高風險宿主操作每次確認。",
         "hostTools_terminal": "終端機與命令",
         "codeDetailFiles": "插件頁面保持隔離；獲准的檔案操作由 Cindy 在你選擇的目錄內執行。",
+        "hostTools_discovery": "查看宿主能力",
+        "hostTools_discoveryDetail": "唯讀查詢執行電腦提供的服務，以及本插件已聲明和獲准的工具組。不能藉此安裝、停用或撤銷其他插件。",
         "hostTools_browser": "操作瀏覽器",
         "hostTools_browserDetail": "使用 Cindy 目前選擇的瀏覽器，讀取網頁並執行頁面操作。切換至「我的瀏覽器」、上傳檔案等敏感操作仍由 Cindy 確認。",
         "hostTools_computer": "操作本機電腦",

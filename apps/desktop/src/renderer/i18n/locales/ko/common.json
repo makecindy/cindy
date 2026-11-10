@@ -7999,6 +7999,8 @@
         "hostTools_schedulerDetail": "승인하면 플러그인이 자동 작업을 생성, 조회, 수정, 일시 정지, 재개, 삭제, 실행하고 실행 기록을 볼 수 있습니다. Agent가 실행하는 예약 작업은 전체 접근을 포함한 작업의 기본 권한으로 실행됩니다. 위험도가 높은 호스트 작업은 매번 확인합니다.",
         "hostTools_terminal": "터미널 및 명령",
         "codeDetailFiles": "플러그인 페이지는 격리된 상태를 유지합니다. 허용된 파일 작업은 선택한 디렉터리 안에서 Cindy가 수행합니다.",
+        "hostTools_discovery": "호스트 기능 보기",
+        "hostTools_discoveryDetail": "실행 컴퓨터가 제공하는 서비스와 이 플러그인이 선언하고 승인받은 도구 그룹을 읽습니다. 다른 플러그인을 설치하거나 비활성화하거나 권한을 취소할 수 없습니다.",
         "hostTools_browser": "브라우저 제어",
         "hostTools_browserDetail": "Cindy에서 선택한 브라우저의 페이지를 읽고 조작합니다. 내 브라우저로 전환, 파일 업로드 등 민감한 작업은 계속 Cindy에서 확인합니다.",
         "hostTools_computer": "컴퓨터 제어",

@@ -8114,6 +8114,8 @@
         "hostTools_schedulerDetail": "Après approbation, le plugin peut créer, consulter, modifier, suspendre, reprendre, supprimer et lancer des tâches automatiques et consulter leur historique. Les tâches planifiées exécutées par Agent utilisent les autorisations par défaut de la tâche, y compris Accès complet. Les opérations à haut risque de l’hôte demandent une confirmation à chaque fois.",
         "hostTools_terminal": "Terminal et commandes",
         "codeDetailFiles": "La page du plugin reste isolée. Cindy exécute les opérations autorisées dans les répertoires que vous sélectionnez.",
+        "hostTools_discovery": "Voir les capacités de l’hôte",
+        "hostTools_discoveryDetail": "Lire les services de l’ordinateur d’exécution et les groupes déclarés et autorisés de ce plugin. Ne permet pas d’installer, désactiver ou révoquer d’autres plugins.",
         "hostTools_browser": "Contrôle du navigateur",
         "hostTools_browserDetail": "Lire et utiliser les pages du navigateur choisi dans Cindy. Le passage à Mon navigateur, les envois de fichiers et les autres actions sensibles conservent les confirmations de Cindy.",
         "hostTools_computer": "Contrôle de l’ordinateur",

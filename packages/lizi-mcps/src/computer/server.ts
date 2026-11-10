@@ -1800,6 +1800,7 @@ export function createComputerMcpServer(
   }
 
   return Object.assign(server, { hostTools: {
+    list: () => COMPUTER_TOOLS.map(({ name }) => ({ name, category: 'computer' })),
     describe: (name: string) => getComputerTool(name) ? { name, category: 'computer' } : undefined,
     call: (name: string, args?: Record<string, unknown>, signal?: AbortSignal) => handleCallTool(name, args, signal),
     close: async () => { await deps.closeContext?.(readCallContext(options)); await server.close(); },

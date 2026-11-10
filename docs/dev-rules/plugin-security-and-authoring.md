@@ -196,7 +196,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   批准后，插件创建的任务及 Worker 中的 Agent 按普通任务的权限使用已连接工具；
   创建回执仅约束插件直接管理该任务，不参与任务内 Agent 的工具权限判定。
   插件直接调用 `cindy.tasks` 仍只管理本插件的任务。
-- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` 工具组，每组独立展示和批准。
+- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` / `discovery` 工具组，每组独立展示和批准。
   receipt 的可选 `approvedHostToolGroups` 仅记录显式批准；旧记录缺失时首次调用复用现有确认，拒绝后由详情页手动重试。
   新增组算扩权，同来源更新只保留仍声明的已批准组，移除或卸载即失效，不改变旧插件其它能力。
   `cindy.host.call(server, tool, args)` 的 UI 与 Node 请求共用 `hostToolSlot`，通过同一 provider / registry 调用 Agent 工具处理器，禁止另写插件业务实现。
@@ -213,6 +213,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   文档写入在原 writer 的 IO 边界复核插件调用授权。未提供服务的 Node Host 明确返回不支持，不装配新平台主体。
   服务提供者沿用已有 browserExtension.pageControl 的普通插件准入、详情页激活、配对和生命周期，不另造注册中心。
   当前媒体生成没有独立 MCP server，继续用已有 cindy.media 接口，不虚设 media 组。
+  discovery 的 host_services 查询同一 provider 目录：只检视已注册的 registry 定义，描述实例无任务/插件身份，
+  不执行工具且立即关闭；不关闭插件正在用的电脑连接。服务开关与本实例声明/批准现查，Node 未供应的服务明确不可用。
+  该目录是投影，不持有服务实现、凭证、批准或插件管理权；不开放 ghost_* 写入口。
   `terminal` 复用 `main/terminal/PtyManager`，界面与 MCP 共用 `HostTerminalService` 的同一注册表；
   不另写插件进程实现。Host 核准的插件实例/安装代次或真实 Session 绑定作业 owner，id 不授予归属。
   启动及输入等变更走原风险规则；命令具有用户级本机能力，确认中必须明确说明，不能宣称文件沙箱。

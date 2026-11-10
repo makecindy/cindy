@@ -54,7 +54,8 @@ export type XdtHelperToolCategory =
   | 'settings'
   | 'terminal'
   | 'files'
-  | 'storage';
+  | 'storage'
+  | 'discovery';
 
 export type XdtHelperToolContentBlock =
   | { type: 'text'; text: string }

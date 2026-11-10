@@ -23,9 +23,6 @@ import { defaultPtySpawn } from '../../desktop/src/main/terminal/ptyFactory.ts';
 import { createHostToolService } from './agent/host-tools.ts';
 import { createHostConfirmations } from './host-confirmations.ts';
 import { createLiziMcpProviders } from '@cindy/mcps';
-import { createProviderHostToolRuntime } from '../../desktop/src/main/mcp-integrations/hostToolCaller.ts';
-import { handlePluginHostToolRequest } from '../../desktop/src/main/cindy-brain/hostToolSlot.ts';
-import { hasPluginHostToolGroupApproval } from '../../desktop/src/main/cindy-brain/taskCapability.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 
 import { dataOwnerStorageKey } from '../../desktop/src/main/dataOwnerPath.ts';
@@ -156,11 +153,11 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   const ghost = { manifest: { id: 'test-node', name: 'Node fixture', version: '1.0.0', node: {
     entry: 'worker.cjs', protocol: 'json-rpc-stdio', entries: ['child.cjs'], childSpawn: true,
     secretBindings: [{ key: 'raw_account', label: 'Account', oauthSecret: 'account', methods: ['raw-account'] }],
-  }, agent: { hostTools: ['terminal', 'files', 'storage', 'browser'] }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
+  }, agent: { hostTools: ['terminal', 'files', 'storage', 'browser', 'discovery'] }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
     secrets: [{ key: 'account', label: 'Account', source: 'oauth', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] },
       oauth: { authorizeUrl: 'https://accounts.example.test/authorize', tokenUrl: 'https://accounts.example.test/token', scopes: ['read'], clientId: 'fixture-client' } }] } }, dir, enabled: true,
     namespace: null, namespaceState: 'confirmed',
-    approval: { state: 'approved', revision: 'real-worker-fixture' }, approvedHostToolGroups: ['terminal', 'files', 'storage', 'browser'] };
+    approval: { state: 'approved', revision: 'real-worker-fixture' }, approvedHostToolGroups: ['terminal', 'files', 'storage', 'browser', 'discovery'] };
   const receiverDir = path.join(dir, 'receiver'); fs.mkdirSync(receiverDir);
   fs.copyFileSync(path.join(dir, 'worker.cjs'), path.join(receiverDir, 'worker.cjs'));
   const receiver = { manifest: { id: 'test-receiver', name: 'Receiver fixture', version: '1.0.0',
@@ -221,6 +218,8 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   const disconnect = confirmations.connect('web:fixture', event => {
     if (event.channel === 'ghosts:confirm-request') queueMicrotask(() =>
       confirmations.resolve('web:fixture', 'confirm', event.payload.requestId, true));
+    if (event.channel === 'ghosts:install-consent:request') queueMicrotask(() =>
+      confirmations.resolve('web:fixture', 'install', event.payload.requestId, false));
     return true;
   });
   const storage = new HostStorageService({ ownerKey: () => 'fixture-owner:1', getGhost, handoff, listGhosts: () => [ghost, receiver],
@@ -242,13 +241,10 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   // assembly remains unsupported; Worker/FD/gateway/registry are the real path.
   const browserProviders = createLiziMcpProviders({ browser: { getRuntime: () => ({ call: async request =>
     ({ ok: true, action: request.action, data: { source: 'shared-browser-handler' } }) }) } });
+  hostTools.providers.push(...browserProviders);
+  hostTools.services.replace(hostTools.providers);
   const broker = createHostNodeRuntimeBroker(workerEntry, { getGhost,
-    hostToolRequest: (id, request, current) => request.server === 'cindy_browser'
-      ? handlePluginHostToolRequest(id, request, current, { getGhost, owner,
-        createRuntime: (server, caller) => createProviderHostToolRuntime(browserProviders, server, caller),
-        approveGroup: async (pluginId, group, active) => active() && hasPluginHostToolGroupApproval(getGhost(pluginId), group),
-        policy: () => 'auto-approve', confirm: async () => false })
-      : hostTools.request(id, request, current), onStopped: hostTools.stopPlugin,
+    hostToolRequest: hostTools.request, onStopped: hostTools.stopPlugin,
     resolveOauthSecret: (id, key, accountId) => oauth.getNodeAccessToken(id, key, ghost.manifest.network.secrets[0].oauth, accountId),
     networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request) });
   try {
@@ -289,6 +285,12 @@ test('runs and reaps real plugin workers through the common broker', async t => 
       assert.equal(result.result.ok, true, JSON.stringify(result));
       return result.result;
     };
+    const capabilities = await terminalCall('host_services');
+    assert.equal(capabilities.scope, 'local');
+    assert.equal(capabilities.services.find(service => service.group === 'terminal').available, true);
+    assert.equal(capabilities.services.find(service => service.group === 'discovery').approved, true);
+    assert.equal(capabilities.services.find(service => service.group === 'scheduler').available, false);
+    assert.equal(capabilities.services.find(service => service.group === 'computer').available, false);
     // §21 integration: execute a real plugin's host.call across the private FD,
     // approval gateway and common service; the plugin never receives a path.
     const fileCall = (op, args = {}) => terminalCall('file_request', { op, directoryRef: selectedDirectory.ref, ...args });

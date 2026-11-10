@@ -116,7 +116,8 @@ import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { createHistoryToolCallbacks } from './historyToolCallbacks.js';
-import { authorizePluginHostToolCall, getPluginHostToolCaller, setHostToolProviders } from './hostToolCaller.js';
+import { authorizePluginHostToolCall, getPluginHostToolCaller, hostServiceCatalog, setHostToolProviders } from './hostToolCaller.js';
+import { createHostServiceToolExecutor } from '../cindy-brain/hostServiceCatalog.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
 import { forkTaskAtMessage } from '../maker-ipc/fork.js';
 import { commitTaskRewind } from '../maker-ipc/rewind.js';
@@ -725,6 +726,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      hostServices: createHostServiceToolExecutor(hostServiceCatalog, { pluginCall: getPluginHostToolCaller, getGhost: findGhostForInstanceId }),
       files: createFileToolExecutor(getGhostFsSlot, getPluginHostToolCaller),
       storage: createStorageToolExecutor(getGhostStorageService, getPluginHostToolCaller),
       terminal: createTerminalToolExecutor({ service: getDesktopHostTerminalService(), owner: getActiveDataOwnerPushStamp,
