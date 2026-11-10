@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
@@ -24,6 +25,31 @@ import { buildPushTokenRegistrationBody, parseNotificationResponseDeepLink } fro
 const PUSH_ENABLED_KEY = 'cindy.push.enabled';
 /** 成功或可能成功注册过 token 的区域集合，避免把注销请求发到错误区域。 */
 const PUSH_REGISTERED_KEY = 'cindy.push.registered';
+// Last registration attempt, not a delivery receipt. One bounded phone-local
+// snapshot lets support distinguish registration from the compensation marker.
+const PUSH_LAST_REGISTRATION_KEY = 'cindy.push.lastRegistration';
+
+interface PushRegistrationStatus {
+  version: 1;
+  at: number;
+  realm: ClientEndpointRegion;
+  stage: string;
+  appVariant?: string;
+  apnsEnv?: string;
+  endpoints?: Array<{ service: 'device-link' | 'chat'; outcome: 'accepted' | 'unsupported' | 'failed'; status?: number }>;
+}
+
+function httpErrorStatus(error: unknown): number | undefined {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+}
+
+async function saveRegistrationStatus(status: PushRegistrationStatus, scope: PushStateScope): Promise<void> {
+  // No token, account identity, endpoint URL, payload, or raw error is persisted.
+  // This is registration state, independent of optional debug log recording.
+  const key = pushStateStorageKeys(PUSH_LAST_REGISTRATION_KEY, scope.environment).primary;
+  await AsyncStorage.setItem(key, JSON.stringify(status)).catch(() => undefined);
+}
 /**
  * 注销失败的区域集合。只允许在以后重新持有同一区域登录态时补偿，
  * 不会用 CN token 请求 Global，也不会用 Global token 请求 CN。
@@ -76,6 +102,8 @@ let pushMutationTail: Promise<void> = Promise.resolve();
  * await 注销时会形成环。注销递增 generation，使旧生命周期的排队操作失效。
  */
 let pushLifecycleGeneration = 0;
+// Memory-only lease: rotation events cannot create a subscription during logout or bootstrap.
+let eventRegistration: { generation: number; owner: MobileAuthOwnerGeneration; token: string } | null = null;
 
 function runPushMutation<T>(operation: () => Promise<T>): Promise<T> {
   const result = pushMutationTail.then(operation, operation);
@@ -207,15 +235,27 @@ function pushTargets(realm: ClientEndpointRegion, method: 'PUT' | 'DELETE' = 'DE
   } catch { /* Older endpoint snapshots do not advertise chat. */ }
   return targets;
 }
-async function mutatePushTokens(apiFetch: AuthedApiFetch, realm: ClientEndpointRegion, method: 'PUT' | 'DELETE', body?: unknown) {
-  const results = await Promise.allSettled(pushTargets(realm, method).map(async target => {
-    try { await apiFetch(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(body ? { body } : {}) }); }
+async function mutatePushTokens(apiFetch: AuthedApiFetch, realm: ClientEndpointRegion, method: 'PUT' | 'DELETE', body?: unknown, registration?: PushRegistrationStatus) {
+  const targets = pushTargets(realm, method);
+  const outcomes: NonNullable<PushRegistrationStatus['endpoints']> = [];
+  const results = await Promise.allSettled(targets.map(async target => {
+    const service = target.optional ? 'chat' as const : 'device-link' as const;
+    try {
+      await apiFetch(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(body ? { body } : {}) });
+      outcomes.push({ service, outcome: 'accepted' });
+    }
     catch (error) {
       // An older chat server can roll forward independently of existing task pushes.
-      if (target.optional && [404, 405].includes((error as { status?: number }).status ?? 0)) return;
+      const status = httpErrorStatus(error);
+      if (target.optional && [404, 405].includes(status ?? 0)) {
+        outcomes.push({ service, outcome: 'unsupported', ...(status ? { status } : {}) });
+        return;
+      }
+      outcomes.push({ service, outcome: 'failed', ...(status ? { status } : {}) });
       throw error;
     }
   }));
+  if (registration) registration.endpoints = outcomes;
   for (const result of results) if (result.status === 'rejected') throw result.reason;
 }
 
@@ -323,23 +363,33 @@ async function syncPushRegistrationInternal(
   opts: {
     enabled: boolean;
     apiFetch: AuthedApiFetch;
+    deviceToken?: Awaited<ReturnType<typeof Notifications.getDevicePushTokenAsync>>;
   },
   lifecycleGeneration: number,
+  registration: PushRegistrationStatus,
+  stateScope: PushStateScope,
+  owner: MobileAuthOwnerGeneration,
 ): Promise<PushSyncResult> {
+  const registrationCurrent = () => lifecycleGeneration === pushLifecycleGeneration
+    && (!opts.enabled || !!owner.accountKey && isMobileAuthOwnerCurrent(owner));
   if (!isPushSupported()) return 'unsupported';
-  if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
-  const realm = getActiveMobileSessionRealm();
-  const stateScope = capturePushStateScope(realm);
+  if (!registrationCurrent()) return 'skipped';
+  const realm = stateScope.legacyRealm;
+  if (opts.enabled && opts.deviceToken) {
+    if (!eventRegistration || eventRegistration.generation !== lifecycleGeneration ||
+        !isMobileAuthOwnerCurrent(eventRegistration.owner) || eventRegistration.token === opts.deviceToken.data) return 'skipped';
+  }
+  if (!opts.enabled) eventRegistration = null;
 
   if (!opts.enabled) {
     const registeredRealms = await readPushRealms(
       PUSH_REGISTERED_KEY,
       stateScope,
     );
-    if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+    if (!registrationCurrent()) return 'skipped';
     if (!registeredRealms.has(realm)) return 'skipped';
     const token = await getNativeDeviceTokenBestEffort();
-    if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+    if (!registrationCurrent()) return 'skipped';
     try {
       await mutatePushTokens(opts.apiFetch, realm, 'DELETE', pushDeleteBody(token));
     } catch (error) {
@@ -353,11 +403,12 @@ async function syncPushRegistrationInternal(
     return 'unregistered';
   }
 
+  registration.stage = 'permission';
   let permission = await Notifications.getPermissionsAsync();
-  if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+  if (!registrationCurrent()) return 'skipped';
   if (permission.status !== 'granted' && permission.canAskAgain) {
     permission = await Notifications.requestPermissionsAsync();
-    if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+    if (!registrationCurrent()) return 'skipped';
   }
   if (permission.status !== 'granted') {
     mobileDebugLog('warn', 'network', 'push registration', { stage: 'permission-denied', realm });
@@ -365,15 +416,19 @@ async function syncPushRegistrationInternal(
   }
 
   let deviceToken;
-  try { deviceToken = await Notifications.getDevicePushTokenAsync(); }
+  registration.stage = 'device-token';
+  // iOS emits a token event for every native token read, even when unchanged.
+  // Rotation listeners must reuse the event's token instead of feeding a loop.
+  try { deviceToken = opts.deviceToken ?? await Notifications.getDevicePushTokenAsync(); }
   catch (error) {
-    if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+    if (!registrationCurrent()) return 'skipped';
     if (Platform.OS === 'android') return 'local-only';
     throw error;
   }
-  if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+  if (!registrationCurrent()) return 'skipped';
+  registration.stage = 'signing-environment';
   const apnsEnvironment = Platform.OS === 'ios' ? await readIosPushEnvironment() : undefined;
-  if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+  if (!registrationCurrent()) return 'skipped';
   const body = buildPushTokenRegistrationBody({
     token: typeof deviceToken.data === 'string' ? deviceToken.data : '',
     region: AUTH_REGION,
@@ -381,20 +436,24 @@ async function syncPushRegistrationInternal(
     platform: Platform.OS === 'android' ? 'android' : 'ios',
   });
   if (!body) return 'skipped';
+  Object.assign(registration, { stage: 'registering', appVariant: body.appVariant, apnsEnv: body.apnsEnv });
+  await saveRegistrationStatus(registration, stateScope);
   mobileDebugLog('info', 'network', 'push registration', { stage: 'registering', realm,
     appVariant: body.appVariant, apnsEnv: body.apnsEnv });
 
   // PUT 响应丢失时无法判断服务端是否提交，发出前即标记“可能已注册”；
   // 后续只能在该区域持有有效会话时做幂等 DELETE。
   await addPushRealm(PUSH_REGISTERED_KEY, realm, stateScope);
-  if (lifecycleGeneration !== pushLifecycleGeneration) {
+  if (!registrationCurrent()) {
     await addPushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope);
     return 'skipped';
   }
   try {
-    await mutatePushTokens(opts.apiFetch, realm, 'PUT', { ...body, preview: await readPushPreviewEnabled() });
+    const preview = await readPushPreviewEnabled();
+    if (!registrationCurrent()) return 'skipped';
+    await mutatePushTokens(opts.apiFetch, realm, 'PUT', { ...body, preview }, registration);
   } catch (error) {
-    if (lifecycleGeneration !== pushLifecycleGeneration) {
+    if (!registrationCurrent()) {
       await addPushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope).catch(
         () => undefined,
       );
@@ -403,7 +462,7 @@ async function syncPushRegistrationInternal(
       // Settings still shows off. DELETE both: a lost PUT response is ambiguous.
       await addPushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope);
       try {
-        if (lifecycleGeneration !== pushLifecycleGeneration) throw error;
+        if (!registrationCurrent()) throw error;
         await mutatePushTokens(opts.apiFetch, realm, 'DELETE', { token: body.token });
         await removePushRealm(PUSH_REGISTERED_KEY, realm, stateScope);
         await removePushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope);
@@ -411,11 +470,12 @@ async function syncPushRegistrationInternal(
     }
     throw error;
   }
-  if (lifecycleGeneration !== pushLifecycleGeneration) {
+  if (!registrationCurrent()) {
     await addPushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope);
     return 'skipped';
   }
   await removePushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope);
+  eventRegistration = { generation: lifecycleGeneration, owner, token: body.token };
   mobileDebugLog('info', 'network', 'push registration', { stage: 'registered', realm,
     appVariant: body.appVariant, apnsEnv: body.apnsEnv });
   return 'registered';
@@ -424,17 +484,29 @@ async function syncPushRegistrationInternal(
 export function syncPushRegistration(opts: {
   enabled: boolean;
   apiFetch: AuthedApiFetch;
+  deviceToken?: Awaited<ReturnType<typeof Notifications.getDevicePushTokenAsync>>;
 }): Promise<PushSyncResult> {
   const lifecycleGeneration = pushLifecycleGeneration;
-  return runPushMutation(() =>
-    syncPushRegistrationInternal(opts, lifecycleGeneration).catch((error: unknown) => {
-      const status = (error as { status?: unknown } | null)?.status;
+  const owner = getMobileAuthOwner();
+  return runPushMutation(async () => {
+    const scope = capturePushStateScope(getActiveMobileSessionRealm());
+    const registration: PushRegistrationStatus = { version: 1, at: Date.now(), realm: scope.legacyRealm, stage: 'starting' };
+    if (opts.enabled) await saveRegistrationStatus(registration, scope);
+    try {
+      const result = await syncPushRegistrationInternal(opts, lifecycleGeneration, registration, scope, owner);
+      registration.stage = result;
+      return result;
+    } catch (error: unknown) {
+      const status = httpErrorStatus(error);
+      registration.stage = `failed:${registration.stage}`;
       // Only structured, non-secret diagnostics. Never log a token, request body or raw error.
       mobileDebugLog('warn', 'network', 'push registration', { stage: 'failed',
         ...(typeof status === 'number' ? { status } : {}) });
       throw error;
-    }),
-  );
+    } finally {
+      if (opts.enabled) await saveRegistrationStatus({ ...registration, at: Date.now() }, scope);
+    }
+  });
 }
 
 /**
@@ -474,6 +546,7 @@ export function unregisterPushTokenBestEffort(
   realm: ClientEndpointRegion = getActiveMobileSessionRealm(),
 ): Promise<void> {
   pushLifecycleGeneration += 1;
+  eventRegistration = null;
   for (const listener of pushPreferenceListeners) listener(true);
   // 不进入 pushMutationTail：当前 tail 可能正在 apiFetch → terminal handler →
   // clearLocalSession → 本函数。等待 tail 会形成自等待死锁。

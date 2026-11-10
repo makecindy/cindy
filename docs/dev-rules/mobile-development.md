@@ -180,6 +180,20 @@ PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成
 原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台过期和关闭实时活动。
 TypeScript 测试不能替代这些原生验收。
 
+### 推送 token 事件与验收
+
+iOS 每次 `getDevicePushTokenAsync()` 完成都会发出 token 事件，不代表 token 已轮换。
+`PushNotificationsBridge` 的监听器必须直接把事件携带的 token 交给注册函数，不能再次
+读取原生 token；否则“读取 → 事件 → 注册 → 读取”会持续向两个推送端点重复注册。
+事件注册必须持有本代次非事件注册成功产生的内存许可；相同 token 不再请求，真实轮换
+仍注册。注销同步撤销许可，注册全过程复查 AuthOwner，防止 React 仍显示已登录的清理
+窗口重新 PUT 旧账号。原生读取在注销时产生的事件也只能 skipped。
+回归分别由 `pushNotificationsBridge.test.ts`（事件接线与去重）和
+`pushNotificationsRealm.test.ts`（真实注册函数与端点请求）覆盖。
+
+注册 API 成功、桌面提交 notify 帧成功都不是 APNs 送达证明。验收需分别记录签名环境、
+手机注册结果、服务端 APNs 回执（可取得时）和真机是否实际收到，不能用本地通知代替。
+
 Release 构建必须使用 `NODE_ENV=production BABEL_ENV=production`，包括手动调用
 `xcodebuild`、Gradle 或 `expo export:embed --dev false`。Expo 会保留父进程的环境变量，
 因此 `__DEV__=false` 或 Xcode 的 Release 配置本身不能证明 Worklets 已按生产模式编译。
@@ -518,6 +532,23 @@ A、B、L1、R1 会占用其原有操作，设置页有明确提示。
 实现：`modules/cindy-handheld/`、`src/handheld/` 和 `app/settings/handheld.tsx`；
 偏好与跨页按住交接回归：`src/__tests__/handheldMode.test.ts`。Android 窗口按键拦截和换屏
 必须随新原生包交付，仍受下文冷更审核门约束。
+
+## 手机推送排障：注册不等于投递
+
+`cindy.push.enabled` 只记录偏好；`cindy.push.registered` 是请求前写入的注销补偿标记，
+不能证明服务器注册成功。Desktop 的 `sendNotify()` 返回 true 也只说明已向 relay 发送，
+不是 APNs 接受或手机展示的回执。不要据此宣布推送恢复。
+
+手机在 AsyncStorage `cindy.push.lastRegistration` 保留最近一次启用注册尝试的单条状态，
+CindyDev 按 `.dev` / `.release` 分开。状态记录时间、账号区域（不含身份）、签名对应的
+APNs 环境、失败阶段和 device-link/chat 分别接受、失败或不支持的结果及 HTTP 状态码。
+它不依赖调试日志开关，不含 token、账号 ID、地址、正文或原始错误；写入失败不影响注册。
+这是有时间戳的历史尝试，关闭推送或切换账号后不能当作当前订阅状态；`registered` 只证明
+注册 API 请求完成，不能替代实际通知验收。回归见 `pushNotificationsRealm.test.ts`。
+
+若注册成功仍无通知，继续核对签名 team/topic 与服务端配置、服务端 token 选择及 APNs
+响应，最后核对手机的系统通知展示条件。本地服务器源码不能证明线上部署；缺少投递日志时
+保留“尚未确定”的结论，不让用户反复切开关，也不通过不断广播测试通知替代定位。
 
 ## 原生配置与 runtime fingerprint(冷更边界)
 
