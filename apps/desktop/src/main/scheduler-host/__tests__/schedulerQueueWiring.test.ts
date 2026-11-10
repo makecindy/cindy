@@ -26,6 +26,7 @@ vi.mock('../../maker-host/model-route-guard-live.js', () => ({
 vi.mock('../../agent-island/service.js', () => ({ getAgentIslandService: () => null }));
 vi.mock('../../notificationService.js', () => ({ getDesktopNotificationsEnabled: () => false }));
 vi.mock('../../maker-ipc/register.js', () => ({
+  bootstrapScheduledSession: vi.fn(),
   ensureSchedulerQueueRestored: mocks.restore,
   findSchedulerUsageLimitWait: mocks.quotaWait,
   getSessionLastUserActionAt: mocks.lastUserActionAt,
