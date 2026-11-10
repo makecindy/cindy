@@ -1,5 +1,7 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { declaredGhostHostToolGroups, type GhostHostToolGroup } from '@cindy/plugin-protocol';
+import { isValidGhostNetworkHostPattern as isValidPluginNetworkHostPattern, ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
+export { ghostNetworkTargetMatches } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
@@ -844,18 +846,10 @@ export const GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL = 8;
 
 /**
  * 域名白名单条目格式:小写域名,至少两段(拒绝裸 TLD / 单段内网名),
- * 通配只允许最左一段(`*.example.com`);不收 IP、端口、路径、协议。
+ * 通配只允许最左一段(`*.example.com`)；精确 HTTP(S)/WS(S) origin 也可声明端口或内网地址。
  */
-const GHOST_NETWORK_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 export function isValidGhostNetworkHostPattern(p: unknown): p is string {
-  if (typeof p !== 'string' || p.length === 0 || p.length > 253) return false;
-  const bare = p.startsWith('*.') ? p.slice(2) : p;
-  const labels = bare.split('.');
-  // 至少两段:`*.com` / `localhost` / 裸 TLD 全部拒绝,命中面必须是具体域。
-  if (labels.length < 2) return false;
-  // 纯数字四段视作 IP,拒收(白名单只认域名)。
-  if (labels.every((l) => /^\d+$/.test(l))) return false;
-  return labels.every((l) => GHOST_NETWORK_LABEL_RE.test(l));
+  return isValidPluginNetworkHostPattern(p);
 }
 
 /**
@@ -870,6 +864,8 @@ export function ghostNetworkHostMatches(pattern: string, hostname: string): bool
 }
 
 function ghostNetworkHostPatternWithinCap(actual: string, reviewed: string): boolean {
+  if (actual.includes('://')) return ghostNetworkTargetMatches(reviewed, new URL(actual));
+  if (reviewed.includes('://')) return false;
   if (!actual.startsWith('*.')) return ghostNetworkHostMatches(reviewed, actual);
   if (!reviewed.startsWith('*.')) return false;
   return ghostNetworkHostMatches(reviewed, `cap-probe.${actual.slice(2)}`);
@@ -3218,8 +3214,8 @@ export function ghostNetworkAuthorizationWithinCap(
     if (secret.inject.header !== cap.inject.header || secret.inject.format !== cap.inject.format) {
       return false;
     }
-    const actualHosts = secret.inject.hosts ?? actualNetwork.hosts;
-    const reviewedHosts = cap.inject.hosts ?? reviewedNetwork.hosts;
+    const actualHosts = secret.inject.hosts ?? actualNetwork.hosts.filter(pattern => !pattern.includes('://'));
+    const reviewedHosts = cap.inject.hosts ?? reviewedNetwork.hosts.filter(pattern => !pattern.includes('://'));
     if (!isHostPatternSubset(actualHosts, reviewedHosts)) return false;
     if (secret.url !== undefined && secret.url !== cap.url) return false;
     if (secret.hint !== undefined && secret.hint !== cap.hint) return false;
@@ -5338,7 +5334,7 @@ function validateGhostManifestInput(
     const seenPreviewHosts = new Set<string>();
     for (const host of previewRaw.hosts) {
       if (
-        !isValidGhostNetworkHostPattern(host) &&
+        (!isValidGhostNetworkHostPattern(host) || (typeof host === 'string' && host.includes('://'))) &&
         !(typeof host === 'string' && GHOST_PREVIEW_LOOPBACK_HOSTS.has(host))
       ) {
         return { ok: false, reason: `preview.hosts 含不合法域名模式 ${JSON.stringify(host)}` };
@@ -5694,7 +5690,7 @@ function validateGhostManifestInput(
       if (typeof h !== 'string' || !isValidGhostNetworkHostPattern(h.trim().toLowerCase())) {
         return {
           ok: false,
-          reason: `network.hosts 含非法条目 ${JSON.stringify(h)}(小写域名、至少两段、通配只允许最左 "*.";不收 IP / 端口 / 路径 / 协议)`,
+          reason: `network.hosts 含非法条目 ${JSON.stringify(h)}(填写域名模式或精确 HTTP(S)/WS(S) origin，不含路径、查询或内嵌凭证)`,
         };
       }
       const host = h.trim().toLowerCase();
@@ -5904,7 +5900,7 @@ function validateGhostManifestInput(
                 'network.secrets[].source 为 oidc-token 时必须显式声明非空 inject.hosts，限制企业身份令牌的流向',
             };
           }
-          if (injectHosts.some((host) => host.startsWith('*.'))) {
+          if (injectHosts.some((host) => host.startsWith('*.') || host.includes('://'))) {
             return {
               ok: false,
               reason:
@@ -9738,8 +9734,8 @@ export interface GhostLibraryOverview {
 export interface GhostPipeFetchRequest {
   type: 'fetch-request';
   /**
-   * 目标地址:仅 https、默认端口。自主调用的 host 必须命中 network.hosts；
-   * 当前 Agent tool-call 可凭严格在途 callId 访问普通未声明 host。
+   * 自主目标须命中 network.hosts 的 HTTPS:443 域名或精确 HTTP(S) origin。
+   * 当前 Agent tool-call 可凭严格在途 callId 访问普通未声明 HTTPS:443 host。
    */
   url: string;
   /** 缺省 GET。 */

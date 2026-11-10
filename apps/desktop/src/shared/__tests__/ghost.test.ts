@@ -18,6 +18,24 @@ it('validates and projects each host tool group independently in both manifest r
   expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map(item => item.key)).toEqual(['agent:host-tools:scheduler']);
 });
 
+// 第23项：HTTPS 域名旧批准不能变成 HTTP 或自定义端口批准；双 validator 与权限 diff 共用真实入口。
+it('keeps exact-origin network permissions separate from existing HTTPS domain approvals', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'local-service', name: 'Local service', version: '1.0.0', kind: 'chip', entry: 'main.js' };
+  const oldNetwork = { hosts: ['*.example.com'] }, newNetwork = { hosts: ['http://api.example.com', 'https://api.example.com:8443'] };
+  for (const validate of [validateGhostManifest, validateProtocolManifest]) {
+    const result = validate({ ...base, network: newNetwork });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, manifest: { network: newNetwork } });
+  }
+  const before = validateGhostManifest({ ...base, network: oldNetwork });
+  const after = validateGhostManifest({ ...base, network: newNetwork });
+  if (!before.ok || !after.ok) throw new Error('invalid fixture');
+  expect(ghostNetworkAuthorizationWithinCap(before.manifest, after.manifest)).toBe(false);
+  expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map(item => item.key))
+    .toEqual(['network:host:http://api.example.com', 'network:host:https://api.example.com:8443']);
+  expect(unreviewedGhostPermissionItems(before.manifest, undefined, after.manifest).map(item => item.key))
+    .toEqual(['network:host:http://api.example.com', 'network:host:https://api.example.com:8443']);
+});
+
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
@@ -3019,13 +3037,13 @@ describe('ghost · 官方保留 id 前缀', () => {
 });
 
 describe('ghost · network 域名条目格式与匹配', () => {
-  it('合法条目:小写域名至少两段,通配只允许最左一段', () => {
-    for (const p of ['api.example.com', 'example.com', '*.weather.com', 'a-b.c1.io']) {
+  it('合法条目:域名或精确 origin，通配只允许域名最左一段', () => {
+    for (const p of ['api.example.com', 'example.com', '*.weather.com', 'a-b.c1.io', 'https://api.example.com']) {
       expect(isValidGhostNetworkHostPattern(p), p).toBe(true);
     }
   });
 
-  it('非法条目:裸 TLD/单段/IP/端口/路径/协议/大写/中缀通配', () => {
+  it('非法条目:不完整地址、路径、大写与中缀通配', () => {
     for (const p of [
       'com',
       '*.com',
@@ -3033,7 +3051,6 @@ describe('ghost · network 域名条目格式与匹配', () => {
       '127.0.0.1',
       'api.example.com:8080',
       'api.example.com/v1',
-      'https://api.example.com',
       'API.Example.com',
       'a.*.example.com',
       'api.*.com',

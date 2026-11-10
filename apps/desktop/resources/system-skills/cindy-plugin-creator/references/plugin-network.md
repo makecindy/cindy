@@ -6,14 +6,27 @@
   HTTPS 地址，无需 `network` 字段。主机仍强制 URL、SSRF、超时、体积与
   重定向守门，但不会向未声明 host 注入任何 Host 托管凭证。
 - 脱离当前 Agent 调用的自主联网：声明 `network` 详单(§2)，只能访问
-  **白名单内的域名**。需要主机保险库凭证、OAuth 或动态连接时也必须
+  **白名单内的网络目标**。需要主机保险库凭证、OAuth 或动态连接时也必须
   显式声明，只有命中声明 host 才会注入。
 
-沙箱本身两种情况都零直连，请求统一由主机代发。规则:
+沙箱本身两种情况都零直连，请求统一由主机代发。
+
+`network.hosts` 中的普通域名和 `*.example.com` 只允许 HTTPS 默认端口，旧批准的范围不变。
+自定义端口、HTTP、本机和内网地址用精确 origin 声明，例如
+`"network": { "hosts": ["api.example.com", "https://api.example.com:8443", "http://127.0.0.1:8080"] }`。
+origin 只含协议、主机和端口，不带尾斜杠、路径、查询、片段、通配或内嵌凭证；IPv6 需方括号。
+新来源逐条进入安装/更新确认和详情页，跨协议或跨端口都算新增权限。Agent 的在途 callId
+不能免除这些声明，重定向每一跳也必须满足同样约束。
+
+自备 `source:'user'` 密钥的 `inject.hosts` 可精确引用完整 origin；旧域名注入不会扩到新端口。
+Host 身份令牌和动态连接凭证继续只用于原 HTTPS 默认端口，不随新来源扩大。
+依赖此增量能力的包须检测请求结果；旧 Host 会拒绝新来源声明，不能靠改写为普通域名绕过。
+
+规则:
 
 ```js
 const r = await cindy.fetch({
-  url: 'https://api.example.com/v1/search?q=hello',  // 仅 https、默认端口
+  url: 'https://api.example.com/v1/search?q=hello',  // 普通域名只允许 HTTPS:443；其它来源须精确声明
   method: 'GET',            // 可选:GET(缺省)/ POST / PUT / PATCH / DELETE
   headers: { Accept: 'application/json' },  // 可选;Host/Cookie/Authorization 等由主机管,写了也不生效
   body: '{"q":"hello"}',    // 可选:仅 POST / PUT / PATCH / DELETE,≤256KB 文本

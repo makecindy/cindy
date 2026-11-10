@@ -65,6 +65,12 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 
 ## 3. Ghost manifest 与 Cindy 专属界面能力
 
+- `network.hosts` 的 string 数组增量接受精确 HTTP(S)/WS(S) origin；普通域名维持 HTTPS:443。
+  复用原声明、权限行和 receipt，不新增 schema 或批准存储。原客户端会在安装时拒绝新格式，
+  使用此能力的包须标明实际支持版本；已装旧插件的规范值与批准范围不变。凭证范围比较按协议、
+  主机与端口区分，不能把旧通配域名批准解释为 HTTP 或非默认端口授权。无新 device-link 帧，
+  官方与自建中转无需升级；网络仍在执行 Host 发起。
+
 - 文件管子在原 `fs-request` 上追加 `workdir` 的 read/list/delete/watch/changes/unwatch。
   监听请求使用可选 `watchId` / `cursor`，结果为相对路径元数据与 `resetRequired`；list 条目可选增加
   `type`。旧私有目录、save 票据和 write 回执不变，不修改 manifest schema 或 receipt 版本。

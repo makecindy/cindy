@@ -234,6 +234,34 @@ describe('network request installation binding', () => {
 });
 
 describe('networkSlot · 载荷与 URL 校验', () => {
+  // 第23项经生产网络入口验证 origin 批准与凭证隔离；旧覆盖只测试所有非443目标被拒，tier=unit。
+  it('allows declared local origins and custom ports, with credentials scoped to that exact origin', async () => {
+    const network = { hosts: ['api.search.brave.com', 'https://api.search.brave.com:8443', 'http://127.0.0.1:8080'], secrets: [
+      { key: 'brave_api_key', label: 'Default TLS key', inject: { header: 'X-Default-Key', format: '{value}' } },
+      { key: 'tavily_api_key', label: 'Custom origin key', inject: { header: 'X-Custom-Key', format: '{value}', hosts: ['https://api.search.brave.com:8443'] } },
+    ] };
+    const { slot, fetchImpl } = makeSlot({ getGhost: () => fakeGhost({ network }) });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com:8443/data' })).toMatchObject({ ok: true });
+    expect(fetchImpl.mock.calls[0]?.[1].headers).toMatchObject({ 'X-Custom-Key': 'tvly-secret' });
+    expect(fetchImpl.mock.calls[0]?.[1].headers['X-Default-Key']).toBeUndefined();
+    expect(await slot.handleFetchRequest('web-search', { url: 'http://127.0.0.1:8080/data' })).toMatchObject({ ok: true });
+    expect(fetchImpl.mock.calls[1]?.[1].headers['X-Default-Key']).toBeUndefined();
+    expect(fetchImpl.mock.calls[1]?.[1].headers['X-Custom-Key']).toBeUndefined();
+    expect(await slot.handleFetchRequest('web-search', { url: 'http://127.0.0.1:8081/data' })).toMatchObject({ ok: false });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let an Agent call expand an old domain approval to HTTP or a custom port', async () => {
+    const { slot, fetchImpl, fetchPublicImpl } = makeSlot({
+      inFlightCallInfo: () => ({ ghostId: 'web-search', sessionId: 's', remoteHostId: null, channel: 'session' }),
+    });
+    for (const url of ['http://api.search.brave.com/data', 'https://api.search.brave.com:8443/data']) {
+      expect(await slot.handleFetchRequest('web-search', { url, callId: 'call-agent' })).toMatchObject({ ok: false });
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchPublicImpl).not.toHaveBeenCalled();
+  });
+
   it('url 缺失/非 https/带端口/内嵌凭证/不是绝对地址一律拒', async () => {
     const { slot } = makeSlot();
     for (const url of [

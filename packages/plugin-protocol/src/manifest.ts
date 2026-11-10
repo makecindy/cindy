@@ -460,11 +460,18 @@ export const GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL = 8;
 
 /**
  * 域名白名单条目格式:小写域名,至少两段(拒绝裸 TLD / 单段内网名),
- * 通配只允许最左一段(`*.example.com`);不收 IP、端口、路径、协议。
+ * 通配只允许最左一段(`*.example.com`)；也可声明精确 HTTP(S)/WS(S) origin，包含端口或内网地址。
  */
 const GHOST_NETWORK_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 export function isValidGhostNetworkHostPattern(p: unknown): p is string {
   if (typeof p !== 'string' || p.length === 0 || p.length > 253) return false;
+  if (p.includes('://')) {
+    try {
+      const url = new URL(p);
+      return ['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol) && url.origin === p
+        && !url.hostname.includes('*') && !url.username && !url.password;
+    } catch { return false; }
+  }
   const bare = p.startsWith('*.') ? p.slice(2) : p;
   const labels = bare.split('.');
   // 至少两段:`*.com` / `localhost` / 裸 TLD 全部拒绝,命中面必须是具体域。
@@ -472,6 +479,12 @@ export function isValidGhostNetworkHostPattern(p: unknown): p is string {
   // 纯数字四段视作 IP,拒收(白名单只认域名)。
   if (labels.every((l) => /^\d+$/.test(l))) return false;
   return labels.every((l) => GHOST_NETWORK_LABEL_RE.test(l));
+}
+
+/** Existing domain declarations retain HTTPS:443; an origin grants exactly one protocol/host/port. */
+export function ghostNetworkTargetMatches(pattern: string, url: URL): boolean {
+  return pattern.includes('://') ? pattern === url.origin
+    : url.protocol === 'https:' && url.port === '' && ghostNetworkHostMatches(pattern, url.hostname);
 }
 
 /**
@@ -2193,7 +2206,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       if (typeof h !== 'string' || !isValidGhostNetworkHostPattern(h.trim().toLowerCase())) {
         return {
           ok: false,
-          reason: `network.hosts 含非法条目 ${JSON.stringify(h)}(小写域名、至少两段、通配只允许最左 "*.";不收 IP / 端口 / 路径 / 协议)`,
+          reason: `network.hosts 含非法条目 ${JSON.stringify(h)}(填写域名模式或精确 HTTP(S)/WS(S) origin，不含路径、查询或内嵌凭证)`,
         };
       }
       const host = h.trim().toLowerCase();
@@ -2425,7 +2438,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
               reason: 'network.secrets[].source 为 oidc-token 时必须显式声明非空 inject.hosts',
             };
           }
-          if (injectHosts.some((host) => host.startsWith('*.'))) {
+          if (injectHosts.some((host) => host.startsWith('*.') || host.includes('://'))) {
             return {
               ok: false,
               reason:
@@ -3536,7 +3549,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     const seenPreviewHosts = new Set<string>();
     for (const host of previewRaw.hosts) {
       if (
-        !isValidGhostNetworkHostPattern(host) &&
+        (!isValidGhostNetworkHostPattern(host) || (typeof host === 'string' && host.includes('://'))) &&
         !(typeof host === 'string' && GHOST_PREVIEW_LOOPBACK_HOSTS.has(host))
       ) {
         return {

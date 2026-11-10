@@ -567,7 +567,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   明确 `resetRequired`；原调用结束或 Stop 即释放。UI 与 Node Host 接线均须提供相同的身份与取消语义。
   `data` 和 `save` 原行为、旧 manifest/receipt/批准保持不变。回归见 `fsSlot.test.ts`，作者用法见 §4.10。
 
-- 自主 network 只允许 manifest 白名单域名；凭证由主机保险库注入，**无明文读回**
+- 自主 network 只允许 manifest 白名单目标：既有域名模式只代表 HTTPS:443；`network.hosts`
+  可用完整 origin 精确声明自定义端口、HTTP、本机或内网地址，不能含路径、凭证、通配或查询。
+  来源逐条进入原安装/更新确认与详情展示，跨协议/端口不继承旧域名批准。`preview.hosts`
+  仍只接受原域名格式，本项不扩大页面导航/CSP。自备密钥可按完整 origin 注入，既有域名凭证
+  不扩到新端口；Host 身份令牌、动态连接和 Node 代发授权仍限原 HTTPS:443。
+  凭证由主机保险库注入，**无明文读回**
   给沙箱。Agent 在途调用可凭严格 `callId` 访问未预声明的普通 HTTPS 地址，仍须通过
   主机 URL、SSRF、超时、体积与重定向守门。此途径不注入任何未在 manifest 中声明且
   未命中目标 host 的托管凭证。

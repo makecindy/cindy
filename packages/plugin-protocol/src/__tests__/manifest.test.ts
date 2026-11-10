@@ -32,6 +32,18 @@ const validManifest = {
 } as const;
 
 describe('Ghost manifest contract', () => {
+  // 第23项：沿用已批准的 network.hosts 字段，以精确 origin 开放端口、内网和 WS。
+  // 旧域名语义不变；最小失败输入为 http://127.0.0.1:8080，tier=unit。
+  it('validates exact network origins without accepting paths, credentials or wildcard origins', () => {
+    for (const target of ['http://127.0.0.1:8080', 'https://api.example.com:8443', 'ws://localhost:9001', 'wss://stream.example.com', 'http://[::1]:8080']) {
+      const result = validateGhostManifest({ ...validManifest, slots: ['tool', 'network'], network: { hosts: [target] } });
+      expect(result, target).toMatchObject({ ok: true, manifest: { network: { hosts: [target] } } });
+    }
+    for (const target of ['http://localhost:8080/path', 'https://user:pw@example.com', 'ws://*.example.com', 'http://localhost:8080?key=x', 'file://host']) {
+      expect(validateGhostManifest({ ...validManifest, slots: ['tool', 'network'], network: { hosts: [target] } }).ok, target).toBe(false);
+    }
+  });
+
   it.each([2, 3])('preserves the optional Host task card visibility flag in schema v%s', (schemaVersion) => {
     const base = {
       ...validManifest,

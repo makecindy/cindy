@@ -8,7 +8,7 @@
  *
  *   电子脑 cindy.send({type:'fetch-request', url, method?, headers?, body?, …})
  *     → 调用上下文审(Agent 在途，或已声明自主 network 详单)
- *     → URL 硬校验(仅 https 默认端口;自主调用 host 必须命中白名单)
+ *     → URL 硬校验(旧域名只代表 HTTPS:443;自定义端口/HTTP/内网须精确 origin)
  *     → 意识自带 headers 消毒(协议关键头/凭证类头一律剥除)
  *     → 凭证注入(保险库现读明文,按 secret.inject 声明拼进请求头——
  *       key 只流向它声明的域名;意识代码从头到尾摸不到凭证字节;
@@ -60,7 +60,7 @@ import {
   GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES,
   GHOST_MEDIA_HASH_RE,
   GHOST_SECRET_EXCHANGE_TTL_DEFAULT_S,
-  ghostNetworkHostMatches,
+  ghostNetworkTargetMatches,
   type GhostConnectionDecl,
   type GhostFetchMethod,
   type GhostSecretOauthDecl,
@@ -735,8 +735,7 @@ function parseTargetUrl(raw: string): { url: URL } | { error: string } {
   } catch {
     return { error: 'url 不是合法的绝对地址' };
   }
-  if (url.protocol !== 'https:') return { error: '仅支持 https 地址' };
-  if (url.port !== '') return { error: '仅支持默认端口(443)' };
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return { error: '仅支持 http / https 地址' };
   if (url.username || url.password) return { error: 'url 不允许内嵌用户名/密码' };
   return { url };
 }
@@ -1149,14 +1148,15 @@ export class GhostNetworkSlot {
     // 自主调用仍只能访问 manifest 声明的地址。Agent 在途调用已经
     // 通过外层 ghost_call 的 Cindy 授权，因此可以访问未预声明的普通
     // 地址；但只有真正命中 manifest 详单的 host 才可获得 Host 托管凭证。
-    const hostDeclared = (hostname: string): boolean =>
-      declaredHosts.some((pattern) => ghostNetworkHostMatches(pattern, hostname)) ||
-      connectionHosts.includes(hostname);
-    const hostAllowed = (hostname: string): boolean =>
-      hostDeclared(hostname) || hasLiveAgentAuthorization();
-    if (nodeAuth && (!net || !declaredHosts.some(pattern => ghostNetworkHostMatches(pattern, url.hostname))))
+    const defaultTls = (target: URL) => target.protocol === 'https:' && target.port === '';
+    const hostDeclared = (target: URL): boolean =>
+      declaredHosts.some(pattern => ghostNetworkTargetMatches(pattern, target)) ||
+      (defaultTls(target) && connectionHosts.includes(target.hostname));
+    const hostAllowed = (target: URL): boolean =>
+      hostDeclared(target) || (defaultTls(target) && hasLiveAgentAuthorization());
+    if (nodeAuth && (!defaultTls(url) || !net || !declaredHosts.some(pattern => ghostNetworkTargetMatches(pattern, url))))
       return { ok: false, message: 'NODE_AUTH_HOST_NOT_DECLARED' };
-    if (!hostAllowed(url.hostname)) {
+    if (!hostAllowed(url)) {
       const declared = [...declaredHosts, ...connectionHosts];
       return {
         ok: false,
@@ -1196,7 +1196,7 @@ export class GhostNetworkSlot {
       const assertStillValid = () => { hostGuard(); nodeAuth?.assertCurrent(); };
       assertStillValid();
       const inject0 = await this.injectSecrets(
-        instanceKey, declaredSecrets, connectionDecls, url.hostname, declaredHosts, requestHeaders, authAccount,
+        instanceKey, declaredSecrets, connectionDecls, url, declaredHosts, requestHeaders, authAccount,
       );
       assertStillValid();
       if (inject0.error) return { ok: false, message: inject0.error };
@@ -1266,7 +1266,7 @@ export class GhostNetworkSlot {
             instanceKey,
             declaredSecrets,
             connectionDecls,
-            url.hostname,
+            url,
             declaredHosts,
             requestHeaders,
             authAccount,
@@ -1299,7 +1299,7 @@ export class GhostNetworkSlot {
               instanceKey,
               declaredSecrets,
               connectionDecls,
-              currentUrl.hostname,
+              currentUrl,
               declaredHosts,
               hopHeaders,
               authAccount,
@@ -1338,7 +1338,7 @@ export class GhostNetworkSlot {
             }
           }
           // 与凭证头一样逐跳重判：只带给 network 已声明的主机，换到其它主机即删掉。
-          applyMcpAppsManualHeaders(hopHeaders, mcpAppsManual && hostDeclared(currentUrl.hostname) ? mcpAppsManual : null);
+          applyMcpAppsManualHeaders(hopHeaders, mcpAppsManual && hostDeclared(currentUrl) ? mcpAppsManual : null);
           if (nodeAuth) {
             assertStillValid();
             deleteHeaderVariants(hopHeaders, 'Authorization');
@@ -1351,7 +1351,7 @@ export class GhostNetworkSlot {
             signal: controller.signal,
             redirect: 'manual' as const,
           };
-          const hopHostDeclared = hostDeclared(currentUrl.hostname);
+          const hopHostDeclared = hostDeclared(currentUrl);
           const hopAgentMediated = !hopHostDeclared && hasLiveAgentAuthorization();
           assertStillValid();
           if (!hopHostDeclared && !hopAgentMediated) {
@@ -1389,11 +1389,11 @@ export class GhostNetworkSlot {
           } catch {
             return { ok: false, message: '重定向地址不合法' };
           }
-          if (nextUrl.protocol !== 'https:' || nextUrl.port !== '') {
-            return { ok: false, message: '重定向到了非 https/非默认端口地址,已阻断' };
+          if ((nextUrl.protocol !== 'https:' && nextUrl.protocol !== 'http:') || nextUrl.username || nextUrl.password) {
+            return { ok: false, message: '重定向地址协议或内嵌凭证不合法，已阻断' };
           }
           // 静态白名单与用户添加的连接地址一并算放行域(连接地址精确匹配)。
-          if (!hostAllowed(nextUrl.hostname)) {
+          if (!hostAllowed(nextUrl)) {
             return { ok: false, message: '重定向超出了本意识的域名白名单,已阻断' };
           }
           // 303(以及 301/302 的 POST)按惯例降级为 GET 并丢 body。
@@ -1715,7 +1715,7 @@ export class GhostNetworkSlot {
   private async injectSecrets(instanceKey: string,
     secrets: readonly GhostSecretDecl[],
     connectionDecls: readonly GhostConnectionDecl[],
-    hostname: string,
+    target: URL,
     allHosts: readonly string[],
     headers: Record<string, string>,
     authAccount?: string,
@@ -1730,6 +1730,8 @@ export class GhostNetworkSlot {
       { membershipId: string; audience: string; hostname: string }
     >;
   }> {
+    const hostname = target.hostname;
+    const defaultTls = target.protocol === 'https:' && target.port === '';
     // 声明的凭证头一律主机独占:先把意识自带(或上一跳残留)的任何大小写
     // 变体删干净,再按本 host 注入——不管这条凭证这一跳注不注入都要删,
     // 否则伪造值/上一跳注入值会经 Headers 大小写不敏感合并混出网。
@@ -1748,8 +1750,10 @@ export class GhostNetworkSlot {
       { membershipId: string; audience: string; hostname: string }
     >();
     for (const secret of secrets) {
-      const scope = secret.inject.hosts ?? allHosts;
-      if (!scope.some((pattern) => ghostNetworkHostMatches(pattern, hostname))) continue;
+      const scope = secret.inject.hosts ?? allHosts.filter(pattern => !pattern.includes('://'));
+      if (!scope.some(pattern => ghostNetworkTargetMatches(pattern, target))) continue;
+      // New origins can carry explicitly scoped user keys, never widen Host identity tokens.
+      if (!defaultTls && secret.source !== undefined && secret.source !== 'user') continue;
       const resolved = await this.resolveSecretValue(instanceKey, secret, hostname, authAccount);
       if ('error' in resolved) {
         return { error: resolved.error, usedExchange, oauthInjected, connectionInjected };
@@ -1766,7 +1770,7 @@ export class GhostNetworkSlot {
     // 连接地址时,注入那条连接自己的 token(按声明的 header/format)。命中
     // 地址但 token 读不到 = 半身位(理论上不该出现:入库先 token 后清单),
     // 与 secrets 同款快速失败,不发一个注定 401 的请求。
-    if (connectionDecls.length > 0 && this.deps.connections) {
+    if (defaultTls && connectionDecls.length > 0 && this.deps.connections) {
       const connHosts = this.deps.connections.hostsFor(instanceKey);
       if (connHosts.includes(hostname)) {
         const tok = this.deps.connections.tokenFor(instanceKey, hostname);
