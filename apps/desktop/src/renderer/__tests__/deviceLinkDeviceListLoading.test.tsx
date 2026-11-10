@@ -1277,6 +1277,59 @@ it('keeps a failed expiry refresh settled until the normal retry backoff', async
   expect(listDevices).toHaveBeenCalledTimes(3);
 });
 
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：真实 useDeviceLinkDeviceList 记下超大的服务端限流期限后，
+ *   退避定时器的延时不得越过 32 位计时器上限（越过 = 立刻触发 = 对目录读的紧追循环）。
+ * - Bug/规则依据：Codex review #9360 —— 超大 Retry-After 必须分片等待；同一模块级单例
+ *   的远端项目那份已有分片用例，设备目录这份此前没有。
+ * - 现有覆盖缺口：既有用例只覆盖正常量级的限流期限（60 秒），不覆盖越过计时器上限的期限。
+ * - 最小失败输入：retryAtMs = now + 3e9（> 2^31 - 1），随后一次目录读失败触发退避。
+ * - tier：unit（jsdom + fake timers）。
+ */
+it('chunks a rate-limit deadline beyond the 32-bit timer limit instead of tight-looping', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const deadline = Date.now() + 3_000_000_000; // > 2^31 - 1（约 24.8 天）
+  const listDevices = vi.fn()
+    .mockResolvedValueOnce({ devices: [], retryAtMs: deadline })
+    .mockRejectedValue(new Error('relay unavailable'));
+  let statusChanged:
+    ((payload: { status: 'stopped' | 'connecting' | 'online' }) => void) | undefined;
+  vi.stubGlobal('electronAPI', { deviceLink: {
+    listDevices,
+    getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+    onPresenceChanged: vi.fn(),
+    onStatusChanged: vi.fn((callback: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void) => {
+      statusChanged = callback;
+    }),
+    onControlTargetChanged: vi.fn(),
+  } });
+  const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+  const { useDeviceLinkDeviceList } = await import('@/features/device-link/useDeviceLinkDeviceList');
+  renderHook(() => useDeviceLinkDeviceList());
+  for (let i = 0; i < 6; i += 1) await act(async () => { await Promise.resolve(); });
+  expect(listDevices).toHaveBeenCalledTimes(1);
+
+  // 下一轮目录读失败 → 退避要让过那个超大的限流期限。
+  act(() => statusChanged?.({ status: 'online' }));
+  for (let i = 0; i < 6; i += 1) await act(async () => { await Promise.resolve(); });
+  expect(listDevices).toHaveBeenCalledTimes(2);
+
+  // 任何一片的延时都不该越过 32 位上限（溢出 = 立刻触发 = 紧追循环）。
+  const delays = setTimeoutSpy.mock.calls
+    .map((call) => call[1])
+    .filter((value): value is number => typeof value === 'number');
+  expect(delays.length).toBeGreaterThan(0);
+  expect(Math.max(...delays)).toBeLessThanOrEqual(2_147_483_647);
+
+  // 分片没走完之前不重读。
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000_000); });
+  expect(listDevices).toHaveBeenCalledTimes(2);
+  // 墙上期限到点之后重读恢复（之后按自己的退避阶梯继续）。
+  await act(async () => { await vi.advanceTimersByTimeAsync(3_000_000_000); });
+  expect(listDevices.mock.calls.length).toBeGreaterThan(2);
+});
+
 it('removes an offline device immediately and ignores a directory reply started before deletion', async () => {
   const target = { deviceId: 'old-device', name: 'Old Mac', platform: 'darwin', appVersion: '0.1.0-dev',
     online: false, busy: false, remoteControlEnabled: false, controlEnabled: true, isSelf: false, lastSeenAt: null,

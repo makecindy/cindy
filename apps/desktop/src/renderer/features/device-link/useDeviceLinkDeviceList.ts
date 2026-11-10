@@ -23,6 +23,11 @@ const removalSubs = new Set<(deviceId: string) => void>();
 let started = false;
 const DEVICE_LIST_RETRY_BASE_MS = 2_000;
 const DEVICE_LIST_RETRY_MAX_MS = 30_000;
+/**
+ * setTimeout 的延时上限:32 位有符号毫秒。超过它的延时会被截断成「立刻触发」——
+ * 服务端给一个超大的 Retry-After 时,渲染进程会变成紧密的 listDevices 循环。
+ */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 export type DeviceLinkDeviceListStatus = 'loading' | 'ready' | 'error';
 export interface DeviceLinkDeviceListRequestState {
   status: DeviceLinkDeviceListStatus;
@@ -399,12 +404,25 @@ function ensureStarted(): void {
     retryDelayMs = nextDeviceListRetryDelay(retryDelayMs);
     // 服务端明确说了多久之后再问(429 的 Retry-After):退避要让过那个期限。
     const wait = Math.max(retryDelayMs, Math.max(0, retryDeadlineMs - Date.now()));
-    retryTimer = setTimeout(() => {
-      retryTimer = null;
-      // 后台恢复不能把已结算的目录重新打回 initialRequestSettled=false；否则持久化的
-      // 远端选择会在每次退避尝试时暂时恢复、遮住本地侧栏。请求仍在飞，但选择/加载态保持稳定。
-      refresh(false, true);
-    }, wait);
+    // setTimeout 的延时是 32 位有符号毫秒:超过 2^31-1 会被截断成「立刻触发」——
+    // 渲染进程里就是一个紧密的 listDevices 循环(main 还会同步返回旧快照)。
+    // 拆成最大块,每块结束后按**墙上时钟**重新算还差多久(与远端项目那份同一口径)。
+    const armRetry = (remainingMs: number): void => {
+      const chunk = Math.min(Math.max(0, remainingMs), MAX_TIMER_DELAY_MS);
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        const left = Math.max(0, retryDeadlineMs - Date.now());
+        // 还有整块没走完(只有超大的服务端期限才会走到这里):接着等剩下的。
+        if (left > 0 && chunk >= MAX_TIMER_DELAY_MS) {
+          armRetry(left);
+          return;
+        }
+        // 后台恢复不能把已结算的目录重新打回 initialRequestSettled=false；否则持久化的
+        // 远端选择会在每次退避尝试时暂时恢复、遮住本地侧栏。请求仍在飞，但选择/加载态保持稳定。
+        refresh(false, true);
+      }, chunk);
+    };
+    armRetry(wait);
   };
 
   const enterLoading = (): void => {
