@@ -379,6 +379,7 @@ export const GHOST_NODE_CHILD_MODE_FLAG = '__cindy-node-child__';
 /** worker → 主机:代启/喂 stdin/收 stdin/杀进程。 */
 export type GhostNodeChildToHostMessage =
   | (GhostPipeHostToolRequest & { reqId: string })
+  | { type: 'network-request'; reqId: string; request: Record<string, unknown> }
   | { type: 'authenticated-fetch'; reqId: string; rpcId: string; authorization: string; request: Record<string, unknown> }
   | { type: 'plugin-authorize'; reqId: string; rpcId: string; request: PluginAuthorizationRequest }
   | { type: 'device-authorize'; reqId: string; rpcId: string; url: string }
@@ -406,6 +407,12 @@ function isChildId(v: unknown): v is string {
 export function parseGhostNodeChildToHostMessage(raw: unknown): GhostNodeChildToHostMessage | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const m = raw as Record<string, unknown>;
+  if (m.type === 'network-request') {
+    if (Object.keys(m).sort().join(',') !== 'reqId,request,type' || !isChildId(m.reqId) ||
+        !m.request || typeof m.request !== 'object' || Array.isArray(m.request)) return null;
+    try { if (JSON.stringify(m.request).length > 128 * 1024) return null; } catch { return null; }
+    return { type: m.type, reqId: m.reqId, request: m.request as Record<string, unknown> };
+  }
   if (m.type === 'host-tool-request') {
     if (Object.keys(m).sort().join(',') !== 'args,reqId,server,tool,type' || !isChildId(m.reqId) ||
       typeof m.server !== 'string' || typeof m.tool !== 'string' || !m.args || typeof m.args !== 'object' || Array.isArray(m.args)) return null;
@@ -9783,7 +9790,7 @@ export interface GhostPipeFetchRequest {
    * 任意类型字节由主机直接写进 save 票据指向的 workdir 目录(须同时传
    * saveTo;字节不进沙箱也不进总仓,见 GHOST_SAVE_DEPOSIT_* 常量)。
    */
-  as?: 'text' | 'media' | 'file' | 'library';
+  as?: 'text' | 'media' | 'file' | 'library' | 'stream';
   /** as:library 的库内相对目标。 */
   path?: string;
   /**
@@ -9814,6 +9821,7 @@ export interface GhostPipeFetchRequest {
 
 /** 代理 fetch 的返回(cindy.send 的 resolve 值)。 */
 export type GhostPipeFetchResult =
+  | { ok: true; status: number; headers: Record<string, string>; connectionId: string }
   | {
       ok: true;
       /** HTTP 状态码(4xx/5xx 也走 ok:true——那是"代发成功,对方说不行")。 */
@@ -9859,6 +9867,29 @@ export type GhostPipeFetchResult =
       errorCode?: string;
       limitBytes?: number;
     };
+
+/** Live network connections stay on their execution Host. Cursors are
+ * non-consuming and contain no installation, account or credential authority. */
+export interface GhostNetworkEvent {
+  sequence: number;
+  type: 'text' | 'binary' | 'end' | 'error';
+  /** Binary WebSocket frames use base64; HTTP streams remain UTF-8 text. */
+  data?: string;
+  errorCode?: string;
+  code?: number;
+}
+
+export type GhostPipeNetworkRequest =
+  | { type: 'network-request'; op: 'open'; url: string; headers?: Record<string, string>; protocols?: string[] }
+  | { type: 'network-request'; op: 'read'; connectionId: string; cursor?: number; waitMs?: number }
+  | { type: 'network-request'; op: 'send'; connectionId: string; data: string; binary?: boolean }
+  | { type: 'network-request'; op: 'close'; connectionId: string };
+
+export type GhostPipeNetworkResult =
+  | { ok: true; connectionId: string }
+  | { ok: true; events: GhostNetworkEvent[]; nextCursor: number; closed: boolean; resetRequired: boolean }
+  | { ok: true }
+  | { ok: false; errorCode: string; message: string };
 
 /** 工具调用的结构化失败分类(与 cindy-tools 的 CindyGhostCallErrorCode 同构)。 */
 export type GhostToolCallErrorCode =

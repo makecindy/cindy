@@ -151,6 +151,8 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     writeSaveDeposit: (id, token, name, bytes) => getSaveDepositVault().write(id, token, name, bytes), log });
   const network = new GhostNetworkSlot({ getGhost, captureRequestGuard: guard,
     inFlightCallInfo: id => current() ? cards.inFlightCallInfoOf(id) : null,
+    getCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId) ?? undefined,
+    resolveWebSocketAgent: hostOutbound.createOutboundHttpAgent,
     readSecret: secret.readGhostSecret, getLoginEmail: options.getLoginEmail,
     fetchImpl: (url, init) => hostOutbound.outboundFetch(url, { ...init, signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), stopSignal.signal]) } as RequestInit),
     fetchPublicImpl: (url, init, before) => hostOutbound.guardedOutboundFetch(url, { ...init, signal: AbortSignal.any([...(init?.signal ? [init.signal] : []), stopSignal.signal]) } as RequestInit, before),
@@ -208,6 +210,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     getCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId),
     getCallSessionId: (id, callId) => dispatcher.getPendingCallSessionId(id, callId),
     authenticatedFetch: (id, request, authorization, check, signal) => network.handleAuthenticatedNodeFetch(id, request, authorization, check, signal),
+    networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request),
     sendToGhost: (id, payload) => { void sandbox.deliver(id, payload); }, log,
   });
   const download = new PluginDownloadSlot({ getGhost, root: id => root('plugin-downloads', id), scope: () => owner,
@@ -215,6 +218,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const notify = new GhostNotifySlot({ getGhost, broadcast: payload => options.publish('ghosts:notify', payload), log });
   const pipe = createGhostExecutionPipe({ dispatcher: () => dispatcher,
     fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload) => fsSlot.handleFsRequest(id, payload),
+    network: (id, payload) => network.handleNetworkRequest(id, payload),
     library: (id, payload) => library.handleLibraryRequest(id, payload),
     download: (id, payload, check) => download.handle(id, payload, check),
     node: (id, payload, check) => download.withNodeDownloads(id, payload as Record<string, unknown>, request => node.handleRequest(id, request), check),
@@ -281,7 +285,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     }),
   });
   const runtime = new GhostRuntime({ adapter: sandbox.adapter, log,
-    onStateChanged: (id, state) => { dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() }); } });
+    onStateChanged: (id, state) => { if (state !== 'running') network.disposeGhost(id); dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() }); } });
   const dispatcher = new GhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
     spawn: ghost => runtime.spawnForTool(ghost), sendToGhost: sandbox.deliver, ownerScope, log });
   async function reconcileInstalled() {
@@ -317,6 +321,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
         // Requests from old pages lose authority immediately, even if writing the
         // disabled receipt fails. Re-enabling is an explicit new transaction.
         suspended.add(key);
+        network.disposeGhost(key);
         runtime.stop(key);
         await node.stopAndWait(key);
         await library.disposeGhost(key);
@@ -336,6 +341,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     closed = true; stopSignal.abort(); runtime.destroyAll();
     const errors: unknown[] = [];
     const finish = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { errors.push(error); } };
+    await finish(() => network.disposeAll());
     await finish(() => authorization.close());
     await finish(() => enableChanges);
     await finish(() => reconciliation);

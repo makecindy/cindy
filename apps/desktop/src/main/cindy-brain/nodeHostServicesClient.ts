@@ -21,6 +21,9 @@ export class NodeHostServicesClient {
   hostCall(server: string, tool: string, args: Record<string, unknown> = {}): Promise<unknown> {
     return this.request('host-tool-request', { server, tool, args });
   }
+  network(request: Record<string, unknown>): Promise<unknown> {
+    return this.request('network-request', { request });
+  }
   private request(type: string, payload: Record<string, unknown>, bound?: { rpcId: string; assertCurrent(): void }): Promise<unknown> {
     bound?.assertCurrent();
     if (this.pending.size >= 8) return Promise.reject(new Error('NODE_HOST_BUSY'));
@@ -28,7 +31,7 @@ export class NodeHostServicesClient {
     return new Promise((resolve, reject) => {
       // A Host tool may await the owner's native confirmation, like the UI path.
       // The existing RPC-bound authenticated-fetch timeout remains unchanged.
-      const timer = bound ? setTimeout(() => this.reply({ reqId, ok: false }), 120000) : undefined;
+      const timer = bound || type === 'network-request' ? setTimeout(() => this.reply({ reqId, ok: false }), bound ? 120000 : 60000) : undefined;
       timer?.unref?.();
       this.pending.set(reqId, { ...bound, assertCurrent: () => bound?.assertCurrent(), resolve, reject, timer });
       try {

@@ -2648,6 +2648,7 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     spawnChild?: () => FakeRawChild,
     autoSpawnChild = true,
     hostToolRequest?: GhostNodeRuntimeBrokerDeps['hostToolRequest'],
+    networkRequest?: GhostNodeRuntimeBrokerDeps['networkRequest'],
   ) {
     const worker = new FakeControlProcess((message) => {
       if (message.id !== undefined && typeof message.method === 'string') {
@@ -2658,6 +2659,7 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
       hostToolRequest,
+      networkRequest,
       spawnProcess: () => worker as unknown as NodeWorkerProcess,
       spawnChildProcess: (entryPath, _cwd, _ghostId, args) => {
         const child = spawnChild?.() ?? new FakeRawChild();
@@ -2730,6 +2732,30 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
       expect(worker.killed).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       expect(worker.killed).toBe(true);
+    } finally { broker.destroyAll(); }
+  });
+
+  // Tier 1: a worker must not borrow another Agent callId through network IPC;
+  // a replacement while a request is awaiting must fence its reply.
+  it.each([false, true])('binds private network requests to the worker installation: %s', async stale => {
+    const ghost = childSpawnGhost();
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const request = vi.fn(async (_id: string, payload: Record<string, unknown>) => {
+      expect(payload.callId).toBeUndefined();
+      await gate;
+      return { ok: true, connectionId: 'opaque' };
+    });
+    const { broker, worker } = await bootWorker(ghost, undefined, true, undefined, request);
+    try {
+      worker.emitControl({ type: 'network-request', reqId: 'host1', request: { op: 'fetch', url: 'https://example.com', callId: 'forged' } });
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      expect(request).toHaveBeenCalledOnce();
+      if (stale) ghost.approval = { state: 'approved', revision: 'r2' };
+      finish();
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'host1', ok: !stale });
     } finally { broker.destroyAll(); }
   });
 

@@ -7,7 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { PassThrough } from 'node:stream';
 import { serialize } from 'node:v8';
+import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
 import { createPluginControlPipe } from '../../desktop/src/main/cindy-brain/nodeRuntimePipe.ts';
+import { GhostNetworkSlot } from '../../desktop/src/main/cindy-brain/networkSlot.ts';
 import { createHostNodeRuntimeBroker } from './plugins/node-process.ts';
 
 import { dataOwnerStorageKey } from '../../desktop/src/main/dataOwnerPath.ts';
@@ -66,6 +69,16 @@ test('a missing profile yields an empty list rather than an error', (t) => {
 // broker tests use fake OS processes and cannot cover this platform adapter.
 test('runs and reaps real plugin workers through the common broker', async t => {
   const dir = tempProfile(t);
+  const http = createServer((_request, response) => { response.writeHead(200, { 'content-type': 'text/event-stream' }); response.write('data: ready\n\n'); });
+  const websocket = new WebSocketServer({ server: http });
+  websocket.on('connection', socket => socket.on('message', (bytes, binary) => socket.send(bytes, { binary })));
+  await new Promise(resolve => http.listen(0, '127.0.0.1', resolve));
+  const port = http.address().port;
+  t.after(async () => {
+    for (const client of websocket.clients) client.terminate();
+    http.closeAllConnections();
+    await new Promise(resolve => http.close(resolve));
+  });
   const workerEntry = process.env.CINDY_TEST_PLUGIN_WORKER || path.join(dir, 'bootstrap.cjs');
   if (!process.env.CINDY_TEST_PLUGIN_WORKER) await build({
     entryPoints: [fileURLToPath(new URL('./plugins/node-worker.ts', import.meta.url))],
@@ -85,6 +98,17 @@ test('runs and reaps real plugin workers through the common broker', async t => 
         child.stdout.on('data', data => { output += data; });
         await new Promise(resolve => child.once('close', resolve));
         result = JSON.parse(output);
+      } else if (request.method === 'network') {
+        const stream = await cindy.fetch({ url: request.params.http + '/events', as: 'stream' });
+        if (!stream.ok) throw new Error(JSON.stringify(stream));
+        const first = await cindy.network.read({ connectionId: stream.connectionId, waitMs: 1000 });
+        await cindy.network.close({ connectionId: stream.connectionId });
+        const socket = await cindy.network.open({ url: request.params.ws + '/echo' });
+        if (!socket.ok) throw new Error(JSON.stringify(socket));
+        await cindy.network.send({ connectionId: socket.connectionId, data: 'plugin-frame' });
+        const echoed = await cindy.network.read({ connectionId: socket.connectionId, waitMs: 1000 });
+        await cindy.network.close({ connectionId: socket.connectionId });
+        result = { status: stream.status, first, echoed };
       } else result = { value: request.params.value, pid: process.pid,
         filtered: process.env.CINDY_TEST_PRIVATE_HOST_VALUE === undefined,
         privatePort: process.parentPort === undefined && process.send === undefined };
@@ -99,8 +123,14 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     else process.env.CINDY_TEST_PRIVATE_HOST_VALUE = previous; });
   const ghost = { manifest: { id: 'test-node', version: '1.0.0', node: {
     entry: 'worker.cjs', protocol: 'json-rpc-stdio', entries: ['child.cjs'], childSpawn: true,
-  } }, dir, enabled: true };
-  const broker = createHostNodeRuntimeBroker(workerEntry, { getGhost: () => ghost });
+  }, network: { hosts: ['http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port] } }, dir, enabled: true,
+    approval: { state: 'approved', revision: 'real-worker-fixture' } };
+  const network = new GhostNetworkSlot({ getGhost: () => ghost, readSecret: () => null, getLoginEmail: () => null,
+    fetchImpl: (url, init) => fetch(url, init), fetchPublicImpl: async () => { throw new Error('undeclared request'); },
+    readGhostMedia: async () => null, takeDirDeposit: () => null, writeSaveDeposit: async () => null,
+    saveGhostMedia: async () => { throw new Error('media not used'); }, isSupportedMediaMime: () => false });
+  const broker = createHostNodeRuntimeBroker(workerEntry, { getGhost: () => ghost,
+    networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request) });
   try {
     const first = await broker.handleRequest('test-node', { type: 'node-request', method: 'echo', params: { value: '你好' } });
     assert.equal(first.ok, true, JSON.stringify(first));
@@ -110,11 +140,16 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     const child = await broker.handleRequest('test-node', { type: 'node-request', method: 'child' });
     assert.equal(child.ok, true, JSON.stringify(child));
     assert.deepEqual(child.result, { arg: 'input', nestedSpawn: false });
+    const connected = await broker.handleRequest('test-node', { type: 'node-request', method: 'network', params: { http: 'http://127.0.0.1:' + port, ws: 'ws://127.0.0.1:' + port } });
+    assert.equal(connected.ok, true, JSON.stringify(connected));
+    assert.equal(connected.result.status, 200);
+    assert.equal(connected.result.first.events[0].data, 'data: ready\n\n');
+    assert.equal(connected.result.echoed.events[0].data, 'plugin-frame');
     await broker.stopAndWait('test-node');
     assert.throws(() => process.kill(first.result.pid, 0), { code: 'ESRCH' });
     ghost.enabled = false;
     assert.equal((await broker.handleRequest('test-node', { type: 'node-request', method: 'echo' })).ok, false);
-  } finally { await broker.stopAndWait('test-node'); broker.destroyAll(); }
+  } finally { await network.disposeAll(); await broker.stopAndWait('test-node'); broker.destroyAll(); }
 });
 
 // Unit: private IPC must decode arbitrary OS fragmentation and settle pending

@@ -65,3 +65,14 @@ it('sends Host tool requests without an RPC identity and preserves the raw resul
   client.reply({ reqId: 'host1', ok: true, result });
   await expect(call).resolves.toBe(result);
 });
+
+// Tier 1: network frames use the private install-bound channel without granting
+// a worker a task identity or delivering the Host-injected request headers.
+it('sends autonomous network requests through the private Host channel', async () => {
+  const sent: any[] = [];
+  const client = new NodeHostServicesClient(new NodeRequestScopes(), value => sent.push(value));
+  const call = client.network({ op: 'open', url: 'wss://stream.example.com/events' });
+  expect(sent[0]).toEqual({ type: 'network-request', reqId: 'host1', request: { op: 'open', url: 'wss://stream.example.com/events' } });
+  client.reply({ reqId: 'host1', ok: true, result: { ok: true, connectionId: 'opaque' } });
+  await expect(call).resolves.toEqual({ ok: true, connectionId: 'opaque' });
+});

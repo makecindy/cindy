@@ -6,6 +6,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { WebSocketServer } from 'ws';
 
 import { afterAll, describe, it, expect, vi } from 'vitest';
 
@@ -140,6 +141,135 @@ function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
 }
 
 const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
+
+// Tier 1: the public network entry must return before a stream ends, preserve
+// reconnect cursors, and revoke live sockets on an installation/owner boundary.
+// Existing buffered-fetch cases cannot observe these lifetime differences.
+describe('host network connections', () => {
+  it('returns headers before EOF, reads UTF-8 incrementally, and retains cursors', async () => {
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start(controller) { source = controller; } });
+    const { slot } = makeSlot({ fetchImpl: async () => new Response(body, { headers: { 'content-type': 'text/event-stream' } }) });
+    const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+    expect(opened).toMatchObject({ ok: true, status: 200, connectionId: expect.any(String) });
+    if (!opened.ok || !('connectionId' in opened)) return;
+    try {
+      const bytes = new TextEncoder().encode('你好');
+      source.enqueue(bytes.slice(0, 2));
+      source.enqueue(bytes.slice(2));
+      const first = await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 });
+      expect(first).toMatchObject({ ok: true, events: [{ type: 'text', data: '你好', sequence: 1 }], nextCursor: 1, resetRequired: false });
+      expect(await slot.handleNetworkRequest('other-plugin', { op: 'read', connectionId: opened.connectionId })).toMatchObject({ ok: false });
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0 })).toMatchObject({ events: [{ data: '你好' }] });
+      source.close();
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 1, waitMs: 1000 })).toMatchObject({ ok: true, closed: true, events: [{ type: 'end' }] });
+    } finally { slot.disposeAll(); }
+  });
+
+  it('cancels a pending stream read when its call ends and releases the guarded transport', async () => {
+    const signal = new AbortController();
+    const release = vi.fn(async () => {});
+    const cancel = vi.fn();
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: null }),
+      inFlightCallInfo: () => ({ ghostId: 'web-search', channel: 'session', sessionId: 's', remoteHostId: null }),
+      getCallSignal: () => signal.signal,
+      fetchPublicImpl: async () => ({ response: new Response(new ReadableStream({ cancel }), { headers: { 'content-type': 'text/plain' } }), release }),
+    });
+    const opened = await slot.handleFetchRequest('web-search', { url: 'https://public.example.com/events', as: 'stream', callId: 'c1' });
+    expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+    if (!opened.ok || !('connectionId' in opened)) return;
+    const reading = slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, waitMs: 1000 });
+    signal.abort();
+    expect(await reading).toMatchObject({ ok: false });
+    await slot.disposeAll();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('requires an exact WS origin, exchanges real frames, and closes on replacement', async () => {
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>(resolve => server.once('listening', resolve));
+    const address = server.address();
+    if (typeof address !== 'object' || !address) throw new Error('missing loopback address');
+    const origin = `ws://127.0.0.1:${address.port}`;
+    let current = true;
+    let authorization: string | undefined;
+    server.on('connection', (socket, request) => {
+      authorization = request.headers.authorization;
+      socket.on('message', (data, binary) => socket.send(data, { binary }));
+    });
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: [origin], secrets: [{ key: 'own', label: 'Own key', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: [origin] } }] } }),
+      readSecret: () => 'host-only-key',
+      captureRequestGuard: () => () => { if (!current) throw new Error('installation changed'); },
+    });
+    try {
+      expect(await slot.handleNetworkRequest('web-search', { op: 'open', url: 'ws://127.0.0.1:1/forbidden' })).toMatchObject({ ok: false });
+      const opened = await slot.handleNetworkRequest('web-search', { op: 'open', url: `${origin}/echo`, headers: { Authorization: 'forged' } });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      expect(authorization).toBe('Bearer host-only-key');
+      expect(await slot.handleNetworkRequest('web-search', { op: 'send', connectionId: opened.connectionId, data: 'hello' })).toMatchObject({ ok: true });
+      const received = await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 });
+      expect(received).toMatchObject({ ok: true, events: [{ type: 'text', data: 'hello' }] });
+      expect(JSON.stringify(received)).not.toContain('host-only-key');
+      expect(await slot.handleNetworkRequest('web-search', { op: 'send', connectionId: opened.connectionId, data: 'AQID', binary: true })).toMatchObject({ ok: true });
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 1, waitMs: 1000 })).toMatchObject({ events: [{ type: 'binary', data: 'AQID' }] });
+      current = false;
+      expect(await slot.handleNetworkRequest('web-search', { op: 'send', connectionId: opened.connectionId, data: 'late' })).toMatchObject({ ok: false });
+      expect(await slot.handleNetworkRequest('web-search', { op: 'close', connectionId: opened.connectionId })).toMatchObject({ ok: false });
+    } finally {
+      await slot.disposeAll();
+      for (const client of server.clients) client.terminate();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+
+  it('bounds stream history, reports a cursor gap, and expires abandoned connections', async () => {
+    vi.useFakeTimers();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ start(controller) { source = controller; }, cancel });
+    const { slot } = makeSlot({ fetchImpl: async () => new Response(body, { headers: { 'content-type': 'text/plain' } }) });
+    try {
+      const opened = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'stream' });
+      expect(opened).toMatchObject({ ok: true, connectionId: expect.any(String) });
+      if (!opened.ok || !('connectionId' in opened)) return;
+      source.enqueue(new Uint8Array(1024 * 1024 + 64 * 1024).fill(97));
+      const result = await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId, cursor: 0, waitMs: 1000 });
+      expect(result).toMatchObject({ ok: true, resetRequired: true, nextCursor: 3 });
+      expect(JSON.stringify(result).length).toBeLessThan(200_000);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(await slot.handleNetworkRequest('web-search', { op: 'read', connectionId: opened.connectionId })).toMatchObject({ ok: false });
+      await slot.disposeAll();
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally { await slot.disposeAll(); vi.useRealTimers(); }
+  });
+
+  it('fences a connection still preparing credentials when the plugin stops', async () => {
+    let finish!: (value: string) => void;
+    const token = new Promise<string>(resolve => { finish = resolve; });
+    let started!: () => void;
+    const exchanging = new Promise<void>(resolve => { started = resolve; });
+    const calls: string[] = [];
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: ['https://api.example.com:8443'], secrets: [{ key: 'own', label: 'Own key',
+        inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['https://api.example.com:8443'] },
+        exchange: { url: 'https://auth.example.com/token', bodyFormat: '{"key":"{value}"}', tokenPath: 'token' },
+      }] } }),
+      readSecret: () => 'synthetic-key',
+      fetchImpl: async url => { calls.push(url); started(); return new Response(JSON.stringify({ token: await token }), { headers: { 'content-type': 'application/json' } }); },
+    });
+    const pending = slot.handleFetchRequest('web-search', { url: 'https://api.example.com:8443/events', as: 'stream' });
+    await exchanging;
+    slot.disposeGhost('web-search');
+    finish('temporary');
+    expect(await pending).toMatchObject({ ok: false });
+    expect(calls).toEqual(['https://auth.example.com/token']);
+    await slot.disposeAll();
+  });
+});
 
 describe('network request installation binding', () => {
   it.each(['redirect-credential', '401-response'] as const)('does not dispatch or invalidate after replacement during %s', async (phase) => {

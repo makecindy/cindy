@@ -3,6 +3,7 @@ import type { GhostPipeDispatcher } from './pipeDispatcher.js';
 export interface GhostExecutionPipePorts {
   dispatcher(): GhostPipeDispatcher;
   fetch(id: string, payload: unknown): Promise<unknown>;
+  network?(id: string, payload: unknown): Promise<unknown>;
   files(id: string, payload: unknown): Promise<unknown>;
   library(id: string, payload: unknown): Promise<unknown>;
   download(id: string, payload: unknown, current: () => boolean): Promise<unknown>;
@@ -17,7 +18,7 @@ export interface GhostExecutionPipePorts {
 export function createGhostExecutionPipe(ports: GhostExecutionPipePorts) {
   return (id: string, payload: unknown, current: () => boolean): Promise<unknown> | undefined => {
     const type = (payload as { type?: unknown } | null)?.type;
-    if (!['tool-result', 'tool-progress', 'fetch-request', 'fs-request', 'library-request', 'download-request', 'node-request', 'host-tool-request'].includes(String(type))) return undefined;
+    if (!['tool-result', 'tool-progress', 'fetch-request', 'network-request', 'fs-request', 'library-request', 'download-request', 'node-request', 'host-tool-request'].includes(String(type))) return undefined;
     if (!current()) return Promise.reject(new Error('PLUGIN_PAGE_UNAVAILABLE'));
     if (type === 'host-tool-request') return ports.hostTools?.(id, payload, current) ?? Promise.reject(new Error('UNSUPPORTED_CAPABILITY'));
     if (type === 'tool-result' || type === 'tool-progress') {
@@ -28,6 +29,7 @@ export function createGhostExecutionPipe(ports: GhostExecutionPipePorts) {
       return Promise.resolve({ ok: true });
     }
     if (type === 'fetch-request') return ports.fetch(id, payload);
+    if (type === 'network-request') return ports.network?.(id, payload) ?? Promise.reject(new Error('UNSUPPORTED_CAPABILITY'));
     if (type === 'fs-request') return ports.files(id, payload);
     if (type === 'library-request') return ports.library(id, payload);
     if (type === 'download-request') return ports.download(id, payload, current);

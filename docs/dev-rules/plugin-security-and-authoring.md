@@ -572,6 +572,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   来源逐条进入原安装/更新确认与详情展示，跨协议/端口不继承旧域名批准。`preview.hosts`
   仍只接受原域名格式，本项不扩大页面导航/CSP。自备密钥可按完整 origin 注入，既有域名凭证
   不扩到新端口；Host 身份令牌、动态连接和 Node 代发授权仍限原 HTTPS:443。
+  `as:'stream'` 返回 Host 持有的文本流连接；`network-request` 提供 WS 精确来源的
+  open/read/send/close。两者共用 `HostNetworkConnections` 的插件归属、非消费游标与有界缓冲，
+  缺口明确返回 resetRequired；不自动重放。Node 私有控制帧走同一网络入口，剥除自报 callId，
+  凭证只在 Host 注入；旧反向 JSON-RPC 规则不变。停用/重载/安装变化、账号切换与 Host 关闭
+  回收连接，带在途 callId 的文本流随调用释放；读取/发送续期 5 分钟空闲窗口。
   凭证由主机保险库注入，**无明文读回**
   给沙箱。Agent 在途调用可凭严格 `callId` 访问未预声明的普通 HTTPS 地址，仍须通过
   主机 URL、SSRF、超时、体积与重定向守门。此途径不注入任何未在 manifest 中声明且

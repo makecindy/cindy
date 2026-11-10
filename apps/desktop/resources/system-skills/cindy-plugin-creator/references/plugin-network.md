@@ -31,7 +31,7 @@ const r = await cindy.fetch({
   headers: { Accept: 'application/json' },  // 可选;Host/Cookie/Authorization 等由主机管,写了也不生效
   body: '{"q":"hello"}',    // 可选:仅 POST / PUT / PATCH / DELETE,≤256KB 文本
   timeoutMs: 30000,         // 可选:文本模式 1s–60s 缺省 30s;媒体模式 1s–300s 缺省 120s
-  as: 'text',               // 可选:'text'(缺省)/ 'media'(响应是媒体,主机落仓,见下)
+  as: 'text',               // 可选:'text'(缺省)/ 'media' / 'file' / 'library' / 'stream'
   label: '',                // 可选:仅媒体模式,入账备注/画廊 caption(≤200 字符)
   callId: msg.callId        // Agent tool-call 内务必带上，同时作为严格在途授权绑定
 });
@@ -378,8 +378,61 @@ maxConnections 收紧到 1–8);token ≤4096 字符。新连接添加成功时�
 
 其它硬边界:每个插件同时在途 4 个请求;媒体取件/上传共用全局串行闸,同时只
 处理一单(忙时返回结构化"正忙",稍后重试即可);重定向最多 3 跳且逐跳重验
-白名单;不支持流式/WebSocket。长任务用"提交 + 轮询"两个工具拆开做;在一次
+白名单。长任务可用下面的流式连接，或用"提交 + 轮询"两个工具拆开做;在一次
 tool-call 内轮询时记得定期发 tool-progress 心跳续命(见 §4"长任务续命")。
+
+## 4.7.1 流式 HTTP 与 WebSocket
+
+`cindy.fetch({as:'stream'})` 在响应头到达后立即返回 `{ok:true,status,headers,connectionId}`，
+只接收 UTF-8 文本（含 SSE/NDJSON）；媒体下载继续使用 `as:'media'` 或 Library。
+HTTP 的来源、逐跳守门与凭证注入沿用本章规则。WebSocket 使用完整 `ws://` 或 `wss://`
+origin 声明，例如 `network.hosts:["wss://stream.example.com"]`，不会从旧 HTTPS 域名批准推导，
+也不跟随握手重定向。沙箱本身仍不能直连。
+
+```js
+const stream = await cindy.fetch({url:'https://api.example.com/events', as:'stream', callId:msg.callId});
+if (!stream.ok) throw new Error(stream.message);
+let cursor = 0;
+try {
+  for (;;) {
+    const part = await cindy.network.read({connectionId:stream.connectionId, cursor, waitMs:20000});
+    if (!part.ok) throw new Error(part.message);
+    if (part.resetRequired) throw new Error('连接历史已出现缺口，请按服务协议恢复');
+    for (const event of part.events) {
+      if (event.type === 'error') throw new Error(event.errorCode);
+      if (event.type === 'text') consume(event.data);
+    }
+    cursor = part.nextCursor;
+    if (part.closed) break;
+  }
+} finally { await cindy.network.close({connectionId:stream.connectionId}); }
+
+const socket = await cindy.network.open({url:'wss://stream.example.com/events', protocols:['example-v1']});
+if (!socket.ok) throw new Error(socket.message);
+try {
+  await cindy.network.send({connectionId:socket.connectionId, data:'hello'});
+  // 同一 read 游标接口返回 text/binary/end/error；binary 的 data 是 base64。
+  const reply = await cindy.network.read({connectionId:socket.connectionId, cursor:0, waitMs:20000});
+} finally { await cindy.network.close({connectionId:socket.connectionId}); }
+```
+
+WebSocket 自备密钥须显式限定到该完整 origin，由 Host 代注入；Host 身份与其它插件的凭证
+不会交给它。`send({binary:true,data:'…base64…'})` 发二进制帧；单帧接收上限 64KiB，
+发送 data 上限 64KiB（文本 UTF-8 字节或 base64 字符）。这些帧是瞬时协议数据，
+需要成为用户素材的媒体仍须交给宿主媒体入库，不自建媒体仓。
+
+连接与普通请求共用每插件在途上限；已结束的连接在显式 close 前仍占一个位置。
+每连接保留最多 1MiB/256 条事件；每次 read 有界返回，`nextCursor` 可重复读取，
+旧游标落后于缓冲时明确 `resetRequired:true`。`waitMs` 为 0–20000，零表示立即取现有事件；
+没有事件不等于结束。`closed:true` 表示终态已到达且本次游标已读完保留事件。
+读取或发送续期 5 分钟空闲窗口，遗弃的连接会被回收。插件停用、重载、安装变化、
+账号切换或 Host 关闭释放连接；带在途 callId 的流随原调用结束/Stop 释放。
+连接 ID 只属于当前执行 Host 与原插件，不能跨插件或新安装代次使用；不自动重连或重放。
+恢复后由调用方持有游标续读，缓冲缺口必须按上游协议处理。
+
+Node Worker 同样提供 `cindy.fetch` / `cindy.network`，走同一宿主代发与凭证注入。
+Node 此入口仅使用已声明网络权限，不接受插件自报 callId 来借用任务授权。
+旧 Host 没有 `cindy.network` 时应明确提示能力不可用，不改成直连或扩大域名声明。
 
 ### Library 下载与上传
 

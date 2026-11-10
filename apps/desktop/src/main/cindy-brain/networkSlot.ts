@@ -24,6 +24,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { Agent } from 'node:http';
+import { HostNetworkConnections } from './networkConnections.js';
 
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
 import { classifyFetchNetworkFailure, fetchTimeoutFailure } from './fetchFailure.js';
@@ -68,6 +70,7 @@ import {
   GHOST_HANDOFF_REF_RE,
   GHOST_HANDOFF_UNAVAILABLE,
   type GhostPipeFetchResult,
+  type GhostPipeNetworkResult,
   type GhostSecretDecl,
   type InstalledGhost,
 } from '../../shared/ghost.js';
@@ -87,6 +90,8 @@ export interface NetworkSlotDeps {
   }): Promise<{ ok: true; path: string; bytes: number; sha256: string; ref: string } |
     { ok: false; errorCode: string; message: string }>;
   captureRequestGuard?(instanceKey: string): () => void;
+  getCallSignal?(instanceKey: string, callId: string): AbortSignal | undefined;
+  resolveWebSocketAgent?(url: string): Promise<Agent | undefined>;
   /**
    * callId → 严格在途的 Agent 调用上下文。只有 channel:'session'、
    * sessionId 存在、明确是本地会话(remoteHostId === null)且 instanceKey
@@ -277,6 +282,22 @@ const STRIPPED_REQUEST_HEADERS = new Set([
 
 /** 请求头名合法形状(与清单 inject.header 校验同口径)。 */
 const HEADER_NAME_RE = /^[A-Za-z0-9-]{1,64}$/;
+
+function parseRequestHeaders(raw: unknown): { headers: Record<string, string> } | { error: string } {
+  const headers: Record<string, string> = {};
+  if (raw === undefined) return { headers };
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { error: 'headers 必须是对象' };
+  const entries = Object.entries(raw);
+  if (entries.length > MAX_REQUEST_HEADERS) return { error: `headers 过多(上限 ${MAX_REQUEST_HEADERS} 条)` };
+  for (const [name, value] of entries) {
+    if (!HEADER_NAME_RE.test(name)) return { error: `非法请求头名 ${JSON.stringify(name)}` };
+    if (typeof value !== 'string' || value.length > MAX_HEADER_VALUE_LEN || /[\r\n]/.test(value)) return { error: `请求头 ${JSON.stringify(name)} 的值不合法` };
+    const lower = name.toLowerCase();
+    if (STRIPPED_REQUEST_HEADERS.has(lower) || lower.startsWith('sec-') || lower.startsWith('proxy-')) continue;
+    headers[name] = value;
+  }
+  return { headers };
+}
 
 /**
  * 回给沙箱的响应头白名单(小写);其余一律不透传。
@@ -780,6 +801,10 @@ function readDotPath(obj: unknown, path: string): unknown {
 
 export class GhostNetworkSlot {
   private readonly inflight = new Map<string, number>();
+  private readonly requests = new Map<string, Set<AbortController>>();
+  private readonly connections = new HostNetworkConnections(GHOST_FETCH_INFLIGHT_LIMIT);
+  private readonly generations = new Map<string, number>();
+  private ownerGeneration = 0;
   private mediaReadsInflight = 0;
   /**
    * 交换型凭证的令牌缓存(内存,不落盘——重启重换一次开销可忽略,也免去
@@ -796,7 +821,62 @@ export class GhostNetworkSlot {
   constructor(private readonly deps: NetworkSlotDeps) {}
 
   hasInFlightRequests(instanceKey: string): boolean {
-    return (this.inflight.get(instanceKey) ?? 0) > 0;
+    return (this.inflight.get(instanceKey) ?? 0) > 0 || this.connections.count(instanceKey) > 0;
+  }
+
+  disposeGhost(instanceKey: string): void {
+    this.generations.set(instanceKey, (this.generations.get(instanceKey) ?? 0) + 1);
+    this.connections.disposeGhost(instanceKey);
+    for (const request of this.requests.get(instanceKey) ?? []) request.abort();
+  }
+
+  async disposeAll(): Promise<void> {
+    this.ownerGeneration += 1;
+    for (const requests of this.requests.values()) for (const request of requests) request.abort();
+    await this.connections.disposeAll();
+  }
+
+  private captureGuard(instanceKey: string): () => void {
+    const guard = this.deps.captureRequestGuard?.(instanceKey);
+    const ownerGeneration = this.ownerGeneration;
+    const generation = this.generations.get(instanceKey) ?? 0;
+    return () => {
+      guard?.();
+      if (ownerGeneration !== this.ownerGeneration || generation !== (this.generations.get(instanceKey) ?? 0) || !this.deps.getGhost(instanceKey)?.enabled) throw new Error('PLUGIN_UNAVAILABLE');
+    };
+  }
+
+  async handleNetworkRequest(instanceKey: string, payload: unknown): Promise<GhostPipeNetworkResult> {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return { ok: false, errorCode: 'NETWORK_INVALID_REQUEST', message: '网络请求格式不合法' };
+    const p = payload as Record<string, unknown>;
+    if (p.op !== 'open') return this.connections.handle(instanceKey, p);
+    try {
+      if (typeof p.url !== 'string' || p.url.length > 2048) throw new Error('NETWORK_INVALID_REQUEST');
+      const url = new URL(p.url);
+      if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.hash) throw new Error('NETWORK_INVALID_REQUEST');
+      const ghost = this.deps.getGhost(instanceKey);
+      if (!ghost?.enabled || !ghost.manifest.network?.hosts.some(pattern => ghostNetworkTargetMatches(pattern, url))) {
+        return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'WebSocket 来源未在 network.hosts 中声明并批准' };
+      }
+      const parsed = parseRequestHeaders(p.headers);
+      if ('error' in parsed) return { ok: false, errorCode: 'NETWORK_INVALID_REQUEST', message: parsed.error };
+      if (p.protocols !== undefined && (!Array.isArray(p.protocols) || p.protocols.length > 16 ||
+          p.protocols.some(protocol => typeof protocol !== 'string' || !/^[!#$%&'*+.^_`|~A-Za-z0-9-]{1,128}$/.test(protocol)) || new Set(p.protocols).size !== p.protocols.length)) throw new Error('NETWORK_INVALID_REQUEST');
+      if ((this.inflight.get(instanceKey) ?? 0) + this.connections.count(instanceKey) >= GHOST_FETCH_INFLIGHT_LIMIT) throw new Error('NETWORK_CONNECTION_LIMIT');
+      const assertCurrent = this.captureGuard(instanceKey);
+      assertCurrent();
+      const inject = await this.injectSecrets(instanceKey, ghost.manifest.network.secrets ?? [], [], url,
+        ghost.manifest.network.hosts, parsed.headers);
+      assertCurrent();
+      if (inject.error) return { ok: false, errorCode: 'NETWORK_CREDENTIAL_UNAVAILABLE', message: inject.error };
+      const connectionId = await this.connections.openWebSocket(instanceKey, {
+        url: url.toString(), headers: parsed.headers, protocols: p.protocols as string[] | undefined,
+        agent: () => this.deps.resolveWebSocketAgent?.(url.toString()) ?? Promise.resolve(undefined), assertCurrent,
+      });
+      return { ok: true, connectionId };
+    } catch {
+      return { ok: false, errorCode: 'NETWORK_CONNECTION_FAILED', message: '连接建立失败，请检查来源声明、连接状态与请求参数' };
+    }
   }
 
   /**
@@ -866,13 +946,14 @@ export class GhostNetworkSlot {
     }
     // ── 响应模式:text(缺省)/ media(字节落总仓)/ file(字节落 save
     // 票据目录)——后两种字节都不进沙箱。
-    let asMode: 'text' | 'media' | 'file' | 'library' = 'text';
+    let asMode: 'text' | 'media' | 'file' | 'library' | 'stream' = 'text';
     if (p.as !== undefined) {
-      if (p.as !== 'text' && p.as !== 'media' && p.as !== 'file' && p.as !== 'library') {
-        return { ok: false, message: "as 仅支持 'text' / 'media' / 'file' / 'library'" };
+      if (p.as !== 'text' && p.as !== 'media' && p.as !== 'file' && p.as !== 'library' && p.as !== 'stream') {
+        return { ok: false, message: "as 仅支持 'text' / 'media' / 'file' / 'library' / 'stream'" };
       }
       asMode = p.as;
     }
+    if (nodeAuth && asMode === 'stream') return { ok: false, message: 'NODE_AUTH_STREAM_UNSUPPORTED' };
     if (asMode === 'library' && (typeof p.path !== 'string' || !isSafeGhostRelativePath(p.path))) {
       return { ok: false, errorCode: 'PATH_INVALID', message: 'Library 下载需要安全的相对 path' };
     }
@@ -1083,27 +1164,9 @@ export class GhostNetworkSlot {
     }
 
     // ── 意识自带 headers 消毒 ────────────────────────────────────────
-    const requestHeaders: Record<string, string> = {};
-    if (p.headers !== undefined) {
-      if (typeof p.headers !== 'object' || p.headers === null || Array.isArray(p.headers)) {
-        return { ok: false, message: 'headers 必须是对象' };
-      }
-      const entries = Object.entries(p.headers as Record<string, unknown>);
-      if (entries.length > MAX_REQUEST_HEADERS) {
-        return { ok: false, message: `headers 过多(上限 ${MAX_REQUEST_HEADERS} 条)` };
-      }
-      for (const [name, value] of entries) {
-        if (!HEADER_NAME_RE.test(name)) return { ok: false, message: `非法请求头名 ${JSON.stringify(name)}` };
-        if (typeof value !== 'string' || value.length > MAX_HEADER_VALUE_LEN || /[\r\n]/.test(value)) {
-          return { ok: false, message: `请求头 ${JSON.stringify(name)} 的值不合法` };
-        }
-        const lower = name.toLowerCase();
-        // 协议关键头/凭证类头静默剥除(文档契约:写了也不生效,不算错误)。
-        if (STRIPPED_REQUEST_HEADERS.has(lower)) continue;
-        if (lower.startsWith('sec-') || lower.startsWith('proxy-')) continue;
-        requestHeaders[name] = value;
-      }
-    }
+    const parsedHeaders = parseRequestHeaders(p.headers);
+    if ('error' in parsedHeaders) return { ok: false, message: parsedHeaders.error };
+    const requestHeaders = parsedHeaders.headers;
 
     // ── URL 硬校验 + 白名单 ─────────────────────────────────────────
     const parsed = parseTargetUrl(p.url);
@@ -1176,12 +1239,15 @@ export class GhostNetworkSlot {
     // 任何未命中 manifest 详单的 Host 托管凭证。
     // ── 在途并发闸(常量硬顶,防死循环刷单;不是配额)──────────────────
     const inflight = this.inflight.get(instanceKey) ?? 0;
-    if (inflight >= GHOST_FETCH_INFLIGHT_LIMIT) {
+    if (inflight + this.connections.count(instanceKey) >= GHOST_FETCH_INFLIGHT_LIMIT) {
       return { ok: false, message: `同时进行的网络请求已达上限(${GHOST_FETCH_INFLIGHT_LIMIT}),请等在途请求返回` };
     }
 
     this.inflight.set(instanceKey, inflight + 1);
     const controller = new AbortController();
+    const requests = this.requests.get(instanceKey) ?? new Set<AbortController>();
+    requests.add(controller);
+    this.requests.set(instanceKey, requests);
     const abortNode = () => controller.abort();
     nodeAuth?.signal.addEventListener('abort', abortNode, { once: true });
     if (nodeAuth?.signal.aborted) controller.abort();
@@ -1192,7 +1258,7 @@ export class GhostNetworkSlot {
     const hasTransfer = !!upload || asMode === 'library';
     const guardedFetchReleases: Array<() => Promise<void>> = [];
     try {
-      const hostGuard = this.deps.captureRequestGuard?.(instanceKey) ?? (() => {});
+      const hostGuard = this.captureGuard(instanceKey);
       const assertStillValid = () => { hostGuard(); nodeAuth?.assertCurrent(); };
       assertStillValid();
       const inject0 = await this.injectSecrets(
@@ -1451,6 +1517,30 @@ export class GhostNetworkSlot {
         const v = response.headers.get(name);
         if (v !== null) responseHeaders[name] = v;
       }
+      if (asMode === 'stream') {
+        controller.signal.throwIfAborted();
+        if (!isTextualContentType(contentType)) {
+          await response.body?.cancel();
+          return { ok: false, message: '流式响应须为 UTF-8 文本，媒体请使用 as:media' };
+        }
+        const signal = requestCallId && agentMediated ? this.deps.getCallSignal?.(instanceKey, requestCallId) : undefined;
+        const releases = [...guardedFetchReleases];
+        const connectionId = this.connections.adoptStream(instanceKey, {
+          body: response.body, signal,
+          assertCurrent: () => {
+            assertStillValid();
+            if (!this.deps.getGhost(instanceKey)?.enabled || (agentMediated && !hasLiveAgentAuthorization())) throw new Error('PLUGIN_CALL_UNAVAILABLE');
+          },
+          release: async () => {
+            controller.abort();
+            await Promise.allSettled(releases.map(release => release()));
+          },
+        });
+        // The connection owns the response until EOF/cancel, including pinned
+        // transport cleanup. The request finally block only releases its slot.
+        guardedFetchReleases.length = 0;
+        return { ok: true, status: response.status, headers: responseHeaders, connectionId };
+      }
 
       // 媒体模式:2xx 且总仓受支持的媒体 → 字节直落总仓记到本意识名下,
       // 沙箱只拿取件单。非 2xx / 文本类响应回落下面的文本形态(错误 JSON
@@ -1670,6 +1760,8 @@ export class GhostNetworkSlot {
       });
       return { ok: false, message: `请求失败:${message}`, ...(network ? { errorCode: network.errorCode } : {}) };
     } finally {
+      requests.delete(controller);
+      if (requests.size === 0) this.requests.delete(instanceKey);
       if (hasTransfer) progress?.(undefined, undefined, '文件处理结束');
       nodeAuth?.signal.removeEventListener('abort', abortNode);
       clearTimeout(timer);

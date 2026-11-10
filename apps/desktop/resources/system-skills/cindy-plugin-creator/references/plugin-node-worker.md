@@ -14,6 +14,9 @@ Node worker ↔ JSON-RPC stdio ↔ 你的 main.js ↔ Cindy 主机能力
 
 Node 不持有 Electron IPC 或 Agent 会话。宿主提供的 `cindy.host.call` 可通过私有通道调用
 与 Agent 共用的宿主工具，须声明并批准 `agent.hostTools`，详见[宿主工具调用](plugin-host-tools.md)。
+`cindy.fetch` 与 `cindy.network.open/read/send/close` 也经同一私有宿主通道提供网络代发、
+流式读取与 WebSocket；沿用本插件已批准的 `network` 目标及凭证注入，不给 Worker 凭证明文，
+不接受自报 callId 借用任务权限，详见[网络](plugin-network.md)。
 其它反向 JSON-RPC 请求仍返回 `-32601`；需要其它 Cindy 能力时，Node 先把数据回给 `main.js`，
 再由 `main.js` 调 Cindy 通道。插件自主调用继续按 manifest 验权；当前
 Agent tool-call 内的网络与 workdir 操作按 §4.2 复用 Agent 授权。

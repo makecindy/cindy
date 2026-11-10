@@ -70,6 +70,11 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   使用此能力的包须标明实际支持版本；已装旧插件的规范值与批准范围不变。凭证范围比较按协议、
   主机与端口区分，不能把旧通配域名批准解释为 HTTP 或非默认端口授权。无新 device-link 帧，
   官方与自建中转无需升级；网络仍在执行 Host 发起。
+  `fetch-request.as` 增量增加 `stream`，成功回执可带 `connectionId`；`network-request`
+  提供 open/read/send/close，read 返回有界事件、nextCursor、closed 与 resetRequired。
+  同一管子服务于 Desktop 与 Node Host；连接留在执行电脑，不是新 HTTP/Webhook 入口。
+  Node 私有控制通道新增 `network-request {reqId,request}`，旧引导层不会提供新 API，
+  插件须检测 `cindy.network`。不改 host-tool-request 或 HostToolCaller 的既有签名。
 
 - 文件管子在原 `fs-request` 上追加 `workdir` 的 read/list/delete/watch/changes/unwatch。
   监听请求使用可选 `watchId` / `cursor`，结果为相对路径元数据与 `resetRequired`；list 条目可选增加

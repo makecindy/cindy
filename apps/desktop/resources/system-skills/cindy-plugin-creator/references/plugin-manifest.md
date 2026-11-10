@@ -280,7 +280,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
 
 ```json
 "preview": {
-  "hosts": ["*.example.dev", "localhost"]   // 1–4 条;语法同 network.hosts;能在右侧栏打开的预览网站白名单,详情页逐条展示
+  "hosts": ["*.example.dev", "localhost"]   // 1–4 条;只接受普通域名模式或预览允许的回环名；不是完整 origin；详情页逐条展示
 }
 ```
 
@@ -325,7 +325,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
 
 ```json
 "network": {
-  "hosts": ["api.example.com", "*.weather.com"],   // 1–8 条;小写域名至少两段;通配只允许最左 "*.";详情页逐条展示给用户
+  "hosts": ["api.example.com", "*.weather.com"],   // 1–8 条；普通域名仅 HTTPS:443；精确 HTTP(S)/WS(S) origin 可声明端口或内网；逐条确认与展示
   "secrets": [{                                     // 可选 0–4 条:需要用户填的凭证(你只声明名字和注入位置,值用户填、主机保管)
     "key": "api_token",                             // 小写字母开头,小写/数字/下划线,1–32;禁用宿主保留键(见 §2.1)
     "label": "Example API Token",                   // 给用户看的名称(设置页/详情页)
@@ -335,7 +335,7 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
     "inject": {                                     // 必填:这条凭证怎么进请求
       "header": "Authorization",                    // 注入的请求头名(Host/Cookie 等协议关键头禁用)
       "format": "Bearer {value}",                   // 恰含一个 {value} 占位,其余静态文本
-      "hosts": ["api.example.com"]                  // 可选:注入范围(hosts 声明条目的子集,逐字);缺省=全部
+      "hosts": ["api.example.com"]                  // 可选:注入范围(hosts 声明条目的子集,逐字);缺省只覆盖普通域名，完整 origin 必须显式写出
     },
     "exchange": {                                   // 可选:key 换令牌二段式(服务要求先拿 key 换临时令牌时声明,主机照单代办,见 §4.7;与 oauth 互斥)
       "url": "https://api.example.com/token",       // 交换端点(https;域名必须命中 hosts 白名单)

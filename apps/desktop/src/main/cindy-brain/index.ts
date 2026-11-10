@@ -715,7 +715,7 @@ import {
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
-import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { guardedOutboundFetch, outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { getDesktopMcpToolApprovalPolicy, setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
 import { createHostToolRuntime } from '../mcp-integrations/hostToolCaller.js';
 import { handlePluginHostToolRequest } from './hostToolSlot.js';
@@ -1444,6 +1444,7 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   abortAllGhostInstallConsentPrompts();
   runtimeSingleton?.destroyAll();
   fsSlotSingleton?.disposeAll();
+  await networkSlotSingleton?.disposeAll();
   resetNodeRuntimeBrokerForAccountBoundary();
   // Drain in-flight staging.release (tombstone/fsync) before tearing Library
   // sessions. Owner mutation leases stay held until each call unwinds; waiting
@@ -2334,6 +2335,7 @@ export function getGhostRuntime(): GhostRuntime {
         // 崩溃/熄灯时把该意识名下的在途工具调用收掉(结构化失败给 agent)。
         getGhostPipeDispatcher().onRuntimeState(storagePart, state);
         if (state !== 'running') {
+          networkSlotSingleton?.disposeGhost(storagePart);
           modelPickerSingleton?.cancel(storagePart);
           pluginInvocations.invalidate(storagePart);
           invocationRuntimeGenerations.set(storagePart, (invocationRuntimeGenerations.get(storagePart) ?? 0) + 1);
@@ -2655,6 +2657,9 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
       authenticatedFetch: (ghostId, request, authorization, assertCurrent, signal) =>
         getGhostNetworkSlot().handleAuthenticatedNodeFetch(ghostId, request, authorization, assertCurrent, signal),
       hostToolRequest: requestPluginHostToolCall,
+      networkRequest: (id, request) => request.op === 'fetch'
+        ? getGhostNetworkSlot().handleFetchRequest(id, request)
+        : getGhostNetworkSlot().handleNetworkRequest(id, request),
       resolveOauthSecret: async (ghostId, secretKey, accountId) => {
         const ghost = findGhostForInstanceId(ghostId);
         const source = ghost
@@ -6718,6 +6723,8 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
   if (!networkSlotSingleton) {
     networkSlotSingleton = new GhostNetworkSlot({
       captureRequestGuard: captureGhostNetworkRequestGuard,
+      getCallSignal: (id, callId) => getGhostPipeDispatcher().getPendingCallSignal(id, callId) ?? undefined,
+      resolveWebSocketAgent: createOutboundHttpAgent,
       createTransferProgress: createGhostFileTransferProgress,
       saveLibraryStream: (id, input) => getGhostLibrarySlot().importStream(id, input),
       uploadFileSize: async (id, value, library) => {
@@ -9780,6 +9787,7 @@ export function registerGhostIpc(): void {
   const executionPipe = createGhostExecutionPipe({
     dispatcher: () => getGhostPipeDispatcher(),
     fetch: (id, payload) => getGhostNetworkSlot().handleFetchRequest(id, payload),
+    network: (id, payload) => getGhostNetworkSlot().handleNetworkRequest(id, payload),
     files: (id, payload) => getGhostFsSlot().handleFsRequest(id, payload),
     library: (id, payload) => getGhostLibrarySlot().handleLibraryRequest(id, payload),
     download: (id, payload, current) => pluginDownloads.handle(id, payload, current),
