@@ -64,6 +64,13 @@ export interface ProductTurnFailureOwner {
   readonly originalExecution?: { readonly instanceId: string; readonly generation: number };
   /** Accepted plugin inputs captured before terminal handling advances the queue. */
   readonly pluginTargetInputIds?: string[];
+  /** Delegation receipt frozen before a recovery can advance the input queue. */
+  readonly delegationTerminal?: {
+    pendingInputClientIds: string[];
+    resultText: string;
+    error?: string;
+    resultMessageClientId?: string;
+  };
 }
 
 export function captureProductTurnFailureOwner(
@@ -119,6 +126,7 @@ export function createProductTurnFailureFinalizer(deps: {
   isCurrentOwner: (owner: ProductTurnFailureOwner) => boolean;
   commitActivity: (sessionId: string) => void;
   settlePluginTasks: (sessionId: string, execution: { instanceId: string; generation: number }, inputClientIds?: string[]) => void;
+  settleDelegation?: (owner: ProductTurnFailureOwner) => Promise<void>;
   interrupt: (sessionId: string, owner?: ProductTurnFailureOwner) => Promise<void>;
 }): (sessionId: string, owner?: ProductTurnFailureOwner) => Promise<void> {
   return async (sessionId, owner) => {
@@ -128,6 +136,10 @@ export function createProductTurnFailureFinalizer(deps: {
     }
     deps.commitActivity(sessionId);
     if (owner) deps.settlePluginTasks(sessionId, owner.originalExecution ?? owner, owner.pluginTargetInputIds);
+    if (owner?.delegationTerminal && deps.settleDelegation) {
+      await deps.settleDelegation(owner);
+      if (!deps.isCurrentOwner(owner)) return;
+    }
     await deps.interrupt(sessionId, owner);
   };
 }

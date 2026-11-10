@@ -587,6 +587,12 @@ export interface AgentInputCoordinatorDeps {
    * 且不得恢复原 recovery、不得再入队。
    */
   onUnconfirmedAutoResumeTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  /** Recovery-only preflight; acceptance still binds the reserved native turn. */
+  beforeQueuedUserMessage?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    restoredFromSnapshot: boolean,
+  ) => Promise<void>;
   onAcceptedQueuedMessage?: (
     sessionId: string,
     item: AgentInputQueuedMessage,
@@ -3533,6 +3539,20 @@ export class AgentInputCoordinator {
       });
       return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
     }
+    // A refused retry keeps the original error and input. The drain repeats this
+    // read-only check because cancellation can race between retry and dispatch.
+    if (recovery.kind === 'active-turn' && this.deps.beforeQueuedUserMessage) {
+      await this.deps.beforeQueuedUserMessage(sessionId, {
+        ...recovery.item,
+        retrySourceClientId: recovery.item.retrySourceClientId ?? recovery.item.supersedesUserClientId ?? recovery.item.clientId,
+        autoResume: automatic ? true : undefined,
+        autoResumeInfo: automatic ? (automaticResumeInfo ?? undefined) : undefined,
+      }, false);
+      if (this.getState(sessionId).recovery !== recovery || usageWaitSuperseded()
+        || (opts?.auto && (!state.autoResumePending || state.autoResumeAttemptToken !== attemptToken))) {
+        return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+      }
+    }
     const previousError = state.error;
     const previousErrorReason = state.errorReason;
     const previousErrorPersistBinding = state.errorPersistBinding;
@@ -5288,6 +5308,10 @@ export class AgentInputCoordinator {
           this.discardRevokedAppInput(sessionId, active, head);
           return;
         }
+      }
+      if (this.deps.beforeQueuedUserMessage && (head.retrySourceClientId || this.restoredQueueItems.has(head))) {
+        await this.deps.beforeQueuedUserMessage(sessionId, head, this.restoredQueueItems.has(head));
+        if (!this.isActiveTurnCurrent(sessionId, active)) return;
       }
       // 意识拦截钩(订阅槽①):落库/派发之前问一遍——block 即丢弃本项
       // (不入库不起 turn),通知宿主降级气泡,继续放行后续排队消息;

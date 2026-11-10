@@ -18,7 +18,7 @@ import { createSessionQueueControlService } from '../../../maker-ipc/sessionQueu
 import { createMessage, readMessagesList } from '../messages';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { authorizeSessionQueueItem, createSessionControlService, rebuildSessionQueueItem } from '../../../maker-ipc/sessionControlService';
-import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue';
+import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON, type AgentInputQueuedMessage } from '../../../../shared/agentInputQueue';
 import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
 import { createCompanionCloudHost } from '../../../companion-cloud/host';
@@ -5041,9 +5041,15 @@ describe('Bot Session task end-to-end runtime', () => {
         return { kind: 'session-dispatch', source: 'fixture-native-turn', dispatched: true };
       },
       onDispatchedUserTurn: async (id, item) => { delegation.confirmQueuedSessionInputDispatched(id, item.clientId); },
+      beforeQueuedUserMessage: async (id, item, restoredFromSnapshot) => {
+        if (options.readSessionExecution) await delegation.validateQueuedSessionInput(id, item.clientId,
+          item.supersedesUserClientId, restoredFromSnapshot, item.retrySourceClientId,
+          !item.autoResume || item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON);
+      },
       onAcceptedQueuedMessage: async (id, item, restoredFromSnapshot) => {
         await acceptedCallbacks.get(item.clientId)?.();
-        if (options.readSessionExecution) await delegation.acceptQueuedSessionInput(id, item.clientId, item.supersedesUserClientId, restoredFromSnapshot, item.retrySourceClientId);
+        if (options.readSessionExecution) await delegation.acceptQueuedSessionInput(id, item.clientId, item.supersedesUserClientId, restoredFromSnapshot, item.retrySourceClientId,
+          !item.autoResume || item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON);
       },
     }) : undefined;
     const dispatch = vi.fn(async (params: Parameters<typeof dispatchDirect>[0]) => {
@@ -8312,6 +8318,69 @@ describe('Bot Session task end-to-end runtime', () => {
         .toEqual({ status: 'completed', result_summary: 'Automatic retry result.' });
     } finally { runtime.dispose(); }
   });
+
+  // DB regression: a previously accepted input must be manually retryable after
+  // failure (including restart), without reopening a cancelled/completed run.
+  it.each([false, true])('retries a failed delegated run in the same Session (cold: %s)', async cold => {
+    await seedPair();
+    let execution = { instanceId: 'native', generation: 1 };
+    let runtime = createDelegationRuntime({ readSessionExecution: () => execution });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Retry accepted work.' });
+      if (!task.ok) throw new Error('missing task');
+      const source = runtime.dispatch.mock.calls.at(-1)![0].clientId!;
+      const failedExecution = execution;
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'error', execution,
+        error: 'Provider unavailable', hadPendingInputAtTerminal: false });
+      if (cold) {
+        runtime.dispose();
+        runtime = createDelegationRuntime({ readSessionExecution: () => execution });
+      }
+      execution = { instanceId: cold ? 'replacement' : 'native', generation: 2 };
+      await runtime.delegation.acceptQueuedSessionInput(task.childSessionId, 'manual-retry', undefined, cold, source, true);
+      runtime.delegation.confirmQueuedSessionInputDispatched(task.childSessionId, 'manual-retry');
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'error', execution: failedExecution,
+        error: 'Late old failure', hadPendingInputAtTerminal: false });
+      expect(h.sqlite!.prepare('SELECT status, run_sequence FROM bot_delegations WHERE id = ?').get(task.delegationId))
+        .toEqual({ status: 'running', run_sequence: 2 });
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'done', execution,
+        resultText: 'Recovered result.', hadPendingInputAtTerminal: false });
+      expect(h.sqlite!.prepare('SELECT status, result_summary, child_session_id FROM bot_delegations WHERE id = ?').get(task.delegationId))
+        .toEqual({ status: 'completed', result_summary: 'Recovered result.', child_session_id: task.childSessionId });
+      await expect(runtime.delegation.acceptQueuedSessionInput(task.childSessionId, 'stale-retry', undefined, false, source, true))
+        .rejects.toThrow('executable run');
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['automatic', 'unknown-source', 'cancelled', 'cancel-requested', 'paused', 'deleted', 'superseded'] as const)(
+    'refuses an unsafe failed delegation retry: %s', async boundary => {
+      await seedPair();
+      let execution = { instanceId: 'native', generation: 1 };
+      const runtime = createDelegationRuntime({ readSessionExecution: () => execution });
+      try {
+        const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Accepted work.' });
+        if (!task.ok) throw new Error('missing task');
+        const source = runtime.dispatch.mock.calls.at(-1)![0].clientId!;
+        await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'error', execution,
+          error: 'Provider unavailable', hadPendingInputAtTerminal: false });
+        if (boundary === 'cancelled') h.sqlite!.prepare("UPDATE bot_delegations SET status = 'cancelled' WHERE id = ?").run(task.delegationId);
+        if (boundary === 'cancel-requested') h.sqlite!.prepare("UPDATE bot_delegations SET permission_snapshot_json = json_set(permission_snapshot_json, '$.taskCancelRequested', json('true')) WHERE id = ?").run(task.delegationId);
+        if (boundary === 'paused') h.sqlite!.prepare("UPDATE bot_delegations SET permission_snapshot_json = json_set(permission_snapshot_json, '$.taskPause', json(?)) WHERE id = ?")
+          .run(JSON.stringify({ token: 'paused', pausedAt: 1, previousStatus: 'running' }), task.delegationId);
+        if (boundary === 'deleted') h.sqlite!.prepare("UPDATE sessions SET status = 'deleted' WHERE id = ?").run(task.childSessionId);
+        if (boundary === 'superseded') h.sqlite!.prepare('UPDATE bot_delegations SET run_sequence = run_sequence + 1 WHERE id = ?').run(task.delegationId);
+        const before = h.sqlite!.prepare('SELECT * FROM bot_delegations WHERE id = ?').get(task.delegationId);
+        execution = { instanceId: 'native', generation: 2 };
+        const args = [task.childSessionId, 'retry', undefined, true,
+          boundary === 'unknown-source' ? `bot-delegation-start:${task.delegationId}:unaccepted` : source,
+          boundary !== 'automatic'] as const;
+        await expect(runtime.delegation.validateQueuedSessionInput(...args)).rejects.toThrow();
+        // Acceptance has its own CAS check even if lifecycle changed after preflight.
+        await expect(runtime.delegation.acceptQueuedSessionInput(...args)).rejects.toThrow();
+        expect(h.sqlite!.prepare('SELECT * FROM bot_delegations WHERE id = ?').get(task.delegationId)).toEqual(before);
+      } finally { runtime.dispose(); }
+    },
+  );
 
   it('binds a cold-restored retry clone through its original delegated input', async () => {
     await seedPair();

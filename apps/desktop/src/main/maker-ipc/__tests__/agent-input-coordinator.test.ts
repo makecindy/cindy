@@ -1729,6 +1729,7 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
 }
 
 function createHarness(opts?: {
+  beforeQueuedUserMessage?: AgentInputCoordinatorDeps['beforeQueuedUserMessage'];
   getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
   providerGroupSwitchCandidate?: AgentInputCoordinatorDeps['providerGroupSwitchCandidate'];
 }) {
@@ -1920,6 +1921,7 @@ function createHarness(opts?: {
     ...(opts?.getRecoveryContextSnapshot
       ? { getRecoveryContextSnapshot: opts.getRecoveryContextSnapshot }
       : {}),
+    beforeQueuedUserMessage: opts?.beforeQueuedUserMessage,
     beforeDispatchUserTurn,
     onUndispatchedUserTurn,
     onUserMessagePersisting,
@@ -13979,6 +13981,48 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     });
   });
 
+  // Unit regression: rejected delegated retries used to write a fresh user row
+  // on every click. A pre-persist refusal must retain one retryable queue item.
+  it('keeps a rejected queued retry before persistence until its owner validates it', async () => {
+    const validate = vi.fn<NonNullable<AgentInputCoordinatorDeps['beforeQueuedUserMessage']>>()
+      .mockRejectedValue(new Error('Delegated retry Session is no longer active'));
+    const h = createHarness({ beforeQueuedUserMessage: validate });
+    const sid = 'delegated-retry-preflight';
+    h.coordinator.enqueue(sid, makeItem('retry', 'original request', { retrySourceClientId: 'bot-delegation-start:original' }));
+    await flush();
+    await Promise.all([h.coordinator.retryLastError(sid), h.coordinator.retryLastError(sid)]);
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.onUserMessagePersisted).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection(sid)).toMatchObject({
+      recovery: { kind: 'queue-head', clientId: 'retry' }, pendingQueue: [{ clientId: 'retry' }],
+    });
+    validate.mockResolvedValue(undefined);
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.onUserMessagePersisted).toHaveBeenCalledOnce();
+  });
+
+  // Unit regression: the existing queued refusal case cannot detect loss of the
+  // original failed turn. Retry must reject before clearing its recovery state.
+  it('retains the failed turn when retry validation refuses it and dispatches concurrent retries once', async () => {
+    const validate = vi.fn<NonNullable<AgentInputCoordinatorDeps['beforeQueuedUserMessage']>>()
+      .mockRejectedValue(new Error('Delegated retry Session is no longer active'));
+    const h = createHarness({ beforeQueuedUserMessage: validate });
+    const sid = 'delegated-active-retry-preflight';
+    await failAfterDispatch(h, sid);
+    const original = h.coordinator.getProjection(sid);
+    await expect(h.coordinator.retryLastError(sid)).rejects.toThrow('no longer active');
+    expect(h.coordinator.getProjection(sid)).toEqual(original);
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    validate.mockResolvedValue(undefined);
+    await Promise.all([h.coordinator.retryLastError(sid), h.coordinator.retryLastError(sid)]);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.onUserMessagePersisted).toHaveBeenCalledTimes(2);
+  });
+
   it.each([false, true])('人工 retryLastError 保留排序时间与真人接手（已有产出=%s）', async (hasProgress) => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
     const h = createHarness();
@@ -15188,7 +15232,9 @@ describe('usage-limit wait (ordinary tasks)', () => {
   // Regression: scheduled quota failures used to discard recovery before the
   // reset-time resolver could run. A real run keeps Retry and the same origin.
   it.each([true, false])('keeps scheduled quota recovery and resumes once; progress=%s', async (progress) => {
-    const h = createHarness();
+    const preflight = vi.fn<NonNullable<AgentInputCoordinatorDeps['beforeQueuedUserMessage']>>()
+      .mockResolvedValue(undefined);
+    const h = createHarness({ beforeQueuedUserMessage: preflight });
     const sid = 'scheduled-quota';
     const origin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'Check', runId: 'run-1' } as const;
     h.setHasAssistantProgressAfter(async () => progress);
@@ -15207,6 +15253,12 @@ describe('usage-limit wait (ordinary tasks)', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: progress ? CONTINUE_AFTER_ERROR_PROMPT : 'original work' });
     expect(h.sendToAgent.mock.calls[1][3].origin).toEqual(origin);
+    // The host must recognize the live quota reset before it clears the failed
+    // run; a stale autoResumeInfo from the original input cannot authorize it.
+    expect(preflight).toHaveBeenCalledWith(sid, expect.objectContaining({
+      retrySourceClientId: 'quota-original', autoResume: true,
+      autoResumeInfo: expect.objectContaining({ reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON }),
+    }), false);
   });
   const INFO = {
     reason: USAGE_LIMIT_RESET_AUTO_RESUME_REASON,

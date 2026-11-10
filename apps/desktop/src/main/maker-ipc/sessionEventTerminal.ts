@@ -320,13 +320,32 @@ export function finishSessionTerminalEvent(
             || isOversizedHistoryErrorData(attributedEvent.data)
             || isUnsupportedRequestOptionErrorData(attributedEvent.data)) ?? 'idle')
         : 'idle';
+    const botDelegationPendingInputClientIds =
+      deps.agentInputCoordinatorHolder?.getQueueControlSnapshot(session.id).pendingQueue.flatMap(item => [
+        item.clientId,
+        ...(item.supersedesUserClientId ? [item.supersedesUserClientId] : []),
+        ...(item.retrySourceClientId ? [item.retrySourceClientId] : []),
+      ]) ?? [];
+    let deferredTerminalOwner: ProductTurnFailureOwner | undefined;
     const deferUnsuccessfulProductTurn = (): void => {
-      if (terminalOwner) deps.deferUnsuccessfulProductTurn?.(terminalOwner);
+      const observed = session.getObservedCurrentTurnTerminal();
+      const observedError = observed.kind === 'error' && observed.generation === terminalOwner?.generation
+        ? observed.message ?? observed.reason : undefined;
+      if (!terminalOwner) return;
+      deferredTerminalOwner = { ...terminalOwner,
+        delegationTerminal: {
+          pendingInputClientIds: botDelegationPendingInputClientIds,
+          resultText: workerTerminalFinalText,
+          error: workerTerminalDiagnostic ?? observedError,
+          resultMessageClientId: turnAssistantPersistId,
+        },
+      };
+      deps.deferUnsuccessfulProductTurn?.(deferredTerminalOwner);
     };
     const notifyUnsuccessfulProductTurn = (): void => {
       const callback = deps.onUnsuccessfulProductTurn;
       if (!callback || !terminalOwner) return;
-      void callback(session.id, terminalOwner).catch(() =>
+      void callback(session.id, deferredTerminalOwner ?? terminalOwner).catch(() =>
         deps.log.warn('Could not interrupt product turn follow-up'),
       );
     };
@@ -700,14 +719,6 @@ export function finishSessionTerminalEvent(
         notifyUnsuccessfulProductTurn();
       }
       // Group lane turns are attributed by the accepted input, captured before the queue drains.
-      const botDelegationPendingInputClientIds =
-        deps.agentInputCoordinatorHolder
-          ?.getQueueControlSnapshot(session.id)
-          .pendingQueue.flatMap((item) => [
-            item.clientId,
-            ...(item.supersedesUserClientId ? [item.supersedesUserClientId] : []),
-            ...(item.retrySourceClientId ? [item.retrySourceClientId] : []),
-          ]) ?? [];
       void (async () => {
         try {
           const doneData = event.data as {
@@ -722,7 +733,7 @@ export function finishSessionTerminalEvent(
               text: typeof doneData?.result === 'string' ? doneData.result : '', messageClientId: turnAssistantPersistId,
             }).catch(() => deps.log.warn('Task completion delivery settlement deferred'));
           }
-          await deps.botDelegationServiceHolder?.settleSession({
+          if (!recoveryOwnsUnsuccessfulBoundary && !autoResumeSuppressesPersist) await deps.botDelegationServiceHolder?.settleSession({
             childSessionId: session.id,
             execution:
               typeof event.sessionTurnGeneration === 'number'

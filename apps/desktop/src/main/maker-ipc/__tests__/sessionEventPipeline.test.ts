@@ -281,6 +281,7 @@ function harness() {
   const activity = new SessionTurnActivityTracker();
   const listActivity = new SessionListActivityTracker(effects.fn('list-activity'));
   const failureGate = createDeferredProductTurnFailureGate();
+  const settleDelegation = vi.fn<NonNullable<SessionEventDependencies['botDelegationServiceHolder']>['settleSession']>(async () => {});
   const isCurrentOwner = (owner: Parameters<typeof failureGate.defer>[0]) =>
     owner.session === session && owner.instanceId === session.instanceId &&
     owner.generation === session.getTurnGeneration();
@@ -292,6 +293,11 @@ function harness() {
       isCurrentOwner,
       commitActivity: (sessionId) => listActivity.commit(sessionId),
       settlePluginTasks: () => {},
+      settleDelegation: async owner => {
+        await settleDelegation({ ...owner.delegationTerminal, childSessionId: owner.sessionId,
+          execution: owner.originalExecution ?? { instanceId: owner.instanceId, generation: owner.generation },
+          outcome: 'error' });
+      },
       interrupt: async () => {},
     })),
     deferUnsuccessfulProductTurn: (owner: Parameters<typeof failureGate.defer>[0]) => failureGate.defer(owner),
@@ -300,7 +306,7 @@ function harness() {
     workingMemoryRefresh: { markCompacted: vi.fn() },
     wireNoteMemory: { reset: vi.fn() },
     attemptBotCompactRuntimeRefresh: vi.fn(),
-    botDelegationServiceHolder: { settleSession: vi.fn(async () => {}) },
+    botDelegationServiceHolder: { settleSession: settleDelegation },
     isFencedStaleSessionTerminal: vi.fn(() => false),
     redactEventForRenderer: vi.fn((value: AgentEvent): AgentEvent => ({ ...value, data: { redacted: true } })),
     interruptedTurnAutoResumeGuard: {
@@ -506,6 +512,7 @@ describe('production Session event pipeline', () => {
         current.emit(event('error', failure));
         await microtasks();
         expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
+        expect(current.deps.botDelegationServiceHolder.settleSession).not.toHaveBeenCalled();
         vi.setSystemTime(45_000);
         if (recovery === 'overflow') result.resolve(false);
         else expect(current.settleDeferredFailure(failure)).toBe(true);
@@ -513,6 +520,9 @@ describe('production Session event pipeline', () => {
         expect(current.deps.noteSessionListActivity).toHaveBeenCalledExactlyOnceWith('task', 40_000);
         expect(current.settleDeferredFailure(failure)).toBe(false);
         expect(current.deps.noteSessionListActivity).toHaveBeenCalledTimes(1);
+        expect(current.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          childSessionId: 'task', outcome: 'error', error: failure.message, pendingInputClientIds: [],
+        }));
       } finally { await current.dispose(); }
     },
   );
@@ -543,6 +553,7 @@ describe('production Session event pipeline', () => {
       expect(current.settleDeferredFailure(failure)).toBe(false);
       expect(current.deps.noteSessionListActivity).not.toHaveBeenCalled();
       vi.setSystemTime(45_000);
+      expect(current.deps.botDelegationServiceHolder.settleSession).not.toHaveBeenCalled();
       current.emit(event('done', {}, {
         sessionInstanceId: current.session.instanceId,
         sessionTurnGeneration: current.session.getTurnGeneration(),
@@ -859,7 +870,7 @@ describe('production Session event pipeline', () => {
       const h = harness();
       const gate = createDeferredProductTurnFailureGate();
       const successful = h.deps.onSuccessfulProductTurn;
-      const unsuccessful = h.deps.onUnsuccessfulProductTurn;
+      const unsuccessful = h.deps.onUnsuccessfulProductTurn.mockImplementation(async () => {});
       const adapters = h.dependencies as {
         -readonly [K in 'deferUnsuccessfulProductTurn' | 'onSuccessfulProductTurn'
           | 'onUnsuccessfulProductTurn' | 'stashProviderGroupHeldError']: SessionEventDependencies[K];
@@ -876,6 +887,13 @@ describe('production Session event pipeline', () => {
         commitActivity: () => {},
         settlePluginTasks: (sessionId, execution, inputClientIds) =>
           h.deps.onPluginTaskTerminal(sessionId, execution, 'failed', undefined, inputClientIds),
+        settleDelegation: async owner => {
+          await h.deps.botDelegationServiceHolder.settleSession({
+            ...owner.delegationTerminal, childSessionId: owner.sessionId,
+            execution: owner.originalExecution ?? { instanceId: owner.instanceId, generation: owner.generation },
+            outcome: 'error',
+          });
+        },
         interrupt: unsuccessful,
       });
       h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue([
@@ -923,6 +941,8 @@ describe('production Session event pipeline', () => {
           return;
         }
         expect(h.deps.onPluginTaskTerminal.mock.calls.length).toBe(0);
+        await microtasks();
+        expect(h.deps.botDelegationServiceHolder.settleSession).not.toHaveBeenCalled();
         // Queue ownership can change during recovery; retain the failed inputs.
         if (!outcome.endsWith('continued')) {
           h.deps.agentInputCoordinatorHolder.getActiveInputClientIds.mockReturnValue(['plugin-target:next']);
@@ -965,6 +985,11 @@ describe('production Session event pipeline', () => {
         expect(successful).toHaveBeenCalledTimes(continued ? 1 : 0);
         expect(unsuccessful).toHaveBeenCalledTimes(continued ? 0 : 1);
         expect(gate.pending('task')).toBeUndefined();
+        expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          childSessionId: 'task', outcome: continued ? 'done' : 'error',
+          execution: { instanceId: execution.sessionInstanceId, generation },
+          pendingInputClientIds: [],
+        }));
       } finally {
         await h.dispose();
       }
@@ -1319,6 +1344,8 @@ describe('production Session event pipeline', () => {
       status: 'error',
       diagnostic: "You've hit your session limit",
     }), null);
+    // A held provider failure is not the final result of the delegated task.
+    expect(h.deps.botDelegationServiceHolder.settleSession).not.toHaveBeenCalled();
     expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
     await h.dispose();
   });
@@ -1337,6 +1364,7 @@ describe('production Session event pipeline', () => {
       activeInputClientId: 'bot-group:g1:turn:bot-a', outcome: 'done',
     }));
     expect(settleLaneTurn).not.toHaveBeenCalled();
+    expect(h.deps.botDelegationServiceHolder.settleSession).not.toHaveBeenCalled();
     expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
     await h.dispose();
   });

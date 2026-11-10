@@ -6355,6 +6355,14 @@ const interruptProductTurn = createProductTurnFailureFinalizer({
   commitActivity: (sessionId) => sessionListActivityTracker.commit(sessionId),
   settlePluginTasks: (sessionId, execution, inputClientIds) =>
     settlePluginTaskTerminal(sessionId, execution, 'failed', undefined, inputClientIds),
+  settleDelegation: async (owner) => {
+    await botDelegationServiceHolder?.settleSession({
+      ...owner.delegationTerminal,
+      childSessionId: owner.sessionId,
+      execution: owner.originalExecution ?? { instanceId: owner.instanceId, generation: owner.generation },
+      outcome: 'error',
+    }).catch(() => log.warn('Deferred delegation terminal settlement failed', { sessionId: owner.sessionId }));
+  },
   interrupt: async (sessionId) => {
     await interruptUpstreamMergeTurn(sessionId);
   },
@@ -20909,6 +20917,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await settleTodoDispatch(sessionId, item.clientId, true);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
     },
+    beforeQueuedUserMessage: async (sessionId, item, restoredFromSnapshot) => {
+      await botDelegationServiceHolder?.validateQueuedSessionInput(sessionId, item.clientId,
+        item.supersedesUserClientId, restoredFromSnapshot, item.retrySourceClientId,
+        !item.autoResume || item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON);
+    },
     onAcceptedQueuedMessage: async (sessionId, item, restoredFromSnapshot): Promise<void> => {
       if (item.clientId.startsWith('plugin-target:')) {
         try { await assertPluginTargetQueuedDelivery(sessionId, item.clientId); }
@@ -20924,7 +20937,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 返回 promise 让 coordinator 在 onPersisted 链路里 await —— worker 运行态与
       // pending auto-bridge 副作用必须先于 turn 启动完成；失败仍吞错落日志，不拦派发。
       await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item);
-      await botDelegationServiceHolder?.acceptQueuedSessionInput(sessionId, item.clientId, item.supersedesUserClientId, restoredFromSnapshot, item.retrySourceClientId);
+      await botDelegationServiceHolder?.acceptQueuedSessionInput(sessionId, item.clientId, item.supersedesUserClientId, restoredFromSnapshot, item.retrySourceClientId,
+        !item.autoResume || item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON);
       const pluginTaskSession = maker.getSession(sessionId);
       if (pluginTaskSession && pluginTaskServiceForCurrentOwner) {
         await pluginTaskServiceForCurrentOwner().accept(sessionId, item, { instanceId: pluginTaskSession.instanceId, generation: pluginTaskSession.getTurnGeneration() });

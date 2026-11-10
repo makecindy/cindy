@@ -1,8 +1,9 @@
 import type { AgentEvent, Session } from '@cindy/maker-core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   captureProductTurnFailureOwner,
   createDeferredProductTurnFailureGate,
+  createProductTurnFailureFinalizer,
 } from '../productTurnFailureOwner.js';
 
 function fakeSession(
@@ -33,6 +34,28 @@ function terminalError(
 }
 
 describe('deferred product turn failure gate', () => {
+  // Unit timing regression: delegation persistence adds an await to the finalizer;
+  // a replacement turn must not be interrupted after that old receipt finishes.
+  it('rechecks ownership after deferred delegation settlement', async () => {
+    const session = fakeSession('task', 'old', 1);
+    const owner = { ...captureProductTurnFailureOwner(session, terminalError(session, 'failed')),
+      delegationTerminal: { pendingInputClientIds: [], resultText: '' } };
+    let current = true;
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const interrupt = vi.fn(async () => {});
+    const settle = createProductTurnFailureFinalizer({
+      gate: createDeferredProductTurnFailureGate(), isCurrentOwner: () => current,
+      commitActivity: () => {}, settlePluginTasks: () => {},
+      settleDelegation: () => pending, interrupt,
+    });
+    const finishing = settle('task', owner);
+    current = false;
+    release();
+    await finishing;
+    expect(interrupt).not.toHaveBeenCalled();
+  });
+
   it('rebinds an outstanding owner across a provider replacement', () => {
     const oldSession = fakeSession('task', 'old', 4);
     const owner = captureProductTurnFailureOwner(
