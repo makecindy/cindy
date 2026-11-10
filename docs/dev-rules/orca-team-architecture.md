@@ -359,6 +359,20 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 
 #### 消息派发与 auto-bridge
 
+#### Worker 结构化回报（六态）
+
+`send_to_lead` 可选携带 `report`：`state`（`progress` / `waiting` / `ready` / `blocked` / `failed` / `dropped`）+ 单条 `question`、`summary`、`verification`、`risk`。不带 `report` 时行为与旧自由文本回报完全一致。
+
+映射与结算规则：
+
+- `progress` 只写最新回报（`orca_workers.latest_report`），不结算欠回报、不改状态；本轮若没有终段回报，turn 结束仍走既有文本 auto-bridge。
+- `waiting` 结算欠回报，turn 结束时 worker 置 `idle`（不进完成待确认）。
+- `ready` 结算欠回报，turn 结束时按本轮终态置 `done`/`error`（既有语义）。
+- `blocked` / `failed` 结算欠回报，turn 结束时置 `error` 并携带 `question`；`blocked` 缺 `question` 时 bridge 直接拒绝，不派发。
+- `dropped` 结算欠回报，置 `done` 且面板显示「无需处理」；Worker 完成本来就不单独发通知，因此不产生打扰。
+
+`worker status` 枚举保持 `idle/running/done/error` 不变——结构化状态属于回报层，不是新的 worker 状态轴（质量裁决与验收仍由 Lead 侧承担）。远端 Worker（运行设备/SSH）第一期维持历史回读 + 文本回报，`latest_report` 由本机回报路径写入。
+
 1. **忙碌目标不丢消息（状态：不变量）**<br>
    Lead/Worker 互发消息时，如果目标 session 正在跑 turn、存在 queue lock，或刚好在派发竞态里返回 `SESSION_RUNNING`，默认进入输入队列。只有发送方显式选择 `delivery='steer'` 时才按 1b 尝试同轮插话；auto-bridge 等系统补报永远不传 `delivery`。已尝试插话后的拒绝不能当成普通忙碌重发。实现指针：`orcaInterAgentDispatcher.ts` 的 `dispatchOrEnqueueOrcaInterAgentMessage`，以及 `register.ts` 的 `AgentInputCoordinator` wiring。
 

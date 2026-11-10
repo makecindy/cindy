@@ -2,6 +2,7 @@ import type { AgentKind } from '@cindy/maker-core';
 import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-shared/orca-team';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import type { OrcaStructuredWorkerReport } from '@cindy/orca-workflow';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
 import type {
   CollabDispatchFailureOutcome,
@@ -36,6 +37,8 @@ export interface OrcaWorkerRecordSnapshot {
   role: string;
   focused: boolean;
   idleSince: string | null;
+  /** 最新一份结构化回报；缺省/ null = 旧自由文本路径（行为不变）。 */
+  latestReport?: OrcaStructuredWorkerReport | null;
   session: {
     title: string;
     agentKind: AgentKind;
@@ -249,6 +252,8 @@ export type MergeWorkerQueuedMessagesResult =
 export interface WorkerReportReceipt {
   delivered: boolean;
   queuedMessageId?: string;
+  /** 本次回报携带的结构化状态；缺省 = 旧自由文本回报。 */
+  report?: OrcaStructuredWorkerReport;
 }
 
 export type WorkerReportWithdrawalStanding = 'covered' | 'last' | 'other-assignment' | 'untracked';
@@ -382,7 +387,7 @@ export interface OrcaTeamServiceDeps {
   }) => Promise<{ ok: true } | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' }>;
   /** 取消该 worker session 尚未落地的后台唤醒（focus 预热）；释放 runtime 前调用。 */
   cancelWorkerResume?(sessionId: string): void;
-  updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
+  updateWorkerStatus(workerId: string, status: OrcaWorkerStatus, latestReport?: OrcaStructuredWorkerReport | null): Promise<void>;
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
   restoreWorkerDoneIfIdle(workerId: string): Promise<boolean>;
@@ -591,6 +596,11 @@ export interface OrcaTeamService {
 /** ready/inFlight 与对象身份共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
 interface AutoBridgeState {
   pending: boolean;
+  /**
+   * 本派活最新的结构化回报。非 progress 的状态已在收到回报时结算欠回报，
+   * 因此这里只剩终态映射与面板/通知读取用途。
+   */
+  structuredReport?: OrcaStructuredWorkerReport;
   /** Reports of this assignment that reached the Lead directly or by same-turn steer. */
   deliveredReports: number;
   /**
@@ -2127,11 +2137,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         finished = true;
         if (accepted && receipt?.delivered) state.deliveredReports += 1;
         else if (accepted && receipt?.queuedMessageId) state.queuedReportIds.add(receipt.queuedMessageId);
+        // progress 只是内部进度：记最新状态但不结算欠回报，也不阻断本轮 Auto-bridge。
+        // 未带 report 的旧自由文本回报照旧结算。
+        const report = accepted ? receipt?.report : undefined;
+        const settlesReport = report === undefined || report.state !== 'progress';
         try {
           await withWorkerTransition(state.workerId, async () => {
             const provisional = provisionalDispatches.get(sessionId);
-            if (accepted && (autoBridge.get(sessionId) === state
-              || provisional?.previousPendingIdentity === state)) settlePendingReport(state);
+            const ownsState = autoBridge.get(sessionId) === state
+              || provisional?.previousPendingIdentity === state;
+            if (report && ownsState) state.structuredReport = report;
+            if (accepted && settlesReport && ownsState) settlePendingReport(state);
           });
         } finally {
           state.reportsInFlight.delete(settled);
@@ -2315,7 +2331,18 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             return;
           }
 
-          await deps.updateWorkerStatus(link.workerId, params.status);
+          // 结构化回报的六态映射：waiting 不进入完成待确认，dropped 不弹完成提醒，
+          // blocked / failed 进现有等人工路径并携带问题；ready 与旧路径一致。
+          const structured = state?.structuredReport;
+          if (structured?.state === 'waiting') {
+            await deps.markWorkerIdle(link.workerId);
+          } else if (structured?.state === 'dropped') {
+            await deps.updateWorkerStatus(link.workerId, 'done', structured);
+          } else if (structured?.state === 'blocked' || structured?.state === 'failed') {
+            await deps.updateWorkerStatus(link.workerId, 'error', structured);
+          } else {
+            await deps.updateWorkerStatus(link.workerId, params.status, structured);
+          }
           if (state) state.terminalObserved = true;
           deps.broadcastOrcaWorkerChanged(link.leadSessionId);
           if (state && !state.pending) clearRuntimeState(params.sessionId);

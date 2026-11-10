@@ -1,0 +1,1 @@
+ALTER TABLE `orca_workers` ADD `latest_report` text;

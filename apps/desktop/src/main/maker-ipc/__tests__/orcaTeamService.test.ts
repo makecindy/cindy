@@ -1773,8 +1773,78 @@ describe('OrcaTeamService', () => {
     ]);
   });
 
-  it('keeps the lead report outstanding until every worker report is delivered', async () => {
-    const onLeadWorkerReportsSettled = vi.fn();
+  // 2026-11-10 Super-agent 结构化回报：六态映射到现有 worker 状态机，且不改变结算不变量。
+  // 生产入口：service.captureLocalWorkerReport 回执 → handleWorkerTerminalTurn（与主进程事件
+  // 适配器同一路径）；unit tier 同本文件其余用例。
+  it.each([
+    { state: 'waiting' as const, turn: 'done' as const, status: 'idle' as const },
+    { state: 'ready' as const, turn: 'done' as const, status: 'done' as const },
+    { state: 'dropped' as const, turn: 'done' as const, status: 'done' as const },
+    { state: 'blocked' as const, turn: 'done' as const, status: 'error' as const },
+    { state: 'failed' as const, turn: 'error' as const, status: 'error' as const },
+  ])('maps a $state report to a $status worker without a text bridge', async ({ state, turn, status }) => {
+    const leadMessages: string[] = [];
+    const { deps, getWorker, service } = createDeps({
+      sendAutoBridgeToLead: vi.fn(async (_lead: string, message: string) => {
+        leadMessages.push(message);
+        return { accepted: true };
+      }),
+    });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '干活',
+    });
+    const report = {
+      state,
+      summary: '已完成登录修复',
+      ...(state === 'blocked' || state === 'failed' ? { question: '选方案 A 还是 B' } : {}),
+    };
+    await service.captureLocalWorkerReport('worker-session-1')(true, { delivered: true, report });
+
+    // 非 progress 的状态都当场结算欠回报，Lead 不会永远等一个已到达的回报。
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(false);
+
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: turn, finalText: '文本' });
+
+    expect(getWorker().status).toBe(status);
+    if (state === 'waiting') {
+      expect(deps.markWorkerIdle).toHaveBeenCalledWith('worker-1');
+      expect(deps.updateWorkerStatus).not.toHaveBeenCalledWith('worker-1', expect.anything(), expect.anything());
+    } else {
+      expect(deps.updateWorkerStatus).toHaveBeenCalledWith('worker-1', status, expect.objectContaining({ state }));
+    }
+    // 结构化回报已送达 Lead：本轮不再补发一段自由文本。
+    expect(leadMessages).toEqual([]);
+  });
+
+  it('records a progress report without settling the assignment or bridging text', async () => {
+    const leadMessages: string[] = [];
+    const { deps, service } = createDeps({
+      sendAutoBridgeToLead: vi.fn(async (_lead: string, message: string) => {
+        leadMessages.push(message);
+        return { accepted: true };
+      }),
+    });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '长任务',
+    });
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: true,
+      report: { state: 'progress', summary: '已完成一半' },
+    });
+
+    // progress 只是内部进度：欠回报仍在，Lead 的完成不被提前解除。
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(true);
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalledWith('worker-1', expect.anything(), expect.anything());
+
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '阶段结果' });
+    expect(leadMessages).toEqual(['[Auto-bridged: worker 已完成，系统自动回传结果]\n\n阶段结果']);
+  });
+
+  it('keeps the lead report outstanding until every worker report is delivered', async () => {    const onLeadWorkerReportsSettled = vi.fn();
     const { service, setWorkers } = createDeps({ onLeadWorkerReportsSettled });
     setWorkers([
       createWorker(),
