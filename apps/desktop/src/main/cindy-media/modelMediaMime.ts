@@ -75,7 +75,9 @@ function is3mf(bytes: Uint8Array): boolean {
         const compressed = Math.min(data.getUint32(cursor + 20, true), 65536);
         if (start + compressed > cursor) return false;
         const method = data.getUint16(cursor + 10, true);
-        const raw = bytes.subarray(start, start + compressed);
+        // Deflate expands at most ~1032:1, so 1000 input bytes can never exceed the 1 MiB output cap;
+        // a truncated stream is fine because only the XML head is inspected.
+        const raw = bytes.subarray(start, start + Math.min(compressed, 1000));
         let head: Uint8Array;
         try { head = method === 0 ? raw : method === 8 ? inflateRawSync(raw, { finishFlush: constants.Z_SYNC_FLUSH, maxOutputLength: 1 << 20 }) : new Uint8Array(); } catch { return false; }
         if (!/<model\b[^>]*\bxmlns\s*=\s*["']http:\/\/schemas\.microsoft\.com\/3dmanufacturing\/core\/\d{4}\/\d{2}["']/.test(new TextDecoder().decode(head))) return false;

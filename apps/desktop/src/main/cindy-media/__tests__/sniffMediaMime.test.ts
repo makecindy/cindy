@@ -127,6 +127,8 @@ describe('sniffMediaMime', () => {
     zip.file('[Content_Types].xml', '<Types><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>');
     zip.file('3D/3dmodel.model', '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"/>');
     expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))).toBe('model/3mf');
+    zip.file('3D/3dmodel.model', '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' + ' '.repeat(1_300_000) + '</model>');
+    expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))).toBe('model/3mf');
     zip.file('3D/3dmodel.model', 'hello');
     expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))).toBeNull();
     zip.file('3D/3dmodel.model', '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"/>');
