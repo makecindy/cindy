@@ -37,6 +37,11 @@ function memoryLedger(): HostDaemonLedger & { owners: Map<string, HostDaemonOwne
   };
 }
 
+/** 追溯窗口查询的替身：默认「读全了」。 */
+function windowOf(rows: ToolMessageRow[], truncated = false) {
+  return { rows, truncated };
+}
+
 function task(overrides: Partial<RawScheduledTask> = {}): RawScheduledTask {
   return {
     id: '\\airlink-autopm',
@@ -101,6 +106,17 @@ describe('pickOwnerSession', () => {
     });
   });
 
+  // 大小写折叠必须走 JS（Unicode）：SQLite 的 lower() 只处理 ASCII，若在 SQL 里
+  // 预筛选，任务名里的非 ASCII 大写字母会被错杀，命中的行读不到、任务被判无归属。
+  it('folds non-ASCII case in both haystack and needle', () => {
+    expect(
+      pickOwnerSession(
+        [{ sessionId: 's1', title: '备份', content: 'schtasks /create /tn équipebackup' }],
+        ['ÉquipeBackup'],
+      ),
+    ).toEqual({ sessionId: 's1', title: '备份', hitCount: 1 });
+  });
+
   it('ignores needles too short to be evidence', () => {
     expect(pickOwnerSession(rows, ['pm'])).toBeNull();
   });
@@ -134,14 +150,33 @@ describe('host daemon ledger', () => {
 });
 
 describe('attribution window query', () => {
-  // 任务名必须作为查询条件传下去，由 SQL 先过滤再截断：先截断再在内存里匹配，
-  // 忙时创建任务的调用会被挤出窗口，随后被当成「查无归属」写进长期负缓存。
-  it('passes the task name so the query filters before truncating', async () => {
-    const readToolMessages = vi.fn(async () => []);
+  // 截断后没命中不能当「查无此人」：忙时创建任务的调用可能排在窗口第 300 行之后，
+  // 窗口一关就写进长期负缓存，用户建的任务从此不再出现在清单里。
+  it('does not cache a miss when the window was only partially read', async () => {
+    const ledger = memoryLedger();
+    const truncated = true;
     const service = createHostDaemonsService({
       scanTasks: async () => [task()],
-      readToolMessages,
-      ledger: memoryLedger(),
+      readToolMessages: async () => windowOf([], truncated),
+      ledger,
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      // 远超 5 分钟窗口：否则「窗口内重算」会掩盖负缓存
+      now: () => 1_800_000_000_000,
+    });
+
+    expect((await service.list()).unrelatedCount).toBe(1);
+    expect(ledger.getMissMtime('\\airlink-autopm')).toBeNull();
+  });
+
+  it('uses the whole window when it was read completely', async () => {
+    const ledger = memoryLedger();
+    const service = createHostDaemonsService({
+      scanTasks: async () => [task()],
+      readToolMessages: async () => windowOf([], false),
+      ledger,
       stopTask: async () => {},
       runTask: async () => {},
       deleteTask: async () => {},
@@ -150,12 +185,7 @@ describe('attribution window query', () => {
     });
 
     await service.list();
-    expect(readToolMessages).toHaveBeenCalledOnce();
-    expect(readToolMessages).toHaveBeenCalledWith(
-      'airlink-autopm',
-      1_793_028_922_179 - 300_000,
-      1_793_028_922_179 + 300_000,
-    );
+    expect(ledger.getMissMtime('\\airlink-autopm')).toBe(1_793_028_922_179);
   });
 });
 
@@ -172,7 +202,7 @@ describe('hostDaemons service', () => {
     let dbRows = traceRows;
     const service = createHostDaemonsService({
       scanTasks: async () => scanned,
-      readToolMessages: async () => dbRows,
+      readToolMessages: async () => windowOf(dbRows),
       ledger,
       stopTask: async () => {},
       runTask: async () => {},
@@ -201,7 +231,7 @@ describe('hostDaemons service', () => {
     const ran: string[] = [];
     const runnable = createHostDaemonsService({
       scanTasks: async () => scanned,
-      readToolMessages: async () => [],
+      readToolMessages: async () => windowOf([]),
       ledger,
       stopTask: async () => {},
       runTask: async (id) => void ran.push(id),
@@ -216,7 +246,7 @@ describe('hostDaemons service', () => {
   it('refuses to stop or delete a task it did not attribute', async () => {
     const service = createHostDaemonsService({
       scanTasks: async () => [task({ id: '\\v2rayNAutoRun', name: 'v2rayNAutoRun' })],
-      readToolMessages: async () => [],
+      readToolMessages: async () => windowOf([]),
       ledger: memoryLedger(),
       stopTask: async () => {},
       runTask: async () => {},
@@ -245,7 +275,7 @@ describe('hostDaemons service', () => {
       scanTasks: async () => [task({ id: '\fresh', name: 'fresh', definitionMtimeMs: createdMs })],
       readToolMessages: async () => {
         queries += 1;
-        return rows;
+        return windowOf(rows);
       },
       ledger: memoryLedger(),
       stopTask: async () => {},
@@ -278,7 +308,7 @@ describe('hostDaemons service', () => {
       scanTasks: async () => [task({ id: '\never', name: 'never', definitionMtimeMs: createdMs })],
       readToolMessages: async () => {
         queries += 1;
-        return [];
+        return windowOf([]);
       },
       ledger: memoryLedger(),
       stopTask: async () => {},
@@ -299,7 +329,7 @@ describe('hostDaemons service', () => {
     const replaced = task({ definitionMtimeMs: 1_793_000_000_001, exec: 'C:\\other\\new.exe', args: '' });
     const service = createHostDaemonsService({
       scanTasks: async () => [replaced],
-      readToolMessages: async () => [],
+      readToolMessages: async () => windowOf([]),
       ledger,
       stopTask: async () => {},
       runTask: async () => {},
@@ -330,7 +360,10 @@ describe('hostDaemons service', () => {
       scanTasks: async () => [task({ definitionMtimeMs: 1_793_028_922_179 })],
       readToolMessages: async () => {
         if (fail) throw new Error('database is locked');
-        return [{ sessionId: 's1', title: '空气质量联动', content: 'schtasks /create /tn airlink-autopm' }];
+        return {
+          rows: [{ sessionId: 's1', title: '空气质量联动', content: 'schtasks /create /tn airlink-autopm' }],
+          truncated: false,
+        };
       },
       ledger,
       stopTask: async () => {},
@@ -353,9 +386,10 @@ describe('hostDaemons service', () => {
     const deleted: string[] = [];
     const service = createHostDaemonsService({
       scanTasks: async () => [task()],
-      readToolMessages: async () => [
-        { sessionId: 's1', title: '空气质量联动', content: 'schtasks /create /tn airlink-autopm' },
-      ],
+      readToolMessages: async () =>
+        windowOf([
+          { sessionId: 's1', title: '空气质量联动', content: 'schtasks /create /tn airlink-autopm' },
+        ]),
       ledger,
       stopTask: async () => {},
       runTask: async () => {},
@@ -376,7 +410,7 @@ describe('hostDaemons service', () => {
       scanTasks: async () => {
         throw new Error('must not scan off Windows');
       },
-      readToolMessages: async () => [],
+      readToolMessages: async () => windowOf([]),
       ledger: memoryLedger(),
       stopTask: async () => {},
       runTask: async () => {},
@@ -395,9 +429,9 @@ describe('hostDaemons service', () => {
       scanTasks: async () => [task()],
       readToolMessages: async () => {
         scope = 'account-b';
-        return [
+        return windowOf([
           { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
-        ];
+        ]);
       },
       ledger,
       stopTask: async () => {},
@@ -422,9 +456,10 @@ describe('hostDaemons service', () => {
         scope = 'account-b';
         return [task()];
       },
-      readToolMessages: async () => [
-        { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
-      ],
+      readToolMessages: async () =>
+        windowOf([
+          { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
+        ]),
       ledger: memoryLedger(),
       stopTask: async () => {},
       runTask: async () => {},
@@ -448,9 +483,10 @@ describe('hostDaemons service', () => {
         scope = 'account-b';
         return [task()];
       },
-      readToolMessages: async () => [
-        { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
-      ],
+      readToolMessages: async () =>
+        windowOf([
+          { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
+        ]),
       ledger,
       stopTask: async () => {},
       runTask: async () => {},
@@ -479,9 +515,10 @@ describe('hostDaemons service', () => {
         pending = true;
         return [task()];
       },
-      readToolMessages: async () => [
-        { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
-      ],
+      readToolMessages: async () =>
+        windowOf([
+          { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
+        ]),
       ledger,
       stopTask: async () => {},
       runTask: async () => {},
@@ -508,9 +545,9 @@ describe('hostDaemons service', () => {
     const readToolMessages = vi.fn(async () => {
       // 查询期间 owner 被提交，边界仍未结束。
       scope = 'account-b';
-      return [
+      return windowOf([
         { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
-      ];
+      ]);
     });
     const service = createHostDaemonsService({
       scanTasks: async () => [task()],
@@ -532,7 +569,7 @@ describe('hostDaemons service', () => {
 
   // 边界进行中连库都不读：那一刻数据库可能正被换掉，读到的行属于哪个账号无法确定。
   it('refuses to read tool history while the account boundary is in progress', async () => {
-    const readToolMessages = vi.fn(async () => []);
+    const readToolMessages = vi.fn(async () => windowOf([]));
     const ledger = memoryLedger();
     const service = createHostDaemonsService({
       scanTasks: async () => [task()],
@@ -570,7 +607,9 @@ describe('hostDaemons service', () => {
         reads += 1;
         // 第一条任务照常归属；第二条任务的查询期间切号。
         if (reads === 2) scope = 'account-b';
-        return [{ sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn first-task' }];
+        return windowOf([
+          { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn first-task' },
+        ]);
       },
       ledger,
       stopTask: async () => {},
@@ -596,7 +635,7 @@ describe('hostDaemons service', () => {
         scope = 'account-b';
         return [task()];
       },
-      readToolMessages: async () => [],
+      readToolMessages: async () => windowOf([]),
       ledger,
       stopTask,
       runTask: async () => {},

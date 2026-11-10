@@ -11,11 +11,8 @@ import type {
   HostDaemonTrigger,
   HostDaemonsSnapshot,
 } from '../../shared/hostDaemons.js';
-import {
-  ATTRIBUTION_WINDOW_MS,
-  pickOwnerSession,
-  type ToolMessageRow,
-} from './attribution.js';
+import { ATTRIBUTION_WINDOW_MS, pickOwnerSession } from './attribution.js';
+import type { ToolMessageWindow } from './toolHistory.js';
 import type { HostDaemonLedger, HostDaemonOwnerRecord } from './ledger.js';
 import {
   isSystemScheduledTaskId,
@@ -40,15 +37,11 @@ export class HostDaemonActionError extends Error {
 export interface HostDaemonsServiceDeps {
   scanTasks: () => Promise<RawScheduledTask[]>;
   /**
-   * 读取 [fromMs, toMs] 内**提到该任务名**的工具调用消息（含会话标题）。
-   * 任务名必须由查询自己过滤：先截断再在内存里匹配，会把创建任务的调用挤出窗口，
-   * 随后被当成「查无归属」写进长期负缓存。
+   * 读取 [fromMs, toMs] 内的工具调用消息（含会话标题），并回报是否只读到一部分。
+   * 匹配放在这里的 JS 里做（Unicode 大小写折叠）；`truncated` 为真时没命中不能
+   * 当作「查无此人」，否则会被写进长期负缓存。
    */
-  readToolMessages: (
-    needle: string,
-    fromMs: number,
-    toMs: number,
-  ) => Promise<ToolMessageRow[]>;
+  readToolMessages: (fromMs: number, toMs: number) => Promise<ToolMessageWindow>;
   ledger: HostDaemonLedger;
   stopTask: (id: string) => Promise<void>;
   /** 立即运行一次（停止之后把任务重新拉起来）。 */
@@ -148,12 +141,14 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     const toMs = task.definitionMtimeMs + ATTRIBUTION_WINDOW_MS;
     // 追溯要读消息库（跨 await）：切号期间读到的可能已是另一个账号的库。
     const scopeBefore = scopeStamp();
-    const rows = await deps.readToolMessages(task.name, fromMs, toMs);
+    const { rows, truncated } = await deps.readToolMessages(fromMs, toMs);
     // 切号后作废在途查询：旧账号的结果不能写进新账号的台账。undefined ≠ null ——
     // null 是「查无此人」（可写负缓存），undefined 是「结果不可信」（不得写任何台账）。
     if (scopeBefore !== scopeStamp()) return undefined;
     const picked = pickOwnerSession(rows, [task.name]);
-    return picked ? { sessionId: picked.sessionId, title: picked.title } : null;
+    if (picked) return { sessionId: picked.sessionId, title: picked.title };
+    // 只读到一部分就判「查无此人」，会让这条任务在窗口关闭后被负缓存永久隐藏。
+    return truncated ? undefined : null;
   }
 
   /**
