@@ -11460,7 +11460,8 @@
       "toolSettings": "Ajustes de herramientas",
       "notTurnedOn": "Aún no está activada en esta computadora",
       "turnOn": "Activar",
-      "permissions": "Permisos"
+      "permissions": "Permisos",
+      "officialInherited": "Oficial de Cindy · Sigue la configuración de este equipo"
     },
     "systemSkills": {
       "followOffHint": "La habilidad del sistema «Panel y seguimiento» de {{name}} está desactivada. Vuelve a activarla en Capacidades para usar esto.",
@@ -20066,5 +20067,11 @@
     "keepDraft": "Tu borrador se conserva. Las tareas se sincronizarán cuando se restablezca la conexión.",
     "retry": "Reconectar",
     "desktopAuthHelp": "Actualiza la configuración de conexión en el terminal de inicio y vuelve a abrir este cliente experimental."
+  },
+  "remoteControlConsent": {
+    "title": "¿Permitir el control remoto de este ordenador?",
+    "detail": "Solicitud de {{device}}\nMotivo: {{purpose}}\n\nLos dispositivos de tu cuenta podrán controlar este ordenador, ejecutar tareas y acceder a archivos. Seguirá activado hasta que lo desactives en Ajustes.",
+    "decline": "Ahora no",
+    "enable": "Activar control remoto"
   }
 }

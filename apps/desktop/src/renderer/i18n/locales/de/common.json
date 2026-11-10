@@ -11363,7 +11363,8 @@
       "toolSettings": "Tool-Einstellungen",
       "notTurnedOn": "Auf diesem Computer noch nicht eingeschaltet",
       "turnOn": "Einschalten",
-      "permissions": "Berechtigungen"
+      "permissions": "Berechtigungen",
+      "officialInherited": "Offiziell von Cindy · Folgt den Einstellungen dieses Computers"
     },
     "systemSkills": {
       "followOffHint": "Der System-Skill „Arbeitsplatz und Nachverfolgung“ von {{name}} ist aus. Schalte ihn unter „Fähigkeiten“ wieder ein, um dies zu nutzen.",
@@ -19879,5 +19880,11 @@
     "keepDraft": "Dein Entwurf bleibt erhalten. Der Aufgabenstatus wird nach Wiederherstellung der Verbindung synchronisiert.",
     "retry": "Erneut verbinden",
     "desktopAuthHelp": "Aktualisiere die Host-Verbindungseinstellungen im Startterminal und öffne diesen experimentellen Client erneut."
+  },
+  "remoteControlConsent": {
+    "title": "Fernsteuerung dieses Computers erlauben?",
+    "detail": "Anfrage von {{device}}\nZweck: {{purpose}}\n\nGeräte Ihres Kontos können diesen Computer steuern, Aufgaben ausführen und auf Dateien zugreifen. Die Einstellung bleibt aktiv, bis Sie sie in den Einstellungen deaktivieren.",
+    "decline": "Jetzt nicht",
+    "enable": "Fernsteuerung aktivieren"
   }
 }

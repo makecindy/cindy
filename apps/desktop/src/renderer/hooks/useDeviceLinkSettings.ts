@@ -89,6 +89,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const disabledControlDeviceIdsRef = useRef<string[]>([]);
   // getState() 与 ownership push 可能乱序返回;事件版本推进后,旧快照不得覆盖新事实。
   const ownershipEventVersion = useRef(0);
+  const enabledEventVersion = useRef(0);
 
   const applyDisabledControlDeviceIds = useCallback((ids: string[]) => {
     disabledControlDeviceIdsRef.current = ids;
@@ -142,6 +143,11 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       setStandby(p.standby === true);
     });
     const ownershipVersionAtGetState = ownershipEventVersion.current;
+    const enabledVersionAtGetState = enabledEventVersion.current;
+    const offEnabled = window.electronAPI.deviceLink.onControlEnabledChanged?.((p) => {
+      enabledEventVersion.current++;
+      setEnabledState(p.remoteControlEnabled);
+    });
     let controllerRevision = 0;
     let disposed = false;
     const offControlled = window.electronAPI.deviceLink.onControlledState((p) => {
@@ -152,7 +158,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       .getState()
       .then((s) => {
         if (disposed || !mounted.current) return;
-        setEnabledState(s.remoteControlEnabled);
+        if (enabledEventVersion.current === enabledVersionAtGetState) setEnabledState(s.remoteControlEnabled);
         setLinkStatus(s.linkStatus);
         setConnectionIssue(s.connectionIssue ?? null);
         if (ownershipEventVersion.current === ownershipVersionAtGetState) {
@@ -187,6 +193,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       offStatus();
       offIssue();
       offOwnership();
+      offEnabled?.();
       offControlled();
       offControlTarget();
       clearInterval(timer);
@@ -196,6 +203,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const setEnabled = useCallback(
     async (next: boolean) => {
       const prev = enabled;
+      const version = ++enabledEventVersion.current;
       setEnabledState(next);
       try {
         await window.electronAPI.deviceLink.setEnabled(next);
@@ -204,7 +212,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         );
       } catch (err) {
         log.warn('setEnabled failed', err);
-        setEnabledState(prev);
+        if (version === enabledEventVersion.current) setEnabledState(prev);
         toast.error(t('settings.devices.toast.toggleFailed'));
       }
     },

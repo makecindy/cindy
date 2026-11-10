@@ -11460,7 +11460,8 @@
       "toolSettings": "Definições das ferramentas",
       "notTurnedOn": "Ainda não ativado neste computador",
       "turnOn": "Ativar",
-      "permissions": "Permissões"
+      "permissions": "Permissões",
+      "officialInherited": "Oficial da Cindy · Segue as definições deste computador"
     },
     "systemSkills": {
       "followOffHint": "A Skill do sistema “Painel e acompanhamento” de {{name}} está desativada. Volta a ativá-la em Capacidades para usar isto.",
@@ -20066,5 +20067,11 @@
     "keepDraft": "O rascunho será mantido. As tarefas serão sincronizadas quando a ligação for restabelecida.",
     "retry": "Voltar a ligar",
     "desktopAuthHelp": "Atualize as definições de ligação no terminal de arranque e reabra este cliente experimental."
+  },
+  "remoteControlConsent": {
+    "title": "Permitir o controlo remoto deste computador?",
+    "detail": "Pedido de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e aceder a ficheiros. A opção mantém-se ativa até a desativar nas definições.",
+    "decline": "Agora não",
+    "enable": "Ativar controlo remoto"
   }
 }
