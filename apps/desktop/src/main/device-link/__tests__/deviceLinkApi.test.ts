@@ -37,6 +37,7 @@ vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ disabl
 vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDeviceProviderViews: vi.fn(async () => []) }));
 
 import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi';
+import { __resetDirectoryThrottleForTests } from '../directoryThrottle';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting';
 import { remoteLocalAgentModels } from '../../local-agent/remoteCatalog.js';
 
@@ -65,6 +66,29 @@ describe('deviceLinkApiFetch', () => {
     await expect(remoteLocalAgentModels(() => true)).resolves.toEqual([]);
     expect(lastRequest()).toEqual({ url: 'http://192.168.1.20:47820/api/device-link/devices', authorization: 'CindyRelay relay-credential' });
     expect(mocks.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  // 目录限流是**共享账本**:读 `/devices` 的不止 IPC 那一条路(还有 relay 上线补展示名、
+  // 远程模型目录)。谁收到 429 都记账,窗口内**所有**读者都不再发物理读 —— 只在 IPC 那条
+  // 路上记账时,另外两条照发,共享的限流窗口会被它们一路推后(Codex review #9360
+  // 「Share the directory cooldown across all /devices readers」)。
+  it('shares the directory cooldown with every reader of the device directory', async () => {
+    try {
+      mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({ message: 'rate limited' }), {
+        status: 429,
+        headers: { 'Retry-After': '60' },
+      }));
+      // 第一次:远程模型目录读到 429,期限进共享账本。
+      await expect(remoteLocalAgentModels(() => true)).resolves.toEqual([]);
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+
+      // 窗口内换一个调用方:账本命中,连物理读都不发(而不是又去撞一次 429)。
+      await expect(remoteLocalAgentModels(() => true)).resolves.toEqual([]);
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      // 账本是模块级共享状态:留给下一个用例就等于替它限流。
+      __resetDirectoryThrottleForTests();
+    }
   });
 
   // 共享任务附件只存在于官方存储:走自建中转时也必须带账号 token 发往官方,不能落到中转。

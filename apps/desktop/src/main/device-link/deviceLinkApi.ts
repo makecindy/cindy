@@ -6,8 +6,24 @@
  *   自建中转的 401 只表示中转凭证失效,不能把 Cindy 账号登出。
  */
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
+import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
+import {
+  currentDirectoryThrottleOwner,
+  directoryRetryDeadline,
+  recordDirectoryRetryDeadline,
+} from './directoryThrottle.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
+
+/**
+ * 设备目录端点。它的限流(429)期限由 `directoryThrottle` 统一记账,`deviceLinkApiFetch`
+ * 在发请求前先看账本:限流窗口内**不发物理读**,直接回一个带期限的 429。
+ *
+ * 这条路径要覆盖所有读 `/devices` 的调用方 —— `handleListDevices`(IPC)、
+ * `runControllerDisplayNamesFromDirectory`(relay 上线补展示名)与
+ * `remoteLocalAgentModels`(远程模型目录)。只在 IPC 那条路上记账时,另外两条既看不到
+ * 冷却也记不下 429,共享的限流窗口照样被推后(Codex review #9360)。
+ */
+const DEVICE_DIRECTORY_PATH = '/api/device-link/devices';
 
 /** 当前中转的 REST 基础地址(WebSocket 地址由它推出)。 */
 export function resolveDeviceLinkApiBase(): string {
@@ -36,12 +52,35 @@ export function deviceLinkApiFetch<T>(
   opts: Omit<ApiFetchOptions, 'baseUrl' | 'token' | 'authorization'> = {},
 ): Promise<T> {
   const relay = activeSelfHostedRelay();
-  if (!relay) return officialDeviceLinkApiFetch<T>(apiPath, opts);
-  return serverApiFetch<T>(apiPath, {
-    ...opts,
-    baseUrl: relay.baseUrl,
-    authorization: `CindyRelay ${relay.credential}`,
-    skipAutoRefresh: true,
-    skipSessionInvalidation: true,
+  // 桶的身份 = 请求要发往的地址,与 ipc 侧 `directoryRelayScope()` 同源。
+  const baseUrl = relay ? relay.baseUrl : officialDeviceLinkApiBase();
+  const owner = currentDirectoryThrottleOwner();
+  if (apiPath === DEVICE_DIRECTORY_PATH) {
+    // 限流窗口内不发物理读:每次追问都会让服务端把窗口重新推后,越问越久。
+    const throttledUntil = directoryRetryDeadline(owner, baseUrl);
+    if (throttledUntil > Date.now()) {
+      return Promise.reject(new ServerApiError('UNAVAILABLE', 429, '设备目录限流退避中', throttledUntil, baseUrl));
+    }
+  }
+  const pending = relay
+    ? serverApiFetch<T>(apiPath, {
+      ...opts,
+      baseUrl: relay.baseUrl,
+      authorization: `CindyRelay ${relay.credential}`,
+      skipAutoRefresh: true,
+      skipSessionInvalidation: true,
+    })
+    : officialDeviceLinkApiFetch<T>(apiPath, opts);
+  if (apiPath !== DEVICE_DIRECTORY_PATH) return pending;
+  return pending.catch((error: unknown) => {
+    // 429 的 Retry-After 记进共享账本:谁收到都算数,否则这条路径收到的限流无人记账,
+    // 下一次读(可能来自另一个调用方)直接撞进同一个窗口。
+    const retryAt = (error as { retryAt?: unknown } | null | undefined)?.retryAt;
+    if (typeof retryAt === 'number' && Number.isFinite(retryAt) && currentDirectoryThrottleOwner() === owner) {
+      const servedBaseUrl = (error as { servedBaseUrl?: unknown } | null | undefined)?.servedBaseUrl;
+      const scope = typeof servedBaseUrl === 'string' && servedBaseUrl !== '' ? servedBaseUrl : baseUrl;
+      recordDirectoryRetryDeadline(owner, scope, retryAt);
+    }
+    throw error;
   });
 }

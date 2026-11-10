@@ -42,6 +42,13 @@ import {
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { ServerApiError } from '../serverApiClient';
 import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.js';
+import {
+  __resetDirectoryThrottleForTests,
+  clearDirectoryRetryDeadline,
+  currentDirectoryRetrySequence,
+  directoryRetryDeadline,
+  recordDirectoryRetryDeadline,
+} from './directoryThrottle.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
@@ -120,6 +127,11 @@ import {
   setDeviceControlEnabled,
 } from './settings-store';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
+import { setDirectoryThrottleOwnerSource } from './directoryThrottle.js';
+
+// 目录限流账本按 owner 分桶:登记当前账号的桶身份来源,让 deviceLinkApiFetch 的
+// 检查与 handleListDevices 的记账落在同一个桶里(Codex review #9360)。
+setDirectoryThrottleOwnerSource(activeOwnerScopeKey);
 import {
   coerceCachedSession,
   getMirrorCache,
@@ -456,57 +468,6 @@ const DEVICE_LIST_COALESCE_WINDOW_MS = 300;
  */
 const DIRECTORY_READ_TIMEOUT_MS = 8_000;
 
-/**
- * 服务端限流(429)给出的目录重试期限(墙钟 ms),按 owner + 中转身份**分桶**记。
- *
- * 中转身份也要算进去:官方中转与自建中转是**各自独立**的限流桶,同一账号从官方切到
- * 自建(或反过来)之后,上一个中转给的期限不该拦住新中转上的第一次读 —— 否则换中转后
- * 目录一直读不出去,恢复被一个已经无关的期限拖住(Codex review #9360)。
- *
- * 每个桶的期限要**各自留着**:只留最后一个桶的话,中转 A → B → A 来回切时,A 的期限
- * 会被 B 覆盖,切回 A 之后就在 A 仍然有效的限流窗口里又发了一次物理读
- * (Codex review #9360)。
- */
-const directoryRetryAtByScope = new Map<string, number>();
-
-/** 限流桶的键:owner + 中转身份。 */
-function directoryScopeKey(owner: string, relay: string): string {
-  return `${owner}\u0000${relay}`;
-}
-
-/** 取某个桶当前有效的期限(过期的顺手丢掉)。 */
-function directoryRetryDeadline(owner: string, relay: string): number {
-  const key = directoryScopeKey(owner, relay);
-  const retryAtMs = directoryRetryAtByScope.get(key);
-  if (retryAtMs === undefined) return 0;
-  if (retryAtMs <= Date.now()) {
-    directoryRetryAtByScope.delete(key);
-    return 0;
-  }
-  return retryAtMs;
-}
-
-/** 记下某个桶的期限(同一个桶里取更晚的那个)。 */
-function recordDirectoryRetryDeadline(owner: string, relay: string, retryAtMs: number): void {
-  const key = directoryScopeKey(owner, relay);
-  const known = directoryRetryAtByScope.get(key) ?? 0;
-  directoryRetryAtByScope.set(key, Math.max(known, retryAtMs));
-  pruneExpiredDirectoryRetryDeadlines();
-}
-
-/** 桶的期限作废:拿到权威目录 = 服务端没有在限流。 */
-function clearDirectoryRetryDeadline(owner: string, relay: string): void {
-  directoryRetryAtByScope.delete(directoryScopeKey(owner, relay));
-}
-
-/** 桶会随账号 / 中转增多,过期的那几个顺手清掉,别让它一直长。 */
-function pruneExpiredDirectoryRetryDeadlines(): void {
-  if (directoryRetryAtByScope.size <= 16) return;
-  const now = Date.now();
-  for (const [key, retryAtMs] of directoryRetryAtByScope) {
-    if (retryAtMs <= now) directoryRetryAtByScope.delete(key);
-  }
-}
 
 /** 当前中转身份(官方端点或自建中转地址):限流期限按它分桶。 */
 function directoryRelayScope(): string {
@@ -526,7 +487,7 @@ function isAbortError(error: unknown): boolean {
 /** 仅测试:重置合并窗口状态,避免跨用例共用在途 promise。 */
 export function __resetDeviceListCoalescingForTests(): void {
   latestDeviceListRequest = null;
-  directoryRetryAtByScope.clear();
+  __resetDirectoryThrottleForTests();
   invalidateProviderDirectoryContinuity();
 }
 
@@ -544,6 +505,8 @@ export function handleListDevices(
   const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
   const presenceRequestEpoch = deps.captureControllerPresenceRequestEpoch();
   const directoryEpoch = providerDirectoryGeneration();
+  /** 这一轮物理读**发起**时的账本序号:成功只清掉序号不晚于它的限流期限(见 directoryThrottle)。 */
+  let issuedSeq = 0;
     const request = readProviderDirectoryContinuity(() => {
       // 限流窗口内不再发**物理读**:每次追问都会让服务端把窗口重新推后,越问越久。
       // 冷启动(没有旧快照可沿用)时尤其明显:本地退避是 5 秒起,一路追问到窗口之后。
@@ -561,6 +524,7 @@ export function handleListDevices(
       const deadline = setTimeout(() => {
         controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
       }, DIRECTORY_READ_TIMEOUT_MS);
+      issuedSeq = currentDirectoryRetrySequence();
       return deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
         '/api/device-link/devices',
         { timeoutMs: DIRECTORY_READ_TIMEOUT_MS, signal: controller.signal },
@@ -618,7 +582,10 @@ export function handleListDevices(
       // 这次响应可能是 401 刷新之后由另一个中转服务的(见上面的 catch 分支)。
       const currentRelay = directoryRelayScope();
       if (!stale) {
-        clearDirectoryRetryDeadline(owner, currentRelay);
+        // 只清掉**这次读发起之前**就已记下的期限:在途期间(issuedSeq 之后)另一次 429
+        // 记下的期限比这次成功更新,抹掉它会让下一次读直接撞进限流窗口,把窗口越推越远
+        // (Codex review #9360「Preserve cooldowns newer than the completing request」)。
+        clearDirectoryRetryDeadline(owner, currentRelay, issuedSeq);
       }
       // 服务端限流给出的重试期限:调用方的退避要让过它(见 handleListDevices)。按当前
       // 中转取 —— 下一次读用的就是这个身份。

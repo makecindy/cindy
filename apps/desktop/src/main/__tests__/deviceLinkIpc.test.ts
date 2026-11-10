@@ -580,6 +580,46 @@ describe('device-link IPC handlers', () => {
     }
   });
 
+  // 两条目录读同时在途:先发的那条先撞上限流记下期限,后发的那条随后才成功。成功只证明
+  // 「服务端处理**我这次**请求时没在限流」,不证明它之后没有 —— 无条件清掉会把并发请求
+  // 刚记下的期限一起抹掉,下一次读直接撞进限流窗口,把窗口越推越远
+  // (Codex review #9360「Preserve cooldowns newer than the completing request」)。
+  it('listDevices:在途请求的成功不清掉并发请求刚记下的限流期限', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const settles: Array<{ resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+    const apiFetch: DeviceLinkIpcDeps['apiFetch'] = <T>() =>
+      new Promise<T>((resolve, reject) => {
+        settles.push({ resolve: (value) => resolve(value as T), reject: (error) => reject(error) });
+      });
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 两次调用间隔要超过合并窗口(否则会共用同一在途请求):前两拍 Date.now 分别是
+      // 第一次的 startedAt 与第二次的合并检查。
+      vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1_000);
+      const older = handleListDevices(deps);
+      const newer = handleListDevices(deps);
+      expect(settles).toHaveLength(2);
+
+      // 先发的那条先撞上限流:期限在后发那条**已经发出之后**才被记下。
+      settles[0].reject(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt));
+      settles[1].resolve({ devices: [{ deviceId: 'dev-1', name: 'Host.local', online: true }] });
+      await expect(newer).resolves.toMatchObject({ devices: [{ name: 'Host.local' }] });
+      // 旧响应跟随新结果(既有的让位规则),不会自己再走一遍收尾。
+      await expect(older).resolves.toMatchObject({ devices: [{ name: 'Host.local' }] });
+
+      // 期限还在:窗口内不再发**物理读**。已经有过权威快照,所以这一轮回的是 stale 快照
+      // (不是抛错),判据是「没有开出第三条在途请求」—— 被清掉的话这里就会多一条。
+      const third = handleListDevices(deps);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settles).toHaveLength(2);
+      await expect(third).resolves.toMatchObject({ stale: true });
+    } finally {
+      vi.restoreAllMocks();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
   // 账号在请求在途时换过:那次响应已经不算数(then 分支也会拒),它的限流期限**整个丢弃**
   // —— 记到新账号头上会让新账号的第一次目录读被一个它从没见过的期限拦住
   // (Codex review #9360)。

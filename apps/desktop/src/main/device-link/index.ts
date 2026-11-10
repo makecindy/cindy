@@ -71,6 +71,11 @@ import { sanitizeSourceName, type MessageSourceHostDevice } from '@cindy/maker-s
 import * as authManager from '../authManager';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { setDirectoryThrottleOwnerSource } from './directoryThrottle.js';
+
+// 目录限流账本按 owner 分桶:登记当前账号的桶身份来源,让 deviceLinkApiFetch 的
+// 检查与 handleListDevices 的记账落在同一个桶里(Codex review #9360)。
+setDirectoryThrottleOwnerSource(activeOwnerScopeKey);
 import { createLogger } from '../logger';
 import { markStartupMilestone } from '../startupTimeline';
 import { onQuit } from '../lifecycle';
