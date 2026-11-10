@@ -19794,12 +19794,14 @@ describe('CodexAgent MCP thread context hooks', () => {
           last: { inputTokens: 10, outputTokens: 100, cachedInputTokens: 0 },
         },
       });
-      const expectSample = (outputTokens: number, generationDurationMs: number) =>
+      // A response that streamed nothing is timed by the model time it took, wait included,
+      // until the turn has measured a speed of its own.
+      const expectSample = (outputTokens: number, generationDurationMs: number, streaming: boolean) =>
         expect(handle.getUsageSnapshot()).toMatchObject({
           outputTokens, generationDurationMs, generationReliable: true,
-          tokenSpeed: { tokens: outputTokens, elapsedMs: generationDurationMs, rate: 100, streaming: true },
+          tokenSpeed: { tokens: outputTokens, elapsedMs: generationDurationMs, average: 100, streaming },
         });
-      expectSample(100, 1_000);
+      expectSample(100, 1_000, false);
       const tool = { id: 'tool-1', type: 'mcpToolCall', server: 'test', tool: 'read', arguments: {} };
       handlers.itemStarted!({ threadId: 'start-thread-id', turnId: 'turn-1', item: tool });
       now = 6_000;
@@ -19808,14 +19810,14 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.itemStarted!({ threadId: 'start-thread-id', turnId: 'turn-1',
         item: { id: 'reasoning-2', type: 'reasoning', summary: [], content: [] } });
       // No second usage yet: 100 / 1s, never 100 / 5s.
-      expectSample(100, 1_000);
+      expectSample(100, 1_000, true);
       handlers.tokenUsageUpdated!({
         threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
           total: { totalTokens: 120, inputTokens: 20, outputTokens: 100, cachedInputTokens },
           last: { inputTokens: 10, outputTokens: 0, cachedInputTokens },
         },
       });
-      expectSample(100, 1_000);
+      expectSample(100, 1_000, true);
       expect(handle.getUsageSnapshot().tokenUsage).toBe(120 - cachedInputTokens);
       handlers.tokenUsageUpdated!({
         threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
@@ -19823,7 +19825,7 @@ describe('CodexAgent MCP thread context hooks', () => {
           last: { inputTokens: 10, outputTokens: 400, cachedInputTokens: 0 },
         },
       });
-      expectSample(500, 5_000);
+      expectSample(500, 5_000, false);
       now = 11_000;
       handlers.tokenUsageUpdated!({
         threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
@@ -19831,7 +19833,7 @@ describe('CodexAgent MCP thread context hooks', () => {
           last: { inputTokens: 10, outputTokens: 0, cachedInputTokens: 0 },
         },
       });
-      expectSample(500, 5_000);
+      expectSample(500, 5_000, false);
       expect(handle.getUsageSnapshot().tokenUsage).toBe(540 - cachedInputTokens);
       handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
       await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
@@ -19890,7 +19892,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(handle.beginTurnContinuationWait?.(events.find(event => event.type === 'done')?.turnContinuationId)).toBe('active');
       await waitForExpectation(() => expect(turnSeq).toBe(2));
       handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
-      expect(handle.getUsageSnapshot().generationReliable).toBe(false);
+      // A native continuation keeps the product turn's measurement.
+      expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 1_000, elapsedMs: 10_000 });
       now = 13_000;
       usage('turn-2', 200, 1_220);
       expect(handle.getUsageSnapshot()).toMatchObject({
@@ -19906,9 +19909,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.itemCompleted!({ threadId: 'start-thread-id', turnId: 'turn-2', item: tool });
       now = 25_000;
       usage('turn-2', 377, 2_001_617);
+      // The unpaired 2M tokens stay out. Nothing in this turn has streamed, so no speed is
+      // measured yet and each response still counts over the model time it took.
       expect(handle.getUsageSnapshot()).toMatchObject({
         outputTokens: 1_577, generationDurationMs: 22_000, generationReliable: true,
-        tokenSpeed: { tokens: 1_577, elapsedMs: 22_000, rate: 37.7, peak: 100 },
+        tokenSpeed: { tokens: 1_577, elapsedMs: 22_000 },
       });
       expect(handle.getUsageSnapshot().tokenUsage).toBe(2_000_607);
       handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-2', status: 'completed' } });
@@ -19916,7 +19921,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-3' } });
       now = 35_000;
       usage('turn-3', 377, 2_002_004);
-      expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 377, elapsedMs: 10_000, average: 37.7, peak: 37.7 });
+      expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 377, elapsedMs: 10_000, average: 37.7 });
     } finally {
       await handle.close();
       nowSpy.mockRestore();

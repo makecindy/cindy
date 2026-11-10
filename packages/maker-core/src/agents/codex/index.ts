@@ -137,7 +137,7 @@ import {
 } from '../shared/auto-review-decision.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
-import { attachLiveGeneration, sampleGenerationDuration } from '../shared/live-generation-snapshot.js';
+import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { formatManagedImageReferences } from '../shared/managed-image-reference.js';
 import { REVIEW_SENSITIVE_CREDENTIAL_GLOB_PATTERNS } from '../shared/sensitive-credential-paths.js';
@@ -213,6 +213,9 @@ import {
   finishCodexSamplingTurn,
   pauseCodexGeneration,
   resetCodexGenerationTiming,
+  codexSpeedSnapshot,
+  resetCodexSpeed,
+  settleCodexSpeedUsage,
   resumeCodexGeneration,
   translateAgentMessageDelta,
   translateReasoningSummaryTextDelta,
@@ -3745,7 +3748,7 @@ assertRouteCurrent();
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
     const liveUsageSnapshot = () => {
-      const speed = translatorRt.generationTimingReliable ? translatorRt.tokenSpeed.snapshot() : undefined;
+      const speed = codexSpeedSnapshot(translatorRt);
       return attachLiveGeneration({ ...usageTracker.snapshot(), requestUsage: usageTracker.getRequestMetering() }, {
         tokenSpeed: speed,
         // Legacy clients use these fields: they must share the speed snapshot's
@@ -11218,7 +11221,7 @@ assertRouteCurrent();
       const realTurnUsageSegments = usageTracker.getTurnUsageSegments();
       finalizeCodexGenerationTurn(translatorRt, turn.id);
       translatorRt.tokenSpeed.stop();
-      const generationDurationMs = translatorRt.tokenSpeed.isSegmentComplete()
+      const generationDurationMs = translatorRt.generationSegmentComplete
         ? codexGenerationDurationMs(translatorRt) : undefined;
       const codexDoneUsage = {
         promptTokens: realTurnUsage.input,
@@ -12504,19 +12507,8 @@ assertRouteCurrent();
           // Input/cache-only segments still belong in the ledger, but cannot
           // pair already reported output with a later generation denominator.
           if (last.outputTokens > 0) {
-            translatorRt.generationOutputTokens += last.outputTokens;
-            translatorRt.generationOutputDurationMs = sampleGenerationDuration(
-              translatorRt.generationDurationMs,
-              translatorRt.generationStartedAt,
-            );
-            if (translatorRt.generationTimingReliable) {
-              translatorRt.tokenSpeed.recordUsage(
-                translatorRt.generationOutputTokens,
-                translatorRt.generationOutputDurationMs,
-              );
-            } else {
-              translatorRt.tokenSpeed.invalidate();
-            }
+            const calibration = settleCodexSpeedUsage(translatorRt, last);
+            if (calibration) log.debug('SDK ▷ token speed calibration', { turnId: params.turnId, ...calibration });
           }
           maybePushUsageRefresh();
           // Maker Memory flush 观察 (A 轻版: 只打日志). makerMemoryEnabled 关时 controller 为 null。
@@ -13417,7 +13409,7 @@ assertRouteCurrent();
         // 不再影响判定, 也不会再被别的 turn(含被 Stop 的旧 send 的孤儿)污染。
         const mySendGen = ++sendGeneration;
         isTurnStartPending = true;
-        if (!isContinuation) translatorRt.tokenSpeed.reset();
+        if (!isContinuation) resetCodexSpeed(translatorRt);
         usageTracker.beginTurn();
         log.debug('send ▶ user message', {
           model: mutableModel,

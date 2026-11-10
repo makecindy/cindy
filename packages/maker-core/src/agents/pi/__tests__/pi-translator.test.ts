@@ -2482,14 +2482,14 @@ describe('pi translator live token speed', () => {
       update({ type: 'text_delta', contentIndex: 0, delta: 'one two three four five six' }, 1_500);
       const live = speedOf(events.filter((e) => e.type === 'status').at(-1));
       expect(live).toMatchObject({ streaming: true, tokens: 6, elapsedMs: 500 });
-      expect(live?.rate).toBeGreaterThan(0);
 
       // A bash call: count generated arguments, exclude execution time.
       update({ type: 'toolcall_start', contentIndex: 1, toolCall: { name: 'bash' } }, 1_600);
       update({ type: 'toolcall_delta', contentIndex: 1, delta: '{"command":"ls -la"}', toolCall: { name: 'bash' } }, 1_700);
       update({ type: 'toolcall_end', contentIndex: 1, toolCall: { name: 'bash' } }, 2_000);
       expect(ctx.tokenSpeed.snapshot(10_000)).toMatchObject({ tokens: 17, elapsedMs: 1_000, streaming: false });
-      update({ type: 'text_delta', contentIndex: 0, delta: 'seven eight' }, 12_000);
+      update({ type: 'text_start', contentIndex: 0 }, 12_000);
+      update({ type: 'text_delta', contentIndex: 0, delta: 'seven eight' }, 12_400);
 
       vi.setSystemTime(12_500);
       translatePiEvent(ev({ type: 'message_end', message: {
@@ -2538,6 +2538,8 @@ describe('pi translator live token speed', () => {
       const { queue, events } = makeQueue();
       vi.setSystemTime(1_000);
       translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_start', contentIndex: 0 } }), queue, ctx);
+      vi.setSystemTime(1_500);
       translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
         type: 'toolcall_delta', contentIndex: 0, delta: 'a b c',
         partial: { content: [{ type: 'toolCall', name }] },
@@ -2564,6 +2566,7 @@ describe('pi translator live token speed', () => {
       vi.setSystemTime(1_000);
       translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
       translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } }), queue, ctx);
       vi.setSystemTime(1_500);
       translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
         type: 'text_delta', contentIndex: 0, delta: 'one two three four five six',
@@ -2602,6 +2605,111 @@ describe('pi translator live token speed', () => {
     }
   });
 
+  // Recorded Pi sessions with Grok: the streamed thinking was a third of the real
+  // reasoning, so a reply in flight showed 45% of its output. Unit tier through translatePiEvent.
+  it('counts streamed thinking for what the last reply showed it to stand for', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      const update = (assistantMessageEvent: Record<string, unknown>, at: number) =>
+        send({ type: 'message_update', assistantMessageEvent }, at);
+      const think = (from: number) => {
+        send({ type: 'message_start', message: { role: 'assistant' } }, from);
+        update({ type: 'thinking_start', contentIndex: 0 }, from);
+        update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(50) }, from + 500);
+        update({ type: 'thinking_delta', contentIndex: 0, delta: 'w '.repeat(50) }, from + 1_000);
+      };
+      send({ type: 'agent_start' }, 1_000);
+      think(1_000);
+      // 100 estimated tokens of thinking so far, as streamed.
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 100 });
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'toolUse', usage: { input: 10, output: 400, reasoning: 400 },
+      } }, 2_000);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 400 });
+      // The same stream now counts for more than it shows: it stood for four times as much.
+      think(5_000);
+      expect(ctx.tokenSpeed.snapshot()!.tokens).toBeGreaterThan(400 + 150);
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The clock used to start when the request was sent, so the wait for the first byte read
+  // as slow generation; starting at the first byte must not turn hidden reasoning into speed.
+  it('times a reply from its first byte and gives reasoning that never streamed the wait it took', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      const text = (words: number, at: number) => send({ type: 'message_update', assistantMessageEvent: {
+        type: 'text_delta', contentIndex: 0, delta: 'w '.repeat(words),
+      } }, at);
+      send({ type: 'agent_start' }, 1_000);
+      // 5s until the first byte, then 200 tokens over 2s.
+      send({ type: 'message_start', message: { role: 'assistant', timestamp: 1_000 } }, 1_000);
+      send({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } }, 6_000);
+      text(100, 7_000);
+      text(100, 8_000);
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'toolUse', timestamp: 1_000, usage: { input: 10, output: 200 },
+      } }, 8_000);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 200, elapsedMs: 2_000, average: 100 });
+      // 20s of reasoning that streams nothing, then 200 visible tokens over 2s.
+      send({ type: 'message_start', message: { role: 'assistant', timestamp: 10_000 } }, 10_000);
+      send({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } }, 30_000);
+      text(100, 31_000);
+      text(100, 32_000);
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'stop', timestamp: 10_000,
+        usage: { input: 10, output: 2_200, reasoning: 2_000 },
+      } }, 32_000);
+      // 2 400 tokens over 2s + 20s + 2s, not the 2 200 tokens over the 2s that streamed.
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 2_400, elapsedMs: 24_000, average: 100 });
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Greptile review of PR 9597: a reply that streamed and then reported zero output left its
+  // estimate in the turn's total, and in the next try's calibration.
+  it('drops the streamed estimate when message_end explicitly reports zero output', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      send({ type: 'agent_start' }, 1_000);
+      send({ type: 'message_start', message: { role: 'assistant' } }, 1_000);
+      send({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } }, 1_000);
+      send({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'one two three four five six' } }, 1_500);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 6 });
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'error', errorMessage: 'HTTP status 500', usage: { input: 10, output: 0 },
+      } }, 2_000);
+      expect(ctx.tokenSpeed.snapshot()).toBeUndefined();
+      send({ type: 'agent_settled' }, 2_500);
+      expect(ctx.tokenSpeed.snapshot()).toBeUndefined();
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the streamed estimate when message_end reports no output usage', () => {
     vi.useFakeTimers();
     try {
@@ -2610,6 +2718,7 @@ describe('pi translator live token speed', () => {
       vi.setSystemTime(1_000);
       translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
       translatePiEvent(ev({ type: 'message_start', message: { role: 'assistant' } }), queue, ctx);
+      translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } }), queue, ctx);
       vi.setSystemTime(1_500);
       translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: {
         type: 'text_delta', contentIndex: 0, delta: 'one two three four five six',
