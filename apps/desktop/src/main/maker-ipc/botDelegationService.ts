@@ -1451,10 +1451,21 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     abortChild?: boolean;
     expectedRunSequence?: number;
     expectedExecution?: DelegationExecutionReceipt;
+    /**
+     * #9307: settle a run the Session layer resumed outside message_session_task.
+     * The row is already terminal; the transaction bumps run_sequence and swaps
+     * the frozen receipts in one write guarded by the previous snapshot.
+     */
+    adoptedRun?: {
+      expectedStatus: Extract<DelegationStatus, 'failed' | 'timed-out'>;
+      expectedSnapshotJson: string;
+      permissionSnapshotJson: string;
+    };
   }): Promise<{
     id: string;
     parentSessionId: string | null;
     childSessionId: string | null;
+    runSequence: number;
     status: DelegationStatus;
   } | null> => {
     const at = now();
@@ -1470,6 +1481,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         completedAt: at,
         expectedRunSequence: params.expectedRunSequence,
         expectedExecution: params.expectedExecution,
+        ...(params.adoptedRun ? { adoptedRun: params.adoptedRun } : {}),
       },
     );
     if (updated) {
@@ -4200,17 +4212,38 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .orderBy(desc(botDelegations.createdAt))
       .limit(1);
     if (params.expectedRunSequence !== undefined && row?.runSequence !== params.expectedRunSequence) return;
-    const acceptedExecution = row && parseRecord(row.permissionSnapshotJson).taskExecution as
+    const settledSnapshot = row ? parseRecord(row.permissionSnapshotJson) : {};
+    const acceptedExecution = settledSnapshot.taskExecution as
       (DelegationExecutionReceipt & { runSequence: number }) | undefined;
-    if (params.execution !== undefined && (!params.execution || !acceptedExecution
+    const settledTerminal = settledSnapshot.taskTerminal as
+      { runSequence: number; execution: DelegationExecutionReceipt } | undefined;
+    // #9307: the Session layer can resume a delegated task without
+    // message_session_task (usage-limit auto-continue, send_to_session, direct
+    // UI input), leaving the delegation stuck at its earlier failed/timed-out
+    // settlement. When a settlement carries the session's *current* execution
+    // on such a row, adopt it as a new run's terminal instead of dropping the
+    // result. Settlements for the already-settled run, for executions the
+    // session no longer holds, or for a row the requester asked to cancel
+    // still drop — a late settlement of a previous run must never settle
+    // twice, and 'completed'/'cancelled' terminal states keep their answer.
+    const adoptResumedRun = !!row && !!row.childSessionId
+      && (row.status === 'failed' || row.status === 'timed-out')
+      && settledSnapshot.taskCancelRequested !== true
+      && !!params.execution
+      && !isSameSessionExecution(params.execution, acceptedExecution)
+      && !isSameSessionExecution(params.execution, settledTerminal?.execution)
+      && !!deps.readSessionExecution
+      && isSameSessionExecution(deps.readSessionExecution(row.childSessionId), params.execution);
+    if (!adoptResumedRun && params.execution !== undefined && (!params.execution || !acceptedExecution
       || acceptedExecution.runSequence !== row?.runSequence
       || acceptedExecution.instanceId !== params.execution.instanceId
       || acceptedExecution.generation !== params.execution.generation || row?.acceptedAt == null)) return;
-    if (row && parseRecord(row.permissionSnapshotJson).taskCancelRequested === true && isActiveDelegation(row.status as DelegationStatus)) {
+    if (row && settledSnapshot.taskCancelRequested === true && isActiveDelegation(row.status as DelegationStatus)) {
       if (!deps.taskControl?.isActive(params.childSessionId)) await cancelDelegationTree(row, 'Cancelled by the requesting Bot.', true, true);
       return;
     }
-    if (!row || readTaskPause(row) || !ACTIVE_DELEGATION_STATUSES.includes(row.status as (typeof ACTIVE_DELEGATION_STATUSES)[number])) return;
+    if (!row || readTaskPause(row)
+      || (!adoptResumedRun && !ACTIVE_DELEGATION_STATUSES.includes(row.status as (typeof ACTIVE_DELEGATION_STATUSES)[number]))) return;
     // message_session_task can enqueue after the event snapshot but before this
     // task operation. Include those accepted inputs before publishing completion.
     const liveOwnedIds = (deps.readPendingInputClientIds?.(params.childSessionId) ?? [])
@@ -4234,17 +4267,46 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     // Native terminal events always provide the queue snapshot. Direct user
     // input in that snapshot cannot defer or take over this delegation's result.
     if (ownedPendingInputIds === undefined && params.hadPendingInputAtTerminal) return;
+    let adoptedRunArgs:
+      | { expectedStatus: 'failed' | 'timed-out'; expectedSnapshotJson: string; permissionSnapshotJson: string }
+      | undefined;
     if (params.execution) {
-      const [recorded] = await db.update(botDelegations).set({
-        permissionSnapshotJson: sql`json_set(${botDelegations.permissionSnapshotJson}, '$.taskTerminal', json(${JSON.stringify({
-          runSequence: row.runSequence, execution: params.execution, outcome: params.outcome,
-          resultText: params.resultText?.slice(0, MAX_RESULT_CHARS), resultMessageClientId: params.resultMessageClientId, error: params.error?.slice(0, 4000),
-        })}))`,
-      }).where(and(eq(botDelegations.id, row.id), eq(botDelegations.runSequence, row.runSequence),
-        eq(botDelegations.permissionSnapshotJson, row.permissionSnapshotJson),
-        inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES])))
-        .returning({ id: botDelegations.id });
-      if (!recorded) return;
+      if (adoptResumedRun) {
+        // Record the resumed run as run N+1 in one guarded write: any
+        // concurrent reopen/settle rewrites the snapshot and drops this.
+        const nextSnapshotJson = JSON.stringify({
+          ...settledSnapshot,
+          taskExecution: { ...params.execution, runSequence: row.runSequence + 1 },
+          taskTerminal: {
+            runSequence: row.runSequence + 1, execution: params.execution, outcome: params.outcome,
+            resultText: params.resultText?.slice(0, MAX_RESULT_CHARS), resultMessageClientId: params.resultMessageClientId,
+            error: params.error?.slice(0, 4000), adopted: true,
+          },
+        });
+        const [recorded] = await db.update(botDelegations).set({
+          permissionSnapshotJson: nextSnapshotJson,
+        }).where(and(eq(botDelegations.id, row.id), eq(botDelegations.runSequence, row.runSequence),
+          eq(botDelegations.status, row.status as DelegationStatus),
+          eq(botDelegations.permissionSnapshotJson, row.permissionSnapshotJson)))
+          .returning({ id: botDelegations.id });
+        if (!recorded) return;
+        adoptedRunArgs = {
+          expectedStatus: row.status as 'failed' | 'timed-out',
+          expectedSnapshotJson: nextSnapshotJson,
+          permissionSnapshotJson: nextSnapshotJson,
+        };
+      } else {
+        const [recorded] = await db.update(botDelegations).set({
+          permissionSnapshotJson: sql`json_set(${botDelegations.permissionSnapshotJson}, '$.taskTerminal', json(${JSON.stringify({
+            runSequence: row.runSequence, execution: params.execution, outcome: params.outcome,
+            resultText: params.resultText?.slice(0, MAX_RESULT_CHARS), resultMessageClientId: params.resultMessageClientId, error: params.error?.slice(0, 4000),
+          })}))`,
+        }).where(and(eq(botDelegations.id, row.id), eq(botDelegations.runSequence, row.runSequence),
+          eq(botDelegations.permissionSnapshotJson, row.permissionSnapshotJson),
+          inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES])))
+          .returning({ id: botDelegations.id });
+        if (!recorded) return;
+      }
     }
     const [child] = await db
       .select({ tokensUsed: sessions.totalTokenUsage })
@@ -4281,11 +4343,15 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       lastError,
       tokensUsed,
       expectedRunSequence: row.runSequence,
-      expectedExecution: params.execution ?? undefined,
+      expectedExecution: adoptedRunArgs ? undefined : params.execution ?? undefined,
+      ...(adoptedRunArgs ? { adoptedRun: adoptedRunArgs } : {}),
     });
     if (!changed) return;
     await deliverCompletion({
       ...row,
+      // The adopted settlement bumped the stored run; its receipt identity
+      // must match what the transaction returned, not the stale row copy.
+      runSequence: changed.runSequence,
       status,
       resultSummary,
       artifacts,

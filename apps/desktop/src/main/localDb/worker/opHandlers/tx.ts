@@ -1017,24 +1017,52 @@ function botsFinishDelegation(
     const tokenSet = p.tokensUsed === undefined ? '' : ', tokens_used = ?';
     if (p.tokensUsed !== undefined) values.push(expectNumber(p.tokensUsed, 'tokensUsed'));
     const completedAt = expectNumber(p.completedAt, 'completedAt');
-    values.push(completedAt, completedAt, expectString(p.delegationId, 'delegationId'));
-    let receiptGuard = '';
-    if (p.expectedRunSequence !== undefined) {
-      receiptGuard += ' AND run_sequence = ?';
-      values.push(expectNumber(p.expectedRunSequence, 'expectedRunSequence'));
-    }
-    if (p.expectedExecution !== undefined) {
-      const receipt = asRecord(p.expectedExecution, 'expectedExecution');
-      receiptGuard += " AND json_extract(permission_snapshot_json, '$.taskExecution.runSequence') = run_sequence AND json_extract(permission_snapshot_json, '$.taskExecution.instanceId') = ? AND json_extract(permission_snapshot_json, '$.taskExecution.generation') = ?";
-      values.push(expectString(receipt.instanceId, 'instanceId'), expectNumber(receipt.generation, 'generation'));
-    }
-    const row = db.prepare(`UPDATE bot_delegations SET status = ?, result_summary = ?, output_artifacts_json = ?, last_error = ?
-      ${tokenSet}, pending_interaction_json = NULL, completed_at = ?, completion_delivered_at = NULL, updated_at = ?
-      WHERE id = ? AND status IN ('queued','running','waiting') ${receiptGuard}
-      RETURNING id, parent_session_id AS parentSessionId, child_session_id AS childSessionId, target_bot_id AS targetBotId, run_sequence AS runSequence, status`)
-      .get(...values) as
+    const returning = `RETURNING id, parent_session_id AS parentSessionId, child_session_id AS childSessionId, target_bot_id AS targetBotId, run_sequence AS runSequence, status`;
+    let row:
       | { id: string; parentSessionId: string | null; childSessionId: string | null; targetBotId: string | null; runSequence: number; status: string }
       | undefined;
+    if (p.adoptedRun !== undefined) {
+      // #9307: the Session layer resumed this delegated task outside
+      // message_session_task. The row is already terminal, so adopt the
+      // resumed run's settlement as a new run: bump run_sequence, reset the
+      // delivery marker, and atomically record its execution/terminal receipts.
+      // The frozen snapshot is the race guard — any concurrent reopen or settle
+      // rewrites it and this update no-ops.
+      const adopted = asRecord(p.adoptedRun, 'adoptedRun');
+      const adoptedExpectedStatus = expectString(adopted.expectedStatus, 'adoptedRun.expectedStatus');
+      if (!['completed', 'failed', 'cancelled', 'timed-out'].includes(adoptedExpectedStatus)) {
+        throw new Error('bots.finishDelegation adoptedRun.expectedStatus must be terminal');
+      }
+      const adoptedValues: unknown[] = [
+        ...values, completedAt,
+        expectString(adopted.permissionSnapshotJson, 'adoptedRun.permissionSnapshotJson'),
+        completedAt, expectString(p.delegationId, 'delegationId'),
+        adoptedExpectedStatus,
+        expectNumber(p.expectedRunSequence, 'expectedRunSequence'),
+        expectString(adopted.expectedSnapshotJson, 'adoptedRun.expectedSnapshotJson'),
+      ];
+      row = db.prepare(`UPDATE bot_delegations SET status = ?, result_summary = ?, output_artifacts_json = ?, last_error = ?
+        ${tokenSet}, pending_interaction_json = NULL, completed_at = ?, completion_delivered_at = NULL,
+        run_sequence = run_sequence + 1, permission_snapshot_json = ?, updated_at = ?
+        WHERE id = ? AND status = ? AND run_sequence = ? AND permission_snapshot_json = ?
+        ${returning}`).get(...adoptedValues) as typeof row;
+    } else {
+      values.push(completedAt, completedAt, expectString(p.delegationId, 'delegationId'));
+      let receiptGuard = '';
+      if (p.expectedRunSequence !== undefined) {
+        receiptGuard += ' AND run_sequence = ?';
+        values.push(expectNumber(p.expectedRunSequence, 'expectedRunSequence'));
+      }
+      if (p.expectedExecution !== undefined) {
+        const receipt = asRecord(p.expectedExecution, 'expectedExecution');
+        receiptGuard += " AND json_extract(permission_snapshot_json, '$.taskExecution.runSequence') = run_sequence AND json_extract(permission_snapshot_json, '$.taskExecution.instanceId') = ? AND json_extract(permission_snapshot_json, '$.taskExecution.generation') = ?";
+        values.push(expectString(receipt.instanceId, 'instanceId'), expectNumber(receipt.generation, 'generation'));
+      }
+      row = db.prepare(`UPDATE bot_delegations SET status = ?, result_summary = ?, output_artifacts_json = ?, last_error = ?
+        ${tokenSet}, pending_interaction_json = NULL, completed_at = ?, completion_delivered_at = NULL, updated_at = ?
+        WHERE id = ? AND status IN ('queued','running','waiting') ${receiptGuard}
+        ${returning}`).get(...values) as typeof row;
+    }
     if (!row) return null;
     if (row.childSessionId && row.targetBotId !== null) {
       // Only legacy Bot-to-Bot execution containers have this archive lifecycle.
