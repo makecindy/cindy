@@ -571,7 +571,9 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   `question-reply:answered:` 标识，桌面与手机据此只保留时序占位、不再出用户气泡。
   入队、发送中与等待历史回流时也不展示独立待发条目，因此没有编辑、插话、排序或取消入口；
   仅过滤展示，不删除实际队列项或改变投递。已撤回／失效题
-  的补充仍是普通用户消息（标识不带 `answered:`），同样只显示可读正文。此前按模型格式落库的行在
+  的补充仍是普通用户消息（标识不带 `answered:`），同样只显示可读正文；它保留排队编辑入口，
+  未改动就保存时仍投递原生格式与延迟说明（`updateQueueItemContent`），改过文字则按普通用户输入投递。
+  此前按模型格式落库的行在
   显示时还原为可读正文，不改库。格式与判据的唯一定义点是 `maker-shared/src/interaction.ts`，
   新增展示面必须复用，不得直接显示排队条目的 `text`。
   三个 Harness 的 `Session` 共用 `agents/shared/async-user-questions.ts` 管理问题寿命，

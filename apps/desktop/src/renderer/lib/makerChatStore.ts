@@ -15220,7 +15220,12 @@ async function updateQueueItemContent(
       burnFailure: 'abort',
     })) ?? [];
 
-  const textUnchanged = content.text === queued.text;
+  // A supplementary answer keeps two copies: the model's native reply format in `text`, and the
+  // readable "question + answer" in `chatMessage.content` that the edit draft starts from. Saving
+  // that draft untouched must not turn the readable copy into what the model receives.
+  const keepsReplyModelText = isAsyncQuestionReplyClientId(queued.clientId)
+    && content.text === (queued.chatMessage.content ?? queued.text);
+  const textUnchanged = keepsReplyModelText || content.text === queued.text;
   const queuedAgentReferences =
     queued.chatMessage.agentReferences?.length
       ? queued.chatMessage.agentReferences
@@ -15263,6 +15268,7 @@ async function updateQueueItemContent(
       createdAt: queued.chatMessage.createdAt ?? new Date().toISOString(),
     },
   );
+  if (keepsReplyModelText) replacement.text = queued.text;
   const replacementSessionRefs = extractSessionRefs(content.text, queued.sessionRefs);
   if (replacementSessionRefs.length > 0) replacement.sessionRefs = replacementSessionRefs;
   else delete replacement.sessionRefs;
@@ -15278,6 +15284,8 @@ async function updateQueueItemContent(
   } catch (error) {
     if (
       extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' &&
+      // The text-only channel would write the readable copy over the model's copy.
+      !keepsReplyModelText &&
       canFallbackQueueEditToText(queued, replacement, content, files)
     ) {
       try {
