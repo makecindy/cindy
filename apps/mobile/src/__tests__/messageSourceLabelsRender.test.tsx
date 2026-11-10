@@ -687,6 +687,23 @@ describe("IM source card", () => {
     expect(html).not.toContain("message.userBubble");
   });
 
+  // #9266 unit/jsdom: a host can persist an empty caption with attachments.
+  // Text-only cases miss the bubble gate that also hides the source header.
+  it.each([
+    ["imessage", "iMessage"],
+    ["feishu", "飞书"],
+  ])("retains the %s source header on attachment-only messages", (im, platform) => {
+    const html = render([
+      msg("im-file", { text: "", files: [{ name: "sample.txt", path: "/tmp/sample.txt" }] }, {
+        imSource: { im, userText: "", contentFormat: "user-text" },
+      }),
+    ]);
+    expect(html).toContain(`Cindy · 来自 ${platform}`);
+    expect(html).toContain("sample.txt");
+    expect(html).toContain("message.agentBubble");
+    expect(html).not.toContain("message.userBubble");
+  });
+
   it("keeps ordinary user actions on local IM rows but not on legacy hook rows (stored prompt)", () => {
     const props = {
       onForkMessage: vi.fn(),
