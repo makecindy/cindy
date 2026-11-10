@@ -13278,8 +13278,10 @@
     },
     "backgroundActivity": {
       "status": "バックグラウンドのサブタスクが実行中、モデル使用量を消費しています…",
-      "bashStatus_one": "バックグラウンドタスク実行中（{{count}} 件）…",
-      "bashStatus_other": "バックグラウンドタスク実行中（{{count}} 件）…",
+      "bashWorkStatus_one": "バックグラウンドで作業中（コマンド {{count}} 件）…",
+      "bashServiceStatus_one": "バックグラウンドサービス実行中（{{count}} 件）",
+      "bashWorkStatus_other": "バックグラウンドで作業中（コマンド {{count}} 件）…",
+      "bashServiceStatus_other": "バックグラウンドサービス実行中（{{count}} 件）",
       "stopAll": "すべて停止",
       "stopAllTitle": "このセッションのバックグラウンドプロセスを終了し、すべてのサブタスクを停止します（セッションは引き続き使用できます）",
       "stopBashTitle": "このセッションで実行中のバックグラウンドタスクを停止します（セッションのプロセスは終了しません）",

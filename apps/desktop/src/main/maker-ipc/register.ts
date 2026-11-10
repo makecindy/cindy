@@ -1384,8 +1384,10 @@ import {
   clearClaudeSessionBackgroundActivity,
   getClaudeSessionBackgroundActivity,
   listActiveClaudeBackgroundActivitySessions,
+  listClaudeBackgroundCommandWorkSessions,
   noteClaudeSessionTurnState,
   setClaudeBackgroundActivityBroadcaster,
+  setClaudeBackgroundCommandWorkBroadcaster,
 } from '../maker-host/claude-session-background-activity.js';
 
 import { setLiveCcSessionBridge } from '../maker-host/claude-transcript-relocation.js';
@@ -7393,6 +7395,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { sessionIds: listActiveClaudeBackgroundActivitySessions() };
   });
 
+  // 回合已结束但后台命令仍在工作的会话全量列表(任务列表初始快照,增量走 push)。
+  ipcMain.handle(MAKER_INVOKE.LIST_SESSION_BACKGROUND_WORK, () => {
+    return { sessionIds: listClaudeBackgroundCommandWorkSessions() };
+  });
+
   // “全部停止”是会话级最终止损入口：即使 turn 正在运行，也关闭其 agent 进程与全部子代理。
   registerStopSessionBackgroundTasksHandler(createElectronIpcHandlerRegistry(), {
     closeSession: (sessionId) => maker.closeSession(sessionId),
@@ -8363,6 +8370,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 会话后台活动翻转 → 广播给所有窗口(renderer 会话内横幅 +「全部停止」入口)。
   setClaudeBackgroundActivityBroadcaster((payload) =>
     broadcastToAllWindows(MAKER_PUSH.SESSION_BACKGROUND_ACTIVITY_CHANGED, payload),
+  );
+  // 回合已结束但后台命令仍在工作 → 广播给所有窗口(任务列表显示运行中)。
+  setClaudeBackgroundCommandWorkBroadcaster((payload) =>
+    broadcastToAllWindows(MAKER_PUSH.SESSION_BACKGROUND_WORK_CHANGED, payload),
   );
 
   // per-session 供应商路由:把 cc loopback proxy 看到的 x-claude-code-session-id(= sdkSessionId)

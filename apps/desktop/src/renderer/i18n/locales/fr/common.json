@@ -13414,15 +13414,18 @@
     },
     "backgroundActivity": {
       "status": "Sous-tâches en arrière-plan en cours d'exécution, consommation du modèle toujours en cours…",
-      "bashStatus_one": "{{count}} tâche en arrière-plan en cours d'exécution…",
-      "bashStatus_other": "{{count}} tâches en arrière-plan en cours d'exécution…",
+      "bashWorkStatus_one": "Travail en arrière-plan en cours ({{count}} commande)…",
+      "bashServiceStatus_one": "{{count}} service en arrière-plan en cours d'exécution",
+      "bashWorkStatus_other": "Travail en arrière-plan en cours ({{count}} commandes)…",
+      "bashServiceStatus_other": "{{count}} services en arrière-plan en cours d'exécution",
       "stopAll": "Tout arrêter",
       "stopAllTitle": "Arrêter le processus en arrière-plan de cette session et toutes les sous-tâches en arrière-plan (la session reste utilisable)",
       "stopBashTitle": "Arrêter les tâches en arrière-plan encore en cours dans cette session (conserve le processus de la session)",
       "stopping": "Arrêt…",
       "remoteStopUnsupported": "La version de {{appName}} sur l'ordinateur distant est trop ancienne pour arrêter les tâches en arrière-plan depuis ici. Mettez-la à jour et réessayez",
       "remoteStopUnreachable": "L'ordinateur distant ne répond pas pour le moment : la tâche en arrière-plan n'a donc pas été arrêtée. Réessayez plus tard",
-      "bashStatus_many": "{{count}} tâches en arrière-plan en cours d'exécution…"
+      "bashWorkStatus_many": "Travail en arrière-plan en cours ({{count}} commandes)…",
+      "bashServiceStatus_many": "{{count}} services en arrière-plan en cours d'exécution"
     },
     "interruptedBanner": {
       "text": "Cette tâche a été interrompue car l'application s'est fermée pendant son exécution.",

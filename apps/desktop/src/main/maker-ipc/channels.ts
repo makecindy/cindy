@@ -108,6 +108,12 @@ export const MAKER_INVOKE = {
    */
   LIST_SESSION_BACKGROUND_ACTIVITY: 'maker:session-background-activity:list',
   /**
+   * 列出「回合已结束但后台命令仍在工作」的全部会话 id（会自己结束的后台命令，不含长驻服务）。
+   * 只读；任务列表全局 store 挂载时的初始快照，后续靠 SESSION_BACKGROUND_WORK_CHANGED 增量维护。
+   * 只覆盖本机 Claude Code 任务；maker 未 init → { sessionIds: [] }。
+   */
+  LIST_SESSION_BACKGROUND_WORK: 'maker:session-background-work:list',
+  /**
    * 一键停止指定会话的全部任务:关闭该会话的常驻 agent 进程(maker.closeSession)，
    * 当前 turn 与进程内后台子 agent 一并终止。会话本身可续 —— 下次发消息按 resume 自动重建。
    * 这是 renderer/main 运行态不一致时仍须可用的最终止损入口，不受 isTurnRunning 限制。
@@ -1000,6 +1006,11 @@ export const MAKER_PUSH = {
    * 据此显示会话内横幅 +「全部停止」入口;false = 已静默 / 已被全停,横幅熄灭。
    */
   SESSION_BACKGROUND_ACTIVITY_CHANGED: 'maker:session-background-activity-changed',
+  /**
+   * 「回合已结束但后台命令仍在工作」翻转广播（payload = { sessionId, active }）。任务列表据此把
+   * 该任务显示为运行中；只影响展示，不代表回合在跑，不改完成提醒、发送排队与停止语义。
+   */
+  SESSION_BACKGROUND_WORK_CHANGED: 'maker:session-background-work-changed',
   /**
    * Scheduler (Phase 4) — 单一 channel 承载 'fired' / 'completed' / 'failed' / 'changed'
    * 4 个事件类型；renderer 按 payload.type 分支。
