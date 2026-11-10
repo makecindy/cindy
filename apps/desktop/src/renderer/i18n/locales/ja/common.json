@@ -14090,6 +14090,12 @@
       "closeDescription": "このサイドチャットを停止して削除します。メインタスクには影響しません。",
       "closeConfirm": "閉じて削除",
       "closeFailed": "削除できませんでした。もう一度お試しください。"
+    },
+    "botStartedTasks": {
+      "started": "開始したタスク",
+      "handedTo": "引き継いだタスク",
+      "open": "タスク「{{title}}」を開く",
+      "untitled": "名称未設定のタスク"
     }
   },
   "ccAgent": {

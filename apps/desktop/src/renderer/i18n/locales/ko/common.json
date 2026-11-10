@@ -14090,6 +14090,12 @@
       "closeDescription": "이 채팅을 중지하고 삭제합니다. 메인 작업에는 영향을 주지 않습니다.",
       "closeConfirm": "닫고 삭제",
       "closeFailed": "삭제하지 못했습니다. 다시 시도해 주세요."
+    },
+    "botStartedTasks": {
+      "started": "시작한 작업",
+      "handedTo": "넘긴 작업",
+      "open": "작업 “{{title}}” 열기",
+      "untitled": "이름 없는 작업"
     }
   },
   "ccAgent": {

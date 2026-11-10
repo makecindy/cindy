@@ -14090,6 +14090,12 @@
         "unavailable-route": "{{plugin}} 所择之模型今不可用，此差事用"
       },
       "routed": "为此差事择用"
+    },
+    "botStartedTasks": {
+      "started": "所启之差事",
+      "handedTo": "所付之差事",
+      "open": "启差事「{{title}}」",
+      "untitled": "无名之差事"
     }
   },
   "ccAgent": {

@@ -14090,6 +14090,12 @@
       "closeDescription": "将停止并删除本次追问，主任务不受影响。",
       "closeConfirm": "关闭并删除",
       "closeFailed": "删除追问失败，请稍后重试。"
+    },
+    "botStartedTasks": {
+      "started": "开出的任务",
+      "handedTo": "交出的任务",
+      "open": "打开任务「{{title}}」",
+      "untitled": "未命名任务"
     }
   },
   "ccAgent": {

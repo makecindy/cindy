@@ -14156,6 +14156,12 @@
           "plan": "Plan aktualisiert"
         }
       }
+    },
+    "botStartedTasks": {
+      "started": "Gestartete Aufgaben",
+      "handedTo": "Übergebene Aufgaben",
+      "open": "Aufgabe „{{title}}“ öffnen",
+      "untitled": "Unbenannte Aufgabe"
     }
   },
   "ccAgent": {

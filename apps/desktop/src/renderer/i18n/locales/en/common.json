@@ -14156,6 +14156,12 @@
       "closeDescription": "This follow-up will stop and its history will be deleted. The main task keeps running.",
       "closeConfirm": "Close and delete",
       "closeFailed": "Could not close the side chat. Please try again."
+    },
+    "botStartedTasks": {
+      "started": "Tasks started",
+      "handedTo": "Tasks handed to",
+      "open": "Open task “{{title}}”",
+      "untitled": "Untitled task"
     }
   },
   "ccAgent": {

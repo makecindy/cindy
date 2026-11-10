@@ -14288,6 +14288,12 @@
         }
       },
       "failed_many": "{{count}} chamadas falharam"
+    },
+    "botStartedTasks": {
+      "started": "Tarefas iniciadas",
+      "handedTo": "Tarefas repassadas",
+      "open": "Abrir a tarefa “{{title}}”",
+      "untitled": "Tarefa sem título"
     }
   },
   "ccAgent": {
