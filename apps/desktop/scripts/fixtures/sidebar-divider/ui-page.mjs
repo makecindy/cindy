@@ -9,7 +9,7 @@ export default {
   name: 'sidebar-divider',
   entry: './fixture.tsx',
   viewport: { width: 800, height: 360 },
-  real: 'Sidebar, useSidebarMaterial, useWallpaperBackground and production theme/CSS',
+  real: 'Sidebar, useWallpaperBackground and production theme/CSS',
   notCovered: 'Native macOS material generation; task list, account and update contents',
   stubs: {
     'src/renderer/components/sidebar/SidebarTopNav': 'export const SidebarTopNav = () => null;',
@@ -20,8 +20,9 @@ export default {
     'src/renderer/features/cc-agent/sidebar/conversationSearchContext': 'export const ConversationSearchProvider = ({ children }) => children;',
   },
   cases: {
-    default: { about: 'No wallpaper, 0% desktop visibility: border must retain its tinted backing' },
-    transparent: { about: '100% desktop visibility retains the independent sidebar tint' },
+    default: { about: 'No wallpaper, 0% desktop visibility keeps the original backdrop: border must retain its tinted backing' },
+    half: { about: '50% desktop visibility: the sidebar shares the main veil, separated by its divider and shadow' },
+    transparent: { about: '100% desktop visibility: sidebar and main area are equally clear' },
     wallpaper: { about: 'Wallpaper canvas and tint adjustment remain continuous at the border' },
     rail: { about: 'Narrow sidebar has the same backed hairline' },
     hidden: { about: 'Fully collapsed sidebar leaves no residual line' },

@@ -24,7 +24,6 @@ import {
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
-import { refreshMacSidebarGeometry } from './macosDesktopBlur.js';
 import {
   readAppearanceSettings,
   readAppearanceSettingsState,
@@ -132,7 +131,6 @@ export function applyAppearanceToWindow(
 ): void {
   if (win.isDestroyed() || win.webContents.isDestroyed() || !isAppContentWindow(win)) return;
   win.webContents.setZoomFactor(settings.windowZoom);
-  if (process.platform === 'darwin') refreshMacSidebarGeometry(win);
 }
 
 export function applyAppearanceToWindows(settings = readAppearanceSettings()): void {

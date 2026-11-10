@@ -66,7 +66,15 @@ pixels after the correction. Unlike blur strength, this clipping is observable
 in single-window captures. Both arm64 and x64 builds passed; only arm64 was run.
 Fullscreen/Spaces and other macOS releases remain unverified.
 
-### Independent task-sidebar material
+### Independent task-sidebar material (superseded 2026-11-10)
+
+> **Superseded.** On 2026-11-10 the user decided the sidebar should follow the same
+> desktop transparency and blur settings as the main area. The masked HUD view, the
+> `theme:set-sidebar-width` IPC and the addon's `setSidebar` entry point were removed;
+> the window-wide radius now covers the sidebar too, and 0% desktop transparency keeps
+> the original backdrop on every platform. Current behavior is specified in
+> [`design-rules/wallpaper.md`](design-rules/wallpaper.md). The record below is kept
+> as history of the earlier trial.
 
 The user requested that the original sidebar frost survive background blur zero.
 The sidebar uses Electron's existing `NSVisualEffectView` with `behindWindow`

@@ -70,8 +70,8 @@ Earlier unreleased artwork (including Blue Gaze, Amber Light and the 2026-10-16 
 trimmed on 2026-10-17) is not shipped and needs no compatibility.
 The new artwork uses the existing continuous cover fit, theme-derived visibility
 and blur controls. None remains the default. With None selected, visibility controls
-desktop background transparency (0% opaque, 100% clear); the retained left sidebar
-material is independent. Both controls remain
+desktop background transparency (0% opaque, 100% clear); the left sidebar follows
+the same controls (user decision, 2026-11-10). Both controls remain
 sliders with the same ranges, preview/commit behavior and reset action when switching
 between None and artwork (user decision, 2026-11-08). Their labels and hints identify
 the current background source; do not replace desktop blur with a separate switch.
@@ -79,31 +79,32 @@ Desktop transparency has its own optional `desktopVisibility` override, defaulti
 0% for both upgrades and new installs. Never infer desktop opt-in from legacy
 `wallpaperVisibility` or `wallpaperOverlay`; artwork keeps its existing values.
 Switching background sources restores each source's visibility. Reset removes the
-desktop override and returns to opaque content, retaining independent sidebar frost.
+desktop override and returns to the original backdrop with its frosted sidebar.
 At 0% desktop transparency or wallpaper visibility, disable the blur slider and
 suspend background blur without writing over its saved value. Restore that value
-as soon as visibility becomes positive. The independent sidebar material is not
-disabled by this optimization (user decision, 2026-11-08).
+as soon as visibility becomes positive.
 macOS passes the numeric radius to the native window backdrop. See
 [`desktop-backdrop-blur-research.md`](../desktop-backdrop-blur-research.md).
 Text and controls are never faded.
-The left task sidebar retains its own frosted material and readable tint floor,
-even when the background blur is zero (user decision, 2026-11-08). The two existing
-sliders still control the background; do not add a separate sidebar preference.
-For a desktop background on macOS, a non-interactive native effect view covers
-only the sidebar's currently visible width. Its geometry is local to each window,
-follows collapse/rail/peek animation and UI zoom, and disappears when hidden or
-when artwork covers the window. With artwork, a paint-only child of the sidebar
-blurs the in-app canvas; never apply the filter to the sidebar ancestor, which
-would change the containing block of its fixed menus. In desktop mode, the shared
-veil starts after the sidebar's visible edge; otherwise 0% transparency hides the
-native material beneath an opaque body. The sidebar retains its original tint.
-With artwork, compensate for the existing canvas veil rather than stacking two full coats.
-Windows/Linux retain the readable tint; native regional desktop sampling has only
-been implemented on macOS. Existing Windows whole-window Acrylic fallback remains.
-Without that native sidebar material (Windows/Linux), 0% desktop transparency does not
-enter desktop-background mode: the window keeps its original backdrop (Windows 11
-Acrylic, otherwise opaque) until transparency is raised (#9424).
+The left task sidebar follows the same visibility and blur as the main area, for
+artwork and the desktop alike (user decision, 2026-11-10; replaces the independent
+sidebar material of 2026-11-08). No separate native material or CSS blur sits
+beneath the docked sidebar: on macOS the window-wide radius covers it, on Windows 11
+the whole-window Acrylic does, and with artwork it shows the same blurred canvas.
+Do not add a separate sidebar preference. The docked sidebar paints no tint of its
+own: the shared veil covers the whole window, so sidebar and main area have the same
+color at every setting. Only its 1px divider separates it; do not add a shadow
+(owner decision, 2026-11-10: a trialed `--shadow-menu` edge was rejected). The peek
+drawer takes the main area's color (owner decision, 2026-11-10) but covers at least
+90%: it overlays app content, and CSS backdrop blur does not render in the transparent
+window, so a fully see-through drawer lets the text beneath collide with its own. The
+shared veil lies beneath that content and hides none of it, so the drawer's own surface
+coat is max(main area's veil, 90%). It drops that ineffective blur and keeps its divider and its
+`--shadow-menu` floating-layer elevation. At 0% desktop transparency the original
+backdrop, docked sidebar and peek drawer are unchanged.
+0% desktop transparency does not enter desktop-background mode on any platform: the
+window keeps its original backdrop (macOS HUD vibrancy with the frosted sidebar,
+Windows 11 Acrylic, otherwise opaque) until transparency is raised (#9424).
 The controls reuse the visibility and blur overrides. On macOS, the own-window
 native addon applies `CGSSetWindowBackgroundBlurRadius` (0–20), with fixed vibrancy
 removed so it cannot obscure radius changes. Artwork clears this native radius.
@@ -178,8 +179,7 @@ Dragging previews both visibility and blur locally; only a committed pointer/key
 value is saved and broadcast to other windows. Cancelled gestures, window blur or
 leaving settings discard the preview; a failed save restores the saved value.
 The macOS dispatcher caches successful native state per window: radius-only changes
-retain the sidebar material, replaced materials resynchronize its mask, and failed
-native calls remain retryable. It also owns background-color writes so redundant
+do not recreate the material, and failed native calls remain retryable. It also owns background-color writes so redundant
 updates cannot erase the tiny alpha backing that preserves AppKit window corners.
 Existing artwork preferences without an explicit visibility override keep the previous Light/Dark veil
 mapping and display its equivalent visibility. The unchanged soft default is 37% visible in

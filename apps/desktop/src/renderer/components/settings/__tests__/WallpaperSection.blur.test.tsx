@@ -27,7 +27,7 @@ beforeEach(() => {
     width: 100,
   } as DOMRect);
   vi.stubGlobal('electronAPI', {
-    // Zero-transparency desktop mode exists only with macOS's native sidebar material (#9424).
+    // Zero desktop transparency keeps the original backdrop on every platform (#9424).
     platform: 'darwin',
     appearanceSettings: {
       getSync: () => saved,
@@ -73,7 +73,7 @@ describe('wallpaper blur gesture persistence', () => {
     saved = { ...saved, wallpaperId: 'none', wallpaperVisibility: legacy };
     const { unmount } = render(view());
     expect(visibility()).toBe('0');
-    expect(document.documentElement.dataset.desktopBlur).toBe('0');
+    expect(document.documentElement.dataset.desktopBlur).toBeUndefined();
     expect(setPatch).not.toHaveBeenCalled();
     const slider = screen.getByRole('slider', { name: 'settings.appearance.wallpaper.desktopVisibilityLabel' }).closest('.cindy-slider')!;
     pointer(slider, 'pointerdown', 60);
@@ -171,7 +171,7 @@ describe('wallpaper blur gesture persistence', () => {
       expect(sliderTrack.hasAttribute('data-disabled')).toBe(true);
       expect(slider.getAttribute('aria-valuenow')).toBe('12');
       expect(blur()).toBe('');
-      if (wallpaperId === 'none') expect(root.dataset.desktopBlur).toBe('0');
+      if (wallpaperId === 'none') expect(root.dataset.desktopBlur).toBeUndefined();
       fireEvent.keyDown(slider, { key: 'ArrowRight' });
       pointer(sliderTrack, 'pointerdown', 80);
       pointer(sliderTrack, 'pointerup', 80);

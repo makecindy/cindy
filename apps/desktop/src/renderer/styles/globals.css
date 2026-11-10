@@ -2450,8 +2450,7 @@ html[data-wallpaper-blur='true'] .app-wallpaper-video video {
   filter: blur(var(--app-wallpaper-blur));
 }
 
-/* No wallpaper: tint the desktop beneath content, leaving the independently
-   frosted sidebar unobscured even when the main content is fully opaque. */
+/* No wallpaper: tint the desktop beneath the whole window, sidebar included. */
 html[data-desktop-background='true'] body {
   isolation: isolate;
   background: transparent;
@@ -2464,9 +2463,6 @@ html[data-desktop-background='true'] body::before {
   pointer-events: none;
   background: color-mix(in srgb, var(--surface) var(--desktop-background-veil), transparent);
 }
-html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-background='true'] body::before {
-  left: var(--sidebar-visible-width, 0px);
-}
 html[data-desktop-background='true'] :is(.wallpaper-composer-zone, .wallpaper-composer-fade) {
   background: transparent;
 }
@@ -2474,19 +2470,23 @@ html[data-desktop-background='true'] .wallpaper-message-viewport [data-scroll-co
   mask-image: linear-gradient(to bottom, black calc(100% - var(--wallpaper-composer-height)), transparent calc(100% - var(--wallpaper-composer-height) + 32px));
 }
 
-/* Sidebar chrome stays frosted independently of the adjustable background.
-   Put CSS blur on the paint-only child, never on aside: a filtered ancestor
-   changes the containing block of fixed menus. Native desktop sampling is done
-   by the macOS material beneath Chromium; CSS samples only in-app artwork/UI. */
-html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true']
-  aside.bg-sidebar > .sidebar-frost {
-  /* Add only the tint missing from the background veil, keeping the original
-     sidebar opacity floor instead of stacking two full-strength coats. */
-  background: rgb(from var(--surface-translucent-sidebar) r g b /
-    clamp(0, calc(1 - (1 - alpha) / max(0.001, var(--background-visibility, 1))), 1));
+/* The sidebar shares the main area's veil and blur, for artwork and the native
+   desktop alike (user decision, 2026-11-10), in the main area's color. Docked, it
+   paints no tint of its own, so it also has the main area's transparency; only
+   its 1px divider separates it, with no material, CSS blur or elevation. */
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true'])
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
+  background: transparent;
 }
-html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true']
-  aside.bg-sidebar > .sidebar-frost {
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
+/* The peek drawer covers app content, and CSS backdrop blur does not render in
+   the transparent window. The shared veil lies beneath that content, so it hides
+   none of it: the drawer's own surface coat must cover the text, at
+   max(main area's veil, 90%). It drops the ineffective blur; its divider and
+   floating-layer elevation stay. */
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true'])
+  aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost {
+  background: rgb(from var(--surface) r g b /
+    max(0.9, calc(1 - var(--background-visibility, 0))));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }

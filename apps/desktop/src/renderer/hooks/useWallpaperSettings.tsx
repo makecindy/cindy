@@ -133,10 +133,9 @@ export function WallpaperSettingsProvider({
         : getBuiltinWallpaperBackground(settings.wallpaperId);
   useWallpaperBackground({
     background,
-    // Only macOS has an independent native sidebar material. Elsewhere 0% keeps the
-    // original window backdrop (Windows 11 Acrylic, otherwise opaque) until opt-in.
-    desktopBackground: desktopBackground && settings.wallpaperId === 'none' &&
-      (visibility > 0 || window.electronAPI?.platform === 'darwin'),
+    // 0% keeps the original window backdrop (frosted sidebar over the theme material)
+    // until opt-in; above it, the sidebar follows the shared desktop backdrop.
+    desktopBackground: desktopBackground && settings.wallpaperId === 'none' && visibility > 0,
     visibility,
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
     reducedMotion,

@@ -1,5 +1,5 @@
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
-import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
+import { applyMacWindowBackdrop } from './macosDesktopBlur';
 import { createPersonalBuildMonitor } from './personalBuildMonitor.js';
 import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
 import { observeDesktopStartupResult } from './devStartupStatus.js';
@@ -5193,14 +5193,6 @@ const registerIpcHandlers = () => {
     else win.setBackgroundColor(config.backgroundColor);
     applyVibrancyToSecondaryWindows(familyId, isDark);
   }
-
-  // Ephemeral local geometry, scoped to the trusted top-level sender's own window.
-  // No persistence, remote channel, window identifier or native handle crosses IPC.
-  ipcMain.on('theme:set-sidebar-width', (event, width: unknown) => {
-    if (process.platform !== 'darwin' || !isTrustedTopLevelCindyRendererEvent(event)) return;
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (win) setMacSidebarWidth(win, width);
-  });
 
   ipcMain.on('theme:apply-vibrancy', (event, rawPayload: unknown) => {
     assertTrustedAppRendererEvent(event);

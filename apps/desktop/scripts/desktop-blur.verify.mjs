@@ -41,7 +41,7 @@ if (!process.versions.electron) {
   try {
     await app.whenReady();
     const addon = require(path.join(temp, 'blur.node'));
-    const { applyMacWindowBackdrop, setMacSidebarWidth } = require(path.join(temp, 'backdrop.cjs'));
+    const { applyMacWindowBackdrop } = require(path.join(temp, 'backdrop.cjs'));
     const display = screen.getPrimaryDisplay();
     const area = display.workArea;
     const bounds = { x: area.x + 60, y: area.y + 60, width: 900, height: 300 };
@@ -62,13 +62,7 @@ if (!process.versions.electron) {
     await front.loadURL('data:text/html,' + encodeURIComponent('<style>body{margin:0;background:transparent}p{color:red;font:700 26px sans-serif;margin:110px 24px}</style><p>Sharp foreground — desktop blur verification</p>'));
     front.showInactive();
     const trace = [];
-    const sidebarTrace = [];
-    const native = { setSidebar(handle, width, dark) {
-      const ok = addon.setSidebar(handle, width, dark);
-      sidebarTrace.push({ width, dark, ok });
-      assert.equal(ok, true, `native sidebar width ${width} accepted`);
-      return ok;
-    }, apply(handle, radius) {
+    const native = { apply(handle, radius) {
       const ok = addon.apply(handle, radius);
       trace.push({ radius, ok });
       assert.equal(ok, true, `native radius ${radius} accepted`);
@@ -109,19 +103,10 @@ if (!process.versions.electron) {
     // Removing the canvas override clears a previous radius on the same native window.
     applyMacWindowBackdrop(front, { vibrancy: null, backgroundColor: '#ffffff' }, () => native);
     assert.equal(trace.at(-1).radius, 0);
-    // The sidebar has a material even when the shared background is clear.
-    const sidebarConfig = { vibrancy: null, backgroundColor: '#00000000', desktopBlurRadius: 0, sidebarMaterial: 'light' };
-    applyMacWindowBackdrop(front, sidebarConfig, () => native);
-    for (const width of [260, 78, 0, 300]) setMacSidebarWidth(front, width, () => native);
-    applyMacWindowBackdrop(front, { ...sidebarConfig, sidebarMaterial: 'dark', desktopBlurRadius: 20 }, () => native);
-    front.setSize(960, 340);
-    setMacSidebarWidth(front, 280, () => native);
-    applyMacWindowBackdrop(front, { vibrancy: null, backgroundColor: '#ffffff' }, () => native);
-    assert.equal(sidebarTrace.at(-1).width, 0);
-    assert.throws(() => addon.setSidebar(front.getNativeWindowHandle(), -1, false));
-    assert.equal(addon.setSidebar(Buffer.alloc(8), 260, false), false);
-    fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ trace, sidebarTrace, canCapture, contrast }, null, 2));
-    console.log(JSON.stringify({ trace, sidebarTrace, canCapture, contrast }));
+    // The window-wide radius is the only backdrop: no separate sidebar entry point.
+    assert.equal(typeof addon.setSidebar, 'undefined');
+    fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ trace, canCapture, contrast }, null, 2));
+    console.log(JSON.stringify({ trace, canCapture, contrast }));
     if (canCapture) {
       assert(contrast[0] > contrast[1] + 10, '5 softens the stripe edges');
       assert(contrast[1] > contrast[2] + 10, '20 is more blurred than 5');

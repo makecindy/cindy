@@ -1,15 +1,13 @@
-// Controlled performance specimen: real theme, shared surfaces, background hook
-// and sidebar geometry hook; synthetic rows isolate composition from agent work.
-import { useLayoutEffect, useRef, useState } from 'react';
+// Controlled performance specimen: real theme, shared surfaces and background
+// hook; synthetic rows isolate composition from agent work.
+import { useLayoutEffect, useState } from 'react';
 import { mountPage } from '../../ui-page/harness';
 import { useWallpaperBackground } from '../../../src/renderer/hooks/useWallpaperBackground';
-import { useSidebarMaterial } from '../../../src/renderer/hooks/useSidebarMaterial';
 import { SettingsCard, SettingsRow } from '../../../src/renderer/components/ui/settings-rows';
 
 type Config = { visibility: number; blur: number };
 declare global {
   interface Window {
-    perfBridge: { width: (width: number) => void };
     perfConfigure: (config: Config) => Promise<void>;
     perfWorkload: (kind: string, duration: number) => Promise<number[]>;
   }
@@ -17,8 +15,6 @@ declare global {
 
 function Specimen() {
   const [config, setConfig] = useState<Config>({ visibility: 0, blur: 0 });
-  const sidebar = useRef<HTMLElement>(null);
-  useSidebarMaterial(sidebar);
   useWallpaperBackground({ background: undefined, desktopBackground: true,
     ...config, reducedMotion: true });
   useLayoutEffect(() => {
@@ -47,7 +43,7 @@ function Specimen() {
     });
   }, []);
   return <div className="flex h-screen text-[var(--text-primary)]">
-    <aside ref={sidebar} className="bg-sidebar relative flex shrink-0 flex-col p-4" style={{ width: 260 }}>
+    <aside className="bg-sidebar relative flex shrink-0 flex-col p-4" style={{ width: 260 }}>
       <div className="sidebar-frost pointer-events-none absolute inset-0" />
       <div className="relative">Cindy · 性能测试样本<br />独立窗口，不修改你的设置</div>
     </aside>
@@ -64,6 +60,5 @@ function Specimen() {
 }
 
 void mountPage({
-  host: { theme: { setSidebarWidth: (width: number) => window.perfBridge.width(width) } },
   render: () => <Specimen />,
 });

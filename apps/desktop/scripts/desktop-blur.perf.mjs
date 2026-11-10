@@ -37,7 +37,6 @@ if (!process.versions.electron) {
     const html = `<html><head>${bundle.styles.map(url => `<link rel="stylesheet" href="${url}">`).join('')}</head><body><div id="root"></div><script id="ui-page-context" type="application/json">${JSON.stringify(ctx)}</script><script type="module" src="/page.js"></script></body></html>`;
     fs.writeFileSync(path.join(temp, 'index.html'), html);
     fs.writeFileSync(path.join(temp, 'manifest.json'), JSON.stringify(manifest));
-    fs.writeFileSync(path.join(temp, 'preload.cjs'), "const {contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('perfBridge',{width:width=>ipcRenderer.send('perf:width',width)});");
     buildDesktopBlur(path.join(temp, 'blur.node'));
     require('esbuild').buildSync({ entryPoints: [path.join(desktop, 'src/main/macosDesktopBlur.ts')],
       outfile: path.join(temp, 'backdrop.cjs'), bundle: true, platform: 'node', format: 'cjs', external: ['electron'] });
@@ -51,7 +50,7 @@ if (!process.versions.electron) {
 } else {
   // Electron's ready event waits for ESM evaluation; do not await it at top level.
   void (async () => {
-  const { app, BrowserWindow, ipcMain, screen } = require('electron');
+  const { app, BrowserWindow, screen } = require('electron');
   const temp = process.argv[2], output = process.argv[3];
   app.setPath('userData', path.join(temp, 'profile'));
   let server;
@@ -60,12 +59,10 @@ if (!process.versions.electron) {
   try {
     await app.whenReady();
     const addon = require(path.join(temp, 'blur.node'));
-    const { applyMacWindowBackdrop, setMacSidebarWidth } = require(path.join(temp, 'backdrop.cjs'));
-    const calls = { radius: 0, sidebar: 0, vibrancy: 0 };
+    const { applyMacWindowBackdrop } = require(path.join(temp, 'backdrop.cjs'));
+    const calls = { radius: 0, vibrancy: 0 };
     const native = { apply(...args) { calls.radius++; const ok = addon.apply(...args);
-      if (!ok) throw new Error('Native radius rejected'); return ok; },
-      setSidebar(...args) { calls.sidebar++; const ok = addon.setSidebar(...args);
-        if (!ok) throw new Error('Native sidebar rejected'); return ok; } };
+      if (!ok) throw new Error('Native radius rejected'); return ok; } };
     const display = screen.getPrimaryDisplay();
     const area = display.workArea;
     const bounds = { x: area.x + 20, y: area.y + 20,
@@ -87,16 +84,13 @@ if (!process.versions.electron) {
     await back.loadURL('data:text/html,' + encodeURIComponent('<style>body{margin:0;overflow:hidden}div{position:absolute;inset:-100px;background:repeating-linear-gradient(45deg,#26465a 0px,#26465a 40px,#e4ce94 40px,#e4ce94 80px);animation:move 2s linear infinite;animation-play-state:paused}@keyframes move{to{transform:translateX(113px)}}</style><div></div>'));
     const front = new BrowserWindow({ ...bounds, titleBarStyle: 'hidden', transparent: true,
       backgroundColor: '#00000000', show: false, alwaysOnTop: true, parent: back,
-      webPreferences: { ...webPreferences, preload: path.join(temp, 'preload.cjs') } });
+      webPreferences });
     windows.push(front);
     front.webContents.session.setPermissionRequestHandler((_wc, _permission, cb) => cb(false));
     front.webContents.session.webRequest.onBeforeRequest((details, cb) => cb({ cancel: !details.url.startsWith(origin + '/') && !details.url.startsWith('data:') }));
     for (const win of windows) win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     const vibrancy = front.setVibrancy.bind(front);
     front.setVibrancy = (...args) => { calls.vibrancy++; return vibrancy(...args); };
-    ipcMain.on('perf:width', (event, width) => {
-      if (event.sender === front.webContents) setMacSidebarWidth(front, width, () => native);
-    });
     await front.loadURL(origin);
     back.showInactive(); front.showInactive();
     for (let i = 0; i < 100; i++) {
@@ -131,7 +125,7 @@ if (!process.versions.electron) {
         for (const config of repeat ? [...selected].reverse() : selected) {
           front.setBounds(bounds);
           applyMacWindowBackdrop(front, { vibrancy: null, backgroundColor: '#00000000',
-            desktopBlurRadius: config.blur, sidebarMaterial: 'light' }, () => native);
+            desktopBlurRadius: config.blur }, () => native);
           await front.webContents.executeJavaScript(`window.perfConfigure(${JSON.stringify(config)})`);
           await back.webContents.executeJavaScript(`document.querySelector('div').style.animationPlayState=${JSON.stringify(kind === 'behind' ? 'running' : 'paused')}`);
           await pause(1000);
@@ -157,7 +151,7 @@ if (!process.versions.electron) {
       }
     }
     // Count redundant same-state application separately from steady-state work.
-    const same = { vibrancy: null, backgroundColor: '#00000000', desktopBlurRadius: 20, sidebarMaterial: 'light' };
+    const same = { vibrancy: null, backgroundColor: '#00000000', desktopBlurRadius: 20 };
     applyMacWindowBackdrop(front, same, () => native);
     const before = { ...calls }, start = performance.now();
     for (let i = 0; i < 100; i++) applyMacWindowBackdrop(front, same, () => native);
