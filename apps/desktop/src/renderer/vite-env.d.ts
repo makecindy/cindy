@@ -4311,6 +4311,8 @@ interface ElectronAPI {
         disabledControlDeviceIds: string[];
       }) => void,
     ) => () => void;
+    /** 本机远程控制开关经设置页或授权弹窗变更后推送 */
+    onControlEnabledChanged?: (cb: (payload: { remoteControlEnabled: boolean }) => void) => () => void;
     /** 「保持电脑唤醒」在其它共享 userData 实例被翻转后推送 */
     onKeepAwakeChanged: (cb: (payload: { keepAwake: boolean }) => void) => () => void;
     /** Main 本地投影:单个 peer 的恢复作废旧内容就绪证据，不代表 relay 离线。 */

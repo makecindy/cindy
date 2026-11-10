@@ -19806,5 +19806,11 @@
     "keepDraft": "草稿仍存。連接復通，任務之態將自同步。",
     "retry": "重試連接",
     "desktopAuthHelp": "請於啟動終端更新後臺連接設定，再啟此實驗客戶端。"
+  },
+  "remoteControlConsent": {
+    "title": "許遠控此機乎？",
+    "detail": "請求來自「{{device}}」\n所為：{{purpose}}\n\n啟用後，同帳號裝置可遠控此機，執行任務、存取檔案。此設長效，可隨時於設定中關閉。",
+    "decline": "暫不開啟",
+    "enable": "開啟遠端控制"
   }
 }

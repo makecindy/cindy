@@ -60,6 +60,8 @@ export const DEVICE_LINK_INVOKE = {
 
 /** main → renderer push */
 export const DEVICE_LINK_PUSH = {
+  /** Local setting changed through UI or native consent; never a remote grant. */
+  CONTROL_ENABLED_CHANGED: 'device-link:control-enabled-changed',
   /** Local peer recovery invalidates content readiness; payload: { deviceId }. Not a wire push. */
   PEER_LINK_RESET: 'device-link:peer-link-reset',
   /** Local recovery succeeded; payload: { deviceId }. Not a wire push. */
