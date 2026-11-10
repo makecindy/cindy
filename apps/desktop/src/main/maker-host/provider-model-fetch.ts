@@ -28,8 +28,8 @@ import {
   deriveModelsDiscoveryUrl,
   readCachedGenericOAuthAccessToken,
   refreshGenericOAuthIfNeeded,
-} from './generic-oauth.js';
-import { outboundFetch } from './outbound-fetch.js';
+} from './generic-oauth.desktop.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 
 /** 拉取超时（与 test-connection 探测同量级）。 */
 const FETCH_TIMEOUT_MS = 10_000;

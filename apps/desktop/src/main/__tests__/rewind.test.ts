@@ -149,7 +149,7 @@ vi.mock('../git-snapshot/gitSnapshotService', () => ({
 vi.mock('../worktree/gitExec', () => ({ gitExec: gitExecMock }));
 
 const setLastAssistantTranscriptUuidMock = vi.fn();
-vi.mock('../messagePersistBroadcaster.js', () => ({
+vi.mock('../messagePersistBroadcaster.desktop.js', () => ({
   setLastAssistantTranscriptUuid: setLastAssistantTranscriptUuidMock,
 }));
 

@@ -3,7 +3,7 @@ const mocks = vi.hoisted(() => ({ fetch: vi.fn(), error: vi.fn(), warn: vi.fn(),
 vi.mock('electron', () => ({ net: { fetch: mocks.fetch } }));
 vi.mock('../../authManager', () => ({ getAccessToken: () => 'fixture-token', refresh: async () => false, invalidateSession: vi.fn() }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ error: mocks.error, warn: mocks.warn, debug: mocks.debug }) }));
-vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => 'en' }));
+vi.mock('../../i18n.desktop.js', () => ({ getResolvedMainLocale: () => 'en' }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://models.example.test' }));
 import { readOrganizationAccountUsage } from '../organizationAccountUsage';
 beforeEach(() => vi.clearAllMocks());

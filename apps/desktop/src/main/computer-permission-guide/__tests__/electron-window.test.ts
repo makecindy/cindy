@@ -196,7 +196,7 @@ vi.mock('../../appPresence.js', () => ({
   scheduleMainAppPresenceRestore: vi.fn(),
 }));
 
-vi.mock('../../i18n.js', () => ({
+vi.mock('../../i18n.desktop.js', () => ({
   getResolvedMainLocale: vi.fn(() => 'ja'),
 }));
 

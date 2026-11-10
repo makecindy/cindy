@@ -27,12 +27,12 @@ vi.mock('../../maker-host/index.js', () => ({
   listBotCreationCapabilities: h.catalog,
 }));
 vi.mock('../../utility-model/oneShotCandidates.js', () => ({ requestUtilityText: h.generate }));
-vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => 'en' }));
+vi.mock('../../i18n.desktop.js', () => ({ getResolvedMainLocale: () => 'en' }));
 vi.mock('../botInvitationAvatar.js', () => ({
   prepareBotInvitationAvatar: vi.fn(),
   finishBotInvitationAvatar: vi.fn(),
 }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ resolveSafe: vi.fn() }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ resolveSafe: vi.fn() }));
 import { generateBotCreationDraft, readBotCreationDraft } from '../botCreationDraft.js';
 const modelRoute = { agentKind: 'pi', providerId: 'connected-provider', model: 'selected-model' };
 const generated = {

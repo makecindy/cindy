@@ -97,7 +97,7 @@ export const HTML_SNAPSHOT_CSP = HTML_PREVIEW_CSP.replace(
  *
  * 两条备选都不划算:
  *  - **patch 原生**(`dependency-patches/react-native-webview@13.16.1.patch` 机制已在):改的是
- *    Android Java,会变动原生构建 → 触发冷更门,需要把关人对冷更单独确认,代价远大于本修复;
+ *    Android Java,会变动原生构建 → 触发冷更,存量装机要装新包,代价远大于本修复;
  *  - **`injectedJavaScriptBeforeContentLoaded`**:与解析赛跑(Android 靠 `onPageStarted` 触发),
  *    作者脚本可能先跑,是 mitigation 不是 fix。
  *
@@ -145,7 +145,7 @@ export const HTML_SNAPSHOT_CSP = HTML_PREVIEW_CSP.replace(
  *  1. `javaScriptEnabled={false}` —— 没有作者脚本,右列**整列**随之消失(带交互的产物退化成静态页);
  *  2. 在原生权限层统一 deny —— 能补上 Android 的 mic/camera 那一格(原生层不分 realm),但
  *     **补不上 WebRTC 那一格**(两端都无对应原生开关),而且改 Android Java 会变动原生构建 →
- *     触发冷更门,需把关人针对冷更单独确认。
+ *     触发冷更,存量装机要装新包。
  * 已在 PR 描述里列成待裁决项。
  *
  * **这不改变「预览保留 JavaScript」这个已定的产品取舍** —— 脚本照旧执行,顶层没有摄像头、

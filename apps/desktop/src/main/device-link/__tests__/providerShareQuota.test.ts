@@ -32,7 +32,7 @@ vi.mock('../../maker-ipc/usage.js', () => ({
 vi.mock('../../provider-group/managementClient.js', () => ({ invokeProviderManagement: remote }));
 vi.mock('../../provider-group/store.js', () => ({ readProviderGroup: () => state.group }));
 const creditUsage = vi.hoisted(() => vi.fn());
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: creditUsage }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: creditUsage }));
 vi.mock('../../usage/claudeAccountUsage.js', () => ({
   readClaudeAccountUsageSnapshot: () => state.snapshot,
   readClaudeAccountQuotaClear: () => null,
