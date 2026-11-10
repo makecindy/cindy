@@ -4469,26 +4469,30 @@ export class ClaudeCodeAgent extends BaseAgent {
         ? await prepareManagedSkillPlugins(allowedManagedSkills, (name) => {
           log.warn('managed skill disappeared before Query startup; skipping', { skill: name });
         }) : undefined;
-      // 短设置仍内联, 与既有行为逐字节一致。超限才写临时文件。同一会话复用一份
-      // 文件, 重建时按当前设置重写 (热切白名单另走 applyFlagSettings, 不依赖它)。
-      // 落盘失败时托管技能插件已经铺好暂存目录, 而此刻 abort 监听与下面的
-      // 启动清理 try 都还没挂上 —— 必须在这里先把它拆掉, 否则整份暂存目录会残留。
-      const flagSettingsDelivery = await materializeClaudeFlagSettings(
-        buildSettings(),
-        flagSettingsFile ?? undefined,
-      ).catch(async (error: unknown) => {
-        if (managedPlugins) {
-          await managedPlugins.dispose().catch((cleanupError) => {
-            log.warn('managed skill plugin cleanup failed', { error: String(cleanupError) });
-          });
-        }
-        throw error;
-      });
-      if (flagSettingsDelivery.kind === 'file') flagSettingsFile = flagSettingsDelivery;
-      const localClaudeSettingsOption = (): string | Settings =>
-        flagSettingsDelivery.kind === 'inline'
+      // 设置对象的落盘时间放在 spawn 前: 内容要跟着本次 Query 的输出上限 / 白名单快照,
+      // 提前算会把上一代的 env 与模型清单写进文件。见 createLocalQueryArgs 处。
+      let localClaudeSettingsOption: () => string | Settings = () => buildSettings();
+      const prepareFlagSettings = async (): Promise<void> => {
+        // 短设置仍内联, 与既有行为逐字节一致。超限才写临时文件。同一会话复用一份
+        // 文件, 重建时按当前设置重写 (热切白名单另走 applyFlagSettings, 不依赖它)。
+        // 落盘失败时托管技能插件已经铺好暂存目录, 而此刻启动清理 try 都还没进来 ——
+        // 必须在这里先把它拆掉, 否则整份暂存目录会残留。
+        const flagSettingsDelivery = await materializeClaudeFlagSettings(
+          buildSettings(),
+          flagSettingsFile ?? undefined,
+        ).catch(async (error: unknown) => {
+          if (managedPlugins) {
+            await managedPlugins.dispose().catch((cleanupError) => {
+              log.warn('managed skill plugin cleanup failed', { error: String(cleanupError) });
+            });
+          }
+          throw error;
+        });
+        if (flagSettingsDelivery.kind === 'file') flagSettingsFile = flagSettingsDelivery;
+        localClaudeSettingsOption = () => (flagSettingsDelivery.kind === 'inline'
           ? flagSettingsDelivery.settings
-          : flagSettingsDelivery.settingsPath;
+          : flagSettingsDelivery.settingsPath);
+      };
       const releaseManagedPlugins = () => {
         void managedPlugins?.dispose().catch((error) => log.warn('managed skill plugin cleanup failed', { error: String(error) }));
       };
@@ -4683,6 +4687,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         companionEnvironment?.assertCurrent?.();
         if (managedPlugins && querySignal.aborted) throw new Error('Claude session closed before skill plugins were loaded');
         activeQueryModelEnvGeneration = applyModelOutputEnv();
+        // 必须紧跟输出上限 / 模型 env 的快照之后再序列化设置: 设置层里的
+        // CLAUDE_CODE_MAX_OUTPUT_TOKENS 与模型白名单都要反映这一次 spawn 的值。
+        await prepareFlagSettings();
         const queryArgs = createLocalQueryArgs();
         if (newSdkSessionId) sdkSessionId = newSdkSessionId;
         onRuntimeStartAttempted();
