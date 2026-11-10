@@ -544,6 +544,46 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     }
   });
 
+  it('keeps a long Claude model catalog off the Windows command line (#9753)', async () => {
+    // Windows CreateProcess rejects a command line over 32767 characters. The SDK
+    // turns an inline settings object into one `--settings <json>` argument, so a
+    // catalog of ~1000 model ids (measured at ~34000 chars) fails spawn with
+    // ENAMETOOLONG before the session starts. A file path stays well under the cap;
+    // the file must carry the same allowlist the inline object would have.
+    const availableModels = Array.from({ length: 1000 }, (_, index) => ({
+      id: `vendor/model-${String(index).padStart(4, '0')}-gateway-route`,
+      displayName: `Model ${index}`,
+      contextWindow: 128_000,
+      efforts: ['high' as const],
+      defaultEffort: 'high' as const,
+    }));
+    const { handle } = await startRewindableSession({
+      model: availableModels[0].id,
+      availableModels,
+    });
+
+    const startArgs = sdkMock.query.mock.calls[0]?.[0] as {
+      options: { settings?: string | { availableModels?: string[] } };
+    };
+    const settings = startArgs.options.settings;
+    expect(typeof settings).toBe('string');
+    const settingsPath = settings as string;
+    expect(settingsPath.length).toBeLessThan(1024);
+    const parsed = JSON.parse(await fs.readFile(settingsPath, 'utf8')) as {
+      availableModels?: string[];
+      apiKeyHelper?: string;
+    };
+    expect(parsed.availableModels).toHaveLength(1000);
+    expect(parsed.availableModels?.[0]).toBe(availableModels[0].id);
+    expect(parsed.availableModels).toContain(availableModels[999].id);
+    expect(parsed.apiKeyHelper).toBe('');
+
+    await handle.close();
+    await vi.waitFor(async () => {
+      await expect(fs.stat(settingsPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
   it('keeps the selected and catalog Claude wire models available for a live model switch', async () => {
     const { handle, firstQuery } = await startRewindableSession();
 

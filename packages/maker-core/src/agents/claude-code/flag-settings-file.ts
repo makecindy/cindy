@@ -1,0 +1,54 @@
+/**
+ * Claude Code flag settings delivery.
+ *
+ * The Agent SDK turns an inline settings object into one `--settings <json>`
+ * command-line argument (see its `initialize()` / `qx()`). Windows CreateProcess
+ * rejects a command line longer than 32767 characters with `spawn ENAMETOOLONG`,
+ * so a catalog of roughly a thousand model ids (issue #9753) fails the session
+ * before it starts. The same option also accepts a path to a settings JSON file,
+ * which stays a few hundred characters no matter how long the catalog is.
+ *
+ * The file holds the same object `buildClaudeFlagSettings` already produced
+ * (apiKeyHelper override, attribution, allowlist). It contains no credentials.
+ * Remote cc-mgr sessions stay on the inline object: the daemon reads settings on
+ * its own machine, and a path written here would not exist there.
+ */
+
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import type { Settings } from '@anthropic-ai/claude-agent-sdk';
+
+/** Inline JSON plus the `--settings` flag itself, under the 32767 Windows cap. */
+export const CLAUDE_INLINE_SETTINGS_ARGV_BUDGET = 24_000;
+
+export type ClaudeFlagSettingsDelivery =
+  | { kind: 'inline'; settings: Settings }
+  | { kind: 'file'; settingsPath: string; dispose: () => Promise<void> };
+
+/** How many characters the SDK will spend on `--settings` plus its JSON value. */
+export function claudeInlineSettingsArgvLength(settings: Settings): number {
+  return '--settings'.length + 1 + JSON.stringify(settings).length;
+}
+
+export async function materializeClaudeFlagSettings(
+  settings: Settings,
+  reuse?: Extract<ClaudeFlagSettingsDelivery, { kind: 'file' }>,
+): Promise<ClaudeFlagSettingsDelivery> {
+  if (claudeInlineSettingsArgvLength(settings) <= CLAUDE_INLINE_SETTINGS_ARGV_BUDGET) {
+    return { kind: 'inline', settings };
+  }
+  if (reuse) {
+    await fs.writeFile(reuse.settingsPath, JSON.stringify(settings), { encoding: 'utf8', mode: 0o600 });
+    return reuse;
+  }
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-claude-settings-'));
+  const settingsPath = path.join(dir, 'settings.json');
+  await fs.writeFile(settingsPath, JSON.stringify(settings), { encoding: 'utf8', mode: 0o600 });
+  return {
+    kind: 'file',
+    settingsPath,
+    dispose: () => fs.rm(dir, { recursive: true, force: true }),
+  };
+}
