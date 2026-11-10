@@ -115,7 +115,7 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
         socket.on('error', (error: unknown) => phase?.('socket-error ' + api.identity.deviceId + ' ' + String(error).slice(0, 300)));
         sockets.push(socket); return socket;
       },
-      timing: { requestTimeoutMs: 4000, pingIntervalMs: 1000, transportRetryIntervalMs: 100, reconnectBaseMs: 20, reconnectMaxMs: 100 },
+      timing: { requestTimeoutMs: 4000, pingIntervalMs: 1000, reconnectBaseMs: 20, reconnectMaxMs: 100 },
       logger: { debug() {},
         info(message) { phase?.('info ' + api.identity.deviceId + ' ' + String(message).slice(0, 300)); },
         warn(message) { phase?.('warn ' + api.identity.deviceId + ' ' + String(message).slice(0, 300)); },
@@ -167,9 +167,11 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
   // the fixture's short deadline. Slow hosted macOS/Windows CPUs must still
   // deliver every byte and satisfy the encryption assertions below.
   step('large-result');
+  const socketCount = f.sockets.length;
   const large = await f.controller.invoke('a-host', { channel: 'test:large', args: [] }, 30_000);
   step('encryption-assertions');
   expect(large.ok && String(large.result).length).toBe('confidential-result-'.length * 160000);
+  expect(f.sockets).toHaveLength(socketCount);
   expect(f.captured.length).toBeGreaterThan(100);
   expect(f.captured.some((bytes) => bytes.includes(Buffer.from('private-business-value-0123456789')) || bytes.includes(Buffer.from('confidential-result-')))).toBe(false);
   if (udp) {
