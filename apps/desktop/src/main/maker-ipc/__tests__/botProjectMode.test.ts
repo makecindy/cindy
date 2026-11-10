@@ -154,6 +154,21 @@ describe('prepareBotProjectWorkspace', () => {
     await expect(fs.readFile(path.join(skill, 'checklist.md'), 'utf8')).resolves.toBe('company checklist');
   });
 
+  // QA recheck: with the project's Skills folder linked elsewhere, the starter template wrote through the link.
+  it.skipIf(process.platform === 'win32')('writes nothing through a Skills folder the project linked elsewhere', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-skill-link-'));
+    const elsewhere = path.join(root, 'elsewhere');
+    await fs.mkdir(elsewhere);
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(path.join(workspace, '.agents'), { recursive: true });
+    await fs.symlink(elsewhere, path.join(workspace, '.agents', 'skills'));
+    await fs.mkdir(path.join(root, 'bots', 'bot_mia', 'skills', 'report'), { recursive: true });
+    await fs.writeFile(path.join(root, 'bots', 'bot_mia', 'skills', 'report', 'SKILL.md'), 'v1');
+    await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
+    expect(await fs.readdir(elsewhere)).toEqual([]);
+    await expect(fs.readFile(path.join(workspace, 'skills-from-v1', 'report', 'SKILL.md'), 'utf8')).resolves.toBe('v1');
+  });
+
   // QA 2026-11-10: a Skill folder the project already had was skipped whole (its other files lost),
   // every link was dropped (a Skill's own `instructions.md -> real.md` broke), and a memory folder
   // that could not be read counted as empty, so the upgrade finished without the memories.
@@ -170,6 +185,7 @@ describe('prepareBotProjectWorkspace', () => {
     await fs.symlink('.', path.join(legacy, 'loop'));
     await fs.mkdir(path.join(legacy, 'templates'));
     await fs.writeFile(path.join(legacy, 'templates', 'brief.md'), 'brief');
+    await fs.symlink('templates', path.join(legacy, 'examples'));
     const other = path.join(root, 'bots', 'bot_mia', 'skills', 'linked');
     await fs.mkdir(other, { recursive: true });
     await fs.writeFile(path.join(other, 'SKILL.md'), 'linked v1');
@@ -191,8 +207,14 @@ describe('prepareBotProjectWorkspace', () => {
     expect(prepared.skippedSkillLinks).toEqual([path.join('report', 'outside.md')]);
     await expect(fs.readFile(path.join(existing, 'templates'), 'utf8')).resolves.toBe('a file here');
     await expect(fs.readFile(path.join(existing, 'templates-from-v1', 'brief.md'), 'utf8')).resolves.toBe('brief');
+    // A second name for a folder inside the Skill is not a loop: both paths the Skill uses work.
+    await expect(fs.readFile(path.join(existing, 'examples', 'brief.md'), 'utf8')).resolves.toBe('brief');
     expect(await fs.readdir(elsewhere)).toEqual([]);
     await expect(fs.readFile(path.join(workspace, '.agents', 'skills', 'linked-from-v1', 'SKILL.md'), 'utf8')).resolves.toBe('linked v1');
+
+    // A retried upgrade reuses its side copy instead of adding another.
+    await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
+    expect((await fs.readdir(existing)).filter((name) => name.startsWith('templates'))).toEqual(['templates', 'templates-from-v1']);
 
     const memory = path.join(root, 'bots', 'bot_mia', 'memories');
     await fs.mkdir(memory, { recursive: true });

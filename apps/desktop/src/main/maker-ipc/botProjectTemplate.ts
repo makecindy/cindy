@@ -92,6 +92,18 @@ async function write(file: string, content: string): Promise<void> {
   await fs.rename(tmp, file);
 }
 
+/** Whether writing `relative` in the project would go through a link (it could lead anywhere). */
+async function throughLink(workspace: string, relative: string): Promise<boolean> {
+  let current = workspace;
+  for (const part of relative.split(/[\\/]/)) {
+    current = path.join(current, part);
+    const stat = await fs.lstat(current).catch(() => null);
+    if (!stat) return false;
+    if (stat.isSymbolicLink()) return true;
+  }
+  return false;
+}
+
 /**
  * Brings the project up to the current template. Never overwrites a file the project changed or
  * a file it had before the template (an upgraded teammate's own rules). Returns true when it wrote.
@@ -106,6 +118,8 @@ export async function applyTeammateTemplate(workspace: string, displayName: stri
   const next: TeammateTemplateRecord = { version, files: {}, pending: [] };
   for (const [relative, content] of Object.entries(files)) {
     const target = path.join(workspace, relative);
+    // The project linked this place elsewhere (its Skills folder, say): never write through it.
+    if (await throughLink(workspace, relative) || await throughLink(workspace, path.join(PENDING_DIR, relative))) continue;
     const current = await readText(target);
     const base = record?.files[relative];
     if (current === null || current === content || (base !== undefined && hash(current) === base)) {

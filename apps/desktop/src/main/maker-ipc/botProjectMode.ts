@@ -76,6 +76,18 @@ async function besideName(file: string): Promise<string> {
 }
 
 /**
+ * The folder beside `dir` for an older copy: an earlier run's `-from-v1` folder is reused (merged
+ * into), so a retried upgrade does not copy everything again.
+ */
+async function besideDir(dir: string): Promise<string> {
+  for (let index = 1; ; index++) {
+    const candidate = `${dir}-from-v1${index === 1 ? '' : `-${index}`}`;
+    const kind = await kindAt(candidate);
+    if (kind === null || kind === 'dir') return candidate;
+  }
+}
+
+/**
  * Copy durable memory records into the project's memory. A record of the same name already there is
  * a later version of the same memory (the project's copy is the newer one) and wins; the older one
  * stays where it was.
@@ -122,10 +134,21 @@ async function kindAt(file: string): Promise<'file' | 'dir' | 'other' | null> {
  * the other kind: the old copy then goes beside. Returns the files written.
  */
 async function mergeSkillTree(sourceRoot: string, source: string, target: string, skipped: string[],
-  visited: Set<string>): Promise<number> {
+  ancestors: Set<string>): Promise<number> {
   const realSource = await fs.realpath(source);
-  if (visited.has(realSource)) return 0;
-  visited.add(realSource);
+  // Only a folder already being copied above this one is a loop; another link to a folder inside
+  // the Skill is a second name for it and is copied there too.
+  if (ancestors.has(realSource)) return 0;
+  ancestors.add(realSource);
+  try {
+    return await mergeSkillEntries(sourceRoot, source, target, skipped, ancestors);
+  } finally {
+    ancestors.delete(realSource);
+  }
+}
+
+async function mergeSkillEntries(sourceRoot: string, source: string, target: string, skipped: string[],
+  ancestors: Set<string>): Promise<number> {
   let written = 0;
   for (const entry of await readEntries(source)) {
     const from = path.join(source, entry.name);
@@ -145,11 +168,11 @@ async function mergeSkillTree(sourceRoot: string, source: string, target: string
     const kind = stat.isDirectory() ? 'dir' : 'file';
     const existing = await kindAt(to);
     // A link the project made, or a file where a folder was (or the reverse): keep it, put the old beside.
-    if (existing !== null && existing !== kind) to = await besideName(to);
+    if (existing !== null && existing !== kind) to = kind === 'dir' ? await besideDir(to) : await besideName(to);
     if (kind === 'dir') {
-      if (visited.has(real)) continue;
+      if (ancestors.has(real)) continue;
       await fs.mkdir(to, { recursive: true });
-      written += await mergeSkillTree(sourceRoot, real, to, skipped, visited);
+      written += await mergeSkillTree(sourceRoot, real, to, skipped, ancestors);
       continue;
     }
     try {
@@ -178,7 +201,7 @@ async function copySkillFolders(sourceDir: string, workspace: string): Promise<{
   // The project's Skills folder (or `.agents`) is a link the project set up: never write through it.
   for (const dir of [path.join(workspace, '.agents'), targetDir]) {
     const kind = await kindAt(dir);
-    if (kind !== null && kind !== 'dir') { targetDir = await besideName(path.join(workspace, 'skills')); break; }
+    if (kind !== null && kind !== 'dir') { targetDir = await besideDir(path.join(workspace, 'skills')); break; }
   }
   const root = await fs.realpath(sourceDir).catch(() => sourceDir);
   for (const entry of await readEntries(sourceDir)) {
@@ -186,7 +209,7 @@ async function copySkillFolders(sourceDir: string, workspace: string): Promise<{
     const skillRoot = path.join(root, entry.name);
     let target = path.join(targetDir, entry.name);
     const existing = await kindAt(target);
-    if (existing !== null && existing !== 'dir') target = await besideName(target);
+    if (existing !== null && existing !== 'dir') target = await besideDir(target);
     await fs.mkdir(target, { recursive: true });
     if (await mergeSkillTree(skillRoot, skillRoot, target, skippedLinks, new Set()) > 0) copied++;
   }
