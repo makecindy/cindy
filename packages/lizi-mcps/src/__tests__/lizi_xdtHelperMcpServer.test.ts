@@ -7,6 +7,23 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit production dispatcher, parity #13: deletion was absent. An explicit target must
+// reach the same Host operation for task/plugin callers, while the current task stays protected.
+it('deletes an explicit target through the shared lifecycle handler and protects the caller', async () => {
+  const deleteSession = vi.fn(async ({ sessionId }: { sessionId: string }) => ({ ok: true as const, sessionId, status: 'deleted' as const }));
+  for (const context of [
+    { agentKind: 'codex' as const, workingDir: '', sessionId: 'ordinary' },
+    { agentKind: 'codex' as const, workingDir: '', hostCaller: { kind: 'plugin' as const, pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 } },
+  ]) {
+    const server = createXdtHelperMcpServer({ deleteSession } as Parameters<typeof createXdtHelperMcpServer>[0], context);
+    expect(parsePayload(await server.hostTools.call('delete_session', { session_id: TARGET_SESSION_ID }))).toMatchObject({ ok: true, status: 'deleted' });
+    expect(parsePayload(await server.hostTools.call('delete_session', {}))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    if (context.sessionId) expect(parsePayload(await server.hostTools.call('delete_session', { session_id: 'local::ordinary' }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    await server.close();
+  }
+  expect(deleteSession).toHaveBeenCalledTimes(2);
+});
+
 it('validates attachment reads against the same history scope before host I/O', async () => {
   let denied = false;
   const readSessionAttachment = vi.fn(async () => ({ ok: true as const, base64: 'dGV4dA==', nextOffset: null }));

@@ -14,6 +14,7 @@ describe('desktop Claude read-only allowlist', () => {
   // bypass the task's normal review. Public policy entry, unit tier; both dispatch routes.
   it.each([
     ['cindy_scheduler', 'schedule_delete'],
+    ['cindy_helper', 'delete_session'],
   ])('routes %s %s through ordinary per-call approval', (serverName, name) => {
     for (const toolParams of [{ id: 'automation' }, { id: 'automation', device: 'local' }]) {
       expect(getDesktopMcpToolApprovalPolicy({ serverName, toolName: name, toolParams })).toBe('prompt-each-time');

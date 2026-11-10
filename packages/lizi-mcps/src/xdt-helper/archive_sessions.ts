@@ -31,7 +31,7 @@ export interface SessionStatusChangeItem {
   sessionId: string;
   title: string | null;
   workingDir: string | null;
-  status: SessionStatus;
+  status: SessionStatus | 'deleted';
 }
 
 /**

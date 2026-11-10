@@ -119,7 +119,7 @@ import { authorizePluginHostToolCall, getPluginHostToolCaller, setHostToolProvid
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
 import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools } from './sharedTaskTools.js';
-import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
   patchSessionMetaInDb,
@@ -978,6 +978,24 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       setRemoteSessionsStatus: deps.historyRemote
         ? createRemoteSessionsStatusSetter({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote })
         : undefined,
+      deleteSession: ({ sessionId, callerSessionId }) => withAccountDataAccess(callerSessionId, async assertCurrent => {
+        await assertTaskActionCurrent();
+        await assertCurrent();
+        const split = sessionId.indexOf('::');
+        if (split > 0) {
+          if (!deps.historyRemote) return { ok: false as const, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task control is unavailable.' };
+          const result = await createRemoteSessionsStatusSetter({ captureAccess: deps.historyRemote.captureAccess, invoke: deps.invokeRemote })({
+            deviceId: sessionId.slice(0, split), sessionIds: [sessionId.slice(split + 2)], status: 'deleted',
+          });
+          return result.ok ? { ok: true as const, sessionId, status: 'deleted' as const } : result;
+        }
+        try {
+          await patchSessionMetaInDb(sessionId, { status: 'deleted' }, { beforeWrite: captureTaskActionSyncGuard() });
+          return { ok: true as const, sessionId, status: 'deleted' as const };
+        } catch (error) {
+          return { ok: false as const, errorCode: isIpcError(error) ? error.code : 'INTERNAL', message: error instanceof Error ? error.message : 'Task deletion failed.' };
+        }
+      }),
       setSessionsStatus: async ({ sessionIds, status }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };

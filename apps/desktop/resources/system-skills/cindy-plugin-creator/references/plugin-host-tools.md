@@ -41,6 +41,12 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 
 底层管子消息为 `{type:'host-tool-request',server,tool,args}`。身份由宿主从逻辑页或 Node 私有通道核验，不接受参数中的 `pluginId`、`sessionId` 或账号作为调用方身份。旧宿主和未提供此能力的执行宿主应按不支持处理。
 
+## 任务删除
+
+`control` 组的 `delete_session({session_id})` 使用宿主已有删除路径，风险规则固定为 `prompt-each-time`。
+跨电脑传 `deviceId::sessionId`，复用同账号远程控制；返回 `REMOTE_RESULT_UNKNOWN` 时先查询，不能自动重发。
+删除后的任务不能用 `unarchive_sessions` 恢复。插件没有当前任务；任务中的 Agent 不能删除调用任务自身。
+
 ## 完整历史与附件
 
 `list_teammates({device:'all'})` 枚举伙伴及其已保存的任务关系（含隐藏、暂停和归档）；`list_sessions` 包含隐藏任务，并在隐藏时返回 `hiddenAt`。普通任务、独立对话、伙伴私聊、话题和渠道专线均以数据库里实际保存的来源和关系为准。跨设备按返回的电脑分组翻页；未查到的电脑保留错误与 `partial`，不据此认定任务不存在。

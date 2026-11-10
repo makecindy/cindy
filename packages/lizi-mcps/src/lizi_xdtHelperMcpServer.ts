@@ -41,6 +41,7 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import type { HostToolMcpServer, HostToolRuntime } from './host-tool-runtime.js';
 import { registerListTeammatesTool } from './xdt-helper/list_teammates.js';
 import { registerReadSessionAttachmentTool } from './xdt-helper/read_session_attachment.js';
+import { registerDeleteSessionTool, type DeleteSessionCallback } from './xdt-helper/delete_session.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
@@ -566,6 +567,7 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  deleteSession?: DeleteSessionCallback;
   setRemoteSessionsStatus?: ArchiveSessionsDeps['setRemoteSessionsStatus'];
   /**
    * 任务导入（与设置 → 任务导入同一实现）。host 注入后, control 类工具
@@ -703,6 +705,9 @@ export function createXdtHelperMcpServer(
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
   }
+  if (deps.deleteSession) registerDeleteSessionTool(registry, {
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), deleteSession: deps.deleteSession,
+  });
   if (deps.sessionImport) {
     registerSessionImportTools(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
