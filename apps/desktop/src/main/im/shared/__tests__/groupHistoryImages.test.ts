@@ -11,7 +11,7 @@ const f = vi.hoisted(() => ({
   rollback: vi.fn(),
   blobInfo: vi.fn(),
 }));
-vi.mock('../../../cindy-media/blobStore', () => ({
+vi.mock('../../../cindy-media/blobStore.desktop', () => ({
   resolveSafe: () => ({ absPath: '/blob/image', hash: 'hash', mimeType: 'image/png' }),
 }));
 vi.mock('../../../cindy-media/ledger', () => ({ getBlobInfo: f.blobInfo }));

@@ -2940,6 +2940,13 @@ describe('Telegram provider capability, binding and prefs', () => {
       provider: 'telegram',
       bindingId: 'binding-telegram-1',
     });
+    const closed = once(sock, 'close');
+    sock.send(serializeHookMessage(makeProviderBindUpdate({
+      ...TELEGRAM_CONFIRMED, replyTo: revoke.payload.requestId, state: 'revoked', reason: 'user-revoked', actions: ['retry'],
+    })));
+    await closed;
+    expect(store.get().telegramEnabled).toBe(false);
+    expect(wss.clients.size).toBe(0);
   });
 
   it('provider prefs 回执 bindingId 不匹配时立即拒绝，旧绑定迟到帧不能串入', async () => {
@@ -3202,6 +3209,7 @@ function feishuLaneHarness(
 ) {
   const transports: HookTransportOpts[] = [];
   const sent: HookMessage[] = [];
+  const dispose = vi.fn();
   const manager = makeManager(
     memoryStore({ url: 'wss://slack-hook.example.test', enabled: false, ...storeInit }),
     {
@@ -3213,15 +3221,87 @@ function feishuLaneHarness(
             sent.push(message);
             return true;
           },
-          dispose: () => {},
+          dispose,
         };
       },
       ...overrides,
     },
   );
   cleanups.push(() => manager.dispose());
-  return { manager, transports, sent };
+  return { manager, transports, sent, dispose };
 }
+
+describe('官方 IM 解绑与连接释放', () => {
+  it.each(['none', 'none-at-startup', 'superseded'] as const)('服务端确认绑定已不存在（%s）时释放连接', (state) => {
+    const { manager, transports, dispose } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync();
+    const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'feishu', features: FEISHU_FEATURES });
+    opts.onStatus('connected', null);
+    if (state !== 'none-at-startup') opts.onMessage(makeProviderBindState(FEISHU_CONFIRMED), () => true);
+    if (state !== 'superseded') {
+      // An authoritative reconnect snapshot can clear a formerly linked device.
+      opts.onWelcome?.({ serverName: 'feishu', features: FEISHU_FEATURES });
+      opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, state: 'none', bindingId: null, principalId: null, principalName: null, actions: [] }), () => true);
+    } else {
+      opts.onMessage(makeProviderBindUpdate({ ...FEISHU_CONFIRMED, state, reason: 'superseded', actions: ['retry'] }), () => true);
+    }
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(manager.snapshot().feishu.enabled).toBe(false);
+    manager.sync();
+    expect(transports).toHaveLength(1);
+  });
+
+  it.each(['telegram', 'x', 'feishu'] as const)('%s 解绑确认后释放连接，重新开启才建连，旧连接回调不能污染新关联', (provider) => {
+    const store = memoryStore({ url: 'wss://slack.test', enabled: false, telegramEnabled: true, xEnabled: true, feishuEnabled: true });
+    const connections: Array<{ opts: HookTransportOpts; dispose: ReturnType<typeof vi.fn>; frames: HookMessage[] }> = [];
+    const manager = makeManager(store, {
+      getTelegramUrl: () => 'wss://telegram.test', getXUrl: () => 'wss://x.test', getFeishuUrl: () => 'wss://feishu.test',
+      createTransport: (opts) => {
+        const frames: HookMessage[] = [];
+        const dispose = vi.fn();
+        connections.push({ opts, dispose, frames });
+        return { send: (message) => { frames.push(message); return true; }, dispose };
+      },
+    });
+    cleanups.push(() => manager.dispose());
+    manager.sync();
+    const current = connections.find(({ opts }) => opts.url === `wss://${provider}.test`)!;
+    const features = [...(current.opts.buildHello().features ?? []), `provider:${provider}`];
+    const confirmed = { ...FEISHU_CONFIRMED, provider };
+    current.opts.onWelcome?.({ serverName: provider, features });
+    current.opts.onStatus('connected', null);
+    current.opts.onMessage(makeProviderBindState(confirmed), () => true);
+    expect(manager.providerBindRevoke(provider)).toBe(true);
+    expect(current.dispose).not.toHaveBeenCalled();
+    const revoke = current.frames.findLast((frame) => frame.type === 'provider.bind.revoke');
+    if (revoke?.type !== 'provider.bind.revoke') throw new Error('revoke missing');
+    current.opts.onMessage(makeProviderBindUpdate({ ...confirmed, replyTo: revoke.payload.requestId, state: 'revoked', reason: 'user-revoked', actions: ['retry'] }), () => true);
+    expect(current.dispose).toHaveBeenCalledTimes(1);
+    expect(manager.snapshot()[provider]).toMatchObject({ enabled: false, status: 'disabled', binding: { state: 'revoked' } });
+    expect(store.get()[`${provider}BindingCache`]).toBeNull();
+    expect(store.get()[`${provider}Enabled`]).toBe(false);
+    expect(connections.filter((connection) => connection !== current).every(({ dispose }) => dispose.mock.calls.length === 0)).toBe(true);
+    manager.sync();
+    expect(connections.filter(({ opts }) => opts.url === current.opts.url)).toHaveLength(1);
+
+    manager.setProviderEnabled(provider, true);
+    const next = connections.at(-1)!;
+    expect(connections.filter(({ opts }) => opts.url === current.opts.url)).toHaveLength(2);
+    next.opts.onWelcome?.({ serverName: provider, features });
+    next.opts.onStatus('connected', null);
+    next.opts.onMessage(makeProviderBindState({ ...confirmed, state: 'none', bindingId: null, principalId: null, principalName: null, actions: [] }), () => true);
+    const start = next.frames.find((frame) => frame.type === 'provider.bind.start');
+    if (start?.type !== 'provider.bind.start') throw new Error('new bind missing');
+    next.opts.onMessage(makeProviderBindUpdate({ ...confirmed, replyTo: start.payload.requestId }), () => true);
+    // A queued callback from the disposed connection must not revoke the newly linked device.
+    current.opts.onMessage(makeProviderBindUpdate({ ...confirmed, state: 'revoked', reason: 'user-revoked', actions: ['retry'] }), () => true);
+    current.opts.onStatus('connecting', null);
+    expect(manager.snapshot()[provider]).toMatchObject({ enabled: true, status: 'connected', binding: { state: 'confirmed' } });
+    expect(next.dispose).not.toHaveBeenCalled();
+  });
+
+});
 
 describe('官方飞书 / Lark provider lane', () => {
   it.each(['disconnect', 'unlink'] as const)('selects this linked computer after acknowledgment, cancelling on %s', async (cancel) => {
@@ -3442,7 +3522,7 @@ describe('官方飞书 / Lark provider lane', () => {
     expect(listRecentSessions).not.toHaveBeenCalled();
   });
 
-  it('只接本机已确认绑定的飞书应用与账号的派发; 解绑后迟到的重投被拒', () => {
+  it('只接本机已确认绑定的飞书应用与账号的派发; 解绑后忽略旧连接的重投', () => {
     // 多个组织的应用共用同一个飞书服务: 别的应用、别的飞书账号、认不出的 lane,
     // 以及解绑之后重连时重投的旧任务, 都不得在这台电脑上执行。
     const dispatcher = stubDispatcher();
@@ -3503,7 +3583,7 @@ describe('官方飞书 / Lark provider lane', () => {
       }),
       () => true,
     );
-    expect(ackOf('feishu:dm:cli_app:ou_user:g2')).toEqual(rejected('feishu:dm:cli_app:ou_user:g2'));
+    expect(ackOf('feishu:dm:cli_app:ou_user:g2')).toEqual([]);
     expect(dispatcher.handleDispatch).toHaveBeenCalledTimes(2);
   });
 
@@ -3895,10 +3975,12 @@ describe('Slack 本机通讯与 Bot 设备分离', () => {
   function communicationsHarness(features = ['slack-tools', 'multi-team', 'slack-communications']) {
     const frames: HookMessage[] = [];
     const transports: HookTransportOpts[] = [];
-    const manager = makeManager(memoryStore({ url: 'wss://hook.example.test' }), {
+    const store = memoryStore({ url: 'wss://hook.example.test' });
+    const dispose = vi.fn();
+    const manager = makeManager(store, {
       createTransport: (opts) => {
         transports.push(opts);
-        return { send: (msg) => { frames.push(msg); return true; }, dispose: () => {} };
+        return { send: (msg) => { frames.push(msg); return true; }, dispose };
       },
     });
     cleanups.push(() => manager.dispose());
@@ -3907,9 +3989,52 @@ describe('Slack 本机通讯与 Bot 设备分离', () => {
     opts.onWelcome?.({ serverName: 'mock', features });
     opts.onStatus('connected', null);
     const receive = (msg: HookMessage) => opts.onMessage(msg, () => true);
-    return { manager, frames, receive };
+    return { manager, frames, receive, store, dispose, transports };
   }
   const row = { teamId: 'T1', teamName: 'Workspace', slackUserId: 'U1', slackUserName: 'tester' };
+
+  it.each(['none', 'bot', 'communications-on', 'communications-off'] as const)('解绑后等权威快照再决定是否释放 Slack：保留 %s', (retained) => {
+    const { manager, receive, store, dispose, transports } = communicationsHarness();
+    const other = { ...row, teamId: 'T2' };
+    const bindings = retained === 'bot' ? [other] : [];
+    const communications = retained.startsWith('communications') ? [{ ...other, enabled: retained === 'communications-on' }] : [];
+    receive(makeBindState({ bindings: [row, ...bindings], communications }));
+    expect(manager.revokeTeam('T1')).toBe(true);
+    // Optimistic removal must not dispose the socket before the server processes revoke.
+    expect(dispose).not.toHaveBeenCalled();
+    receive(makeBindState({ bindings, communications }));
+    expect(store.get().enabled).toBe(retained !== 'none');
+    expect(dispose).toHaveBeenCalledTimes(retained === 'none' ? 1 : 0);
+    manager.sync();
+    expect(transports).toHaveLength(retained === 'none' ? 1 : 2);
+  });
+
+  it('最后一项通讯授权删除后释放连接，快照先到时仍等待工具回执', async () => {
+    const { manager, receive, frames, dispose, store } = communicationsHarness();
+    receive(makeBindState({ bindings: [], communications: [{ ...row, enabled: true }] }));
+    const removed = manager.revokeTeam('T1');
+    const request = frames.at(-1)!;
+    if (request.type !== 'tool.request') throw new Error('remove missing');
+    receive(makeBindState({ bindings: [], communications: [] }));
+    expect(dispose).not.toHaveBeenCalled();
+    receive(makeToolResponse({ replyTo: request.payload.requestId, ok: true, result: { removed: true } }));
+    expect(await removed).toBe(true);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(store.get().enabled).toBe(false);
+  });
+
+  it.each(['denied', 'none'] as const)('解绑最后一个 workspace 时保留进行中的授权，%s 后释放', (ending) => {
+    const { manager, receive, dispose } = communicationsHarness();
+    receive(makeBindState({ bindings: [row] }));
+    expect(manager.addBinding()).toBe(true);
+    expect(manager.revokeTeam('T1')).toBe(true);
+    receive(makeBindState({ bindings: [] }));
+    expect(manager.snapshot().enabled).toBe(true);
+    expect(dispose).not.toHaveBeenCalled();
+    receive(makeBindUpdate({ state: ending, slackUserId: null, slackUserName: null, message: null }));
+    expect(manager.snapshot().enabled).toBe(false);
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
 
   it.each(['snapshot', 'connected'] as const)('旧 multi-team 的缓存行不阻断自动绑定：%s', async (entry) => {
     const { manager, frames, receive } = communicationsHarness(['slack-tools', 'multi-team']);

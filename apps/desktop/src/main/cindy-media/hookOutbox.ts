@@ -7,9 +7,9 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 import { mediaRefs, sessions } from '../localDb/schema';
 import { HOOK_TERMINAL_DELIVERY_TTL_MS, type HookMediaReference } from '../hook-control/requestLedger';
 import { ingestMedia } from './ingest';
-import { parseBlobUrl, resolveSafe } from './blobStore';
+import { parseBlobUrl, resolveSafe } from './blobStore.desktop';
 import { removeRefById, withSessionMediaRefLock } from './ledger';
-import { captureMediaRefCompensationScope, withMediaRefCompensation } from './refCompensationJournal';
+import { captureMediaRefCompensationScope, withMediaRefCompensation } from './refCompensationJournal.desktop';
 
 const ORIGIN = 'hook-outbox';
 

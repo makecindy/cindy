@@ -25,7 +25,7 @@ vi.mock('../snapshot', () => ({ writeSnapshot: mocks.snapshot }));
 vi.mock('../registry', () => ({ registryService: {
   getInstall: mocks.getInstall, addInstall: mocks.addInstall, updateInstall: mocks.updateInstall,
 } }));
-vi.mock('../../serverApiClient', () => ({ ServerApiError: class extends Error {} }));
+vi.mock('../../serverApiClient.desktop', () => ({ ServerApiError: class extends Error {} }));
 
 import { SkillPublishService } from '../publishService';
 

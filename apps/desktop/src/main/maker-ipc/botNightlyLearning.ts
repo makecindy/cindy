@@ -12,7 +12,7 @@ import path from 'node:path';
 import { buildBotMemoryScopeKey, MemoryError, type AgentKind, type MemoryRecord } from '@cindy/maker-core';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { createLogger } from '../logger.js';
 import { listInstalledSkills } from '../learn-host/skillsIndex.js';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';

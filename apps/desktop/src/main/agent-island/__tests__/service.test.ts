@@ -2498,7 +2498,7 @@ describe('AgentIslandService native publishing', () => {
     // 存的是原始哨兵,所以 refreshLocalization() 的这次 republish 自然带新语言。若把投影
     // 固化进 state,这里会一直停在上一语言,直到下一次 metadata 事件(PR #1031 review P1)。
     {
-      const { setMainLocale } = await import('../../i18n.js');
+      const { setMainLocale } = await import('../../i18n.desktop.js');
       setMainLocale('zh-CN');
       service.refreshLocalization();
       await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
