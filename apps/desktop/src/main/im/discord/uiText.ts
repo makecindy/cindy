@@ -1,8 +1,8 @@
 /**
  * main/im/discord/uiText.ts
  * ---------------------------------------------------------------------------
- * Discord 渠道的用户文案包。P1 Discord 只支持 DM, 不启用 threadScoped, 因此
- * 只提供共享编排层的非 thread 文案字段。
+ * Discord 私聊与服务器频道 / thread 的用户文案。thread 已编码进 lane id，
+ * 不启用共享编排层的 threadScoped 文案。
  */
 
 import type { IMUnsupportedEntry } from '@cindy/im';
