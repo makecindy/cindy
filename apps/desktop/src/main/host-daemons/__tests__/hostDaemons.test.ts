@@ -11,11 +11,15 @@
  * - tier：unit。扫描与数据库全部注入，不触碰真实 PowerShell / SQLite。
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ToolMessageRow } from '../attribution.js';
 import { pickOwnerSession } from '../attribution.js';
-import type { HostDaemonLedger, HostDaemonOwnerRecord } from '../ledger.js';
+import { createHostDaemonLedger, type HostDaemonLedger, type HostDaemonOwnerRecord } from '../ledger.js';
 import { parseScheduledTaskScan, type RawScheduledTask } from '../scheduledTasks.js';
 import { HostDaemonActionError, createHostDaemonsService } from '../service.js';
 
@@ -99,6 +103,59 @@ describe('pickOwnerSession', () => {
 
   it('ignores needles too short to be evidence', () => {
     expect(pickOwnerSession(rows, ['pm'])).toBeNull();
+  });
+});
+
+describe('host daemon ledger', () => {
+  // 两个账号都还没有台账文件时，空台账必须是各自的新对象：共用一份就会让后登录
+  // 的账号读到前一个账号写入的会话标题与 id（账号目录隔离挡不住这条内存路径）。
+  it('does not share in-memory records between accounts with no ledger file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-daemons-ledger-'));
+    try {
+      const accountA = createHostDaemonLedger(path.join(dir, 'a', 'host-daemons.v1.json'));
+      const accountB = createHostDaemonLedger(path.join(dir, 'b', 'host-daemons.v1.json'));
+
+      accountA.setOwner('\\airlink-autopm', {
+        sessionId: 'session-a',
+        title: '账号A的标题',
+        atMs: 1_800_000_000_000,
+        definitionMtimeMs: 1_793_028_922_179,
+        command: 'C:\\py\\pythonw.exe autopm.py',
+      });
+
+      expect(accountA.getOwner('\\airlink-autopm')?.title).toBe('账号A的标题');
+      expect(accountB.getOwner('\\airlink-autopm')).toBeNull();
+      accountA.save();
+      expect(accountB.getOwner('\\airlink-autopm')).toBeNull();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('attribution window query', () => {
+  // 任务名必须作为查询条件传下去，由 SQL 先过滤再截断：先截断再在内存里匹配，
+  // 忙时创建任务的调用会被挤出窗口，随后被当成「查无归属」写进长期负缓存。
+  it('passes the task name so the query filters before truncating', async () => {
+    const readToolMessages = vi.fn(async () => []);
+    const service = createHostDaemonsService({
+      scanTasks: async () => [task()],
+      readToolMessages,
+      ledger: memoryLedger(),
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+    });
+
+    await service.list();
+    expect(readToolMessages).toHaveBeenCalledOnce();
+    expect(readToolMessages).toHaveBeenCalledWith(
+      'airlink-autopm',
+      1_793_028_922_179 - 300_000,
+      1_793_028_922_179 + 300_000,
+    );
   });
 });
 

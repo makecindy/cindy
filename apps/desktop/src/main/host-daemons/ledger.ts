@@ -34,7 +34,14 @@ interface LedgerFile {
   misses: Record<string, number>;
 }
 
-const EMPTY: LedgerFile = { version: 1, owners: {}, misses: {} };
+/**
+ * 空台账必须是**新对象**。模块级常量做浅拷贝时只复制外层，`owners` / `misses`
+ * 仍与常量共用：一个账号在没有台账文件时写进去的记录，会原样出现在下一个同样
+ * 没有台账文件的账号里 —— 账号目录隔离挡不住这条内存路径。
+ */
+function emptyLedger(): LedgerFile {
+  return { version: 1, owners: {}, misses: {} };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -45,9 +52,9 @@ function parseLedger(raw: string): LedgerFile {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { ...EMPTY };
+    return emptyLedger();
   }
-  if (!isRecord(parsed)) return { ...EMPTY };
+  if (!isRecord(parsed)) return emptyLedger();
 
   const owners: Record<string, HostDaemonOwnerRecord> = {};
   if (isRecord(parsed.owners)) {
@@ -111,7 +118,7 @@ export function createHostDaemonLedger(filePath: string | (() => string)): HostD
       state = parseLedger(fs.readFileSync(path, 'utf8'));
     } catch {
       // 文件不存在 = 首次运行；损坏 = 当成空台账重来（判定可重建，不阻塞面板）。
-      state = { ...EMPTY };
+      state = emptyLedger();
     }
     return state;
   }

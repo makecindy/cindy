@@ -7,16 +7,23 @@
  * 查询走 `(created_at, id)` 索引的有界窗口（默认交给调用方传 ±5 分钟），不扫全表。
  */
 
-import { and, asc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { messages, sessions } from '../localDb/schema';
 import type { ToolMessageRow } from './attribution.js';
 
-/** 单个窗口最多取多少行。超出时按时间先后截断（命令通常在窗口前段）。 */
+/**
+ * 单个窗口最多取多少行。
+ *
+ * 任务名在 SQL 里就先过滤掉，截断只会砍掉「同一个任务名」的冗余命中，不会把
+ * 创建任务的那次调用挤出窗口 —— 否则命中被截断后会被当成「查无归属」写进长期
+ * 负缓存，用户建的任务从此不再出现在清单里。
+ */
 export const TOOL_MESSAGE_WINDOW_LIMIT = 300;
 
 export async function readToolMessages(
+  needle: string,
   fromMs: number,
   toMs: number,
   limit = TOOL_MESSAGE_WINDOW_LIMIT,
@@ -38,6 +45,8 @@ export async function readToolMessages(
         // 只认能确认在本机执行的记录：SSH 远端会话的工具调用也会落进同一张消息表，
         // 远端消息提到同名任务时会被误当成本机归属证据（进而授权停止/删除无关的本机任务）。
         isNull(sessions.remoteHostId),
+        // 先按任务名过滤再截断：截断不能影响「这条窗口里到底有没有提到它」。
+        sql`instr(lower(${messages.content}), lower(${needle})) > 0`,
       ),
     )
     .orderBy(asc(messages.createdAt))
