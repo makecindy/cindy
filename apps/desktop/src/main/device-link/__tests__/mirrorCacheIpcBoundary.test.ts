@@ -126,6 +126,7 @@ vi.mock('../index', () => ({
   remoteUnsubscribe: vi.fn(),
   disconnectAllControllers: vi.fn(),
   revokeController: vi.fn(),
+  setControllerModelUse: vi.fn(),
   restoreController: vi.fn(),
   broadcast: vi.fn(),
   deviceLinkApiBase: 'https://example.invalid',

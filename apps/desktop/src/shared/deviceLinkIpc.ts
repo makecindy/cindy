@@ -36,6 +36,7 @@ export const DEVICE_LINK_INVOKE = {
   DISCONNECT_ALL: 'device-link:disconnect-all',
   /** 被控端:撤销某控制端的访问权限(逐设备黑名单,持久化) */
   REVOKE: 'device-link:revoke',
+  SET_MODEL_USE: 'device-link:set-model-use',
   /** 被控端:恢复某控制端的访问权限 */
   RESTORE: 'device-link:restore',
   // —— 控制端:远程会话镜像的本地冷缓存(见 main/device-link/mirrorCacheStore.ts)——
@@ -164,6 +165,8 @@ export interface DeviceLinkState {
   controlledBy: ControlledByDevice[];
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单,被控端 UI 渲染「已撤销」用) */
   revokedControllers: string[];
+  /** 单独关掉「用本机模型」的同账号电脑(仍可远程控制本机，但借不到本机的模型)。 */
+  modelUseRevokedControllers?: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   /**
