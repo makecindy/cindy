@@ -343,14 +343,15 @@ function makePermissionModeFake() {
 }
 
 /** fake maker: createSession 返回"send 即接受、随后立刻 done"的会话。 */
-function makeFakeSession(id: string) {
+function makeFakeSession(
+  id: string,
+  status: 'active' | 'aborting' | 'closed' | 'error' = 'active',
+) {
   const permission = makePermissionModeFake();
-  let status: 'active' | 'aborting' | 'closed' | 'error' = 'active';
   return {
     id,
+    // close 失败会让真实 Session 停在 error;测试用初始状态复刻这一后果。
     getStatus: () => status,
-    /** 测试注入:模拟 close 失败后 Session 停在 error(回收抛出的同款后果)。 */
-    __setStatus: (next: 'active' | 'aborting' | 'closed' | 'error') => { status = next; },
 
     ...({ instanceId: `instance-${id}` } as { instanceId?: string }),
     workDir: 'D:/repo',
@@ -857,8 +858,7 @@ describe('hook task model selection on next send', () => {
   it('rebuilds when the recycle fails and the session is no longer active', async () => {
     // Codex P2:close 抛出时 Session 已停在 error,旧实例不可用 —— 必须重建,
     // 否则 send 被 ensureActive 拒、runner 永远绑在坏实例上。
-    const broken = makeFakeSession('sess-new');
-    broken.__setStatus('error');
+    const broken = makeFakeSession('sess-new', 'error');
     const rebuilt = makeFakeSession('sess-new');
     rebuilt.send.mockResolvedValue({ accepted: true });
     fakeMaker.createSession.mockResolvedValueOnce(broken).mockResolvedValueOnce(rebuilt);
@@ -1796,6 +1796,8 @@ describe('进度快照(turn.progress 链路)', () => {
         return permission.permissionModeState;
       },
       id,
+      // 与 makeFakeSession 同形状:生产代码按 getStatus 判定实例是否仍可用。
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(
         cb: (ev: {
@@ -2793,6 +2795,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     return {
       ...makePermissionModeFake(),
       id,
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
@@ -3113,6 +3116,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     return {
       ...makePermissionModeFake(),
       id,
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(
         cb: (ev: {
