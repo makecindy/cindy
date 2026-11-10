@@ -5,6 +5,9 @@ import { setSessionProvider, clearSessionProvider } from '../../../desktop/src/m
 import { toDesktopSessionDispatchOutcome } from '../../../desktop/src/main/maker-host/send-outcome.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
+import { prependNoteToWireUserMessage } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
+import { readWireSourceDevice } from '../../../desktop/src/main/maker-ipc/messageSourceNote.ts';
+import { buildClientEnvironmentNote, shouldPrependMobileClientPromptNote } from '../../../desktop/src/main/maker-ipc/mobileClientPromptNote.ts';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
@@ -135,7 +138,13 @@ export function createTurnExecutor(deps) {
       // grants nothing and every sensitive action still asks (fail closed).
       const delegated = sendOpts[AUTO_REVIEW_DELEGATED_CONTINUATION] === true
         || typeof sendOpts[MCP_APP_MESSAGE_GUARD] === 'function';
-      const result = await session.send(message, { messageUuid: sendOpts.messageUuid,
+      // The host-stamped device of a remote input: shown as attribution on the
+      // stored row, and told to the model once per message like the desktop does.
+      const sourceDevice = readWireSourceDevice(sendOpts.sourceDevice);
+      const deviceNote = sourceDevice && shouldPrependMobileClientPromptNote(message, createOpts.agentKind)
+        ? buildClientEnvironmentNote({ device: sourceDevice }) : null;
+      const wireMessage = deviceNote ? prependNoteToWireUserMessage(message, deviceNote) : message;
+      const result = await session.send(wireMessage, { messageUuid: sendOpts.messageUuid,
         ...(delegated ? {
           [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
           resolveAutoReviewUserIntent: async () => restoreAutoReviewUserIntent([]),
@@ -162,8 +171,9 @@ export function createTurnExecutor(deps) {
           try {
             await deps.persistMessage(sessionId, { clientId: persist.clientId, role: 'user',
               content: persist.content, agentKind: turn.dbKind,
-              ...(persist.origin || persist.sourcePlugin || delegated ? { agentMeta: {
+              ...(persist.origin || persist.sourcePlugin || sourceDevice || delegated ? { agentMeta: {
                 ...(persist.origin ? { origin: persist.origin } : {}),
+                ...(sourceDevice ? { sourceDevice } : {}),
                 // Attribution for history reconciliation, not an authorization input.
                 ...(persist.sourcePlugin ? { sourcePlugin: persist.sourcePlugin } : {}),
                 ...(delegated ? { autoReviewUserText: { kind: 'delegated-continuation' } } : {}),

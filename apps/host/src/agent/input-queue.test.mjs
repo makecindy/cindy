@@ -424,6 +424,25 @@ test('an MCP App message is a delegated continuation that grants nothing', async
   assert.equal(h.maker.getSession('human-task').sendOptions[0][AUTO_REVIEW_DELEGATED_CONTINUATION], undefined);
 });
 
+// PR #9621 review: a remote input keeps its host-stamped device on the stored
+// row and the model is told which device the user is on.
+test('a remote input keeps its source device and tells the model', async () => {
+  const h = createHarness();
+  await runDeviceLinkInvokeContext({ controllerDeviceId: 'verified-phone', controllerPlatform: 'ios', channel: 'maker:input:enqueue' }, () =>
+    h.queue.enqueue('remote-note', { clientId: 'remote-note-1', text: 'from phone' }));
+  await waitFor(() => h.maker.getSession('remote-note')?.sent.length === 1);
+  const row = h.persisted.find(message => message.clientId === 'remote-note-1' && message.role === 'user');
+  assert.deepEqual(row.agentMeta.sourceDevice, { deviceId: 'verified-phone', platform: 'mobile' });
+  const sent = h.maker.getSession('remote-note').sent[0];
+  assert.match(String(sent), /from phone/);
+  assert.notEqual(String(sent), 'from phone', 'the device note precedes the text');
+  assert.equal(h.persisted.find(message => message.clientId === 'remote-note-1').content, 'from phone');
+
+  await h.queue.enqueue('local-note', { clientId: 'local-note-1', text: 'from here' });
+  await waitFor(() => h.maker.getSession('local-note')?.sent.length === 1);
+  assert.equal(h.maker.getSession('local-note').sent[0], 'from here');
+});
+
 test('a second message waits for the running turn instead of interleaving', async () => {
   const h = createHarness();
   await enqueue(h, 'task-2', { clientId: 'a', text: 'first' });
