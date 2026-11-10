@@ -48,12 +48,12 @@ describe('buildAgentIslandQuota', () => {
       cell({ id: 'codex', value: '9', valueUnit: '%', level: 'error', fill: 0.09, stale: true }),
       cell({ id: 'payg', kind: 'payg', fill: null, valueLabel: 'Pay per use' }),
       cell({ id: 'unread', valueLabel: '—', fill: null }),
-      cell({ id: 'claude', value: null, valueLabel: 'credits', fill: 0, reserve: true }),
+      cell({ id: 'claude', value: '61.8K', valueUnit: 'credits', valueLabel: null, fill: 0, reserve: true }),
       cell({ id: 'cindy', kind: 'balance', logoSvg: MENUBAR_CINDY_LOGO, value: '$12.30', fill: 0.6 }),
     ]));
     expect(items.map(({ id, text, level, stale }) => ({ id, text, level, stale }))).toEqual([
       { id: 'codex', text: '9%', level: 'error', stale: true },
-      { id: 'claude', text: 'credits', level: 'normal', stale: false },
+      { id: 'claude', text: '61.8K credits', level: 'normal', stale: false },
       { id: 'cindy', text: '$12.30', level: 'normal', stale: false },
     ]);
     expect(items[2]!.logoSvg.startsWith('<svg')).toBe(true);
@@ -79,8 +79,8 @@ describe('buildAgentIslandQuota', () => {
 
   it('订阅额度全部用完、只剩额外 credits 时,菜单栏的 0% 仍落在一个套餐上并带折叠读数', () => {
     const items = buildAgentIslandQuota(view([
-      cell({ id: 'claude', value: null, valueLabel: 'credits', fill: 0, reserve: true }),
-      cell({ id: 'codex', value: null, valueLabel: 'credits', fill: 0, reserve: true }),
+      cell({ id: 'claude', value: '61.8K', valueUnit: 'credits', valueLabel: null, fill: 0, reserve: true }),
+      cell({ id: 'codex', value: '61.8K', valueUnit: 'credits', valueLabel: null, fill: 0, reserve: true }),
     ], undefined, '0%'));
     expect(items.map(({ id, lowest, compactText }) => ({ id, lowest, compactText }))).toEqual([
       { id: 'claude', lowest: true, compactText: '0%' },
