@@ -37,18 +37,26 @@ export function currentClassicalStyleForLocale(locale: string | null | undefined
   return currentClassicalStyle(classicalReplyStyleContextOf(locale));
 }
 
-export async function readClassicalStyle(): Promise<StoredStyles> {
-  // 单个 key 读失败只降级那一档,不拖垮另一档的已存值(Promise.all 需要永不 reject 的入参)。
-  // 读回迟于用户操作 resolve 时,被改过的语境不得用旧值洗掉新选择。
-  const read = (key: string) => AsyncStorage.getItem(key).catch(() => null);
-  const [classical, modern] = await Promise.all([read(STORAGE_KEYS.classical), read(STORAGE_KEYS.modern)]);
-  if (!dirtyContexts.has('classical')) {
-    current.classical = isClassicalReplyStyle(classical) ? classical : null;
-  }
-  if (!dirtyContexts.has('modern')) {
-    current.modern = isClassicalReplyStyle(modern) ? modern : null;
-  }
-  return { ...current };
+// 水合只发起一次:模块加载期与 Provider 挂载各调一次 readClassicalStyle,共享同一
+// promise,避免并发读回中后失败的一次把先成功恢复的值洗成 null(Codex P2)。
+// 存储只会经 saveClassicalStyle 变化,已解析的缓存结果不会失真。
+let hydration: Promise<StoredStyles> | null = null;
+
+export function readClassicalStyle(): Promise<StoredStyles> {
+  hydration ??= (async () => {
+    // 单个 key 读失败只降级那一档,不拖垮另一档的已存值(Promise.all 需要永不 reject 的入参)。
+    // 读回迟于用户操作 resolve 时,被改过的语境不得用旧值洗掉新选择。
+    const read = (key: string) => AsyncStorage.getItem(key).catch(() => null);
+    const [classical, modern] = await Promise.all([read(STORAGE_KEYS.classical), read(STORAGE_KEYS.modern)]);
+    if (!dirtyContexts.has('classical')) {
+      current.classical = isClassicalReplyStyle(classical) ? classical : null;
+    }
+    if (!dirtyContexts.has('modern')) {
+      current.modern = isClassicalReplyStyle(modern) ? modern : null;
+    }
+    return { ...current };
+  })();
+  return hydration;
 }
 
 export async function saveClassicalStyle(
