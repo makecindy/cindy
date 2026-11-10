@@ -129,8 +129,9 @@ export function createInputQueue(deps) {
       isStoppingRuntime: () => closing,
       persistMessage: deps.persistMessage ?? (async () => {}),
       onPersistenceError: persistenceFailed,
-      onTerminal: (id, type, error, meta) => {
-        coordinator.onTurnEvent(id, type, error, undefined, meta);
+      onTerminal: (id, type, error, meta, direct) => {
+        if (direct) coordinator.wakeSession(id, 'host-turn-settled');
+        else coordinator.onTurnEvent(id, type, error, undefined, meta);
         deps.onSessionSettled?.(id);
       },
     });
@@ -275,6 +276,8 @@ export function createInputQueue(deps) {
       return project(coordinator.getProjection(id));
     }
     const api = {
+      wireHostSession: session => { assertCurrent(); executor.wireHostSession(session); },
+      beginHostTurn: id => command(id, () => executor.beginHostTurn(id)),
       taskActionInput: id => readTaskActionInput(id, sessionId => deps.getMaker()?.getSession(sessionId), coordinator),
       schedulerQueue: () => ({ ...scheduleBridge,
         ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),

@@ -11,6 +11,7 @@ import { saveAgentInputQueueSnapshot, loadAgentInputQueueSnapshot, getPersistedI
 import { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 
 import { createInputQueue } from './input-queue.mjs';
+import { createTurnExecutor } from './turn-executor.mjs';
 import { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.ts';
 import { AcceptedCallbackDispatchCancelled } from '../../../desktop/src/main/maker-ipc/acceptedCallbackRunner.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
@@ -124,6 +125,54 @@ test('task action facts follow accepted input and the live permission generation
     assert.equal(active.permission.isCurrent(), false);
     assert.equal(h.queue.taskActionInput('s').permission.permissionMode, 'plan');
   } finally { await h.queue.dispose(); }
+});
+
+// Integration adapter contract: scheduler/hook runners send through the real
+// Session directly. Their replies must use the existing persistence pipeline,
+// and queued client input must wait until that Host turn has durably settled.
+test('a direct Host turn persists its reply before queued client input starts', async () => {
+  let starts = 0;
+  const h = createHarness({ markStarted: async () => { starts++; } });
+  try {
+    const session = await h.maker.createSession({ id: 'scheduled', agentKind: 'claude-code' });
+    session.agentKind = 'claude-code';
+    h.queue.wireHostSession(session);
+    h.queue.wireHostSession(session);
+    await h.queue.beginHostTurn('scheduled');
+    await h.queue.beginHostTurn('scheduled');
+    assert.equal(starts, 1, 'registering the same accepted turn is idempotent');
+    await h.queue.enqueue('scheduled', { clientId: 'client-next', text: 'next input' });
+    assert.equal(session.sent.length, 0);
+    session.emit({ type: 'text', data: { text: 'Scheduled reply', isFinal: true }, agentMeta: { uuid: 'scheduled-reply' } });
+    session.emit({ type: 'done', data: {} });
+    await waitFor(() => session.sent.length === 1);
+    assert.equal(h.persisted.filter(row => row.role === 'assistant').length, 1);
+    assert.equal(h.persisted.find(row => row.role === 'assistant').content, 'Scheduled reply');
+    assert.equal(session.sent[0], 'next input');
+    assert.equal(h.persisted.find(row => row.clientId === 'client-next').role, 'user');
+  } finally { await h.queue.dispose(); }
+});
+
+// Unit: an urgent Stop must wait for the accepted turn's start marker before
+// writing its end marker, so a late start cannot resurrect an ended task.
+test('stopping a direct Host turn drains its pending start marker', async () => {
+  const maker = createFakeMaker();
+  const session = await maker.createSession({ id: 'scheduled', agentKind: 'claude-code' });
+  const order = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  session.abort = async () => { order.push('aborted'); };
+  const executor = createTurnExecutor({ getMaker: () => maker, assertCurrent() {}, isCurrent: () => true,
+    isStoppingRuntime: () => false, hub: { publish() {} }, persistMessage: async () => {},
+    onPersistenceError: error => { throw error; }, onTerminal() {},
+    markStarted: async () => { await gate; order.push('started'); },
+    markEnded: async () => { order.push('ended'); } });
+  const started = executor.beginHostTurn('scheduled');
+  const stopped = executor.abort('scheduled');
+  release();
+  await Promise.all([started, stopped]);
+  assert.deepEqual(order, ['started', 'aborted', 'ended']);
+  await executor.close('scheduled');
 });
 
 // Host lifecycle / integration: desktop runner tests inject the queue bridge;
