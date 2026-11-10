@@ -43,12 +43,20 @@ function statMtime(target: string): number {
   return statSync(target).mtimeMs;
 }
 
-/** 实现内部以 realpath(scanRoot) 作 Map 键(macOS 的 os.tmpdir() 是 /var/folders 软链)：断言必须用规范化后的路径查键，否则键恒缺失（MagicLizi P1）。 */
+/** 实现内部以 realpath(scanRoot) 作键前缀、未创建尾段词法拼接（macOS 的 os.tmpdir() 是 /var/folders 软链）：断言必须同语义查键，否则键恒缺失（MagicLizi P1 两轮）。canon 向上走到最深存在祖先做 realpath，再把不存在的尾段按原序拼回 —— 对已存在路径等价于 realpathSync。 */
 function canon(target: string): string {
-  try {
-    return realpathSync(target);
-  } catch {
-    return target;
+  const abs = path.isAbsolute(target) ? target : path.resolve(target);
+  const missingTail: string[] = [];
+  let cur = abs;
+  for (;;) {
+    try {
+      return path.join(realpathSync(cur), ...missingTail);
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return abs;
+      missingTail.unshift(path.basename(cur));
+      cur = parent;
+    }
   }
 }
 
