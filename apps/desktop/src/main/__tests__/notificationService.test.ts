@@ -200,10 +200,14 @@ async function freshService() {
   return service;
 }
 
-async function invokeHandler(payload: unknown): Promise<void> {
+function windowEvent(senderId: number): { sender: { id: number } } {
+  return { sender: { id: senderId } };
+}
+
+async function invokeHandler(payload: unknown, event: unknown = {}): Promise<void> {
   const handler = registeredHandlers.get('notification:show-session-event');
   if (!handler) throw new Error('handler not registered');
-  await handler({} as unknown, payload);
+  await handler(event, payload);
   await flushAsync();
 }
 
@@ -1298,10 +1302,11 @@ describe('notificationService — channels 分发', () => {
 
   // Two BrowserWindows each sample Date.now() for one running frame, so the same
   // error arrives as turn:1000:error and turn:1002:error. Exact-id dedupe toasts
-  // both. Collapse that pair: same task, same content tail, arrivals inside 1s,
-  // one toast. The second preview is released last so a ledger that only keeps
-  // the latest id cannot hide the extra toast. A different request, a different
-  // error tail, another task, and the same tail a full second later each toast.
+  // both. Collapse that pair only because the senders differ: same task, same
+  // content tail, arrivals inside 1s, one toast. The second preview is released
+  // last so a ledger that only keeps the latest id cannot hide the extra toast.
+  // A different request, a different error tail, another task, and the same tail
+  // a full second later each toast.
   it('toasts once when two renderer clocks 2ms apart report the same alert', async () => {
     const { initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm(null)));
@@ -1315,12 +1320,12 @@ describe('notificationService — channels 分发', () => {
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
     try {
       const started = [
-        handler({}, {
+        handler(windowEvent(1), {
           sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
         }),
       ];
       now += 2;
-      started.push(handler({}, {
+      started.push(handler(windowEvent(2), {
         sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
       }));
       await vi.waitFor(() => expect(pending).toHaveLength(2));
@@ -1369,6 +1374,99 @@ describe('notificationService — channels 分发', () => {
         sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
       });
       expect(notificationCtor).toHaveBeenCalledTimes(5);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Same window, two failures, 200ms apart. Stripping the turn clock leaves `error`
+  // for both. A time window alone would collapse them; the sender id must not.
+  it('toasts twice when the same window reports two failures 200ms apart', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+      }, windowEvent(1));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Two windows, clocks 2ms apart, arrivals 200ms apart. Different sender ids are
+  // what makes this one event; the shared `error` tail is not enough on its own.
+  it('toasts once when two windows 200ms apart report the same failure', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      }, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // The suppressed window's id has to stay in the ledger. Replaying that same
+  // payload 2s later misses both the exact id and the 1s content window if it
+  // was never recorded, and would toast again.
+  it('does not toast again when a collapsed window replays its payload after 2s', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const collapsed = {
+      sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+    };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler(collapsed, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 2000;
+      await invokeHandler(collapsed, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Same window, two needs-reply request keys. Different content must not merge
+  // even inside the 1s window.
+  it('toasts twice when the same window reports two different requests', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:1000:ask:1', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:1200:ask:2', channels,
+      }, windowEvent(1));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
     } finally {
       nowSpy.mockRestore();
     }

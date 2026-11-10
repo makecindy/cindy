@@ -182,12 +182,20 @@ interface NotifiedAlert {
    * 同一帧采出相差几毫秒的轮次时钟，标识因不相同；请求或错误内容不同时这段尾也不同。
    */
   content: string;
+  /** 告警种类。账本 key 只有任务和通道，错误和需要回复共用一本，合并时还得再比这一位。 */
+  kind: 'error' | 'needs-reply';
+  /**
+   * 投进来的窗口。Electron 里每个 BrowserWindow 的 webContents id 不同，同一窗口恒定。
+   * 拿不到时不参与跨窗合并：宁可少合并，也不把同一窗口的两次失败并成一次。
+   */
+  senderId: number | undefined;
 }
 const NOTIFIED_ALERTS_PER_KEY = 8;
 /**
- * 同一事件被主窗和副窗各自投一次时，两次进入主进程的时间差。两个 renderer 收到同一帧广播
- * 后各自采样 `Date.now()`，差距是几毫秒级；1 秒留给副窗刚展开侧栏、主进程调度和 preview 读取的差额。
- * 真正的下一轮是用户再发一次或模型再跑一次，不会落在这 1 秒里。窗口用到达主进程的时刻比，不用 renderer 的接收时刻。
+ * 同一条事件的两扇窗进入主进程可以隔开的最长时间。这不是「跨窗」的判据：
+ * 判据是 webContents id，每个窗口不同、同一窗口恒定。错误标识去掉时钟后都是 `error`，
+ * 只靠内容尾加这个窗口，同一窗口里一秒内的两次失败会被合成一次。
+ * 1 秒只留给副窗展开侧栏、主进程调度和 preview 读取的差额；来自同一窗口的下一次失败即使落在这 1 秒里也各弹一次。
  */
 const CROSS_WINDOW_ALERT_WINDOW_MS = 1_000;
 const notifiedAlerts = new Map<string, NotifiedAlert[]>();
@@ -215,27 +223,50 @@ function alertOrder(alertEventId: string, deliveryOrder: number): NotifiedAlert[
   return { source: 'delivery', value: deliveryOrder };
 }
 
-/**
- * 同一告警标识只弹一次。没有标识的调用不去重，照常通知：宁可多弹一次，
- * 也不能把新的提问或失败吞掉。
- */
 /** 去掉 renderer 各自采样的 `turn:<毫秒>:`。剩下的才是请求或错误内容；没有这段前缀就整串都算内容。 */
 function alertContentKey(alertEventId: string): string {
   return alertEventId.replace(/^turn:\d{1,16}:/, '');
 }
 
-function wasAlertNotified(key: string, alertEventId: string | undefined, arrivedAt: number): boolean {
-  if (!alertEventId) return false;
+/** 投递来自哪扇窗。id 在窗口存活期间不变；测试或残缺事件拿不到时返回 undefined，不当成另一扇窗。 */
+function readAlertSenderId(event: unknown): number | undefined {
+  if (!event || typeof event !== 'object') return undefined;
+  const id = (event as { sender?: { id?: unknown } }).sender?.id;
+  return typeof id === 'number' && Number.isSafeInteger(id) ? id : undefined;
+}
+
+type NotifiedAlertMatch =
+  | { matched: 'exact' }
+  | { matched: 'cross-window'; order: NotifiedAlert['order'] };
+
+/**
+ * 同一告警标识只弹一次。没有标识的调用不去重，照常通知：宁可多弹一次，
+ * 也不能把新的提问或失败吞掉。
+ *
+ * 跨窗是另一回事，不靠时间窗判断：每个窗口的 webContents id 不同，同一窗口恒定。
+ * 只有 id 不同、种类相同、内容尾相同、到达相差不到 1 秒，才当成同一条事件的两扇窗。
+ * 同一窗口发来的两条永不合并，所以一秒内的两次失败各弹一次。
+ * 命中跨窗时把已经弹过那条的顺序带回去，调用方记新标识时沿用它，不把副本排成最近一条。
+ */
+function matchNotifiedAlert(
+  key: string,
+  alertEventId: string | undefined,
+  arrivedAt: number,
+  senderId: number | undefined,
+  kind: 'error' | 'needs-reply',
+): NotifiedAlertMatch | undefined {
+  if (!alertEventId) return undefined;
   const current = notifiedAlerts.get(key);
-  if (!current) return false;
-  if (current.some(alert => alert.id === alertEventId)) return true;
-  // 合并键是 (sessionId, kind, 内容尾)，到达时刻只用来卡 1 秒窗口。
-  // sessionId 与 kind 已经在 key 里；内容尾不含 turn 时钟，所以两个窗口相差几毫秒的同一事件会对上，
-  // 换了请求或换了错误内容就对不上。超过 1 秒的下一次是新事件，即使内容尾相同也再弹。
+  if (!current) return undefined;
+  if (current.some(alert => alert.id === alertEventId)) return { matched: 'exact' };
   const content = alertContentKey(alertEventId);
-  return current.some(alert =>
-    alert.content === content && Math.abs(arrivedAt - alert.arrivedAt) < CROSS_WINDOW_ALERT_WINDOW_MS,
+  const cross = current.find(alert =>
+    alert.kind === kind
+    && alert.content === content
+    && alert.senderId !== senderId
+    && Math.abs(arrivedAt - alert.arrivedAt) < CROSS_WINDOW_ALERT_WINDOW_MS,
   );
+  return cross ? { matched: 'cross-window', order: cross.order } : undefined;
 }
 
 /**
@@ -249,10 +280,19 @@ function rememberAlert(
   alertEventId: string,
   order: NotifiedAlert['order'],
   arrivedAt: number,
+  senderId: number | undefined,
+  kind: 'error' | 'needs-reply',
 ): void {
   const current = notifiedAlerts.get(key) ?? [];
   if (current.some(alert => alert.id === alertEventId)) return;
-  const entry = { id: alertEventId, order, arrivedAt, content: alertContentKey(alertEventId) };
+  const entry = {
+    id: alertEventId,
+    order,
+    arrivedAt,
+    content: alertContentKey(alertEventId),
+    senderId,
+    kind,
+  };
   const newerAt = current.findIndex(alert => alert.order.source === order.source && alert.order.value > order.value);
   const next = newerAt === -1
     ? [...current, entry]
@@ -382,9 +422,10 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // 序号必须在任何 await 之前定下来。两条告警会并发去读 preview，后读完的
       // 不一定是后产生的；拿不到标识里的轮次时间时，就靠这个入口序号分先后。
       const alertDeliveryOrder = alertEventId === undefined ? undefined : nextAlertDeliveryOrder++;
-      // 跨窗合并看的是进入主进程的时刻，不是 renderer 采到轮次时钟的时刻。
-      // 和序号一样，在任何 await 之前定下来，两条并发 preview 不会互相改写这个时刻。
+      // 到达时刻和窗口 id 都在任何 await 之前定下来。两条并发 preview 不会互相改写它们。
+      // 跨窗看的是窗口 id，不是 renderer 采到轮次时钟的时刻；1 秒只用来限制两扇窗可以隔多远。
       const alertArrivedAt = alertEventId === undefined ? undefined : Date.now();
+      const alertSenderId = alertEventId === undefined ? undefined : readAlertSenderId(event);
       assertValidSessionEventPayload(payload);
       const { sessionId, title, kind, channels } = payload;
       const markAttention = payload.markAttention !== false;
@@ -503,9 +544,12 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         if (markAttention && isSessionNotificationsMutedSync(sessionId)) return;
         const fallbackBody = teammate && kind === 'done' ? getTeammateNotificationFallback() : undefined;
         const mobileTeammateBotId = preview?.teammateBotId ?? teammateBotId;
+        const priorAlert = kind !== 'done' && usableAlertEventId !== undefined && alertArrivedAt !== undefined
+          ? matchNotifiedAlert(desktopKey, usableAlertEventId, alertArrivedAt, alertSenderId, kind)
+          : undefined;
         if (wantDesktop && (kind === 'done'
           ? !wasReplyNotified(desktopKey, eventId)
-          : !wasAlertNotified(desktopKey, usableAlertEventId, alertArrivedAt ?? 0))) {
+          : priorAlert === undefined)) {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
               sessionId, title: notificationTitle, kind, teammate, markAttention, avatarJpeg,
@@ -514,14 +558,25 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             });
             if (kind === 'done' && accepted) {
               notifiedReplies.set(desktopKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
-            } else if (accepted && usableAlertEventId && usableAlertOrder && alertArrivedAt !== undefined) {
+            } else if (accepted && kind !== 'done' && usableAlertEventId && usableAlertOrder && alertArrivedAt !== undefined) {
               // 只记下有标识的告警。无标识的不留记录，下一次同样无标识的调用仍要通知。
               // 更早产生、更晚读完的告警不能把这里改回旧标识。
-              rememberAlert(desktopKey, usableAlertEventId, usableAlertOrder, alertArrivedAt);
+              rememberAlert(desktopKey, usableAlertEventId, usableAlertOrder, alertArrivedAt, alertSenderId, kind);
             }
           } catch (err) {
             log.warn('[notification] desktop reply notification failed (non-fatal)', err);
           }
+        } else if (
+          wantDesktop
+          && kind !== 'done'
+          && priorAlert?.matched === 'cross-window'
+          && usableAlertEventId
+          && alertArrivedAt !== undefined
+        ) {
+          // 另一扇窗已经弹过同一条。这条不弹，但标识要进账本，否则 1 秒后再投一次
+          // 对不上精确标识，窗口也过期了，会再弹。顺序沿用已弹那条，不用本条自己的
+          // 轮次时钟，免得这条晚到的副本变成「最近一条」、盖过真正更新的告警。
+          rememberAlert(desktopKey, usableAlertEventId, priorAlert.order, alertArrivedAt, alertSenderId, kind);
         }
         if (channels?.mobile === true && (kind !== 'done' || !wasReplyNotified(mobileKey, eventId))) {
           try {
