@@ -382,6 +382,7 @@ import {
   codexSmartSubagentRoutingSignature,
   prepareCodexSmartSubagentConfig,
   selectCodexSmartSubagentCandidates,
+  withParentReasoningEffort,
 } from './codex-smart-subagent-routing.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import {
@@ -1009,7 +1010,23 @@ function broadcastVisionBridgeEvent(
   }
 }
 
+/**
+ * Client mode: another process (cindy-host) owns the runtime. Every maker access
+ * throws instead of assembling a second one — the callers already treat a
+ * failed maker probe as "no runtime".
+ */
+let makerClientMode = false;
+export function setMakerClientMode(active: boolean): void {
+  makerClientMode = active;
+}
+export function isMakerClientMode(): boolean {
+  return makerClientMode;
+}
+
 export function getMaker(): Maker {
+  if (makerClientMode) {
+    throw new Error('cindy-host owns the runtime; this process is a client');
+  }
   if (!_maker) {
     makerStartupGate.assertComplete();
     // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap
@@ -2325,10 +2342,25 @@ export function getMaker(): Maker {
         text,
         subagentRoute,
         smartSubagentRoutes,
+        reasoningEffort,
       }) =>
         registerCodexProxyComposed(sessionId, threadId, text, {
           ...(subagentRoute ? { subagentRoute } : {}),
-          ...(smartSubagentRoutes ? { smartSubagentRoutes } : {}),
+          // 共享的 app-server 目录不带档位。只给这条线程的智能路由盖上父任务当前档位，
+          // 避免恢复后子代理掉回目录默认 low。优先用登记时带上的活档位：冷恢复
+          // 这一刻 session store 还没从数据库 hydrate。
+          // 空字符串是「不用推理」的显式哨兵，不能再去 store 里找一个默认档。
+          // 字段缺席是「这一轮没有已选档位」（agent 不把目录默认 high 登记过来），
+          // 同样不盖章：store 在任务从没存过档位时也会被填成目录默认，读它
+          // 会把子代理自己选的 low 盖掉。
+          ...(smartSubagentRoutes
+            ? {
+                smartSubagentRoutes: withParentReasoningEffort(
+                  smartSubagentRoutes,
+                  reasoningEffort !== undefined ? reasoningEffort : null,
+                ),
+              }
+            : {}),
         }),
       getCodexSubagentIdentity: ({ childThreadId }) =>
         getObservedCodexSubagentIdentity(childThreadId),
@@ -2535,11 +2567,9 @@ export function getMaker(): Maker {
       // 轮 27 HIGH-1:Claude 凭证失效同样失效 PI bridge。
       invalidatePiEnvironment();
     });
-    // 预热 codex-home 骨架 + 与本机 codex CLI reconcile 凭证。原本挂在
-    // DesktopCodexAuthAdapter 构造函数里(import 即写盘),会让所有传递性 import 到
-    // auth-adapters 的测试在真实文件系统留痕(2026-07-03 曾把含真实凭证硬链的
-    // codex-home 生成进仓库),现改为装配 maker 时显式预热,import 保持零副作用。
-    desktopCodexAuthAdapter.warmUp();
+    // 只协调已有的本机 Codex 登录；运行目录内的资源在登录或实际调用时准备。
+    // 不在构造/import 阶段写盘，也不因装配全部 agent 就初始化未使用的 harness。
+    void desktopCodexAuthAdapter.warmUp();
 
     // pi(实验性,个人分支):二进制在位才注册;缺失时 agents map 不含 pi,
     // 既有环境零影响。模型清单走目录 pi 投影(xd 网关模型经 active-catalog 按
@@ -2555,7 +2585,7 @@ export function getMaker(): Maker {
     _mcpProviders.pi = piMcpProviders;
     // 用户自定义 MCP:三个 agent 都必须注册其实际持有的数组引用，再统一做初始 refresh。
     // localDb onReady 可能在 Maker 构造前就已触发（此时 registry 无数组，refresh 空跑）；
-    // 在此补一次 refresh，若 DB 尚未就绪则 refreshCustomMcpProviders 内部 catch 后静默跳过。
+    // 在此补一次 refresh；DB 尚未就绪时显式延后，由 onReady 的账号路由屏障补齐。
     // 此后每次 CRUD（mcpHandlers.afterChange）也会原地刷新三份数组；运行中会话保持启动快照。
     registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders, piMcpProviders);
     _initialCustomMcpRefresh = refreshCustomMcpProviders().then(() => { refreshInstalledPluginApps(); });

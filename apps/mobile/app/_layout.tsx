@@ -15,6 +15,7 @@ import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import { MobileOutboxBridge } from '@/session/MobileOutboxBridge';
 import { RemoteHistoryPrefetchBridge } from '@/session/RemoteHistoryPrefetchBridge';
 import { UsageWidgetBridge } from '@/widgets/UsageWidgetBridge';
+import { AgentActivityBridge } from '@/widgets/AgentActivityBridge';
 import { HandheldModeBridge } from '@/handheld/HandheldModeBridge';
 import {
   DarkTheme as NavigationDarkTheme,
@@ -421,6 +422,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
         <MobileOutboxBridge />
         <RemoteHistoryPrefetchBridge />
         <UsageWidgetBridge />
+        <AgentActivityBridge />
         {/* 掌机模式:手柄语音键 / 焦点导航 / 副屏(仅含 cindy-handheld 的 Android 原生包,不渲染 UI) */}
         <HandheldModeBridge />
         <NavigationGate />

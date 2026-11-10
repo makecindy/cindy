@@ -153,6 +153,7 @@ import {
   sourcesForModel,
   unifiedModelEntries,
   visibleModelUnion,
+  withEffectiveModelContextWindows,
   type ProviderView,
 } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
@@ -1437,7 +1438,7 @@ function ModelSelectorContentView({
     () =>
       remoteAgentBrowsing
         ? remoteAgentProviders(remoteProviders.providers)
-        : remoteProviders.providers,
+        : remoteProviders.providers.map(withEffectiveModelContextWindows),
     [remoteAgentBrowsing, remoteProviders.providers],
   );
   const sshCodexProviders = sshCodex?.providers;

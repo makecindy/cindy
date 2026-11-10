@@ -1,0 +1,30 @@
+[Unit]
+Description=Cindy host — long-running Agent runtime (cindy-host)
+Documentation=https://github.com/iamcheyan/cindy/blob/feat/cindy-host/docs/host/systemd.md
+# The host owns a single runtime and storage writer per profile. Starting it
+# without a logged-in profile is harmless: it serves /health and waits.
+After=network-online.target
+Wants=network-online.target
+# Never start a second host for the same profile. Runtime ownership is also
+# enforced in-process by a SQLite exclusive lock; this is a second, earlier gate.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# %h expands to the invoking user's home. Adjust the checkout path for your install.
+WorkingDirectory=%h/development/cindy
+ExecStart=/usr/bin/env pnpm start-host
+Restart=always
+RestartSec=3
+# Graceful shutdown: the host releases the runtime lease and closes storage on
+# SIGTERM, which is what systemd sends first.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# Environment the host reads. Set your region and profile explicitly so the
+# service never guesses a different data root than your logged-in profile.
+Environment=CINDY_HOST_REGION=global
+# Environment=CINDY_HOST_DATA_DIR=%h/.config/CindyGlobal
+# Environment=CINDY_HOST_OWNER=<owner-id-from-the-login-stage>
+
+[Install]
+WantedBy=default.target

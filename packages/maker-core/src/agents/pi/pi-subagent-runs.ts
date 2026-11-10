@@ -1603,11 +1603,11 @@ function clampTranscriptContent(value: string): string {
   return `${value.slice(0, MAX_TRANSCRIPT_ENTRY_CHARS - 1)}…`;
 }
 
-function transcriptText(message: unknown): string {
+function transcriptText(message: unknown, inheritedModel?: string): string {
   if (!message || typeof message !== 'object' || Array.isArray(message)) return '';
   const record = message as { role?: unknown; model?: unknown; content?: unknown };
   const content = record.role === 'assistant'
-    ? hy4ContentBlocks(record.model, record.content)
+    ? hy4ContentBlocks(record.model || inheritedModel, record.content)
     : record.content;
   if (!Array.isArray(content)) return '';
   return content
@@ -1702,6 +1702,7 @@ function transcriptEntry(
   runId: string,
   offset: number,
   rawLine: string,
+  models: ReadonlyMap<string, string>,
 ): SubagentTranscriptEntry | null {
   let parsed: unknown;
   try {
@@ -1766,7 +1767,7 @@ function transcriptEntry(
         ? event.message as Record<string, unknown>
         : {};
       role = message.role === 'assistant' ? 'subagent' : message.role === 'user' ? 'parent' : 'system';
-      content = transcriptText(message);
+      content = transcriptText(message, childId ? models.get(childId) : undefined);
     } else if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
       role = 'tool';
       toolName = typeof event.toolName === 'string' && event.toolName
@@ -1972,6 +1973,17 @@ export async function readPiSubagentTranscriptPage(
       continue;
     }
     if (start > opened.size) throw new Error('PI Subagent transcript cursor exceeds file size');
+    // Use this generation's launch model, not another child's or the latest
+    // resumed generation's model. Response metadata still takes precedence.
+    const models = new Map<string, string>();
+    const config = await readSmallJson(path.join(root, generation, 'config.json')).catch(() => undefined);
+    if (config && typeof config === 'object' && 'tasks' in config && Array.isArray(config.tasks)) {
+      for (const task of config.tasks) {
+        if (task && typeof task === 'object' && typeof task.childId === 'string' && typeof task.model === 'string') {
+          models.set(task.childId, task.model);
+        }
+      }
+    }
     let offset = start;
     const input = createReadStream(opened.file, { encoding: 'utf8', start });
     const lines = createInterface({ input, crlfDelay: Infinity });
@@ -1979,7 +1991,7 @@ export async function readPiSubagentTranscriptPage(
       for await (const line of lines) {
         const lineOffset = offset;
         offset += Buffer.byteLength(line, 'utf8') + 1;
-        const entry = transcriptEntry(generation, lineOffset, line);
+        const entry = transcriptEntry(generation, lineOffset, line, models);
         if (entry) entries.push(entry);
         if (entries.length >= limit) {
           lines.close();

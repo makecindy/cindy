@@ -16,6 +16,7 @@ import {
   creatorMicro2KeymapBackupFileName,
   creatorMicro2KeymapSessionFileName,
   isWorkLouderHidContention,
+  isWorkLouderHidPermissionError,
   isWorkLouderSdkTransportDeath,
   shouldRequestWorkLouderLivenessProbe,
   isWorkLouderCodexLightingFrameOff,
@@ -169,7 +170,7 @@ if (parentPort) {
         creatorKeymap = request.keymap.map((row) => [...row]);
         creatorKeymapGeneration += 1;
         creatorKeymapBound = false;
-        if (api) void bindCreatorAgentKeysWhenIdle(api);
+        if (api) requestListen();
       }
     } else if (request?.kind === 'listen') {
       hidListeningRequested = true;
@@ -178,10 +179,8 @@ if (parentPort) {
       latestFrame = request.frame;
       requestApply();
     } else if (request?.kind === 'probe') {
-      // A probe is an explicit recovery request (for example after the user
-      // grants Input Monitoring or unlocks macOS), so it is allowed to clear
-      // the permission circuit breaker once.
-      permissionBlocked = false;
+      // This is also used by background polling. Main owns explicit permission
+      // recovery and creates a fresh host through retryPermission/the toggle.
       requestProbe();
     } else if (request?.kind === 'discover') {
       requestDiscover();
@@ -209,6 +208,7 @@ const sdkLogger: WorkLouderLogger = {
       transportFaulted = true;
     }
     logSdkMessage('error', 'Work Louder SDK reported an error', args);
+    if (reportPermissionError(detail) || stopping) return;
     if (
       api &&
       !stopping &&
@@ -289,7 +289,7 @@ function requestProbe(): void {
 }
 
 function requestDiscover(): void {
-  if (stopping) return;
+  if (stopping || permissionBlocked) return;
   discoverPending = true;
   kickQueue();
 }
@@ -307,7 +307,11 @@ function kickQueue(): void {
 async function drainApplyQueue(): Promise<void> {
   applying = true;
   try {
-    while ((applyPending || listenPending || probePending || discoverPending) && !stopping) {
+    while (
+      (applyPending || listenPending || probePending || discoverPending) &&
+      !stopping &&
+      !permissionBlocked
+    ) {
       // Drop a stale handle before lighting or HID reuse it.
       if (discoverPending) {
         discoverPending = false;
@@ -339,6 +343,7 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
   }
   try {
     const deviceApi = await ensureConnected();
+    if (stopping || permissionBlocked) return;
     if (!deviceApi) {
       post({ kind: 'state', status: 'not-detected' });
       scheduleRetry();
@@ -350,7 +355,9 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
         keys: frame.keys,
       }),
     );
+    if (stopping || permissionBlocked) return;
     const threadsOk = lightingRpcSucceeded(await deviceApi.sendThreadsLighting(frame.threads));
+    if (stopping || permissionBlocked) return;
     if (transportFaulted) throw new Error('lighting transport faulted');
     if (!lightingOk || !threadsOk) {
       hostLog(
@@ -365,6 +372,7 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
     post({ kind: 'state', status: 'connected' });
   } catch (error) {
     const message = safeErrorMessage(error);
+    if (stopping || reportPermissionError(message)) return;
     if (message !== lastLoggedError) {
       lastLoggedError = message;
       hostLog('error', `lighting apply failed: ${message}`);
@@ -393,7 +401,7 @@ async function applyFrame(frame: WorkLouderCodexLightingFrame): Promise<void> {
  * showing connection state, so an idle app is not waking the device on a timer.
  */
 async function probeConnection(): Promise<void> {
-  if (stopping) return;
+  if (stopping || permissionBlocked) return;
   if (api) {
     if (transportFaulted) {
       hostLog('debug', 'probe dropped a stale Work Louder transport');
@@ -404,6 +412,7 @@ async function probeConnection(): Promise<void> {
         // failures — swallowing here would make every probe "succeed" and defeat
         // the whole point. Same round trip also keeps battery and firmware fresh.
         const status = readWorkLouderDeviceStatusOrThrow(await api.getDeviceStatus());
+        if (stopping || permissionBlocked) return;
         if (!transportFaulted) {
           const device = connectedDevice;
           if (device) postDeviceState(device.deviceType, device.isUsb, status);
@@ -411,6 +420,7 @@ async function probeConnection(): Promise<void> {
           return;
         }
       } catch (error) {
+        if (stopping || reportPermissionError(safeErrorMessage(error))) return;
         hostLog('debug', `probe status failed: ${safeErrorMessage(error)}`);
         if (isOptionalDeviceStatusError(error)) {
           post({ kind: 'state', status: 'connected' });
@@ -436,6 +446,7 @@ async function probeConnection(): Promise<void> {
 
   try {
     const deviceApi = await ensureConnected();
+    if (stopping || permissionBlocked) return;
     if (!deviceApi) {
       post({ kind: 'state', status: 'not-detected' });
       scheduleRetry();
@@ -447,11 +458,13 @@ async function probeConnection(): Promise<void> {
     if (latestFrame && !isWorkLouderCodexLightingFrameOff(latestFrame)) requestApply();
   } catch (error) {
     const message = safeErrorMessage(error);
+    if (stopping || reportPermissionError(message)) return;
     if (isWorkLouderHidContention(message)) {
       post({ kind: 'state', status: 'error', reason: 'device-in-use' });
       scheduleCreatorKeymapRetry();
       return;
     }
+    await disconnect();
     post({ kind: 'state', status: 'not-detected' });
     scheduleRetry();
   }
@@ -501,6 +514,7 @@ function findCandidates(): Array<{
 async function listenForAgentKeys(): Promise<void> {
   try {
     const deviceApi = await ensureConnected();
+    if (stopping || permissionBlocked) return;
     if (!deviceApi) {
       post({ kind: 'state', status: 'not-detected' });
       scheduleRetry();
@@ -511,6 +525,7 @@ async function listenForAgentKeys(): Promise<void> {
     post({ kind: 'state', status: 'connected' });
   } catch (error) {
     const message = safeErrorMessage(error);
+    if (stopping || reportPermissionError(message)) return;
     if (message !== lastLoggedError) {
       lastLoggedError = message;
       hostLog('error', `HID listening failed: ${message}`);
@@ -613,7 +628,13 @@ function normalizeSdkLogSignature(message: string): string {
 function lightingRpcSucceeded(result: unknown): boolean {
   if (result === true) return true;
   if (result === false || result == null) return false;
-  if (typeof result === 'object' && 'ok' in result) return (result as { ok: unknown }).ok === true;
+  if (typeof result === 'object' && 'ok' in result) {
+    const rpc = result as WorkLouderRpcResult;
+    if (rpc.ok === false && typeof rpc.error?.message === 'string') {
+      reportPermissionError(rpc.error.message);
+    }
+    return rpc.ok === true;
+  }
   return true;
 }
 
@@ -635,7 +656,7 @@ function sleep(ms: number): Promise<void> {
   const deadline = Date.now() + ms;
   return new Promise((resolve) => {
     const tick = (): void => {
-      if (stopping || Date.now() >= deadline) {
+      if (stopping || permissionBlocked || Date.now() >= deadline) {
         resolve();
         return;
       }
@@ -739,7 +760,7 @@ async function hasKeymapSession(): Promise<boolean> {
 }
 
 async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
-  if (creatorKeymapBound || stopping) return;
+  if (creatorKeymapBound || stopping || permissionBlocked) return;
   if (!connectedDevice) return;
   if (!comm) return;
   const generation = creatorKeymapGeneration;
@@ -769,6 +790,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
     await keepFactoryKeymap('was refused by the firmware');
     return;
   }
+  if (stopping || permissionBlocked) return;
   if (!workLouderFsSucceeded(liveResult)) {
     if (isWorkLouderUnsupportedRpc(liveResult?.error?.code, liveResult?.error?.message)) {
       await keepFactoryKeymap('was refused by the firmware');
@@ -784,6 +806,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
     typeof deviceApi.getDeviceStatus === 'function'
       ? readWorkLouderDeviceStatusOrThrow(await deviceApi.getDeviceStatus())
       : {};
+  if (stopping || permissionBlocked) return;
   const profileIndex = resolveWorkLouderActiveProfileIndex(
     status.profileIndex,
     document.profiles.length,
@@ -806,6 +829,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
     return;
   }
   await backupCreatorKeymap(liveText, profileIndex, layerIndex);
+  if (stopping || permissionBlocked) return;
   const writeResult = await fsApi.writeFile(
     WORKLOUDER_DEVICE_KEYMAP_FILE,
     JSON.stringify(next.document),
@@ -815,7 +839,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
   }
   creatorKeymapWritten = true;
   await sleep(CREATOR_MICRO_2_KEYMAP_RELOAD_MS);
-  if (generation !== creatorKeymapGeneration || stopping) return;
+  if (generation !== creatorKeymapGeneration || stopping || permissionBlocked) return;
   creatorKeymapBound = true;
   clearCreatorKeymapRetry();
   hostLog('info', `Work Louder layer ${layerIndex + 1} now emits agent keys instead of keystrokes`);
@@ -823,7 +847,7 @@ async function bindCreatorAgentKeys(deviceApi: WorkLouderApi): Promise<void> {
 
 async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<void> {
   if (!connectedDevice) return;
-  while (!stopping && !creatorKeymapBound) {
+  while (!stopping && !permissionBlocked && !creatorKeymapBound) {
     if (Date.now() < creatorKeymapRetryAt) break;
     if (creatorKeymapBinding) {
       await creatorKeymapBinding;
@@ -832,6 +856,7 @@ async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<v
     const task = bindCreatorAgentKeys(deviceApi)
       .catch((error) => {
         const message = safeErrorMessage(error);
+        if (reportPermissionError(message)) throw error;
         hostLog('warn', `Work Louder keymap bind failed: ${message}`);
         if (isWorkLouderHidContention(message)) {
           hostLog('warn', 'Work Louder vendor HID is busy; another app may be using the keyboard');
@@ -845,13 +870,17 @@ async function bindCreatorAgentKeysWhenIdle(deviceApi: WorkLouderApi): Promise<v
     creatorKeymapBinding = task;
     await task;
   }
-  if (!stopping && !creatorKeymapBound && Date.now() < creatorKeymapRetryAt) {
+  if (!stopping && !permissionBlocked && !creatorKeymapBound && Date.now() < creatorKeymapRetryAt) {
     throw new Error('Work Louder vendor HID is busy; device has been closed');
   }
 }
 
 function scheduleCreatorKeymapRetry(): void {
-  if (stopping || creatorKeymapBound || creatorKeymapRetryTimer) return;
+  if (stopping || permissionBlocked || creatorKeymapBound || creatorKeymapRetryTimer) return;
+  if (!api) {
+    scheduleRetry();
+    return;
+  }
   creatorKeymapRetryAt = Date.now() + CREATOR_KEYMAP_RETRY_MS;
   creatorKeymapRetryTimer = setTimeout(() => {
     creatorKeymapRetryTimer = null;
@@ -871,7 +900,9 @@ function clearCreatorKeymapRetry(): void {
 }
 
 async function ensureConnected(): Promise<WorkLouderApi | null> {
+  if (stopping || permissionBlocked) return null;
   if (api && transportFaulted) await disconnect();
+  if (stopping || permissionBlocked) return null;
   if (api) {
     await bindCreatorAgentKeysWhenIdle(api);
     return api;
@@ -881,11 +912,30 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
   const loaded = loadSdk();
   const nextComm = new loaded.WLDeviceCommImpl(sdkLogger);
   recoverBareWorkLouderNotifies(nextComm);
-  if (!(await nextComm.connect(candidate.device))) return null;
+  // A failed connect can already own native listeners/queues. Keep local
+  // ownership until success, and also close a late connection after stop/denial.
+  let connected = false;
+  try {
+    connected = await nextComm.connect(candidate.device);
+  } catch (error) {
+    // Notify main before awaiting native cleanup, which can itself hang.
+    reportPermissionError(safeErrorMessage(error));
+    throw error;
+  } finally {
+    if (!connected || stopping || permissionBlocked) {
+      try {
+        await nextComm.disconnect();
+      } catch {
+        // Best effort; main also retires the utility process on permission denial.
+      }
+    }
+  }
+  if (!connected || stopping || permissionBlocked) return null;
   comm = nextComm;
   const nextApi = new loaded.RPCApiOAI(nextComm, sdkLogger);
   if (typeof nextApi.onHidReceived === 'function') {
     const unsubscribe = nextApi.onHidReceived((event) => {
+      if (stopping || permissionBlocked || api !== nextApi) return;
       postActivity();
       const parsed = parseWorkLouderCodexHidEvent(event);
       if (parsed) {
@@ -900,6 +950,7 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
   }
   if (typeof nextApi.onJoystickMove === 'function') {
     const unsubscribe = nextApi.onJoystickMove((event) => {
+      if (stopping || permissionBlocked || api !== nextApi) return;
       postActivity();
       const parsed = parseWorkLouderCodexJoystickEvent(event);
       if (parsed) post({ kind: 'joystick', event: parsed });
@@ -913,6 +964,7 @@ async function ensureConnected(): Promise<WorkLouderApi | null> {
     backupId: creatorKeymapBackupId(candidate.device, candidate.deviceType),
   };
   await postDeviceStatus(nextApi, candidate.deviceType, candidate.device.isUsbConnection === true);
+  if (stopping || permissionBlocked) return null;
   await bindCreatorAgentKeysWhenIdle(nextApi);
   return nextApi;
 }
@@ -966,7 +1018,7 @@ export async function postDeviceStatus(
       if (transportFaulted || !isOptionalDeviceStatusError(error)) throw error;
     }
   }
-  postDeviceState(deviceType, isUsbConnection, status);
+  if (!stopping && !permissionBlocked) postDeviceState(deviceType, isUsbConnection, status);
 }
 
 /** Publish a device snapshot, clamping whatever the SDK handed back. */
@@ -996,26 +1048,37 @@ function postDeviceState(
 export function classifyConnectionError(
   message: string,
 ): 'connection-failed' | 'permission-required' | 'device-in-use' {
-  if (isWorkLouderHidContention(message)) return 'device-in-use';
-  const looksLikePermissionError =
-    /permission|not permitted|access denied|input monitoring|operation not allowed/i.test(message);
   // Input Monitoring is a macOS authorization boundary. On Windows, the HID
   // backend also reports transient handle contention as "access denied"; that
   // must stay on the bounded connection retry path instead of tripping the
   // permanent permission circuit breaker.
-  return process.platform === 'darwin' && looksLikePermissionError
-    ? 'permission-required'
-    : 'connection-failed';
+  if (
+    process.platform === 'darwin' &&
+    (isWorkLouderHidPermissionError(message) ||
+      /permission|not permitted|access denied|input monitoring|operation not allowed/i.test(
+        message,
+      ))
+  ) {
+    return 'permission-required';
+  }
+  return isWorkLouderHidContention(message) ? 'device-in-use' : 'connection-failed';
 }
 
-function reportConnectionError(message: string): void {
-  const reason = classifyConnectionError(message);
-  if (reason === 'permission-required') {
-    permissionBlocked = true;
-    clearRetry();
-  }
-  post({ kind: 'state', status: 'error', reason });
-  if (reason !== 'permission-required') scheduleRetry();
+function reportPermissionError(message: string): boolean {
+  if (permissionBlocked) return true;
+  if (classifyConnectionError(message) !== 'permission-required') return false;
+  permissionBlocked = true;
+  applyPending = false;
+  listenPending = false;
+  probePending = false;
+  discoverPending = false;
+  clearRetry();
+  clearCreatorKeymapRetry();
+  // The SDK sometimes only logs denial. Release its active subscriptions and
+  // transport even when no RPC rejects, and let main retire a stuck native host.
+  void disconnect();
+  post({ kind: 'state', status: 'error', reason: 'permission-required' });
+  return true;
 }
 
 /**
@@ -1068,8 +1131,11 @@ function clearRetry(): void {
 }
 
 async function disconnect(): Promise<void> {
+  clearCreatorKeymapRetry();
   const currentApi = api;
-  if (currentApi && creatorKeymapWritten) {
+  // Denial must not cause more device writes, including keymap restoration.
+  // Keep its snapshot for the next authorized connection.
+  if (currentApi && creatorKeymapWritten && !permissionBlocked) {
     try {
       await restoreCreatorKeymap(currentApi);
     } catch (error) {
@@ -1133,6 +1199,7 @@ async function awaitWithTimeout(task: Promise<unknown> | null, ms: number): Prom
 async function stop(): Promise<void> {
   if (stopping) return;
   stopping = true;
+  applyPending = false;
   listenPending = false;
   probePending = false;
   discoverPending = false;
@@ -1143,7 +1210,7 @@ async function stop(): Promise<void> {
   await awaitWithTimeout(applyTask, 400);
   await awaitWithTimeout(creatorKeymapBinding, 400);
   const currentApi = api;
-  if (currentApi) {
+  if (currentApi && !permissionBlocked) {
     // Cindy's keymap can bind up to 13 task-key threads; clear them all.
     const off = createWorkLouderCodexOffFrame(WORKLOUDER_CREATOR_LIT_TASK_KEY_COUNT);
     await awaitWithTimeout(

@@ -1717,6 +1717,7 @@ export function UnifiedModelPanel({
             return (
               <ModelConfigFlyout
                 entry={target.entry}
+                deviceId={deviceId}
                 config={config}
                 state={state}
                 sourceLabel={providerLabel(target.entry.providerId)}

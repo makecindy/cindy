@@ -1,5 +1,13 @@
 # Desktop 开发、启动与验证
 
+## 排队消息展示
+
+Desktop 与 Mobile 都把待发消息作为消息流气泡展示，气泡下方的「排队中」菜单提供插话、编辑、上移、下移与取消发送。输入框不再承载独立队列列表。
+
+Desktop 在工作过程分组后追加待发项（`pendingQueueItems.ts`），避免待发输入提前截断当前助手轮次。待发项与正式回流使用相同的 `msg-clientId` key，已回流的历史优先，防止队列快照迟到造成双显。`PendingQueueBubble` 复用 `UserMessage`，操作可用性使用 `maker-shared/queue` 的共享判据。编辑锁由任务页持有，不随气泡虚拟化卸载而释放；队列通知放在消息流 footer。
+
+定向界面验证：`pnpm ui:check --page pending-queue --theme all`。真实派发仍由现有输入协调器负责。
+
 > **读取时机**：安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时
 
 本文是 Desktop 开发命令及其使用条件的权威说明；可执行脚本以当前 checkout 的根
@@ -291,6 +299,12 @@ pnpm test:unit
 - 数据库 migration、协议、更新器、权限与用户数据另有高风险专项规则；命中时先读取
   对应规则，不以本页命令替代专项验证。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
+
+菜单栏状态按钮的原生回归在 macOS 上运行
+`node apps/desktop/native/menubar/test.mjs`。它编译完整 Swift helper，并在离屏 AppKit
+按钮上检查重复更新、标题、提示文字、远控标识和 Light/Dark 切换；不启动 Cindy 或创建
+菜单栏项。该检查属于原生集成层，独立于默认单测池，需在 macOS 上手动执行，未接入 CI。
+脚本分别输出编译与测试耗时；Windows/Linux 不支持运行，不能将其计为通过。
 
 ## 单页 UI 快速验证
 

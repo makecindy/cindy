@@ -170,8 +170,8 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     });
 
     render(<KeyboardShortcutsSection />);
-    fireEvent.click(screen.getAllByTitle('settings.shortcuts.delete')[0]!);
-    fireEvent.click(screen.getByTitle('settings.shortcuts.reset'));
+    fireEvent.click(screen.getAllByLabelText('settings.shortcuts.deleteAria')[0]!);
+    fireEvent.click(screen.getByLabelText('settings.shortcuts.reset'));
     await vi.waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
 
     await act(async () => {
@@ -204,8 +204,8 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     });
 
     render(<KeyboardShortcutsSection />);
-    fireEvent.click(screen.getAllByTitle('settings.shortcuts.delete')[0]!);
-    fireEvent.click(screen.getAllByTitle('settings.shortcuts.edit')[1]!);
+    fireEvent.click(screen.getAllByLabelText('settings.shortcuts.deleteAria')[0]!);
+    fireEvent.click(screen.getAllByLabelText('settings.shortcuts.editAria')[1]!);
     await vi.waitFor(() => expect(document.body.dataset.appShortcutRecording).toBe('1'));
     fireEvent.keyDown(window, { key: 'q', code: 'KeyQ' });
     await vi.waitFor(() => {

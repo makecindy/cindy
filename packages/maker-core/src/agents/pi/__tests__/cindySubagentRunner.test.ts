@@ -638,6 +638,8 @@ describe('Cindy durable PI Subagent runner', () => {
     await waitForClose(fixture.child, fixture.stderr);
     const [run] = await listPiSubagentRuns(fixture.root);
     expect(run.tasks[0].output).toBe(expected);
+    const page = await readPiSubagentTranscriptPage(fixture.root, fixture.runId);
+    expect(page.entries.filter(entry => entry.role === 'subagent').map(entry => entry.content)).toEqual([expected]);
   });
 
   /**

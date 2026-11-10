@@ -7,12 +7,12 @@
 
 ## 1. 用户应该得到什么
 
-工具发现入口（2026-10-30 起）：`cindy_helper` 的顶层工具 `ask_owner`，一直在模型的工具列表里，不藏在 `list_tools` 类目后面。kind=fill 是本页的代输入，kind=scan 是扫码（窗口里的码，或 Agent 截图里的码，见 §4.1），另有 connect（连接账号）。2026-11-08 起，普通异步提问恢复独立的 `ask_user_question_async`，不再使用 `ask_owner(kind=choose)`；登录交接与需求澄清保持独立。工具说明与参数 schema 随列表下发，模型无需先发错误调用。Claude Code 与 Codex 直接看到它；Pi 通过原有 MCP 网关检索，不另外增加 system prompt。旧名 `request_input_handoff` 仍可经 `call_tool` 调用，但不再列出。
+工具发现入口（2026-11-08）：独立的 `request_input_handoff`，不再使用 `ask_owner` 统一分派。Claude Code 与 Codex 直接看到 `cindy_helper` 顶层工具；Pi 直接注册同名工具并复用宿主 schema。传 `purpose` 与 `target`（窗口）或 `image`（截图二维码），二者互斥。原 `call_tool` 调用继续兼容。普通提问仍使用各 Harness 自己的同步／异步提问工具；Grok 设备码登录通过 auth 类目的 `start_grok_device_login` 发现，不与代输入合并。
 
-**什么时候用**（2026-11-02 裁决）：只有一定不能让模型知道的内容才用这个工具——登录，以及密码、密钥、令牌、验证码。邮箱、姓名、地址这类不敏感的信息，Agent 直接在对话里问，主人告诉模型，由模型去填，既不弹工具，也不让主人自己开窗口。
+**什么时候用**（2026-11-02 裁决）：只有一定不能让模型知道的内容才用这个工具——登录，以及密码、密钥、令牌、验证码。邮箱、姓名、地址这类不敏感的信息，Agent 用已有提问工具询问，主人告诉模型后由模型去填，不使用保密代输入表单。
 
 Agent 在任何界面遇到这类输入框，调用
-`ask_owner`（kind=fill，传目标窗口），本轮结束。目标是 Cindy 自身或找不到窗口时，调用当下就返回
+`request_input_handoff`（传 `purpose` 与 `target`），本轮结束。目标是 Cindy 自身或找不到窗口时，调用当下就返回
 `TARGET_IS_CINDY`／`TARGET_NOT_FOUND` 并说明下一步（列出有可见窗口的应用），不再先回「等待中」、几分钟后才以
 `target_gone` 结束。目标窗口被最小化时（「我的浏览器」的 Cindy 窗口默认如此），宿主先把它恢复并带到前面、等页面出现再读：
 最小化的窗口不绘制也读不到，主人也看不到它；只有被点名（`window_title`）或该应用没有其它可见窗口时才会选中它。浏览器的工具栏
@@ -129,7 +129,7 @@ Agent 在任何界面遇到这类输入框，调用
 
 ### 4.1 Agent 截图里的码（2026-10-30）
 
-有的登录码不在这台电脑的任何窗口里：Cindy 侧栏里的设备模拟器、远程画面等。Agent 用 `ask_owner`（kind=scan，
+有的登录码不在这台电脑的任何窗口里：Cindy 侧栏里的设备模拟器、远程画面等。Agent 用 `request_input_handoff`（`purpose` 说明用途，
 `image` 传截图路径或 `cindy-media://` 地址）交给主人：
 
 - 宿主自己读码（同一套 macOS Vision 识别与裁切），读不到码、不是图片时调用当下就报错，不出卡片。截图在任务
@@ -218,5 +218,5 @@ Windows 暂不支持 askpass。
 - 扫码登录：网页与桌面客户端的登录码各走通一次——手机上能在本机打开、存图、复制；码刷新后手机跟上；扫完自动交还，
   扫完还要填的输入框直接出现。
 - 推送与 IM 指引里没有界面内容；Light / Dark 两种模式下卡片可读。
-- `ask_owner` 出现在三个 Harness 的工具列表／网关检索里；目标是 Cindy 或找不到时当场报错；Agent 截图里的码能在
+- `request_input_handoff` 直接出现在三个 Harness 的工具列表里；目标是 Cindy 或找不到时当场报错；Agent 截图里的码能在
   电脑和手机上扫码并交还；Agent 发起后结束本轮，任务与伙伴的青色「等你」状态保持到代输入结束。

@@ -2773,6 +2773,37 @@ describe('PI durable subagent run store', () => {
     });
   });
 
+  it('projects inherited models per child and generation while paging transcript entries', async () => {
+    const root = await makeRoot();
+    const generations = [
+      '123e4567-e89b-42d3-a456-426614174031',
+      '123e4567-e89b-42d3-a456-426614174032',
+      '123e4567-e89b-42d3-a456-426614174033',
+    ];
+    for (const [index, runId] of generations.entries()) {
+      await writeStatus(root, status(runId));
+      if (index < 2) {
+        await writeFile(path.join(root, runId, 'config.json'), JSON.stringify({ tasks: [
+          { childId: 'child-1', model: index === 0 ? 'hy4' : 'other-model' },
+          { childId: 'child-2', model: 'other-model' },
+        ] }));
+      }
+      await writeFile(path.join(root, runId, 'transcript.jsonl'), ['child-1', 'child-2'].map(childId => JSON.stringify({
+        type: 'cindy.subagent.child_event', childId, event: {
+          type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'private</think:6124c78e>answer' }] },
+        },
+      })).join('\n') + '\n');
+    }
+    const contents: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await readPiSubagentTranscriptPage(root, generations, { cursor, limit: 1 });
+      contents.push(...page.entries.map(entry => entry.content));
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(contents).toEqual(['answer', ...Array<string>(5).fill('private</think:6124c78e>answer')]);
+  });
+
   it('normalizes tool frames into paired card data instead of raw event JSON', async () => {
     const root = await makeRoot();
     const runId = '123e4567-e89b-42d3-a456-426614174020';

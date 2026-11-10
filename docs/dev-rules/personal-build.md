@@ -12,6 +12,21 @@ Mac、Windows 和 Linux 共用 Node 入口；运行应用仍取决于各平台�
 
 ## Quick start
 
+### Choose the scope before setup
+
+| Scope | Prerequisites and behaviour |
+| --- | --- |
+| Compose and check source | Your own GitHub login, repository checkout and the repository's Node/pnpm toolchain. App-only is supported; neither a plugin repository nor a phone is required. |
+| Isolated Desktop preview | The platform's existing Desktop development prerequisites. Uses separate app data; it does not adopt a running official installation. |
+| Stable signed Cindy identity | Currently Apple-silicon macOS 27.3+ with a compatible SDK and your own usable developer signing certificate. Older/other platforms record native capabilities as unsupported; they do not receive this fixed signed app path. |
+| Shared-profile supervised upgrades | Explicit macOS runtime configuration, an independently installed Node toolchain and a live Terminal. Uses the existing regional profile only after an observed first setup; automatic switching stays disabled by default. |
+| Personal iPhone delivery | Optional macOS/Xcode/CocoaPods setup, an authorized physical device and an Apple team able to provision the app and its required capabilities. Signing or entitlement failures must be resolved with that team's provisioning; the builder does not remove capabilities. |
+
+Start with the app-only isolated preview below. Add plugins, a shared profile and a phone independently
+after that works. The script can be operated by a Cindy task, but machine permissions, Apple sign-in
+and signing authorization still belong to the user. This does not require another contributor's local
+launcher, account, certificate, receipt, database or private endpoint file.
+
 Run from the Cindy source checkout. Put config and generated builds outside tracked source files.
 Paths below are examples; paths containing spaces are supported.
 
@@ -28,6 +43,39 @@ review the generated owner/repo when working from forks (set the upstream reposi
 if its PRs, rather than your fork's PRs, are intended). Run `gh auth login` in your own terminal if
 needed. Config is JSON, never executable shell. `init` refuses to overwrite an existing config.
 The CLI can also be invoked with `node scripts/personal-build.mjs`.
+
+### Keep personal configuration local
+
+Before adopting shared-profile upgrades, fill in the existing [runtime configuration](#macos-managed-launcher-one-lifecycle)
+and check the values on the target computer:
+
+- Choose the repository whose PRs you intend to include and your GitHub author. `init` captures the
+  current author; omit `author` only if following the active CLI account on each preparation is intended.
+- Leave `localRefs`, `exclude` and `localPlugins` empty unless explicitly needed. They are local choices,
+  not a list of branches or plugins every contributor must reproduce.
+- Select the regional profile using the repository's startup path resolver. Do not copy another
+  machine's `dataDir`; shared mode uses existing login/data, while isolated mode has its own profile.
+- Choose a stable `name`, region and `runtime.personalApp`. Changing name/region changes the bundle
+  identity; changing the signing certificate requires an explicit identity migration.
+- Obtain your public certificate fingerprint with `security find-identity -v -p codesigning`.
+  Set `CINDY_REMOTE_CREDENTIALS_SIGNING_IDENTITY` in the launcher environment when multiple certificates
+  exist. Private keys/passwords stay in Keychain/Xcode, never in JSON or the repository.
+- `runtime.node` and optional `toolPaths` refer to your installed tools, outside generated application
+  checkouts. Homebrew, a particular home directory and a particular Xcode installation name are not
+  requirements; `DEVELOPER_DIR` can select a compatible Xcode for this process.
+- Keep config, generated reports, signed apps, mobile provisioning files and deployed tool bundles
+  outside tracked source. Only generic scripts/tests/documentation belong in a PR.
+
+For repeated upgrades, deploy `bundle-tools` to a new external directory and invoke that immutable
+tool entry. Use a new build directory for each `upgrade-check`. A local shortcut or `current` link is
+optional operator setup, not a prerequisite or an automatically installed background service. Do not
+replace a running tool bundle; switch your shortcut only after the new version passes acceptance.
+
+The supervised workflow starts with an already prepared client and an explicit normal stop of any
+instance using its profile; `auto-launch` establishes its first known-good journal. Later upgrades use
+`manual-check` and `manual-restart` as described below. Legacy mutable commands are retained for existing
+setups; new immutable candidates do not need a personal SQL repair script or an old manifest copied
+from another installation.
 
 ## Configuration
 
@@ -100,6 +148,113 @@ To update, repeat prepare → check → start with a new output directory. The o
 rollback candidate; its compatibility with data created by a newer build must still be verified.
 There is no automatic rollback of data and no automatic cleanup of worktrees. When finished, use
 normal Git worktree management after checking no process or uncommitted work depends on the directory.
+
+## Personal iPhone companion delivery
+
+The optional mobile step consumes the **same `report.json` and frozen source commit** as Desktop.
+It never discovers another PR list, skips a draft, changes the Desktop restart decision, or enables
+the unattended supervisor. This is local developer delivery, not App Store, TestFlight or OTA.
+
+Set `mobileConfig` to a JSON file outside the repository (relative to the personal config):
+
+```json
+{
+  "enabled": true,
+  "platform": "ios",
+  "region": "global",
+  "bundleId": "com.example.personal",
+  "appGroupId": "group.com.example.personal",
+  "teamId": "ABCDEFGHIJ",
+  "signingCertificateSha256": "YOUR_64_HEX_CERTIFICATE_FINGERPRINT",
+  "deviceId": "EXACT_DEVICE_ID_FROM_CINDY_SIMULATOR",
+  "hardwareUdid": "HARDWARE_UDID_FOR_PROVISIONING",
+  "stateDir": "./mobile-state",
+  "launchAfterInstall": false,
+  "verifyInstallationMetadataOnly": true
+}
+```
+
+An inline `mobile` object is also supported; do not configure both. `configFrom` resolves the shared
+file into the upgrade snapshot. Changing it later cannot retarget an existing candidate. An optional
+`regionConfigFile` points at the existing Mobile region-config format; credentials stay in Apple/Xcode
+and are never placed in this JSON. Bundle ID, signing team/certificate, App Group and exact physical
+device are explicit, with no personal account defaults in the repository.
+
+`check` automatically follows successful Desktop checks with `mobile-build` when enabled, including
+when called by `upgrade-check` or `auto-check`. A mobile failure is recorded separately in
+`report.mobileDelivery`; Desktop remains checked. Each native build attempt has a new artifact directory
+and a monotonic build number from the configured state directory. A failed attempt may be resumed with
+`mobile-build --report BUILD_REPORT`; it keeps the PR snapshot and does not overwrite earlier artifacts.
+The source report must describe a composed, disposable checkout; generated ignored iOS files are
+regenerated there. Tracked native sources are refused before `prebuild --clean`.
+
+Build uses Release mode, the existing endpoint/region loader and CocoaPods setup, and Xcode's exact
+physical-device destination (not `generic/platform=iOS`).
+Automatic provisioning uses the `Apple Development` certificate class: Xcode rejects an explicit
+SHA-1 identity with automatic signing. Before delivery, every signed bundle must still match the
+configured certificate fingerprint and its provisioning profile; a different certificate blocks
+installation, even when Xcode reports a successful build.
+
+#### Migrating an existing SHA-1 certificate pin
+
+New configuration uses `signingCertificateSha256` (64 hex characters). SHA-1-only and mixed
+SHA-1/SHA-256 configurations are rejected with migration guidance, including direct artifact checks.
+There is no weak-hash fallback. Keep historical reports and requests unchanged; after migration,
+prepare a new build rather than rewriting a frozen report.
+
+Export the **previously trusted signing certificate** as DER from Keychain Access (public certificate
+only, no private key). Confirm its identity against the certificate selected for the existing setup;
+do not establish trust from an unverified new candidate. Compute its SHA-256 fingerprint:
+
+```sh
+openssl x509 -inform DER -in trusted-certificate.cer -noout -fingerprint -sha256
+```
+
+Remove colons from the fingerprint, set `signingCertificateSha256` in the source mobile configuration,
+and remove `signingCertificateSha1`. Back up that configuration first. A SHA-1 digest cannot be
+converted to SHA-256 without the certificate. If the original trusted certificate is unavailable,
+stop and explicitly select a replacement signing identity; never pin whichever certificate a new
+build happens to use. Xcode still selects the `Apple Development` class; all four signed bundles
+must match the exact SHA-256 pin and the profile's authorized certificate bytes before delivery.
+This configuration migration does not change the signing identity, install an app, or restart it.
+
+APNs registration uses the installed native provisioning environment, never JavaScript `__DEV__`:
+a Release build signed for development registers with sandbox APNs. Artifact verification requires
+`aps-environment` to be `development` or `production` and to agree between the code signature and
+the embedded provisioning profile; `verification.json.pushEnvironment` records the signed and
+registration environments. Missing or mismatched values stop delivery. The existing ExpoApplication
+reader is reused without adding native dependencies; App Store re-signing without an embedded profile
+uses its native App Store release type. Unknown signing environments do not upload a token.
+This check does not prove server APNs credentials, notification permission or physical delivery;
+those require a separately authorized real-device push test.
+
+All three shared-container readers and
+entitlements use the configured App Group. Every extension is checked independently: a main-app deep
+signature check alone can miss a provisioning file replaced by incremental Xcode signing. Verification
+checks profile expiry, certificate, team, App ID, device authorization, App Groups, embedded JavaScript,
+version agreement and disabled OTA. No Apple capability is deleted to get past a signing failure.
+
+### Cindy task continuation (installation stays in the device plugin)
+
+1. Inspect `mobile-status --report BUILD_REPORT`; after a build, run `mobile-next --report BUILD_REPORT`.
+2. Execute its `next` object through `ghost_call` for `cindy-simulator`. Only `devices`, `app info` and
+   `app install` can be emitted. Save the actual receipt outside the source tree, then call
+   `mobile-record --report BUILD_REPORT --action devices|info|install --receipt RECEIPT`.
+3. Repeat `mobile-next` after recording each result. Offline devices remain `awaiting-device`; end
+   this task's attempt and resume on the next explicit update/continuation. Do not spin or create a
+   background schedule. A newer installed version ends as `superseded`, without downgrading.
+4. Installation intent is persisted before returning the install call. If the task is interrupted,
+   the next action is **read installed metadata**, never repeat installation blindly. An old/missing
+   installation after an uncertain result becomes `installation-unconfirmed`; investigate the original
+   operation before retrying. A successful install receipt still requires a matching metadata read.
+5. `installed-metadata-verified` proves the phone reports the intended bundle/version. It does not prove
+   every installed byte matches, login works, remote service works, or notifications work. Do not launch,
+   screenshot or test phone UI as part of this flow. Never uninstall either identity or clear its data.
+
+The native builder and Desktop supervisor do not call the plugin themselves. **A Cindy update task owns
+the installation continuation**; when no task is running, the package simply remains pending. There is
+no newly enabled daily schedule, always-on device watcher, silent phone rollback or implicit Desktop
+restart. Keep Desktop and mobile results separate in the final report.
 
 ## Plugins and duplicate installations
 
@@ -316,6 +471,15 @@ versions. Good/current/candidate directories are not automatically deleted. The 
 an update remains pinned; this rollout does not automatically replace its own recovery implementation.
 The old private launcher backup remains the independent bootstrap recovery route.
 
+Both the legacy launcher and supervised terminal source `credential-signing.zsh` before invoking
+the restart wrapper. It resolves `CINDY_REMOTE_CREDENTIALS_SIGNING_IDENTITY` from the explicit
+environment, interactive shell, a previously signed credential helper, or the sole available developer
+certificate, in that order. Multiple unselected certificates remain ambiguous. This is the remote
+desktop credential helper's identity, not the Electron application's signature. `remoteReady` only
+proves device-link connectivity; it does not prove saved-credential automatic login. A changed launcher
+does not inject environment variables into an already running host: verify helper signing and remote
+login separately after the next authorized safe restart.
+
 Real cold-switch/rollback and compatibility acceptance remain required before enabling this on the
 live shared profile. Unit/state-machine success and a mock startup are distinct evidence, not a claim
 of a completed live upgrade. The following target constraints describe the complete acceptance bar;
@@ -402,7 +566,57 @@ Still unverified: shared-profile bootstrap/handoff, live remote reconnection dur
 recovery, and the full fault matrix above. Automatic activation remains disabled for the live profile.
 
 
-### First observed health-bridge handover
+### Explicit manual upgrade after the health bridge
+
+When the user requests an immediate upgrade that changes backend/runtime/plugin content, use
+`manual-check --config FILE --report BUILD_REPORT --out NEW_MANUAL_REPORT` followed, after the old
+instance exits normally, by `manual-activate --config FILE --report NEW_MANUAL_REPORT`. These commands
+do not enable automatic updates and do not pretend that the automatic compatibility gate passed.
+The checked build, exact baseline/candidate/profile, unchanged migration fingerprint and isolated
+startup proof are required. A failed/rejected candidate cannot be silently retried. The existing
+restart wrapper still enforces profile exclusivity and runtime startup checks.
+
+Manual activation journals an explicit manual rollback policy before starting the candidate. It
+requires the same continuous readiness/remote-health probation before promotion. Failure/interruption
+blocks further starts instead of launching old code against potentially changed data; the independent
+rescue receipt also marks rollback compatibility unverified until successful promotion. This does not
+restore or overwrite databases, credentials or plugin ledgers. Preserve both version directories for
+inspection. This path does not accept changed migration artifacts or private database scripts.
+
+For an explicitly authorized immediate restart, use the single Terminal command:
+
+```sh
+node scripts/personal-build.mjs manual-restart --config FILE --report NEW_MANUAL_REPORT --expected-pid OBSERVED_PID --out NEW_HANDOFF_RECEIPT
+```
+
+This command acquires `supervisor.lock` **before any shutdown**, validates the frozen candidate,
+isolated proof, baseline and launch profile, then rechecks the exact ready PID before sending normal
+SIGTERM. It retains that same lock through shutdown, startup, health probation and the new supervisor's
+lifetime. Never generate an external script that quits the app before calling `manual-activate`, or
+check the lock and release it before quitting: either can leave no working app when another supervisor
+wins the lock. `manual-activate` remains available after an independently requested normal quit.
+
+A live supervisor owner causes `manual-restart` to fail before touching the app. Do not delete its lock,
+kill an unverified PID, or stop the app to get around it. With an older already-running supervisor,
+inspect its process identity and exit **only that supervisor** normally before retrying; the app must
+remain running. Automatic takeover of a live supervisor is not implemented. A competing launcher can
+still win the lock, but then this command leaves the current app running. Dead owners are reclaimed by
+the existing lock implementation, never by the handover script.
+
+The output receipt is created exclusively: use a new path for each approved attempt. It records
+`blocked-before-stop`, `stopping`, `shutdown-unconfirmed`, `starting`, `activation-failed`, or `verified`.
+A crash leaves the last durable phase; inspect the receipt, journal and actual processes instead of
+replaying an old restart command. `verified` requires continuous readiness/remote-service probation,
+not phone UI testing. A startup failure keeps the existing manual rollback policy; it does not blindly
+launch old code against possibly changed data. No force kill, fabricated idle result, automatic enable,
+or persistent restart job is added. A current restart confirmation is still required when tasks run.
+
+`desktop-whoami` exit 1 means no matching ready instance, not necessarily a scan failure: parse
+`processScan.ok` and use `--all` when checking shared profile exclusivity. Record no-instance,
+readiness, and scan errors separately. Regression coverage is in
+`scripts/__tests__/personal-build-recovery.test.mjs`.
+
+### First observed health-bridge handover (legacy bootstrap)
 
 `auto-bootstrap --config FILE --report BOOTSTRAP_REPORT` is an explicit operator handover, not an
 automatic-update exception. The report must name the observed ready original checkout, a separately
@@ -419,3 +633,156 @@ A failed first candidate restores the original directory. This path does not mig
 an official release, or enable the old Cindy Make product. A one-use external Terminal handover can wait
 for current turns to finish and quit the explicitly selected source instance after the user has selected
 that developer-launcher method; it must not install a persistent restart job or force-kill an unknown PID.
+
+### Native capability acceptance for source personal builds
+
+`check` also prepares native Live Activity components on Apple-silicon macOS 27.3+.
+It uses an explicitly selected `DEVELOPER_DIR`, or discovers a compatible installed Xcode
+without changing `xcode-select`. A missing SDK or skipped required component fails the check.
+Older systems record `unsupported`; startup readiness is not complete feature acceptance.
+
+The source addon alone is insufficient: the candidate's own Electron app must contain the
+WidgetKit extension, Live Activity plist declaration and silent alert sound. The builder copies
+Electron before changing it (pnpm store hard links must not affect another checkout), retains the
+original runtime, preserves the extension's sandbox signature, and verifies the resulting bundle.
+It refuses a running candidate. No installed application or user data is modified.
+
+`resources/personal-native.json` records SDK, capability state and artifact hashes. Supervised
+release identity includes this receipt and validates its files before activation. Missing/replaced
+native artifacts invalidate the candidate. A rebuilt native runtime can therefore be a distinct
+release even when its source commit has not changed. Test actual Live Activity availability after
+isolated startup; do not equate a built addon, a visible setting, or `remoteReady` with a rendered
+system activity. New macOS native personal builds use the same developer certificate resolver as the remote credential helper.
+The main app, nested Electron code and WidgetKit extension are signed inside-out; the extension retains
+its sandbox entitlements. Ad-hoc signing is no longer an accepted final identity for new native builds.
+Previously checked receipts remain readable for recovery; do not rewrite a live or approved bundle.
+
+Native source builds launch through macOS LaunchServices within Forge's existing startup wrapper.
+Directly spawning the Electron executable leaves ActivityKit without an application identity even
+when the addon and extension are present. `open -W -n` inherits the launch environment without
+putting credentials in arguments/files; the early main import restores Forge's working directory.
+The personal app bundle identifier is stable for a configured name/region and distinct from generic
+`com.github.Electron`, whose LaunchServices record can resolve to another development checkout.
+The profile and credential-helper identity remain separate. Changing from the generic identifier
+may require fresh macOS privacy permissions; never grant or bypass those automatically.
+
+Personal native bundles set `CFBundleDisplayName` to `Cindy` and use the repository's
+`icon.icns` before signing, so macOS does not prefer Electron's inherited display name
+and icon. The icon is included in the capability receipt. This display-only branding
+does not rename the executable/helpers, change the stable bundle identifier, or alter
+the profile / safeStorage identity. Existing checked candidates are immutable: prepare
+and check a new candidate to apply branding; do not patch a running or approved bundle.
+
+
+### Upgrade-start snapshots
+
+Every new upgrade starts with `upgrade-check --config FILE --out NEW_DIRECTORY` (or
+`prepare`, then `check` and `manual-check`). It queries the current main branch and every
+open PR by the configured/authenticated author in both repositories, including drafts,
+before composing either repository. Merged PRs arrive through main; closed unmerged PRs
+are omitted. Only explicit configured exclusions may omit an open PR. Local refs are
+resolved to commits at the same preparation stage.
+
+The report stores `upgradeSnapshot` with capture time, author and both complete selections.
+Build, conflict continuation, isolated startup and activation use that fixed snapshot.
+New commits during the build belong to the next upgrade, not an endless rebuild loop.
+`continue` resumes the same attempt without querying GitHub again. Every new `prepare`
+queries again and requires a new output directory. Never clone an older report to begin
+another upgrade. Old reports without snapshots must be prepared again for upgrade.
+
+`snapshot --config FILE --report BUILD_REPORT` verifies that the composed PRs, commits,
+local refs and exclusions exactly match this attempt. Manual and automatic activation
+use this offline check plus artifact/commit verification. `freshness` remains an optional
+live comparison for diagnostics, not a switching gate. Existing known-good launch and
+recovery stay available offline. Conflicts/check failures remain visible and never
+silently drop a PR. Capturing a snapshot does not authorize a restart.
+
+
+### Shared signed runtime and independent business releases
+
+On supported native macOS builds, `check` prepares a signed runtime in
+`<stateDir>/runtimes/<personalBundleId>/versions/<inputHash>/Cindy.app`. Without managed
+runtime configuration, the store is under `~/Library/Application Support/CindyPersonal`.
+The hash covers the original Electron bytes/version, architecture, native sources and
+assets, SDK/compiler, build logic and signing certificate. Business commits, PR lists and
+plugin bundles are deliberately not runtime inputs. Equal inputs reuse the exact signed
+bundle at the exact same path; changed inputs produce another immutable bundle. Never
+patch a cached or running runtime, re-sign on every launch, or prune previous runtimes
+as part of preparation. Full contents and developer signature are verified before reuse.
+
+Each independent business checkout records its runtime and native-resource hashes in
+`resources/personal-native.json` (version 2). Forge launches that runtime through the
+existing LaunchServices wrapper, passing the explicit business checkout. Process discovery
+uses both the shared executable and the business path, and readiness still requires a live
+renderer for that checkout. Multiple checkouts sharing a runtime must not be mistaken for
+one process. Ordinary non-personal development and existing receipt v1 launches are retained.
+
+The shared-profile supervisor installs a **physical directory**, not a runtime-cache symlink,
+at `runtime.personalApp` (default `~/Applications/Cindy Personal.app`; ` CN` / ` Dev` suffix
+for those regions). Both the installation path and the actual launched executable stay fixed
+when native dependencies change. `runtime.installedApp` still denotes the official app and
+must not equal this personal destination. Existing ordinary applications at the destination
+are never adopted/overwritten. Isolated previews continue to launch the immutable cache and
+never install/replace the formal entry automatically.
+
+`fixed-install.mjs` copies and verifies the signed candidate next to the destination, then
+records a durable transition before renaming anything. The old physical bundle is retained
+as a hidden sibling; old runtime caches and business journal pointers are also retained.
+An unchanged runtime is verified and reused without replacing its directory. A changed
+runtime requires the exact installed app to be stopped, the same Bundle ID and developer
+certificate, and the existing supervisor profile/stop guards. Changing signing identity is
+an explicit migration, not an automatic fallback. A retry completes an interrupted recorded
+filesystem transition, including a crash between moving the old bundle and promoting the new
+one. Invalid or missing artifacts stop recovery for inspection; no unknown files are replaced.
+The shared owner lock also serializes different configurations targeting the same app path.
+This is installation recovery only: business rollback still requires data compatibility.
+
+The launch wrapper verifies the installed receipt, full contents and developer signature
+against the selected business release before opening the fixed path. The fixed app setting
+is forwarded explicitly to Terminal and stale inherited values are cleared for previews.
+Process discovery binds the physical executable to its installation receipt and business
+checkout; a changed location must not make a live instance invisible or another checkout ready.
+
+Continue using the personal launcher to supply the selected business release and its interface
+server. The fixed runtime is not a standalone packaged business app; double-click-only cold
+startup without the personal launcher is not implemented. Automatic switching stays opt-in;
+preparation never authorizes a restart or enables it. Moving from an ad-hoc shell to a developer
+identity can require macOS permission approval once; signature verification does not prove
+privacy permission or remote login works. This is local signing, not notarized public distribution.
+
+The supervisor and dev server share one Terminal window. It passes live stdin and
+`--reuse-terminal` to `desktop-restart-runner.mjs`; coordinator output still goes to the
+generation's `console.log`. The repository wrapper writes dev output directly to that input
+terminal, using one `script` PTY with the existing bounded `apps/desktop/logs/dev-terminal.log`
+drain. It does not open another Terminal window. Missing terminal input fails before stopping
+anything; ordinary headless developer launches retain their existing new-window behavior.
+Do not add another detached PTY or pipe PTY output through the supervisor: a blocked/lost
+consumer can leave Electron alive after Forge/Vite exits and produce a white window.
+A nonzero wrapper exit immediately fails acceptance even if a main PID remains.
+A successful wrapper exit means readiness only, not the end of the running app. The interface
+still uses the development server; prebuilt static UI delivery is not part of this change.
+
+
+Manual shutdown retains the observed original PID until the OS reports it gone, in addition to
+waiting for the instance record and launch runner to disappear. `will-quit` can remove the record
+before the process ends; that gap must not authorize installation. The wait is bounded at 60 seconds;
+unknown observations or timeout stop the switch without a forced kill. Fixed-app installation checks
+`ps` executable paths (`comm`), not text anywhere in command arguments, and reports blocking PIDs.
+A diagnostic shell/grep mentioning the app therefore cannot masquerade as its running main process.
+Regression coverage: `personal-build-recovery.test.mjs` (original PID outlives metadata, timeout,
+unknown observations, and executable-path ownership).
+
+### Personal app open events and push diagnostics
+
+The signed personal runtime declares the current and legacy Cindy URL schemes, folders and
+`.cindy` cartridges before signing. File types use Alternate rank: do not take over the official
+app's defaults. This repairs Finder eligibility for an already running personal client, not
+standalone cold startup: keep using the personal launcher when the runtime is stopped.
+Test cold-start routing separately before changing default handlers. Never edit the installed
+app's Info.plist in place: that breaks its signature and runtime receipt.
+
+Mobile debug recording includes non-secret push registration stages, realm, app variant, APNs
+environment and numeric HTTP failure status. It never records the native token or authorization
+headers. A registered event confirms only registration, and a desktop notify-sent log confirms
+only enqueueing; neither proves APNs acceptance or notification display. Verify provider logs
+and the target phone before calling delivery successful.
