@@ -143,6 +143,25 @@ export async function writeScheduledModelBaselineIfProfileCurrent(
 
 export class ScheduledModelSelectionBusyError extends Error {}
 
+/** Resolve a registered companion route before automation captures its restore baseline. */
+export async function reconcileScheduledModelRouteBeforeBaseline(deps: {
+  reconcile: () => Promise<void>;
+  hasPendingRoute: () => boolean;
+  hasPendingSwitch: () => boolean;
+  isIdle: () => boolean;
+  applyPendingSwitch: () => Promise<void>;
+}): Promise<void> {
+  await deps.reconcile();
+  if (!deps.hasPendingRoute()) return;
+  if (!deps.isIdle()) {
+    throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the saved companion route');
+  }
+  if (deps.hasPendingSwitch()) await deps.applyPendingSwitch();
+  if (deps.hasPendingRoute()) {
+    throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the saved companion route');
+  }
+}
+
 interface ScheduledModelTarget {
   agentKind: AgentKind;
   agentDeviceId?: string | null;

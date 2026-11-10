@@ -260,7 +260,7 @@ import {
   readInputDeliveryClientIds,
 } from '@cindy/device-link';
 import { and, asc, desc, eq, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
-import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
+import { applyScheduledModelSelection, createScheduledModelScope, createScheduledModelSelectionResolver, reconcileScheduledModelRouteBeforeBaseline, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
 import { parseScheduledModelBaseline, type ScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
 import { recoverRenamedSessionModelBeforeSend } from './renamedSessionModelRecovery';
 import { recordTurnModelChange, type TurnModelIdentity } from './turnModelChange';
@@ -12164,17 +12164,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const scheduledModelScope = createScheduledModelScope({
     createId,
     ownerEpoch: captureSessionRuntimeControlOwnerEpoch,
-    prepareBaseline: async (sessionId) => {
-      await reconcileBotModelRoute(sessionId, true);
-      // Reconciliation applies idle companion choices through the normal switch
-      // path. A deferred or failed switch must not become a stale new baseline.
-      if (agentSwitchPending.get(sessionId) || getPendingSessionRuntimeMutation(sessionId)) {
-        if (!isSessionIdleForRouteApply(sessionId)) {
-          throw new ScheduledModelSelectionBusyError('Scheduled model selection waits for the saved companion route');
-        }
-        throwIpcError('HARNESS_SWITCH_NOT_READY', 'Saved companion route did not become ready');
-      }
-    },
+    prepareBaseline: (sessionId) => reconcileScheduledModelRouteBeforeBaseline({
+      reconcile: () => reconcileBotModelRoute(sessionId, true),
+      hasPendingRoute: () => !!agentSwitchPending.get(sessionId) || !!getPendingSessionRuntimeMutation(sessionId),
+      hasPendingSwitch: () => !!agentSwitchPending.get(sessionId),
+      isIdle: () => isSessionIdleForRouteApply(sessionId),
+      applyPendingSwitch: () => applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { bootstrapAfterSwitch: true }),
+    }),
     read: async (sessionId) => {
       const [row] = await getDbClient().drizzle.select({
         agentKind: sessions.agentKind, model: sessions.model, providerId: sessions.providerId,
