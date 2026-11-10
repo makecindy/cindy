@@ -11460,7 +11460,8 @@
       "toolSettings": "Réglages des outils",
       "notTurnedOn": "Pas encore activé sur cet ordinateur",
       "turnOn": "Activer",
-      "permissions": "Autorisations"
+      "permissions": "Autorisations",
+      "officialInherited": "Officiel Cindy · Suit les réglages de cet ordinateur"
     },
     "systemSkills": {
       "followOffHint": "Le skill système « Tableau de bord et suivi » de {{name}} est désactivé. Réactivez-le dans Capacités pour utiliser ceci.",

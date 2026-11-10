@@ -11318,7 +11318,8 @@
       "toolSettings": "器具之设",
       "notTurnedOn": "此机尚未开",
       "turnOn": "往开",
-      "permissions": "权"
+      "permissions": "权",
+      "officialInherited": "Cindy 官方 · 随本机启停"
     },
     "systemSkills": {
       "followOffHint": "{{name}} 之系统技艺「案头与督促」已关，于才能页复开之乃可用。",

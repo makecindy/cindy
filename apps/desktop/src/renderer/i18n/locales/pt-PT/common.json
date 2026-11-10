@@ -11460,7 +11460,8 @@
       "toolSettings": "Definições das ferramentas",
       "notTurnedOn": "Ainda não ativado neste computador",
       "turnOn": "Ativar",
-      "permissions": "Permissões"
+      "permissions": "Permissões",
+      "officialInherited": "Oficial da Cindy · Segue as definições deste computador"
     },
     "systemSkills": {
       "followOffHint": "A Skill do sistema “Painel e acompanhamento” de {{name}} está desativada. Volta a ativá-la em Capacidades para usar isto.",
