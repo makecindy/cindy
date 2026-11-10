@@ -13052,10 +13052,10 @@
       "customAnswer": "Etwas anderes eingeben…",
       "answerPlaceholder": "Deine Antwort eingeben…",
       "validation": {
-        "required": "Füllen Sie dieses Pflichtfeld aus.",
-        "choice": "Wählen Sie eine der aufgeführten Optionen.",
-        "tooShort": "Geben Sie mindestens {{count}} Zeichen ein.",
-        "tooLong": "Geben Sie höchstens {{count}} Zeichen ein."
+        "required": "Fülle dieses Pflichtfeld aus.",
+        "choice": "Wähle eine der aufgeführten Optionen.",
+        "tooShort": "Gib mindestens {{count}} Zeichen ein.",
+        "tooLong": "Gib höchstens {{count}} Zeichen ein."
       }
     },
     "planReviewBubble": {
@@ -15725,7 +15725,7 @@
         "sections": "Automatisierungseinstellungen"
       },
       "webhook": {
-        "quotaHint": "Webhook-Empfänge sind pro Tag begrenzt, und Filter hier verringern die Anzahl nicht. Wählen Sie beim Absender, etwa GitHub, nur die benötigten Ereignisse aus.",
+        "quotaHint": "Webhook-Empfänge sind pro Tag begrenzt, und Filter hier verringern die Anzahl nicht. Wähle beim Absender, etwa GitHub, nur die benötigten Ereignisse aus.",
         "sourceLabel": "Absender",
         "sourceCustom": "Benutzerdefiniert",
         "customLabel": "Format (JSON)",
@@ -16014,10 +16014,10 @@
       "urlUnavailable": "Die Empfangsadresse ist derzeit nicht verfügbar.",
       "quotaNotifyTitle": "Webhook-Empfangslimit erreicht",
       "quotaExhausted": "Die heutigen {{limit}} Webhook-Empfänge sind aufgebraucht. Fortsetzung um {{time}}. Bis dahin lösen externe Ereignisse keine Aufgaben aus. Geplante Ausführungen und die Modellnutzung sind nicht betroffen.",
-      "signedOut": "Melden Sie sich bei Ihrem Cindy-Konto an, um den Empfang fortzusetzen. Ihre Einstellungen bleiben erhalten.",
+      "signedOut": "Melde dich bei deinem Cindy-Konto an, um den Empfang fortzusetzen. Deine Einstellungen bleiben erhalten.",
       "serviceUnavailable": "Webhook-Empfang ist in dieser Umgebung nicht verfügbar.",
       "suspended": "Webhooks sind für dieses Konto deaktiviert.",
-      "endpointLimit": "Alle Empfangs-URL-Plätze sind belegt. Geben Sie eine ungenutzte URL frei.",
+      "endpointLimit": "Alle Empfangs-URL-Plätze sind belegt. Gib eine ungenutzte URL frei.",
       "offline": "Dieser Computer ist derzeit nicht mit dem Server verbunden. Ereignisse werden zwischengespeichert und nach der Wiederverbindung zugestellt.",
       "localOnlyHint": "Diese Adresse funktioniert nur auf diesem Computer. Leite öffentliche Ereignisse dorthin weiter, zum Beispiel mit gh webhook forward.",
       "eventsSummary": "Ereignisse: {{events}}",
@@ -16069,7 +16069,7 @@
         "open": "Automatisierung ansehen",
         "release": "Freigeben",
         "confirm": "Adresse für „{{name}}“ auf {{device}} freigeben?",
-        "confirmHint": "Die alte Adresse, der geheime Schlüssel und auf dem Server gespeicherte Ereignisse werden ungültig. Eine erneute Verbindung des alten Computers stellt sie nicht wieder her. Automatisierung und Verlauf bleiben erhalten; gestartete Ausführungen sind nicht betroffen.",
+        "confirmHint": "Die alte Adresse, das Secret und auf dem Server gespeicherte Ereignisse werden ungültig. Eine erneute Verbindung des alten Computers stellt sie nicht wieder her. Automatisierung und Verlauf bleiben erhalten; gestartete Ausführungen sind nicht betroffen.",
         "cancel": "Abbrechen",
         "confirmRelease": "Adresse freigeben",
         "viewAddress": "Adresse ansehen",
@@ -16078,7 +16078,7 @@
         "releasedHint": "Diese Adresse wurde freigegeben und belegt keinen Platz mehr. Beim erneuten Verbinden entsteht eine neue Adresse. Die Konfiguration des Absenders muss aktualisiert werden.",
         "reconnect": "Erneut verbinden",
         "reconnectConfirm": "Webhook erneut verbinden?",
-        "reconnectConfirmHint": "Dies belegt einen Platz und erstellt eine neue Empfangsadresse. Neue Adresse und neuen geheimen Schlüssel beim Absender eintragen.",
+        "reconnectConfirmHint": "Dies belegt einen Platz und erstellt eine neue Empfangsadresse. Neue Adresse und neues Secret beim Absender eintragen.",
         "reconnectFailed": "Verbindung fehlgeschlagen. Verfügbare Plätze prüfen und erneut versuchen."
       }
     }
