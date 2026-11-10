@@ -354,4 +354,27 @@ describe('piProjectResourcesDrifted', () => {
     const roots = collectPiProjectResourceWatchRootMtimes(project);
     expect(roots.get(canon(path.join(project, '.pi')))).toBe(-1);
   });
+  it('detects a symlinked workingDir retargeted within the same repo (resolved scan root in drift key)', () => {
+    // 回归(Codex P2):workingDir 经软链启动、软链改指同仓另一目录时,repoRoot
+    // 与解析后旧物理根的 mtime 均不变,快检会放行旧 argv。漂移键必须含解析后
+    // 的 scanRoot:改指即漂移。junction 在 Windows CI 无特权可用。
+    const realA = path.join(project, 'workspaces', 'real-a');
+    const realB = path.join(project, 'workspaces', 'real-b');
+    writeSkill(path.join('workspaces', 'real-a', '.pi', 'skills'), 'alpha-a');
+    writeSkill(path.join('workspaces', 'real-b', '.pi', 'skills'), 'alpha-b');
+    mkdirSync(path.join(project, '.git'), { recursive: true });
+    const link = path.join(project, 'wd-link');
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    symlinkSync(realA, link, linkType);
+    const baseline = snapshotPiProjectResourceLaunch(
+      link,
+      collectPiProjectResourceCliPaths(link),
+      collectPiProjectResourceWatchRootMtimes(link),
+      resolvePiResourceRepoRoot(link),
+    );
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    rmSync(link);
+    symlinkSync(realB, link, linkType);
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
 });
