@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import type { BotGroupMemberView } from '@cindy/maker-shared/botGroupChat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { StyleSheet, View, useWindowDimensions } from 'react-native';
@@ -15,7 +16,7 @@ export function BotGroupMentionIdentity({ member, anchor, deviceId, onClose }: {
 }) {
   const { t } = useTranslation();
   const { mode } = useTheme();
-  const surface = useRef<View>(null);
+  const surface = useRef<ViewInstance>(null);
   const { width, height } = useWindowDimensions();
   const viewport = useRef({ width, height, mode });
   const [position, setPosition] = useState<{ anchor: BotGroupMentionPoint; x: number; y: number; width: number } | null>(null);

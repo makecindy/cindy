@@ -10,6 +10,7 @@ import { useSettingDefinition } from './useSettingDefinition';
 import { useTranslation } from 'react-i18next';
 import { ListOrdered } from 'lucide-react';
 
+import { SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { cn } from '@/lib/utils';
@@ -21,34 +22,31 @@ export function MessageNavRailCell() {
   const { enabled, isCustomized, setEnabled } = useMessageNavRailPreference();
 
   return (
-    <div {...setting.anchorProps} className="flex items-center justify-between gap-3 px-4 py-[14px]">
-      <div className="flex items-center gap-3">
-        <div
+    <SettingsRow
+      {...setting.anchorProps}
+      lead={
+        <span
           className={cn(
             'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
             'bg-[var(--settings-input-bg)]',
           )}
         >
           <ListOrdered size={18} className="text-[var(--settings-section-title)]" />
+        </span>
+      }
+      title={setting.title}
+      hint={setting.description}
+      trailing={
+        <div className="flex items-center gap-2">
+          <DefaultOverrideControls isCustomized={isCustomized} onReset={() => setEnabled(true)} />
+          <Switch
+            {...setting.controlProps}
+            checked={enabled}
+            onCheckedChange={setEnabled}
+            aria-label={t('settings.messageNavRail.toggleAria')}
+          />
         </div>
-        <div className="flex flex-col gap-[8px]">
-          <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-            {setting.title}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-desc)]">
-            {setting.description}
-          </p>
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <DefaultOverrideControls isCustomized={isCustomized} onReset={() => setEnabled(true)} />
-        <Switch
-          {...setting.controlProps}
-          checked={enabled}
-          onCheckedChange={setEnabled}
-          aria-label={t('settings.messageNavRail.toggleAria')}
-        />
-      </div>
-    </div>
+      }
+    />
   );
 }

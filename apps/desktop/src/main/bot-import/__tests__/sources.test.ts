@@ -92,7 +92,7 @@ it.each([
   }
 });
 
-it('retains an over-budget skill for retry without dropping healthy siblings', async () => {
+it('keeps resource bodies out of the preview budget even when multiple skills are used by automations', async () => {
   await write('.hermes/config.yaml', 'name: Ada\n');
   for (const name of ['first', 'second']) {
     await write(`.hermes/skills/${name}/SKILL.md`, `---\nname: ${name}\n---\nRead data.txt`);
@@ -102,12 +102,12 @@ it('retains an over-budget skill for retry without dropping healthy siblings', a
   await write('.hermes/cron/jobs.json', jobs(['first']));
   const reader = deps(); const [source] = await discoverImportSources(reader);
   const snapshot = await inspectImportSource(source!, reader, createImportBudget(6000));
-  expect(snapshot.items.find(item => item.view.name === 'first')?.files?.find(file => file.name === 'data.txt')?.bytes.length).toBe(2048);
-  expect(snapshot.items.find(item => item.view.name === 'second')?.files).toHaveLength(1);
+  expect(snapshot.items.find(item => item.view.name === 'first')?.files).toBeUndefined();
+  expect(snapshot.items.find(item => item.view.name === 'second')?.files).toBeUndefined();
   await write('.hermes/cron/jobs.json', jobs(['first', 'second']));
   const partial = await inspectImportSource(source!, reader, createImportBudget(6000));
-  expect(partial.items.find(item => item.view.name === 'second')?.captureIssue).toBe('SOURCE_SNAPSHOT_TOO_LARGE');
-  expect(partial.items.find(item => item.view.name === 'first')?.files).toHaveLength(2);
+  expect(partial.items.filter(item => item.view.category === 'skills')).toHaveLength(2);
+  expect(partial.items.filter(item => item.view.category === 'skills').every(item => !item.captureIssue && !item.files)).toBe(true);
 });
 
 it('counts configuration includes and memory against the same source budget', async () => {
@@ -416,7 +416,8 @@ it.each(['daily-report', 'Daily report'])('matches a skill reference %s against 
   expect(automation.view.dependsOn).toEqual(expect.arrayContaining([
     skill.view.id, ...snapshot.items.filter(item => item.env).map(item => item.view.id),
   ]));
-  expect(skill.files?.find(file => file.name === 'scripts/query.py')).toBeDefined();
+  expect(skill.resourceReferences).toContain('REPORT_TOKEN');
+  expect(skill.resourceReferences).toContain('REPORT_URL');
 });
 
 it('requires an explicit credential account and binds variables to the chosen profile, including MCP references', async () => {
@@ -575,7 +576,7 @@ it('uses OpenClaw declared names, skillKey, grouped roots and plugin sources in 
   const skills = snapshot.items.filter(item => item.view.category === 'skills');
   expect(skills.map(item => item.view.name)).toEqual(['report', 'project', 'personal', 'extra', 'example']);
   expect(skills[0]?.view).toMatchObject({ selected: true, enabled: false });
-  expect(skills[0]?.files?.[0]?.bytes.toString()).toContain('Workspace');
+  expect(skills[0]?.sourceDirectory).toBe(await fs.realpath(path.join(home, '.openclaw/workspace/skills/category/renamed')));
   expect(snapshot.items.find(item => item.env?.SERVICE_TOKEN)?.view.selected).toBe(true);
 });
 
@@ -753,7 +754,7 @@ it('preserves sorted skill-name precedence after streaming directory entries', a
   const items = await discoverImportSkills({ kind: 'hermes', agentId: 'main', name: 'Ada', root, workspace: root, configFile: path.join(root, 'config.yaml') }, {}, home, {}, createImportBudget());
   expect(items).toHaveLength(1);
   expect(items[0]!.sourceAlias).toBe('a-first');
-  expect(items[0]!.files![0]!.bytes.toString()).toContain('First');
+  expect(items[0]!.sourceDirectory).toBe(await fs.realpath(path.join(home, '.hermes/skills/a-first')));
 });
 
 it('does not synchronously sort a whole 100,000-entry Skill root before visiting children', async () => {

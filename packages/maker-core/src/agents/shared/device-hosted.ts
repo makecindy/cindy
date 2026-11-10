@@ -133,6 +133,14 @@ export function deviceHostedGhostRoster(
   return hosted.guest ? '' : legacyLocal();
 }
 
+/**
+ * 设备托管时 Claude Code 等 MCP 服务连上的上限(`MCP_TIMEOUT`)。这些服务都是经隧道回到任务所在电脑的
+ * HTTP MCP，每次握手都要跨机往返；Claude Code 默认只等 30s，到点即判连接失败，这一轮没有任何工具。
+ * 与远程 Agent 拉取的 2 分钟不可达窗口一致(2026-11-04：两台电脑间的直连掉回中转、请求要 4–12s，
+ * 一轮开始时 91 个工具全部被判断开，Agent 只能回复“工具连不上”)。
+ */
+export const DEVICE_HOSTED_MCP_TIMEOUT_MS = 120_000;
+
 /** 设备托管时顶替 Claude Code 自带文件与命令工具的 Cindy MCP 服务名。 */
 export const DEVICE_HOSTED_EXEC_MCP_SERVER = 'cindy_exec';
 /** 顶替的工具名(与自带工具同名)。 */

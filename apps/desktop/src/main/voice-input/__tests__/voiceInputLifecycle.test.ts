@@ -8,13 +8,15 @@ import type { AsrEvent } from '@cindy/voice-input-core';
 // Minimal input: delayed topic start -> replacement -> old runId cancel.
 // Unit tier: no socket, credentials, disk or real clock waits.
 const m = vi.hoisted(() => {
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
   const deferred = () => {
     let resolve!: () => void;
-    const promise = new Promise<void>(done => { resolve = done; });
-    return { promise, resolve };
+    let reject!: (error: Error) => void;
+    const promise = new Promise<void>((done, fail) => { resolve = done; reject = fail; });
+    return { promise, resolve, reject };
   };
   const plans: ReturnType<typeof plan>[] = [];
-  function plan() { return { connect: deferred(), disposing: deferred(), disposed: deferred(), started: deferred() }; }
+  function plan() { return { connect: deferred(), disposing: deferred(), disposed: deferred(), started: deferred(), flushing: deferred(), flush: Promise.resolve() }; }
   const providers: Provider[] = [];
   class Provider {
     readonly plan = plans.shift()!;
@@ -23,16 +25,16 @@ const m = vi.hoisted(() => {
     constructor() { providers.push(this); }
     start = vi.fn(async () => { this.plan.started.resolve(); await this.plan.connect.promise; });
     stop = vi.fn(async () => {});
-    flushAudio = vi.fn(async () => { this.listener?.({ type: 'stable', text: 'spoken', at: 0 }); });
+    flushAudio = vi.fn(async () => { this.plan.flushing.resolve(); await this.plan.flush; this.listener?.({ type: 'stable', text: 'spoken', at: 0 }); });
     appendAudio = vi.fn();
     onEvent(callback: (event: AsrEvent) => void) { this.listener = callback; }
     dispose = vi.fn(async () => { this.plan.disposing.resolve(); await this.plan.disposed.promise; });
   }
   return {
-    deferred, plan, plans, providers, Provider, owner: 'owner-a', boundary: false,
+    deferred, plan, plans, providers, Provider, owner: 'owner-a', boundary: false, muted: false,
     handlers: new Map<string, (...args: any[]) => any>(),
     listeners: new Map<string, (...args: any[]) => any>(),
-    restore: vi.fn(async (_id: number) => {}), unregister: vi.fn(),
+    restore: vi.fn(async (_id: number | symbol | 'remote-desktop') => {}), unregister: vi.fn(),
   };
 });
 vi.mock('electron', () => ({ app: { isPackaged: true, once: vi.fn(), on: vi.fn(),
@@ -68,7 +70,18 @@ vi.mock('../VoiceInputModelSelection.js', () => ({
 vi.mock('../VoiceInputDataStore.js', () => ({ registerVoiceInputDataStoreIpc: vi.fn(),
   voiceInputDataStore: { getSettings: () => ({ speakerFilterEnabled: false }), updateSettings: vi.fn() } }));
 vi.mock('../speaker/index.js', () => ({ registerVoiceSpeakerFilterIpc: vi.fn(), getSpeakerFilterService: () => ({ createGate: () => undefined }) }));
-vi.mock('../SystemAudioMuteGuard.js', () => ({ systemAudioMuteGuard: { restore: m.restore, restoreAll: vi.fn(), hasPendingOrActiveMute: false } }));
+vi.mock('loudness', () => ({ default: { getMuted: async () => m.muted,
+  setMuted: async (value: boolean) => { m.muted = value; } } }));
+// Keep the production guard and OS mutation queue; only the OS API is fake.
+vi.mock('../SystemAudioMuteGuard.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../SystemAudioMuteGuard.js')>();
+  const guard = new actual.SystemAudioMuteGuard();
+  m.restore.mockImplementation(guard.restore.bind(guard));
+  return { ...actual, systemAudioMuteGuard: {
+    mute: guard.mute.bind(guard), restore: m.restore, restoreAll: guard.restoreAll.bind(guard),
+    get hasPendingOrActiveMute() { return guard.hasPendingOrActiveMute; },
+  } };
+});
 vi.mock('../global.js', () => ({ isGlobalVoiceInputOverlaySender: () => false,
   registerActiveInlineVoiceInputWebContents: vi.fn(), unregisterActiveInlineVoiceInputWebContents: m.unregister,
   refreshVoiceInputInputMonitoringPermissionSnapshot: async () => ({ ok: true }),
@@ -112,6 +125,96 @@ afterEach(async () => {
 });
 
 describe('registered main dictation lifecycle (#6656)', () => {
+  // The recording-scoped lease must survive neither a rejected ASR stop nor
+  // window teardown. Existing error coverage only exercised startup failure.
+  it('releases the recording lease and provider when cancellation rejects', async () => {
+    const event = windowEvent(); const provider = plan();
+    provider.connect.resolve(); provider.disposed.resolve();
+    await invoke('mute-system-audio', event, { recordingId: 'cancel-error' });
+    await invoke('start', event, { recordingId: 'cancel-error', refinementEnabled: false });
+    m.providers.at(-1)!.stop.mockRejectedValueOnce(new Error('ASR stop failed'));
+    await expect(invoke('cancel', event)).rejects.toThrow('ASR stop failed');
+    expect(m.muted).toBe(false);
+    expect(m.providers.at(-1)!.dispose).toHaveBeenCalledOnce();
+  });
+  it('releases recording leases after a destroyed window encounters an ASR stop error', async () => {
+    const event = windowEvent(); const provider = plan();
+    provider.connect.resolve(); provider.disposed.resolve();
+    await invoke('mute-system-audio', event, { recordingId: 'window-error' });
+    await invoke('start', event, { recordingId: 'window-error', refinementEnabled: false });
+    m.providers.at(-1)!.stop.mockRejectedValueOnce(new Error('ASR stop failed'));
+    event.sender.isDestroyed.mockReturnValue(true);
+    event.sender.once.mock.calls.find(([name]) => name === 'destroyed')![1]();
+    await vi.waitFor(() => expect(m.muted).toBe(false));
+    expect(m.providers.at(-1)!.dispose).toHaveBeenCalledOnce();
+  });
+  it('reports failed scoped restoration and retains the lease for retry', async () => {
+    const event = windowEvent();
+    await invoke('mute-system-audio', event, { recordingId: 'retry' });
+    m.restore.mockRejectedValueOnce(new Error('OS restore failed'));
+    expect((await invoke('restore-system-audio', event, { recordingId: 'retry' })).ok).toBe(false);
+    expect(m.muted).toBe(true);
+    expect((await invoke('restore-system-audio', event, { recordingId: 'retry' })).ok).toBe(true);
+    expect(m.muted).toBe(false);
+  });
+  it('scopes identical renderer recording IDs to distinct sender windows', async () => {
+    const first = windowEvent(); const second = windowEvent();
+    await invoke('mute-system-audio', first, { recordingId: 'same' });
+    await invoke('mute-system-audio', second, { recordingId: 'same' });
+    await invoke('restore-system-audio', first, { recordingId: 'same' });
+    expect(m.muted).toBe(true);
+    await invoke('restore-system-audio', second, { recordingId: 'same' });
+    expect(m.muted).toBe(false);
+  });
+  it('releases a recording lease when provider startup fails', async () => {
+    const event = windowEvent(); const provider = plan(); provider.disposed.resolve();
+    await invoke('mute-system-audio', event, { recordingId: 'failed-start' });
+    const starting = invoke('start', event, { recordingId: 'failed-start', refinementEnabled: false });
+    await provider.started.promise; provider.connect.reject(new Error('connection failed'));
+    expect((await starting).ok).toBe(false);
+    expect(m.muted).toBe(false);
+  });
+
+  it('rejects malformed recording IDs without muting the OS', async () => {
+    const event = windowEvent();
+    expect((await invoke('mute-system-audio', event, { recordingId: 'x'.repeat(129) })).ok).toBe(false);
+    expect(m.muted).toBe(false);
+  });
+  it('revokes events before a queued cancel while the real controller is flushing stop', async () => {
+    const event = windowEvent(); const provider = plan(); const flush = m.deferred();
+    provider.connect.resolve(); provider.disposed.resolve(); provider.flush = flush.promise;
+    const run = await start(event);
+    event.sender.send.mockClear();
+    const stopping = invoke('stop', event); await provider.flushing.promise;
+    const cancelling = invoke('cancel', event, { runId: run.runId });
+    flush.resolve(); await stopping; await cancelling;
+    expect(event.sender.send.mock.calls.some(([, message]) => message.type === 'submitted')).toBe(false);
+  });
+
+  it('releases a mute owned by a window destroyed before any start', async () => {
+    const event = windowEvent();
+    await invoke('mute-system-audio', event, { recordingId: 'pending' });
+    expect(m.muted).toBe(true);
+    event.sender.isDestroyed.mockReturnValue(true);
+    event.sender.once.mock.calls.find(([name]) => name === 'destroyed')![1]();
+    await vi.waitFor(() => expect(m.muted).toBe(false));
+  });
+  // discussion_r4496889755: old disposal must not release a pending new
+  // recording's lease. Real main handlers/controller/queue/audio guard.
+  it('retains the replacement mute while old cancellation is disposing', async () => {
+    const event = windowEvent(); const old = plan(); old.connect.resolve();
+    await invoke('mute-system-audio', event, { recordingId: 'old' });
+    await invoke('start', event, { recordingId: 'old', refinementEnabled: false });
+    const cancelling = invoke('cancel', event);
+    await old.disposing.promise;
+    const next = plan(); next.connect.resolve(); next.disposed.resolve();
+    await invoke('mute-system-audio', event, { recordingId: 'next' });
+    const replacement = invoke('start', event, { recordingId: 'next', refinementEnabled: false });
+    old.disposed.resolve(); await cancelling; await replacement;
+    expect(m.muted).toBe(true);
+    await invoke('cancel', event);
+    expect(m.muted).toBe(false);
+  });
   it.each(['owner', 'destroyed', 'boundary'])('rechecks %s after replacement disposal, before allocating another provider', async boundary => {
     const event = windowEvent(); const old = plan(); old.connect.resolve(); await start(event);
     const unused = plan(); unused.connect.resolve(); unused.disposed.resolve();

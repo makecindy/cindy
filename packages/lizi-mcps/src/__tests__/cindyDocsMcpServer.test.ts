@@ -905,7 +905,15 @@ describe('read_sheet', () => {
       outPath: 'r.xlsx',
     });
 
-    const first = await callTool(client, 'read_sheet', { path: 'r.xlsx' });
+    // These selectors read the same immutable workbook. Keep every real worker
+    // and result assertion without serializing five independent worker startups.
+    const [first, named, numbered, missing, missingNumber] = await Promise.all([
+      callTool(client, 'read_sheet', { path: 'r.xlsx' }),
+      callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 'S2' }),
+      callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 2 }),
+      callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: '不存在' }),
+      callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 9 }),
+    ]);
     expect(first.ok).toBe(true);
     expect(first.sheet).toBe('S1');
     expect(first.sheetNames).toEqual(['S1', 'S2']);
@@ -915,21 +923,14 @@ describe('read_sheet', () => {
     ]);
     expect(first.truncated).toBe(false);
 
-    expect((await callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 'S2' })).rows).toEqual([
+    expect(named.rows).toEqual([
       ['c'],
       ['x'],
     ]);
-    expect((await callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 2 })).sheet).toBe('S2');
-
-    const missing = await callTool(client, 'read_sheet', {
-      path: 'r.xlsx',
-      sheet: '不存在',
-    });
+    expect(numbered.sheet).toBe('S2');
     expect(missing.errorCode).toBe('SHEET_NOT_FOUND');
     expect((missing.data as Record<string, string>).hint).toContain('S1');
-    expect((await callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 9 })).errorCode).toBe(
-      'SHEET_NOT_FOUND',
-    );
+    expect(missingNumber.errorCode).toBe('SHEET_NOT_FOUND');
   });
 
   it('读 csv / tsv,引号与跨行字段保真', async () => {

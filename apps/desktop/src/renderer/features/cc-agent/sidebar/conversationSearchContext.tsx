@@ -168,7 +168,7 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
           machineSelection: selectedMachineId,
         }))
     ) {
-      search.reset();
+      search.dismiss();
       search.clearLock();
       return;
     }
@@ -192,7 +192,7 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
     search.clearLock,
     search.lockedProjectKey,
     search.projectSelection,
-    search.reset,
+    search.dismiss,
     search.setProjectSelection,
   ]);
 
@@ -200,9 +200,9 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   //   - 命中搜索界面内部([data-conversation-search-surface] = 搜索输入行 + 结果 overlay)→ 不收起,
   //     所以点结果列表内 / 点输入行都保持展开;
   //   - 命中排序 / 筛选下拉(Radix portal,[data-radix-popper-content-wrapper])→ 视为内部,不收起;
-  //   - 其余位置(搜索区域以外)→ search.reset() 清空 query,overlay 收起、输入行回落。
+  //   - 其余位置(搜索区域以外)→ search.dismiss() 仅收起结果，保留 query。
   // 用 pointerdown 而非 click:滚轮滚动不产生 pointerdown,故「任意位置滚动」永远不会收起(用户诉求)。
-  const { trimmed, reset } = search;
+  const { trimmed, dismiss } = search;
   useEffect(() => {
     if (!trimmed) return;
     const handlePointerDown = (event: PointerEvent) => {
@@ -210,11 +210,11 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
       if (!target) return;
       if (target.closest('[data-conversation-search-surface]')) return;
       if (target.closest('[data-radix-popper-content-wrapper]')) return;
-      reset();
+      dismiss();
     };
     document.addEventListener('pointerdown', handlePointerDown, true);
     return () => document.removeEventListener('pointerdown', handlePointerDown, true);
-  }, [trimmed, reset]);
+  }, [trimmed, dismiss]);
 
   const value = useMemo<ConversationSearchContextValue>(
     () => ({ search, allKnownProjects: visibleProjects, openSignal }),

@@ -13,7 +13,7 @@
  * (后者仅 devDependencies),故手写小型 tokenizer(规则 9:代码确定性)。
  */
 
-import { parseGhostCardForm } from '@cindy/maker-shared/ghost-card-form';
+import { parseGhostCardForm, ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CARD_HTML_MAX_BYTES,
@@ -350,13 +350,21 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // 卡内外链(v3):data-ghost-link 声明"点击经宿主确认框后 openExternal"。
   // <a href> 转写为同一声明——真实 href 不落地(无脚本 iframe 里点真链接会把
   // 外部页面导航进卡片画布)。一元素一行为:合法动作/音频插槽在场即忽略;
-  // 值必须整串 http/https(isGhostCardLinkAllowed),不合法只丢属性。
+  // 值必须整串 http/https 或导航专用任务链接(isGhostCardLinkAllowed),不合法只丢属性。
   if (!audioSlot && !actionValid) {
     const explicit = (attrs['data-ghost-link'] ?? '').trim();
     const linkDecl = explicit !== '' || tag !== 'a' ? explicit : (attrs['href'] ?? '').trim();
     if (isGhostCardLinkAllowed(linkDecl)) {
       parts.push(` data-ghost-link="${escapeAttr(linkDecl)}"`);
     }
+  }
+  // Progressive task navigation: old hosts retain the ordinary action; new clients
+  // may replace it with native navigation. Never combine it with an input action.
+  const sessionLink = attrs['data-ghost-session-link'] ?? '';
+  if (tag === 'button' && actionValid && !audioSlot && ghostCardSessionLinkId(sessionLink) &&
+      attrs['data-ghost-prompt'] === undefined && attrs['data-ghost-submit'] === undefined &&
+      attrs['data-ghost-model-select'] === undefined) {
+    parts.push(` data-ghost-session-link="${escapeAttr(sessionLink)}"`);
   }
   // 归档任务按钮(data-ghost-task-archive="owner/repo#123"):只挂没有动作、没有外链的 button。
   // 点击不回传插件,由宿主走与侧边栏相同的归档流程,只作用于卡片所在的任务;PR 已合并或

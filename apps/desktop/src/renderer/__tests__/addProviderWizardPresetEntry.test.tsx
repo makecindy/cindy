@@ -308,6 +308,12 @@ it.each(['openrouter', 'minimax-cn', 'minimax-global', 'moonshot-kimi-code', 'gi
 beforeEach(() => {
   testI18n.language = 'zh-CN';
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    subscriptionAccounts: { command: vi.fn(async () => ({
+      providerId: 'anthropic', configured: false, strategy: 'least', accounts: [{
+        id: 'default', status: 'signed-out', directory: '/default',
+        running: 0, paused: false, limit: 4, weight: 1,
+      }],
+    })) },
     maker: {
       llamaCppEnsure: vi.fn(async () => undefined),
       llamaCppStatus: vi.fn(async () => ({ installed: false, supported: true, running: false, models: [] })),

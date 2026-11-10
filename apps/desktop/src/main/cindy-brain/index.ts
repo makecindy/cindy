@@ -480,6 +480,7 @@ import {
   getGhostCard,
   listGhostCardsBySession,
   reassignGhostCards,
+  RENAMED_BUILTIN_GHOSTS,
   updateGhostCardHeight,
   upsertGhostCard,
 } from './cardStoreDb.js';
@@ -550,6 +551,10 @@ import {
   type GhostInstallConsentDecision,
   type GhostInstallConsentPrompt,
 } from './ghostInstallConsent.js';
+import { applyPersonalPluginUpdates, personalPluginContentHash } from './personalPluginUpdates.js';
+import { packGhostDirToFile } from './forge.js';
+import { snapshotInstalledGhostPackage } from './exportGhostPackage.js';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 import { GhostInstallConsentWindowBridge } from './ghostInstallConsentWindowBridge.js';
 import { GhostNetworkSlot } from './networkSlot.js';
 import {
@@ -684,6 +689,7 @@ import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.js';
 import { setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
+import { bindingStore } from '../im/binding.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
 import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import {
@@ -1610,16 +1616,6 @@ function scheduleBuiltinReconcile(
 }
 
 /**
- * 内置意识改名台账([旧 id, 新 id]):播种器的孤儿回收负责"旧包收走、新包
- * 装上",这里驱动存量数据迁移(历史卡片归属 / KV 偏好)。改完名的条目长期
- * 保留——老设备可能隔很多版本才升级,迁移必须一直在场。
- */
-const RENAMED_BUILTIN_GHOSTS: ReadonlyArray<readonly [string, string]> = [
-  ['cindy-mivo', 'xd-mivo'], // 2026-07-13 更名 XD Mivo
-  ['cindy-feishu', 'xd-feishu'], // 2026-07-16 更名 XD Feishu(企业档)
-];
-
-/**
  * 内置意识退役台账(整包下线、无接替 id)。种子目录删除后播种器的孤儿回收
  * 只负责"包收走",不清用户数据 —— 这里补上 uninstall 同款的三连清理:
  * safeStorage 凭证(OAuth 账号/refresh token)、ghost-kv 偏好、fs 槽私有
@@ -1921,19 +1917,12 @@ async function reconcileBuiltinGhostsLocked(
   }
   // 内置意识改名的存量迁移(每轮无条件跑,两个操作都幂等:UPDATE 查无旧行
   // no-op、KV 有"目标已存在即跳过"守卫——不吃"改名落地那一轮"的一次性触发
-  // 窗口,首轮失败/中途退出下轮自愈):历史卡片归属改挂新 id(老卡 chip 与
-  // 交互按钮按 ghostId 找主,不迁全废)+ KV 偏好搬家。密钥零迁移(官方别名
+  // 窗口,首轮失败/中途退出下轮自愈)。历史卡片在 localDb onReady 中等待迁移
+  // 完成；这里仅搬 KV 偏好。密钥零迁移(官方别名
   // 映射到底层同一存储键);媒体账本旧引用保留(历史聊天图继续可读,新任务
   // 在新 id 名下重新记账)。
   if (dataOwnerId !== null) {
     for (const [fromId, toId] of RENAMED_BUILTIN_GHOSTS) {
-      void reassignGhostCards(fromId, toId).catch((err) =>
-        log.warn('ghost card reassign failed', {
-          fromId,
-          toId,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
       migrateGhostKvOnRename(fromId, toId);
     }
     // 退役插件的凭证、KV 与 fs 槽都是 owner 私有数据；signed-out 不得借
@@ -7913,6 +7902,7 @@ async function updateLocalGhostPackageLocked(
       '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。',
     );
   }
+  const mutationOwner = captureGhostMutationOwner();
   const runtime = getGhostRuntime();
   const marketLedger = getPluginMarketLedger().bind(
     ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
@@ -7935,7 +7925,12 @@ async function updateLocalGhostPackageLocked(
   if (sourceChanged) assertGhostRelocationIdle(instanceId);
   rejectUnauthorizedTokenBroker(inspected.canonicalManifest, authorizationOverrides);
   const releaseSync = pluginDeviceSync.beginMutation(instanceId);
+  let releaseBrowserUpdate: (() => void) | undefined;
   try {
+    releaseBrowserUpdate = await getGhostBrowserExtensionSlot().prepareUpdate(instanceId);
+    const recheckOwner = beginGhostMutation(mutationOwner);
+    recheckOwner();
+    if (isCurrent?.() === false) throwIpcError('PRECONDITION_FAILED', 'Plugin install authorization changed');
     runtime.stop(instanceId);
     // 等待失败表示旧进程仍可能存活；此时不能恢复 resident，否则会产生
     // 两份后台进程。仅在确认退出后的更新阶段失败时恢复旧版本。
@@ -8036,8 +8031,85 @@ async function updateLocalGhostPackageLocked(
     spawnIfResident(result.ghost);
     return result.ghost;
   } finally {
-    releaseSync();
+    releaseBrowserUpdate?.();
+    try { broadcastGhostsChanged(manager.list()); }
+    finally { releaseSync(); }
   }
+}
+
+/** Developer supervisor post-promotion only. Never updates a public/org copy. */
+export async function updatePersonalLocalPlugins() {
+  if (app.isPackaged || !process.env.CINDY_PERSONAL_MONITOR_DIR || !process.env.CINDY_PERSONAL_GENERATION)
+    throw new Error('Personal plugin updates require the developer supervisor');
+  const owner = captureGhostMutationOwner();
+  const scope = activeOwnerScopeKey();
+  const isCurrent = () => activeOwnerScopeKey() === scope && !isAppSessionBoundaryPending();
+  if (!owner.dataOwnerId) return { state: 'deferred', reason: 'No active data owner' };
+  const manager = getGhostManager();
+  return applyPersonalPluginUpdates(path.join(app.getAppPath(), 'resources', 'personal-plugins'), {
+    isCurrent,
+    findLocal: id => findInstalledGhostForDeliveryTarget(manager.list(), { ghostId: id, namespace: LOCAL_PLUGIN_NAMESPACE }),
+    update: async (target, source, entry) => {
+      const release = beginGhostMutation(owner);
+      let temp: string | undefined;
+      try {
+        const recordFile = ownerScopedUserDataPath('personal-plugins', 'applied', `${entry.id}.json`);
+        let previous: { sourceHash?: string; revision?: string; installedHash?: string } = {};
+        try { previous = JSON.parse(await fs.promises.readFile(recordFile, 'utf8')); } catch { /* First use or incomplete report: verify through the installer. */ }
+        if (previous.sourceHash === entry.contentHash && previous.revision === ghostInstallApprovalToken(target.approval) &&
+            previous.installedHash === await personalPluginContentHash(target.dir)) return target;
+        temp = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'cindy-personal-plugin-'));
+        const approval = ghostInstallApprovalToken(target.approval), instance = installedGhostStoragePart(target);
+        const file = path.join(temp, 'update.cindy');
+        const packed = await packGhostDirToFile(source, file, source);
+        if (!packed.ok) throw new Error(packed.message);
+        if (await personalPluginContentHash(source) !== entry.contentHash) throw new Error('Personal plugin source changed while packing');
+        const inspected = await manager.inspect(file);
+        if ('rejection' in inspected) throwInstallError(inspected.rejection);
+        if (inspected.manifest.id !== entry.id || inspected.manifest.version !== entry.version) throw new Error('Personal plugin package identity changed');
+        return await withGhostInstallLock(entry.id, async () => {
+          if (!isCurrent()) throw new Error('Personal plugin owner changed');
+          const current = findInstalledGhostForLocalUpdate(manager.list(), entry.id, instance, approval);
+          if (!current || current.namespace !== LOCAL_PLUGIN_NAMESPACE || current.namespaceState !== 'confirmed') throw new Error('Personal local installation changed');
+          assertGhostRelocationIdle(instance);
+          const receipt = current.approval.state === 'approved' ? manager.readApprovedInstallReceipt(instance, current.approval.revision) : null;
+          const origin = receipt?.installOrigin === 'agent-forge' ? 'agent-forge' as const : undefined;
+          const updateSource = readLocalGhostUpdateSource(manager, current, inspected, origin);
+          if (updateSource.sourceChanged) throw new Error('Personal plugin update requires explicit source-change confirmation');
+          const consent = await obtainGhostInstallConsent({ mode: 'automatic' }, current, inspected.manifest, inspected.packageSha256);
+          // Preserve a verified code-only recovery package; credentials and data
+          // remain owned by the existing installer/instance and are not copied.
+          const backup = await snapshotInstalledGhostPackage(instance, { listInstalled: () => [current] });
+          if (backup.status !== 'prepared') throw new Error('Unable to preserve the previous local plugin package');
+          const backupHash = createHash('sha256').update(backup.bytes).digest('hex');
+          const backupFile = ownerScopedUserDataPath('personal-plugins', 'backups', `${entry.id}-${backupHash}.cindy`);
+          await fs.promises.mkdir(path.dirname(backupFile), { recursive: true, mode: 0o700 });
+          try { await fs.promises.writeFile(backupFile, backup.bytes, { flag: 'wx', mode: 0o600, flush: true }); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+          if (createHash('sha256').update(await fs.promises.readFile(backupFile)).digest('hex') !== backupHash)
+            throw new Error('Previous personal plugin backup verification failed');
+          const backupInspection = await manager.inspect(backupFile);
+          if ('rejection' in backupInspection) throwInstallError(backupInspection.rejection);
+          if (!isCurrent()) throw new Error('Personal plugin owner changed');
+          assertGhostRelocationIdle(instance);
+          const updated = await updateLocalGhostPackageLocked(manager, file, inspected, inspected.packageSha256,
+            approval, instance, consent, origin, isCurrent, false);
+          const actual = findInstalledGhostByInstanceId(manager.list(), instance);
+          const installedReceipt = actual?.approval.state === 'approved' ? manager.readApprovedInstallReceipt(instance, actual.approval.revision) : null;
+          if (!actual || installedReceipt?.packageSha256 !== inspected.packageSha256) throw new Error('Personal plugin installed package verification failed');
+          const installedHash = await personalPluginContentHash(actual.dir);
+          await fs.promises.mkdir(path.dirname(recordFile), { recursive: true, mode: 0o700 });
+          atomicWriteFileSync(recordFile, JSON.stringify({ version: 1, sourceHash: entry.contentHash,
+            revision: ghostInstallApprovalToken(actual.approval), installedHash, backupFile,
+            packageSha256: inspected.packageSha256, at: Date.now() }));
+          return updated;
+        });
+      } finally {
+        try { if (temp) await fs.promises.rm(temp, { recursive: true, force: true }); }
+        finally { release(); }
+      }
+    },
+  });
 }
 
 /**
@@ -8322,6 +8394,7 @@ async function installOrUpdateMarketGhostPackageLocked(
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
   let releaseMutation: (() => void) | null = null;
+  let releaseBrowserUpdate: (() => void) | undefined;
   let releaseSync: (() => void) | undefined;
   try {
     const manager = getGhostManager();
@@ -8458,6 +8531,10 @@ async function installOrUpdateMarketGhostPackageLocked(
 
     expected.beforeCommitInLock?.();
     if (expected.sourceChanged) assertGhostRelocationIdle(installedGhostStoragePart(installed));
+    releaseBrowserUpdate = await getGhostBrowserExtensionSlot().prepareUpdate(installedGhostStoragePart(installed));
+    const recheckOwner = beginGhostMutation(mutationOwner);
+    recheckOwner();
+    expected.assertCurrent?.();
     const runtime = getGhostRuntime();
     releaseSync = pluginDeviceSync.beginMutation(installedGhostStoragePart(installed));
     runtime.stop(installedGhostStoragePart(installed));
@@ -8536,13 +8613,19 @@ async function installOrUpdateMarketGhostPackageLocked(
       throwInstallError(result.rejection);
     }
     runtime.resetFuse(installedGhostStoragePart(result.ghost));
-    spawnIfResident(result.ghost);
     await expected.afterCommitInLock?.(result.ghost, commitEvidence);
+    spawnIfResident(result.ghost);
     await bindPluginUsage(result.ghost);
     return result.ghost;
   } finally {
-    releaseSync?.();
-    releaseMutation?.();
+    releaseBrowserUpdate?.();
+    // The manager's package-change event precedes the provenance ledger commit.
+    // Publish the completed facts, including failures/rollback, while the owner lease is held.
+    try { if (releaseMutation) broadcastGhostsChanged(getGhostManager().list()); }
+    finally {
+      releaseSync?.();
+      releaseMutation?.();
+    }
   }
 }
 
@@ -8938,6 +9021,9 @@ async function installRemoteGhostFile(peer: string, attachment: string, target: 
   } finally { await fs.promises.rm(dir, { recursive: true, force: true }); }
 }
 
+/** Lazy on purpose: git-context/ipc.ts -> scheduler-host -> script-capability-broker -> this module is a real import cycle. */
+const loadGitContextIpc = () => import('../git-context/ipc.js');
+
 export function registerGhostIpc(): void {
   registerGhostCardRemoteProvider((id) => {
     const ghost = findGhostForRemotePluginIdentity(availableGhosts(), id);
@@ -8949,7 +9035,10 @@ export function registerGhostIpc(): void {
       mobilePluginPages.assertInteraction(pageId, ghostId, controllerId);
       return (await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt, pageId, formValues, formChange, mailUpload)).ok;
     },
-  }, async (sessionId, key) => (await import('../git-context/ipc.js')).readSessionPrStatus(sessionId, key));
+  }, async (sessionId, key) => (await loadGitContextIpc()).readSessionPrStatus(sessionId, key), async (sessionId) => {
+    const allMerged = await (await loadGitContextIpc()).readSessionPrsAllMerged(sessionId);
+    return { allMerged, attached: !!bindingStore.findByTarget(sessionId) };
+  });
   if (ipcRegistered) return;
   ipcRegistered = true;
   // 插件工具审批按真实已装实例与 receipt 判定，调用参数里的名字只用来定位。
@@ -9073,7 +9162,9 @@ export function registerGhostIpc(): void {
       return () => { const settings = readDeviceLinkSettings(); return !isSharedTaskPeer(peer) && !isProviderSharePeer(peer) && settings.remoteControlEnabled && !settings.revokedControllers.includes(peer) && isDataOwnerBroadcastScopeCurrent(scope); };
     },
     market: {
-      snapshot: () => requireRemotePluginManagementServices().market.snapshot(),
+      snapshot: legacy => requireRemotePluginManagementServices().market.snapshot(legacy),
+      query: input => requireRemotePluginManagementServices().market.query!(input),
+      recommendations: () => requireRemotePluginManagementServices().market.recommendations!(),
       detail: id => requireRemotePluginManagementServices().market.detail(id),
       install: async (id, options, prompt, assertCurrent, assertScope) => {
         await requireRemotePluginManagementServices().market.install(id, options, prompt, assertCurrent, assertScope);
@@ -11420,6 +11511,11 @@ function broadcastGhostProvisioning(active: boolean): void {
  * 非权威的空表(账号切换窗口里 manager 尚未重扫)必须当作"还不知道",
  * 否则会把用户的未读整批误清。缺省 false = 保守。
  */
+/** Re-publish the roster after a ledger-only change (a failed source replacement restoring its route). */
+export function republishGhostRoster(): void {
+  broadcastGhostsChanged(getGhostManager().list());
+}
+
 function broadcastGhostsChanged(
   ghosts: InstalledGhost[],
   rosterAuthoritative = false,

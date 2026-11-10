@@ -2,6 +2,38 @@ import { registerColor } from './color-registry';
 import { filledButtonHover, filledButtonPressed } from './filledButtonStates';
 // BEGIN GENERATED DS-8: defaults
 const GENERATED_DEFAULTS = {
+  "plugin-identity-official-text": {
+    "light": "#2868c8",
+    "dark": "#83b5ff"
+  },
+  "plugin-identity-official-bg": {
+    "light": "rgba(65, 124, 221, 0.11)",
+    "dark": "rgba(65, 124, 221, 0.18)"
+  },
+  "plugin-identity-community-text": {
+    "light": "#8050bb",
+    "dark": "#c4a1ef"
+  },
+  "plugin-identity-community-bg": {
+    "light": "rgba(128, 80, 187, 0.10)",
+    "dark": "rgba(155, 105, 215, 0.16)"
+  },
+  "plugin-identity-team-text": {
+    "light": "#097c78",
+    "dark": "#6dd7cd"
+  },
+  "plugin-identity-team-bg": {
+    "light": "rgba(22, 145, 132, 0.10)",
+    "dark": "rgba(22, 145, 132, 0.16)"
+  },
+  "plugin-identity-custom-text": {
+    "light": "#b36518",
+    "dark": "#eeba70"
+  },
+  "plugin-identity-custom-bg": {
+    "light": "rgba(190, 113, 29, 0.10)",
+    "dark": "rgba(190, 113, 29, 0.16)"
+  },
   "surface": {
     "light": "#f8f8f6",
     "dark": "#1f1f1e"
@@ -3252,3 +3284,13 @@ registerColor(
   GENERATED_DEFAULTS["task-tag-white-check"],
   'Task label identity color',
 );
+
+// Append new provenance roles so existing registration order remains stable.
+registerColor('plugin-identity-official-text', GENERATED_DEFAULTS["plugin-identity-official-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-official-bg', GENERATED_DEFAULTS["plugin-identity-official-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-community-text', GENERATED_DEFAULTS["plugin-identity-community-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-community-bg', GENERATED_DEFAULTS["plugin-identity-community-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-team-text', GENERATED_DEFAULTS["plugin-identity-team-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-team-bg', GENERATED_DEFAULTS["plugin-identity-team-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-custom-text', GENERATED_DEFAULTS["plugin-identity-custom-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-custom-bg', GENERATED_DEFAULTS["plugin-identity-custom-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');

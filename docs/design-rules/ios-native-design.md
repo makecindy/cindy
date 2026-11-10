@@ -4,6 +4,8 @@
 
 ## 1. 原生行为与 Cindy 内容
 
+- **能用原生的都用原生**（用户定稿 2026-11-07）：系统已有的控件、材质与交互一律用原生实现，不用 React Native 自绘去模仿。已安装的 `@expo/ui`（SwiftUI）能覆盖的就用它；确实没有公开原生 API 的部分才自绘，并在代码注释里写明原因。
+- **浮动玻璃按钮**：浮在内容上的按钮（全屏预览、内置浏览器、远程画面等）用 SwiftUI 原生控件，并复用 App 共用的玻璃组件，保持各处风格一致：单个圆钮用 `NativeChromeButton`（`platform/chrome/NativeChromeButton.ios.tsx`），成组按钮用 `useNativeGlassGroupStyle` 的一枚胶囊、组内 borderless `Button` + SF Symbol，带菜单的圆钮用 `useNativeGlassButtonStyle({ shape: "circle" })`（见 `HomeDisplayMenu.ios.tsx`），Host 统一 `colorScheme` 与 `seedColor`；载入用 `ProgressView`。新界面不另写一套 `glassEffect` 参数。不要在 `expo-glass-effect` 的 `GlassView` 上叠 React Native 画的图标和文字再压一层底色——那样图标颜色是固定的，只能靠底色保证可读，玻璃就成了实色胶囊。玻璃的明暗、图标颜色、按压与禁用效果交给系统，不另加底色。共用样式见 `apps/mobile/src/platform/chrome/nativeGlassButtonStyle.ios.ts`，用法参考任务页顶栏 `SessionHeaderNativeControls.ios.tsx` 与全屏预览 `PreviewNativeChrome.ios.tsx`。
 - **容器**：导航、sheet 的呈现、拖拽、收起、安全区和键盘协调优先交给系统。不要用自绘圆角、假把手和 JS 位移动画冒充原生 sheet。
 - **控件**：分组表单优先使用原生 Form / Section 或原生分组 List；输入、按钮、开关、选择器优先用现有原生组件。原生外壳包着手工卡片，只能称为“原生外壳”，不能称为整页原生化。
 - **内容**：消息、Markdown、代码、业务图标和复杂数据可继续由 React Native 渲染。不要为原生化替换用户已熟悉的业务图标；远程桌面和文件保留现有 Monitor / Folder。

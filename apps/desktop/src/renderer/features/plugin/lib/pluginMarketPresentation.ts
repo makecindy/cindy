@@ -16,6 +16,14 @@ import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 export type PluginPresentationOrigin = 'public' | 'organization' | 'local' | 'custom';
 
+/** Public contributors stay anonymous even when an older payload includes an author. */
+export function pluginPresentationAuthor(
+  item: Pick<PluginMarketItem, 'scope' | 'sourceType' | 'publisherKind' | 'author'>,
+): string | null {
+  return item.sourceType === 'server' && item.scope === 'public' && item.publisherKind !== 'official'
+    ? null : item.author;
+}
+
 export type PluginCatalogPresentationItem<TInstalled> =
   { kind: 'installed'; item: TInstalled } | { kind: 'market'; item: PluginMarketItem };
 

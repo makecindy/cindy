@@ -111,6 +111,23 @@ beforeEach(() => {
 afterEach(() => { cleanup(); clearArmedDetachedVoiceDraft(); events.clear(); shortcuts.clear(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('group textarea dictation ownership (#6650)', () => {
+  // discussion_r4496889744: a queued cancel must revoke event ownership before
+  // main finishes its delayed stop. Real hooks; controlled IPC completion.
+  it('rejects stop results immediately after cancel while cancel IPC is pending', async () => {
+    let finishStop!: () => void;
+    let finishCancel!: () => void;
+    api.stop.mockImplementationOnce(() => new Promise(resolve => { finishStop = () => {
+      submit(); resolve({ ok: true });
+    }; }));
+    api.cancel.mockImplementationOnce(() => new Promise(resolve => { finishCancel = () => resolve({ ok: true }); }));
+    render(<Harness id="group" initial="original" />);
+    await start('group');
+    await act(async () => { fireEvent.click(screen.getByText('stop group')); });
+    await act(async () => { fireEvent.click(screen.getByText('cancel group')); });
+    await act(async () => { finishStop(); });
+    expect(screen.getByTestId('group-saved').textContent).toBe('original');
+    await act(async () => { finishCancel(); });
+  });
   // Reviewer follow-up: the old hook can resume after its audio drain and after
   // the replacement has started. Whole fake IPC calls are observable here;
   // registered-main tests separately cover actual routing and mute restoration.
@@ -144,7 +161,8 @@ describe('group textarea dictation ownership (#6650)', () => {
     await start('group');
     expect(api.muteSystemAudio).toHaveBeenCalledTimes(2);
     await act(async () => { finishMute({ ok: true }); });
-    expect(api.restoreSystemAudio).not.toHaveBeenCalled();
+    expect(api.restoreSystemAudio).toHaveBeenCalledExactlyOnceWith(api.muteSystemAudio.mock.calls[0][0]);
+    expect(api.restoreSystemAudio).not.toHaveBeenCalledWith(api.muteSystemAudio.mock.calls[1][0]);
     expect(screen.getByTestId('group-state').textContent).toBe('listening');
   });
 

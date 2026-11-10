@@ -817,7 +817,10 @@
     "quotaReset": "{{left}}% left · resets in {{reset}}",
     "confirm": "Switch",
     "remember": "Switch, and do it automatically from now on (this task only)",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "disable": "Don't switch automatically (this task)",
+    "disableFailed": "Couldn't confirm whether your choice was saved. Check the connection and make sure Cindy on the task’s computer is up to date, then try again. This message will still be sent as usual.",
+    "moreOptions": "More options"
   },
   "messageEdit": {
     "editing": "Editing message",

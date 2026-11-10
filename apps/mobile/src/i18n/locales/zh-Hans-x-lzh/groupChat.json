@@ -104,6 +104,13 @@
     "stepFailed": "{{name}}此步有谬，未竟",
     "stepTimeout": "{{name}}久未竟，此步暂止",
     "stepUnavailable": "{{name}}今不可用，此步无从为之",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}}逾候未始处理，此请已终。",
+        "advice": "请伙伴之主查其电脑之 Cindy 运行与网络连接。",
+        "details": "待 Cindy 与网络复常，请重遣讯。"
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}}不能作覆：同僚所在之器所留远程差事已达上限。",

@@ -59,7 +59,7 @@ export function createMobileHtmlPreviewCache(deviceId: string, root: string, ssh
     },
     async storeManifest(entry: string, files: HtmlSnapshotEntry[], temporary: File) {
       try {
-        temporary.write(JSON.stringify(files));
+        temporary.writeSync(JSON.stringify(files));
         const disk = await cache;
         if (current()) await disk.storePreview(key(entry, true), temporary.uri, 'application/json', temporary.size);
       } catch { /* Old clients may rebuild the directory if its manifest was evicted. */ }

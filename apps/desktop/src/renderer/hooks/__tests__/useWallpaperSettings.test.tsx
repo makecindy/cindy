@@ -428,6 +428,35 @@ describe('application wallpaper lifecycle', () => {
       expect(style.getPropertyValue('--app-wallpaper-figure-position')).toBe('');
     },
   );
+  // Windows without the native backdrop bridge (the detached sidebar) must keep their opaque canvas
+  // when no wallpaper is chosen; the main window opts into the desktop background by default.
+  it('enables the desktop background with no wallpaper unless the window opts out', () => {
+    vi.stubGlobal('electronAPI', {
+      platform: 'darwin',
+      appearanceSettings: { getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'none' }) },
+    });
+    const first = render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
+    expect(document.documentElement.dataset.desktopBackground).toBe('true');
+    first.unmount();
+    render(<WallpaperSettingsProvider desktopBackground={false}><Controls /></WallpaperSettingsProvider>);
+    expect(document.documentElement.dataset.desktopBackground).toBeUndefined();
+  });
+  // #9424: Windows has no native sidebar material, so the default 0% desktop
+  // background left the sidebar showing the unblurred desktop. Keep the original
+  // backdrop until the user raises transparency.
+  it('keeps the original Windows backdrop at 0% desktop transparency', () => {
+    vi.stubGlobal('electronAPI', {
+      platform: 'win32',
+      appearanceSettings: {
+        getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'none' }),
+        setPatch: vi.fn().mockResolvedValue(undefined),
+      },
+    });
+    render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
+    expect(document.documentElement.dataset.desktopBackground).toBeUndefined();
+    fireEvent.click(screen.getByText('Show Fully'));
+    expect(document.documentElement.dataset.desktopBackground).toBe('true');
+  });
   it('covers the document, including portals, and restores the theme on reset/unmount', () => {
     vi.stubGlobal('electronAPI', undefined);
     const { unmount } = render(

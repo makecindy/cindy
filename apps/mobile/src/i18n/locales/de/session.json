@@ -829,7 +829,10 @@
     "quotaReset": "{{left}} % übrig · Zurücksetzung in {{reset}}",
     "confirm": "Wechseln",
     "remember": "Wechseln und künftig automatisch wechseln (nur für diese Aufgabe)",
-    "cancel": "Abbrechen"
+    "cancel": "Abbrechen",
+    "disable": "Nicht automatisch wechseln (diese Aufgabe)",
+    "disableFailed": "Es konnte nicht bestätigt werden, ob deine Auswahl gespeichert wurde. Prüfe die Verbindung und ob Cindy auf dem Computer mit dieser Aufgabe aktuell ist, und versuche es erneut. Diese Nachricht wird wie gewohnt gesendet.",
+    "moreOptions": "Weitere Optionen"
   },
   "messageEdit": {
     "editing": "Nachricht bearbeiten",

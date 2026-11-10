@@ -1,3 +1,8 @@
+import { flushStandbyUsage, importStandbyUsage } from './providerShareAvailabilityUsage.js';
+import { publishShareAvailability, refreshStandbyGuests } from './providerShareAvailability.js';
+import { onProviderGroupChanged } from '../provider-group/store.js';
+import { onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
+import { onDeviceLinkSettingChanged } from './settings-store.js';
 import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
 import { readMemberBudgetStatus, supportsMemberBudget } from './providerShareBudgetRuntime.js';
@@ -47,16 +52,18 @@ import {
   type ProviderUsageHistoryView,
 } from '../../shared/providerShare.js';
 import { getAuthState, getDeviceId } from '../authManager.js';
-import { parseProviderShareInsights, PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
+import { type ProviderShareInsights, parseProviderShareInsights, PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
 import { isProviderGroupProviderId } from '../../shared/providerGroup.js';
 import { providerShareVisibility } from './providerShareVisibility.js';
 import { remoteModelAccess } from './remoteModelAccess.js';
 import { isRemoteModelSelection, type RemoteModelAccessView } from '../../shared/remoteModelAccess.js';
 import { createProviderShareInsightsReader } from './providerShareInsights.js';
-import { readProviderShareQuota, readProviderShareQuotaAccount } from './providerShareQuota.js';
+import { readProviderShareQuota, readProviderShareQuotaAccountResult } from './providerShareQuota.js';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
+import { focusMainWindow } from '../deepLink.js';
+import { isFocusedAppContentWindow } from '../windowFocusClassifier.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -158,6 +165,7 @@ let directForgetAgain = false;
 let directForgetCursor = 0;
 let directForgetEpoch = 0;
 const liveNotifications = new Set<Notification>();
+let notificationSequence = 0;
 
 function emit(channel: string, payload: unknown): void {
   try {
@@ -172,18 +180,8 @@ function notifyControlledModelCatalogChanged(): void {
   tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, {});
 }
 
-function focusMainWindow(): void {
-  const win = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  win.setAlwaysOnTop(true);
-  win.show();
-  win.focus();
-  win.setAlwaysOnTop(false);
-}
-
 function appInForeground(): boolean {
-  return BrowserWindow.getAllWindows().some((win) => !win.isDestroyed() && win.isVisible() && win.isFocused());
+  return BrowserWindow.getAllWindows().some((win) => isFocusedAppContentWindow(win) && win.isVisible());
 }
 
 /** 系统通知：不含配对码(产品规则 §6.1)。点击把窗口拉到前台并打开对应界面。 */
@@ -196,15 +194,21 @@ async function notify(title: string, body: string, onClick: () => void): Promise
     return;
   }
   const notification = new Notification({ title, body });
+  // Local sequence only: never log notification text, pairing codes or share URLs.
+  const sequence = ++notificationSequence;
+  const trace = (phase: string) => log.info('share notification lifecycle', { sequence, phase });
+  trace('created');
   liveNotifications.add(notification);
   const release = () => liveNotifications.delete(notification);
+  notification.on('show', () => trace('show'));
   notification.on('click', () => {
+    trace('click');
     focusMainWindow();
     onClick();
     release();
   });
-  notification.on('close', release);
-  notification.on('failed', release);
+  notification.on('close', () => { trace('close'); release(); });
+  notification.on('failed', () => { trace('failed'); release(); });
   notification.show();
 }
 
@@ -328,7 +332,48 @@ const reshareEvents: ProviderShareReshareEvents = {
 };
 
 /** 设备互联连上(本实例持有连接)时启动；断开、登出或失去持有权时停止。 */
+let stopAvailabilityPublisher: (() => void) | undefined;
+let availabilityPublishing = false;
+let availabilityPublishPending = false;
+let availabilityPublisherEpoch = 0;
+let availabilitySnapshot: string | undefined;
+function queueAvailabilityPublish(): void {
+  if (!running) return;
+  availabilityPublishPending = true;
+  if (availabilityPublishing) return;
+  availabilityPublishing = true;
+  void (async () => {
+    try {
+      while (running && availabilityPublishPending) {
+        availabilityPublishPending = false;
+        const epoch = availabilityPublisherEpoch;
+        const shares = getProviderShareHostSnapshot();
+        for (const work of [refreshStandbyGuests, () => publishShareAvailability(shares), flushStandbyUsage,
+          ...shares.map(share => () => importStandbyUsage(share.shareId))]) {
+          if (!running || epoch !== availabilityPublisherEpoch) break;
+          try { await work(); }
+          catch (error) { log.warn('shared standby synchronization unavailable', { error: String(error) }); }
+        }
+      }
+    } finally { availabilityPublishing = false; }
+  })();
+}
 export function startProviderShareRuntime(broadcast: Broadcast, options: { invoke?: ShareInvoke } = {}): void {
+  stopAvailabilityPublisher?.();
+  const stopGroup = onProviderGroupChanged(queueAvailabilityPublish);
+  const stopModels = remoteModelAccess.subscribe(queueAvailabilityPublish);
+  const stopAccess = onRemoteProviderAccessChanged(queueAvailabilityPublish);
+  const stopSettings = onDeviceLinkSettingChanged(key => { if (key === 'remoteControlEnabled') queueAvailabilityPublish(); });
+  const timer = setInterval(queueAvailabilityPublish, 60_000);
+  timer.unref?.();
+  availabilitySnapshot = undefined;
+  availabilityPublisherEpoch += 1;
+  stopAvailabilityPublisher = () => {
+    availabilityPublisherEpoch += 1;
+    availabilityPublishPending = false;
+    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopSettings();
+  };
+
   // 启动仲裁可能早于 IPC 注册；必须在 host 的第一轮快照前配置持久归属。
   configureProviderShareApprovalWindows({
     filePath: () => ownerScopedUserDataPath('provider-share-approval-windows.json'),
@@ -382,9 +427,20 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       }, member.joinedAt);
     },
     changed() {
+      // Polling also emits unchanged snapshots. Only permission/identity changes
+      // need an immediate full pass; periodic refresh still checks executor health.
+      const snapshot = JSON.stringify(getProviderShareHostSnapshot().map(share => ({
+        shareId: share.shareId, hostDeviceId: share.hostDeviceId, providerId: share.providerId,
+        members: share.members.map(member => [member.memberId, member.joinedAt, member.status]),
+      })));
+      if (snapshot !== availabilitySnapshot) {
+        availabilitySnapshot = snapshot;
+        queueAvailabilityPublish();
+      }
       emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
     },
     requested(request, share, quiet) {
+      log.info('share approval received', { source: 'owner', quiet });
       emit(PROVIDER_SHARE_IPC.REQUESTED, {
         request,
         share: { shareId: share.shareId, providerId: share.providerId, providerLabel: share.providerLabel },
@@ -399,6 +455,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       );
     },
     watchedRequested(item) {
+      log.info('share approval received', { source: 'watcher' });
       emit(PROVIDER_SHARE_IPC.REQUESTED, item);
       // 审批弹窗已在排队：点通知只把窗口拉到前台。
       void notify(
@@ -450,6 +507,8 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
 }
 
 export function stopProviderShareRuntime(): void {
+  stopAvailabilityPublisher?.();
+  stopAvailabilityPublisher = undefined;
   invalidateProviderShareGuestPrefsCache();
   running = false;
   directForgetEpoch += 1;
@@ -1002,7 +1061,7 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       return result;
     }
     case 'quota-account':
-      return readProviderShareQuotaAccount(command.providerId);
+      return readProviderShareQuotaAccountResult(command.providerId);
     case 'insights': {
       const assertOwner = captureProviderManagementScope();
       const share = findReceivedShare(command.shareId);
@@ -1127,6 +1186,14 @@ async function execute(command: ProviderShareCommand, assertCurrent: () => void 
       return { skip: isProviderShareCredentialConsentSkipped(command.shareId) };
     }
   }
+}
+
+/** Native quota panel uses the same authenticated read as the sharing details. */
+export async function readReceivedProviderShareQuota(shareId: string): Promise<ProviderShareInsights> {
+  const assertCurrent = captureProviderManagementScope();
+  const result = await execute({ action: 'insights', shareId, includeUsage: false }, assertCurrent);
+  assertCurrent();
+  return result as ProviderShareInsights;
 }
 
 /**
@@ -1282,6 +1349,7 @@ export function registerProviderShareIpc(): void {
 
 /** 深链 `cindy://provider-share/join?...` → 让 Renderer 打开申请弹窗。 */
 export function openProviderShareJoin(link: string): void {
+  log.info('share join activation');
   focusMainWindow();
   emit(PROVIDER_SHARE_IPC.OPEN_JOIN, { link });
 }

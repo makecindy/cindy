@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件実行中",
       "limitAria": "{{name}} の同時実行数の上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同時 {{count}}",
       "weightAria": "{{name}} の重み",
       "weightOption": "重み {{weight}}",
       "assignAria": "{{name}} に割り当てる",
@@ -873,6 +873,7 @@
         "pausedLocal": "他のパソコンからの新しいタスクは受付停止中",
         "cooling": "クールダウン中",
         "coolingUntil": "クールダウン中 · {{time}} ごろ回復",
+        "quotaExhausted": "クォータを使い切りました",
         "offline": "オフライン",
         "unreachableHere": "このパソコンから接続できません",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。直近数回のやり取りと要約は引き継がれますが、それより前の細部は失われることがあります。",
       "quota": "残り {{left}}%",
       "quotaReset": "残り {{left}}%・{{reset}}",
-      "confirm": "切り替える",
-      "cancel": "キャンセル",
-      "remember": "今後は確認せず自動で切り替える（このタスクのみ）"
+      "confirm": "今回だけ切り替える",
+      "cancel": "今は切り替えない",
+      "remember": "今後は確認せず自動で切り替える",
+      "disable": "自動では切り替えず、確認もしない",
+      "disableFailed": "選択が保存されたか確認できませんでした。接続を確認し、タスクがあるパソコンの Cindy を最新版にしてから、もう一度お試しください。このメッセージは通常どおり送信されます。",
+      "choiceLabel": "切り替え方法（このタスクのみ）",
+      "send": "メッセージを送信"
     },
     "deleteConfirm": {
       "title": "{{provider}} のプロバイダーグループを削除しますか？",
@@ -1429,13 +1434,19 @@
       "actionFailed": "操作を完了できませんでした。通知は保持されています。もう一度お試しください。",
       "newConversationTitle": "新しいセッション",
       "newConversationHint": "新しいセッションを開始",
-      "muteSound": "Agent Island の音をミュート",
-      "enableSound": "Agent Island の音を有効化",
-      "settings": "Agent Island 設定",
+      "muteSound": "Agent Notch の音をミュート",
+      "enableSound": "Agent Notch の音を有効化",
+      "settings": "Agent Notch 設定",
       "newMessage": "新規メッセージ",
       "review": "確認",
       "needsInput": "入力が必要",
       "completed": "完了",
+      "liveActivityRunning_one": "{{count}} 件のタスクを実行中",
+      "liveActivityRunning_other": "{{count}} 件のタスクを実行中",
+      "liveActivityAlsoRunning_one": "ほかに {{count}} 件実行中",
+      "liveActivityAlsoRunning_other": "ほかに {{count}} 件実行中",
+      "liveActivityWaiting_one": "{{count}} 件のタスクが返答待ち",
+      "liveActivityWaiting_other": "{{count}} 件のタスクが返答待ち",
       "error": "エラー",
       "input": "入力",
       "done": "完了",
@@ -1454,6 +1465,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "共有",
+      "note": "アカウント全体で共有する利用枠です。あなた専用の枠ではありません。",
+      "highestWeekly": "共有 · 週の残り最多",
+      "highestWeeklyNote": "読み取れるアカウントで週間クォータの残りが最多のものです。アカウント共用の枠で、合算値や個人専用の枠ではありません。",
+      "from": "{{name}} からの共有"
+    },
     "balance": {
       "name": "Cindy 残高",
       "quotaName": "Cindy の今期クォータ",
@@ -1775,7 +1793,7 @@
       "apiKeys": "ツールキー",
       "voiceInput": "音声入力",
       "shortcuts": "キーボードショートカット",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "import": "セッションインポート",
       "connections": "サードパーティ連携",
       "providers": "プロバイダー",
@@ -1797,7 +1815,7 @@
       "billing": "使用量と請求",
       "appearance": "外観",
       "notifications": "通知",
-      "agentIsland": "Agent Island",
+      "agentIsland": "Dynamic Island",
       "collaboration": "コラボレーション",
       "agentResource": "Agent リソース使用量",
       "gitSafety": "Git セーフティ",
@@ -2242,6 +2260,10 @@
         },
         "visibilityLabel": "壁紙の表示濃度",
         "visibilityHint": "0% で壁紙を非表示にし、100% でそのまま表示します。",
+        "desktopVisibilityLabel": "デスクトップの透明度",
+        "desktopVisibilityHint": "Cindy の背後にあるデスクトップやウィンドウを透かします。文字や操作部分は鮮明に保たれます。",
+        "desktopBlurLabel": "デスクトップのぼかし",
+        "desktopBlurHint": "背後のデスクトップをぼかします。0 でオフ、値が大きいほど強くなります。強さを調整できない OS では標準の効果を使います。",
         "blurLabel": "壁紙のぼかし",
         "blurHint": "壁紙だけをぼかします。0でオフになります。動く壁紙のぼかしはGPU負荷を増やします。",
         "motionLabel": "表示方法",
@@ -2273,7 +2295,7 @@
     "notifications": {
       "title": "通知",
       "sessionDoneLabel": "システム通知",
-      "sessionDoneHint": "セッションの完了、エラー、返信が必要なときに通知します。通常のセッションでは、ウィンドウが背面にあるときのみ通知します。Agent Island が有効な場合は、そちらでお知らせします。",
+      "sessionDoneHint": "セッションの完了、エラー、返信が必要なときに通知します。通常のセッションでは、ウィンドウが背面にあるときのみ通知します。Agent Notch または Dynamic Island がオンの場合は、そちらでお知らせします。Dynamic Island のみオンのときは、エラーはシステム通知でお知らせします。",
       "sessionDoneAria": "セッションのシステム通知を切り替え",
       "feishuLabel": "セッション完了または返信が必要な時に Feishu / Lark メッセージを送信",
       "feishuHint": "連携済みの Feishu または Lark ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
@@ -2385,28 +2407,31 @@
       }
     },
     "agentIsland": {
-      "title": "Agent Island",
-      "unsupported": "Agent Island を利用するには macOS 14 以降が必要です。",
+      "title": "Dynamic Island",
+      "unsupported": "Agent Notch を利用するには macOS 14 以降が必要です。",
       "subtleRemindersLabel": "控えめな通知",
-      "subtleRemindersHint": "新着メッセージ、返答が必要な項目、エラーは、アイランドの下に通知カードを表示せず、アイコンの変化で知らせます。アイランドをクリックすると、タスク一覧を確認できます。",
+      "subtleRemindersHint": "新着メッセージ、返答が必要な項目、エラーは、Agent Notch の下に通知カードを表示せず、アイコンの変化で知らせます。Agent Notch をクリックすると、タスク一覧を確認できます。",
       "subtleRemindersFailed": "通知設定を保存できませんでした。もう一度お試しください。",
-      "enableLabel": "Agent Island を表示",
-      "enableHint": "実行中、返信が必要、未読の完了タスクを画面上部に表示します。オンにすると同種のシステム通知を抑制し、二重通知を防ぎます。",
-      "enableAria": "Agent Island を切り替え",
+      "liveActivityLabel": "Dynamic Island にタスクを表示",
+      "liveActivityHint": "新しい MacBook Pro の Dynamic Island にタスクの進行状況を表示し、対応が必要なときや完了したときに展開します。その他の Mac ではメニューバーに表示されます。Agent Notch とは別に動作します。",
+      "liveActivityFailed": "ライブアクティビティの設定を保存できませんでした。もう一度お試しください。",
+      "enableLabel": "Agent Notch を表示",
+      "enableHint": "画面上部にタスクの進行状況を表示し、対応が必要なときや結果が届いたときにお知らせします。オンの間、これらの通知はシステム通知としては届きません。",
+      "enableAria": "Agent Notch を切り替え",
       "displayLabel": "表示位置",
-      "displayHint": "Agent Island を表示するディスプレイを選択します。すべてを選ぶと各ディスプレイに表示されます。",
-      "displaySelectAria": "Agent Island のディスプレイを選択",
+      "displayHint": "Agent Notch を表示するディスプレイを選択します。すべてを選ぶと各ディスプレイに表示されます。",
+      "displaySelectAria": "Agent Notch のディスプレイを選択",
       "displayAll": "すべてのディスプレイ",
       "displayOption": "{{name}} · {{resolution}}",
       "displayNameFallback": "ディスプレイ {{index}}",
       "displayPrimary": "メイン",
       "displayInternal": "内蔵",
       "displayMissing": "接続されていないディスプレイ {{id}}",
-      "skinLabel": "アイコンスキン",
-      "skinHint": "実行中アイコンに使うキャラクタースキンを選択します。",
+      "skinLabel": "キャラクター",
+      "skinHint": "Agent Notch と Dynamic Island に表示するキャラクター。",
       "soundLabel": "イベントサウンド",
-      "soundHint": "Agent Island の各イベントに 8-bit サウンドを選択します。",
-      "soundAria": "Agent Island サウンドを切り替え",
+      "soundHint": "イベント音を設定すると、その音のみ再生します。未設定またはオフの場合は、システムの通知設定に従います。",
+      "soundAria": "Agent Notch サウンドを切り替え",
       "soundSelectAria": "{{event}} のサウンド",
       "soundPreviewAria": "{{event}} のサウンドをプレビュー",
       "skinAnimationAria": "{{skin}} のプレビューアニメーションを切り替え",
@@ -2429,7 +2454,7 @@
         },
         "boli": {
           "name": "Boli",
-          "description": "軽く跳ねるピンクの Boli。Agent Island を少しやわらかく、軽快な雰囲気にします。"
+          "description": "軽く跳ねるピンクの Boli。Agent Notch を少しやわらかく、軽快な雰囲気にします。"
         },
         "whitesnow": {
           "name": "アップルガール",
@@ -2460,7 +2485,7 @@
         "select": "クリック操作"
       },
       "soundOptions": {
-        "none": "なし",
+        "none": "システムに従う",
         "startup-chime": "起動チャイム",
         "ring-chime": "リングチャイム",
         "item-found": "アイテム発見",
@@ -5541,12 +5566,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome プラグインをインストール",
           "enablePluginTitle": "Cindy Chrome プラグインを有効にする",
-          "installExtensionTitle": "ブラウザに Cindy 拡張機能を追加",
+          "connectExtensionTitle": "ブラウザー拡張機能が未接続です",
           "pluginBody": "「自分のブラウザ」は Cindy Chrome プラグインとそのブラウザ拡張機能を通じて Chrome / Edge に接続します。まず Cindy でプラグインをインストールし、案内に従って拡張機能を追加してください。",
-          "extensionBody": "「ブラウザ拡張機能を追加」を押すと、使用中のブラウザで Cindy 拡張機能のストアページが開きます。「追加」を押すと、ここは自動的に「接続済み」になります。追加済みの場合は、ブラウザの拡張機能管理で有効にしてください。",
+          "connectionBody": "Cindy とブラウザーを起動したまま、Cindy 拡張機能が有効になっているか確認してください。未接続でも再インストールが必要とは限りません。再接続すると表示が自動で更新されます。",
           "installPlugin": "プラグインをインストール",
           "enablePlugin": "有効にする",
-          "installExtension": "ブラウザ拡張機能を追加",
+          "openExtensionStore": "拡張機能ストアを開く",
+          "updatingTitle": "ブラウザー接続を更新中",
+          "updatingBody": "更新が完了すると自動的に再接続します。",
+          "selectPluginTitle": "ブラウザー拡張機能を選択",
+          "selectPluginBody": "プラグインの詳細を開き、「このブラウザー拡張機能を使用」を選択して、Cindy が使用する拡張機能を確認してください。",
+          "selectPlugin": "プラグインを開く",
           "updatePluginTitle": "Cindy Chrome プラグインを更新",
           "updatePluginBody": "インストール済みの Cindy Chrome プラグインは古く、「自分のブラウザ」に対応していません。最新版に更新してから、案内に従って拡張機能を追加してください。",
           "updatePlugin": "更新する",
@@ -6133,7 +6163,7 @@
         "hook": "Cindy IM ボット"
       },
       "hook": {
-        "description": "Slack と Telegram を同じ Cindy に接続します。メッセージはこのデバイスに送られ、プロジェクト一覧とセッション実行基盤を共有します。アカウント連携と設定はプロバイダーごとに分離されます。",
+        "description": "Slack、Telegram、Feishu / Lark などを同じ Cindy に接続します。メッセージはこのデバイスに送られ、プロジェクト一覧とセッション実行基盤を共有します。アカウント連携と設定はプロバイダーごとに分離されます。",
         "slackDescription": "Slack ワークスペースを連携し、Slack から Cindy にタスクを依頼できます。",
         "slackDisabledHint": "スイッチをオンにすると Slack 認証が始まります。連携が完了すると Slack からタスクを依頼できます。",
         "slackBoundHint": "連携が完了しました。スイッチをオフにすると連携が解除され、再びオンにするには再認証が必要です。",
@@ -6354,6 +6384,45 @@
             "revoked": "連携が解除されました",
             "superseded": "別のデバイスで連携済み"
           }
+        },
+        "feishu": {
+          "description": "Feishu のメッセージを作業用パソコンで処理します。",
+          "disabledHint": "スイッチをオンにして、ブラウザで Feishu / Lark アカウントを認証するか、連携コードを bot に送信してください。",
+          "toggleAria": "Feishu / Lark 接続を切り替え",
+          "connect": "Feishu / Lark を連携",
+          "openApp": "認証ページを開く",
+          "cancel": "連携をキャンセル",
+          "retry": "再連携",
+          "openBot": "Bot を開く",
+          "unlink": "Feishu / Lark の連携を解除",
+          "unlinkConfirmTitle": "Feishu / Lark の連携を解除しますか？",
+          "unlinkConfirmDescription": "このパソコンのみ連携を解除します。",
+          "unavailableHint": "所属組織で Feishu / Lark bot がまだ設定されていません。組織の管理者にお問い合わせください。",
+          "unavailableHintPersonal": "Feishu / Lark bot は個人アカウントではまだご利用いただけません。",
+          "status": {
+            "checking": "サーバーの対応状況を確認中…",
+            "unavailable": "組織で未設定",
+            "unavailablePersonal": "未提供",
+            "disabled": "無効",
+            "none": "未連携",
+            "pending": "ブラウザで認証するか、連携コードを bot に送信してください",
+            "awaiting_confirmation": "Feishu / Lark でこのパソコンの連携アカウント変更を確認してください",
+            "confirmed": "{{user}} が Feishu / Lark bot と連携済み",
+            "denied": "認証が拒否されました",
+            "expired": "認証の有効期限切れ",
+            "failed": "連携に失敗しました",
+            "revoked": "連携が解除されました",
+            "superseded": "このパソコンは別の Feishu / Lark アカウントと連携されています",
+            "appChanged": "Feishu / Lark bot が変更されました。もう一度連携してください。"
+          },
+          "bindCode": {
+            "label": "連携コード",
+            "copy": "コードをコピー",
+            "copied": "連携コードをコピーしました",
+            "hint": "または Feishu / Lark で Cindy bot にこのコードをダイレクトメッセージで送信してください"
+          },
+          "setWorkingDevice": "作業用パソコンに設定",
+          "workingDeviceSet": "作業用パソコンに設定しました"
         }
       },
       "summary": {
@@ -6372,7 +6441,7 @@
     "tina": {
       "chat": {
         "title": "会話",
-        "description": "リポジトリに紐づかない会話です。Slack・Telegram・X で「chat」を選ぶと、会話 lane ごとにセッションを利用できます。"
+        "description": "リポジトリに紐づかない会話です。Slack・Telegram・X・Feishu / Lark で「chat」を選ぶと、会話 lane ごとにセッションを利用できます。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -6382,6 +6451,7 @@
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
         "providerX": "X",
+        "providerFeishu": "Feishu / Lark",
         "requireConnected": "{{provider}} 接続後に編集できます（上のスイッチをオンにして接続をお待ちください）。",
         "offlineLocal": "{{provider}} に接続できない間、変更はこのコンピュータに保存されます。再接続後にチャットのモデルカードへ同期します。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",
@@ -7302,6 +7372,11 @@
         "installedExpand": "インストール済みプラグイン {{count}} 件をすべて表示",
         "installedCollapse": "追加のインストール済みプラグインを隠す",
         "recommendedSection": "おすすめ",
+        "todayRecommendations": "今日のおすすめ",
+        "marketSection": "プラグインマーケット",
+        "browseMarket": "プラグインマーケットを見る",
+        "searching": "検索中…",
+        "allLoaded": "全 {{count}} 件のプラグインを表示しました",
         "updatesAvailable": "{{count}} 件のプラグイン更新があります",
         "updateAll": "すべて更新",
         "ignoreRound": "今回は無視",
@@ -7331,7 +7406,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "公式"
+          "official": "公式",
+          "community": "コミュニティ"
+        },
+        "publisherDescription": {
+          "official": "Cindy が公式に公開・保守しています",
+          "community": "コミュニティ開発者が公開・保守しています",
+          "team": "組織内の権限を持つメンバーに共有されています",
+          "custom": "追加した Git またはローカルフォルダーのマーケットから取得",
+          "local": "このコンピューター上で開発、またはローカルファイルからインストール"
         },
         "scopeAria": "プラグインの提供元を絞り込む",
         "scope": {
@@ -9847,6 +9930,8 @@
     "banner": {
       "title": "{{version}} に更新済み",
       "subtitle": "再起動して適用",
+      "nativeBuildTitle": "Apple シリコン版の準備ができました",
+      "nativeBuildSubtitle": "再起動すると切り替わります。タスクと設定はそのまま残ります",
       "viewNotes": "更新情報を見る",
       "viewNotesAria": "{{version}} の更新情報を見る",
       "button": "再起動",
@@ -9976,6 +10061,12 @@
       "description": "データベースは約 {{size}} で、{{threshold}} G を超えています。ストレージでのクリーンアップをおすすめします。",
       "openSettings": "ストレージを開く",
       "disable": "今後通知しない"
+    },
+    "nativeBuild": {
+      "title": "Intel 版の Cindy を使用中です",
+      "description": "この Mac は Apple シリコン搭載のため、Intel 版は変換して動作し大幅に遅くなります。Apple シリコン版に入れ替えても、データはそのまま残ります。",
+      "dismiss": "今回は表示しない",
+      "download": "ダウンロード"
     },
     "horizontalTabbarAria": "メインビュー切り替え",
     "tabs": {
@@ -10649,6 +10740,9 @@
         "stepFailed": "{{name}} はエラーのため、このステップを完了できませんでした",
         "stepTimeout": "{{name}} の作業に時間がかかりすぎたため、このステップを止めました",
         "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}は待機期限内に処理を開始できませんでした。今回のリクエストは終了しました。\nパートナーのオーナーに、所属するパソコンで Cindy が正常に動作し、ネットワークに接続されているか確認してもらってください。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}は返信できません：この仲間のデバイスのリモートセッション数が上限に達しました。\n仲間の所有者に不要なセッションのアーカイブを依頼するか、リモートのパソコンの所有者に「リモートと共有」で上限の変更を依頼してください。",
           "REMOTE_TOTAL_LIMIT": "{{name}}は返信できません：リモートのパソコンのセッション総数が上限に達しました。\nそのパソコンの所有者に不要なセッションの解放、または「リモートと共有」での上限変更を依頼してください。",
@@ -11294,6 +11388,9 @@
       "databaseDriver": "データベースドライバーを読み込めません。Cindy を更新または修復して再試行してください。",
       "databaseUnavailable": "元のデータベースを読み込めません。元データは変更されていません。修復後に再試行できます。",
       "fileTooLarge": "ファイルまたはインポート全体が読み取り上限を超えています。内容は切り捨てていません。",
+      "sourceFileTooLarge": "単一のファイルが読み取り上限を超えています。この項目は完全にはインポートされていません。",
+      "snapshotTooLarge": "今回読み取るデータの合計が上限を超えています。インポートは未完了です。",
+      "itemTooLarge": "この項目のファイルの合計が 128 MiB を超えています。この項目は完全にはインポートされていません。",
       "memoryMetadata": "メモリの概要またはタイトルが保存要件を満たしていません。",
       "memoryWrite": "メモリの保存または整合性確認に失敗しました。再試行できます。",
       "memoryChanged": "保存済みのメモリが変更されているため、上書きしていません。",
@@ -11437,7 +11534,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "接続済み",
@@ -11568,6 +11666,22 @@
           "existing": "Cindy で設定済みのボットを使う",
           "manual": "新しい認証情報を入力",
           "moveNote": "このボットは 設定 → IM ボット から移され、そちらは空になります。これまでの個人チャットとグループチャットは {{name}} が引き継いで返信します。"
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles サーバー",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API パスワード",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "あなたの iMessage アドレス",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "チャット GUID（カンマ区切り）",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "ローカル待受アドレス",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "ローカル待受ポート",
+          "listenPortPlaceholder": "18747",
+          "hint": "ローカルネットワークで BlueBubbles に接続し、選択したチャットのみ処理します。接続前に、これらのチャットの他の自動応答を停止してください。",
+          "uncertain": "{{count}} 件の処理結果の確認が必要です。重複を避けるため、再試行前にチャット履歴を確認してください。"
         }
       },
       "removeConfirm": {
@@ -12392,6 +12506,12 @@
       "missingDir": "フォルダが見つかりません"
     },
     "pendingQueue": {
+      "stopping": "停止処理中",
+      "queued": "順番待ち",
+      "editingInComposer": "下の入力欄で編集中…",
+      "moveUp": "1つ前へ",
+      "moveDown": "1つ後ろへ",
+      "cancelSend": "送信をキャンセル",
       "regionAria": "送信待ちメッセージのキュー",
       "listAria": "キュー内のメッセージ",
       "pausedFooter": "タスク停止、キューは一時停止中",
@@ -12639,6 +12759,10 @@
       "defer": "今はダウンロードしない"
     },
     "permissionPrompt": {
+      "titleStdin": "端末への入力を許可しますか？",
+      "titleMcpUrl": "{{server}} のリクエストを完了",
+      "mcpComplete": "完了",
+      "mcpCancel": "キャンセル",
       "alwaysAllowScoped": "このセッションでは {{scope}} を常に許可",
       "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
       "alwaysAllowSessionHint": "この 1 回のリクエストだけでなく、このセッション全体に適用されます。",
@@ -12839,6 +12963,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "この返信には表示できる処理記録がありません",
+      "unavailable": "処理記録を読み込めませんでした",
       "record": "作業履歴",
       "operations": "操作履歴",
       "elapsed": "処理中 {{duration}}",
@@ -12903,7 +13029,13 @@
       "sendAndContinue": "送信して続行",
       "close": "閉じる",
       "customAnswer": "別の回答を入力…",
-      "answerPlaceholder": "回答を入力…"
+      "answerPlaceholder": "回答を入力…",
+      "validation": {
+        "required": "この必須項目を入力してください。",
+        "choice": "一覧の選択肢から選んでください。",
+        "tooShort": "{{count}}文字以上で入力してください。",
+        "tooLong": "{{count}}文字以内で入力してください。"
+      }
     },
     "planReviewBubble": {
       "title": "計画レビュー",
@@ -13988,8 +14120,11 @@
       "mailLegacy": "下書きの履歴（読み取り専用）",
       "taskAutoArchived": "「{{title}}」をアーカイブしました",
       "taskAutoArchivedUndo": "元に戻す",
-      "taskAutoArchivePending": "離れると自動でアーカイブ",
-      "taskAutoArchiveCancel": "今回はしない"
+      "taskAutoArchivePending": "このタスクを離れると自動アーカイブします",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」は作業フォルダに未コミットの変更があるため、自動アーカイブされませんでした",
+      "taskAutoArchiveCancel": "キャンセル",
+      "taskAutoArchiveCancelled": "今回は自動アーカイブしません",
+      "taskArchiveNow": "今すぐアーカイブ"
     },
     "ghostHook": {
       "blockedFallback": "メッセージはプラグインによりブロックされました(未送信)",
@@ -19166,6 +19301,7 @@
       "apply": "移行"
     },
     "source": {
+      "receivingOn": "移行先：{{name}}",
       "description": "同じアカウントでログインしているパソコンを選んでください。そのパソコンのプラグイン、スキル、設定、接続をこのパソコンに同じように設定します。キーはそのパソコンで許可した後にだけコピーされ、ログイン状態はそのパソコンから出ません。",
       "loading": "ほかのパソコンを探しています…",
       "empty": "このアカウントのほかのパソコンが見つかりません。別のパソコンで Cindy にログインしてから、もう一度開いてください",
@@ -19576,5 +19712,55 @@
     "rendered": "文書を表示",
     "wrap": "行の折り返し",
     "lineNumbers": "行番号"
+  },
+  "subscriptionAccounts": {
+    "signIn": {
+      "checking": "ローカルアカウントを確認中…",
+      "detected": "ログイン済みのアカウントが見つかりました",
+      "useAccount": "このアカウントを使う",
+      "anotherAccount": "別のアカウントでログイン",
+      "keepExisting": "新しいアカウントはこのプロバイダーに追加されます。既存のログインは維持されます。",
+      "checkFailed": "ローカルアカウントを確認できませんでした。再試行してください。",
+      "retry": "再試行",
+      "useCodex": "Codex でログイン"
+    },
+    "title": "サブスクリプションアカウント",
+    "strategy": "負荷分散",
+    "add": "アカウントを追加",
+    "default": "既定フォルダー",
+    "defaultTag": "既定",
+    "ready": "接続済み",
+    "signedOut": "ログインが必要",
+    "unavailable": "状態を取得できません",
+    "limited": "利用上限に到達",
+    "remove": "アカウントを削除",
+    "removeTitle": "{{name}} を削除しますか？",
+    "removeDescription": "Cindy はこのアカウントにタスクを割り当てなくなります。CLI のログイン情報と会話履歴はこのコンピューターに残ります。",
+    "failed": "アカウントの取得または更新ができませんでした。CLI のログインとネットワーク接続を確認して、もう一度お試しください。",
+    "openDirectory": "アカウントフォルダーを開く",
+    "openDirectoryFailed": "アカウントフォルダーを開けませんでした。移動または削除された可能性があります。",
+    "loginAgain": "再ログイン",
+    "login": "ログイン"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy が予期せず終了しました",
+    "description": "原因を診断しますか？終了情報と機密情報を除いたログをタスクの下書きにまとめます。確認してから送信できます。強制終了や停電でも発生することがあります。",
+    "diagnose": "問題を診断",
+    "later": "今はしない",
+    "logExcerpt": "関連ログ（抜粋、不完全な場合があります）",
+    "logsUnavailable": "関連ログがありません。原因はまだ不明です。",
+    "failed": "診断情報を準備できませんでした。もう一度お試しください。"
+  },
+  "githubStar": {
+    "title": "Cindy は気に入りましたか？",
+    "description": "GitHub でスターを付けて Cindy を応援しませんか。",
+    "dismiss": "今後表示しない",
+    "action": "Cindy を応援する",
+    "starring": "星を灯しています…",
+    "thanks": "スターをありがとうございます！",
+    "thanksDescription": "応援が Cindy の成長につながります。",
+    "browserFallback": "GitHub を開いて Cindy にスターを付けてください。",
+    "openGithub": "GitHub を開く",
+    "openFailed": "GitHub を開けませんでした。"
   }
 }

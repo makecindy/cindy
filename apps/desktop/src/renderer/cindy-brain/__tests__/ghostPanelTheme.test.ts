@@ -33,9 +33,12 @@ const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 // theme strings, not the applied canvas or wallpaper-only updates. Unit tier:
 // exercise the production injector + observer with unchanged light/dark tokens,
 // and verify document/control background overrides across off -> on -> off.
+// Desktop transparency must follow the same injected canvas contract (2026-11-08).
 // jsdom does not resolve CSS variables: concrete Light/Dark token colors and
 // restoration are covered by scripts/check-ghost-wallpaper-theme.mjs in Electron.
-it.each(['light', 'dark'])('main-view canvas follows wallpaper without fading controls (%s)', async (scheme) => {
+it.each(['light', 'dark'].flatMap(scheme =>
+  ['data-wallpaper-active', 'data-desktop-background'].map(attribute => [scheme, attribute]),
+))('main-view canvas follows the background without fading controls (%s, %s)', async (scheme, attribute) => {
   const frame = document.createElement('iframe');
   document.body.append(frame);
   const guest = frame.contentWindow!;
@@ -64,20 +67,20 @@ it.each(['light', 'dark'])('main-view canvas follows wallpaper without fading co
     const body = guest.document.body;
     const input = body.querySelector('input')!;
     const original = [background(canvas), background(body), background(input)];
-    document.documentElement.setAttribute('data-wallpaper-active', 'true');
+    document.documentElement.setAttribute(attribute, 'true');
     await flush();
     expect(background(canvas)).toBe('rgba(0, 0, 0, 0)');
     expect(background(body)).toBe('rgba(0, 0, 0, 0)');
     expect(background(input)).toBe(original[2]);
     expect(styles.size).toBe(1);
-    document.documentElement.removeAttribute('data-wallpaper-active');
+    document.documentElement.removeAttribute(attribute);
     await flush();
     expect([background(canvas), background(body), background(input)]).toEqual(original);
   } finally {
     unobserve();
     injector.dispose();
     frame.remove();
-    document.documentElement.removeAttribute('data-wallpaper-active');
+    document.documentElement.removeAttribute(attribute);
     document.documentElement.style.colorScheme = '';
   }
 });
