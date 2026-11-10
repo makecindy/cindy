@@ -1,4 +1,4 @@
-import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
+import { withAvailabilityPolicyLock, withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 /**
  * 远程 Agent 的供应商级授权。
  *
@@ -89,7 +89,8 @@ export function isRemoteProviderInvocationAllowed(providerId: string): boolean {
 export async function migrateRemoteProviderAccessDefault(sharedProviderIds: ReadonlySet<string>): Promise<void> {
   store.invalidateIfChanged();
   if (store.read().defaultOpen) return;
-  return withAvailabilityPolicyMutation(undefined, async () => {
+  // 只开放、不收回任何东西(为暂停分享关掉的仍记为关闭)，不需要先停用分享的待机可用。
+  return withAvailabilityPolicyLock(async () => {
     store.invalidateIfChanged();
     const prefs = store.read();
     if (prefs.defaultOpen) return;
@@ -121,13 +122,13 @@ export async function setRemoteProviderInvocationEnabled(providerId: string, ena
     allowedProviders[providerId] = true;
     delete disabledProviders[providerId];
   } else {
-    // 默认开放后，关闭要留下记录，才分得清「没设置过」与「关掉了」。
+    // 关闭一律留下记录，才分得清「没设置过」与「关掉了」；默认开放迁移之前关掉的，迁移后也保持关闭。
     if (!(providerId in allowedProviders) && (!prefs.defaultOpen || disabledProviders[providerId] === true)) return;
-    if (prefs.defaultOpen && Object.keys(disabledProviders).length >= MAX_ENTRIES) {
+    if (disabledProviders[providerId] !== true && Object.keys(disabledProviders).length >= MAX_ENTRIES) {
       throw new Error('remote provider access limit reached');
     }
     delete allowedProviders[providerId];
-    if (prefs.defaultOpen) disabledProviders[providerId] = true;
+    disabledProviders[providerId] = true;
   }
   store.writePatch({ allowedProviders, disabledProviders });
   bumpEpoch(providerId);

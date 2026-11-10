@@ -1767,7 +1767,8 @@ function ModelSelectorContentView({
       const candidates = remoteAgentDevices.flatMap((device) => {
         if (isProviderShareAgentDeviceId(device.deviceId)) return [];
         const offered = remoteDeviceCatalogs.get(device.deviceId)?.providers.find((entry) => entry.id === provider.id);
-        return offered?.connected && offered.remoteInvocationEnabled === true && !(offered as { group?: unknown }).group
+        return offered?.connected && !offered.suspended && offered.remoteInvocationEnabled === true
+          && !(offered as { group?: unknown }).group
           ? [{ deviceId: device.deviceId, name: device.name }]
           : [];
       });

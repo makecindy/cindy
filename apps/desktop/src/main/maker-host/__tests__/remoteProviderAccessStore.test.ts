@@ -16,6 +16,7 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-provider-access-tes
 vi.mock('../../ownerContext.js', () => ({ ownerScopedPath: (name: string) => path.join(tmpDir, name) }));
 vi.mock('../../device-link/providerShareAvailabilityPolicy.js', () => ({
   withAvailabilityPolicyMutation: (_providerId: string | undefined, work: () => Promise<unknown>) => work(),
+  withAvailabilityPolicyLock: (work: () => Promise<unknown>) => work(),
 }));
 vi.mock('../logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }) },
@@ -44,5 +45,16 @@ describe('remote provider access default', () => {
     expect(store.isRemoteProviderInvocationAllowed('openai')).toBe(false);
     await store.setRemoteProviderInvocationEnabled('paused-share', true);
     expect(store.isRemoteProviderInvocationAllowed('paused-share')).toBe(true);
+  });
+
+  // PR #9740 review：分享快照还没到时关掉的供应商，迁移后不能被重新打开。
+  it('keeps a provider turned off before the migration closed', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'remote-provider-access-prefs.json'),
+      JSON.stringify({ allowedProviders: { anthropic: true, openai: true } }));
+    await store.setRemoteProviderInvocationEnabled('anthropic', false);
+    expect(store.isRemoteProviderInvocationAllowed('anthropic')).toBe(false);
+    await store.migrateRemoteProviderAccessDefault(new Set());
+    expect(store.isRemoteProviderInvocationAllowed('anthropic')).toBe(false);
+    expect(store.isRemoteProviderInvocationAllowed('openai')).toBe(true);
   });
 });

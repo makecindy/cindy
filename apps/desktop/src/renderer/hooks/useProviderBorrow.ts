@@ -19,7 +19,7 @@ export function useProviderBorrow(provider: ProviderView | null | undefined) {
     ? []
     : devices.flatMap((device) => {
       const offered = catalogs.get(device.deviceId)?.providers.find((entry) => entry.id === provider.id);
-      return offered?.connected && offered.remoteInvocationEnabled === true
+      return offered?.connected && !offered.suspended && offered.remoteInvocationEnabled === true
         ? [{ deviceId: device.deviceId, name: device.name }]
         : [];
     });

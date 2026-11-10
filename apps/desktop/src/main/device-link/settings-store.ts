@@ -290,7 +290,7 @@ function updateDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
     }
     return written;
   };
-  const task = writeChain.then(() => ['remoteControlEnabled', 'disabledControlDeviceIds', 'revokedControllers', 'modelUseRevokedControllers'].includes(key)
+  const task = writeChain.then(() => ['remoteControlEnabled', 'disabledControlDeviceIds', 'revokedControllers'].includes(key)
     ? withAvailabilityPolicyMutation(undefined, write) : write());
   writeChain = task.catch(() => undefined); // 队列不因单次失败断链
   return task;

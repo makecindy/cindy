@@ -366,10 +366,10 @@ describe('同一个供应商在几台自己的电脑上只列一项', () => {
     }),
   );
   const railNames = () => screen.getAllByRole('button').map((button) => button.getAttribute('aria-label') ?? button.textContent ?? '');
-  const withShared = async (local: Record<string, unknown>, check: () => void) => {
+  const withShared = async (local: Record<string, unknown>, check: () => void, remote: Record<string, unknown> = {}) => {
     const original = { local: catalogs.local, laptop: catalogs.byDevice['device-d'] };
     catalogs.local = [...catalogs.local, catalogs.provider('b-shared', 'B Shared', 'me@desk', local)];
-    catalogs.byDevice['device-d'] = [...original.laptop!, catalogs.provider('b-shared', 'B Shared', 'laptop-b@x', { remoteInvocationEnabled: true })];
+    catalogs.byDevice['device-d'] = [...original.laptop!, catalogs.provider('b-shared', 'B Shared', 'laptop-b@x', { remoteInvocationEnabled: true, ...remote })];
     try {
       renderNewTask();
       await act(async () => {});
@@ -399,6 +399,14 @@ describe('同一个供应商在几台自己的电脑上只列一项', () => {
       expect(railNames().filter((name) => name.startsWith('B Shared')).length).toBe(1);
       expect(railNames().some((name) => name.startsWith('B Shared · Laptop'))).toBe(true);
     });
+  });
+
+  // PR #9740 review：改选的电脑上这个供应商被暂停了，就回到本机那一项，不能两边都不显示。
+  it('pinned to a laptop where it is suspended: this computer\'s entry stays', async () => {
+    await withShared({ runLocation: 'device-d' }, () => {
+      expect(railNames().filter((name) => name.startsWith('B Shared')).length).toBe(1);
+      expect(railNames().some((name) => name.startsWith('B Shared · me@desk'))).toBe(true);
+    }, { suspended: true });
   });
 
   // PR #9740 review：收起本机那一项时，本机已有的收藏不能跟着消失。
