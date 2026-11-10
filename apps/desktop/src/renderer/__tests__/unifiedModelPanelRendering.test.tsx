@@ -16,7 +16,7 @@
 
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { FastMode } from '@cindy/maker-shared';
 import { MemoryRouter } from 'react-router-dom';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
@@ -778,6 +778,11 @@ describe('模型浮层上下文按目录来源隔离', () => {
     } } },
     { name: '被控电脑', props: { deviceId: 'other' } },
   ])('$name 的窗口与引擎切换只使用来源目录', async ({ props }) => {
+    // 同账号的另一台电脑：本机也有同名供应商时左栏只列一处，这里是用户把它们改成「运行于」那台。
+    if (props.remoteAgent?.selectedDeviceId === 'other') {
+      providersRef.providers = (localProviders as ProviderView[]).map((provider) => ({ ...provider, runLocation: 'other' }));
+      onTestFinished(() => { providersRef.providers = localProviders; });
+    }
     renderPanel(props);
     const claude = await openRowFlyout('Opus 5');
     expect(within(claude).getByText(/上下文 1M/)).toBeTruthy();

@@ -4294,7 +4294,18 @@
           "ariaLabel": "Permita que sus otras computadoras y las personas con las que comparte usen este proveedor",
           "writeFailed": "No se pudo guardar la configuración de acceso remoto. Por favor inténtalo de nuevo."
         },
-        "moreActionsAria": "Más acciones"
+        "moreActionsAria": "Más acciones",
+        "runLocation": {
+          "label": "Ejecutar en",
+          "optionLocal": "Este equipo",
+          "notSignedIn": "Sin sesión",
+          "autoBorrowing": "Este equipo no tiene sesión iniciada, así que las tareas nuevas se ejecutan en {{device}}. No hace falta iniciar sesión.",
+          "local": "Las tareas nuevas se ejecutan en este equipo. Puedes elegir otro de tus equipos con sesión iniciada.",
+          "pinned": "Las tareas nuevas se ejecutan en {{device}} con su sesión. Las tareas en curso siguen donde están.",
+          "inline": "Se ejecuta en",
+          "signInHere": "Iniciar sesión en este equipo",
+          "writeFailed": "No se pudo guardar dónde se ejecuta este proveedor. Inténtalo de nuevo."
+        }
       },
       "detect": {
         "groupLabel": "Detectado en este dispositivo",
@@ -6262,13 +6273,18 @@
         "allowInboundAria": "Activar o desactivar el permiso de {{name}} para controlar este dispositivo",
         "peerControlOff": "El control remoto no está habilitado en ese dispositivo",
         "masterOffHint": "Primero activa el interruptor principal de arriba",
-        "controllingThisMac": "Conectado a Cindy"
+        "controllingThisMac": "Conectado a Cindy",
+        "useThisDeviceModels": "Usar sus modelos aquí",
+        "allowModelUseAria": "Permitir que {{name}} use los modelos de este equipo"
       },
       "toast": {
         "revoked": "Acceso revocado para este dispositivo",
         "revokeFailed": "No se pudo revocar el acceso",
         "restored": "Acceso restaurado para este dispositivo",
-        "restoreFailed": "No se pudo restaurar el acceso"
+        "restoreFailed": "No se pudo restaurar el acceso",
+        "modelUseRestored": "Ese equipo vuelve a poder usar los modelos de este",
+        "modelUseRevoked": "Ese equipo ya no puede usar los modelos de este",
+        "modelUseFailed": "No se pudo guardar «Usar sus modelos aquí». Inténtalo de nuevo."
       },
       "sections": {
         "myDevices": "Mis dispositivos",
@@ -19987,6 +20003,7 @@
     "lineNumbers": "Números de línea"
   },
   "subscriptionAccounts": {
+    "unassigned": "Cuenta sin asignar",
     "providerManagedAuth": "El proveedor actual de Codex no permite consultar la cuenta de ChatGPT. Al añadir el proveedor, elige «$t(subscriptionAccounts.signIn.anotherAccount)» para usar una carpeta independiente.",
     "signIn": {
       "checking": "Comprobando la cuenta local…",

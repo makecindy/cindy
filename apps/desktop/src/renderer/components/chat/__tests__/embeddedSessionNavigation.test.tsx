@@ -46,6 +46,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   getSessionDeviceId: () => undefined,
   remoteProjectsStore: {
     getSessionDeviceId: () => undefined,
+    getVisibleMergedRemoteSessions: () => mocks.remoteSessions,
     pinSessionOrigin: mocks.pinSessionOrigin,
   },
 }));

@@ -10,7 +10,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 
 // Account generations are driven explicitly below; no full auth host is needed.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => 'self-a' }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => 'self-a', useOptionalDataOwnerGeneration: () => 0 }));
 
 const sharing = vi.hoisted(() => ({ received: [] as ProviderShareReceived[] }));
 vi.mock('@/features/provider-share/providerShareStore', () => ({
@@ -51,6 +51,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 import { UnifiedModelRail } from '@/components/new-chat/UnifiedModelRail';
+import { ModelSourceDetails, ModelSourceUsageProvider } from '@/components/new-chat/ModelSourceDetails';
 import {
   codexWeeklyQuota,
   localCodexQuotaView,
@@ -88,6 +89,37 @@ afterEach(() => {
 });
 
 describe('provider weekly quota identity and windows', () => {
+  // #9711 / unit: rail and row must consume the same pool snapshot, not an
+  // identity from B beside a weekly bar borrowed from paused default account A.
+  it('shares the draft account read across the rail and source rows', async () => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    reads.claude.mockImplementation(enabled => enabled ? { sevenDay: { utilization: 93 }, subscriptionType: 'pro' } : null);
+    const command = vi.fn().mockResolvedValue({ providerId: 'anthropic', configured: true, accounts: [
+      { id: 'default', identity: 'a@example.test', paused: true, status: 'ready', running: 0, limit: 4 },
+      { id: 'b', identity: 'b@example.test', plan: 'max', paused: false, status: 'ready', running: 0, limit: 4,
+        usage: { claude: { sevenDay: { utilization: 0 } } } },
+    ] });
+    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
+    const providers = [provider('anthropic', { auth: { method: 'oauth', native: 'claude' }, subscriptionAccount: { source: 'oauth', identity: 'a@example.test' } })];
+    const scope = { deviceId: null, previewSubscriptionPool: true };
+    const view = render(
+      <ModelSourceUsageProvider providers={providers} scope={scope}>
+        <UnifiedModelRail items={[{ kind: 'provider', providerId: 'anthropic' }]} active={{ kind: 'all' }}
+          providers={providers} providerLabel={() => 'Claude'} onSelect={() => {}} providerUsage={scope} />
+        <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
+      </ModelSourceUsageProvider>,
+    );
+    await act(async () => {});
+    const button = screen.getByRole('button', { name: 'Claude · b@example.test' });
+    expect(button.querySelector('[data-weekly-remaining="100"]')).not.toBeNull();
+    expect(view.container.textContent).toContain('b@example.test · Max');
+    expect(view.container.textContent).not.toContain('a@example.test');
+    expect(command.mock.calls).toEqual([
+      [{ action: 'preview', providerId: 'anthropic' }],
+      [{ action: 'read', providerId: 'anthropic' }],
+    ]);
+  });
+
   // #8010 merge regression / unit: main added Kimi after self-source normalization.
   // Run the real quota + account hooks; existing tests only covered other vendors.
   // Minimum input: A's explicit device ID and a Kimi provider read from B's catalog.

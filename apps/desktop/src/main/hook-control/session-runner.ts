@@ -1681,6 +1681,7 @@ export function createMakerHookSessionRunner(deps: {
           `item${inboundAttachmentFailures === 1 ? '' : 's'} could not be prepared.`;
         finalText = `${finalText.trimEnd()}${finalText.trim().length > 0 ? '\n\n' : ''}${warning}`;
       }
+      const process = observer.processRecord();
       return {
         status: 'ok',
         finalText,
@@ -1688,6 +1689,7 @@ export function createMakerHookSessionRunner(deps: {
         durationMs: Date.now() - startedAt,
         ...(outAttachments !== undefined ? { attachments: outAttachments } : {}),
         ...(xMediaIds !== undefined ? { xMediaIds } : {}),
+        ...(process ? { process } : {}),
       };
     },
 
