@@ -14,7 +14,6 @@ import { SessionQuickSendProvider } from '@/session/SessionQuickSendContext';
 import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
 import { useIncomingShareComposer } from '@/session/useIncomingShareComposer';
 import { incomingShareDestination } from '@/session/incomingShare';
-import { CompanionFollowUpInvitation } from '@/session/CompanionFollowUpInvitation';
 import { ModelSpeedIcon } from '@/session/ModelSpeedIcon';
 import { useSessionHistorySearch } from '@/session/useSessionHistorySearch';
 import { useContentRecoveryDiagnostics } from '@/debug/useContentRecoveryDiagnostics';
@@ -397,7 +396,6 @@ import {
   replaceComposerTextRange,
   serializeComposerDocument,
   sessionLinkComposerNode,
-  todoReferenceComposerNode,
   slashCommandTextNode,
   textComposerDocument,
   displayComposerSlashRuntimeAliases,
@@ -6304,9 +6302,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     openedCompanionSettings.current = sessionId;
     openCompanionSettings('capabilities');
   }, [routeCompanionSettings, sessionId, openCompanionSettings]);
-  const followUpScope = JSON.stringify([auth.accountGeneration, deviceId, sessionId]);
-  const [followUpEngaged, setFollowUpEngaged] = useState<string | null>(null);
-  useEffect(() => setFollowUpEngaged(null), [followUpScope]);
   const companionWorkingLabel = useCompanionWorkingLabel({ sessionId, deviceId, botId: companionDisplay?.ref.id ?? '',
     active: companionChat && showComposerActivity, messages, reconnectAttempt: remoteSessionRunStatus.reconnectAttempt });
   const companionAvatarData = companionDisplay?.display.avatar;
@@ -7431,7 +7426,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 取消归档属于任务本身,不属于页面:电脑已接收就要做,即使用户已离开这个页面。
       if (enqueueAccepted) void unarchiveSessionAfterSend(sessionId, deviceId, invoke);
       if (!sendScopeStillAlive()) return messageAccepted;
-      if (enqueueAccepted) setFollowUpEngaged(followUpScope);
       if (sessionAtSend.permissionMode === 'plan') {
         // 一次性语义(对齐桌面 PR#494 / 产品决策):计划模式只对本条消息生效,发送后
         // 自动恢复进入前的权限档;本条消息通常已按 plan 派发,切换只影响后续消息。
@@ -10229,33 +10223,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     requestAnimationFrame(() => composerInputRef.current?.focus());
   }, [applyComposerDocument, canUseComposer, currentSession, deviceId, sessionId]);
 
-  // 伙伴近况里点一条待办：作为待办引用放进输入框，主人写一句话交代，伙伴按话更新它。
-  const quoteTodoInComposer = useCallback((todo: { id: string; title: string }) => {
-    if (!canUseComposer || !companionResource) return;
-    const node = todoReferenceComposerNode({ botId: companionResource.ref.id, todoId: todo.id, title: todo.title });
-    const editor = composerInputRef.current;
-    if (editor) editor.insertNode(node);
-    else applyComposerDocument(appendComposerNode(composerDocumentRef.current, node));
-    requestAnimationFrame(() => composerInputRef.current?.focus());
-  }, [applyComposerDocument, canUseComposer, companionResource]);
-
-  // 伙伴近况里的「帮我查查」：输入框空着就作为主人的一句话直接发出（与手动发送同一条路径，带来源设备）；
-  // 已有草稿或附件时不替主人连同草稿一起发，只把这句话放进输入框。
-  const askCompanionInComposer = useCallback((text: string) => {
-    if (!canUseComposer || !composerDraftHydrated) return;
-    const idle = !composerDocumentHasContent(composerDocumentRef.current)
-      && attachments.length === 0 && pendingUploads.length === 0 && !queueEditingRef.current;
-    if (idle && sendLatestRef.current) {
-      void sendLatestRef.current({ documentOverride: textComposerDocument(text) });
-      return;
-    }
-    const node = { type: 'text' as const, text: composerDocumentHasContent(composerDocumentRef.current) ? `\n${text}` : text };
-    const editor = composerInputRef.current;
-    if (editor) editor.insertNode(node);
-    else applyComposerDocument(appendComposerNode(composerDocumentRef.current, node));
-    requestAnimationFrame(() => composerInputRef.current?.focus());
-  }, [applyComposerDocument, attachments.length, canUseComposer, composerDraftHydrated, pendingUploads.length]);
-
   const deleteMessage = useCallback((clientId: string) => {
     if (!deviceId || messageActionBusy) return;
     // 运行中能否删由被控端判定:点停止后本地运行态可能晚于被控端收敛,
@@ -10367,9 +10334,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         settingsRequest={companionSettingsRequest?.sessionId === sessionId ? companionSettingsRequest : undefined}
         working={!!companionWorkingLabel}
         sessionId={sessionId ?? ''}
-        onQuoteTodo={quoteTodoInComposer}
-        onAskCompanion={askCompanionInComposer}
-        askCompanionReady={canUseComposer && composerDraftHydrated}
         onSearch={() => setSearchOpen(true)}
         onBack={goBackToHome} />
           )}
@@ -11468,13 +11432,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     />
                   ) : null}
                 </View>
-              ) : null}
-              {companionChat && companionResource?.ref.id === 'cindy-default'
-                && companionResource.links.some(
-                          (link) => link.rel === 'conversation' && link.target.kind === 'session' && link.target.sessionId === sessionId)
-                && followUpEngaged === followUpScope && !remoteSessionRunning && !isSessionStreaming
-                && pending.length === 0 && !shareSelectionActive && !remoteUnavailableReason ? (
-                <CompanionFollowUpInvitation key={followUpScope} deviceId={deviceId} deviceName={deviceName} botId="cindy-default" />
               ) : null}
               {/* Desktop BotWorkingStatus: a teammate's paced public status stays above the composer,
                   also while the user reads older messages. Interactions carry their own panel. */}

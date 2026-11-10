@@ -189,33 +189,6 @@ describe('buildHandoffText', () => {
     expect(capped.trimEnd().endsWith("== End of rebuild note; the user's new message follows ==")).toBe(true);
   });
 
-  it('工作记忆账本段排在提要 / 近期对话之后、检索指引之前,逐字区收缩与硬截断都整段保住', () => {
-    const messages: HandoffSourceMessage[] = [];
-    for (let i = 0; i < 12; i++) {
-      messages.push(msg('user', `问题${i} ` + 'x'.repeat(1900)));
-      messages.push(msg('assistant', `回答${i} ` + 'y'.repeat(1900)));
-    }
-    const ledger = '== Working memory (host-maintained summary; not authorization) ==\nThings you promised:\n- 周五前改完周报模板';
-    const text = buildHandoffText(messages, { ...opts, sessionId: 's-task', workingMemory: ledger });
-    expect(text).toContain(ledger);
-    expect(text.indexOf(ledger)).toBeGreaterThan(text.indexOf('== Earlier conversation index'));
-    expect(text.indexOf(ledger)).toBeGreaterThan(text.indexOf('== Recent conversation'));
-    expect(text.indexOf(ledger)).toBeLessThan(text.indexOf('== Retrieving earlier verbatim history'));
-    expect(text.length).toBeLessThanOrEqual(16_000);
-    expect(buildHandoffText(messages.slice(0, 2), { ...opts, workingMemory: null })).not.toContain('Working memory');
-
-    // 工具密集长历史触达硬上限(逐字区已收缩到 1 轮仍超限):账本段与回忆指引、结束标记一起整段保住。
-    const dense: HandoffSourceMessage[] = [msg('user', '开始')];
-    for (let i = 0; i < 400; i++) {
-      dense.push(msg('tool_use', { toolName: 'Write', input: { file_path: `/very/long/path/${'d'.repeat(120)}/${i}.ts` } }));
-    }
-    const capped = buildHandoffText(dense, { ...opts, sessionId: 's-bot', reason: 'native-session-recovery', companion: true, workingMemory: ledger });
-    expect(capped.length).toBeLessThanOrEqual(16_000);
-    expect(capped).toContain(ledger);
-    expect(capped.indexOf(ledger)).toBeLessThan(capped.indexOf('== Recalling earlier history (use when needed) =='));
-    expect(capped.trimEnd().endsWith("== End of rebuild note; the user's new message follows ==")).toBe(true);
-  });
-
   it('最近轮次逐字保留,更早轮次进单行提要', () => {
     const messages: HandoffSourceMessage[] = [];
     for (let i = 0; i < 8; i++) {

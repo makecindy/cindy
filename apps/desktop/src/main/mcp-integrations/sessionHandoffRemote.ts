@@ -46,9 +46,7 @@ export type RemoteSessionHandoffErrorCode =
   | 'REMOTE_DEVICE_OFFLINE'
   | 'REMOTE_DISABLED'
   | 'REMOTE_UNAVAILABLE'
-  | 'DELIVERY_UNKNOWN'
-  /** This computer's review refused the hand-off before anything was sent. */
-  | 'DELEGATION_NOT_AUTHORIZED';
+  | 'DELIVERY_UNKNOWN';
 
 /**
  * 目标电脑明确拒绝、消息没有进入目标任务的错误码（与本机 send_to_session 同名同义）。
@@ -156,7 +154,6 @@ export function createRemoteSessionHandoff(deps: {
     } catch {
       return notSent();
     }
-    if (captured?.blocked) return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: captured.blocked };
     let response: InvokeResultPayload;
     let taskActionReceipt: string | undefined;
     const releaseReceipt = () => {

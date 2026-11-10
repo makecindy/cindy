@@ -821,12 +821,6 @@
     "failed": "No se pudo guardar. Intentar otra vez.",
     "restore": "Restaurar valores predeterminados"
   },
-  "followUp": {
-    "title": "¿Quieres que haga un seguimiento de tus sesiones?",
-    "start": "Comience a realizar un seguimiento",
-    "notNow": "Ahora no",
-    "saveFailed": "No se pudo guardar. Intentar otra vez."
-  },
   "providerGroupRebalance": {
     "title": "¿Continuar en {{label}}?",
     "body": "Para utilizar la cuota de cada cuenta de manera uniforme, envíe este mensaje desde {{label}} ({{quota}}). Los últimos mensajes y un resumen se conservan; Es posible que se pierdan detalles más antiguos.",

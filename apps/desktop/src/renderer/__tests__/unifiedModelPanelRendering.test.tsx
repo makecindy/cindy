@@ -4496,7 +4496,6 @@ vi.mock('@/features/bots/botStore', () => ({ getEffectiveBotModelSettings: () =>
 }) }));
 vi.mock('@/features/bots/botPronounContext', () => ({ useBotTranslation: () => ({ t: (key: string) => key }) }));
 import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
-import { BotTaskModelEditor } from '@/features/bots/BotTaskModelEditor';
 
 describe('teammate settings selected location catalog', () => {
   const originalProviders = providersRef.providers;
@@ -4522,14 +4521,12 @@ describe('teammate settings selected location catalog', () => {
     workerCapabilities.byAgent = {};
   });
 
-  it.each(['primary', 'backup', 'task'] as const)('shows shared-only Gemini and Terra in the %s picker', async (position) => {
+  it.each(['primary', 'backup'] as const)('shows shared-only Gemini and Terra in the %s picker', async (position) => {
     for (const model of models) {
       const route = { harness: 'codex' as const, providerId: 'xd', model: model.id,
         effort: 'high', fastMode: false, agentDeviceId: share };
       const local = { ...route, agentDeviceId: null, model: 'gpt-5.5' };
-      const view = render(position === 'task'
-        ? <BotTaskModelEditor value={route} onChange={vi.fn()} />
-        : <BotModelChainEditor value={position === 'backup' ? [local, route] : [route]} onChange={vi.fn()} />);
+      const view = render(<BotModelChainEditor value={position === 'backup' ? [local, route] : [route]} onChange={vi.fn()} />);
       const picker = view.container.querySelectorAll('button[aria-haspopup="listbox"]')[position === 'backup' ? 1 : 0]!;
       expect(picker.textContent).toContain(model.name);
       expect(picker.textContent).not.toContain('settings.auxiliaryModels.unavailable');

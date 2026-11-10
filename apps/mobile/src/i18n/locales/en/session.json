@@ -804,12 +804,6 @@
     "failed": "Could not save. Try again.",
     "restore": "Restore defaults"
   },
-  "followUp": {
-    "title": "Would you like me to follow up on your sessions?",
-    "start": "Start Following Up",
-    "notNow": "Not Now",
-    "saveFailed": "Couldn't save. Try again."
-  },
   "providerGroupRebalance": {
     "title": "Continue on {{label}}?",
     "body": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). The last few messages and a summary carry over; older details may be lost.",

@@ -37,7 +37,6 @@ import {
 import type { ByokStatus } from '../shared/modelAccess.js';
 import type { LocalPluginOauthRequest, LocalPluginSecretRequest } from '../shared/pluginOauth';
 import { REMOTE_VIEWER } from '../shared/remoteDesktopViewer';
-import type { RoutineInput } from '@cindy/maker-scheduler';
 import {
   LOGIN_ITEM_GET_CHANNEL,
   LOGIN_ITEM_SET_CHANNEL,
@@ -881,15 +880,12 @@ const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
 const fanOutMakerSessionBackgroundWorkChanged = createIpcFanOut(
   'maker:session-background-work-changed',
 );
-const fanOutBotDelegationChanged = createIpcFanOut('maker:bot-delegation:changed');
-const fanOutBotDirectMessageChanged = createIpcFanOut('maker:bot-direct-message:changed');
 const fanOutBotGroupChanged = createIpcFanOut('maker:bot-group:changed');
 const fanOutBotGroupOutboxChanged = createIpcFanOut('maker:bot-group:outbox-changed');
 const fanOutBotReadStateChanged = createIpcFanOut('maker:bot-read-state:changed');
 const fanOutCompanionCloudChanged = createIpcFanOut('maker:companion-cloud:changed');
 const fanOutBotProfileChanged = createIpcFanOut('maker:bot-profile:changed');
 const fanOutBotWorkbenchChanged = createIpcFanOut('maker:bot-workbench:changed');
-const fanOutBotAutonomyChanged = createIpcFanOut('maker:bot-autonomy:changed');
 const fanOutBotLifecycleChanged = createIpcFanOut('maker:bot-lifecycle:changed');
 const fanOutMakerPiPackagesChanged = createIpcFanOut('maker:pi-packages:changed');
 const fanOutMakerUsageTodaySpend = createIpcFanOut('usage:today-spend-changed'); // Claude USD
@@ -1252,35 +1248,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     start: (selection: CompanionImportSelection) => ipcRenderer.invoke('companion-import', 'start', selection),
     status: (requestId: string) => ipcRenderer.invoke('companion-import', 'status', requestId),
   } satisfies CompanionImportApi,
-  routines: {
-    list: (botId: string) => ipcRenderer.invoke('routines:list', botId),
-    save: (botId: string, input: RoutineInput, id?: string) =>
-      ipcRenderer.invoke('routines:save', botId, input, id),
-    remove: (botId: string, id: string) => ipcRenderer.invoke('routines:remove', botId, id),
-    runNow: (botId: string, id: string) => ipcRenderer.invoke('routines:run-now', botId, id),
-    history: (botId: string, id: string) => ipcRenderer.invoke('routines:history', botId, id),
-    sources: () => ipcRenderer.invoke('routines:sources'),
-    deliveryTargets: (botId: string) => ipcRenderer.invoke('routines:delivery-targets', botId),
-    nightlyLearning: {
-      get: (botId: string): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:get', botId),
-      setEnabled: (botId: string, enabled: boolean): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:set-enabled', botId, enabled),
-      setFrequency: (botId: string, frequency: import('../shared/botNightlyLearning').NightlyLearningFrequency): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:set-frequency', botId, frequency),
-      runNow: (botId: string): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:run-now', botId),
-      revert: (botId: string, runId: string, itemId: string, redo: boolean): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:revert', botId, runId, itemId, redo),
-      candidate: (botId: string, candidateId: string, action: 'promote' | 'decline'): Promise<import('../shared/botNightlyLearning').NightlyLearningView> =>
-        ipcRenderer.invoke('routines:nightly-learning:candidate', botId, candidateId, action),
-    },
-    onChanged: (listener: () => void) => {
-      const wrapped = () => listener();
-      ipcRenderer.on('routines:changed', wrapped);
-      return () => ipcRenderer.removeListener('routines:changed', wrapped);
-    },
-  },
   platform: process.platform,
   accessibilitySupport: createAccessibilitySupportBridge(),
   supportsBetaUpdateChannel: supportsBetaUpdateChannel(process.platform, process.arch),
@@ -6207,12 +6174,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
         list: (body: { botId: string; rootSessionId: string }): Promise<unknown> =>
           ipcRenderer.invoke('local-db:bots:dm-thread:list', body),
       },
-      todos: {
-        list: (botId: string) => ipcRenderer.invoke('local-db:bots:todos:list', botId),
-        update: (botId: string, patch: import('@cindy/maker-shared/teammate-todo').TodoPatch) => ipcRenderer.invoke('local-db:bots:todos:update', botId, patch),
-        act: (botId: string, input: {id:string;revision:number;requestId:string;locale?:string}) => ipcRenderer.invoke('local-db:bots:todos:act', botId, input),
-        dailyCheck: (botId: string, enabled?: boolean) => ipcRenderer.invoke('local-db:bots:todos:daily-check', botId, enabled),
-      },
       projects: {
         list: (botId: string): Promise<import('../shared/botWorkbench').BotProjectOption[]> =>
           ipcRenderer.invoke('local-db:bots:projects:list', botId),
@@ -6220,25 +6181,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
           ipcRenderer.invoke('local-db:bots:projects:set', botId, projectId, linked),
       },
       workbench: {
-        get: (botId: string): Promise<unknown> =>
-          ipcRenderer.invoke('local-db:bots:workbench:get', botId),
-        readTask: (botId: string, taskId: string): Promise<unknown> =>
-          ipcRenderer.invoke('local-db:bots:workbench:read-task', botId, taskId),
         followScopes: (): Promise<unknown> =>
           ipcRenderer.invoke('local-db:bots:workbench:follow-scopes'),
-      },
-      /** 伙伴自主跟进：工作台「一眼」与「自动跟进所有任务」设置（shared/botAutonomy.ts）。 */
-      autonomy: {
-        glance: (botId: string, refreshRemote = true): Promise<import('../shared/botAutonomy').BotGlance> =>
-          ipcRenderer.invoke('local-db:bots:autonomy:glance', botId, refreshRemote),
-        getSettings: (): Promise<import('../shared/botAutonomy').BotAutonomySettingsView> =>
-          ipcRenderer.invoke('local-db:bots:autonomy:settings-get'),
-        setSettings: (
-          patch: import('../shared/botAutonomy').BotAutonomySettings,
-        ): Promise<import('../shared/botAutonomy').BotAutonomySettingsView> =>
-          ipcRenderer.invoke('local-db:bots:autonomy:settings-set', patch),
-        resetSettings: (): Promise<import('../shared/botAutonomy').BotAutonomySettingsView> =>
-          ipcRenderer.invoke('local-db:bots:autonomy:settings-reset'),
       },
       listSkills: (botId: string): Promise<import('../shared/botSkill').BotSkillSummary[]> =>
         ipcRenderer.invoke('local-db:bots:skills:list', botId),
@@ -6643,24 +6587,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       parentSessionId: string,
     ): Promise<import('../shared/botDelegation').BotDelegationListResult> =>
       ipcRenderer.invoke('maker:bot-delegations:list', parentSessionId),
-    cancelBotDelegation: (
-      parentSessionId: string,
-      delegationId: string,
-    ): Promise<import('../shared/botDelegation').BotDelegationCancelResult> =>
-      ipcRenderer.invoke('maker:bot-delegation:cancel', parentSessionId, delegationId),
-    traceBotDelegationNote: (
-      parentSessionId: string,
-      delegationId: string,
-      text: string,
-    ): Promise<import('../shared/botDelegation').BotDelegationNoteTraceResult> =>
-      ipcRenderer.invoke('maker:bot-delegation:note-trace', parentSessionId, delegationId, text),
-    onBotDelegationChanged: fanOutBotDelegationChanged,
     getBotDirectMessageThread: (
       threadId: string,
       viewerBotId: string,
     ): Promise<import('../shared/botDirectMessage').BotDirectMessageThreadResult> =>
       ipcRenderer.invoke('maker:bot-direct-message-thread:get', threadId, viewerBotId),
-    onBotDirectMessageChanged: fanOutBotDirectMessageChanged,
     chatServer: {
       mask: (input: Parameters<NonNullable<import('../shared/botGroupChat').ChatServerApi['mask']>>[0]) =>
         ipcRenderer.invoke('maker:chat-server:mask', input),
@@ -6788,7 +6719,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:companion-avatar:resolve', request),
     onBotProfileChanged: fanOutBotProfileChanged,
     onBotWorkbenchChanged: fanOutBotWorkbenchChanged,
-    onBotAutonomyChanged: fanOutBotAutonomyChanged,
     runBotLifecycleAction: (
       request: import('../shared/botLifecycle').BotLifecycleActionRequest,
     ): Promise<import('../shared/botLifecycle').BotLifecycleActionResult> =>

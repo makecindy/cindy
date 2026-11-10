@@ -816,12 +816,6 @@
     "failed": "Speichern fehlgeschlagen. Versuch es erneut.",
     "restore": "Standardwerte wiederherstellen"
   },
-  "followUp": {
-    "title": "Soll ich deine Sitzungen weiterverfolgen?",
-    "start": "Nachverfolgung starten",
-    "notNow": "Nicht jetzt",
-    "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut."
-  },
   "providerGroupRebalance": {
     "title": "Auf {{label}} fortsetzen?",
     "body": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Die letzten Nachrichten und eine Zusammenfassung werden übernommen; ältere Details können verloren gehen.",

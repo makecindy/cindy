@@ -1165,7 +1165,6 @@ interface ElectronAPI {
   companionImport: import('@cindy/maker-shared/companion-import').CompanionImportApi;
   modelFavoritesHost: import('../shared/modelFavoritesSync').ModelFavoritesHostApi;
   setupMigration: import('../shared/setupMigration').SetupMigrationApi;
-  routines: import('../shared/routines').RoutinesAPI;
   platform: string;
   /** 当前 Desktop 构建是否具备 Beta 更新渠道。 */
   supportsBetaUpdateChannel?: boolean;
@@ -5148,38 +5147,13 @@ interface ElectronAPI {
         >;
         list: (body: { botId: string; rootSessionId: string }) => Promise<import('../shared/botDmThread').BotDmThreadSummary[]>;
       };
-      todos: {
-        list: (botId:string) => Promise<{items:import('@cindy/maker-shared/teammate-todo').TeammateTodo[];version:1}>;
-        update: (botId:string, patch:import('@cindy/maker-shared/teammate-todo').TodoPatch) => Promise<import('@cindy/maker-shared/teammate-todo').TeammateTodo>;
-        act: (botId:string, input:{id:string;revision:number;requestId:string;locale?:string}) => Promise<import('@cindy/maker-shared/teammate-todo').TeammateTodo | null>;
-        /** 近况「每天帮我查一次」：不传 enabled 只读；返回当前是否开着。 */
-        dailyCheck: (botId:string, enabled?:boolean) => Promise<boolean>;
-      };
       projects: {
         list: (botId: string) => Promise<import('../shared/botWorkbench').BotProjectOption[]>;
         set: (botId: string, projectId: string, linked: boolean) => Promise<import('../shared/botWorkbench').BotProjectOption[]>;
       };
       workbench: {
-        get: (botId: string) => Promise<import('../shared/botWorkbench').BotWorkbench | null>;
-        readTask: (
-          botId: string,
-          taskId: string,
-        ) => Promise<
-          | { ok: true; taskId: string; transcript: import('../shared/botWorkbench').WorkbenchTranscript }
-          | { ok: false; errorCode: string; message: string }
-        >;
-        /** 每个在用本机伙伴的逐任务责任 ID；旧宿主缺字段时不推断。`delegatedSessionIds` 只含伙伴自己开的后台任务。 */
+        /** 每个在用本机伙伴开的任务 ID；旧宿主缺字段时不推断。`delegatedSessionIds` 含它开过的全部任务，`sessionIds` 去掉已解除的。 */
         followScopes: () => Promise<Array<{ botId: string; sessionIds?: string[]; delegatedSessionIds?: string[] }>>;
-      };
-      /** 伙伴自主跟进：工作台「一眼」投影与账号级「自动跟进所有任务」设置（shared/botAutonomy.ts）。 */
-      autonomy: {
-        glance: (botId: string, refreshRemote?: boolean) => Promise<import('../shared/botAutonomy').BotGlance>;
-        getSettings: () => Promise<import('../shared/botAutonomy').BotAutonomySettingsView>;
-        setSettings: (
-          patch: import('../shared/botAutonomy').BotAutonomySettings,
-        ) => Promise<import('../shared/botAutonomy').BotAutonomySettingsView>;
-        /** 删除 override，重新跟随当前版本默认。 */
-        resetSettings: () => Promise<import('../shared/botAutonomy').BotAutonomySettingsView>;
       };
       listSkills: (botId: string) => Promise<import('../shared/botSkill').BotSkillSummary[]>;
       skills: {
@@ -5658,35 +5632,14 @@ interface ElectronAPI {
     listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
     onAgentsChanged: (cb: () => void) => () => void;
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown>;
+    /** Read-only: the V1 background tasks a teammate chat started (stored rows). */
     listBotDelegations: (
       parentSessionId: string,
     ) => Promise<import('../shared/botDelegation').BotDelegationListResult>;
-    cancelBotDelegation: (
-      parentSessionId: string,
-      delegationId: string,
-    ) => Promise<import('../shared/botDelegation').BotDelegationCancelResult>;
-    /** The owner's 补一句 from a task card leaves its trace in the Bot's chat (local tasks only). */
-    traceBotDelegationNote: (
-      parentSessionId: string,
-      delegationId: string,
-      text: string,
-    ) => Promise<import('../shared/botDelegation').BotDelegationNoteTraceResult>;
-    onBotDelegationChanged: (
-      cb: (
-        payload: import('../shared/botDelegation').BotDelegationChangedPayload,
-        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
-      ) => void,
-    ) => () => void;
     getBotDirectMessageThread: (
       threadId: string,
       viewerBotId: string,
     ) => Promise<import('../shared/botDirectMessage').BotDirectMessageThreadResult>;
-    onBotDirectMessageChanged: (
-      cb: (
-        payload: import('../shared/botDirectMessage').BotDirectMessageChangedPayload,
-        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
-      ) => void,
-    ) => () => void;
     chatServer: import('../shared/botGroupChat').ChatServerApi;
     listBotGroups: () => Promise<import('../shared/botGroupChat').BotGroupListResult>;
     getBotGroup: (
@@ -5756,8 +5709,6 @@ interface ElectronAPI {
       cb: (payload: { botId: string; change: 'created' | 'updated' }) => void,
     ) => () => void;
     onBotWorkbenchChanged: (cb: (payload: { botId: string }) => void) => () => void;
-    /** 状态表或「自动跟进所有任务」设置变化（节流 ≤ 1 次/秒）；缺 botIds = 全部伙伴。 */
-    onBotAutonomyChanged: (cb: (payload: { botIds?: string[] }) => void) => () => void;
     runBotLifecycleAction: (
       request: import('../shared/botLifecycle').BotLifecycleActionRequest,
     ) => Promise<import('../shared/botLifecycle').BotLifecycleActionResult>;
@@ -6661,8 +6612,6 @@ interface ElectronAPI {
         persistId?: string;
       }>
     >;
-    /** Detached Bot workbench only: approve its current local permission row. */
-    allowBotWorkbenchPermission: (botId: string, sessionId: string, requestId: string) => Promise<{ accepted: boolean }>;
 
     // ── 运行时切换 (Stage 2 B) ─────────────────────────────────────────────
     // session 不存在(没 send 过/已 close)时 main 侧 no-op,renderer 可乐观调用。

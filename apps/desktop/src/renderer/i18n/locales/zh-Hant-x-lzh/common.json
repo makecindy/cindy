@@ -162,12 +162,7 @@
   },
   "taskActionConfirmation": {
     "title": "確認差事操作",
-    "once": "請核下方之目標、動作與全文。所許僅及此一操作。",
-    "remove": "此將釋自動化之接收址。請核其目標，僅許此次。",
-    "permission": "此舉將代君答他差事之授權請求。請核其操作，僅許此一次。",
-    "resume": "此舉將復已暫停之執行。請核其目標，僅許此一次。",
-    "command": "此舉將於機上存或行命令，執行時不經 Agent 之工具審批。請核命令與工作目錄，僅許此一次。",
-    "authority": "此舉將立或改自運之指令，後續執行皆沿此授權。請核全部指令，所批僅用於此番儲存。"
+    "once": "請核下方之目標、動作與全文。所許僅及此一操作。"
   },
   "logSupport": {
     "title": "日誌與進言",
@@ -10189,70 +10184,20 @@
     },
     "glance": {
       "open": "{{name}}之近況",
-      "dueUnseen": "有待辦已屆期",
       "computers": "機",
       "runningHere": "方行於此機",
       "online": "在線",
       "offline": "失聯",
       "current": "當前",
       "offlineCount_other": "{{count}} 機失聯",
-      "todos": "待理",
       "showMore": "顯更多",
       "showLess": "收",
       "doneCount_other": "已畢 {{count}}",
-      "delete": "刪",
-      "deleted": "已刪，同一事此後不再記",
-      "undo": "復之",
-      "undoFailed": "不能復原，請再試",
-      "deleteFailed": "不能刪，請再試",
-      "check": "為吾查之",
-      "checkMeta": "於已連之郵件與訊中尋新待辦",
-      "checkPrompt": "為吾查已連之信箱、訊息等來源，可有須吾處理之新事；有則記為待辦。",
-      "checkFailed": "未能遣出，請再試",
-      "dailyCheck": "每日為吾查一次",
-      "dailyCheckMeta": "工作日 9:00，無新待辦則不擾",
       "recentTasks": "近日差事",
       "unread": "未讀之果",
-      "stopDailyCheck": "止每日之查",
-      "loadFailed": "待辦載入未成，點之再試",
-      "dailyCheckFailed": "未能存，請再試",
       "outputs": "所出",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "不能啟卷",
-      "source": {
-        "conversation": "君所囑",
-        "mail": "出自郵件",
-        "feishu": "出自飛書",
-        "github": "出自 GitHub",
-        "community": "出自社群",
-        "task": "出自差事"
-      }
-    },
-    "autonomy": {
-      "title": "跟進吾之差事",
-      "descriptionOn": "差事有變，{{name}}即覽其摘要而告君。",
-      "movedFrom": "已自{{name}}移至此",
-      "heldBy": "今由{{name}}主之，啟之即移至此。",
-      "routineScopeHint": "君自立之差事，亦交吾跟進；下方內建跟進，專應此等差事之變。",
-      "heldByNobody": "尚未啟",
-      "restoreDefault": "復常例（{{name}}）",
-      "saveFailed": "未能存，請再試",
-      "turnOff": {
-        "title": "停自動跟進諸差事？",
-        "description": "停之，則無同僚統跟諸差事。",
-        "confirm": "停",
-        "cancel": "罷"
-      },
-      "allowSchedulerFollow": {
-        "title": "其所開之差事，亦交{{name}}跟進",
-        "description": "常例{{scheduler}}但觀不跟。啟之，則{{name}}所開之差事未竟時，{{scheduler}}亦續而跟之。"
-      },
-      "consent": "啟之，吾將讀此機上君所立差事之摘要，析其進度，遇要變則告君。此將耗模型限額，君可隨時停之。",
-      "invitation": {
-        "title": "可要吾為君跟進差事？",
-        "start": "始跟進",
-        "notNow": "暫不啟"
-      }
+      "openFailed": "不能啟卷"
     },
     "remoteSettings": {
       "empty": "空空如也",
@@ -10274,9 +10219,6 @@
     },
     "creationName": "名",
     "settingsBack": "歸規制",
-    "sidebar": {
-      "newTaskWith": "與{{name}}新開差事"
-    },
     "title": "同僚",
     "add": "增同僚",
     "createWizard": {
@@ -10287,7 +10229,22 @@
       "description": "同僚自守其記憶與所習之法。唯須匡正時，方直啟其卷匣。",
       "contents": "內有 SOUL.md、USER.md、system_prompt.md，及 Skill 與記憶之卷匣。模型、權柄與連線仍由 Cindy 掌之。",
       "open": "啟卷匣",
-      "openFailed": "不能啟同僚之卷匣。"
+      "openFailed": "不能啟同僚之卷匣。",
+      "projectMode": {
+        "memoryReviewName": "{{name}} · 理記",
+        "carryover": {
+          "title": "升級前未竟之事",
+          "intro": "夥伴升級之時尚未了結者。有用者續之，無用者刪之。舊錄全存於夥伴資料夾之 v1-archive。",
+          "todos": "待辦",
+          "work": "案頭",
+          "threads": "進行中",
+          "commitments": "所諾",
+          "waiting": "所待",
+          "corrections": "君所糾正",
+          "routines": "例行之務待查",
+          "upgrade": "升級時未能自攜者"
+        }
+      }
     },
     "profile": {
       "title": "行狀",
@@ -10346,9 +10303,6 @@
     "model": {
       "description": "擇此同僚所用之模型。",
       "primary": "主模型",
-      "task": "差事模型",
-      "inheritPrimary": "承主模型",
-      "inheritingPrimary": "承主模型，用於新立之背景差事",
       "restoreDefault": "復預設模型"
     },
     "modelChain": {
@@ -10476,11 +10430,10 @@
       "showReplyTargetHint": "同僚回覆之上，標其所回乃君何訊。較早之回覆不顯。"
     },
     "session": {
-      "ownedByBot": "{{name}} 之背景差事",
+      "ownedByBot": "{{name}} 所開",
       "backToBot": "歸 {{name}}"
     },
     "collab": {
-      "deliveryFailed": "結果未達原言談，已存於此差事中",
       "backgroundTask": "背景差事",
       "trackedTask": "獨行而自回其果",
       "stopTask": "止差事",
@@ -10497,8 +10450,6 @@
       "actionFailed": "未能遣出，再試之。",
       "retrying": "尚未始，方再試…",
       "status": {
-        "queued": "方始",
-        "waiting": "候處置",
         "running": "方為之",
         "completed": "已畢",
         "failed": "未成",
@@ -10514,13 +10465,6 @@
       },
       "viewResult": "覽其果",
       "noWrittenResult": "無文字之果。",
-      "addNote": "補一言",
-      "addNotePlaceholder": "補言於背景差事，按 Enter 遣之",
-      "addNoteSent": "已遣予背景差事",
-      "stop": "止",
-      "lookAt": "一觀",
-      "awaitingConfirm": "候君確認：{{summary}}",
-      "awaitingConfirmGeneric": "候君確認",
       "elapsed": "已行 {{duration}}",
       "tookTime": "歷時 {{duration}}",
       "expandResult": "展其果",
@@ -10904,7 +10848,6 @@
         "planning": "方籌畫…"
       },
       "task": {
-        "label": "差事",
         "state": {
           "started": "方進",
           "waiting": "候君確認",
@@ -11260,30 +11203,6 @@
           }
         }
       },
-      "system": {
-        "group": "系統技藝",
-        "meta": "已開 {{on}} / 共 {{total}}",
-        "pageMeta": "系統技藝 · 隨 Cindy 更",
-        "use": "為此伴開之",
-        "whenOff": "關後",
-        "items": {
-          "todo": {
-            "name": "待辦",
-            "hint": "記汝所囑與彼所察之事，期至則告汝。",
-            "off": "不復記、理、告待辦；舊有待辦存焉，復開則續。"
-          },
-          "routine": {
-            "name": "常例",
-            "hint": "為汝立而守按時而行之常例。",
-            "off": "不復立、改常例；舊有常例照行，汝猶可於「常例」頁理之。"
-          },
-          "follow": {
-            "name": "案頭與督促",
-            "hint": "察汝諸任務之近況，督汝所託之任務。",
-            "off": "不復自察、自督汝之任務；汝猶可於言談中問之。"
-          }
-        }
-      },
       "learned": {
         "group": "所習技藝",
         "empty": "尚無所習之技藝。夜習將屢用之法輯為技藝，汝亦可於言談中令其記之。",
@@ -11320,10 +11239,6 @@
       "turnOn": "往開",
       "permissions": "權",
       "officialInherited": "Cindy 官方 · 隨本機啟停"
-    },
-    "systemSkills": {
-      "followOffHint": "{{name}} 之系統技藝「案頭與督促」已關，於才能頁復開之乃可用。",
-      "offHint": "系統技藝「{{skill}}」已關，於才能頁復開之乃行。"
     },
     "guided": {
       "title": "立同僚",
@@ -11470,6 +11385,10 @@
       "resumeToMove": "先復 {{name}}，再移至他機",
       "transferBusy": "{{name}} 方在回覆，待此輪畢再換機",
       "targetUnavailable": "「{{device}}」今不可用，須在線並開遠端控制",
+      "targetOutdated": "「{{device}}」之 Cindy 版本較舊，未能運行「{{name}}」，請先於彼機更新 Cindy",
+      "targetOutdatedItem": "移至「{{device}}」· 舊版 Cindy",
+      "targetOutdatedMeta": "舊版 Cindy",
+      "olderTargetNote": "「{{device}}」之 Cindy 為舊版，{{name}} 於彼依舊法而行：對話記錄照常同步，項目規約與自動之事於彼不行。",
       "shadowTitle": "此同僚已於「{{device}}」行事",
       "shadowHint": "此處言談僅可觀覽。",
       "openOnHome": "啟「{{device}}」上之同僚",
@@ -11497,7 +11416,7 @@
       "mergeLabel": "併重複之 Cindy",
       "mergeHint": "君有 {{count}} 個 Cindy：{{devices}}",
       "mergeTitle": "將 {{count}} 個 Cindy 合而為一？",
-      "mergeDescription": "合併之後，僅留一 Cindy。他 Cindy 之言談記錄、記憶、技藝、待辦與例行差事皆併入；同名而內容相異之記憶與技藝另存一份，不覆寫。他 Cindy 將停用，其資料仍存雲端與原機。",
+      "mergeDescription": "合併之後，僅留一 Cindy。他 Cindy 之言談記錄、記憶、技藝與例行差事皆併入；同名而內容相異之記憶與技藝另存一份，不覆寫。他 Cindy 將停用，其資料仍存雲端與原機。",
       "mergeKeep": "留何者之名、性情與規制",
       "mergeAction": "合而為一",
       "merged": "{{count}} 個 Cindy 已合而為一，攜來 {{messages}} 則訊",
@@ -11881,6 +11800,15 @@
       "unavailable": "目錄暫失",
       "failed": "案未能更新，請重載以核所存之果。",
       "noAvailable": "欲得更多案，可先於案錄中增之。"
+    },
+    "automations": {
+      "title": "自運",
+      "description": "{{name}} 案中之自運。於此啟閉，修改請往自運之頁。",
+      "empty": "{{name}} 尚無自運。",
+      "failed": "自運讀取未成。",
+      "toggle": "啟「{{name}}」",
+      "manage": "於自運之頁管理",
+      "create": "往自運之頁新建"
     }
   },
   "common": {
@@ -14201,6 +14129,19 @@
         "unavailable-route": "{{plugin}} 所擇之模型今不可用，此差事用"
       },
       "routed": "為此差事擇用"
+    },
+    "botStartedTasks": {
+      "started": "所啟之差事",
+      "handedTo": "所付之差事",
+      "open": "啟差事「{{title}}」",
+      "untitled": "無名之差事",
+      "startedOne": "已啟差事",
+      "handedToOne": "付與差事"
+    },
+    "botTaskLetter": {
+      "replied": "覆書",
+      "toggle": "啟閉「{{title}}」之覆書",
+      "openTask": "啟差事"
     }
   },
   "ccAgent": {
@@ -15399,7 +15340,8 @@
         "openConfigAria": "啟案之自運設定卷",
         "openConfigFailed": "啟卷未成",
         "reload": "重載",
-        "reloadAria": "重載案之自運設定"
+        "reloadAria": "重載案之自運設定",
+        "teammate": "{{name}} · 同僚"
       },
       "promote": {
         "menu": "升為案之自運",
@@ -18116,168 +18058,10 @@
     "compression": "用以精簡冗長之內容。"
   },
   "routines": {
-    "deliveryLabel": "終達",
-    "deliveryDirect": "逕現於同僚言談中",
-    "deliveryProcess": "交同僚處置後回覆",
-    "deliveryIm": "遣至訊息機器人",
-    "deliveryNone": "唯存於所行差事中",
-    "deliveryHint": "預設逕示結果，不另呼模型。啟靜默檢查後，無事則不送達。",
-    "deliveryRecipient": "受處",
-    "deliveryUnavailable": "今之受處不可用",
-    "deliveryNoRecipients": "請先連訊息機器人，且與之言談一次，再重開此設定。",
-    "deliveryFailed": "已畢，送達未成",
-    "deliveryFailedHint": "所行之結果已存。請察送達之設定；勿為補發而重行差事。",
-    "deliveryDelivered": "結果已達",
-    "onEvent": "事：{{source}} · {{event}}",
-    "triggerDetails": "觀觸發之條件（{{count}} 項，合其一即行）",
-    "noTriggers": "尚未設觸發之條件",
-    "unsavedTitle": "尚有未存之修改",
-    "unsavedDescription": "離去則捨此番於例行差事之修改。",
-    "discard": "棄其修改",
-    "continueEditing": "續修",
-    "title": "例行差事",
-    "add": "增例行差事",
-    "back": "歸例行差事",
-    "error": "無從更例行差事，請察設定後再試",
-    "empty": "晨鐘暮鼓，皆可成例：增一例行差事，告同僚何事、何時行之",
-    "enabled": "已啟",
-    "paused": "已暫止",
-    "runNow": "即行",
-    "running": "方行…",
-    "name": "名",
-    "instructions": "令",
-    "when": "何時行",
-    "addTrigger": "再增其一",
-    "removeTrigger": "去觸發器",
-    "schedule": "定時",
     "hourly": "每時",
-    "daily": "每日",
-    "weekdays": "工作日",
-    "weekly": "每週",
-    "monthly": "每月",
-    "interval": "間",
-    "advanced": "深設…",
     "everyMinutes": "每 {{count}} 分",
-    "minutes": "分鐘",
-    "expression": "Cron 式",
-    "timezone": "時區",
-    "delete": "刪例行差事",
-    "save": "存例行差事",
-    "saved": "例行差事已存",
-    "deleteConfirm": "刪此例行差事，並罷待行之執行乎？",
-    "keep": "留例行差事",
-    "openTask": "觀差事",
-    "history": "行事錄",
-    "noRuns": "此例行差事尚未行",
-    "field": "欄",
-    "operator": "條",
-    "value": "值",
-    "addFilter": "增條件",
-    "removeFilter": "去條",
     "pluginCapability": "向例行差事呈已宣告之事，唯觸發君所設之例行差事",
-    "time": "時",
-    "day": "日",
-    "weekday": "星期",
-    "status": {
-      "queued": "待行",
-      "running": "方行",
-      "success": "已畢",
-      "failed": "行之未成",
-      "interrupted": "中輟",
-      "cancelled": "已罷",
-      "skipped": "已察 · 未喚模型"
-    },
-    "sourceStatus": {
-      "listening": "方聽",
-      "disconnected": "未聽",
-      "error": "來源待察"
-    },
-    "operators": {
-      "equals": "等",
-      "contains": "含",
-      "not-equals": "不等"
-    },
-    "quiet": "察而無事則默",
-    "sessionMode": "行之方式",
-    "sessionModePersistent": "沿用同一差事（存上下文）",
-    "sessionModeFresh": "每番新開差事（隔上下文）",
-    "sessionModeHint": "沿用同一差事，則於同一例行差事之言談中續之；每番新開，則每觸發立一獨立差事，行畢即闔。",
-    "quietHint": "唯報變化或問題。提醒與定時傳送可關此項。",
-    "checkCommand": "行前檢查命令",
-    "checkHint": "選填。先於機上檢查：結束代碼 2 略此番執行，0 續行，異常仍當回報。清空即移除。",
-    "timeoutMs": "檢查逾時（毫秒，留空不限）",
-    "advancedSettings": "深設",
-    "builtinFollowUp": {
-      "name": "跟進已接之差事（內建）",
-      "hint": "差事卡住、待君、出謬、達耗用上限或已畢時跟進。唯理已交於吾之差事。"
-    },
-    "todoCheck": {
-      "name": "日查待辦"
-    },
-    "builtinNightlyLearning": {
-      "name": "夜學（內建）",
-      "title": "夜學",
-      "hint": "每日 3:30 整理與君之言談：併記憶，將屢用之法總結為技藝。無新言談則略過，不呼模型。",
-      "hintWeekly": "每週一 3:30 整理本週與君之言談：併記憶，將屢用之法總結為技藝。無新言談則略過，不呼模型。"
-    },
-    "nightly": {
-      "switchLabel": "屆時自理",
-      "paused": "已暫止。言談照常計數，重啟後屆時即理。",
-      "running": "方理…",
-      "memoryOff": "記憶已關，唯理技藝。",
-      "pending": "待理",
-      "pendingTurns_one": "言談 {{count}} 輪",
-      "pendingTurns_other": "言談 {{count}} 輪",
-      "pendingNone": "無新言談，屆時當略過",
-      "last": "前番",
-      "lastNever": "未嘗理",
-      "lastFailed": "未理竟，次番再試",
-      "lastLearned_one": "理 {{count}} 項",
-      "lastLearned_other": "理 {{count}} 項",
-      "nothing": "無所須理",
-      "viewHistory": "觀其錄",
-      "notHere": "夜學唯行於同僚之主力機。",
-      "switchHint": "無新言談則略過，不呼模型",
-      "frequency": "頻",
-      "daily": "每日",
-      "weekly": "每週",
-      "dailyHint": "每日 3:30",
-      "weeklyHint": "每週一 3:30",
-      "runNow": "即理",
-      "history": "錄",
-      "empty": "尚未嘗理。燈下黃卷待新言，有新言談，屆時當首理之。",
-      "manual": "手理",
-      "readTurns_one": "閱言談 {{count}} 輪",
-      "readTurns_other": "閱言談 {{count}} 輪",
-      "undone": "已復原",
-      "undo": "撤之",
-      "redo": "復之",
-      "watching": "方察之法",
-      "watchingHint": "僅見一次之法，暫置於此，不載入。再遇同類之事，方總結為技藝。",
-      "promote": "即記為技藝",
-      "decline": "不必學",
-      "changedSince": "此條其後已改，無從復原",
-      "failed": "未能竟，請再試",
-      "item": {
-        "memoryCreated": "新記「{{title}}」",
-        "memoryUpdated": "理記憶「{{title}}」",
-        "memoryDeleted": "刪記憶「{{title}}」",
-        "memoryMerged": "併記憶「{{title}}」入「{{into}}」",
-        "skillCreated": "新習技藝「{{title}}」",
-        "skillUpdated": "更技藝「{{title}}」",
-        "skillDisabled": "停技藝「{{title}}」",
-        "skillMerged": "併技藝「{{title}}」入「{{into}}」而停之"
-      }
-    },
-    "checkSource": "檢查之法",
-    "remote": {
-      "pause": "暫停例行差事",
-      "resume": "續行例行差事",
-      "addSchedule": "增定時條件",
-      "addInterval": "增間隔條件",
-      "addEvent": "增事件條件",
-      "filterField": "篩選欄位"
-    }
+    "advancedSettings": "深設"
   },
   "cindyMakeDoctor": {
     "description": "察此機建置 Cindy 所需之環境。用法：/cindy-make-doctor",
@@ -19328,10 +19112,7 @@
     "sourcePresent": "[來源] 使用者原話由宿主原樣保留，以為請求之背景；目前之請求見 Agent補充。",
     "sourceMissing": "[來源] 未得可核驗之使用者原話。",
     "userPrefix": "用者原言：",
-    "agentPrefix": "Agent補述：",
-    "taskSource": "[差事來源] 此差事由同僚發起。",
-    "taskId": "差事 ID：",
-    "contextReferences": "參稽："
+    "agentPrefix": "Agent補述："
   },
   "sharing": {
     "loginRequired": "登門以分享",
@@ -19778,6 +19559,10 @@
     "openDirectoryFailed": "帳號目錄未能啟，或已移或已刪。",
     "loginAgain": "重登",
     "login": "登入"
+  },
+  "sessionNotify": {
+    "finished": "此務此輪已畢，終答如下：",
+    "ended": "此務此輪未得善終，末出如下："
   },
   "crashDiagnosis": {
     "title": "Cindy 前次異常而止",
