@@ -8,8 +8,13 @@
  * 正本与语义见 main/im/shared/botImConnectionStore.ts 与 botImConnectionRuntime.ts。
  */
 
-export const BOT_IM_CHANNELS = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord'] as const;
+export const BOT_IM_CHANNELS = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord', 'imessage'] as const;
 export type BotImChannel = (typeof BOT_IM_CHANNELS)[number];
+
+/** Group participation identifiers shared by local IPC, remote settings and persistence. */
+export function isBotImGroupChatId(value: unknown): value is string {
+  return typeof value === 'string' && /^(?:-?\d{1,32}|(?:iMessage|any);\+;[^\r\n]{1,480})$/.test(value);
+}
 
 export type BotImFeishuService = 'feishu' | 'lark';
 
@@ -40,6 +45,7 @@ export const BOT_IM_CHANNEL_CHAT_VENDOR_KEY: Record<BotImChannel, string> = {
   wecom: 'wecomConversationId',
   dingtalk: 'dingtalkChatId',
   discord: 'discordChatId',
+  imessage: 'imessageChatId',
 };
 
 /** 这个会话的轮次能用某个渠道的原生 API 工具: 专线带该渠道 chat, 或主任务标记绑了该渠道。 */
@@ -103,6 +109,8 @@ export interface BotImConnectionGroupsPayload {
 }
 
 export interface BotImConnectionView extends BotImConnectionRecord {
+  /** Optional local bridge health; older clients ignore it. Never contains credentials or message text. */
+  health?: { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number };
   status: BotImConnectionStatus;
   identity: {
     /** Telegram bot 用户名 / Discord bot 标签(连上后才有); 其它渠道为 null。 */
@@ -117,6 +125,7 @@ export interface BotImConnectionListPayload {
 }
 
 export type BotImConnectionAddInput =
+  | { botId: string; channel: 'imessage'; groupAliases?: string[]; serverUrl: string; password: string; ownerAddress: string; chatGuids: string[]; listenHost: string; listenPort: number }
   | { botId: string; channel: 'telegram'; token: string; ownerUserId: string }
   | {
       botId: string;

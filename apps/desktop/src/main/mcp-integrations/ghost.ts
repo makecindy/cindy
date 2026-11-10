@@ -510,7 +510,7 @@ export interface ToolResultImageDescription {
 }
 
 export interface CindyGhostsHostDeps {
-  pluginMarket?: Pick<PluginMarketService, 'snapshot' | 'detail' | 'install'>;
+  pluginMarket?: Pick<PluginMarketService, 'query' | 'detail' | 'install'>;
   createMediaDownloadContext?: (sessionId: string, sessionInstanceId: string) => MediaDownloadContext | undefined;
   /** 当前 Desktop 版本；Forge scaffold 用它生成具体插件包的默认最低版本。 */
   getAppVersion?: () => string;
@@ -2085,13 +2085,17 @@ export function getCindyGhostsMcpDeps(
     },
     connectAccount: async (target, signal) => {
       const context = resolveSessionContext();
-      const sessionId = ghostSetupInteractionSessionId(context);
+      // Persistent owner-chat cards outlive this turn and render on Desktop.
+      // Only the verified teammate owner session may bypass the headless waiter
+      // guard; ordinary/guest sessions still need an interactive turn surface.
+      const botAuthorizationSession = !!context?.sessionId && await isBotAuthorizationSession(context.sessionId);
+      const sessionId = botAuthorizationSession ? context!.sessionId : ghostSetupInteractionSessionId(context);
       if (!sessionId) return { ok: false, errorCode: 'NO_SESSION_CONTEXT' };
       if (signal?.aborted) return { ok: false, errorCode: 'SETUP_CANCELLED' };
       // The persistent teammate service retains its own session/policy checks.
       // Ordinary tasks use the same setup gate as ghost_call, without dispatching
       // a business tool or granting files merely to obtain a connection card.
-      if (target.kind === 'host' || await isBotAuthorizationSession(sessionId)) {
+      if (target.kind === 'host' || botAuthorizationSession) {
         if (signal?.aborted) return { ok: false, errorCode: 'SETUP_CANCELLED' };
         const service = getBotAuthorizationService();
         if (!service) return { ok: false, errorCode: 'HOST_NOT_READY' };

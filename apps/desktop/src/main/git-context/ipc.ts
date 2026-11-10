@@ -522,6 +522,30 @@ export async function readSessionPrStatus(
   }
 }
 
+/** 与电脑端任务页 areAllTaskPrsMerged 同一上限:超过这么多关联 PR 的任务不算可归档。 */
+const MAX_TASK_ARCHIVE_PRS = 30;
+const PR_STATUS_BATCH = 10;
+
+/**
+ * 手机读插件卡片的归档按钮用：任务记录的每个 PR 都确认已合并才算完成(与电脑端任务页同一判据)。
+ * 没有关联 PR、超过上限、任一 PR 查不到或失败都返回 false,卡片上不露出归档。
+ */
+export async function readSessionPrsAllMerged(sessionId: string): Promise<boolean> {
+  if (!prStatusService) return false;
+  try {
+    const refs = await listPrRefs(sessionId);
+    if (refs.length === 0 || refs.length > MAX_TASK_ARCHIVE_PRS) return false;
+    for (let i = 0; i < refs.length; i += PR_STATUS_BATCH) {
+      const batch = refs.slice(i, i + PR_STATUS_BATCH);
+      const statuses = await prStatusService.getStatuses(batch, { remote: true });
+      if (statuses.length !== batch.length || !statuses.every((status) => status.ok && status.status === 'merged')) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 应用退出时清理 watcher 订阅。 */
 export async function disposeGitContext(): Promise<void> {
   await gitContextService?.dispose();

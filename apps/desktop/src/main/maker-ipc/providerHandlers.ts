@@ -1,3 +1,4 @@
+import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 import { bindModelSourceSnapshot, acceptsModelSourceSnapshot, modelSourceRequestSignature, issueModelSourceSnapshot } from '../maker-host/model-source-snapshots.js';
 import { buildModelsFetchRequest } from '../maker-host/provider-model-fetch.js';
 import { getProviderRouteCredentialRevision } from '../maker-host/provider-route.js';
@@ -450,7 +451,7 @@ export interface ProviderHandlerDeps {
   setProviderDisabled(providerId: string, disabled: boolean): void;
   /** Per-provider opt-in for remote Agent use; absent means disabled. */
   getRemoteProviderInvocationEnabled?(providerId: string): boolean;
-  setRemoteProviderInvocationEnabled?(providerId: string, enabled: boolean): void;
+  setRemoteProviderInvocationEnabled?(providerId: string, enabled: boolean): void | Promise<void>;
   /**
    * 「恢复默认」= 删除该供应商的整组停用 override(供应商级 + 全部逐模型条目,含
    * 指向已下架模型的陈旧条目)。语义遵循 docs/dev-rules/configuration-and-overrides.md
@@ -858,7 +859,7 @@ export function registerProviderHandlers(
     beginProviderConfigMutation(providerId);
     try {
       await previous.catch(() => undefined);
-      return await operation(commitRouteMutation);
+      return await withAvailabilityPolicyMutation(providerId, () => operation(commitRouteMutation));
     } finally {
       release();
       if (providerConfigMutationTails.get(providerId) === tail) {
@@ -1789,7 +1790,7 @@ export function registerProviderHandlers(
       deps.broadcastChanged();
       return { ok: true };
     };
-    return enqueueDisableWrite(run);
+    return withAvailabilityPolicyMutation(i.providerId as string, () => enqueueDisableWrite(run));
   };
   registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
@@ -1816,7 +1817,7 @@ export function registerProviderHandlers(
     if (!provider) throwIpcError('INVALID_PARAMS', `unknown providerId "${value.providerId}"`);
     assertProviderMutationOwner(ownerAtIngress, 'active account changed before persisting remote provider access');
     try {
-      deps.setRemoteProviderInvocationEnabled(value.providerId, value.enabled);
+      await deps.setRemoteProviderInvocationEnabled(value.providerId, value.enabled);
     } catch (err) {
       log.warn('remote provider access persist failed', {
         providerId: value.providerId,
@@ -2807,6 +2808,12 @@ export function registerProviderHandlers(
     const providerId = requireProviderId(input);
     let failure: ProviderModelDiscoveryFailure | null;
     try {
+      // Settings and helper rediscovery must use the same live source. The legacy
+      // discovery hook may be a no-op for SDK-backed subscription providers.
+      if (isBuiltinRefreshableProviderId(providerId)) {
+        await deps.refreshBuiltinModels(providerId);
+        return { ok: true };
+      }
       failure = await deps.rediscoverModels(providerId);
     } catch (err) {
       // 原文只进 Main 日志:凭证读取 / token 刷新等依赖抛出的消息可能含内部路径或上游

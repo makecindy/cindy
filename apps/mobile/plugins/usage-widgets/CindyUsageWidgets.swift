@@ -446,6 +446,7 @@ struct CindyUsageWidgetsBundle: WidgetBundle {
   var body: some Widget {
     QuotaWidget()
     DailyUsageWidget()
+    CindyAgentActivityWidget()
   }
 }
 

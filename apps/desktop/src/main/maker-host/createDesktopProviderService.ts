@@ -1,4 +1,4 @@
-import { isModelContextLimitCustomized } from './model-context-limit-store.js';
+import { isModelContextLimitCustomized, readModelContextLimits } from './model-context-limit-store.js';
 import { requestCodexApiModelProbe } from './codex-api-model-capabilities.js';
 import { readModelPriceOverrideView } from '../usage/modelPriceOverrideStore.js';
 import { readProviderPresentation } from './provider-presentation-store.js';
@@ -1015,6 +1015,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
   }
   if (singleton) return singleton;
   singleton = createProviderService({
+    getModelContextLimits: readModelContextLimits,
     projectProvider: projectSubscriptionFastPolicy,
     getProviderPresentation: (providerId) => {
       const presentation = readProviderPresentation(providerId);

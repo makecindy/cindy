@@ -81,6 +81,11 @@ export const appearanceSettings = defineSettings({
       'settings.appearance.wallpaper.visibilityHint',
       'settings.appearance.wallpaper.blurLabel',
       'settings.appearance.wallpaper.blurHint',
+      'settings.appearance.wallpaper.desktopVisibilityLabel',
+      'settings.appearance.wallpaper.desktopVisibilityHint',
+      'settings.appearance.wallpaper.desktopBlurLabel',
+      'settings.appearance.wallpaper.desktopBlurHint',
+
     ],
     options: [
       { value: 'static', labelKey: 'settings.appearance.wallpaper.motionStatic', isVisible: ({ wallpaperMotionAvailable }) => wallpaperMotionAvailable === true },

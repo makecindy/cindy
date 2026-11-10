@@ -13,7 +13,7 @@ import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExp
 
 vi.mock('react-native', () => ({
   Platform: { OS: 'ios' },
-  useWindowDimensions: () => ({ fontScale: 1 }),
+  Dimensions: { get: () => ({ fontScale: 1 }), addEventListener: () => ({ remove() {} }) },
   StyleSheet: { flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) },
 }));
 vi.mock('react-native-uitextview', () => ({ UITextView: (props: SurfaceProps) => UITextView(props) }));

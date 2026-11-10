@@ -834,7 +834,10 @@
     "quotaReset": "{{left}}% restante · reposição em {{reset}}",
     "confirm": "Mudar",
     "remember": "Mudar e fazê-lo automaticamente a partir de agora (apenas nesta tarefa)",
-    "cancel": "Cancelar"
+    "cancel": "Cancelar",
+    "disable": "Não mudar automaticamente (esta tarefa)",
+    "disableFailed": "Não foi possível confirmar se a tua escolha foi guardada. Verifica a ligação e se o Cindy está atualizado no computador onde está a tarefa e tenta novamente. Esta mensagem será enviada normalmente.",
+    "moreOptions": "Mais opções"
   },
   "messageEdit": {
     "editing": "A editar a mensagem",
