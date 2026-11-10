@@ -15,8 +15,8 @@ import {
   encodePushTransfer,
   encodedPushDictionary,
   isEncodedPushPayload,
+  acceptedPushDeflateDictionaries,
   pushDeflateCapabilities,
-  selectPushDeflateDictionary,
 } from './pushTransfer.js';
 import { decodeScopedEnvelope, encodeScopedEnvelope, type ScopeSupport } from './providerShareEnvelope.js';
 import { isProviderSharePeer, parseProviderSharePeer } from './providerSharePeer.js';
@@ -2218,7 +2218,7 @@ export class DeviceLinkClient {
       if (peerSupportsReliable) this.issueProviderShareDirectLease(dst);
     } else {
       // 没有对得上的 link-open 声明(被挤出或 requestId 不符):不知道对端能否解压缩推送。
-      this.setPeerPushDeflate(dst, peer, undefined);
+      this.setPeerPushDeflate(dst, peer, []);
     }
     peer.linkAcceptedInbound = true;
     peer.duplicateOpenRepair = null;
@@ -2261,7 +2261,7 @@ export class DeviceLinkClient {
     const peer = this.peerTransport.get(dst);
     // 只对走可靠传输、链路未被显式关闭、且最近一次 link-open 声明过能力的同账号控制端编码;
     // 显式关闭后仍可发的旧路径推送(远控授权、插件同步等)照旧明文,对端此时可能已换版本。
-    if (codec?.deflateRawBase64 && peer?.reliable && peer.acceptsPushDeflate && !peer.explicitlyClosed
+    if (codec?.deflateRawBase64 && peer?.reliable && peer.pushDeflateDict !== undefined && !peer.explicitlyClosed
       && !isScopedPeer(dst)) {
       pushPayload = encodePushTransfer(pushPayload, codec, peer.pushDeflateDict);
     }
@@ -2536,18 +2536,19 @@ export class DeviceLinkClient {
    * 换成 skip 占位:同 seq、不留空洞,旧端不会收到 payload 为 null 的推送。链路此刻可发时
    * 立即定向补发,否则由建链后的既有重放按预算推进;推送本就由重连 resync 补偿。
    */
-  private setPeerPushDeflate(dst: string, peer: PeerTransportState, dict: number | undefined): void {
+  private setPeerPushDeflate(dst: string, peer: PeerTransportState, accepted: readonly number[]): void {
     const retired: PendingReliableMessage[] = [];
-    if (peer.acceptsPushDeflate && peer.pushDeflateDict !== dict) {
-      // 换了字典（含不再支持）时，用旧字典压的积压推送对端未必解得开。
+    if (peer.acceptsPushDeflate) {
+      // 只换掉对端这次不再声明的字典压的积压推送；它仍能解的旧字典推送照常交付。
       for (const [seq, pending] of peer.pending) {
         if (pending.envelope.kind === 'push' && isEncodedPushPayload(pending.envelope.payload)
-          && encodedPushDictionary(pending.envelope.payload) !== dict) {
+          && !accepted.includes(encodedPushDictionary(pending.envelope.payload))) {
           this.replacePendingWithSkip(peer, seq, pending);
           retired.push(pending);
         }
       }
     }
+    const dict = accepted.length > 0 ? Math.max(...accepted) : undefined;
     peer.acceptsPushDeflate = dict !== undefined;
     peer.pushDeflateDict = dict;
     // 链路此刻可发时(无对应 offer 的 accept 不会再走重放)定向补发,接收端不会在这些 seq 上
@@ -5193,9 +5194,9 @@ export class DeviceLinkClient {
     // (重启,可能已降级)时先当作不支持,等它下次以控制端身份 link-open 再按声明恢复。
     if (source === 'inbound-open') {
       this.setPeerPushDeflate(dst, peer, !isScopedPeer(dst) && reliable
-        ? selectPushDeflateDictionary(capabilities!) : undefined);
+        ? acceptedPushDeflateDictionaries(capabilities!) : []);
     } else if (peer.remoteStreamId !== nextRemoteStreamId) {
-      this.setPeerPushDeflate(dst, peer, undefined);
+      this.setPeerPushDeflate(dst, peer, []);
     }
     const nextRemoteBaseSeq = reliable && Number.isSafeInteger(remoteBaseSeq) && remoteBaseSeq! > 0
       ? remoteBaseSeq!

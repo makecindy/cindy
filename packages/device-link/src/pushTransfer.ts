@@ -23,6 +23,10 @@ export const DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1 = 'push-deflate-v1';
  * 不再有对端只声明它为止。协商：控制端在 link-open 声明自己能解的**全部**字典能力；被控端选
  * 双方都有的最大 id，线上用 `transfer.dict` 标明（id 1 省略，保持 v1 形状）。新旧端混用时自然
  * 落到共同的最高版本；没有共同字典就不压缩。
+ *
+ * 新字典沿用 `deflateBase64` 字段、只加 `dict`，而不换字段名：万一 v2 推送误发到只认 v1 的端，
+ * 它会按 v1 字典解压失败、走解不开的恢复路径；换了字段名，旧端反而会把 payload 为 null 的
+ * 推送原样交给业务。
  */
 export const PUSH_TRANSFER_DICTIONARIES: ReadonlyArray<{ id: number; capability: string; dictionary: string }> = [
   { id: 1, capability: DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1, dictionary: PUSH_TRANSFER_DICTIONARY_V1 },
@@ -33,13 +37,15 @@ export function pushDeflateCapabilities(): string[] {
   return PUSH_TRANSFER_DICTIONARIES.map((entry) => entry.capability);
 }
 
+/** 被控端：对端声明、本端也有的全部字典 id。 */
+export function acceptedPushDeflateDictionaries(capabilities: readonly string[]): number[] {
+  return PUSH_TRANSFER_DICTIONARIES.filter((entry) => capabilities.includes(entry.capability)).map((entry) => entry.id);
+}
+
 /** 被控端：对端声明的能力里双方都有的最大字典 id；没有则 undefined（不压缩）。 */
 export function selectPushDeflateDictionary(capabilities: readonly string[]): number | undefined {
-  let selected: number | undefined;
-  for (const entry of PUSH_TRANSFER_DICTIONARIES) {
-    if (capabilities.includes(entry.capability) && (selected === undefined || entry.id > selected)) selected = entry.id;
-  }
-  return selected;
+  const accepted = acceptedPushDeflateDictionaries(capabilities);
+  return accepted.length > 0 ? Math.max(...accepted) : undefined;
 }
 
 function dictionaryById(id: number): string | undefined {
@@ -82,7 +88,7 @@ export interface EncodedPushPayload extends PushPayload {
 export function encodePushTransfer(
   push: PushPayload,
   codec: DeviceLinkTransferCodec,
-  dict = 1,
+  dict: number,
 ): PushPayload | EncodedPushPayload {
   const dictionary = dictionaryById(dict);
   if (!dictionary || !codec.deflateRawBase64 || push.payload === null || push.payload === undefined) return push;
@@ -98,7 +104,8 @@ export function encodePushTransfer(
   const deflateBase64 = codec.deflateRawBase64(text, dictionary);
   // 按线上字节比较：可靠层把 payload 作为 JSON 字符串再转义一次（原文里的引号、反斜杠
   // 各多一个字节，base64 没有），压缩形状另有固定包装。省不到 10% 就原样发送。
-  if (deflateBase64.length + ENCODED_WRAPPER_BYTES >= byteLength(JSON.stringify(text)) * 0.9) return push;
+  const wrapper = ENCODED_WRAPPER_BYTES + (dict !== 1 ? ENCODED_DICT_FIELD_BYTES : 0);
+  if (deflateBase64.length + wrapper >= byteLength(JSON.stringify(text)) * 0.9) return push;
   return {
     channel: push.channel,
     payload: null,
@@ -107,9 +114,11 @@ export function encodePushTransfer(
   };
 }
 
-/** 压缩推送所用的字典 id（缺省 1）。 */
+/** 压缩推送所用的字典 id：缺省为 1；出现了却不是正整数时返回 -1，按未知字典拒绝。 */
 export function encodedPushDictionary(push: EncodedPushPayload): number {
-  return typeof push.transfer.dict === 'number' ? push.transfer.dict : 1;
+  const dict = (push.transfer as { dict?: unknown }).dict;
+  if (dict === undefined) return 1;
+  return typeof dict === 'number' && Number.isSafeInteger(dict) && dict > 0 ? dict : -1;
 }
 
 /**
@@ -117,6 +126,8 @@ export function encodedPushDictionary(push: EncodedPushPayload): number {
  * 按可靠层再转义一次后约 44 字节，取整留余量。
  */
 const ENCODED_WRAPPER_BYTES = 48;
+/** 非 v1 字典时多出的 `,"dict":N`（转义后）。 */
+const ENCODED_DICT_FIELD_BYTES = 14;
 
 /** 只认本模块产出的形状；其它带 transfer 字段的推送不当作压缩推送。 */
 export function isEncodedPushPayload(value: unknown): value is EncodedPushPayload {

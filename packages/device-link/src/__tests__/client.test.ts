@@ -12925,8 +12925,11 @@ describe('推送传输编码（push-deflate-v1）', () => {
     expect(encoded).toMatchObject({ payload: null, transfer: { deflateBase64: expect.any(String) } });
     expect('dict' in (encoded as { transfer: object }).transfer).toBe(false);
     expect(decodePushTransfer(encoded as Parameters<typeof decodePushTransfer>[0], nodeCodec)).toEqual({ ok: true, push });
-    const future = { ...(encoded as object), transfer: { ...(encoded as { transfer: object }).transfer, dict: 99 } } as Parameters<typeof decodePushTransfer>[0];
-    expect(decodePushTransfer(future, nodeCodec)).toMatchObject({ ok: false, reason: expect.stringContaining('dictionary') });
+    for (const dict of [99, '2', 1.5]) {
+      // 未知或形状不对的字典 id 一律拒绝，不能回落到 v1 字典去解。
+      const future = { ...(encoded as object), transfer: { ...(encoded as { transfer: object }).transfer, dict } } as Parameters<typeof decodePushTransfer>[0];
+      expect(decodePushTransfer(future, nodeCodec)).toMatchObject({ ok: false, reason: expect.stringContaining('dictionary') });
+    }
     // 本端没有的字典 id：不压缩，原样发送。
     expect(encodePushTransfer(push, nodeCodec, 99)).toBe(push);
   });

@@ -32,8 +32,9 @@ skip 占位（链路可发时立即定向补发，否则由建链后的重放推
 字典按字节参与解码，**发布后不得修改**，所以字典带版本（`PUSH_TRANSFER_DICTIONARIES`）：控制端
 在 link-open 声明自己能解的全部字典能力（现在只有 `push-deflate-v1`），被控端选双方都有的最大
 id，线上用 `transfer.dict` 标明（id 1 省略，v1 形状不变）；换字典只追加新 id 与新能力名，旧项
-保留到不再有对端只认它。`dict` 缺省为 1，未知的 id 按解不开处理。选中的字典变了或不再被声明时，
-用原字典压的积压推送换成 skip。
+保留到不再有对端只认它。`dict` 缺省为 1，出现了却不是正整数或未知时按解不开处理。对端这次不再
+声明某个字典时，用它压的积压推送换成 skip，仍声明的字典照常交付。新字典沿用 `deflateBase64`
+字段而不换名：误发到旧端时，旧端会解压失败走恢复，而不会把 payload 为 null 的推送交给业务。
 旧控制端从不声明，被控端照发原推送；新控制端连旧被控端时收到原推送，按原路消费。
 Desktop 与 Node Host 共用 `desktopTransferCodec`（Node zlib，同步，按 5 分钟窗口另记
 `push deflate summary`），Mobile 用已有依赖 pako 在 JS 线程同步解码，不改原生指纹。
