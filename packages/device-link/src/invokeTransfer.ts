@@ -307,6 +307,11 @@ export class InvokeResultCache {
     this.epoch += 1;
   }
 
+  /** 保留已有条目，但停止前在途的解码不再写回（停连保留缓存时用）。 */
+  fence(): void {
+    this.epoch += 1;
+  }
+
   private decode(
     key: string | null,
     epoch: number,

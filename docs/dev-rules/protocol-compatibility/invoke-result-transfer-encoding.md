@@ -19,12 +19,19 @@ notModified: true } }`；否则在控制端声明可解、结果不小于 1 KiB�
 
 handler 每次都执行，`notModified` 只省略字节完全相同的结果，因此对所有 channel 语义不变，
 不需要逐 channel 登记。控制端缓存按设备、channel、args 键控，最多 32 条、约 8 MB，只在内存，
-随客户端 `stop()` 清空；共享任务与供应商分享等跨账号 peer 不使用该编码。旧被控端忽略
+随客户端 `stop()` 清空（Mobile 退后台停连例外，见下文）；共享任务与供应商分享等跨账号 peer 不使用该编码。旧被控端忽略
 `transfer` 回普通结果；旧控制端从不携带 `transfer`，被控端也就不会编码。Desktop（同时作为
 被控端与控制端）注入 zlib 与 SHA-256，Mobile 只注入 pako 解压（已有依赖，不改原生指纹）。
 relay 不解析隧道 payload，无服务端改动、数据库 migration 或部署顺序要求。实现见
 `packages/device-link/src/invokeTransfer.ts`，回归见同目录 `__tests__/invokeTransfer.test.ts`
 与 `client.test.ts`「invoke 结果传输编码」。
+
+Mobile 退后台停连（`client.stop({ retainResultCache: true })`）保留同一 client 的 invoke 结果
+缓存，回前台的列表等重复读取仍能换 `notModified` 或[增量](invoke-result-delta.md)；账号、登录状态
+或中转线路变化时 Mobile 会换新 client，中转移除本设备与其它停止路径照旧清空。只保留主连接的缓存：
+随它一起停止的其它连接（跨账号连接、按资源安装的分享连接，以及 Agent 网络开启时给旧对端用的
+中转连接）照旧清空。缓存只在内存、按目标设备键控，只在被控端确认标签相同时才采用，被控端每次
+重新授权执行。
 
 Desktop 的压缩保持 gzip level 4 与同步发送／错误处理契约，手机与电脑、电脑与电脑
 共用这一实现。收益按 gzip 的 base64 长度（加约 48 字节的传输包装）与原始 JSON 的 UTF-8

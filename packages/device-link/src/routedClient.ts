@@ -215,9 +215,9 @@ export class RoutedDeviceLinkClient extends DeviceLinkClient {
     for (const connection of this.extraScopedConnections()) connection.start();
   }
 
-  override stop(): void {
+  override stop(options?: Parameters<DeviceLinkClient['stop']>[0]): void {
     this.started = false;
-    super.stop();
+    super.stop(options);
     this.syncCrossAccount();
     for (const connection of this.extraScopedConnections()) connection.stop();
   }

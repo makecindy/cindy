@@ -93,8 +93,8 @@ export function stripTransferFields(text: string, fields: readonly string[]): st
 /**
  * Harness-wide switches (not per profile). All default to production behaviour.
  *
- *   TRANSFER_BASELINE_PHONE_STOP_RETAIN=1  the backgrounded phone calls client.stop({ retainResultCache: true })
- *                                          (Mobile's background stop keeping the result cache; ignored where stop() takes none)
+ *   TRANSFER_BASELINE_PHONE_STOP_RETAIN=0  the backgrounded phone calls client.stop() without keeping its result
+ *                                          cache (production keeps it: stop({ retainResultCache: true }))
  *   TRANSFER_BASELINE_PMD_HOST=0           the host's ws client does not offer permessage-deflate
  *   TRANSFER_BASELINE_PMD_CONTROLLER=0     the controllers' ws clients do not offer it (e.g. an iPhone socket)
  *   TRANSFER_BASELINE_REALISTIC_ROWS=1     task-list rows fill every sessions column with per-row values
@@ -111,7 +111,7 @@ export interface HarnessSwitches {
 
 export function readHarnessSwitches(env: NodeJS.ProcessEnv = process.env): HarnessSwitches {
   return {
-    phoneStopRetainResultCache: env.TRANSFER_BASELINE_PHONE_STOP_RETAIN === '1',
+    phoneStopRetainResultCache: env.TRANSFER_BASELINE_PHONE_STOP_RETAIN !== '0',
     pmdHost: env.TRANSFER_BASELINE_PMD_HOST === '0' ? 'off' : 'default',
     pmdController: env.TRANSFER_BASELINE_PMD_CONTROLLER === '0' ? 'off' : 'default',
     realisticRows: env.TRANSFER_BASELINE_REALISTIC_ROWS === '1',

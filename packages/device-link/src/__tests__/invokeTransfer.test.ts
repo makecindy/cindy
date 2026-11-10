@@ -69,6 +69,20 @@ describe('asynchronous gunzip', () => {
     expect(cache.prepare('peer', channel).payload.transfer).toEqual({ gzip: 1 });
   });
 
+  it('keeps cached results across fence() but drops a decode that was in flight', async () => {
+    let release!: (text: string) => void;
+    const cache = new InvokeResultCache({ ...codec, gunzipBase64Async: () => new Promise((resolve) => { release = resolve; }) });
+    const kept = { channel: 'kept', args: [] };
+    cache.prepare('desktop', kept).decode({ ok: true, result: large, transfer: { tag: 'kept' } });
+    const late = cache.prepare('desktop', { channel: 'late', args: [] });
+    const pending = late.decode({ ok: true, result: null, transfer: { tag: 'late', gzipBase64: 'x' } });
+    cache.fence();
+    release(JSON.stringify(large));
+    await pending;
+    expect(cache.prepare('desktop', kept).payload.transfer?.ifNoneMatch).toBe('kept');
+    expect(cache.prepare('desktop', { channel: 'late', args: [] }).payload.transfer?.ifNoneMatch).toBeUndefined();
+  });
+
   it('does not let a throwing observer lose the result', () => {
     const cache = new InvokeResultCache({ gunzipBase64: codec.gunzipBase64 });
     expect(cache.prepare('peer', channel).decode(encoded(), () => { throw new Error('metrics'); }))

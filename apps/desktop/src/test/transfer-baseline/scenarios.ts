@@ -56,8 +56,9 @@ export const EXTRA_STAGES = ['live_turn_tool_results', 'expand_work_groups', 'li
  * Added in scenario v3 (sidebar repeat reads; earlier stages unchanged). Each runs on a
  * controller that has already read the list once in the same process, so list deltas,
  * notModified and read-ahead skipping can show up:
- *  - phone:   backgrounded past the stop grace (client.stop()), foregrounded, list re-read,
- *             with the list unchanged and with one task changed meanwhile;
+ *  - phone:   backgrounded past the stop grace (client.stop() keeping the result cache, as in
+ *             production; TRANSFER_BASELINE_PHONE_STOP_RETAIN=0 for a plain stop), foregrounded,
+ *             list re-read, with the list unchanged and with one task changed meanwhile;
  *  - desktop: periodic reconcile with the list unchanged and with one task changed.
  * Each also runs against a 200-task list, with LIST_SCALE_SUFFIX appended to its name.
  */

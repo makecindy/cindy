@@ -51,7 +51,7 @@ TRANSFER_BASELINE_EXTRA_CAPS_PHONE=<能力名> TRANSFER_BASELINE_DROP_TRANSFER=d
 
 | 变量 | 作用 |
 | --- | --- |
-| `TRANSFER_BASELINE_PHONE_STOP_RETAIN=1` | 手机退后台时调 `client.stop({ retainResultCache: true })`，量回前台时保留结果缓存的效果。`stop()` 不认这个参数的客户端运行时忽略 |
+| `TRANSFER_BASELINE_PHONE_STOP_RETAIN=0` | 手机退后台时调不带参数的 `client.stop()`，不保留结果缓存。默认与生产相同，调 `client.stop({ retainResultCache: true })`；`stop()` 不认这个参数的客户端运行时忽略 |
 | `TRANSFER_BASELINE_PMD_HOST=0` / `TRANSFER_BASELINE_PMD_CONTROLLER=0` | 被控端 / 控制端的 ws 客户端不提出 permessage-deflate（例如模拟不支持它的 iPhone socket）。不设时不传选项，与生产相同 |
 | `TRANSFER_BASELINE_REALISTIC_ROWS=1` | 任务列表行换成「接近真实」的形状：`sessions` 表每一列都按行取不同值（固定种子），并带标签。默认行只填少数几列，各行大量相同，压缩比偏高 |
 
@@ -83,7 +83,7 @@ TRANSFER_BASELINE_EXTRA_CAPS_PHONE=<能力名> TRANSFER_BASELINE_DROP_TRANSFER=d
 | `live_turn_tool_results`（v2） | 一轮普通大小、不会被推迟的工具结果（Edit / Write / TodoWrite / 插件调用 / Agent / 失败命令，几十字节到 12 KB）。按生产形状带 `resolvedContent` |
 | `expand_work_groups`（v2） | 展开一个已折叠的历史工作组，再收起；然后展开装着 1.05 MiB 结果的工作组 |
 | `live_turn_with_expanded`（v2） | 上面那个已完成的工作组保持展开，被控端再跑一轮 |
-| `foreground_list_unchanged` / `foreground_list_changed`（v3，手机） | 手机已经读过一次列表；退后台超过宽限期（`client.stop()`），回前台（`connectAllNow`），由恢复核心 reseed，再重读列表。后者在后台期间有 1 个任务写了一条消息。预读会跳过本进程已读过、版本没变的任务 |
+| `foreground_list_unchanged` / `foreground_list_changed`（v3，手机） | 手机已经读过一次列表；退后台超过宽限期（`client.stop({ retainResultCache: true })`，与生产相同），回前台（`connectAllNow`），由恢复核心 reseed，再重读列表。后者在后台期间有 1 个任务写了一条消息。预读会跳过本进程已读过、版本没变的任务 |
 | `reconcile_list_unchanged` / `reconcile_list_changed`（v3，电脑） | 电脑端定时对账（不带 `fresh`）。后者在两次对账之间有 1 个任务写了一条消息 |
 | 以上四个加 `.rows200` 后缀（v3） | 同样的阶段换成 200 个任务的列表，与列表读取上限 200 相同 |
 

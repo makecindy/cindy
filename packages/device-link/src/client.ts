@@ -1319,13 +1319,19 @@ export class DeviceLinkClient {
     });
   }
 
-  stop(): void {
-    this.stopConnection();
+  /**
+   * `retainResultCache`：控制端暂时停连（手机退后台）时保留 invoke 结果缓存，回来后的
+   * 重复读取仍能带 `ifNoneMatch` 换 notModified / 增量。缓存只在内存、按目标设备键控，
+   * 只在被控端确认标签相同时才被采用，被控端每次都重新授权执行；账号或中转线路变化时
+   * 调用方会换一个新的 client。
+   */
+  stop(options?: { retainResultCache?: boolean }): void {
+    this.stopConnection(options?.retainResultCache === true);
     this.stallDiagnostics.flush();
   }
 
   /** 只停这一条连接:中转移除本设备只影响它自己的线路,host 的 stop 才结束整个 client。 */
-  protected stopConnection(): void {
+  protected stopConnection(retainResultCache = false): void {
     for (const [timer, stream] of this.delayedAckTimers) {
       clearTimeout(timer);
       if (stream.delayedAckTimer !== timer) continue;
@@ -1338,7 +1344,8 @@ export class DeviceLinkClient {
     this.delayedAckTimers.clear();
     this.messageReuse.clear();
     this.historyViewDelta.clear();
-    this.invokeResultCache.clear();
+    if (retainResultCache) this.invokeResultCache.fence();
+    else this.invokeResultCache.clear();
     this.invokeDeltaBases.clear();
     this.inboundInvokeTransfer.clear();
     this.inboundInvokeChannels.clear();

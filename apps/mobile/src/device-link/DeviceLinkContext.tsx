@@ -1805,7 +1805,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       isBackground: () => AppState.currentState === 'background',
       releaseTopics: releaseHeavyTopics,
       pendingTransitions: () => [...backgroundTransitions.current],
-      stop: () => client.stop(),
+      // 同一 client（同账号、同中转线路）的结果缓存跨后台保留：回前台的列表重读可换 notModified / 增量。
+      stop: () => client.stop({ retainResultCache: true }),
       connect: () => client.connectAllNow('appstate-active', {
         overrideCongestionCooldown: true,
         keepInFlightAttempt: true,

@@ -8698,7 +8698,7 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     controller.stop();
   }, 10_000);
 
-  it('invoke 结果增量:列表只回变化的行,坏增量不带基准重发', async () => {
+  it('invoke 结果增量:列表只回变化的行,坏增量不带基准重发,退后台停连保留基准', async () => {
     const codec = {
       gzipBase64: (text: string) => gzipSync(Buffer.from(text, 'utf8')).toString('base64'),
       gunzipBase64: (base64: string, maxChars: number) => gunzipSync(Buffer.from(base64, 'base64'), { maxOutputLength: maxChars }).toString('utf8'),
@@ -8740,6 +8740,15 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     await expect(call()).resolves.toEqual({ ok: true, result: rows });
     const [full, delta] = responseBytes();
     expect(delta).toBeLessThan(full! / 4);
+
+    // Backgrounded phone: the socket stops, the cached base survives, the next read is a delta.
+    controller.stop({ retainResultCache: true });
+    controller.start();
+    await relay.settleUntil(() => controller.getStatus() === 'online');
+    await Promise.all([controller.openLink('desktop', { controllerName: 'iPhone', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+    rows = rows.map((row, i) => (i === 3 ? { ...row, title: '改名' } : row));
+    await expect(call()).resolves.toEqual({ ok: true, result: rows });
+    expect(responseBytes().at(-1)).toBeLessThan(full! / 4);
 
     corrupt = true;
     const before = handled.length;
