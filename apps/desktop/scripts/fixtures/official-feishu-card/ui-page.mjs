@@ -28,6 +28,7 @@ export default {
       data: { kind: 'unavailable' },
     },
     unlinked: { about: 'Unlinked account with a live server socket: unbound badge and relink action', data: { kind: 'revoked' } },
+    released: { about: 'Unlink acknowledged: connection released and switch off; enable again to link', data: { kind: 'released' } },
     confirmed: { about: 'Linked: open bot and unlink actions', data: { kind: 'confirmed' } },
     narrow: {
       about: 'Pending bind at 360px: code and actions wrap',
@@ -40,6 +41,12 @@ export default {
   },
   async check(page, ui) {
     const card = page.locator('#cindy-im-feishu-panel');
+    if (ui.data.kind === 'released') {
+      const row = page.locator('#cindy-im-feishu');
+      assert.equal(await row.getByRole('status').textContent(), await ui.t('settings.remoteControl.hook.feishu.status.disabled'));
+      assert.equal(await row.getByRole('switch').getAttribute('aria-checked'), 'false');
+      assert.equal(await card.getByText(await ui.t('settings.remoteControl.hook.feishu.status.revoked'), { exact: true }).count(), 0);
+    }
     if (ui.data.kind === 'revoked') {
       const row = page.locator('#cindy-im-feishu');
       assert.equal(await row.getByRole('status').textContent(), await ui.t('settings.remoteControl.hook.feishu.status.none'));

@@ -210,6 +210,12 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     await act(async () => pushStatus({ ...BASE_HOOK, [provider]: view }));
     expect(card.getByRole('status').textContent).toBe('settings.remoteControl.hook.status.connected');
     expect(ipc.setEnabled).not.toHaveBeenCalled();
+    await act(async () => pushStatus({ ...BASE_HOOK, [provider]: { ...view,
+      enabled: false, available: false, status: 'disabled',
+      binding: { ...binding, state: 'revoked', actions: ['retry'] } } }));
+    expect(card.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+    expect(card.getByRole('status').textContent).toBe(`settings.remoteControl.hook.${provider}.status.disabled`);
+    expect(card.queryByText(`settings.remoteControl.hook.${provider}.status.revoked`)).toBeNull();
   });
 
   it.each([false, true])('does not claim a connected Slack account without a retained binding (communications: %s)', async (retained) => {
