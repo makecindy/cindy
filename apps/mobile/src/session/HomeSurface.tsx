@@ -622,7 +622,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const homeListFreshnessRef = useRef(createHomeListFreshness());
   // 最近一次离开首页的时刻；null = 当前在首页（或尚未离开过）。
   const homeBlurredAtRef = useRef<number | null>(null);
-  // 待完成的整轮重拉（含设备清单），由 startSilentHomeSync 统一登记。值是请求序号，只有在它
+  // 待完成的整轮重拉（含设备清单），由 startSilentHomeSync 与每次 loadHome 入口登记。值是请求序号，只有在它
   // 之后开始的 loadHome 整轮成功提交才清除；在途新触发保留最新补跑，失败或失焦后请求仍保留。
   const homeRefreshRequests = useRef(createHomeRefreshRequests()).current;
   const requestHomeFullReload = homeRefreshRequests.requestFull;
@@ -1312,6 +1312,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const rosterVersionAtStart = rosterVersionRef.current;
     const accountGenerationAtStart = accountGeneration;
     if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
+    // 每个整轮入口（含手动下拉、空态重新检查）都登记整轮意图：本轮若被切后台退役，
+    // 回到首页仍按整轮重拉，设备增删对账不会因迟到的清单响应被丢弃而缺失。
+    requestHomeFullReload();
     if (!deviceIdentityCacheReady) return;
     const visible = options.visible === true;
     if (visible) setRefreshing(true);
@@ -1488,7 +1491,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     });
   }, [accountGeneration, armDirectoryBudget, clearDirectoryBudget, readDeviceList, deviceIdentityCacheReady,
     homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, reconcileHomeDeviceSyncScope,
-    revokedDevices, softInvalidateDeviceMirror, syncInFlightRef]);
+    requestHomeFullReload, revokedDevices, softInvalidateDeviceMirror, syncInFlightRef]);
   // A manual refresh also recovers the teammate section: roster, group chats and cloud companions.
   const homeRoster = teammatesSectionContext.shared;
   const refreshHome = useCallback(() => {
