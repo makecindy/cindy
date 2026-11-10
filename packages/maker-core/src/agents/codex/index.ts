@@ -15052,7 +15052,7 @@ assertRouteCurrent();
           };
         });
         const operation = manualCompact;
-        eventQueue.push({ type: 'status', data: { status: 'Compacting context…', ...usageTracker.snapshot(), isRunning: true }, source: 'codex', turnScope: 'background' });
+        eventQueue.push({ type: 'status', data: { status: 'Compacting context…', ...usageTracker.snapshot(), isRunning: true }, source: 'codex' });
         void host.request(Method.ThreadCompactStart, { threadId }).catch((error: unknown) => {
           if (manualCompact !== operation) return; // A native terminal may precede the ACK.
           // Admission may have timed out after the server accepted it. Unsubscribe

@@ -11,7 +11,7 @@ import {
   isExactNoRolloutThreadResumeError,
 } from './index.js';
 import { CodexForkError } from './fork-error.js';
-import { Session } from '../../session.js';
+import { MANUAL_ABORT_RECOVERY_GRACE_MS, Session } from '../../session.js';
 import { withFastModePolicy } from '../shared/fast-mode-policy.js';
 import { AUTO_REVIEW_CONTINUATION_POLICY } from '../shared/continuation-policy.js';
 import { Method, type TurnStartParams } from './app-server/protocol.js';
@@ -35926,6 +35926,10 @@ describe('Codex native manual compaction', () => {
     expect(resolved).toBe(false);
     expect(handle.hasPendingHostOperation?.()).toBe(true);
     expect(handle.isTurnRunning?.()).toBe(true);
+    await waitForExpectation(() => expect(events.some(e => e.type === 'status' && e.data.isRunning === true)).toBe(true));
+    // Desktop ignores background running frames. Stop must be available even
+    // before the daemon produces its first turn/item notification.
+    expect(events.find(e => e.type === 'status' && e.data.isRunning === true)?.turnScope).not.toBe('background');
     expect(host.request).toHaveBeenCalledWith(Method.ThreadCompactStart, { threadId: handle.id });
     await expect(handle.send({ type: 'user', content: 'do not race' })).rejects.toThrow('compacting');
     await expect(handle.compactSession!()).rejects.toThrow('active');
@@ -35980,6 +35984,41 @@ describe('Codex native manual compaction', () => {
     release();
     await sending;
     await session.close();
+  });
+
+  it('retires a previous Stop check while preserving bounded recovery for a Stop on the compact', async () => {
+    const { agent, handle, handlers, started } = await setup(undefined, false);
+    const session = new Session({ id: 'manual-compact-test', agentKind: 'codex', workDir: '/repo',
+      handle, capabilities: agent.capabilities, logger: createNoopLogger(), turnStallMs: 0 });
+    session.onEvent(() => {});
+    vi.useFakeTimers();
+    try {
+      await session.send('previous turn');
+      await session.abort();
+      handlers.turnCompleted!({ threadId: handle.id,
+        turn: { id: 'next-user-turn', status: 'interrupted' } });
+      await vi.advanceTimersByTimeAsync(0);
+      const generation = session.getTurnGeneration();
+      await vi.advanceTimersByTimeAsync(MANUAL_ABORT_RECOVERY_GRACE_MS / 2);
+      const compact = session.compactSession();
+      const failure = expect(compact).rejects.toThrow('closed');
+      started();
+      expect(session.getTurnGeneration()).toBe(generation);
+      await vi.advanceTimersByTimeAsync(MANUAL_ABORT_RECOVERY_GRACE_MS / 2 + 1);
+      expect(session.getStatus()).toBe('active');
+      expect(handle.hasPendingHostOperation?.()).toBe(true);
+
+      // Stop on this operation must not be deduplicated against the old turn's
+      // Stop. A rejected repeat compact must not invalidate that new check.
+      await session.abort();
+      await expect(session.compactSession()).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+      await vi.advanceTimersByTimeAsync(MANUAL_ABORT_RECOVERY_GRACE_MS + 1);
+      await failure;
+      expect(session.getStatus()).toBe('closed');
+    } finally {
+      vi.useRealTimers();
+      await session.close();
+    }
   });
 
   it('rejects failed compaction without rollover or replay and permits another send', async () => {
