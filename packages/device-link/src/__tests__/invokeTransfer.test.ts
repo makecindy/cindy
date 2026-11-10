@@ -94,6 +94,42 @@ describe('invoke result transfer encoding', () => {
     expect(encodeInvokeResultTransfer({ gzip: 1 }, encoded, codec)).toBe(encoded);
   });
 
+  // 门槛按 UTF-8 字节、与标签分开（INVOKE_TRANSFER_MIN_GZIP_BYTES）：正文复用 / 增量读取后的 1–4 KB 结果
+  // 原来原样发送并在可靠层被二次转义；现在压缩，但不带标签、不占控制端 32 条缓存。
+  it.each([
+    ['below the gzip threshold', 'x'.repeat(600), false],
+    ['1–4 KB of JSON rows', JSON.stringify(Array.from({ length: 30 }, (_, i) => ({ id: `row-${i}`, status: 'idle' }))), true],
+    ['Chinese text over 1 KiB of UTF-8 but far under 4096 characters', '弱网下的结果正文'.repeat(60), true],
+  ])('compresses mid-size results by UTF-8 bytes without tagging them (%s)', (_label, value, compressed) => {
+    const payload = { ok: true as const, result: { value } };
+    const encoded = encodeInvokeResultTransfer({ gzip: 1 }, payload, codec);
+    if (!compressed) {
+      expect(encoded).toBe(payload);
+      return;
+    }
+    expect(encoded).toMatchObject({ ok: true, result: null, transfer: { gzipBase64: expect.any(String) } });
+    expect((encoded as { transfer: { tag?: string } }).transfer.tag).toBeUndefined();
+    const cache = new InvokeResultCache(codec);
+    expect(cache.prepare('peer', { channel: 'c', args: [] }).decode(encoded)).toEqual(payload);
+    // 不打标签的结果不进缓存：下一次请求不会带 ifNoneMatch。
+    expect(cache.prepare('peer', { channel: 'c', args: [] }).payload.transfer).toEqual({ gzip: 1 });
+    // 控制端没声明 gzip 时照旧原样。
+    expect(encodeInvokeResultTransfer({}, payload, codec)).toBe(payload);
+  });
+
+  it('drops a cached large result once the same read comes back small and untagged', () => {
+    // 同一读取从 4096 字符以上缩到 1–4 KB：旧标签再也对不上，不能继续占缓存位、每次白带 ifNoneMatch。
+    const cache = new InvokeResultCache(codec);
+    const request = { channel: 'c', args: [] };
+    const first = cache.prepare('peer', request);
+    first.decode(encodeInvokeResultTransfer({ gzip: 1 }, { ok: true, result: large }, codec));
+    expect(cache.prepare('peer', request).payload.transfer).toMatchObject({ ifNoneMatch: expect.any(String) });
+    const smaller = { ok: true as const, result: { rows: '弱网'.repeat(300) } };
+    const second = cache.prepare('peer', request);
+    expect(second.decode(encodeInvokeResultTransfer({ gzip: 1 }, smaller, codec))).toEqual(smaller);
+    expect(cache.prepare('peer', request).payload.transfer).toEqual({ gzip: 1 });
+  });
+
   it('keeps an incompressible result plain but still tags it', () => {
     let seed = 1;
     const noise = Array.from({ length: INVOKE_TRANSFER_MIN_CHARS * 2 }, () => {

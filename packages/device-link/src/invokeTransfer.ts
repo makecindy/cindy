@@ -86,8 +86,23 @@ export interface DeviceLinkTransferCodec {
   inflateRawBase64?(base64: string, maxChars: number, dictionary: string): string;
 }
 
-/** 小结果编码收益抵不过开销，原样发送。 */
+/**
+ * 内容标签（及 notModified 短路）的门槛：更小的结果不带标签、不进控制端缓存。缓存只有 32 条，
+ * 让大量小结果占位会把真正值得短路的大页挤出去，所以这个门槛不随压缩门槛一起下调。
+ */
 export const INVOKE_TRANSFER_MIN_CHARS = 4 * 1024;
+/**
+ * gzip 的门槛，按 UTF-8 字节计（与比较收益、传输层计帧的口径一致）。原来与标签共用 4096 字符：
+ * 正文复用、增量读取把很多结果缩到 1–4 KB，于是原样发送，还在可靠层里被二次转义（基准
+ * reconnect 阶段重连后的预读页比首读还大）。1 KiB 以上的 JSON 结果 gzip+base64 稳定省 40% 左右，
+ * 再小的省下来抵不过包装；10% 收益判据照旧兜底。只是被控端的选择：控制端声明 gzip 即可解任意大小。
+ */
+export const INVOKE_TRANSFER_MIN_GZIP_BYTES = 1024;
+/**
+ * 压缩形状比原结果多出的固定包装 `null,"transfer":{"gzipBase64":""}`（可靠层转义后约 40 B）。
+ * 4 KB 以上可以忽略；门槛降到 1 KiB 后约占 4%，收益判据要算进去。
+ */
+const INVOKE_TRANSFER_GZIP_WRAPPER_BYTES = 48;
 /**
  * 编码结果的解压上限，与传输层单条逻辑消息上限同量级：更大的结果被控端不编码，
  * 仍走原有的超限处理；控制端解压超过即判失败。
@@ -134,9 +149,12 @@ export function encodeInvokeResultTransfer(
   } catch {
     return payload;
   }
-  if (text === undefined || text.length < INVOKE_TRANSFER_MIN_CHARS
-    || text.length > INVOKE_TRANSFER_MAX_CHARS) return payload;
-  const tag = codec.contentTag?.(text);
+  if (text === undefined || text.length > INVOKE_TRANSFER_MAX_CHARS) return payload;
+  const taggable = text.length >= INVOKE_TRANSFER_MIN_CHARS;
+  const bytes = options.gzip === 1 ? byteLength(text) : 0;
+  const compressible = options.gzip === 1 && bytes >= INVOKE_TRANSFER_MIN_GZIP_BYTES;
+  if (!taggable && !compressible) return payload;
+  const tag = taggable ? codec.contentTag?.(text) : undefined;
   const requestKey = options.requestKey;
   // 只有声明了 delta、能打标签的结果才记作下次的基准；旧控制端不占这份内存。
   const delta = deltaContext && requestKey && tag !== undefined ? { ...deltaContext, requestKey } : undefined;
@@ -153,11 +171,11 @@ export function encodeInvokeResultTransfer(
       return { ok: true, result: null, transfer: { tag, delta: encodeDelta(options, base!.tag, text, patch, codec) } };
     }
   }
-  if (options.gzip && codec.gzipBase64) {
+  if (compressible && codec.gzipBase64) {
     const gzipBase64 = codec.gzipBase64(text);
     // Base64 is ASCII, whereas Chinese/emoji JSON takes multiple UTF-8 bytes
     // per character. Compare transmitted bytes, not JS string lengths.
-    if (gzipBase64.length < byteLength(text) * 0.9) {
+    if (gzipBase64.length + INVOKE_TRANSFER_GZIP_WRAPPER_BYTES < bytes * 0.9) {
       return { ok: true, result: null, transfer: { ...(tag ? { tag } : {}), gzipBase64 } };
     }
   }
@@ -429,8 +447,13 @@ export class InvokeResultCache {
     value: unknown,
     unverified = 0,
   ): InvokeResultPayload {
-    if (key && epoch === this.epoch && typeof transfer.tag === 'string' && transfer.tag.length <= MAX_TAG_CHARS) {
-      this.remember(key, { tag: transfer.tag, text, ...(unverified ? { unverified } : {}) });
+    if (key && epoch === this.epoch) {
+      if (typeof transfer.tag === 'string' && transfer.tag.length <= MAX_TAG_CHARS) {
+        this.remember(key, { tag: transfer.tag, text, ...(unverified ? { unverified } : {}) });
+      } else {
+        // 结果缩到标签门槛以下（压缩但不打标签）：旧标签再也对不上，别让它占着缓存位。
+        this.forget(key);
+      }
     }
     return { ok: true, result: value };
   }
