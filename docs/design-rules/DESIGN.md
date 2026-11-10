@@ -654,6 +654,20 @@ Decision: [#6796, maintainer confirmation](https://github.com/makecindy/cindy/is
 - Centered-card layouts (login, empty states) follow the Surface + Card two-layer rule in §2.
 - Reading-width content (settings forms, document previews) is centered with a comfortable max width; full-bleed content (chat stream, file tree) fills its region.
 
+### Desktop task sidebar identity
+
+Individually pinned tasks stay out of the ordinary list. Automatic task groups use two presentation modes:
+while expanded, history includes the task represented by the group header, whether read or unread;
+while collapsed, omit that task from the visible attention rows so it only appears in the header.
+Deduplicate collapsed rows by task ID, not title. The header keeps its existing click target (latest run,
+or the failing run when a collapsed group reports an error). Expanded preview limits, frozen layouts
+and “Show all” continue to include the header task.
+Non-silent unread runs and pending errors/replies remain visible while collapsed, without a five-row cap;
+a task already represented by the header satisfies this visibility rule. Silent successful runs and
+read history stay hidden unless the group is expanded.
+Implementation: `AutomationSessionGroupItem.tsx` and `automationSidebarGrouping.ts`; regression:
+`automationGroupCollapsedAlerts.test.tsx` and the `automation-unread` UI fixture.
+
 ### Desktop teammate sidebar
 
 The expanded teammate section previews five chats (local teammates, remote teammates, groups and the merged Cindy device row share this limit). Keep the current chat visible within those five rows. Use the task list’s “Show all N” footer style, with “Show less” after expansion. Collapsing the section to its existing avatar strip resets the preview; the strip’s +N button opens the full list. This limit applies to the Desktop sidebar; the Mobile task home section below previews three.
