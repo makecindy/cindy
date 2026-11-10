@@ -10,7 +10,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { UpdateBanner } from '@/components/sidebar/UpdateBanner';
+import { checkForUpdateWithToast } from '@/lib/checkForUpdateWithToast';
+import { FloatingUpdateBanner, UpdateBanner } from '@/components/sidebar/UpdateBanner';
 import {
   UPDATE_BANNER_BUSY_POLL_MS,
 } from '@/hooks/useDeferUpdateBannerWhileBusy';
@@ -22,6 +23,8 @@ import {
   resetUpdateBannerDismissStoreForTests,
   restoreUpdateBanner,
 } from '@/hooks/useUpdateBannerDismiss';
+
+vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -334,5 +337,28 @@ describe('UpdateBanner busy defer', () => {
     expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
     expect(getUpdateBannerDismissState().pinnedByUser).toBe(false);
     expect(getUpdateBannerDismissState().dismissedVersion).toBe('2.0.0');
+  });
+});
+
+// 手动检查必须重新展开已关闭/忙碌隐藏的提醒；既有用例只覆盖自动展示及火焰入口。
+// 最小失败输入：ready + 已关闭。unit，通过真实手动检查入口观察真实横幅。
+describe('manual update check reveals banner', () => {
+  it.each([
+    ['ready', false], ['downloading', false], ['ready', true], ['downloading', true],
+  ] as const)('reveals a dismissed banner after %s (floating=%s), even while busy', async (result, floating) => {
+    anyActivityBlockingRelaunch.mockResolvedValue(true);
+    dismissUpdateBanner('ready', '1.2.3');
+    window.electronAPI.checkForUpdate = vi.fn().mockResolvedValue({ result });
+    updateStatus.current = { status: result, version: '1.2.3', errorCode: null };
+    const banner = floating ? <FloatingUpdateBanner enabled /> : <UpdateBanner isCollapsed={false} />;
+    const { rerender } = render(banner);
+    await act(async () => { await checkForUpdateWithToast((key) => key); });
+    updateStatus.current = { status: 'ready', version: '1.2.3', errorCode: null };
+    rerender(floating ? <FloatingUpdateBanner enabled /> : <UpdateBanner isCollapsed={false} />);
+    expect(await screen.findByRole('button', { name: EXPANDED })).toBeTruthy();
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(true);
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+    act(() => dismissUpdateBanner('ready', '1.2.3'));
+    expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
   });
 });

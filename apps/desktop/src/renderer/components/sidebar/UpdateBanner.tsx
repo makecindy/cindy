@@ -659,3 +659,17 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     </div>,
   );
 }
+
+/** 原侧栏不可见时，显式请求的更新提醒仍在窗口左下角显示。 */
+export function FloatingUpdateBanner({
+  enabled,
+  onOpenVersionNotice,
+}: { enabled: boolean } & Pick<UpdateBannerProps, 'onOpenVersionNotice'>) {
+  const { revealRequested, pinnedByUser, dismissed } = useUpdateBannerDismiss();
+  if (!enabled || (!revealRequested && (!pinnedByUser || dismissed))) return null;
+  return (
+    <div className="fixed bottom-4 left-4 z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-sidebar-border bg-sidebar empty:hidden">
+      <UpdateBanner isCollapsed={false} onOpenVersionNotice={onOpenVersionNotice} />
+    </div>
+  );
+}

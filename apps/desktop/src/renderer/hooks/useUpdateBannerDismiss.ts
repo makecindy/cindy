@@ -29,6 +29,7 @@ import { useSyncExternalStore } from 'react';
 export type UpdateBannerDismissReason = 'user' | 'busy';
 
 interface DismissState {
+  revealRequested: boolean;
   dismissed: boolean;
   reason: UpdateBannerDismissReason | null;
   dismissedStatus: string | null;
@@ -44,6 +45,7 @@ export function updateBannerDecisionVersion(version: string | null): string {
 }
 
 const INITIAL_STATE: DismissState = {
+  revealRequested: false,
   dismissed: false,
   reason: null,
   dismissedStatus: null,
@@ -89,6 +91,7 @@ function sameBusyDefer(status: string, version: string | null): boolean {
 export function dismissUpdateBanner(currentStatus: string, currentVersion: string | null) {
   if (state.dismissed && state.reason === 'user') return;
   state = {
+    ...state,
     dismissed: true,
     reason: 'user',
     dismissedStatus: currentStatus,
@@ -108,6 +111,7 @@ export function deferUpdateBannerBecauseBusy(currentStatus: string, currentVersi
   if (isUpdateBannerPinnedFor(currentVersion)) return;
   if (sameBusyDefer(currentStatus, currentVersion)) return;
   state = {
+    ...state,
     dismissed: true,
     reason: 'busy',
     dismissedStatus: currentStatus,
@@ -129,6 +133,7 @@ export function markUpdateBannerAutoShown(currentVersion: string | null) {
     && !state.pinnedByUser
   ) return;
   state = {
+    ...state,
     dismissed: false,
     reason: null,
     dismissedStatus: null,
@@ -142,12 +147,30 @@ export function markUpdateBannerAutoShown(currentVersion: string | null) {
 export function restoreUpdateBanner(opts?: { pin?: boolean }) {
   if (!state.dismissed) return;
   state = {
+    ...state,
     dismissed: false,
     reason: null,
     dismissedStatus: null,
     dismissedVersion: null,
     decidedVersion: state.decidedVersion,
     pinnedByUser: opts?.pin !== false,
+  };
+  emit();
+}
+
+/** 手动检查发现更新：即使下载未完成或横幅尚未挂载，也记住这次展示意图。 */
+export function requestUpdateBannerReveal() {
+  state = { ...state, revealRequested: true };
+  emit();
+}
+
+/** 就绪后绑定实际版本，避免沿用上次关闭的版本或被忙碌探针再次隐藏。 */
+export function revealRequestedUpdateBanner(version: string | null) {
+  if (!state.revealRequested) return;
+  state = {
+    ...INITIAL_STATE,
+    decidedVersion: updateBannerDecisionVersion(version),
+    pinnedByUser: true,
   };
   emit();
 }
@@ -192,6 +215,7 @@ export function useUpdateBannerDismiss() {
   const snap = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return {
     dismissed: snap.dismissed,
+    revealRequested: snap.revealRequested,
     reason: snap.reason,
     dismiss: dismissUpdateBanner,
     restore: restoreUpdateBanner,
