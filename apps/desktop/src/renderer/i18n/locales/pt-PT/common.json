@@ -13442,15 +13442,18 @@
     },
     "backgroundActivity": {
       "status": "Subtarefas em segundo plano em execução, ainda a consumir utilização do modelo…",
-      "bashStatus_one": "{{count}} tarefa em segundo plano em execução…",
-      "bashStatus_other": "{{count}} tarefas em segundo plano em execução…",
+      "bashWorkStatus_one": "A trabalhar em segundo plano ({{count}} comando)…",
+      "bashServiceStatus_one": "{{count}} serviço em segundo plano em execução",
+      "bashWorkStatus_other": "A trabalhar em segundo plano ({{count}} comandos)…",
+      "bashServiceStatus_other": "{{count}} serviços em segundo plano em execução",
       "stopAll": "Parar tudo",
       "stopAllTitle": "Encerrar o processo em segundo plano desta sessão e parar todas as subtarefas em segundo plano (a sessão continua utilizável)",
       "stopBashTitle": "Parar as tarefas em segundo plano ainda em execução nesta sessão (mantém o processo da sessão)",
       "stopping": "A parar…",
       "remoteStopUnsupported": "A versão do {{appName}} no computador remoto é demasiado antiga para parar tarefas em segundo plano a partir daqui. Atualize-a e tente novamente",
       "remoteStopUnreachable": "O computador remoto não está a responder neste momento, pelo que a tarefa em segundo plano não foi parada. Tente mais tarde",
-      "bashStatus_many": "{{count}} tarefas em segundo plano em execução…"
+      "bashWorkStatus_many": "A trabalhar em segundo plano ({{count}} comandos)…",
+      "bashServiceStatus_many": "{{count}} serviços em segundo plano em execução"
     },
     "interruptedBanner": {
       "text": "Esta tarefa foi interrompida porque a aplicação foi encerrada durante a execução.",

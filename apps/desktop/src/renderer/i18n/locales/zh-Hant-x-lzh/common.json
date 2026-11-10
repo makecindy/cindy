@@ -13297,8 +13297,10 @@
     },
     "backgroundActivity": {
       "status": "後臺子差事方行，模型耗用未止…",
-      "bashStatus_one": "後臺差事方行（{{count}} 件）…",
-      "bashStatus_other": "後臺差事方行（{{count}} 件）…",
+      "bashWorkStatus_one": "後臺猶作（令 {{count}} 道）…",
+      "bashServiceStatus_one": "後臺常役方行（{{count}} 件）",
+      "bashWorkStatus_other": "後臺猶作（令 {{count}} 道）…",
+      "bashServiceStatus_other": "後臺常役方行（{{count}} 件）",
       "stopAll": "盡止",
       "stopAllTitle": "闔此差事之後臺程序，盡止後臺作業（差事仍可續用）",
       "stopBashTitle": "止此差事尚在行之後臺作業（不闔言談程序）",

@@ -171,7 +171,11 @@ vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   resetTurnPersistState: effects.fn('resetTurnPersistState'),
   saveTurnStartedAtForDeferred: effects.fn('saveTurnStartedAtForDeferred'),
 }));
-vi.mock('../../maker-host/claude-session-background-activity.js', () => ({
+vi.mock('../../maker-host/claude-session-background-activity.js', async (importOriginal) => ({
+  hasWorkingBackgroundCommand: (
+    await importOriginal<typeof import('../../maker-host/claude-session-background-activity.js')>()
+  ).hasWorkingBackgroundCommand,
+  noteClaudeSessionBackgroundCommandWork: effects.fn('noteClaudeSessionBackgroundCommandWork'),
   noteClaudeSessionTurnState: effects.fn('noteClaudeSessionTurnState'),
 }));
 vi.mock('../../subagentObservationRewindFence.js', () => ({
@@ -1571,6 +1575,39 @@ describe('production Session event pipeline', () => {
     });
     await h.dispose();
   });
+
+  // 任务列表的「后台命令仍在工作」来自会话的权威后台任务快照:任务表变化与回合收尾各刷新一次
+  // (收尾先刷新再记回合结束,换代清表不带事件)。SSH 远程任务的终态可能丢在断连窗口里,不参与。
+  it.each([
+    ['local task still running a test command', null, 'work', [true, true]],
+    ['local task that only left a dev server', null, 'service', [false, false]],
+    ['SSH remote task', 'ssh-host', 'work', []],
+  ] as const)(
+    'refreshes background command work from the session snapshot: %s',
+    async (_label, remoteHostId, backgroundCommandKind, expected) => {
+      const h = harness();
+      Object.defineProperty(h.session, 'remoteHostId', { value: remoteHostId });
+      vi.spyOn(h.session, 'listBackgroundTasks').mockReturnValue([
+        { taskId: 'bash-1', taskType: 'local_bash', backgroundCommandKind },
+      ]);
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('agent_task_update', { provider: 'claude-code', taskId: 'bash-1', status: 'running' }));
+      h.emit(event('done', { reason: 'completed' }));
+      expect(effects.fn('noteClaudeSessionBackgroundCommandWork').mock.calls).toEqual(
+        expected.map((hasWork) => ['task', hasWork]),
+      );
+      if (expected.length > 0) {
+        const calls = effects.calls.filter(
+          (name) => name === 'noteClaudeSessionBackgroundCommandWork' || name === 'noteClaudeSessionTurnState',
+        );
+        expect(calls.slice(-2)).toEqual([
+          'noteClaudeSessionBackgroundCommandWork',
+          'noteClaudeSessionTurnState',
+        ]);
+      }
+      await h.dispose();
+    },
+  );
 
   it.each([null, 'ssh-host'])(
     'only records local Codex account snapshots (remote=%s)',

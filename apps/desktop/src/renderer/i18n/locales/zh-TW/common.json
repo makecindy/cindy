@@ -13305,8 +13305,10 @@
     },
     "backgroundActivity": {
       "status": "後臺子任務執行中，模型用量仍在消耗…",
-      "bashStatus_one": "後臺任務執行中（{{count}} 個）…",
-      "bashStatus_other": "後臺任務執行中（{{count}} 個）…",
+      "bashWorkStatus_one": "正在後臺工作（{{count}} 個命令）…",
+      "bashServiceStatus_one": "後臺服務執行中（{{count}} 個）",
+      "bashWorkStatus_other": "正在後臺工作（{{count}} 個命令）…",
+      "bashServiceStatus_other": "後臺服務執行中（{{count}} 個）",
       "stopAll": "全部停止",
       "stopAllTitle": "關閉該任務的後臺處理程序，停止全部後臺作業（任務可繼續使用）",
       "stopBashTitle": "停止該任務仍在執行的後臺作業（不關閉會話處理程序）",
