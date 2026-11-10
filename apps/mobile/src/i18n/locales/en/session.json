@@ -1,4 +1,32 @@
 {
+  "githubPrs": {
+    "title": "Manage PR Links",
+    "hint": "Up to 3 in the header; pinned PRs appear first",
+    "empty": "Paste a GitHub PR or GitLab MR URL to add it",
+    "removed": "Removed: {{count}}",
+    "legacy": "Unconfirmed references: {{count}}",
+    "addLabel": "Add PR Link",
+    "add": "Add PR",
+    "loading": "Loading…",
+    "restore": "Restore PR",
+    "pin": "Pin to Header",
+    "unpin": "Unpin PR / MR",
+    "pinLimit": "Pin up to 3 PRs",
+    "reorderHint": "Use Alt+↑/↓ to reorder within the pinned or unpinned group.",
+    "dragHandle": "Drag to reorder {{repo}} #{{number}}",
+    "remove": "Remove PR",
+    "errors": {
+      "duplicate": "This PR is already linked; restore removed links from the list",
+      "notFound": "PR not found or access denied",
+      "invalidUrl": "Enter a valid GitHub PR or GitLab MR URL",
+      "reorderFailed": "The order was not saved. Please try again.",
+      "verifyFailed": "Could not verify the PR; check GitHub or GitLab sign-in and access",
+      "unsupported": "This computer’s version does not support managing PR links",
+      "failed": "Could not update PR links"
+    },
+    "urlPlaceholder": "GitHub PR or GitLab MR URL",
+    "moveUp": "Move up"
+  },
   "paneResize": {
     "label": "Column width",
     "hint": "Drag left or right to adjust the column widths"
@@ -45,6 +73,10 @@
     "text": "An automatic run failed.",
     "precheck": "Automatic checks are temporarily blocked.",
     "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
+    "pluginMissing": "Automatic checks are blocked: the {{name}} plugin is not installed. They resume once it is installed on your computer.",
+    "pluginMissingUnnamed": "Automatic checks are blocked: a required plugin is not installed. They resume once it is installed on your computer.",
+    "pluginDisabled": "Automatic checks are blocked: the {{name}} plugin is disabled. They resume once it is enabled on your computer.",
+    "pluginDisabledUnnamed": "Automatic checks are blocked: a required plugin is disabled. They resume once it is enabled on your computer.",
     "dismissTitle": "Dismiss past failure notice"
   },
   "common": {
@@ -61,6 +93,7 @@
     "context": "Context",
     "screenshot": "Screenshot",
     "photo": "Photos",
+    "photosAndVideos": "Photos and videos",
     "takePhoto": "Take Photo",
     "file": "File",
     "joinConversation": "Add to chat ({{num}})",
@@ -185,7 +218,7 @@
       },
       "actionCopy": {
         "pending": "Handle the pending request first; the input area will be restored afterward.",
-        "archived": "This session is archived. Restore it before sending more messages.",
+        "archived": "This session is archived. Sending a message unarchives it.",
         "deleted": "This session is deleted and can't be changed.",
         "queuePaused": "The queue is paused. Resume it from the queue panel."
       }
@@ -200,7 +233,25 @@
       },
       "context": {
         "title": "Context usage",
-        "unavailable": "No context data"
+        "unavailable": "No context data",
+        "estimate": {
+          "title": "Text estimates",
+          "delivery": "Answer delivery",
+          "host": "Cindy instructions",
+          "plugins": "Plugin catalogue",
+          "memoryRules": "Memory instructions",
+          "memoryIndex": "Memory index",
+          "profile": "Teammate profile",
+          "user": "User instructions",
+          "directories": "Additional directories",
+          "native": "Pi instructions",
+          "skills": "Skill catalogue",
+          "project": "Project instructions",
+          "tools": "Tool definitions",
+          "messages": "Conversation text",
+          "other": "Other instructions",
+          "note": "Estimated from current text, not model tokenization. Excludes images and provider formatting; does not add up to the native total."
+        }
       },
       "rateLimit": {
         "plan": "Plan",
@@ -424,11 +475,12 @@
     "chipArchived": "Archived",
     "titleFallback": "Remote session",
     "unnamedTitle": "Untitled session",
+    "openSection": "Open",
     "renameAction": "Rename Session",
     "copyLinkAction": "Copy Session Link",
     "unpin": "Unpin",
     "pin": "Pin",
-    "restore": "Restore",
+    "restore": "Unarchive",
     "archive": "Archive",
     "deleteAction": "Delete Session",
     "deleteConversation": "Delete Session",
@@ -559,13 +611,17 @@
     "dismissNotice": "Dismiss notice",
     "ignore": "Ignore",
     "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
-    "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
+    "outputLimit": "The model reached its output limit, so this response may be incomplete. Send a new message to continue; if this repeats, lower the reasoning effort or compact the conversation history first.",
+    "outputLimitReasoning": "Reasoning consumed most of this request’s output budget, so the response may be incomplete. Lower the reasoning effort or compact the conversation history before continuing.",
+    "outputLimitUsage": "This model request used {{outputTokens}} output tokens, including {{reasoningTokens}} reasoning tokens.",
+    "outputLimitOutputUsage": "This model request used {{outputTokens}} output tokens.",
     "toolUseLoopDetected": "The model repeated a tool call too many times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedWithCount": "The model kept repeating invalid tool calls, so Cindy stopped this turn after {{count}} failures to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedConsecutiveWithCount": "The model repeated the same tool call {{count}} times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedPingPongWithCount": "The model kept cycling between tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
     "toolUseLoopDetectedRotationWithCount": "The model kept rotating through tool calls, so Cindy stopped this turn after detecting {{count}} calls in the loop. Send a new message to continue.",
     "codexThreadLost": "The Codex auth mode changed, so this session can't continue. Start a new session.",
+    "remoteCompactEncryptedContent": "Context compaction failed because the model could not read encrypted history. Automatic continuation did not complete. Retry to attempt recovery.",
     "encryptedContentInvalid": "Switching providers made the encryption unavailable, so this session works only under the original provider. Handle it on the computer (use “Start new session from here” to drop the encrypted protocol content and continue in a new session)."
   },
   "row": {
@@ -619,7 +675,7 @@
     "REMOTE_PROVIDER_UPDATING": "This model provider’s credentials are updating. Try again in a moment.",
     "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
-    "REMOTE_AGENT_UNAVAILABLE": "Can't reach the computer running the Agent. Make sure it's online and allows remote control, then try again.",
+    "REMOTE_AGENT_UNAVAILABLE": "The connection to the computer running the Agent dropped. Try again. If it keeps happening, make sure that computer is online and allows remote control.",
     "REMOTE_AGENT_PEER_TOO_OLD": "Cindy on the other computer is too old to run the Agent for this one. Update Cindy there first.",
     "REMOTE_AGENT_EXPIRED": "This session already ended on the computer running the Agent. Send your message again.",
     "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",
@@ -629,6 +685,7 @@
     "REMOTE_AGENT_RESUME_LOST": "The earlier conversation on the other computer could not be reconnected, so the agent continues without that context.",
     "REMOTE_AGENT_UNSUPPORTED": "This Agent isn't available on the other computer. Install or sign in to it there, or pick another Agent.",
     "REMOTE_AGENT_INVALID": "Something went wrong talking to the computer running the Agent. Try again; if it keeps happening, update Cindy on both computers.",
+    "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "This model has reached the model share limit set by its owner. Choose another available model to continue.",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t allowed remote use of this provider. On that computer, turn on “Allow remote use” in Settings → Providers, or pick another model.",
     "REMOTE_AGENT_FORK_FAILED": "The computer running the Agent couldn’t start a new session from here. Try again, or try a different message.",
     "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
@@ -760,6 +817,21 @@
     "quotaReset": "{{left}}% left · resets in {{reset}}",
     "confirm": "Switch",
     "remember": "Switch, and do it automatically from now on (this task only)",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "disable": "Don't switch automatically (this task)",
+    "disableFailed": "Couldn't confirm whether your choice was saved. Check the connection and make sure Cindy on the task’s computer is up to date, then try again. This message will still be sent as usual.",
+    "moreOptions": "More options"
+  },
+  "messageEdit": {
+    "editing": "Editing message",
+    "discard": "Discard message edit",
+    "stopTimeout": "Timed out waiting for the task to stop — please try again",
+    "queueNotEmpty": "This session has queued messages — send or remove them before editing",
+    "notLast": "A newer message exists in this session — this one is no longer the latest and cannot be edited",
+    "failed": "Failed to edit and resend, please try again",
+    "noPriorAssistant": "There is no AI reply before this message, and the Cindy version on the computer can't edit it yet. Update Cindy on the computer and try again.",
+    "uploadsPending": "Attachments are still uploading. Wait for them to finish before editing the message.",
+    "rollbackHint": "Sending will undo changes to {{count}} file(s) from the last turn",
+    "conversationOnlyHint": "Sending will not restore project files; previous file changes will remain"
   }
 }

@@ -1,0 +1,7 @@
+{
+  "ios": {
+    "NSMicrophoneUsageDescription": "Cindy needs microphone access for voice input in remote sessions.",
+    "NSCameraUsageDescription": "Cindy needs camera access to attach photos to remote sessions.",
+    "NSPhotoLibraryUsageDescription": "Cindy needs photo library access to show recent photos and screenshots for quick attaching."
+  }
+}

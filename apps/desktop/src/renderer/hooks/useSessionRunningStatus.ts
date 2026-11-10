@@ -41,6 +41,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import type { SessionStatusInfo } from '@/lib/makerChatStore';
 import {
   addSessionAttention,
@@ -74,6 +75,12 @@ import {
  */
 const QUEUE_DEBOUNCE_MS = 500;
 
+// Keep only currently pending request IDs across Sidebar remounts. A cleared dot
+// stays cleared for the same request, while a new request can alert immediately.
+// Account switches discard the ledger; settled/deleted tasks are pruned below.
+let pendingReminderOwnerId: string | null = null;
+const notifiedPendingRequests = new Map<string, Set<string>>();
+
 interface UseSessionRunningStatusOptions {
   /**
    * Fired when a session transitions running → done. Filters out errored
@@ -93,10 +100,10 @@ interface UseSessionRunningStatusOptions {
    * Fired when a session enters a pending state needing user input
    * (`pendingAskUser` / `pendingPermission` / `pendingPlanReview` /
    * `pendingPluginSetup`). Rising
-   * edge only — re-fires only after the pending state clears and re-enters.
+   * edge fires for a new request (or new input-handoff step) in the session.
    * Like onSessionDone, no active-session filter; the consumer decides.
    */
-  onSessionNeedsReply?: (sessionId: string) => void;
+  onSessionNeedsReply?: (sessionId: string, options?: { inputHandoff: true; inputHandoffRequestId?: string }) => void;
 }
 
 /**
@@ -138,6 +145,8 @@ export function useSessionRunningStatus(
   // Track which sessions had pending states last cycle, so we can detect
   // when pending states disappear and auto-clear notifications.
   const prevPendingRef = useRef(new Set<string>());
+  const prevPendingKeysRef = useRef(new Map<string, Set<string>>());
+  const prevPendingOwnerRef = useRef(getDataOwnerGeneration().dataOwnerId);
 
   /** 本 hook 因 turn 以错误结束而点的红点(新一轮正常结束时据此收掉过期的那颗)。 */
   const liveErrorMarkedRef = useRef(new Set<string>());
@@ -332,37 +341,85 @@ export function useSessionRunningStatus(
     }
 
     // --- 3. Detect pending ask-user / permission / plan-review / plugin-setup ---
+    const ownerId = getDataOwnerGeneration().dataOwnerId;
+    if (pendingReminderOwnerId !== ownerId) {
+      pendingReminderOwnerId = ownerId;
+      notifiedPendingRequests.clear();
+    }
+    if (prevPendingOwnerRef.current !== ownerId) {
+      prevPendingOwnerRef.current = ownerId;
+      prevPendingRef.current.clear();
+      prevPendingKeysRef.current.clear();
+    }
     const currentPendingSet = new Set<string>();
+    const currentPendingKeys = new Map<string, Set<string>>();
+    const previouslyPending = new Set([
+      ...prevPendingRef.current,
+      ...notifiedPendingRequests.keys(),
+    ]);
     for (const [id, info] of statusMap) {
       if (
         info.hasPendingAskUser ||
         info.hasPendingPermission ||
         info.hasPendingPlanReview ||
         info.hasPendingPluginSetup ||
-        info.hasPendingInputHandoff === true
+        info.hasActionableInputHandoff === true
       ) {
         currentPendingSet.add(id);
         const isActive = id === activeSessionId;
-        const wasAlreadyPending = prevPendingRef.current.has(id);
-        // In-app dot + dock badge: RISING edge only (mirror onSessionNeedsReply
-        // below), NOT a per-tick re-derive. A backgrounded session keeps
-        // hasPendingX=true until the prompt is answered, so the old
-        // `!hasSessionAttention(id)` guard re-added it on every snapshot tick:
-        // the moment the user cleared the badge (clicked the session / focused
-        // the window → clearAllSessionAttention), the next tick resurrected it,
-        // leaving the macOS Dock red dot impossible to clear. Edge-triggering
-        // means a cleared badge stays cleared until pending clears and re-enters.
+        const keys = info.hasActionableInputHandoff
+          ? info.pendingRequestKeys
+          : info.pendingRequestKeys?.filter((key) => !key.startsWith('handoff:'));
+        const newKeys = keys?.filter((key) =>
+          !notifiedPendingRequests.get(id)?.has(key)
+          && !prevPendingKeysRef.current.get(id)?.has(key));
+        const wasAlreadyPending = keys?.length
+          ? newKeys?.length === 0
+          : prevPendingRef.current.has(id);
+        if (keys?.length) currentPendingKeys.set(id, new Set(keys));
+        // A cleared dot stays cleared for the same request across status ticks
+        // and Sidebar remounts, but a new request raises it immediately.
         if (!isActive && !wasAlreadyPending) {
-          addSessionAttention(id, 'awaiting'); // 待用户回复/选择 → 黄(V5)
+          addSessionAttention(id, 'awaiting');
         }
-        // System notification callback: rising edge only, no active filter.
-        // Same reasoning as onSessionDone — focus state is the consumer's
-        // call. Re-firing for the same session requires the pending state
-        // to clear and re-enter (prevents repeat-pings).
         if (!wasAlreadyPending) {
-          onSessionNeedsReplyRef.current?.(id);
+          // Main owns the fixed-copy phone push. The notification helper checks
+          // existing IM routing before deciding whether Feishu needs a fallback.
+          const handoffOnly = newKeys?.length
+            ? newKeys.every((key) => key.startsWith('handoff:'))
+            : info.hasActionableInputHandoff === true
+              && !info.hasPendingAskUser
+              && !info.hasPendingPermission
+              && !info.hasPendingPlanReview
+              && !info.hasPendingPluginSetup;
+          if (handoffOnly) {
+            const handoffKey = (newKeys ?? keys)?.find((key) => key.startsWith('handoff:'));
+            const requestId = handoffKey?.slice('handoff:'.length, handoffKey.lastIndexOf(':'));
+            onSessionNeedsReplyRef.current?.(id, {
+              inputHandoff: true,
+              ...(requestId ? { inputHandoffRequestId: requestId } : {}),
+            });
+          } else onSessionNeedsReplyRef.current?.(id);
+        }
+        // Other hook consumers only read running status. They may add the
+        // in-app dot, but must not consume the system notification owner's edge.
+        if (keys?.length && onSessionNeedsReplyRef.current) {
+          const seen = notifiedPendingRequests.get(id) ?? new Set<string>();
+          for (const key of keys) seen.add(key);
+          notifiedPendingRequests.set(id, seen);
         }
       }
+    }
+
+    // Keep memory bounded to requests still pending. A request resolved while
+    // Sidebar was unmounted is removed on the next snapshot.
+    for (const [id, seen] of notifiedPendingRequests) {
+      const current = currentPendingKeys.get(id);
+      const stillPending = statusMap.get(id)?.pendingRequestKeys;
+      for (const key of seen) {
+        if (!current?.has(key) && !stillPending?.includes(key)) seen.delete(key);
+      }
+      if (seen.size === 0) notifiedPendingRequests.delete(id);
     }
 
     // --- 4. Auto-clear notifications when pending state disappears ---
@@ -371,7 +428,7 @@ export function useSessionRunningStatus(
     // immediately starts a continuation: otherwise the pending falling edge is
     // consumed while running, and no later snapshot can clear the stale badge.
     // Done/error notifications have separate owners and remain sticky.
-    for (const sessionId of prevPendingRef.current) {
+    for (const sessionId of previouslyPending) {
       if (
         !currentPendingSet.has(sessionId) &&
         hasSessionAttention(sessionId) &&
@@ -385,6 +442,7 @@ export function useSessionRunningStatus(
 
     prevRunningRef.current = new Set(currentRunningSet);
     prevPendingRef.current = currentPendingSet;
+    prevPendingKeysRef.current = currentPendingKeys;
   }, [statusMap, activeSessionId]);
 
   // Unmount cleanup:清掉所有还没 fire 的 done debounce 定时器,避免 hook 卸载后

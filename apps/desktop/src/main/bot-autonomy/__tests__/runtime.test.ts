@@ -65,6 +65,7 @@ async function setup(options: {
   const execute = vi.fn<RoutineEngineDeps['execute']>(async () => ({}));
   const remind = vi.fn();
   const push = vi.fn();
+  const ensureOwnBuiltins = vi.fn<(botId: string) => Promise<void>>(async () => {});
   const engineDeps: RoutineEngineDeps = {
     load: async () => structuredClone(saved),
     save: async (state) => { saved = structuredClone(state); },
@@ -82,6 +83,7 @@ async function setup(options: {
   ]);
   const create = (engine: AutonomyEngine) => new BotAutonomyRuntime({
       engine,
+      ensureOwnBuiltins,
       now: () => now,
       log,
       isCurrent: () => true,
@@ -117,7 +119,7 @@ async function setup(options: {
     await created.start();
     return created;
   };
-  return { runtime, create, engine, execute, remind, push, bots, now: () => now, advance: (ms: number) => { now += ms; } };
+  return { runtime, create, engine, execute, remind, push, ensureOwnBuiltins, bots, now: () => now, advance: (ms: number) => { now += ms; } };
 }
 
 describe('BotAutonomyRuntime with the routine engine', () => {
@@ -533,6 +535,38 @@ it('keeps opted-in tasks visible and reminds the owner when the scheduler teamma
     await runtime.sweep();
     expect(t.remind).toHaveBeenCalledOnce();
     expect(t.execute).not.toHaveBeenCalled();
+  } finally {
+    runtime.stop();
+    await engine.stop();
+  }
+});
+
+// Unit / cindy-bots-runtime.md §6「伙伴技能分层」: turning off a teammate's "follow" system Skill stops its background
+// follow-up with its prompt and tools. Before this, the scheduler teammate kept receiving waiting events and
+// its built-in follow-up rule was still installed. Nightly learning is not a system Skill and must still be
+// ensured; turning follow back on restores the stored scheduler choice without the owner redoing anything.
+it('never wakes a follow-off teammate, keeps the owner reminder and nightly learning, and restores on re-enable', async () => {
+  const t = await setup({ creators: { delegated: 'a' } });
+  for (const id of ['a', 'sched']) Object.assign(t.bots.get(id)!, { followOff: true });
+  const engine = await t.engine();
+  const runtime = await t.runtime(engine);
+  try {
+    expect([engine.list('a'), engine.list('sched')]).toEqual([[], []]);
+    expect(t.ensureOwnBuiltins.mock.calls.map(([id]) => id).sort()).toEqual(['a', 'sched']);
+    expect(runtime.watch.getSchedulerBotId()).toBeNull();
+    runtime.watch.applyActivity('delegated', waiting('delegated', t.now()));
+    await runtime.watch.settled();
+    expect(runtime.watch.get('delegated')?.followerBotId).toBeNull();
+    t.advance(AUTONOMY_THRESHOLDS.waitingAfterMs);
+    await runtime.evaluate();
+    expect(t.remind).toHaveBeenCalledOnce();
+    expect(t.execute).not.toHaveBeenCalled();
+
+    for (const id of ['a', 'sched']) Object.assign(t.bots.get(id)!, { followOff: false });
+    await runtime.refreshFollowers();
+    expect(runtime.watch.getSchedulerBotId()).toBe('sched');
+    expect(runtime.watch.get('delegated')?.followerBotId).toBe('a');
+    expect(engine.list('a').map((routine) => routine.id)).toEqual([builtinFollowUpRoutineId('a')]);
   } finally {
     runtime.stop();
     await engine.stop();

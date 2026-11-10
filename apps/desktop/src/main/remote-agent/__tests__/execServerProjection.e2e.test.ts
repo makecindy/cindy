@@ -13,6 +13,103 @@ const REPO = path.resolve(__dirname, '../../../../../..');
 const CODEX = path.join(REPO, 'apps', 'codex-package-bin', process.platform + '-' + process.arch, 'bin', process.platform === 'win32' ? 'codex.exe' : 'codex');
 
 describe.skipIf(!fs.existsSync(CODEX))('native exec-server workspace projection', () => {
+  // 真机缺口：Mac Codex 把 Windows 执行环境的沙箱级别发成 disabled，Auto 终端全部被拒。
+  // e2e tier：实际 Relay → 原生 exec-server；工作区可写，区外及 .git 不可写，不能执行的 deny-read 仍拒绝。
+  it.skipIf(process.platform !== 'win32')('enforces a POSIX agent workspace policy on the Windows executor without removing unsupported restrictions', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-exec-sandbox-')));
+    const codexHome = path.join(root, 'codex-home');
+    fs.mkdirSync(codexHome);
+    const project = path.join(root, 'project');
+    fs.mkdirSync(project);
+    fs.mkdirSync(path.join(project, '.git'));
+    fs.writeFileSync(path.join(project, 'denied.txt'), 'isolated fixture');
+    const virtual = '/Users/agent/workspace';
+    const workspace = new ExecutorWorkspace({ workingDir: project, aliases: [{ from: virtual, to: project }] });
+    workspace.setVirtualRoot('/Users/agent');
+    const messages: Array<Record<string, any>> = [];
+    let parts = '';
+    const relay = new ExecServerRelay({
+      codexPath: CODEX, cwd: project, workspace, authorize: () => ({ ok: true }),
+      env: { ...process.env, CODEX_HOME: codexHome },
+      push: async (frames) => {
+        for (const frame of frames) {
+          if (frame.kind !== 'message') continue;
+          parts += frame.data;
+          if (!frame.more) { messages.push(JSON.parse(parts)); parts = ''; }
+        }
+      },
+    });
+    const send = (message: unknown) => relay.handle({ t: 'ws', connId: 'sandbox', kind: 'message', data: JSON.stringify(message) });
+    let backgroundPid: number | undefined;
+    const sandbox = {
+      permissions: { type: 'managed', network: 'restricted', file_system: { type: 'restricted', entries: [
+        { path: { type: 'special', value: { kind: 'root' } }, access: 'read' },
+        { path: { type: 'path', path: `file://${virtual}` }, access: 'write' },
+        { path: { type: 'path', path: `file://${virtual}/.git` }, access: 'read' },
+      ] } },
+      cwd: `file://${virtual}`, userHomeDir: 'file:///Users/agent',
+      temporaryDirectories: [`file://${virtual}`], windowsSandboxLevel: 'disabled',
+    };
+    const params = {
+      argv: [process.execPath, '-e', `const fs=require('node:fs');let r={};fs.writeFileSync('allowed.txt','ok');r.workspaceWrite=fs.readFileSync('allowed.txt','utf8')==='ok';for(const [k,p] of ${JSON.stringify([['outsideDenied', path.join(root, 'outside.txt')], ['gitDenied', path.join(project, '.git', 'outside.txt')]])}){try{fs.writeFileSync(p,'escape');r[k]=false}catch(e){r[k]=e.code==='EACCES'||e.code==='EPERM'}}console.log(JSON.stringify(r));if(!Object.values(r).every(Boolean))process.exitCode=3;`],
+      cwd: `file://${virtual}`, env: { SystemRoot: process.env.SystemRoot, TEMP: project, TMP: project }, tty: false, sandbox,
+    };
+    try {
+      relay.handle({ t: 'ws', connId: 'sandbox', kind: 'open', path: '/ws/exec-server' });
+      send({ id: 1, method: 'initialize', params: { clientName: 'cindy-test', clientVersion: '1' } });
+      await expect.poll(() => messages.find(item => item.id === 1), { timeout: 5000 }).toBeDefined();
+      send({ method: 'initialized', params: {} });
+      send({ id: 2, method: 'process/start', params: { ...params, processId: 'workspace' } });
+      await expect.poll(() => messages.find(item => item.id === 2), { timeout: 5000 }).toBeDefined();
+      expect(messages.find(item => item.id === 2)?.error).toBeUndefined();
+      expect(messages.find(item => item.id === 2)?.result.sandboxType).toBe('windowsRestrictedToken');
+      await expect.poll(() => messages.find(item => item.method === 'process/exited'), { timeout: 5000 }).toBeDefined();
+      expect(messages.find(item => item.method === 'process/exited')?.params.exitCode).toBe(0);
+      const output = messages.filter(item => item.method === 'process/output').map(item => Buffer.from(item.params.chunk, 'base64').toString()).join('');
+      expect(JSON.parse(output)).toEqual({ workspaceWrite: true, outsideDenied: true, gitDenied: true });
+      expect(fs.existsSync(path.join(root, 'outside.txt'))).toBe(false);
+      expect(fs.existsSync(path.join(project, '.git', 'outside.txt'))).toBe(false);
+      // Agent 按 initialize 宣告的 Shell 启动命令，不能只测 Node 而漏掉 Store 版 PowerShell。
+      const shell = messages.find(item => item.id === 1)?.result.environmentInfo.shell;
+      expect(shell.name).toBe('powershell');
+      send({ id: 3, method: 'process/start', params: { ...params, processId: 'shell',
+        argv: [shell.path, '-NoLogo', '-NoProfile', '-Command', "[Console]::WriteLine('CINDY_SANDBOX_SHELL_OK')"],
+      } });
+      await expect.poll(() => messages.find(item => item.id === 3), { timeout: 5000 }).toBeDefined();
+      expect(messages.find(item => item.id === 3)?.error).toBeUndefined();
+      await expect.poll(() => messages.find(item => item.method === 'process/exited' && item.params.processId === 'shell'), { timeout: 5000 }).toBeDefined();
+      expect(messages.find(item => item.method === 'process/exited' && item.params.processId === 'shell')?.params.exitCode).toBe(0);
+      expect(messages.filter(item => item.method === 'process/output' && item.params.processId === 'shell')
+        .map(item => Buffer.from(item.params.chunk, 'base64').toString()).join('')).toContain('CINDY_SANDBOX_SHELL_OK');
+      send({ id: 4, method: 'process/start', params: { ...params, processId: 'deny-read', sandbox: {
+        ...sandbox, permissions: { ...sandbox.permissions, file_system: { ...sandbox.permissions.file_system, entries: [
+          ...sandbox.permissions.file_system.entries,
+          { path: { type: 'path', path: `file://${virtual}/denied.txt` }, access: 'deny' },
+        ] } },
+      } } });
+      await expect.poll(() => messages.find(item => item.id === 4), { timeout: 5000 }).toBeDefined();
+      expect(messages.find(item => item.id === 4)?.error.message).toContain('refusing to run unsandboxed');
+      send({ id: 5, method: 'process/start', params: { ...params, processId: 'background',
+        argv: [process.execPath, '-e', "console.log('CHILD_PID:'+process.pid);setInterval(()=>{},1000)"],
+      } });
+      await expect.poll(() => {
+        const output = messages.filter(item => item.method === 'process/output' && item.params.processId === 'background')
+          .map(item => Buffer.from(item.params.chunk, 'base64').toString()).join('');
+        const match = /CHILD_PID:(\d+)/.exec(output);
+        backgroundPid = match ? Number(match[1]) : undefined;
+        return backgroundPid;
+      }, { timeout: 5000 }).toBeGreaterThan(0);
+      relay.close();
+      await expect.poll(() => {
+        try { process.kill(backgroundPid!, 0); return false; } catch { return true; }
+      }, { timeout: 3000 }).toBe(true);
+    } finally {
+      relay.close();
+      if (backgroundPid) try { process.kill(backgroundPid); } catch { /* 已随中继结束。 */ }
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+
   // 测试价值：生产入口 ExecServerRelay → 原生 exec-server 必须能从含空格的别名目录
   // 启动程序。#6743 的旧实现把 argv[0] 当 Shell 文本引用，Windows 实际报 os error 123；
   // 现有 E2E 只使用未映射的 process.execPath。最小失败输入是一个程序目录别名，e2e tier。

@@ -1,7 +1,11 @@
+import './personalBuildMonitor.js';
+import { configureWindowsAtomicRename } from './windowsAtomicRename.js';
+import './personalLaunchCwd.js';
 // Entry: Electron startup → bootstrap-electron.ts (dynamic import).
 import fixPath from 'fix-path';
 import { ensureMacPackageManagerPath } from './agentToolPath.js';
-import { app } from 'electron';
+import { app, utilityProcess } from 'electron';
+import { configureGhostSnapshotProcess } from './cindy-brain/ghostSnapshotCapability.js';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
@@ -12,6 +16,7 @@ import { refreshBrowserRuntimeConfigDir } from '@cindy/browser-control-runtime/c
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
+import { configureUserDataDir, configureAppDataDir } from './userDataPath.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
 import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
@@ -54,7 +59,21 @@ prepareCindyVersionStartup();
 // 进程级默认值,兜住 main 里所有不走自建 dispatcher 的 fetch / net.connect。
 setDefaultAutoSelectFamilyAttemptTimeout(2500);
 
-initLogger();
+// Logger 不再直接 import electron：宿主事实由调用方注入，Node 的 cindy-host
+// 因此能加载同一份日志与依赖它的 storage 模块。
+initLogger({
+  isPackaged: app.isPackaged,
+  userDataDir: app.getPath('userData'),
+  version: app.getVersion(),
+});
+configureGhostSnapshotProcess((parentDir) => utilityProcess.fork(
+  path.join(__dirname, 'ghostSnapshotWorkerProcess.js'), [], {
+    cwd: parentDir,
+    stdio: ['ignore', 'ignore', 'pipe'],
+    serviceName: 'cindy-ghost-snapshot',
+  },
+));
+
 const log = createLogger('fix-path');
 log.debug(`[fix-path] before PATH=${process.env.PATH ?? ''}`);
 fixPath();
@@ -290,6 +309,16 @@ const desktopDevInstanceOptions = (() => {
     profileKind: devFlags.profileKind,
   };
 })();
+
+// Pin shared storage after all profile/version/dev overrides. Capturing the
+// regional default above would make an isolated runtime write into that profile.
+configureUserDataDir(app.getPath('userData'));
+configureAppDataDir(app.getPath('appData'));
+configureWindowsAtomicRename({
+  packagedBinary: app.isPackaged ? path.join(process.resourcesPath, 'tools', 'windows-atomic-rename', 'cindy-windows-atomic-rename.exe') : undefined,
+  sourceFile: app.isPackaged ? undefined : path.join(app.getAppPath(), 'native', 'windows-atomic-rename', 'main.rs'),
+  cacheDir: path.join(app.getPath('userData'), 'windows-atomic-rename'),
+});
 
 // Pin after the last userData setPath. Vite's main bundle require()s
 // @cindy/browser-control-runtime at chunk load (before this body), so

@@ -35,48 +35,21 @@ import { BrowserRealProfileSubsection } from '../BrowserRealProfileSubsection';
 afterEach(cleanup);
 
 describe('BrowserRealProfileSubsection', () => {
-  it('explains that the sidebar backend cannot use copied logins', () => {
-    render(
-      <BrowserRealProfileSubsection
-        enabled={false}
-        pending={false}
-        available={false}
-        onToggle={vi.fn()}
-      />,
-    );
-    expect(
-      screen.getByText('settings.computerUse.realProfile.unavailableEmbedded'),
-    ).toBeTruthy();
-    expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
-  });
-
-  it('lets the user turn the switch off when the embedded backend is active', () => {
-    const onToggle = vi.fn();
-    render(
-      <BrowserRealProfileSubsection
-        enabled
-        pending={false}
-        available={false}
-        onToggle={onToggle}
-      />,
-    );
-    const toggle = screen.getByRole('switch');
-    expect(toggle).toHaveProperty('disabled', false);
-    fireEvent.click(toggle);
-    expect(onToggle).toHaveBeenCalledWith(false);
-  });
-
-  it('toggles on when the external backend is active', () => {
+  it('toggles on from off', () => {
     const onToggle = vi.fn();
     render(
       <BrowserRealProfileSubsection
         enabled={false}
         pending={false}
-        available
         onToggle={onToggle}
       />,
     );
     fireEvent.click(screen.getByRole('switch'));
     expect(onToggle).toHaveBeenCalledWith(true);
+  });
+
+  it('blocks the switch while a change is pending', () => {
+    render(<BrowserRealProfileSubsection enabled pending onToggle={vi.fn()} />);
+    expect(screen.getByRole('switch')).toHaveProperty('disabled', true);
   });
 });

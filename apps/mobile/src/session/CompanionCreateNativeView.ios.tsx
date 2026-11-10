@@ -1,6 +1,5 @@
-import { Button, HStack, Spacer, ProgressView, Text, TextField, useNativeState } from '@expo/ui/swift-ui';
+import { Button, HStack, Spacer, ProgressView, Text, TextField } from '@expo/ui/swift-ui';
 import { accessibilityLabel, buttonStyle, contentShape, shapes, disabled, font, foregroundStyle, frame } from '@expo/ui/swift-ui/modifiers';
-import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '@/theme';
 import { ComposerSheet } from './ComposerSheet';
@@ -8,18 +7,18 @@ import { ComposerNativeSection as Section } from './ComposerNativeSection';
 import { CompanionPortraitPicker } from './CompanionPortraitPicker';
 import { CompanionNativeContent } from './CompanionNativeContent.ios';
 import type { CompanionCreateNativeViewProps } from './CompanionCreateNativeView';
+import { useNativeTextDraft } from './nativeTextDraft';
 
 export function CompanionCreateNativeView(p: CompanionCreateNativeViewProps) {
   const { t } = useTranslation(); const { colors } = useTheme();
   const name = typeof p.values.name === 'string' ? p.values.name : '';
-  const state = useNativeState(name);
-  useEffect(() => { if (state.get() !== name) state.set(name); }, [name, state]);
+  const nameField = useNativeTextDraft(name, next => p.onChange({ ...p.values, name: next }));
   const tr = (key: string) => t(`devices.companionProfile.${key}`, { deviceName: p.deviceName });
   return <ComposerSheet visible={p.visible} onClose={p.onClose} onClosed={p.onClosed} title={tr('create')} nativeContent preventDismiss={p.dirty || p.busy}>
     {!p.online || p.error || p.duplicate ? <Section><Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}>{tr(!p.online ? 'offline' : p.duplicate || p.nameTaken ? 'nameTaken' : 'createFailed')}</Text></Section> : null}
     {p.loading ? <Section><ProgressView /></Section> : null}
     {p.panel ? <>
-      <Section title={tr('name')}><TextField text={state} onTextChange={name => p.onChange({ ...p.values, name })} maxLength={200} testID="companionCreate.name" modifiers={[accessibilityLabel(tr('name')), disabled(p.busy || !p.online || !!p.locked)]} /></Section>
+      <Section title={tr('name')}><TextField text={nameField.text} onTextChange={nameField.onTextChange} maxLength={200} testID="companionCreate.name" modifiers={[accessibilityLabel(tr('name')), disabled(p.busy || !p.online || !!p.locked)]} /></Section>
       <Section title={tr('avatar')}><CompanionNativeContent><CompanionPortraitPicker value={String(p.values.avatarImageBase64 ?? '')} onChange={avatarImageBase64 => p.onChange({ ...p.values, avatarImageBase64 })} disabled={p.busy || !p.online || !!p.locked} /></CompanionNativeContent></Section>
       {p.models ? <Section><CompanionNativeContent>{p.models}</CompanionNativeContent></Section> : null}
     </> : null}

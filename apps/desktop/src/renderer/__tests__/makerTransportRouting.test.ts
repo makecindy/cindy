@@ -445,22 +445,6 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(orcaWorkflows.endTeam).not.toHaveBeenCalled();
   });
 
-  it('isSessionTurnRunningFor:远程经隧道 maker:session-in-turn;本机直接 false(不经隧道)', async () => {
-    const { invoke } = stubElectron();
-    invoke.mockResolvedValue(true);
-    const { isSessionTurnRunningFor } = await import('@/lib/makerTransport');
-    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
-    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('rs')]);
-
-    await expect(isSessionTurnRunningFor('rs')).resolves.toBe(true);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session-in-turn', ['rs']);
-
-    invoke.mockClear();
-    // 未注册 → 本机会话:直接 false,不经隧道(看门狗对本机会话整体不生效)
-    await expect(isSessionTurnRunningFor('local-sess')).resolves.toBe(false);
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
   it('getSessionTurnActiveOn:远程问被控端 maker:session-in-turn,本机问本机 main', async () => {
     const { invoke, makerSpies } = stubElectron();
     invoke.mockResolvedValue(true);
@@ -501,6 +485,12 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     await estimatedSessionValueFor('local-sess');
     expect(localMessages.estimatedSessionValue).toHaveBeenCalledWith('local-sess');
     expect(invoke).not.toHaveBeenCalled();
+
+    const options = { includeBreakdown: true, clientId: 'answer' };
+    await estimatedSessionValueFor('local-sess', options);
+    expect(localMessages.estimatedSessionValue).toHaveBeenLastCalledWith('local-sess', options);
+    await estimatedSessionValueFor('rs', options);
+    expect(invoke).toHaveBeenLastCalledWith('dev-1', 'local-db:messages:estimatedSessionValue', ['rs', options]);
   });
 
   // issue #1170 codex P2:协同 mutation 在 relay 瞬时重连清空注册表的窗口内若退回本机,

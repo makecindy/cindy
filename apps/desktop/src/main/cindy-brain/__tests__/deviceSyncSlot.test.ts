@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { PluginDeviceSync } from '../deviceSyncSlot.js';
 import { PluginSyncAccess } from '../../device-link/pluginSyncAccess.js';
-import { generateContactsSyncIdentity } from '../../contacts-sync/crypto.js';
+import { generateDeviceSyncIdentity } from '../../device-sync-keys/crypto.js';
 import {
   ghostPermissionItems,
   validateGhostManifest,
@@ -9,8 +9,8 @@ import {
 } from '../../../shared/ghost.js';
 import { validateGhostManifest as validateProtocolManifest } from '../../../../../../packages/plugin-protocol/src/manifest.js';
 
-// New generic plugin boundary: real handler/encryption, in-memory wire. Unit tier.
-// Existing contacts tests cannot cover plugin namespace, owner/revision and permission isolation.
+// Generic plugin boundary: real handler/encryption, in-memory wire. Unit tier.
+// Covers plugin namespace, owner/revision and permission isolation.
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const fn of cleanups.splice(0)) fn();
@@ -39,7 +39,7 @@ function pair() {
       instanceKey: 'example-sync',
       approval: { state: 'approved', revision: '1' },
     } as InstalledGhost;
-    const identity = generateContactsSyncIdentity(),
+    const identity = generateDeviceSyncIdentity(),
       pins = new Map<string, string>(),
       delivered: any[] = [];
     const blocked = new Set<string>();

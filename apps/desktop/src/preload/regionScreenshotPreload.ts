@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import {
   REGION_SCREENSHOT_CHANNEL as C,
   type RegionRect,
+  type RegionScreenshotHit,
   type RegionScreenshotBegin,
   type RegionScreenshotExport,
   type RegionScreenshotBitmap,
@@ -17,6 +18,10 @@ import { REGION_CAPTURE_CHANNEL as LIVE, type RegionCaptureMode } from '../share
 exposeScreenshotPageElectronApi();
 
 contextBridge.exposeInMainWorld('regionScreenshot', {
+  startAudio: (token: string, options: import('../shared/recordingAudio').RecordingAudioOptions) => ipcRenderer.invoke(LIVE.AUDIO_START, token, options),
+  readAudio: (token: string) => ipcRenderer.invoke(LIVE.AUDIO_READ, token),
+  stopAudio: (token: string) => ipcRenderer.invoke(LIVE.AUDIO_STOP, token),
+  setTranslationLanguage: (token: string, value: import('../shared/screenshotTranslation').ScreenshotTranslationPreference): Promise<boolean> => ipcRenderer.invoke(C.SET_TRANSLATION_LANGUAGE, token, value),
   recordingControls: (token: string, expanded: boolean, point?: { x: number; y: number }, dragging = false) => ipcRenderer.invoke(LIVE.CONTROLS, token, expanded, point, dragging),
   previewRecording: (token: string, bytes: Uint8Array, format: 'webm' | 'gif') => ipcRenderer.invoke(LIVE.PREVIEW, token, bytes, format),
   autoScroll: (token: string, enabled: boolean) => ipcRenderer.invoke(LIVE.AUTO_SCROLL, token, enabled),
@@ -29,6 +34,9 @@ contextBridge.exposeInMainWorld('regionScreenshot', {
   onBegin: (callback: (payload: RegionScreenshotBegin) => void): (() => void) =>
     onPayload(C.BEGIN, callback),
   onEnd: (callback: () => void): (() => void) => onPayload(C.END, callback),
+  onLocaleChanged: (callback: (payload: { token: string; locale: string }) => void) => onPayload(C.LOCALE_CHANGED, callback),
+  onTranslationLanguageChanged: (callback: (payload: { token: string; preference: import('../shared/screenshotTranslation').ScreenshotTranslationPreference }) => void): (() => void) =>
+    onPayload(C.TRANSLATION_LANGUAGE_CHANGED, callback),
   onClear: (callback: () => void): (() => void) => onPayload(C.CLEAR, callback),
   painted: (token: string): void => ipcRenderer.send(C.PAINTED, token),
   focused: (token: string): void => ipcRenderer.send(C.FOCUSED, token),
@@ -36,7 +44,7 @@ contextBridge.exposeInMainWorld('regionScreenshot', {
   copyText: (token: string, text: string): void => ipcRenderer.send(C.COPY_TEXT, token, text),
   cancel: (token: string): void => ipcRenderer.send(C.CANCEL, token),
   abandon: (): void => ipcRenderer.send(C.ABANDON),
-  elementsAt: (token: string, windowId: number, x: number, y: number): Promise<RegionRect[]> =>
+  elementsAt: (token: string, windowId: number, x: number, y: number): Promise<RegionScreenshotHit | null> =>
     ipcRenderer.invoke(C.ELEMENTS_AT, token, windowId, x, y),
   exportImage: (token: string, payload: RegionScreenshotExport): Promise<boolean> =>
     ipcRenderer.invoke(C.EXPORT, token, payload),

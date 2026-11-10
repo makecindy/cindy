@@ -26,7 +26,7 @@ Cindy checks for updates automatically and downloads them in the background. Whe
 
 **Related settings:**
 
-- **Beta channel** — **Settings > General > Experimental**. Gets upcoming updates early; takes effect after a restart. Not shown on Linux.
+- **Beta channel** — **Settings > General > Experimental**. Gets upcoming updates early; takes effect after a restart. Shown on Linux x64; hidden on other Linux architectures.
 - **Storage** — its own Settings tab (**Settings > Storage**): media and cache usage and cleanup, database cleanup, the Chat workspace folder, and **Worktree cleanup**.
 
 **Notes:**

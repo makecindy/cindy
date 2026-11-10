@@ -17,9 +17,12 @@ const state = vi.hoisted(() => ({
   running: new Map<string, { isRunning: boolean }>(),
   starting: new Set<string>(),
   background: new Set<string>(),
+  commandWork: new Set<string>(),
   workers: new Map<string, ReadonlySet<string>>(),
   owner: { dataOwnerId: 'owner-a', generation: 1 },
   isLoading: false,
+  historyLoading: false,
+  historyError: null as Error | null,
   publish: vi.fn().mockResolvedValue(undefined),
 }));
 const botState = vi.hoisted(() => ({
@@ -54,6 +57,7 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
 vi.mock('@/lib/sessionStartingStore', () => ({ useStartingSessionIds: () => state.starting }));
 vi.mock('@/lib/sessionBackgroundActivityStore', () => ({
   useBackgroundActivitySessionIds: () => state.background,
+  useBackgroundCommandWorkSessionIds: () => state.commandWork,
 }));
 vi.mock('@/features/cc-agent/hooks/useOrcaLeadWorkerMap', () => ({
   useOrcaLeadWorkerMap: (sessions: { id: string }[]) =>
@@ -64,8 +68,8 @@ vi.mock('@/hooks/useCCSessions', () => ({
   useCCSessions: (options: { includeArchived: string }) => ({
     sessions:
       options.includeArchived === 'all' ? (state.history ?? state.sessions) : state.sessions,
-    isLoading: state.isLoading,
-    error: null,
+    isLoading: options.includeArchived === 'all' ? state.historyLoading : state.isLoading,
+    error: options.includeArchived === 'all' ? state.historyError : null,
   }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
@@ -99,12 +103,15 @@ afterEach(() => {
   state.publish.mockClear();
   botState.markRead.mockClear(); botState.markRemoteRead.mockClear();
   state.isLoading = false;
+  state.historyLoading = false;
+  state.historyError = null;
   state.sessions = ['a', 'b', 'c'].map((id) => ({ id, status: 'active' }));
   state.history = null;
   state.remoteSessions = [];
   state.running = new Map();
   state.starting = new Set();
   state.background = new Set();
+  state.commandWork = new Set();
   state.workers = new Map();
   state.attention = new Map([
     ['a', 'done'],
@@ -184,6 +191,22 @@ describe('app badge projection lifecycle', () => {
     expect(projection.sessionIds).toEqual(expect.arrayContaining(['a', 'b', 'c', 'archived-0']));
   });
 
+  it('keeps publishing the projection when the archived bucket is still loading or broken', () => {
+    vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
+    // 历史桶只补齐去重目录；它一直 loading / 报错也不得把计入数的投影一次次吞掉，
+    // 否则角标会永久停在最后一次推送的旧值（界面上已经没有未读了）。
+    state.historyLoading = true;
+    state.historyError = new Error('db busy');
+    const view = render(<AppBadgeAttentionSync />);
+    expect(state.publish).toHaveBeenLastCalledWith(
+      expect.objectContaining({ count: 3, sessionIds: ['a', 'b', 'c'] }),
+    );
+    // 历史桶一直坏着，同一个组件在未读清零后也必须把 0 推下去。
+    state.attention = new Map();
+    view.rerender(<AppBadgeAttentionSync />);
+    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 0 }));
+  });
+
   it('keeps remote IDs in the projection but excludes remote attention from the badge', () => {
     vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
     state.remoteSessions = [
@@ -223,12 +246,14 @@ describe('app badge projection lifecycle', () => {
     expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
   });
 
-  it.each(['running', 'starting', 'background'] as const)(
+  // commandWork:回合已结束但后台命令(跑测试、构建)仍在工作,与后台子代理同口径只点亮显示。
+  it.each(['running', 'starting', 'background', 'commandWork'] as const)(
     'promotes %s workers without broadening operation guards',
     (source) => {
       const running = new Set(source === 'running' ? ['worker'] : []);
       state.starting = new Set(source === 'starting' ? ['worker'] : []);
       state.background = new Set(source === 'background' ? ['worker'] : []);
+      state.commandWork = new Set(source === 'commandWork' ? ['worker'] : []);
       state.workers = new Map([['lead', new Set(['worker'])]]);
       const { result } = renderHook(() =>
         useSessionDisplayRunningState(

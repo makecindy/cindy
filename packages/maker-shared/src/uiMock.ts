@@ -13,6 +13,40 @@ export { UI_MOCK_SHOWCASE_PROJECTS };
 /** Every seeded id starts with this prefix, except the Mobile state ids below. */
 export const UI_MOCK_ID_PREFIX = 'ui-mock-';
 
+/** Synthetic Pi diagnostics for the same context panel on Desktop and Mobile. */
+export const UI_MOCK_PI_CONTEXT_USAGE = {
+  model: 'pi-context-demo', totalTokens: 8192, maxTokens: 200000, rawMaxTokens: 200000,
+  percentage: 4.096, categories: [], gridRows: [], memoryFiles: [], mcpTools: [], agents: [],
+  isAutoCompactEnabled: true, apiUsage: null,
+  textEstimate: {
+    method: 'text-heuristic',
+    items: [
+      { source: 'delivery', tokens: 227 }, { source: 'host', tokens: 460 },
+      { source: 'plugins', tokens: 1100 }, { source: 'memoryRules', tokens: 900 },
+      { source: 'memoryIndex', tokens: 180 }, { source: 'native', tokens: 740 },
+      { source: 'skills', tokens: 1480 }, { source: 'project', tokens: 240 },
+      { source: 'tools', tokens: 2860 }, { source: 'messages', tokens: 320 },
+    ],
+  },
+};
+
+/** GitHub 插件 PR 卡片的演示卡位(手机 mock 按这些 id 返回卡片内容)。 */
+export const UI_MOCK_PR_CARD_IDS = {
+  ask: `${UI_MOCK_ID_PREFIX}pr-card-ask`,
+  draft: `${UI_MOCK_ID_PREFIX}pr-card-draft`,
+  following: `${UI_MOCK_ID_PREFIX}pr-card-following`,
+  merged: `${UI_MOCK_ID_PREFIX}pr-card-merged`,
+} as const;
+
+function prCardCall(card: keyof typeof UI_MOCK_PR_CARD_IDS, args: Record<string, unknown>): UiMockMessage {
+  return {
+    role: 'tool',
+    name: 'mcp__cindy__ghost_call',
+    input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args },
+    result: JSON.stringify({ ok: true, xdt_card_id: UI_MOCK_PR_CARD_IDS[card], xdt_card_turn_end: true }),
+  };
+}
+
 export interface UiMockProject {
   /** Directory name; Desktop creates it under the sandbox, Mobile shows it as a remote path. */
   name: string;
@@ -24,7 +58,9 @@ export type UiMockMessage =
   | { role: 'user'; text: string }
   | { role: 'assistant'; text: string }
   | { role: 'thinking'; text: string }
-  | { role: 'tool'; name: string; input: Record<string, unknown>; result: string };
+  | { role: 'tool'; name: string; input: Record<string, unknown>; result: string }
+  /** New task "Let a plugin choose": the one-line note under the first message. */
+  | { role: 'plugin-route'; note: Record<string, unknown> };
 
 export interface UiMockTask {
   id: string;
@@ -93,6 +129,31 @@ const RICH_ANSWER = [
  */
 export const UI_MOCK_TASKS: readonly UiMockTask[] = [
   ...UI_MOCK_SHOWCASE_TASKS,
+  {
+    id: 'ui-mock-inline-math',
+    title: '行内公式语义验收',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-5.5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: '检查行内公式的符号、参数和上下标。' },
+      { role: 'assistant', text: String.raw`单字符参数：$e\in\mathcal E$。
+
+花括号参数：$e\in\mathcal{E}$。
+
+符号边界：$\mathrm{\alpha}x$；嵌套样式：$\mathbf{\mathcal{E}}$。
+
+分数与根号：$\frac\mathrm{12}2$，$\sqrt\mathrm{2}$。
+
+上下标：$x^{\mathrm{12}}+y_\mathrm i$。
+
+字面花括号：$e\in\mathrm{\{E\}}$。
+
+块级公式对照：
+
+$$e\in\mathcal{E},\quad x^{12}+y_i$$` },
+    ],
+  },
   {
     id: 'visual-running',
     title: '重构登录页布局',
@@ -182,6 +243,37 @@ export const UI_MOCK_TASKS: readonly UiMockTask[] = [
         result: 'The file src/login.tsx has been updated.',
       },
       { role: 'assistant', text: RICH_ANSWER },
+    ],
+  },
+  {
+    id: `${UI_MOCK_ID_PREFIX}pr-card`,
+    title: 'PR 卡片各状态',
+    project: 'cindy-demo',
+    agentKind: 'cc',
+    model: 'claude-sonnet-5',
+    effort: 'medium',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 40,
+    messages: [
+      { role: 'user', text: '登录页改完先别发，用 PR 卡片问我。' },
+      {
+        role: 'tool',
+        name: 'Edit',
+        input: { file_path: 'src/login.tsx', old_string: 'width: 420px', new_string: 'max-width: 24rem' },
+        result: 'The file src/login.tsx has been updated.',
+      },
+      prCardCall('ask', { repo: 'cindy-demo/web', head: 'fix/login-width', base: 'main', commits: 1, files_total: 1 }),
+      { role: 'assistant', text: '表单改成随窗口收缩，已提交到 fix/login-width。要不要发出去，在卡片里选。' },
+      { role: 'user', text: '发成草稿。' },
+      prCardCall('draft', { card_id: UI_MOCK_PR_CARD_IDS.ask, pr: 'https://github.com/cindy-demo/web/pull/42' }),
+      { role: 'assistant', text: '草稿 PR #42 已创建，任务标题也改好了。' },
+      { role: 'user', text: '转成正式，并自动跟进到合并。' },
+      prCardCall('following', { card_id: UI_MOCK_PR_CARD_IDS.ask, pr: 'https://github.com/cindy-demo/web/pull/42', following: true }),
+      { role: 'assistant', text: '已转为正式 PR，后台每 10 分钟检查一次，有变化再叫我。' },
+      { role: 'user', text: '合并了吗？' },
+      prCardCall('merged', { card_id: UI_MOCK_PR_CARD_IDS.ask, pr: 'https://github.com/cindy-demo/web/pull/42' }),
+      { role: 'assistant', text: '#42 已合并，跟进已结束。' },
     ],
   },
   {
@@ -287,6 +379,38 @@ export const UI_MOCK_TASKS: readonly UiMockTask[] = [
       { role: 'assistant', text: '已替换 36 个图标，旧资源已删除。' },
     ],
   },
+  {
+    id: 'ui-mock-plugin-route-routed',
+    title: '插件模型：选了模型',
+    project: null,
+    agentKind: 'codex',
+    model: 'gpt-6-astra',
+    effort: 'high',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 2,
+    messages: [
+      { role: 'user', text: '写一个判断回文的函数。' },
+      { role: 'plugin-route', note: { pluginName: '决策闸门', outcome: 'routed', modelName: 'GPT-6-Astra', effort: 'high', reason: '写代码 98%' } },
+      { role: 'assistant', text: '好的，函数已写好。' },
+    ],
+  },
+  {
+    id: 'ui-mock-plugin-route-failed',
+    title: '插件模型：插件没回应',
+    project: null,
+    agentKind: 'codex',
+    model: 'gpt-6.1-sol',
+    effort: 'medium',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 3,
+    messages: [
+      { role: 'user', text: '写一个求阶乘的函数。' },
+      { role: 'plugin-route', note: { pluginName: '决策闸门', outcome: 'kept', modelName: 'GPT-6.1-Sol', why: 'failed' } },
+      { role: 'assistant', text: '好的，函数已写好。' },
+    ],
+  },
 ];
 
 export interface UiMockSessionRow {
@@ -321,6 +445,7 @@ export interface UiMockMessageRow {
   /** Decoded content; Desktop stores `JSON.stringify(content)`. */
   content: unknown;
   toolUseId: string | null;
+  agentMeta?: Record<string, unknown>;
   /** Unix ms. */
   createdAt: number;
 }
@@ -374,9 +499,9 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
   const rows: UiMockMessageRow[] = [];
   const count = task.messages.reduce((total, message) => total + (message.role === 'tool' ? 2 : 1), 0);
   let at = endsAt - (count - 1) * 1_000;
-  const push = (role: UiMockMessageRole, content: unknown, toolUseId: string | null = null) => {
+  const push = (role: UiMockMessageRole, content: unknown, toolUseId: string | null = null, agentMeta?: Record<string, unknown>) => {
     const id = `${UI_MOCK_ID_PREFIX}${task.id}-${rows.length + 1}`;
-    rows.push({ id, clientId: id, sessionId: task.id, role, content, toolUseId, createdAt: at });
+    rows.push({ id, clientId: id, sessionId: task.id, role, content, toolUseId, ...(agentMeta ? { agentMeta } : {}), createdAt: at });
     at += 1_000;
   };
   task.messages.forEach((message, index) => {
@@ -386,6 +511,9 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
         break;
       case 'assistant':
         push('assistant', message.text);
+        break;
+      case 'plugin-route':
+        push('assistant', '', null, { pluginModelRoute: message.note });
         break;
       case 'thinking':
         push('thinking', { kind: 'thinking', text: message.text, durationMs: 1_500, isRedacted: false });

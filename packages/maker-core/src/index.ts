@@ -16,6 +16,14 @@ export * from './interfaces/index.js';
 
 // agents
 export * from './agents/index.js';
+export {
+  CLAUDE_CLI_STATUS_ARGS,
+  parseClaudeCliLoginStatus,
+  readClaudeCliLoginStatusBySpawn,
+  type ClaudeCliLoginStatus,
+  type ReadClaudeCliStatusOptions,
+} from './agents/claude-code/cli-login-status.js';
+export { workspaceSettingsFiles, parseClaudeSettingsJson } from './agents/claude-code/workspace-settings-guard.js';
 export * from './agents/pi/managed-command.js';
 export { evaluatePiProjectTrust, piProjectKey } from './agents/pi/project-trust.js';
 export {
@@ -90,6 +98,12 @@ export {
   type ConsolidateResult,
 } from './memory/store.js';
 export {
+  createMakerMemoryManagerForHost,
+  attachAgentsToMakerMemory,
+  type MakerMemoryHostContext,
+  type MemoryHostSession,
+} from './memory/host-factory.js';
+export {
   MakerMemoryManager,
   type MakerMemoryManagerDeps,
   type MakerMemoryState,
@@ -97,6 +111,8 @@ export {
   type SqliteFactory,
 } from './memory/manager.js';
 export { isBotMcpServerAllowed } from './agents/shared/bot-runtime-policy.js';
+export { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from './agents/shared/managed-skill-policy.js';
+export { isSkillDisabled } from './agents/shared/skill-activation.js';
 export {
   MemoryFlushController,
   DEFAULT_FLUSH_THRESHOLDS,
@@ -104,32 +120,7 @@ export {
 } from './memory/flush-controller.js';
 export { MAKER_MEMORY_RULES } from './memory/system-prompt.js';
 
-// maker contacts (agent-native 智能通讯录, 全局人物实体库)
-export * from './contacts/types.js';
-export * from './contacts/sync/types.js';
-export { createContactsSyncDelta } from './contacts/sync/merge.js';
-export {
-  CONTACTS_RULES_DISABLED,
-  CONTACTS_RULES_ENABLED,
-  type ContactsPromptState,
-} from './contacts/system-prompt.js';
-export { initContactsSchema, CONTACTS_SCHEMA_VERSION } from './contacts/schema.js';
-export { ContactsFts, type ContactFtsDoc } from './contacts/fts.js';
-export {
-  namesSimilar,
-  profilesNameSimilar,
-  findSimilarContacts,
-  scanDuplicatePairs,
-  type NameFacets,
-} from './contacts/dedupe.js';
-export { MakerContactsStore, type MakerContactsStoreDeps } from './contacts/store.js';
-export { parseVCards, serializeVCards, findEmploymentRelation } from './contacts/vcard.js';
-export { importContacts } from './contacts/import.js';
-export {
-  MakerContactsManager,
-  type MakerContactsManagerDeps,
-  type ContactsSqliteFactory,
-} from './contacts/manager.js';
-
 export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';
 export { VoiceCallContext, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
+
+export { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS } from './agents/base-agent.js';

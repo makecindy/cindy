@@ -1,3 +1,6 @@
+import { taskListSessionTarget } from './sessionDrawerNavigation';
+import type { ViewInstance } from 'react-native';
+import { useTaskListNavigation } from './useTaskListNavigation';
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { cloudCompanionRows } from '@/chat/cloudCompanion';
 import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from './teammateTaskSource';
@@ -12,6 +15,7 @@ import { SwipeableProjectHeader } from './SwipeableProjectHeader';
 import { useRetainedHomeState, getHomeViewSession } from './homeViewSession';
 import { rememberRecentTask } from './recentTasks';
 import { homeListStyles, SESSION_ROW_LONG_PRESS_MS, SessionStatusMark, SessionStatusPulse } from '@/session/HomeListVisuals';
+import { AnimationVisibilityProvider } from '@/hooks/useLoopingAnimation';
 import { useOptionalHeaderHeight } from '@/session/useOptionalHeaderHeight';
 import { rememberComposerEntry } from './composerMorph';
 import type { ComposerMorphOrigin } from './composerGeometry';
@@ -21,6 +25,7 @@ import { countHomeSuggestionSessions, remoteTaskSuggestionsMode, type RemoteTask
 import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
 import { canBrowseMobileHomeDevice } from '@/session/mobileHome';
 import { useFocusEffect, useIsFocused, useRouter } from 'expo-router';
+import { useHandheldVoiceKey } from '@/handheld/handheldMode';
 import { createContext, useContext, Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -76,7 +81,6 @@ import { useAuth } from '@/auth/AuthContext';
 import { HomeTeammatesSection, useHomeTeammatesSectionContext } from './HomeTeammatesSection';
 import { HomeRosterProvider } from './HomeRosterContext';
 import { createDisclosureListCell, DisclosureGroupView, DisclosureItem, ListDisclosureScope, useDisclosurePrepare, useListDisclosureTransition } from './listDisclosureTransition';
-import { useGuardedPush } from '@/utils/useGuardedPush';
 import { useHomeMenuFadeTiming } from '@/session/homeMenuFadeTiming';
 import {
   MainWindowActionButton,
@@ -93,6 +97,8 @@ import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel'
 import { FilterReminderDot } from '@/components/FilterReminderDot';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { sessionPaneLayout } from './sessionPaneLayout';
+import { sharedStatusRowTrailingReserve } from '@/platform/windowGeometry';
 import { useBalancedTitle } from '@/platform/chrome/balancedTitle';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
 import { HomeProjectMachineLabel } from '@/session/HomeProjectMachineLabel';
@@ -114,7 +120,7 @@ import {
   openHomeRemoteCollection,
 } from '@/session/homeChromeMenus';
 import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
-import { AnchoredPullDownMenu } from '@/platform/chrome/AnchoredPullDownMenu';
+import { HomeDisplayMenu } from '@/session/HomeDisplayMenu';
 import type { NativePullDownAction } from '@/platform/chrome/NativePullDownMenu';
 import {
   activeContentFilterCount,
@@ -123,6 +129,7 @@ import {
   type HomeLastActivityFilter,
   type HomeListViewMode,
   type HomeProjectFilter,
+  type HomeTeammateFilter,
   type HomeTaskInfoField,
   type HomeVendorFilter,
 } from '@/session/homeDisplaySettings';
@@ -148,12 +155,13 @@ import {
   reconcileDeviceIdentities,
   saveDeviceIdentityCache,
 } from '@/device-link/deviceIdentityStore';
-import { toDeviceListItems } from '@/device-link/devices';
+import { observeDirectoryBudgetExpiry, scheduleDirectoryBudgetRetirement, toDeviceListItems } from '@/device-link/devices';
 import {
   collectFreshPresenceDeviceIds,
   createPresenceFreshnessTracker,
   deviceMirrorCleanupDisposition,
   markPresenceFresh,
+  mergeDeviceViewsForStaleDirectory,
   mergeDeviceViewsWithFreshPresence,
   patchDeviceViewsWithPresence,
 } from '@/device-link/presenceDevices';
@@ -237,12 +245,15 @@ import {
   type HomeSection,
 } from '@/session/homeSections';
 import {
+  readHomeCollapsePreferences,
   readHomeViewPreferences,
+  saveHomeCollapsePreferences,
   saveHomeViewPreferences as persistHomeViewPreferences,
+  type HomeCollapsePreferences,
   type HomeViewPreferencePatch,
   type HomeViewPreferences,
 } from '@/session/homeViewPreferenceStore';
-import { homeNavigationOwner } from '@/session/useHomeMode';
+import { homeNavigationOwner, useHomeMode } from '@/session/useHomeMode';
 import {
   getCachedHomeListSnapshot,
   scheduleHomeListSnapshotPersist,
@@ -313,6 +324,7 @@ const LIST_LIMIT = 200;
 // computers. This does not change the 200-row server limit; it only bounds the
 // number of device snapshots processed at once.
 const HOME_DEVICE_HYDRATE_CONCURRENCY = 2;
+const EMPTY_DEVICES: DeviceView[] = [];
 // 项目组与自动化组展开后的子列表共用同一个预览限量(设备详情页也 import 复用,避免两处漂移)。
 export const PROJECT_PREVIEW_LIMIT = 5;
 const PROJECT_CHILD_WINDOW_THRESHOLD = 20;
@@ -465,24 +477,27 @@ function useHomeFilterClock(enabled: boolean): number {
 export function MobileHome(props: MobileHomeProps) {
   const screenFocused = useIsFocused();
   const { accountGeneration } = useAuth();
-  return <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
-    <ActiveHomeSession.Provider value={props.currentSessionId}>
-      <HomeRosterProvider key={accountGeneration}>
-        <HomeScreenContent {...props} />
-      </HomeRosterProvider>
-    </ActiveHomeSession.Provider>
-  </RemoteSessionStoreSubscriptionGate>;
+  return <AnimationVisibilityProvider visible={screenFocused && props.active !== false}>
+    <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
+      <ActiveHomeSession.Provider value={props.currentSessionId}>
+        <HomeRosterProvider key={accountGeneration}>
+          <HomeScreenContent {...props} />
+        </HomeRosterProvider>
+      </ActiveHomeSession.Provider>
+    </RemoteSessionStoreSubscriptionGate>
+  </AnimationVisibilityProvider>;
 }
 
 function HomeScreenContent({ active = true, width, newSessionInSystemBar = false, newSessionInHeader = false, onSelectSession, runNavigation, newSessionActionRef }: MobileHomeProps) {
   const ownedSharedTasks = useSharedTasks();
-  const [sharedCollapsed, setSharedCollapsed] = useState(false);
   // The retained page and its visible sidebar must never release each other's subscriptions.
   const HOME_LIST_SUBSCRIPTION_OWNER = `device-list:${useId()}`;
   const embedded = width !== undefined;
+  const homeGeometry = useAdaptiveWindow();
   const residentList = useResidentHomeList(embedded);
   // Captured here: Android draws the list above the route, outside its roster and navigation context.
   const teammatesSectionContext = useHomeTeammatesSectionContext();
+  const { showCollapsedTeammateAvatars, setShowCollapsedTeammateAvatars } = useHomeMode();
   // Bumped by a manual home refresh so the teammate section also re-reads its cloud companions.
   const [teammatesRefreshKey, setTeammatesRefreshKey] = useState(0);
   const activeHomeSession = useContext(ActiveHomeSession);
@@ -504,7 +519,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const preferenceOwnerRef = useRef(preferenceOwner);
   preferenceOwnerRef.current = preferenceOwner;
   const saveHomeViewPreferences = useCallback((
-    patch: Omit<HomeViewPreferencePatch, 'projectFilter' | 'teammateFilter'> & { projectFilter?: HomeProjectFilter; teammateFilter?: HomeProjectFilter },
+    patch: Omit<HomeViewPreferencePatch, 'projectFilter' | 'teammateFilter'> & { projectFilter?: HomeProjectFilter; teammateFilter?: HomeTeammateFilter },
   ) => {
     const owner = getMobileAuthOwner();
     const { projectFilter, teammateFilter, ...rest } = patch;
@@ -518,16 +533,24 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       }
     });
   }, [t]);
+  // 分组收起/展开按账号落盘;写失败只意味着下次启动显示旧状态,不打断操作。
+  // 「已手动操作」按字段记在视图会话上,常驻首页与侧栏两个实例共用:迟到的恢复只跳过
+  // 用户动过的那一类分组,其余分组照常恢复。
+  const saveHomeCollapse = useCallback((patch: HomeCollapsePreferences) => {
+    viewSession.write('collapseTouchedFields', [
+      ...new Set([...viewSession.read<string[]>('collapseTouchedFields', []), ...Object.keys(patch)]),
+    ]);
+    void saveHomeCollapsePreferences(preferenceOwnerRef.current, patch).catch(() => undefined);
+  }, [viewSession]);
+  const [sharedCollapsed, setSharedCollapsed] = useRetainedHomeState(viewSession, 'sharedCollapsed', false,
+    (next) => saveHomeCollapse({ sharedCollapsed: next }));
   // 所有前进导航(进会话 / 新建 / 设置 / 组页面)统一走守卫 push:列表卡顿时的
   // 连点会各自触发一次裸 push,把同一页压进栈 N 层(返回也要 N 次)。
-  const push = useGuardedPush();
-  const navigationHost = useRef({ runNavigation, onSelectSession });
-  navigationHost.current = { runNavigation, onSelectSession };
+  const sidebarNavigation = embedded || sessionPaneLayout(homeGeometry).persistent;
+  const guardedPush = useTaskListNavigation({ sidebar: sidebarNavigation, runNavigation });
+  const navigationHost = useRef({ onSelectSession });
+  navigationHost.current = { onSelectSession };
   const router = useRouter();
-  const guardedPush = useCallback((href: Parameters<typeof push>[0]) => {
-    const run = navigationHost.current.runNavigation;
-    if (run) run(() => push(href)); else push(href);
-  }, [push]);
   const { width: windowWidth, height: screenHeight } = useWindowDimensions();
   const screenWidth = width ?? windowWidth;
   const auth = useAuth();
@@ -543,6 +566,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     presenceVersion,
     recoveringDeviceIds,
     readDeviceList,
+    rosterVersion = 0,
     status,
     subscribe,
     unsubscribe,
@@ -556,6 +580,18 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const homePendingCacheRef = useRef(new Map<string, { pending: readonly unknown[]; count: number }>());
   const homeLiveActivityIndexRef = useRef(new Map<string, RemoteSessionLiveActivity>());
   const devicesRef = useRef<DeviceView[]>([]);
+  const directoryBudgetRef = useRef<{
+    token: number;
+    owner: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    expired: boolean;
+    retired: boolean;
+    retireScheduled: boolean;
+    wallUntil?: number;
+    monoUntil?: number;
+  }>({ token: 0, owner: accountGeneration, timer: null, expired: false, retired: false, retireScheduled: false });
+  const rosterVersionRef = useRef(rosterVersion);
+  rosterVersionRef.current = rosterVersion;
   // HomeScreen stays mounted while switching saved accounts. Keep an owner generation beside every
   // local projection so requests started by the previous account cannot repopulate the new screen.
   const homeAccountGenerationRef = useRef(accountGeneration);
@@ -627,6 +663,54 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<HomeConnectionError>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const clearDirectoryBudget = useCallback(() => {
+    const budget = directoryBudgetRef.current;
+    if (budget.timer !== null) clearTimeout(budget.timer);
+    budget.timer = null;
+    budget.token += 1;
+    budget.expired = false;
+    budget.retired = false;
+    budget.retireScheduled = false;
+    budget.wallUntil = undefined;
+    budget.monoUntil = undefined;
+  }, []);
+  const retireDirectoryBudget = useCallback((token: number, owner: number) => {
+    const budget = directoryBudgetRef.current;
+    if (budget.token !== token || homeAccountGenerationRef.current !== owner) return;
+    if (budget.retired) return;
+    budget.retired = true;
+    budget.expired = true;
+    budget.timer = null;
+    // Expiry is unknown, not a confirmed removal. Hide the mounted rows and let
+    // the normal read path revalidate; do not run ghost/mirror cleanup here.
+    devicesRef.current = [];
+    setDevices([]);
+    lastSyncedAtRef.current = null;
+    setLastSyncedAt(null);
+    setRefreshing(true);
+    void loadHomeRef.current({ visible: true });
+  }, []);
+  const armDirectoryBudget = useCallback((requestedAt: { wall: number; mono: number }, remainingMs: number,
+    authoritative: boolean) => {
+    const wasExpired = directoryBudgetRef.current.expired;
+    clearDirectoryBudget();
+    const budget = directoryBudgetRef.current;
+    budget.owner = accountGeneration;
+    budget.wallUntil = requestedAt.wall + remainingMs;
+    budget.monoUntil = requestedAt.mono + remainingMs;
+    const { token, owner } = budget;
+    const remaining = Math.min(budget.wallUntil - Date.now(), budget.monoUntil - performance.now());
+    // A stale fallback cannot revive an already-expired source; an explicit
+    // zero is expired on arrival, never a legacy "no stamp" row.
+    if (!(remainingMs > 0) || remaining <= 0 || (!authoritative && wasExpired)) {
+      budget.expired = true;
+      budget.timer = setTimeout(() => retireDirectoryBudget(token, owner), 0);
+      return budget.token;
+    }
+    budget.timer = setTimeout(() => retireDirectoryBudget(token, owner), remaining);
+    return budget.token;
+  }, [accountGeneration, clearDirectoryBudget, retireDirectoryBudget]);
+  useEffect(() => () => clearDirectoryBudget(), [clearDirectoryBudget]);
   const [selectedDeviceId, setSelectedDeviceId] = useRetainedHomeState<string | null>(viewSession, 'selectedDeviceId', null);
   const [remoteHomeCollections, setRemoteHomeCollections] = useState<RemoteHomeCollection[]>([]);
   const [resourceCacheAccount, setResourceCacheAccount] = useState<number | null>(null);
@@ -682,7 +766,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [sortBy, setSortBy] = useRetainedHomeState<HomeListSortBy>(viewSession, 'sortBy', 'recency');
   const [projectOrder, setProjectOrder] = useRetainedHomeState<HomeProjectOrder>(viewSession, 'projectOrder', 'activity');
   const [manualProjectOrder, setManualProjectOrder] = useRetainedHomeState<string[]>(viewSession, 'manualProjectOrder', []);
-  const [teammateFilter, setTeammateFilter] = useRetainedHomeState<HomeProjectFilter>(viewSession, 'teammateFilter', 'all');
+  const [teammateFilter, setTeammateFilter] = useRetainedHomeState<HomeTeammateFilter>(viewSession, 'teammateFilter', 'all');
   const [projectFilter, setProjectFilter] = useRetainedHomeState<HomeProjectFilter>(viewSession, 'projectFilter', 'all');
   const [vendorFilter, setVendorFilter] = useRetainedHomeState<HomeVendorFilter>(viewSession, 'vendorFilter', 'all');
   const [lastActivityFilter, setLastActivityFilter] = useRetainedHomeState<HomeLastActivityFilter>(viewSession, 'lastActivityFilter', 'all');
@@ -691,8 +775,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [hostProjectOrders, setHostProjectOrders] = useState<ReadonlyMap<string, SyncedProjectOrderSnapshot>>(() => new Map());
   const projectOrderFetchFenceRef = useRef(createProjectOrderFetchFence());
   const visualProjectKeysRef = useRef<string[]>([]);
-  const homeRootRef = useRef<View>(null);
-  const projectHeaderRefs = useRef(new Map<string, View>());
+  const homeRootRef = useRef<ViewInstance>(null);
+  const projectHeaderRefs = useRef(new Map<string, ViewInstance>());
   const projectDragRef = useRef<ProjectDragSession | null>(null);
   const projectDragEpochRef = useRef(0);
   const [projectDrag, setProjectDrag] = useState<ProjectDragSession | null>(null);
@@ -722,10 +806,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const requestedListFilter = active ? remoteListStatusFilter(statusFilter) : 'active';
   const homeListFilterRef = useRef(requestedListFilter);
   const homeListFilterChanged = homeListFilterRef.current !== requestedListFilter;
-  const [collapsedProjectKeys, setCollapsedProjectKeys] = useRetainedHomeState<string[]>(viewSession, 'collapsedProjectKeys', []);
-  const [pinnedCollapsed, setPinnedCollapsed] = useRetainedHomeState(viewSession, 'pinnedCollapsed', false);
+  const [collapsedProjectKeys, setCollapsedProjectKeys] = useRetainedHomeState<string[]>(viewSession, 'collapsedProjectKeys', [],
+    (next) => saveHomeCollapse({ collapsedProjectKeys: next }));
+  const [pinnedCollapsed, setPinnedCollapsed] = useRetainedHomeState(viewSession, 'pinnedCollapsed', false,
+    (next) => saveHomeCollapse({ pinnedCollapsed: next }));
   // 已展开的自动化组 key(页面级 state:SectionList 虚拟化回收行组件时展开态不丢)。
-  const [expandedAutomationGroups, setExpandedAutomationGroups] = useRetainedHomeState<string[]>(viewSession, 'expandedAutomationGroups', []);
+  const [expandedAutomationGroups, setExpandedAutomationGroups] = useRetainedHomeState<string[]>(viewSession, 'expandedAutomationGroups', [],
+    (next) => saveHomeCollapse({ expandedAutomationGroups: next }));
   const [rawDeviceConnectionStates, setDeviceConnectionStates] = useState<Record<string, HomeDeviceConnectionState>>({});
   // 熔断 open(电脑端未响应)的设备复用既有 failed 渲染路径(红圈),不新增视觉:
   // 内部态映射覆盖在 hydrate 状态之上,熔断关闭后自动回落到原状态。
@@ -1179,6 +1266,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [accountGeneration, invoke]);
 
   const loadHome = useCallback(async (options: { visible?: boolean } = {}) => {
+    const rosterVersionAtStart = rosterVersionRef.current;
     const accountGenerationAtStart = accountGeneration;
     if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
     if (!deviceIdentityCacheReady) return;
@@ -1211,6 +1299,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       // WS hydrate 已有瞬时重试——闸门自己也必须重试,否则一次弱网抖动就把首页
       // 卡在「同步失败」等手动下拉。maxAttempts 收敛到 3:它前置于全部 hydrate,
       // 不值得为它烧满 6 次退避。
+      const directoryRequestedAt = { wall: Date.now(), mono: performance.now() };
       const res = await withTransientRemoteRetry(
         () => {
           if (homeAccountGenerationRef.current !== accountGenerationAtStart) {
@@ -1224,9 +1313,30 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         { maxAttempts: 3 },
       );
       if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
+      if (rosterVersionRef.current !== rosterVersionAtStart) return;
       if (!screenFocusedRef.current) return;
       const now = Date.now();
-      const serverDevices = mergeFreshPresence(reconcileDeviceViews(res.devices).devices);
+      const staleDirectory = res.stale === true;
+      let budgetToken = 0;
+      if (res.displayBudget) {
+        budgetToken = armDirectoryBudget(directoryRequestedAt, res.displayBudget.remainingMs, res.stale !== true);
+      }
+      else clearDirectoryBudget();
+      const budgetAllowsDisplay = budgetToken === 0
+        || (directoryBudgetRef.current.token === budgetToken && !directoryBudgetRef.current.expired);
+      if (!budgetAllowsDisplay) {
+        // The source budget ended before this response could become visible.
+        // Do not run absence/mirror cleanup from an expired directory; the
+        // expiry timer will trigger a live re-read.
+        devicesRef.current = [];
+        setDevices([]);
+        setRefreshing(true);
+        return;
+      }
+      const listedDevices = reconcileDeviceViews(res.devices).devices;
+      const serverDevices = staleDirectory
+        ? mergeDeviceViewsForStaleDirectory(listedDevices, devicesRef.current)
+        : mergeFreshPresence(listedDevices);
       const deviceRows = toDeviceListItems(serverDevices, now, revokedDevices);
       const availableRows = deviceRows.filter((item) => item.canOpen);
       const syncDeviceIds = resolveHomeDeviceSyncIds(
@@ -1263,17 +1373,19 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       // 整表对账:REST 全量清单对“设备是否仍绑定”是权威。冷启动从缓存种入、
       // 随后被解绑(完全不在清单里)的设备不会出现在状态分类里,按差集硬清 shard;
       // 这与短暂 offline 不同,否则幽灵项会被快照回写无限续存。
-      const knownDeviceIds = new Set(deviceRows.map((item) => item.device.deviceId));
-      const ghostDeviceIds = new Set<string>();
-      for (const session of remoteSessionStore.getSessions()) {
-        const shardId = session.deviceLinkDeviceId;
-        if (shardId && !isSharedTaskPeer(shardId) && !knownDeviceIds.has(shardId)) ghostDeviceIds.add(shardId);
-      }
-      for (const deviceId of ghostDeviceIds) {
-        invalidateScheduleIndexForDevice(deviceId);
-        remoteScheduleEventStore.clearDevice(deviceId);
-        remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
-        remoteSessionStore.removeDevice(deviceId);
+      if (!staleDirectory) {
+        const knownDeviceIds = new Set(deviceRows.map((item) => item.device.deviceId));
+        const ghostDeviceIds = new Set<string>();
+        for (const session of remoteSessionStore.getSessions()) {
+          const shardId = session.deviceLinkDeviceId;
+          if (shardId && !isSharedTaskPeer(shardId) && !knownDeviceIds.has(shardId)) ghostDeviceIds.add(shardId);
+        }
+        for (const deviceId of ghostDeviceIds) {
+          invalidateScheduleIndexForDevice(deviceId);
+          remoteScheduleEventStore.clearDevice(deviceId);
+          remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
+          remoteSessionStore.removeDevice(deviceId);
+        }
       }
 
       const failures: HomeDeviceFailure[] = [];
@@ -1295,17 +1407,27 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           invalidateOfflineScheduleIndexFailureFor(deviceId);
         }
       }
-      if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
+      if (homeAccountGenerationRef.current !== accountGenerationAtStart
+        || rosterVersionRef.current !== rosterVersionAtStart) return;
 
       // 收尾再合并一次:hydrate 阶段(可能持续数秒)里新到的 presence 补丁同样不能被覆盖掉。
       const nextDevices = reconcileDeviceViews(
         mergeFreshPresence(markDeviceViewsOffline(serverDevices, offlineDeviceIds)),
       ).devices;
-      devicesRef.current = nextDevices;
-      setDevices(nextDevices);
-      lastSyncedAtRef.current = now;
-      setLastSyncedAt(now);
-      if (homeFullReloadOnFocusRef.current === fullReloadRequestAtStart) homeFullReloadOnFocusRef.current = null;
+      const finalBudgetAllowsDisplay = budgetToken === 0
+        || (directoryBudgetRef.current.token === budgetToken && !directoryBudgetRef.current.expired);
+      if (finalBudgetAllowsDisplay) {
+        devicesRef.current = nextDevices;
+        setDevices(nextDevices);
+        if (!staleDirectory) {
+          lastSyncedAtRef.current = now;
+          setLastSyncedAt(now);
+          if (homeFullReloadOnFocusRef.current === fullReloadRequestAtStart) homeFullReloadOnFocusRef.current = null;
+        }
+      } else {
+        devicesRef.current = [];
+        setDevices([]);
+      }
       if (selectedDeviceIdRef.current === selectedDeviceIdAtSyncStart) {
         setError(failures.length > 0 ? failures : null);
       }
@@ -1333,7 +1455,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     return task.finally(() => {
       if (visible && homeAccountGenerationRef.current === accountGenerationAtStart) setRefreshing(false);
     });
-  }, [accountGeneration, readDeviceList, deviceIdentityCacheReady, homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, reconcileHomeDeviceSyncScope, revokedDevices, softInvalidateDeviceMirror]);
+  }, [accountGeneration, armDirectoryBudget, clearDirectoryBudget, readDeviceList, deviceIdentityCacheReady,
+    homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, reconcileHomeDeviceSyncScope,
+    revokedDevices, softInvalidateDeviceMirror]);
   // A manual refresh also recovers the teammate section: roster, group chats and cloud companions.
   const homeRoster = teammatesSectionContext.shared;
   const refreshHome = useCallback(() => {
@@ -1431,6 +1555,20 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       readHomeViewPreferences(preferenceOwnerRef.current),
       null,
     );
+    // 分组收起记录单独读取:与显示偏好互不牵连,任何一边读失败都不影响另一边恢复。
+    const collapseRead = startBoundedStartupRead<HomeCollapsePreferences | null>(
+      readHomeCollapsePreferences(preferenceOwnerRef.current),
+      null,
+    );
+    const applyCollapse = (collapse: HomeCollapsePreferences | null) => {
+      if (!collapse || restoredView) return;
+      if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+      const touched = viewSession.read<string[]>('collapseTouchedFields', []);
+      // 直接写入视图会话:恢复出来的值不需要再落盘一次;用户已动过的分组保持其选择。
+      for (const key of ['pinnedCollapsed', 'sharedCollapsed', 'collapsedProjectKeys', 'expandedAutomationGroups'] as const) {
+        if (collapse[key] !== undefined && !touched.includes(key)) viewSession.write(key, collapse[key]);
+      }
+    };
     const applyPreferences = (preferences: HomeViewPreferences | null) => {
       if (!preferences || restoredView) return;
       if (
@@ -1456,6 +1594,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         restoredSelectionUnvalidatedRef.current = true;
       }
     };
+    void collapseRead.initial.then((initial) => {
+      applyCollapse(initial.value);
+      // 超时只是不再等待,迟到的值仍会补上用户没动过的分组。
+      if (initial.timedOut) void collapseRead.completion.then((late) => { if (late.ok) applyCollapse(late.value); });
+    });
     void read.initial
       .then((initial) => {
         applyPreferences(initial.value);
@@ -1627,6 +1770,18 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     }, [refillStaleHomeDevices, refreshHomeScheduleIndexes, startSilentHomeSync]),
   );
 
+  // A late roster denial clears only the account device projection; provider/group
+  // catalogs and healthy direct links are separate authorities. The sync effect
+  // below deliberately does not depend on rosterVersion: a retry from the denial
+  // itself would recreate the 403 -> notification -> read feedback loop. Reconnect,
+  // foreground and manual refresh remain the legitimate triggers.
+  useEffect(() => {
+    if (rosterVersion === 0) return;
+    devicesRef.current = [];
+    setDevices([]);
+    setDeviceConnectionStates({});
+  }, [rosterVersion]);
+
   useEffect(() => {
     startSilentHomeSync();
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -1744,9 +1899,15 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     setHeaderFrosted((current) => (current === next ? current : next));
   }, [homeScrollY, viewSession]);
 
+  const directoryBudget = directoryBudgetRef.current;
+  const directoryBudgetObservedExpired = observeDirectoryBudgetExpiry(
+    directoryBudget, Date.now(), performance.now(),
+  );
+  if (directoryBudgetObservedExpired) scheduleDirectoryBudgetRetirement(directoryBudget, retireDirectoryBudget);
+  const visibleDevices = directoryBudgetObservedExpired ? EMPTY_DEVICES : devices;
   const deviceRows = useMemo(
-    () => toDeviceListItems(devices, Date.now(), revokedDevices),
-    [devices, i18nInstance.resolvedLanguage, revokedDevices],
+    () => toDeviceListItems(visibleDevices, Date.now(), revokedDevices),
+    [visibleDevices, i18nInstance.resolvedLanguage, revokedDevices],
   );
   // 不随首页失焦清空：被任务页等盖住时保留订阅与镜像，增量补丁照常到达；
   // 不可见 / 不可用的设备仍由 resolveHomeDeviceSyncIds 排除并 release。
@@ -2402,26 +2563,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       navigationHost.current.onSelectSession(item);
       return;
     }
-    const session = item.session as RemoteSession;
-    // 打开会话走可达优先(与详情页 openSession 口径一致):被认领的 stale 会话优先用 canonicalDeviceId
-    // (当前可达设备),否则 re-link 后旧 deviceId 不可达会导致「首页卡片点开打不开」。回退物理 id / store 索引。
-    const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId ?? remoteSessionStore.getSessionDeviceId(session.id);
-    if (!deviceId) {
+    const target = taskListSessionTarget(item, id => remoteSessionStore.getSessionDeviceId(id));
+    if (!target) {
       setError(t('devices.list.error.sessionDeviceNotFound'));
       return;
     }
-    const focusClientId = 'searchFocusClientId' in item
-      ? (item as { searchFocusClientId?: string }).searchFocusClientId
-      : undefined;
-    const href = {
-      pathname: '/sessions/[sessionId]',
-      params: {
-        deviceId,
-        deviceName: deviceDisplayName(deviceId, session.deviceLinkDeviceName),
-        sessionId: session.id,
-        ...(focusClientId ? { focusClientId } : {}),
-      },
-    } as const;
+    const href = { pathname: '/sessions/[sessionId]', params: { ...target } } as const;
     rememberTask(href);
     guardedPush(href);
   }, [guardedPush, rememberTask, swipeRegistry, t]);
@@ -2460,6 +2607,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     newSessionActionRef.current = action;
     return () => { if (newSessionActionRef.current === action) newSessionActionRef.current = null; };
   }, [newSessionActionRef, openNewSession]);
+
+  // 掌机模式:首页长按语音键直接开新任务并开始说话(新建页聚焦后接手这次按住)。
+  useHandheldVoiceKey({
+    start: () => openNewSession(),
+    end: () => undefined,
+  }, active && !embedded);
 
   const openSuggestedSession = useCallback((suggestion?: RemoteTaskSuggestionId) => {
     openNewSession(undefined, suggestion, taskSuggestionsDeviceId);
@@ -2935,13 +3088,14 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     lastActivityFilter,
     projectFilter,
     teammateFilter: effectiveTeammateFilter,
+    showCollapsedTeammateAvatars,
     projectOrder: displayedProjectOrder,
     sortBy,
     statusFilter,
     taskInfoFields,
     vendorFilter,
     viewMode,
-  }), [displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
+  }), [showCollapsedTeammateAvatars, displayedProjectOrder, groupByProject, groupDialogue, lastActivityFilter, projectFilter, effectiveTeammateFilter, sortBy, statusFilter, taskInfoFields, vendorFilter, viewMode]);
   // 在看已归档任务时,顶栏「⋯」带提醒点(iOS 系统顶栏 / 自绘按钮两条路径共用这一个判据),
   // 同时把状态写进无障碍名称,读屏用户不用打开菜单也知道列表不是平常的进行中任务。
   const archivedReminder = statusFilter === 'archived';
@@ -2967,8 +3121,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   );
   const handleDisplayAction = useCallback((id: string) => {
     const patch = homeDisplayActionPatch(id, displayMenuState);
-    if (patch) applyDisplayView(patch);
-  }, [applyDisplayView, displayMenuState]);
+    if (!patch) return;
+    if (patch.showCollapsedTeammateAvatars !== undefined) {
+      void setShowCollapsedTeammateAvatars(patch.showCollapsedTeammateAvatars);
+    } else applyDisplayView(patch);
+  }, [applyDisplayView, displayMenuState, setShowCollapsedTeammateAvatars]);
   // iOS 系统顶栏的菜单项是顶栏选项的一部分,任何变化都会重建顶栏并关掉展开中的菜单。
   // 菜单内容按结构比较、回调走 ref 保持同一引用:后台同步刷新任务列表时,菜单没实质变化
   // 就不重建顶栏;只有用户自己的勾选会更新它。
@@ -2990,12 +3147,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [guardedPush, home.deviceFilters, selectedDeviceId, selectedDeviceLabel]);
 
   const nativeHomeHeader = !embedded && usesNativeStackHeader();
-  const homeGeometry = useAdaptiveWindow();
   const keepMenuTopLeft = nativeHomeHeader && homeGeometry.barEdge !== 'none';
   const nativeHeaderHeight = useOptionalHeaderHeight();
+  const homeStatusRowReserve = sharedStatusRowTrailingReserve(homeGeometry, nativeHeaderHeight);
   const chromeHeight = nativeHomeHeader
     ? nativeHeaderHeight + (headerHeight ?? 0)
-    : (headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT);
+    : (headerHeight ?? (embedded ? spacing.lg : edgePadding.paddingTop)
+      + Math.max(HOME_HEADER_MIN_HEIGHT, navigationChrome.target + spacing.md));
   const homeListNode = (
     <HomeRowDisplayContext.Provider value={rowDisplay}>
     <HomeListViewportContext.Provider value={childViewport}>
@@ -3150,7 +3308,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             <View style={styles.pinnedFooter} testID="home.pinnedFooter" />
           ) : null}
         ListEmptyComponent={
-          sharedRows.length > 0 ? null : initialHomeLoading || taskSuggestionsPending ? (
+          (sharedRows.length > 0 ? null : initialHomeLoading || taskSuggestionsPending ? (
             <HomeInitialLoadingState
               style={{
                 marginTop: spacing.xxl,
@@ -3207,12 +3365,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
               testID={initialHomeError ? 'home.syncError' : 'home.empty'}
               title={emptyStateTitle}
             />
-          )
+          )) ?? undefined
         }
-        ListFooterComponent={taskSuggestionsMode === 'footer' ? (
+        ListFooterComponent={(taskSuggestionsMode === 'footer' ? (
           <RemoteTaskSuggestions mode="footer" onNewSession={() => openSuggestedSession()}
             onSelect={openSuggestedSession} />
-        ) : null}
+        ) : null) ?? undefined}
         renderItem={renderHomeRow}
       />
     </ListDisclosureScope>
@@ -3253,6 +3411,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       {nativeHomeHeader && active ? (
         <HomeNativeStackHeader
           keepMenuTopLeft={keepMenuTopLeft}
+          statusRowReserve={homeStatusRowReserve}
           syncing={quietSyncing}
           displayA11y={displayA11y}
           displayActions={stableDisplayActions}
@@ -3340,15 +3499,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
                 <Monitor color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
               </HomeHeaderGlassButton>
             ) : null}
-            {/* 系统菜单不可用(未编进 MenuView 的旧 iOS 包)时退回同一份菜单模型的 Cindy 自绘菜单。 */}
-            <HomeDisplayMenu actions={homeDisplayPullDownActions} onAction={handleDisplayAction}>
-              <HomeHeaderGlassButton accessibilityLabel={displayA11y} onPress={() => undefined} testID="home.displaySettingsButton">
-                <View>
-                  <Ellipsis color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
-                  {/* 在看已归档任务时标一个点,提醒列表不是平常的进行中任务。 */}
-                  {archivedReminder ? <FilterReminderDot offset={styles.displayFilterDotOffset} testID="home.displayFilterDot" /> : null}
-                </View>
-              </HomeHeaderGlassButton>
+            {/* 侧栏本地菜单完整保留分组和多层筛选;系统顶栏继续使用自己的原生菜单。 */}
+            <HomeDisplayMenu actions={stableDisplayActions} onAction={stableDisplayAction} accessibilityLabel={displayA11y}>
+              <View>
+                <Ellipsis color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
+                {/* 在看已归档任务时标一个点,提醒列表不是平常的进行中任务。 */}
+                {archivedReminder ? <FilterReminderDot offset={styles.displayFilterDotOffset} testID="home.displayFilterDot" /> : null}
+              </View>
             </HomeDisplayMenu>
           </View>
         )}
@@ -3361,6 +3518,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             filterA11y={searchFilterA11y}
             filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
+            searching={indexedSearch.status === 'searching'}
             onChangeQuery={indexedSearch.setQuery}
             onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}
@@ -3820,7 +3978,7 @@ function HomeProjectWindowAnchorTracker({
   onAnchorChange(anchor: number): void;
   projectHeaderHeight: SharedValue<number>;
   projectLayoutRevision: SharedValue<number>;
-  projectRef: AnimatedRef<View>;
+  projectRef: AnimatedRef<ViewInstance>;
   scrollY: SharedValue<number>;
   viewportHeight: number;
 }) {
@@ -3884,7 +4042,7 @@ function ProjectRow({
   collapsed: boolean;
   dragging?: boolean;
   expandedAutomationGroups: readonly string[];
-  headerRefs?: MutableRefObject<Map<string, View>>;
+  headerRefs?: MutableRefObject<Map<string, ViewInstance>>;
   kind?: 'project' | 'dialogue' | 'cindy-make';
   machineIdentity?: HomeProjectMachineIdentity;
   onDragEnd?: () => void;
@@ -3948,7 +4106,7 @@ function ProjectRow({
   ].filter(Boolean).join(', ');
   const projectHeaderHeight = useSharedValue(HOME_PROJECT_HEADER_HEIGHT);
   const textMode = useHomeRowDisplay().viewMode === 'text';
-  const projectRef = useAnimatedRef<View>();
+  const projectRef = useAnimatedRef<ViewInstance>();
   const prepareDisclosure = useDisclosurePrepare();
   const [windowAnchor, setWindowAnchor] = useState(0);
   const projectLayoutRevision = useSharedValue(0);
@@ -4291,7 +4449,7 @@ function HomeListRowInner({
   prevIsBlock: boolean;
   projectCollapsed: boolean;
   projectDragging: boolean;
-  projectHeaderRefs: MutableRefObject<Map<string, View>>;
+  projectHeaderRefs: MutableRefObject<Map<string, ViewInstance>>;
   homeScrollY?: SharedValue<number>;
   viewportHeight: number;
   registry: ReturnType<typeof createSwipeRowRegistry>;
@@ -4794,7 +4952,7 @@ function AutomationGroupChildren({
   });
   const hasViewAllRow = hiddenCount > 0 && !!onOpenGroup;
   const viewport = useContext(HomeListViewportContext);
-  const childrenRef = useAnimatedRef<View>();
+  const childrenRef = useAnimatedRef<ViewInstance>();
   const layoutRevision = useSharedValue(0);
   const headerHeight = useSharedValue(0);
   // A project can retain many expanded automation groups. Preload nearby runs
@@ -4900,26 +5058,6 @@ function AutomationGroupPreviewText({ item, sessionCount, style, testID }: {
 
 function pullDownActionsEqual(a: readonly NativePullDownAction[], b: readonly NativePullDownAction[]): boolean {
   return a === b || JSON.stringify(a) === JSON.stringify(b);
-}
-
-/**
- * 显示菜单触发器:系统菜单可用时走 UIMenu / 安卓下拉;未编进 MenuView 的旧 iOS 包退回
- * 同一份菜单模型的 Cindy 自绘菜单,两条路径的选项与层级完全一致。
- */
-function HomeDisplayMenu({
-  actions,
-  children,
-  onAction,
-}: {
-  actions: readonly NativePullDownAction[];
-  children: ReactNode;
-  onAction(id: string): void;
-}) {
-  return usesNativePullDownMenu() ? (
-    <NativePullDownMenu actions={actions} onAction={onAction}>{children}</NativePullDownMenu>
-  ) : (
-    <AnchoredPullDownMenu actions={actions} onAction={onAction}>{children}</AnchoredPullDownMenu>
-  );
 }
 
 /** 该首页行是否以「块」呈现(上下全宽线):项目组,或自动化组行(顶层 asBlock)。 */

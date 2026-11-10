@@ -1,13 +1,14 @@
 ## 7. 打包与测试
 
-### 7.1 打包前轻量确认图标
+### 7.1 图标来源与用户选择
 
-准备调用 `ghost_forge_pack` 前检查一次图标。如果清单没有 `icon`，或者本次用了
-`ghost_forge_scaffold` 且没有明确替换它生成的占位图，就视为图标尚未配置。此时只
-**轻提醒一次**，不要把图标变成验收门槛，也不要擅自开始耗时的图片生成。提示与选项
-使用用户当前对话语言：
+`ghost_forge_scaffold` 不生成占位图，也不预填 `icon` 字段。新建插件时告知用户需要
+一张图标，请用户提供图片，或在用户同意后调用当前可用的 Agent 图片能力生成。
+已有明确选择时沿用，不重复询问，也不要未经同意生成图片。禁止手绘或生成纯色色块
+作为占位图标。准备调用 `ghost_forge_pack` 前核对图标来源和文件；旧源码仍使用脚手架
+色块时也按未设置处理。提示与选项使用用户当前对话语言：
 
-- **使用 AI 生成（推荐）**：仅在用户选择后，调用当前可用的图片生成能力；它与当前
+- **使用 AI 生成（推荐）**：仅在用户同意后，调用当前可用的图片生成能力；它与当前
   聊天模型解耦，不要因为用户正在使用 GLM、Claude 等文本模型而切换聊天模型。把插件
   展示名与一句话用途填入下面模板后原样注入，不要临场追加文字、品牌或复杂场景：
 
@@ -15,7 +16,8 @@
   Create a polished square app icon for a Cindy plugin named "{{name}}". Purpose: {{one-sentence purpose}}. Show one clear, original visual metaphor for that purpose. Use a clean geometric composition, a restrained natural color palette, high contrast, and a centered subject with generous safe padding so it remains readable at 32–48 px. Use one symbol only on a simple solid or transparent background. No text, letters, numbers, UI mockups, scenes, baked-in rounded corners, trademarks, copied brand shapes, watermarks, heavy gradients, inner shadows, or photorealism. Output a 1024×1024 PNG.
   ```
 
-  只尝试一次。图片能力不可用、超时或失败时不要重试，保留占位图/宿主默认图标继续。
+  只尝试一次。图片能力不可用、超时或失败时不要重试，告知用户尚未取得图标；
+  未设置图标的新插件保持 `icon` 缺省，使用客户端默认符号继续，不补造占位图片。
   缺省调用 `ghost_forge_pack({ dir })`；只有用户已明确要求当前 Agent 直接安装时，才改调
   `ghost_forge_install({ dir })`，不要让图标阻塞用户。
   生成成功后，从图片工具结果的 `xdt_image_url` 取单张地址；如果结果只有
@@ -23,14 +25,14 @@
   仅当它是 `cindy-media://` 地址时，才把它原样交给本次要调用的终点工具：缺省为
   `ghost_forge_pack({ dir, icon_source: selectedImageUrl })`；用户已明确要求直接安装时为
   `ghost_forge_install({ dir, icon_source: selectedImageUrl })`。主机会转成 1024×1024 PNG
-  并嵌入安装包；处理失败时两种工具都会回退默认图标，不要再发起第二次生成。
+  并嵌入安装包；处理失败时保持原图标或缺省状态，不要再发起第二次生成。
   如果源码根目录已有 `cindy-signatures.json`，pack 会保留原图标和原签名，不做 AI
   图标覆盖；任何文件变更都必须交给发布流水线重新签名，不能静默降级信任等级。
 - **上传图片**：让用户提供图片，保存到 `assets/icon.png`，并同步把
   `ghost.json` 的 `icon` 字段设为 `assets/icon.png` 后继续；不要要求用户先把图片
   处理成圆角，宿主负责最终显示形态。
-- **使用默认图标（跳过）**：立即继续打包；scaffold 项目保留占位图，未使用 scaffold
-  的项目可以省略 `icon`，由宿主显示默认图标。跳过与使用默认是同一个选择。
+用户明确要求暂不设置图标时，保持 `icon` 缺省，使用客户端默认符号继续；不要把默认
+符号或纯色色块写成插件包内的图片。缺图不新增打包或安装校验限制，存量插件照常可用。
 
 如果插件明确对应现有品牌或服务（如 X/Twitter、Notion），不要用 AI 仿制商标。将推荐
 项改为“使用官方品牌图标”，只从品牌官网、官方开发者文档或官方媒体资源中查询并设置；
@@ -60,16 +62,13 @@
    首次安装会启用，同 id 已安装时原位更新并保留启用状态、配置、
    数据与面板位置，同版本也可覆盖。同来源更新延续旧数据；从市场等不同来源切换到 Forge
    时旧账号、密钥及数据隔离保留，新来源需要重新连接。不要因为 scaffold 或 pack 成功就自动调用本工具。
-   新装默认个人范围（root / `namespace:null`），不能因为用户登录了组织就另装为组织插件。
-   已有个人实例优先原位更新；只有唯一旧组织实例时仍原位更新，不迁移其账号与数据。
-   只有用户明确要求组织安装时才传 `namespace:'<当前组织>'`，不能仅按裸 id 或登录组织推断归属。
-   无法唯一确定已有实例时返回 `INSTALL_TARGET_REQUIRED`，不会自动另装并启用。
-   展示 `targets` 中的身份、版本与更新来源影响，让用户选择；更新已有实例时传
-   `target_instance_id`，明确另装一份时传 `install_copy:true`，两者互斥。
-   `namespace` 与 `target_instance_id` 互斥。新副本也默认个人范围，组织副本需明确传
-   `namespace`；需要单独连接账号，不覆盖、停用或迁移其它实例。
-   换源或已有其它副本时，任务确认卡会说明安装位置及账号影响。成功结果包含真实
-   `instanceId` 与 `namespace`，后续查询与调用沿用该身份，不按裸 id 猜测。
+   新装默认本地开发副本（`namespace:"local"`），仅原位更新同名 local，不覆盖市场或企业实例。
+   显式更新已有实例传 `target_instance_id`；明确新副本传 `install_copy:true`，两者互斥，
+   `namespace` 与 `target_instance_id` 也互斥。企业自测必须显式传当前企业 namespace。
+   local 文件与 Forge 交替更新保留账号；同实例、同来源、未扩权的更新不因同名并存重复确认。
+   换源或扩权照旧确认。新副本单独连接私有账号，不自动复制市场账号；共享 gh 依声明使用。
+   local 不获得企业 OIDC 或 Broker。要测企业身份，使用现有 Forge 企业自测路径，每次仍需确认。
+   成功结果包含真实 `instanceId` 与 `namespace`，后续查询与调用沿用该身份，不按裸 id 猜测。
    企业身份下若清单声明 `source:"oidc-token"`，提交安装前会展示插件名、id 与精确请求
    域名，并要求用户手输相同 id；取消不会安装。个人与企业身份下的明确 Forge 安装都会标记为
    作者本地自测并受组织默认插件自动接管保护；但 Connection JWT 资格仍只来自当前企业身份、
@@ -93,7 +92,7 @@
 ## 7.3 向公开市场发布插件
 
 个人账号和组织成员向公开市场投稿使用独立入口：先在作者源码目录开发、安装并实际使用插件，再调用
-`ghost_contribution_prepare({ ghost_id, namespace: null })`。Host 固定当前精确安装的包并返回
+`ghost_contribution_prepare({ ghost_id, namespace: "local" })`（旧 root 作者实例仍可显式传 null）。Host 固定当前精确安装的包并返回
 只读发布摘要：实际版本、包内更新说明以及提审阻塞原因；此时没有创建上传或占用版本。
 首次上架不要求更新说明，插件用途写在 `description`。插件曾上架后再提审时，须在 `ghost.json` 顶层写入 `releaseNotes` 纯文本字符串（v2、v3 均支持），完整描述相对上一已上架版本的全部变化。
 例如文本工具的更新说明可写“相较已上架的 1.0.0：新增 UTF-8 字节数统计，修复末尾空行计数”。
@@ -151,3 +150,5 @@ plugin_id、release_id、sha256 和 revision；取消保留版本与记录，当
 历史内容和更新说明按对应版本的提审快照展示，不用当前本地包补写历史。
 可信官方来源固定署名 Cindy；组织插件沿用原有发布与署名规则。
 不把本地安装或提交资格当作作者身份。
+
+本地开发实例与发布目标独立：选择确切 local 实例后，投稿仍由真实市场的 ACL 决定；同名或相同作者显示名不证明发布权限。官方公共插件继续通过 GitHub 投稿。

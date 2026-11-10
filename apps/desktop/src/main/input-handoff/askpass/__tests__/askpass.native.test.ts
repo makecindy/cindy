@@ -6,7 +6,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { TerminalPromptRequest } from '../../service.js';
-import { AskpassHost, INPUT_HANDOFF_ROUTE_ENV } from '../host.js';
+import { AskpassHost, INPUT_HANDOFF_ROUTE_ENV, type AskpassHostDeps } from '../host.js';
 
 /**
  * Real processes, no real secrets: git asks a throwaway local server for Basic
@@ -22,10 +22,10 @@ afterEach(async () => {
   servers.splice(0).forEach((s) => s.close());
 });
 
-function run(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string }> {
+function run(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    execFile(file, args, { env, timeout: 30_000 }, (error, stdout) => {
-      resolve({ code: error ? Number((error as { code?: number }).code ?? 1) : 0, stdout: String(stdout) });
+    execFile(file, args, { env, timeout: 30_000 }, (error, stdout, stderr) => {
+      resolve({ code: error ? Number((error as { code?: number }).code ?? 1) : 0, stdout: String(stdout), stderr: String(stderr) });
     });
   });
 }
@@ -46,11 +46,12 @@ async function nativeGitPath(): Promise<string> {
   throw new Error('git executable was not found on PATH');
 }
 
-async function setup(answers: Record<string, string>) {
+async function setup(answers: Record<string, string>, options: Partial<AskpassHostDeps> = {}) {
   const prompts: TerminalPromptRequest[] = [];
   const host = new AskpassHost({
     isDisabledForSession: async () => false,
     baseEnv: {},
+    ...options,
     startTerminalPrompt: (request) => {
       prompts.push(request);
       const key = Object.keys(answers).find((k) => request.prompt.startsWith(k));
@@ -65,7 +66,31 @@ async function setup(answers: Record<string, string>) {
 }
 
 describe.runIf(runnable)('代输入 askpass with real programs', () => {
-  it('answers git over HTTP and the value reaches only git', async () => {
+  // Regression: a connected alternative must reach the agent's stderr before any
+  // credential card is shown. A local challenge exercises the real helper/Git boundary.
+  it('returns authentication recovery to the agent without asking the owner', async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(401, { 'www-authenticate': 'Basic realm="test"' }).end();
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    const recovery = 'CINDY_AUTH_ALTERNATIVE_AVAILABLE: inspect the connected plugin first';
+    const { prompts, env } = await setup({}, { getAuthRecovery: async () => recovery });
+    const result = await run(await nativeGitPath(), ['-c', 'credential.helper=', 'ls-remote', `http://127.0.0.1:${port}/r.git`], {
+      PATH: process.env.PATH,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_TERMINAL_PROMPT: '0',
+      ...env,
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(recovery);
+    expect(prompts).toHaveLength(0);
+  });
+
+  it.each(['no alternative', 'probe failed', 'terminal requested'])('answers git over HTTP when %s; the value reaches only git', async (scenario) => {
     const seen: string[] = [];
     const server = http.createServer((req, res) => {
       seen.push(req.headers.authorization ?? '');
@@ -75,18 +100,26 @@ describe.runIf(runnable)('代输入 askpass with real programs', () => {
     servers.push(server);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address() as AddressInfo;
-    const { prompts, env } = await setup({ Username: 'someone', Password: 'synthetic-pass' });
+    const { prompts, env } = await setup({ Username: 'someone', Password: 'synthetic-pass' }, {
+      getAuthRecovery: async () => {
+        if (scenario === 'probe failed') throw new Error('synthetic probe failure');
+        return scenario === 'terminal requested' ? 'CINDY_AUTH_ALTERNATIVE_AVAILABLE' : null;
+      },
+    });
 
     const result = await run(await nativeGitPath(), ['-c', 'credential.helper=', 'ls-remote', `http://127.0.0.1:${port}/r.git`], {
       PATH: process.env.PATH,
-      HOME: process.env.HOME,
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_TERMINAL_PROMPT: '0',
       ...env,
+      ...(scenario === 'terminal requested' ? { CINDY_INPUT_HANDOFF_PREFER_TERMINAL: '1' } : {}),
     });
 
     expect(result.stdout).not.toContain('synthetic-pass');
+    expect(result.stderr).not.toContain('synthetic-pass');
+    expect(result.stderr).not.toContain('synthetic probe failure');
+    expect(result.stderr).not.toContain('CINDY_AUTH_ALTERNATIVE_AVAILABLE');
     expect(seen).toContain(`Basic ${Buffer.from('someone:synthetic-pass').toString('base64')}`);
     expect(prompts.map((p) => p.program)).toEqual(['git', 'git']);
     expect(prompts[0].command).toContain('ls-remote');

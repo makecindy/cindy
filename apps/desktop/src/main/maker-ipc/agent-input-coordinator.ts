@@ -1,12 +1,14 @@
+import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
+import { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
 import { MCP_APP_MESSAGE_GUARD, isUnrestorableMcpAppMessage, queuedAppMessageGuard, type McpAppMessageGuard } from '../mcp-apps/message.js';
+import { isOwnerOwnMessage } from '../input-handoff/ownerMessage.js';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -40,11 +42,11 @@ import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 import type { UsageLimitRecoverySnapshot } from './usageLimitRecoveryStore.js';
 import { createLogger } from '../logger.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText } from './autoReviewUserIntent.js';
-import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
+import type { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
-import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
+import type { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import {
-  isAcceptedTurnContinuationOnlyReason,
+  isContinuationOnlyAutoResumeReason,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import type { SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
@@ -52,7 +54,7 @@ import {
   restoreTrustedDesktopQueuedOrigin,
   revokeTrustedDesktopQueuedOrigin,
   TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT,
-} from './makerSendTransaction.js';
+} from './queuedInputOrigin.js';
 import type {
   DesktopSessionDispatchFailure,
   HostSendFailureCode,
@@ -73,6 +75,7 @@ import type {
 } from '../../shared/agentInputQueue.js';
 import {
   HOST_ONLY_AGENT_PREFIX,
+  appendNoteToMakerUserMessage,
   buildMakerUserMessage,
   getAgentInputAttachmentBlockType,
   getAgentFacingText,
@@ -215,6 +218,8 @@ function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
 }
 
 export interface AgentInputSendOpts {
+  readonly [ASYNC_QUESTION_ANSWER]?: true;
+  readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
   /** Main-only authorization recheck after async steer preparation, before provider dispatch. */
   beforeProviderStart?: () => Promise<void>;
   /** Main-only App grant, checked by the send/steer transaction at dispatch. */
@@ -248,6 +253,8 @@ export interface AgentInputSendOpts {
    */
   fromMobileClient?: boolean;
   uiLanguage?: string;
+  /** Classical output style stamped with uiLanguage; direct wire values are stripped. */
+  classicalStyle?: string;
   /** Queue provenance stamped by the controlled desktop at device-link input IPC entry. */
   fromDeviceLinkClient?: boolean;
   /**
@@ -365,6 +372,7 @@ export interface AgentInputCoordinatorDeps {
     sdkError?: string;
     errorStatus?: number;
     toolLoop?: AgentInputToolLoopDetails;
+    outputLimit?: OutputLimitDetails;
   } | undefined;
   /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
   getTurnSessionIdentity?: (sessionId: string) => object | null;
@@ -387,13 +395,13 @@ export interface AgentInputCoordinatorDeps {
     userClientId: string,
   ) => Promise<RecoveryContextSnapshot>;
   /**
-   * Durable user-row writer shared with direct maker sends.  The fallback keeps
-   * the coordinator usable in narrow unit harnesses, while the registered host
-   * injects its FIFO writer so steer and drain persistence share one ordering.
+   * Durable user-row writer supplied by the launcher. Steer and drain must
+   * share its owner boundary and FIFO persistence ordering.
    */
-  createUserMessage?: typeof createDbMessage;
+  createUserMessage: typeof createDbMessage;
+  touchUserSend: typeof touchUserSendInDb;
   /** Hide a user row that was written after `/clear` won the persistence race. */
-  rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string) => Promise<void>;
+  rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string, options?: { discard?: boolean }) => Promise<void>;
   /**
    * interrupted-turn-resume:判断某条已派发 user 消息之后 agent 是否已产出内容
    * (assistant / tool_use / thinking 持久化行)。retryLastError 用它决定语义:
@@ -608,6 +616,16 @@ export interface AgentInputCoordinatorDeps {
    */
   onDiscardedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
+   * 排队项派发那一刻，追加在发给模型的 wire 消息末尾的宿主说明；返回 null 不追加。
+   * `pendingQueue` 是该项取出后仍在等待的队列。说明不写回队列项（不进排队正文与落库正文）。
+   * 目前只用于协同消息的 Queue note，见 orcaQueueNote.ts。
+   */
+  describeQueueBehindDispatch?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    pendingQueue: readonly AgentInputQueuedMessage[],
+  ) => string | null;
+  /**
    * 这个会话的失败 turn 正在重试；`source` 区分人工操作与自动续跑。
    *
    * hook-control 用它把那一轮的结果接回渠道里那条已经收口的消息(turn.reopen)。
@@ -634,6 +652,8 @@ export interface AgentInputCoordinatorDeps {
    * pendingQueue.unshift、不经这两个用户输入入口, 于是不会自我作废。
    */
   onUserEnqueue?: (sessionId: string) => void;
+  /** A new message from a person (not retransmitted, not automatic) entered the queue. */
+  onOwnerMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
    * 真人消息刚进队、尚未 drain / sendToAgent。灵动岛用它在 agent 进程拉起前
    * 就进入 running 并播开始音效,避免「任务开始」跟着 isRunning 一起晚响。
@@ -760,6 +780,8 @@ interface SessionInputState {
    * 放行;而用户显式 Stop 出来的暂停必须保持,不许新输入静默释放旧队列。
    */
   queuePausedByRestore: boolean;
+  /** Queue head whose steer delivery is unknown; its protective pause needs an explicit user decision. */
+  uncertainDeliveryClientId: string | null;
   queueExpanded: boolean;
   queueInteractionLocks: string[];
   /** Interaction locks that must survive a later user Stop. */
@@ -767,13 +789,17 @@ interface SessionInputState {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   activeTurn: ActiveTurn | null;
+  /** Last completed owner input, only reusable by a wake-up of that live SDK turn. */
+  providerContinuationCandidate?: { turn: ActiveTurn; sessionIdentity: object };
   error: string | null;
   /** Stable error reason for live projections; null when no terminal error is active. */
   errorReason: string | null;
+  errorPersistBinding: { message: string; persistId: string } | null;
   /** The failed scheduled input was persisted before its recovery was released. */
   errorCanContinue: boolean;
   /** Bounded structured details for tool-loop terminal errors. */
   toolLoop: AgentInputToolLoopDetails | null;
+  outputLimit: OutputLimitDetails | null;
   stickyError: string | null;
   /**
    * 中断自愈接管中（退避窗口内）时的展示信息；`null` = 未接管。
@@ -877,10 +903,14 @@ interface SessionInputState {
 interface PendingAutoResumeRecovery {
   sessionId: string;
   stateRef: SessionInputState;
+  /** The continuation entry owns cancellation; activity metadata is presentation only. */
+  recoveryOwner: 'interrupted' | 'quota-reset' | 'provider-group';
   recovery: Extract<AgentInputRecovery, { kind: 'active-turn' }>;
   error: string | null;
   errorReason: string | null;
+  errorPersistBinding: SessionInputState['errorPersistBinding'];
   toolLoop: AgentInputToolLoopDetails | null;
+  outputLimit: OutputLimitDetails | null;
   stickyError: string | null;
   autoResumeInfo: AutoResumeInfo | null;
   /** 中断自愈的 attempt 令牌；额度重置后的自动继续不走那套记账，为 null。 */
@@ -901,6 +931,7 @@ function createInitialInputState(
     directSteeringItems: [],
     queuePaused: false,
     queuePausedByRestore: false,
+    uncertainDeliveryClientId: null,
     queueExpanded: false,
     queueInteractionLocks: [],
     interactionLocksPreservedOnStop: [],
@@ -909,8 +940,10 @@ function createInitialInputState(
     activeTurn: null,
     error: null,
     errorReason: null,
+    errorPersistBinding: null,
     errorCanContinue: false,
     toolLoop: null,
+    outputLimit: null,
     stickyError: null,
     autoResumePending: null,
     autoResumeAttemptToken: null,
@@ -1147,20 +1180,23 @@ function recordPendingTerminalEvent(active: ActiveTurn, event: ActiveTurnTermina
 }
 
 function clearErrorProjectionSignals(
-  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'errorCanContinue'>,
+  state: Pick<SessionInputState, 'errorReason' | 'errorPersistBinding' | 'toolLoop' | 'outputLimit' | 'errorCanContinue'>,
 ): void {
   state.errorReason = null;
+  state.errorPersistBinding = null;
   state.toolLoop = null;
+  state.outputLimit = null;
   state.errorCanContinue = false;
 }
 
 function setErrorProjectionSignals(
-  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'errorCanContinue'>,
+  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'outputLimit' | 'errorCanContinue'>,
   signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
 ): void {
   state.errorReason =
     typeof signals?.reason === 'string' && signals.reason.length > 0 ? signals.reason : null;
   state.toolLoop = parseAgentInputToolLoopDetails(signals?.toolLoop) ?? null;
+  state.outputLimit = parseOutputLimitDetails(signals?.outputLimit) ?? null;
   state.errorCanContinue = false;
 }
 
@@ -1194,19 +1230,34 @@ function isScheduledQuotaRecovery(
 
 /** Scheduler / Orca / tool-sent session inputs are automation, not a fresh human intervention. */
 function isAutomaticOriginItem(item: AgentInputQueuedMessage | null | undefined): boolean {
-  return isAutomaticInputOriginKind(item?.origin?.kind);
+  return !isManualSchedulerContinuation(item) && isAutomaticInputOriginKind(item?.origin?.kind);
+}
+
+// A same-process receipt: wire input and restored automation cannot impersonate
+// a fresh Continue click. Object spreads preserve it; JSON persistence does not.
+const manualSchedulerContinuation = Symbol('manual-scheduler-continuation');
+export function markManualSchedulerContinuation(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+  return Object.assign(item, { [manualSchedulerContinuation]: true as const });
+}
+function isManualSchedulerContinuation(item: AgentInputQueuedMessage | null | undefined): boolean {
+  return (item as (AgentInputQueuedMessage & { [manualSchedulerContinuation]?: true }) | undefined)?.[manualSchedulerContinuation] === true;
 }
 
 function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
-  return !isSchedulerOriginItem(item) && item.originalSyntheticTrigger === 'continue';
+  return (!isSchedulerOriginItem(item) || isManualSchedulerContinuation(item))
+    && item.originalSyntheticTrigger === 'continue';
 }
 
-function isActiveTurnBeforeVendorDispatch(active: ActiveTurn): boolean {
+function isActiveTurnBeforeVendorDispatch(
+  active: ActiveTurn,
+  options?: { allowUnreservedHostSend?: boolean },
+): boolean {
   return (
     !isActiveTurnDispatched(active) &&
     (!active.sendStarted ||
       active.persisting ||
-      active.dispatchLifecycle === 'awaiting-dispatch-hooks')
+      active.dispatchLifecycle === 'awaiting-dispatch-hooks' ||
+      (options?.allowUnreservedHostSend === true && !active.persisted && active.vendorTurnGeneration === null))
   );
 }
 
@@ -1352,10 +1403,10 @@ export class AgentInputCoordinator {
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 
-  /** Account-scoped tools may not borrow the Host identity from plugin or shared guest input. */
+  /** Account-scoped tools use the task's account; shared guests keep their own identity. */
   isActiveInputAccountScoped(sessionId: string): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
-    return !!item && !item.sourcePlugin && !item.sharedTaskAuthor;
+    return !!item && !item.sharedTaskAuthor;
   }
 
   /**
@@ -1386,6 +1437,35 @@ export class AgentInputCoordinator {
 
   private activeInputHasOwnerAuthor(sessionId: string, allowContinuation: boolean): boolean {
     const item = this.states.get(sessionId)?.activeTurn?.item;
+    return this.inputHasOwnerAuthor(item, allowContinuation);
+  }
+
+  /** Only the exact input held by this coordinator may use companion group recovery. */
+  ownsCompanionProviderGroupInput(
+    sessionId: string,
+    context: { kind: 'failure'; token: number; lease?: object | null } | { kind: 'before-send'; clientId?: string; scheduled?: boolean },
+  ): boolean {
+    const state = this.states.get(sessionId);
+    if (!state || this.isExecutionPaused(sessionId)) return false;
+    let item: AgentInputQueuedMessage | null | undefined;
+    if (context.kind === 'failure') {
+      // A native close cancels the wait token while the group still owns its
+      // captured recovery lease. User intervention invalidates that lease too.
+      const current = isUsageLimitCandidateCurrent(state, context.token)
+        || (context.lease != null && this.isUsageLimitRecoveryLeaseCurrent(sessionId, context.lease));
+      if (state.activeTurn || state.autoResumePending || !current) return false;
+      const recovery = state.recovery;
+      item = recovery?.kind === 'active-turn' ? recovery.item
+        : recovery?.kind === 'queue-head' ? state.pendingQueue.find(queued => queued.clientId === recovery.clientId) : undefined;
+    } else {
+      if (context.scheduled || !context.clientId) return false;
+      item = state.activeTurn?.item;
+      if (item?.clientId !== context.clientId) return false;
+    }
+    return this.inputHasOwnerAuthor(item, true);
+  }
+
+  private inputHasOwnerAuthor(item: AgentInputQueuedMessage | null | undefined, allowContinuation: boolean): boolean {
     // A trusted Desktop receipt (`origin.kind === 'desktop'`) is still owner input.
     const originKind = (item?.origin as { kind?: unknown } | undefined)?.kind;
     if (!item || (originKind !== undefined && originKind !== 'desktop')) return false;
@@ -1926,7 +2006,7 @@ export class AgentInputCoordinator {
     // 渠道回流的记账), 而**就是**一次续跑意图 —— 所以在这里发续跑信号并带上 clientId,
     // 让消费方按 clientId 做权威归属(见 deps.onUiRetry 的说明)。
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
-    const schedulerOrigin = isSchedulerOriginItem(item);
+    const schedulerOrigin = isSchedulerOriginItem(item) && !isManualSchedulerContinuation(item);
     const automaticOrigin = isAutomaticOriginItem(item);
     if (!schedulerOrigin) {
       // 自动续跑可能已经从 pendingQueue 进入 activeTurn、但仍卡在持久化或其它
@@ -1949,6 +2029,10 @@ export class AgentInputCoordinator {
       this.deps.onAutomaticEnqueue?.(sessionId, item);
     } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
+      // Only the owner's own message closes their card, not a guest, a plugin, a teammate bot or an App card.
+      if (!item.autoResume && isOwnerOwnMessage({ ...item, appMessageGuard: queuedAppMessageGuard(item) }) && !getDeviceLinkInvokeContext()?.sharedTask) {
+        this.deps.onOwnerMessage?.(sessionId, item);
+      }
     }
     if (!schedulerOrigin) {
       // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。
@@ -2659,6 +2743,13 @@ export class AgentInputCoordinator {
         } } : {}),
         ...(appMessageGuard ? { [MCP_APP_MESSAGE_GUARD]: appMessageGuard } : {}),
         ...(item.sharedTaskAuthor ? { sharedTaskAuthor: item.sharedTaskAuthor } : {}),
+        // Queue entry already handles ordinary user supersession. Direct steering
+        // needs this host classification; a generic Session send/steer is not proof of user input.
+        [SUPERSEDE_ASYNC_QUESTIONS]: !opts?.removeFromQueue && !sharedTask && !item.autoResume
+          && !isAutomaticOriginItem(item) && !isUiContinuationItem(item)
+          && isOwnerOwnMessage({ ...item, appMessageGuard: queuedAppMessageGuard(item) })
+          && !item.clientId.startsWith('question-reply:') ? true : undefined,
+        [ASYNC_QUESTION_ANSWER]: item.clientId.startsWith('question-reply:') ? true : undefined,
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(item),
         ...(verifiedOwnerRequestText(item.autoReviewUserText) !== undefined ? {
           [AUTO_REVIEW_USER_INTENT]: verifiedOwnerRequestText(item.autoReviewUserText),
@@ -2683,6 +2774,7 @@ export class AgentInputCoordinator {
         // 同 drain:steer 投递也在入队时的 async context 之外。
         ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(item.uiLanguage ? { uiLanguage: item.uiLanguage } : {}),
+        ...(item.classicalStyle ? { classicalStyle: item.classicalStyle } : {}),
         // 消息来源同样随 steer 透传(只用于说明与归属,steer 不经 send 事务)。主机生成的
         // 隐藏指令([UI_ACTION_TRIGGER])与自动续跑不是来源方的话,同 send 事务不加 `[消息来源]`。
         ...(item.sourceDevice ? { sourceDevice: item.sourceDevice } : {}),
@@ -2803,6 +2895,7 @@ export class AgentInputCoordinator {
           latest.queuePaused = true;
           // 不确定投递的保护性暂停必须由用户显式处置,不许新输入静默放行。
           latest.queuePausedByRestore = false;
+          latest.uncertainDeliveryClientId = item.clientId;
         }
       } else if (
         isSteerDeliveryUncertainError(err) &&
@@ -2820,6 +2913,7 @@ export class AgentInputCoordinator {
         latest.queuePaused = true;
         // 同上:不确定投递的保护性暂停,不许新输入静默放行。
         latest.queuePausedByRestore = false;
+        latest.uncertainDeliveryClientId = item.clientId;
         log.warn('steer delivery uncertain after stop/close; materialized into paused queue', {
           sessionId,
           clientId: item.clientId,
@@ -2913,7 +3007,9 @@ export class AgentInputCoordinator {
     // accepted 清理吞掉;合成收口分支需要回放它(review #939 第三轮)。
     const priorError = accepted.error;
     const priorErrorReason = accepted.errorReason;
+    const priorErrorPersistBinding = accepted.errorPersistBinding;
     const priorToolLoop = accepted.toolLoop;
+    const priorOutputLimit = accepted.outputLimit;
     const priorStickyError = accepted.stickyError;
     const priorRecovery = accepted.recovery;
     accepted.error = null;
@@ -3017,7 +3113,9 @@ export class AgentInputCoordinator {
       if (priorError || priorRecovery) {
         latest.error = priorError;
         latest.errorReason = priorErrorReason;
+        latest.errorPersistBinding = priorErrorPersistBinding;
         latest.toolLoop = priorToolLoop;
+        latest.outputLimit = priorOutputLimit;
         latest.stickyError = priorStickyError;
         latest.recovery = priorRecovery;
       }
@@ -3096,6 +3194,7 @@ export class AgentInputCoordinator {
     // Ordinary Stop remains explicit. Restart, like crash recovery, may be
     // released by the next deliberate user input, never by background enqueue.
     state.queuePausedByRestore = shouldPause && opts?.resumeOnUserInput === true;
+    state.uncertainDeliveryClientId = null;
     state.queueAbortPending = shouldPause && this.isDispatchBoundaryBusy(sessionId, state);
     const abortBoundaryToken = Symbol('agent-input-abort-boundary');
     const abortBoundaryGeneration = state.generation;
@@ -3153,6 +3252,7 @@ export class AgentInputCoordinator {
         : null;
     state.queuePaused = false;
     state.queuePausedByRestore = false;
+    state.uncertainDeliveryClientId = null;
     if (pausedQueueHeadRecoveryClientId !== null) {
       state.error = null;
       clearErrorProjectionSignals(state);
@@ -3215,8 +3315,8 @@ export class AgentInputCoordinator {
     opts?: {
       auto?: boolean;
       attemptToken?: number;
-      /** 额度重置后自动继续（`continueAfterUsageLimitReset`），以等待令牌复核用户未接手。 */
-      usageLimitWait?: { token: number; info: AutoResumeInfo };
+      /** Quota/group continuation shares the wait token, but retains its actual recovery owner. */
+      usageLimitWait?: { token: number; info: AutoResumeInfo; recoveryOwner: 'quota-reset' | 'provider-group' };
     },
   ): Promise<{ projection: AgentInputProjection; outcome: AutoRetryOutcome }> {
     const state = this.getState(sessionId);
@@ -3254,17 +3354,48 @@ export class AgentInputCoordinator {
     let continueItem: AgentInputQueuedMessage | null = null;
     let progressKnown = false;
     const previousAutoResumeInfo = opts?.auto ? state.autoResumePending : null;
+    const providerRestart = state.errorReason === 'remote_agent_restarted';
+    // Keep quota/error details for other recoveries. A provider restart already
+    // has a localized reconnect label on Desktop and Mobile; it is not an error
+    // summary to append to an otherwise successful continuation.
     // 额度重置后的续跑记录带上当初的限额原文，作为活动行展开详情里的原因。
     const automaticResumeInfo = opts?.auto
       ? previousAutoResumeInfo
       : usageWait
-        ? { ...usageWait.info, ...(state.error ? { error: state.error } : {}) }
+        ? { ...usageWait.info, ...(state.error && !providerRestart ? { error: state.error } : {}) }
         : null;
     const attemptToken = opts?.auto ? (opts.attemptToken ?? null) : null;
-    const continuationOnly = Boolean(
-      opts?.auto && isAcceptedTurnContinuationOnlyReason(previousAutoResumeInfo?.reason),
+    const continuationOnly = providerRestart || Boolean(
+      opts?.auto && isContinuationOnlyAutoResumeReason(previousAutoResumeInfo?.reason),
     );
-    let continueText = CONTINUE_AFTER_ERROR_PROMPT;
+    // Group inputs are hidden in the transcript and omitted by engine handoff.
+    // Carry the actual interrupted request as context, even on CONTINUE-only
+    // recovery; a bare "continue" can otherwise answer an unrelated old turn.
+    const groupRecovery = recovery.kind === 'active-turn'
+      && isBotGroupClientId(recovery.item.retrySourceClientId ?? recovery.item.clientId);
+    const groupRecoveryText = groupRecovery && recovery.kind === 'active-turn'
+      && typeof recovery.item.chatMessage.content === 'string'
+      ? recovery.item.chatMessage.content : recovery.kind === 'active-turn' ? recovery.item.text : '';
+    let continueText = groupRecovery && recovery.kind === 'active-turn'
+      ? recovery.item.originalSyntheticTrigger === 'continue'
+        ? groupRecoveryText
+        : `${groupRecoveryText}\n\n${CONTINUE_AFTER_ERROR_PROMPT}`
+      : CONTINUE_AFTER_ERROR_PROMPT;
+    if (groupRecovery && recovery.kind === 'active-turn' && recovery.item.recoveryCheckpoint) {
+      // Remove only the host-authored suffix, preserving any marker inside the
+      // original request. A fresh snapshot below replaces this stale progress.
+      const previousCheckpoint = appendRecoveryCheckpointPrompt('', recovery.item.recoveryCheckpoint);
+      if (previousCheckpoint && continueText.endsWith(previousCheckpoint)) {
+        continueText = continueText.slice(0, -previousCheckpoint.length);
+      }
+    }
+    if (providerRestart) {
+      continueText += '\n\n[Host recovery] The provider process stopped or restarted during the previous turn.'
+        + (automatic ? ' Cindy is automatically continuing the interrupted task in the original conversation.'
+          : ' Continue the interrupted task in the original conversation.')
+        + ' Some tools may already have executed on the task computer without their results reaching you.'
+        + ' Check the current files, processes and external state before continuing; do not repeat side effects.';
+    }
     let recoveryCheckpoint: RecoveryCheckpoint | undefined;
     if (recovery.kind === 'active-turn') {
       let hasProgress = false;
@@ -3356,7 +3487,7 @@ export class AgentInputCoordinator {
           }
         }
         const clientId = crypto.randomUUID();
-        continueItem = {
+        continueItem = acceptTaskActionRecoveryCopy(recovery.item, {
           ...recovery.item,
           clientId,
           text: continueText,
@@ -3367,8 +3498,9 @@ export class AgentInputCoordinator {
           // 人工 Retry 是新的真人介入周期，不能继承上一轮隐藏自动消息的标记；自动路径
           // 则把展示信息随消息落库，成为「已重新连接」活动行的 param 位与展开详情。
           autoResumeInfo: automatic ? (automaticResumeInfo ?? undefined) : undefined,
-          // 附件 / mention 属于原始消息,已在失败 turn 里送达过模型,续跑指令不重带。
-          files: undefined,
+          // Ordinary retries keep files in their native history. Hidden group inputs
+          // may be absent after handoff, so retain their files with the request.
+          files: groupRecovery ? recovery.item.files : undefined,
           mentions: undefined,
           // retry-supersede 只属于零产出克隆重发。续跑分支的原消息是真实历史,
           // 不取代;展开继承的旧值若留着,落库后会把本轮"有产出失败"的 error 行
@@ -3386,7 +3518,7 @@ export class AgentInputCoordinator {
             content: continueText,
             createdAt: new Date().toISOString(),
           },
-        };
+        });
       }
     }
     // Only the verified group quota rejection can arm a queue-head wait: selection failed
@@ -3403,9 +3535,12 @@ export class AgentInputCoordinator {
     }
     const previousError = state.error;
     const previousErrorReason = state.errorReason;
+    const previousErrorPersistBinding = state.errorPersistBinding;
     const previousToolLoop = state.toolLoop;
+    const previousOutputLimit = state.outputLimit;
     const previousStickyError = state.stickyError;
     let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
+    if (retryItem && groupRecovery) retryItem = { ...retryItem, text: groupRecoveryText };
     if (
       !continueItem &&
       retryItem &&
@@ -3438,7 +3573,7 @@ export class AgentInputCoordinator {
       let item = continueItem;
       if (!item) {
         const clientId = crypto.randomUUID();
-        item = {
+        item = acceptTaskActionRecoveryCopy(recovery.item, {
           ...(retryItem ?? recovery.item),
           clientId,
           autoResume: automatic ? true : undefined,
@@ -3452,16 +3587,19 @@ export class AgentInputCoordinator {
             clientId,
             createdAt: new Date().toISOString(),
           },
-        };
+        });
       }
       if ((opts?.auto && attemptToken !== null) || usageWait) {
         this.pendingAutoResumeRecoveries.set(item.clientId, {
           sessionId,
           stateRef: state,
+          recoveryOwner: usageWait?.recoveryOwner ?? 'interrupted',
           recovery,
           error: previousError,
           errorReason: previousErrorReason,
+          errorPersistBinding: previousErrorPersistBinding,
           toolLoop: previousToolLoop,
+          outputLimit: previousOutputLimit,
           stickyError: previousStickyError,
           autoResumeInfo: previousAutoResumeInfo,
           attemptToken,
@@ -3793,6 +3931,13 @@ export class AgentInputCoordinator {
     return this.getProjection(sessionId);
   }
 
+  /** True while the queue is held because an earlier steer may already have reached the model. */
+  isPausedForUncertainDelivery(sessionId: string): boolean {
+    const state = this.getState(sessionId);
+    const clientId = state.uncertainDeliveryClientId;
+    return state.queuePaused && clientId !== null && state.pendingQueue.some((item) => item.clientId === clientId);
+  }
+
   isExecutionPaused(sessionId: string): boolean {
     return this.getState(sessionId).queueInteractionLocks.includes('execution-pause');
   }
@@ -3923,6 +4068,22 @@ export class AgentInputCoordinator {
     };
   }
 
+  /** Restore the accepted input boundary for a provider wake-up, not a new send.
+   * No history lookup or guessed owner: missing/stale context remains an external turn.
+   */
+  noteProviderInitiatedTurn(sessionId: string, vendorTurnGeneration: number): void {
+    const state = this.getState(sessionId);
+    const candidate = state.providerContinuationCandidate;
+    state.providerContinuationCandidate = undefined;
+    if (!candidate || state.activeTurn || state.recovery || state.error || state.queuePaused ||
+        state.queueAbortPending || state.pendingQueue.length > 0 ||
+        candidate.sessionIdentity !== this.deps.getTurnSessionIdentity?.(sessionId) ||
+        candidate.turn.vendorTurnGeneration !== vendorTurnGeneration ||
+        candidate.turn.generation !== state.generation ||
+        candidate.turn.clearBoundaryMs !== state.clearBoundaryMs) return;
+    state.activeTurn = candidate.turn;
+  }
+
   /**
    * Host-owned continuation (silent-stop auto-resume) keeps the same product turn on a
    * new vendor generation. `sendHostTurnContinuation` bypasses the send transaction that
@@ -3982,6 +4143,16 @@ export class AgentInputCoordinator {
     active.vendorTurnGeneration = previous;
   }
 
+  /** Called synchronously after terminal ownership is settled and a row ID is reserved.
+   * The live event delivers the ID; future projection reads must retain the same identity.
+   * Keep the message with it so a different dispatch/sticky error cannot inherit the row.
+   */
+  bindErrorPersistId(sessionId: string, persistId: string, message: string): void {
+    const state = this.states.get(sessionId);
+    if (!persistId || !message || !state?.error || state.error !== message) return;
+    state.errorPersistBinding = { message, persistId };
+  }
+
   onTurnEvent(
     sessionId: string,
     type: 'done' | 'error',
@@ -4025,6 +4196,7 @@ export class AgentInputCoordinator {
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
     if (type === 'error') {
+      state.providerContinuationCandidate = undefined;
       if (
         active &&
         state.recovery?.kind === 'queue-head' &&
@@ -4223,6 +4395,7 @@ export class AgentInputCoordinator {
                 ? { errorStatus: observed.errorStatus }
                 : {}),
               ...(observed.toolLoop ? { toolLoop: observed.toolLoop } : {}),
+              ...(observed.outputLimit ? { outputLimit: observed.outputLimit } : {}),
             };
             // Codex/Claude 失败收尾是 terminal error 后再补 done。漏掉的 error
             // 回调不能被这道配对 done 先清掉 leftover activeTurn，否则 250ms
@@ -4279,6 +4452,11 @@ export class AgentInputCoordinator {
     state.error = null;
     clearErrorProjectionSignals(state);
     state.recovery = null;
+    const sessionIdentity = this.deps.getTurnSessionIdentity?.(sessionId);
+    if (active?.persisted && active.item && !active.controlKind && sessionIdentity &&
+        !active.item.sharedTaskAuthor && !isSchedulerOriginItem(active.item)) {
+      state.providerContinuationCandidate = { turn: active, sessionIdentity };
+    }
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'turn-done');
   }
@@ -4313,6 +4491,7 @@ export class AgentInputCoordinator {
     },
   ): void {
     const state = this.getState(sessionId);
+    state.providerContinuationCandidate = undefined;
     // Planned-upgrade suppression is per Session incarnation. Replacement
     // Sessions restart generation; a leftover marker would silence a later
     // genuine remote_daemon_closed on the reused generation.
@@ -4533,9 +4712,13 @@ export class AgentInputCoordinator {
       queueEditLocks: [...state.queueEditLocks],
       queueAbortPending: state.queueAbortPending,
       error,
+      ...(error && state.errorPersistBinding?.message === error
+        ? { errorPersistId: state.errorPersistBinding.persistId }
+        : {}),
       ...(error && state.errorCanContinue ? { errorCanContinue: true } : {}),
       ...(error && state.errorReason ? { errorReason: state.errorReason } : {}),
       ...(error && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
+      ...(error && state.outputLimit ? { outputLimit: state.outputLimit } : {}),
       recovery,
       ...(autoResumePending ? { autoResumePending } : {}),
       usageLimitWait: !groupSwitchHeld && isUsageLimitWaitLive(state)
@@ -4738,6 +4921,7 @@ export class AgentInputCoordinator {
       ...(observed.sdkError ? { sdkError: redactSensitiveText(observed.sdkError) } : {}),
       ...(typeof observed.errorStatus === 'number' ? { errorStatus: observed.errorStatus } : {}),
       ...(observed.toolLoop ? { toolLoop: observed.toolLoop } : {}),
+      ...(observed.outputLimit ? { outputLimit: observed.outputLimit } : {}),
     };
     return {
       message: redactSensitiveText(observed.message ?? 'Turn ended with an error'),
@@ -4972,6 +5156,29 @@ export class AgentInputCoordinator {
     state.drainWakeupGeneration += 1;
   }
 
+  /** A host note is optional context; building it must never keep the queue head from dispatching. */
+  private describeQueueBehindDispatch(
+    sessionId: string,
+    head: AgentInputQueuedMessage,
+  ): string | null {
+    try {
+      return (
+        this.deps.describeQueueBehindDispatch?.(
+          sessionId,
+          head,
+          this.getState(sessionId).pendingQueue,
+        ) ?? null
+      );
+    } catch (error) {
+      log.warn('queue note skipped', {
+        sessionId,
+        clientId: head.clientId,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      return null;
+    }
+  }
+
   private async drain(sessionId: string, reason: string): Promise<void> {
     const state = this.getState(sessionId);
     const compact = this.getDrainableCompact(sessionId, state);
@@ -5056,7 +5263,32 @@ export class AgentInputCoordinator {
     this.emit(sessionId);
 
     let appMessageGuardRejected = false;
+    const taskActionGuard = taskActionInputGuard(sessionId, head);
+    const logTaskActionRevocation = (error: unknown, stage: 'pre-check' | 'before-persistence'): boolean => {
+      const errorCode = taskActionRevocationCode(error);
+      if (!errorCode) return false;
+      // The guard may fail again immediately before persistence. Both exits need
+      // the same diagnostic; only host-defined codes, never arbitrary error text.
+      log.info('discarding revoked task action input before dispatch', {
+        sessionId, clientId: head.clientId, reason: errorCode, errorCode, stage,
+      });
+      return true;
+    };
     try {
+      if (taskActionGuard) {
+        // A revoked task action settles before screening, persistence or a vendor
+        // turn, so the receiving task never shows a failed reply for it. A check that
+        // merely failed is not a revocation: it takes the ordinary pre-accept failure
+        // path below, which keeps the message as a retryable queue head. The send
+        // transaction still rechecks the same guard at dispatch.
+        const rejection = await taskActionGuard().then(() => null, (error: unknown) => ({ error }));
+        if (!this.isActiveTurnCurrent(sessionId, active)) return;
+        if (rejection) {
+          if (!logTaskActionRevocation(rejection.error, 'pre-check')) throw rejection.error;
+          this.discardRevokedAppInput(sessionId, active, head);
+          return;
+        }
+      }
       // 意识拦截钩(订阅槽①):落库/派发之前问一遍——block 即丢弃本项
       // (不入库不起 turn),通知宿主降级气泡,继续放行后续排队消息;
       // rewrite 用新正文替换 head(送 agent / 落库 / 显示都用它),通知宿主
@@ -5117,23 +5349,41 @@ export class AgentInputCoordinator {
         referenceContexts,
       );
       const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
+      // Wire-only: derived from the live queue at this dispatch. The queue item and the stored
+      // replay copy (agentFacingWireContent, readable through history) never carry it.
+      const wireUserMessage = appendNoteToMakerUserMessage(
+        makerUserMessage,
+        this.describeQueueBehindDispatch(sessionId, head),
+      );
       active.sendStarted = true;
       active.dispatchLifecycle = 'sending';
       // Freeze side-effect timestamps before entering vendor code. A dispatch
       // may synchronously emit the new turn's started marker before it returns;
       // post-dispatch acknowledgements must remain older than that marker.
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
-      const appMessageGuard = combineInputGuards(queuedAppMessageGuard(head), taskActionInputGuard(sessionId, head));
-      const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
-        ...(appMessageGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
+      const appMessageGuard = queuedAppMessageGuard(head);
+      const result = await this.deps.sendToAgent(sessionId, wireUserMessage, head.createOpts, {
+        ...(appMessageGuard || taskActionGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
           try {
-            await appMessageGuard();
+            await appMessageGuard?.();
           } catch (error) {
             appMessageGuardRejected = true;
             throw error;
           }
+          // A task action is judged until its row is persisted. Afterwards a refusal could only
+          // leave a user row with a failed reply, and a queued task action cannot be retried (its
+          // guard is bound to the original clientId), so the message is delivered instead.
+          if (active.persisted) return;
+          try {
+            await taskActionGuard?.();
+          } catch (error) {
+            // Only a proven revocation discards; a failed check keeps the message retryable.
+            if (logTaskActionRevocation(error, 'before-persistence')) appMessageGuardRejected = true;
+            throw error;
+          }
         } } : {}),
         ...(head.supersedesUserClientId ? { retryUserClientId: head.supersedesUserClientId } : {}),
+        [ASYNC_QUESTION_ANSWER]: head.clientId.startsWith('question-reply:') ? true : undefined,
         [AUTO_REVIEW_SOURCE_CONTENT]: queuedAutoReviewText(head),
         ...(verifiedOwnerRequestText(head.autoReviewUserText) !== undefined
           ? { [AUTO_REVIEW_USER_INTENT]: verifiedOwnerRequestText(head.autoReviewUserText) } : {}),
@@ -5155,6 +5405,7 @@ export class AgentInputCoordinator {
         // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
         ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
         ...(head.uiLanguage ? { uiLanguage: head.uiLanguage } : {}),
+        ...(head.classicalStyle ? { classicalStyle: head.classicalStyle } : {}),
         ...(head.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         ...(head.sourceDevice ? { sourceDevice: head.sourceDevice } : {}),
         persistUserMessage: {
@@ -5416,6 +5667,7 @@ export class AgentInputCoordinator {
   /** Only proven preparation rejection can erase a scheduled continuation row.
    * The coordinator owns its clientId even when dispatch beats enqueue's return.
    * Unknown vendor outcomes and interactive messages keep their existing history.
+   * The row is deleted, not tombstoned: a deferring routine would otherwise leave one hidden copy per attempt.
    */
   private async rewindSchedulerPreparationFailure(
     sessionId: string,
@@ -5436,7 +5688,7 @@ export class AgentInputCoordinator {
         && (failure?.code === 'PRECONDITION_FAILED' || message.includes('[PRECONDITION_FAILED]')));
     if (!preparationRejected) return false;
     try {
-      await this.deps.rewindPersistedUserMessageAfterClear(sessionId, item.clientId);
+      await this.deps.rewindPersistedUserMessageAfterClear(sessionId, item.clientId, { discard: true });
       return true;
     } catch (err) {
       log.warn('scheduled preparation rollback failed; retaining failure presentation', {
@@ -6056,9 +6308,10 @@ export class AgentInputCoordinator {
     sessionId: string,
     state: SessionInputState,
     preserveQueue: boolean,
+    options?: { allowUnreservedHostSend?: boolean },
   ): void {
     const active = state.activeTurn;
-    if (!active || !isActiveTurnBeforeVendorDispatch(active)) return;
+    if (!active || !isActiveTurnBeforeVendorDispatch(active, options)) return;
     this.abortInputBoundary(sessionId);
     state.generation += 1;
     state.activeTurn = null;
@@ -6093,7 +6346,10 @@ export class AgentInputCoordinator {
       }
     }
     const state = this.states.get(sessionId);
-    if (state) state.autoResumeAttemptToken = null;
+    if (state) {
+      state.autoResumeAttemptToken = null;
+      state.providerContinuationCandidate = undefined;
+    }
   }
 
   /**
@@ -6119,7 +6375,9 @@ export class AgentInputCoordinator {
     this.pendingAutoResumeRecoveries.delete(clientId);
     state.error = pending.error;
     state.errorReason = pending.errorReason;
+    state.errorPersistBinding = pending.errorPersistBinding;
     state.toolLoop = pending.toolLoop;
+    state.outputLimit = pending.outputLimit;
     state.stickyError = pending.stickyError;
     state.recovery = pending.recovery;
     state.autoResumePending = pending.autoResumeInfo;
@@ -6492,14 +6750,16 @@ export class AgentInputCoordinator {
   private noteUserAction(sessionId: string): void {
     // Use host time, not a remote sender's clock. State clear/owner teardown also
     // clears this clock; an app restart has no running turn to yield to.
-    this.getState(sessionId).lastUserActionAt = Date.now();
+    const state = this.getState(sessionId);
+    state.lastUserActionAt = Date.now();
+    state.providerContinuationCandidate = undefined;
     this.deps.onUserAction?.(sessionId);
   }
 
   private touchUserSend(sessionId: string, atMs?: number): void {
     // 真人接手在派发/落库失败时也成立；限额预算与渠道 turn 的认领分别通知。
     this.noteUserAction(sessionId);
-    void touchUserSendInDb(sessionId, atMs).catch((err) => {
+    void this.deps.touchUserSend(sessionId, atMs).catch((err) => {
       log.warn('touchUserSend failed', { sessionId, error: errorMessage(err) });
     });
   }
@@ -6665,7 +6925,7 @@ export class AgentInputCoordinator {
   isContinuationOnlyAutoResume(sessionId: string): boolean {
     const state = this.states.get(sessionId);
     if (!state) return false;
-    if (isAcceptedTurnContinuationOnlyReason(state.autoResumePending?.reason)) return true;
+    if (isContinuationOnlyAutoResumeReason(state.autoResumePending?.reason)) return true;
     const activeItem =
       state.activeTurn?.item && !isActiveTurnDispatched(state.activeTurn)
         ? state.activeTurn.item
@@ -6674,7 +6934,7 @@ export class AgentInputCoordinator {
     return items.some(
       (item) =>
         item.autoResume === true &&
-        isAcceptedTurnContinuationOnlyReason(item.autoResumeInfo?.reason),
+        isContinuationOnlyAutoResumeReason(item.autoResumeInfo?.reason),
     );
   }
 
@@ -7094,6 +7354,35 @@ export class AgentInputCoordinator {
     return this.getProjection(sessionId);
   }
 
+  /** A saved companion model supersedes group recovery until vendor dispatch. */
+  cancelProviderGroupRecovery(sessionId: string): AgentInputProjection {
+    this.cancelUsageLimitWait(sessionId);
+    const state = this.getState(sessionId);
+    const restore = (item: AgentInputQueuedMessage | null | undefined): boolean => {
+      if (!item) return false;
+      const pending = this.pendingAutoResumeRecoveries.get(item.clientId);
+      if (pending?.recoveryOwner !== 'provider-group'
+        || !this.restoreAutoResumeRecovery(sessionId, item.clientId, pending.attemptToken)) return false;
+      this.autoResumeDispatchAttempts.delete(item.clientId);
+      return true;
+    };
+    const active = state.activeTurn;
+    // The model save holds the send lock. A host send may still be waiting for
+    // that lock before Session reservation; its signal/generation can be revoked.
+    // A reservation is not proof of dispatch, but an unclassified sending turn
+    // after that boundary must not be cancelled as if it had never reached vendor.
+    const options = { allowUnreservedHostSend: true };
+    if (active && isActiveTurnBeforeVendorDispatch(active, options) && restore(active.item)) {
+      this.cancelPreSendActiveTurn(sessionId, state, false, options);
+      this.emit(sessionId);
+      this.scheduleDrain(sessionId, 'provider-group-recovery-cancelled');
+    }
+    for (const item of [...state.pendingQueue]) {
+      if (restore(item)) this.remove(sessionId, item.clientId);
+    }
+    return this.getProjection(sessionId);
+  }
+
   /** End a scheduled quota claim while preserving an ordinary manual Retry. */
   releaseScheduledUsageLimitRecovery(sessionId: string, runId: string, retryClientId?: string): void {
     const state = this.getState(sessionId);
@@ -7124,7 +7413,19 @@ export class AgentInputCoordinator {
     info: AutoResumeInfo,
   ): Promise<AutoRetryOutcome> {
     const { outcome } = await this.performRetryLastError(sessionId, {
-      usageLimitWait: { token, info },
+      usageLimitWait: { token, info, recoveryOwner: 'quota-reset' },
+    });
+    return outcome;
+  }
+
+  /** Group switching and reconnecting share the retry path, with explicit cancellation ownership. */
+  async continueAfterProviderGroupRecovery(
+    sessionId: string,
+    token: number,
+    info: AutoResumeInfo,
+  ): Promise<AutoRetryOutcome> {
+    const { outcome } = await this.performRetryLastError(sessionId, {
+      usageLimitWait: { token, info, recoveryOwner: 'provider-group' },
     });
     return outcome;
   }
@@ -7303,7 +7604,7 @@ export class AgentInputCoordinator {
     if (!this.isTurnGenerationCurrent(sessionId, active)) return 'stale';
     this.notifyUserMessagePersisting(sessionId, item);
     try {
-      const createUserMessage = this.deps.createUserMessage ?? createDbMessage;
+      const createUserMessage = this.deps.createUserMessage;
       await createUserMessage(
         sessionId,
         {

@@ -30,9 +30,10 @@ import { GHOST_NODE_CHILD_MODE_FLAG } from '../../shared/ghost.js';
 import { installVirtualStdin } from './nodeRuntimeVirtualStdin.js';
 import { NodeRequestScopes } from './nodeRequestScope.js';
 import { NodeDeviceAuthorizationClient } from './nodeDeviceAuthorizationClient.js';
+import { NodeHostServicesClient } from './nodeHostServicesClient.js';
 import { NodeAuthorizationClient } from './nodeAuthorizationClient.js';
 
-interface ParentPortLike {
+export interface NodeWorkerParentPort {
   postMessage(message: unknown): void;
   on(event: 'message', listener: (event: { data: unknown }) => void): void;
 }
@@ -41,10 +42,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-const parentPort = (process as unknown as { parentPort?: ParentPortLike }).parentPort;
-const entryPath = process.argv[2];
-const childMode = process.argv[3] === GHOST_NODE_CHILD_MODE_FLAG;
-const childArgs = childMode ? process.argv.slice(4) : [];
+export function runNodeRuntimeWorker(parentPort: NodeWorkerParentPort, entryPath: string, args: string[] = []) {
+const childMode = args[0] === GHOST_NODE_CHILD_MODE_FLAG;
+const childArgs = childMode ? args.slice(1) : [];
 
 if (!parentPort) throw new Error('Node 插件工作进程缺少 parentPort');
 if (
@@ -62,6 +62,7 @@ const requestScopes = new NodeRequestScopes();
 const deviceAuthorization = new NodeDeviceAuthorizationClient(requestScopes, (message) =>
   parentPort.postMessage(message),
 );
+const hostServices = new NodeHostServicesClient(requestScopes, message => parentPort.postMessage(message));
 const authorization = new NodeAuthorizationClient(requestScopes, message => parentPort.postMessage(message));
 
 /* ── spawnEntry 窄接口(仅普通 worker 模式;子进程模式不给,树深恒为 1)── */
@@ -144,7 +145,7 @@ function handleChildControlMessage(m: GhostNodeChildToWorkerMessage): void {
     pending.resolve(handle);
     return;
   }
-  if (m.type === 'device-authorize-result' || m.type === 'plugin-authorize-result') return;
+  if (m.type === 'device-authorize-result' || m.type === 'plugin-authorize-result' || m.type === 'node-host-result') return;
   const internal = childHandles.get(m.childId);
   if (!internal) return;
   if (m.type === 'child-stdout') {
@@ -201,12 +202,14 @@ parentPort.on('message', (event) => {
     requestScopes.finish(data.rpcId);
     deviceAuthorization.finish(data.rpcId);
     authorization.finish(data.rpcId);
+    hostServices.finish(data.rpcId);
     return;
   }
   if (!childMode && data.type === 'device-authorize-result') {
     deviceAuthorization.reply(data);
     return;
   }
+  if (!childMode && data.type === 'node-host-result') { hostServices.reply(data); return; }
   if (!childMode && data.type === 'plugin-authorize-result') {
     authorization.reply(data);
     return;
@@ -253,9 +256,12 @@ if (childMode) {
     enumerable: false,
     writable: false,
     value: Object.freeze({ spawnEntry, bindDeviceAuthorization: () => deviceAuthorization.bind(),
+      bindHostServices: () => hostServices.bind(),
       bindAuthorization: () => authorization.bind() }),
   });
 }
 
-const requireFromWorker = createRequire(__filename);
+const requireFromWorker = createRequire(entryPath);
 requireFromWorker(entryPath);
+
+}

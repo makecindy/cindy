@@ -59,7 +59,7 @@ export function appendMobileDebugFile(batch: string): void {
     // Enforce the total cap before appending another file.
     if (files.length >= DEBUG_FILE_COUNT) files[0].delete();
   }
-  file.write(batch, { append: true });
+  file.writeSync(batch, { append: true });
 }
 
 export function clearMobileDebugFiles(): void {
@@ -76,7 +76,7 @@ export function copyMobileDebugFiles(destination: File): void {
     const handle = file.open();
     try {
       while ((handle.offset ?? 0) < (handle.size ?? 0)) {
-        destination.write(handle.readBytes(64 * 1024), { append: true });
+        destination.writeSync(handle.readBytesSync(64 * 1024), { append: true });
       }
     } finally {
       handle.close();

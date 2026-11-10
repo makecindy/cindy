@@ -18,7 +18,7 @@ import type { TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 import type { TodoItem } from './TodoListCard';
 import type { ToolMediaItem } from './AgentActionRow';
 
-export type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage };
+export type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage; pending?: true };
 type AgentPlanRenderItem = {
   type: 'agent_plan';
   key: string;
@@ -95,6 +95,7 @@ interface WorkGroupRenderItem {
    *  动作段展开后直接显示思考 / 工具行;外层展开后显示 assistant 文字和
    *  仍保持折叠的内层动作段。tool_media 不参与合并,继续留在组外可见。 */
   type: 'work_group';
+  teammateJournal?: boolean;
   key: string;
   children: WorkGroupChildItem[];
   deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;

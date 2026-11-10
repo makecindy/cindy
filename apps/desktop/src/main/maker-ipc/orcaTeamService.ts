@@ -245,6 +245,14 @@ export type MergeWorkerQueuedMessagesResult =
       messages?: WorkerQueuedMessageSnapshot[];
     };
 
+/** How the Lead took an accepted Worker report; queued reports can still be withdrawn. */
+export interface WorkerReportReceipt {
+  delivered: boolean;
+  queuedMessageId?: string;
+}
+
+export type WorkerReportWithdrawalStanding = 'covered' | 'last' | 'other-assignment' | 'untracked';
+
 /** worker turn 终止后由 register.ts 的事件 adapter 回调 service。 */
 export interface WorkerTerminalTurnParams {
   sessionId: string;
@@ -372,14 +380,6 @@ export interface OrcaTeamServiceDeps {
     previousRole: string;
     previousLabel: string | null;
   }) => Promise<{ ok: true } | { ok: false; errorCode: 'NOT_FOUND' | 'DUPLICATE_LABEL' }>;
-  /**
-   * true = 这些 label 中被当前 lead 的插件 team plan 未结算条目引用，改名会破坏计划归属与委派自动授权。
-   * 非插件任务 / 无计划 / 已结算时不锁定。可选：未注入时不做计划锁。
-   */
-  isWorkerLabelLockedByPlan?: (params: {
-    leadSessionId: string;
-    labels: ReadonlyArray<string | null>;
-  }) => Promise<boolean>;
   /** 取消该 worker session 尚未落地的后台唤醒（focus 预热）；释放 runtime 前调用。 */
   cancelWorkerResume?(sessionId: string): void;
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
@@ -546,7 +546,33 @@ export interface OrcaTeamService {
   }): Promise<MoveWorkerQueuedMessageResult>;
   captureWorkerText(sessionId: string, text: string, opts?: { isFinal?: boolean }): void;
   clearAutoBridgeState(sessionId: string): void;
-  captureLocalWorkerReport(sessionId: string): (accepted: boolean) => Promise<void>;
+  /**
+   * The receipt says how an accepted report was taken: delivered to the Lead now (direct send or
+   * same-turn steer) or waiting in the Lead's queue under `queuedMessageId`. It only feeds
+   * `workerReportWithdrawalStanding`.
+   */
+  captureLocalWorkerReport(
+    sessionId: string,
+  ): (accepted: boolean, receipt?: WorkerReportReceipt) => Promise<void>;
+  /**
+   * What withdrawing this queued report would do to the Worker's current assignment. Accepting a
+   * report (even into the queue) settles the duty to report, so nothing is auto-bridged later:
+   * - `covered`: the assignment has another accepted report, queued or already read;
+   * - `last`: it is the assignment's only report — withdrawing it leaves the Lead uninformed;
+   * - `other-assignment`: it belongs to an earlier assignment; the current one still reports;
+   * - `untracked`: no Lead assignment is running (direct user turn, or state lost on restart).
+   */
+  workerReportWithdrawalStanding(
+    sessionId: string,
+    queuedMessageId: string,
+  ): WorkerReportWithdrawalStanding;
+  /** A queued report left the Lead's queue undelivered (withdrawn, merged away, Stop, clear). */
+  forgetWorkerQueuedReports(sessionId: string, queuedMessageIds: readonly string[]): void;
+  /**
+   * A merge kept `queuedMessageId` in place of reports that belonged to the current assignment:
+   * it now carries that assignment's report. No-op without a running assignment.
+   */
+  adoptWorkerQueuedReport(sessionId: string, queuedMessageId: string): void;
   /** Execution-device settlement retains its existing durable done semantics. */
   settleReportedWorker(
     capture: WorkerTerminalTurnCapture,
@@ -565,6 +591,13 @@ export interface OrcaTeamService {
 /** ready/inFlight 与对象身份共同保证极速 terminal 与重派活不会重复 bridge 或删错状态。 */
 interface AutoBridgeState {
   pending: boolean;
+  /** Reports of this assignment that reached the Lead directly or by same-turn steer. */
+  deliveredReports: number;
+  /**
+   * Reports of this assignment accepted into the Lead's queue. An id stays after the Lead
+   * drains it (that is a delivery) and is dropped only when the report is discarded undelivered.
+   */
+  queuedReportIds: Set<string>;
   reportsInFlight: Set<Promise<void>>;
   terminalObserved: boolean;
   productTerminal?: Pick<WorkerTerminalTurnCapture, 'runtime' | 'turnGeneration'>;
@@ -710,6 +743,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
   ): AutoBridgeState {
     const state: AutoBridgeState = {
       pending: true,
+      deliveredReports: 0,
+      queuedReportIds: new Set(),
       reportsInFlight: new Set(),
       terminalObserved: false,
       ready: false,
@@ -1644,23 +1679,6 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         return { ok: true as const, workerId: worker.id, role, label };
       }
 
-      // 插件 team plan 以 label 冻结 Worker 归属与委派自动授权且登记后不可变；
-      // 活动（未结算）计划引用到旧/新 label 时必须拒绝改 label，只放过 role 改名。
-      if (label !== worker.label && deps.isWorkerLabelLockedByPlan) {
-        const locked = await deps.isWorkerLabelLockedByPlan({
-          leadSessionId: link.leadSessionId,
-          labels: [worker.label, label],
-        });
-        if (locked) {
-          return {
-            ok: false as const,
-            errorCode: 'WORKER_STATE_CHANGED' as const,
-            message:
-              'worker label is referenced by the active plugin team plan and cannot be changed; change the role or release the worker first',
-          };
-        }
-      }
-
       const updated = await deps.updateWorkerIdentity({
         workerId: worker.id,
         role,
@@ -2104,9 +2122,11 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const settled = new Promise<void>(resolve => { release = resolve; });
       state.reportsInFlight.add(settled);
       let finished = false;
-      return async (accepted) => {
+      return async (accepted, receipt) => {
         if (finished) return;
         finished = true;
+        if (accepted && receipt?.delivered) state.deliveredReports += 1;
+        else if (accepted && receipt?.queuedMessageId) state.queuedReportIds.add(receipt.queuedMessageId);
         try {
           await withWorkerTransition(state.workerId, async () => {
             const provisional = provisionalDispatches.get(sessionId);
@@ -2118,6 +2138,27 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           release();
         }
       };
+    },
+    workerReportWithdrawalStanding(sessionId, queuedMessageId) {
+      const state = autoBridge.get(sessionId);
+      if (!state) return 'untracked';
+      // Same boundary as captureLocalWorkerReport: once the assignment's product turn ended,
+      // a later direct user turn is not that assignment.
+      const runtime = deps.getLiveSession(sessionId);
+      if (state.productTerminal && (
+        state.productTerminal.runtime !== runtime
+        || state.productTerminal.turnGeneration !== runtime?.getTurnGeneration?.()
+      )) return 'untracked';
+      if (!state.queuedReportIds.has(queuedMessageId)) return 'other-assignment';
+      return state.deliveredReports > 0 || state.queuedReportIds.size > 1 ? 'covered' : 'last';
+    },
+    forgetWorkerQueuedReports(sessionId, queuedMessageIds) {
+      const state = autoBridge.get(sessionId);
+      if (!state) return;
+      for (const id of queuedMessageIds) state.queuedReportIds.delete(id);
+    },
+    adoptWorkerQueuedReport(sessionId, queuedMessageId) {
+      autoBridge.get(sessionId)?.queuedReportIds.add(queuedMessageId);
     },
     async settleReportedWorker(capture, commit) {
       const link = await deps.getWorkerLinkBySessionId(capture.sessionId);

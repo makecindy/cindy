@@ -1,4 +1,4 @@
-import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import type { ClaudeAccountUsageSnapshot } from './claudeAccountUsage.js';
 

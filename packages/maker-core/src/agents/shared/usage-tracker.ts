@@ -22,6 +22,7 @@
  *     (它属于 session lifecycle 不属于 usage)
  */
 
+import { randomUUID } from 'node:crypto';
 import type { UsageSnapshot } from '../../types/events.js';
 
 /**
@@ -45,6 +46,11 @@ export interface UsageSegment {
   cacheReadTokens?: number;
   /** 写入缓存的 token (Anthropic cache_creation_input_tokens) */
   cacheCreateTokens?: number;
+  /**
+   * cacheCreateTokens 中按 1 小时 TTL 写入的部分 (Anthropic
+   * cache_creation.ephemeral_1h_input_tokens)。1h 写入单价高于 5m，计价需分开。
+   */
+  cacheCreate1hTokens?: number;
   /** Provider diagnostic subset; never add this to outputTokens again. */
   reasoningTokens?: number;
   /** Provider-reported request cost, used only on routes where that value is authoritative. */
@@ -53,7 +59,32 @@ export interface UsageSegment {
   complete?: boolean;
 }
 
+export class RequestUsageTracker {
+  private meteringEpoch = randomUUID();
+  private meteringModels = new Map<string, UsageSegment>();
+
+  /** Runtime-cumulative receipts. Independent of turn resets, context and display cost. */
+  snapshot() {
+    return { epoch: this.meteringEpoch, models: [...this.meteringModels.values()].map(row => ({ ...row })) };
+  }
+
+  ingest(usage: UsageSegment): void {
+    const model = usage.model ?? 'unknown';
+    const previous = this.meteringModels.get(model);
+    this.meteringModels.set(model, {
+      model,
+      inputTokens: (previous?.inputTokens ?? 0) + usage.inputTokens,
+      outputTokens: (previous?.outputTokens ?? 0) + usage.outputTokens,
+      cacheReadTokens: (previous?.cacheReadTokens ?? 0) + (usage.cacheReadTokens ?? 0),
+      cacheCreateTokens: (previous?.cacheCreateTokens ?? 0) + (usage.cacheCreateTokens ?? 0),
+    });
+  }
+
+}
+
 export class UsageTracker {
+  private requestMeter = new RequestUsageTracker();
+  getRequestMetering() { return this.requestMeter.snapshot(); }
   // ── turn 累计 ────────────────────────────────────────────────────────────
   // 每次 ingestApiCallUsage 累加, endTurn 后由 resetCurrentTurn 清零。
   // 老链路对标: agentManager.ts:2362-2365 currentTurn{Input,Output,CacheRead,CacheCreate}Tokens
@@ -140,6 +171,14 @@ export class UsageTracker {
       outputTokens: Math.max(existing.outputTokens, usage.outputTokens),
       cacheReadTokens: Math.max(existing.cacheReadTokens ?? 0, usage.cacheReadTokens ?? 0),
       cacheCreateTokens: Math.max(existing.cacheCreateTokens ?? 0, usage.cacheCreateTokens ?? 0),
+      ...(existing.cacheCreate1hTokens !== undefined || usage.cacheCreate1hTokens !== undefined
+        ? {
+            cacheCreate1hTokens: Math.max(
+              existing.cacheCreate1hTokens ?? 0,
+              usage.cacheCreate1hTokens ?? 0,
+            ),
+          }
+        : {}),
       reasoningTokens: Math.max(existing.reasoningTokens ?? 0, usage.reasoningTokens ?? 0),
       costUsd: Math.max(existing.costUsd ?? 0, usage.costUsd ?? 0),
       ...(existing.complete !== undefined || usage.complete !== undefined
@@ -147,6 +186,13 @@ export class UsageTracker {
         : {}),
     };
     this.currentTurnSegments[existingIndex] = merged;
+    this.requestMeter.ingest({
+      model: merged.model,
+      inputTokens: merged.inputTokens - existing.inputTokens,
+      outputTokens: merged.outputTokens - existing.outputTokens,
+      cacheReadTokens: (merged.cacheReadTokens ?? 0) - (existing.cacheReadTokens ?? 0),
+      cacheCreateTokens: (merged.cacheCreateTokens ?? 0) - (existing.cacheCreateTokens ?? 0),
+    });
     this.applyUsageDelta(
       {
         inputTokens: merged.inputTokens - existing.inputTokens,
@@ -185,6 +231,7 @@ export class UsageTracker {
       this.currentTurnSegmentIndex.set(normalized.id, this.currentTurnSegments.length);
     this.currentTurnSegments.push(normalized);
     this.applyUsageDelta(normalized, true);
+    this.requestMeter.ingest(normalized);
   }
 
   private applyUsageDelta(

@@ -28,9 +28,21 @@ afterEach(async () => {
 });
 
 describe('preparePinnedClaudeSkillInvocation', () => {
-  it.each(['/learn release flow', '/skill:learn release flow'])(
-    'keeps the original %s invocation while loading the attested file',
-    async (input) => {
+  // #8549 (unit): the provider must expand the exact attested file for
+  // /cindy:learn. Existing coverage only exercised the unqualified aliases;
+  // the bare namespaced command is the smallest previously failing input.
+  it.each([
+    { input: '/learn release flow', args: 'release flow' },
+    { input: '/skill:learn release flow', args: 'release flow' },
+    { input: '/cindy:learn', args: '' },
+    { input: '/cindy:learn release flow', args: 'release flow' },
+    {
+      input: '/CINDY:LEARN hub:market:release-flow notes\nmore details',
+      args: 'hub:market:release-flow notes\nmore details',
+    },
+  ])(
+    'keeps the original $input invocation while loading the attested file',
+    async ({ input, args }) => {
       const skillFile = await writeSkill();
 
       await expect(preparePinnedClaudeSkillInvocation(
@@ -39,7 +51,7 @@ describe('preparePinnedClaudeSkillInvocation', () => {
       )).resolves.toBe([
         '<command-name>learn</command-name>',
         '<command-message>/learn</command-message>',
-        '<command-args>release flow</command-args>',
+        ...(args ? [`<command-args>${args}</command-args>`] : []),
         '',
         '# Exact Skill body',
       ].join('\n'));
@@ -49,13 +61,22 @@ describe('preparePinnedClaudeSkillInvocation', () => {
   it('fails closed when the command or frontmatter does not match the pin', async () => {
     const skillFile = await writeSkill('other');
 
-    await expect(preparePinnedClaudeSkillInvocation(
+    for (const input of [
       '/other release flow',
-      { name: 'learn', path: skillFile },
-    )).rejects.toThrow('does not match the user invocation');
-    await expect(preparePinnedClaudeSkillInvocation(
-      '/learn release flow',
-      { name: 'learn', path: skillFile },
-    )).rejects.toThrow('metadata does not match');
+      '/cindy:other release flow',
+      '/other:learn release flow',
+      '/cindy:learner release flow',
+    ]) {
+      await expect(preparePinnedClaudeSkillInvocation(
+        input,
+        { name: 'learn', path: skillFile },
+      )).rejects.toThrow('does not match the user invocation');
+    }
+    for (const input of ['/learn release flow', '/cindy:learn release flow']) {
+      await expect(preparePinnedClaudeSkillInvocation(
+        input,
+        { name: 'learn', path: skillFile },
+      )).rejects.toThrow('metadata does not match');
+    }
   });
 });

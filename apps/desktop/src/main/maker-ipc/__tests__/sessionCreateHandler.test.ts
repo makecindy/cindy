@@ -1,3 +1,4 @@
+import { runSessionCreationAttempt, captureSessionCreationCancellation } from '../../localDb/sessionRuntimeCleanup';
 import { describe, expect, it, vi } from 'vitest';
 
 import { MAKER_INVOKE } from '../channels';
@@ -305,4 +306,50 @@ describe('maker session CREATE_SESSION IPC handler', () => {
       'lock:preset-session-1:end',
     ]);
   });
+});
+
+// Unit, F6: a validated terminal request may resume after the old creation finished.
+// Capture its attempt before validation awaits; never cancel a replacement with the same UUID.
+it('a late terminal cancellation snapshot cannot cancel a replacement or sibling creation', async () => {
+  const owner = {};
+  let finishOld!: () => void, finishNew!: () => void, finishSibling!: () => void;
+  const old = runSessionCreationAttempt('same', () => owner, () => new Promise<void>(done => { finishOld = done; }));
+  const cancelOld = captureSessionCreationCancellation(owner, 'same');
+  finishOld(); await old;
+  let newState = 'pending', siblingState = 'pending';
+  const replacement = runSessionCreationAttempt('same', () => owner, () => new Promise<void>(done => { finishNew = done; }))
+    .then(() => { newState = 'resolved'; }, () => { newState = 'rejected'; });
+  const sibling = runSessionCreationAttempt('sibling', () => owner, () => new Promise<void>(done => { finishSibling = done; }))
+    .then(() => { siblingState = 'resolved'; }, () => { siblingState = 'rejected'; });
+  cancelOld(); await Promise.resolve(); await Promise.resolve();
+  expect(newState).toBe('pending'); expect(siblingState).toBe('pending');
+  finishNew(); finishSibling(); await Promise.all([replacement, sibling]);
+  expect(newState).toBe('resolved'); expect(siblingState).toBe('resolved');
+});
+
+// Unit, F6: once bootstrap returns, cancellation still owns that exact handle
+// until IPC publication. Delayed role persistence must not send/broadcast it.
+it('closes the returned instance once when terminal cancellation interrupts publication', async () => {
+  const harness = new IpcHarness(), owner = {};
+  let finishRole!: () => void;
+  const role = new Promise<void>(done => { finishRole = done; });
+  const close = vi.fn(async () => {});
+  const deps = createDeps({ creationOwner: () => owner,
+    closeCancelledSession: close,
+    markOrcaRoleIfNeeded: vi.fn(() => role),
+  });
+  registerMakerSessionCreateHandler(harness, deps);
+  let failure: unknown;
+  const pending = harness.invoke(MAKER_INVOKE.CREATE_SESSION, {
+    id: 'session-1', agentKind: 'codex', model: 'm', workingDir: '/fixture', orcaRole: 'lead',
+  }).catch(error => { failure = error; });
+  await vi.waitFor(() => expect(deps.markOrcaRoleIfNeeded).toHaveBeenCalledOnce(), { interval: 1 });
+  captureSessionCreationCancellation(owner, 'session-1')();
+  await pending;
+  expect(String(failure)).toContain('REMOTE_AGENT_EXPIRED');
+  expect(close).toHaveBeenCalledExactlyOnceWith((await deps.bootstrapSession.mock.results[0]!.value).session);
+  finishRole(); await Promise.resolve(); await Promise.resolve();
+  expect(deps.broadcastSessionCreated).not.toHaveBeenCalled();
+  expect(deps.sendWorkerReadyMessage).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
 });

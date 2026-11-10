@@ -265,7 +265,7 @@ V1 最低要求是能显示所有 system card,不能丢弃 `/context` 这类内�
 - 普通文本发送走远程 `makerApiFor(sessionId).send` 等价能力。
 - `/context` 可走远程 context usage 并插入/展示 system card,不要手机本地伪造。
 - 其它 slash command 走被控电脑的 command dispatch,不在手机本机执行。
-- archived session 发送前确认并远程 unarchive。
+- archived session 与桌面一致:消息确定发出后自动远程取消归档,不弹确认;菜单不提供取消归档的任务(伙伴托管、分享来的任务、协同 Worker)不改状态。
 - running 时发送要走 queue 或 steer 语义,不能强行打断。
 
 ### 7.3 Queue

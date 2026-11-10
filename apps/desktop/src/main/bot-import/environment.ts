@@ -21,6 +21,8 @@ export interface CompanionEnvironment {
   memoryFiles?: Record<string, string>;
   /** Originals behind redacted skill projections; only materialized for authorized host commands. */
   skillFiles?: Record<string, Array<{ name: string; bytes: string; executable: boolean; interpreterLink?: string }>>;
+  /** Bounded-memory encrypted originals; legacy inline skillFiles remain readable. */
+  skillArchives?: Record<string, import('./types.js').ImportResourceRef>;
   /** Original selected documents; model-readable profile/memory copies redact known credentials. */
   documents?: Record<string, string>;
   /** Redaction only: known values embedded in selected originals, never injected into processes. */
@@ -45,6 +47,8 @@ export interface CompanionSecretIo {
   /** Idempotent: a missing key is a successful removal, matching the account vault. */
   remove(key: string): boolean;
   removeResources?(botId: string, assertOwner: () => void): Promise<void>;
+  writeResource?(key: string, id: string, chunks: AsyncIterable<string>, assertOwner: () => void): Promise<string>;
+  readResource?(key: string, id: string, digest: string, assertOwner: () => void): AsyncIterable<string>;
 }
 
 export interface CompanionDiscoveryEnvironment {
@@ -84,6 +88,16 @@ export function createCompanionEnvironmentStore(io: CompanionSecretIo) {
     assertOwner();
   };
   const store = {
+    async writeResource(botId: string, id: string, chunks: AsyncIterable<string>, assertOwner: () => void) {
+      if (!io.writeResource) throw new CompanionImportError('CREDENTIAL_STORAGE_UNAVAILABLE');
+      const key = companionEnvironmentKey(botId);
+      const digest = await io.writeResource(key, id, chunks, assertOwner);
+      return { key, id, digest };
+    },
+    async *readResource(ref: import('./types.js').ImportResourceRef, assertOwner: () => void) {
+      if (!io.readResource) throw new CompanionImportError('CREDENTIAL_STORAGE_UNAVAILABLE');
+      yield* io.readResource(ref.key, ref.id, ref.digest, assertOwner);
+    },
     async write(userData: string, botId: string, value: CompanionEnvironment, assertOwner: () => void): Promise<void> {
       const key = `${userData}:${botId}`;
       const task = serializeDiscovery(key, async () => {

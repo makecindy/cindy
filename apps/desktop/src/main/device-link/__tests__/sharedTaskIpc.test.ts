@@ -34,7 +34,7 @@ beforeEach(() => {
 
 describe('shared-task IPC availability', () => {
   it.each(commands)('returns a retryable disconnect for %s %j without side effects', async (channel, command) => {
-    registerSharedTaskIpc(() => false, () => false);
+    registerSharedTaskIpc(() => false, () => false, async () => undefined);
     await expect(invoke(channel, command)).rejects.toMatchObject({ code: 'DEVICE_LINK_NOT_CONNECTED' });
     expect(h.host.open).not.toHaveBeenCalled();
     expect(h.host.activeSharedTaskIds).not.toHaveBeenCalled();
@@ -43,7 +43,7 @@ describe('shared-task IPC availability', () => {
   });
 
   it('keeps unsupported capability distinct when the relay is online', async () => {
-    registerSharedTaskIpc(() => false, () => true);
+    registerSharedTaskIpc(() => false, () => true, async () => undefined);
     await expect(invoke(SHARED_TASK_HOST_CHANNEL, { action: 'state', sessionId: 'task' }))
       .resolves.toEqual({ available: false, detail: null });
     for (const [channel, command] of commands.slice(1)) {
@@ -54,7 +54,7 @@ describe('shared-task IPC availability', () => {
 
   it('recovers after reconnection without re-registering handlers', async () => {
     let online = true;
-    registerSharedTaskIpc(() => online, () => online);
+    registerSharedTaskIpc(() => online, () => online, async () => undefined);
     const state = () => invoke(SHARED_TASK_HOST_CHANNEL, { action: 'state', sessionId: 'task' });
     await expect(state()).resolves.toEqual({ available: true, detail: null });
     online = false;
@@ -67,7 +67,7 @@ describe('shared-task IPC availability', () => {
 
   // Reconnect / revocation refreshes must read the server, not a list cached before the event.
   it('drops the cached directory only for an event-driven fresh read', async () => {
-    registerSharedTaskIpc(() => true, () => true);
+    registerSharedTaskIpc(() => true, () => true, async () => undefined);
     await invoke(SHARED_TASK_ACCOUNT_CHANNEL, { action: 'list' });
     expect(h.forget).not.toHaveBeenCalled();
     await invoke(SHARED_TASK_ACCOUNT_CHANNEL, { action: 'list', fresh: true });
@@ -76,7 +76,7 @@ describe('shared-task IPC availability', () => {
   });
 
   it('retains the guest and tunneled-account permission guards before availability', async () => {
-    registerSharedTaskIpc(() => false, () => false);
+    registerSharedTaskIpc(() => false, () => false, async () => undefined);
     h.context = { sharedTask: {} };
     for (const [channel, command] of commands) {
       await expect(invoke(channel, command)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });

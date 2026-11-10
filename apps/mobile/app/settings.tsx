@@ -2,7 +2,8 @@ import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import { useUpdates } from 'expo-updates';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import {
   Alert,
   AppState,
@@ -28,7 +29,9 @@ import {
 } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
 import { hasPrivacyConsent } from '@/update/updateConsentGate';
+import { CLASSICAL_REPLY_STYLES, isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
+import { isClassicalLocale, type ClassicalLocale } from '@/i18n/locale';
 import { useLocale } from '@/i18n/useLocale';
 import { goBackGuarded } from '@/utils/backGuard';
 import {
@@ -57,16 +60,18 @@ import { LEGAL_LINKS } from '@/config/legalLinks';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { clearSelfHostedRelay, useSelfHostedRelay } from '@/device-link/selfHostedRelay';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
   isPushSupported,
   readPushEnabled,
   syncPushRegistration,
+  enablePushNotifications,
   writePushEnabled,
   readPushPreviewEnabled,
   writePushPreviewEnabled,
 } from '@/notifications/pushNotifications';
-import { isChatBackgroundSupported, readChatBackgroundEnabled, writeChatBackgroundEnabled } from '@/notifications/chatBackground';
+import { CHAT_BACKGROUND_MODES, type ChatBackgroundMode, isChatBackgroundSupported, readChatBackgroundMode, writeChatBackgroundMode } from '@/notifications/chatBackground';
 import {
   hydrateMobileVoiceDictionary,
   readCachedMobileVoiceDictionarySnapshot,
@@ -104,6 +109,7 @@ import {
   subscribeMobileSpeakerFilter,
 } from '@/session/mobileSpeakerFilter';
 import { useSettingsDeviceDirectory } from '@/session/settingsDeviceDirectory';
+import { isHandheldModeSupported, useHandheldSettings } from '@/handheld/handheldMode';
 import { confirmLogout } from '@/session/confirmLogout';
 import { THEME_PREFERENCES, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
@@ -111,12 +117,21 @@ import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 
 type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'uptodate' | 'error';
-// 显示语言选项:「跟随系统」在前,英语作为第一个显式语言,其余语言按支持列表顺序排列。
-const LANGUAGE_OPTIONS: readonly LocalePreference[] = [
+// 显示语言选项:「跟随系统」在前,英语作为第一个显式语言,其余语言按支持列表顺序排列;
+// 文言等古典版本在菜单里合为一项放最后,选中后下方出现简繁与文风两行。
+const CLASSICAL_OPTION = 'classical';
+type LanguageOption = LocalePreference | typeof CLASSICAL_OPTION;
+const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
   'system',
   'en',
-  ...SUPPORTED_LOCALES.filter((locale) => locale !== 'en'),
+  ...SUPPORTED_LOCALES.filter((locale) => locale !== 'en' && !isClassicalLocale(locale)),
+  CLASSICAL_OPTION,
 ];
+const CLASSICAL_SCRIPTS: readonly { locale: ClassicalLocale; key: 'hans' | 'hant' }[] = [
+  { locale: 'zh-Hans-x-lzh', key: 'hans' },
+  { locale: 'zh-Hant-x-lzh', key: 'hant' },
+];
+type ClassicalPicker = 'script' | 'style';
 
 function hasRunningRemoteTasks(): boolean {
   return remoteSessionStore.getSessions().some((session) => remoteSessionStore.isSessionRunning(session.id));
@@ -136,22 +151,32 @@ export default function SettingsScreen() {
   const push = useGuardedPush();
   const auth = useAuth();
   const { t } = useTranslation();
-  const { locale, setLocale } = useLocale();
+  const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
+  const classical = isClassicalLocale(locale) ? locale : null;
+  const languageOption: LanguageOption = classical ? CLASSICAL_OPTION : locale;
   const windowDimensions = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
-  const { status } = useDeviceLink();
+  const { status, connectionIssue } = useDeviceLink();
+  // 中转服务:官方中转或自建中转(docs/self-hosted-relay-plan.md §5.3)。
+  const selfHostedRelay = useSelfHostedRelay();
+  const [relaySwitching, setRelaySwitching] = useState(false);
+  const [relayMessage, setRelayMessage] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
     useState(false);
   const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
   const [languagePickerSnap, setLanguagePickerSnap] = useState<ContextSheetSnap>('half');
+  const [classicalPicker, setClassicalPicker] = useState<ClassicalPicker | null>(null);
+  const [classicalPickerSnap, setClassicalPickerSnap] = useState<ContextSheetSnap>('half');
   const [appearancePickerOpen, setAppearancePickerOpen] = useState(false);
   const [appearancePickerSnap, setAppearancePickerSnap] = useState<ContextSheetSnap>('half');
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
   const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushPreview, setPushPreview] = useState(true);
-  const [chatBackground, setChatBackground] = useState(false);
+  const [chatBackground, setChatBackground] = useState<ChatBackgroundMode>('auto');
+  const [backgroundPickerOpen, setBackgroundPickerOpen] = useState(false);
+  const [backgroundPickerSnap, setBackgroundPickerSnap] = useState<ContextSheetSnap>('half');
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
   // 使用统计(TapDB)开关。真相在 analyticsConsentStore,这里只是视图态。
@@ -244,11 +269,44 @@ export default function SettingsScreen() {
     setLanguagePickerOpen(true);
   }, []);
   const selectLanguage = useCallback((next: string) => {
-    const nextLocale = LANGUAGE_OPTIONS.find((option) => option === next);
-    if (!nextLocale) return;
-    setLocale(nextLocale);
+    const nextOption = LANGUAGE_OPTIONS.find((option) => option === next);
+    if (!nextOption) return;
     setLanguagePickerOpen(false);
+    if (nextOption !== CLASSICAL_OPTION) {
+      setLocale(nextOption);
+      return;
+    }
+    if (classical) return;
+    // First switch keeps the script the user already reads.
+    setLocale(effectiveLocale === 'zh-TW' ? 'zh-Hant-x-lzh' : 'zh-Hans-x-lzh');
+  }, [classical, effectiveLocale, setLocale]);
+  const classicalScriptOptions = useMemo<readonly MobileChoiceOption[]>(
+    () => CLASSICAL_SCRIPTS.map((script) => ({
+      id: script.locale,
+      label: t(`settings.language.classical.script.${script.key}`),
+    })),
+    [t],
+  );
+  const classicalStyleOptions = useMemo<readonly MobileChoiceOption[]>(
+    () => CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
+      id: style.id,
+      label: t(`settings.language.classical.styles.${style.id}`),
+    })),
+    [t],
+  );
+  const openClassicalPicker = useCallback((picker: ClassicalPicker) => {
+    setClassicalPickerSnap('half');
+    setClassicalPicker(picker);
+  }, []);
+  const selectClassicalScript = useCallback((next: string) => {
+    const script = CLASSICAL_SCRIPTS.find((candidate) => candidate.locale === next);
+    setClassicalPicker(null);
+    if (script) setLocale(script.locale);
   }, [setLocale]);
+  const selectClassicalStyle = useCallback((next: string) => {
+    setClassicalPicker(null);
+    if (isClassicalReplyStyle(next)) setClassicalStyle(next);
+  }, [setClassicalStyle]);
   const appearancePickerOptions = useMemo<readonly MobileChoiceOption[]>(
     () => THEME_PREFERENCES.map((option) => ({
       id: option,
@@ -384,6 +442,43 @@ export default function SettingsScreen() {
     router.push('/account-deletion');
   }, [router]);
 
+  // 切回官方中转:先确认(之后要再用这个中转得在电脑上重新加入);删掉本机设置与凭证,
+  // 连接随路由变化重建。不会自动切回,只在用户确认后执行。
+  const switchToOfficialRelay = useCallback(async () => {
+    if (relaySwitching) return;
+    setRelaySwitching(true);
+    setRelayMessage(null);
+    try {
+      await clearSelfHostedRelay();
+    } catch {
+      setRelayMessage(t('relay.settings.switchFailed'));
+    } finally {
+      setRelaySwitching(false);
+    }
+  }, [relaySwitching, t]);
+
+  const requestSwitchToOfficialRelay = useCallback(() => {
+    if (!selfHostedRelay || relaySwitching) return;
+    Alert.alert(
+      t('relay.settings.confirmTitle'),
+      t('relay.settings.confirmBody', { name: selfHostedRelay.name }),
+      [
+        { text: t('devices.common.cancel'), style: 'cancel' },
+        { text: t('relay.settings.confirmAction'), style: 'destructive', onPress: () => void switchToOfficialRelay() },
+      ],
+    );
+  }, [relaySwitching, selfHostedRelay, switchToOfficialRelay, t]);
+
+  // 自建中转下:被主人移出 / 中转停用(4410)或中转凭证被拒(401),以及本机凭证缺失,
+  // 都要在这里给出原因,并配「切回官方中转」。
+  const relayIssueMessage = !selfHostedRelay
+    ? null
+    : selfHostedRelay.credential === null
+      ? t('relay.settings.credentialMissingHint')
+      : status !== 'online' && (connectionIssue?.kind === 'device-removed' || connectionIssue?.kind === 'auth-failed')
+        ? t('relay.settings.removedHint')
+        : null;
+
   // 任务完成通知开关:开 → 请求系统权限 + 注册 APNs token 到 device-link server;
   // 关 → 注销 token。开关状态本机持久化,server 注册表是唯一发送依据。
   useEffect(() => {
@@ -392,7 +487,7 @@ export default function SettingsScreen() {
       if (!cancelled) setPushEnabled(enabled);
     });
     void readPushPreviewEnabled().then(value => { if (!cancelled) setPushPreview(value); });
-    const refreshBackground = () => { void readChatBackgroundEnabled().then(value => { if (!cancelled) setChatBackground(value); }); };
+    const refreshBackground = () => { void readChatBackgroundMode().then(value => { if (!cancelled) setChatBackground(value); }); };
     refreshBackground();
     const foreground = AppState.addEventListener('change', state => { if (state === 'active') refreshBackground(); });
     return () => {
@@ -443,13 +538,12 @@ export default function SettingsScreen() {
         }
         return;
       }
-      const result = await syncPushRegistration({ enabled: true, apiFetch: auth.apiFetch });
+      const result = await enablePushNotifications({ apiFetch: auth.apiFetch,
+        onEnabled: () => setPushEnabled(true) });
       if (result === 'permission-denied') {
         setPushMessage(t('settings.notifications.permissionDenied'));
         return; // 权限被拒:开关保持关闭,不落盘
       }
-      await writePushEnabled(true);
-      setPushEnabled(true);
       if (result === 'local-only') setPushMessage(t('settings.notifications.googleUnavailable'));
     } catch (error) {
       setPushMessage(formatRemoteError(error));
@@ -544,6 +638,13 @@ export default function SettingsScreen() {
     push('/settings/voice-speaker-filter');
   }, [push]);
 
+  // 掌机模式:只有带 cindy-handheld 原生模块的 Android 包显示入口。
+  const handheldSupported = isHandheldModeSupported();
+  const handheld = useHandheldSettings();
+  const openHandheldSettings = useCallback(() => {
+    push('/settings/handheld');
+  }, [push]);
+
   // dictionaryRevision 只作为依赖存在:缓存是模块级的,刷新完成后靠它触发重算。
   const dictionaryEntries = useMemo(
     () =>
@@ -605,6 +706,38 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* 中转服务:当前走官方中转还是自建中转;自建时提供「切回官方中转」。
+            加入自建中转从电脑上的二维码进入(相机扫码打开加入页),这里不放扫码入口。 */}
+        <SettingsGroup
+          footer={selfHostedRelay
+            ? t('relay.settings.selfHostedHint', { address: selfHostedRelay.baseUrl })
+            : t('relay.settings.officialHint')}
+          messages={[
+            relayIssueMessage ? { text: relayIssueMessage, testID: 'settings.relay.issue' } : null,
+            relayMessage ? { text: relayMessage, testID: 'settings.relay.message' } : null,
+          ]}
+          testID="settings.relay"
+          title={t('relay.settings.sectionTitle')}
+        >
+          <InfoRow
+            key="relay-current"
+            label={t('relay.settings.currentLabel')}
+            testID="settings.relay.current"
+            value={selfHostedRelay ? selfHostedRelay.name : t('relay.settings.official')}
+          />
+          {selfHostedRelay ? (
+            <ActionInfoRow
+              accessibilityLabel={t('relay.settings.switchToOfficial')}
+              chevron={false}
+              disabled={relaySwitching}
+              key="relay-switch-official"
+              label={t('relay.settings.switchToOfficial')}
+              onPress={requestSwitchToOfficialRelay}
+              testID="settings.relay.switchToOfficial"
+            />
+          ) : null}
+        </SettingsGroup>
+
         {/* 版本:当前版本 + 统一检查入口(允许整包分发时先查整包,否则直接查热更);
             更新方式与检查结果写在分组下方。检查不可用或审核模式时不显示检查行。 */}
         <SettingsGroup
@@ -657,7 +790,9 @@ export default function SettingsScreen() {
         {/* Notification permission and preview preferences belong to this installation. */}
         {isPushSupported() ? (
           <SettingsGroup
-            footer={t('settings.notifications.taskDoneHint') + (isChatBackgroundSupported() ? ` ${t('settings.notifications.backgroundHint')}` : '')}
+            footer={t('settings.notifications.taskDoneHint')
+              + (isChatBackgroundSupported() ? ` ${t('settings.notifications.backgroundHint')}` : '')
+              + (selfHostedRelay ? ` ${t('relay.settings.pushUnavailable')}` : '')}
             messages={[pushMessage ? { text: pushMessage, testID: 'settings.pushMessage' } : null]}
             title={t('settings.notifications.sectionTitle')}
           >
@@ -685,16 +820,12 @@ export default function SettingsScreen() {
                 }).catch(error => setPushMessage(formatRemoteError(error))).finally(() => setPushBusy(false));
               }}
             />
-            {isChatBackgroundSupported() ? <SettingsSwitchRow
-              accessibilityLabel={t('settings.notifications.background')}
+            {isChatBackgroundSupported() ? <ChoicePickerRow
+              expanded={backgroundPickerOpen}
               label={t('settings.notifications.background')}
-              value={chatBackground}
-              disabled={pushBusy || !pushEnabled}
-              onValueChange={() => {
-                const next = !chatBackground;
-                void writeChatBackgroundEnabled(next).then(() => setChatBackground(next))
-                  .catch(error => setPushMessage(formatRemoteError(error)));
-              }}
+              value={t(`settings.notifications.backgroundModes.${chatBackground}`)}
+              onPress={() => { setBackgroundPickerSnap('half'); setBackgroundPickerOpen(true); }}
+              testID="settings.backgroundPicker"
             /> : null}
           </SettingsGroup>
         ) : null}
@@ -727,6 +858,22 @@ export default function SettingsScreen() {
               onPress={openVoiceSpeakerFilter}
               testID="settings.voiceSpeakerFilter.row"
               value={t(speakerFilter.enabled ? 'settings.voiceSpeakerFilter.on' : 'settings.voiceSpeakerFilter.off')}
+            />
+          </SettingsGroup>
+        ) : null}
+
+        {handheldSupported ? (
+          <SettingsGroup
+            footer={t('settings.handheld.entryHint')}
+            title={t('settings.handheld.sectionTitle')}
+          >
+            <ActionInfoRow
+              accessibilityLabel={t('settings.handheld.openAccessibility')}
+              key="handheld"
+              label={t('settings.handheld.label')}
+              onPress={openHandheldSettings}
+              testID="settings.handheld.row"
+              value={t(handheld.settings.enabled ? 'settings.handheld.on' : 'settings.handheld.off')}
             />
           </SettingsGroup>
         ) : null}
@@ -770,7 +917,7 @@ export default function SettingsScreen() {
           <NativePullDownMenu
             actions={LANGUAGE_OPTIONS.map((option) => ({
               id: option,
-              state: option === locale ? 'on' : 'off',
+              state: option === languageOption ? 'on' : 'off',
               title: t(`settings.language.options.${option}`),
             }))}
             onAction={selectLanguage}
@@ -780,9 +927,45 @@ export default function SettingsScreen() {
               label={t('settings.language.title')}
               onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}
               testID="settings.language.picker"
-              value={t(`settings.language.options.${locale}`)}
+              value={t(`settings.language.options.${languageOption}`)}
             />
           </NativePullDownMenu>
+          {classical ? (
+            <>
+              <NativePullDownMenu
+                actions={CLASSICAL_SCRIPTS.map((script) => ({
+                  id: script.locale,
+                  state: script.locale === classical ? 'on' : 'off',
+                  title: t(`settings.language.classical.script.${script.key}`),
+                }))}
+                onAction={selectClassicalScript}
+              >
+                <ChoicePickerRow
+                  expanded={classicalPicker === 'script'}
+                  label={t('settings.language.classical.scriptAriaLabel')}
+                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}
+                  testID="settings.language.classicalScript"
+                  value={t(`settings.language.classical.script.${classical === 'zh-Hant-x-lzh' ? 'hant' : 'hans'}`)}
+                />
+              </NativePullDownMenu>
+              <NativePullDownMenu
+                actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
+                  id: style.id,
+                  state: style.id === classicalStyle ? 'on' : 'off',
+                  title: t(`settings.language.classical.styles.${style.id}`),
+                }))}
+                onAction={selectClassicalStyle}
+              >
+                <ChoicePickerRow
+                  expanded={classicalPicker === 'style'}
+                  label={t('settings.language.classical.styleAriaLabel')}
+                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}
+                  testID="settings.language.classicalStyle"
+                  value={t(`settings.language.classical.styles.${classicalStyle}`)}
+                />
+              </NativePullDownMenu>
+            </>
+          ) : null}
         </SettingsGroup>
 
         {/* 关于这台手机 */}
@@ -913,6 +1096,36 @@ export default function SettingsScreen() {
         </View>
       </ScrollView>
       <SheetModal
+        nativePresentation
+        visible={backgroundPickerOpen}
+        onBackdropPress={() => setBackgroundPickerOpen(false)}
+        onRequestClose={() => setBackgroundPickerOpen(false)}
+      >
+        <NotificationPickerContent>
+          <SheetSurface
+            bottomInset={safeAreaInsets.bottom}
+            heights={choicePickerHeights}
+            onClose={() => setBackgroundPickerOpen(false)}
+            onSnapChange={setBackgroundPickerSnap}
+            snap={backgroundPickerSnap}
+            title={t('settings.notifications.background')}
+          >
+            <MobileChoicePickerList
+              activeId={chatBackground}
+              options={CHAT_BACKGROUND_MODES.map(id => ({ id, label: t(`settings.notifications.backgroundModes.${id}`) }))}
+              onSelect={value => {
+                const mode = CHAT_BACKGROUND_MODES.find(mode => mode === value);
+                if (!mode) return;
+                setBackgroundPickerOpen(false);
+                void writeChatBackgroundMode(mode).then(() => setChatBackground(mode))
+                  .catch(error => setPushMessage(formatRemoteError(error)));
+              }}
+              testID="settings.backgroundPicker.option"
+            />
+          </SheetSurface>
+        </NotificationPickerContent>
+      </SheetModal>
+      <SheetModal
         backdropTestID="settings.appearancePicker.backdrop"
         nativePresentation
         onBackdropPress={() => setAppearancePickerOpen(false)}
@@ -953,15 +1166,48 @@ export default function SettingsScreen() {
           title={t('settings.language.title')}
         >
           <MobileChoicePickerList
-            activeId={locale}
+            activeId={languageOption}
             onSelect={selectLanguage}
             options={languagePickerOptions}
             testID="settings.languagePicker.option"
           />
         </SheetSurface>
       </SheetModal>
+      <SheetModal
+        backdropTestID="settings.classicalPicker.backdrop"
+        nativePresentation
+        onBackdropPress={() => setClassicalPicker(null)}
+        onRequestClose={() => setClassicalPicker(null)}
+        visible={classicalPicker !== null}
+      >
+        <SheetSurface
+          bottomInset={safeAreaInsets.bottom}
+          heights={choicePickerHeights}
+          onClose={() => setClassicalPicker(null)}
+          onSnapChange={setClassicalPickerSnap}
+          snap={classicalPickerSnap}
+          testID="settings.classicalPicker"
+          title={t(classicalPicker === 'script'
+            ? 'settings.language.classical.scriptAriaLabel'
+            : 'settings.language.classical.styleAriaLabel')}
+        >
+          <MobileChoicePickerList
+            activeId={classicalPicker === 'script' ? (classical ?? '') : classicalStyle}
+            onSelect={classicalPicker === 'script' ? selectClassicalScript : selectClassicalStyle}
+            options={classicalPicker === 'script' ? classicalScriptOptions : classicalStyleOptions}
+            testID="settings.classicalPicker.option"
+          />
+        </SheetSurface>
+      </SheetModal>
     </SafeAreaView>
   );
+}
+
+// Native sheets measure RN contents intrinsically; use the actual sheet/pane width
+// so the centered heading and choice rows do not shrink to the shortest label.
+function NotificationPickerContent({ children }: { children: ReactNode }) {
+  const viewport = usePaneViewport();
+  return <View style={{ width: viewport.width }}>{children}</View>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({

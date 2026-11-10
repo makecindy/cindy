@@ -88,6 +88,7 @@ import { HomeListViewportContext, HomeSessionRow } from '@/session/HomeSurface';
 import { useTeammateRoster } from '@/session/useTeammateRoster';
 import { createDisclosureListCell, ListDisclosureScope, useListDisclosureTransition } from '@/session/listDisclosureTransition';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
+import { SessionImportSheet } from '@/session/SessionImportSheet';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
 import type { SessionSwipeAction } from '@/session/swipeRowRegistry';
@@ -230,6 +231,7 @@ function DeviceDetailScreenContent() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(() => readRouteString(params.search) === '1');
   const [searchFilterOpen, setSearchFilterOpen] = useState(false);
+  const [sessionImportOpen, setSessionImportOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const [loading, setLoading] = useState(false);
@@ -753,6 +755,14 @@ function DeviceDetailScreenContent() {
         setActionSheetSession={setActionSheetSession}
         setRenameSessionDraft={setRenameSessionDraft}
       />
+      <SessionImportSheet
+        deviceId={deviceId}
+        deviceName={deviceName}
+        online={status === 'online' && !deviceUnresponsive}
+        onClose={() => setSessionImportOpen(false)}
+        onOpenSession={(id) => openSession(id)}
+        visible={sessionImportOpen}
+      />
     </>
   );
 
@@ -777,7 +787,7 @@ function DeviceDetailScreenContent() {
       if (!key || !scopeKeys.has(key)) return false;
       // 入口带项目维度时,组键匹配的行还要落在同一项目(与首页项目分桶同一归一化语义);
       // 快照内的 id 是入口组的精确成员,不受此过滤影响。
-      return !automationScopeDir || sessionMatchesProjectDir(item.session.workingDir, automationScopeDir);
+      return !automationScopeDir || sessionMatchesProjectDir(item.session, automationScopeDir);
     });
     return (
       <SafeAreaView edges={simpleScrollScreenSafeAreaEdges()} style={styles.safeArea} testID="deviceDetail.screen">
@@ -819,7 +829,7 @@ function DeviceDetailScreenContent() {
               testID={`deviceDetail.automationRunRow.${item.session.id}`}
             />
           )}
-          ListEmptyComponent={suppressListEmptyState ? (
+          ListEmptyComponent={(suppressListEmptyState ? (
             effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.automationSyncing" />
           ) : (
             <MainWindowEmptyState
@@ -833,7 +843,7 @@ function DeviceDetailScreenContent() {
               testID="deviceDetail.automationEmpty"
               title={t('devices.detail.automationScope.emptyTitle')}
             />
-          )}
+          )) ?? undefined}
         />
         {actionOverlays}
       </SafeAreaView>
@@ -909,6 +919,7 @@ function DeviceDetailScreenContent() {
                   filterA11y={searchFilterA11y}
                   filterActions={searchFilterMenu.filterActions}
                   filterActive={indexedSearch.activeFilterCount > 0}
+                  searching={indexedSearch.status === 'searching'}
                   onChangeQuery={setSearchQuery}
                   onDismiss={() => setSearchOpen(false)}
                   onFilterAction={searchFilterMenu.onFilterAction}
@@ -957,7 +968,7 @@ function DeviceDetailScreenContent() {
                 testID={`deviceDetail.projectSessionRow.${item.session.id}`}
               />
             )}
-            ListEmptyComponent={suppressListEmptyState ? (
+            ListEmptyComponent={(suppressListEmptyState ? (
               effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.projectSyncing" />
             ) : (
               <MainWindowEmptyState
@@ -971,7 +982,7 @@ function DeviceDetailScreenContent() {
                 testID="deviceDetail.projectEmpty"
                 title={searchQuery.trim() ? deviceSessionEmptyState(statusFilter, searchQuery).title : t('devices.detail.projectScope.emptyTitle')}
               />
-            )}
+            )) ?? undefined}
           />
         </ListDisclosureScope>
         {actionOverlays}
@@ -1019,11 +1030,18 @@ function DeviceDetailScreenContent() {
         }}
         testID="deviceDetail.summary"
       >
-        <MainWindowActionButton action={{
-          label: t('remoteDesktop.title'),
-          onPress: () => guardedPush({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } }),
-          testID: 'deviceDetail.remoteDesktop',
-        }} />
+        <View style={[styles.summaryActions, { gap: windowLayout.metricGap }]}>
+          <MainWindowActionButton action={{
+            label: t('remoteDesktop.title'),
+            onPress: () => guardedPush({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } }),
+            testID: 'deviceDetail.remoteDesktop',
+          }} />
+          <MainWindowActionButton action={{
+            label: t('devices.sessionImport.entry'),
+            onPress: () => setSessionImportOpen(true),
+            testID: 'deviceDetail.sessionImport',
+          }} />
+        </View>
         <View style={[styles.summaryTopRow, { gap: windowLayout.metricGap }]}>
           <MainWindowMetric
             accessibilityLabel={t('devices.detail.metric.activeA11y')}
@@ -1120,6 +1138,7 @@ function DeviceDetailScreenContent() {
             filterA11y={searchFilterA11y}
             filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
+            searching={indexedSearch.status === 'searching'}
             onChangeQuery={setSearchQuery}
             onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}
@@ -1296,7 +1315,7 @@ function DeviceDetailScreenContent() {
           renderSectionHeader={({ section }) => (
             section.title ? <Text style={styles.sectionTitle}>{section.title}</Text> : null
           )}
-          ListEmptyComponent={suppressListEmptyState ? (
+          ListEmptyComponent={(suppressListEmptyState ? (
             effectiveError ? null : <RemoteListSyncingPlaceholder testID="deviceDetail.syncing" />
           ) : (
             <MainWindowEmptyState
@@ -1310,7 +1329,7 @@ function DeviceDetailScreenContent() {
               testID="deviceDetail.empty"
               title={emptyState.title}
             />
-          )}
+          )) ?? undefined}
           renderItem={({ item }) => (
             <DeviceDetailSessionRow
               expandedAutomationGroups={expandedAutomationGroups}
@@ -1519,6 +1538,10 @@ function readRouteString(value: unknown): string | null {
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.surface },
+  summaryActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
   summaryTopRow: {
     alignItems: 'stretch',
     flexDirection: 'row',

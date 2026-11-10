@@ -1,3 +1,4 @@
+import type { ScrollViewInstance } from 'react-native';
 import { useContext, useEffect, useMemo } from 'react';
 import { NativeSheetContext } from './NativeSheetContext';
 import { FloatingSheetContext, usePaneViewport } from '@/platform/AdaptiveWindowContext';
@@ -38,6 +39,7 @@ export interface SheetSurfaceProps {
   backAccessibilityLabel?: string;
   /** header 右侧插槽(如模型浮窗的权限小入口);缺省为对称占位 spacer。 */
   headerTrailing?: ReactNode;
+  headerLeading?: ReactNode;
   /** header 下、滚动区上的固定插槽(如搜索框);不传不占位。 */
   pinnedTop?: ReactNode;
   children: ReactNode;
@@ -46,7 +48,7 @@ export interface SheetSurfaceProps {
   /** 固定在面板底部(滚动区之外)的操作区。 */
   footer?: ReactNode;
   /** 暴露内容 ScrollView(打开时滚动到选中行用);不传则内部自管。 */
-  scrollRef?: RefObject<ScrollView | null>;
+  scrollRef?: RefObject<ScrollViewInstance | null>;
   /** 档位三件套(受控):heights 由调用方 useMemo computeContextSheetSnapHeights 保持身份稳定。 */
   heights: ContextSheetSnapHeights;
   snap: ContextSheetSnap;
@@ -66,6 +68,7 @@ export function SheetSurface({
   onBack,
   backAccessibilityLabel,
   headerTrailing,
+  headerLeading,
   pinnedTop,
   children,
   renderScrollContent,
@@ -113,7 +116,7 @@ export function SheetSurface({
       <View collapsable={false} style={styles.dragZone} {...(nativeSheet ? {} : drag.panHandlers)}>
         {!nativeSheet && <SheetGrabber variant={variant} />}
         <View style={styles.header}>
-          {onBack ? (
+          {headerLeading ?? (onBack ? (
             <Pressable
               accessibilityLabel={backAccessibilityLabel ?? t('shared.back')}
               accessibilityRole="button"
@@ -126,7 +129,7 @@ export function SheetSurface({
             </Pressable>
           ) : (
             <View style={styles.headerSpacer} />
-          )}
+          ))}
           <View pointerEvents="none" style={styles.headerTitleOverlay}>
             <Text numberOfLines={1} style={styles.headerTitle}>{title}</Text>
           </View>

@@ -174,7 +174,7 @@ describe('pi project resource path order and spawn argv budget', () => {
     );
     expect(estimateSpawnArgvLength(args)).toBeGreaterThan(PI_WINDOWS_SPAWN_ARGV_BUDGET);
     expect(estimateSpawnArgvLength(args)).toBeLessThan(PI_POSIX_SPAWN_ARGV_BUDGET);
-    expect(() => assertPiSpawnArgvFitsPlatform(args, 'win32')).toThrow(/too many Pi skills/);
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'win32')).toThrow(/launch command line exceeds/);
     expect(() => assertPiSpawnArgvFitsPlatform(args, 'darwin')).not.toThrow();
   });
 
@@ -184,8 +184,30 @@ describe('pi project resource path order and spawn argv budget', () => {
       (_, index) => `/Users/very/long/cindy/project/.pi/skills/skill-${String(index).padStart(4, '0')}/with/nested/folders`,
     );
     expect(estimateSpawnArgvLength(args)).toBeGreaterThan(PI_POSIX_SPAWN_ARGV_BUDGET);
-    expect(() => assertPiSpawnArgvFitsPlatform(args, 'darwin')).toThrow(/too many Pi skills/);
-    expect(() => assertPiSpawnArgvFitsPlatform(args, 'linux')).toThrow(/too many Pi skills/);
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'darwin')).toThrow(/launch command line exceeds/);
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'linux')).toThrow(/launch command line exceeds/);
+  });
+
+  it.each(['win32', 'linux'] as const)('reports prompt-dominated failures without exposing arguments (%s)', (platform) => {
+    const args = ['--append-system-prompt', 'private-prompt'.repeat(12_000), '--api-key', 'private-key'];
+    const length = estimateSpawnArgvLength(args, platform);
+    const promptLength = estimateSpawnArgvLength(args.slice(0, 2), platform);
+    const budget = platform === 'win32' ? PI_WINDOWS_SPAWN_ARGV_BUDGET : PI_POSIX_SPAWN_ARGV_BUDGET;
+    const unit = platform === 'win32' ? 'UTF-16 code units' : 'UTF-8 bytes';
+    expect(() => assertPiSpawnArgvFitsPlatform(args, platform)).toThrow(
+      `Pi launch command line exceeds the ${platform} budget: estimated ${length} ${unit}, limit ${budget} `
+      + `(prompt arguments: ${promptLength}; resource arguments: 0; other arguments: ${length - promptLength}).`,
+    );
+  });
+
+  it('reports resource-dominated failures without suggesting that prompts caused them', () => {
+    const args = ['--skill', 'private-skill'.repeat(2_500), '--model', 'private-model'];
+    const length = estimateSpawnArgvLength(args, 'win32');
+    const resourceLength = estimateSpawnArgvLength(args.slice(0, 2), 'win32');
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'win32')).toThrow(
+      `Pi launch command line exceeds the win32 budget: estimated ${length} UTF-16 code units, limit 30000 `
+      + `(prompt arguments: 0; resource arguments: ${resourceLength}; other arguments: ${length - resourceLength}).`,
+    );
   });
 
   // POSIX 侧按 UTF-8 字节：按字符数估会让一段中文提示词「看起来没超」，
@@ -196,7 +218,7 @@ describe('pi project resource path order and spawn argv budget', () => {
     expect(estimateSpawnArgvLength(['--append-system-prompt', cjk], 'linux'))
       .toBeGreaterThan(PI_POSIX_SPAWN_ARGV_BUDGET);
     expect(() => assertPiSpawnArgvFitsPlatform(['--append-system-prompt', cjk], 'linux'))
-      .toThrow(/too many Pi skills/);
+      .toThrow(/launch command line exceeds/);
   });
 
   // Windows 侧必须按 UTF-16 字符：CreateProcess 的 32767 上限是字符数，不是字节。

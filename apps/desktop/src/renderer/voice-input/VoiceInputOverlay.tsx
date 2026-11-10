@@ -16,6 +16,7 @@ import type {
   DictationRefinementContext,
   VoiceInputErrorCode,
   VoiceInputState,
+  VoiceInputRendererEvent,
 } from '@cindy/voice-input-core';
 
 import { Spinner } from '@/components/ui/spinner';
@@ -78,9 +79,10 @@ import {
 } from './readinessRecovery';
 import { buildRefinementPreviewText } from './refinementPreviewText';
 import { useVoiceProcessingIndicator } from './useVoiceProcessingIndicator';
-import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
+import { dispatchVoiceInputEvent } from './eventScope';
 import { VoiceInputStatusErrorIcon, VoiceInputStatusNotice } from './VoiceInputStatusNotice';
 import { useVoiceInputOverlayDrag } from './useVoiceInputOverlayDrag';
+import { useSpeakerFilterNotice } from './useSpeakerFilterNotice';
 
 const log = createLogger('voice-input-overlay');
 const workletUrl = getVoiceInputWorkletUrl();
@@ -230,6 +232,11 @@ export function VoiceInputOverlay() {
   const [refinementPreviewText, setRefinementPreviewText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [microphoneNotice, setMicrophoneNotice] = useState<string | null>(null);
+  const {
+    visible: speakerFiltered,
+    show: showSpeakerFiltered,
+    clear: clearSpeakerFiltered,
+  } = useSpeakerFilterNotice();
   const [hasPasteError, setHasPasteError] = useState(false);
   const [pasteErrorCode, setPasteErrorCode] = useState<PasteErrorCode | null>(null);
   const [permissionPrompt, setPermissionPrompt] = useState<PermissionPromptKind | null>(null);
@@ -315,6 +322,7 @@ export function VoiceInputOverlay() {
     setCodexRecovery(null);
     invalidateCodexRecoveryPrompt();
     setMicrophoneNotice(null);
+    clearSpeakerFiltered();
     setHasPasteError(false);
     setPasteErrorCode(null);
     setPermissionPrompt(null);
@@ -340,7 +348,7 @@ export function VoiceInputOverlay() {
     setStopInFlight(false);
     setVoiceState('idle');
     resetOverlayInteraction();
-  }, [clearErrorCloseTimer, invalidateCodexRecoveryPrompt, resetOverlayInteraction, setVoiceState]);
+  }, [clearErrorCloseTimer, clearSpeakerFiltered, invalidateCodexRecoveryPrompt, resetOverlayInteraction, setVoiceState]);
 
   const enableActionTips = useCallback(() => {
     setActionTipsDisabled(false);
@@ -793,6 +801,7 @@ export function VoiceInputOverlay() {
     setError(null);
     setCodexRecovery(null);
     setMicrophoneNotice(null);
+    clearSpeakerFiltered();
     setHasPasteError(false);
     setPasteErrorCode(null);
     setPermissionPrompt(null);
@@ -1006,6 +1015,7 @@ export function VoiceInputOverlay() {
     buildRefinementContext,
     cancelStartedRun,
     clearErrorCloseTimer,
+    clearSpeakerFiltered,
     closeOverlay,
     closeOverlayAndReset,
     createStartReadyState,
@@ -1335,12 +1345,16 @@ export function VoiceInputOverlay() {
   }, []);
 
   useEffect(() => {
-    return window.electronAPI.voiceInput.onEvent((event) => {
-      if (!shouldHandleVoiceInputEvent(
-        ownedRunIdRef.current,
-        event.runId,
-        isVoiceInputEventScopeActive(stateRef.current),
-      )) return;
+    let subscribed = true;
+    const unsubscribe = window.electronAPI.voiceInput.onEvent((event) => {
+      dispatchVoiceInputEvent(
+        event,
+        () => subscribed ? ownedRunIdRef.current : null,
+        startReadyRef.current?.promise,
+        handleEvent,
+      );
+    });
+    function handleEvent(event: VoiceInputRendererEvent): void {
       switch (event.type) {
         case 'auth-required':
           codexSessionPromptActiveRef.current = requestCodexSessionExpiredPrompt(event.reason);
@@ -1461,6 +1475,9 @@ export function VoiceInputOverlay() {
             recordVoiceInputRefinementUsage(event.refinement);
           }
           break;
+        case 'speaker-filtered':
+          showSpeakerFiltered();
+          break;
         case 'timeline':
           if (
             event.event.type === 'refine_rejected' &&
@@ -1470,8 +1487,12 @@ export function VoiceInputOverlay() {
           }
           break;
       }
-    });
-  }, [formatVoiceInputError, requestCodexSessionExpiredPrompt, resolveDoneWaiters, setVoiceState]);
+    }
+    return () => {
+      subscribed = false;
+      unsubscribe();
+    };
+  }, [formatVoiceInputError, requestCodexSessionExpiredPrompt, resolveDoneWaiters, setVoiceState, showSpeakerFiltered]);
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.voiceInput.onGlobalOverlayCommand((command: GlobalOverlayCommand) => {
@@ -1606,7 +1627,7 @@ export function VoiceInputOverlay() {
       onPointerMove={actionTipsDisabled ? enableActionTips : undefined}
     >
       <div
-        className="w-full rounded-[14px] border border-[var(--cmd-palette-border)] px-4 py-3 shadow-[var(--shadow-menu)] backdrop-blur"
+        className="w-full rounded-xl border border-[var(--cmd-palette-border)] px-4 py-3 shadow-[shadow:var(--shadow-menu)] backdrop-blur"
         style={{ backgroundColor: 'color-mix(in srgb, var(--cmd-palette-bg) 95%, transparent)' }}
         {...dragHandlers}
       >
@@ -1624,6 +1645,10 @@ export function VoiceInputOverlay() {
             />
           )}
           <span className="font-medium text-[var(--cmd-palette-item-text)]">{statusLabel}</span>
+          {/* Beside the status, not below the transcript: the card height stays fixed. */}
+          {speakerFiltered && !hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
+            <span className="min-w-0 truncate text-12">{t('voiceInputOverlay.speakerFiltered')}</span>
+          )}
           <div className="ml-auto flex items-center gap-1">
             {!hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
               <Tip text={submitTooltip} side="bottom" delay={150} disabled={actionTipsDisabled}>
@@ -1730,7 +1755,7 @@ export function VoiceInputOverlay() {
                   void cancelAndClose();
                 }}
                 onClick={suppressOverlayButtonClick}
-                className="shrink-0 shadow-sm"
+                className="shrink-0"
               >
                 {t('commonUi.confirmDialog.cancel')}
               </Button>
@@ -1745,7 +1770,7 @@ export function VoiceInputOverlay() {
                   openPermissionPromptSettings();
                 }}
                 onClick={suppressOverlayButtonClick}
-                className="shrink-0 shadow-sm"
+                className="shrink-0"
               >
                 <Settings className="h-3.5 w-3.5" />
                 {t('voiceInputOverlay.openPermissionSettings')}
@@ -1769,7 +1794,7 @@ export function VoiceInputOverlay() {
                 void openReadinessSettings();
               }}
               onClick={suppressOverlayButtonClick}
-              className="shrink-0 shadow-sm"
+              className="shrink-0"
             >
               <Settings className="h-3.5 w-3.5" />
               {t('voiceInputOverlay.openSettings')}
@@ -1794,7 +1819,7 @@ export function VoiceInputOverlay() {
                     void openAccessibilitySettings();
                   }}
                   onClick={suppressOverlayButtonClick}
-                  className="shrink-0 shadow-sm"
+                  className="shrink-0"
                 >
                   <Settings className="h-3.5 w-3.5" />
                   {t('voiceInputOverlay.openPermissionSettings')}
@@ -1811,7 +1836,7 @@ export function VoiceInputOverlay() {
                   void copyPendingText();
                 }}
                 onClick={suppressOverlayButtonClick}
-                className="shrink-0 shadow-sm"
+                className="shrink-0"
               >
                 <Copy className="h-3.5 w-3.5" />
                 {t('voiceInputOverlay.copy')}

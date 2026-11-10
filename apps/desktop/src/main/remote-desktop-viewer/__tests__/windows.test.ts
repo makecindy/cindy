@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { powerMonitor } from 'electron';
 import { afterEach, expect, it, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({
   windows: [] as any[],
@@ -6,9 +7,12 @@ const fixture = vi.hoisted(() => ({
   calls: [] as any[],
   owner: 'a:1',
   debug: vi.fn(),
+  canUseDeviceLink: true,
+  persistedMode: 'cloud',
 }));
 vi.mock('electron', () => ({
   BrowserWindow: { fromWebContents: () => null },
+  powerMonitor: new EventEmitter(),
   screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }) },
   clipboard: { readText: () => '', writeText: vi.fn() },
   ipcMain: { handle: (name: string, fn: Function) => fixture.handlers.set(name, fn) },
@@ -18,10 +22,11 @@ vi.mock('../../logger', () => ({
 }));
 vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: () => fixture.owner,
+  getPersistedAppSessionMode: () => fixture.persistedMode,
   isAppSessionBoundaryPending: () => false,
 }));
 vi.mock('../../appCapabilities', () => ({
-  getAppCapabilities: () => ({ canUseDeviceLink: true }),
+  getAppCapabilities: () => ({ canUseDeviceLink: fixture.canUseDeviceLink }),
 }));
 vi.mock('../preferences', () => ({
   readViewerPreferences: () => ({
@@ -40,7 +45,7 @@ vi.mock('../preferences', () => ({
     ...patch,
   }),
 }));
-vi.mock('../../i18n', () => ({ t: (s: string) => s }));
+vi.mock('../../i18n.desktop', () => ({ t: (s: string) => s }));
 vi.mock('../../device-link/index', () => ({
   getSelfDeviceId: () => 'local',
   getDeviceLinkStatus: () => 'online',
@@ -115,10 +120,13 @@ import { remoteInvoke } from '../../device-link/index';
 let manager: RemoteDesktopViewerWindows;
 afterEach(() => {
   manager?.reset();
+  powerMonitor.removeAllListeners();
   fixture.windows = [];
   fixture.calls = [];
   fixture.handlers.clear();
   fixture.owner = 'a:1';
+  fixture.canUseDeviceLink = true;
+  fixture.persistedMode = 'cloud';
   fixture.debug.mockClear();
   vi.restoreAllMocks();
 });
@@ -349,6 +357,25 @@ it('prewarms without network or focus, reuses the target window and cleans only 
   expect(fixture.calls.filter((c) => c[2][0].op === 'stop').map((c) => c[0])).toEqual(['a']);
   expect(a.isDestroyed()).toBe(false);
 });
+// A spare shell costs a hidden renderer for the whole run, so profiles that can
+// never use remote desktop skip it; a saved cloud session still prewarms while
+// auth verifies the account at startup, before canUseDeviceLink turns true.
+it.each([
+  [false, 'local', 0],
+  [false, 'signed-out', 0],
+  [false, 'cloud', 1],
+  [true, 'cloud', 1],
+] as const)(
+  'prewarm with canUseDeviceLink=%s and saved mode %s creates %i spare window',
+  (canUseDeviceLink, persistedMode, created) => {
+    fixture.canUseDeviceLink = canUseDeviceLink;
+    fixture.persistedMode = persistedMode;
+    manager = new RemoteDesktopViewerWindows(() => true);
+    manager.register();
+    manager.prewarm();
+    expect(fixture.windows).toHaveLength(created);
+  },
+);
 it('rejects subframes and stale window/account generations even with a valid channel', async () => {
   const sender: any = { id: 100 };
   manager = new RemoteDesktopViewerWindows((value) => value === sender);
@@ -451,4 +478,26 @@ it('keeps the session through native hide/minimize, forwards visibility, and end
   await Promise.resolve();
   expect(call(REMOTE_VIEWER.STATE, win).active).toBe(false);
   expect(fixture.calls.filter((c) => c[2][0].op === 'stop')).toHaveLength(1);
+});
+
+// Unit: physical controller lock/sleep must retire viewer authority before async stop.
+it.each(['lock-screen', 'suspend'])('ends the remote desktop on local %s without automatic resume', async (signal) => {
+  const sender: any = { id: 100 };
+  manager = new RemoteDesktopViewerWindows((value) => value === sender);
+  manager.register();
+  manager.open(sender, { deviceId: 'a', name: 'Computer' });
+  const win = fixture.windows[0];
+  call(REMOTE_VIEWER.READY, win);
+  call(REMOTE_VIEWER.PRESENTED, win);
+  const { generation } = call(REMOTE_VIEWER.STATE, win);
+  vi.mocked(remoteInvoke).mockResolvedValueOnce({ ok: true, result: { lockOnExit: true, idleLock: true } });
+  await call(REMOTE_VIEWER.REQUEST, win, generation, { op: 'capabilities' });
+  await call(REMOTE_VIEWER.REQUEST, win, generation, { op: 'start', displayId: 'screen' });
+  powerMonitor.emit(signal);
+  expect(call(REMOTE_VIEWER.STATE, win).active).toBe(false);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(fixture.calls.map((args) => args[2][0])).toContainEqual({ op: 'stop', lease: 'lease-a', lockScreen: true });
+  powerMonitor.emit('unlock-screen');
+  expect(call(REMOTE_VIEWER.STATE, win).active).toBe(false);
 });

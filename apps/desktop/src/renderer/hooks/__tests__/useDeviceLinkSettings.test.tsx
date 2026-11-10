@@ -42,6 +42,7 @@ describe('useDeviceLinkSettings ownership state', () => {
     const state = deferred<State>();
     let controlledChanged:
       ((payload: { controllers: { deviceId: string; name: string }[] }) => void) | undefined;
+    let enabledChanged: ((payload: { remoteControlEnabled: boolean }) => void) | undefined;
     let ownershipChanged: ((payload: { standby: boolean }) => void) | undefined;
     const off = vi.fn();
     const subscribe = vi.fn(() => off);
@@ -52,6 +53,7 @@ describe('useDeviceLinkSettings ownership state', () => {
         ownershipChanged = callback;
         return off;
       }),
+      onControlEnabledChanged: (callback: typeof enabledChanged) => { enabledChanged = callback; return off; },
       onPresenceChanged: subscribe,
       onStatusChanged: subscribe,
       onConnectionIssue: subscribe,
@@ -71,12 +73,14 @@ describe('useDeviceLinkSettings ownership state', () => {
       api.getState.mock.invocationCallOrder[0],
     );
     act(() => ownershipChanged?.({ standby: true }));
+    act(() => enabledChanged?.({ remoteControlEnabled: true }));
+    expect(result.current.enabled).toBe(true);
     expect(result.current.standby).toBe(true);
     act(() => controlledChanged?.({ controllers: [{ deviceId: 'mac', name: 'MacBook' }] }));
 
     await act(async () => {
       state.resolve({
-        remoteControlEnabled: true,
+        remoteControlEnabled: false,
         keepAwake: false,
         linkStatus: 'online',
         connectionIssue: null,
@@ -94,6 +98,9 @@ describe('useDeviceLinkSettings ownership state', () => {
 
     expect(result.current.standby).toBe(true);
     expect(result.current.controlledBy).toEqual([{ deviceId: 'mac', name: 'MacBook' }]);
+    expect(result.current.enabled).toBe(true);
+    act(() => enabledChanged?.({ remoteControlEnabled: false }));
+    expect(result.current.enabled).toBe(false);
     unmount();
   });
 });

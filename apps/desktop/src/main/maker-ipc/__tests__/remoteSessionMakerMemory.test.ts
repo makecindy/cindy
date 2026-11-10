@@ -20,6 +20,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(/\r\n?/g, '\n');
+const memorySource = readFileSync(resolve(__dirname, '../../app-settings/memory.ts'), 'utf8').replace(/\r\n?/g, '\n');
 
 describe('ensureRemoteReadyForSessionStart Maker Memory flag (R1 P1)', () => {
   it('no longer hard-forces makerMemoryEnabled=false on remote createOpts', () => {
@@ -79,24 +80,38 @@ describe('codex remote drift uses the bridge-clamped memory flag (R2 P2)', () =>
 
 describe('maker-memory toggle rebuilds the codex MCP bridge (R1 P2)', () => {
   it('MAKER_MEMORY_SET_ENABLED applyRuntime shuts down the codex environment when the flag flips', () => {
-    const handler = source.indexOf('MAKER_INVOKE.MAKER_MEMORY_SET_ENABLED');
+    // Settings UI and helper now share this implementation. Keep the bridge/flag
+    // contract scoped to it, and verify IPC still delegates to it (R1 P2).
+    const handler = source.indexOf('const updateMakerMemorySetting = async');
     expect(handler).toBeGreaterThan(-1);
-    const guard = source.indexOf('if (wasEnabled !== enabled) {', handler);
-    expect(guard).toBeGreaterThan(handler);
-    const shutdown = source.indexOf('await shutdownAgentMcpEnvironmentsBestEffort(', guard);
+    const ipc = source.indexOf('ipcMain.handle(MAKER_INVOKE.MAKER_MEMORY_SET_ENABLED', handler);
+    expect(ipc).toBeGreaterThan(handler);
+    expect(source.slice(ipc, source.indexOf('\n', ipc))).toContain('return updateMakerMemorySetting(enabled);');
+    const binding = source.slice(handler, ipc);
+    expect(binding).toContain('return updateMakerMemorySettings(enabled, nativePatch, {');
+    expect(binding).toContain('invalidateBridge: shutdownAgentMcpEnvironmentsBestEffort');
+    const runtime = memorySource.indexOf('applyRuntime: async () => {');
+    const guard = memorySource.indexOf('if (wasEnabled !== enabled) {', runtime);
+    const shutdown = memorySource.indexOf("await deps.invalidateBridge('maker-memory toggle')", guard);
+    expect(runtime).toBeGreaterThan(-1);
+    expect(guard).toBeGreaterThan(runtime);
     expect(shutdown).toBeGreaterThan(guard);
-    // 同值调用 (无翻转) 不得白杀 bridge — shutdown 必须在翻转守卫之内。
-    const wasEnabledSnapshot = source.indexOf('const wasEnabled = makerMemory.isEnabled();', handler);
-    expect(wasEnabledSnapshot).toBeGreaterThan(handler);
-    expect(wasEnabledSnapshot).toBeLessThan(guard);
+    // Snapshot precedes the callback; same-value calls must not invalidate it.
+    const wasEnabledSnapshot = memorySource.indexOf('const wasEnabled = makerMemory.isEnabled();');
+    expect(wasEnabledSnapshot).toBeGreaterThan(-1);
+    expect(wasEnabledSnapshot).toBeLessThan(runtime);
   });
 
   it('MEMORY_RESET_SETTINGS applyRuntime shuts down the codex environment when the maker flag flips', () => {
-    const handler = source.indexOf('MAKER_INVOKE.MEMORY_RESET_SETTINGS');
+    const handler = source.indexOf('const restoreMemorySettings = async');
     expect(handler).toBeGreaterThan(-1);
+    const ipc = source.indexOf('ipcMain.handle(MAKER_INVOKE.MEMORY_RESET_SETTINGS', handler);
+    expect(ipc).toBeGreaterThan(handler);
+    expect(source.slice(ipc, source.indexOf('\n', ipc))).toContain('return restoreMemorySettings();');
     const guard = source.indexOf('if (wasMakerEnabled !== resetSettings_.maker) {', handler);
     expect(guard).toBeGreaterThan(handler);
     const shutdown = source.indexOf('await shutdownAgentMcpEnvironmentsBestEffort(', guard);
     expect(shutdown).toBeGreaterThan(guard);
+    expect(shutdown).toBeLessThan(ipc);
   });
 });

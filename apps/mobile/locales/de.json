@@ -1,0 +1,7 @@
+{
+  "ios": {
+    "NSMicrophoneUsageDescription": "Cindy benötigt Zugriff auf das Mikrofon für die Spracheingabe in Remote-Sitzungen.",
+    "NSCameraUsageDescription": "Cindy benötigt Zugriff auf die Kamera, um Fotos an Remote-Sitzungen anzuhängen.",
+    "NSPhotoLibraryUsageDescription": "Cindy benötigt Zugriff auf die Fotomediathek, um aktuelle Fotos und Screenshots zum schnellen Anhängen anzuzeigen."
+  }
+}

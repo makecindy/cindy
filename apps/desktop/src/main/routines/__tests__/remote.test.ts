@@ -32,6 +32,8 @@ it('offers a per-teammate creation action and returns navigation to the saved re
   expect(list.items[0].ref.id).toBe('bot:bot');
   const resource = await provider.get!(context, { ref: list.items[0].ref, client });
   expect(resource.actions?.[0].id).toBe('create');
+  // Unit regression: the generic phone form previously fell back to English in French.
+  expect(resource.actions?.[0].label).toMatchObject({ translations: { fr: 'Ajouter une routine', es: 'Agregar rutina' } });
   const response = await provider.invoke!(context, {
     client,
     collectionId: 'routines',

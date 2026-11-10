@@ -1,7 +1,7 @@
 ---
 id: personalization
 title: Custom instructions and the Personalization page
-summary: Settings > Personalization — custom instructions the agents follow in every new task, plus Memory, Subagents, Auxiliary models, Vision Bridge, Smart Contacts, context compaction, default terminal shell, where links open, and Tips toggles.
+summary: Settings > Personalization — custom instructions the agents follow in every new task, plus Memory, Subagents, Auxiliary models, Vision Bridge, context compaction, default terminal shell, where links open, and Tips toggles.
 tab: personalization
 ---
 Personalization is where you give the agents standing instructions that apply to **every** new task — tone, language, conventions, things you want the agent to always keep in mind. The same page also holds several agent-behavior settings.
@@ -19,7 +19,6 @@ Personalization is where you give the agents standing instructions that apply to
 - **Subagents** — the default model Claude Code uses for subagents, and **Codex smart routing** (lets Codex pick from more connected models per subtask; off uses Codex's native assignment).
 - **Auxiliary models** — the small models used for background chores such as automatic task naming, composer input suggestions, the Help assistant, pinned-task summaries, and IM titles. Keep **Automatic recommendation**, or choose **Custom** to set a **Preferred** model and up to two fallbacks.
 - **Vision Bridge** — lets text-only models (e.g. DeepSeek) read images: images are first described by a multimodal model you choose (a **Primary** plus an optional **Backup**). Turn on **Enable Vision Bridge**, then pick which models route through it.
-- **Smart Contacts** — a people / organization directory the agents can look up and add to as they work (uncertain entries wait in **Pending** for your review). You can browse, search, and edit entries here, and optionally turn on **Sync across my devices**.
 - **Context compaction** — the context-usage percentage at which Claude Code and Pi automatically compact a long conversation (Codex sets its own threshold).
 - **Default terminal shell** — the shell used for new terminal tabs in the right sidebar (existing tabs aren't affected).
 - **Open Links** — whether links in messages open in Cindy's **Built-In Browser** or your **System Default Browser**, set separately for web pages and local pages. Right-click a link to pick another option just for that link.

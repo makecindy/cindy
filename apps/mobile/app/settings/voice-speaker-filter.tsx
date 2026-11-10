@@ -1,9 +1,11 @@
+import type { ScrollViewInstance, ViewInstance } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
+import { isClassicalLocale, modernLocaleOf } from '@/i18n/locale';
 import { Check } from 'lucide-react-native';
 import {
   SPEAKER_ENROLLMENT_CLIP_COUNT,
@@ -91,7 +93,9 @@ export function VoiceSpeakerFilterScreen({ services = liveServices }: { services
   const { t, i18n } = useTranslation();
   const language = i18n.resolvedLanguage || i18n.language;
   // The model covers Chinese and English; other UI locales use English passages.
-  const passageLanguage = language === 'zh-CN' || language === 'zh-TW' ? language : 'en';
+  // Classical editions read their modern passages aloud.
+  const modernLanguage = isClassicalLocale(language) ? modernLocaleOf(language) : language;
+  const passageLanguage = modernLanguage === 'zh-CN' || modernLanguage === 'zh-TW' ? modernLanguage : 'en';
   const rowStyles = useSettingsRowStyles();
   const styles = useThemedStyles(makeStyles);
   const state = useSyncExternalStore(subscribeMobileSpeakerFilter, getMobileSpeakerFilterSnapshot);
@@ -104,8 +108,8 @@ export function VoiceSpeakerFilterScreen({ services = liveServices }: { services
   const [saving, setSaving] = useState(false);
   const [enrollError, setEnrollError] = useState<{ key: EnrollErrorKey; clipIndex?: number } | null>(null);
   const [retryIndex, setRetryIndex] = useState<number | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
-  const passageRef = useRef<View>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
+  const passageRef = useRef<ViewInstance>(null);
   const scrollOffset = useRef(0);
   const revealFrame = useRef<number | null>(null);
   const revealGeneration = useRef(0);

@@ -120,6 +120,7 @@ import { MainListScopeHeader } from '../MainListScopeHeader';
 import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
+import { sessionRowKey } from '../sessionRowKey';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
 import { useAutomationGroupsCollapsed } from '../../hooks/useAutomationGroupCollapsed';
 import type { SessionClickHandler } from '../SessionItem';
@@ -270,8 +271,8 @@ export interface ProjectsSectionProps {
   onOpenConversationSearch: (project: ProjectNodeData) => void;
   /** 在系统文件管理器中打开 project 的 workingDir。 */
   onOpenInExplorer: (workingDir: string) => void;
-  onLinkCodexProject: (project: ProjectNodeData) => void;
-  linkingCodexProject: string | null;
+  /** 打开设置 → 任务导入，只看这个项目。 */
+  onImportFromTools: (project: ProjectNodeData) => void;
   /** 进入 workdir 文件浏览模式 (vscode-style file tree + body viewer)。 */
   onBrowseFiles: (project: ProjectNodeData) => void;
   /** 右键菜单 → 归档该 project 下所有非执行中的 session（带二次确认）。 */
@@ -332,8 +333,7 @@ export function ProjectsSection({
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
-  onLinkCodexProject,
-  linkingCodexProject,
+  onImportFromTools,
   onBrowseFiles,
   onArchiveAll,
   onSearchDialogues,
@@ -974,8 +974,7 @@ export function ProjectsSection({
       onCreateInProject={onCreateInProject}
       onOpenConversationSearch={onOpenConversationSearch}
       onOpenInExplorer={onOpenInExplorer}
-      onLinkCodexProject={onLinkCodexProject}
-      linkingCodexProject={linkingCodexProject === project.projectKey}
+      onImportFromTools={onImportFromTools}
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
     />
@@ -994,7 +993,7 @@ export function ProjectsSection({
     if (entry.kind === 'session' || entry.kind === 'automation-group') {
       return (
         <SessionEntryRows
-          key={entry.kind === 'session' ? entry.session.id : `automation-group:${entry.group.id}`}
+          key={entry.kind === 'session' ? sessionRowKey(entry.session) : `automation-group:${entry.group.id}`}
           entries={[entry]}
           activeSessionId={activeSessionId}
           runningSessionIds={runningSessionIds}

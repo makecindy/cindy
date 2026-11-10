@@ -30,8 +30,9 @@ import { getVoiceInputWorkletUrl } from '@/voice-input/workletUrl';
 import { playVoiceInputEndCue, playVoiceInputStartCue, prepareVoiceInputCues } from '@/voice-input/startCue';
 import {
   isVoiceInputEventScopeActive,
-  shouldHandleVoiceInputEvent,
+  dispatchVoiceInputEvent,
 } from '@/voice-input/eventScope';
+import { useSpeakerFilterNotice } from '@/voice-input/useSpeakerFilterNotice';
 import type { WebMicAudioEngine } from '@/voice-input/WebMicAudioEngine';
 import { useTranslation } from 'react-i18next';
 
@@ -67,6 +68,8 @@ export function useAskUserDictation(
   isBusy: boolean;
   liveText: string | null;
   lastError: string | null;
+  /** The voiceprint filter just muted someone else's speech in this run. */
+  speakerFiltered: boolean;
   start: () => boolean;
   stop: () => Promise<boolean>;
   cancel: () => Promise<void>;
@@ -76,6 +79,11 @@ export function useAskUserDictation(
   const [captureReady, setCaptureReady] = useState(false);
   const [liveText, setLiveText] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const {
+    visible: speakerFiltered,
+    show: showSpeakerFiltered,
+    clear: clearSpeakerFiltered,
+  } = useSpeakerFilterNotice();
   const stateRef = useRef<VoiceInputState>('idle');
   const targetRef = useRef(target);
   const optionsRef = useRef(options);
@@ -172,12 +180,21 @@ export function useAskUserDictation(
   useEffect(() => {
     const subscribe = window.electronAPI?.voiceInput?.onEvent;
     if (!subscribe) return;
-    return subscribe((event: VoiceInputRendererEvent) => {
-      if (!shouldHandleVoiceInputEvent(
-        runIdRef.current,
-        event.runId,
-        anchorRef.current !== null && isVoiceInputEventScopeActive(stateRef.current),
-      )) return;
+    let subscribed = true;
+    const unsubscribe = subscribe((event: VoiceInputRendererEvent) => {
+      const attempt = attemptRef.current;
+      dispatchVoiceInputEvent(
+        event,
+        () => subscribed ? runIdRef.current : null,
+        startReadyRef.current.then(() => (
+          attemptRef.current === attempt && runIdRef.current
+            ? { ok: true as const, runId: runIdRef.current }
+            : { ok: false as const }
+        )),
+        handleEvent,
+      );
+    });
+    function handleEvent(event: VoiceInputRendererEvent): void {
       if (event.type === 'draft') {
         const anchor = anchorRef.current;
         if (!anchor) return;
@@ -242,6 +259,10 @@ export function useAskUserDictation(
         }
         return;
       }
+      if (event.type === 'speaker-filtered') {
+        showSpeakerFiltered();
+        return;
+      }
       if (event.type === 'error') {
         const kept = event.transcriptKept === true && submittedRef.current !== null;
         const message = formatError(event.message, event.code);
@@ -252,8 +273,12 @@ export function useAskUserDictation(
         void stopEngine();
         void restoreMute();
       }
-    });
-  }, [formatError, reportError, restoreMute, setVoiceState, stopEngine, t]);
+    }
+    return () => {
+      subscribed = false;
+      unsubscribe();
+    };
+  }, [formatError, reportError, restoreMute, setVoiceState, showSpeakerFiltered, stopEngine, t]);
 
   const start = useCallback((): boolean => {
     const api = window.electronAPI?.voiceInput;
@@ -277,6 +302,7 @@ export function useAskUserDictation(
     completionRef.current = { promise: completion, resolve: resolveCompletion };
     runIdRef.current = null;
     setLastError(null);
+    clearSpeakerFiltered();
     setCaptureReady(false);
     setLiveText(null);
     setVoiceState('listening');
@@ -409,7 +435,7 @@ export function useAskUserDictation(
       }
     })();
     return true;
-  }, [fail, formatError, reportError, restoreMute, setVoiceState, stopEngine, t]);
+  }, [clearSpeakerFiltered, fail, formatError, reportError, restoreMute, setVoiceState, stopEngine, t]);
 
   const stop = useCallback(async () => {
     if (stopInFlightRef.current) return stopInFlightRef.current;
@@ -501,6 +527,7 @@ export function useAskUserDictation(
     isBusy: state === 'listening' || state === 'submitting' || state === 'refining',
     liveText,
     lastError,
+    speakerFiltered,
     start,
     stop,
     cancel,

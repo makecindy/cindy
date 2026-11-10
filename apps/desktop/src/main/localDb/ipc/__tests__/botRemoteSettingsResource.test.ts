@@ -36,6 +36,7 @@ describe('opaque teammate settings actions', () => {
     const f = fixture();
     const resource = await f.get();
     expect(JSON.stringify(resource)).not.toContain('PRIVATE');
+    expect(resource.blocks?.find(block => block.id === 'models')?.data).toMatchObject({ acceptsModelSelection: true });
     expect(resource.blocks?.find(block => block.id === 'models')?.fallbackMarkdown).toContain('user-selected-model · connected-source · pi · high · Fast: true');
     expect(resource.blocks?.find(block => block.id === 'skills')?.fallbackMarkdown).toContain('Learned');
     expect(resource.blocks?.find(block => block.id === 'direct')?.fallbackMarkdown).toBe('Cindy: hello');
@@ -171,10 +172,10 @@ it('saves the complete model chain and can restore application defaults', async 
   const route = { harness: 'pi', model: 'selected', providerId: 'source', effort: 'high', fastMode: false };
   const resource = await f.get();
   await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: false, modelChain: JSON.stringify([route]) }));
-  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { modelChainOverride: [route], modelOverride: null } }, 3);
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', acceptSavedModelSelectionVersion: 3, capabilities: { modelChainOverride: [route], modelOverride: null } }, 3);
   const fresh = await f.get();
   await f.host.invoke(f.context, f.request(actionId(fresh, 'models'), { followsDefault: true }));
-  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { modelChainOverride: null, modelOverride: null } }, 4);
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', acceptSavedModelSelectionVersion: 4, capabilities: { modelChainOverride: null, modelOverride: null } }, 4);
 });
 it('rejects invalid, duplicate and oversized model chains without modifying the profile', async () => {
   const f = fixture(); const resource = await f.get();

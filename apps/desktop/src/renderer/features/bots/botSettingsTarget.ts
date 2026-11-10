@@ -15,6 +15,7 @@ export type BotCapabilityEntry = {
   description?: string;
   available: boolean;
   personal?: boolean;
+  cindyOfficial?: boolean;
   /** Kept from the companion's setup but not present on this computer. */
   missing?: boolean;
 };
@@ -54,6 +55,8 @@ export interface BotSettingsTarget {
   /** Teammates on the same computer: name uniqueness and the follow-up holder's name. */
   useRoster(): ReadonlyArray<{ id: string; name: string; status?: string }>;
   memory: Bots['memory'];
+  /** Core text and learned Skill actions; null when the teammate's computer is too old to offer them. */
+  skills: Bots['skills'] | null;
   history: { search(body: { botId: string; query: string; limit: number }): Promise<ConversationSearchResponse> };
   capabilities: {
     /** `isCurrent` turns false once a newer load superseded this one, so it can stop before its next request. */
@@ -86,6 +89,7 @@ export interface BotSettingsTarget {
   routineModels?: boolean;
   /** Host keeps a routine's session mode (persistent lane or a fresh lane per trigger). */
   routineSessionModes?: boolean;
+  routineDelivery?: boolean;
   autonomy: {
     useSettings(): BotAutonomySettingsView | null;
     setSchedulerBotId(botId: string | null): Promise<void>;

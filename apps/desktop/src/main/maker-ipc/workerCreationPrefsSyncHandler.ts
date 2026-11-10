@@ -1,3 +1,8 @@
+import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
+import {
+  normalizeWorkerCreationSelection,
+  type WorkerCreationSelection,
+} from '../../shared/workerCreationSelection.js';
 import {
   isOrcaWorkerPermissionMode,
   type OrcaWorkerPermissionMode,
@@ -5,6 +10,12 @@ import {
 
 interface WorkerCreationPrefsSyncDeps<TEvent> {
   assertTrustedSender: (event: TEvent) => void;
+  getActiveOwner?: () => DataOwnerPushStamp;
+  isBoundaryPending?: () => boolean;
+  setSelection?: (
+    selection: WorkerCreationSelection | null,
+    ownerStamp: DataOwnerPushStamp,
+  ) => void;
   setWorkerPermissionMode: (mode: OrcaWorkerPermissionMode) => void;
 }
 
@@ -23,5 +34,16 @@ export function createWorkerCreationPrefsSyncHandler<TEvent>(
     const mode = (payload as { workerPermissionMode?: unknown }).workerPermissionMode;
     if (!isOrcaWorkerPermissionMode(mode)) return;
     deps.setWorkerPermissionMode(mode);
+    const p = payload as { ownerStamp?: unknown; selection?: unknown };
+    const owner = deps.getActiveOwner?.();
+    if (
+      !owner ||
+      deps.isBoundaryPending?.() ||
+      !isDataOwnerPushStamp(p.ownerStamp) ||
+      p.ownerStamp.dataOwnerId !== owner.dataOwnerId ||
+      p.ownerStamp.ownerGeneration !== owner.ownerGeneration
+    )
+      return;
+    deps.setSelection?.(normalizeWorkerCreationSelection(p.selection), owner);
   };
 }

@@ -16,7 +16,7 @@ describe('Bot named worker transactions', () => {
     db.pragma('foreign_keys = ON');
     db.exec(`
       CREATE TABLE sessions (
-        id TEXT PRIMARY KEY, title TEXT NOT NULL, working_dir TEXT, workspace_kind TEXT NOT NULL,
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, working_dir TEXT, project_dir TEXT, workspace_kind TEXT NOT NULL,
         model TEXT NOT NULL, effort TEXT NOT NULL, permission_mode TEXT NOT NULL, status TEXT NOT NULL,
         scheduled_model_baseline TEXT,
         sdk_session_id TEXT, total_token_usage INTEGER NOT NULL, total_cost_usd REAL NOT NULL,
@@ -525,7 +525,7 @@ describe('Bot named worker transactions', () => {
       .toMatchObject({ sessionId: 'second-routine', created: true });
     expect(db.prepare("SELECT canonical_session_id FROM bot_profiles WHERE id = 'bot-1'").pluck().get()).toBe('main');
     for (const role of ['group', 'thread', 'delegation', 'history']) {
-      db.prepare(`INSERT INTO sessions SELECT ?, title, working_dir, workspace_kind, model, effort, permission_mode, status,
+      db.prepare(`INSERT INTO sessions SELECT ?, title, working_dir, project_dir, workspace_kind, model, effort, permission_mode, status,
         scheduled_model_baseline, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode,
         plan_mode_enabled, cleared_at, pinned_at, user_send_at, agent_kind, orca_role, parent_session_id, forked_at_message_id,
         worktree_path, extra_dirs, remote_host_id, provider_id, agent_device_id, source, created_at, updated_at FROM sessions WHERE id = 'main'`).run(role);

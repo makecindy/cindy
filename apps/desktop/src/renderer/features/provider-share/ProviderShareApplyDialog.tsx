@@ -24,6 +24,7 @@ import {
   ProviderShareDialogTitle,
   ProviderSharePairingCode,
 } from './ProviderShareDialog';
+import { OwnRelayCrossAccountNotice } from '../device-link/OwnRelayCrossAccountNotice';
 import { providerShareJoinErrorKind } from './providerShareFormat';
 import { ShareAvatar } from './ShareAvatar';
 
@@ -199,6 +200,7 @@ export function ProviderShareApplyDialog({
             <Fact icon={<ShieldCheck size={16} aria-hidden />} title={t('providerShare.apply.factApproval', { name: owner })}
               detail={t('providerShare.apply.factApprovalDetail', { name: owner })} />
           </ul>
+          <OwnRelayCrossAccountNotice feature="providerShare" className="mt-2.5" />
           <ProviderShareDialogFooter>
             <Button variant="cta" palette="confirmation" size="lg" loading={busy === 'send'} disabled={busy !== null}
               onClick={() => void send()}>

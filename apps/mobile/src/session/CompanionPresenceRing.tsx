@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, StyleSheet } from 'react-native';
-import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { useLoopingAnimation } from '@/hooks/useLoopingAnimation';
 import { motionDuration, radius, useTheme } from '@/theme';
 
 /** Opacity range and half-period of the running breath; the task row's MobileVendorIcon uses the same values. */
@@ -15,7 +15,7 @@ const REDUCED_OPACITY = 0.8;
  */
 export function CompanionPresenceRing({ active, gap = 2, width = 2 }: { active: boolean; gap?: number; width?: number }) {
   const { colors } = useTheme();
-  const reduceMotion = useReduceMotionEnabled();
+  const animate = useLoopingAnimation();
   const opacity = useRef(new Animated.Value(active ? BREATH_MIN : 0)).current;
   const [mounted, setMounted] = useState(active);
   const mountedRef = useRef(active); mountedRef.current = mounted;
@@ -24,13 +24,13 @@ export function CompanionPresenceRing({ active, gap = 2, width = 2 }: { active: 
     opacity.stopAnimation();
     if (!active) {
       if (!mountedRef.current) return;
-      if (reduceMotion !== false) { setMounted(false); return; }
+      if (!animate) { setMounted(false); return; }
       const fade = Animated.timing(opacity, { toValue: 0, duration: motionDuration.fast, easing: Easing.in(Easing.ease), useNativeDriver: true });
       fade.start(({ finished }) => { if (finished) setMounted(false); });
       return () => fade.stop();
     }
     setMounted(true);
-    if (reduceMotion !== false) {
+    if (!animate) {
       opacity.setValue(REDUCED_OPACITY);
       return;
     }
@@ -39,7 +39,7 @@ export function CompanionPresenceRing({ active, gap = 2, width = 2 }: { active: 
     const loop = Animated.loop(Animated.sequence([breathe(1), breathe(BREATH_MIN)]));
     loop.start();
     return () => loop.stop();
-  }, [active, opacity, reduceMotion]);
+  }, [active, opacity, animate]);
 
   if (!mounted) return null;
   const inset = -(gap + width);

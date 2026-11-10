@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 /**
  * Android 的「贴着触发控件弹出」菜单:与 iOS UIMenu 同一交互(点触发器在旁边弹出、点外面
  * 收起、选中项打勾、内联分组带标题、子菜单逐层进入、keepPresented 的项点完不收起),
@@ -30,6 +31,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Check, ChevronLeft, ChevronRight, Minus } from "lucide-react-native";
 import { Text } from "@/components/AppText";
+import { FilterReminderDot } from "@/components/FilterReminderDot";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import type { NativePullDownAction } from "@/platform/chrome/NativePullDownMenu";
 import {
@@ -119,7 +121,7 @@ export function AnchoredPullDownMenu({
   onOpenChange?(open: boolean): void;
 }) {
   const styles = useThemedStyles(makeStyles);
-  const anchorRef = useRef<View>(null);
+  const anchorRef = useRef<ViewInstance>(null);
   const [anchor, setAnchor] = useState<Anchor | null>(null);
   const [path, setPath] = useState<string[]>([]);
   const open = anchor !== null;
@@ -434,6 +436,7 @@ function MenuRow({
           </Text>
         ) : null}
       </View>
+      {action.filterReminder ? <FilterReminderDot /> : null}
       {submenu ? (
         <ChevronRight
           color={colors.textTertiary}

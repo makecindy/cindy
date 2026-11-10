@@ -3,6 +3,7 @@ import {
   buildMobileHomePresentation,
   parseHostProjectAliases,
   remoteProjectAlias,
+  sessionMatchesProjectDir,
   type MobileHomeSessionLike,
 } from '../mobileHome.js';
 
@@ -28,6 +29,20 @@ function session(id: string, patch: Partial<MobileHomeSessionLike> = {}): Mobile
 }
 
 describe('mobileHome', () => {
+  // Unit: home cards and their drill-down must agree when project != execution cwd.
+  it('groups temporary execution directories into their explicit project and filters consistently', () => {
+    const tasks = ['/tmp/checkout', '/repo/.cindy-worktrees/branch'].map((workingDir, i) => session(String(i), {
+      workingDir, projectDir: '/product', deviceLinkDeviceId: 'mac',
+    }));
+    const home = buildMobileHomePresentation({ sessions: tasks,
+      projectAliases: new Map([['device:mac:/product', 'Product']]) });
+    expect(home.projects).toHaveLength(1);
+    expect(home.projects[0]).toMatchObject({ workingDir: '/product', title: 'Product' });
+    expect(home.projects[0].sessions).toHaveLength(2);
+    expect(sessionMatchesProjectDir(tasks[0], '/product')).toBe(true);
+    expect(sessionMatchesProjectDir(tasks[0], '/tmp/checkout')).toBe(false);
+    expect(sessionMatchesProjectDir('/product', '/product')).toBe(true);
+  });
   it('maps host aliases with the same Windows/worktree identity as project cards', () => {
     const aliases = parseHostProjectAliases('pc:one', [
       { projectKey: 'local:C:\\Repo\\App\\', alias: 'Newest' },

@@ -29,6 +29,7 @@ export interface InlineReferenceChipProps {
   tooltipContentClassName?: string;
   selected?: boolean;
   onClick?: MouseEventHandler<HTMLSpanElement>;
+  onMouseDown?: MouseEventHandler<HTMLSpanElement>;
   onAuxClick?: MouseEventHandler<HTMLSpanElement>;
   onContextMenu?: MouseEventHandler<HTMLSpanElement>;
   chipRef?: Ref<HTMLSpanElement>;
@@ -54,6 +55,7 @@ export function InlineReferenceChip({
   tooltipContentClassName,
   selected = false,
   onClick,
+  onMouseDown,
   onAuxClick,
   onContextMenu,
   chipRef,
@@ -88,7 +90,8 @@ export function InlineReferenceChip({
           {icon}
         </span>
       ) : null}
-      <span className={cn('min-w-0 truncate', labelClassName)}>{label}</span>
+      {/* Keep an atomic summary non-selectable even inside `.select-text *`. */}
+      <span className={cn('min-w-0 truncate', !textSelectable && 'select-none', labelClassName)}>{label}</span>
     </>
   );
   // `<span role="button">` 换掉原生 `<button>` 后要自己补键盘激活:走 native
@@ -104,6 +107,7 @@ export function InlineReferenceChip({
       tabIndex={focusable ? 0 : undefined}
       aria-label={ariaLabel}
       onClick={onClick}
+      onMouseDown={onMouseDown}
       onAuxClick={onAuxClick}
       onContextMenu={onContextMenu}
       onKeyDown={focusable ? handleKeyDown : undefined}

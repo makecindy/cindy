@@ -171,8 +171,8 @@ export function clearRateHistoryCache(): void {
 }
 
 /**
- * Host-measured tok/s (usage intervals or streaming estimates, see maker-core
- * `token-speed.ts`). Optional additive status field: old hosts omit it and the
+ * Host-measured tok/s (the stream, corrected by the usage each request reports; see
+ * maker-core `calibrated-token-speed.ts`). Optional additive status field: old hosts omit it and the
  * counter-based history above stays in charge.
  */
 export interface TokenSpeedSnapshot {

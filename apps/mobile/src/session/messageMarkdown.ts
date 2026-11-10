@@ -92,6 +92,8 @@ export interface ParseMobileMarkdownOptions {
   blockIndexOffset?: number;
   charOffset?: number;
   sourceIsNormalized?: boolean;
+  /** Previous committed parse, used only for immutable paragraph inline prefixes. */
+  previous?: MobileMarkdownParseResult;
 }
 
 export interface MobileMarkdownBlockRange {
@@ -116,6 +118,42 @@ export interface MobileMarkdownParseResult {
   incremental: boolean;
   reusedBlockCount: number;
   parsedSourceUtf16Length: number;
+  reusedInlineUtf16Length?: number;
+}
+
+interface ParagraphInlineSnapshot {
+  source: string;
+  safeOffset: number;
+  stable: MobileMarkdownInline[];
+}
+
+// Owned by the caller's block lifetime, not a process-wide text cache.
+const paragraphInlineSnapshots = new WeakMap<MobileMarkdownBlock, ParagraphInlineSnapshot>();
+
+// Deliberately narrow: these atoms have no unresolved opener or context-sensitive
+// URL/path boundary. Only commit through whitespace after complete atoms. Other
+// syntax remains in the reparsed tail; do not split arbitrary Markdown by length.
+function safeParagraphInlineEnd(input: string, from: number): number {
+  const atom = /(?:[\p{L}\p{N},，。;；、=+\-]+|\s+|\*\*[\p{L}\p{N} ,，。;；、=+\-]+\*\*|`[\p{L}\p{N} ,，。;；、=+\-]+`)/uy;
+  let cursor = from;
+  let safe = from;
+  while (cursor < input.length) {
+    atom.lastIndex = cursor;
+    const match = atom.exec(input);
+    if (!match) break;
+    cursor = atom.lastIndex;
+    if (/\s$/.test(match[0])) safe = cursor;
+  }
+  return safe;
+}
+
+function joinParagraphInlines(left: MobileMarkdownInline[], right: MobileMarkdownInline[]): MobileMarkdownInline[] {
+  const end = left.at(-1);
+  const start = right[0];
+  if (end?.type === 'text' && !end.marks && start?.type === 'text' && !start.marks) {
+    return [...left.slice(0, -1), { type: 'text', text: end.text + start.text }, ...right.slice(1)];
+  }
+  return [...left, ...right];
 }
 
 interface ParsedTableBlock {
@@ -174,6 +212,12 @@ export function parseMobileMarkdownDocument(
   const lines = normalized.split('\n');
   const blocks: MobileMarkdownBlock[] = [];
   const ranges: MobileMarkdownBlockRange[] = [];
+  const previousParagraphs = new Map<number, ParagraphInlineSnapshot>();
+  options?.previous?.blocks.forEach((block, index) => {
+    const snapshot = paragraphInlineSnapshots.get(block);
+    if (snapshot) previousParagraphs.set(options!.previous!.ranges[index].startLine, snapshot);
+  });
+  let reusedInlineUtf16Length = 0;
   const checkpoints: MobileMarkdownParseCheckpoint[] = [{
     charOffset,
     lineIndex: lineOffset,
@@ -217,12 +261,30 @@ export function parseMobileMarkdownDocument(
     const text = paragraph.join('\n').trim();
     paragraph = [];
     if (!text) return;
-    pushBlock({
+    let snapshot: ParagraphInlineSnapshot | undefined;
+    let inlines: MobileMarkdownInline[];
+    if (!paragraphStartsInComment && text.length >= 1024) {
+      const previous = previousParagraphs.get(lineNumber(paragraphStart));
+      const retained = previous && text.startsWith(previous.source) ? previous : undefined;
+      const from = retained?.safeOffset ?? 0;
+      const safeOffset = safeParagraphInlineEnd(text, from);
+      const stable = joinParagraphInlines(retained?.stable ?? [],
+        safeOffset > from ? parseMobileMarkdownInlines(text.slice(from, safeOffset)) : []);
+      inlines = joinParagraphInlines(stable,
+        safeOffset < text.length ? parseMobileMarkdownInlines(text.slice(safeOffset)) : []);
+      snapshot = { source: text, safeOffset, stable };
+      reusedInlineUtf16Length += from;
+    } else {
+      inlines = parseMobileMarkdownInlines(text, paragraphStartsInComment);
+    }
+    const block: MobileMarkdownBlock = {
       type: 'paragraph',
       key: `p:${lineNumber(lineIndex)}:${blockNumber()}`,
       ...(withSrc ? { srcLine: lineNumber(paragraphStart) } : {}),
-      inlines: parseMobileMarkdownInlines(text, paragraphStartsInComment),
-    }, paragraphStart, lineIndex);
+      inlines,
+    };
+    if (snapshot) paragraphInlineSnapshots.set(block, snapshot);
+    pushBlock(block, paragraphStart, lineIndex);
   };
 
   for (let index = 0; index < lines.length; index++) {
@@ -446,6 +508,7 @@ export function parseMobileMarkdownDocument(
     incremental: false,
     reusedBlockCount: 0,
     parsedSourceUtf16Length: normalized.length,
+    reusedInlineUtf16Length,
   };
 }
 
@@ -491,7 +554,7 @@ export function parseMobileMarkdownIncremental(
       )
     ));
 
-  if (!checkpoint) return parseMobileMarkdownDocument(input);
+  if (!checkpoint) return parseMobileMarkdownDocument(input, { previous });
 
   let suffixCharOffset = checkpoint.charOffset;
   let suffix = normalizedInput.slice(suffixCharOffset);
@@ -514,6 +577,7 @@ export function parseMobileMarkdownIncremental(
       lineOffset: checkpoint.lineIndex,
       blockIndexOffset: checkpoint.blockCount,
       charOffset: suffixCharOffset,
+      previous,
     },
   );
 
@@ -536,6 +600,7 @@ export function parseMobileMarkdownIncremental(
     incremental: true,
     reusedBlockCount: checkpoint.blockCount,
     parsedSourceUtf16Length: suffixResult.parsedSourceUtf16Length,
+    reusedInlineUtf16Length: suffixResult.reusedInlineUtf16Length,
   };
 }
 
@@ -1169,7 +1234,7 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
   const commentProbe = () => (probe ??= blankEscapedAngles(blankCodeSpans(input)));
   return {
     startsInsideHtmlComment,
-    search: createMarkdownRegexSearch(input),
+    search: createMarkdownRegexSearch<{ index: number; end: number; inline: MobileMarkdownInline } | null>(input),
     needsCommentCheck: startsInsideHtmlComment || input.includes('<!--'),
     hasMarkdownImage: input.includes('!['),
     hasHtmlImage: HTML_IMG_HINT_RE.test(input),
@@ -1202,8 +1267,8 @@ function findNextInlineToken(
   const candidates = [
     // 图片要放在 link / 裸 URL 之前:![alt](url) 的 "[alt](url)" 子串会被 link 规则命中,
     // 靠 image 的起点(`!`)更靠前在排序里胜出,这里的顺序只是可读性上的强调。
-    matchMarkdownImage(input, from, context),
-    matchHtmlImage(input, from, context),
+    context.search.next('MarkdownImage', from, () => matchMarkdownImage(input, from, context)),
+    context.search.next('HtmlImage', from, () => matchHtmlImage(input, from, context)),
     // 链接语法:http(s) 之外放行 Cindy 深链(双 scheme:cindy 主 + xdt-maker
     // 兼容存量消息)session|project/(session 渲染成会话 chip;project 在
     // renderInline 里显示 label 纯文本,不落 Linking.openURL——桌面端粘贴
@@ -1211,7 +1276,7 @@ function findNextInlineToken(
     // markdown 源码,review P1)。cindy-media 只收字节仓严格地址中的视频
     // 后缀;由 managedMediaKind 让渲染层走既有媒体查看器/远端取件,绝不把
     // 私有 scheme 交给 Linking.openURL。
-    matchRegex(
+    context.search.next('Link', from, () => matchRegex(
       input,
       from,
       new RegExp(
@@ -1229,16 +1294,16 @@ function findNextInlineToken(
       },
       undefined,
       context.search.exec,
-    ),
+    )),
     // 本地路径链接:[README.md](/abs/path/README.md:17) 这类模型高频输出形态。
     // URL 经 classifyChatPathLinkTarget 判形状(http/session 之外的路径形态才收),
     // 渲染层再经被控端 stat 决定点亮 chip 还是保持纯文本标签。
-    matchLocalPathLink(input, from, context),
+    context.search.next('LocalPathLink', from, () => matchLocalPathLink(input, from, context)),
     // 正文纯文本里裸写的本地路径(`见 src/App.tsx 第 20 行`、`改的是 C:\proj\a.ts`):
     // 模型高频形态,桌面端由 remarkLocalPathLinks 切成 link 节点,这里补齐同一入口。
     // 产出 link inline 后与 `[label](path)` 形态共用 LinkPathChipSpan → 远端 stat →
     // 点亮 chip / 保持纯文本。
-    matchBareFilePathLink(input, from, context),
+    context.search.next('BareFilePathLink', from, () => matchBareFilePathLink(input, from, context)),
     matchRegex(input, from, /`([^`]+)`/g, (match) => ({ type: 'code' as const, text: match[1] }), undefined, context.search.exec),
     // inline math:$$x$$(双 dollar 行内形态)与 $x$。候选按起点排序,公式起点
     // 的 $ 早于公式体内的 * / _,强调规则不会拆走公式内容。单 dollar 采用

@@ -1,24 +1,27 @@
 # Cindy 客户端仓：Agent 工作入口
 
-> 本文件是 Codex 与 Claude Code 共用的项目指令正本。`CLAUDE.md` 只保留
-> `@AGENTS.md`，不要在两处重复维护规则。
+Cindy 是面向大众用户的开源 AI 助手，连接模型、工具与设备，帮助用户在自己的文件和
+应用中完成工作。
 
-## 仓库边界
+## 仓库边界与安全底线
 
 - 本仓库只负责 desktop、mobile 及其共享 packages。
 - 服务端位于独立仓库；除非用户明确要求，不要跨仓修改服务端。
-- 开始工作前先检查工作区状态和相关源码，不覆盖、不回退用户已有改动。
+- 开始工作前先检查工作区状态，不覆盖、不回退用户已有改动。
+- 先读实际代码和测试，再决定实现；不要只依赖文档猜测现状。
+- 用户凭证、令牌、授权文件和密钥不得写入仓库或任何可能被 Git 跟踪的路径。
+- 未经用户明确授权，不执行删除数据、覆盖改动、推送、发布、合并等外部或难以
+  恢复的操作。
+- 发现任务会触及系统提示词、更新器、协议兼容、数据库历史 migration、权限边界
+  或用户数据安全时，必须先停下来核对专项规则，并在动手前向用户说明风险或
+  请求确认。
 
-## 规则组织
+## 产品方向
 
-- 开发与工程规则统一放在 `docs/dev-rules/`。
-- 产品行为与体验规则统一放在 `docs/product-rules/`。
-- UI 视觉、交互与内容设计规则统一放在 `docs/design-rules/`，权威视觉规范正文为
-  `docs/design-rules/DESIGN.md`（根目录 `DESIGN.md` 仅为跳转入口），目录索引为
-  `docs/design-rules/cindy-design-system.md`。
-- 根 `AGENTS.md` 只保留所有任务都适用的规则、风险入口和文档索引。
-- 目录或模块专属规则优先放到对应目录的嵌套 `AGENTS.md`；需要跨目录复用的
-  专题说明放在 `docs/`，并由本文件写明触发条件。
+Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。我们追求极致的体验：
+用户面前的每一分简单，都是产品在背后承担的复杂和匠心。产品、UI 与架构的取舍，以
+[产品原则](docs/product-rules/core-product-principles.md)、[设计规范](docs/design-rules/DESIGN.md)
+与[架构原则](docs/dev-rules/architecture-invariants.md)为准。
 
 ## 按模块进入
 
@@ -29,10 +32,14 @@
 | 修改范围 | 模块规则入口 | 开发与架构正本 |
 | --- | --- | --- |
 | Desktop：main、renderer、preload、数据库、个人 IM / 官方 hook | [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) | [Desktop 开发](docs/dev-rules/desktop-development.md) |
-| Mobile：Expo 页面、远程调用、原生配置与模块 | [apps/mobile/AGENTS.md](apps/mobile/AGENTS.md) | [Mobile 开发与冷更边界](docs/dev-rules/mobile-development.md) |
+| Mobile：Expo 页面、远程调用、原生配置与模块；在手机上查看效果 | [apps/mobile/AGENTS.md](apps/mobile/AGENTS.md) | [Mobile 开发与冷更边界](docs/dev-rules/mobile-development.md) |
 | maker-core：Agent 编排、prompt、工具、translator、用量 | [packages/maker-core/AGENTS.md](packages/maker-core/AGENTS.md) | [Agent 行为](docs/dev-rules/maker-core-and-agent-behavior.md) |
 
 ## 当前规则索引
+
+修改前按下列场景读取相关正文；涉及多个主题时同时适用。产品、设计、工程的完整导航
+分别见 [产品规则](docs/product-rules/README.md)、[设计规则](docs/design-rules/README.md)、
+[开发规则](docs/dev-rules/README.md)。
 
 - 首次接触本仓、需要定位功能代码位置或判断新代码归属模块时，先读仓库地图
   `docs/dev-rules/repo-map.md`。
@@ -48,26 +55,37 @@
   先读 `docs/dev-rules/credentials-and-local-storage.md`。
 - 新增或修改媒体生成、导入、缓存、附件、持久化、协议解析或回收逻辑前，必须先读
   `docs/dev-rules/media-storage-and-protocols.md`。
+- 新增或修改邮件卡（阅读、编辑、草稿同步、发送、头像）或邮箱插件与 Cindy 之间的分工前，
+  必须先读 `docs/product-rules/mail-card.md`。
 - 新增或调整产品功能、判断能力应进入 Core / Skill / 插件、设计人机交互或多端体验
   前，必须先读 `docs/product-rules/core-product-principles.md`。
 - 新增或修改 Agent 管理用户自己的任务、定时任务、项目、伙伴的工具（`cindy_helper` /
   `cindy_scheduler` 等），或调整工具索引、工具的作用范围说明前，必须先读
   `docs/product-rules/agent-user-parity.md`：用户本人能做的（含跨电脑）Agent 也要能做并能在
   索引第一步发现；改完把现状台账写回去。
+- 修改「迁移助理」（新电脑从其他电脑迁移）的入口、迁移范围、`maker:setup-snapshot` /
+  `maker:setup-transfer` 协议、计划与应用规则或一次性配置清单，或新增一类可迁移的设置前，必须先读
+  `docs/product-rules/new-device-setup-migration.md`：密钥只在原电脑的人允许后一次性加密复制，
+  OAuth 登录与私钥不复制，写入只走本机原有安装器与设置存储，不覆盖本机已改过的设置。
 - 修改共享任务、跨账号访客邀请、共享上下文或共享成员权限前，必须先读
   `docs/product-rules/shared-task-mode.md`；复用 device-link，同账号远控行为不变。
 - 修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道前，
   必须先读 `docs/product-rules/im-permission-confirmation.md`；Desktop、Mobile 与共享
   packages 共用同一最终决定，渠道收到回答不代表执行已恢复。
-- 新增或修改代输入（`request_input_handoff`、宿主步骤读取与执行、代输入卡、终端 askpass、
+- 新增或修改代输入（`request_input_handoff`、宿主步骤读取与执行、代输入卡、截图扫码、终端 askpass、
   单窗口实时画面、设备码识别，或任何经手主人填写值的路径）前，必须先读
   `docs/product-rules/input-handoff.md`：主人填写的值只交给宿主执行，不进模型、记录、日志、IM 与推送。
+- 新增或修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前，必须先读
+  `docs/product-rules/schedule-webhook-trigger.md`：事件只是门铃，正文不进任务，密钥不进任务记录。
 - 修改账号用量上限的判定、重置时刻来源，或普通任务／目标模式撞上限额后的等待与自动继续前，
   必须先读 `docs/product-rules/usage-limit-auto-continue.md`。
 - 新增或修改自动发送／远程发送消息的路径、消息来源标签，或发给模型的来源说明前，必须先读
   `docs/product-rules/message-source.md`：界面标签与模型说明同源，两侧一起改。
 - 修改伙伴（Bot）的身份、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
   委派协作或伙伴设置前，必须先读 `docs/product-rules/cindy-bots-runtime.md`。
+- 新增或修改只对伙伴生效的工具、提示词规则、回执或例行任务等专属机制前，先读
+  `docs/product-rules/teammate-capability-ledger.md`：伙伴的工作方式属于伙伴自己的规则，先判断
+  普通任务或项目能力能否做到；做不到时优先补成通用能力。这是引导，不是审批。
 - 修改伙伴调用任务写工具的身份判定（主人代办 / 受托 / 自主）、自主轮可做的范围、转达主人原话的
   核实凭证，或伙伴提示词里对应的说法前，必须先读 `docs/product-rules/teammate-authority.md`。
 - 修改伙伴的跨电脑身份、主力电脑（登记、接管、交出、降级）、云端对话层与资料上传，或
@@ -90,8 +108,8 @@
   `docs/product-rules/provider-groups.md`：Agent 始终在被选中的组内电脑上运行，组所在电脑
   只选电脑与转发，并负责按使用方隔离。
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
-  `docs/design-rules/DESIGN.md`；设计文档索引见
-  `docs/design-rules/cindy-design-system.md`。
+  `docs/design-rules/DESIGN.md` 开头的「阅读路由」，再按路由读相关章节与专题，不需要
+  通读全文；设计文档索引见 `docs/design-rules/cindy-design-system.md`。
 - 做 UI 圆角分类或点击目标尺寸审查时，必须同时读 `docs/design-rules/DESIGN.md §5` 与
   `docs/design-rules/design-governance.md §13`；普通 UI 改动同样适用，不限于设计系统迁移 PR。
 - 新增或修改设计 Token、主题系统、标准 UI 组件（primitive / pattern）、视觉类门禁脚本，
@@ -117,6 +135,8 @@
   为准。
 - 修改 Orca 多 Agent 协同时，必须先读
   `docs/dev-rules/orca-team-architecture.md`。
+- 新增或修改 Agent 使用多台机器的能力（`list_machines`、机器状态、按机器执行），或要为 Agent 的资源使用加上限前，必须先读
+  `docs/product-rules/cindy-machines.md`：**宿主暴露情况，不替大脑做资源决策**，不写死「最多几个」这类决策上限；结果不完整必须明说。
 - 修改任何进入模型 system 段的提示词前（无论文件位于哪个模块），必须先读
   `docs/dev-rules/maker-core-and-agent-behavior.md`。
 - 修改 PI harness 集成（`packages/maker-core/src/agents/pi/**`、`pi-host.ts`、
@@ -140,6 +160,9 @@
   改动」豁免。
 - 修改插件发现链（花名册注入、`ghost_list` / `ghost_info` / `ghost_call`）、插件运行期
   可见性门禁或 FORGE_GUIDE 作者契约前，必须先读 `docs/ghost-progressive-discovery.md`。
+- 新增或修改 Browser Use（专用浏览器、侧边栏、「我的浏览器」）的工具层、配方目录、外链处理
+  或任一浏览器后端前，必须先读 `docs/dev-rules/browser-use.md`：优化做在共享层让三端都受益，
+  能力不设限、风险交给审批。
 - 新增或修改插件持久 Library（library 槽、binding / 目录选择、随时迁移、
   回收站删除、SQLite 语句门或 `/library/` 面板投影）前，必须先读
   `docs/dev-rules/plugin-library-storage.md`。
@@ -167,8 +190,15 @@
 - 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
   `docs/dev-rules/protocol-compatibility.md`。
-- 修改 package 依赖方向、main 进程模块加载方式，或主界面布局树结构前，必须先读
-  `docs/dev-rules/architecture-invariants.md`。
+- 修改 Device Link 客户端、协议、relay、设备／媒体接口、能力协商或连接恢复行为前，必须先读
+  `docs/dev-rules/protocol-compatibility.md` 的「自建中转同步维护」：凡影响自建中转的改动，
+  必须在同一次改动中完成必要的同步适配与互通验证，不得留到后续。
+- 新增或修改直接／间接的服务器请求、订阅、推送、同步、轮询或重试（包括界面调用方）前，
+  必须先读 `docs/dev-rules/server-channel-review.md`：结合通道用途、共享容量与累计压力
+  检查调用方式及次数频率；自审与 AI review 按实际严重程度报告问题，不排除 P2 缺陷。
+- 修改 package 依赖方向、main 进程模块加载方式、桌面与 Node Host（`apps/host`）共用的业务主体
+  （`*.desktop.ts` 装配、工厂端口注入），或主界面布局树结构前，必须先读
+  `docs/dev-rules/architecture-invariants.md`；改共用主体后还要跑 Host 的测试和类型检查（§5）。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider
   开关前，必须先读 `docs/dev-rules/configuration-and-overrides.md`。
 - 新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，新增 IPC channel／推送事件，
@@ -178,54 +208,24 @@
 - 在 Cindy 内嵌 worktree 会话里工作、准备提交或直推、或做 code review 前，必须先读
   `docs/dev-rules/development-workflow.md`。
 
-## 通用工作流程
-
-1. 先确认用户目标、仓库边界、当前分支、worktree 和工作区状态。
-2. 尊重开发者或宿主已经提供的 Git 工作流。已有任务分支或 worktree 时直接复用，
-   不嵌套创建；没有隔离方案时，可以建议新功能使用独立分支或 worktree，但不要
-   擅自搬动或混用现有工作区。
-3. 根据任务类型读取 `docs/dev-rules/`、`docs/product-rules/` 与
-   `docs/design-rules/` 中相关规则。
-4. 先读实际代码和测试，再决定实现；不要只依赖文档猜测现状。
-5. 修改时保持范围最小，保护用户已有改动，不使用破坏性 Git 命令。
-6. 完成后运行与风险匹配的检查，并 review 整体 diff。
-7. 如实报告已验证、未验证、风险和需要用户决定的事项。
-
 ## Git 与交付
 
-- 本仓默认 PR-first。代码和文档通常从非默认分支通过 PR 进入 `main`；只有仓库
-  维护者明确选择例外时才允许直推主干。
-- commit、push 和创建 PR 的执行时机由开发者或 Codex、Claude Code、Cindy 等宿主
-  工作流决定；仓库规则本身不额外授权外部写操作。
-- 提交 PR 时遵循 `.github/PULL_REQUEST_TEMPLATE.md`，如实说明改动、验证和风险。
-- 非 fork 的非 draft PR 会触发自动 code review（`.github/workflows/pr-code-review.yml`），
-  审阅口径见根目录 `REVIEW.md`。它是**建议性**检查，不替代人工 review，也不替代
-  `client-ci` 的机器门禁；改动上述两份文件前先读 `REVIEW.md` 开头的说明。
-- **DCO 签名（硬性要求）**：本仓每个 commit 都必须带 `Signed-off-by` trailer，且其中的
-  名字与邮箱都要与 commit 的 author（或 committer）一致，用 `git commit -s` 生成；
-  agent 的自动提交同样适用。PR 上的 DCO check（DCO GitHub App，配置见
-  `.github/dco.yml`）会拦下漏签的 commit。`git commit` 没有自动签名的配置项，一次配好
-  可跑 `pnpm dco:install-hook` 装 `.githooks/prepare-commit-msg`；提交前自查用
-  `pnpm check:dco`。DCO 全文见根目录 `DCO`，贡献者说明见 `CONTRIBUTING.md`。
-  对自动 code review 环境的说明：review 沙箱 checkout 出的 HEAD 可能是平台合成的
-  瞬时 commit（不存在于本仓库、GitHub 上查不到该 SHA）；对这类合成 SHA 跑
-  `check:dco` 的失败结果不构成缺签证据，不要据此报告 DCO 问题。判定 DCO 是否通过，
-  一律以 PR 上的 DCO App check 与真实提交范围（`origin/main..PR head`）的结果为准。
-- **提交前验证**：提交前必须完成与改动风险匹配的测试和相关 package 的类型检查。
-  默认使用根 `pnpm test:unit:related` 选测；已按影响面完成等效定向验证时，不要求为了
-  commit 重跑整仓测试。相关 package 运行
-  `pnpm --filter <包名> run --if-present typecheck`（包名以该 package 的 `package.json`
-  为准）。已执行检查的失败必须修复或明确说明既有故障，未执行项和原因须如实记录。
-  本机资源预算、并发与跨任务排队由使用者或宿主决定，仓库不强制多个 session 串行。
-  GitHub CI 保留完整单测与合并门禁；细则见 `docs/dev-rules/development-workflow.md`。
-- 按风险追加验证：跨模块、高风险或基础设施改动追加更广泛验证（如
-  `pnpm test:all`），最终以 CI 门禁为准。不得通过跳过、删除或弱化测试制造通过。
+尊重用户与宿主提供的工作流，已有任务分支或 worktree 直接复用，不嵌套创建，
+不擅自搬动或混用工作区。本仓默认 PR-first；只有仓库维护者明确选择例外时才允许
+直推主干。仓库规则本身不额外授权 commit、push、发布或合并。
 
-## 绝对安全底线
+每个 commit 必须带与 author 或 committer 一致的 DCO `Signed-off-by`（`git commit -s`）。
+DCO 是否通过以 PR 上的 DCO App check 和真实提交范围（`origin/main..PR head`）为准；
+自动审阅沙箱里的平台合成 HEAD 跑本地 DCO 检查失败，不构成缺签证据。
+提交 PR 遵循 [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md)；
+自动审阅是建议性检查，修改 [REVIEW.md](REVIEW.md) 或自动审阅 workflow 前先读其说明。
 
-- 用户凭证、令牌、授权文件和密钥不得写入仓库或任何可能被 Git 跟踪的路径。
-- 未经用户明确授权，不执行删除数据、覆盖改动、推送、发布、合并等外部或难以
-  恢复的操作。
-- 发现任务会触及系统提示词、更新器、协议兼容、数据库历史 migration、权限边界
-  或用户数据安全时，必须先停下来核对专项规则，并在动手前向用户说明风险或
-  请求确认。
+提交前完成与风险匹配的测试和相关 package 类型检查，默认使用 `pnpm test:unit:related`；
+已完成等效定向验证时不要求重跑整仓，纯文档运行 `pnpm check:dev-docs`。完成后 review
+整体 diff。失败、既有故障、未验证项和需要用户决定的事项须如实报告，不得通过跳过、删除
+或弱化测试制造通过。本机资源预算、并发与跨任务排队由用户或宿主决定，完整检查与合并门禁
+仍由 CI 保障。DCO 核验、按风险追加验证及直推门禁见[开发工作流](docs/dev-rules/development-workflow.md)。
+
+可复用的项目知识写进仓库；个人路径、设备标识、账号偏好、凭据和私聊原文留在本地。
+整理文档只改组织与索引，Cindy 特有的信息不得丢失或弱化；细则见
+[开发工作流](docs/dev-rules/development-workflow.md) §4、§5。

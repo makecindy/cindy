@@ -17,7 +17,7 @@ import { BrowserWindow } from 'electron';
 
 import type { ModelMismatchInfo } from '../shared/modelMismatch.js';
 import { patchMessageAgentMeta } from './localDb/ipc/messages.js';
-import { enqueueDurableWrite } from './messagePersistBroadcaster.js';
+import { enqueueDurableWrite } from './messagePersistBroadcaster.desktop.js';
 import { createLogger } from './logger.js';
 import * as broadcastTap from './device-link/broadcast-tap.js';
 

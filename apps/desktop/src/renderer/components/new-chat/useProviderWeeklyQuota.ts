@@ -1,4 +1,9 @@
+import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
+import type { KimiCodingUsageSnapshot } from '../../../shared/kimiCodingUsage';
+import type { OpenCodeGoUsageSnapshot } from '../../../shared/opencodeGoUsage';
 import { useEffect, useMemo, useState } from 'react';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
+import { useDraftClaudeAccount } from './DraftClaudeAccount';
 import type { ProviderView } from '@cindy/model-providers';
 import { providerWeeklyQuotaSource } from '../../../shared/providerQuotaSource';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
@@ -35,6 +40,8 @@ export interface ProviderWeeklyQuota {
  */
 export interface ProviderUsageScope {
   deviceId: string | null;
+  /** Explicit opt-in from the new-task composer; existing tasks keep their readers. */
+  previewSubscriptionPool?: boolean;
 }
 
 /**
@@ -134,7 +141,9 @@ export function codexWeeklyQuota(
 export { providerWeeklyQuotaSource };
 
 export interface ProviderUsageSnapshots {
-  source: 'codex' | 'claude' | 'xai' | null;
+  source: 'codex' | 'claude' | 'xai' | 'kimi' | 'opencode-go' | null;
+  kimi?: KimiCodingUsageSnapshot | null;
+  opencodeGo?: OpenCodeGoUsageSnapshot | null;
   codex: CodexQuotaView | null;
   claude: ClaudeSubscriptionUsageSnapshot | null;
   xai: XaiSubscriptionUsageSnapshot | null;
@@ -150,8 +159,12 @@ export function useProviderUsageSnapshots(
   { web = false }: { web?: boolean } = {},
 ): ProviderUsageSnapshots {
   const source = providerWeeklyQuotaSource(provider);
-  const local = scope.deviceId === null;
-  const remoteDeviceId = scope.deviceId;
+  // A can be an explicit source in B's catalog. Reading A's own quota is local,
+  // even though its catalog remains routed through B for visibility checks.
+  // Normalize here so rail rows, model details and group members agree.
+  const selfDeviceId = useOptionalAuthDeviceId();
+  const local = scope.deviceId === null || scope.deviceId === selfDeviceId;
+  const remoteDeviceId = local ? null : scope.deviceId;
   const { snapshot: localCodex } = useCodexRateLimits(local && source === 'codex', provider.id);
   const localWeb = useAccountUsage(
     undefined,
@@ -160,7 +173,13 @@ export function useProviderUsageSnapshots(
     undefined,
     provider.id,
   );
-  const localClaude = useClaudeSubscriptionUsage(local && source === 'claude', provider.id);
+  const accountUsage = useProviderAccountUsage(
+    source === 'kimi' || source === 'opencode-go' ? provider : undefined,
+    undefined,
+    remoteDeviceId,
+  );
+  const draftClaude = useDraftClaudeAccount(provider.id, scope.deviceId);
+  const localClaude = useClaudeSubscriptionUsage(local && source === 'claude' && !draftClaude, provider.id);
   const localXai = useXaiSubscriptionUsage(local && source === 'xai', provider.id);
   const remoteCodex = useRemoteCodexAccountUsage(
     source === 'codex' ? remoteDeviceId : null,
@@ -186,8 +205,12 @@ export function useProviderUsageSnapshots(
   );
   return {
     source,
+    kimi: source === 'kimi' && accountUsage.result?.status === 'ready' && !accountUsage.result.stale
+      && accountUsage.result.snapshot.kind === 'kimi-coding-quota' ? accountUsage.result.snapshot : null,
+    opencodeGo: source === 'opencode-go' && accountUsage.result?.status === 'ready' && !accountUsage.result.stale
+      && accountUsage.result.snapshot.kind === 'opencode-go-quota' ? accountUsage.result.snapshot : null,
     codex,
-    claude: source === 'claude' ? (local ? localClaude : remoteClaude) : null,
+    claude: source === 'claude' ? (local ? draftClaude ? draftClaude.usage : localClaude : remoteClaude) : null,
     xai: source === 'xai' ? (local ? localXai : remoteXai) : null,
   };
 }
@@ -196,7 +219,7 @@ export function useProviderWeeklyQuota(
   provider: ProviderView,
   scope: ProviderUsageScope,
 ): ProviderWeeklyQuota | null {
-  const { source, codex, claude, xai } = useProviderUsageSnapshots(provider, scope);
+  const { source, codex, claude, xai, kimi, opencodeGo } = useProviderUsageSnapshots(provider, scope);
   const [nowMs, setNowMs] = useState(Date.now);
   // Local display clock only; fetching and cached-first updates remain in the
   // existing hooks. Hide expired windows even when the panel is left open.
@@ -205,6 +228,14 @@ export function useProviderWeeklyQuota(
     const timer = setInterval(() => setNowMs(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, [source]);
+  if (source === 'kimi') {
+    const window = kimi?.windows.find(w => w.id === 'limit_7d');
+    return weeklyQuota(window?.usedPercent, window?.resetsAt ? window.resetsAt / 1000 : null, nowMs);
+  }
+  if (source === 'opencode-go') {
+    const window = opencodeGo?.windows.find(w => w.id === 'weekly');
+    return weeklyQuota(window?.usedPercent, window?.resetsAt ? window.resetsAt / 1000 : null, nowMs);
+  }
   if (source === 'codex') return codexWeeklyQuota(codex, nowMs);
   if (source === 'claude')
     return weeklyQuota(claude?.sevenDay?.utilization, claude?.sevenDay?.resetsAt, nowMs);

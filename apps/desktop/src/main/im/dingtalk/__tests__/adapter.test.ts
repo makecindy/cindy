@@ -93,6 +93,15 @@ describe('dingtalk turn permission boundary', () => {
     expect(adapter.turnPermissionPolicyFor?.(baseEvent)).toBeUndefined();
   });
 
+  it('directs unsupported permission modes to Cindy, not an unsupported chat command', () => {
+    const copy = adapter.ui.error!.permissionModeUnsupported;
+    const message = typeof copy === 'function' ? copy('bypassPermissions') : copy;
+    expect(message).toContain('尚未执行');
+    expect(message).toContain('Cindy');
+    expect(message).toContain('自动审批');
+    expect(message).not.toContain('/permission');
+  });
+
   it('群聊保留逐轮危险操作强确认', () => {
     const policy = adapter.turnPermissionPolicyFor?.({
       ...baseEvent,
@@ -143,7 +152,7 @@ describe('dingtalk group window', () => {
 
   beforeEach(async () => {
     const dir = path.resolve(__dirname, '../../../../../drizzle');
-    const sql = ['0083_', '0086_', '0087_', '0088_']
+    const sql = ['0083_', '0086_', '0087_', '0088_', '0136_']
       .map((prefix) => {
         const file = fs.readdirSync(dir).find((name) => name.startsWith(prefix));
         if (!file) throw new Error(`${prefix} migration not found`);

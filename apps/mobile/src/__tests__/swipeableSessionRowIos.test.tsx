@@ -32,7 +32,7 @@ vi.mock("react-native", () => ({
     </button>
   ),
   StyleSheet: { create: (value: unknown) => value },
-  useWindowDimensions: () => ({ width: runtime.width }),
+  Dimensions: { get: () => ({ width: runtime.width }), addEventListener: () => ({ remove() {} }) },
 }));
 vi.mock("@/platform/gestureHandler", async () => {
   const { forwardRef, useImperativeHandle } = await import("react");

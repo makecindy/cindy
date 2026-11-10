@@ -587,7 +587,7 @@ describe('metadata layers through the active catalog', () => {
 
 
 it('keeps complex quotes with their provider snapshot and clears them on successful replacement', () => {
-  const displayPricing = { items: [{ label: 'Generated video', tier: 'HD', price: 0.5, unit: 'second', quantity: 1, priceType: 'estimated' as const }], notes: ['Billed by output duration.'], summary: { output: [{ price: 6, maxPrice: 10, unit: 'token', quantity: 1000000, tier: '480P/720P' }] } };
+  const displayPricing = { items: [{ label: 'Generated video', tier: 'HD', price: 0.5, unit: 'second', quantity: 1, priceType: 'estimated' as const }], notes: ['Billed by output duration.'], summary: { output: [{ price: 6, maxPrice: 10, unit: 'token', quantity: 1000000, tier: '480P/720P', component: 'video' }] } };
   const video = { id: 'example-video', name: 'Video', mode: 'video_generation', agents: [] as const,
     currency: 'USD' as const, costDiscount: 0.2, displayPricing,
     modalities: { input: ['text'], output: ['video'] } };
@@ -605,4 +605,22 @@ it('keeps complex quotes with their provider snapshot and clears them on success
   setXdGatewayModels([{ ...video, id: 'chat', mode: 'chat', agents: ['codex'], contextWindow: 100000,
     perAgent: { codex: { wireProtocol: 'openai-responses' } } }], { authoritative: true });
   expect(provider().models.codex?.find(m => m.id === 'chat')).toMatchObject({ displayPricing, currency: 'USD', costDiscount: 0.2 });
+});
+
+// Unit: local image declarations must reach both runtime capability representations.
+// Existing metadata tests did not cover false against modalities supplied by discovery.
+it.each([true, false])('projects local image input %s onto existing models without changing output', (supported) => {
+  const model = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: { pi: {
+    baseUrl: 'https://relay.example/v1', models: [{ id: 'vision', name: 'Vision' }],
+  } } }).models.pi![0];
+  const overrides = sanitizeModelCatalogOverrides({ version: 1, patches: {
+    'relay:vision': { perAgent: { pi: { supportsImageInput: supported } } },
+  } }).overrides;
+  const result = applyExistingModelLocalPatch('relay', 'pi', {
+    ...model, supportsImageInput: !supported, modalities: { input: ['text', 'audio', 'image'], output: ['text'] },
+  }, overrides);
+  expect(result.supportsImageInput).toBe(supported);
+  expect(result.modalities?.input.includes('image')).toBe(supported);
+  expect(result.modalities?.input).toContain('audio');
+  expect(result.modalities?.output).toEqual(['text']);
 });

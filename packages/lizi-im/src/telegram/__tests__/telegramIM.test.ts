@@ -235,6 +235,32 @@ async function connect(): Promise<void> {
 }
 
 describe('TelegramIM', () => {
+  it('reads a persisted image locator without needing the recent in-memory media pool', async () => {
+    await im.init();
+    await connect();
+    const original = api.call.bind(api);
+    api.call = async (method, params, signal) =>
+      method === 'getFile'
+        ? ({ file_path: 'photos/saved.jpg', file_size: 3 } as never)
+        : original(method, params, signal);
+    const fetcher = vi.fn(async () => new Response(new Uint8Array([1, 2, 3])));
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      expect(await im.readGroupHistoryImage('saved-file')).toEqual(Buffer.from([1, 2, 3]));
+      expect(fetcher).toHaveBeenCalledWith(
+        'https://files.local/photos/saved.jpg',
+        expect.anything(),
+      );
+      fetcher.mockImplementationOnce(async () => {
+        await im.dispose();
+        return new Response(new Uint8Array([1]));
+      });
+      expect(await im.readGroupHistoryImage('saved-file')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(['startup', 'poll'])('honors the full rate-limit wait during %s', async (phase) => {
     vi.useFakeTimers();
     ctx.host.secrets.write('telegram-bot-token', '999:saved-token');
@@ -1320,6 +1346,7 @@ describe('TelegramIM', () => {
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(events[0].replyContext).toEqual({
       messageId: '40',
+      sentAt: expect.any(Number),
       author: 'Cindy',
       text: '方案 A: 先改 transport',
       isBot: true,
@@ -3037,11 +3064,16 @@ describe('TelegramIM 音视频与群历史媒体', () => {
       kind: 'file',
       originalName: 'IMG_80.MP4',
       mimeType: 'video/mp4',
-      author: 'Tom',
+      author: 'Tom · 消息 80',
     });
     // 不在上下文 id 里的消息不下载; 其它群同 id 不串。
     expect((await im.collectGroupHistoryMedia('-100200', ['81'])).attachments).toEqual([]);
     expect((await im.collectGroupHistoryMedia('-100300', ['80'])).attachments).toEqual([]);
+    const missing = await im.collectGroupHistoryMedia('-100200', ['999'], undefined, { attachmentMessageIds: ['999'] });
+    expect(missing).toEqual({ attachments: [], unavailable: ['历史消息 999：附件原件不在可用缓存中，仅提供历史记录'] });
+    const full = await im.collectGroupHistoryMedia('-100200', ['80'], undefined, { provided: Array.from({ length: 4 }, () => ({kind: 'file' as const, absPath: '/current.pdf', originalName: 'current.pdf', mimeType: 'application/pdf'})) });
+    expect(full.attachments).toEqual([]);
+    expect(full.unavailable.join(' ')).toContain('上限');
   });
 
   it('本轮已随附件送达的被引消息/相册成员不重复补; 媒体不随轮次出池; 受保护群不入池', async () => {

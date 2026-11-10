@@ -53,7 +53,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 import { projectQuietScheduledOutput, revealScheduledOutput, hasVisibleScheduledOutput } from '../silent-output.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
@@ -152,6 +152,7 @@ function createRunnerHarness(
     getSessionMeta: vi.fn(async () => null),
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -494,6 +495,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       expect(mocks.rewind).toHaveBeenCalledExactlyOnceWith(
         h.session.id,
         mocks.createMessage.mock.calls[0][1].clientId,
+        { discard: true },
       );
       expect(notifier.notify).not.toHaveBeenCalled();
     },
@@ -521,6 +523,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     expect(mocks.rewind).toHaveBeenCalledExactlyOnceWith(
       h.session.id,
       mocks.createMessage.mock.calls[0][1].clientId,
+        { discard: true },
     );
     expect(notifier.notify).not.toHaveBeenCalled();
   });

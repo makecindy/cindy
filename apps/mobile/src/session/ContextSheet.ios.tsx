@@ -2,13 +2,14 @@ import { useNativeGlassButtonStyle } from "@/platform/chrome/nativeGlassButtonSt
 import { iconSize, useTheme } from '@/theme';
 import { NativeErrorNotice } from '@/components/NativeErrorNotice.ios';
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
+import { useNativeTextDraft } from './nativeTextDraft';
 import {
   createContext,
   useContext,
   useEffect,
   useRef,
 } from "react";
-import { Button, HStack, Image, Picker, RNHostView, ProgressView, Spacer, Text, TextField, VStack, useNativeState } from '@expo/ui/swift-ui';
+import { Button, HStack, Image, Picker, RNHostView, ProgressView, Spacer, Text, TextField, VStack } from '@expo/ui/swift-ui';
 import {
   accessibilityAddTraits,
   accessibilityHint,
@@ -261,12 +262,11 @@ export function ContextSheetSelectRow(props: ContextSheetSelectRowProps) {
 }
 
 export function ContextSheetTextField(props: ContextSheetTextFieldProps) {
-  const text = useNativeState(props.value);
-  useEffect(() => { if (text.get() !== props.value) text.set(props.value); }, [props.value, text]);
+  const draft = useNativeTextDraft(props.value, props.onChange);
   return (
     <TextField
-      text={text}
-      onTextChange={props.onChange}
+      text={draft.text}
+      onTextChange={draft.onTextChange}
       axis={props.multiline ? 'vertical' : 'horizontal'}
       placeholder={props.placeholder}
       maxLength={props.maxLength}

@@ -26,6 +26,41 @@ const MAX_INBOUND_FILE_BYTES = 20 * 1024 * 1024;
 /** 附件下载超时 — 与 Discord 通道同参数。 */
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 
+export interface TelegramHistoryImageRef {
+  fileId: string;
+  name: string;
+  mimeType: string;
+  /** Official relay proof; personal bots use their own Bot API connection. */
+  downloadToken?: string;
+}
+
+export function historyImageRefsOf(m: TgMessage): TelegramHistoryImageRef[] {
+  if (m.has_protected_content === true) return [];
+  const refs: TelegramHistoryImageRef[] = [];
+  const best = m.photo?.reduce(
+    (a, b) => (b.width * b.height > a.width * a.height ? b : a),
+    m.photo[0],
+  );
+  if (best && (best.file_size ?? 0) <= MAX_INBOUND_FILE_BYTES) {
+    refs.push({
+      fileId: best.file_id,
+      name: 'photo.jpg',
+      mimeType: 'image/jpeg',
+    });
+  }
+  if (m.document && (m.document.file_size ?? 0) <= MAX_INBOUND_FILE_BYTES) {
+    const name = m.document.file_name ?? 'image';
+    const classified = classifyInboundAttachment(m.document.mime_type, name);
+    if (classified.kind === 'image')
+      refs.push({
+        fileId: m.document.file_id,
+        name: name.slice(0, 256),
+        mimeType: classified.mimeType,
+      });
+  }
+  return refs;
+}
+
 export interface TelegramGroupWindowEntry {
   /**
    * 归属 bot 的数字 id(字符串形态) — 窗口存储按 bot 命名空间隔离: 换绑
@@ -41,6 +76,7 @@ export interface TelegramGroupWindowEntry {
   author: { name: string; isBot?: boolean };
   text: string;
   fileNames?: string[];
+  imageRefs?: TelegramHistoryImageRef[];
   sentAt: number;
 }
 
@@ -76,6 +112,7 @@ export function groupWindowEntryOf(m: TgMessage): Omit<TelegramGroupWindowEntry,
       ...(m.from?.is_bot ? { isBot: true } : {}),
     },
     text: telegramMessageText(m),
+    imageRefs: historyImageRefsOf(m),
     ...(fileNames.length > 0 ? { fileNames } : {}),
     sentAt: m.date * 1000,
   };
@@ -206,7 +243,7 @@ export interface NormalizeContext {
  */
 export function replyContextOf(
   m: TgMessage,
-): { messageId: string; author: string; text: string; isBot?: boolean } | null {
+): { messageId: string; sentAt?: number; author: string; text: string; isBot?: boolean } | null {
   const replied = m.reply_to_message;
   if (!replied) return null;
   // 受保护群里被引用的原消息不进 prompt: 引用块会把原文原样带进模型上下文,
@@ -224,6 +261,7 @@ export function replyContextOf(
   }
   return {
     messageId: String(replied.message_id),
+    ...(replied.date ? { sentAt: replied.date * 1000 } : {}),
     author: displayNameOf(replied.from),
     text,
     ...(replied.from?.is_bot ? { isBot: true } : {}),
@@ -444,12 +482,12 @@ export const GROUP_HISTORY_FILE_MAX = 4;
  */
 export async function collectGroupHistoryMedia(
   messages: TgMessage[],
-  ctx: Pick<NormalizeContext, 'api' | 'media' | 'files' | 'stagedDiscards'>,
+  ctx: Pick<NormalizeContext, 'api' | 'media' | 'files' | 'stagedDiscards'> & { provided?: readonly IMAttachment[] },
 ): Promise<{ attachments: Array<IMAttachment & { author: string }>; unavailable: string[] }> {
   const picked: Array<IMAttachment & { author: string }> = [];
   const unavailable: string[] = [];
-  let images = 0;
-  let files = 0;
+  let images = ctx.provided?.filter((a) => a.kind === 'image').length ?? 0;
+  let files = ctx.provided?.filter((a) => a.kind !== 'image').length ?? 0;
   let overQuota = 0;
   for (const m of [...messages].reverse()) {
     const isImage = expectedAttachmentKind(m) === 'image';
@@ -459,7 +497,7 @@ export async function collectGroupHistoryMedia(
     }
     if (isImage) images++;
     else files++;
-    const author = displayNameOf(m.from);
+    const author = `${displayNameOf(m.from)} · 消息 ${m.message_id}`;
     const sink: IMAttachment[] = [];
     const failed: IMUnsupportedEntry[] = [];
     await collectMedia(m, { ...ctx, contextId: '', history: true }, sink, failed);
@@ -542,7 +580,10 @@ async function downloadTelegramFile(
 }
 
 /** getFile + 下载字节; 任一跳失败返回 null。 */
-async function fetchTelegramFileBytes(ctx: NormalizeContext, fileId: string): Promise<Buffer | null> {
+export async function fetchTelegramFileBytes(
+  ctx: NormalizeContext,
+  fileId: string,
+): Promise<Buffer | null> {
   try {
     // getFile 与下载 fetch 同在轮询循环的 await 链上 — 两跳都必须带超时,
     // 否则任一悬死连接(TCP 半开/代理黑洞)会卡住全部入站直到进程重启。
@@ -551,12 +592,20 @@ async function fetchTelegramFileBytes(ctx: NormalizeContext, fileId: string): Pr
       { file_id: fileId },
       AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
     );
-    if (!file.file_path) return null;
+    if (!file.file_path || (file.file_size ?? 0) > MAX_INBOUND_FILE_BYTES) return null;
     const res = await fetch(ctx.api.fileUrl(file.file_path), {
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
     });
     if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
+    if (!res.body) return null;
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for await (const chunk of res.body) {
+      size += chunk.byteLength;
+      if (size > MAX_INBOUND_FILE_BYTES) return null;
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
   } catch {
     return null;
   }

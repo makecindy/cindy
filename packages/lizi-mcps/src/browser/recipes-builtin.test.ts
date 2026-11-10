@@ -85,6 +85,14 @@ describe('bundled recipe catalog', () => {
     }
   });
 
+  it('a Cindy guide for an upstream site keeps its entries and gains the upstream recipes', () => {
+    const guide = siteGuides.get('chatgpt.com');
+    expect(guide?.entry?.billing).toBe('https://chatgpt.com/settings/billing');
+    expect(guide?.recipes).toContain('opencli:chatgpt/ask');
+    expect(guide?.aliases).toContain('chatgpt');
+    expect([...siteGuides.keys()].filter((site) => site === 'chatgpt' || site === 'chatgpt.com')).toEqual(['chatgpt.com']);
+  });
+
   it('every recipe is listed by some siteguide (discoverable via siteguide action)', () => {
     const listed = new Set([...siteGuides.values()].flatMap((g) => g.recipes ?? []));
     for (const id of recipes.keys()) {

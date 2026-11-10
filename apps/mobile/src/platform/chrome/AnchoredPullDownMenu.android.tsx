@@ -36,6 +36,7 @@ import {
   useTheme,
 } from "@/theme";
 import { Text as AppText } from "@/components/AppText";
+import { FilterReminderDot } from "@/components/FilterReminderDot";
 import type { NativePullDownAction } from "./NativePullDownMenu";
 
 /** Compose's exported modifiers lack a tri-state semantic setter. Keep one RN
@@ -115,6 +116,7 @@ function CheckedMenuItem({
               </AppText>
             ) : null}
           </View>
+          {action.filterReminder ? <FilterReminderDot /> : null}
           {action.subactions?.length || action.state !== "off" ? (
             <AppText
               style={{
@@ -297,18 +299,24 @@ export function AnchoredPullDownMenu({
                           }}
                           onClick={() => choose(action)}
                         >
-                          {action.icon ? (
+                          {action.icon || action.filterReminder ? (
                             <DropdownMenuItem.LeadingIcon>
                               <RNHostView matchContents>
-                                <action.icon
-                                  color={action.disabled
-                                    ? colors.textTertiary
-                                    : action.destructive
-                                      ? colors.destructive
-                                      : colors.textPrimary}
-                                  size={iconSize.md}
-                                  strokeWidth={iconStroke.regular}
-                                />
+                                <View>
+                                  {action.filterReminder ? (
+                                    <FilterReminderDot />
+                                  ) : action.icon ? (
+                                    <action.icon
+                                      color={action.disabled
+                                        ? colors.textTertiary
+                                        : action.destructive
+                                          ? colors.destructive
+                                          : colors.textPrimary}
+                                      size={iconSize.md}
+                                      strokeWidth={iconStroke.regular}
+                                    />
+                                  ) : null}
+                                </View>
                               </RNHostView>
                             </DropdownMenuItem.LeadingIcon>
                           ) : null}

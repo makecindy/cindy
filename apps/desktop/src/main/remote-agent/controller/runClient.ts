@@ -64,6 +64,7 @@ export interface RemoteAgentRunHandlers {
   onClosed(reason: string, error?: RemoteAgentErrorInfo, idleReclaimed?: boolean): void;
   /** 本机还有这个任务的工作在进行、对方看不到(拉取时报 hold，对方不按闲置收回)。 */
   holdsRemote?(): boolean;
+  recoverAuthorization?(): Promise<void>;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -103,20 +104,32 @@ export class RemoteAgentRunClient implements PolledRun {
     });
   }
 
+  async recoverAuthorization(): Promise<void> {
+    if (!this.closed) await this.handlers.recoverAuthorization?.();
+  }
+
   static async caps(invoke: RemoteAgentInvoke): Promise<RemoteAgentCaps> {
     return parseRemoteAgentCaps(await invoke([{ op: 'caps' }]));
   }
 
   /** 把一个 JSON 值做成载荷：小的内联，大的 gzip 后分段上传。 */
   async payload(value: unknown, uploadId = this.newId()): Promise<RemoteAgentPayload> {
+    const requireOpen = () => {
+      if (this.closed) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
+    };
+    requireOpen();
     const text = JSON.stringify(value ?? null);
     if (text.length <= REMOTE_AGENT_MAX_INLINE_PAYLOAD_CHARS) return { json: JSON.parse(text) as unknown };
     const gz = await gzipAsync(Buffer.from(text, 'utf8'));
+    requireOpen();
     if (gz.length > REMOTE_AGENT_MAX_PAYLOAD_BYTES) throw new Error('The request is too large to send to the other computer.');
     const chunks = Math.max(1, Math.ceil(gz.length / REMOTE_AGENT_UPLOAD_CHUNK_BYTES));
     for (let index = 0; index < chunks; index += 1) {
+      requireOpen();
       const data = gz.subarray(index * REMOTE_AGENT_UPLOAD_CHUNK_BYTES, (index + 1) * REMOTE_AGENT_UPLOAD_CHUNK_BYTES);
       await this.invoke([{ op: 'upload', uploadId, index, data: data.toString('base64') }]);
+      // An in-flight chunk can finish after cancellation, but no next chunk or open may start.
+      requireOpen();
     }
     return { uploadId, chunks, bytes: gz.length };
   }

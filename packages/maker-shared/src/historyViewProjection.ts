@@ -179,7 +179,7 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     ));
     const plainAssistant = !nested && row.role === 'assistant' && typeof row.content === 'string'
       && !meta?.botCollaboration && !meta?.botDirectMessage
-      && !meta?.systemCardType && !meta?.goalCompletion && !meta?.goalNotice && !meta?.reviewRun;
+      && !meta?.systemCardType && !meta?.goalCompletion && !meta?.goalNotice && !meta?.reviewRun && !meta?.pluginModelRoute;
     return { type: 'source', row, activity, archivable: activity || (
       plainAssistant && !isDeliveryProseText(row.content as string)
     ) };
@@ -201,9 +201,25 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
   }
   flushToolSegment();
   type Item = SourceItem<T> | GroupItem<T>;
+  // thinking 行按块起点落库,结束时刻只留在 content.finishedAt —— 组时长必须用它收口,
+  // 否则「用户 → 15s 思考 → 回答」会算成从思考起点就结束。
+  const rowEndMs = (row: T): number => {
+    const started = Date.parse(row.createdAt);
+    if (row.role !== 'thinking') return started;
+    const content = row.content && typeof row.content === 'object' && !Array.isArray(row.content)
+      ? row.content as Record<string, unknown> : null;
+    const finishedAt = typeof content?.finishedAt === 'number' && Number.isFinite(content.finishedAt)
+      ? content.finishedAt : null;
+    return finishedAt ?? started;
+  };
   const timestamp = (item: Item | undefined): number | null => {
     if (!item) return null;
     const ms = item.type === 'group' ? item.summary.startedAtMs : Date.parse(item.row.createdAt);
+    return Number.isFinite(ms) ? ms : null;
+  };
+  const endTimestamp = (item: Item | undefined): number | null => {
+    if (!item) return null;
+    const ms = item.type === 'group' ? item.summary.endedAtMs : rowEndMs(item.row);
     return Number.isFinite(ms) ? ms : null;
   };
   const group = (run: SourceItem<T>[], active: boolean, boundary: number | null): GroupItem<T> => {
@@ -211,7 +227,8 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     const last = run[run.length - 1].row;
     const anchor = run.find((item) => item.activity && item.row.role !== 'tool_result')?.row ?? first;
     const startedAtMs = boundary ?? Date.parse(first.createdAt);
-    const endedAtMs = Date.parse(last.createdAt);
+    // 并行的动作可能乱序完成:按起点排的行里,更早的 thinking 可能结束得比最后一行还晚。
+    const endedAtMs = run.reduce((end, item) => Math.max(end, rowEndMs(item.row)), 0);
     const hash = historyRowsHash(run.map((item) => item.row));
     return { type: 'group', summary: {
       key: `work-${anchor.clientId || anchor.id}`,
@@ -276,8 +293,11 @@ function projectHistorySourceView<T extends HistoryMessageSource>(
     isCompactBoundary: (item) => item.type === 'source' && item.row.role === 'system',
     isActivity: (item): item is SourceItem<T> => item.type === 'source' && item.activity,
     isArchivable: (item): item is SourceItem<T> => item.type === 'source' && item.archivable,
+    // 分页游标按消息 id 切:work 的行区间一旦延伸到紧随其后的回答之后,切点落在回答上时
+    // 尾随行两页都取不到。这里不并回,渲染端拿到行后自行重新分组。
+    foldAnswerTail: false,
     startTimestamp: timestamp,
-    endTimestamp: timestamp,
+    endTimestamp,
     boundaryTimestamp: timestamp,
     userBoundaryEnd: (item, previous) => timestamp(item) ?? previous,
     createGroup: (run, _next, active, boundary) => activityGroup(run, active, boundary),

@@ -93,7 +93,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 import { applyScheduledModelSelection, createScheduledModelScope, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import type { ProviderView } from '@cindy/model-providers';
 import type { Scheduler } from '@cindy/maker-scheduler';
@@ -290,6 +290,7 @@ function createRunnerHarness(
     // 默认 false = fresh spawn（opts.model/effort 已生效）；true 模拟进程内
     // 复用 active session 的路径（createSession 忽略 opts, setModel/setEffort 是唯一通道）。
     isSessionAlive: vi.fn(() => opts.sessionAlive ?? false),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const notifier: Notifier = { notify: vi.fn(async () => undefined) };
   const runner = new MakerScheduleRunner({
@@ -475,7 +476,7 @@ describe('MakerScheduleRunner model selection', () => {
       const acceptedClientId = mocks.createMessage.mock.calls[0][1].clientId;
       expect(acceptedClientId).toEqual(expect.any(String));
       expect(mocks.rewindPersistedUserMessageAfterClear)
-        .toHaveBeenCalledExactlyOnceWith(h.session.id, acceptedClientId);
+        .toHaveBeenCalledExactlyOnceWith(h.session.id, acceptedClientId, { discard: true });
     });
 
     // Merge regression, unit: a legacy remote default must not mask an explicit

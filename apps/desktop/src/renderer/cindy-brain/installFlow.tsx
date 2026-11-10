@@ -9,7 +9,7 @@ import {
 } from '../../shared/ghost';
 import {
   findInstalledGhostByInstanceId,
-  findInstalledRootGhostForFileImport,
+  findInstalledLocalGhostForFileImport,
   installedGhostStoragePart,
 } from '../../shared/pluginIdentity';
 import { ghostInstallErrorKey } from './installErrorKey';
@@ -47,11 +47,11 @@ function findInstalled(id: string): InstalledGhost | null {
   }
 }
 
-/** 拖入或双击只更新 root，不选中同名企业实例。 */
-function findInstalledRootForFile(ghostId: string): InstalledGhost | null {
+/** 拖入或双击只更新 local 开发副本，不选中市场或企业实例。 */
+function findInstalledLocalForFile(ghostId: string): InstalledGhost | null {
   try {
     const { ghosts } = window.electronAPI.ghosts.listSync();
-    return findInstalledRootGhostForFileImport(ghosts, ghostId);
+    return findInstalledLocalGhostForFileImport(ghosts, ghostId);
   } catch {
     return null;
   }
@@ -102,7 +102,7 @@ export async function installGhostFromFile(
 
   // 1.5) 同 id 已装 → 转更新分支(拖入/双击/装入按钮选到新版包时不再报
   // "已经注入",直接原位更新)。
-  const installed = findInstalledRootForFile(manifest.id);
+  const installed = findInstalledLocalForFile(manifest.id);
   if (installed) {
     await runUpdate(lizFilePath, packageSha256, installed, deps);
     return;

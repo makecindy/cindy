@@ -3,6 +3,8 @@
  * capability for one shared provider. src/dst always remain physical device identifiers.
  */
 export const PROVIDER_SHARE_RELAY_CAPABILITY = 'provider-share-v1';
+/** Relay can route provider-share WebRTC signaling in both directions. */
+export const PROVIDER_SHARE_DIRECT_SIGNAL_CAPABILITY = 'provider-share-direct-signal-v1';
 export type ProviderShareEndpoint = { role: 'host' } | { role: 'guest'; memberId: string };
 export interface ProviderShareScope {
   shareId: string;

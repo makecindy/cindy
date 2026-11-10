@@ -2,11 +2,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { invokeOpenPath } from '../../preload/openPath';
 import { shouldOpenTextLightbox } from '../lib/filePreview';
-import { toast } from '../lib/toast';
-
-vi.mock('../lib/toast', () => ({ toast: { error: vi.fn() } }));
-vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
-vi.mock('../lib/remoteFileOpen', () => ({ openRemoteChatFile: vi.fn() }));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -25,16 +20,17 @@ describe('opening a non-text file from chat', () => {
     window.electronAPI = {
       openPath: (target: string) => invokeOpenPath(invoke, target),
     } as typeof window.electronAPI;
-    expect(await shouldOpenTextLightbox('report.pdf')).toBe(false);
-    expect(toast.error).toHaveBeenCalledTimes(visible ? 1 : 0);
-    if (visible) expect(toast.error).toHaveBeenCalledWith(message);
+    const result = await window.electronAPI.openPath('report.pdf');
+    expect(result).toEqual({ success: false, error: message, ...(!visible ? { failureKind: 'ipc_lifecycle' } : {}) });
   });
 
-  it('still shows an ordinary system error returned by main', async () => {
+  it('routes PDF to the in-app preview without invoking the system app', async () => {
     vi.stubGlobal('electronAPI', {
       openPath: vi.fn().mockResolvedValue({ success: false, error: 'No application associated' }),
     });
-    await shouldOpenTextLightbox('report.pdf');
-    expect(toast.error).toHaveBeenCalledWith('No application associated');
+    expect(await shouldOpenTextLightbox('report.pdf')).toBe(true);
+    expect(window.electronAPI.openPath).not.toHaveBeenCalled();
+    const systemError = { success: false, error: 'No application associated' };
+    expect(await invokeOpenPath(vi.fn().mockResolvedValue(systemError), 'report.pdf')).toEqual(systemError);
   });
 });

@@ -35,6 +35,7 @@ export function NativeVideoPlayer({
   url,
   visible,
   autoPlay = false,
+  nativeControls = true,
   onVideoSize,
 }: {
   onError(detail: string): void;
@@ -45,6 +46,8 @@ export function NativeVideoPlayer({
   visible: boolean;
   /** Only true after an explicit play action in the message stream. */
   autoPlay?: boolean;
+  /** A message cover uses the paused first frame beneath its own gallery link. */
+  nativeControls?: boolean;
   /** Intrinsic display size, available once the native track renders. */
   onVideoSize?: (size: { width: number; height: number }) => void;
 }) {
@@ -116,8 +119,8 @@ export function NativeVideoPlayer({
       <VideoView
         allowsPictureInPicture={false}
         contentFit="contain"
-        fullscreenOptions={{ enable: true, orientation: "default" }}
-        nativeControls
+        fullscreenOptions={{ enable: nativeControls, orientation: "default" }}
+        nativeControls={nativeControls}
         onFirstFrameRender={() => {
           const size = player.videoTrack?.size;
           if (size && Number.isFinite(size.width) && Number.isFinite(size.height)

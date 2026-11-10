@@ -55,7 +55,7 @@ mountPage({
     let view = viewFor(ctx.case);
     const routines = [
       routine('builtin-follow-up-cindy-default', 'follow-up', true),
-      routine('builtin-todo-check-cindy-default', 'todo-check', false),
+      routine('builtin-todo-check-cindy-default', undefined, false, '每天查待办'),
       ...(view.enabled === null ? [] : [routine('builtin-nightly-learning-cindy-default', 'nightly-learning', view.enabled)]),
       routine('weekly-report', undefined, true, '每周一整理周报'),
     ];

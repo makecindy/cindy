@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const imageResolve = vi.hoisted(() => vi.fn());
 const videoResolve = vi.hoisted(() => vi.fn());
-vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: imageResolve }));
+vi.mock('../../imageCacheStore.desktop.js', () => ({ resolveSafe: imageResolve }));
 vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: videoResolve }));
 
 const uploadLocalFile = vi.hoisted(() => vi.fn());

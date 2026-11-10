@@ -31,10 +31,10 @@ it('bounds native export and preserves the hidden document and system share boun
   const route = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
   const share = route.indexOf("await sharing.shareAsync(localUri, { mimeType: 'image/png' });");
   const completed = route.indexOf('shareCompleted = true;', share);
-  const inactive = route.indexOf('if (!isShareOperationActive()) return;', share);
   expect(share).toBeGreaterThanOrEqual(0);
   expect(completed).toBeGreaterThan(share);
-  expect(inactive).toBeGreaterThan(completed);
+  // Selection now closes before opening the sheet. File lifetime still follows
+  // the native promise, independent of that UI state.
   expect(route).toContain('if (!shareCompleted && localUri)');
 });
 
@@ -310,7 +310,9 @@ describe('persistent native history ownership', () => {
     const route = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
     const layout = readFileSync(resolve(process.cwd(), 'src/session/SessionTaskLayout.tsx'), 'utf8');
     expect(route).toContain('<SessionTaskLayout>');
-    expect(layout).toContain('<MessageHistoryOverlay enabled={false}>');
+    const drawerOwner = readFileSync(resolve(process.cwd(), 'src/session/SessionTaskDrawer.tsx'), 'utf8');
+    expect(layout).toContain('<SessionTaskDrawerProvider');
+    expect(drawerOwner).toContain('<MessageHistoryOverlay enabled={false}>');
     expect(layout).toContain('persistent={paneLayout.persistent}');
   });
   it('does not keep the old route preloading mechanism alongside the resident host', () => {
@@ -322,7 +324,7 @@ describe('persistent native history ownership', () => {
     for (const source of [layout.replace(/\r\n/g, '\n'), layout.replace(/\r?\n/g, '\r\n')]) {
       const provider = source.search(/<RecentMessageHistoriesProvider(?:\s|>)/);
       const residentProvider = source.indexOf('<ResidentHomeListProvider>');
-      const stack = source.search(/<Stack\s/);
+      const stack = source.search(/<AdaptiveNavigationStack[\s/>]/);
       expect(provider).toBeGreaterThanOrEqual(0);
       expect(residentProvider).toBeGreaterThan(provider);
       expect(stack).toBeGreaterThan(provider);

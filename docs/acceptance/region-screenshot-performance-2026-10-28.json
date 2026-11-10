@@ -1,0 +1,1358 @@
+{
+  "generatedAt": "2026-10-28T12:03:26.469Z",
+  "baseline": "7fdb9dd0963794cf46bc026f240d34c568bac03f",
+  "samples": 30,
+  "platform": "win32",
+  "arch": "x64",
+  "cpu": "Intel(R) Core(TM) Ultra 7 265K",
+  "scope": "Real Electron offscreen renderer (1040x760 DIP, 2x density), synthetic opaque BGRA source at the stated dimensions. Excludes OS capture, native window startup, IPC serialization, clipboard and disk. 3 warmups per batch; alternating before/after batches. First-paint timing includes two animation frames and is sensitive to vsync/GC.",
+  "results": [
+    {
+      "width": 1920,
+      "height": 1080,
+      "scale": 1,
+      "before": {
+        "beginSyncMs": {
+          "p50": 3.6,
+          "p95": 5.2
+        },
+        "paintedMs": {
+          "p50": 29.3,
+          "p95": 31.4
+        },
+        "exportMs": {
+          "p50": 12.1,
+          "p95": 13.2
+        },
+        "frameWrites": 2,
+        "raw": [
+          {
+            "syncMs": 4.300000011920929,
+            "paintedMs": 30,
+            "frameWrites": 2,
+            "exportMs": 12.399999976158142
+          },
+          {
+            "syncMs": 4,
+            "paintedMs": 28.900000005960464,
+            "frameWrites": 2,
+            "exportMs": 13.799999982118607
+          },
+          {
+            "syncMs": 5.199999988079071,
+            "paintedMs": 28.69999998807907,
+            "frameWrites": 2,
+            "exportMs": 12.199999988079071
+          },
+          {
+            "syncMs": 3.2999999821186066,
+            "paintedMs": 29.299999982118607,
+            "frameWrites": 2,
+            "exportMs": 12.299999982118607
+          },
+          {
+            "syncMs": 4.0999999940395355,
+            "paintedMs": 29,
+            "frameWrites": 2,
+            "exportMs": 12.799999982118607
+          },
+          {
+            "syncMs": 3.5999999940395355,
+            "paintedMs": 27.19999998807907,
+            "frameWrites": 2,
+            "exportMs": 12.199999988079071
+          },
+          {
+            "syncMs": 3.5,
+            "paintedMs": 27.099999994039536,
+            "frameWrites": 2,
+            "exportMs": 11.800000011920929
+          },
+          {
+            "syncMs": 3.5999999940395355,
+            "paintedMs": 31.400000005960464,
+            "frameWrites": 2,
+            "exportMs": 12.099999994039536
+          },
+          {
+            "syncMs": 3.9000000059604645,
+            "paintedMs": 29.5,
+            "frameWrites": 2,
+            "exportMs": 12.5
+          },
+          {
+            "syncMs": 4.0999999940395355,
+            "paintedMs": 29.19999998807907,
+            "frameWrites": 2,
+            "exportMs": 13
+          },
+          {
+            "syncMs": 3.5,
+            "paintedMs": 30.30000001192093,
+            "frameWrites": 2,
+            "exportMs": 12.400000005960464
+          },
+          {
+            "syncMs": 3.5,
+            "paintedMs": 30,
+            "frameWrites": 2,
+            "exportMs": 11.800000011920929
+          },
+          {
+            "syncMs": 3.7999999821186066,
+            "paintedMs": 29.69999998807907,
+            "frameWrites": 2,
+            "exportMs": 12
+          },
+          {
+            "syncMs": 3.5999999940395355,
+            "paintedMs": 29.200000017881393,
+            "frameWrites": 2,
+            "exportMs": 12.199999988079071
+          },
+          {
+            "syncMs": 3.4000000059604645,
+            "paintedMs": 29.900000005960464,
+            "frameWrites": 2,
+            "exportMs": 11.600000023841858
+          },
+          {
+            "syncMs": 3.5999999940395355,
+            "paintedMs": 28,
+            "frameWrites": 2,
+            "exportMs": 12.099999994039536
+          },
+          {
+            "syncMs": 5.4000000059604645,
+            "paintedMs": 29.5,
+            "frameWrites": 2,
+            "exportMs": 12.5
+          },
+          {
+            "syncMs": 4.100000023841858,
+            "paintedMs": 27.600000023841858,
+            "frameWrites": 2,
+            "exportMs": 12
+          },
+          {
+            "syncMs": 3.4000000059604645,
+            "paintedMs": 27.099999994039536,
+            "frameWrites": 2,
+            "exportMs": 12
+          },
+          {
+            "syncMs": 3.5,
+            "paintedMs": 29.30000001192093,
+            "frameWrites": 2,
+            "exportMs": 11.900000005960464
+          },
+          {
+            "syncMs": 4,
+            "paintedMs": 31.5,
+            "frameWrites": 2,
+            "exportMs": 12
+          },
+          {
+            "syncMs": 3.5999999940395355,
+            "paintedMs": 29.30000001192093,
+            "frameWrites": 2,
+            "exportMs": 13.200000017881393
+          },
+          {
+            "syncMs": 3.699999988079071,
+            "paintedMs": 29.299999982118607,
+            "frameWrites": 2,
+            "exportMs": 11.399999976158142
+          },
+          {
+            "syncMs": 3.2999999821186066,
+            "paintedMs": 31.299999982118607,
+            "frameWrites": 2,
+            "exportMs": 11.799999982118607
+          },
+          {
+            "syncMs": 4,
+            "paintedMs": 29.80000001192093,
+            "frameWrites": 2,
+            "exportMs": 12.5
+          },
+          {
+            "syncMs": 3.600000023841858,
+            "paintedMs": 29.200000017881393,
+            "frameWrites": 2,
+            "exportMs": 11.800000011920929
+          },
+          {
+            "syncMs": 3.300000011920929,
+            "paintedMs": 31.400000005960464,
+            "frameWrites": 2,
+            "exportMs": 12
+          },
+          {
+            "syncMs": 3.5999999940395355,
+            "paintedMs": 30.599999994039536,
+            "frameWrites": 2,
+            "exportMs": 12.099999994039536
+          },
+          {
+            "syncMs": 4.0999999940395355,
+            "paintedMs": 29.69999998807907,
+            "frameWrites": 2,
+            "exportMs": 12.600000023841858
+          },
+          {
+            "syncMs": 3.4000000059604645,
+            "paintedMs": 28.900000005960464,
+            "frameWrites": 2,
+            "exportMs": 11.800000011920929
+          }
+        ]
+      },
+      "after": {
+        "beginSyncMs": {
+          "p50": 3.3,
+          "p95": 5.3
+        },
+        "paintedMs": {
+          "p50": 33.4,
+          "p95": 34.2
+        },
+        "exportMs": {
+          "p50": 2.85,
+          "p95": 5.9
+        },
+        "frameWrites": 1,
+        "raw": [
+          {
+            "syncMs": 3.0999999940395355,
+            "paintedMs": 34,
+            "frameWrites": 1,
+            "exportMs": 3.899999976158142
+          },
+          {
+            "syncMs": 4.9000000059604645,
+            "paintedMs": 32.900000005960464,
+            "frameWrites": 1,
+            "exportMs": 5.9000000059604645
+          },
+          {
+            "syncMs": 4.899999976158142,
+            "paintedMs": 32.79999998211861,
+            "frameWrites": 1,
+            "exportMs": 2.699999988079071
+          },
+          {
+            "syncMs": 3.4000000059604645,
+            "paintedMs": 33.400000005960464,
+            "frameWrites": 1,
+            "exportMs": 2.899999976158142
+          },
+          {
+            "syncMs": 3.0999999940395355,
+            "paintedMs": 33.900000005960464,
+            "frameWrites": 1,
+            "exportMs": 2.9000000059604645
+          },
+          {
+            "syncMs": 4.300000011920929,
+            "paintedMs": 32.099999994039536,
+            "frameWrites": 1,
+            "exportMs": 2.699999988079071
+          },
+          {
+            "syncMs": 5.4000000059604645,
+            "paintedMs": 33.400000005960464,
+            "frameWrites": 1,
+            "exportMs": 2.899999976158142
+          },
+          {
+            "syncMs": 3.0999999940395355,
+            "paintedMs": 33,
+            "frameWrites": 1,
+            "exportMs": 2.699999988079071
+          },
+          {
+            "syncMs": 3,
+            "paintedMs": 33.099999994039536,
+            "frameWrites": 1,
+            "exportMs": 4.9000000059604645
+          },
+          {
+            "syncMs": 3.300000011920929,
+            "paintedMs": 33.19999998807907,
+            "frameWrites": 1,
+            "exportMs": 2.699999988079071
+          },
+          {
+            "syncMs": 3.2000000178813934,
+            "paintedMs": 34.099999994039536,
+            "frameWrites": 1,
+            "exportMs": 2.7999999821186066
+          },
+          {
+            "syncMs": 3.5999999940395355,
+            "paintedMs": 33.69999998807907,
+            "frameWrites": 1,
+            "exportMs": 2.699999988079071
+          },
+          {
+            "syncMs": 3.5999999940395355,
+            "paintedMs": 33.900000005960464,
+            "frameWrites": 1,
+            "exportMs": 3.0999999940395355
+          },
+          {
+            "syncMs": 3.199999988079071,
+            "paintedMs": 33.5,
+            "frameWrites": 1,
+            "exportMs": 2.5999999940395355
+          },
+          {
+            "syncMs": 2.9000000059604645,
+            "paintedMs": 33.400000005960464,
+            "frameWrites": 1,
+            "exportMs": 3
+          },
+          {
+            "syncMs": 3.300000011920929,
+            "paintedMs": 33.400000005960464,
+            "frameWrites": 1,
+            "exportMs": 3.9000000059604645
+          },
+          {
+            "syncMs": 3.7999999821186066,
+            "paintedMs": 33.099999994039536,
+            "frameWrites": 1,
+            "exportMs": 2.9000000059604645
+          },
+          {
+            "syncMs": 3.300000011920929,
+            "paintedMs": 32.70000001788139,
+            "frameWrites": 1,
+            "exportMs": 3.800000011920929
+          },
+          {
+            "syncMs": 3.2999999821186066,
+            "paintedMs": 34.29999998211861,
+            "frameWrites": 1,
+            "exportMs": 7
+          },
+          {
+            "syncMs": 5.0999999940395355,
+            "paintedMs": 29.900000005960464,
+            "frameWrites": 1,
+            "exportMs": 2.5999999940395355
+          },
+          {
+            "syncMs": 3.0999999940395355,
+            "paintedMs": 32.29999998211861,
+            "frameWrites": 1,
+            "exportMs": 2.5999999940395355
+          },
+          {
+            "syncMs": 3,
+            "paintedMs": 33.10000002384186,
+            "frameWrites": 1,
+            "exportMs": 2.9000000059604645
+          },
+          {
+            "syncMs": 2.9000000059604645,
+            "paintedMs": 34,
+            "frameWrites": 1,
+            "exportMs": 3.5999999940395355
+          },
+          {
+            "syncMs": 3.100000023841858,
+            "paintedMs": 33.30000001192093,
+            "frameWrites": 1,
+            "exportMs": 2.800000011920929
+          },
+          {
+            "syncMs": 3,
+            "paintedMs": 32.5,
+            "frameWrites": 1,
+            "exportMs": 2.800000011920929
+          },
+          {
+            "syncMs": 3.5,
+            "paintedMs": 34.099999994039536,
+            "frameWrites": 1,
+            "exportMs": 2.800000011920929
+          },
+          {
+            "syncMs": 5.299999982118607,
+            "paintedMs": 34.19999998807907,
+            "frameWrites": 1,
+            "exportMs": 2.7999999821186066
+          },
+          {
+            "syncMs": 3.0999999940395355,
+            "paintedMs": 33.599999994039536,
+            "frameWrites": 1,
+            "exportMs": 2.699999988079071
+          },
+          {
+            "syncMs": 3,
+            "paintedMs": 32.79999998211861,
+            "frameWrites": 1,
+            "exportMs": 2.800000011920929
+          },
+          {
+            "syncMs": 3.5999999940395355,
+            "paintedMs": 33.900000005960464,
+            "frameWrites": 1,
+            "exportMs": 5.199999988079071
+          }
+        ]
+      }
+    },
+    {
+      "width": 3840,
+      "height": 2160,
+      "scale": 2,
+      "before": {
+        "beginSyncMs": {
+          "p50": 13.5,
+          "p95": 15.5
+        },
+        "paintedMs": {
+          "p50": 20.65,
+          "p95": 32
+        },
+        "exportMs": {
+          "p50": 44.9,
+          "p95": 55.6
+        },
+        "frameWrites": 2,
+        "raw": [
+          {
+            "syncMs": 14,
+            "paintedMs": 25.200000017881393,
+            "frameWrites": 2,
+            "exportMs": 45.70000001788139
+          },
+          {
+            "syncMs": 12.900000005960464,
+            "paintedMs": 15,
+            "frameWrites": 2,
+            "exportMs": 45.599999994039536
+          },
+          {
+            "syncMs": 13.399999976158142,
+            "paintedMs": 18.5,
+            "frameWrites": 2,
+            "exportMs": 44.900000005960464
+          },
+          {
+            "syncMs": 13,
+            "paintedMs": 16.80000001192093,
+            "frameWrites": 2,
+            "exportMs": 44.69999998807907
+          },
+          {
+            "syncMs": 13.200000017881393,
+            "paintedMs": 18.5,
+            "frameWrites": 2,
+            "exportMs": 44.29999998211861
+          },
+          {
+            "syncMs": 13,
+            "paintedMs": 17.19999998807907,
+            "frameWrites": 2,
+            "exportMs": 44.5
+          },
+          {
+            "syncMs": 13.5,
+            "paintedMs": 25,
+            "frameWrites": 2,
+            "exportMs": 45.5
+          },
+          {
+            "syncMs": 14,
+            "paintedMs": 21.30000001192093,
+            "frameWrites": 2,
+            "exportMs": 44.30000001192093
+          },
+          {
+            "syncMs": 14.700000017881393,
+            "paintedMs": 20,
+            "frameWrites": 2,
+            "exportMs": 55.599999994039536
+          },
+          {
+            "syncMs": 16,
+            "paintedMs": 18.400000005960464,
+            "frameWrites": 2,
+            "exportMs": 45.19999998807907
+          },
+          {
+            "syncMs": 13.400000005960464,
+            "paintedMs": 18.600000023841858,
+            "frameWrites": 2,
+            "exportMs": 44.79999998211861
+          },
+          {
+            "syncMs": 13.099999994039536,
+            "paintedMs": 17.19999998807907,
+            "frameWrites": 2,
+            "exportMs": 44.89999997615814
+          },
+          {
+            "syncMs": 14.100000023841858,
+            "paintedMs": 19.200000017881393,
+            "frameWrites": 2,
+            "exportMs": 44.900000005960464
+          },
+          {
+            "syncMs": 12.900000005960464,
+            "paintedMs": 30.200000017881393,
+            "frameWrites": 2,
+            "exportMs": 48.5
+          },
+          {
+            "syncMs": 13.799999982118607,
+            "paintedMs": 31.599999994039536,
+            "frameWrites": 2,
+            "exportMs": 45.900000005960464
+          },
+          {
+            "syncMs": 13.800000011920929,
+            "paintedMs": 29.599999994039536,
+            "frameWrites": 2,
+            "exportMs": 44
+          },
+          {
+            "syncMs": 13.599999994039536,
+            "paintedMs": 27.80000001192093,
+            "frameWrites": 2,
+            "exportMs": 43.29999998211861
+          },
+          {
+            "syncMs": 13.400000005960464,
+            "paintedMs": 25.299999982118607,
+            "frameWrites": 2,
+            "exportMs": 45
+          },
+          {
+            "syncMs": 13.300000011920929,
+            "paintedMs": 25.700000017881393,
+            "frameWrites": 2,
+            "exportMs": 43.5
+          },
+          {
+            "syncMs": 13.900000005960464,
+            "paintedMs": 29.900000005960464,
+            "frameWrites": 2,
+            "exportMs": 45.80000001192093
+          },
+          {
+            "syncMs": 13.700000017881393,
+            "paintedMs": 19.5,
+            "frameWrites": 2,
+            "exportMs": 44.900000005960464
+          },
+          {
+            "syncMs": 13.599999994039536,
+            "paintedMs": 19.599999994039536,
+            "frameWrites": 2,
+            "exportMs": 45.80000001192093
+          },
+          {
+            "syncMs": 12.799999982118607,
+            "paintedMs": 24.299999982118607,
+            "frameWrites": 2,
+            "exportMs": 45.69999998807907
+          },
+          {
+            "syncMs": 13.5,
+            "paintedMs": 18.900000005960464,
+            "frameWrites": 2,
+            "exportMs": 45.900000005960464
+          },
+          {
+            "syncMs": 13.899999976158142,
+            "paintedMs": 32,
+            "frameWrites": 2,
+            "exportMs": 46.900000005960464
+          },
+          {
+            "syncMs": 15.5,
+            "paintedMs": 34.099999994039536,
+            "frameWrites": 2,
+            "exportMs": 58
+          },
+          {
+            "syncMs": 13.299999982118607,
+            "paintedMs": 16.599999994039536,
+            "frameWrites": 2,
+            "exportMs": 44.400000005960464
+          },
+          {
+            "syncMs": 13.199999988079071,
+            "paintedMs": 25.299999982118607,
+            "frameWrites": 2,
+            "exportMs": 44.400000005960464
+          },
+          {
+            "syncMs": 13.600000023841858,
+            "paintedMs": 26.700000017881393,
+            "frameWrites": 2,
+            "exportMs": 43.79999998211861
+          },
+          {
+            "syncMs": 13.5,
+            "paintedMs": 19.30000001192093,
+            "frameWrites": 2,
+            "exportMs": 44.79999998211861
+          }
+        ]
+      },
+      "after": {
+        "beginSyncMs": {
+          "p50": 11.45,
+          "p95": 12.5
+        },
+        "paintedMs": {
+          "p50": 18.75,
+          "p95": 29.2
+        },
+        "exportMs": {
+          "p50": 12.55,
+          "p95": 18.3
+        },
+        "frameWrites": 1,
+        "raw": [
+          {
+            "syncMs": 12.400000005960464,
+            "paintedMs": 21.599999994039536,
+            "frameWrites": 1,
+            "exportMs": 18.30000001192093
+          },
+          {
+            "syncMs": 11.199999988079071,
+            "paintedMs": 29.19999998807907,
+            "frameWrites": 1,
+            "exportMs": 16.80000001192093
+          },
+          {
+            "syncMs": 11.199999988079071,
+            "paintedMs": 24.900000005960464,
+            "frameWrites": 1,
+            "exportMs": 10.400000005960464
+          },
+          {
+            "syncMs": 11,
+            "paintedMs": 19,
+            "frameWrites": 1,
+            "exportMs": 11.599999994039536
+          },
+          {
+            "syncMs": 11.599999994039536,
+            "paintedMs": 18.299999982118607,
+            "frameWrites": 1,
+            "exportMs": 13.099999994039536
+          },
+          {
+            "syncMs": 11.400000005960464,
+            "paintedMs": 16.200000017881393,
+            "frameWrites": 1,
+            "exportMs": 12.199999988079071
+          },
+          {
+            "syncMs": 11.5,
+            "paintedMs": 29.69999998807907,
+            "frameWrites": 1,
+            "exportMs": 12.600000023841858
+          },
+          {
+            "syncMs": 11.600000023841858,
+            "paintedMs": 16.600000023841858,
+            "frameWrites": 1,
+            "exportMs": 12.099999994039536
+          },
+          {
+            "syncMs": 11.099999994039536,
+            "paintedMs": 18.5,
+            "frameWrites": 1,
+            "exportMs": 12.700000017881393
+          },
+          {
+            "syncMs": 12.5,
+            "paintedMs": 17.400000005960464,
+            "frameWrites": 1,
+            "exportMs": 15.800000011920929
+          },
+          {
+            "syncMs": 11.299999982118607,
+            "paintedMs": 13.5,
+            "frameWrites": 1,
+            "exportMs": 12.900000005960464
+          },
+          {
+            "syncMs": 11.699999988079071,
+            "paintedMs": 17.80000001192093,
+            "frameWrites": 1,
+            "exportMs": 11.599999994039536
+          },
+          {
+            "syncMs": 11.299999982118607,
+            "paintedMs": 18.19999998807907,
+            "frameWrites": 1,
+            "exportMs": 13.199999988079071
+          },
+          {
+            "syncMs": 13,
+            "paintedMs": 29,
+            "frameWrites": 1,
+            "exportMs": 10.299999982118607
+          },
+          {
+            "syncMs": 11.800000011920929,
+            "paintedMs": 19.200000017881393,
+            "frameWrites": 1,
+            "exportMs": 12.200000017881393
+          },
+          {
+            "syncMs": 12,
+            "paintedMs": 21.900000005960464,
+            "frameWrites": 1,
+            "exportMs": 15.099999994039536
+          },
+          {
+            "syncMs": 11,
+            "paintedMs": 13.099999994039536,
+            "frameWrites": 1,
+            "exportMs": 17.200000017881393
+          },
+          {
+            "syncMs": 11.199999988079071,
+            "paintedMs": 23.400000005960464,
+            "frameWrites": 1,
+            "exportMs": 10.5
+          },
+          {
+            "syncMs": 11.099999994039536,
+            "paintedMs": 19.80000001192093,
+            "frameWrites": 1,
+            "exportMs": 11.799999982118607
+          },
+          {
+            "syncMs": 11.5,
+            "paintedMs": 19.30000001192093,
+            "frameWrites": 1,
+            "exportMs": 12.300000011920929
+          },
+          {
+            "syncMs": 11.599999994039536,
+            "paintedMs": 17.5,
+            "frameWrites": 1,
+            "exportMs": 12
+          },
+          {
+            "syncMs": 10.900000005960464,
+            "paintedMs": 13.200000017881393,
+            "frameWrites": 1,
+            "exportMs": 12.5
+          },
+          {
+            "syncMs": 12,
+            "paintedMs": 18.5,
+            "frameWrites": 1,
+            "exportMs": 10.899999976158142
+          },
+          {
+            "syncMs": 11.099999994039536,
+            "paintedMs": 19.799999982118607,
+            "frameWrites": 1,
+            "exportMs": 19.30000001192093
+          },
+          {
+            "syncMs": 12.399999976158142,
+            "paintedMs": 22.19999998807907,
+            "frameWrites": 1,
+            "exportMs": 12.800000011920929
+          },
+          {
+            "syncMs": 10.900000005960464,
+            "paintedMs": 14.600000023841858,
+            "frameWrites": 1,
+            "exportMs": 12.5
+          },
+          {
+            "syncMs": 11.599999994039536,
+            "paintedMs": 16.80000001192093,
+            "frameWrites": 1,
+            "exportMs": 12
+          },
+          {
+            "syncMs": 11.200000017881393,
+            "paintedMs": 17.599999994039536,
+            "frameWrites": 1,
+            "exportMs": 12.599999994039536
+          },
+          {
+            "syncMs": 11.900000005960464,
+            "paintedMs": 20.900000005960464,
+            "frameWrites": 1,
+            "exportMs": 14
+          },
+          {
+            "syncMs": 11.099999994039536,
+            "paintedMs": 24.599999994039536,
+            "frameWrites": 1,
+            "exportMs": 12.599999994039536
+          }
+        ]
+      }
+    },
+    {
+      "width": 1600,
+      "height": 10000,
+      "scale": 2,
+      "before": {
+        "beginSyncMs": {
+          "p50": 24.85,
+          "p95": 34.3
+        },
+        "paintedMs": {
+          "p50": 39.9,
+          "p95": 47.5
+        },
+        "exportMs": {
+          "p50": 87.7,
+          "p95": 101.1
+        },
+        "frameWrites": 2,
+        "raw": [
+          {
+            "syncMs": 24.399999976158142,
+            "paintedMs": 37.099999994039536,
+            "frameWrites": 2,
+            "exportMs": 88.19999998807907
+          },
+          {
+            "syncMs": 26.5,
+            "paintedMs": 44,
+            "frameWrites": 2,
+            "exportMs": 88.59999999403954
+          },
+          {
+            "syncMs": 24.599999994039536,
+            "paintedMs": 43.099999994039536,
+            "frameWrites": 2,
+            "exportMs": 82.90000000596046
+          },
+          {
+            "syncMs": 32,
+            "paintedMs": 36.20000001788139,
+            "frameWrites": 2,
+            "exportMs": 101.09999999403954
+          },
+          {
+            "syncMs": 25.299999982118607,
+            "paintedMs": 30.899999976158142,
+            "frameWrites": 2,
+            "exportMs": 85.2000000178814
+          },
+          {
+            "syncMs": 24.5,
+            "paintedMs": 36.900000005960464,
+            "frameWrites": 2,
+            "exportMs": 86.69999998807907
+          },
+          {
+            "syncMs": 24.400000005960464,
+            "paintedMs": 29.599999994039536,
+            "frameWrites": 2,
+            "exportMs": 89.69999998807907
+          },
+          {
+            "syncMs": 24.900000005960464,
+            "paintedMs": 37.79999998211861,
+            "frameWrites": 2,
+            "exportMs": 90.7000000178814
+          },
+          {
+            "syncMs": 25.100000023841858,
+            "paintedMs": 44.60000002384186,
+            "frameWrites": 2,
+            "exportMs": 82.40000000596046
+          },
+          {
+            "syncMs": 24.69999998807907,
+            "paintedMs": 28,
+            "frameWrites": 2,
+            "exportMs": 110.5
+          },
+          {
+            "syncMs": 24.30000001192093,
+            "paintedMs": 42.80000001192093,
+            "frameWrites": 2,
+            "exportMs": 85.40000000596046
+          },
+          {
+            "syncMs": 24.799999982118607,
+            "paintedMs": 40.5,
+            "frameWrites": 2,
+            "exportMs": 82
+          },
+          {
+            "syncMs": 24.600000023841858,
+            "paintedMs": 37.20000001788139,
+            "frameWrites": 2,
+            "exportMs": 87.30000001192093
+          },
+          {
+            "syncMs": 24.099999994039536,
+            "paintedMs": 40.19999998807907,
+            "frameWrites": 2,
+            "exportMs": 86.59999999403954
+          },
+          {
+            "syncMs": 25.100000023841858,
+            "paintedMs": 45.30000001192093,
+            "frameWrites": 2,
+            "exportMs": 84.90000000596046
+          },
+          {
+            "syncMs": 25.69999998807907,
+            "paintedMs": 44.79999998211861,
+            "frameWrites": 2,
+            "exportMs": 87.90000000596046
+          },
+          {
+            "syncMs": 24.900000005960464,
+            "paintedMs": 37.80000001192093,
+            "frameWrites": 2,
+            "exportMs": 88.7999999821186
+          },
+          {
+            "syncMs": 24.599999994039536,
+            "paintedMs": 46.099999994039536,
+            "frameWrites": 2,
+            "exportMs": 89.69999998807907
+          },
+          {
+            "syncMs": 25,
+            "paintedMs": 34.30000001192093,
+            "frameWrites": 2,
+            "exportMs": 87.90000000596046
+          },
+          {
+            "syncMs": 25.19999998807907,
+            "paintedMs": 40.599999994039536,
+            "frameWrites": 2,
+            "exportMs": 91.2000000178814
+          },
+          {
+            "syncMs": 24.099999994039536,
+            "paintedMs": 39.599999994039536,
+            "frameWrites": 2,
+            "exportMs": 84.80000001192093
+          },
+          {
+            "syncMs": 27.30000001192093,
+            "paintedMs": 40.19999998807907,
+            "frameWrites": 2,
+            "exportMs": 85.19999998807907
+          },
+          {
+            "syncMs": 34.29999998211861,
+            "paintedMs": 47.5,
+            "frameWrites": 2,
+            "exportMs": 87.5
+          },
+          {
+            "syncMs": 24.5,
+            "paintedMs": 29.900000005960464,
+            "frameWrites": 2,
+            "exportMs": 91.2999999821186
+          },
+          {
+            "syncMs": 24.400000005960464,
+            "paintedMs": 32.69999998807907,
+            "frameWrites": 2,
+            "exportMs": 85.19999998807907
+          },
+          {
+            "syncMs": 25.30000001192093,
+            "paintedMs": 30.600000023841858,
+            "frameWrites": 2,
+            "exportMs": 85.30000001192093
+          },
+          {
+            "syncMs": 24.599999994039536,
+            "paintedMs": 34.19999998807907,
+            "frameWrites": 2,
+            "exportMs": 88.5
+          },
+          {
+            "syncMs": 24.69999998807907,
+            "paintedMs": 44.099999994039536,
+            "frameWrites": 2,
+            "exportMs": 88
+          },
+          {
+            "syncMs": 36.39999997615814,
+            "paintedMs": 53.79999998211861,
+            "frameWrites": 2,
+            "exportMs": 92.80000001192093
+          },
+          {
+            "syncMs": 25,
+            "paintedMs": 43.5,
+            "frameWrites": 2,
+            "exportMs": 85.90000000596046
+          }
+        ]
+      },
+      "after": {
+        "beginSyncMs": {
+          "p50": 21.25,
+          "p95": 29.7
+        },
+        "paintedMs": {
+          "p50": 35.65,
+          "p95": 40.7
+        },
+        "exportMs": {
+          "p50": 22.25,
+          "p95": 39.8
+        },
+        "frameWrites": 1,
+        "raw": [
+          {
+            "syncMs": 22.19999998807907,
+            "paintedMs": 31.80000001192093,
+            "frameWrites": 1,
+            "exportMs": 29.80000001192093
+          },
+          {
+            "syncMs": 25.5,
+            "paintedMs": 35.5,
+            "frameWrites": 1,
+            "exportMs": 39.80000001192093
+          },
+          {
+            "syncMs": 20.799999982118607,
+            "paintedMs": 26.19999998807907,
+            "frameWrites": 1,
+            "exportMs": 25.599999994039536
+          },
+          {
+            "syncMs": 20.69999998807907,
+            "paintedMs": 37.900000005960464,
+            "frameWrites": 1,
+            "exportMs": 23.700000017881393
+          },
+          {
+            "syncMs": 21.30000001192093,
+            "paintedMs": 26.5,
+            "frameWrites": 1,
+            "exportMs": 22.900000005960464
+          },
+          {
+            "syncMs": 20.5,
+            "paintedMs": 23.899999976158142,
+            "frameWrites": 1,
+            "exportMs": 24.200000017881393
+          },
+          {
+            "syncMs": 21.399999976158142,
+            "paintedMs": 30.599999994039536,
+            "frameWrites": 1,
+            "exportMs": 28.099999994039536
+          },
+          {
+            "syncMs": 20.899999976158142,
+            "paintedMs": 37.79999998211861,
+            "frameWrites": 1,
+            "exportMs": 24.5
+          },
+          {
+            "syncMs": 21.19999998807907,
+            "paintedMs": 39.79999998211861,
+            "frameWrites": 1,
+            "exportMs": 21.5
+          },
+          {
+            "syncMs": 21.099999994039536,
+            "paintedMs": 27.19999998807907,
+            "frameWrites": 1,
+            "exportMs": 23.899999976158142
+          },
+          {
+            "syncMs": 21.299999982118607,
+            "paintedMs": 26.5,
+            "frameWrites": 1,
+            "exportMs": 22.900000005960464
+          },
+          {
+            "syncMs": 21.5,
+            "paintedMs": 24.099999994039536,
+            "frameWrites": 1,
+            "exportMs": 24.30000001192093
+          },
+          {
+            "syncMs": 35.30000001192093,
+            "paintedMs": 51.5,
+            "frameWrites": 1,
+            "exportMs": 29.900000005960464
+          },
+          {
+            "syncMs": 20.80000001192093,
+            "paintedMs": 27.599999994039536,
+            "frameWrites": 1,
+            "exportMs": 21.599999994039536
+          },
+          {
+            "syncMs": 24,
+            "paintedMs": 39.599999994039536,
+            "frameWrites": 1,
+            "exportMs": 20.900000005960464
+          },
+          {
+            "syncMs": 22.099999994039536,
+            "paintedMs": 31.099999994039536,
+            "frameWrites": 1,
+            "exportMs": 42.20000001788139
+          },
+          {
+            "syncMs": 21,
+            "paintedMs": 23.299999982118607,
+            "frameWrites": 1,
+            "exportMs": 32.5
+          },
+          {
+            "syncMs": 20.80000001192093,
+            "paintedMs": 30.200000017881393,
+            "frameWrites": 1,
+            "exportMs": 20.900000005960464
+          },
+          {
+            "syncMs": 21,
+            "paintedMs": 35.79999998211861,
+            "frameWrites": 1,
+            "exportMs": 21.200000017881393
+          },
+          {
+            "syncMs": 24.5,
+            "paintedMs": 38,
+            "frameWrites": 1,
+            "exportMs": 21.200000017881393
+          },
+          {
+            "syncMs": 24.30000001192093,
+            "paintedMs": 40.20000001788139,
+            "frameWrites": 1,
+            "exportMs": 21
+          },
+          {
+            "syncMs": 21.099999994039536,
+            "paintedMs": 35.80000001192093,
+            "frameWrites": 1,
+            "exportMs": 20.80000001192093
+          },
+          {
+            "syncMs": 25.100000023841858,
+            "paintedMs": 40.70000001788139,
+            "frameWrites": 1,
+            "exportMs": 20.69999998807907
+          },
+          {
+            "syncMs": 29.700000017881393,
+            "paintedMs": 34.099999994039536,
+            "frameWrites": 1,
+            "exportMs": 25.80000001192093
+          },
+          {
+            "syncMs": 20.69999998807907,
+            "paintedMs": 26.799999982118607,
+            "frameWrites": 1,
+            "exportMs": 20.80000001192093
+          },
+          {
+            "syncMs": 21.099999994039536,
+            "paintedMs": 37.400000005960464,
+            "frameWrites": 1,
+            "exportMs": 20.900000005960464
+          },
+          {
+            "syncMs": 24.600000023841858,
+            "paintedMs": 36.30000001192093,
+            "frameWrites": 1,
+            "exportMs": 21
+          },
+          {
+            "syncMs": 21.19999998807907,
+            "paintedMs": 37.5,
+            "frameWrites": 1,
+            "exportMs": 21
+          },
+          {
+            "syncMs": 21.700000017881393,
+            "paintedMs": 39.10000002384186,
+            "frameWrites": 1,
+            "exportMs": 20.80000001192093
+          },
+          {
+            "syncMs": 21.200000017881393,
+            "paintedMs": 36.900000005960464,
+            "frameWrites": 1,
+            "exportMs": 21.19999998807907
+          }
+        ]
+      }
+    }
+  ],
+  "regression": [
+    {
+      "theme": "light",
+      "side": "before",
+      "name": "offset-crop",
+      "width": 400,
+      "height": 320,
+      "oracle": "canvas",
+      "hash": 3731316037
+    },
+    {
+      "theme": "light",
+      "side": "before",
+      "name": "alpha-fallback",
+      "width": 800,
+      "height": 600,
+      "oracle": "canvas",
+      "hash": 2433304853
+    },
+    {
+      "theme": "light",
+      "side": "before",
+      "name": "mixed-dpi-resize",
+      "width": 800,
+      "height": 600,
+      "oracle": "baseline",
+      "hash": 1022123766
+    },
+    {
+      "theme": "light",
+      "side": "before",
+      "name": "rectangle-annotation",
+      "width": 800,
+      "height": 600,
+      "oracle": "canvas",
+      "hash": 328964738
+    },
+    {
+      "theme": "light",
+      "side": "after",
+      "name": "offset-crop",
+      "width": 400,
+      "height": 320,
+      "oracle": "canvas",
+      "hash": 3731316037
+    },
+    {
+      "theme": "light",
+      "side": "after",
+      "name": "alpha-fallback",
+      "width": 800,
+      "height": 600,
+      "oracle": "canvas",
+      "hash": 2433304853
+    },
+    {
+      "theme": "light",
+      "side": "after",
+      "name": "mixed-dpi-resize",
+      "width": 800,
+      "height": 600,
+      "oracle": "baseline",
+      "hash": 1022123766
+    },
+    {
+      "theme": "light",
+      "side": "after",
+      "name": "rectangle-annotation",
+      "width": 800,
+      "height": 600,
+      "oracle": "canvas",
+      "hash": 328964738
+    },
+    {
+      "theme": "dark",
+      "side": "before",
+      "name": "offset-crop",
+      "width": 400,
+      "height": 320,
+      "oracle": "canvas",
+      "hash": 3731316037
+    },
+    {
+      "theme": "dark",
+      "side": "before",
+      "name": "alpha-fallback",
+      "width": 800,
+      "height": 600,
+      "oracle": "canvas",
+      "hash": 2433304853
+    },
+    {
+      "theme": "dark",
+      "side": "before",
+      "name": "mixed-dpi-resize",
+      "width": 800,
+      "height": 600,
+      "oracle": "baseline",
+      "hash": 1022123766
+    },
+    {
+      "theme": "dark",
+      "side": "before",
+      "name": "rectangle-annotation",
+      "width": 800,
+      "height": 600,
+      "oracle": "canvas",
+      "hash": 328964738
+    },
+    {
+      "theme": "dark",
+      "side": "after",
+      "name": "offset-crop",
+      "width": 400,
+      "height": 320,
+      "oracle": "canvas",
+      "hash": 3731316037
+    },
+    {
+      "theme": "dark",
+      "side": "after",
+      "name": "alpha-fallback",
+      "width": 800,
+      "height": 600,
+      "oracle": "canvas",
+      "hash": 2433304853
+    },
+    {
+      "theme": "dark",
+      "side": "after",
+      "name": "mixed-dpi-resize",
+      "width": 800,
+      "height": 600,
+      "oracle": "baseline",
+      "hash": 1022123766
+    },
+    {
+      "theme": "dark",
+      "side": "after",
+      "name": "rectangle-annotation",
+      "width": 800,
+      "height": 600,
+      "oracle": "canvas",
+      "hash": 328964738
+    }
+  ],
+  "versions": {
+    "electron": "42.11.12",
+    "chrome": "148.0.7778.280"
+  }
+}

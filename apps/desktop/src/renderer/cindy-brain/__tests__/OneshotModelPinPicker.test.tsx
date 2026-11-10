@@ -90,7 +90,8 @@ describe('OneshotModelPinPicker shared A adapter', () => {
   });
 
   it('uses the shared picker with all host-approved routes, without a separate Agent step', () => {
-    mount();
+    mount({ 'data-setting-id': 'settings.auxiliaryModels.preferred.label' });
+    expect(picker['data-setting-id']).toBe('settings.auxiliaryModels.preferred.label');
     expect(screen.getByTestId('shared-picker')).toBeTruthy();
     expect(picker.unifiedPanel).toBeUndefined(); // shared default, no opt-in needed
     expect(picker.configurationEnabled).toBe(true);
@@ -105,6 +106,17 @@ describe('OneshotModelPinPicker shared A adapter', () => {
     expect(await picker.onUnifiedSelect!({ providerId: 'anthropic', modelId: 'claude-haiku-4-5',
       engine: 'cc', fast: false, favoriteUid: null })).toBe(true);
     expect(onChange).toHaveBeenCalledWith(ANTHROPIC_PIN);
+  });
+
+  // PR #7744: provider grouping must preserve the host's identity name rather than
+  // replace it with the generic translated brand before reaching ModelSelector.
+  it('preserves an updated Cindy AI identity in the real picker adapter', () => {
+    const view = mount({ options: [{ ...xdOption, group: 'Cindy AI · 个人' }], groupByProvider: true });
+    expect(picker.providersOverride?.[0].name).toBe('Cindy AI · 个人');
+    view.rerender(<OneshotModelPinPicker defaultOptionLabel="Automatic" options={[{ ...xdOption, group: 'Cindy AI · 心动', logoKind: 'xd' }]}
+      onChange={vi.fn()} ariaLabel="Auxiliary model" groupByProvider />);
+    expect(picker.providersOverride?.[0].name).toBe('Cindy AI · 心动');
+    expect(picker.providersOverride?.[0].logoKind).toBe('xd');
   });
 
   it('rejects forged, unavailable, and wrong-Harness routes without saving', async () => {

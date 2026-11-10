@@ -30,7 +30,10 @@ export function colorScope(file) {
 }
 
 export function readExemptions(root) {
-  const data = JSON.parse(fs.readFileSync(path.join(root, 'scripts/hardcoded-color-exemptions.json'), 'utf8'));
+  return validateExemptions(JSON.parse(fs.readFileSync(path.join(root, 'scripts/hardcoded-color-exemptions.json'), 'utf8')));
+}
+
+export function validateExemptions(data) {
   if (!Array.isArray(data) || data.some(e => !e.glob || !e.reason || !e.owner)) {
     throw new Error('Invalid hardcoded-color-exemptions.json; expected glob/reason/owner');
   }
@@ -44,9 +47,21 @@ export function readExemptions(root) {
       }
       new RegExp(rule.before);
     }
+    if (entry.matches !== undefined && !isCalendarDate(entry.reviewDate)) throw new Error(`Invalid reviewDate: ${entry.glob}`);
   }
   return data;
 }
+
+/** YYYY-MM-DD that is a real calendar day (9999-99-99 or 2026-02-30 would otherwise never expire). */
+export function isCalendarDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+/** UTC calendar date; an exemption is valid through its reviewDate. */
+export const currentDate = () => new Date().toISOString().slice(0, 10);
+export const isExpired = (entry, today) => Boolean(entry.reviewDate) && entry.reviewDate < today;
 
 /** Key path of the object literals enclosing index, outermost first — e.g.
  * ['VARIANT_MAP', 'info'] for a colour inside `VARIANT_MAP = { info: { … } }`.
@@ -120,7 +135,7 @@ export function addedLines(diff) {
   return lines;
 }
 
-export function inspectFile(file, source, changed, exemptions, spacingVariables) {
+export function inspectFile(file, source, changed, exemptions, spacingVariables, today = currentDate()) {
   const starts = [0];
   for (let i = 0; i < source.length; i++) if (source[i] === '\n') starts.push(i + 1);
   const locate = index => {
@@ -136,21 +151,27 @@ export function inspectFile(file, source, changed, exemptions, spacingVariables)
     const addedLine = [...changed].filter(line => line >= pos.line && line <= end).sort((a, b) => a - b)[0];
     if (addedLine === undefined) return [];
     const candidatePos = addedLine === pos.line ? pos : { line: addedLine, column: 1 };
-    const exemption = approvedColor(file, clean, hit, exemptions);
+    const matched = approvedColor(file, clean, hit, exemptions);
+    // An expired narrow exemption no longer approves new lines: renew it through
+    // design review (new reviewDate) or move the value to a theme role.
+    const expired = matched && isExpired(matched, today) ? matched : null;
+    const exemption = expired ? null : matched;
     const disposition = exemption || scope === 'source' || scope === 'test' ? 'allowed' : scope;
     return [{ file, ...candidatePos, literalStart: pos, rule: 'bare-color', value: hit.value, disposition,
-      reason: exemption?.reason ?? (scope === 'source' ? 'Governed colour source; existing theme guards still apply.'
+      reason: exemption?.reason ?? (expired && scope !== 'source' && scope !== 'test'
+        ? `Exemption for ${expired.glob} expired on ${expired.reviewDate}; renew it through design review (new reviewDate) or use a theme role.`
+        : scope === 'source' ? 'Governed colour source; existing theme guards still apply.'
         : scope === 'test' ? 'Test/fixture colour, not a production consumer.'
         : scope === 'report' ? 'Literal colour outside the newly blocking scope; inspect its role (documentation, asset, runtime or future UI scope), not automatically a violation.'
         : 'Literal colour bypasses semantic Light/Dark theme roles (including literal fallbacks).'),
       suggestion: 'Desktop: find the matching role in themes/colors.ts and consume var(--role) / hsl(var(--role)); preserve local aliases. Mobile: use ThemeColors. If no role fits, request a design decision; do not guess a token.',
     }];
   });
-  const layers = scope === 'block' ? reportDesignLayers(file, clean, changed, locate, spacingVariables) : [];
+  const layers = scope === 'block' ? reportDesignLayers(file, clean, changed, locate, spacingVariables, source) : [];
   return [...colors, ...layers];
 }
 
-export function audit({ root = ROOT, baseRef = 'origin/main', headRef = 'HEAD', worktree = false } = {}) {
+export function audit({ root = ROOT, baseRef = 'origin/main', headRef = 'HEAD', worktree = false, today = currentDate() } = {}) {
   const resolve = ref => git(root, ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`]).trim();
   const base = resolve(baseRef), head = resolve(headRef);
   const exemptions = readExemptions(root);
@@ -180,7 +201,7 @@ export function audit({ root = ROOT, baseRef = 'origin/main', headRef = 'HEAD', 
     const changed = untracked.includes(file) ? new Set(source.split('\n').map((_, i) => i + 1))
       : addedLines(git(root, [...diffArgs, '--unified=0', ...range, '--', file]));
     sources.push({ file, sha256: hash(source), addedLines: [...changed] });
-    try { findings.push(...inspectFile(file, source, changed, exemptions, spacingVariables)); }
+    try { findings.push(...inspectFile(file, source, changed, exemptions, spacingVariables, today)); }
     catch (error) { throw new Error(`${file}: ${error.message}`); }
   }
   // Code hashes bind the running scripts; input hashes bind the audited
@@ -194,10 +215,12 @@ export function audit({ root = ROOT, baseRef = 'origin/main', headRef = 'HEAD', 
     ...inputFiles.map(f => [f, hash(fs.readFileSync(path.join(root, f)))]),
   ]);
   const colors = findings.filter(f => f.rule === 'bare-color');
+  const expiredExemptions = exemptions.filter(e => e.matches && isExpired(e, today))
+    .map(e => ({ glob: e.glob, reviewDate: e.reviewDate, owner: e.owner }));
   return { schemaVersion: 1, base, head, candidate: worktree ? 'worktree (staged + unstaged + untracked)' : 'commit',
-    scriptHashes, candidateHash: hash(JSON.stringify(sources)), sources,
+    scriptHashes, candidateHash: hash(JSON.stringify(sources)), sources, today, expiredExemptions,
     counts: { raw: colors.length, allowed: colors.filter(f => f.disposition === 'allowed').length,
-      unexpected: colors.filter(f => f.disposition === 'block').length,
+      unexpected: findings.filter(f => f.disposition === 'block').length,
       report: findings.filter(f => f.disposition === 'report').length }, findings };
 }
 
@@ -218,6 +241,9 @@ export function main(args = process.argv.slice(2)) {
   if (json) console.log(JSON.stringify(result, null, 2));
   else {
     console.log(`BASE ${result.base} HEAD ${result.head} ${result.candidate}\n${JSON.stringify(result.counts)}`);
+    for (const e of result.expiredExemptions) {
+      console.log(`[expired-exemption] ${e.glob} reviewDate ${e.reviewDate} (owner ${e.owner}): no longer approves new lines; renew through design review or remove.`);
+    }
     for (const f of result.findings.filter(f => f.disposition !== 'allowed')) {
       console.log(`${f.file}:${f.line}:${f.column} [${f.disposition}/${f.rule}] ${f.value}\n  ${f.reason}\n  ${f.suggestion}`);
     }
