@@ -46,9 +46,10 @@ export class DesktopNotifier implements Notifier {
     // 链路代次在任何 await 之前捕获:飞书分支的 await 期间可能发生登出/换号,
     // 发送侧按代次不一致丢弃,旧账号调度的通知不会进新账号的链路。
     const generation = getMobileNotifyGeneration();
+    let repeatedFailure = false;
     if (schedule.silentWhenIdle && run.status === 'failed') {
       try {
-        if (await this.deps.hasUnrecoveredMatchingFailure?.(run)) return;
+        repeatedFailure = await this.deps.hasUnrecoveredMatchingFailure?.(run) ?? false;
       } catch (error) {
         // A failed history lookup must never hide the original failure.
         this.deps.logger.warn?.('scheduler failure dedup lookup failed', error);
@@ -69,6 +70,9 @@ export class DesktopNotifier implements Notifier {
           errorMsg: error instanceof Error ? error.message : 'Routine delivery failed' };
       }
     }
+    // Preparation owns the per-run report receipt and forwarding cleanup even
+    // when the alert itself is deduplicated. Never leave a hung lane silenced.
+    if (repeatedFailure) return;
     // 「消息免打扰」任务不再发个人提醒。wecomGroup 是共享群通知,不跟个人静音走;
     // 手机通道在 sendMobileSessionNotify 内另有同一道门,覆盖不走这里的调用方。
     const muted = run.sessionId ? isSessionNotificationsMutedSync(run.sessionId) : false;

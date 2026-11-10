@@ -479,7 +479,7 @@ export class AgentIslandService {
     wasReplacementTurnDispatching: boolean;
   }>();
   private readonly deferredCompletions = new Map<string, { event: AgentEvent; suppressAttention: boolean }>();
-  private readonly forwardedReportSessions = new Map<string, object>();
+  private readonly forwardedReportSessions = new Map<string, { runId: string }>();
   private readonly deferredRemoteAuthErrors = new Map<string, {
     meta: AgentIslandSessionMeta;
     event: AgentEvent;
@@ -1063,7 +1063,7 @@ export class AgentIslandService {
   /** A host report will alert from another task; retain this task's execution and
    * real interactions, without emitting a second terminal alert from its lane. */
   beginForwardedReport(sessionId: string, runId: string): () => void {
-    const token = {};
+    const token = { runId };
     this.forwardedReportSessions.set(sessionId, token);
     return () => {
       if (this.forwardedReportSessions.get(sessionId) !== token) return;
@@ -1253,7 +1253,7 @@ export class AgentIslandService {
     }
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
-      suppressErrorAttention: this.forwardedReportSessions.has(hydrated.sessionId),
+      suppressErrorAttention: this.isForwardedReportEventSilenced(hydrated.sessionId, event),
       // Direct IM sends bypass handleUserPrompt. Running preserves unread in the
       // live state/ledger, so use that state (including any intervening read ack).
       preserveCompletionAttention: suppressCompletionAttention && !this.isGroupLaneEvent(hydrated.sessionId, event) && (
@@ -1988,11 +1988,22 @@ export class AgentIslandService {
 
   private isCompletionEventSilenced(sessionId: string, event: AgentEvent): boolean {
     if (!isCompletionDoneEvent(event)) return false;
+    const quietRunId = this.silencedSessionRunIds.get(sessionId);
+    // Forwarding's late-event guard belongs only to that accepted execution.
+    // A late cleanup during another turn must not quiet the new owner's result.
+    const quiet = quietRunId && (!quietRunId.startsWith('forwarded-report:') || !event.turnOrigin ||
+      (event.turnOrigin.kind === 'scheduler' && quietRunId === `forwarded-report:${event.turnOrigin.runId}`));
     return event.agentMeta?.botTaskCoordination === true
       || event.agentMeta?.botPrivateReply === true
       || this.isGroupLaneEvent(sessionId, event)
-      || event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId)
-      || this.forwardedReportSessions.has(sessionId);
+      || event.turnOrigin?.surface === 'im' || !!quiet
+      || this.isForwardedReportEventSilenced(sessionId, event);
+  }
+
+  private isForwardedReportEventSilenced(sessionId: string, event: AgentEvent): boolean {
+    const forwarded = this.forwardedReportSessions.get(sessionId);
+    return !!forwarded && (!event.turnOrigin ||
+      (event.turnOrigin.kind === 'scheduler' && event.turnOrigin.runId === forwarded.runId));
   }
 
   private isGroupLaneEvent(sessionId: string, event: AgentEvent): boolean {

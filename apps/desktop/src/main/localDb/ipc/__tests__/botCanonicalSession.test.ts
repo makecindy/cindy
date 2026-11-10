@@ -267,6 +267,7 @@ import {
   setBotProfileAvatar,
   updateBotProfile as updateStoredBotProfile,
   getBotRemoteResourceSource,
+  getBotRoutineTarget,
   listBotRemoteResourceSources,
   prepareImportedBotInvitation,
 } from '../bots';
@@ -632,6 +633,37 @@ describe('Bot global model restore IPC', () => {
 });
 
 describe('Bot canonical Session lifecycle', () => {
+  // #9616 / unit: routing needs a live canonical link and status, not the UI
+  // projection. Observe actual database reads to catch accidental preview/version
+  // loading even when the returned routing fields are correct. Reuse this file's
+  // isolated SQLite lifecycle fixture; no new resources, waits or module reloads.
+  it('reads only routine routing data while preserving canonical-link validation', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const prepare = vi.spyOn(h.sqlite!, 'prepare');
+    try {
+      expect(await getBotRoutineTarget('bot-1')).toEqual({ status: 'active', canonicalSessionId: created.session.id });
+      const unrelated = prepare.mock.calls.map(([sql]) => String(sql))
+        .filter(sql => /\b(messages|bot_profile_versions)\b/i.test(sql));
+      expect(unrelated).toEqual([]);
+      h.sqlite!.prepare("UPDATE sessions SET status='deleted' WHERE id=?").run(created.session.id);
+      expect(await getBotRoutineTarget('bot-1')).toEqual({ status: 'active', canonicalSessionId: null });
+      await expect(getBotRoutineTarget('missing')).rejects.toThrow('NOT_FOUND');
+    } finally { prepare.mockRestore(); }
+  });
+
+  // Routing must not return the old account's target after an asynchronous read.
+  it('rejects a routine target after the owner changes during canonical reconciliation', async () => {
+    const runTx = h.tx!;
+    h.tx = async (name, args) => {
+      const result = await runTx(name, args);
+      if (name === 'bots.reconcileCanonicalLink') h.ownerScopeKey = 'owner-b:2';
+      return result;
+    };
+    await expect(getBotRoutineTarget('bot-1')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+  });
+
   it('reads the stored 代输入 and follow-by-scheduler choices back into the settings profile', async () => {
     expect((await invoke('local-db:bots:get', 'bot-1')).capabilities).not.toHaveProperty('inputHandoff');
     await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { inputHandoff: false, allowSchedulerFollow: true } });

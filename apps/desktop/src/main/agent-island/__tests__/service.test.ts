@@ -4661,11 +4661,13 @@ describe('AgentIslandService native publishing', () => {
       const meta = { sessionId: 'lane', agentKind: 'codex' as const };
       const finish = service.beginForwardedReport('lane', 'routine-run');
       service.handleUserPrompt(meta, 'follow up');
+      service.handleUserPromptDispatching('lane');
       service.handleScheduleEvent({ type: 'silenced', scheduleId: 'schedule', runId: 'execution', sessionId: 'lane' });
       service.handleScheduleEvent({ type: 'notified', scheduleId: 'schedule', runId: 'execution', sessionId: 'lane' });
       playSound.mockClear();
-      service.handleAgentEvent(meta, terminal === 'done' ? doneEvent() :
-        { type: 'error', data: { message: 'failed', isTerminal: true } });
+      service.handleAgentEvent(meta, { ...(terminal === 'done' ? doneEvent() :
+        { type: 'error' as const, data: { message: 'failed', isTerminal: true } }),
+        turnOrigin: { kind: 'scheduler', runId: 'routine-run' } });
       expect(playSound).not.toHaveBeenCalled();
       expect(publish.mock.calls.at(-1)?.[0].displayPolicy).toBe('closed');
       finish();
@@ -4676,6 +4678,31 @@ describe('AgentIslandService native publishing', () => {
       service.handleAgentEvent(meta, doneEvent());
       expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
     } finally { vi.useRealTimers(); }
+  });
+
+  // #9616 / unit: the old report can still be publishing when the owner starts
+  // the next turn. Its late cleanup must not silence that new turn's terminal.
+  it.each([['done', 'user'], ['error', 'user'], ['done', 'scheduler']] as const)('alerts for a new %s/%s turn while an old forwarded report is pending', async (terminal, kind) => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState) => state.visible);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({ getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound } });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+      complete: customSound('complete.wav'), error: customSound('error.wav') } });
+    const meta = { sessionId: 'lane', agentKind: 'codex' as const };
+    service.handleUserPrompt(meta, 'follow up');
+    const finish = service.beginForwardedReport('lane', 'routine-run');
+    service.handleAgentEvent(meta, doneEvent());
+    service.handleUserPrompt(meta, 'new owner request');
+    service.handleUserPromptDispatching('lane');
+    if (terminal === 'done') finish();
+    playSound.mockClear();
+    service.handleAgentEvent(meta, { ...(terminal === 'done' ? doneEvent() :
+      { type: 'error' as const, data: { message: 'failed', isTerminal: true } }), turnOrigin: { kind, runId: 'next-run' } });
+    expect(playSound).toHaveBeenCalledWith(customSound(terminal === 'done' ? 'complete.wav' : 'error.wav'));
+    if (terminal === 'error') finish();
   });
 
   it('does not play a completion sound or reveal card for a silenced scheduler completion', async () => {

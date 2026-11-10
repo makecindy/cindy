@@ -1269,7 +1269,7 @@ import { configureRoutineHost } from './routines/service.js';
 import { configureBotAutonomyHost, initBotAutonomy } from './bot-autonomy/service.js';
 import { voiceCallCoordinator } from './voice-conversation/callCoordinator.js';
 import { hasVoiceConversationLease } from './voice-conversation/lease.js';
-import { getBotRemoteResourceSource, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
+import { getBotRoutineTarget, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
   awaitAccountSchedulerReady,
@@ -1444,7 +1444,7 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
 configureRoutineHost({
   deliverResult: deliverRoutineResult, deliveryTargets: listRoutineDeliveryTargets,
   assertImportedAutomationReady: ensureImportedAutomationReady, prepareImportedAutomation, finishImportedAutomation, recoverImports: recoverCompanionImports,
-  getBot: getBotRemoteResourceSource,
+  getBot: getBotRoutineTarget,
   ensureRoutineSession: ensureBotRoutineLaneSession,
   beginForwardedReport: (sessionId, runId) => getAgentIslandService()?.beginForwardedReport(sessionId, runId) ?? (() => {}),
   closeRoutineSession: async (sessionId) => {

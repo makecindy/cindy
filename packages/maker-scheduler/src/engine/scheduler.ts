@@ -64,7 +64,7 @@ export interface RunNowOptions {
   /** Host publication barrier shared by runner and watchdog notifications; never persisted. */
   prepareNotification?: PrepareScheduleNotification;
   /** Host observer of the accepted execution, not queueing or a deferred attempt. */
-  onTurnActive?: (sessionId: string) => void;
+  onTurnActive?: (sessionId: string, runId: string) => void;
   deferToCaller?: boolean;
   internalRoutine?: true;
   canDispatch?: () => boolean;
@@ -1405,7 +1405,7 @@ export class Scheduler extends EventEmitter {
         onTurnActive: (sessionId) => {
           continuationAccepted = true;
           this.buildOnTurnActive(runId)(sessionId);
-          options?.onTurnActive?.(sessionId);
+          options?.onTurnActive?.(sessionId, runId);
         },
         createChildRun: this.buildCreateChildRun(schedule.id, firedAt),
         onQueueWaitStart: this.buildOnQueueWaitStart(runId),

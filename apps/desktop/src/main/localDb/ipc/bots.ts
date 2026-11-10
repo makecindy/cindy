@@ -1670,6 +1670,21 @@ export async function listBotRemoteResourceSources(): Promise<BotRemoteResourceS
   return sources;
 }
 
+/** Fresh routing metadata only. Reconciles the canonical link (including its
+ * existing repair path), but never reads chat previews/versions/followed tasks
+ * or flushes assistant sampling. Display projections are not routing getters. */
+export async function getBotRoutineTarget(botId: string): Promise<{ status: string; canonicalSessionId: string | null }> {
+  const owner = captureBotOperationOwner();
+  const client = getDbClient();
+  const [profile] = await client.drizzle.select({ status: botProfiles.status })
+    .from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
+  owner.assertCurrent();
+  if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
+  const { canonicalSessionId } = await reconcileCanonicalLink(botId, client);
+  owner.assertCurrent();
+  return { status: profile.status, canonicalSessionId };
+}
+
 export async function getBotRemoteResourceSource(botId: string): Promise<BotRemoteResourceSource> {
   return readBotRemoteResourceSource(getDbClient(), botId);
 }

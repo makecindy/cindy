@@ -4442,7 +4442,7 @@ describe('Scheduler: 排队不占槽与卡死守卫', () => {
       expect(notified[0]!.scheduleId).toBe(sch.id);
       expect(notified[0]!.errorMsg).toMatch(/stalled/);
       expect(notified[0]!.prepareNotification).toBe(prepareNotification);
-      expect(onTurnActive).toHaveBeenCalledWith('accepted-lane');
+      expect(onTurnActive).toHaveBeenCalledWith('accepted-lane', notified[0]!.runId);
       await scheduler.stop();
     } finally {
       vi.useRealTimers();

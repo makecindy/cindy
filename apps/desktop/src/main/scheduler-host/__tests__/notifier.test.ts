@@ -333,6 +333,16 @@ it('does not notify a replacement account after the failure history read crosses
 
 // #9616 / unit: blocked publication must block both notifications; forwarding a
 // report must not rewrite the execution-history row. Existing cases have no async routing.
+it('settles a repeated failure report without repeating its alerts', async () => {
+  vi.clearAllMocks();
+  const { notifier } = createNotifier({ hasUnrecoveredMatchingFailure: async () => true });
+  const prepare = vi.fn(async (row: ScheduleRun) => ({ ...row, sessionId: 'canonical' }));
+  await notifier.notify({ ...schedule, silentWhenIdle: true }, run('failed'), prepare);
+  expect(prepare).toHaveBeenCalledOnce();
+  expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+  expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+});
+
 it('waits for report publication before routing desktop and mobile to the main task', async () => {
   vi.clearAllMocks();
   isSessionNotificationsMutedSync.mockReturnValue(false);

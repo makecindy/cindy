@@ -58,6 +58,7 @@ export interface RoutineHostDeps {
   prepareImportedAutomation?: typeof import('../bot-import/automationRuntime.js').prepareImportedAutomation;
   finishImportedAutomation?: typeof import('../bot-import/automationRuntime.js').finishImportedAutomation;
   recoverImports?: () => Promise<void>;
+  /** Routing metadata only; do not load display projections, chat history or sampling here. */
   getBot(botId: string): Promise<{ status: string; canonicalSessionId?: string | null }>;
   ensureRoutineSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null }): Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; message: string }>;
   closeRoutineSession?(sessionId: string): Promise<void>;
@@ -404,9 +405,9 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
       return { deferred: true };
     }
     const result = await scheduler.runNow(id, { deferToCaller: true, internalRoutine: true, canDispatch,
-      ...(prepareNotification ? { prepareNotification, onTurnActive: (sessionId: string) => {
+      ...(prepareNotification ? { prepareNotification, onTurnActive: (sessionId: string, executionRunId: string) => {
         assertScope(scope);
-        if (!signal.aborted) finishForwardedReport ??= getRoutineHost().beginForwardedReport?.(sessionId, run.id);
+        if (!signal.aborted) finishForwardedReport ??= getRoutineHost().beginForwardedReport?.(sessionId, executionRunId);
       } } : {}) });
     assertScope(scope);
     // The routine queue owns this batch and its retry delay, not the backing schedule.
@@ -418,6 +419,12 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     const rows = await storage.listRuns(id, 10);
     const completed = rows.find((row) => row.id === result.runId);
     if (!completed) throw new Error('Routine execution record is missing');
+    // A watchdog's notification hook may still be reading storage (or publishing)
+    // after runNow returns. Join the same per-status report before persisting the
+    // delivery receipt and releasing this routine's lock; do not execute again.
+    if (followUp && completed.status === 'failed') await prepareNotification!(completed).catch(() => {});
+    await Promise.allSettled(reports.values());
+    assertScope(scope);
     // pre-run hook 判跳过：模型从未被派发，回收 fresh 空壳。真实跑过的（成功 / 失败 /
     // 中途取消）一律保留，历史里的「查看任务」回放完整过程。
     if (completed.status === 'skipped') await discardFreshLane();

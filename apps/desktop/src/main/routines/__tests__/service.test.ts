@@ -1357,8 +1357,8 @@ it.each([true, false])('defers lane-alert forwarding until accepted execution (d
   mock.scheduler.runNow.mockImplementationOnce(async (_id, options) => {
     expect(mock.beginForwardedReport).not.toHaveBeenCalled();
     if (!deferred) {
-      options?.onTurnActive?.('accepted-lane');
-      expect(mock.beginForwardedReport).toHaveBeenCalledWith('accepted-lane', expect.any(String));
+      options?.onTurnActive?.('accepted-lane', 'execution');
+      expect(mock.beginForwardedReport).toHaveBeenCalledWith('accepted-lane', 'execution');
     }
     return { runId: 'execution', deferred };
   });
@@ -1375,6 +1375,35 @@ it.each([true, false])('defers lane-alert forwarding until accepted execution (d
 
 // #9616 / unit: watchdog notification can finish while runner.fire never returns.
 // Its lane-alert forwarding scope must be released by the report, not by runNow.
+it.each([true, false])('retains the running lock until the failure report settles (already started=%s)', async (started) => {
+  const engine = await getRoutineEngine();
+  const routine = await engine.ensureBuiltin('bot', 'follow-up', {
+    name: 'Follow', prompt: 'Check', enabled: true, silentWhenIdle: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  }, 'builtin-follow-up-bot');
+  if (!routine) throw new Error('Missing builtin');
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const row: ScheduleRun = { id: 'execution', scheduleId: 'backing', firedAt: 1,
+    status: 'failed', errorMsg: 'watchdog failed' };
+  mock.storage.listRuns.mockResolvedValueOnce([row]);
+  mock.deliverResult.mockImplementationOnce(async () => { await gate; throw new Error('delivery unavailable'); });
+  mock.scheduler.runNow.mockImplementationOnce(async (_id, options) => {
+    if (started) void options!.prepareNotification!(row).catch(() => {});
+    return { runId: 'execution' };
+  });
+  try {
+    await routineTools.runNow('bot', routine.id);
+    await vi.waitFor(() => expect(mock.deliverResult).toHaveBeenCalledOnce());
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({ status: 'running' });
+  } finally { release(); }
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({
+    status: 'failed', delivery: { status: 'failed', error: 'delivery unavailable' },
+  }));
+  expect(mock.deliverResult).toHaveBeenCalledOnce();
+});
+
 it('releases lane-alert forwarding on failure report before execution returns', async () => {
   const engine = await getRoutineEngine();
   const routine = await engine.ensureBuiltin('bot', 'follow-up', {
@@ -1386,7 +1415,7 @@ it('releases lane-alert forwarding on failure report before execution returns', 
   mock.storage.listRuns.mockResolvedValueOnce([{ id: 'execution', scheduleId: 'backing', firedAt: 1,
     status: 'failed', errorMsg: 'watchdog failed' }]);
   mock.scheduler.runNow.mockImplementationOnce(async (_id, options) => {
-    options?.onTurnActive?.('lane');
+    options?.onTurnActive?.('lane', 'execution');
     await options!.prepareNotification!({ id: 'execution', scheduleId: 'backing', firedAt: 1,
       status: 'failed', errorMsg: 'watchdog failed' });
     releasedBeforeReturn = mock.finishForwardedReport.mock.calls.length === 1;
