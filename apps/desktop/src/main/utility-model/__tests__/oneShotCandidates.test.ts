@@ -58,7 +58,7 @@ vi.mock('../../maker-host/grok-oauth-login.js', () => ({
 }));
 
 vi.mock('../../maker-host/generic-oauth.js', () => ({
-  readCachedGenericOAuthAccessToken: vi.fn(),
+  readGenericOAuthAccessToken: vi.fn(async () => null),
 }));
 
 vi.mock('../../maker-host/active-catalog.js', () => ({
@@ -113,7 +113,7 @@ import { getAppCapabilities } from '../../appCapabilities.js';
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch } from '../../maker-host/anthropic-responses-bridge-host.js';
 import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../../maker-host/grok-oauth-login.js';
-import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
+import { readGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
 import {
   getActiveCatalog,
   isXdGatewayPaymentRequiredRoute,
@@ -146,7 +146,7 @@ const readCodexDispatchAuth = vi.mocked(getChatgptBridgeAuthForDispatch);
 const codexAuthorizationCurrent = vi.fn((_providerId: string) => true);
 const readGrokToken = vi.mocked(getGrokAccessToken);
 const grokCredentialGeneration = vi.mocked(getGrokOAuthCredentialGeneration);
-const readGenericOAuthToken = vi.mocked(readCachedGenericOAuthAccessToken);
+const readGenericOAuthToken = vi.mocked(readGenericOAuthAccessToken);
 const fetchMock = vi.mocked(undiciFetch);
 const activeCatalog = vi.mocked(getActiveCatalog);
 const xdPaymentRequiredRoute = vi.mocked(isXdGatewayPaymentRequiredRoute);
@@ -183,7 +183,7 @@ describe('utility one-shot candidates', () => {
     }));
     readGrokToken.mockRejectedValue(new Error('not authenticated'));
     grokCredentialGeneration.mockReturnValue(0);
-    readGenericOAuthToken.mockReturnValue(null);
+    readGenericOAuthToken.mockResolvedValue(null);
     providerRouteMutationInProgress.mockReturnValue(false);
     providerRouteCredentialRevision.mockReturnValue(0);
     readCustomKey.mockReturnValue(null);
@@ -2229,7 +2229,7 @@ describe('utility one-shot candidates', () => {
         },
       }],
     } as never);
-    readGenericOAuthToken.mockReturnValue('oauth-access-token');
+    readGenericOAuthToken.mockResolvedValue('oauth-access-token');
     fetchMock.mockResolvedValueOnce({
       ok: true,
       text: async () => JSON.stringify({ content: [{ type: 'text', text: 'script' }] }),
@@ -2278,17 +2278,29 @@ describe('utility one-shot candidates', () => {
         },
       }],
     } as never);
-    readGenericOAuthToken.mockReturnValue('oauth-access-token');
+    // 测试价值
+    // - 生产入口与可观察结果：requestUtilityText 的 OAuth provider 分支；刷新前不得发上游请求。
+    // - Bug 依据：#7942；旧同步缓存读取会让首个临期 token 请求立即出站。
+    // - 现有覆盖缺口：相邻用例只断言最终 Bearer，没有验证刷新等待与网络发送时序。
+    // - 最小失败输入：一个尚未 resolve 的 OAuth token Promise。
+    // - tier：unit；使用内存 Promise 和 mock fetch，无真实网络或凭证。
+    // - 实测耗时：本文件全量运行约 77 秒（含基线 60 秒超时故障）；定向用例更低，见验证记录。
+    let releaseToken!: (token: string) => void;
+    readGenericOAuthToken.mockReturnValue(new Promise((resolve) => { releaseToken = resolve; }));
     fetchMock.mockResolvedValueOnce({
       ok: true,
       text: async () => 'data: {"type":"response.output_text.delta","delta":"script"}\ndata: [DONE]\n',
     } as never);
 
-    const result = await requestUtilityText(makerMock(false), 'generate', {
+    const resultPromise = requestUtilityText(makerMock(false), 'generate', {
       providerId: 'codex-oauth',
       agentKind: 'codex',
       model: 'codex-oauth-5-5',
     });
+    await vi.waitFor(() => expect(readGenericOAuthToken).toHaveBeenCalled());
+    expect(fetchMock).not.toHaveBeenCalled();
+    releaseToken('oauth-access-token');
+    const result = await resultPromise;
 
     expect(result).toMatchObject({ ok: true, providerId: 'codex-oauth' });
     const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };

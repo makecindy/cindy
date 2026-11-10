@@ -108,6 +108,7 @@ import {
   configureGenericOAuth,
   hasGenericOAuthLogin,
   readCachedGenericOAuthAccessToken,
+  readGenericOAuthAccessToken,
   resetGenericOAuthMemoryCache,
 } from './generic-oauth.js';
 import {
@@ -482,7 +483,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 测试连接探测与路由同源读 key（同 setter 模式，见 provider-diagnostics.ts）。
   setDiagnosticsKeyReader(readCustomProviderKey);
   // 通用 OAuth Runner 接线（idempotent）：safeStorage blob IO + 系统浏览器拉起;
-  // 路由热路径的同步 token 读取（描述符现查目录,临期后台单飞刷新,不阻塞路由）。
+  // Route reads await required token refreshes; diagnostics retain a synchronous cache read.
   configureGenericOAuth({
     storage: genericOAuthSecretIo,
     openExternal: async (url) => {
@@ -493,14 +494,20 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 账号切换清空本机密钥后,同步失效 generic-oauth 的内存缓存——
   // 不失效的话磁盘 blob 已删但缓存还热,B 账号会继续用 A 的 token 路由(串号)。
   addProviderSecretsClearedListener(handleProviderSecretsCleared);
-  const readOAuthToken = (providerId: string): string | null => {
+  const getOAuthStorageProvider = (providerId: string) => {
     const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
     const storageProviderId =
       provider?.source === 'user' ? storedCustomProviderId(providerId) : providerId;
-    return readCachedGenericOAuthAccessToken(storageProviderId, provider?.auth.oauth);
+    return { provider, storageProviderId };
   };
-  setOAuthTokenReader(readOAuthToken);
-  setDiagnosticsOAuthTokenReader(readOAuthToken);
+  setOAuthTokenReader(async (providerId) => {
+    const { provider, storageProviderId } = getOAuthStorageProvider(providerId);
+    return readGenericOAuthAccessToken(storageProviderId, provider?.auth.oauth);
+  });
+  setDiagnosticsOAuthTokenReader((providerId) => {
+    const { provider, storageProviderId } = getOAuthStorageProvider(providerId);
+    return readCachedGenericOAuthAccessToken(storageProviderId, provider?.auth.oauth);
+  });
   // 在启动期固定 service 实例，避免请求路由热路径重复进入 getter 里的 legacy
   // owner 绑定迁移；每次 listProviders 仍会实时读取凭证连接态。
   const providerService = getDesktopProviderService();

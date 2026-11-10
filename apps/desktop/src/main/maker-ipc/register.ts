@@ -1321,9 +1321,9 @@ import {
   discoverGenericOAuthModels,
   logoutGenericOAuth,
   removeGenericOAuthCredentialsReversibly,
+  readGenericOAuthAccessToken,
   runGenericOAuthLogin,
   readCachedGenericOAuthAccessToken,
-  refreshGenericOAuthIfNeeded,
 } from '../maker-host/generic-oauth.js';
 import {
   revokeCodexAccountUltrafast,
@@ -7860,7 +7860,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     (id) => readCachedGenericOAuthAccessToken(storedCustomProviderId(id), undefined),
     async (id) => {
       const provider = getActiveCatalog().providers.find((p) => p.id === id);
-      if (provider?.auth.oauth) await refreshGenericOAuthIfNeeded(storedCustomProviderId(id), provider.auth.oauth);
+      if (provider?.auth.oauth) await readGenericOAuthAccessToken(storedCustomProviderId(id), provider.auth.oauth);
     },
   );
   setAccountUsageOwnerStampReader(() => {
