@@ -74,7 +74,8 @@ desktop background transparency (0% opaque, 100% clear); the left sidebar follow
 the same controls (user decision, 2026-11-10). Both controls remain
 sliders with the same ranges, preview/commit behavior and reset action when switching
 between None and artwork (user decision, 2026-11-08). Their labels and hints identify
-the current background source; do not replace desktop blur with a separate switch.
+the current background source; do not replace desktop blur with a separate switch,
+except on Windows, where it is an on/off Switch (user decision, 2026-11-11; see below).
 Desktop transparency has its own optional `desktopVisibility` override, defaulting to
 0% for both upgrades and new installs. Never infer desktop opt-in from legacy
 `wallpaperVisibility` or `wallpaperOverlay`; artwork keeps its existing values.

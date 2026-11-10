@@ -21,7 +21,7 @@ export default {
   },
   cases: {
     default: { about: 'No wallpaper, 0% desktop visibility keeps the original backdrop: border must retain its tinted backing' },
-    half: { about: '50% desktop visibility: the sidebar shares the main veil, separated by its divider and shadow' },
+    half: { about: '50% desktop visibility: the sidebar shares the main veil, separated only by its divider' },
     transparent: { about: '100% desktop visibility: sidebar and main area are equally clear' },
     wallpaper: { about: 'Wallpaper canvas and tint adjustment remain continuous at the border' },
     rail: { about: 'Narrow sidebar has the same backed hairline' },
