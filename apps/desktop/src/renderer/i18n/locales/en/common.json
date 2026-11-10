@@ -14161,7 +14161,14 @@
       "started": "Tasks started",
       "handedTo": "Tasks handed to",
       "open": "Open task “{{title}}”",
-      "untitled": "Untitled task"
+      "untitled": "Untitled task",
+      "startedOne": "Started",
+      "handedToOne": "Handed to"
+    },
+    "botTaskLetter": {
+      "replied": "replied",
+      "toggle": "Show or hide the reply from “{{title}}”",
+      "openTask": "Open task"
     }
   },
   "ccAgent": {

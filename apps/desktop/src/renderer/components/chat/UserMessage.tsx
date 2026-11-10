@@ -118,6 +118,7 @@ import { ghostCommandTokenLength, parseGhostCommandToken, splitGhostDirective } 
 import { splitHostCapabilityDirective } from '@/cindy-brain/hostCapabilityInvocation';
 import { GhostSummonCard } from './GhostSummonCard';
 import { MessageSourceLabels } from './MessageSourceLabels';
+import { BotTaskLetterOpen, BotTaskLetterPill } from './BotStartedTasks';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
@@ -1441,38 +1442,23 @@ export function UserMessage({
           </>
         ) : botLetter ? (
           <>
-            <div className="flex w-full min-w-0 items-center gap-1.5">
-              <div className="min-w-0 max-w-[60%] shrink-0">
-                <MessageSourceLabels
-                  automationOrigin={automationOrigin}
-                  sourceDevice={sourceDevice}
-                  sourcePlugin={sourcePlugin}
-                  hostSessionId={sessionId}
-                  align="start"
-                />
-              </div>
-              <button
-                type="button"
-                aria-expanded={letterExpanded}
-                aria-label={letterExpanded ? t('chat.userMessage.collapseLongMessage') : t('chat.userMessage.expandLongMessage')}
-                onClick={() => setLetterExpanded((value) => !value)}
-                className={cn(
-                  'flex min-h-6 min-w-0 flex-1 items-center gap-1 rounded-[4px] text-left',
-                  'text-11 text-[var(--cmd-palette-item-meta)] transition-colors hover:text-foreground',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                )}
-              >
-                <span className="min-w-0 truncate">{letterExpanded ? null : letterPreview}</span>
-                {letterExpanded ? (
-                  <ChevronDown size={12} aria-hidden className="shrink-0" />
-                ) : (
-                  <ChevronRight size={12} aria-hidden className="shrink-0" />
-                )}
-              </button>
-            </div>
+            <BotTaskLetterPill
+              senderSessionId={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined}
+              senderTitle={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionTitle ?? null : null}
+              hostSessionId={sessionId}
+              preview={letterPreview}
+              expanded={letterExpanded}
+              onToggle={() => setLetterExpanded((value) => !value)}
+            />
             {letterExpanded && (
-              <div className="w-full select-text whitespace-pre-wrap border-l-2 border-[var(--border-default)] pl-3 text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
-                {displayContent}
+              <div className="flex w-full flex-col items-start gap-1.5 border-l-2 border-[var(--border-default)] pl-3">
+                <div className="w-full select-text whitespace-pre-wrap text-13 leading-5 text-[var(--text-secondary)] [overflow-wrap:anywhere]">
+                  {displayContent}
+                </div>
+                <BotTaskLetterOpen
+                  senderSessionId={automationOrigin?.kind === 'session' ? automationOrigin.senderSessionId : undefined}
+                  hostSessionId={sessionId}
+                />
               </div>
             )}
             {imageAttachmentNodes}

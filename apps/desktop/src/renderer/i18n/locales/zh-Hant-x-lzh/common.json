@@ -14095,7 +14095,14 @@
       "started": "所啟之差事",
       "handedTo": "所付之差事",
       "open": "啟差事「{{title}}」",
-      "untitled": "無名之差事"
+      "untitled": "無名之差事",
+      "startedOne": "已啟差事",
+      "handedToOne": "付與差事"
+    },
+    "botTaskLetter": {
+      "replied": "覆書",
+      "toggle": "啟閉「{{title}}」之覆書",
+      "openTask": "啟差事"
     }
   },
   "ccAgent": {

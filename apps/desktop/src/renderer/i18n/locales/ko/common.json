@@ -14095,7 +14095,14 @@
       "started": "시작한 작업",
       "handedTo": "넘긴 작업",
       "open": "작업 “{{title}}” 열기",
-      "untitled": "이름 없는 작업"
+      "untitled": "이름 없는 작업",
+      "startedOne": "시작한 작업",
+      "handedToOne": "넘긴 작업"
+    },
+    "botTaskLetter": {
+      "replied": "의 회신",
+      "toggle": "“{{title}}” 회신 펼치기/접기",
+      "openTask": "작업 열기"
     }
   },
   "ccAgent": {

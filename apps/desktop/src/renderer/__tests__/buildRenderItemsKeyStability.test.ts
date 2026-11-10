@@ -18,6 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
+import { attachBotStartedTasks } from '../components/chat/BotStartedTasks';
 import {
   assistantHasFollowingUserBoundary,
   buildRenderItems,
@@ -850,6 +851,16 @@ describe('buildRenderItems — key stability', () => {
       { sessionId: 's-b', title: 'Release notes', created: false },
     ] }]);
     expect(started(undefined)).toEqual([]);
+
+    // The owner reads them at the foot of the reply that announced them; a turn with no
+    // reply yet keeps them as a row of their own.
+    const withReply = [...messages.slice(0, -1), mkAssistant('reply', 'Started it.'), mkUser('u2')];
+    const attached = attachBotStartedTasks(buildRenderItems(withReply, undefined, undefined, { botSessionId: 'bot-chat' }).items);
+    expect(attached.some((item) => item.type === 'bot_started_tasks')).toBe(false);
+    const reply = attached.find((item) => item.type === 'message' && item.message.clientId === 'reply');
+    expect(reply?.type === 'message' ? reply.message.botStartedTasks?.map((task) => task.sessionId) : null).toEqual(['s-a', 's-b']);
+    expect(attachBotStartedTasks(buildRenderItems(messages, undefined, undefined, { botSessionId: 'bot-chat' }).items)
+      .filter((item) => item.type === 'bot_started_tasks')).toHaveLength(1);
   });
 
   describe('bot sessions hand the turn over to deliverables', () => {

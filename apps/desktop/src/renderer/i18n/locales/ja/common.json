@@ -14095,7 +14095,14 @@
       "started": "開始したタスク",
       "handedTo": "引き継いだタスク",
       "open": "タスク「{{title}}」を開く",
-      "untitled": "名称未設定のタスク"
+      "untitled": "名称未設定のタスク",
+      "startedOne": "開始したタスク",
+      "handedToOne": "引き継ぎ先"
+    },
+    "botTaskLetter": {
+      "replied": "からの返信",
+      "toggle": "「{{title}}」からの返信を開閉",
+      "openTask": "タスクを開く"
     }
   },
   "ccAgent": {

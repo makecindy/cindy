@@ -14293,7 +14293,14 @@
       "started": "Tâches lancées",
       "handedTo": "Tâches confiées",
       "open": "Ouvrir la tâche « {{title}} »",
-      "untitled": "Tâche sans titre"
+      "untitled": "Tâche sans titre",
+      "startedOne": "Lancée",
+      "handedToOne": "Confiée à"
+    },
+    "botTaskLetter": {
+      "replied": "a répondu",
+      "toggle": "Afficher ou masquer la réponse de « {{title}} »",
+      "openTask": "Ouvrir la tâche"
     }
   },
   "ccAgent": {

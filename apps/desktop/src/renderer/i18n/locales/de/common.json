@@ -14161,7 +14161,14 @@
       "started": "Gestartete Aufgaben",
       "handedTo": "Übergebene Aufgaben",
       "open": "Aufgabe „{{title}}“ öffnen",
-      "untitled": "Unbenannte Aufgabe"
+      "untitled": "Unbenannte Aufgabe",
+      "startedOne": "Gestartet",
+      "handedToOne": "Übergeben an"
+    },
+    "botTaskLetter": {
+      "replied": "hat geantwortet",
+      "toggle": "Antwort von „{{title}}“ ein- oder ausblenden",
+      "openTask": "Aufgabe öffnen"
     }
   },
   "ccAgent": {

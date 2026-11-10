@@ -332,7 +332,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
-import { BotStartedTasks, collectBotStartedTasks } from './BotStartedTasks';
+import { attachBotStartedTasks, BotStartedTasks, collectBotStartedTasks } from './BotStartedTasks';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorMessageCard } from './ErrorMessageCard';
@@ -3376,7 +3376,7 @@ export function MessageStream({
     );
     return appendPendingQueueItems(
       simplifiedBotConversation
-        ? botProcessItems(grouped, isSessionStreaming, botTailReplyIds)
+        ? attachBotStartedTasks(botProcessItems(grouped, isSessionStreaming, botTailReplyIds))
         : grouped,
       pendingMessages ?? [],
       messages,
@@ -7205,6 +7205,7 @@ const MessageItem = memo(function MessageItem({
             botStarterOptions={message.botStarterOptions}
             starterOptionsLocked={starterOptionsLocked}
             botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}
+            botStartedTasks={message.botStartedTasks}
           />
         </>,
       );

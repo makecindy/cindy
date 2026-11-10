@@ -14293,7 +14293,14 @@
       "started": "Tarefas iniciadas",
       "handedTo": "Tarefas repassadas",
       "open": "Abrir a tarefa “{{title}}”",
-      "untitled": "Tarefa sem título"
+      "untitled": "Tarefa sem título",
+      "startedOne": "Iniciada",
+      "handedToOne": "Repassada a"
+    },
+    "botTaskLetter": {
+      "replied": "respondeu",
+      "toggle": "Mostrar ou ocultar a resposta de “{{title}}”",
+      "openTask": "Abrir tarefa"
     }
   },
   "ccAgent": {

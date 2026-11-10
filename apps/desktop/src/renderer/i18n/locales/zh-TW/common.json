@@ -14095,7 +14095,14 @@
       "started": "開出的任務",
       "handedTo": "交出的任務",
       "open": "開啟任務「{{title}}」",
-      "untitled": "未命名任務"
+      "untitled": "未命名任務",
+      "startedOne": "開了任務",
+      "handedToOne": "交給任務"
+    },
+    "botTaskLetter": {
+      "replied": "回信",
+      "toggle": "展開或收合「{{title}}」的回信",
+      "openTask": "開啟任務"
     }
   },
   "ccAgent": {
