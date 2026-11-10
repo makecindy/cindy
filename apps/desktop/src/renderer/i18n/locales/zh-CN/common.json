@@ -6424,7 +6424,13 @@
           "setWorkingDevice": "设为工作电脑",
           "workingDeviceSet": "已设为工作电脑",
           "addAccount": "关联其他飞书账号",
-          "linkedAccounts": "已关联账号：{{count}} 个"
+          "linkedAccounts": "已关联账号：{{count}} 个",
+          "botPlatform": "飞书",
+          "unnamedAccount": "飞书账号",
+          "tenantId": "连接企业标识",
+          "accountRemark": "本机账号备注",
+          "linkingBot": "正在关联到机器人 {{name}}",
+          "botSummary": "{{bots}} 个机器人 · {{accounts}} 个账号"
         }
       },
       "summary": {

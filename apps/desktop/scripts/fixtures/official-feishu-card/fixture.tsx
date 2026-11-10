@@ -16,6 +16,23 @@ const disabledLane = {
 };
 
 function view(kind: string): SlackHookView {
+  if (kind === 'bots' || kind === 'bots-pending') {
+    const base = view(kind === 'bots' ? 'multi' : 'multi-pending');
+    base.feishu.apps = [
+      { scopeId: 'cli_app', scopeName: 'Cindy · 产品团队', brand: 'feishu', avatarUrl: null, multiBindAvailable: true },
+      { scopeId: 'cli_partner', scopeName: 'Cindy · 合作伙伴', brand: 'feishu', avatarUrl: null, multiBindAvailable: true },
+      { scopeId: 'cli_project', scopeName: 'Cindy · 项目团队', brand: 'lark', avatarUrl: null, multiBindAvailable: true },
+    ];
+    base.feishu.bindings = base.feishu.bindings!.map((row, index) => ({ ...row,
+      scopeId: index < 2 ? 'cli_app' : 'cli_partner', tenantKey: index < 2 ? 'tenant_product' : 'tenant_partner',
+      localLabel: index === 1 ? '外部协作账号' : undefined,
+    }));
+    if (kind === 'bots-pending' && base.feishu.binding) {
+      base.feishu.binding.scopeId = 'cli_project';
+      base.feishu.binding.scopeName = 'Cindy · 项目团队';
+    }
+    return base;
+  }
   if (kind === 'multi' || kind === 'multi-pending') {
     const base = view(kind === 'multi' ? 'confirmed' : 'pending');
     const first = view('confirmed').feishu.binding!;

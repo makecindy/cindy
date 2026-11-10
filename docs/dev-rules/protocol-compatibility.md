@@ -246,9 +246,9 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 回调（`onHookReadyForPrefsMirror`）按客户端支持集收窄。没有服务端部署、数据库、环境变量、
 Device Link 或自建中转变化；协议包改动会触发服务端全部服务的 CI。
 
-### 自建飞书应用多身份绑定（2026-11-10，未发布）
+### 多个自建飞书机器人与多身份绑定（2026-11-10，未发布）
 
-两仓协议追加可选 `provider-multi-bind-v1`；服务端只对当前自建应用协商，不对商店应用开放。
+两仓协议追加可选 `provider-multi-bind-v1`；服务端只对授权的自建应用协商，不对商店应用开放。
 `provider.bind.state.bindings` 为同一应用内全部 confirmed 状态，校验唯一 bindingId / principalId，拒绝嵌套；
 旧字段保留最早的绑定。追加确认的 `completedAttemptId` 只结束匹配尝试；其它 confirmed/revoked 事件只修改对应身份。
 客户端等待本次连接的权威快照后才按列表授权 task.dispatch 与 query.request；初始快照与实时更新交错时合并变更。
@@ -259,9 +259,19 @@ Main 的账号分区配置可选保存飞书 bindingsCache 数组，兼容读取
 全局默认目录/模型偏好沿原 mirror 流程逐绑定同步，不新增轮询、第三方凭证、Device Link 帧或远控 allowlist。
 手机没有官方飞书设置入口；任务执行共用宿主，官方与自建中转继续透传既有任务协议，无需更新中转。
 
-旧服务端不协商新能力，新客户端保持单绑定；旧客户端连接新服务端只收到最早绑定，其它身份的任务不投递给旧端。
+旧服务端不协商新能力，新客户端保持单绑定；旧客户端连接新服务端只收到默认应用的最早绑定，其它身份的任务不投递给旧端。
 先发布服务端追加 migration 并完成全部副本升级，再发客户端和开放追加关联；已产生多身份后不可回退旧服务端。
 服务端 migration 与运行态部署核验在 server 仓维护，不能把本地检查作为已部署证据。
+
+双方另协商 `provider-multi-app-v1` 时，state 的可选 `apps` 给出当前 Cindy 组织授权的机器人目录及各自 bindings。
+每项包含 scopeId、scopeName、brand、avatarUrl、multiBindAvailable；保留原字段与 bindings 作为默认应用投影。
+App ID、绑定 ID、身份配对与非嵌套规则由两仓校验器验证；不同机器人下相同 open_id 也不能互换使用。
+发起关联通过既有 `provider.bind.start.scopeId` 选择机器人，bind start / open action 的本机 IPC 可选追加 scopeId，必须命中目录。
+逐绑定 select/revoke 保留原语义，服务端从记录确定应用并校验授权，不能仅相信客户端选择。
+客户端按机器人展示名称、头像（有真实数据时）、品牌、App ID，账号展示姓名、Open ID 和已知连接 tenantKey（可能属于机器人安装企业，不能当作账号所属企业名称）；外部账号缺失资料不推测。
+新增本机备注 IPC 只修改当前 Cindy 账号下已存账号的 localLabel（最多128字符），不改变身份或路由；缓存仅存展示资料，无 provider token。
+备注和已绑定机器人资料可离线显示；目录变化、跨组织登录、旧服务端降级不授予缓存中的任何工作权限。
+额外机器人配置使用服务端新增表，旧服务端的唯一性检查不了解该表；必须全部副本升级后才通过新版 Console 添加机器人。
 
 ## 群内能力提示（非执行终态）
 

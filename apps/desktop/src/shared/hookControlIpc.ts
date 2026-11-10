@@ -59,6 +59,7 @@ export const HOOK_CONTROL_INVOKE = {
   /** 独立开关一个 Cindy IM provider；不会改动其它 provider。 */
   SET_PROVIDER_ENABLED: 'maker:hook-control:set-provider-enabled',
   /** 发起 provider-neutral(Telegram / X / 飞书)一次性绑定。 */
+  FEISHU_ACCOUNT_LABEL: 'maker:hook-control:feishu-account-label',
   PROVIDER_BIND_START: 'maker:hook-control:provider-bind-start',
   /** 取消当前 provider-neutral 绑定尝试。 */
   PROVIDER_BIND_CANCEL: 'maker:hook-control:provider-bind-cancel',
@@ -125,6 +126,8 @@ export type ProviderBindingState =
 
 /** renderer 可见的 provider-neutral 绑定快照；不含任何 token/secret。 */
 export interface ProviderBindingView {
+  tenantKey?: string | null;
+  localLabel?: string;
   provider: HookProvider;
   state: ProviderBindingState;
   attemptId: string | null;
@@ -164,6 +167,7 @@ export interface ProviderHookView {
   /** Confirmed Feishu identities; pending attempts remain in binding. */
   bindings?: ProviderBindingView[];
   multiBindAvailable?: boolean;
+  apps?: Array<{ scopeId: string; scopeName: string | null; brand: 'feishu' | 'lark'; avatarUrl: string | null; multiBindAvailable: boolean }>;
   /**
    * 派发任务时使用的默认工作目录别名(null = 内置「对话」伪目录)。
    *

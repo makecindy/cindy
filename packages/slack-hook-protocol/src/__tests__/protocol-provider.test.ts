@@ -548,3 +548,17 @@ describe('Feishu multi-bind snapshots', () => {
     expectReject(makeProviderBindUpdate({ ...PENDING, completedAttemptId: 'not-complete' }), 'completedAttemptId');
   });
 });
+
+// Protocol: app/account pairing and legacy projection must survive round-trip; nested catalogs are invalid.
+it('validates a multi-app Feishu catalog with independently scoped identities', () => {
+  const a = { ...CONFIRMED, provider: 'feishu' as const, scopeId: 'cli_a', remediationUrl: null };
+  const b = { ...a, bindingId: 'binding-b', scopeId: 'cli_b' };
+  const apps = [a, b].map((row) => ({ scopeId: row.scopeId, scopeName: row.scopeName, brand: 'feishu' as const, avatarUrl: null, multiBindAvailable: true, bindings: [row] }));
+  const message = makeProviderBindState({ ...a, bindings: [a], apps });
+  roundTrip(message);
+  expectReject({ ...message, payload: { ...message.payload, apps: [...apps, apps[0]] } }, 'apps');
+  expectReject({ ...message, payload: { ...message.payload, apps: [{ ...apps[0], bindings: [b] }, apps[1]] } }, 'apps');
+  expectReject({ ...message, payload: { ...message.payload, apps: [{ ...apps[0], bindings: [{ ...a, apps }] }, apps[1]] } }, 'apps');
+  expectReject({ ...message, payload: { ...message.payload, apps: [{ ...apps[0], avatarUrl: 'http://unsafe.example.test/avatar' }, apps[1]] } }, 'apps');
+  expectReject({ ...message, payload: { ...message.payload, principalId: 'other-user' } }, 'apps');
+});

@@ -928,6 +928,33 @@ function validateProviderBindStatus(
     return `${label}.actions must not contain duplicates`;
   }
 
+  if (p.tenantKey !== undefined && !isNullableNonEmptyString(p.tenantKey)) return `${label}.tenantKey is invalid`;
+  if (p.apps !== undefined) {
+    if (label !== 'provider.bind.state' || p.provider !== 'feishu' || !Array.isArray(p.apps)) return `${label}.apps is only valid on Feishu state`;
+    const appIds = new Set<string>();
+    const bindingIds = new Set<string>();
+    for (const app of p.apps) {
+      if (!isPlainObject(app) || !isNonEmptyString(app.scopeId) || appIds.has(app.scopeId)
+        || !isNullableNonEmptyString(app.scopeName) || !['feishu', 'lark'].includes(app.brand as string)
+        || (app.avatarUrl !== null && !isSafeHttpsUrl(app.avatarUrl)) || typeof app.multiBindAvailable !== 'boolean'
+        || !Array.isArray(app.bindings)) return `${label}.apps contains an invalid app`;
+      appIds.add(app.scopeId);
+      const principals = new Set<string>();
+      for (const row of app.bindings) {
+        if (!isPlainObject(row) || row.apps !== undefined || row.bindings !== undefined || row.scopeId !== app.scopeId
+          || row.provider !== 'feishu' || row.state !== 'confirmed' || validateProviderBindStatus(row, label) !== null
+          || bindingIds.has(row.bindingId as string) || principals.has(row.principalId as string)) return `${label}.apps contains an invalid binding`;
+        bindingIds.add(row.bindingId as string); principals.add(row.principalId as string);
+      }
+    }
+    if (p.scopeId !== null && !appIds.has(p.scopeId as string)) return `${label}.apps must include the legacy scope`;
+    const primary = p.apps.find((app: Record<string, unknown>) => app.scopeId === p.scopeId) as { bindings: Record<string, unknown>[] } | undefined;
+    if (primary && (p.state === 'confirmed'
+      ? !primary.bindings.some((row) => row.bindingId === p.bindingId && row.principalId === p.principalId)
+      : p.state !== 'none' || primary.bindings.length > 0)) return `${label}.apps must agree with the legacy binding`;
+    if (primary && Array.isArray(p.bindings) && (primary.bindings.length !== p.bindings.length
+      || p.bindings.some((row) => !primary.bindings.some((item) => item.bindingId === row.bindingId && item.principalId === row.principalId)))) return `${label}.apps must agree with bindings`;
+  }
   if (p.completedAttemptId !== undefined && (p.state !== 'confirmed' || !isNonEmptyString(p.completedAttemptId))) {
     return `${label}.completedAttemptId must identify a completed confirmed attempt`;
   }
@@ -938,7 +965,7 @@ function validateProviderBindStatus(
     const ids = new Set<string>();
     const principals = new Set<string>();
     for (const row of p.bindings) {
-      if (!isPlainObject(row) || row.bindings !== undefined || row.provider !== p.provider || row.state !== 'confirmed'
+      if (!isPlainObject(row) || row.bindings !== undefined || row.apps !== undefined || row.provider !== p.provider || row.state !== 'confirmed'
         || row.scopeId !== p.scopeId || validateProviderBindStatus(row, label) !== null) {
         return `${label}.bindings must contain confirmed bindings in the same scope`;
       }

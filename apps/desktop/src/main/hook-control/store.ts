@@ -39,6 +39,10 @@ export interface HookBindingCacheEntry {
  * 稳定展示(字段与 provider.bind.* 协议词汇对齐; Telegram / X 存储槽使用)。
  */
 export interface ProviderBindingCacheEntry {
+  localLabel?: string;
+  botBrand?: 'feishu' | 'lark';
+  botAvatarUrl?: string | null;
+  tenantKey?: string | null;
   bindingId: string;
   principalId: string;
   principalName: string | null;
@@ -351,6 +355,10 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       return null;
     }
     return {
+      ...(row.botBrand === 'feishu' || row.botBrand === 'lark' ? { botBrand: row.botBrand } : {}),
+      ...(typeof row.botAvatarUrl === 'string' && row.botAvatarUrl.startsWith('https://') ? { botAvatarUrl: row.botAvatarUrl } : {}),
+      ...(typeof row.localLabel === 'string' && row.localLabel.trim() ? { localLabel: row.localLabel.trim().slice(0, 128) } : {}),
+      ...(typeof row.tenantKey === 'string' ? { tenantKey: row.tenantKey } : {}),
       bindingId: row.bindingId,
       principalId: row.principalId,
       principalName: typeof row.principalName === 'string' ? row.principalName : null,

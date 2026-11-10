@@ -6467,7 +6467,13 @@
           "setWorkingDevice": "Als Arbeitscomputer festlegen",
           "workingDeviceSet": "Arbeitscomputer festgelegt",
           "addAccount": "Weiteres Konto verknüpfen",
-          "linkedAccounts": "Verknüpfte Konten: {{count}}"
+          "linkedAccounts": "Verknüpfte Konten: {{count}}",
+          "botPlatform": "Feishu",
+          "unnamedAccount": "Feishu-Konto",
+          "tenantId": "Verbindungsmandant-ID",
+          "accountRemark": "Lokale Kontonotiz",
+          "linkingBot": "Konto mit {{name}} verknüpfen",
+          "botSummary": "{{bots}} Bots · {{accounts}} Konten"
         }
       },
       "summary": {

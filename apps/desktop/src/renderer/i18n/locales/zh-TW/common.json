@@ -6424,7 +6424,13 @@
           "setWorkingDevice": "設為工作電腦",
           "workingDeviceSet": "已設為工作電腦",
           "addAccount": "關聯其他飛書帳號",
-          "linkedAccounts": "已關聯帳號：{{count}} 個"
+          "linkedAccounts": "已關聯帳號：{{count}} 個",
+          "botPlatform": "飛書",
+          "unnamedAccount": "飛書帳號",
+          "tenantId": "連線企業識別碼",
+          "accountRemark": "本機帳號備註",
+          "linkingBot": "正在關聯至機器人 {{name}}",
+          "botSummary": "{{bots}} 個機器人 · {{accounts}} 個帳號"
         }
       },
       "summary": {

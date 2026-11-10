@@ -6424,7 +6424,13 @@
           "setWorkingDevice": "작업 컴퓨터로 설정",
           "workingDeviceSet": "작업 컴퓨터로 설정했습니다",
           "addAccount": "다른 계정 연결",
-          "linkedAccounts": "연결된 계정: {{count}}개"
+          "linkedAccounts": "연결된 계정: {{count}}개",
+          "botPlatform": "Feishu",
+          "unnamedAccount": "Feishu 계정",
+          "tenantId": "연결 테넌트 ID",
+          "accountRemark": "이 기기의 계정 메모",
+          "linkingBot": "{{name}}에 계정 연결 중",
+          "botSummary": "봇 {{bots}}개 · 계정 {{accounts}}개"
         }
       },
       "summary": {

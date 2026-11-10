@@ -507,3 +507,13 @@ it('persists multiple Feishu identities and isolates their cache by Cindy accoun
   expect(restored.feishuBindingCache).toEqual(rows[0]);
   expect(restored.feishuBindingsCache).toBeUndefined();
 });
+
+// Unit: local remarks and actual tenant identifiers persist only inside the current Cindy account.
+it('persists account notes per bot and isolates them when the Cindy account changes', () => {
+  let owner = 'owner-account-a'; const store = makeStore(undefined, () => owner);
+  const row = { bindingId: 'binding-a', principalId: 'ou_same', principalName: null, scopeId: 'cli_a', scopeName: 'Bot A', localLabel: 'Product', tenantKey: 'tenant-a' };
+  store.setFeishuBindingsCache([row, { ...row, bindingId: 'binding-b', scopeId: 'cli_b', scopeName: 'Bot B', localLabel: 'Partner' }]);
+  expect(makeStore(undefined, () => owner).get().feishuBindingsCache?.map((item) => item.localLabel)).toEqual(['Product', 'Partner']);
+  owner = 'owner-account-b'; expect(store.get().feishuBindingsCache ?? []).toEqual([]);
+  owner = 'owner-account-a'; expect(store.get().feishuBindingsCache?.[0]?.tenantKey).toBe('tenant-a');
+});

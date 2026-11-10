@@ -12,6 +12,7 @@ const ipc = vi.hoisted(() => ({
   setLifecycleAnnouncement: vi.fn(),
   setSlackCommunications: vi.fn(),
   providerBindStart: vi.fn(),
+  setFeishuAccountLabel: vi.fn(),
   providerBindCancel: vi.fn(),
   providerBindRevoke: vi.fn(),
   providerBindSelect: vi.fn(),
@@ -272,6 +273,7 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
         setLifecycleAnnouncement: ipc.setLifecycleAnnouncement,
         setSlackCommunications: ipc.setSlackCommunications,
         providerBindStart: ipc.providerBindStart,
+        setFeishuAccountLabel: ipc.setFeishuAccountLabel,
         providerBindCancel: ipc.providerBindCancel,
         providerBindRevoke: ipc.providerBindRevoke,
         providerBindSelect: ipc.providerBindSelect,
@@ -2486,4 +2488,30 @@ it('adds another Feishu account and applies per-account actions without unlinkin
   await waitFor(() => expect(ipc.providerBindRevoke).toHaveBeenCalledWith('feishu', 'b'));
   await waitFor(() => expect(screen.queryByRole('group', { name: 'Account B' })).toBeNull());
   expect(screen.getByRole('group', { name: 'Account A' })).toBeTruthy();
+});
+
+// Unit/jsdom: the real settings section must associate actions and local remarks with the chosen bot.
+// The previous flat-account tests cannot distinguish two applications with independent accounts.
+it('shows bot and account identifiers and sends actions for the selected bot', async () => {
+  const a = { provider: 'feishu' as const, state: 'confirmed' as const, bindingId: 'a', principalId: 'ou_a', principalName: 'Alice',
+    attemptId: null, scopeId: 'cli_product', scopeName: 'Product bot', connectUrl: null, bindCode: null, expiresAt: null,
+    reason: null, remediationUrl: null, tenantKey: 'tenant_product', actions: ['revoke', 'select_device'] };
+  const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu, enabled: true, available: true, status: 'connected',
+    url: 'wss://feishu.example.test', binding: a, bindings: [a], apps: [
+      { scopeId: 'cli_product', scopeName: 'Product bot', brand: 'feishu', avatarUrl: null, multiBindAvailable: true },
+      { scopeId: 'cli_partner', scopeName: 'Partner bot', brand: 'feishu', avatarUrl: null, multiBindAvailable: true },
+    ] } };
+  ipc.get.mockResolvedValue({ hook }); ipc.providerBindStart.mockResolvedValue({ hook }); ipc.setFeishuAccountLabel.mockResolvedValue({ hook });
+  render(<HookConnectionsSection />); await expandChannelCard(FEISHU_CARD);
+  const product = within(await screen.findByRole('region', { name: 'Product bot' }));
+  const partner = within(screen.getByRole('region', { name: 'Partner bot' }));
+  expect(product.getByText('Open ID: ou_a')).toBeTruthy();
+  expect(product.getByText(/tenant_product/)).toBeTruthy();
+  fireEvent.change(product.getByRole('textbox'), { target: { value: 'Product work' } });
+  fireEvent.blur(product.getByRole('textbox'));
+  await waitFor(() => expect(ipc.setFeishuAccountLabel).toHaveBeenCalledWith('a', 'Product work'));
+  fireEvent.click(partner.getByRole('button', { name: 'settings.remoteControl.hook.feishu.connect' }));
+  await waitFor(() => expect(ipc.providerBindStart).toHaveBeenCalledWith('feishu', 'cli_partner'));
+  fireEvent.click(partner.getByRole('button', { name: 'settings.remoteControl.hook.feishu.openBot' }));
+  await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('feishu', 'provider', 'cli_partner'));
 });

@@ -19,6 +19,8 @@ export default {
     `,
   },
   cases: {
+    bots: { about: 'Several bots with account identities and local notes', data: { kind: 'bots' } },
+    'bots-pending': { about: 'Link an account to the chosen bot while other bots stay usable', data: { kind: 'bots-pending' } },
     multi: { about: 'Multiple identities share one computer with per-account unlink and working-device selection', data: { kind: 'multi' } },
     'multi-pending': { about: 'Additive linking preserves existing account rows', data: { kind: 'multi-pending' } },
     default: {
@@ -43,6 +45,16 @@ export default {
   },
   async check(page, ui) {
     const card = page.locator('#cindy-im-feishu-panel');
+    if (ui.data.kind === 'bots' || ui.data.kind === 'bots-pending') {
+      assert.equal(await card.getByRole('region').count(), 3);
+      assert.ok(await card.getByText('Cindy · 合作伙伴', { exact: true }).isVisible());
+      assert.equal(await card.getByRole('textbox').count(), 4);
+      await ui.capture('bot-identity', { locator: card.getByRole('region').first() });
+      if (ui.data.kind === 'bots-pending') {
+        await card.getByRole('region', { name: 'Cindy · 项目团队' }).scrollIntoViewIfNeeded();
+        await ui.capture('selected-bot-linking');
+      }
+    }
     if (ui.data.kind === 'released') {
       const row = page.locator('#cindy-im-feishu');
       assert.equal(await row.getByRole('status').textContent(), await ui.t('settings.remoteControl.hook.feishu.status.disabled'));

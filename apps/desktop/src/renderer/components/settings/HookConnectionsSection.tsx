@@ -1,3 +1,4 @@
+import { FeishuOfficialBotsPanel } from './FeishuOfficialBotsPanel';
 import { imBotSettings } from './ImBotSection.settings-search';
 /**
  * HookConnectionsSection —— 「IM 机器人」页「官方」栏(Cindy 渠道)。
@@ -921,9 +922,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   const handleProviderOpen = (
     provider: NeutralCardProvider,
     action: 'connect' | 'provider' | 'add-to-group',
+    scopeId?: string,
   ) => {
-    void window.electronAPI.hookControl
-      .openProviderAction(provider, action)
+    void (scopeId === undefined ? window.electronAPI.hookControl.openProviderAction(provider, action)
+      : window.electronAPI.hookControl.openProviderAction(provider, action, scopeId))
       .catch((err: unknown) => {
         toast.error(
           extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
@@ -1497,6 +1499,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
     const cs = providerCardState(provider, view);
     const accountRows = provider === 'feishu' ? view.bindings ?? [] : [];
+    const multiBot = provider === 'feishu' && view.apps !== undefined;
     const multiAccount = provider === 'feishu' && (view.multiBindAvailable === true || accountRows.length > 1);
     if (!cs.visible) return null;
     const prefsState =
@@ -1516,7 +1519,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               : 'settings.tina.prefs.providerX',
         )}
         description={t(`settings.remoteControl.hook.${provider}.description`)}
-        routeSummary={companion ? null : multiAccount && accountRows.length > 0
+        routeSummary={multiBot ? t('settings.remoteControl.hook.feishu.botSummary', { bots: view.apps!.length, accounts: accountRows.length }) : companion ? null : multiAccount && accountRows.length > 0
           ? t('settings.remoteControl.hook.feishu.linkedAccounts', { count: accountRows.length }) : cs.bindingLine}
         status={<ChannelStatusBadge tone={cs.badge.tone} label={cs.badge.label} />}
         headerAction={
@@ -1578,7 +1581,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </span>
           ) : null}
 
-          {view.enabled && view.available ? (
+          {!multiBot && view.enabled && view.available ? (
             <div className="flex flex-wrap items-center gap-2">
               {cs.inProgress && cs.binding?.connectUrl ? (
                 <>
@@ -1679,7 +1682,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </div>
           ) : null}
 
-          {multiAccount && accountRows.length > 0 ? (
+          {!multiBot && multiAccount && accountRows.length > 0 ? (
             <div className="flex flex-col gap-2">
               {accountRows.map((account, index) => (
                 <div key={account.bindingId} role="group" aria-label={account.principalName ?? account.principalId ?? ''}
@@ -1716,9 +1719,13 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </div>
           ) : null}
 
+          {multiBot ? <FeishuOfficialBotsPanel view={view} run={runHookAction}
+            onSelect={(id) => void selectWorkingDevice(id)} onUnlink={(id) => void handleProviderUnlink('feishu', id)}
+            onOpen={(action, scopeId) => handleProviderOpen('feishu', action, scopeId)} onCopyCode={() => void handleCopyBindCode('feishu')} onCopyLink={() => void handleCopyProviderLink('feishu')} /> : null}
+
           {/* 飞书关联码: 网页授权是主路径(已自动打开), 授权页进不去的外部用户把这串
               码私聊发给机器人。码只在 pending 时存在, 过期 / 完成后随快照消失。 */}
-          {provider === 'feishu' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode ? (
+          {!multiBot && provider === 'feishu' && view.enabled && view.available && cs.inProgress && cs.binding?.bindCode ? (
             <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--border-default)] p-2.5">
               <span className="text-11 text-[var(--text-tertiary)]">
                 {t('settings.remoteControl.hook.feishu.bindCode.label')}

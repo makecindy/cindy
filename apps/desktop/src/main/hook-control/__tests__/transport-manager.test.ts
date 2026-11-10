@@ -19,6 +19,7 @@ import {
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_MULTI_BIND,
+  HOOK_FEATURE_PROVIDER_MULTI_APP,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -3370,7 +3371,7 @@ describe('官方飞书 / Lark provider lane', () => {
     if (opts === undefined) throw new Error('Feishu transport was not created');
     expect(opts.url).toBe('ws://127.0.0.1:8794');
     // 第一里程碑由服务端排版: 不得声明 msg.op 或任何 Telegram 专属能力。
-    expect(opts.buildHello().features).toEqual([...FEISHU_FEATURES, HOOK_FEATURE_PROVIDER_MULTI_BIND]);
+    expect(opts.buildHello().features).toEqual([...FEISHU_FEATURES, HOOK_FEATURE_PROVIDER_MULTI_BIND, HOOK_FEATURE_PROVIDER_MULTI_APP]);
     expect(opts.buildHello().features).not.toContain(HOOK_FEATURE_MESSAGE_OPS);
     expect(opts.buildHello().statusReactions).toBeUndefined();
 
@@ -4969,4 +4970,36 @@ describe('Feishu multi-account queries and settings', () => {
     }
     await expect(update).resolves.toMatchObject({ bindingId: a.bindingId });
   });
+});
+
+// Unit: two bots and their principals require exact pairing; old single-bot cases miss this boundary.
+it('authorizes exact bot-account pairs, chooses the requested bot, and rejects unknown bot metadata', async () => {
+  const dispatcher = stubDispatcher();
+  const openUrl = vi.fn();
+  const { manager, transports, sent } = feishuLaneHarness({ dispatcher, openFeishuUrl: openUrl }, { feishuEnabled: true });
+  manager.sync(); const opts = transports[0]!;
+  opts.onWelcome?.({ serverName: 'feishu', features: [...FEISHU_FEATURES, HOOK_FEATURE_PROVIDER_MULTI_BIND, HOOK_FEATURE_PROVIDER_MULTI_APP] });
+  opts.onStatus('connected', null);
+  const a = FEISHU_CONFIRMED;
+  const b = { ...a, bindingId: 'bot-b-binding', scopeId: 'cli_bot_b', scopeName: 'Partner bot', principalId: 'ou_partner', remediationUrl: 'https://applink.feishu.cn/client/bot/open?appId=cli_bot_b' };
+  opts.onMessage(makeProviderBindState({ ...a, bindings: [a], apps: [
+    { scopeId: a.scopeId!, scopeName: 'Product bot', brand: 'feishu', avatarUrl: null, multiBindAvailable: true, bindings: [a] },
+    { scopeId: b.scopeId, scopeName: b.scopeName, brand: 'feishu', avatarUrl: null, multiBindAvailable: true, bindings: [b] },
+  ] }), () => true);
+  expect(manager.snapshot().feishu.apps).toHaveLength(2);
+  const dispatch = (app: string, principal: string) => opts.onMessage(makeTaskDispatch({ requestId: `${app}-${principal}`,
+    externalKey: `feishu:dm:${app}:${principal}:g0`, workspace: 'chat', prompt: 'work', source: { im: 'feishu' } }), () => true);
+  dispatch(a.scopeId!, a.principalId!); dispatch(b.scopeId, b.principalId); dispatch(a.scopeId!, b.principalId); dispatch('cli_unknown', b.principalId);
+  expect(dispatcher.handleDispatch).toHaveBeenCalledTimes(2);
+  expect(manager.providerBindStart('feishu', 'cli_unknown')).toBe(false);
+  expect(manager.providerBindStart('feishu', b.scopeId)).toBe(true);
+  expect(sent.at(-1)).toMatchObject({ type: 'provider.bind.start', payload: { scopeId: b.scopeId } });
+  expect(manager.snapshot().feishu.binding?.scopeId).toBe(b.scopeId);
+  await expect(manager.openProviderAction('feishu', 'provider', b.scopeId)).resolves.toBe(true);
+  expect(openUrl).toHaveBeenCalledWith(b.remediationUrl);
+  opts.onMessage(makeProviderBindUpdate({ ...b, bindingId: 'unknown-binding', scopeId: 'cli_unknown' }), () => true);
+  expect(manager.snapshot().feishu.bindings).toHaveLength(2);
+  expect(manager.setFeishuAccountLabel(b.bindingId, 'Partner work')).toBe(true);
+  expect(manager.snapshot().feishu.bindings?.find((row) => row.bindingId === b.bindingId)?.localLabel).toBe('Partner work');
+  expect(manager.setFeishuAccountLabel('foreign-binding', 'x')).toBe(false);
 });

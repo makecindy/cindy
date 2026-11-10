@@ -6424,7 +6424,13 @@
           "setWorkingDevice": "作業用パソコンに設定",
           "workingDeviceSet": "作業用パソコンに設定しました",
           "addAccount": "別のアカウントを連携",
-          "linkedAccounts": "連携済みアカウント：{{count}}"
+          "linkedAccounts": "連携済みアカウント：{{count}}",
+          "botPlatform": "Feishu",
+          "unnamedAccount": "Feishu アカウント",
+          "tenantId": "接続先テナント ID",
+          "accountRemark": "この端末のアカウントメモ",
+          "linkingBot": "{{name}} にアカウントを連携中",
+          "botSummary": "ボット {{bots}} 件 · アカウント {{accounts}} 件"
         }
       },
       "summary": {

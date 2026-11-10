@@ -931,6 +931,15 @@ export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload 
  * event/reply; state is an authoritative point-in-time snapshot for one scope.
  * All nullable fields are explicit so an old value cannot survive a snapshot.
  */
+export interface ProviderAppBindingState {
+  scopeId: string;
+  scopeName: string | null;
+  brand: 'feishu' | 'lark';
+  avatarUrl: string | null;
+  multiBindAvailable: boolean;
+  bindings: ProviderBindStatusPayload[];
+}
+
 export interface ProviderBindStatusPayload {
   provider: HookProvider;
   /** Request id being answered, or null for an unsolicited state push. */
@@ -962,6 +971,9 @@ export interface ProviderBindStatusPayload {
   bindings?: ProviderBindStatusPayload[];
   /** Matches a completed additive attempt without disturbing another attempt. */
   completedAttemptId?: string;
+  /** Full authorized bot catalog, negotiated separately from same-bot multi-bind. */
+  apps?: ProviderAppBindingState[];
+  tenantKey?: string | null;
 }
 
 export type ProviderBindUpdatePayload = ProviderBindStatusPayload;
@@ -1395,6 +1407,7 @@ export const HOOK_FEATURE_MULTI_TEAM = 'multi-team';
 export const HOOK_FEATURE_PROVIDER_BIND = 'provider-bind-v1';
 /** Multiple Feishu identities on one desktop; both peers must advertise it. */
 export const HOOK_FEATURE_PROVIDER_MULTI_BIND = 'provider-multi-bind-v1';
+export const HOOK_FEATURE_PROVIDER_MULTI_APP = 'provider-multi-app-v1';
 
 /** Both peers must advertise this before using provider.prefs.* frames. */
 export const HOOK_FEATURE_PROVIDER_PREFS = 'provider-prefs-v1';

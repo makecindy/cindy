@@ -27,6 +27,7 @@ import {
   HOOK_FEATURE_SESSION_RESULT,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_MULTI_BIND,
+  HOOK_FEATURE_PROVIDER_MULTI_APP,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -308,7 +309,8 @@ export interface HookControlManager {
     teamId?: string | null,
   ): Promise<HookPrefsView>;
   setProviderEnabled(provider: HookProvider, enabled: boolean): void;
-  providerBindStart(provider: NeutralHookProvider): boolean;
+  providerBindStart(provider: NeutralHookProvider, scopeId?: string): boolean;
+  setFeishuAccountLabel(bindingId: string, label: string): boolean;
   providerBindCancel(provider: NeutralHookProvider): boolean;
   providerBindRevoke(provider: NeutralHookProvider, bindingId?: string): boolean;
   providerBindSelect(provider: NeutralHookProvider, bindingId?: string): Promise<void>;
@@ -316,6 +318,7 @@ export interface HookControlManager {
   openProviderAction(
     provider: NeutralHookProvider,
     action: 'connect' | 'provider' | 'add-to-group',
+    scopeId?: string,
   ): Promise<boolean>;
   getProviderWorkspacePrefs(provider: NeutralHookProvider): Promise<ProviderPrefsView>;
   setProviderWorkspacePrefs(
@@ -562,6 +565,7 @@ interface NeutralProviderLane {
   lastError: string | null;
   /** Provider-neutral state; confirmed cache survives provider disable/restart. */
   binding: ProviderBindingView | null;
+  apps?: ProviderHookView['apps'];
   confirmedBindings: ProviderBindingView[];
   revokedBindingIds: Set<string>;
   snapshotChanges: Map<string, ProviderBindingView>;
@@ -837,7 +841,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     requiredFeatures: feishuProviderFeatures,
     // 与 Telegram 相同: 服务端按 hello.features 判定 provider 协商结果, 客户端
     // 要求的基础能力必须全部自报。
-    helloFeatures: [...feishuProviderFeatures, HOOK_FEATURE_PROVIDER_MULTI_BIND],
+    helloFeatures: [...feishuProviderFeatures, HOOK_FEATURE_PROVIDER_MULTI_BIND, HOOK_FEATURE_PROVIDER_MULTI_APP],
     isEnabled: () => store.get().feishuEnabled,
     setEnabled: (enabled) => {
       store.setProviderEnabled('feishu', enabled);
@@ -1043,6 +1047,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     multiBindings = store.get().bindingsCache.map((entry) => ({ ...entry, displaced: false }));
     for (const lane of lanes) {
       lane.binding = lane.config.restoreCachedBinding();
+      lane.apps = undefined;
       lane.confirmedBindings = [];
       lane.revokedBindingIds.clear();
       lane.snapshotChanges.clear();
@@ -1381,7 +1386,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   }
 
   function multiBindReady(lane: NeutralProviderLane): boolean {
-    return lane.config.provider === 'feishu' && lane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_MULTI_BIND);
+    return lane.config.provider === 'feishu' && (lane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_MULTI_BIND) || lane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_MULTI_APP));
   }
 
   function confirmedLaneBindings(lane: NeutralProviderLane): ProviderBindingView[] {
@@ -1392,6 +1397,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     const base = feishuConfig.restoreCachedBinding();
     const saved = store.get();
     const entries = saved.feishuBindingsCache ?? (saved.feishuBindingCache ? [saved.feishuBindingCache] : []);
+    const apps = new Map<string, NonNullable<ProviderHookView['apps']>[number]>();
+    for (const row of entries) if (row.botBrand) apps.set(row.scopeId, { scopeId: row.scopeId, scopeName: row.scopeName,
+      brand: row.botBrand, avatarUrl: row.botAvatarUrl ?? null, multiBindAvailable: false });
+    feishuLane.apps = apps.size > 0 ? [...apps.values()] : undefined;
     feishuLane.confirmedBindings = base === null ? [] : entries.map((row) => ({
       ...base, ...row, state: 'confirmed' as const,
       remediationUrl: feishuBotUrlOrNull(base.remediationUrl, row.scopeId),
@@ -1400,10 +1409,16 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
 
   function persistFeishuBindings(lane: NeutralProviderLane): void {
     try {
+      const cachedRows = store.get().feishuBindingsCache ?? [];
+      const labels = new Map(cachedRows.map((row) => [JSON.stringify([row.scopeId, row.principalId]), row.localLabel]));
+      const apps = new Map(lane.apps?.map((app) => [app.scopeId, app]) ?? []);
       store.setFeishuBindingsCache(lane.confirmedBindings.flatMap((row) =>
         row.bindingId && row.principalId && row.scopeId && row.scopeName ? [{
           bindingId: row.bindingId, principalId: row.principalId, principalName: row.principalName,
-          scopeId: row.scopeId, scopeName: row.scopeName,
+          scopeId: row.scopeId, scopeName: apps.get(row.scopeId)?.scopeName ?? row.scopeName, tenantKey: row.tenantKey,
+          botBrand: apps.get(row.scopeId)?.brand,
+          botAvatarUrl: apps.get(row.scopeId)?.avatarUrl,
+          localLabel: labels.get(JSON.stringify([row.scopeId, row.principalId])),
         }] : []));
     } catch (error) {
       log.warn(`persist Feishu binding list failed (${error instanceof Error ? error.name : 'unknown'})`);
@@ -1414,6 +1429,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function laneView(lane: NeutralProviderLane): ProviderHookView {
     const enabled = lane.config.isEnabled();
     const url = lane.config.getUrl().trim();
+    const labels = new Map(lane.config.provider === 'feishu' ? (store.get().feishuBindingsCache ?? []).map((row) => [JSON.stringify([row.scopeId, row.principalId]), row.localLabel]) : []);
     const selectionReady = accountActive && !disposed && enabled && lane.status === 'connected'
       && laneCapabilityReady(lane) && !lane.awaitingStateSnapshot && lane.bindRequest?.kind !== 'revoke';
     return {
@@ -1429,7 +1445,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       available: laneCapabilityReady(lane),
       capabilityPending: enabled && url.length > 0 && !lane.serverWelcomeReceived,
       ...(lane.config.provider === 'feishu' ? {
-        bindings: lane.confirmedBindings.map((row) => ({ ...row, actions: row.actions.filter((action) => action !== 'select_device' || selectionReady) })),
+        ...(lane.apps === undefined ? {} : { apps: lane.apps.map((app) => ({ ...app })) }),
+        bindings: lane.confirmedBindings.map((row) => ({ ...row, localLabel: labels.get(JSON.stringify([row.scopeId, row.principalId])), actions: row.actions.filter((action) => action !== 'select_device' || selectionReady) })),
         multiBindAvailable: multiBindReady(lane),
       } : {}),
       behaviorAvailable:
@@ -1562,6 +1579,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       bindingId: payload.bindingId,
       principalId: payload.principalId,
       principalName: payload.principalName,
+      tenantKey: payload.tenantKey,
       scopeId: payload.scopeId,
       scopeName: payload.scopeName,
       connectUrl: payload.connectUrl,
@@ -1723,7 +1741,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     return false;
   }
 
-  function initiateProviderBind(lane: NeutralProviderLane): boolean {
+  function initiateProviderBind(lane: NeutralProviderLane, scopeId?: string): boolean {
     if (
       lane.transport === null ||
       lane.status !== 'connected' ||
@@ -1736,9 +1754,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     // one-time link can be superseded. A confirmed binding blocks duplicate
     // single-account starts; negotiated Feishu starts explicitly add an identity.
     if (lane.binding?.state === 'confirmed' && !multiBindReady(lane)) return false;
+    const selectedApp = scopeId === undefined ? undefined : lane.apps?.find((app) => app.scopeId === scopeId);
+    if (scopeId !== undefined && (lane.config.provider !== 'feishu' || !selectedApp)) return false;
+    if (selectedApp && !selectedApp.multiBindAvailable && lane.confirmedBindings.some((row) => row.scopeId === scopeId)) return false;
     const requestId = randomUUID();
     if (
-      !lane.transport.send(makeProviderBindStart({ requestId, provider: lane.config.provider }))
+      !lane.transport.send(makeProviderBindStart({ requestId, provider: lane.config.provider, ...(scopeId === undefined ? {} : { scopeId }) }))
     ) {
       return false;
     }
@@ -1752,8 +1773,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       bindingId: null,
       principalId: null,
       principalName: null,
-      scopeId: null,
-      scopeName: null,
+      scopeId: scopeId ?? null,
+      scopeName: selectedApp?.scopeName ?? null,
       connectUrl: null,
       bindCode: null,
       expiresAt: null,
@@ -1780,6 +1801,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       log.warn(`provider bind state dropped before ${label} capability negotiation`);
       return;
     }
+    if (lane.config.provider === 'feishu' && lane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_MULTI_APP)
+      && lane.apps !== undefined && !isStateSnapshot && !lane.awaitingStateSnapshot && !lane.apps.some((app) => app.scopeId === payload.scopeId)) return;
     if (!shouldApplyProviderBindStatus(lane, payload, isStateSnapshot)) {
       if (payload.replyTo !== null && payload.replyTo === lane.openRequestId) {
         lane.openRequestId = null;
@@ -1830,11 +1853,14 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       if (multiBindReady(lane)) {
         if (isStateSnapshot) {
           lane.revokedBindingIds.clear();
-          lane.confirmedBindings = (acceptedPayload.bindings ?? (view.state === 'confirmed' ? [acceptedPayload] : []))
+          if (lane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_MULTI_APP) && acceptedPayload.apps) {
+            lane.apps = acceptedPayload.apps.map(({ bindings: _rows, ...app }) => app);
+          } else lane.apps = undefined;
+          lane.confirmedBindings = ((lane.apps ? acceptedPayload.apps!.flatMap((app) => app.bindings) : acceptedPayload.bindings) ?? (view.state === 'confirmed' ? [acceptedPayload] : []))
             .map((row) => providerBindingView('feishu', lane.config.normalizeBindingPayload?.(row) ?? row));
           for (const [id, change] of lane.snapshotChanges) {
             lane.confirmedBindings = lane.confirmedBindings.filter((row) => row.bindingId !== id);
-            if (change.state === 'confirmed') lane.confirmedBindings.push(change);
+            if (change.state === 'confirmed' && (!lane.apps || lane.apps.some((app) => app.scopeId === change.scopeId))) lane.confirmedBindings.push(change);
             else lane.revokedBindingIds.add(id);
           }
           lane.snapshotChanges.clear();
@@ -1934,7 +1960,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     if (
       (view.state === 'revoked' || view.state === 'superseded' || view.state === 'none'
         || (multiBindReady(lane) && lane.binding?.state === 'none'))
-      && !(multiBindReady(lane) && (lane.confirmedBindings.length > 0 || lane.awaitingStateSnapshot))
+      && !(multiBindReady(lane) && (lane.confirmedBindings.length > 0 || lane.awaitingStateSnapshot || (lane.apps?.length ?? 0) > 0))
     ) {
       lane.config.setEnabled(false);
       stopLane(lane);
@@ -3091,6 +3117,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       onWelcome: (payload) => {
         if (created === null || lane.transport !== created) return;
         lane.serverFeatures = [...payload.features];
+        if (!payload.features.includes(HOOK_FEATURE_PROVIDER_MULTI_APP)) lane.apps = undefined;
         lane.serverWelcomeReceived = true;
         const supported = laneCapabilityReady(lane);
         lane.awaitingStateSnapshot = supported;
@@ -3449,11 +3476,19 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       }
       notifyStatus(toView());
     },
-    providerBindStart(provider) {
+    providerBindStart(provider, scopeId) {
       const lane = laneByProvider.get(provider);
       if (lane === undefined) return false;
       lane.autoBindIntent = false;
-      return initiateProviderBind(lane);
+      return initiateProviderBind(lane, scopeId);
+    },
+    setFeishuAccountLabel(bindingId, label) {
+      if (!accountActive || disposed || typeof label !== 'string' || label.length > 128) return false;
+      const rows = store.get().feishuBindingsCache ?? [];
+      if (!rows.some((row) => row.bindingId === bindingId)) return false;
+      store.setFeishuBindingsCache(rows.map((row) => row.bindingId === bindingId ? { ...row, localLabel: label.trim() || undefined } : row));
+      notifyStatus(toView());
+      return true;
     },
     providerBindCancel(provider) {
       const lane = laneByProvider.get(provider);
@@ -3542,10 +3577,14 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
       });
     },
-    async openProviderAction(provider, action) {
+    async openProviderAction(provider, action, scopeId) {
       const lane = laneByProvider.get(provider);
-      if (lane === undefined || !lane.config.openUrl || lane.binding === null) return false;
-      const url = lane.config.actionUrl(action, lane.binding);
+      if (lane === undefined || !lane.config.openUrl) return false;
+      const app = scopeId === undefined ? undefined : lane.apps?.find((row) => row.scopeId === scopeId);
+      if (scopeId !== undefined && (provider !== 'feishu' || !app || action !== 'provider')) return false;
+      const binding = lane.binding;
+      const url = app ? `${app.brand === 'lark' ? 'https://applink.larksuite.com' : 'https://applink.feishu.cn'}/client/bot/open?appId=${encodeURIComponent(app.scopeId)}`
+        : binding === null ? null : lane.config.actionUrl(action, binding);
       if (!url) return false;
       await lane.config.openUrl(url);
       return true;
@@ -3661,6 +3700,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         serverWelcomeReceived = false;
         for (const lane of lanes) {
           lane.binding = null;
+          lane.apps = undefined;
           lane.confirmedBindings = [];
           lane.revokedBindingIds.clear();
           lane.snapshotChanges.clear();

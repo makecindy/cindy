@@ -6532,7 +6532,13 @@
           "setWorkingDevice": "Définir comme ordinateur de travail",
           "workingDeviceSet": "Ordinateur de travail défini",
           "addAccount": "Associer un autre compte",
-          "linkedAccounts": "Comptes associés : {{count}}"
+          "linkedAccounts": "Comptes associés : {{count}}",
+          "botPlatform": "Feishu",
+          "unnamedAccount": "Compte Feishu",
+          "tenantId": "Locataire de la connexion",
+          "accountRemark": "Note locale du compte",
+          "linkingBot": "Association du compte à {{name}}",
+          "botSummary": "{{bots}} bots · {{accounts}} comptes"
         }
       },
       "summary": {

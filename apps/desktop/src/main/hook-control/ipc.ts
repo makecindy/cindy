@@ -850,11 +850,23 @@ export function registerHookControlIpc(): void {
     return { hook: m.snapshot() };
   });
 
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.FEISHU_ACCOUNT_LABEL, (_e, payload) => {
+    requireHookControl();
+    const p = requireObject(payload);
+    const bindingId = requireString(p.bindingId, 'bindingId');
+    const label = typeof p.label === 'string' ? p.label : null;
+    const { manager: m } = ensureInstances();
+    if (label === null || !m.setFeishuAccountLabel(bindingId, label)) throwIpcError('INVALID_PARAMS', 'invalid Feishu account label');
+    return { hook: m.snapshot() };
+  });
+
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_START, (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
     const provider = requireNeutralProvider(payload);
-    if (!m.providerBindStart(provider)) {
+    const scopeId = requireObject(payload).scopeId;
+    if (scopeId !== undefined && (typeof scopeId !== 'string' || !scopeId)) throwIpcError('INVALID_PARAMS', 'invalid scopeId');
+    if (!m.providerBindStart(provider, scopeId as string | undefined)) {
       throwIpcError(
         'HOOK_NOT_CONNECTED',
         `${providerDisplayName(provider)} provider is not connected`,
@@ -920,7 +932,9 @@ export function registerHookControlIpc(): void {
         throwIpcError('INVALID_PARAMS', `invalid ${providerDisplayName(provider)} open action`);
       }
       try {
-        if (!(await m.openProviderAction(provider, action))) {
+        const scopeId = p.scopeId;
+        if (scopeId !== undefined && (typeof scopeId !== 'string' || !scopeId)) throwIpcError('INVALID_PARAMS', 'invalid scopeId');
+        if (!(await m.openProviderAction(provider, action, scopeId as string | undefined))) {
           throwIpcError(
             'INVALID_PARAMS',
             `${providerDisplayName(provider)} action is not available`,
