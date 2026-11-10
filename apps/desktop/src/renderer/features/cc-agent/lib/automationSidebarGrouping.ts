@@ -237,20 +237,22 @@ export interface AutomationGroupChildViewOptions {
   notifications: ReadonlySet<string>;
   runningSessionIds?: ReadonlySet<string>;
   showAll: boolean;
+  /** 组头实际打开的任务，仅在收起态从未读子行中排除；展开态仍列出。 */
+  headerSessionId?: string;
   activeSessionId?: string;
   frozenVisibleSessionIds?: readonly string[] | null;
   /** 传入当前时间 ms 即启用「最近 24h 内有活动不折叠」豁免(和普通对话一致);不传走纯硬上限。 */
   nowMs?: number;
-  /** 收起态默认展示条数,默认 5(和普通对话一致)。 */
+  /** 展开组内的历史列表默认展示条数，默认 5（和普通对话一致）。 */
   minVisibleCount?: number;
-  /** 轴 1(文件夹开/关)的收起态。收起时只渲染 alertSessionIds 命中的运行,见下方 ⚠️。 */
+  /** 轴 1(文件夹开/关)的收起态。收起时只渲染 collapsedAttentionSessionIds 命中的运行。 */
   collapsed?: boolean;
   /**
-   * 收起态仍要保留可见的错误告警与待回复运行 id。错误来源是
+   * 收起态仍要保留可见的非静默未读、错误告警与待回复运行 id。错误来源是
    * `sidebar/projectCollapsedAttention.ts` 的 `resolveCollapsedAttention().errorSessionIds`
    * —— 与组头红点、项目折叠头红点同一份判据;待回复由组件按本地/远程活动补入。
    */
-  alertSessionIds?: ReadonlySet<string>;
+  collapsedAttentionSessionIds?: ReadonlySet<string>;
   /**
    * 展开态折叠的追加豁免集合(只影响折叠),语义同 SessionEntryList 的同名 prop:
    * 父层把 device-link 远程活动镜像并进来,保证项目行 / 对话组 / 设备段头聚合灯
@@ -262,22 +264,14 @@ export interface AutomationGroupChildViewOptions {
 /**
  * 计算自动化分组组头底下要展示哪些子运行。
  *
- * 展开态(showAll=false 且无冻结快照)复用与普通对话列表同源的
- * `getSessionListCollapseView`:默认前 N 条(默认 5)+ 传入 nowMs 时豁免最近 24h 内
- * 有活动的运行 + 需关注(未读)/运行中 + 当前打开的运行始终可见,超出由「显示全部」一次
- * 展开。**全部运行(含被组头代表的最新一条)都参与折叠并各自成行**,让最新未读也单独可见,
- * 与「显示全部」一致;组头点击打开哪条由组件单独算(getAutomationGroupPrimarySession),
- * 与列表行是"两个入口指向同一 session",不互斥。
+ * 展开态列出全部运行，包含组头代表的那条，并复用普通任务列表的前 N 条、
+ * 最近 24h、未读／运行中和当前任务豁免；冻结布局和「显示全部」也保留它。
+ * 只有收起态排除组头实际代表的任务，避免未读子行与组头重复。
  *
- * ⚠️ 收起态(options.collapsed)**不是空列表**:组内带未处理告警的运行会被提上来单独
- * 成行。原因是「组头只代表最新一条」+「收起时子行整片不渲染」叠起来会藏掉告警 ——
- * 项目折叠头按全部子任务汇总出红点,用户展开项目却在任何一行上都看不到它
- * (实测:一条被 App 重启打断、turn 从未收尾的定时任务运行)。告警行与组头红点同源
- * (错误 id ← resolveCollapsedAttention),待回复运行也由组件并入 alertSessionIds,
- * 避免上层展开后提示消失。
- * 这也是折叠上限里「需关注的条目始终显示」那条不变量本来就该覆盖的路径。
- * 收起态刻意不套 24h / active 豁免:此时列表的语义是"只列要你处理的",
- * 把非告警运行放进来会让收起形同失效。
+ * 收起态仍展示全部非静默未读及待处理运行，不受前 N 条上限影响。
+ * 组件把未读、远程 completed、错误和待回复统一传入 collapsedAttentionSessionIds；
+ * 静默成功不产生未读，已读且无待处理状态的历史仍隐藏。
+ * 收起态不套 24h / active 豁免，避免普通历史或当前打开的已读运行撑开列表。
  */
 export function getAutomationGroupChildView(
   group: AutomationSessionGroup,
@@ -291,23 +285,17 @@ export function getAutomationGroupChildView(
     hiddenCount: 0,
   });
 
-  // 收起:只提告警行。必须排在 frozen 之前 —— 冻结快照是展开态"前 N 条"防跳动用的,
-  // 收起态套上去会把非告警运行一起带回来。也必须排在下方的 showAll 短路之前:
-  // showAll 是两套列表共用的轴 2 状态,漏排会让收起态点过的「显示全部」把展开态
-  // 直接渲染成整组历史(见 AutomationSessionGroupItem 切折叠时的复位注释)。
+  // 收起态先于冻结布局和 showAll，只显示未读及待处理运行。
   if (options.collapsed) {
-    const alertIds = options.alertSessionIds;
-    const alertRuns = alertIds?.size ? allRuns.filter((session) => alertIds.has(session.id)) : [];
-    const limit = options.showAll
-      ? alertRuns.length
-      : Math.max(0, options.minVisibleCount ?? SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT);
-    const visibleSessions = alertRuns.slice(0, limit);
+    const attentionIds = options.collapsedAttentionSessionIds;
+    const visibleSessions = attentionIds?.size
+      ? allRuns.filter((session) => session.id !== options.headerSessionId && attentionIds.has(session.id))
+      : [];
     return {
       visibleSessions,
-      isOverflowing: alertRuns.length > visibleSessions.length,
-      // 收起态的「显示全部 N 个」N = 告警行总数(此时列表语义就是告警,不是整组)。
-      totalCount: alertRuns.length,
-      hiddenCount: alertRuns.length - visibleSessions.length,
+      isOverflowing: false,
+      totalCount: visibleSessions.length,
+      hiddenCount: 0,
     };
   }
 
@@ -333,7 +321,7 @@ export function getAutomationGroupChildView(
     return { visibleSessions, isOverflowing: hiddenCount > 0, totalCount: allRuns.length, hiddenCount };
   }
 
-  // 默认展开态:全部运行套用普通对话同款折叠,每条(含被组头代表的最新一条)各自成行。
+  // 默认展开态：全部运行套用普通任务同款折叠，包含组头代表的任务。
   const view = getSessionListCollapseView({
     entries: allRuns,
     minVisibleCount: options.minVisibleCount ?? SESSION_LIST_COLLAPSE_MIN_VISIBLE_COUNT,

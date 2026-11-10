@@ -1552,8 +1552,10 @@ describe('cindy-bridge extension source', () => {
     // 路由指定额外头必须合并进请求（anthropic-version / x-api-key / 自定义 provider 头），
     // 缺失会被后端拒（对齐 host 侧 vision-channel 的 headers 合并）。
     expect(source).toContain('...spec.headers');
-    // anthropic-messages 视觉请求必须带 max_tokens（/v1/messages 强制要求，缺省会 400）。
-    expect(source).toContain('max_tokens: 1024');
+    // anthropic-messages 视觉请求必须带有界 max_tokens（/v1/messages 缺省会 400）。
+    // #4580：1024 会被 thinking 块吃光。预算对齐 host 侧 VISION_ANTHROPIC_MAX_TOKENS=4096。
+    expect(source).toContain('const VISION_ANTHROPIC_MAX_TOKENS = 4096');
+    expect(source).toContain('max_tokens: VISION_ANTHROPIC_MAX_TOKENS');
     // fallback 去重必须比较 headers——同 (url/model/auth) 但路由头不同（如不同
     // anthropic-beta）的 fallback 是独立后端，不得误判为重复跳过（P2）。
     expect(source).toContain('JSON.stringify(cfg.fallback.headers');
@@ -1569,6 +1571,44 @@ describe('cindy-bridge extension source', () => {
     expect(source).toContain('vision bridge pi primary backend failed');
     expect(source).toContain('vision bridge pi used fallback backend');
     expect(source).toContain('vision bridge pi fallback backend failed');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：桥源码里的 anthropicVisionText。Pi 视觉桥只采用 text 块。
+  // - Bug／规则依据：#4580。思考块被拼进描述，或只有思考时被当成转图成功。
+  // - 现有覆盖缺口：原断言只锁了 max_tokens: 1024，没有跑过响应解析。
+  // - 最小失败输入：thinking 块带 text 字段排在 text 块前；或 content 里只有 thinking。
+  // - tier：unit。截取桥里的真实函数执行，不发网络请求。
+  it('skips Anthropic thinking blocks and leaves a thinking-only vision reply empty (#4580)', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('function anthropicVisionText');
+    const end = source.indexOf('async function callPiVision', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const extract = runInNewContext(
+      ts.transpile(source.slice(start, end) + '\nanthropicVisionText;', {
+        target: ts.ScriptTarget.ES2022,
+      }),
+    ) as (blocks: unknown) => string;
+    expect(
+      extract([
+        { type: 'thinking', thinking: 'hidden', text: 'should not leak' },
+        { type: 'redacted_thinking', data: 'opaque', text: 'also hidden' },
+        { type: 'text', text: 'a red button' },
+      ]),
+    ).toBe('a red button');
+    expect(extract([{ type: 'text', text: 'a blue ' }, { type: 'text', text: 'sky' }])).toBe(
+      'a blue sky',
+    );
+    expect(extract([{ type: 'thinking', thinking: 'only thoughts', text: 'not a description' }]).trim()).toBe(
+      '',
+    );
+    // 空串不是成功：callPiVision 仍在 trim 后抛 vision empty description。
+    const callSite = source.slice(source.indexOf("wire === 'anthropic-messages'", end));
+    expect(callSite).toContain('content = anthropicVisionText(blocks)');
+    expect(callSite.indexOf('content = anthropicVisionText(blocks)')).toBeLessThan(
+      callSite.indexOf("throw new Error('vision empty description')"),
+    );
   });
 
   it('captures known writes before execution and marks opaque tools only after a result', () => {

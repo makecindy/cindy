@@ -105,17 +105,39 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   These files remain individually deselectable; deselecting a subtree dependency
   prevents that automation's takeover, leaving its source running. Helper code
   contributes environment dependencies and bounded verification planning text.
-  A shared 128 MiB read budget bounds each source snapshot, including
-  config includes, documents, credentials, scripts and all referenced skill trees.
-  Additional selected skill resources use the same cumulative limit before any
-  import writes. An unreadable/oversized selected resource retains a per-item failure
-  for retry; healthy items and the conversation are saved. No item is truncated. Fingerprints hash raw
-  file bytes, and encrypted checkpoints use base64 while still reading legacy
-  numeric-array checkpoints.
-  Skill count, source entry count, resource file count and cron row count have no
-  fixed quota. Imported SKILL.md files preserve their full body rather than using
-  the interactive skill editor's 64 KiB authoring limit. Individual file and total
-  in-memory snapshot byte bounds remain; this is not an unlimited-byte importer.
+  Skill resource bytes no longer count against the 128 MiB in-memory metadata
+  snapshot budget. Preview reads only the SKILL.md header; selected Skill bodies,
+  scripts, .venv, node_modules and resources stream into a private encrypted
+  archive per Skill. No fixed per-resource or aggregate Skill byte quota applies;
+  available disk space remains necessary. Files are classified and hashed with
+  32 KiB reads, then captured in bounded authenticated records. Checkpoints and
+  environments retain archive references rather than base64 copies of resources.
+  Config/documents and parsed YAML headers retain their 16 MiB parsing bound;
+  other buffered source metadata/documents still share the 128 MiB memory budget.
+  These are parser/memory protections, not an aggregate Skill migration quota.
+  Credential-safe readable copies are streamed into private staging directories
+  and published only after archive integrity verification. Originals remain in
+  the account vault and are streamed into a temporary directory for authorized
+  commands only when their published copy required masking or interpreter links.
+  Failed/unpublished Skills never enter the executable environment; their
+  archive references stay in the retry checkpoint. The executable reference is
+  saved before the copied receipt, so crash recovery preserves this distinction.
+  Resource restoration shares command cancellation and its 120-second deadline.
+  Automation verification reads authenticated redacted excerpts directly from
+  archives (32,000 characters per file, 96,000 total including names), without
+  materializing the resource tree; incomplete excerpts are marked as such.
+  The entry point has a reserved allowance within that same budget regardless
+  of archive order. `.venv`, `venv`, and `node_modules` remain fully migrated but
+  are excluded from planning excerpts, including for legacy inline snapshots.
+  UTF-8 and BOM-marked UTF-16 redaction preserves chunk boundaries;
+  binary files keep exact bytes. Retry works without the source after capture,
+  compares existing files incrementally, and refuses to overwrite user edits.
+  The resource directory follows companion deletion/failed-import cleanup.
+  Legacy inline files and encrypted snapshots remain readable. Buffered legacy
+  reads release only their own failed reservations; healthy siblings retain room.
+  Unreadable resources fail individually without truncation or silent omission.
+  Desktop and Mobile distinguish file, item and snapshot bounds for the remaining
+  buffered paths without exposing raw exceptions or private paths.
   Skill-root discovery charges each streamed directory entry before retaining it.
   Native alphabetical precedence uses 256 KiB sort batches, 64 KiB merge I/O and
   a logarithmic set of runs instead of a whole-directory Dirent array. Large

@@ -138,7 +138,9 @@ describe('伙伴消息流复用工作组件并保留独立过程分组', () => {
     expect(sessionView).toContain(
       'botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}',
     );
-    expect(messageStream).toContain("t('bots.chat.newMessagesBoundary')");
+    // The extracted BotMessageTimelineHeader's visible label and accessible
+    // separator are exercised by selectionQuoteUserMessage's real-component test.
+    // Keep this guard about the Bot-only routing, not the label's source location.
     expect(messageStream).toContain('botUnreadBoundaryClientId === msg.clientId');
   });
 

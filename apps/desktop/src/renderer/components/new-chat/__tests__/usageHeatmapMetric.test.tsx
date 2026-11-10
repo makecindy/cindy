@@ -118,6 +118,82 @@ describe('UsageHeatmap metric', () => {
     expect(monthLabel).toBeTruthy();
   });
 
+  // User-selected annual view: older history must not extend the window on wide screens.
+  // Unit: the real component must expose a full year, without exposing older dates.
+  it('全年视图在宽屏也固定为一年，不随更早记录扩展日期', () => {
+    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1600);
+    const { getByRole, queryByRole } = render(
+      <UsageHeatmap
+        days={[{ day: '2024-01-01', money: money(1), tokens: 10 }, ...days]}
+        todayKey="2026-08-22"
+        windowDays={365}
+        fillWidth
+        metric="tokens"
+        onDayClick={vi.fn()}
+      />,
+    );
+    width.mockRestore();
+    expect(queryByRole('button', { name: /Aug 23, 2024/ })).toBeNull();
+    expect(getByRole('button', { name: /Aug 23, 2025/ })).toBeTruthy();
+    expect(getByRole('button', { name: /Aug 22, 2026/ })).toBeTruthy();
+    expect(queryByRole('button', { name: /Jan 1, 2024/ })).toBeNull();
+    expect(queryByRole('button', { name: /Aug 23, 2026/ })).toBeNull();
+  });
+
+  it.each([
+    { name: '无记录', records: [], annual: false },
+    { name: '未满半年', records: [{ day: '2026-03-01', money: money(0), tokens: 1 }], annual: false },
+    { name: '月末恰好满半年', records: [{ day: '2026-02-28', money: money(0), tokens: 1 }], annual: true },
+    { name: '旧零用量不算开始使用', records: [{ day: '2024-01-01', money: money(10), tokens: 0 }], annual: false },
+    { name: '超过一年仍限定一年', records: [{ day: '2024-01-01', money: money(0), tokens: 1 }], annual: true },
+  ])('自动窗口：$name', ({ records, annual }) => {
+    const { container } = render(
+      <UsageHeatmap days={records} todayKey="2026-08-31" windowDays="auto" fillWidth metric="tokens" />,
+    );
+    const titles = cellTitles(container);
+    expect(titles.some((title) => title.startsWith('2026-02-28'))).toBe(true);
+    expect(titles.some((title) => title.startsWith('2025-09-01'))).toBe(annual);
+    expect(titles.some((title) => title.startsWith('2024-01-01'))).toBe(false);
+    expect(titles.some((title) => title.startsWith('2026-09-01'))).toBe(false);
+  });
+
+  it('短期布局补满四行连续日期，标题和点击对应实际窗口', () => {
+    const onDayClick = vi.fn();
+    const onVisibleWeeksChange = vi.fn();
+    const { container, getByRole } = render(
+      <UsageHeatmap
+        days={[{ day: '2026-06-01', money: money(0), tokens: 1 }]}
+        todayKey="2026-11-12"
+        windowDays="auto"
+        fillWidth
+        metric="tokens"
+        onDayClick={onDayClick}
+        onVisibleWeeksChange={onVisibleWeeksChange}
+      />,
+    );
+    const dates = cellTitles(container).map((title) => title.split(' · ')[0]);
+    expect(dates).toHaveLength(212);
+    expect(new Set(dates).size).toBe(212);
+    expect(dates[0]).toBe('2026-04-15');
+    expect(dates.at(-1)).toBe('2026-11-12');
+    expect(onVisibleWeeksChange).toHaveBeenLastCalledWith(31);
+    fireEvent.click(getByRole('button', { name: /Apr 15, 2026/ }));
+    expect(onDayClick).toHaveBeenCalledWith('2026-04-15');
+  });
+
+  it('历史数据或日期锚点变化时自动重新选择半年或全年', () => {
+    const records = [{ day: '2026-03-01', money: money(0), tokens: 1 }];
+    const view = (history: typeof records, todayKey: string) => (
+      <UsageHeatmap days={history} todayKey={todayKey} windowDays="auto" fillWidth metric="tokens" />
+    );
+    const { container, rerender } = render(view(records, '2026-08-31'));
+    expect(cellTitles(container).some((title) => title.startsWith('2025-09-02'))).toBe(false);
+    rerender(view(records, '2026-09-01'));
+    expect(cellTitles(container).some((title) => title.startsWith('2025-09-02'))).toBe(true);
+    rerender(view([], '2026-09-01'));
+    expect(cellTitles(container).some((title) => title.startsWith('2025-09-02'))).toBe(false);
+  });
+
   it('分桶取值随 metric 切换 (金额口径与 token 口径给出不同深浅)', () => {
     const asMoney = render(<UsageHeatmap days={days} todayKey="2026-08-22" windowDays={7} />);
     const moneyStyles = cellStyles(asMoney.container);

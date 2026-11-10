@@ -4435,6 +4435,29 @@ describe('Bots list unread projection', () => {
     expect(await unreadFor('bot-1', { 'bot-1': 4_000 })).toBe(0);
   });
 
+  // Regression / unit: list/get and the remote projection must agree with the
+  // transcript's persisted tool-parent classification. Earlier coverage only
+  // used parentToolUseId, not the parentUuid written by message persistence.
+  // Minimal case: one read reply followed by a sealed child (or legacy parent).
+  it.each([
+    { parentUuid: 'toolu_child', internal: true },
+    { parentUuid: 'call_child', internal: true },
+    { parentUuid: 'Task_x1', internal: true },
+    { parentUuid: 'chatcmpl-tool-child', internal: true },
+    { parentUuid: '4f1c9a7e-3b2d-4c8a-9e5f-1a2b3c4d5e6f', internal: false },
+    { parentUuid: 'preceding-user-uuid', internal: false },
+  ])('keeps persisted parent $parentUuid consistent across list projections', async ({ parentUuid, internal }) => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'read-reply', role: 'assistant', content: 'Already read', createdAt: 1000 });
+    insertMessage(sessionId, { id: 'parented-reply', role: 'assistant', content: 'Later reply', createdAt: 2000,
+      agentMeta: { parentUuid, turnCompleted: true } });
+    const expected = { lastMessagePreview: internal ? 'Already read' : 'Later reply', lastMessageAt: internal ? 1000 : 2000 };
+    const rows = await invoke('local-db:bots:list', { lastReadAtByBotId: { 'bot-1': 1500 } }) as Array<{ id: string }>;
+    expect(rows.find(row => row.id === 'bot-1')).toMatchObject({ ...expected, unreadCount: internal ? 0 : 1 });
+    expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject(expected);
+    expect(await getBotRemoteResourceSource('bot-1')).toMatchObject({ ...expected, lastReplyAt: expected.lastMessageAt });
+  });
+
   it('excludes commentary, pre-tool narration, empty and private rows from both badges and remote reply watermarks', async () => {
     const sessionId = await canonicalFor('bot-1');
     insertMessage(sessionId, { id: 'progress', role: 'assistant', content: 'Checking', createdAt: 2000 });

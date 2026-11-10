@@ -40,7 +40,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     oneLiner: 'Grok 有浏览器跳转和设备短码两种登录方式；agent 可发授权页与短码并查询完成状态。',
     detail: [
       '浏览器跳转登录在「设置 → 模型供应商」的 Grok 连接中可用；仅伙伴对话可调用 cindy 网关的 connect_account({kind:"host", id:"grok"}) 弹出连接卡，普通任务请使用设置页或下述设备码登录。',
-      '设备码登录适合远程协助：agent 通过 cindy_helper 的 ask_owner（kind="connect"，service="grok"）取得 xAI 授权页和短码，发给用户；用户在授权页输入短码并确认，Cindy 在本机自动轮询并保存凭证。',
+      '设备码登录适合远程协助：agent 通过 cindy_helper 的 start_grok_device_login 取得 xAI 授权页和短码，发给用户；用户在授权页输入短码并确认，Cindy 在本机自动轮询并保存凭证。',
       'agent 可用 get_grok_login_status 查询连接状态，用户要求停止时可用 cancel_grok_device_login。长期 access token 和 refresh token 不会出现在工具返回值或聊天里；不要要求用户粘贴长期凭证。',
     ].join(' '),
   },
