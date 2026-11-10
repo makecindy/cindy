@@ -5433,10 +5433,11 @@ export function ChatInput({
     (selectedItem: AtResourceItem) => {
       if (!editor || !effectiveAt) return;
       const directoryQuery = getAtDirectoryCompletionQuery(selectedItem);
-      // An exact-length candidate stops the scan, so the slash-terminated directory
-      // query goes first: re-selecting `@dir|/` must also replace the existing `/`.
+      // An exact-length candidate stops the scan, so slash-terminated directory
+      // candidates go first: re-selecting `@dir|/` must also replace the existing `/`,
+      // whether the draft holds the full path or only the basename.
       const range = resolveEffectiveAtRange([
-        ...(directoryQuery ? [directoryQuery] : []),
+        ...(directoryQuery ? [directoryQuery, `${selectedItem.name}/`] : []),
         selectedItem.name,
         selectedItem.name.replace(/\.md$/, ''),
         selectedItem.relPath,
@@ -5547,7 +5548,10 @@ export function ChatInput({
         closeAtPanel();
         return;
       }
-      const range = resolveEffectiveAtRange();
+      const range = resolveEffectiveAtRange([
+        entry.action.label,
+        ...(entry.action.searchText ? [entry.action.searchText] : []),
+      ]);
       if (!range) return;
       // 打开面板下一级页面的动作不把焦点还给编辑器：TipTap 的 focus 延后执行，焦点落回
       // 编辑器时「+」弹层按焦点离开收起，刚打开的下一级页面会随之关掉。

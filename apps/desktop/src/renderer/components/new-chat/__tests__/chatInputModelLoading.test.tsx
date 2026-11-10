@@ -181,18 +181,23 @@ it.each([
   // Re-selecting a directory whose `/` is already in the draft must not repeat the path.
   { input: '@fo|obar/ rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
   { input: '@foobar|/ rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
+  // A nested directory queried by its basename re-selects onto its full path.
+  { input: '@desktop|/ rest', name: 'desktop', relPath: 'apps/desktop', remaining: '@apps/desktop/ rest', directory: true },
+  { input: '@desk|top/ rest', name: 'desktop', relPath: 'apps/desktop', remaining: '@apps/desktop/ rest', directory: true },
   // A plugin command placed at the start must not leave the typed name suffix behind.
   { input: '@issu|es rest', name: 'issues', remaining: '$issues rest', plugin: true },
   { input: '@|word rest', name: null, remaining: 'word rest' },
-])('preserves unrelated draft text when selecting @ completion in $input ($name)', async ({ input, name, remaining, directory, plugin }) => {
+  // An action consumes the rest of its own typed label, but nothing unrelated.
+  { input: '@Col|laboration rest', name: null, label: 'Collaboration', remaining: 'rest' },
+])('preserves unrelated draft text when selecting @ completion in $input ($name)', async ({ input, name, relPath, label, remaining, directory, plugin }) => {
   const run = vi.fn();
   const ghost: GhostComposerEntry = { manifest: { id: 'issues', name: 'Issues', command: 'issues' }, enabled: true };
   if (plugin) h.composerGhosts = [ghost];
   h.mentionEntry = name === null
-    ? { kind: 'action', action: { id: 'attach-files', label: 'Attach files', run } }
+    ? { kind: 'action', action: { id: 'attach-files', label: label ?? 'Attach files', run } }
     : plugin
       ? { kind: 'resource', item: { type: 'plugin-command', name: ghost.manifest.name, relPath: name, pluginId: installedGhostStoragePart(ghost) } }
-      : { kind: 'resource', item: { type: directory ? 'dir' : 'file', name, relPath: name } };
+      : { kind: 'resource', item: { type: directory ? 'dir' : 'file', name, relPath: relPath ?? name } };
   try {
     render(<ChatInput {...props} sessionId={undefined} onSend={vi.fn()} />);
     await waitFor(() => expect(h.editor).not.toBeNull());
