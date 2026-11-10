@@ -33,7 +33,14 @@ import {
 import { ImageLightbox } from './ImageLightbox';
 import { VideoLightbox } from './VideoLightbox';
 
-const ModelPreview = lazy(() => import('./ModelPreview').then(module => ({ default: module.ModelPreview })));
+const ModelLoadFailed = () => {
+  const { t } = useTranslation();
+  return <div role="alert" className="flex h-full items-center justify-center">{t('chat.media.modelLoadFailed')}</div>;
+};
+// A failed chunk load must not escape Suspense into the route error page.
+const ModelPreview = lazy(() =>
+  import('./ModelPreview').then(module => ({ default: module.ModelPreview })).catch(() => ({ default: ModelLoadFailed })),
+);
 
 /** Binary files use the same origin resolver as text, then existing read-only renderers. */
 export function FileLightbox({

@@ -40,7 +40,8 @@ export function isModelMediaCandidate(bytes: Uint8Array, declaredMime = ''): boo
   if (Object.values(MODEL_MIME_BY_EXT).includes(declaredMime)) return true;
   const prefix = new TextDecoder().decode(bytes.subarray(0, 4096));
   return /^\s*(?:ply[\r\n]|solid(?:\s|$)|;\s*FBX|<COLLADA\b)/.test(prefix) ||
-    /["']asset["']\s*:\s*\{/.test(prefix) || vertex.test(prefix) ||
+    // glTF JSON member order is arbitrary, so any JSON object may hide `asset` past the prefix.
+    /^\s*\{/.test(prefix) || vertex.test(prefix) ||
     /<COLLADA\b/.test(prefix) ||
     prefix.startsWith('Kaydara FBX Binary  ') ||
     (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 3 && bytes[3] === 4) ||
