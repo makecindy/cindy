@@ -1,14 +1,5 @@
 import assert from 'node:assert/strict';
 
-const provider = {
-  id: 'anthropic',
-  name: 'Anthropic',
-  source: 'builtin',
-  connected: true,
-  auth: { method: 'oauth', native: 'claude' },
-  routing: {},
-};
-
 export default {
   name: 'provider-group-accounts',
   entry: './fixture.tsx',
@@ -17,7 +8,16 @@ export default {
   notCovered:
     'Real subscription reads, sign-in and other computers over device link. Accounts and usage are fixture data.',
   stubs: {
-    'src/renderer/hooks/useProviders': `export const useProviders = () => ({ providers: [${JSON.stringify(provider)}] });`,
+    'src/renderer/hooks/useProviders': `export const useProviders = () => ({
+      providers: [{
+        id: 'anthropic',
+        name: 'Anthropic',
+        source: 'builtin',
+        connected: true,
+        auth: { method: 'oauth', native: 'claude' },
+        routing: {},
+      }],
+    });`,
   },
   cases: {
     default: {
