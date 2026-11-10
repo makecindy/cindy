@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 
 import type { SidebarPeekDrawerProps, SidebarPeekState } from '@/hooks/useSidebarPeek';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { useSidebarMaterial } from '@/hooks/useSidebarMaterial';
 import { useFeatureSidebarUpper, useOwnsTopNavScrollableRows } from '@/features/feature-context';
 import { ConversationSearchProvider } from '@/features/cc-agent/sidebar/conversationSearchContext';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
@@ -88,6 +89,8 @@ export function Sidebar({
   peekState = null,
   peekDrawerProps,
 }: SidebarProps) {
+  const sidebarRef = useRef<HTMLElement>(null);
+  useSidebarMaterial(sidebarRef);
   const upperContent = useFeatureSidebarUpper();
   // 当前 Feature 是否自行渲染顶部导航的可滚动段(见 feature-context)。
   const ownsTopNavScrollableRows = useOwnsTopNavScrollableRows();
@@ -150,6 +153,7 @@ export function Sidebar({
 
   return (
     <aside
+      ref={sidebarRef}
       {...(isPeek ? peekDrawerProps : undefined)}
       aria-label={t('sidebar.ariaLabel')}
       aria-hidden={isCollapsed && !isPeek}

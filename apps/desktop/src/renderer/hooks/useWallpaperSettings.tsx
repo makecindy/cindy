@@ -134,7 +134,7 @@ export function WallpaperSettingsProvider({
   useWallpaperBackground({
     background,
     // 0% keeps the original window backdrop (frosted sidebar over the theme material)
-    // until opt-in; above it, the sidebar follows the shared desktop backdrop.
+    // until opt-in; above it, the sidebar tint follows the same transparency.
     desktopBackground: desktopBackground && settings.wallpaperId === 'none' && visibility > 0,
     visibility,
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,

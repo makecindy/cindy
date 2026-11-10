@@ -6,6 +6,7 @@ import type { VibrancyConfig } from './vibrancyConfig';
 
 interface NativeDesktopBlur {
   apply(handle: Buffer, radius: number): boolean;
+  setSidebar(handle: Buffer, width: number, dark: boolean): boolean;
 }
 const log = createLogger('macosDesktopBlur');
 const requireNative = createRequire(__filename);
@@ -27,16 +28,75 @@ const appliedRadii = new WeakMap<BrowserWindow, number>();
 const backgroundColors = new WeakMap<BrowserWindow, string>();
 const materials = new WeakMap<BrowserWindow, string | null>();
 const warnedWindows = new WeakSet<BrowserWindow>();
+const sidebarWidths = new WeakMap<BrowserWindow, number>();
+const backdropConfigs = new WeakMap<BrowserWindow, VibrancyConfig>();
+const activeSidebars = new WeakMap<BrowserWindow, { width: number; dark: boolean }>();
+const sidebarNeedsSync = new WeakSet<BrowserWindow>();
 
 function setMaterial(win: BrowserWindow, material: string | null): void {
   if (materials.has(win) && materials.get(win) === material) return;
   win.setVibrancy(material as 'under-window' | null);
   materials.set(win, material);
+  // Electron can replace the effect view. Reapply the mask even if its geometry
+  // did not change; retain the marker until the native sidebar is cleared.
+  if (activeSidebars.has(win)) sidebarNeedsSync.add(win);
 }
 
-/** Main and secondary windows use the same radius path. The radius covers the
- * whole window, sidebar included, so both follow the user's blur. Artwork clears
- * the native radius before restoring the normal theme material. Only macOS calls this. */
+function syncSidebar(win: BrowserWindow, getNative: () => NativeDesktopBlur | null): void {
+  const config = backdropConfigs.get(win);
+  const material = config?.sidebarMaterial;
+  // A radius that could not be applied leaves the whole-window system material as
+  // the fallback; a masked sidebar must neither replace nor clear it.
+  const radiusFailed = config?.desktopBlurRadius !== undefined && !appliedRadii.has(win);
+  const cssWidth = material && !radiusFailed ? sidebarWidths.get(win) ?? 0 : 0;
+  if (!cssWidth && !activeSidebars.has(win)) return;
+  const width = Math.min(cssWidth * win.webContents.getZoomFactor(), win.getContentBounds().width, 16384);
+  const dark = material === 'dark';
+  try {
+    // Let Electron own placement/lifecycle in Chromium's native view host. The
+    // addon only masks this material to the sidebar; it never hosts an overlay.
+    if (width > 0) {
+      setMaterial(win, 'hud');
+      const previous = activeSidebars.get(win);
+      if (previous?.width === width && previous.dark === dark && !sidebarNeedsSync.has(win)) return;
+    } else if (config?.desktopBlurRadius !== undefined && !radiusFailed) setMaterial(win, null);
+    if (getNative()?.setSidebar(win.getNativeWindowHandle(), width, dark)) {
+      if (width > 0) activeSidebars.set(win, { width, dark });
+      else activeSidebars.delete(win);
+      sidebarNeedsSync.delete(win);
+      return;
+    }
+  } catch { /* An unavailable native material keeps the readable CSS tint. */ }
+  // Never leave an unmasked fixed material over the adjustable main backdrop.
+  if (width > 0) setMaterial(win, null);
+  if (!warnedWindows.has(win)) {
+    warnedWindows.add(win);
+    log.warn('Sidebar material unavailable; retaining sidebar tint');
+  }
+}
+
+/** Local renderer geometry only; no window ID, theme or native handle is accepted. */
+export function setMacSidebarWidth(
+  win: BrowserWindow,
+  rawWidth: unknown,
+  getNative: () => NativeDesktopBlur | null = load,
+): void {
+  if (win.isDestroyed() || typeof rawWidth !== 'number' || !Number.isFinite(rawWidth)
+    || rawWidth < 0 || rawWidth > 16384) return;
+  sidebarWidths.set(win, rawWidth);
+  syncSidebar(win, getNative);
+}
+
+/** Page zoom changes the physical sidebar width without changing its CSS width. */
+export function refreshMacSidebarGeometry(
+  win: BrowserWindow,
+  getNative: () => NativeDesktopBlur | null = load,
+): void {
+  if (!win.isDestroyed()) syncSidebar(win, getNative);
+}
+
+/** Main and secondary windows use the same radius path. Artwork clears the
+ * native radius before restoring the normal theme material. Only macOS calls this. */
 export function applyMacWindowBackdrop(
   win: BrowserWindow,
   config: VibrancyConfig,
@@ -49,8 +109,11 @@ export function applyMacWindowBackdrop(
     win.setBackgroundColor(config.backgroundColor);
     backgroundColors.set(win, config.backgroundColor);
     appliedRadii.delete(win);
+    if (activeSidebars.has(win)) sidebarNeedsSync.add(win);
   }
+  backdropConfigs.set(win, config);
   applyBackdrop(win, config, getNative);
+  syncSidebar(win, getNative);
 }
 
 function applyBackdrop(
@@ -59,13 +122,17 @@ function applyBackdrop(
   getNative: () => NativeDesktopBlur | null,
 ): void {
   const radius = config.desktopBlurRadius;
+  // Leaving desktop mode must release the masked HUD, including when the next
+  // theme also requests HUD: that next view must be unmasked.
+  if (radius === undefined && activeSidebars.has(win)) setMaterial(win, null);
   if (radius === undefined && !activeWindows.has(win)) {
     setMaterial(win, config.vibrancy);
     return;
   }
   if (radius !== undefined && appliedRadii.get(win) === radius) return;
-  // A system material would stack its own fixed blur over the adjustable radius.
-  setMaterial(win, null);
+  // Keep the existing masked sidebar during radius-only updates. A fixed,
+  // unmasked fallback material still needs clearing before the native retry.
+  if (!activeSidebars.has(win)) setMaterial(win, null);
   try {
     if (getNative()?.apply(win.getNativeWindowHandle(), radius ?? 0)) {
       if (radius !== undefined) {

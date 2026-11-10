@@ -22,6 +22,7 @@ export interface VibrancyConfig {
   backgroundColor: string;
   backgroundMaterial?: WindowsBackdropMaterial;
   desktopBlurRadius?: number;
+  sidebarMaterial?: 'light' | 'dark';
 }
 
 export interface ResolveVibrancyConfigOptions {
@@ -103,12 +104,12 @@ export function resolveVibrancyConfig(
   options?: ResolveVibrancyConfigOptions,
 ): VibrancyConfig {
   if (!options?.wallpaperCovered && typeof options?.desktopBlur === 'number') {
-    // One window-wide radius covers the sidebar too, so the sidebar follows the
-    // user's blur instead of a fixed system material.
     return {
       vibrancy: platform === 'darwin' && options.desktopBlur ? 'under-window' : null,
       backgroundColor: '#00000000',
       ...(platform === 'darwin' ? { desktopBlurRadius: options.desktopBlur } : {}),
+      ...(platform === 'darwin' && familyId === 'cindy'
+        ? { sidebarMaterial: isDark ? 'dark' as const : 'light' as const } : {}),
       ...(platform === 'win32' ? {
         backgroundMaterial: options.desktopBlur && (parseWindowsBuild(readWindowsSystemVersion(options)) ?? 0) >= 22621
           ? 'acrylic' : 'none',

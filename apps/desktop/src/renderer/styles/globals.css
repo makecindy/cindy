@@ -2450,7 +2450,7 @@ html[data-wallpaper-blur='true'] .app-wallpaper-video video {
   filter: blur(var(--app-wallpaper-blur));
 }
 
-/* No wallpaper: tint the desktop beneath the whole window, sidebar included. */
+/* No wallpaper: tint the desktop beneath the main area. */
 html[data-desktop-background='true'] body {
   isolation: isolate;
   background: transparent;
@@ -2463,6 +2463,11 @@ html[data-desktop-background='true'] body::before {
   pointer-events: none;
   background: color-mix(in srgb, var(--surface) var(--desktop-background-veil), transparent);
 }
+/* CINDY's sidebar paints its own tint (below), so the shared veil starts at its
+   visible edge instead of stacking a second coat beneath it. */
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-background='true'] body::before {
+  left: var(--sidebar-visible-width, 0px);
+}
 html[data-desktop-background='true'] :is(.wallpaper-composer-zone, .wallpaper-composer-fade) {
   background: transparent;
 }
@@ -2470,19 +2475,32 @@ html[data-desktop-background='true'] .wallpaper-message-viewport [data-scroll-co
   mask-image: linear-gradient(to bottom, black calc(100% - var(--wallpaper-composer-height)), transparent calc(100% - var(--wallpaper-composer-height) + 32px));
 }
 
-/* The sidebar shares the main area's veil and blur, for artwork and the native
-   desktop alike (user decision, 2026-11-10), in the main area's color. Docked, it
-   paints no tint of its own, so it also has the main area's transparency; only
-   its 1px divider separates it, with no material, CSS blur or elevation. */
-html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true'])
+/* With artwork, the docked sidebar shares the canvas veil and blur in the main
+   area's color; only its 1px divider separates it (user decision, 2026-11-10). */
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true']
   aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
   background: transparent;
 }
+/* On the desktop, the docked sidebar has the main area's hue and transparency,
+   one step deeper: the same veil on the aside, a fixed shade on its frost layer
+   above it (user decision, 2026-11-11).
+   On macOS a colorless system blur beneath it adds a fixed frost over the
+   adjustable window blur; Windows shares the whole-window backdrop. */
+html[data-theme='cindy-light'] { --sidebar-desktop-shade: rgb(0 0 0 / 0.04); }
+html[data-theme='cindy-dark'] { --sidebar-desktop-shade: rgb(0 0 0 / 0.1); }
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-background='true']
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+  background: color-mix(in srgb, var(--surface) var(--desktop-background-veil), transparent);
+}
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-background='true']
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
+  background: var(--sidebar-desktop-shade);
+}
 /* The peek drawer covers app content, and CSS backdrop blur does not render in
-   the transparent window. The shared veil lies beneath that content, so it hides
-   none of it: the drawer's own surface coat must cover the text, at
-   max(main area's veil, 90%). It drops the ineffective blur; its divider and
-   floating-layer elevation stay. */
+   the transparent window. The shared veil hides none of that content, so the
+   drawer's own surface coat must cover the text, at max(main area's veil, 90%),
+   in the main area's color (user decision, 2026-11-10). It drops the ineffective
+   blur; its divider and floating-layer elevation stay. */
 html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true'])
   aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost {
   background: rgb(from var(--surface) r g b /

@@ -40,6 +40,7 @@ function Specimen() {
 
 void mountPage({
   host: {
+    theme: { setSidebarWidth: () => {} },
     getFullscreenState: async () => false,
     onFullscreenChange: subscription('fullscreen'),
   },

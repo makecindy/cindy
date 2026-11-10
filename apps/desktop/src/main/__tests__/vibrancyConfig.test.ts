@@ -264,14 +264,3 @@ it('keeps desktop blur per window and restores it after removing artwork', () =>
   setWindowDesktopBlur(win, null);
   expect(resolveWindowVibrancyConfig(win, 'default', true, 'darwin').backgroundColor).toBe('#1f1f1e');
 });
-
-// User decision 2026-11-10: the CINDY sidebar follows the window-wide radius
-// instead of a separate fixed system material, so desktop mode carries nothing
-// beyond the shared radius for it.
-it('gives the CINDY sidebar no separate material in desktop mode', () => {
-  for (const isDark of [false, true]) {
-    expect(resolveVibrancyConfig('cindy', isDark, 'darwin', { desktopBlur: 9 })).toEqual({
-      vibrancy: 'under-window', backgroundColor: '#00000000', desktopBlurRadius: 9,
-    });
-  }
-});

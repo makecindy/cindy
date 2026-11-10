@@ -1,16 +1,22 @@
 // Own-window backdrop only. No screen capture, global input, or foreign window IDs.
 // CGS is private SPI: resolve at runtime and report failure to the material fallback.
 #import <Cocoa/Cocoa.h>
+#import <QuartzCore/QuartzCore.h>
 #include <node_api.h>
 #include <dlfcn.h>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 using Connection = uint32_t (*)(void);
 using SetBlur = int32_t (*)(uint32_t, uint32_t, uint32_t);
 
 static char originalBackgroundKey;
+static char sidebarKey;
+static char radiusKey;
+static char neutralStateKey;
 
 static NSWindow *OwnedWindow(void *bytes) {
   if (![NSThread isMainThread]) return nil;
@@ -42,6 +48,132 @@ static void PreserveCornerMask(NSWindow *window) {
   window.backgroundColor = CornerMaskBackground();
 }
 
+// The sidebar keeps only the material's blur; Cindy paints its color in CSS, in
+// the main area's hue (user decision, 2026-11-11). AppKit's private layer tree is
+// a backdrop layer (blur + saturation) beside tint, blend and desktop-tinting
+// layers. Any other layout is left untouched, keeping the system material.
+static void StripMaterialColor(CALayer *layer) {
+  for (CALayer *child in layer.sublayers) {
+    if (![NSStringFromClass(child.class) isEqualToString:@"CABackdropLayer"]) {
+      StripMaterialColor(child);
+      continue;
+    }
+    NSMutableArray *filters = [NSMutableArray array];
+    for (id filter in child.filters) {
+      id name = [filter respondsToSelector:@selector(name)] ? [filter valueForKey:@"name"] : nil;
+      if ([name isEqual:@"gaussianBlur"] || [name isEqual:@"sdrNormalize"]) [filters addObject:filter];
+    }
+    child.filters = filters;
+    for (CALayer *sibling in layer.sublayers) {
+      if (sibling != child && sibling.sublayers.count == 0) sibling.hidden = YES;
+    }
+    return;
+  }
+}
+static void StripView(NSView *view) {
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  StripMaterialColor(view.layer);
+  [CATransaction commit];
+}
+// AppKit rebuilds these layers on appearance, state and layout changes. A
+// per-view subclass strips them again after each rebuild; restoring the class
+// and appearance returns the untouched system material (0% and artwork).
+static Class NeutralClass(Class base) {
+  NSString *name = [@"CindyNeutral_" stringByAppendingString:NSStringFromClass(base)];
+  Class neutral = NSClassFromString(name);
+  if (neutral) return neutral;
+  neutral = objc_allocateClassPair(base, name.UTF8String, 0);
+  if (!neutral) return nil;
+  for (NSString *selectorName in @[@"updateLayer", @"layout", @"viewDidChangeEffectiveAppearance"]) {
+    SEL selector = NSSelectorFromString(selectorName);
+    Method method = class_getInstanceMethod(base, selector);
+    if (!method) continue;
+    IMP imp = imp_implementationWithBlock(^(id self) {
+      struct objc_super parent = { self, base };
+      ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&parent, selector);
+      StripView(self);
+    });
+    class_addMethod(neutral, selector, imp, method_getTypeEncoding(method));
+  }
+  objc_registerClassPair(neutral);
+  return neutral;
+}
+static void SetNeutral(NSVisualEffectView *view, bool neutral) {
+  NSNumber *state = objc_getAssociatedObject(view, &neutralStateKey);
+  if (neutral && !state) {
+    Class subclass = NeutralClass(view.class);
+    if (!subclass) return;
+    objc_setAssociatedObject(view, &neutralStateKey, @(view.state), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    object_setClass(view, subclass);
+    // An inactive window would swap the blur for an opaque gray in another hue.
+    view.state = NSVisualEffectStateActive;
+  } else if (!neutral && state) {
+    object_setClass(view, class_getSuperclass(view.class));
+    objc_setAssociatedObject(view, &neutralStateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    view.state = (NSVisualEffectState)state.integerValue;
+    NSAppearance *appearance = view.appearance;
+    view.appearance = nil;
+    view.appearance = appearance;
+    return;
+  }
+  if (neutral) StripView(view);
+}
+
+static napi_value SetSidebar(napi_env env, napi_callback_info info) {
+  size_t argc = 3, length = 0;
+  napi_value args[3], result;
+  void *bytes = nullptr;
+  double width = 0;
+  bool isBuffer = false, dark = false;
+  napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+  if (argc != 3 || napi_is_buffer(env, args[0], &isBuffer) != napi_ok || !isBuffer ||
+      napi_get_buffer_info(env, args[0], &bytes, &length) != napi_ok || length != sizeof(void *) ||
+      napi_get_value_double(env, args[1], &width) != napi_ok || !std::isfinite(width) ||
+      width < 0 || width > 16384 || napi_get_value_bool(env, args[2], &dark) != napi_ok) {
+    napi_throw_type_error(env, nullptr, "Invalid sidebar material handle or geometry");
+    return nullptr;
+  }
+  NSWindow *window = OwnedWindow(bytes);
+  if (window) {
+    // Electron attaches its effect through Chromium's NativeViewHost, below
+    // the web content. Reuse that view instead of adding an unmanaged NSView
+    // inside Chromium's layer-hosting contentView (which may not sample behind).
+    SEL selector = NSSelectorFromString(@"vibrantView");
+    id candidate = [window respondsToSelector:selector]
+      ? ((id (*)(id, SEL))objc_msgSend)(window, selector) : nil;
+    NSVisualEffectView *view = [candidate isKindOfClass:NSVisualEffectView.class] ? candidate : nil;
+    if (width == 0) {
+      if (view) SetNeutral(view, false);
+      objc_setAssociatedObject(window, &sidebarKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      if ([objc_getAssociatedObject(window, &radiusKey) doubleValue] == 0) RestoreBackground(window);
+    } else if (view) {
+      view.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+      CGFloat visibleWidth = std::min(width, (double)window.contentView.bounds.size.width);
+      // Keep one transparent guard point in the fixed cap: stretching the first
+      // transparent sample would interpolate the opaque edge across the content.
+      // Only the second transparent point stretches; the sidebar edge stays sharp.
+      NSImage *mask = [NSImage imageWithSize:NSMakeSize(visibleWidth + 2, 1)
+        flipped:NO drawingHandler:^BOOL(NSRect rect) {
+          [NSColor.whiteColor setFill];
+          NSRectFill(NSMakeRect(0, 0, visibleWidth, rect.size.height));
+          return YES;
+        }];
+      mask.capInsets = NSEdgeInsetsMake(0, visibleWidth + 1, 0, 0);
+      mask.resizingMode = NSImageResizingModeStretch;
+      view.maskImage = mask;
+      SetNeutral(view, true);
+      objc_setAssociatedObject(window, &sidebarKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      PreserveCornerMask(window);
+    } else {
+      napi_get_boolean(env, false, &result);
+      return result;
+    }
+  }
+  napi_get_boolean(env, window != nil, &result);
+  return result;
+}
+
 static napi_value Apply(napi_env env, napi_callback_info info) {
   size_t argc = 2, length = 0;
   napi_value args[2], result;
@@ -67,7 +199,8 @@ static napi_value Apply(napi_env env, napi_callback_info info) {
     if (target && connection && setBlur) {
       if (radius > 0) PreserveCornerMask(target);
       applied = setBlur(connection(), (uint32_t)target.windowNumber, (uint32_t)radius) == 0;
-      if (radius == 0 || !applied) RestoreBackground(target);
+      if (applied) objc_setAssociatedObject(target, &radiusKey, @(radius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      if ((radius == 0 || !applied) && !objc_getAssociatedObject(target, &sidebarKey)) RestoreBackground(target);
     }
   }
   napi_get_boolean(env, applied, &result);
@@ -77,7 +210,8 @@ static napi_value Apply(napi_env env, napi_callback_info info) {
 NAPI_MODULE_INIT() {
   napi_property_descriptor properties[] = {
     {"apply", nullptr, Apply, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"setSidebar", nullptr, SetSidebar, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
-  napi_define_properties(env, exports, 1, properties);
+  napi_define_properties(env, exports, 2, properties);
   return exports;
 }
