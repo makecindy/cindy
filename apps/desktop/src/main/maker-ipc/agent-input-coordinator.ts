@@ -3208,11 +3208,7 @@ export class AgentInputCoordinator {
       })
       .finally(() => {
         const current = this.states.get(sessionId);
-        if (
-          current !== state ||
-          current.generation !== abortBoundaryGeneration ||
-          current.abortBoundaryToken !== abortBoundaryToken
-        ) {
+        if (current !== state || current.generation !== abortBoundaryGeneration) {
           // clearSession, a newer Stop, or a terminal event has superseded this
           // abort. Its late promise must not touch the current session state.
           log.info('ignoring stale abort completion', {
@@ -3220,6 +3216,20 @@ export class AgentInputCoordinator {
             abortBoundaryGeneration,
             currentGeneration: current?.generation,
           });
+          return;
+        }
+        if (current.abortBoundaryToken !== abortBoundaryToken) {
+          // A new turn can invalidate the old Stop token while keeping this
+          // coordinator state. Wake the normal drain so its live-session probes
+          // can reclaim a dispatched turn whose terminal event was lost.
+          // The old abort callback never clears a replacement turn itself.
+          log.info('ignoring superseded abort completion and rechecking queued work', {
+            sessionId,
+            abortBoundaryGeneration,
+          });
+          if (current.abortBoundaryToken === null) {
+            this.scheduleDrain(sessionId, 'superseded-abort-completion');
+          }
           return;
         }
         // `Session.abort()` can settle before the vendor process has actually
