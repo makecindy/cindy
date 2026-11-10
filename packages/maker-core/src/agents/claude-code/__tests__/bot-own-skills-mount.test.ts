@@ -33,6 +33,8 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 const flagSettingsMock = vi.hoisted(() => ({
   fail: false,
   stagingDirs: [] as string[],
+  // 本次启动是否把超限设置真的写成了临时文件（内联路径不算）。
+  wroteFile: false,
 }));
 
 vi.mock('../managed-skill-plugins.js', async (importOriginal) => {
@@ -56,13 +58,16 @@ vi.mock('../flag-settings-file.js', async (importOriginal) => {
     materializeClaudeFlagSettings: async (
       ...args: Parameters<typeof actual.materializeClaudeFlagSettings>
     ) => {
-      if (!flagSettingsMock.fail) return actual.materializeClaudeFlagSettings(...args);
-      throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      if (flagSettingsMock.fail) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      const delivery = await actual.materializeClaudeFlagSettings(...args);
+      flagSettingsMock.wroteFile = delivery.kind === 'file';
+      return delivery;
     },
   };
 });
 
 import { ClaudeCodeAgent } from '../index.js';
+import { CLAUDE_INLINE_SETTINGS_ARGV_BUDGET } from '../flag-settings-file.js';
 
 const tempDirs: string[] = [];
 const liveHandles: Awaited<ReturnType<ClaudeCodeAgent['startSession']>>[] = [];
@@ -147,6 +152,8 @@ async function startBotSession(input: {
   allowManaged?: boolean;
   catalogState?: 'failed' | 'disabled' | 'missing' | 'user-collision';
   projectContext?: boolean;
+  availableModels?: NonNullable<AgentDeps['capabilityAdditions']>['availableModels'];
+  resolveSessionEnvironment?: AgentDeps['resolveSessionEnvironment'];
 }) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -154,6 +161,8 @@ async function startBotSession(input: {
   sdkMock.query.mockReturnValue(input.query ?? createFakeQuery());
 
   const deps = createDeps();
+  if (input.availableModels) deps.capabilityAdditions = { availableModels: input.availableModels };
+  if (input.resolveSessionEnvironment) deps.resolveSessionEnvironment = input.resolveSessionEnvironment;
   if (input.duplicateResolver) {
     deps.resolveLocalMcpDuplicateChoices = input.duplicateResolver;
     deps.mcpProviders = ['custom_magpie', 'other'].map(name => ({ name,
@@ -285,6 +294,7 @@ afterEach(async () => {
   }
   sdkMock.forkSession.mockReset();
   sdkMock.query.mockReset();
+  flagSettingsMock.wroteFile = false;
   if (originalClaudeConfigDir === undefined) {
     delete process.env.CLAUDE_CONFIG_DIR;
   } else {
@@ -528,5 +538,49 @@ describe('managed skill staging cleanup when settings materialization fails', ()
 
     expect(flagSettingsMock.stagingDirs).toHaveLength(1);
     await expect(fs.stat(flagSettingsMock.stagingDirs[0]!)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：ClaudeCodeAgent.startSession。本地伙伴会话在设置落盘后作用域失效时，启动 reject，且不调 sdk query。
+// - Bug／规则依据：PR #9776 P1。prepareFlagSettings 的 await 打开异步窗口，回来后必须再调 companionEnvironment.assertCurrent，失效走启动清理而不拉起 SDK。
+// - 现有覆盖缺口：同文件只覆盖落盘失败时拆掉托管技能暂存；没有覆盖落盘期间伙伴被删或换主。
+// - 最小失败输入：带 botRuntimeProfile 的本地会话，模型白名单序列化后超过 CLAUDE_INLINE_SETTINGS_ARGV_BUDGET，assertCurrent 在落盘 await 之后抛 OWNER_CHANGED。
+// - tier：unit。进程内假 SDK 与临时文件，无网络、无真实 CLI。
+// - 实测耗时：见 tmp/fix-9776c-vitest.log
+describe('companion scope invalidated while flag settings are written', () => {
+  it('rejects startSession and does not call the SDK when the Bot scope dies after the settings file is written', async () => {
+    const catalogIds = Array.from({ length: 280 }, (_, index) =>
+      `vendor/${'gateway'.repeat(12)}-model-${index}`,
+    );
+    expect(JSON.stringify(catalogIds).length).toBeGreaterThan(CLAUDE_INLINE_SETTINGS_ARGV_BUDGET);
+
+    // buildQuery 开头和落盘前各有一次围栏。计数器放过这两次；
+    // 只有落盘 await 回来之后的那一次（此时临时文件已写出）才抛。
+    // 拿掉落盘后的复查时，这里不会抛，SDK query 会被调用。
+    let scopeChecks = 0;
+    await expect(startBotSession({
+      availableModels: catalogIds.map((id) => ({
+        id,
+        displayName: 'Catalog',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+      })),
+      resolveSessionEnvironment: async (sessionId) => {
+        expect(sessionId).toBe('session-bot-skills');
+        return {
+          identity: 'companion-scope',
+          assertCurrent() {
+            scopeChecks += 1;
+            if (scopeChecks > 2 && flagSettingsMock.wroteFile) throw new Error('OWNER_CHANGED');
+          },
+        };
+      },
+    })).rejects.toThrow('OWNER_CHANGED');
+
+    expect(sdkMock.query).not.toHaveBeenCalled();
+    expect(flagSettingsMock.wroteFile).toBe(true);
+    expect(scopeChecks).toBe(3);
   });
 });
