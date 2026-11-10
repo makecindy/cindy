@@ -7,7 +7,7 @@
  * 强度口径由 `metric` 决定: 'money' (默认, 首页仪表盘) 或 'tokens' (设置 → 用量历史,
  * 那个页面不出现任何金额, 见 issue #2785)。两种口径共用同一套分位分桶与色阶。
  *
- * 视觉: 首页/全年为 7 行周网格，半年为 4 行连续日期；单色阶 — 非零值按 4 分位分桶,
+ * 视觉: 首页/全年为 7 行周网格，短期为 4 行连续日期；单色阶 — 非零值按 4 分位分桶,
  * 用 color-mix 做强度阶梯：用量历史使用登记蓝色，其余入口沿用 --accent-emphasis。
  * 格子用原生 title 做 tooltip (Radix per-cell 实例太重)。
  */
@@ -162,7 +162,7 @@ export function UsageHeatmap({
 }: {
   days: Array<{ day: string; money: RegionalMoney; tokens?: number }>;
   todayKey: string;
-  /** Auto uses six months for newer histories and a year once usage reaches six months. */
+  /** Auto uses four full rows for newer histories, seven once usage reaches six months. */
   windowDays: number | 'auto';
   /** 格子深浅按哪一维分桶。'tokens' 下 tooltip 也只显示 token, 不出现金额。 */
   metric?: 'money' | 'tokens';
@@ -216,10 +216,13 @@ export function UsageHeatmap({
         cellSize,
       });
   const rowCount = fillWidth && windowDays === 'auto' && historyWindowDays < 365 ? 4 : 7;
+  const columnCount = rowCount === 4 ? heatmapWeeksForWindow(todayKey, 365) : visibleWeeks;
+  const cellCount = columnCount * rowCount;
+  const reportedWeeks = rowCount === 4 ? Math.ceil(cellCount / 7) : visibleWeeks;
 
   useLayoutEffect(() => {
-    onVisibleWeeksChange?.(visibleWeeks);
-  }, [onVisibleWeeksChange, visibleWeeks]);
+    onVisibleWeeksChange?.(reportedWeeks);
+  }, [onVisibleWeeksChange, reportedWeeks]);
 
   const { columns, monthLabels } = useMemo(() => {
     const spendByDay = new Map(days.map((d) => [d.day, d.money]));
@@ -231,7 +234,7 @@ export function UsageHeatmap({
     if (rowCount === 4) {
       start.setTime(today.getTime());
       start.setHours(12, 0, 0, 0);
-      start.setDate(start.getDate() - historyWindowDays + 1);
+      start.setDate(start.getDate() - cellCount + 1);
     } else {
       start.setDate(start.getDate() - (visibleWeeks - 1) * 7);
     }
@@ -250,8 +253,6 @@ export function UsageHeatmap({
 
     const cells: HeatCell[] = [];
     const cursor = new Date(start);
-    const cellCount =
-      rowCount === 4 ? Math.ceil(historyWindowDays / rowCount) * rowCount : visibleWeeks * rowCount;
     for (let index = 0; index < cellCount; index += 1) {
       const key = toDayKey(cursor);
       // `cursor` stays at noon so DST transitions cannot skip a calendar day;
@@ -288,22 +289,15 @@ export function UsageHeatmap({
     });
 
     return { columns: cols, monthLabels: labels };
-  }, [days, todayKey, visibleWeeks, i18n.language, metric, rowCount, historyWindowDays]);
+  }, [days, todayKey, visibleWeeks, i18n.language, metric, rowCount, cellCount]);
 
-  // Both windows keep the annual view's square size. Extra width goes between columns,
-  // so the half-year view becomes shorter by removing rows, not by distorting cells.
-  const sizeColumns = fillWidth
-    ? Math.max(columns.length, heatmapWeeksForWindow(todayKey, 365))
-    : columns.length;
+  // Both windows use the same square size and gaps; the shorter view fills four rows
+  // with continuous dates instead of stretching the gaps to fit exactly six months.
   const cellWidth = fillWidth
-    ? Math.max(cellSize, (availableWidth - GAP_PX * 2 - (sizeColumns - 1) * GAP_PX) / sizeColumns)
+    ? Math.max(cellSize, (availableWidth - GAP_PX * 2 - (columnCount - 1) * GAP_PX) / columnCount)
     : cellSize;
   const cellHeight = cellWidth;
-  const columnGap =
-    fillWidth && columns.length > 1
-      ? Math.max(GAP_PX, (availableWidth - GAP_PX * 2 - columns.length * cellWidth) / (columns.length - 1))
-      : GAP_PX;
-  const colPitch = cellWidth + columnGap;
+  const colPitch = cellWidth + GAP_PX;
 
   useLayoutEffect(() => {
     // A narrow history timeline opens at the most recent dates.
@@ -325,7 +319,7 @@ export function UsageHeatmap({
           {/* 月份标签行。nowrap 防止最右侧月份被挤成上下两行。 */}
           <div
             className="usage-heatmap-months relative h-[14px]"
-            style={{ width: columns.length * colPitch - columnGap }}
+            style={{ width: columns.length * colPitch - GAP_PX }}
           >
             {monthLabels.map((m) => (
               <span
@@ -341,7 +335,7 @@ export function UsageHeatmap({
             ))}
           </div>
           {/* 网格 */}
-          <div className="flex" style={{ gap: columnGap }}>
+          <div className="flex" style={{ gap: GAP_PX }}>
             {columns.map((col, ci) => (
               <div key={ci} className="flex flex-col" style={{ gap: GAP_PX }}>
                 {col.map((cell, ri) => {

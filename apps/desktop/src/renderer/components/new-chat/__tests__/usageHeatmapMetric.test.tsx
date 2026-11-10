@@ -157,8 +157,9 @@ describe('UsageHeatmap metric', () => {
     expect(titles.some((title) => title.startsWith('2026-09-01'))).toBe(false);
   });
 
-  it('半年连续日期布局保留完整窗口且点击返回对应日期', () => {
+  it('短期布局补满四行连续日期，标题和点击对应实际窗口', () => {
     const onDayClick = vi.fn();
+    const onVisibleWeeksChange = vi.fn();
     const { container, getByRole } = render(
       <UsageHeatmap
         days={[{ day: '2026-06-01', money: money(0), tokens: 1 }]}
@@ -167,15 +168,17 @@ describe('UsageHeatmap metric', () => {
         fillWidth
         metric="tokens"
         onDayClick={onDayClick}
+        onVisibleWeeksChange={onVisibleWeeksChange}
       />,
     );
     const dates = cellTitles(container).map((title) => title.split(' · ')[0]);
-    expect(dates).toHaveLength(185);
-    expect(new Set(dates).size).toBe(185);
-    expect(dates[0]).toBe('2026-05-12');
+    expect(dates).toHaveLength(212);
+    expect(new Set(dates).size).toBe(212);
+    expect(dates[0]).toBe('2026-04-15');
     expect(dates.at(-1)).toBe('2026-11-12');
-    fireEvent.click(getByRole('button', { name: /May 12, 2026/ }));
-    expect(onDayClick).toHaveBeenCalledWith('2026-05-12');
+    expect(onVisibleWeeksChange).toHaveBeenLastCalledWith(31);
+    fireEvent.click(getByRole('button', { name: /Apr 15, 2026/ }));
+    expect(onDayClick).toHaveBeenCalledWith('2026-04-15');
   });
 
   it('历史数据或日期锚点变化时自动重新选择半年或全年', () => {
