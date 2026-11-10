@@ -56,7 +56,7 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
     let server: ReturnType<typeof createServer> | undefined;
     let catalogForCleanup: typeof import('../active-catalog.js') | undefined;
     let routingForCleanup: typeof import('../provider-route.js') | undefined;
-    let proxyForCleanup: typeof import('../codex-proxy-host.js') | undefined;
+    let proxyForCleanup: typeof import('../codex-proxy-host.desktop.js') | undefined;
     let sessionsForCleanup: typeof import('../session-provider-store.js') | undefined;
     let agent: CodexAgent | undefined;
     let handle: AgentSessionHandle | undefined;
@@ -95,7 +95,7 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
       catalogForCleanup = catalog;
       const routing = await import('../provider-route.js');
       routingForCleanup = routing;
-      const proxy = await import('../codex-proxy-host.js');
+      const proxy = await import('../codex-proxy-host.desktop.js');
       proxyForCleanup = proxy;
       const sessions = await import('../session-provider-store.js');
       sessionsForCleanup = sessions;
