@@ -24,11 +24,13 @@ const serverRelay = (record: SelfHostedRelayDeploymentView) => ({ name: record.n
 
 /**
  * default:官方在用、服务器中转已部署未使用;server:正在用服务器中转;host:这台电脑当中转在用;
- * multi:两台服务器,正在用第一台;retry-*:一次失败的部署;deploy-steady:从头部署一台。
+ * multi:两台服务器,正在用第一台;retry-*:一次失败的部署;deploy-steady:从头部署一台;
+ * join-link(-narrow):这台电脑当中转,已生成加入链接(假的一次性参数);narrow 为窄设置栏。
  */
 function initialState(name: string): SelfHostedRelayState {
   const server = name === 'server' || name === 'multi';
-  const host = name === 'host';
+  const joinLink = name.startsWith('join-link');
+  const host = name === 'host' || joinLink;
   const recovering = name.startsWith('retry-');
   const redeploy = name === 'retry-existing';
   const fresh = name === 'deploy-steady';
@@ -57,7 +59,9 @@ function initialState(name: string): SelfHostedRelayState {
         : [{ at: finishedAt - 15_000, step: 'check' }, { at: finishedAt - 14_000, step: 'runtime' }],
     } : null,
     bundledRelayVersion: '0.3.1',
-    joinLink: null,
+    joinLink: joinLink
+      ? { link: 'cindy://relay/join?u=https%3A%2F%2Frelay.example.test&c=demo-code&o=demo-owner&s=demo-secret', expiresAt: new Date(finishedAt + 600_000).toISOString() }
+      : null,
     pendingRequests: [],
     join: { status: 'idle' },
   };

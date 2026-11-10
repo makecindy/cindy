@@ -16,6 +16,10 @@ export default {
     'retry-check-error': { about: 'A failed retry check stays in the deployment dialog with a visible error' },
     'deploy-steady': { about: 'Choosing a server, its check, each deployment step and the finished page keep the dialog and form fields in place' },
     multi: { about: 'Two server relays, one in use; renaming the other and deploying again stay available' },
+    'join-link': { about: 'A join link is ready: Enlarge opens a large, sharply rendered QR code that closes with its own button' },
+    // The 800px minimum window minus the settings sidebar leaves about 230px beside the QR.
+    'join-link-narrow': { about: 'Narrow settings column: the link actions wrap and Enlarge stays fully visible', viewport: { width: 480, height: 720 } },
+    'join-link-zoomed': { about: 'Zooming the minimum window to 200% and 300% with the enlarged QR open: the QR keeps a scannable size and Close QR Code stays reachable' },
   },
   async check(page, ui) {
     const route = 'settings.remoteControl.relay.route';
@@ -167,6 +171,55 @@ export default {
       await ui.capture('join-dialog');
       await dialog.getByRole('button', { name: await ui.t(`${relay}.join.cancel`), exact: true }).click();
       await dialog.waitFor({ state: 'detached' });
+    } else if (ui.case.startsWith('join-link')) {
+      const add = `${relay}.add`;
+      await page.getByRole('button', { name: await ui.t(`${relay}.actions.editHost`), exact: true }).waitFor();
+      const enlarge = page.getByRole('button', { name: await ui.t(`${add}.enlarge`), exact: true });
+      // The action row must reflow, not push Enlarge past the clipped route list edge.
+      const [button, list] = await Promise.all([enlarge.boundingBox(), page.getByRole('listitem').first().boundingBox()]);
+      assert.ok(button.x + button.width <= list.x + list.width, `Enlarge is clipped: ends at ${button.x + button.width}, list ends at ${list.x + list.width}`);
+      if (ui.case === 'join-link-narrow') {
+        await ui.capture('narrow');
+        return;
+      }
+      await enlarge.click();
+      const dialog = page.getByRole('dialog', { name: await ui.t(`${add}.qrTitle`), exact: true });
+      await dialog.waitFor();
+      if (ui.case === 'join-link-zoomed') {
+        const qr = dialog.getByRole('img', { name: await ui.t(`${add}.qrAlt`), exact: true });
+        const close = dialog.getByRole('button', { name: await ui.t(`${add}.close`), exact: true });
+        // The 800x600 minimum window at 200% and at the 300% maximum interface zoom. When the dialog can't fit,
+        // it scrolls: the QR keeps a scannable size and Close QR Code stays reachable.
+        for (const [zoom, viewport] of [['2x', { width: 400, height: 300 }], ['3x', { width: 267, height: 200 }]]) {
+          await page.setViewportSize(viewport);
+          await qr.scrollIntoViewIfNeeded();
+          const qrBox = await qr.boundingBox();
+          assert.ok(qrBox.y >= 0 && qrBox.y + qrBox.height <= viewport.height && qrBox.height >= 96, `QR is not usable at ${zoom}: ${qrBox.height}px tall at ${qrBox.y}`);
+          await ui.capture(`qr-zoomed-${zoom}`);
+          await close.scrollIntoViewIfNeeded();
+          const closeBox = await close.boundingBox();
+          assert.ok(closeBox.y >= 0 && closeBox.y + closeBox.height <= viewport.height, `Close QR Code is not reachable at ${zoom}: ${closeBox.y}..${closeBox.y + closeBox.height}`);
+        }
+        await close.click();
+        await dialog.waitFor({ state: 'detached' });
+        return;
+      }
+      // 放大版按大尺寸重新生成,不是把 200px 的小图拉伸。
+      const qr = dialog.getByRole('img', { name: await ui.t(`${add}.qrAlt`), exact: true });
+      const { natural, shown } = await qr.evaluate((img) => ({ natural: img.naturalWidth, shown: img.getBoundingClientRect().width }));
+      assert.ok(natural >= shown, `enlarged QR is upscaled: ${natural}px shown at ${shown}px`);
+      assert.ok(shown > 300, `enlarged QR is not larger than the inline one: ${shown}px`);
+      await ui.capture('qr-enlarged');
+      await dialog.getByRole('button', { name: await ui.t(`${add}.close`), exact: true }).click();
+      await dialog.waitFor({ state: 'detached' });
+      // The dialog has no Radix Trigger: closing it with the button or Esc must hand focus back to Enlarge.
+      const enlargeFocused = () => enlarge.evaluate((el) => el === document.activeElement);
+      assert.ok(await enlargeFocused(), 'focus not restored to Enlarge after Close');
+      await page.keyboard.press('Enter');
+      await dialog.waitFor();
+      await page.keyboard.press('Escape');
+      await dialog.waitFor({ state: 'detached' });
+      assert.ok(await enlargeFocused(), 'focus not restored to Enlarge after Esc');
     } else if (ui.case === 'server') {
       assert.ok(await serverRow.getByText(await ui.t(`${relay}.manage.deviceCount`, { count: 3 }), { exact: true }).isVisible());
       assert.equal(await serverRow.getByRole('button', { name: removeLabel, exact: true }).count(), 1);
