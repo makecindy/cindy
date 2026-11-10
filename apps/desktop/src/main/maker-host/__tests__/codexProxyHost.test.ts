@@ -6578,6 +6578,88 @@ describe('codex proxy host', () => {
     }
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   cindy_custom 命名空间里，不支持 Responses custom tools 的连接仍要把 exec 从
+  //   type:'custom' 转成 function；产品提示词注入仍跳过（#9759）。
+  // - Bug／规则依据：#9759。命名空间包装原先只放行工具 ID 校正，exec 适配被整段跳过。
+  // - 现有覆盖缺口：上面的 round-trip 走的是普通 /responses，不经过命名空间包装。
+  // - 最小失败输入：已登记的 Responses 路由，url 为 /_cindy/custom-provider/<routeId>/responses，
+  //   工具 type:'custom' name:'exec'，并注册了产品提示词。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('adapts exec on a custom-provider namespace route and still skips ordinary rewrites', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'namespace-exec-provider',
+      name: 'Namespace Exec Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'http://127.0.0.1:43169/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'namespace-model', name: 'Namespace Model' }],
+        },
+      },
+    });
+    expect(provider.routing.codex?.supportsResponsesCustomTools).toBe(false);
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog)[0]!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-exec', 'thread-namespace-exec', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-exec', provider.id);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const body = {
+        model: 'namespace-model',
+        instructions: 'base instructions',
+        tools: [{ type: 'custom', name: 'exec', description: 'run a command' }],
+        tool_choice: { type: 'custom', name: 'exec' },
+        input: [{ type: 'custom_tool_call', id: 'fc_legacy', status: 'completed',
+          name: 'exec', call_id: 'call_exec', input: 'text("local")' }],
+      };
+      const ctx = {
+        reqId: 9759,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-exec' },
+        upstreamBase: 'http://127.0.0.1:43169/v1',
+      };
+      let current: unknown = body;
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(current).toMatchObject({
+        instructions: 'base instructions',
+        tools: [expect.objectContaining({
+          type: 'function',
+          name: 'exec',
+          parameters: expect.objectContaining({ required: ['input'] }),
+        })],
+        tool_choice: { type: 'function', name: 'exec' },
+        input: [expect.objectContaining({
+          type: 'function_call', id: 'fc_legacy', name: 'exec',
+          arguments: '{"input":"text(\\"local\\")"}',
+        })],
+      });
+      expect((current as { instructions: string }).instructions).not.toContain('PRODUCT_PROMPT');
+    } finally {
+      host.unregister('session-namespace-exec');
+      clearSessionProvider('session-namespace-exec');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
   it('adapts exec when env-key falls through a built-in OpenAI session to XD', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
@@ -9940,8 +10022,38 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
           { type: 'compaction', encrypted_content: 'opaque' },
         ],
       };
-      const repaired = { ...body, reasoning: { summary: 'auto', ...(efforts.length ? { effort: efforts.at(-1) } : {}) }, input: body.input.map((item, index) => index < 2
-        ? { ...item, id: index === 0 ? 'ctc_legacy' : 'ctco_legacy' } : item) };
+      // This user-built Responses connection has supportsResponsesCustomTools === false,
+      // so the namespace path now adapts exec to a function (#9759). Effort still comes
+      // only from the frozen route; vendor fields, model and image JSON stay untouched.
+      const execTool = body.tools[0]!;
+      const adapted = {
+        ...body,
+        reasoning: { summary: 'auto', ...(efforts.length ? { effort: efforts.at(-1) } : {}) },
+        tools: [{
+          type: 'function',
+          name: 'exec',
+          description: `Original Responses custom tool metadata:\n${JSON.stringify(execTool)}`,
+          parameters: {
+            type: 'object',
+            properties: {
+              input: {
+                type: 'string',
+                description: 'Raw string input for the original custom tool. Preserve formatting exactly.',
+              },
+            },
+            required: ['input'],
+          },
+        }],
+        input: [
+          {
+            type: 'function_call', id: 'fc_legacy', call_id: 'call_same', name: 'exec',
+            arguments: JSON.stringify({ input: '你好' }),
+          },
+          { type: 'function_call_output', id: 'fco_legacy', call_id: 'call_same', output: 'result' },
+          body.input[2],
+          body.input[3],
+        ],
+      };
       const post = async (path: string, raw: string) => {
         const response = await fetch(`${endpoint}/_cindy/custom-provider/${route.routeId}/${path}`, {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: raw,
@@ -9951,8 +10063,8 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       };
       await post('responses?native=true', JSON.stringify(body));
       expect(received[0]?.path).toBe('/v1/responses?native=true');
-      expect(JSON.parse(received[0]!.body)).toEqual(repaired);
-      const unchanged = JSON.stringify(repaired, null, 2);
+      expect(JSON.parse(received[0]!.body)).toEqual(adapted);
+      const unchanged = JSON.stringify(adapted, null, 2);
       await post('responses', unchanged);
       expect(received[1]?.body).toBe(unchanged);
       // Even an image JSON body containing tool-shaped input remains byte-identical.

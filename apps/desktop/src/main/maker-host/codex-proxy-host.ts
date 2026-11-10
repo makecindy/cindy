@@ -3315,7 +3315,10 @@ function createTransformRequestChain(
   pricing: XaiRequestPricing = new Map(),
   /** 供应商分享受邀者的 proxy：不走视觉桥(视觉后端是本机用户自己的其它供应商)。 */
   guest = false,
-): RequestTransform[] {
+): {
+  transforms: RequestTransform[];
+  execFunctionAdapterTransform: RequestTransform;
+} {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
     const { providerId, routing } = responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
@@ -3436,7 +3439,7 @@ function createTransformRequestChain(
   // 档位与模型改写都在上面收敛。卡片读的观察身份必须是这份最终会发出去的值。
   // 放在调试转储之后：转储只是旁路，不能盖掉它记下的出站身份。
   transforms.push(createObservedSubagentIdentityTransform());
-  return transforms;
+  return { transforms, execFunctionAdapterTransform };
 }
 
 /**
@@ -3585,42 +3588,59 @@ async function createCodexProxyHandle(
     });
     return recovered;
   };
+  const {
+    transforms: transformChain,
+    execFunctionAdapterTransform,
+  } = createTransformRequestChain(
+    frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined,
+  );
+  // Namespaced Responses use a frozen Provider route. Preserve its native
+  // fields and model. The dedicated transform below reconciles effort against
+  // that same snapshot; ordinary session/catalog transforms stay out.
+  // execFunctionAdapterTransform is the exception: its own precondition already
+  // narrows to supportsResponsesCustomTools === false, so only connections that
+  // reject Responses custom tools are rewritten, and native custom routes are
+  // left alone (#9759).
+  const customProviderNamespaceTransforms = new Set<RequestTransform>([
+    normalizeResponsesToolItemIds,
+    execFunctionAdapterTransform,
+  ]);
+  const transformRequest: RequestTransform[] = transformChain.map(
+    (transform): RequestTransform => {
+      const scoped: RequestTransform = (body, ctx) => {
+        if (crossProviderRequests.has(ctx.headers)) {
+          return transform(body, { ...ctx, url: '/responses' });
+        }
+        return isCodexCustomProviderNamespacePath(ctx.url)
+          && !customProviderNamespaceTransforms.has(transform)
+          ? null : transform(body, ctx);
+      };
+      // Keep adapter rejection and request-state cleanup on ordinary routes.
+      scoped.errorMode = transform.errorMode;
+      scoped.onRequestSettled = transform.onRequestSettled;
+      return scoped;
+    },
+  ).concat((body, ctx) => {
+    // 同连接的命名空间路由不跑普通改写链，档位只在这条专用 transform 里收敛。
+    // 观察点必须排在它后面，卡片才读到真正发出去的档，而不是父任务存档档位。
+    if (crossProviderRequests.has(ctx.headers)) return null;
+    const reconciled = frozenReasoning(body, ctx);
+    const outgoing = isPlainObject(reconciled) ? reconciled : body;
+    if (isPlainObject(outgoing) && typeof outgoing.model === 'string') {
+      recordObservedSubagentIdentity(
+        ctx.headers,
+        outgoing.model,
+        observedReasoningEffort(outgoing),
+      );
+    }
+    return reconciled;
+  });
+
   const handle = await createAnthropicCompatProxy({
     // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
     upstream: () => buildCodexGatewayBaseUrl(),
     ...(ports.authorizeInbound ? { authorizeInbound: ports.authorizeInbound } : {}),
-    transformRequest: createTransformRequestChain(frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined).map(
-      (transform): RequestTransform => {
-        // Namespaced Responses use a frozen Provider route. Preserve its native
-        // fields and model. The dedicated transform below reconciles effort
-        // against that same snapshot; ordinary session/catalog transforms stay out.
-        const scoped: RequestTransform = (body, ctx) => {
-          if (crossProviderRequests.has(ctx.headers)) {
-            return transform(body, { ...ctx, url: '/responses' });
-          }
-          return isCodexCustomProviderNamespacePath(ctx.url) && transform !== normalizeResponsesToolItemIds
-            ? null : transform(body, ctx);
-        };
-        // Keep adapter rejection and request-state cleanup on ordinary routes.
-        scoped.errorMode = transform.errorMode;
-        scoped.onRequestSettled = transform.onRequestSettled;
-        return scoped;
-      },
-    ).concat((body, ctx) => {
-      // 同连接的命名空间路由不跑普通改写链，档位只在这条专用 transform 里收敛。
-      // 观察点必须排在它后面，卡片才读到真正发出去的档，而不是父任务存档档位。
-      if (crossProviderRequests.has(ctx.headers)) return null;
-      const reconciled = frozenReasoning(body, ctx);
-      const outgoing = isPlainObject(reconciled) ? reconciled : body;
-      if (isPlainObject(outgoing) && typeof outgoing.model === 'string') {
-        recordObservedSubagentIdentity(
-          ctx.headers,
-          outgoing.model,
-          observedReasoningEffort(outgoing),
-        );
-      }
-      return reconciled;
-    }),
+    transformRequest,
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);
