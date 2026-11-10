@@ -22,6 +22,7 @@ import * as React from 'react';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 
 import { cn } from '@/lib/utils';
+import { TriggerTooltipBlocked } from './transient-layer';
 
 // 全局默认 delayDuration（F-PJ-7 规格 500ms）—— 调用方可在 Provider 上覆盖
 // disableHoverableContent=true:鼠标离开 trigger 立即关闭,不允许移到 tip 内容
@@ -53,10 +54,13 @@ const TooltipProvider = ({
 // Radix 的状态机。
 function TooltipRoot({
   open,
+  defaultOpen,
   onOpenChange,
   ...props
 }: React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Root>) {
   const controlled = open !== undefined;
+  const blocked = React.useContext(TriggerTooltipBlocked);
+  const [localOpen, setLocalOpen] = React.useState(defaultOpen ?? false);
   const onOpenChangeRef = React.useRef(onOpenChange);
   onOpenChangeRef.current = onOpenChange;
   React.useEffect(() => {
@@ -72,7 +76,16 @@ function TooltipRoot({
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [controlled]);
-  return <TooltipPrimitive.Root {...props} open={open} onOpenChange={onOpenChange} />;
+  React.useEffect(() => {
+    if (!blocked) return;
+    setLocalOpen(false);
+    if (open) onOpenChangeRef.current?.(false);
+  }, [blocked, open]);
+  return <TooltipPrimitive.Root {...props} open={!blocked && (open ?? localOpen)} onOpenChange={next => {
+    if (next && blocked) return;
+    setLocalOpen(next);
+    onOpenChange?.(next);
+  }} />;
 }
 const TooltipTrigger = TooltipPrimitive.Trigger;
 

@@ -2,8 +2,13 @@ import * as React from 'react';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 
 import { cn } from '@/lib/utils';
+import {
+  TransientLayerContent,
+  useTransientCloseAutoFocus,
+  withTransientLayer,
+} from './transient-layer';
 
-const Popover = PopoverPrimitive.Root;
+const Popover = withTransientLayer(PopoverPrimitive.Root);
 
 const PopoverTrigger = PopoverPrimitive.Trigger;
 
@@ -22,22 +27,30 @@ const PopoverContent = React.forwardRef<
      */
     portalContainer?: HTMLElement | null;
   }
->(({ className, align = 'center', sideOffset = 4, portalContainer, ...props }, ref) => (
-  <PopoverPrimitive.Portal container={portalContainer ?? undefined}>
-    <PopoverPrimitive.Content
-      ref={ref}
-      align={align}
-      sideOffset={sideOffset}
-      className={cn(
-        'z-50 w-72 rounded-xl border bg-popover p-4 text-popover-foreground shadow-[shadow:var(--shadow-menu)] outline-none',
-        'origin-[var(--radix-popover-content-transform-origin)]',
-        'data-[state=open]:animate-float-in data-[state=closed]:animate-float-out',
-        className,
-      )}
-      {...props}
-    />
-  </PopoverPrimitive.Portal>
-));
+>(({
+  className, align = 'center', sideOffset = 4, portalContainer, children, onCloseAutoFocus, ...props
+}, ref) => {
+  const closeAutoFocus = useTransientCloseAutoFocus(onCloseAutoFocus);
+  return (
+    <PopoverPrimitive.Portal container={portalContainer ?? undefined}>
+      <PopoverPrimitive.Content
+        ref={ref}
+        align={align}
+        sideOffset={sideOffset}
+        onCloseAutoFocus={closeAutoFocus}
+        className={cn(
+          'z-50 w-72 rounded-xl border bg-popover p-4 text-popover-foreground shadow-[shadow:var(--shadow-menu)] outline-none',
+          'origin-[var(--radix-popover-content-transform-origin)]',
+          'data-[state=open]:animate-float-in data-[state=closed]:animate-float-out',
+          className,
+        )}
+        {...props}
+      >
+        <TransientLayerContent>{children}</TransientLayerContent>
+      </PopoverPrimitive.Content>
+    </PopoverPrimitive.Portal>
+  );
+});
 PopoverContent.displayName = PopoverPrimitive.Content.displayName;
 
 export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor };
