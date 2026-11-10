@@ -443,6 +443,7 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
 | Codex 侧对应实现 | `packages/maker-core/src/agents/codex/`（对应 index／translator） |
 | vendor 事件到 `AgentEvent` 的映射 | `packages/maker-core/src/agents/*/translator.ts` |
 | 缓存率／token 计量 | `packages/maker-core/src/agents/shared/usage-tracker.ts` |
+| 实时生成速度（tok/s） | `packages/maker-core/src/agents/shared/calibrated-token-speed.ts`，Claude Code、Codex、Pi 的 translator 各自接入。口径见[协议兼容](protocol-compatibility.md#实时生成速度)；读数用 `scripts/token-speed-replay.ts` 对照真实录制 |
 | Agent 抽象与共用逻辑 | `packages/maker-core` 的 `BaseAgent` 及子类 |
 
 文档与实现冲突时以代码为准，但必须在同一改动内同步修正本文。
@@ -464,15 +465,14 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   只对**本账号的本机任务**调用：SSH 远程、Review、设备托管访客任务一律不注入。Claude Code 与 Pi 写进
   Agent 进程 env；Codex 的 app-server 共享，按线程经 `shell_environment_policy.set.<名>` 设置。
   返回值必须按 sessionId 确定，重启进程得到字节相同的 env（否则破坏缓存与重建一致性）。
-- 用户操作交接走 `cindy_helper` 的顶层工具 `ask_owner`（`packages/lizi-mcps/src/xdt-helper/ask_owner.ts`，
-  2026-10-30 引入，2026-11-08 拆出普通提问）：kind = fill（亲自输入，原 `request_input_handoff`）／scan（扫码，窗口或
-  Agent 截图）／connect（连接账号，目前为 Grok）。它一直在模型的工具列表里（Pi 经网关检索），不藏在
-  `list_tools` 类目后面；列表按请求时的 harness 与能力面只给可用的 kind（SSH 工作区无 fill／scan）。旧名 `request_input_handoff`、`start_grok_device_login` 仍可经 `call_tool` 调用但不再
-  列出。普通异步提问独立使用 `ask_user_question_async`，不再接受 `ask_owner(kind=choose)`。使用时机只写在工具说明里，
-  **不改 system prompt**；子 Agent（`mcpCallerKind === 'descendant'`）与远程工作区任务直接拒绝。
+- 代输入独立使用 `request_input_handoff`（`packages/lizi-mcps/src/xdt-helper/input_handoff.ts`）：
+  `purpose` 与 `target`（窗口）或 `image`（截图二维码）；不使用 `ask_owner` 统一入口。
+  Claude Code／Codex 直接看到 MCP 工具；Pi 直接注册同名工具并复用宿主 schema 和授权身份。
+  旧 `call_tool` 路径继续兼容，Grok 的 `start_grok_device_login` 恢复在 auth 类目列出。
+  普通问题使用各 Harness 原生同步提问及独立异步入口；保密输入不会进入普通问答。
+  使用时机只写在工具说明里，**不改 system prompt**；代输入拒绝子 Agent 与远程工作区。
   目标窗口不可用（Cindy 自身、找不到）在调用当下返回 `TARGET_IS_CINDY`／`TARGET_NOT_FOUND` 并说明
-  下一步，不再先回 pending。何时该发起靠工具说明与工具返回提示（如 `cindy_computer` 拒绝直接操作
-  保密输入框、浏览器读到登录墙时指向 `ask_owner`），不靠提示词。
+  下一步，不再先回 pending。浏览器登录墙与保密输入字段提示指向 `request_input_handoff`。
 - 续接是隐藏的 `[Input handoff ended]` 合成消息，只有事实；产品规则见
   [`../product-rules/input-handoff.md`](../product-rules/input-handoff.md)。
 
