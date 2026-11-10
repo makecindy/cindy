@@ -144,37 +144,73 @@ describe("cindy_helper MCP server", () => {
 
   // The agent never found input handoff behind list_tools(auth) (2026-10-30).
   // Unit: a fresh client sees it in tools/list, with the window/title arguments,
-  // before its first call; the old name stays callable for saved calls but unlisted.
-  it('offers input handoff in the tool list itself and keeps the old name callable', async () => {
+  // before its first call. Removing ask_owner must preserve screenshot QR input,
+  // which the old target-only entry could not accept. Minimal input: image without target.
+  it.each(['codex', 'claude-code', 'pi'] as const)('offers %s independent input handoff for windows and screenshot QR codes', async (agentKind) => {
     const start = vi.fn(async () => ({ ok: true as const, requestId: 'handoff-1' }));
-    const server = createXdtHelperMcpServer({ inputHandoff: { start } }, {
-      agentKind: 'codex', workingDir: '/repo', sessionId: 'current-task',
-      getSessionContext: () => ({
-        agentKind: 'codex', workingDir: '/repo', sessionId: 'current-task', sessionInstanceId: 'instance-1',
-      }),
+    const startImage = vi.fn(async () => ({ ok: true as const, requestId: 'handoff-image' }));
+    let context: LiziMcpSessionContext = {
+      agentKind, workingDir: '/repo', sessionId: 'current-task', sessionInstanceId: 'instance-1',
+    };
+    const server = createXdtHelperMcpServer({ inputHandoff: { start, startImage } }, {
+      agentKind, workingDir: '/repo', sessionId: 'current-task',
+      getSessionContext: () => context,
     });
     const client = new Client({ name: 'handoff-discovery-test', version: '1' });
     const [ct, st] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(st), client.connect(ct)]);
     try {
-      const owner = (await client.listTools()).tools.find((tool) => tool.name === 'ask_owner')!;
+      const owner = (await client.listTools()).tools.find((tool) => tool.name === 'request_input_handoff')!;
       expect(owner.description).toContain('password');
       expect(owner.inputSchema).toMatchObject({
-        required: ['kind'],
+        required: ['purpose'],
         properties: {
-          kind: { enum: ['fill', 'scan'] },
-          title: { type: 'string' },
+          purpose: { type: 'string' },
+          image: { type: 'string' },
           target: { type: 'object', properties: { app: { type: 'string' } } },
         },
       });
       const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
-      expect(overview.categories).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'auth' })]));
+      expect(overview.categories).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'auth' })]));
       expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
         name: 'request_input_handoff', args: { purpose: 'Sign in to continue', target: { app: 'Google Chrome' } },
       } }))).toMatchObject({ ok: true, request_id: 'handoff-1', status: 'pending' });
       expect(start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'current-task' }), {
         purpose: 'Sign in to continue', target: { app: 'Google Chrome' },
       });
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Scan the simulator sign-in code', image: 'shots/qr.png',
+      } }))).toMatchObject({ ok: true, request_id: 'handoff-image', status: 'pending' });
+      expect(startImage).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'current-task' }), {
+        purpose: 'Scan the simulator sign-in code', image: 'shots/qr.png',
+      });
+      for (const args of [{}, { image: 'qr.png', target: {} }, { image: 'qr.png', complete_when: { window_closed: true } }]) {
+        expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+          purpose: 'Sign in', ...args,
+        } }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      }
+      // Preserve admission and immediate host failures when switching from the wrapper.
+      context = { ...context, mcpCallerKind: 'descendant' };
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Sign in', image: 'qr.png',
+      } }))).toMatchObject({ errorCode: 'ROOT_REQUIRED' });
+      context = { ...context, mcpCallerKind: 'root', remoteHostId: 'ssh-host' };
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Sign in', image: 'qr.png',
+      } }))).toMatchObject({ errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      context = { ...context, remoteHostId: undefined, sessionInstanceId: undefined };
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Sign in', target: {},
+      } }))).toMatchObject({ errorCode: 'NO_SESSION_CONTEXT' });
+      context = { ...context, sessionInstanceId: 'instance-2', sessionId: 'next-task' };
+      start.mockResolvedValueOnce({ ok: false, errorCode: 'TARGET_IS_CINDY', message: 'That window is Cindy itself.' } as never);
+      expect(parsePayload(await client.callTool({ name: 'request_input_handoff', arguments: {
+        purpose: 'Sign in', target: { app: 'Cindy' },
+      } }))).toMatchObject({ errorCode: 'TARGET_IS_CINDY' });
+      expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'next-task', sessionInstanceId: 'instance-2' }),
+        { purpose: 'Sign in', target: { app: 'Cindy' } });
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(startImage).toHaveBeenCalledTimes(1);
     } finally { await client.close(); await server.close(); }
   });
 
@@ -337,15 +373,13 @@ describe("cindy_helper MCP server", () => {
     await Promise.all([server.connect(st), client.connect(ct)]);
     try {
       const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
-      // Starting is listed through ask_owner (connect); status and cancel stay here.
+      // The dedicated sign-in entry is discoverable with its status and cancel tools.
       expect(overview.categories).toEqual([
         { name: 'cindy', tool_count: 2, description: expect.stringContaining('self-management') },
-        { name: 'auth', tool_count: 2, description: expect.any(String) },
+        { name: 'auth', tool_count: 3, description: expect.any(String) },
       ]);
-      const owner = (await client.listTools()).tools.find((tool) => tool.name === 'ask_owner')!;
-      expect((owner.inputSchema.properties as Record<string, { enum?: string[] }>).kind.enum).toEqual(['connect']);
+      expect((await client.listTools()).tools.some((tool) => tool.name === 'ask_owner')).toBe(false);
       for (const request of [
-        { name: 'ask_owner', arguments: { kind: 'connect', service: 'grok' } },
         { name: 'call_tool', arguments: { name: 'start_grok_device_login', args: {} } },
       ]) {
         const result = parsePayload(await client.callTool(request));
@@ -360,7 +394,7 @@ describe("cindy_helper MCP server", () => {
         name: 'call_tool', arguments: { name: 'start_grok_device_login', args: {} },
       }));
       expect(stale).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
-      expect(start).toHaveBeenCalledTimes(2);
+      expect(start).toHaveBeenCalledTimes(1);
     } finally {
       await client.close();
       await server.close();

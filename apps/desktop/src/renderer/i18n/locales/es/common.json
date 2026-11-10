@@ -875,8 +875,8 @@
       "runningCount_one": "Tarea {{count}} ejecutándose",
       "runningCount_other": "Tareas {{count}} en ejecución",
       "limitAria": "Límite de tareas para {{name}}",
-      "limitOption_one": "Max {{count}}",
-      "limitOption_other": "Max {{count}}",
+      "limitOption_one": "{{count}} tarea",
+      "limitOption_other": "{{count}} tareas",
       "weightAria": "Peso para {{name}}",
       "weightOption": "Peso {{weight}}",
       "assignAria": "Asignar tareas a {{name}}",
@@ -929,7 +929,7 @@
       },
       "accountCount_many": "cuentas {{count}}",
       "runningCount_many": "Tareas {{count}} en ejecución",
-      "limitOption_many": "Max {{count}}"
+      "limitOption_many": "{{count}} tareas"
     },
     "rebalance": {
       "title": "¿Continuar en {{label}}?",

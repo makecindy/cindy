@@ -257,9 +257,9 @@ GitHub 查询与关联的独立语义、缓存和游标合同见 [GitHub 状态�
 ### 普通提问入口（2026-11-08）
 
 Claude Code／Pi 的非阻塞澄清恢复独立的 `ask_user_question_async`；Pi 同步展示为直接工具，
-无需先检索 MCP。Codex 保持原生提问入口。`ask_owner` 只负责用户操作交接
-（fill／scan／connect），不再兼作普通问题卡入口；既有同步提问、卡片和回答生命周期保持不变。
-
+无需先检索 MCP。Codex 保持原生提问入口。独立的 `request_input_handoff` 处理窗口与截图二维码，
+三个 Harness 直接可发现；Grok 登录恢复 auth 类目的 `start_grok_device_login`。移除 `ask_owner`，
+既有同步提问、卡片和回答生命周期保持不变。
 
 三种 Harness 都直接列出 `manage_user_questions`，无需先猜能力名称；只管理当前任务的
 异步问题，Codex 提问仍使用原生终端协议。模型可列出未答题，再逐题带原因撤回。
