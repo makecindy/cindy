@@ -246,6 +246,21 @@ describe('piProjectResourcesDrifted', () => {
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
+  it('treats a missing .pi/extensions appearing as an empty dir as no drift (resolution null→path)', () => {
+    writeSkill(path.join('.pi', 'skills'), 'alpha');
+    const baseline = snapshot();
+    // 前提:缺失的扩展根已在监测表中,基线解析为 null(Greptile P2)
+    expect(baseline.watchRootsResolved.get(canon(path.join(project, '.pi', 'extensions')))).toBeNull();
+    // 仅创建空目录:资源路径集合仍相同,不得误报漂移触发多余冷启动
+    mkdirSync(path.join(project, '.pi', 'extensions'), { recursive: true });
+    bumpMtime(path.join(project, '.pi', 'extensions'));
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    // 空目录已纳入盯视:之后真正的扩展落地必须检出
+    writeFileSync(path.join(project, '.pi', 'extensions', 'hook.ts'), 'export {};\n');
+    bumpMtime(path.join(project, '.pi', 'extensions'));
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
   it('detects a nearer git boundary appearing after launch (repo root identity)', () => {
     mkdirSync(path.join(project, 'outer', '.agents', 'skills'), { recursive: true });
     writeFileSync(path.join(project, 'outer', '.git'), '');
@@ -439,10 +454,10 @@ describe('piProjectResourcesDrifted', () => {
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
-  it('retargeting a nested namespace junction to a same-mtime twin tree is drift (any depth)', () => {
-    // 通用性证明:不是 `.pi`/`.agents` 根,而是嵌套 namespace 级软链改指。
-    // rm/symlink 会改 `.pi/skills` 自身 mtime,retarget 后把它恢复到快照值,
-    // 让解析身份成为唯一信号。
+  it('retargeting a nested namespace junction to a same-mtime twin tree leaves the set unchanged (identity is signal, not verdict)', () => {
+    // 通用性验证的另一面:collector 明文不走进软链 namespace(symlinked namespace
+    // is intentionally not walked),改指前后集合都不含它 —— 按集合契约这不是漂移,
+    // 不触发多余冷启动;解析身份变化只负责触发重扫(本用例的信号隔离仍成立)。
     const targetA = path.join(project, 'ns-a');
     const targetB = path.join(project, 'ns-b');
     const nsLink = path.join(project, '.pi', 'skills', '@scope');
@@ -467,6 +482,11 @@ describe('piProjectResourcesDrifted', () => {
     // rm/symlink 弄脏了 `.pi/skills` 的 mtime,恢复到快照值以隔离信号。
     utimesSync(skillsDir, aligned, aligned);
 
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    // 契约的另一端不放松:软链 namespace 换成真目录,集合真正变化,必须检出。
+    rmSync(nsLink);
+    writeSkill(path.join('.pi', 'skills', '@scope'), 'alpha');
+    bumpMtime(skillsDir);
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 });

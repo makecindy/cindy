@@ -407,9 +407,11 @@ function samePiResourceList(left: readonly string[], right: readonly string[]): 
  *      任何被盯目录的 mtime)。
  * 2. 全量重扫,按最终路径集合判定(argv 的输入是集合,不是内容):
  *    - 集合不同 → 漂移,返回 true(不动基线,调用方将回收运行时并重建快照);
- *    - 集合相同(触碰无关目录 / git init 未截断任何资源)→ 不算漂移,就地重建
- *      整张基线(新建的空 namespace / 空扩展目录纳入盯视)并更新边界持有者,
- *      下一次快检恢复零收集。
+ *    - 集合相同(触碰无关目录 / git init 未截断任何资源 / 缺失目录空壳落地 /
+ *      不被 collector 枚举的软链 namespace 改指)→ 不算漂移,就地重建整张基线
+ *      (新建的空 namespace / 空扩展目录纳入盯视)并更新边界持有者,下一次快检
+ *      恢复零收集。解析身份变化只是触发重扫的信号,永远不是漂移判决:
+ *      身份变了而集合不变,说明运行时消费的资源没有变。
  */
 export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnapshot): boolean {
   // 本次调用只解析一次 git root,贯穿传给所有收集器;独立探测会在重扫窗口内
@@ -422,12 +424,14 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
   const resolvedWorkingDirChanged = resolvedWorkingDir !== snapshot.state.resolvedWorkingDir;
   // 任一 watch root 的解析身份变化(软链改指同 mtime 的孪生树):mtime 面碰撞
   // 时这是唯一信号;realpath 含全链路,任意层级的改指都会落到某个 key 上。
+  // 记录本次采样而非只记信号:窗口复核必须与本轮开头比,不能与启动基线比 ——
+  // 否则空目录从 null→存在 会撞上旧基线被误判为「窗口内再次改指」(Greptile P2)。
+  const resolvedNow = new Map<string, string | null>();
   let resolvedRootChanged = false;
   for (const [dir, resolvedAtLaunch] of snapshot.watchRootsResolved) {
-    if (realpathOrNull(dir) !== resolvedAtLaunch) {
-      resolvedRootChanged = true;
-      break;
-    }
+    const now = realpathOrNull(dir);
+    resolvedNow.set(dir, now);
+    if (now !== resolvedAtLaunch) resolvedRootChanged = true;
   }
   let mtimeChanged = false;
   for (const [dir, mtimeAtLaunch] of snapshot.watchRootMtimes) {
@@ -460,8 +464,8 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
   // 的解析根写回快照。
   if (realpathOrNull(snapshot.workingDir) !== resolvedWorkingDir) return true;
   // 重扫窗口内解析身份又有变化(任意层级再次改指):按漂移交回收路径重建,不把
-  // 混合口径的基线写回快照。
-  for (const [dir, resolvedAtSignal] of snapshot.watchRootsResolved) {
+  // 混合口径的基线写回快照。与本轮开头采样比(同 repoRoot/resolvedWorkingDir)。
+  for (const [dir, resolvedAtSignal] of resolvedNow) {
     if (realpathOrNull(dir) !== resolvedAtSignal) return true;
   }
   snapshot.watchRootMtimes.clear();
