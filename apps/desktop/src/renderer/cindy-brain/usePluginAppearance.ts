@@ -49,6 +49,21 @@ function css(settings: AppearanceSettings, dark: boolean): string {
   return rules.join('\n');
 }
 
+function wallpaperApplicationStatus(settings: AppearanceSettings, dark: () => boolean): 'applied' | 'saved' | 'failed' {
+  if (settings.wallpaperId === 'none' && document.documentElement.dataset.wallpaperActive === 'true') return 'saved';
+  if (settings.wallpaperId === 'custom') {
+    const url = settings.customWallpaperUrl;
+    if (!url) return 'saved';
+    if (url.endsWith('.mp4')) {
+      const player = [...document.querySelectorAll('video')].find(video => video.src === url || video.currentSrc === url);
+      if (!player || player.readyState < 2 || player.error) return player?.error ? 'failed' : 'saved';
+    } else if (!document.documentElement.style.getPropertyValue('--app-wallpaper-image').includes(url)) return 'saved';
+    const veil = `${100 - getWallpaperVisibility(settings, dark()) * 100}%`;
+    if (document.documentElement.style.getPropertyValue('--app-wallpaper-veil') !== veil) return 'saved';
+  }
+  return 'applied';
+}
+
 /** Only font bytes and the closed appearance model reach this consumer. */
 export async function applyPluginAppearance(settings: AppearanceSettings, options: {
   bridge: Bridge; style: HTMLStyleElement; faces: Faces; pending: PendingFonts; dark(): boolean; current(): boolean; applyFonts(settings: AppearanceSettings): void;
@@ -87,18 +102,7 @@ export async function applyPluginAppearance(settings: AppearanceSettings, option
   if (!options.current()) return 'saved';
   options.applyFonts(settings);
   options.style.textContent = css(settings, options.dark());
-  if (settings.wallpaperId === 'none' && document.documentElement.dataset.wallpaperActive === 'true') return 'saved';
-  if (settings.wallpaperId === 'custom') {
-    const url = settings.customWallpaperUrl;
-    if (!url) return 'saved';
-    if (url.endsWith('.mp4')) {
-      const player = [...document.querySelectorAll('video')].find(video => video.src === url || video.currentSrc === url);
-      if (!player || player.readyState < 2 || player.error) return player?.error ? 'failed' : 'saved';
-    } else if (!document.documentElement.style.getPropertyValue('--app-wallpaper-image').includes(url)) return 'saved';
-    const veil = `${100 - getWallpaperVisibility(settings, options.dark()) * 100}%`;
-    if (document.documentElement.style.getPropertyValue('--app-wallpaper-veil') !== veil) return 'saved';
-  }
-  return 'applied';
+  return wallpaperApplicationStatus(settings, options.dark);
 }
 
 
@@ -123,7 +127,7 @@ export function usePluginAppearance(applyFonts: (settings: AppearanceSettings) =
       const settings = normalizeAppearanceSettings(raw);
       const extended = settings.bodyFont || settings.reading || settings.contentStyle || settings.themeColors ||
         settings.uiFontTraits || settings.codeFontTraits || settings.uiFontResource || settings.codeFontResource || settings.bodyFontResource;
-      if (!extended && !style && !faces.size) return Promise.resolve('applied');
+      if (!extended && !style && !faces.size) return Promise.resolve(wallpaperApplicationStatus(settings, dark));
       const key = JSON.stringify(settings);
       if (applying?.key === key) return applying.promise;
       const currentGeneration = ++generation; latest = settings;

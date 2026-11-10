@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyPluginAppearance, usePluginAppearance } from '../usePluginAppearance';
+import { applyPluginAppearance, applyPluginAppearanceInWindow, usePluginAppearance } from '../usePluginAppearance';
 import { normalizeAppearanceSettings } from '@/../shared/appearanceSettings';
 import { applyFontSettings } from '@/hooks/useFontSettings';
 
@@ -64,6 +64,38 @@ describe('plugin appearance renderer', () => {
     document.documentElement.style.setProperty('--app-wallpaper-image', `url("${url}")`);
     document.documentElement.style.setProperty('--app-wallpaper-veil', '63%');
     expect(await applyPluginAppearance(settings, h)).toBe('applied');
+  });
+  // Current PR: the hook's wallpaper-only shortcut bypassed the lower-level
+  // application check. Exercise the public receipt with browser media state;
+  // default preferences must still allocate no plugin resources. Tier: unit.
+  it.each([
+    ['pending image', 'webp', false, 'saved'],
+    ['displayed image', 'webp', true, 'applied'],
+    ['pending video', 'mp4', 0, 'saved'],
+    ['failed video', 'mp4', 'error', 'failed'],
+    ['ready video', 'mp4', 2, 'applied'],
+  ] as const)('reports actual wallpaper-only state for %s without font or style work', async (_name, extension, ready, status) => {
+    const url = `cindy-media://client-wallpaper/${'a'.repeat(64)}.${extension}`;
+    const settings = normalizeAppearanceSettings({ wallpaperId: 'custom', customWallpaperUrl: url });
+    document.documentElement.style.setProperty('--app-wallpaper-veil', '63%');
+    if (extension === 'mp4') {
+      const video = document.createElement('video'); video.src = url;
+      Object.defineProperty(video, 'readyState', { value: typeof ready === 'number' ? ready : 2 });
+      Object.defineProperty(video, 'error', { value: ready === 'error' ? { code: 4 } : null });
+      document.body.append(video);
+    } else if (ready) document.documentElement.style.setProperty('--app-wallpaper-image', `url("${url}")`);
+    const loadPluginFont = vi.fn(), observe = vi.fn();
+    vi.stubGlobal('MutationObserver', class { observe = observe; disconnect() {} });
+    window.electronAPI = { appearanceSettings: { getSync: () => settings,
+      onChanged: () => () => {}, loadPluginFont } } as unknown as typeof window.electronAPI;
+    const hook = renderHook(() => usePluginAppearance(vi.fn()));
+    try {
+      await act(async () => {
+        expect(await applyPluginAppearanceInWindow(settings)).toEqual({ status });
+      });
+      expect(document.querySelector('[data-cindy-plugin-appearance]')).toBeNull();
+      expect(observe).not.toHaveBeenCalled(); expect(loadPluginFont).not.toHaveBeenCalled();
+    } finally { hook.unmount(); }
   });
   it('discards a late font read after the viewing generation changes', async () => {
     const h = options(); let resolve!: (value: { family: string; bytes: ArrayBuffer }) => void;
