@@ -28,6 +28,7 @@ import { CompanionProfileArtifacts } from './CompanionProfileArtifacts';
 import { companionEditorSections, loadCompanionProfile, profileFormDirty, type CompanionProfileData, type ProfilePanel, type ProfileValues } from './companionProfileData';
 import { CompanionMemoryPage } from './CompanionMemoryPage';
 import { useCompanionMemory } from './useCompanionMemory';
+import { useCompanionAutomations } from './useCompanionAutomations';
 import { saveCompanionReplyTargetPreference, useCompanionReplyTargetPreference } from './companionReplyTargetPreference';
 
 // Same identity block as iOS: a 48pt avatar and the name, not a navigation target.
@@ -114,6 +115,9 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const memoryList = data?.panels.find(item => item.id === 'memories')?.entries?.[0]?.resourceId;
   const memory = useCompanionMemory({ invoke, openLink, deviceId, deviceName, collectionId, resourceKind: resource?.ref.kind ?? 'bot',
     listResourceId: memoryList, online, active: page === 'memoryEntries', binding });
+  // The teammate project's automations, listed in place with their timing and a switch.
+  const automations = useCompanionAutomations({ invoke, openLink, deviceId, deviceName, botRef: resource ? { ...resource.ref, collectionId } : null,
+    resourceId: data?.panels.find(item => item.id === 'automations')?.entries?.[0]?.resourceId, online, visible, binding, locale: i18n.language });
   const read = useCallback(async () => {
     if (!online || !resource) return null;
     await openLink(deviceId);
@@ -356,7 +360,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
     error={error} errorLabel={deleteFailure ? t('devices.companionProfile.deleteFailed') : nameTakenOnSave ? t('devices.companionProfile.nameTaken') : undefined} conflict={conflict?.page === page} receipt={receipt && !confirmation ? label(receipt) : null} confirmation={confirmation} deleted={deleted}
     channels={resource ? <CompanionChannelTasks deviceId={deviceId} botId={resource.ref.id} online={online} onOpenTask={openArtifactTask} /> : null}
     artifacts={sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery')}
-    memoryPage={memoryPage} hasMemoryEntries={!!memoryList}
+    memoryPage={memoryPage} hasMemoryEntries={!!memoryList} automations={automations}
     onClose={dismiss} onClosed={afterClosed} onBack={page !== 'home' || confirmation ? () => void leave(false) : undefined}
     onOpen={open}
     onChange={changeValues}
@@ -394,7 +398,18 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       </View></View>
       {note('showReplyTargetHint')}
     </View>
-    {data?.panels.filter(item => ['projects', 'automations', 'followUp'].includes(item.id)).flatMap(item => item.entries ?? [])?.map(entry => <View style={styles.group} key={entry.id}><ContextSheetRow icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} disabled={!online} /></View>)}
+    {automations.rows?.length ? <View style={styles.field} testID="companionProfile.automations">
+      <Text accessibilityRole="header" style={styles.groupLabel}>{label(automations.title ?? '')}</Text>
+      <View style={styles.group}>{automations.rows.map((row, index) => <View key={row.id} style={[styles.inline, styles.automationRow, index > 0 && styles.rowDivider]}>
+        <View style={styles.automationText}>
+          <Text style={styles.switchLabel} numberOfLines={2}>{label(row.title)}</Text>
+          {row.subtitle ? <Text style={styles.note} numberOfLines={2}>{label(row.subtitle)}</Text> : null}
+        </View>
+        <NativeSwitch accessibilityLabel={label(row.title)} value={row.on} disabled={!online || !!automations.pending}
+          onValueChange={on => automations.toggle(row.id, on)} seedColor={colors.inputCaret} />
+      </View>)}</View>
+    </View> : null}
+    {data?.panels.filter(item => ['projects', 'followUp'].includes(item.id) || (item.id === 'automations' && automations.rows === null)).flatMap(item => item.entries ?? [])?.map(entry => <View style={styles.group} key={entry.id}><ContextSheetRow icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} disabled={!online} /></View>)}
     <View style={styles.group}>{row('channels', MessageCircle)}{row('artifacts', FileText)}{onOpenSearch ? row('search', History, onOpenSearch) : null}{row('permissions', Hand)}</View>
     {onOpenHome ? <View style={styles.group}>{row('home', Monitor, onOpenHome)}</View> : null}
     {/* Host order, like iOS: restart / resume / delete are whatever the computer offers now. */}
@@ -647,6 +662,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   spinner: { paddingVertical: spacing.md },
   field: { gap: spacing.sm },
   inline: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 44 },
+  automationRow: { paddingVertical: spacing.sm },
+  automationText: { flex: 1, gap: 2 },
+  rowDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
   flex: { flex: 1 },
   input: { minHeight: 44, borderRadius: radius.pill, borderColor: colors.border, borderWidth: 1, padding: spacing.md, color: colors.textPrimary, backgroundColor: colors.surfaceElevated, fontSize: typeScale.body },
   multiline: { minHeight: 120, borderRadius: radius.control, textAlignVertical: 'top' },

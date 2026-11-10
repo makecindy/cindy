@@ -350,4 +350,9 @@ it('lists and switches only the automations of the teammate project', async () =
   await f.send(await f.resource('settings:bot-a/automations/own'), { active: false });
   await f.send(await f.resource('settings:bot-a/automations/paused'), { active: true });
   expect(schedules.map(item => item.status)).toEqual(['paused', 'active', 'active']);
+  // The list switches in place too, and only the teammate's own automations.
+  await f.send(await f.resource('settings:bot-a/automations'), { own: true });
+  expect(schedules.map(item => item.status)).toEqual(['active', 'active', 'active']);
+  await expect(f.send(await f.resource('settings:bot-a/automations'), { other: false })).rejects.toThrow();
+  expect(schedules[2].status).toBe('active');
 });

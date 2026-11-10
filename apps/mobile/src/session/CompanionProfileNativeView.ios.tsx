@@ -78,7 +78,12 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
       <Toggle label={tr('showReplyTarget')} isOn={showReplyTargets} onIsOnChange={value => void saveCompanionReplyTargetPreference(value)}
         modifiers={[tint(colors.inputCaret)]} testID="companionProfile.showReplyTarget" />
     </Section>
-    {p.data?.panels.filter(item => ['projects', 'automations', 'followUp'].includes(item.id)).flatMap(item => item.entries ?? [])?.map(entry => <Section key={entry.id}>{action(label(entry.title), () => p.onEditor(entry.resourceId), !p.online)}</Section>)}
+    {p.automations?.rows?.length ? <Section title={label(p.automations.title ?? '')}>{p.automations.rows.map(row => <Toggle key={row.id} isOn={row.on}
+      onIsOnChange={on => p.automations!.toggle(row.id, on)} testID={`companionProfile.automation.${row.id}`}
+      modifiers={[tint(colors.inputCaret), disabled(!p.online || !!p.automations!.pending), accessibilityLabel(label(row.title))]}>
+      <VStack alignment="leading" spacing={2}><Text modifiers={[lineLimit(2)]}>{label(row.title)}</Text>{row.subtitle ? <Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary), lineLimit(2)]}>{label(row.subtitle)}</Text> : null}</VStack>
+    </Toggle>)}</Section> : null}
+    {p.data?.panels.filter(item => ['projects', 'followUp'].includes(item.id) || (item.id === 'automations' && !p.automations?.rows)).flatMap(item => item.entries ?? [])?.map(entry => <Section key={entry.id}>{action(label(entry.title), () => p.onEditor(entry.resourceId), !p.online)}</Section>)}
     <Section>{row('channels', 'bubble.left.and.bubble.right')}{row('artifacts', 'doc.text')}{p.onSearch ? row('search', 'magnifyingglass', p.onSearch) : null}{row('permissions', 'hand.raised')}</Section>
     {p.onHome ? <Section>{row('home', 'desktopcomputer', p.onHome)}</Section> : null}
     <Section>{p.data?.panels.filter(item => ['restart', 'resume', 'delete'].includes(item.id) && item.action).map(item => <Button key={item.id} onPress={() => p.onConfirm(item)} modifiers={[buttonStyle('plain'), listRowInsets({ top: 4, bottom: 4, leading: 16, trailing: 16 }), disabled(p.busy || !p.online), frame({ minHeight: 44 }), ...(item.id === 'delete' ? [foregroundStyle(colors.destructive)] : [])]}><HStack modifiers={[frame({ maxWidth: Infinity, minHeight: 44 }), contentShape(shapes.rectangle())]}><Text>{label(item.action!.label)}</Text><Spacer /></HStack></Button>)}</Section>

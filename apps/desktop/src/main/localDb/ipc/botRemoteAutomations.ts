@@ -122,16 +122,49 @@ export function createBotRemoteAutomationsEditor(deps: BotRemoteAutomationDeps, 
     const { botId, botName, scheduleId, locale } = request;
     const id = `settings:${botId}/automations`;
     const items = await read(owner, botId);
+    const state = (item: Schedule) => [item.id, item.status, item.name];
     const name = (key: string, values: Record<string, unknown>) => resolveRemoteText(copy[key], locale)
       .replace(/\{\{(\w+)\}\}/g, (match, field: string) => field in values ? String(values[field]) : match);
     if (!scheduleId) {
-      return { ref: ref(id), revision: hash(items), display: { title: copy['bots.automations.title'] }, links: [], blocks: items.length ? [
-        { id: 'about', primitive: 'markdown', fallbackMarkdown: name('bots.automations.description', { name: botName }) },
-        { id: 'automations', primitive: 'list', fallbackMarkdown: '', data: { entries: items.map(schedule => {
-          const { frequency, when } = automationTiming(schedule, locale);
-          return { id: schedule.id, title: schedule.name, subtitle: [frequency, when].filter(Boolean).join(' · '), resourceId: `${id}/${schedule.id}` };
-        }) } },
-      ] : [{ id: 'automations', primitive: 'markdown', fallbackMarkdown: name('bots.automations.empty', { name: botName }) }] };
+      if (!items.length) return { ref: ref(id), revision: hash(items), display: { title: copy['bots.automations.title'] }, links: [],
+        blocks: [{ id: 'automations', primitive: 'markdown', fallbackMarkdown: name('bots.automations.empty', { name: botName }) }] };
+      // One switch per automation, so a phone can list them with their timing and switch them in
+      // place (2026-11-10 owner). Each row still links to its own page for clients that show rows.
+      const inflight = await Promise.all(items.map(item => item.status === 'active' ? deps.automations.inflight(item.id) : Promise.resolve(0)));
+      deps.assertOwner(owner);
+      const running = items.filter((_, index) => inflight[index] > 0);
+      const resource: RemoteResource = {
+        ref: ref(id), revision: hash(items.map(state)), display: { title: copy['bots.automations.title'] }, links: [],
+        blocks: [{ id: 'automations', primitive: 'form', title: copy['bots.automations.title'], fallbackMarkdown: name('bots.automations.description', { name: botName }),
+          data: { actionId: 'automations', values: Object.fromEntries(items.map(item => [item.id, item.status === 'active'])),
+            entries: items.map(item => {
+              const { frequency, when } = automationTiming(item, locale);
+              return { id: item.id, title: item.name, subtitle: [frequency, when].filter(Boolean).join(' · '), resourceId: `${id}/${item.id}` };
+            }) } }],
+        actions: [{ id: 'automations', label: copy['bots.automations.title'],
+          fields: items.map(item => ({ id: item.id, label: item.name, kind: 'toggle' })),
+          // Same as the Automations page: pausing stops runs in progress, so it asks first.
+          ...(running.length ? { confirmation: {
+            title: name('scheduler.confirm.pause.title', { name: running.map(item => item.name).join('、') }),
+            body: name('scheduler.confirm.pause.withInflight', { count: inflight.reduce((sum, count) => sum + count, 0) }),
+            confirmLabel: copy['scheduler.confirm.pause.confirm'],
+          } } : {}) }],
+      };
+      return bind(context, resource, async () => hash((await read(owner, botId)).map(state)), async invoke => {
+        const input = invoke.input ?? {};
+        const current = await read(owner, botId);
+        const entries = Object.entries(input);
+        if (!entries.length || entries.some(([key, value]) => typeof value !== 'boolean' || !current.some(item => item.id === key))) {
+          throwIpcError('INVALID_PARAMS', 'Invalid automation input');
+        }
+        for (const [key, value] of entries) {
+          const item = current.find(candidate => candidate.id === key)!;
+          if (item.status === 'expired' || (item.status === 'active') === value) continue;
+          await (value ? deps.automations.resume(key) : deps.automations.pause(key));
+          deps.assertOwner(owner);
+        }
+        return { effects: [{ kind: 'refresh-resource', ref: ref(id) }] };
+      });
     }
     const schedule = items.find(item => item.id === scheduleId);
     if (!schedule) throwIpcError('NOT_FOUND', 'Automation unavailable');
@@ -140,7 +173,6 @@ export function createBotRemoteAutomationsEditor(deps: BotRemoteAutomationDeps, 
     // Same as the Automations page: pausing stops runs in progress, so it asks first.
     const inflight = active ? await deps.automations.inflight(scheduleId) : 0; deps.assertOwner(owner);
     const label = name('bots.automations.toggle', { name: schedule!.name });
-    const state = (item: Schedule) => [item.status, item.name];
     const resource: RemoteResource = {
       ref: ref(`${id}/${scheduleId}`), revision: hash(state(schedule!)), display: { title: schedule!.name }, links: [],
       blocks: [{ id: 'automation', primitive: 'form', title: copy['bots.automations.title'], fallbackMarkdown: [frequency, when].filter(Boolean).join('\n\n'),
