@@ -80,6 +80,17 @@ export function useDiscordChannelAccess(
    */
   const writeEpoch = useRef(0);
 
+  const invalidateUnsupportedAccess = useCallback(() => {
+    // 远端降级后旧 v2 快照不能再用于编辑，尚未发出的写入也必须失效。
+    writeEpoch.current += 1;
+    pendingWrites.current = 0;
+    saveFailed.current = false;
+    desiredRef.current = null;
+    setGuilds(null);
+    setAccess(null);
+    setError('unsupported');
+  }, []);
+
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -108,19 +119,14 @@ export function useDiscordChannelAccess(
       if (!mounted.current || version !== loadVersion.current || !isDataOwnerIdCurrent(owner)) return;
       log.error('load failed:', err instanceof Error ? err.message : String(err));
       if (err instanceof DiscordChannelAccessUnsupportedError) {
-        // 远端降级后旧 v2 快照不能再用于编辑，尚未发出的写入也必须失效。
-        writeEpoch.current += 1;
-        pendingWrites.current = 0;
-        saveFailed.current = false;
-        desiredRef.current = null;
-        setGuilds(null);
-        setAccess(null);
+        invalidateUnsupportedAccess();
+      } else {
+        setError('load');
       }
-      setError(err instanceof DiscordChannelAccessUnsupportedError ? 'unsupported' : 'load');
     } finally {
       if (mounted.current && version === loadVersion.current) setLoading(false);
     }
-  }, []);
+  }, [invalidateUnsupportedAccess]);
 
   useEffect(() => {
     if (!active) {
@@ -182,14 +188,17 @@ export function useDiscordChannelAccess(
               desiredRef.current = loaded.access;
               setAccess(loaded.access);
             }
-          } catch {
-            // 读不回来就保留当前显示，错误提示里有重试。
+          } catch (err) {
+            if (mounted.current && !stale() && err instanceof DiscordChannelAccessUnsupportedError) {
+              invalidateUnsupportedAccess();
+            }
+            // 其他补读错误保留当前显示，并提供重试。
           }
           if (mounted.current && !stale()) setError('save');
         }
       }
     });
-  }, []);
+  }, [invalidateUnsupportedAccess]);
 
   const update = useCallback(
     (transform: (access: DiscordChannelAccess) => DiscordChannelAccess) => {

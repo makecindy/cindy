@@ -19,10 +19,12 @@ const api = {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const entry = (channelId: string) => ({ guildId: '11', channelId });
@@ -125,6 +127,28 @@ describe('useDiscordChannelAccess queued saves', () => {
     expect(hook.result.current.access).toBeNull();
     expect(hook.result.current.guilds).toBeNull();
     expect(api.setChannelAccess).toHaveBeenCalledTimes(queued ? 1 : 0);
+  });
+
+  it.each([false, true])('invalidates editing after unsupported save recovery (queued during recovery: %s)', async (queued) => {
+    const hook = renderHook(({ active }) => useDiscordChannelAccess(active), {
+      initialProps: { active: true },
+    });
+    await waitFor(() => expect(hook.result.current.access).not.toBeNull());
+    const recovery = deferred<{ channels: Array<{ guildId: string; channelId: string }> }>();
+    api.getChannelAccess.mockImplementationOnce(() => recovery.promise);
+    api.setChannelAccess.mockImplementation(async (access: unknown) => access);
+    api.setChannelAccess.mockRejectedValueOnce(new Error('save failed'));
+
+    act(() => hook.result.current.update((a) => setChannelSelected(a, '11', '21', true)));
+    await waitFor(() => expect(api.getChannelAccess).toHaveBeenCalledTimes(2));
+    if (queued) act(() => hook.result.current.update((a) => setChannelSelected(a, '11', '22', true)));
+    await act(async () => recovery.reject(new DiscordChannelAccessUnsupportedError()));
+    act(() => hook.result.current.update((a) => setChannelSelected(a, '11', '23', true)));
+
+    expect(hook.result.current.error).toBe('unsupported');
+    expect(hook.result.current.access).toBeNull();
+    expect(hook.result.current.guilds).toBeNull();
+    expect(api.setChannelAccess).toHaveBeenCalledTimes(1);
   });
 
   it('never writes a queued save to a different connection after switching', async () => {
