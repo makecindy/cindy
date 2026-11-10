@@ -17,7 +17,7 @@ function summary(skillName: string, totalUseCount: number): SkillUsageSummary {
     unversionedUseCount: 0,
     documentVersionCoverageRate: null,
     latestSeenAt: null,
-    agentBreakdown: { claude: 0, codex: totalUseCount },
+    agentBreakdown: { claude: 0, codex: totalUseCount, pi: 0 },
     sourceBreakdown: { strongActive: 0, semiActive: 0, passive: totalUseCount },
     readObservation: {
       fileReadCount: 0,
@@ -87,22 +87,24 @@ describe('skill usage summary state', () => {
     });
   });
 
-  it('keeps the previous same-entry summary when a refreshing result is still empty', () => {
-    const oldSummary = summary('skill-a', 7);
-    const previous: SkillUsagePanelState = {
-      entryId: 'skill-a',
-      loading: true,
-      error: null,
-      summary: oldSummary,
-    };
-
-    const next = settleUsageSummarySuccess(previous, 'skill-a', {
-      refreshing: true,
-      summary: summary('skill-a', 0),
+  it.each(['indexing', 'incomplete'] as const)('shows records but does not conclude zero during %s', (phase) => {
+    const refreshing = phase === 'indexing';
+    const next = settleUsageSummarySuccess('skill-a', {
+      refreshing, phase, summary: summary('skill-a', 0),
     });
+    expect(next.summary).toBeNull();
+    expect(next.loading).toBe(refreshing);
+    expect(settleUsageSummarySuccess('skill-a', {
+      refreshing, phase, summary: summary('skill-a', 5),
+    }).summary?.totalUseCount).toBe(5);
+  });
 
-    expect(next.summary).toBe(oldSummary);
-    expect(next.loading).toBe(true);
+  it('shows zero after completion and clears that conclusion on a new request', () => {
+    const next = settleUsageSummarySuccess('skill-a', {
+      refreshing: false, phase: 'complete', summary: summary('skill-a', 0),
+    });
+    expect(next.summary?.totalUseCount).toBe(0);
+    expect(beginUsageSummaryRequest(next, 'skill-a').summary).toBeNull();
   });
 
   it('keeps the previous same-entry summary when a background refresh fails', () => {

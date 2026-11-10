@@ -22,7 +22,10 @@ const comparePublishedSkill = vi.fn();
 vi.mock('../publishedComparison', () => ({ comparePublishedSkill }));
 const showOpenDialog = vi.fn();
 const showMessageBox = vi.fn();
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.js', () => ({
+  t: (key: string) => key,
+  getResolvedMainLocale: vi.fn(() => 'ja'),
+}));
 const assertTrustedAppRendererEvent = vi.fn();
 const isTrustedAppRendererWindow = vi.fn();
 const publishServiceOptions = vi.hoisted(() => ({ onProgress: null as null | ((event: unknown) => void) }));
@@ -1046,7 +1049,9 @@ describe('registerSkillhubIpc usage handlers', () => {
     expect(result).toEqual({ success: true, summary: { totalUseCount: 1 }, refreshing: false });
   });
 
-  it('passes readable SKILL.md content and path into diagnosis context', async () => {
+  it('passes readable SKILL.md and freezes the request locale before reading it', async () => {
+    const { getResolvedMainLocale } = await import('../../i18n.js');
+    vi.mocked(getResolvedMainLocale).mockReturnValue('ja');
     const sender = { id: 31, on: vi.fn(), once: vi.fn() };
     const mdPath = '/repo/.pi/skills/authorized/demo/SKILL.md';
     scanAllSkills.mockResolvedValueOnce({
@@ -1058,7 +1063,10 @@ describe('registerSkillhubIpc usage handlers', () => {
       }],
       sources: [],
     });
-    readSkillRawFile.mockResolvedValueOnce({ success: true, content: 'skill body' });
+    readSkillRawFile.mockImplementationOnce(async () => {
+      vi.mocked(getResolvedMainLocale).mockReturnValue('ko');
+      return { success: true, content: 'skill body' };
+    });
     getLocalSkillUsageDiagnosisContext.mockResolvedValueOnce({
       success: true,
       context: { prompt: 'diagnose' },
@@ -1073,6 +1081,7 @@ describe('registerSkillhubIpc usage handlers', () => {
       skillName: 'word-doc',
       currentSkillContent: 'skill body',
       skillPath: mdPath,
+      locale: 'ja',
       client: defaultDbClient,
     });
     expect(result).toEqual({ success: true, context: { prompt: 'diagnose' } });

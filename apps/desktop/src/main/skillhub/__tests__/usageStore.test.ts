@@ -66,35 +66,7 @@ function createQueryClient(db: Database.Database): DbClient {
   } as DbClient;
 }
 
-type DiagnosisContextGetter = (
-  db: Database.Database,
-  params: {
-    skillName: string;
-    currentDocumentHash?: string | null;
-    currentDocumentContent?: string | null;
-    analyzerVersion?: string | null;
-    skillPath?: string | null;
-    maxEvidence?: number;
-    nowMs?: number;
-  },
-) => {
-  prompt: string;
-  evidence: Array<{
-    bucket: string;
-    rawFilePath: string;
-    rawLineNo: number;
-    skillDocumentHash: string | null;
-    exposureContentHash: string;
-    documentHashSource: string;
-    observation: {
-      toolCallCount: number;
-      repeatedToolCallCount: number;
-      toolErrorCount: number;
-      commandCallCount: number;
-      commandFailureCount: number;
-    };
-  }>;
-};
+type DiagnosisContextGetter = typeof getSkillUsageDiagnosisContextFromDb;
 
 function persistExposure(db: Database.Database, row: {
   id: string;
@@ -105,7 +77,7 @@ function persistExposure(db: Database.Database, row: {
   skillDocumentHash: string | null;
   exposureContentHash?: string;
   documentHashSource?: string;
-  agentKind?: 'claude-code' | 'codex';
+  agentKind?: 'claude-code' | 'codex' | 'pi';
   skillName?: string;
   skillPath?: string | null;
   source?: string;
@@ -180,6 +152,66 @@ const fixtureNowMs = 10_000;
 const dayMs = 24 * 60 * 60 * 1000;
 
 describe('skill usage store', () => {
+  it('selects rare failures before capping a prolific task and returns identical sync and async evidence', async () => {
+    const db = createDb();
+    try {
+      for (let index = 0; index < 550; index += 1) {
+        persistExposure(db, {
+          id: `frequent-${index}`, rawFilePath: 'frequent.jsonl', rawLineNo: index + 1,
+          sessionId: 'codex-frequent', sdkSessionId: 'frequent', skillDocumentHash: 'doc-current',
+          seenAt: fixtureNowMs + index,
+        });
+      }
+      persistExposure(db, {
+        id: 'rare-failure', rawFilePath: 'rare.jsonl', rawLineNo: 1,
+        sessionId: 'codex-rare', sdkSessionId: 'rare', skillDocumentHash: 'doc-current',
+        seenAt: fixtureNowMs - 1, toolErrorCount: 1,
+      });
+      const params = { skillName: 'word-doc', currentDocumentHash: 'doc-current', nowMs: fixtureNowMs + 550 };
+      const sync = getSkillUsageDiagnosisContextFromDb(db, params);
+      const asyncResult = await usageStore.getSkillUsageDiagnosisContextFromClient(createQueryClient(db), params);
+      expect(sync.evidence.map((item) => item.id)).toContain('rare-failure');
+      expect(sync.evidence.filter((item) => item.sessionId === 'codex-frequent')).toHaveLength(1);
+      expect(asyncResult).toEqual(sync);
+    } finally { db.close(); }
+  });
+
+  it('retains missing-source counts but excludes their unreadable paths from both diagnosis queries', async () => {
+    const db = createDb();
+    try {
+      persistExposure(db, {
+        id: 'missing', rawFilePath: 'missing.jsonl', rawLineNo: 1, sessionId: 'codex-missing',
+        sdkSessionId: 'missing', skillDocumentHash: 'doc-current', seenAt: fixtureNowMs, toolErrorCount: 1,
+      });
+      db.prepare("UPDATE skill_usage_sources SET status = 'missing'").run();
+      const params = { skillName: 'word-doc', currentDocumentHash: 'doc-current', nowMs: fixtureNowMs };
+      const sync = getSkillUsageDiagnosisContextFromDb(db, params);
+      const asyncResult = await usageStore.getSkillUsageDiagnosisContextFromClient(createQueryClient(db), params);
+      expect(sync.summary.totalUseCount).toBe(1);
+      expect(sync.evidence).toEqual([]);
+      expect(asyncResult).toEqual(sync);
+    } finally { db.close(); }
+  });
+
+  it('falls back to readable older-version evidence when every current-version path is missing', async () => {
+    const db = createDb();
+    try {
+      for (const version of ['current', 'old']) {
+        persistExposure(db, {
+          id: version, rawFilePath: `${version}.jsonl`, rawLineNo: 1, sessionId: `codex-${version}`,
+          sdkSessionId: version, skillDocumentHash: `doc-${version}`, seenAt: fixtureNowMs,
+        });
+      }
+      db.prepare("UPDATE skill_usage_sources SET status = 'missing' WHERE raw_file_path = 'current.jsonl'").run();
+      const params = { skillName: 'word-doc', currentDocumentHash: 'doc-current', nowMs: fixtureNowMs };
+      const sync = getSkillUsageDiagnosisContextFromDb(db, params);
+      const asyncResult = await usageStore.getSkillUsageDiagnosisContextFromClient(createQueryClient(db), params);
+      expect(sync.summary.currentDocumentVersionUseCount).toBe(1);
+      expect(sync.evidence.map((item) => item.id)).toEqual(['old']);
+      expect(asyncResult).toEqual(sync);
+    } finally { db.close(); }
+  });
+
   it.each([
     { analyzerVersion: '6', suffix: 'AND analyzer_version = ?' },
     { analyzerVersion: null, suffix: '' },
@@ -303,6 +335,140 @@ describe('skill usage store', () => {
       expect(asyncContext).toEqual(syncContext);
       expect(querySpy).toHaveBeenCalledTimes(1);
       expect(String(querySpy.mock.calls[0]?.[0])).toContain('MATERIALIZED');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('includes Pi sources in both query paths and file reread observations', async () => {
+    const db = createDb();
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        persistExposure(db, {
+          id: `pi-read-${index}`,
+          rawFilePath: 'pi-reads.jsonl',
+          rawLineNo: index + 1,
+          sessionId: 'pi-reads',
+          sdkSessionId: 'pi-reads',
+          agentKind: 'pi',
+          skillDocumentHash: 'doc-current',
+          source: 'pi_skill_file_read',
+          seenAt: 1_000 + index * 1_000,
+        });
+      }
+      persistExposure(db, {
+        id: 'pi-injection',
+        rawFilePath: 'pi-injection.jsonl',
+        rawLineNo: 1,
+        sessionId: 'pi-injection',
+        sdkSessionId: 'pi-injection',
+        agentKind: 'pi',
+        skillDocumentHash: 'doc-previous',
+        documentHashSource: 'transcript_skill_content',
+        source: 'pi_skill_injection',
+        seenAt: 5_000,
+      });
+      persistExposure(db, {
+        id: 'claude-skill-tool',
+        rawFilePath: 'claude-skill-tool.jsonl',
+        rawLineNo: 1,
+        sessionId: 'claude-skill-tool',
+        sdkSessionId: 'claude-skill-tool',
+        agentKind: 'claude-code',
+        skillDocumentHash: 'doc-current',
+        source: 'claude_skill_tool',
+        seenAt: 6_000,
+      });
+      persistExposure(db, {
+        id: 'codex-read',
+        rawFilePath: 'codex-read.jsonl',
+        rawLineNo: 1,
+        sessionId: 'codex-read',
+        sdkSessionId: 'codex-read',
+        skillDocumentHash: 'doc-current',
+        seenAt: 7_000,
+      });
+      const client = createQueryClient(db);
+      const params = {
+        skillName: 'word-doc',
+        currentDocumentHash: 'doc-current',
+        analyzerVersion: '5',
+        nowMs: fixtureNowMs,
+      };
+
+      const summary = getSkillUsageSummaryFromDb(db, params);
+      expect(await usageStore.getSkillUsageSummaryFromClient(client, params)).toEqual(summary);
+      expect(summary.agentBreakdown).toEqual({ claude: 1, codex: 1, pi: 4 });
+      expect(summary.sourceBreakdown).toEqual({ strongActive: 1, semiActive: 4, passive: 1 });
+      expect(summary.currentDocumentVersion?.agentBreakdown).toEqual({ claude: 1, codex: 1, pi: 3 });
+      expect(summary.currentDocumentVersion?.sourceBreakdown).toEqual({ strongActive: 1, semiActive: 4, passive: 0 });
+      expect(summary.readObservation).toEqual({
+        fileReadCount: 4,
+        sessionsWithFileRead: 2,
+        averageFileReadsPerSession: 2,
+        extraFileReadCount: 2,
+        shortWindowRereadSessionCount: 1,
+        shortWindowRereadRate: 1 / 2,
+      });
+      expect(summary.currentDocumentVersion?.readObservation).toEqual(summary.readObservation);
+      const sources = usageStore.listSkillUsageSourcesWithRecentExposures(db, '5', 0);
+      expect(await usageStore.listSkillUsageSourcesWithRecentExposuresFromClient(client, '5', 0)).toEqual(sources);
+      expect(sources.filter((source) => source.agentKind === 'pi')).toHaveLength(2);
+
+      const context = getSkillUsageDiagnosisContextFromDb(db, params);
+      expect(await usageStore.getSkillUsageDiagnosisContextFromClient(client, params)).toEqual(context);
+      expect(context.evidence.some((item) => item.agentKind === 'pi')).toBe(true);
+      expect(context.evidence.every((item) => item.skillDocumentHash === 'doc-current')).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('keeps separate tasks with identical counters while limiting each task to one evidence entry', async () => {
+    const db = createDb();
+    try {
+      for (const [id, sdkSessionId, seenAt] of [
+        ['failure-a', 'task-a', 1_000],
+        ['failure-b', 'task-b', 2_000],
+        ['failure-b-reread', 'task-b', 3_000],
+      ] as const) {
+        persistExposure(db, {
+          id,
+          rawFilePath: `${sdkSessionId}.jsonl`,
+          rawLineNo: seenAt / 1_000,
+          sessionId: `codex-${sdkSessionId}`,
+          sdkSessionId,
+          skillDocumentHash: 'doc-current',
+          seenAt,
+          toolCallCount: 3,
+          repeatedToolCallCount: 1,
+          toolErrorCount: 2,
+        });
+      }
+      persistExposure(db, {
+        id: 'ordinary-recent',
+        rawFilePath: 'ordinary-recent.jsonl',
+        rawLineNo: 1,
+        sessionId: 'codex-ordinary-recent',
+        sdkSessionId: 'ordinary-recent',
+        skillDocumentHash: 'doc-current',
+        seenAt: 4_000,
+      });
+      const params = {
+        skillName: 'word-doc',
+        currentDocumentHash: 'doc-current',
+        analyzerVersion: '5',
+        maxEvidence: 8,
+        nowMs: fixtureNowMs,
+      };
+
+      const context = getSkillUsageDiagnosisContextFromDb(db, params);
+      expect(await usageStore.getSkillUsageDiagnosisContextFromClient(createQueryClient(db), params)).toEqual(context);
+      expect(context.evidence.map((item) => item.sdkSessionId)).toEqual(['task-b', 'task-a', 'ordinary-recent']);
+      expect(context.evidence.map((item) => item.bucket)).toEqual(['tool_failed', 'tool_failed', 'recent']);
+      expect(new Set(context.evidence.map((item) => item.id)).size).toBe(context.evidence.length);
+      expect(context.evidence[0].observation).toEqual(context.evidence[1].observation);
+      expect(context.evidence.every((item) => item.id !== 'failure-b')).toBe(true);
     } finally {
       db.close();
     }
@@ -443,6 +609,30 @@ describe('skill usage store', () => {
     }
   });
 
+  it('lists retained evidence with its native identity and source stats after a failed refresh in both database paths', async () => {
+    const db = createDb();
+    try {
+      persistExposure(db, {
+        id: 'retained', analyzerVersion: '7', rawFilePath: 'retained.jsonl', rawLineNo: 1,
+        sessionId: 'codex-native-session', sdkSessionId: 'native-session',
+        skillDocumentHash: 'doc-current', seenAt: 1_000,
+      });
+      for (const rawFilePath of ['retained.jsonl', 'never-indexed.jsonl']) {
+        markSkillUsageSourceFailed(db, {
+          rawFilePath, analyzerVersion: '7', agentKind: 'codex',
+          sessionId: 'codex-discovered-filename', sdkSessionId: 'discovered-filename',
+          mtimeMs: 1_500, sizeBytes: 200, scannedAt: 2_000, error: 'read failed before resolving native identity',
+        });
+      }
+      const expected = [{
+        rawFilePath: 'retained.jsonl', agentKind: 'codex', sessionId: 'codex-native-session',
+        sdkSessionId: 'native-session', mtimeMs: 1_500, sizeBytes: 200,
+      }];
+      expect(usageStore.listSkillUsageSourcesWithRecentExposures(db, '7', 0)).toEqual(expected);
+      expect(await usageStore.listSkillUsageSourcesWithRecentExposuresFromClient(createQueryClient(db), '7', 0)).toEqual(expected);
+    } finally { db.close(); }
+  });
+
   it('preserves cached exposures when a retained transcript source fails to refresh', () => {
     const db = createDb();
     try {
@@ -557,7 +747,7 @@ describe('skill usage store', () => {
       expect(summary.currentDocumentVersionUseCount).toBe(3);
       expect(summary.unversionedUseCount).toBe(1);
       expect(summary.documentVersionCoverageRate).toBe(3 / 4);
-      expect(summary.agentBreakdown).toEqual({ claude: 1, codex: 3 });
+      expect(summary.agentBreakdown).toEqual({ claude: 1, codex: 3, pi: 0 });
       expect(summary.sourceBreakdown).toEqual({ strongActive: 1, semiActive: 2, passive: 1 });
       expect(summary.currentDocumentSize).toEqual({
         characterCount: 19,
@@ -576,7 +766,7 @@ describe('skill usage store', () => {
       expect(summary.documentVersions[0]).toMatchObject({
         skillDocumentHash: 'doc-current',
         useCount: 3,
-        agentBreakdown: { claude: 1, codex: 2 },
+        agentBreakdown: { claude: 1, codex: 2, pi: 0 },
         sourceBreakdown: { strongActive: 1, semiActive: 2, passive: 0 },
         readObservation: {
           fileReadCount: 2,
@@ -853,6 +1043,7 @@ describe('skill usage store', () => {
         currentDocumentHash: currentDocHash,
         currentDocumentContent: 'abcd efgh ijkl mnop',
         skillPath: '/tmp/skills/word-doc/SKILL.md',
+        locale: 'zh-CN',
         maxEvidence: 4,
         nowMs: fixtureNowMs,
       });
@@ -868,12 +1059,12 @@ describe('skill usage store', () => {
       expect(context.evidence[0]).toHaveProperty('observation');
       expect(context.evidence[0]).not.toHaveProperty('outcome');
       expect(context).not.toHaveProperty('evidenceExcerpts');
-      expect(context.prompt).toContain('不要修改任何文件；先读取证据并给出诊断');
+      expect(context.prompt).toContain('不要修改任何文件； 先读取证据并给出诊断');
       expect(context.prompt).toContain('读取目标 skillPath 指向的 SKILL.md');
       expect(context.prompt).toContain('读取每条 rawFilePath 中 rawLineNo 附近上下文');
       expect(context.prompt).toContain('读取失败时说明证据文件不可读');
-      expect(context.prompt).toContain('source/file_read 只表示模型接触过文档，不证明后续行为由 skill 导致');
-      expect(context.prompt).toContain('不建议改 skill 也是有效结论');
+      expect(context.prompt).toContain('source/file_read 只表示模型接触过文档，不证明后续行为由 Skill 导致');
+      expect(context.prompt).toContain('不建议改 Skill 也是有效结论');
       expect(context.prompt).toContain('排除原因');
       expect(context.prompt).toContain('环境 / 权限 / 依赖问题');
       expect(context.prompt).toContain('样本太少');

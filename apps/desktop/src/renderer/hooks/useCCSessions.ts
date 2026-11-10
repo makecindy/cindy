@@ -182,17 +182,22 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       /** 新建页的未发送任务(见 sessionService.create)。 */
       provisional?: boolean;
     }, onCreateError?: (error: unknown) => void): Promise<Session | null> => {
+      const owner = getDataOwnerGeneration();
       try {
         const newSession = await sessionService.create({
           permissionMode: getDraft().newChatDefaultPermissionMode ?? 'auto',
           fastMode: false,
           ...opts,
         });
+        // 任务可能已为此前的账号创建，仍保留在该账号下；
+        // 但不得将其响应写入新账号的缓存或调用方 UI。
+        if (!isDataOwnerGenerationCurrent(owner)) return null;
         // 本地 prepend：新建必然是 active 且 _count.messages=0，
         // projectGrouping 自动把它落到"未分类区"。省掉一次全量 IPC。
         sessionsStore.prependCreated(newSession);
         return newSession;
       } catch (err) {
+        if (!isDataOwnerGenerationCurrent(owner)) return null;
         setError(err instanceof Error ? err : new Error(String(err)));
         // The caller needs this invocation's error before React commits setError.
         onCreateError?.(err);
