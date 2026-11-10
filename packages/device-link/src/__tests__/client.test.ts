@@ -3980,7 +3980,7 @@ describe('DeviceLinkClient', () => {
   });
 
   // PR #6569: plugin data sync remains independent from the control link (unit wire fixture).
-  it.each(['device-link:voice:dictionary:snapshot', PLUGIN_SYNC_CHANNEL])('显式 close 后 %s push 仍走 unlinked legacy,不报 LINK_NOT_OPEN', async (channel) => {
+  it.each(['device-link:voice:dictionary:snapshot', PLUGIN_SYNC_CHANNEL, 'device-link:remote-control-consent'])('显式 close 后 %s push 仍走 unlinked legacy,不报 LINK_NOT_OPEN', async (channel) => {
     const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
     h.client.start();
     await tick();

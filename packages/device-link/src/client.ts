@@ -6539,6 +6539,8 @@ const UNLINKED_LEGACY_INVOKE_CHANNELS = new Set([
   'maker:git-safety:get',
 ]);
 const UNLINKED_LEGACY_PUSH_CHANNELS = new Set([
+  // Same-account request only; the receiver grants exclusively through its local dialog.
+  'device-link:remote-control-consent',
   // Same-account encrypted sync does not require an open remote-control link.
   // The Desktop plugin-sync receiver still checks owner, revocation and capability.
   PLUGIN_SYNC_CHANNEL,

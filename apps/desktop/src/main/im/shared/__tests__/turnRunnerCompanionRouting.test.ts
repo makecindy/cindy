@@ -255,6 +255,7 @@ beforeEach(() => {
   mocks.getMaker.mockReturnValue({
     getSession: vi.fn((id: string) => harnesses.get(id)?.session),
     on: vi.fn(() => () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
     createSession: vi.fn(async (args: { id?: string }) => {
       createSessionArgs.push(args as Record<string, unknown>);
       const id = args.id ?? 'anon';
@@ -578,6 +579,7 @@ describe('turnRunner: connection handed to a companion bot', () => {
     };
     mocks.getMaker.mockReturnValue({
       createSession: base.createSession,
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn((id: string) => live ?? harnesses.get(id)?.session),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         listeners.push(listener);
@@ -623,6 +625,7 @@ describe('turnRunner: connection handed to a companion bot', () => {
       createSession: (args: { id?: string }) => Promise<Session>;
     };
     mocks.getMaker.mockReturnValue({
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       createSession: vi.fn(async (args: { id?: string }) => {
         if (args.id === 'mimi-main' && live === null) {
           live = rebuilt.session;
