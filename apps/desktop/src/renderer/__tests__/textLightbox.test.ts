@@ -268,6 +268,14 @@ describe('TextLightbox — detectRenderable', () => {
     expect(detectRenderable('index.html')).toEqual({ kind: 'code', lang: 'xml' });
   });
 
+  it('routes Solidity files to the Solidity CodeMirror language', () => {
+    // Production entry: detectRenderable. Issue #9479 exposed that .sol was
+    // absent from EXT_TO_LANG, so the file browser selected the plain-text
+    // editor before CodeMirror could apply any syntax highlighting. Keep the
+    // smallest representative filename here as the renderer-routing tier.
+    expect(detectRenderable('contracts/Counter.sol')).toEqual({ kind: 'code', lang: 'solidity' });
+  });
+
   it('matches Dockerfile / Makefile by filename (no extension)', () => {
     expect(detectRenderable('repo/Dockerfile')).toEqual({ kind: 'code', lang: 'dockerfile' });
     expect(detectRenderable('Makefile')).toEqual({ kind: 'code', lang: 'makefile' });

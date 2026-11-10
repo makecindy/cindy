@@ -24,7 +24,7 @@ export const SUPPORTED_TEXT_EXTS = new Set<string>([
   // Mainstream languages
   '.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java',
   '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh', '.cs', '.rb', '.php',
-  '.swift', '.kt', '.kts', '.scala', '.groovy', '.coffee',
+  '.swift', '.kt', '.kts', '.scala', '.groovy', '.coffee', '.sol',
   // Less common but still readable as text
   '.lua', '.dart', '.r', '.pl', '.pm', '.ex', '.exs', '.elm',
   '.clj', '.cljs', '.cljc', '.fs', '.fsi', '.fsx', '.ml', '.mli',

@@ -1,4 +1,6 @@
 import type { Element } from 'hast';
+import solidity from 'highlightjs-solidity/src/languages/solidity.js';
+import { common } from 'lowlight';
 import rehypeHighlight from 'rehype-highlight';
 import { visit } from 'unist-util-visit';
 
@@ -41,7 +43,7 @@ function remember(key: string, node: Element): void {
  */
 export function rehypeHighlightShared(): HighlightTransformer {
   if (sharedTransformer) return sharedTransformer;
-  const highlight = rehypeHighlight();
+  const highlight = rehypeHighlight({ languages: { ...common, solidity } });
   sharedTransformer = (tree, file) => {
     const misses: Array<{ key: string; node: Element }> = [];
     const hits: Array<{ node: Element; entry: HighlightEntry }> = [];

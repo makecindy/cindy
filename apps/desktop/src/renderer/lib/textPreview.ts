@@ -22,9 +22,7 @@ import { basename } from './utils';
  * `<pre>` path — the safe default for .log/.csv/.txt/unknown files.
  *
  * Aliases (typescript/javascript, xml for html, etc.) are chosen to match the
- * languages bundled by `highlight.js/lib/common`, which is what rehype-highlight
- * loads by default. Adding a new entry here is the only change needed when we
- * want to support a new language.
+ * languages registered by rehypeHighlightShared and codemirrorLanguages.
  */
 export const EXT_TO_LANG: Record<string, string> = {
   json: 'json',
@@ -39,6 +37,7 @@ export const EXT_TO_LANG: Record<string, string> = {
   rb: 'ruby',
   go: 'go',
   rs: 'rust',
+  sol: 'solidity',
   java: 'java',
   kt: 'kotlin',
   swift: 'swift',

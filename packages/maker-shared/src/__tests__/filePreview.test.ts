@@ -82,6 +82,10 @@ describe('file preview shared model', () => {
 
   it('only treats desktop text-like files as remote text preview candidates', () => {
     expect(remoteFilePreviewKind('/repo/notes.md')).toBe('text');
+    // Production entry: remoteFilePreviewKind. Issue #9479 exposed that .sol
+    // attachments were rejected before the text preview could reach syntax
+    // highlighting; this is the minimal extension-level routing input.
+    expect(remoteFilePreviewKind('/repo/Counter.sol')).toBe('text');
     expect(remoteFilePreviewKind('/repo/Makefile')).toBe('text');
     expect(remoteFilePreviewKind('/repo/spec.pdf')).toBe('pdf');
     expect(remoteFilePreviewKind('/repo/workflow.drawio')).toBe('drawio');

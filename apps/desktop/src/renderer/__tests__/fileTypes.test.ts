@@ -88,6 +88,10 @@ describe('categorizeFile', () => {
     expect(categorizeFile('.md')).toBe('text');
     expect(categorizeFile('.yaml')).toBe('text');
     expect(categorizeFile('.sql')).toBe('text');
+    // Production entry: categorizeFile. Issue #9479 could not reach the text
+    // preview because .sol was missing from the shared allowlist; this minimal
+    // extension pins the attachment/lightbox routing tier.
+    expect(categorizeFile('.sol')).toBe('text');
     expect(categorizeFile('.sh')).toBe('text');
     expect(categorizeFile('.vue')).toBe('text');
     expect(categorizeFile('.svelte')).toBe('text');

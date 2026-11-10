@@ -18,6 +18,7 @@ export default {
   cases: {
     default: { about: 'A zip that cannot be previewed opens in a compact centered panel over the dimmed conversation' },
     markdown: { about: 'A Markdown document in the same floating panel' },
+    solidity: { about: 'A Solidity contract uses syntax highlighting in the floating text preview' },
     image: { about: 'An image in the same floating panel' },
   },
   async ready(page) {
@@ -26,6 +27,7 @@ export default {
         document.querySelector('[data-preview-scrim]') &&
         ([...document.querySelectorAll('img')].some((i) => i.complete && i.naturalWidth === 1600) ||
           document.body.innerText.includes('核对步骤') ||
+          document.body.innerText.includes('contract Counter') ||
           document.body.innerText.includes('269.4 KB ·')),
     );
     // 入场淡入结束后再截图。
