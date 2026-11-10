@@ -931,7 +931,22 @@ export interface ProviderBindSelectionPayload extends ProviderBindRevokePayload 
  * event/reply; state is an authoritative point-in-time snapshot for one scope.
  * All nullable fields are explicit so an old value cannot survive a snapshot.
  */
+export interface FeishuBotAppInfo {
+  appId: string;
+  brand: 'feishu' | 'lark';
+  appType: 'self_built' | 'store';
+  botName: string | null;
+  organization: string | null;
+}
+
+export interface FeishuApplicationState {
+  app: FeishuBotAppInfo;
+  bindings: ProviderBindStatusPayload[];
+}
+
 export interface ProviderBindStatusPayload {
+  appInfo?: FeishuBotAppInfo;
+  applications?: FeishuApplicationState[];
   provider: HookProvider;
   /** Request id being answered, or null for an unsolicited state push. */
   replyTo: string | null;
@@ -2122,3 +2137,6 @@ export type HookMessage =
 
 /** parseHookMessage 的结果 —— 不抛异常, 坏帧以 error 字符串描述具体原因。 */
 export type HookParseResult = { ok: true; message: HookMessage } | { ok: false; error: string };
+
+/** Multiple independently enabled Feishu apps on one connection; each app keeps its own identities. */
+export const HOOK_FEATURE_FEISHU_MULTI_APP = 'feishu-multi-app-v1';

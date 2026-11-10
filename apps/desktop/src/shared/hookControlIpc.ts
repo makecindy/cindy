@@ -147,7 +147,16 @@ export interface ProviderBindingView {
 }
 
 /** provider-neutral(Telegram / X / 飞书)的独立设置与绑定视图。 */
+export interface FeishuAppView {
+  appId: string;
+  brand: 'feishu' | 'lark';
+  appType: 'self_built' | 'store';
+  botName: string | null;
+  organization: string | null;
+}
+
 export interface ProviderHookView {
+  applications?: FeishuAppView[];
   /** Local companion assignment, currently only used by the official X provider. */
   companionBotId?: string | null;
   enabled: boolean;

@@ -6492,7 +6492,13 @@
           "linkedAccounts": "Linked Accounts: {{count}}",
           "connectionTenant": "Connected Tenant: {{tenant}}",
           "setWorkingDevice": "Set as working computer",
-          "workingDeviceSet": "Working computer set"
+          "workingDeviceSet": "Working computer set",
+          "appType": {
+            "self_built": "Organization app",
+            "store": "Store app"
+          },
+          "botFallback": "Cindy bot",
+          "sharedSettings": "These bots share workspace and model settings on this computer. Each bot has separate tasks and a separate working computer selection."
         }
       },
       "summary": {

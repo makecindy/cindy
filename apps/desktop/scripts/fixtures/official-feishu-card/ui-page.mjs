@@ -19,6 +19,10 @@ export default {
     `,
   },
   cases: {
+    'coexist-error': { about: 'Named bots retain explicit transport error details after a connection failure', data: { kind: 'coexist-error' } },
+    coexist: { about: 'Both apps enabled: named bot cards share settings, separate accounts', data: { kind: 'coexist' } },
+    'coexist-pending': { about: 'Additional store account authorizes while both bots stay linked', data: { kind: 'coexist-pending' } },
+    'coexist-narrow': { about: 'Both apps at 360px: labels and actions wrap', viewport: { width: 360, height: 1100 }, data: { kind: 'coexist' } },
     store: { about: 'Store app: multiple linked accounts with the existing link action', data: { kind: 'store' } },
     'store-failed': { about: 'Failed additional authorization retains existing accounts and shows its error', data: { kind: 'store-failed' } },
     'store-pending': { about: 'Existing store accounts remain visible while another account authorizes', data: { kind: 'store-pending' } },
@@ -44,6 +48,14 @@ export default {
   },
   async check(page, ui) {
     const card = page.locator('#cindy-im-feishu-panel');
+    if (ui.data.kind === 'coexist-error') assert.ok(await card.getByText('TLS connection failed', { exact: true }).isVisible());
+    if (ui.data.kind === 'coexist' || ui.data.kind === 'coexist-pending') {
+      assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.openBot'), exact: true }).count(), 2);
+      assert.ok(await card.getByText('团队 Cindy', { exact: true }).isVisible());
+      assert.ok(await card.getByText('Alice', { exact: true }).isVisible());
+      assert.ok(await card.getByText(await ui.t('settings.remoteControl.hook.feishu.sharedSettings'), { exact: true }).isVisible());
+      assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.unlink'), exact: true }).count(), 3);
+    }
     if (ui.data.kind === 'store' || ui.data.kind === 'store-pending' || ui.data.kind === 'store-failed') {
       assert.ok(await card.getByText('Alice', { exact: true }).isVisible());
       assert.ok(await card.getByText('Bob', { exact: true }).isVisible());

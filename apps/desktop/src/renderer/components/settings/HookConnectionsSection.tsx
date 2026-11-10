@@ -70,6 +70,7 @@ import {
   slackHookInstallUrl,
   type HookTeamBindingView,
   type ProviderHookView,
+  type FeishuAppView,
   type SlackHookView,
 } from '../../../shared/hookControlIpc';
 
@@ -927,9 +928,11 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   const handleProviderOpen = (
     provider: NeutralCardProvider,
     action: 'connect' | 'provider' | 'add-to-group',
+    scopeId?: string,
   ) => {
-    void window.electronAPI.hookControl
-      .openProviderAction(provider, action)
+    void (scopeId
+      ? window.electronAPI.hookControl.openProviderAction(provider, action, scopeId)
+      : window.electronAPI.hookControl.openProviderAction(provider, action))
       .catch((err: unknown) => {
         toast.error(
           extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
@@ -1499,6 +1502,66 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     }
   };
 
+  const renderFeishuApplications = (view: ProviderHookView) => {
+    const busy = view.binding?.state === 'pending' || view.binding?.state === 'awaiting_confirmation';
+    return <>
+      {!view.enabled ? <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.disabledHint')}</p> : null}
+      {view.applications!.map((app: FeishuAppView) => {
+        const accounts = (view.bindings ?? []).filter((row) => row.scopeId === app.appId);
+        const own = view.binding?.scopeId === app.appId ? view.binding : accounts[0] ?? null;
+        const state = providerCardState('feishu', { ...view, binding: own, bindings: accounts, multiBindAvailable: app.appType === 'store' });
+        const active = busy && view.binding?.scopeId === app.appId;
+        return <SettingsCard key={app.appId}>
+          <SettingsRow wrap title={app.botName ?? t('settings.remoteControl.hook.feishu.botFallback')}
+            hint={<>
+              <span>{t(`settings.remoteControl.hook.feishu.appType.${app.appType}`)}{app.organization ? ` · ${app.organization}` : ''}</span>
+              {state.bindingLine && !state.confirmed ? <span className="mt-1 block">{state.bindingLine}</span> : null}
+            </>} />
+          {accounts.map((account) => <SettingsRow key={account.bindingId} wrap
+            title={account.principalName ?? account.principalId}
+            hint={account.tenantKey ? t('settings.remoteControl.hook.feishu.connectionTenant', { tenant: account.tenantKey }) : undefined}
+            trailing={<div className="flex flex-wrap gap-2">
+              {account.actions.includes('select_device') ? <Button variant="secondary" size="xs" compact type="button"
+                data-setting-id={imBotSettings.cindyFeishuWorkingDevice.id}
+                disabled={selectingWorkingDevice || !view.enabled || !view.available || view.status !== 'connected'}
+                onClick={() => void selectWorkingDevice(account.bindingId!)}>{t('settings.remoteControl.hook.feishu.setWorkingDevice')}</Button> : null}
+              {account.actions.includes('revoke') ? <Button variant="secondary" size="xs" compact type="button"
+                data-settings-search-action="Unlink this bot account"
+                disabled={!view.enabled || !view.available || view.status !== 'connected'}
+                onClick={() => void handleProviderUnlink('feishu', account.bindingId!)}>{t('settings.remoteControl.hook.feishu.unlink')}</Button> : null}
+            </div>} />)}
+          {active && own?.bindCode ? <SettingsRow wrap
+            title={<span className="font-mono tracking-wider">{own.bindCode}</span>}
+            hint={t('settings.remoteControl.hook.feishu.bindCode.hint')}
+            trailing={<Button variant="secondary" size="xs" compact type="button" data-settings-search-action="Copy the Feishu bind code"
+              onClick={() => void handleCopyBindCode('feishu')}>{t('settings.remoteControl.hook.feishu.bindCode.copy')}</Button>} /> : null}
+          <div className="flex flex-wrap gap-2 p-3">
+            {active ? <>
+              {own?.actions.includes('open_connect_url') ? <Button variant="secondary" size="xs" compact type="button"
+                data-settings-search-action="Open the channel connection or group setup link"
+                onClick={() => handleProviderOpen('feishu', 'connect', app.appId)}>{t('settings.remoteControl.hook.feishu.openApp')}</Button> : null}
+              {own?.actions.includes('copy_connect_url') ? <Button variant="secondary" size="xs" compact type="button"
+                data-settings-search-action="Copy the channel connection link"
+                onClick={() => void handleCopyProviderLink('feishu')}>{t('settings.remoteControl.hook.binding.copyLink')}</Button> : null}
+              {own?.actions.includes('cancel') ? <Button variant="secondary" size="xs" compact type="button"
+                data-settings-search-action="Start or cancel linking this bot account"
+                onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindCancel('feishu'))}>{t('settings.remoteControl.hook.feishu.cancel')}</Button> : null}
+            </> : <>
+              {app.appType === 'store' || accounts.length === 0 ? <Button variant="secondary" size="xs" compact type="button"
+                data-settings-search-action="Start or cancel linking this bot account"
+                disabled={busy || !view.enabled || !view.available || view.status !== 'connected'}
+                onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart('feishu', app.appId))}>{t('settings.remoteControl.hook.feishu.connect')}</Button> : null}
+            </>}
+              <Button variant="secondary" size="xs" compact type="button" data-settings-search-action="Open the channel connection or group setup link"
+                disabled={!view.enabled || !view.available || view.status !== 'connected'}
+                onClick={() => handleProviderOpen('feishu', 'provider', app.appId)}>{t('settings.remoteControl.hook.feishu.openBot')}</Button>
+          </div>
+        </SettingsCard>;
+      })}
+      <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.sharedSettings')}</p>
+    </>;
+  };
+
   const renderProviderCard = (provider: NeutralCardProvider) => {
     const setting = provider === 'telegram'
       ? imBotSettings.cindyTelegram
@@ -1539,6 +1602,14 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
         onToggle={() => toggleCard(provider)}
       >
         <div className="flex flex-col gap-2">
+          {view.enabled &&
+          view.status === 'error' &&
+          cs.errorText &&
+          cs.errorText !== cs.badge.label ? (
+            <span className="text-11 leading-relaxed text-[var(--error-fg)]">{cs.errorText}</span>
+          ) : null}
+
+          {provider === 'feishu' && view.applications?.length ? renderFeishuApplications(view) : <>
           {!view.enabled ? (
             <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
               {t(`settings.remoteControl.hook.${provider}.disabledHint`)}
@@ -1562,12 +1633,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             </span>
           ) : null}
 
-          {view.enabled &&
-          view.status === 'error' &&
-          cs.errorText &&
-          cs.errorText !== cs.badge.label ? (
-            <span className="text-11 leading-relaxed text-[var(--error-fg)]">{cs.errorText}</span>
-          ) : null}
 
           {/* 飞书服务已连上但没宣告 provider:feishu: 组织账号是组织还没配置(或停用了)
               飞书机器人; 个人账号是 Cindy 全局应用尚未开放。徽章只放得下短词,
@@ -1759,6 +1824,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               </span>
             </div>
           ) : null}
+
+          </>}
 
           {/* X 专属: 用法与公开风险。两个刻意的选择 ——
               · 放在工作目录区**之前**: 风险那条讲的就是这张卡上那个默认工作目录,

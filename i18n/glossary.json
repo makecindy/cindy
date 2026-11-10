@@ -3566,6 +3566,8 @@
       },
       "checkCase": false,
       "note": "官方飞书 / Lark 机器人中接收新消息的已关联电脑；每个应用和飞书账号独立选择，默认最新关联的电脑。"
-    }
+    },
+    {"id": "feishu-organization-app", "status": "proposed", "en": "Organization app", "translations": {"ja": "組織のカスタムアプリ", "zh-CN": "组织自建应用", "pt-PT": "Aplicação da organização", "zh-Hant-x-lzh": "組織自建應用", "zh-TW": "組織自建應用程式", "pt-BR": "Aplicativo da organização", "de": "Organisations-App", "ko": "조직 자체 앱", "fr": "Application de l’organisation", "es": "Aplicación de la organización", "zh-Hans-x-lzh": "组织自建应用"}, "checkCase": false, "note": "飞书应用类型标识，供组织切换提示识别新旧机器人；不同于 Cindy 个人/组织身份。用户确认不展示 App ID。"},
+    {"id": "feishu-store-app", "status": "proposed", "en": "Store app", "translations": {"ja": "ストアアプリ", "zh-CN": "商店应用", "pt-PT": "Aplicação da loja", "zh-Hant-x-lzh": "商店應用", "zh-TW": "商店應用程式", "pt-BR": "Aplicativo da loja", "de": "Store-App", "ko": "스토어 앱", "fr": "Application de la boutique", "es": "Aplicación de la tienda", "zh-Hans-x-lzh": "商店应用"}, "checkCase": false, "note": "飞书应用类型标识，供组织切换提示识别新旧机器人；不同于 Cindy 个人/组织身份。用户确认不展示 App ID。"}
   ]
 }

@@ -6449,7 +6449,13 @@
           "linkedAccounts": "連携済みアカウント：{{count}}",
           "connectionTenant": "接続先企業の識別子：{{tenant}}",
           "setWorkingDevice": "作業用パソコンに設定",
-          "workingDeviceSet": "作業用パソコンに設定しました"
+          "workingDeviceSet": "作業用パソコンに設定しました",
+          "appType": {
+            "self_built": "組織のカスタムアプリ",
+            "store": "ストアアプリ"
+          },
+          "botFallback": "Cindy ボット",
+          "sharedSettings": "これらのボットは、このパソコンの作業フォルダーとモデル設定を共有します。タスクと作業用パソコンの選択はボットごとに独立しています。"
         }
       },
       "summary": {

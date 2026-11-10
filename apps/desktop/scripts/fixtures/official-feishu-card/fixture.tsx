@@ -16,6 +16,17 @@ const disabledLane = {
 };
 
 function view(kind: string): SlackHookView {
+  if (kind === 'coexist' || kind === 'coexist-pending' || kind === 'coexist-error') {
+    const base = view(kind === 'coexist-pending' ? 'store-pending' : 'store');
+    const org = { ...base.feishu.bindings![0]!, bindingId: 'org-binding', scopeId: 'cli_org', principalName: '张三', tenantKey: null };
+    base.feishu.bindings = [...base.feishu.bindings!, org];
+    base.feishu.applications = [
+      { appId: 'cli_app', brand: 'feishu', appType: 'store', botName: 'Cindy', organization: '示例组织' },
+      { appId: 'cli_org', brand: 'feishu', appType: 'self_built', botName: '团队 Cindy', organization: '示例组织' },
+    ];
+    if (kind === 'coexist-error') base.feishu = { ...base.feishu, status: 'error', lastError: 'TLS connection failed' };
+    return base;
+  }
   if (kind === 'store' || kind === 'store-pending' || kind === 'store-failed') {
     const base = view(kind === 'store' ? 'confirmed' : 'pending');
     const first = { ...view('confirmed').feishu.binding!, principalName: 'Alice', tenantKey: 'tenant-acme' };

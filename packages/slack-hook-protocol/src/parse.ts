@@ -928,6 +928,37 @@ function validateProviderBindStatus(
     return `${label}.actions must not contain duplicates`;
   }
 
+  const validApp = (app: unknown): app is Record<string, unknown> => isPlainObject(app)
+    && isNonEmptyString(app.appId) && ['feishu', 'lark'].includes(app.brand as string)
+    && ['self_built', 'store'].includes(app.appType as string)
+    && (app.botName === null || typeof app.botName === 'string')
+    && (app.organization === null || typeof app.organization === 'string');
+  if (p.appInfo !== undefined && (p.provider !== 'feishu' || !validApp(p.appInfo) || p.appInfo.appId !== p.scopeId)) return `${label}.appInfo is invalid`;
+  if (p.applications !== undefined) {
+    if (label !== 'provider.bind.state' || p.provider !== 'feishu' || !Array.isArray(p.applications)
+      || p.applications.length === 0 || p.applications.length > 16) return `${label}.applications is invalid`;
+    const apps = new Set<string>(); const ids = new Set<string>();
+    for (const entry of p.applications) {
+      if (!isPlainObject(entry) || !validApp(entry.app) || !Array.isArray(entry.bindings)
+        || apps.has(entry.app.appId as string)) return `${label}.applications contains an invalid app`;
+      apps.add(entry.app.appId as string);
+      const principals = new Set<string>();
+      for (const row of entry.bindings) {
+        if (!isPlainObject(row) || row.applications !== undefined || row.bindings !== undefined
+          || row.provider !== 'feishu' || row.state !== 'confirmed' || row.completedAttemptId !== undefined
+          || row.scopeId !== entry.app.appId || validateProviderBindStatus(row, label) !== null
+          || ids.has(row.bindingId as string) || principals.has(row.principalId as string)) return `${label}.applications contains an invalid binding`;
+        ids.add(row.bindingId as string); principals.add(row.principalId as string);
+      }
+      if (entry.app.appType === 'self_built' && entry.bindings.length > 1) return `${label}.applications self-built apps have one identity`;
+    }
+    if (!apps.has(p.scopeId as string)) return `${label}.applications must include the legacy scope`;
+    const projection = p.applications.find((entry: Record<string, unknown>) => (entry.app as Record<string, unknown>).appId === p.scopeId)!.bindings as Array<Record<string, unknown>>;
+    if (p.state === 'confirmed' ? !projection.some((row) => row.bindingId === p.bindingId && row.principalId === p.principalId)
+      : p.state !== 'none' || projection.length !== 0) return `${label}.applications must agree with the legacy state`;
+    if (p.bindings !== undefined && (!Array.isArray(p.bindings) || p.bindings.length !== projection.length
+      || p.bindings.some((row: unknown) => !isPlainObject(row) || !projection.some((item) => item.bindingId === row.bindingId)))) return `${label}.applications must agree with bindings`;
+  }
   if (p.tenantKey !== undefined && (p.provider !== 'feishu' || !isNullableNonEmptyString(p.tenantKey))) {
     return `${label}.tenantKey must be a Feishu installation tenant or null`;
   }
@@ -942,7 +973,7 @@ function validateProviderBindStatus(
     const ids = new Set<string>();
     const principals = new Set<string>();
     for (const row of p.bindings) {
-      if (!isPlainObject(row) || row.bindings !== undefined || row.completedAttemptId !== undefined
+      if (!isPlainObject(row) || row.bindings !== undefined || row.applications !== undefined || row.completedAttemptId !== undefined
         || row.provider !== 'feishu' || row.state !== 'confirmed' || row.scopeId !== p.scopeId
         || validateProviderBindStatus(row, label) !== null) {
         return `${label}.bindings must contain confirmed bindings in the same scope`;

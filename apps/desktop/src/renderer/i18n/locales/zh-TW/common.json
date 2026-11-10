@@ -6449,7 +6449,13 @@
           "linkedAccounts": "已關聯帳號：{{count}}",
           "connectionTenant": "連線企業識別碼：{{tenant}}",
           "setWorkingDevice": "設為工作電腦",
-          "workingDeviceSet": "已設為工作電腦"
+          "workingDeviceSet": "已設為工作電腦",
+          "appType": {
+            "self_built": "組織自建應用程式",
+            "store": "商店應用程式"
+          },
+          "botFallback": "Cindy 機器人",
+          "sharedSettings": "這些機器人共用本機的工作目錄與模型設定，各自保留獨立任務和工作電腦選擇。"
         }
       },
       "summary": {

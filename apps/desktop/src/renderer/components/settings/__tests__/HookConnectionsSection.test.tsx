@@ -640,6 +640,40 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     expect(screen.getAllByText('settings.remoteControl.hook.feishu.status.failed').length).toBeGreaterThan(0);
   });
 
+  // Two configured bots need distinct authorization/open targets, with one shared editor.
+  it('shows both bot names and sends link/open actions to the chosen application', async () => {
+    const account: NonNullable<SlackHookView['feishu']['binding']> = {
+      provider: 'feishu', state: 'confirmed', attemptId: null, bindingId: 'org-binding',
+      principalId: 'org-user', principalName: 'Alice', scopeId: 'cli_org', scopeName: 'Acme bot',
+      connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null, actions: ['revoke', 'select_device'],
+    };
+    const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu,
+      enabled: true, available: true, status: 'connected', multiBindAvailable: true, binding: account, bindings: [account],
+      applications: [
+        { appId: 'cli_store', brand: 'feishu', appType: 'store', botName: 'Cindy Official', organization: 'Acme' },
+        { appId: 'cli_org', brand: 'feishu', appType: 'self_built', botName: 'Acme bot', organization: 'Acme' },
+      ],
+    } };
+    ipc.get.mockResolvedValue({ hook }); ipc.providerBindStart.mockResolvedValue({ hook });
+    ipc.openProviderAction.mockResolvedValue(undefined);
+    const entry = resolveSettingsSearchEntry('im-bot', 'imBot.cindy.feishu.workingDevice');
+    render(<SettingsSearchNavigationContext.Provider value={{ entry, activation: 1 }}><HookConnectionsSection /></SettingsSearchNavigationContext.Provider>);
+    await screen.findByText('Cindy Official'); expect(screen.getByText('Acme bot')).toBeTruthy();
+    expect(screen.queryByText('cli_store')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.connect' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.hook.feishu.connect' }));
+    await waitFor(() => expect(ipc.providerBindStart).toHaveBeenCalledWith('feishu', 'cli_store'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.openBot' })[1]!);
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('feishu', 'provider', 'cli_org'));
+    const listener = ipc.onStatusChanged.mock.calls[0]![0];
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, binding: {
+      ...account, scopeId: 'cli_store', state: 'pending', bindingId: null, attemptId: 'store-append',
+      actions: ['cancel'], bindCode: 'TEST-CODE', expiresAt: Date.now() + 60_000 } } }));
+    expect(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.openBot' })).toHaveLength(2);
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, status: 'error', lastError: 'TLS connection failed' } }));
+    expect(screen.getByText('TLS connection failed')).toBeTruthy();
+  });
+
   it.each(['success', 'failure', 'old-server', 'unlink'] as const)('offers a concise working-computer action with a confirmed result: %s', async (outcome) => {
     const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu,
       enabled: true, available: true, status: 'connected', url: 'wss://feishu.example.test',

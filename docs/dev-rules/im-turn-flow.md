@@ -262,6 +262,13 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
 | live session 改走 `bootstrapSession` | 不注入项目上下文 / Orca 指令 | 同左 | 未改：改了等于给 IM / hook 任务新增项目上下文与 Orca 指令注入、目录授权准备等行为，属产品决定 |
 | 缺口 2b / 2e / 2f / 默认配置取值链 | 见台账 | 见台账 | 各自保留，合并只共享实现骨架 |
 
+### 同一 Cindy 电脑上的多个飞书机器人（2026-11-10，未发布）
+
+协商 `feishu-multi-app-v1` 后组织 bot 和官方商店 bot 同时可用，关联状态按应用分组。
+目录和模型设置由服务器按 Cindy 身份与电脑共享，端侧继续维护同一套本机目录映射和偏好镜像。
+执行授权来自该连接最新应用/绑定权威快照；每个派发仍精确匹配 scopeId + principalId。
+任务与确认卡、`/new`、`/stop`、工作电脑独立，不合并 session，不对双 @ 增加防重或专用调度。
+
 ### 官方飞书 / Lark（第一里程碑，2026-11-04）
 
 官方飞书与 Lark 是同一个 provider `feishu`（品牌跟随组织配置的应用，不随 Cindy 版本区域切换），

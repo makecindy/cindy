@@ -6557,7 +6557,13 @@
           "linkedAccounts": "Contas vinculadas: {{count}}",
           "connectionTenant": "Empresa conectada: {{tenant}}",
           "setWorkingDevice": "Definir como computador de trabalho",
-          "workingDeviceSet": "Computador de trabalho definido"
+          "workingDeviceSet": "Computador de trabalho definido",
+          "appType": {
+            "self_built": "Aplicativo da organização",
+            "store": "Aplicativo da loja"
+          },
+          "botFallback": "Bot Cindy",
+          "sharedSettings": "Estes bots compartilham as pastas de trabalho e as configurações dos modelos neste computador. Cada bot mantém suas tarefas e a seleção do computador de trabalho."
         }
       },
       "summary": {

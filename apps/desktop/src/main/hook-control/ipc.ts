@@ -854,7 +854,10 @@ export function registerHookControlIpc(): void {
     requireHookControl();
     const { manager: m } = ensureInstances();
     const provider = requireNeutralProvider(payload);
-    if (!m.providerBindStart(provider)) {
+    const p = requireObject(payload);
+    const scopeId = p.scopeId === undefined ? undefined : requireString(p.scopeId, 'scopeId');
+    if (scopeId !== undefined && provider !== 'feishu') throwIpcError('INVALID_PARAMS', 'scopeId is only supported for Feishu');
+    if (!m.providerBindStart(provider, scopeId)) {
       throwIpcError(
         'HOOK_NOT_CONNECTED',
         `${providerDisplayName(provider)} provider is not connected`,
@@ -915,12 +918,13 @@ export function registerHookControlIpc(): void {
       const { manager: m } = ensureInstances();
       const provider = requireNeutralProvider(payload);
       const p = requireObject(payload);
+      if (p.scopeId !== undefined && provider !== 'feishu') throwIpcError('INVALID_PARAMS', 'scopeId is only available for Feishu');
       const action = requireString(p.action, 'action');
       if (action !== 'connect' && action !== 'provider' && action !== 'add-to-group') {
         throwIpcError('INVALID_PARAMS', `invalid ${providerDisplayName(provider)} open action`);
       }
       try {
-        if (!(await m.openProviderAction(provider, action))) {
+        if (!(await m.openProviderAction(provider, action, p.scopeId === undefined ? undefined : requireString(p.scopeId, 'scopeId')))) {
           throwIpcError(
             'INVALID_PARAMS',
             `${providerDisplayName(provider)} action is not available`,

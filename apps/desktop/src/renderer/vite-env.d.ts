@@ -4600,6 +4600,7 @@ interface ElectronAPI {
     cancelPendingBind: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindStart: (
       provider: 'telegram' | 'x' | 'feishu',
+      scopeId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindCancel: (
       provider: 'telegram' | 'x' | 'feishu',
@@ -4615,6 +4616,7 @@ interface ElectronAPI {
     openProviderAction: (
       provider: 'telegram' | 'x' | 'feishu',
       action: import('../shared/hookControlIpc').ProviderOpenAction,
+      scopeId?: string,
     ) => Promise<{ ok: true }>;
     getWorkspacePrefs: () => Promise<{
       prefs: import('../shared/hookControlIpc').HookPrefsView;

@@ -19,6 +19,7 @@ import {
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_FEISHU_STORE_MULTI_BIND,
+  HOOK_FEATURE_FEISHU_MULTI_APP,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -3272,7 +3273,7 @@ describe('官方 IM 解绑与连接释放', () => {
     cleanups.push(() => manager.dispose());
     manager.sync();
     const current = connections.find(({ opts }) => opts.url === `wss://${provider}.test`)!;
-    const features = [...(current.opts.buildHello().features ?? []).filter((feature) => feature !== HOOK_FEATURE_FEISHU_STORE_MULTI_BIND), `provider:${provider}`];
+    const features = [...(current.opts.buildHello().features ?? []).filter((feature) => feature !== HOOK_FEATURE_FEISHU_STORE_MULTI_BIND && feature !== HOOK_FEATURE_FEISHU_MULTI_APP), `provider:${provider}`];
     const confirmed = { ...FEISHU_CONFIRMED, provider };
     current.opts.onWelcome?.({ serverName: provider, features });
     current.opts.onStatus('connected', null);
@@ -3373,11 +3374,13 @@ describe('官方飞书 / Lark provider lane', () => {
     expect(opts.buildHello().features).toEqual([
       ...FEISHU_FEATURES,
       HOOK_FEATURE_FEISHU_STORE_MULTI_BIND,
+      HOOK_FEATURE_FEISHU_MULTI_APP,
       HOOK_FEATURE_MESSAGE_OPS,
       'feishu-progress-ops-v1',
       'feishu-final-ops-v1',
     ]);
     expect((opts.buildHello().features ?? []).some((feature) => feature.startsWith('telegram-'))).toBe(false);
+
     expect(opts.buildHello().statusReactions).toBeUndefined();
 
     const dispatch = makeTaskDispatch({
@@ -5133,5 +5136,73 @@ describe('store Feishu multi-account manager', () => {
       state: 'failed', reason: 'cancelled', replyTo: cancel.payload.requestId, attemptId: 'cancel-new' }), () => true);
     expect(manager.snapshot().feishu.bindings).toHaveLength(2);
     expect(manager.snapshot().feishu.enabled).toBe(true);
+  });
+});
+
+
+// Authority for both apps comes from the negotiated snapshot, while authorization
+// attempts and user actions must continue to target the intended bot.
+describe('coexisting Feishu bot manager', () => {
+  const features = [...FEISHU_FEATURES, HOOK_FEATURE_FEISHU_MULTI_APP];
+  const org = { ...FEISHU_CONFIRMED, scopeId: 'cli_org', bindingId: 'org-binding', principalId: 'org-user' };
+  const app = { appId: 'cli_app', brand: 'feishu' as const, appType: 'store' as const, botName: 'Cindy', organization: 'example' };
+  const other = { ...app, appId: 'cli_org', appType: 'self_built' as const, botName: 'Org Cindy' };
+  const applications = [{ app, bindings: [FEISHU_CONFIRMED] }, { app: other, bindings: [org] }];
+  it('authorizes both app identities and keeps the other bot active after one unlink', async () => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'coexist', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, applications }), () => true);
+    expect(manager.snapshot().feishu.applications).toEqual([app, other]);
+    for (const [scopeId, principalId, allowed] of [['cli_app', 'ou_user', true], ['cli_org', 'org-user', true], ['cli_foreign', 'org-user', false]] as const) {
+      const replies: HookMessage[] = [];
+      opts.onMessage(makeQueryRequest({ queryId: scopeId, kind: 'workspaces', recipient: { scopeId, principalId } }),
+        (frame) => { replies.push(frame); return true; });
+      await vi.waitFor(() => expect(replies).toHaveLength(1), { interval: 1 });
+      expect(replies[0]).toMatchObject({ type: 'query.response', payload: { ok: allowed } });
+    }
+    expect(manager.providerBindStart('feishu', 'cli_org')).toBe(false);
+    expect(manager.providerBindRevoke('feishu', org.bindingId!)).toBe(true);
+    opts.onMessage(makeProviderBindUpdate({ ...org, state: 'revoked', reason: 'user-revoked' }), () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.bindingId)).toEqual([FEISHU_CONFIRMED.bindingId]);
+    expect(manager.snapshot().feishu.enabled).toBe(true);
+    expect(manager.providerBindStart('feishu', 'cli_org')).toBe(true);
+    const request = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
+    if (request.type !== 'provider.bind.start') throw new Error('start missing');
+    expect(request.payload.scopeId).toBe('cli_org');
+    // An already-linked reply racing the new start must complete optimistic UI.
+    opts.onMessage(makeProviderBindUpdate({ ...org, bindingId: 'org-relinked', replyTo: request.payload.requestId }), () => true);
+    expect(manager.snapshot().feishu.binding?.state).toBe('confirmed');
+  });
+  it('mirrors defaults when the legacy projection is unbound but another app is linked', () => {
+    const ready = vi.fn();
+    const { manager, transports } = feishuLaneHarness({ onHookReadyForPrefsMirror: ready }, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'coexist', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, state: 'none', bindingId: null, principalId: null,
+      principalName: null, actions: [], applications: [{ app, bindings: [] }, applications[1]!] }), () => true);
+    expect(manager.snapshot().feishu.binding?.bindingId).toBe(org.bindingId);
+    expect(ready).toHaveBeenCalledWith('feishu');
+  });
+  it('keeps a different bot authorization pending through snapshots and unrelated account updates', () => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'coexist', features }); opts.onStatus('connected', null);
+    const snapshot = { ...FEISHU_CONFIRMED, applications: [applications[0]!, { app: other, bindings: [] }] };
+    opts.onMessage(makeProviderBindState(snapshot), () => true);
+    manager.providerBindStart('feishu', 'cli_org');
+    const request = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
+    if (request.type !== 'provider.bind.start') throw new Error('start missing');
+    const pending = { ...FEISHU_PENDING, scopeId: 'cli_org', replyTo: request.payload.requestId, attemptId: 'org-attempt',
+      connectUrl: FEISHU_PENDING.connectUrl!.replace('cli_app', 'cli_org') };
+    opts.onMessage(makeProviderBindUpdate(pending), () => true);
+    opts.onMessage(makeProviderBindUpdate(FEISHU_CONFIRMED), () => true);
+    expect(manager.snapshot().feishu.binding?.attemptId).toBe('org-attempt');
+    opts.onWelcome?.({ serverName: 'coexist', features });
+    opts.onMessage(makeProviderBindState(snapshot), () => true);
+    expect(manager.snapshot().feishu.binding?.attemptId).toBe('org-attempt');
+    opts.onMessage(makeProviderBindUpdate({ ...org, completedAttemptId: 'org-attempt' }), () => true);
+    expect(manager.snapshot().feishu.bindings).toHaveLength(2);
+    expect(manager.snapshot().feishu.binding?.state).toBe('confirmed');
   });
 });

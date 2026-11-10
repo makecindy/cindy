@@ -547,3 +547,25 @@ describe('Feishu store multi-account contract', () => {
     expectReject(makeProviderBindState({ ...first, provider: 'telegram', tenantKey: undefined, bindings: [first] }), 'bindings');
   });
 });
+
+// The application set is the authority for multiple bot accounts. Old single-app
+// frames still round-trip; ambiguous projections and cross-app bindings cannot.
+describe('Feishu application coexistence contract', () => {
+  it('accepts two app scopes and rejects duplicated apps, foreign bindings and nested authority', () => {
+    const first: ProviderBindStatusPayload = { ...CONFIRMED, provider: 'feishu' };
+    const org: ProviderBindStatusPayload = { ...first, scopeId: 'cli_org', bindingId: 'org-binding', principalId: 'org-user' };
+    const app = { appId: first.scopeId!, brand: 'feishu' as const, appType: 'store' as const, botName: 'Cindy', organization: null };
+    const other = { ...app, appId: 'cli_org', appType: 'self_built' as const, botName: 'Acme Cindy' };
+    const applications = [{ app, bindings: [first] }, { app: other, bindings: [org] }];
+    roundTrip(makeProviderBindState({ ...first, applications }));
+    roundTrip(makeProviderBindState(first));
+    for (const invalid of [
+      [applications[0], applications[0]],
+      [{ app, bindings: [org] }, applications[1]],
+      [{ app, bindings: [{ ...first, applications }] }, applications[1]],
+      [applications[0], { app: other, bindings: [org, { ...org, bindingId: 'org-2', principalId: 'org-user-2' }] }],
+      [applications[1]],
+    ]) expectReject({ ...makeProviderBindState(first), payload: { ...first, applications: invalid } }, 'applications');
+    expectReject(makeProviderBindUpdate({ ...first, applications }), 'applications');
+  });
+});

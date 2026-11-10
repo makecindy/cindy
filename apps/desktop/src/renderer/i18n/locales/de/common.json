@@ -6492,7 +6492,13 @@
           "linkedAccounts": "Verknüpfte Konten: {{count}}",
           "connectionTenant": "Verbundener Mandant: {{tenant}}",
           "setWorkingDevice": "Als Arbeitscomputer festlegen",
-          "workingDeviceSet": "Arbeitscomputer festgelegt"
+          "workingDeviceSet": "Arbeitscomputer festgelegt",
+          "appType": {
+            "self_built": "Organisations-App",
+            "store": "Store-App"
+          },
+          "botFallback": "Cindy-Bot",
+          "sharedSettings": "Diese Bots teilen Arbeitsordner und Modelleinstellungen auf diesem Computer. Aufgaben und die Auswahl des Arbeitscomputers bleiben für jeden Bot getrennt."
         }
       },
       "summary": {

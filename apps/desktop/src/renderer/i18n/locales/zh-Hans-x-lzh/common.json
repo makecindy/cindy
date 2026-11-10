@@ -6449,7 +6449,13 @@
           "linkedAccounts": "已系账号：{{count}}",
           "connectionTenant": "所连企业之识：{{tenant}}",
           "setWorkingDevice": "设为工作电脑",
-          "workingDeviceSet": "已设为工作电脑"
+          "workingDeviceSet": "已设为工作电脑",
+          "appType": {
+            "self_built": "组织自建应用",
+            "store": "商店应用"
+          },
+          "botFallback": "Cindy 机器人",
+          "sharedSettings": "诸机器人共用本机工作目录与模型之设，各有差事，工作电脑亦各自择之。"
         }
       },
       "summary": {
