@@ -195,6 +195,10 @@ function MakerBootstrap() {
 
   useResyncAgentIslandSettingsAfterLogin(isAuthenticated);
 
+  // Remote SSH handlers register during the environment check. Read the
+  // snapshot only after that gate passes, then keep receiving live pushes.
+  useEffect(() => installCcMgrUpgradeListener(), []);
+
   useEffect(() => {
     if (!isAuthenticated || isSecondaryWindow() || isSidebarWindow()) return;
     return installGithubStarPrompt(createGithubStarPromptEnvironment(router));
@@ -438,13 +442,6 @@ export function App() {
   // device-link 控制端都显示一次可操作的人话提示, 不再让用户盲目重试。
   useEffect(() => {
     return installAutoPermissionFallbackToastListener();
-  }, []);
-
-  // cc-mgr 版本不匹配的 UpgradeBanner: 订阅 main 的 CC_MGR_UPGRADE_AVAILABLE push +
-  // 启动时拉一次 pending snapshot, 写进 ccMgrUpgradeStore。没挂这个 listener 的话
-  // main 探到版本差异 broadcast 了也没人接, banner 永不显示。详见 ccMgrUpgradeStore.ts。
-  useEffect(() => {
-    return installCcMgrUpgradeListener();
   }, []);
 
   return (
