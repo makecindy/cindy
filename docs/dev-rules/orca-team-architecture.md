@@ -635,6 +635,12 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 主动回报只允许当前输入来自 Orca 派活且具有已消费输入；用户在运行设备直接发送、已接受的
 人工插话接管或没有活动输入时返回 `NOT_LEAD_ASSIGNED_TURN`，不转发或结清。不能仅凭持久
 Worker 归属或累计回复 ID 判断当前输入仍属 Lead；只读 Lead 工具与本机 Worker 路径保持不变。
+「来自 Orca 派活」由运行设备在 `maker:input:enqueue` 边界确认：device-link 输入的盖章会剥掉
+wire 带来的全部 `origin`，之后只有当 relay 盖章的调用方设备正是该任务 `orcaRemoteLead`
+登记的 Lead 电脑、协同未结束且不是共享任务访客时，`stampTrustedRemoteLeadQueuedOrigin`
+才恢复固定标签的 Lead 来源（只沿用 wire 的展示正文，不声明来源任务）。缺了这一步，Lead
+派活在运行设备上永远没有来源，主动回报全部退化为轮询代报（2026-11 修复）。回归见
+`agent-input-coordinator.test.ts`「INPUT_ENQUEUE execution-device Worker assignment from the Lead」。
 已消费输入 ID 经可选 `reportedInputClientIds` 传给 Lead，
 不向模型工具增加参数。主动回报成功只剔除这些输入的运行期和持久等待记录；即使 B 已经
 排队，A 的回报也不能清掉 B 或提前把 Worker 标为 done。新派活的回滚链同步剔除已回报输入，
