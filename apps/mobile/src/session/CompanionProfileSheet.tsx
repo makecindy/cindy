@@ -115,9 +115,9 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
   const memoryList = data?.panels.find(item => item.id === 'memories')?.entries?.[0]?.resourceId;
   const memory = useCompanionMemory({ invoke, openLink, deviceId, deviceName, collectionId, resourceKind: resource?.ref.kind ?? 'bot',
     listResourceId: memoryList, online, active: page === 'memoryEntries', binding });
-  // The teammate project's automations, listed in place with their timing and a switch.
+  // The teammate project's automations page: each with its timing and a switch that applies at once.
   const automations = useCompanionAutomations({ invoke, openLink, deviceId, deviceName, botRef: resource ? { ...resource.ref, collectionId } : null,
-    resourceId: data?.panels.find(item => item.id === 'automations')?.entries?.[0]?.resourceId, online, visible, binding, locale: i18n.language });
+    resourceId: page === 'editor' && /\/automations$/.test(editorResourceId) ? editorResourceId : undefined, online, visible, binding, locale: i18n.language });
   const read = useCallback(async () => {
     if (!online || !resource) return null;
     await openLink(deviceId);
@@ -398,8 +398,15 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
       </View></View>
       {note('showReplyTargetHint')}
     </View>
-    {automations.rows?.length ? <View style={styles.field} testID="companionProfile.automations">
-      <Text accessibilityRole="header" style={styles.groupLabel}>{label(automations.title ?? '')}</Text>
+    {data?.panels.filter(item => ['projects', 'automations', 'followUp'].includes(item.id)).flatMap(item => item.entries ?? [])?.map(entry => <View style={styles.group} key={entry.id}><ContextSheetRow icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} disabled={!online} /></View>)}
+    <View style={styles.group}>{row('channels', MessageCircle)}{row('artifacts', FileText)}{onOpenSearch ? row('search', History, onOpenSearch) : null}{row('permissions', Hand)}</View>
+    {onOpenHome ? <View style={styles.group}>{row('home', Monitor, onOpenHome)}</View> : null}
+    {/* Host order, like iOS: restart / resume / delete are whatever the computer offers now. */}
+    {management.length ? <View style={styles.group}>{management.map(item => actionRow(item, () => confirm(item), item.id === 'delete'))}</View> : null}
+    {online && data && !actionPanel('profile') ? note('hostUpgrade') : null}
+  </>;
+  const automationsView = automations.rows?.length ? <View style={styles.field} testID="companionProfile.automations">
+      {panel?.text ? noteText(panel.text) : null}
       <View style={styles.group}>{automations.rows.map((row, index) => <View key={row.id} style={[styles.inline, styles.automationRow, index > 0 && styles.rowDivider]}>
         <View style={styles.automationText}>
           <Text style={styles.switchLabel} numberOfLines={2}>{label(row.title)}</Text>
@@ -408,15 +415,9 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         <NativeSwitch accessibilityLabel={label(row.title)} value={row.on} disabled={!online || !!automations.pending}
           onValueChange={on => automations.toggle(row.id, on)} seedColor={colors.inputCaret} />
       </View>)}</View>
-    </View> : null}
-    {data?.panels.filter(item => ['projects', 'followUp'].includes(item.id) || (item.id === 'automations' && automations.rows === null)).flatMap(item => item.entries ?? [])?.map(entry => <View style={styles.group} key={entry.id}><ContextSheetRow icon={null} trailing="chevron" label={label(entry.title)} onPress={() => void openEditor(entry.resourceId)} disabled={!online} /></View>)}
-    <View style={styles.group}>{row('channels', MessageCircle)}{row('artifacts', FileText)}{onOpenSearch ? row('search', History, onOpenSearch) : null}{row('permissions', Hand)}</View>
-    {onOpenHome ? <View style={styles.group}>{row('home', Monitor, onOpenHome)}</View> : null}
-    {/* Host order, like iOS: restart / resume / delete are whatever the computer offers now. */}
-    {management.length ? <View style={styles.group}>{management.map(item => actionRow(item, () => confirm(item), item.id === 'delete'))}</View> : null}
-    {online && data && !actionPanel('profile') ? note('hostUpgrade') : null}
-  </>;
-  const editorView = panel ? <>
+    </View> : null;
+  // The switches come from their own read; until it lands, a spinner rather than a Save form.
+  const editorView = panel?.id === 'automations' && page === 'editor' ? automationsView ?? spinner : panel ? <>
     {formPanel(panel)}
     {editor?.panels.filter(item => item.id === 'remove' && item.action).map(item => <View key={item.id} style={styles.group}>{actionRow(item, () => confirm(item), true)}</View>)}
   </> : editor ? <>{companionEditorSections(editor.panels).map(section => {
