@@ -9039,6 +9039,8 @@
       "daysWindow": "{{days}}日"
     },
     "claude": {
+      "totalWeeklyLabel": "週間合計",
+      "temporarilyLimited": "一時的に制限中",
       "waitingDetail": "Claude サブスクリプションの使用量は次回のターン完了後に更新されます。",
       "weeklyLabel": "週間",
       "modelWeeklyLabel": "{{model}} 週間",

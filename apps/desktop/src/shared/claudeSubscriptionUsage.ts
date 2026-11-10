@@ -277,6 +277,26 @@ export function parseClaudeSdkRateLimitInfo(
   };
 }
 
+/** Headers omit severity. Keep it only while the previous window is still valid;
+ * a full endpoint snapshot or an explicit severity can confirm recovery. */
+function mergeHeaderWindow(
+  previous: ClaudeUsageWindow | null | undefined,
+  incoming: ClaudeUsageWindow | null | undefined,
+  updatedAt: number | null | undefined,
+): ClaudeUsageWindow | null | undefined {
+  if (!incoming) return previous;
+  const changedWindow = previous?.resetsAt != null && incoming.resetsAt != null
+    && previous.resetsAt !== incoming.resetsAt;
+  const expiredWindow = previous?.resetsAt != null && updatedAt != null
+    && previous.resetsAt * 1000 <= updatedAt;
+  if (!previous || changedWindow || expiredWindow) return incoming;
+  return {
+    ...incoming,
+    resetsAt: incoming.resetsAt ?? previous.resetsAt,
+    severity: incoming.severity ?? previous.severity,
+  };
+}
+
 // ── 双源合并 ─────────────────────────────────────────────────────────────────
 
 /**
@@ -285,7 +305,7 @@ export function parseClaudeSdkRateLimitInfo(
  *     整体状态,保留 endpoint 独有的 scoped / extraUsage / subscriptionType / severity
  *     不被清掉(headers 没有这些维度,不代表它们消失了)。
  *   - incoming 为 endpoint 源 → 全量替换(endpoint 是权威全集),仅 subscriptionType /
- *     headers 独有的 rateLimitStatus 在 incoming 缺失时沿用 prev。
+ *     accountFingerprint 沿用 prev; 瞬时限流状态不沿用。
  */
 export function mergeClaudeSubscriptionUsageSnapshot(
   prev: ClaudeSubscriptionUsageSnapshot | null,
@@ -308,8 +328,8 @@ export function mergeClaudeSubscriptionUsageSnapshot(
   if (incoming.source === 'unified-headers') {
     return {
       ...prev,
-      fiveHour: incoming.fiveHour ?? prev.fiveHour,
-      sevenDay: incoming.sevenDay ?? prev.sevenDay,
+      fiveHour: mergeHeaderWindow(prev.fiveHour, incoming.fiveHour, incoming.updatedAt),
+      sevenDay: mergeHeaderWindow(prev.sevenDay, incoming.sevenDay, incoming.updatedAt),
       rateLimitStatus: incoming.rateLimitStatus ?? prev.rateLimitStatus,
       representativeClaim: incoming.representativeClaim ?? prev.representativeClaim,
       updatedAt: incoming.updatedAt ?? prev.updatedAt,
