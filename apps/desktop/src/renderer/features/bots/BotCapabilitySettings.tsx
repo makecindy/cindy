@@ -303,7 +303,7 @@ export function BotCapabilitySettings({
       : t('bots.capabilities.selectedMeta', { count: checkedCount, total: data.total });
     const row = (item: Row) => (
       <ListRow key={item.id} title={item.name} hint={item.description} dim={!item.available}
-        note={item.available ? (item.cindyOfficial ? t('bots.capabilities.officialInherited') : undefined) : (
+        note={item.cindyOfficial ? t('bots.capabilities.officialInherited') : item.available ? undefined : (
           <>
             {t(item.missing ? 'bots.capabilities.notOnThisComputer' : kind === 'toolset' ? 'bots.capabilities.notTurnedOn' : 'bots.capabilities.unavailableHint')}
             {kind === 'toolset' && !item.missing && onConfigure ? (

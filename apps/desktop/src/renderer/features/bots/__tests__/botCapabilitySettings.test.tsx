@@ -301,6 +301,7 @@ it('asks before leaving a learned Skill editor with unsaved changes', async () =
         { name: 'PR', cindyOfficial: true, enabled: true },
         { name: 'Disabled official', cindyOfficial: true, enabled: false },
         { name: 'Personal', enabled: true },
+        { name: 'PR', enabled: true },
       ] }), plugins: { list: async () => [] },
     },
   } });
@@ -313,7 +314,9 @@ it('asks before leaving a learned Skill editor with unsaved changes', async () =
   const official = view.getByRole('switch', { name: 'PR' }) as HTMLButtonElement;
   expect(official.disabled).toBe(true);
   expect(official.getAttribute('aria-checked')).toBe('true');
-  expect(view.getByText('bots.capabilities.officialInherited')).toBeTruthy();
+  // The same-name namesake does not hide the official entry; a disabled official keeps its explanation.
+  expect(view.getAllByRole('switch', { name: 'PR' })).toHaveLength(1);
+  expect(view.getAllByText('bots.capabilities.officialInherited')).toHaveLength(2);
   expect(view.getByRole('switch', { name: 'Disabled official' }).getAttribute('aria-checked')).toBe('false');
   const personal = view.getByRole('switch', { name: 'Personal' }) as HTMLButtonElement;
   expect(personal.disabled).toBe(false);
