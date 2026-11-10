@@ -591,6 +591,7 @@ export interface ChatMessage {
   goalBadge?: { updated: boolean };
   /** F7.2: ask_user message fields */
   askUserStatus?: 'pending' | 'answered' | 'expired';
+  askUserWithdrawalReason?: string;
   askUserRequestId?: string;
   askUserReply?: string | null;
   /** All questions in this AskUserQuestion call */
@@ -854,6 +855,7 @@ export interface PendingAppPermission extends PendingPermission {
 /** F7.2: Pending ask-user-question data — holds ALL questions for the wizard. */
 export interface PendingAskUser {
   requestId: string;
+  withdrawalReason?: string;
   questions: AskUserQuestionItem[];
   delivery?: 'async';
   isBlocking?: boolean;
@@ -2540,6 +2542,7 @@ function cancelRemoteOptimisticSendsForRemoteClear(
         queueInteractionLocks: [],
         queueEditLocks: [],
         protectedAskUser: opts.historicalHydration ? state.protectedAskUser : undefined,
+        parkedProtectedAsks: opts.historicalHydration ? state.parkedProtectedAsks : undefined,
       };
     });
   }
@@ -2761,6 +2764,9 @@ export interface SessionChatState {
   pendingAppPermissions?: PendingAppPermission[];
   /** F7.2: Currently pending ask-user-question; null when none. */
   pendingAskUser: PendingAskUser | null;
+  /** All live questions, including the selected one, in arrival order. */
+  pendingAskUserQueue?: PendingAskUser[];
+  askUserDrafts?: Record<string, AskUserDraft>;
   /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
   pendingPluginSetup: PendingPluginSetup | null;
   /**
@@ -2791,6 +2797,8 @@ export interface SessionChatState {
   askUserDraft: AskUserDraft | null;
   /** Local editing survives provider dismissal; it is not a pending Host interaction. */
   protectedAskUser?: { pending: PendingAskUser; draft: AskUserDraft };
+  /** Withdrawn questions whose unsent supplement was displaced; restored when no other question is shown. */
+  parkedProtectedAsks?: Array<{ pending: PendingAskUser; draft: AskUserDraft }>;
   /** FP-3: Currently pending plan-review; null when none. */
   pendingPlanReview: PendingPlanReview | null;
   /** issue_confirm: 提交 GitHub issue 前的确认卡片; null when none. */
@@ -3011,6 +3019,7 @@ export type SessionChatLightState = Pick<
   | 'historyLoaded'
   | 'pendingPermission'
   | 'pendingAskUser'
+  | 'pendingAskUserQueue'
   | 'pendingPluginSetup'
   | 'pluginSetupViewerState'
   | 'pluginSetupCommandInFlight'
@@ -3088,6 +3097,8 @@ function createInitialState(): SessionChatState {
     streamingText: '',
     pendingPermission: null,
     pendingAskUser: null,
+    pendingAskUserQueue: [],
+    askUserDrafts: {},
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
     pluginSetupViewerState: 'expanded',
@@ -3175,6 +3186,8 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   sdkSessionId: null,
   pendingPermission: null,
   pendingAskUser: null,
+  pendingAskUserQueue: [],
+  askUserDrafts: {},
   pendingPluginSetup: null,
   pendingPluginSetupQueue: [],
   pluginSetupViewerState: 'expanded',
@@ -3792,6 +3805,7 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
     s.pendingPermission ||
     s.pendingAskUser ||
     s.protectedAskUser ||
+    s.parkedProtectedAsks?.length ||
     hasPendingPluginSetupInteraction(s.pendingPluginSetup, s.pendingPluginSetupQueue) ||
     s.pendingPlanReview ||
     s.pendingIssueConfirm ||
@@ -6475,12 +6489,13 @@ export function handleStreamEvent(
       // Codex ask_user 同款:code-mode 可能在提问 RPC 未决时就 turn/completed。
       // 卡片必须跨 done 存活,等用户回答后走 detached continuation。
       const keepPlanReviewAcrossDone = state.agentKind === 'codex';
-      const keepAskUserAcrossDone = state.agentKind === 'codex';
+      const keepAskUserAcrossDone = state.agentKind === 'codex' || state.pendingAskUser?.delivery === 'async';
       const cleanedMessages = finalized.messages.map((m) => {
         let next = m;
         if (m.isStreaming) next = { ...next, isStreaming: false };
         if (
           !keepAskUserAcrossDone &&
+          !allPendingQuestions(state).some((q) => q.delivery === 'async' && q.requestId === m.askUserRequestId) &&
           m.role === 'ask_user' &&
           m.askUserStatus === 'pending'
         ) {
@@ -6543,6 +6558,7 @@ export function handleStreamEvent(
         // F-AUQ-DRAFT: pending question gone → in-progress wizard draft is
         // meaningless, drop it so the next question starts clean.
         askUserDraft: keepAskUserAcrossDone ? state.askUserDraft : null,
+        ...(!keepAskUserAcrossDone ? retainAsyncQuestions(state) : {}),
         pendingPlanReview: keepPlanReviewAcrossDone ? state.pendingPlanReview : null,
         pendingIssueConfirm: null,
         pendingRenameSessionsConfirm: null,
@@ -6765,11 +6781,11 @@ export function handleStreamEvent(
         // the 'done' path to consume — reset it explicitly on error so the
         // accumulated delta text doesn't linger in memory.
         pendingPermission: null,
-        pendingAskUser: null,
+        ...retainAsyncQuestions(state),
         // F-AUQ-MIN-5: same reset as the 'done' path.
-        askUserViewerState: 'expanded',
+        askUserViewerState: state.askUserViewerState,
         // F-AUQ-DRAFT: same reset as the 'done' path.
-        askUserDraft: null,
+        askUserDraft: state.askUserDraft,
         pendingPlanReview: null,
         pendingIssueConfirm: null,
         pendingRenameSessionsConfirm: null,
@@ -6831,7 +6847,7 @@ export function handleStreamEvent(
       // switched permissionMode mid-prompt, permission timed out, or session
       // closed). Drop the matching pending prompt so the input is no longer
       // gated and the UI cannot keep showing a stale interaction.
-      const data = event.data as { requestId: string; reason?: string; decision?: unknown };
+      const data = event.data as { requestId: string; reason?: string; decision?: unknown; withdrawalReason?: string };
       // reason==='resolved' 且带 decision:交互被某一端答了(本端乐观清 / 对端经此广播收敛)。
       // 据此把被点中的 ask/plan 卡片翻成「已回答」(与答题端、reload 后一致);其它 reason
       // (timeout / mode_changed / session_closed 等真·放弃)resolved 为 null,仍标 expired。
@@ -6904,7 +6920,7 @@ export function handleStreamEvent(
         };
       }
       if (
-        state.pendingAskUser?.requestId === data.requestId ||
+        allPendingQuestions(state).some((q) => q.requestId === data.requestId) ||
         state.protectedAskUser?.pending.requestId === data.requestId ||
         state.messages.some((m) => m.role === 'ask_user' && m.askUserRequestId === data.requestId)
       ) {
@@ -6913,6 +6929,7 @@ export function handleStreamEvent(
         // 多窗口输家可能已经乐观写成 answered；仍要用赢家决策覆盖，不能只认 pending。
         const answers = resolved?.answers as Record<string, string> | undefined;
         const dismissed = resolved?.dismissed === true;
+        const withdrawalReason = data.reason === 'question_withdrawn' ? data.withdrawalReason : undefined;
         const askUserReply = answers && !dismissed ? formatAskUserReply(answers) : '';
         const releasesProtectedAsk = data.reason === 'resolved' && !dismissed &&
           state.protectedAskUser?.pending.requestId === data.requestId;
@@ -6925,6 +6942,10 @@ export function handleStreamEvent(
             state.pendingAskUser?.requestId === data.requestId || releasesProtectedAsk ? 'expanded' : state.askUserViewerState,
           askUserDraft:
             state.pendingAskUser?.requestId === data.requestId ? null : state.askUserDraft,
+          ...removePendingQuestion(state, data.requestId, data.reason === 'resolved' || data.reason === 'superseded' || data.reason === 'session_closed', withdrawalReason),
+          ...(withdrawalReason && state.protectedAskUser?.pending.requestId === data.requestId ? {
+            protectedAskUser: { ...state.protectedAskUser, pending: { ...state.protectedAskUser.pending, withdrawalReason } },
+          } : {}),
           messages: state.messages.map((m) =>
             m.role === 'ask_user' && m.askUserRequestId === data.requestId
               ? answers && !dismissed
@@ -6935,7 +6956,7 @@ export function handleStreamEvent(
                     askUserAnswers: answers,
                   }
                 : m.askUserStatus === 'pending'
-                  ? { ...m, askUserStatus: 'expired' as const }
+                  ? { ...m, askUserStatus: 'expired' as const, ...(withdrawalReason ? { askUserWithdrawalReason: withdrawalReason } : {}) }
                   : m
               : m,
           ),
@@ -6991,7 +7012,7 @@ export function handleStreamEvent(
       // when questions changes, which would erase locally typed, unsubmitted text.
       // Compare fields rather than JSON object key order; changed questions must
       // still take the normal initialization path.
-      const previousAsk = state.pendingAskUser;
+      const previousAsk = allPendingQuestions(state).find((q) => q.requestId === data.requestId);
       const keepAskProgress = previousAsk?.requestId === data.requestId &&
         previousAsk.questions.length === data.questions.length &&
         previousAsk.questions.every((question, index) => {
@@ -7053,21 +7074,13 @@ export function handleStreamEvent(
 
       return {
         ...finalized,
-        pendingAskUser: keepAskProgress ? previousAsk : {
+        ...upsertPendingQuestion(state, keepAskProgress ? previousAsk! : {
           requestId: data.requestId,
           questions: data.questions,
           delivery: data.delivery,
           isBlocking: data.isBlocking,
           persistId: event.persistId,
-        },
-        // Async delivery lets the agent continue; every new question still starts expanded.
-        // Replayed requests preserve the user's existing viewing state, and so does a new
-        // request queued behind a draft-protected one: the visible card is still the old one.
-        // It opens expanded once the protected question is released.
-        askUserViewerState: keepAskProgress || state.protectedAskUser ? state.askUserViewerState : 'expanded',
-        // Only an unchanged pending request may retain its draft. A new batch
-        // or changed question content starts clean, even with the same requestId.
-        askUserDraft: keepAskProgress ? state.askUserDraft : null,
+        }),
         messages: askMessages,
       };
     }
@@ -7291,6 +7304,8 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingPermission: null,
     pendingAppPermissions: [],
     pendingAskUser: null,
+    pendingAskUserQueue: [],
+    askUserDrafts: {},
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
     pluginSetupViewerState: 'expanded',
@@ -9011,6 +9026,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       reason?: string;
       resolvedAs?: 'allow' | 'deny';
       decision?: unknown;
+      withdrawalReason?: string;
     };
     // reason==='resolved' 时 main 会带上决策内容(ask 的 answers / plan 的 behavior+reason);
     // 透传给 permission_dismissed 处理,让被点中的 ask/plan 卡片翻成「已回答」而非 expired。
@@ -9020,6 +9036,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       reason: dismissPayload.reason ?? 'mode_changed_to_bypassPermissions',
       resolvedAs: dismissPayload.resolvedAs ?? 'deny',
       decision: dismissPayload.decision,
+      withdrawalReason: dismissPayload.withdrawalReason,
     };
     const sessionId = payload.sessionId;
     setState(sessionId, (s) =>
@@ -10080,6 +10097,94 @@ function subscribe(sessionId: string, cb: () => void): () => void {
   };
 }
 
+function allPendingQuestions(state: SessionChatState): PendingAskUser[] {
+  const queue = state.pendingAskUserQueue ?? [];
+  return state.pendingAskUser && !queue.some((q) => q.requestId === state.pendingAskUser!.requestId)
+    ? [state.pendingAskUser, ...queue] : queue;
+}
+
+function questionSelection(state: SessionChatState, queue: PendingAskUser[], selected: PendingAskUser | null): Partial<SessionChatState> {
+  const drafts = { ...state.askUserDrafts };
+  const draft = state.protectedAskUser?.draft ?? state.askUserDraft;
+  if (draft) drafts[draft.requestId] = draft;
+  const unchanged = selected === state.pendingAskUser;
+  // A withdrawn question is no longer in the queue; switching away must not lose its supplement draft.
+  const displaced = !unchanged && state.protectedAskUser &&
+    !queue.some((q) => q.requestId === state.protectedAskUser!.pending.requestId) ? state.protectedAskUser : undefined;
+  const parked = displaced
+    ? [...(state.parkedProtectedAsks ?? []).filter((p) => p.pending.requestId !== displaced.pending.requestId), displaced]
+    : state.parkedProtectedAsks;
+  return {
+    pendingAskUserQueue: queue, pendingAskUser: selected, askUserDrafts: drafts,
+    askUserDraft: unchanged ? state.askUserDraft : selected ? drafts[selected.requestId] ?? null : null,
+    protectedAskUser: unchanged ? state.protectedAskUser : undefined,
+    parkedProtectedAsks: parked,
+    askUserViewerState: unchanged ? state.askUserViewerState : 'expanded',
+  };
+}
+
+/** Bring back the oldest displaced supplement once nothing else needs the answer card. */
+function restoreParkedQuestion(patch: Partial<SessionChatState>): Partial<SessionChatState> {
+  const [next, ...rest] = patch.parkedProtectedAsks ?? [];
+  if (!next || patch.pendingAskUser || patch.protectedAskUser) return patch;
+  return { ...patch, protectedAskUser: next, parkedProtectedAsks: rest, askUserViewerState: 'expanded' };
+}
+
+function upsertPendingQuestion(state: SessionChatState, question: PendingAskUser): Partial<SessionChatState> {
+  const queue = allPendingQuestions(state);
+  const index = queue.findIndex((q) => q.requestId === question.requestId);
+  const next = index < 0 ? [...queue, question] : queue.map((q, i) => i === index ? question : q);
+  // A blocking question takes focus without destroying optional questions/drafts.
+  const selected = question.delivery !== 'async' || !state.pendingAskUser || state.pendingAskUser.requestId === question.requestId
+    ? question : state.pendingAskUser;
+  const patch = questionSelection(state, next, selected);
+  // Older executors can still expire a request mid-edit; keep that local fallback until submitted.
+  if (state.protectedAskUser && question.delivery === 'async' && !queue.some((q) => q.requestId === state.protectedAskUser!.pending.requestId)) {
+    patch.protectedAskUser = state.protectedAskUser;
+    patch.askUserViewerState = state.askUserViewerState;
+  }
+  if (index >= 0 && queue[index] !== question) {
+    delete patch.askUserDrafts![question.requestId];
+    if (selected === question) { patch.askUserDraft = null; patch.protectedAskUser = undefined; }
+  }
+  return patch;
+}
+
+function removePendingQuestion(
+  state: SessionChatState, requestId: string, releaseDraft: boolean, withdrawalReason?: PendingAskUser['withdrawalReason'],
+): Partial<SessionChatState> {
+  const all = allPendingQuestions(state);
+  const queue = all.filter((q) => q.requestId !== requestId);
+  const selected = state.pendingAskUser && state.pendingAskUser.requestId !== requestId ? state.pendingAskUser : queue[0] ?? null;
+  const patch = questionSelection(state, queue, selected);
+  const draft = patch.askUserDrafts![requestId];
+  const removed = all.find((q) => q.requestId === requestId);
+  delete patch.askUserDrafts![requestId];
+  patch.parkedProtectedAsks = (patch.parkedProtectedAsks ?? []).filter((p) => p.pending.requestId !== requestId);
+  if (state.protectedAskUser?.pending.requestId === requestId) patch.protectedAskUser = releaseDraft ? undefined : state.protectedAskUser;
+  else if (!releaseDraft && removed && draft?.started) {
+    // Withdrawn while another question was shown: keep the unsent supplement for later.
+    patch.parkedProtectedAsks = [...patch.parkedProtectedAsks, {
+      pending: withdrawalReason ? { ...removed, withdrawalReason } : removed, draft,
+    }];
+  }
+  return restoreParkedQuestion(patch);
+}
+
+function retainAsyncQuestions(state: SessionChatState): Partial<SessionChatState> {
+  const queue = allPendingQuestions(state).filter((q) => q.delivery === 'async');
+  return questionSelection(state, queue, queue.find((q) => q.requestId === state.pendingAskUser?.requestId) ?? queue[0] ?? null);
+}
+
+function selectAskUserQuestion(sessionId: string, requestId: string): void {
+  setState(sessionId, (state) => {
+    const queue = allPendingQuestions(state);
+    const selected = queue.find((q) => q.requestId === requestId);
+    if (!selected || state.pendingAskUser?.delivery !== 'async' || selected === state.pendingAskUser) return state;
+    return { ...state, ...questionSelection(state, queue, selected) };
+  });
+}
+
 const resumeQuestionPresentations = new WeakMap<PendingAskUser, PendingAskUser>();
 function visibleAskUser(state: SessionChatState): PendingAskUser | null {
   const pending = state.protectedAskUser?.pending;
@@ -10119,15 +10224,16 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     historyWindowHasIsland: state.historyWindowIslands.length > 0,
     isFirstMessage: state.isFirstMessage,
     historyLoaded: state.historyLoaded,
-    pendingPermission: state.protectedAskUser ? null : state.pendingPermission,
+    pendingPermission: state.pendingPermission,
     pendingAskUser: visibleAskUser(state),
+    pendingAskUserQueue: state.pendingAskUserQueue,
     pendingPluginSetup: state.pendingPluginSetup,
     pluginSetupViewerState: state.pluginSetupViewerState,
     pluginSetupCommandInFlight: state.pluginSetupCommandInFlight,
     pluginSetupCommandError: state.pluginSetupCommandError,
     askUserViewerState: state.askUserViewerState,
     askUserDraft: state.protectedAskUser?.draft ?? state.askUserDraft,
-    pendingPlanReview: state.protectedAskUser ? null : state.pendingPlanReview,
+    pendingPlanReview: state.pendingPlanReview,
     pendingIssueConfirm: state.pendingIssueConfirm,
     pendingInputHandoff: state.pendingInputHandoff,
     pendingRenameSessionsConfirm: state.pendingRenameSessionsConfirm,
@@ -10876,9 +10982,10 @@ function reconcilePendingInteractions(
       setState(sessionId, (state) => {
         // Missing dismissal pushes must not leave old questions blocking the
         // composer. Only a successful, current Host snapshot can retire them.
+        const survivingQuestions = allPendingQuestions(state).filter((q) => authoritativeQuestionIds.has(q.requestId));
         const nextAskUser = state.pendingAskUser &&
           authoritativeQuestionIds.has(state.pendingAskUser.requestId)
-          ? state.pendingAskUser : null;
+          ? state.pendingAskUser : survivingQuestions[0] ?? null;
         const nextPlanReview = state.pendingPlanReview &&
           authoritativePlanIds.has(state.pendingPlanReview.requestId)
           ? state.pendingPlanReview : null;
@@ -10959,6 +11066,7 @@ function reconcilePendingInteractions(
           !appPermissionsChanged &&
           !queueChanged &&
           !messagesChanged &&
+          survivingQuestions.length === allPendingQuestions(state).length &&
           nextAskUser === state.pendingAskUser &&
           nextPlanReview === state.pendingPlanReview &&
           nextPermission === state.pendingPermission &&
@@ -10973,7 +11081,8 @@ function reconcilePendingInteractions(
           ...state,
           messages: messagesChanged ? messages : state.messages,
           pendingAskUser: nextAskUser,
-          askUserDraft: nextAskUser ? state.askUserDraft : null,
+          pendingAskUserQueue: survivingQuestions,
+          askUserDraft: nextAskUser?.requestId === state.pendingAskUser?.requestId ? state.askUserDraft : (nextAskUser && state.askUserDrafts?.[nextAskUser.requestId]) || null,
           askUserViewerState: nextAskUser ? state.askUserViewerState : 'expanded',
           pendingPlanReview: nextPlanReview,
           planViewerState: nextPlanReview ? state.planViewerState : 'expanded',
@@ -16434,11 +16543,7 @@ function stopSession(
       errorRetryText: null,
       pendingPermission: null,
       continuationTurnClientId: null,
-      pendingAskUser: null,
-      // F-AUQ-MIN-5: Stop session — pending question is gone, reset viewer.
-      askUserViewerState: 'expanded',
-      // F-AUQ-DRAFT: Stop wipes the question, draft is no longer meaningful.
-      askUserDraft: null,
+      ...retainAsyncQuestions(s),
       pendingPlanReview: null,
       // 用户主动 Stop:wake 型 running 任务标 stopped、唤醒桥接清零,让 running
       // 快照立即回落。只收 wake 型——后台 bash / codex 任务不因 interrupt 而死,
@@ -17068,6 +17173,8 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       pendingPermission: null,
       pendingAppPermissions: [],
       pendingAskUser: null,
+      pendingAskUserQueue: [],
+      askUserDrafts: {},
       pendingPluginSetup: null,
       pendingPluginSetupQueue: [],
       pluginSetupViewerState: 'expanded',
@@ -17078,6 +17185,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       // F-AUQ-DRAFT: Clear session also wipes any in-progress draft.
       askUserDraft: null,
       protectedAskUser: undefined,
+      parkedProtectedAsks: undefined,
       pendingPlanReview: null,
       pendingIssueConfirm: null,
       pendingInputHandoff: null,
@@ -17379,6 +17487,7 @@ function answerUserQuestion(
     pendingAskUser: s.pendingAskUser?.requestId === requestId ? null : s.pendingAskUser,
     askUserViewerState: s.pendingAskUser?.requestId === requestId ? 'expanded' : s.askUserViewerState,
     askUserDraft: s.pendingAskUser?.requestId === requestId ? null : s.askUserDraft,
+    ...removePendingQuestion(s, requestId, true),
     messages: s.messages.map((m) =>
       m.askUserRequestId === requestId && m.askUserStatus === 'pending'
         ? { ...m, askUserStatus: 'answered' as const, askUserReply: replySummary, askUserAnswers: submittedAnswers }
@@ -17394,9 +17503,10 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
   const state = getOrCreateState(sessionId);
   const protectedQuestion = state.protectedAskUser;
   if (protectedQuestion?.pending.requestId !== requestId) return;
-  const text = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers);
+  const text = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers,
+    { late: !state.agentStatus.isRunning || state.turnStoppedByUser });
   const clear = () => setState(sessionId, (s) => s.protectedAskUser?.pending.requestId === requestId
-    ? { ...s, protectedAskUser: undefined, askUserViewerState: 'expanded' } : s);
+    ? { ...s, ...removePendingQuestion(s, requestId, true) } : s);
   const key = `${sessionId}:${requestId}:supplement`;
   if (questionDecisionsInFlight.has(key)) return;
   questionDecisionsInFlight.add(key);
@@ -17424,16 +17534,14 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
     );
     if (!current()) return;
     if (!needsSupplement) {
-      setState(sessionId, (s) => ({ ...s, protectedAskUser: undefined, askUserViewerState: 'expanded',
-        pendingAskUser: s.pendingAskUser?.requestId === requestId ? null : s.pendingAskUser,
-        askUserDraft: s.askUserDraft?.requestId === requestId ? null : s.askUserDraft,
-      }));
+      setState(sessionId, (s) => ({ ...s, ...removePendingQuestion(s, requestId, true) }));
       return;
     }
     if (!text) { clear(); return; }
     const session = await getSessionFor(sessionId);
     // Exact retries share an ID; an edited answer is a new supplemental input.
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    const answerText = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(answerText));
     const answerId = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
     if (!current()) return;
     const queued = buildQueuedMessage(sessionId, text, session.model, session.effort,
@@ -18799,6 +18907,7 @@ export const makerChatStore = {
   setPluginSetupViewerState,
   /** F-AUQ-DRAFT: persist in-progress wizard state across session switch. */
   setAskUserDraft,
+  selectAskUserQuestion,
   setTitleUpdateCallback,
   syncActiveTurnsFromMain,
   /**
@@ -19619,6 +19728,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         content: displayContent,
         isStreaming: false,
         askUserStatus: resolvedStatus as 'answered' | 'expired',
+        askUserWithdrawalReason: typeof c.withdrawalReason === 'string' ? c.withdrawalReason : undefined,
         askUserRequestId: typeof c.requestId === 'string' ? c.requestId : undefined,
         askUserReply: replySummary,
         askUserQuestions: questions,

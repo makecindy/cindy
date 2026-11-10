@@ -12,6 +12,8 @@
 
 ## 2026-11
 
+- **11-10 交互回答输入框统一全宽、操作放框内**——用户指出撤回补充卡中语音和长文字发送按钮挤占输入宽度，要求所有交互输入一起优化。普通回答、自定义回答、多选补充、撤回补充与计划反馈改用全宽输入区，已有语音及发送操作位于框内下方；发送复用主消息输入框的纸飞机图标，动作名通过提示和无障碍标签保留。多选自定义输入只保留一个发送入口。落点：`DESIGN.md §4 Inputs & Forms`、桌面 `AskUserQuestionPrompt` / `PlanActionCard`、手机 `InteractionPanel`；证据：`ask-user-question` 的 withdrawn / input-free / input-custom / input-multi / input-plan 窄屏深浅色场景。
+
 - **11-06 桌面伙伴展开行与任务列表模式的任务行统一**——用户发现展开后的伙伴行比列表模式的一条任务高（头像外层是行内盒，落在文字基线上把行撑到 66px），要求「和任务一样高」，看过选中对比图后要求选中样式也统一。现行：伙伴、远程伙伴、多电脑 Cindy 与群行共用任务行的高度（`SIDEBAR_LIST_ROW_HEIGHT_CLASS`，默认约 59px，随界面字号缩放，头像仍为 44px）与选中样式（`SIDEBAR_LIST_ROW_ACTIVE_CLASS`：实色底 + 文字色 + 1px 内描边），行间距由 4px 改为与任务一致的 2px，行圆角由 12px 改为任务行的 8px（悬停与选中底色同形）。被取代：10-29「伙伴选中用淡色表面、不用任务侧栏选中底色」。收起头像行的圆形描边选中不变，手机端不变。落点：`cc-agent/sidebar/listRowStyle.ts`、`desktop-bot-list-status.md`；守护：`teammatesSectionSpacing.test.ts`、`teammates-section` 单页验证。
 - **11-05 填充按钮的悬停与按下改由基础色算出，借鉴苹果「基础色 + 系统效果」**——用户看 `cta` 按下色时发现白字按钮按下反而变亮（公式朝按钮文字色混 10%），11 个内置主题中 4 个反向；发送按钮在非 Cindy 主题没有悬停和按下反馈；授权按钮按下明显变亮；确认框按下与悬停同色。用户要求统一成一条规则，便于以后做更自由的主题自定义，看过对比图后确认。规则：OKLCH 亮度悬停 -0.045、按下 -0.085，亮度不高于 0.25 的底色改抬到 0.27 / 0.355。步长由 Cindy 定稿值反推（浅色 -0.051 / -0.091，深色 -0.036 / -0.079），Cindy 不留例外：`#2E3237` / `#25282C` → `#303337` / `#27292D`，`#E2E2E2` / `#D4D4D4` → `#DFDFDF` / `#D2D2D2`。唯一例外是深色 `danger-solid` 继续朝文字色走，否则对比度低于 4.5。列表与菜单悬停、登录页、设置页自有按钮、中性按钮不在范围内。落点：DESIGN §4 Filled button states、§15.10；`themes/filledButtonStates.ts`；`buttonStateContrast.test.ts`。
 

@@ -203,7 +203,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   canHostControlPiSubagentRun,
@@ -214,7 +214,7 @@ import {
 } from '@cindy/maker-core/pi-subagent-runs';
 import {
   PI_CACHE_RECOVERY_EXPECTATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT,
-  INHERITED_CAPABILITY_SELECTION, MAIN_OWNED_SEND_CONTEXT, TurnDispatchRejectedError,
+  INHERITED_CAPABILITY_SELECTION, MAIN_OWNED_SEND_CONTEXT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, TurnDispatchRejectedError,
 } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import type {
@@ -3927,7 +3927,8 @@ configureBotAutonomyHost({
 function hasPendingAgentInteractionForSession(sessionId: string): boolean {
   return (
     Array.from(pendingInteractionResolvers.values()).some(
-      (entry) => entry.sessionId === sessionId,
+      (entry) => entry.sessionId === sessionId &&
+        !(entry.request.kind === 'ask_user_question' && entry.request.delivery === 'async'),
     ) || ghostSetupInteractionBridge.pendingSnapshots(sessionId).length > 0
   );
 }
@@ -3943,6 +3944,7 @@ type BotCompactRuntimeRefreshHandler = (
  * needs the register-time Maker/bootstrap closure, so keep one narrow holder
  * and let the instance-scoped coordinator own all compact settle signals.
  */
+let asyncQuestionInputDispatcher: ((session: NonNullable<ReturnType<Maker['getSession']>>, text: string, signal: AbortSignal, requestId: string) => Promise<void>) | undefined;
 let botCompactRuntimeRefreshHandler: BotCompactRuntimeRefreshHandler | null = null;
 /**
  * 逐轮环境说明(界面语言 / 客户端设备 / 个人版制作说明)的去重记忆:同一原生上下文里内容
@@ -4179,6 +4181,8 @@ function cleanupPendingAgentInteractionsForSession(sessionId: string, reason: st
     ([, entry]) => entry.sessionId === sessionId,
   );
   for (const [requestId, entry] of entries) {
+    if ((reason === 'session_aborted' || reason === 'turn_idle_reconcile') &&
+        entry.request.kind === 'ask_user_question' && entry.request.delivery === 'async') continue;
     clearPendingInteraction(requestId);
     handleAgentIslandInteractionDismissed(sessionId, requestId);
     const decision = defaultDecisionForPending(entry.kind, reason);
@@ -6610,6 +6614,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   if (!session) return;
   const registration = sessionBindings.beginBinding(session);
   if (!registration) return;
+
+  session.setAsyncQuestionAnswerDispatcher((text, signal, requestId) => {
+    if (!asyncQuestionInputDispatcher) throw new Error('Question input dispatcher is unavailable');
+    return asyncQuestionInputDispatcher(session, text, signal, requestId);
+  });
 
   registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session));
 
@@ -19561,6 +19570,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       expectedTurnSession?: object;
       expectedTurnGeneration?: number;
       readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
+      readonly [ASYNC_QUESTION_ANSWER]?: true;
+      readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
       readonly [AUTO_REVIEW_SOURCE_CONTENT]?: string;
       readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
       readonly [AUTO_REVIEW_USER_INTENT]?: string;
@@ -19740,6 +19751,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         userName: so.userName,
         signal: so.signal,
         [MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT],
+        [ASYNC_QUESTION_ANSWER]: so[ASYNC_QUESTION_ANSWER],
+        [SUPERSEDE_ASYNC_QUESTIONS]: so[SUPERSEDE_ASYNC_QUESTIONS],
         [AUTO_REVIEW_SOURCE_CONTENT]: so[AUTO_REVIEW_SOURCE_CONTENT],
         [AUTO_REVIEW_DELEGATED_CONTINUATION]: so[AUTO_REVIEW_DELEGATED_CONTINUATION],
         [AUTO_REVIEW_USER_INTENT]: restoredSteerIntent,
@@ -21050,7 +21063,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       publishUiSessionIntervention(sessionId);
     },
     // persistedContent can be a JSON envelope (attachments, pasted ranges): read the text the owner typed.
-    onOwnerMessage: (sessionId, item) => dismissInputHandoffForOwnerMessage(sessionId, extractPlainText(item.persistedContent || item.text)),
+    onOwnerMessage: (sessionId, item) => {
+      dismissInputHandoffForOwnerMessage(sessionId, extractPlainText(item.persistedContent || item.text));
+      // This prefix only preserves question UI. It conveys no permission or identity.
+      if (!item.clientId.startsWith('question-reply:')) maker.getSession(sessionId)?.dismissAsyncQuestionsForUserInput();
+    },
     previewQueuedUserTurn: (sessionId, item) => {
       if (item.botTaskCoordination) return;
       notifyAgentIslandUserPrompt(
@@ -21269,6 +21286,46 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;
+  asyncQuestionInputDispatcher = async (session, text, signal, requestId) => {
+    const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+    const pausedBeforeAnswer = inputCoordinator.getProjection(session.id).queuePaused;
+    const inputGeneration = inputCoordinator.getGeneration(session.id);
+    // Stop aborts this boundary without bumping the generation, so capture it before any await.
+    const inputSignal = inputCoordinator.getInputAbortSignal(session.id, inputGeneration);
+    await inputCoordinator.ensureQueueRestored(session.id);
+    const assertCurrent = () => {
+      if (signal.aborted || inputSignal.aborted || maker.getSession(session.id) !== session || inputCoordinator.getGeneration(session.id) !== inputGeneration) throw new Error('Question session changed');
+      if (inputCoordinator.isExecutionPaused(session.id)) throw new Error('Question session is paused');
+      if (sharedTask && (!sharedTask.isCurrent() || !sharedTask.authorize('input.send'))) throw new Error('[PERMISSION_DENIED] SharedTask task access denied');
+    };
+    const meta = await maker.getSessionMeta(session.id);
+    assertCurrent();
+    if (!meta) throw new Error('Question session is no longer available');
+    const digest = createHash('sha256').update(text).digest('hex');
+    let item = await buildSessionControlInputItem({ targetSessionId: session.id, message: text,
+      persistedContent: text, clientId: `question-reply:${requestId}:${digest}`, meta, inheritTargetPlanMode: true });
+    item = stampSharedTaskInput(item, sharedTask, item.createOpts);
+    item = stampTrustedDeviceLinkQueuedOrigin(
+      stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(item, isMobileControllerInvoke()), isDeviceLinkInvoke()),
+      isDeviceLinkInvoke(), readDeviceLinkInvokeSourceDevice(),
+    );
+    assertCurrent();
+    if (!pausedBeforeAnswer) {
+      const outcome = await inputCoordinator.steerControlInput(session.id, { item }, {
+        session, turnGeneration: session.getTurnGeneration(), beforeMutation: async () => assertCurrent(),
+      });
+      // An uncertain ACK is already held in the coordinator's paused queue. Never resume or replay it.
+      if (outcome === 'steered' || outcome === 'queued') return;
+      if (outcome === 'rejected') throw new Error('Question answer was not accepted');
+    }
+    assertCurrent();
+    inputCoordinator.enqueue(session.id, item);
+    // An answer submitted after Stop explicitly resumes; a newer Stop still wins the race.
+    // An ACK-uncertain steer keeps its protective pause: only an explicit user decision may re-dispatch it.
+    if (pausedBeforeAnswer && inputCoordinator.getProjection(session.id).queuePaused &&
+      !inputCoordinator.isPausedForUncertainDelivery(session.id)) inputCoordinator.resume(session.id);
+  };
+
   explicitStopImpl = async (sessionId) => {
     await inputCoordinator.ensureQueueRestored(sessionId);
     resetAutomaticRecoveryForExplicitStop(sessionId);
@@ -23222,6 +23279,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // payload and is carried only through the Host-owned action path.
           pluginSetupResponseTarget = event.sender;
         }
+      }
+      const pendingQuestion = pendingInteractionResolvers.get(requestId);
+      if (pendingQuestion?.request.kind === 'ask_user_question' && pendingQuestion.request.delivery === 'async') {
+        if (agentInputCoordinatorHolder?.isExecutionPaused(pendingQuestion.sessionId)) return { accepted: false };
+        const questionSession = maker.getSession(pendingQuestion.sessionId);
+        if (!questionSession || !await questionSession.submitAsyncQuestionAnswer(requestId, decision as InteractionDecision)) return { accepted: false };
+        if (pendingInteractionResolvers.get(requestId) !== pendingQuestion) return { accepted: false };
+        if (sharedTask) assertSharedTaskInteractionResolveCurrent(sharedTask, [requestId, decision]);
       }
       if (resolvePendingInteraction(requestId, decision as InteractionDecision)) {
         return { accepted: true };

@@ -13002,6 +13002,11 @@
     "jumpToBottom": "至底",
     "prevMessageJump": "至上一问：{{preview}}",
     "askUserQuestion": {
+    "unanswered": "未答",
+    "withdrawn": "无须再答",
+    "withdrawnDraft": "此问无须再答。\n{{reason}}\n草稿尚存，可另作补充发送。",
+    "sendSupplement": "发送补充",
+
       "voice": {
         "hint": "可言「第一项」或选项之名；多选毕，请言「确认选择」。",
         "freeTextHint": "可径言其答，察毕言「确认选择」以呈。",

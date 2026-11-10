@@ -36,6 +36,11 @@
     "exit": "退出計劃模式"
   },
   "panel": {
+    "questionUnanswered": "未回答",
+    "questionWithdrawn": "無需再回答",
+    "withdrawnDraft": "這個問題已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作為補充傳送。",
+    "sendSupplement": "傳送補充",
+
     "readOnlyKind": "待確認",
     "readOnlyTitle": "電腦端正在等待確認",
     "pendingRequests": "待處理請求",

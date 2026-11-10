@@ -13011,6 +13011,11 @@
     "prevMessageJump": "이전 질문으로 이동: {{preview}}",
     "sessionLoading": "세션 불러오는 중",
     "askUserQuestion": {
+    "unanswered": "답변 없음",
+    "withdrawn": "더 이상 답변이 필요하지 않습니다",
+    "withdrawnDraft": "이 질문에 더 이상 답변할 필요가 없습니다.\n{{reason}}\n초안은 보관되며 추가 정보로 보낼 수 있습니다.",
+    "sendSupplement": "추가 정보 보내기",
+
       "voice": {
         "hint": "옵션 번호나 이름을 말하세요. 여러 개를 선택한 뒤에는 “선택 확인”이라고 말하세요.",
         "freeTextHint": "답변을 말하고 내용을 검토한 뒤 “선택 확인”이라고 말하여 제출하세요.",

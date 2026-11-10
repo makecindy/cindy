@@ -13132,6 +13132,11 @@
     "prevMessageJump": "Aller au prompt précédent : {{preview}}",
     "sessionLoading": "Chargement de la tâche",
     "askUserQuestion": {
+    "unanswered": "Sans réponse",
+    "withdrawn": "Réponse désormais inutile",
+    "withdrawnDraft": "Cette question ne nécessite plus de réponse.\n{{reason}}\nVotre brouillon est conservé et peut être envoyé en complément.",
+    "sendSupplement": "Envoyer un complément",
+
       "voice": {
         "hint": "Dites le numéro ou le nom d'une option. Pour un choix multiple, dites ensuite « confirmer la sélection ».",
         "freeTextHint": "Dites votre réponse, relisez-la, puis dites « confirmer la sélection » pour l'envoyer.",

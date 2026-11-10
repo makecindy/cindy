@@ -128,6 +128,11 @@ export interface PersistableWindow {
   isMinimized(): boolean;
   isFullScreen(): boolean;
   getBounds(): WorkAreaRect;
+  /**
+   * The real window rectangle when `getBounds` reports a substituted baseline
+   * (right sidebar open). Snap / work-area fill detection must read this one.
+   */
+  getLiveBounds?(): WorkAreaRect;
   isSnapped?: () => boolean;
   on?(event: string, listener: () => void): unknown;
   removeListener?(event: string, listener: () => void): unknown;
@@ -179,7 +184,7 @@ export function persistedBoundsDecision(
 }
 
 /** The whole rectangle sits inside the work area. A partial overlap still counts as off-screen. */
-function rectInsideWorkArea(rect: WorkAreaRect, workArea: WorkAreaRect): boolean {
+export function rectInsideWorkArea(rect: WorkAreaRect, workArea: WorkAreaRect): boolean {
   return (
     rect.x >= workArea.x &&
     rect.y >= workArea.y &&
@@ -218,7 +223,7 @@ function nearWorkAreaSize(size: number, workAreaSize: number): boolean {
   return size >= workAreaSize - WORK_AREA_FILL_TOLERANCE_PX;
 }
 
-function placeOntoLiveDisplay(
+export function placeOntoLiveDisplay(
   bounds: WorkAreaRect,
   live: WorkAreaRect,
   screenApi: Pick<WorkAreaScreen, 'getDisplayMatching'>,
@@ -350,8 +355,11 @@ export function manageWindowStatePreservingNormalBounds(
   }
   // A window that is already filling the work area when tracking starts has no
   // earlier size to return to. Otherwise the live rectangle is the restore size.
+  const liveRect = () => (win.getLiveBounds ? win.getLiveBounds() : win.getBounds());
+  // `getBounds` is the rectangle to persist (the standalone baseline while the
+  // sidebar is open); `liveRect` is what is on screen and decides Snap / fill.
   let previousNormalBounds: WorkAreaRect | null = persistedBoundsDecision(
-    win,
+    windowStateView(win, liveRect),
     null,
     screenApi,
     platform,
@@ -362,12 +370,12 @@ export function manageWindowStatePreservingNormalBounds(
   // decision cannot be re-derived from it; clearing this only happens when the
   // window is back at a genuinely normal size.
   let syntheticMaximized = persistedBoundsDecision(
-    win,
+    windowStateView(win, liveRect),
     null,
     screenApi,
     platform,
   ).reportMaximized;
-  const originalGetBounds = win.getBounds.bind(win);
+  const originalGetBounds = liveRect;
   // electron-window-state reads getBounds() and then, while isMaximized() is
   // true, leaves x/y/width/height alone. A filled window dragged onto another
   // monitor never gets a smaller rectangle, so the flag stays true and the old
@@ -380,14 +388,14 @@ export function manageWindowStatePreservingNormalBounds(
   let copyBoundsReads = 0;
   const boundsForKeeper = () => {
     const live = originalGetBounds();
-    if (win.isMinimized()) return previousNormalBounds ?? live;
+    if (win.isMinimized()) return previousNormalBounds ?? win.getBounds();
     const decision = persistedBoundsDecision(
       windowStateView(win, () => live),
       previousNormalBounds,
       screenApi,
       platform,
     );
-    if (!decision.bounds) return live;
+    if (!decision.bounds) return win.getBounds();
     const relocated = placeOntoLiveDisplay(decision.bounds, live, screenApi);
     if (relocated !== decision.bounds) {
       previousNormalBounds = relocated;
@@ -413,7 +421,7 @@ export function manageWindowStatePreservingNormalBounds(
     }
     syntheticMaximized = filling;
     if (filling) return;
-    previousNormalBounds = live;
+    previousNormalBounds = { ...win.getBounds() };
   };
   const liveFillsWorkArea = () =>
     persistedBoundsDecision(
