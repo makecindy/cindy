@@ -315,3 +315,44 @@ it.each(['ios', 'android', 'web'])('offers project moving only when %s has a pic
   expect(h.invoke).toHaveBeenCalledTimes(supported ? 1 : 0);
   if (!supported) expect(h.picker).toBeNull();
 });
+
+// A renamed/deleted cwd must not strand the project picker without navigation.
+it('falls back once to home when the initial project directory is unreadable and can choose a new destination', async () => {
+  await open({ ...session, workspaceKind: 'project', workingDir: '/missing' });
+  h.invoke.mockRejectedValueOnce(new Error('[FS_BROWSE_FAILED] ENOENT'))
+    .mockResolvedValueOnce({ resolvedPath: '/home', parent: '/', entries: [{ name: 'new', path: '/home/new', kind: 'dir' }] });
+  await act(async () => h.picker!.onBrowse());
+  expect(h.invoke.mock.calls.slice(1).map(call => call[2])).toEqual([[{ path: '/missing' }], [{ path: '~' }]]);
+  expect(h.picker?.error).toBeNull();
+  expect(h.picker?.path).toBe('/home');
+  expect(h.picker?.entries.map(entry => entry.path)).toEqual(['/home/new']);
+  h.invoke.mockResolvedValueOnce({ resolvedPath: '/home/new', parent: '/home', entries: [] });
+  await act(async () => h.picker!.onEnter('/home/new'));
+  h.invoke.mockResolvedValueOnce({ projectMove: { sessionId: 'task-a', workingDir: '/home/new', workspaceKind: 'project' } });
+  await act(async () => h.picker!.onChoose('/home/new'));
+  expect(h.patch).toHaveBeenCalledExactlyOnceWith('old-shard', 'task-a', {
+    workingDir: '/home/new', workspaceKind: 'project', projectDir: null,
+  });
+});
+
+it.each(['back', 'account'])('does not send the home fallback after %s invalidates the initial browse', async change => {
+  await open({ ...session, workspaceKind: 'project', workingDir: '/missing' });
+  let fail!: (error: unknown) => void;
+  h.invoke.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+  act(() => h.picker!.onBrowse());
+  if (change === 'back') act(() => h.picker!.onBack());
+  else setMobileAuthOwner('owner-b');
+  await act(async () => fail(new Error('[FS_BROWSE_FAILED] ENOENT')));
+  expect(h.invoke).toHaveBeenCalledTimes(2);
+  expect(h.patch).not.toHaveBeenCalled();
+});
+
+it.each(['project', 'dialogue'] as const)('does not loop when home is unreadable for a %s', async workspaceKind => {
+  await open({ ...session, workspaceKind, workingDir: '/missing' });
+  h.invoke.mockRejectedValue(new Error('[FS_BROWSE_FAILED] EACCES'));
+  await act(async () => h.picker!.onBrowse());
+  expect(h.invoke).toHaveBeenCalledTimes(workspaceKind === 'project' ? 3 : 2);
+  expect(h.picker?.error).toBe('session.menu.moveFailed');
+  expect(h.picker?.loading).toBe(false);
+  expect(h.patch).not.toHaveBeenCalled();
+});

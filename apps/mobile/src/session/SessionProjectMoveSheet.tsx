@@ -104,7 +104,7 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
     readGeneration.current++;
     setPage(null);
   };
-  const browse = async (path: string) => {
+  const browse = async (path: string, fallbackToHome = false) => {
     if (!devices || lock.current || !current()) return;
     const request = ++readGeneration.current;
     const currentRead = () => current() && request === readGeneration.current;
@@ -116,8 +116,15 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
     setError(null);
     setActionError(null);
     try {
-      let result = await invoke<RemoteDirectoryListResult>(devices.rpcDeviceId, 'fs:list-dir',
-        [{ path: path || '~' }], { preSend: assertCurrentRead });
+      const readDirectory = (target: string) => invoke<RemoteDirectoryListResult>(devices.rpcDeviceId, 'fs:list-dir',
+        [{ path: target || '~' }], { preSend: assertCurrentRead });
+      let result: RemoteDirectoryListResult;
+      try { result = await readDirectory(path); }
+      catch (err) {
+        // A moved or deleted task cwd must not strand the initial folder picker.
+        if (!fallbackToHome || !path || path === '~' || !currentRead()) throw err;
+        result = await readDirectory('~');
+      }
       if (!currentRead()) return;
       setDirectory(result);
       setLoading(false);
@@ -190,7 +197,7 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
       if (lock.current) return;
       readGeneration.current++; setLoading(false); setError(null); setActionError(null); setPage('workspace');
     }} onDevice={() => undefined} onDialogue={() => void choose(null)} onProject={path => void choose(path)}
-    onBrowse={() => void browse(session.workspaceKind === 'project' ? session.workingDir || '~' : '~')} onEnter={path => void browse(path)}
+    onBrowse={() => void browse(session.workspaceKind === 'project' ? session.workingDir || '~' : '~', true)} onEnter={path => void browse(path)}
     onChoose={path => void choose(path)} onShowHidden={setShowHidden}
   />;
 }
