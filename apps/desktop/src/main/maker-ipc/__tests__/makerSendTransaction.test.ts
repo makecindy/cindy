@@ -2832,6 +2832,50 @@ describe('maker SEND transaction', () => {
     expect(newSession.send).toHaveBeenCalled();
   });
 
+  // Orca inter-agent delivery reaches an idle live session without sendToAgentAccepted;
+  // it uses this entry so a session that became a Lead after startup is rebuilt first.
+  it('rebuilds an idle live Orca session on request and leaves a hydrated one alone', async () => {
+    const oldSession = createSession({
+      id: 'orca-session',
+      workDir: 'C:\\repo',
+      hostStartupPreferences: { userPrompt: 'custom prompt', makerMemoryEnabled: false },
+    });
+    const newSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
+    const hydrated = { current: false };
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => hydrated.current),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      bootstrapSession: vi.fn(async () => {
+        hydrated.current = true;
+        return { session: newSession, didInjectOrcaInstructions: true, didInjectProjectContext: false };
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'orca-session',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      orcaRole: 'lead',
+    };
+
+    await expect(transaction.hydrateActiveOrcaSession('orca-session', createOpts)).resolves.toBe(true);
+    expect(deps.closeSession).toHaveBeenCalledTimes(1);
+    expect(deps.bootstrapSession).toHaveBeenCalledTimes(1);
+    // Startup preferences of the replaced runtime survive the rebuild.
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      userPrompt: 'custom prompt',
+      makerMemoryEnabled: false,
+    }));
+    expect(deps.markOrcaRoleIfNeeded).toHaveBeenCalledWith('orca-session', 'lead');
+    expect(oldSession.send).not.toHaveBeenCalled();
+
+    await expect(transaction.hydrateActiveOrcaSession('orca-session', createOpts)).resolves.toBe(false);
+    expect(deps.closeSession).toHaveBeenCalledTimes(1);
+    expect(deps.bootstrapSession).toHaveBeenCalledTimes(1);
+  });
+
   it('reconciles createOpts against DB before closing the old runtime on active Orca rehydrate (#2882)', async () => {
     const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
     const newSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
