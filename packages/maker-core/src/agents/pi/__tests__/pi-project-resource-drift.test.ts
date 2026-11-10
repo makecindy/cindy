@@ -43,6 +43,15 @@ function statMtime(target: string): number {
   return statSync(target).mtimeMs;
 }
 
+/** 实现内部以 realpath(scanRoot) 作 Map 键(macOS 的 os.tmpdir() 是 /var/folders 软链)：断言必须用规范化后的路径查键，否则键恒缺失（MagicLizi P1）。 */
+function canon(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    return target;
+  }
+}
+
 // Windows 文件时间戳有粒度(最粗 ~15.6ms):同一 tick 内的连续 mkdir/write 不改
 // 父目录 mtime,快检判不出漂移就不触发重扫 —— 断言依赖漂移判定的步骤必须显式
 // 推 mtime,否则 Windows CI 会偶发假失败(2026-11-08 run 42406651024 实报)。
@@ -131,11 +140,11 @@ describe('piProjectResourcesDrifted', () => {
     const nested = path.join(project, 'sub');
     mkdirSync(nested, { recursive: true });
     const roots = collectPiProjectResourceWatchRootMtimes(nested);
-    expect(roots.has(path.join(nested, '.pi'))).toBe(true);
-    expect(roots.has(path.join(nested, '.agents'))).toBe(true);
-    expect(roots.has(path.join(nested, '.agents', 'skills'))).toBe(true);
-    expect(roots.has(path.join(project, '.agents'))).toBe(true);
-    expect(roots.has(path.join(project, '.agents', 'skills'))).toBe(true);
+    expect(roots.has(canon(path.join(nested, '.pi')))).toBe(true);
+    expect(roots.has(canon(path.join(nested, '.agents')))).toBe(true);
+    expect(roots.has(canon(path.join(nested, '.agents', 'skills')))).toBe(true);
+    expect(roots.has(canon(path.join(project, '.agents')))).toBe(true);
+    expect(roots.has(canon(path.join(project, '.agents', 'skills')))).toBe(true);
   });
 
   it('detects a skill added inside an existing namespace dir (nested level)', () => {
@@ -178,13 +187,13 @@ describe('piProjectResourcesDrifted', () => {
     writeSkill(path.join('.pi', 'skills'), 'alpha');
     const baseline = snapshot();
     const skillsDir = path.join(project, '.pi', 'skills');
-    const mtimeAtLaunch = baseline.watchRootMtimes.get(skillsDir)!;
+    const mtimeAtLaunch = baseline.watchRootMtimes.get(canon(skillsDir))!;
     // 无关子目录:改了 skills 根 mtime,但不改变路径集合
     mkdirSync(path.join(skillsDir, 'unrelated'), { recursive: true });
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     // 基线已就地刷新:下一次快检恢复零扫描,且真实漂移仍能检出
-    expect(baseline.watchRootMtimes.get(skillsDir)).toBe(statMtime(skillsDir));
-    expect(baseline.watchRootMtimes.get(skillsDir)).not.toBe(mtimeAtLaunch);
+    expect(baseline.watchRootMtimes.get(canon(skillsDir))).toBe(statMtime(skillsDir));
+    expect(baseline.watchRootMtimes.get(canon(skillsDir))).not.toBe(mtimeAtLaunch);
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     writeSkill(path.join('.pi', 'skills'), 'beta');
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
@@ -196,10 +205,10 @@ describe('piProjectResourcesDrifted', () => {
     mkdirSync(path.join(project, '.pi', 'extensions', 'myext'), { recursive: true });
     const roots = collectPiProjectResourceWatchRootMtimes(project);
     const ns = path.join(project, '.pi', 'skills', '@scope');
-    expect(roots.has(ns)).toBe(true);
-    expect(roots.has(path.join(ns, 'alpha'))).toBe(true);
-    expect(roots.has(path.join(ns, 'plain'))).toBe(true);
-    expect(roots.has(path.join(project, '.pi', 'extensions', 'myext'))).toBe(true);
+    expect(roots.has(canon(ns))).toBe(true);
+    expect(roots.has(canon(path.join(ns, 'alpha')))).toBe(true);
+    expect(roots.has(canon(path.join(ns, 'plain')))).toBe(true);
+    expect(roots.has(canon(path.join(project, '.pi', 'extensions', 'myext')))).toBe(true);
   });
 
   it('launch snapshot samples watch roots before path collection (race-safe order)', () => {
@@ -211,7 +220,7 @@ describe('piProjectResourcesDrifted', () => {
     const baseline = snapshotPiProjectResourceLaunch(
       project, collectPiProjectResourceCliPaths(project), watchRootMtimes, resolvePiResourceRepoRoot(project));
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
-    expect(baseline.watchRootMtimes.get(path.join(project, '.pi', 'skills')))
+    expect(baseline.watchRootMtimes.get(canon(path.join(project, '.pi', 'skills'))))
       .toBe(statMtime(path.join(project, '.pi', 'skills')));
   });
 
@@ -222,7 +231,7 @@ describe('piProjectResourcesDrifted', () => {
     mkdirSync(path.join(project, '.pi', 'extensions', 'newext'), { recursive: true });
     bumpMtime(path.join(project, '.pi', 'extensions'));
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
-    expect(baseline.watchRootMtimes.has(path.join(project, '.pi', 'extensions', 'newext'))).toBe(true);
+    expect(baseline.watchRootMtimes.has(canon(path.join(project, '.pi', 'extensions', 'newext')))).toBe(true);
     // 若不重建基线,这里的 index.ts 只改未盯视的新子目录 mtime,永远检不出
     writeFileSync(path.join(project, '.pi', 'extensions', 'newext', 'index.ts'), 'export {};\n');
     bumpMtime(path.join(project, '.pi', 'extensions', 'newext'));
@@ -335,6 +344,6 @@ describe('piProjectResourcesDrifted', () => {
 
   it('missing directories baseline as -1 and compare against real mtimes', () => {
     const roots = collectPiProjectResourceWatchRootMtimes(project);
-    expect(roots.get(path.join(project, '.pi'))).toBe(-1);
+    expect(roots.get(canon(path.join(project, '.pi')))).toBe(-1);
   });
 });
