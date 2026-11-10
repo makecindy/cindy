@@ -52,6 +52,7 @@ import path from 'node:path';
 
 import {
   Maker,
+  type Session,
   isBotMcpServerAllowed,
   ClaudeCodeAgent,
   CodexAgent,
@@ -3242,6 +3243,15 @@ export function getMaker(): Maker {
         },
       },
     });
+    // 漂移回收的 close 必须在抑制窗口内:直发链路(IM turnRunner/hook/scheduler/goal)
+    // 回收后立刻按 DB 行重建同一任务,窗口内 onClose 跳过临时附件清理与 worktree
+    // 释放 —— 否则重建后的 turn 会丢转录里引用的暂存附件(Codex P2,2026-11-10)。
+    // 桌面发送事务的同一 close 在 register.ts 的 deps seam 处已各自包裹,此处收口
+    // 其余全部直发调用方(getMaker 侧不经过 seam)。
+    const baseRecyclePiRuntimeIfResourcesDrifted
+      = _maker.recyclePiRuntimeIfResourcesDrifted.bind(_maker);
+    _maker.recyclePiRuntimeIfResourcesDrifted = async (session: Session) =>
+      withRehydrateCloseSuppressed(session.id, () => baseRecyclePiRuntimeIfResourcesDrifted(session));
     // 本机作为「Agent 运行的电脑」：同账号另一台电脑的任务可让 Agent 在这里运行。
     installRemoteAgentHost({
       getMaker: () => getMaker(),
