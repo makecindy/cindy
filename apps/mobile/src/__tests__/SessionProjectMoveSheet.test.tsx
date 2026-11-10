@@ -45,7 +45,7 @@ let move: ReturnType<typeof useSessionProjectMoveSheet>;
 function Harness() { move = useSessionProjectMoveSheet(); return move.sheet; }
 beforeEach(() => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
-  vi.clearAllMocks(); h.picker = null; h.running = false;
+  vi.clearAllMocks(); h.invoke.mockReset(); h.picker = null; h.running = false;
   setMobileAuthOwner('owner-a');
   h.invoke.mockResolvedValue({ supported: true, projects: ['/project'] });
   container = document.createElement('div');
@@ -86,7 +86,7 @@ it('retains the picker and original membership after a host rejection; never ret
   h.invoke.mockRejectedValueOnce(new Error('WORKTREE_MOVE_BLOCKED'));
   await act(async () => h.picker!.onProject('/project'));
   expect(h.patch).not.toHaveBeenCalled();
-  expect(h.picker?.error).toBe('session.menu.moveWorktree');
+  expect(h.picker?.actionError).toBe('session.menu.moveWorktree');
   expect(h.picker?.page).toBe('workspace');
   expect(h.invoke).toHaveBeenCalledTimes(2);
 });
@@ -95,7 +95,7 @@ it('blocks a running task and does not send its workspace change', async () => {
   await open(); h.running = true;
   await act(async () => h.picker!.onProject('/project'));
   expect(h.invoke).toHaveBeenCalledTimes(1);
-  expect(h.picker?.error).toBe('session.menu.moveRunning');
+  expect(h.picker?.actionError).toBe('session.menu.moveRunning');
 });
 
 it('does not apply a late result after switching accounts, and cancels queued writes before send', async () => {
@@ -154,4 +154,61 @@ it('uses the host resolved folder path and can move a task back to a dialogue', 
   await act(async () => h.picker!.onDialogue());
   expect(h.invoke).toHaveBeenLastCalledWith('live-computer', 'maker:task-copy',
     [{ action: 'move-project', sessionId: 'task-a', workingDir: null }], expect.any(Object));
+});
+
+// PR #9826: a move rejection must not invalidate a folder that was already read.
+it('keeps a loaded folder selectable after running/host failures and permits an explicit retry', async () => {
+  await open();
+  h.invoke.mockResolvedValueOnce({ resolvedPath: '/actual', parent: '/', entries: [] });
+  await act(async () => h.picker!.onBrowse());
+  h.running = true;
+  await act(async () => h.picker!.onChoose('/actual'));
+  expect(h.picker?.error).toBeNull();
+  expect(h.picker?.actionError).toBe('session.menu.moveRunning');
+  h.running = false;
+  h.invoke.mockRejectedValueOnce(new Error('HOST_UNAVAILABLE'));
+  await act(async () => h.picker!.onChoose('/actual'));
+  expect(h.picker?.path).toBe('/actual');
+  expect(h.picker?.error).toBeNull();
+  expect(h.picker?.actionError).toBe('session.menu.moveFailed');
+  h.invoke.mockResolvedValueOnce({ projectMove: { sessionId: 'task-a', workingDir: '/actual', workspaceKind: 'project' } });
+  await act(async () => h.picker!.onChoose('/actual'));
+  expect(h.patch).toHaveBeenCalledOnce();
+  expect(h.picker?.page).toBeNull();
+});
+
+// PR #9826: delayed Windows drive enumeration must populate the same directory page.
+it('loads late Windows drives without blocking the folder and bounds pending enumeration', async () => {
+  await open();
+  const folder = { resolvedPath: 'C:/work', parent: 'C:/', entries: [], drivesPending: true };
+  let finish!: (value: unknown) => void;
+  h.invoke.mockResolvedValueOnce(folder).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  act(() => h.picker!.onBrowse());
+  await act(async () => {});
+  expect(h.picker?.path).toBe('C:/work');
+  expect(h.picker?.loading).toBe(false);
+  await act(async () => finish({ ...folder, drivesPending: false, drives: [
+    { name: 'C:', path: 'C:/', current: true }, { name: 'D:', path: 'D:/', current: false },
+  ] }));
+  expect(h.picker?.drives.map(drive => drive.path)).toEqual(['C:/', 'D:/']);
+  h.invoke.mockResolvedValue(folder);
+  await act(async () => h.picker!.onEnter('C:/work'));
+  expect(h.invoke.mock.calls.filter(call => call[1] === 'fs:list-dir')).toHaveLength(6); // 2 + initial/3 bounded rereads
+});
+
+it.each(['back', 'account'])('ignores late drive enumeration after %s and fences queued rereads', async change => {
+  await open();
+  let finish!: (value: unknown) => void;
+  h.invoke.mockResolvedValueOnce({ resolvedPath: 'C:/', parent: null, entries: [], drivesPending: true })
+    .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  act(() => h.picker!.onBrowse());
+  await act(async () => {});
+  const preSend = h.invoke.mock.calls.at(-1)![3].preSend;
+  if (change === 'back') act(() => h.picker!.onBack());
+  else setMobileAuthOwner('owner-b');
+  expect(() => preSend()).toThrow('PROJECT_MOVE_CLOSED');
+  await act(async () => finish({ resolvedPath: 'C:/', parent: null, entries: [], drivesPending: true,
+    drives: [{ name: 'C:', path: 'C:/', current: true }, { name: 'D:', path: 'D:/', current: false }] }));
+  expect(h.picker?.drives).toEqual([]);
+  expect(h.invoke).toHaveBeenCalledTimes(3);
 });

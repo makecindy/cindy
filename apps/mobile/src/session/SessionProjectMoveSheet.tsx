@@ -5,7 +5,7 @@ import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGe
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import type { RemoteDirectoryListResult } from '@/device-link/mobileMakerTransport';
 import { NewTaskSelectionSheet } from './NewTaskSelectionSheet';
-import { filterRemoteDirectoryEntries, normalizeRemoteDirectoryDrives } from './newSession';
+import { filterRemoteDirectoryEntries, normalizeRemoteDirectoryDrives, shouldRetryRemoteBrowseDrives } from './newSession';
 import { remoteSessionStore, resolveSessionWriteDevices } from './remoteSessionStore';
 import type { RemoteSession } from './types';
 
@@ -54,6 +54,7 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const active = useRef(true);
   const lock = useRef(false);
@@ -101,13 +102,30 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
   const browse = async (path: string) => {
     if (!devices || lock.current || !current()) return;
     const request = ++readGeneration.current;
+    const currentRead = () => current() && request === readGeneration.current;
+    const assertCurrentRead = () => {
+      if (!currentRead()) throw new Error('PROJECT_MOVE_CLOSED');
+    };
     setPage('directory');
     setLoading(true);
     setError(null);
+    setActionError(null);
     try {
-      const result = await invoke<RemoteDirectoryListResult>(devices.rpcDeviceId, 'fs:list-dir',
-        [{ path: path || '~' }], { preSend: assertCurrent });
-      if (current() && request === readGeneration.current) setDirectory(result);
+      let result = await invoke<RemoteDirectoryListResult>(devices.rpcDeviceId, 'fs:list-dir',
+        [{ path: path || '~' }], { preSend: assertCurrentRead });
+      if (!currentRead()) return;
+      setDirectory(result);
+      setLoading(false);
+      // Show the folder immediately while Windows finishes enumerating its drives.
+      for (let attempt = 0; shouldRetryRemoteBrowseDrives(result.drivesPending, attempt); attempt += 1) {
+        if (!currentRead()) return;
+        try {
+          result = await invoke<RemoteDirectoryListResult>(devices.rpcDeviceId, 'fs:list-dir',
+            [{ path: result.resolvedPath }], { preSend: assertCurrentRead });
+        } catch { return; } // A drive refresh failure does not invalidate the loaded folder.
+        if (!currentRead()) return;
+        setDirectory(result);
+      }
     } catch (err) {
       if (current() && request === readGeneration.current) setError(failureText(err));
     } finally {
@@ -117,12 +135,12 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
   const choose = async (workingDir: string | null) => {
     if (!devices || lock.current || loading || !current()) return;
     if (remoteSessionStore.getSessionRunStatus(session.id).isRunning) {
-      setError(t('session.menu.moveRunning'));
+      setActionError(t('session.menu.moveRunning'));
       return;
     }
     lock.current = true;
     setBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       const result = await invoke<TaskMigrationView>(devices.rpcDeviceId, TASK_MIGRATION_CHANNEL,
         [{ action: 'move-project', sessionId: session.id, workingDir }], { preSend: assertCurrent });
@@ -143,7 +161,7 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
       if (current()) {
         // A lost reply may follow a completed move. Refresh instead of replaying the write.
         remoteSessionStore.requestReseed(devices.shardId);
-        setError(failureText(err));
+        setActionError(failureText(err));
       }
     } finally {
       lock.current = false;
@@ -157,10 +175,10 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
     workspaceKind={session.workspaceKind} workingDir={session.workingDir ?? ''}
     path={directory?.resolvedPath ?? ''} parent={directory?.parent ?? null}
     entries={filterRemoteDirectoryEntries((directory?.entries ?? []).filter(entry => entry.kind !== 'file'), showHidden)}
-    drives={normalizeRemoteDirectoryDrives(directory?.drives)} loading={loading || busy} error={error} showHidden={showHidden}
+    drives={normalizeRemoteDirectoryDrives(directory?.drives)} loading={loading || busy} error={error} actionError={actionError} showHidden={showHidden}
     onClose={close} onClosed={onClosed} onBack={() => {
       if (lock.current) return;
-      readGeneration.current++; setLoading(false); setError(null); setPage('workspace');
+      readGeneration.current++; setLoading(false); setError(null); setActionError(null); setPage('workspace');
     }} onDevice={() => undefined} onDialogue={() => void choose(null)} onProject={path => void choose(path)}
     onBrowse={() => void browse(session.workspaceKind === 'project' ? session.workingDir || '~' : '~')} onEnter={path => void browse(path)}
     onChoose={path => void choose(path)} onShowHidden={setShowHidden}

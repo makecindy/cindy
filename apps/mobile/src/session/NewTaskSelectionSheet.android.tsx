@@ -38,6 +38,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
   // Keep the presentation kind through the closing animation, when page becomes null.
   if (p.page !== null) nativePresentation.current = p.page === "device";
   const unavailable = p.busy || p.loading;
+  const displayError = p.error || p.actionError;
   const [snap, setSnap] = useState<ContextSheetSnap>("half");
   useEffect(() => setSnap(browsing ? "full" : "half"), [p.page, browsing]);
   const heights = useMemo(
@@ -103,7 +104,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
         ) : p.page === "workspace" ? (
           <>
             {p.loading ? <ActivityIndicator color={colors.textSecondary} /> : null}
-            {p.error ? <ErrorNotice message={p.error} /> : null}
+            {displayError ? <ErrorNotice message={displayError} /> : null}
             <NewTaskSelectionRow
               title={t("session.new.workspaceDialogue")}
               leading={icon(MessageCircle)}
@@ -212,8 +213,8 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
             {p.loading ? (
               <ActivityIndicator color={colors.textSecondary} />
             ) : null}
-            {p.error ? <ErrorNotice message={p.error} /> : null}
-            {!p.loading && !p.error && !p.entries.length ? (
+            {displayError ? <ErrorNotice message={displayError} /> : null}
+            {!p.loading && !displayError && !p.entries.length ? (
               <Text
                 style={{
                   color: colors.textSecondary,

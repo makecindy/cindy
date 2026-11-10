@@ -19,6 +19,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
   const glassStyle = useNativeGlassButtonStyle({ prominent: true });
   const browsing = p.page === 'directory';
   const unavailable = p.busy || p.loading;
+  const displayError = p.error || p.actionError;
   const icon = (name: 'laptopcomputer' | 'folder' | 'bubble.left' | 'folder.badge.plus' | 'chevron.right' | 'arrow.up') =>
     <Image systemName={name} size={iconSize.lg} />;
   return (
@@ -49,7 +50,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           onPress={() => p.onDevice(device.deviceId)} testID="newSession.deviceOption" />)}
       </Section> : p.page === 'workspace' ? <>
         {p.loading ? <Section><ProgressView /></Section> : null}
-        {p.error ? <Section><NativeErrorNotice message={p.error} /></Section> : null}
+        {displayError ? <Section><NativeErrorNotice message={displayError} /></Section> : null}
         <Section>
           <ComposerNativeRow title={t('session.new.workspaceDialogue')} leading={icon('bubble.left')}
             selected={p.workspaceKind === 'dialogue'} disabled={unavailable}
@@ -82,9 +83,9 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
             onIsOnChange={p.onShowHidden} modifiers={[disabled(p.busy), tint(colors.inputCaret)]} testID="newSession.remoteBrowseShowHidden" />
         </Section>
         {p.loading ? <Section><ProgressView /></Section> : null}
-        {p.error ? <Section><NativeErrorNotice message={p.error} /></Section> : null}
+        {displayError ? <Section><NativeErrorNotice message={displayError} /></Section> : null}
         <Section>
-          {!p.loading && !p.error && p.entries.length === 0 ? <Text>{newSessionText('emptyDirectory')}</Text> : null}
+          {!p.loading && !displayError && p.entries.length === 0 ? <Text>{newSessionText('emptyDirectory')}</Text> : null}
           {p.entries.map(entry => <ComposerNativeRow key={entry.path} title={entry.name}
             leading={icon('folder')} accessory={icon('chevron.right')} disabled={unavailable}
             onPress={() => p.onEnter(entry.path)} testID="newSession.remoteBrowseEnterEntry" />)}

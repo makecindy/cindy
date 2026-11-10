@@ -225,3 +225,11 @@ it.each([
   render({ workingDir: base });
   expect(row.getAttribute("aria-pressed")).toBe("true");
 });
+
+// PR #9826 / unit: a failed move is visible but does not invalidate a loaded folder.
+it("keeps a loaded folder selectable while displaying a move error", () => {
+  render({ page: "directory", actionError: "Move failed" });
+  expect(container.textContent).toContain("Move failed");
+  click("remoteBrowseSelectCurrent");
+  expect(props.onChoose).toHaveBeenCalledExactlyOnceWith("D:/project");
+});

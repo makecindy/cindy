@@ -551,3 +551,12 @@ it.each(["light", "dark"])("pairs permission-guide primary labels without changi
     });
   }
 });
+
+// PR #9826 / unit: iOS must show the failure without disabling an already loaded folder.
+it("allows an explicit folder retry while displaying a move error", () => {
+  const props = directoryProps({ actionError: "Move failed" });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  expect(host.textContent).toContain("Move failed");
+  act(() => (host.querySelector('[data-testid="newSession.remoteBrowseSelectCurrent"]') as HTMLButtonElement).click());
+  expect(props.onChoose).toHaveBeenCalledExactlyOnceWith("/project");
+});
