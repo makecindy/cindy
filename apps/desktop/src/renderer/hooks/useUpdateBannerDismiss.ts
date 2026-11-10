@@ -32,6 +32,8 @@ interface DismissState {
   revealRequested: boolean;
   /** 每次手动检查递增；让同一请求只绑定一次，用户随后关闭不会被重新弹出。 */
   revealSeq: number;
+  /** 已绑定过的请求（seq+状态+版本）；放在 store 里，切页面重挂载组件也不会重复展开。 */
+  revealBoundKey: string | null;
   dismissed: boolean;
   reason: UpdateBannerDismissReason | null;
   dismissedStatus: string | null;
@@ -49,6 +51,7 @@ export function updateBannerDecisionVersion(version: string | null): string {
 const INITIAL_STATE: DismissState = {
   revealRequested: false,
   revealSeq: 0,
+  revealBoundKey: null,
   dismissed: false,
   reason: null,
   dismissedStatus: null,
@@ -172,12 +175,19 @@ export function requestUpdateBannerReveal() {
  * superseding 携带的还是旧补丁版本，新版尚未就绪：先钉住让提醒可见，但保留请求，
  * 等新版 ready 时再绑定新版本；只有 ready 才消费请求。
  */
-export function revealRequestedUpdateBanner(version: string | null, consume: boolean) {
+export function revealRequestedUpdateBanner(
+  status: string,
+  version: string | null,
+  consume: boolean,
+) {
   if (!state.revealRequested) return;
+  const key = `${state.revealSeq}:${status}:${updateBannerDecisionVersion(version)}`;
+  if (state.revealBoundKey === key) return;
   state = {
     ...INITIAL_STATE,
     revealSeq: state.revealSeq,
     revealRequested: !consume,
+    revealBoundKey: consume ? null : key,
     decidedVersion: updateBannerDecisionVersion(version),
     pinnedByUser: true,
   };

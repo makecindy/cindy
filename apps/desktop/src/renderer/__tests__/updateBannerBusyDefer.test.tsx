@@ -377,6 +377,21 @@ describe('manual update check reveals banner', () => {
     expect(getUpdateBannerDismissState().pinnedByUser).toBe(true);
   });
 
+  // 评审回归：关闭后切页面导致横幅重新挂载（如进出设置页），同一请求不得再次展开。
+  it('does not reopen a dismissed banner when the banner remounts', async () => {
+    anyActivityBlockingRelaunch.mockResolvedValue(true);
+    updateStatus.current = { status: 'superseding', version: '1.2.3', errorCode: null };
+    window.electronAPI.checkForUpdate = vi.fn().mockResolvedValue({ result: 'downloading' });
+    const first = render(<UpdateBanner isCollapsed={false} />);
+    await act(async () => { await checkForUpdateWithToast((key) => key); });
+    await waitFor(() => expect(getUpdateBannerDismissState().pinnedByUser).toBe(true));
+    act(() => dismissUpdateBanner('superseding', '1.2.3'));
+    first.unmount();
+    render(<FloatingUpdateBanner enabled />);
+    await act(async () => { await Promise.resolve(); });
+    expect(getUpdateBannerDismissState().dismissed).toBe(true);
+  });
+
   // 评审回归：superseding 期间手动检查（主进程回 downloading），旧补丁版本不能吞掉请求；
   // 新版 ready 且任务忙碌时仍要展开，且之后用户关闭不会被重新弹出。
   it('keeps the request through superseding and reveals the new version while busy', async () => {
