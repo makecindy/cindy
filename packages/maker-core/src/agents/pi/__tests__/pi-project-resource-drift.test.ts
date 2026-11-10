@@ -357,14 +357,37 @@ describe('piProjectResourcesDrifted', () => {
     symlinkSync(path.join(project, 'target-dir'), path.join(project, '.pi', 'skills', 'foo'), 'junction');
     const baseline = snapshot();
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
-    // 前提:仓内软键以完整条目列表为基线('L:' + 空目录),与判断输入同一次 readdir ——
-    // 而非旧实现的「先读 hasManifest 再记基线」两步窗口
+    // 前提:软链一层只采样清单存在性('M:' + 空清单)—— 既不 readdir 目标
+    // (仓内大目录也不拖快检),又与判断输入同一次采样(无「先读清单后记基线」窗口)
     const linkKey = path.join(realpathSync(project), '.pi', 'skills', 'foo');
-    expect(baseline.watchRootEntries.get(linkKey)).toBe('L:');
+    expect(baseline.watchRootEntries.get(linkKey)).toBe('M:');
     // 同一刻新增普通文件 SKILL.md(显式把目标目录 mtime 恢复基线值,隔离 mtime 信号)
     writeFileSync(path.join(project, 'target-dir', 'SKILL.md'), '---\nname: foo\ndescription: t\n---\n');
     utimesSync(path.join(project, 'target-dir'), aligned, aligned);
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('samples a symlinked namespace by manifest only, never by full entry list', () => {
+    // 回归(Greptile P2):一层子键曾一律用 'dir' 采样,仓内软链 namespace 也会
+    // 每轮快检 readdir + 排序整个目标目录 —— 而 collector 根本不会走进它。
+    writeFileSync(path.join(project, '.git'), '');
+    writeSkill(path.join('.pi', 'skills'), 'alpha');
+    const big = path.join(project, 'big-namespace');
+    mkdirSync(big, { recursive: true });
+    for (let i = 0; i < 40; i += 1) mkdirSync(path.join(big, `entry-${i}`), { recursive: true });
+    symlinkSync(big, path.join(project, '.pi', 'skills', '@big'), 'junction');
+
+    const surface = collectPiProjectResourceSurface(project);
+    const linkKey = path.join(realpathSync(project), '.pi', 'skills', '@big');
+    // 基线是清单存在性指纹(不是完整条目列表),快检因此不会遍历 40 个无关条目。
+    expect(surface.watch.entries.get(linkKey)).toBe('M:');
+    // 真实目录(一层 skill 目录里的 namespace)仍用完整列表,同刻新增才检得出。
+    expect(surface.watch.entries.get(path.join(realpathSync(project), '.pi', 'skills'))).toMatch(/^L:/);
+    const baseline = snapshotPiProjectResourceLaunch(
+      project, surface.paths, surface.repoRoot, surface.watch);
+    // 目标目录内新增无关条目:集合不变,不触发回收(且不依赖其完整列表信号)。
+    mkdirSync(path.join(big, 'later'), { recursive: true });
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
   });
 
   it('stores null entries baseline for collector-excluded keys (symlink namespace to outside-repo target)', () => {

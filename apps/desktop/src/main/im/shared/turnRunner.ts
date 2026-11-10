@@ -2048,6 +2048,12 @@ export function createTurnRunner(
       throw new Error(`session ${sessionId} is not active after deferred agent switch`);
     }
     let current = maker.getSession(sessionId);
+    // close 失败会让实例停在 error、或已开始关闭但仍登记在 activeSessions ——
+    // 这类实例不可用,按「不存在」处理,交给 createSession 的既有 close 重试重建
+    // (Greptile P2,2026-11-10:只认 null 会让刷新原封不动返回坏实例)。
+    if (current && (current.getStatus() !== 'active' || current.hasStartedClosing())) {
+      current = undefined;
+    }
     // apply 已提交 DB 但 bootstrap 失败时,直发路径也要像 makerSendTransaction 的
     // lazy-create 一样按最新 DB 行自愈,不能退回已关闭的 previous.send()。
     if (!current) {

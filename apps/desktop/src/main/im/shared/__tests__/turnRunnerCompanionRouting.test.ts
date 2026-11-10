@@ -90,6 +90,8 @@ interface SessionHarness {
   session: Session;
   send: ReturnType<typeof vi.fn>;
   emit(event: AgentEvent): void;
+  /** 复刻 close 失败后的实例状态(仍登记在 activeSessions,但不可用)。 */
+  setStatus(next: 'active' | 'error' | 'closed'): void;
 }
 
 function makeSessionHarness(sessionId: string): SessionHarness {
@@ -103,12 +105,18 @@ function makeSessionHarness(sessionId: string): SessionHarness {
       return { accepted: true } as SessionSendResult;
     },
   );
+  let status: 'active' | 'error' | 'closed' = 'active';
+  let closing = false;
   const session = {
     id: sessionId,
     workDir: '/tmp/wd',
     agentKind: 'claude-code',
     instanceId: `${sessionId}-instance`,
     abort: vi.fn(async () => undefined),
+    // 回收 close 失败会让真实 Session 停在 error 且仍登记在 activeSessions;
+    // 生产代码按这两个值决定「复用 / 交给 createSession 重建」。
+    getStatus: () => status,
+    hasStartedClosing: () => closing,
     send,
     isTurnRunning: vi.fn(() => false),
     onEvent(listener: (event: AgentEvent) => void) {
@@ -125,6 +133,9 @@ function makeSessionHarness(sessionId: string): SessionHarness {
   return {
     session,
     send,
+    setStatus(next: 'active' | 'error' | 'closed') {
+      status = next;
+    },
     emit(event: AgentEvent) {
       for (const l of [...listeners]) l(event);
     },
@@ -645,5 +656,46 @@ describe('turnRunner: project-resource drift recycle before IM dispatch', () => 
     expect(rebuilt.send).toHaveBeenCalledTimes(1);
     // 换实例必须重接广播/落库链路(wireSessionToIpcExternal 按 Session 实例幂等)。
     expect(mocks.wireSessionToIpcExternal).toHaveBeenCalledWith(rebuilt.session);
+  });
+
+  it('rebuilds when the recycle close failed and the old instance is left in error', async () => {
+    // 回归(Greptile P2):close 失败后旧实例停在 error 但仍登记在 activeSessions。
+    // 刷新路径若只认「找不到实例」就会原封不动返回它,后续 send 必挂 —— 必须把
+    // error/已开始关闭的实例交给 createSession 的既有 close 重试重建。
+    const broken = makeSessionHarness('mimi-main');
+    const rebuilt = makeSessionHarness('mimi-main-rebuilt');
+    broken.setStatus('error');
+    let createCalls = 0;
+    let rebuiltLive = false;
+    mocks.getMaker.mockImplementation(() => ({
+      getSession: vi.fn((id: string) => (rebuiltLive && id === 'mimi-main' ? rebuilt.session : broken.session)),
+      on: vi.fn(() => () => undefined),
+      createSession: vi.fn(async () => {
+        createCalls += 1;
+        return createCalls === 1 ? broken.session : rebuilt.session;
+      }),
+      // close 抛出:Session 被置为 error,recycle 返回前就抛了。
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => {
+        broken.setStatus('error');
+        throw new Error('close boom');
+      }),
+    }));
+    mocks.dbSelect.mockImplementation(() => ({
+      from: () => ({
+        where: () => ({
+          limit: async () => [{ ...botRows.get('mimi-main'), status: 'active' }],
+        }),
+      }),
+    }));
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      companion: companion as unknown as ImCompanionRouteDeps,
+      acquirePendingAgentSwitch,
+    });
+
+    await runTurn(OWNER);
+
+    expect(createCalls).toBe(2);
+    expect(broken.send).not.toHaveBeenCalled();
+    expect(rebuilt.send).toHaveBeenCalledTimes(1);
   });
 });

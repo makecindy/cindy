@@ -156,19 +156,25 @@ function walkPiSkillTree(
     if (entry.name.startsWith('.') || /\.bak\.\d+$/.test(entry.name)) continue;
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const candidatePath = path.join(root.resolved, entry.name);
-    // 一层子键一律 'dir'(完整条目列表):collector 要么在此收 skill、要么下行
-    // 枚举 namespace —— 两条路都依赖该目录的条目集合,只有完整列表能检出同刻新增
-    // 的嵌套 skill 目录。模式不依赖 hasManifest(那是旧 bug 的两次读窗口)。
-    const child = samplePiWatchKey(sample, candidatePath, 'dir', repoRoot);
-    if (!child.inRepoDir || !child.resolved) continue;
+    // 模式只由**结构**定(不看内容 —— 读内容定模式会重新造出两次读窗口):
+    // 软链一层 collector 要么收为直链 skill、要么直接跳过(不走 namespace),
+    // 只消费清单存在性 → 'skill'(两次 stat;仓内大目录也不拖快检);
+    // 真实目录 collector 会枚举 namespace → 'dir'(完整列表,同刻新增的嵌套
+    // skill 目录才检得出)。
     const isSymlink = isSymlinkEntry(entry, candidatePath);
+    const child = samplePiWatchKey(sample, candidatePath, isSymlink ? 'skill' : 'dir', repoRoot);
+    if (!child.inRepoDir || !child.resolved) continue;
     // 清单本体无论当前是否解析都盯住:悬空链(目标尚不存在)落地成 skill 时,
     // 改动的只是未盯视的目标处,盯住链接自身才能检出(与 prompts 同款)。
     // 直链 skill 根同样适用:其 SKILL.md 为二级软链时,目标移动/删除只改目标处。
     watchPiSkillManifestTargets(sample, child.resolved, repoRoot);
     // 判断输入与基线同源(Greptile P2:先 hasManifest 再记基线 → 中间写入的
-    // SKILL.md 被固化进基线、argv 漏收 → 永久漏检)。
-    if (skillManifestIn(child.resolved, child.dirents ?? [])) {
+    // SKILL.md 被固化进基线、argv 漏收 → 永久漏检);软链用采样时的清单存在性,
+    // 真实目录用采样时的同一次 readdir 条目。
+    const hasManifest = isSymlink
+      ? child.manifest
+      : skillManifestIn(child.resolved, child.dirents ?? []);
+    if (hasManifest) {
       addPiSkill(repoRoot, child.resolved, bucket);
       continue;
     }
