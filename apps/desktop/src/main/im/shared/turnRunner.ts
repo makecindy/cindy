@@ -2204,20 +2204,13 @@ export function createTurnRunner(
    * 拆除已开始（`hasStartedClosing()`，含 close 失败停住的实例）或 close 刚失败的
    * error 态仍是同一个实例，`session.send` 会直接抛「is closing / is in error state」。
    * `'aborting'` 不算不可用：那是同一轮 Stop 的瞬态，不应该为它重建运行时。
-   *
-   * 测试替身可能没有这两个方法，缺省按「活着」处理。
    */
   function describeUnusableRuntime(session: MakerSession | undefined): string | null {
     if (!session) return 'missing';
     // status 比「拆除已开始」更具体：close 失败停住的实例两者都成立，日志要写 error。
-    if (typeof session.getStatus === 'function') {
-      const status = session.getStatus();
-      if (status === 'closed' || status === 'error') return `status=${status}`;
-    }
-    if (typeof session.hasStartedClosing === 'function' && session.hasStartedClosing()) {
-      return 'closing';
-    }
-    return null;
+    const status = session.getStatus();
+    if (status === 'closed' || status === 'error') return `status=${status}`;
+    return session.hasStartedClosing() ? 'closing' : null;
   }
 
   async function ensureSessionWired(target: RouteTarget, userId: string): Promise<SessionState> {
