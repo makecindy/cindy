@@ -56,7 +56,7 @@ export default {
       throw Error('Ultrafast capability does not match the account');
     }
     await ui.capture('ultra-selected');
-    const imageInput = page.getByRole('button', { name: await ui.t('settings.providers.models.advanced.imageInput'), exact: true });
+    const imageInput = page.getByRole('combobox', { name: await ui.t('settings.providers.models.advanced.imageInput'), exact: true });
     const knownDefault = !['image-unknown', 'image-mixed', 'image-inherited'].includes(ui.case);
     if (ui.case === 'image-inherited' && !(await imageInput.textContent()).includes(await ui.t('settings.providers.models.advanced.supported'))) throw Error('Mixed override provenance must show its common effective capability');
     const defaultSupported = ui.case !== 'image-unsupported';
@@ -67,21 +67,22 @@ export default {
     };
     await imageInput.scrollIntoViewIfNeeded();
     await imageInput.click();
-    if (await page.getByRole('menuitemradio').count() !== 2) throw Error('Image input must have exactly two choices');
+    // A disabled first row may describe a mixed or legacy current state; only two values are choosable.
+    if (await page.locator('[role=option]:not([data-disabled])').count() !== 2) throw Error('Image input must have exactly two choices');
     await ui.capture('image-input-options');
-    await page.getByRole('menuitemradio', { name: await label(false), exact: true }).click();
+    await page.getByRole('option', { name: await label(false), exact: true }).click();
     if (ui.case === 'owner-repair') {
       if (!(await imageInput.isDisabled())) throw Error('In-flight image save should disable the control');
       await page.evaluate(() => window.__uiPage.emit('authChanged', {}));
       await page.waitForFunction(label => {
-        const button = [...document.querySelectorAll('button')].find(el => el.getAttribute('aria-label') === label);
+        const button = [...document.querySelectorAll('[role=combobox]')].find(el => el.getAttribute('aria-label') === label);
         return button && !button.disabled;
       }, await ui.t('settings.providers.models.advanced.imageInput'));
       await ui.capture('image-input-owner-recovered');
     }
     if (!(await imageInput.textContent()).includes(await ui.t('settings.providers.models.advanced.unsupported'))) throw Error('Explicit image input false was not shown');
     await imageInput.click();
-    await page.getByRole('menuitemradio', { name: await label(true), exact: true }).click();
+    await page.getByRole('option', { name: await label(true), exact: true }).click();
     if (!(await imageInput.textContent()).includes(await ui.t('settings.providers.models.advanced.supported'))) throw Error('Image input true was not shown');
     await imageInput.click();
     await ui.capture('image-input-selected');

@@ -364,5 +364,13 @@
     "merged": "已合并",
     "closed": "已关闭",
     "draft": "草稿"
+  },
+  "taskArchive": {
+    "now": "立即归档",
+    "pending": "离开此任务后将自动归档",
+    "cancel": "取消",
+    "cancelled": "本次不会自动归档",
+    "archived": "已归档「{{title}}」",
+    "undo": "撤销"
   }
 }

@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_ISLAND_SOUND_SETTINGS } from '../../shared/agentIsland';
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +16,8 @@ const gates = vi.hoisted(() => ({
   desktop: true,
   feishu: false,
   islandEnabled: false,
+  soundEnabled: true,
+  completionSound: true,
   islandSupported: false,
 }));
 
@@ -26,6 +29,7 @@ vi.mock('@/hooks/useFeishuNotificationSettings', () => ({
 }));
 vi.mock('@/hooks/useAgentIslandSettings', () => ({
   getAgentIslandEnabled: () => gates.islandEnabled,
+  getAgentIslandSoundSettings: () => ({ enabled: gates.soundEnabled, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: gates.completionSound ? DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds.complete : { type: 'builtin', id: 'none' } } }),
   isAgentIslandSupported: () => gates.islandSupported,
 }));
 
@@ -69,6 +73,8 @@ describe('shared session event notifications', () => {
     gates.desktop = true;
     gates.feishu = false;
     gates.islandEnabled = false;
+    gates.soundEnabled = true;
+    gates.completionSound = true;
     gates.islandSupported = false;
     vi.clearAllMocks();
     getSession.mockResolvedValue({ source: 'desktop', feishuOpenId: null });
@@ -178,7 +184,7 @@ describe('shared session event notifications', () => {
       inputHandoff: true, remoteDevice: true, remoteDeviceId: 'host',
     });
     expect(showSessionEvent).toHaveBeenCalledExactlyOnceWith({
-      sessionId: 'remote-handoff', title: 'Task', kind: 'needs-reply', markAttention: false,
+      sessionId: 'remote-handoff', title: 'Task', kind: 'needs-reply', markAttention: false, remoteDeviceId: 'host',
       channels: { desktop: false, feishu: false, mobile: false },
     });
     expect(getSession).not.toHaveBeenCalled();
@@ -197,6 +203,20 @@ describe('shared session event notifications', () => {
         channels: { desktop: false, feishu: true, mobile: true },
       }),
     );
+  });
+
+  // Unit: the old island gate swallowed the OS notification selected as the sound source.
+  it('keeps the OS notification available for an unconfigured event sound with the island enabled', () => {
+    gates.islandSupported = true;
+    gates.islandEnabled = true;
+    gates.completionSound = false;
+    sendSessionEventNotification('system-sound', 'Task', 'done');
+    expect(showSessionEvent).toHaveBeenLastCalledWith(expect.objectContaining({ channels: { desktop: true, feishu: false, mobile: true } }));
+    sendSessionEventNotification('system-sound', 'Task', 'needs-reply');
+    expect(showSessionEvent).toHaveBeenLastCalledWith(expect.objectContaining({ channels: { desktop: false, feishu: false, mobile: true } }));
+    gates.soundEnabled = false;
+    sendSessionEventNotification('system-sound', 'Task', 'needs-reply');
+    expect(showSessionEvent).toHaveBeenLastCalledWith(expect.objectContaining({ channels: { desktop: true, feishu: false, mobile: true } }));
   });
 
   it('leaves the desktop toast of a remote device task to the main-process scope filter', () => {
@@ -235,7 +255,7 @@ describe('shared session event notifications', () => {
     resolve(handled);
     await relay.waitForCompletionNotification('remote-task');
     expect(showSessionEvent).toHaveBeenCalledTimes(handled ? 0 : 1);
-    if (!handled) expect(showSessionEvent).toHaveBeenCalledWith({ sessionId: 'remote-task', title: 'Task', kind: 'done', markAttention: false, channels: { desktop: false, feishu: true, mobile: true } });
+    if (!handled) expect(showSessionEvent).toHaveBeenCalledWith({ sessionId: 'remote-task', title: 'Task', kind: 'done', markAttention: false, remoteDeviceId: 'host', channels: { desktop: false, feishu: true, mobile: true } });
     expect(markAttention).not.toHaveBeenCalled();
     expect(getRemoteSessionActivity('remote-task', 'host')).toMatchObject({ phase: 'completed', attention: true, compactDetail: 'Final result' });
     relay.replay([completed]);

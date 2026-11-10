@@ -5,6 +5,7 @@
  * 版本严格更高时报告可更新，与启动安装「保留不旧于 manifest 的本地版本」同口径。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync } from 'node:fs';
 
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -62,6 +63,22 @@ function invoke(kind: unknown, options?: unknown) {
 }
 
 describe('maker:agent:binary-version', () => {
+  // Unit regression: the IPC previously spawned Codex outside the startup probe's
+  // environment boundary. Check the actual handler's child env and cleanup.
+  it('isolates the About version query from the user Codex home', async () => {
+    let home = '';
+    h.fetchManifest.mockResolvedValue(null);
+    h.execFile.mockImplementation((_file, _args, options, callback) => {
+      home = options.env?.CODEX_HOME;
+      expect(home).toBeTruthy();
+      expect(existsSync(home)).toBe(true);
+      callback(null, 'codex-cli 0.145.0', '');
+    });
+    await expect(invoke('codex', { checkLatest: true })).resolves.toMatchObject({ version: 'codex-cli 0.145.0' });
+    expect(home).toBeTruthy();
+    expect(existsSync(home)).toBe(false);
+  });
+
   beforeEach(() => {
     h.handlers.clear();
     h.fetchManifest.mockReset();

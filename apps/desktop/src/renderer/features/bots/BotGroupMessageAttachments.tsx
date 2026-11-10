@@ -16,7 +16,7 @@ import { useTranslation } from 'react-i18next';
 
 import { ChatImageView } from '@/components/chat/ChatImageView';
 import { ImageMissingPlaceholder } from '@/components/chat/ImageMissingPlaceholder';
-import { TextLightbox } from '@/components/chat/TextLightbox';
+import { TextLightbox } from '@/components/chat/lazyPreviewLightboxes';
 import { UserAttachmentChip } from '@/components/chat/UserAttachmentChip';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { Spinner } from '@/components/ui/spinner';

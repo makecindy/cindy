@@ -211,7 +211,7 @@ import { PI_RPC_OVERSIZED_FRAME_ERROR, PiRpcProcess, type PiRpcEvent } from './r
 import { createPiStdioTransport, type PiTransport } from './transport.js';
 import type { PiRemoteFileOps } from '../base-agent.js';
 import {
-  capturePiRuntimeCapabilityManifest,
+  capturePiRuntimeCapabilitiesWithRetry,
   identifyManagedPiPackageCommandNames,
   preparePinnedPiSkillInvocation,
   snapshotManagedPiPackageSkills,
@@ -6383,7 +6383,40 @@ export class PiAgent extends BaseAgent {
     let runtimeCapabilityRefreshPromise: Promise<void> | undefined;
     const refreshRuntimeCapabilities = async (stage: 'ready' | 'switch_session' | 'fork'): Promise<void> => {
       const generation = ++runtimeCapabilityGeneration;
-      const capturedManifest = await capturePiRuntimeCapabilityManifest(
+      // 每个 attempt 的结果都立即发布(失败也发):面板轮询先看到 failed/unknown
+      // 而不是长时间 undefined,后续重试成功再升级为 loaded(2026-11-09 实报:
+      // bridge 10s 启动预算 vs 采集 5s 请求预算的结构性冲突,一次失败曾永灰)。
+      const publishDecoratedCapabilityManifest = (captured: PiRuntimeCapabilityManifest): void => {
+        const managedPackageRoots = [...nativePackageRoots, ...managedPackageResources.packageRoots];
+        const managedPackageCommandNames = identifyManagedPiPackageCommandNames(
+          captured.commands,
+          managedPackageRoots,
+        );
+        const authorizedSlashCommandNames = identifyManagedPiPackageCommandNames(
+          captured.commands,
+          [
+            ...managedPackageRoots,
+            ...projectResourceCli.skills,
+            ...managedSkillPaths,
+            ...(managedSkillRoot ? [managedSkillRoot] : []),
+            ...projectResourceCli.promptTemplates,
+            ...projectResourceCli.extensions,
+          ],
+        );
+        const manifest = {
+          ...captured,
+          managedPackageCommandNames,
+          authorizedSlashCommandNames,
+          managedPackageSkills: snapshotManagedPiPackageSkills(
+            managedPackageResources.skills,
+            captured.commands,
+            managedPackageCommandNames,
+          ),
+          projectResources: reconcilePiProjectResourceRuntime(projectResourceAssembly, captured),
+        };
+        if (!closed && generation === runtimeCapabilityGeneration) publishRuntimeCapabilities(manifest);
+      };
+      const capturedManifest = await capturePiRuntimeCapabilitiesWithRetry(
         proc,
         {
           ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
@@ -6391,35 +6424,27 @@ export class PiAgent extends BaseAgent {
         },
         generation,
         stage,
+        {
+          // 会话已关闭或被更新代刷新接替时停止重试,避免僵尸采集覆写新代结果。
+          isCurrent: () => !closed && generation === runtimeCapabilityGeneration,
+          // 采集失败此前完全静默:5s 请求预算 vs bridge 10s 启动预算的结构性冲突
+          // 只能靠日志发现(考古教训)。重试期 info,耗尽仍失败升 warn。
+          onAttemptFailed: (failedManifest, attempt, isFinalAttempt) => {
+            publishDecoratedCapabilityManifest(failedManifest);
+            const logFields = {
+              sessionId: opts.sessionId,
+              stage,
+              attempt,
+              status: failedManifest.status,
+              code: failedManifest.error?.code,
+              message: failedManifest.error?.message,
+            };
+            if (isFinalAttempt) this.deps.logger.warn('pi runtime capability capture failed; giving up', logFields);
+            else this.deps.logger.info('pi runtime capability capture failed; retrying', logFields);
+          },
+        },
       );
-      const managedPackageRoots = [...nativePackageRoots, ...managedPackageResources.packageRoots];
-      const managedPackageCommandNames = identifyManagedPiPackageCommandNames(
-        capturedManifest.commands,
-        managedPackageRoots,
-      );
-      const authorizedSlashCommandNames = identifyManagedPiPackageCommandNames(
-        capturedManifest.commands,
-        [
-          ...managedPackageRoots,
-          ...projectResourceCli.skills,
-          ...managedSkillPaths,
-          ...(managedSkillRoot ? [managedSkillRoot] : []),
-          ...projectResourceCli.promptTemplates,
-          ...projectResourceCli.extensions,
-        ],
-      );
-      const manifest = {
-        ...capturedManifest,
-        managedPackageCommandNames,
-        authorizedSlashCommandNames,
-        managedPackageSkills: snapshotManagedPiPackageSkills(
-          managedPackageResources.skills,
-          capturedManifest.commands,
-          managedPackageCommandNames,
-        ),
-        projectResources: reconcilePiProjectResourceRuntime(projectResourceAssembly, capturedManifest),
-      };
-      if (!closed && generation === runtimeCapabilityGeneration) publishRuntimeCapabilities(manifest);
+      publishDecoratedCapabilityManifest(capturedManifest);
     };
     const scheduleRuntimeCapabilityRefresh = (stage: 'ready' | 'switch_session' | 'fork'): Promise<void> => {
       const pending = refreshRuntimeCapabilities(stage);
@@ -6431,11 +6456,22 @@ export class PiAgent extends BaseAgent {
     };
     const awaitRuntimeCapabilitiesForSlashCommand = async (text: string): Promise<void> => {
       const trimmed = text.trimStart();
-      if (!trimmed.startsWith('/') || trimmed.startsWith('/skill:') || runtimeCapabilityManifest) return;
+      // 只有已确认 loaded 的清单才能放行派发;非 loaded(unknown/failed)清单是
+      // 过渡快照:若重试链仍在跑,等它(重试成功会升级为 loaded);重试已耗尽时
+      // runtimeCapabilityRefreshPromise 为 undefined,race 立即返回,按原样逃逸。
+      if (!trimmed.startsWith('/') || trimmed.startsWith('/skill:') || runtimeCapabilityManifest?.status === 'loaded') return;
       // get_commands starts asynchronously after Pi's ready boundary. A prompt
       // template selected on a brand-new task must wait for that exact runtime
       // catalog instead of being escaped into ordinary model text.
-      await runtimeCapabilityRefreshPromise;
+      // race 上限要覆盖重试链全生命周期(末次 5s + Σ(delay_i+5s) = 5+4+5+10+5+20+5
+      // ≈ 54s,确定性有界):cap 从派发时刻起算,/template 可能恰在 ready 即发出,
+      // 此时初次采集还在跑 —— 上限必须盖住链尾,否则重试成功前一瞬仍会逃逸
+      // (Codex P2:10s cap 在 10.6s 才就绪的场景下提前胜出)。链结束或耗尽时
+      // promise 已 settle,race 立即返回,不把用户卡在派发上。
+      await Promise.race([
+        runtimeCapabilityRefreshPromise,
+        new Promise<void>((resolve) => { setTimeout(resolve, 60_000).unref?.(); }),
+      ]);
     };
     const routeManagedPackageCommand = async (
       text: string,

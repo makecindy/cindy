@@ -13,6 +13,7 @@ import {
   BOT_GROUP_REMOTE_COLLECTION_ID,
   BOT_GROUP_REMOTE_RESOURCE_KIND,
   isBotGroupRuntimeFailureCode,
+  readBotGroupRuntimeFailureReason,
   isBotGroupCapabilityNoticeCode,
   parseBotGroupQuoteView,
   parseBotGroupTaskCardView,
@@ -236,6 +237,8 @@ function parseMessage(value: unknown): BotGroupMessageView | null {
   // A task this teammate started from the group (bot-group-chat.md §10); older computers send none.
   const task = authorKind === 'bot' ? parseBotGroupTaskCardView(record.task) : null;
   const process = authorKind === 'bot' && record.deleted !== true ? parseBotGroupProcessRef(record.process) : null;
+  const runtimeFailureReason = kind === 'notice' && authorKind === 'system'
+    ? readBotGroupRuntimeFailureReason(record.runtimeFailureCode, record.runtimeFailureReason) : undefined;
   return {
     id: messageId,
     sequence,
@@ -251,6 +254,7 @@ function parseMessage(value: unknown): BotGroupMessageView | null {
     mentions: parseMentions(record.mentions),
     noticeCode,
     ...(isBotGroupRuntimeFailureCode(record.runtimeFailureCode) ? { runtimeFailureCode: record.runtimeFailureCode } : {}),
+    ...(runtimeFailureReason ? { runtimeFailureReason } : {}),
     ...(kind === 'notice' && authorKind === 'bot' && record.deleted !== true && isBotGroupCapabilityNoticeCode(record.capabilityNoticeCode)
       ? { capabilityNoticeCode: record.capabilityNoticeCode } : {}),
     planId: optionalId(record.planId),

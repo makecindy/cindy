@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import type { BotGroupMemberView, BotGroupSummary } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
 import { botGroupMemberDisplayName } from './BotGroupTimelineModel';
-import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsRow, SettingsSection } from './ChatGroupSettingsRows';
+import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 const key = (name: string) => `bots.groupChat.server.settings.${name}`;
 const shared = (name: string) => `bots.groupChat.settings.${name}`;

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
+import type { PiRpcResponse } from '../rpc-client.js';
 
 import {
+  capturePiRuntimeCapabilitiesWithRetry,
   capturePiRuntimeCapabilityManifest,
   identifyManagedPiPackageCommandNames,
   parsePiRuntimeCommands,
@@ -390,5 +392,128 @@ describe('Pi runtime capability parsing', () => {
       'ready',
     );
     expect(manifest).toMatchObject({ status: 'failed', error: { code: 'malformed_response' } });
+  });
+});
+
+describe('capturePiRuntimeCapabilitiesWithRetry', () => {
+  // 2026-11-09 实报:bridge MCP 初始化在扩展加载期占用 ready 窗口(每 server
+  // startup 预算默认 10s),单次采集的 5s 请求预算必超 —— 一次性采集产出
+  // status='unknown' 后无重试、无日志,新任务预热的项目 Skill 永远灰。
+  const command = {
+    name: 'skill:fixture',
+    description: 'fixture skill',
+    source: 'skill',
+    sourceInfo: { source: 'auto', scope: 'project', baseDir: '/proj', path: '/proj/.pi/skills/fixture' },
+  };
+  const loadedResponse: PiRpcResponse = {
+    type: 'response',
+    id: '1',
+    command: 'get_commands',
+    success: true,
+    data: { commands: [command] },
+  };
+  const timeoutError = new Error('pi rpc timeout after 5000ms: get_commands');
+
+  function deferredRequester(failTimes: number) {
+    const requests: Array<Promise<unknown>> = [];
+    let calls = 0;
+    return {
+      get callCount() { return calls; },
+      request: async () => {
+        calls += 1;
+        const promise = calls <= failTimes
+          ? Promise.reject(timeoutError)
+          : Promise.resolve(loadedResponse);
+        requests.push(promise);
+        return promise;
+      },
+    };
+  }
+
+  const instantSleep = async () => undefined;
+
+  it('retries a timed-out capture until the runtime catalog answers (bridge startup budget > capture budget)', async () => {
+    const requester = deferredRequester(1);
+    const sleeps: number[] = [];
+    const failures: Array<{ status: string; attempt: number; isFinal: boolean }> = [];
+    const manifest = await capturePiRuntimeCapabilitiesWithRetry(
+      requester,
+      { sessionId: 's1' },
+      1,
+      'ready',
+      {
+        retryDelaysMs: [4_000, 10_000, 20_000],
+        sleep: async (delayMs) => { sleeps.push(delayMs); },
+        onAttemptFailed: (failed, attempt, isFinal) => failures.push({ status: failed.status, attempt, isFinal }),
+      },
+    );
+    expect(manifest.status).toBe('loaded');
+    expect(manifest.commands).toHaveLength(1);
+    expect(requester.callCount).toBe(2);
+    expect(sleeps).toEqual([4_000]);
+    expect(failures).toEqual([{ status: 'unknown', attempt: 1, isFinal: false }]);
+  });
+
+  it('gives up after the bounded retries and keeps the last failed manifest', async () => {
+    let requests = 0;
+    const probe = {
+      get callCount() { return requests; },
+      request: async () => { requests += 1; throw timeoutError; },
+    };
+    const failures: Array<{ attempt: number; isFinal: boolean }> = [];
+    const manifest = await capturePiRuntimeCapabilitiesWithRetry(
+      probe as Parameters<typeof capturePiRuntimeCapabilityManifest>[0],
+      { sessionId: 's1' },
+      1,
+      'ready',
+      {
+        retryDelaysMs: [4_000, 10_000],
+        sleep: instantSleep,
+        onAttemptFailed: (_failed, attempt, isFinal) => failures.push({ attempt, isFinal }),
+      },
+    );
+    expect(manifest.status).toBe('unknown');
+    expect(manifest.error?.code).toBe('timeout');
+    expect(requests).toBe(3);
+    // 每次(含末次)失败都上报;只有末次(不会再有下一采)标 final。
+    expect(failures).toEqual([
+      { attempt: 1, isFinal: false },
+      { attempt: 2, isFinal: false },
+      { attempt: 3, isFinal: true },
+    ]);
+  });
+
+  it('stops retrying once the session is closed or a newer generation superseded the refresh', async () => {
+    const requester = deferredRequester(Number.POSITIVE_INFINITY);
+    let current = true;
+    const manifest = await capturePiRuntimeCapabilitiesWithRetry(
+      requester,
+      { sessionId: 's1' },
+      1,
+      'ready',
+      {
+        sleep: instantSleep,
+        isCurrent: () => current,
+        // 首次失败即关闭会话/被新代接替:重试必须立刻中止。
+        onAttemptFailed: () => { current = false; },
+      },
+    );
+    expect(manifest.status).toBe('unknown');
+    expect(requester.callCount).toBe(1);
+  });
+
+  it('does not sleep when the first capture already reports loaded', async () => {
+    const requester = deferredRequester(0);
+    const sleeps: number[] = [];
+    const manifest = await capturePiRuntimeCapabilitiesWithRetry(
+      requester,
+      { sessionId: 's1' },
+      1,
+      'ready',
+      { retryDelaysMs: [4_000], sleep: async (delayMs) => { sleeps.push(delayMs); } },
+    );
+    expect(manifest.status).toBe('loaded');
+    expect(requester.callCount).toBe(1);
+    expect(sleeps).toEqual([]);
   });
 });

@@ -104,6 +104,13 @@
     "stepFailed": "{{name}} ist auf ein Problem gestoßen und hat diesen Schritt nicht abgeschlossen",
     "stepTimeout": "{{name}} hat zu lange gebraucht, daher wurde dieser Schritt gestoppt",
     "stepUnavailable": "{{name}} ist nicht verfügbar und kann diesen Schritt nicht ausführen",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}} hat die Verarbeitung nicht innerhalb der Wartezeit begonnen. Diese Anfrage ist beendet.",
+        "advice": "Bitte den Besitzer des Partners zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht.",
+        "details": "Sobald Cindy und das Netzwerk wieder funktionieren, sende die Nachricht erneut."
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}} kann nicht antworten: Das Gerät des Teammitglieds hat sein Limit für Remote-Sitzungen erreicht.",

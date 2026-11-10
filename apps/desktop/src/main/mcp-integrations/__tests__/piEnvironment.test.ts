@@ -1,3 +1,8 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { configureUserDataDir } from '../../userDataPath.js';
+import { configureOwnerContext } from '../../ownerContext.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 /**
@@ -14,7 +19,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
  * getPiExtraSpawnConfig 内部起真 codexHttpBridge,故这里做真 HTTP 往返。
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { PluginRegistry } from '../../maker-host/plugins/plugin-registry';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createLiziMcpProviders, getLiziMcpSessionContext } from '@cindy/mcps';
@@ -161,8 +166,18 @@ async function readRpcText(resp: Response): Promise<unknown> {
 }
 
 describe('piEnvironment per-session identity', () => {
+  let profile: string;
+  beforeEach(() => {
+    profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-pi-env-'));
+    configureUserDataDir(profile);
+    configureOwnerContext({
+      read: () => ({ dataOwnerId: null, generation: 0, boundaryPending: false }),
+      fallbackBaseDir: () => profile,
+    });
+  });
   afterEach(async () => {
     await shutdownPiEnvironment();
+    rmSync(profile, { recursive: true, force: true });
   });
 
   it('recovers Slack binding in the existing Pi bridge while another session holds its lease', async () => {

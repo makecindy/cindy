@@ -428,7 +428,7 @@
         "ask-send-disabled-bg": "var(--surface-elevated-soft)",
         "completion-badge-fg": "#1f1f1e",
         "create-agent-control-bg-hover": "var(--surface-hover)",
-        "create-agent-control-bg-pressed": "var(--surface-hover-soft)",
+        "create-agent-control-bg-pressed": "rgba(0, 0, 0, 0.08)",
         "create-agent-send-icon": "#FCFCFC",
         "slider-track": "#A3A39E",
         "slider-fill": "#3C3F43",

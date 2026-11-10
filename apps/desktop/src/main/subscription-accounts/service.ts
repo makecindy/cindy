@@ -6,14 +6,14 @@ import { requestAnthropicModelProbe } from '../maker-host/model-discovery/anthro
 /** Shared by the owner UI and helper, after their ordinary authorization checks. */
 export async function executeSubscriptionAccountCommand(command: SubscriptionAccountCommand) {
   const result = await runSubscriptionAccountCommand(command);
-  if (command.action === 'add' || command.action === 'login') {
+  if (command.action === 'add' || command.action === 'connect' || command.action === 'login') {
     if (command.providerId === 'anthropic') requestAnthropicModelProbe();
     else
       void getMaker()
         .refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer' })
         .catch(() => {});
   }
-  if (command.action !== 'read' && command.action !== 'cancel')
+  if (command.action !== 'read' && command.action !== 'preview' && command.action !== 'cancel')
     refreshSelectableModelsAndBroadcast({ providerId: command.providerId });
   return result;
 }

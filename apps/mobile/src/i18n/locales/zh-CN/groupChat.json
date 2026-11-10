@@ -98,6 +98,13 @@
     "stepFailed": "{{name}}这一步出错了，没做完",
     "stepTimeout": "{{name}}太久没做完，这一步先停下",
     "stepUnavailable": "{{name}}现在不可用，这一步没法做",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}}未能在等待期限内开始处理，本次请求已结束。",
+        "advice": "请伙伴的主人检查所属电脑上的 Cindy 是否正常运行、网络是否连接。",
+        "details": "确认 Cindy 和网络恢复正常后，请重新发送消息。"
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}}无法回复：伙伴所在设备保留的远程任务数已达上限。",
