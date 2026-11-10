@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
 const { JSDOM } = createRequire(import.meta.url)("jsdom");
 import { pluginPageHtml } from "../plugins/pluginPageHtml";
-import { createPluginPagePoller, loadPluginPageAssets } from "../plugins/pluginClient";
+import { loadPluginPageAssets } from "../plugins/pluginClient";
 import type { PluginPageDocument } from "@cindy/device-link";
 
 const document: PluginPageDocument = {
@@ -15,51 +15,6 @@ const document: PluginPageDocument = {
   files: [],
 };
 describe("mobile plugin page transport", () => {
-  // Unit regression: the page's production read loop previously locked the entire
-  // page after one transient poll failure or a rejection received while suspended.
-  // The existing bootstrap tests do not exercise native poll lifecycle/timing.
-  it("recovers a transient read, remains single-flight on resume and ignores suspended rejection", async () => {
-    vi.useFakeTimers();
-    let active = true, reject!: (error: Error) => void;
-    const read = vi.fn().mockRejectedValueOnce(new Error("TIMEOUT"))
-      .mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail; }))
-      .mockResolvedValue(undefined);
-    const failed = vi.fn();
-    const poller = createPluginPagePoller({ active: () => active, read, failed });
-    try {
-      poller.resume();
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(read).toHaveBeenCalledTimes(2);
-      active = false;
-      poller.pause();
-      active = true;
-      poller.resume();
-      expect(read).toHaveBeenCalledTimes(2);
-      reject(new Error("[NOT_FOUND] Plugin page is no longer available"));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(read).toHaveBeenCalledTimes(3);
-      expect(failed).not.toHaveBeenCalled();
-      poller.dispose();
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(read).toHaveBeenCalledTimes(3);
-    } finally { poller.dispose(); vi.useRealTimers(); }
-  });
-  it.each([
-    ["[NOT_FOUND] Plugin page is no longer available", 1],
-    ["[PERMISSION_DENIED] revoked", 1],
-    ["TIMEOUT", 3],
-  ])("bounds read recovery for %s without reopening or replaying writes", async (message, attempts) => {
-    vi.useFakeTimers();
-    const read = vi.fn().mockRejectedValue(new Error(message));
-    const failed = vi.fn();
-    const poller = createPluginPagePoller({ active: () => true, read, failed });
-    try {
-      poller.resume();
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(read).toHaveBeenCalledTimes(attempts);
-      expect(failed).toHaveBeenCalledOnce();
-    } finally { poller.dispose(); vi.useRealTimers(); }
-  });
   it("assembles chunk boundaries without corrupting base64 and stops when the owner changes", async () => {
     const data = Buffer.alloc(48 * 1024 + 13, 65);
     const doc = {

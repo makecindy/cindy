@@ -40,7 +40,7 @@ import {
   useThemedStyles,
   type ThemeColors,
 } from "@/theme";
-import { createPluginPagePoller, invokePlugin, loadPluginPageAssets } from "./pluginClient";
+import { invokePlugin, loadPluginPageAssets } from "./pluginClient";
 import { PluginNativeIntent } from "./PluginNativeIntent";
 import { PluginDirectoryPicker } from "./PluginDirectoryPicker";
 import { PluginModelPicker } from './PluginModelPicker';
@@ -99,7 +99,6 @@ export function PluginPage({
     assets: Record<string, PluginPageAsset>;
   }>();
   const [error, setError] = useState(false);
-  const [pollError, setPollError] = useState(false);
   const [nativeIntent, setNativeIntent] = useState<NativeIntent>();
   const taskIntent = useRef<string | undefined>(undefined);
   const [directoryRequest, setDirectoryRequest] =
@@ -110,8 +109,6 @@ export function PluginPage({
   const [answering, setAnswering] = useState(false);
   const [notice, setNotice] = useState("");
   const focusedRef = useRef(focused);
-  const onlineRef = useRef(status === "online");
-  onlineRef.current = status === "online";
   const delivery = useRef(0);
   focusedRef.current = focused;
   const send = useCallback(
@@ -133,11 +130,13 @@ export function PluginPage({
 
   useEffect(() => {
     const owner = getMobileAuthOwner();
-    let disposed = false;
-    let page: PluginPageDocument | undefined;
+    let disposed = false,
+      timer: ReturnType<typeof setTimeout> | undefined;
+    let page: PluginPageDocument | undefined,
+      polling = false;
     const current = () => !disposed && isMobileAuthOwnerCurrent(owner);
     const visible = () =>
-      current() && onlineRef.current && focusedRef.current && AppState.currentState === "active";
+      current() && focusedRef.current && AppState.currentState === "active";
     const call = <T,>(action: string, input: Record<string, unknown> = {}) =>
       invokePlugin<T>(
         (device, channel, args) =>
@@ -172,19 +171,19 @@ export function PluginPage({
     rendered.current = false;
     setContent(undefined);
     setError(false);
-    setPollError(false);
     setConfirm(undefined);
     setDirectoryRequest(undefined);
     setModelPicker(undefined);
     completedModelPickers.current.clear();
     setNativeIntent(undefined);
-    const poller = createPluginPagePoller({
-      active: () => visible() && !!page && rendered.current,
-      read: async (pollCurrent) => {
+    const poll = async () => {
+      if (!visible() || !page || !rendered.current || polling) return;
+      polling = true;
+      try {
         const result = await call<PluginPagePoll>("poll", {
           after: cursor.current,
         });
-        if (!pollCurrent()) return;
+        if (!visible()) return;
         if (
           !result ||
           !Array.isArray(result.events) ||
@@ -202,10 +201,14 @@ export function PluginPage({
         setNativeIntent(result.intents?.[0]);
         if (result.notifications?.length)
           setNotice(result.notifications.at(-1)!.text);
-        setPollError(false);
-      },
-      failed: () => { if (visible()) setPollError(true); },
-    });
+        setError(false);
+      } catch {
+        if (current()) setError(true);
+      } finally {
+        polling = false;
+        if (visible()) timer = setTimeout(() => void poll(), 1_000);
+      }
+    };
     void (async () => {
       try {
         page = await call<PluginPageDocument>(`open:${surface}`, { modelPickerRemoteSources: true });
@@ -230,18 +233,18 @@ export function PluginPage({
       }
     })();
     const ready = () => {
-      poller.resume();
+      if (timer) clearTimeout(timer);
+      void poll();
     };
     startPolling.current = ready;
-    pausePolling.current = () => poller.pause();
     const foreground = AppState.addEventListener("change", (state) => {
       send({
         type: "lifecycle",
         active: state === "active" && focusedRef.current,
       });
+      if (timer) clearTimeout(timer);
       if (state === "active" && documentRef.current) ready();
       else {
-        poller.pause();
         setConfirm(undefined);
         setDirectoryRequest(undefined);
         setModelPicker(undefined);
@@ -253,8 +256,7 @@ export function PluginPage({
       disposed = true;
       request.current = null;
       startPolling.current = null;
-      pausePolling.current = null;
-      poller.dispose();
+      if (timer) clearTimeout(timer);
       foreground.remove();
       if (page && isMobileAuthOwnerCurrent(owner))
         void invokePlugin(invoke, deviceId, pluginId, "close", {
@@ -263,11 +265,6 @@ export function PluginPage({
     };
   }, [deviceId, pluginId, surface, attempt, invoke, send]);
   const startPolling = useRef<(() => void) | null>(null);
-  const pausePolling = useRef<(() => void) | null>(null);
-  useEffect(() => {
-    if (status === "online" && focused) startPolling.current?.();
-    else pausePolling.current?.();
-  }, [status]);
   useEffect(() => {
     send({
       type: "lifecycle",
@@ -275,7 +272,6 @@ export function PluginPage({
     });
     if (focused) startPolling.current?.();
     else {
-      pausePolling.current?.();
       setConfirm(undefined);
       setDirectoryRequest(undefined);
       setNativeIntent(undefined);
@@ -462,8 +458,7 @@ export function PluginPage({
         )
           onTitle?.(message.title.trim());
       } else if (message.type === "resource-error") {
-        // A missing thumbnail is not evidence that the page or a submitted write failed.
-        // Critical document/script failures still arrive through WebView onError.
+        setError(true);
       } else if (message.type === "ready") {
         rendered.current = true;
         send({
@@ -556,7 +551,7 @@ export function PluginPage({
       if (current()) setError(true);
     }
   };
-  const unavailable = error || pollError || status !== "online";
+  const unavailable = error || status !== "online";
   return (
     <View style={styles.root}>
       {unavailable ? (
