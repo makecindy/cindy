@@ -1142,6 +1142,16 @@ export function getMaker(): Maker {
         return Boolean(session && session.instanceId === sessionInstanceId
           && session.getStatus() === 'active' && !isAppSessionBoundaryPending());
       },
+      manageUserQuestions: (
+        context: import('@cindy/mcps').LiziMcpSessionContext,
+        input: Parameters<import('@cindy/maker-core').Session['manageAsyncUserQuestions']>[0],
+      ) => {
+        const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
+        if (!session || session.instanceId !== context.sessionInstanceId || isAppSessionBoundaryPending()) {
+          throw new Error('Question caller is no longer active');
+        }
+        return session.manageAsyncUserQuestions(input);
+      },
       askUserQuestionAsync: (
         context: import('@cindy/mcps').LiziMcpSessionContext,
         questions: Parameters<import('@cindy/maker-core').Session['askUserQuestionAsync']>[0],

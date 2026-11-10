@@ -36,6 +36,11 @@
     "exit": "Salir del modo de plan"
   },
   "panel": {
+    "questionUnanswered": "Sin respuesta",
+    "questionWithdrawn": "Ya no necesita respuesta",
+    "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",
+    "sendSupplement": "Enviar información adicional",
+
     "readOnlyKind": "Pendiente",
     "readOnlyTitle": "Esperando confirmación en su computadora",
     "pendingRequests": "Solicitudes pendientes",

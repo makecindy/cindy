@@ -3,6 +3,7 @@ import {
   splitQuestionReferences,
   asyncQuestionNeedsSupplement,
   formatAsyncQuestionSupplement,
+  withdrawnQuestionDraftText,
   buildAskQuestionProgressSummary,
   buildAskQuestionReviewPresentation,
   buildAskUserQuestionDecision,
@@ -109,6 +110,18 @@ describe('interaction shared model', () => {
     expect(formatAsyncQuestionSupplement([{ question: 'Scope?\nDetails?', header: 'Scope' }, { question: 'Skipped?' }],
       { Scope: 'Mobile too', 'Skipped?': '' })).toBe('> Scope?\n> Details?\n\nMobile too');
     expect(formatAsyncQuestionSupplement([{ question: 'Q?' }], {})).toBe('');
+  });
+
+
+  it('keeps delayed-answer context outside the native reply and never sends an empty reply', () => {
+    const question = { id: '["request_user_input_async","item",0]', question: 'Install?' };
+    const text = formatAsyncQuestionSupplement([question], { [question.id]: 'Yes' }, { late: true });
+    expect(text).toContain('</send_user_message_question_reply>\n\n<cindy_question_context>');
+    expect(text).toContain('whether the question still applies');
+    expect(text).toContain("not part of the user's answer or new authorization");
+    expect(formatAsyncQuestionSupplement([question], {}, { late: true })).toBe('');
+    expect(withdrawnQuestionDraftText('Details', ['A', 'B'])).toBe('A\nB\nDetails');
+    expect(withdrawnQuestionDraftText('', [], '["A","B"]')).toBe('A\nB');
   });
 
   it('never supplements an accepted native answer', async () => {

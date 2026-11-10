@@ -2370,6 +2370,7 @@ export function createMessagePersistence(deps: MessagePersistencePorts) {
             requestId,
             questions: request.questions ?? [],
             status: cancelled ? 'cancelled' : 'answered',
+        ...(cancelled && typeof decision.withdrawalReason === 'string' ? { withdrawalReason: decision.withdrawalReason } : {}),
             answers,
           },
           {
