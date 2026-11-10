@@ -94,6 +94,12 @@ function fixture(): {
   const home = path.join(root, 'home');
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
   vi.spyOn(os, 'homedir').mockReturnValue(home);
+  // The Codex CLI home honours `CODEX_HOME` (#8258). An ambient absolute value
+  // would bypass the mocked home and point the reconcile flow at the developer's
+  // real `~/.codex/auth.json` — the refresh write in the local-reconnect case
+  // would overwrite that live credential with a test token. Neutralise it here;
+  // the CODEX_HOME cases below override it.
+  vi.stubEnv('CODEX_HOME', '');
   const systemAuth = path.join(home, '.codex', 'auth.json');
   fs.writeFileSync(
     systemAuth,
@@ -453,6 +459,17 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
       expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(
         path.join(customHome, 'auth.json'),
       );
+    });
+
+    it('不继承环境里的 CODEX_HOME:凭证路径始终落在 fixture 的临时目录里', () => {
+      // 开发者的环境里若带着绝对路径 CODEX_HOME,凭证发现就会指到真实目录 ——
+      // 之后的 reconcile 写入会覆盖开发者真正的 auth.json。
+      const decoy = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-ambient-codex-home-'));
+      dirs.push(decoy);
+      vi.stubEnv('CODEX_HOME', decoy);
+      const { systemAuth } = fixture();
+      h.isPackaged = true;
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
     });
 
     it('相对路径与空值不生效,回退 ~/.codex(不按 cwd 解析)', () => {
