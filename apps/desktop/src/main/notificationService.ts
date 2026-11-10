@@ -172,8 +172,24 @@ interface NotifiedAlert {
    * 投递入口同步分配的单调序号。两者只在同一种来源之间比较，不混成一条数轴。
    */
   order: { source: 'turn' | 'delivery'; value: number };
+  /**
+   * 这条告警进入主进程投递入口的时刻。跨窗合并用它比较两次到达，
+   * 不用 renderer 各自采样的轮次时钟。
+   */
+  arrivedAt: number;
+  /**
+   * 去掉 `turn:<毫秒>` 之后的内容尾。主窗和「在新窗口打开」的副窗会给
+   * 同一帧采出相差几毫秒的轮次时钟，标识因不相同；请求或错误内容不同时这段尾也不同。
+   */
+  content: string;
 }
 const NOTIFIED_ALERTS_PER_KEY = 8;
+/**
+ * 同一事件被主窗和副窗各自投一次时，两次进入主进程的时间差。两个 renderer 收到同一帧广播
+ * 后各自采样 `Date.now()`，差距是几毫秒级；1 秒留给副窗刚展开侧栏、主进程调度和 preview 读取的差额。
+ * 真正的下一轮是用户再发一次或模型再跑一次，不会落在这 1 秒里。窗口用到达主进程的时刻比，不用 renderer 的接收时刻。
+ */
+const CROSS_WINDOW_ALERT_WINDOW_MS = 1_000;
 const notifiedAlerts = new Map<string, NotifiedAlert[]>();
 /** 没有 turn 时间的告警，在投递入口同步分配的单调序号。只和同样没有 turn 时间的告警比先后。 */
 let nextAlertDeliveryOrder = 0;
@@ -203,9 +219,23 @@ function alertOrder(alertEventId: string, deliveryOrder: number): NotifiedAlert[
  * 同一告警标识只弹一次。没有标识的调用不去重，照常通知：宁可多弹一次，
  * 也不能把新的提问或失败吞掉。
  */
-function wasAlertNotified(key: string, alertEventId: string | undefined): boolean {
+/** 去掉 renderer 各自采样的 `turn:<毫秒>:`。剩下的才是请求或错误内容；没有这段前缀就整串都算内容。 */
+function alertContentKey(alertEventId: string): string {
+  return alertEventId.replace(/^turn:\d{1,16}:/, '');
+}
+
+function wasAlertNotified(key: string, alertEventId: string | undefined, arrivedAt: number): boolean {
   if (!alertEventId) return false;
-  return notifiedAlerts.get(key)?.some(alert => alert.id === alertEventId) === true;
+  const current = notifiedAlerts.get(key);
+  if (!current) return false;
+  if (current.some(alert => alert.id === alertEventId)) return true;
+  // 合并键是 (sessionId, kind, 内容尾)，到达时刻只用来卡 1 秒窗口。
+  // sessionId 与 kind 已经在 key 里；内容尾不含 turn 时钟，所以两个窗口相差几毫秒的同一事件会对上，
+  // 换了请求或换了错误内容就对不上。超过 1 秒的下一次是新事件，即使内容尾相同也再弹。
+  const content = alertContentKey(alertEventId);
+  return current.some(alert =>
+    alert.content === content && Math.abs(arrivedAt - alert.arrivedAt) < CROSS_WINDOW_ALERT_WINDOW_MS,
+  );
 }
 
 /**
@@ -214,10 +244,15 @@ function wasAlertNotified(key: string, alertEventId: string | undefined): boolea
  * （成为最近一条）还是插在已有更新记录之前。同一种来源按数值比较；来源不同
  * 时没有共同的时间轴，本条追加到末尾。每个 key 只留最近若干条，超出丢最旧的。
  */
-function rememberAlert(key: string, alertEventId: string, order: NotifiedAlert['order']): void {
+function rememberAlert(
+  key: string,
+  alertEventId: string,
+  order: NotifiedAlert['order'],
+  arrivedAt: number,
+): void {
   const current = notifiedAlerts.get(key) ?? [];
   if (current.some(alert => alert.id === alertEventId)) return;
-  const entry = { id: alertEventId, order };
+  const entry = { id: alertEventId, order, arrivedAt, content: alertContentKey(alertEventId) };
   const newerAt = current.findIndex(alert => alert.order.source === order.source && alert.order.value > order.value);
   const next = newerAt === -1
     ? [...current, entry]
@@ -347,6 +382,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // 序号必须在任何 await 之前定下来。两条告警会并发去读 preview，后读完的
       // 不一定是后产生的；拿不到标识里的轮次时间时，就靠这个入口序号分先后。
       const alertDeliveryOrder = alertEventId === undefined ? undefined : nextAlertDeliveryOrder++;
+      // 跨窗合并看的是进入主进程的时刻，不是 renderer 采到轮次时钟的时刻。
+      // 和序号一样，在任何 await 之前定下来，两条并发 preview 不会互相改写这个时刻。
+      const alertArrivedAt = alertEventId === undefined ? undefined : Date.now();
       assertValidSessionEventPayload(payload);
       const { sessionId, title, kind, channels } = payload;
       const markAttention = payload.markAttention !== false;
@@ -467,7 +505,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const mobileTeammateBotId = preview?.teammateBotId ?? teammateBotId;
         if (wantDesktop && (kind === 'done'
           ? !wasReplyNotified(desktopKey, eventId)
-          : !wasAlertNotified(desktopKey, usableAlertEventId))) {
+          : !wasAlertNotified(desktopKey, usableAlertEventId, alertArrivedAt ?? 0))) {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
               sessionId, title: notificationTitle, kind, teammate, markAttention, avatarJpeg,
@@ -476,10 +514,10 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             });
             if (kind === 'done' && accepted) {
               notifiedReplies.set(desktopKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
-            } else if (accepted && usableAlertEventId && usableAlertOrder) {
+            } else if (accepted && usableAlertEventId && usableAlertOrder && alertArrivedAt !== undefined) {
               // 只记下有标识的告警。无标识的不留记录，下一次同样无标识的调用仍要通知。
               // 更早产生、更晚读完的告警不能把这里改回旧标识。
-              rememberAlert(desktopKey, usableAlertEventId, usableAlertOrder);
+              rememberAlert(desktopKey, usableAlertEventId, usableAlertOrder, alertArrivedAt);
             }
           } catch (err) {
             log.warn('[notification] desktop reply notification failed (non-fatal)', err);

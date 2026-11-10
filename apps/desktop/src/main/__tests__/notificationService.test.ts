@@ -1296,6 +1296,84 @@ describe('notificationService — channels 分发', () => {
     }
   });
 
+  // Two BrowserWindows each sample Date.now() for one running frame, so the same
+  // error arrives as turn:1000:error and turn:1002:error. Exact-id dedupe toasts
+  // both. Collapse that pair: same task, same content tail, arrivals inside 1s,
+  // one toast. The second preview is released last so a ledger that only keeps
+  // the latest id cannot hide the extra toast. A different request, a different
+  // error tail, another task, and the same tail a full second later each toast.
+  it('toasts once when two renderer clocks 2ms apart report the same alert', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const pending: Array<() => void> = [];
+    readSessionNotificationPreview.mockImplementation(() => new Promise(resolve => {
+      pending.push(() => resolve({}));
+    }));
+    const handler = registeredHandlers.get('notification:show-session-event')!;
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const started = [
+        handler({}, {
+          sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+        }),
+      ];
+      now += 2;
+      started.push(handler({}, {
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      }));
+      await vi.waitFor(() => expect(pending).toHaveLength(2));
+      pending[1]!();
+      await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(1));
+      pending[0]!();
+      await Promise.all(started);
+      await flushAsync();
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+      readSessionNotificationPreview.mockImplementation(async () => ({}));
+      for (const releaseLeft of pending.splice(0)) releaseLeft();
+      await flushAsync();
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      });
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+      now += 2;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:1004:ask:2', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      now += 2;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1006:error:quota', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(3);
+      now += 2;
+      await invokeHandler({
+        sessionId: 's2', title: 'Other', kind: 'error', alertEventId: 'turn:1008:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(4);
+
+      now += 1000;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:9000:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(5);
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(5);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   // #9317 / unit: a done with no turn id and a failed preview read records only a
   // send time. An alert keeps its own ledger, so a later needs-reply or error of
   // the same task — even one that also has no id — must still toast.
