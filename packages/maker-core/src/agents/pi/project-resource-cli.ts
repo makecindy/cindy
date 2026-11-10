@@ -95,6 +95,13 @@ function isSymlinkDirectory(target: string): boolean {
   }
 }
 
+/** readdir 把 Windows junction 报成目录时 Dirent.isSymbolicLink 为 false,需 lstat
+ * 兜底。collector 与 watcher 必须共用同一判定:口径分叉会让盯视面混入 collector
+ * 永不枚举的目标树键(无谓重扫 + 基线带脏键)。 */
+function isSymlinkEntry(entry: fs.Dirent, absPath: string): boolean {
+  return entry.isSymbolicLink() || (entry.isDirectory() && isSymlinkDirectory(absPath));
+}
+
 function hasSkillFile(dir: string): boolean {
   return ['SKILL.md', 'skill.md'].some((name) => isFile(path.join(dir, name)));
 }
@@ -201,9 +208,20 @@ function statMtimeMs(target: string): number {
   }
 }
 
+/** 目录条目名指纹:时间戳粒度盲区(同一 tick 内增删,mtime 逐位不变)的第二信号。
+ * 文件键/缺失目录 readdir 失败,恒 ''。变化只作重扫信号,判决仍归路径集合。 */
+function readDirEntryFingerprint(dir: string): string {
+  try {
+    return fs.readdirSync(dir).sort().join('\n');
+  } catch {
+    return '';
+  }
+}
+
 /**
- * 启动快照:spawn 时冻结的项目资源清单 + watch root 的 mtime 基线。
- * paths 是未经禁用过滤的原始收集结果(与后续 fresh collect 同口径可比)。
+ * 启动快照:spawn 时冻结的项目资源清单 + watch 面基线(mtime/条目指纹/解析身份)。
+ * paths 是未经禁用过滤的原始收集结果(受邀者会话已按 guestRoot 裁剪,与后续
+ * fresh collect 经同一 restrict 裁剪后同口径可比)。
  */
 export interface PiProjectResourceLaunchSnapshot {
   readonly workingDir: string;
@@ -217,19 +235,50 @@ export interface PiProjectResourceLaunchSnapshot {
   /** 启动时认定的 git root 可变持有器:更近的 .git 出现/消失会改变 collector 的枚举链
    * (.agents 向上走到 repoRoot),而任何被盯目录的 mtime 都不动,必须单独核对。边界
    * 变化只作重扫信号(见 piProjectResourcesDrifted),确认集合未变后就地更新,避免
-   * 嵌套目录 git init 在无实际资源变化时多余回收。必须与 watchRootMtimes 同批采样
+   * 嵌套目录 git init 在无实际资源变化时多余回收。必须与 watch 基线同批采样
    * (都先于 paths 收集),否则窗口内新旧边界会与路径集合错配。 */
   readonly state: { repoRoot: string; resolvedWorkingDir: string | null };
   /** 每个 watch root 的解析身份(realpath)。基线不只记 mtime:被盯路径的软链改指
    * 同 mtime 的孪生树时,解析身份是唯一信号;与 watchRootMtimes 同 key 同批。 */
   readonly watchRootsResolved: Map<string, string | null>;
+  /** 每个 watch root 的 readdir 条目名指纹:时间戳粒度盲区(同一 tick 内增删,
+   * mtime 与基线逐位相等)的第二信号;与 watchRootMtimes 同 key 同批。 */
+  readonly watchRootEntries: Map<string, string>;
+  /** 受邀者裁剪口径(非受邀者恒 null):重扫后的 fresh 集合先经它裁剪再与 paths
+   * 比较 —— 缺了会拿全量比裁剪基线恒判漂移,回收死循环。 */
+  readonly restrict: ((paths: PiProjectResourceCliPaths) => PiProjectResourceCliPaths) | null;
 }
 
 /**
- * 收集漂移快检要盯的目录 mtime 基线。目录集合必须覆盖 collector 实际枚举的
- * 每一层目录:在已存在的子目录内增删条目只改该子目录自身的 mtime,父目录不动,
- * 漏盯哪层就在哪层漏检(如已有 namespace 下增删 skill、已有扩展目录内补 index.ts、
- * 已有 skill 目录内删 SKILL.md):
+ * 启动采样的一次遍历产出:每个 watch key 的三样信号 + scanRoot 解析身份。
+ * 整份样本必须先于路径收集采样 —— 身份基线晚于 argv 采集,会把「采基线前的
+ * 改指」固化成一致基线,永久漏检(Codex P2,2026-11-10);基线在前则窗口内
+ * 不一致只会让首次快检多一次重扫后收敛。
+ */
+export interface PiProjectResourceLaunchWatch {
+  /** workingDir 的解析身份,先于所有键采样(键路径都从它拼出)。 */
+  readonly scanRootResolved: string | null;
+  readonly mtimes: Map<string, number>;
+  /** key → readdir 条目名指纹(排序拼接;文件键/缺失恒 '')。时间戳粒度盲区
+   * (同一 tick 内增删,mtime 与基线逐位相等)的第二信号;变化只作重扫信号,
+   * 判决仍归路径集合。 */
+  readonly entries: Map<string, string>;
+  /** key → realpath 解析身份(缺失 null),与 mtimes 同 key 同批。 */
+  readonly resolved: Map<string, string | null>;
+}
+
+function recordWatchKey(sample: PiProjectResourceLaunchWatch, target: string): void {
+  // 解析身份先行:身份与 mtime/条目之间的窗口不一致只会多一次重扫,不会固化。
+  sample.resolved.set(target, realpathOrNull(target));
+  sample.mtimes.set(target, statMtimeMs(target));
+  sample.entries.set(target, readDirEntryFingerprint(target));
+}
+
+/**
+ * 收集漂移快检要盯的目录基线(mtime + 条目指纹 + 解析身份,同一次遍历)。目录
+ * 集合必须覆盖 collector 实际枚举的每一层目录:在已存在的子目录内增删条目只改
+ * 该子目录自身的 mtime,父目录不动,漏盯哪层就在哪层漏检(如已有 namespace 下
+ * 增删 skill、已有扩展目录内补 index.ts、已有 skill 目录内删 SKILL.md):
  * - `<wd>/.pi` 本身 + `.pi/skills` / `.pi/prompts` / `.pi/extensions`
  * - `.pi/skills` 与 `.agents/skills` 各自的两层 skill 树(skills 根、namespace 级、
  *   namespace 内 skill 级;与 collector 的枚举深度一致,不往更深处看)
@@ -237,27 +286,32 @@ export interface PiProjectResourceLaunchSnapshot {
  * - cwd→git root 链上每级的 `.agents` + `.agents/skills`
  * 不含 workingDir 本身:往项目根丢无关文件不应触发全量重扫。
  */
-export function collectPiProjectResourceWatchRootMtimes(workingDir: string, repoRootHint?: string): Map<string, number> {
-  const roots = new Map<string, number>();
-  const scanRoot = realpathOrNull(workingDir) ?? path.resolve(workingDir);
-  if (!isDir(scanRoot)) return roots;
+export function collectPiProjectResourceLaunchWatch(workingDir: string, repoRootHint?: string): PiProjectResourceLaunchWatch {
+  const sample: PiProjectResourceLaunchWatch = {
+    scanRootResolved: realpathOrNull(workingDir),
+    mtimes: new Map(),
+    entries: new Map(),
+    resolved: new Map(),
+  };
+  const scanRoot = sample.scanRootResolved ?? path.resolve(workingDir);
+  if (!isDir(scanRoot)) return sample;
   const repoRoot = repoRootHint ?? (findNearestGitRoot(scanRoot) ?? scanRoot);
   const piDir = path.join(scanRoot, '.pi');
-  roots.set(piDir, statMtimeMs(piDir));
-  watchPiSkillTreeMtimes(roots, path.join(piDir, 'skills'));
-  watchPiPromptTargets(roots, path.join(piDir, 'prompts'), repoRoot);
-  watchPiExtensionChildMtimes(roots, path.join(piDir, 'extensions'));
+  recordWatchKey(sample, piDir);
+  watchPiSkillTreeMtimes(sample, path.join(piDir, 'skills'));
+  watchPiPromptTargets(sample, path.join(piDir, 'prompts'), repoRoot);
+  watchPiExtensionChildMtimes(sample, path.join(piDir, 'extensions'));
   let current = scanRoot;
   while (true) {
     const agentsDir = path.join(current, '.agents');
-    roots.set(agentsDir, statMtimeMs(agentsDir));
-    watchPiSkillTreeMtimes(roots, path.join(agentsDir, 'skills'));
+    recordWatchKey(sample, agentsDir);
+    watchPiSkillTreeMtimes(sample, path.join(agentsDir, 'skills'));
     if (current === repoRoot) break;
     const parent = path.dirname(current);
     if (parent === current) break;
     current = parent;
   }
-  return roots;
+  return sample;
 }
 
 /**
@@ -266,33 +320,35 @@ export function collectPiProjectResourceWatchRootMtimes(workingDir: string, repo
  * 目录 mtime 捕获,与 realpath 收集口径一致。跳过 collector 不枚举的子树
  * (隐藏/bak、软链 namespace、剪枝名),避免无关变化触发无谓重扫。
  */
-function watchPiSkillTreeMtimes(roots: Map<string, number>, skillsDir: string): void {
-  roots.set(skillsDir, statMtimeMs(skillsDir));
+function watchPiSkillTreeMtimes(sample: PiProjectResourceLaunchWatch, skillsDir: string): void {
+  recordWatchKey(sample, skillsDir);
   if (!isDir(skillsDir)) return;
   for (const entry of listDir(skillsDir)) {
     if (entry.name.startsWith('.') || /\.bak\.\d+$/.test(entry.name)) continue;
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const childPath = path.join(skillsDir, entry.name);
-    roots.set(childPath, statMtimeMs(childPath));
+    recordWatchKey(sample, childPath);
     const realChild = realpathOrNull(childPath);
     if (!realChild || !isDir(realChild)) continue;
     // 清单本体无论当前是否解析都盯住:悬空链(目标尚不存在)落地成 skill 时,
     // 改动的只是未盯视的目标处,盯住链接自身才能检出(与 prompts 同款)。
     // 直链 skill 根同样适用:其 SKILL.md 为二级软链时,目标移动/删除只改目标处,
     // 跟随后的目录与 skills 根 mtime 都不动,必须先记清单本体再跳过软链目录。
-    watchPiSkillManifestTargets(roots, realChild);
-    if (entry.isSymbolicLink()) continue;
+    watchPiSkillManifestTargets(sample, realChild);
+    // 与 collector 同口径判定软链(含 readdir 把 junction 报成目录的形态):
+    // 软链 namespace collector 明文不枚举,盯视面不得混入目标树内的键。
+    if (isSymlinkEntry(entry, childPath)) continue;
     if (hasSkillFile(realChild)) continue; // skill 目录:collector 不再往里枚举
     if (shouldPruneSkillScanDirectory(entry.name)) continue; // collector 剪枝的 namespace
     for (const nested of listDir(realChild)) {
       if (nested.name.startsWith('.') || /\.bak\.\d+$/.test(nested.name)) continue;
       if (!nested.isDirectory() && !nested.isSymbolicLink()) continue;
       const nestedPath = path.join(realChild, nested.name);
-      roots.set(nestedPath, statMtimeMs(nestedPath));
+      recordWatchKey(sample, nestedPath);
       const realNested = realpathOrNull(nestedPath);
       if (!realNested || !isDir(realNested)) continue;
       // 同上层:悬空的嵌套清单(.pi/skills/@scope/foo/SKILL.md 为悬空软链)也要盯住本体
-      watchPiSkillManifestTargets(roots, realNested);
+      watchPiSkillManifestTargets(sample, realNested);
     }
   }
 }
@@ -300,7 +356,7 @@ function watchPiSkillTreeMtimes(roots: Map<string, number>, skillsDir: string): 
 /** 软链清单本体:SKILL.md/skill.md 为指向仓内目标的软链时,目标移动/删除不改变
  * skill 目录自身 mtime,只有盯住解析后的文件才能检出(与 prompts 同款)。悬空链
  * 盯链接自身,目标落地即检出。 */
-function watchPiSkillManifestTargets(roots: Map<string, number>, realFolder: string): void {
+function watchPiSkillManifestTargets(sample: PiProjectResourceLaunchWatch, realFolder: string): void {
   for (const name of ['SKILL.md', 'skill.md']) {
     const manifestPath = path.join(realFolder, name);
     let manifestLstat: fs.Stats;
@@ -311,24 +367,24 @@ function watchPiSkillManifestTargets(roots: Map<string, number>, realFolder: str
     }
     if (!manifestLstat.isSymbolicLink()) continue;
     const realManifest = realpathOrNull(manifestPath);
-    roots.set(realManifest ?? manifestPath, statMtimeMs(realManifest ?? manifestPath));
+    recordWatchKey(sample, realManifest ?? manifestPath);
   }
 }
 
 /** stat 一个 extensions 根及其子目录:已有扩展目录内 index.ts 增删只改子目录 mtime。 */
-function watchPiExtensionChildMtimes(roots: Map<string, number>, extDir: string): void {
-  roots.set(extDir, statMtimeMs(extDir));
+function watchPiExtensionChildMtimes(sample: PiProjectResourceLaunchWatch, extDir: string): void {
+  recordWatchKey(sample, extDir);
   if (!isDir(extDir)) return;
   for (const entry of listDir(extDir)) {
     if (entry.name.startsWith('.')) continue;
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const childPath = path.join(extDir, entry.name);
-    roots.set(childPath, statMtimeMs(childPath));
+    recordWatchKey(sample, childPath);
     const realChild = realpathOrNull(childPath);
     if (!realChild || !isDir(realChild)) continue;
     // 软链 index.ts 的目标增删只改目标处,collector 按解析路径收集,盯住解析后的本体。
     const realIndex = path.join(realChild, 'index.ts');
-    roots.set(realIndex, statMtimeMs(realIndex));
+    recordWatchKey(sample, realIndex);
   }
 }
 
@@ -338,8 +394,8 @@ function watchPiExtensionChildMtimes(roots: Map<string, number>, extDir: string)
  * 但目标文件的移动/删除只改目标处。statSync 跟随软链,目标缺失时为 -1,与
  * realpath 收集口径一致。枚举条件与 collector 逐条对应(隐藏/非 .md 跳过)。
  */
-function watchPiPromptTargets(roots: Map<string, number>, promptsDir: string, repoRoot: string): void {
-  roots.set(promptsDir, statMtimeMs(promptsDir));
+function watchPiPromptTargets(sample: PiProjectResourceLaunchWatch, promptsDir: string, repoRoot: string): void {
+  recordWatchKey(sample, promptsDir);
   if (!isDir(promptsDir)) return;
   for (const entry of listDir(promptsDir)) {
     if (entry.name.startsWith('.') || !entry.name.endsWith('.md')) continue;
@@ -348,47 +404,46 @@ function watchPiPromptTargets(roots: Map<string, number>, promptsDir: string, re
     if (!realFile || !isFile(realFile) || !isWithinRoot(repoRoot, realFile)) {
       // 悬空软链(或目标越界):把链接自身入盯视 —— 目标落地时 statSync 解析到
       // 新 mtime(未盯视目录里的变化也能触发重扫);普通文件不存在此形态。
-      if (entry.isSymbolicLink()) roots.set(entryPath, statMtimeMs(entryPath));
+      if (entry.isSymbolicLink()) recordWatchKey(sample, entryPath);
       continue;
     }
-    roots.set(realFile, statMtimeMs(realFile));
+    recordWatchKey(sample, realFile);
   }
 }
 
 /**
- * 冻结一份启动快照。watchRootMtimes 与 repoRoot 必须由调用方在收集 paths **之前**
- * 采样传入(见 pi/index.ts 调用点):三样同批且基线在前,采样窗口内新增的资源只会
- * 让首次快检多一次重扫后收敛;反过来(先收集后采样)会漏掉窗口内新增的资源,或让
- * 新旧边界与路径集合错配,静默漏检。
+ * 冻结一份启动快照。watch 采样(含解析身份与 scanRoot 身份)与 repoRoot 必须由
+ * 调用方在收集 paths **之前**采样传入(见 pi/index.ts 调用点):身份基线晚于 argv
+ * 采集,会把「采基线前的改指」固化成一致基线,永久漏检(Codex P2,2026-11-10);
+ * 基线在前则窗口内不一致只会让首次快检多一次重扫后收敛。restrict 传受邀者裁剪
+ * 口径:比较对 fresh 集合做与启动相同的裁剪。
  */
 export function snapshotPiProjectResourceLaunch(
   workingDir: string,
   paths: PiProjectResourceCliPaths,
-  watchRootMtimes: Map<string, number>,
   repoRoot: string,
+  watch: PiProjectResourceLaunchWatch,
+  restrict?: (paths: PiProjectResourceCliPaths) => PiProjectResourceCliPaths,
 ): PiProjectResourceLaunchSnapshot {
   return Object.freeze({
     workingDir,
     paths,
-    watchRootMtimes,
-    // 收集器与 watch 面都按解析后的 scanRoot 取物理路径:快照必须同时记住
-    // 解析结果,否则 workingDir 经软链启动、软链改指同仓另一目录时,边界与
-    // 旧物理根 mtime 均不变,快检放行旧 argv(Codex P2,2026-11-10)。
+    watchRootMtimes: watch.mtimes,
+    // scanRoot(workingDir 解析后)刻意不是 watch key(不含 workingDir 本身),
+    // 解析身份单独成字段;身份出自 watch 采样的最前面 —— 若在这里补采样就退回
+    // 「收集后才采身份」的永久漏检窗口(Codex P2)。软链 workingDir 改指同仓
+    // 另一目录时,边界与旧物理根 mtime 均不变,这是唯一信号。
     state: {
       repoRoot,
-      // 收集器与 watch 面都按解析后的 scanRoot 取物理路径:快照必须同时记住
-      // 解析结果,否则 workingDir 经软链启动、软链改指同仓另一目录时,边界与
-      // 旧物理根 mtime 均不变,快检放行旧 argv(Codex P2,2026-11-10)。scanRoot
-      // 刻意不是 watch key(不含 workingDir 本身),单独成字段。
-      resolvedWorkingDir: realpathOrNull(workingDir),
+      resolvedWorkingDir: watch.scanRootResolved,
     },
     // 每个 watch root 的解析身份:任意层级(`.pi`、`.agents` 链、namespace、单个
     // skill 目录)改指同 mtime 的孪生树时 mtime 面致盲,唯一完备信号是逐 key 的
-    // 解析身份(workingDir→`.pi`→`.agents` 三连击后的根治,取代逐点枚举)。realpath
-    // 含全链路解析,未枚举的嵌套软链同样覆盖。
-    watchRootsResolved: new Map(
-      [...watchRootMtimes.keys()].map((dir) => [dir, realpathOrNull(dir)] as const),
-    ),
+    // 解析身份。realpath 含全链路解析,未枚举的嵌套软链同样覆盖。与 mtimes/entries
+    // 同 key 同批产出(见 collectPiProjectResourceLaunchWatch)。
+    watchRootsResolved: watch.resolved,
+    watchRootEntries: watch.entries,
+    restrict: restrict ?? null,
   });
 }
 
@@ -399,10 +454,13 @@ function samePiResourceList(left: readonly string[], right: readonly string[]): 
 /**
  * 盘上项目资源相对启动快照是否已漂移(argv 重算后会不同)。结构性契约:
  * **每次调用至多一次全量路径收集**。两级信号 → 一次收集 → 一次比较:
- * 1. stat 扫描(零收集):所有 watch root 的 mtime 与基线全等(含缺失态 -1)且
- *    git 边界未变 → 无漂移;任一不等或有信号 → 进入下一步。信号源:
+ * 1. 轻量信号扫描(每 key 一次 realpath + stat + readdir,无递归):全部与基线
+ *    相等且 git 边界未变 → 无漂移;任一不等 → 进入下一步。信号源:
  *    - watch root mtime 变化(资源增删只改所在目录自身 mtime,基线必须覆盖
  *      collector 实际枚举的每一层目录);
+ *    - watch root 条目名指纹变化(时间戳粒度盲区:同一 tick 内增删,mtime 与
+ *      基线逐位相等,条目名单不同);
+ *    - watch root / workingDir 解析身份变化(软链改指同 mtime 孪生树时唯一信号);
  *    - git 边界变化(更近的 .git 出现/消失会改变 collector 的枚举链,但不动
  *      任何被盯目录的 mtime)。
  * 2. 全量重扫,按最终路径集合判定(argv 的输入是集合,不是内容):
@@ -440,17 +498,27 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
       break;
     }
   }
-  if (!boundaryChanged && !resolvedWorkingDirChanged && !resolvedRootChanged && !mtimeChanged) return false;
+  // 条目名指纹:时间戳粒度盲区(同一 tick 内增删,mtime 逐位不变)的第二信号。
+  let entriesChanged = false;
+  for (const [dir, fingerprintAtLaunch] of snapshot.watchRootEntries) {
+    if (readDirEntryFingerprint(dir) !== fingerprintAtLaunch) {
+      entriesChanged = true;
+      break;
+    }
+  }
+  if (!boundaryChanged && !resolvedWorkingDirChanged && !resolvedRootChanged && !mtimeChanged && !entriesChanged) return false;
 
   // 重扫与启动同序:先采样 watch 基线,再收集路径 —— 重扫窗口内新增的资源落在
   // 基线之后,下次快检仍会检出;反序(先路径后基线)会把新 mtime 与旧集合固化在
   // 一起,静默漏检。
-  const freshRoots = collectPiProjectResourceWatchRootMtimes(snapshot.workingDir, repoRoot);
+  const freshRoots = collectPiProjectResourceLaunchWatch(snapshot.workingDir, repoRoot);
   const fresh = collectPiProjectResourceCliPaths(snapshot.workingDir, repoRoot);
+  // 受邀者:比较前对 fresh 做与启动相同的裁剪,否则全量比裁剪基线恒判漂移。
+  const freshForCompare = snapshot.restrict ? snapshot.restrict(fresh) : fresh;
   if (!(
-    samePiResourceList(fresh.skills, snapshot.paths.skills)
-    && samePiResourceList(fresh.promptTemplates, snapshot.paths.promptTemplates)
-    && samePiResourceList(fresh.extensions, snapshot.paths.extensions)
+    samePiResourceList(freshForCompare.skills, snapshot.paths.skills)
+    && samePiResourceList(freshForCompare.promptTemplates, snapshot.paths.promptTemplates)
+    && samePiResourceList(freshForCompare.extensions, snapshot.paths.extensions)
   )) {
     return true;
   }
@@ -469,9 +537,11 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
     if (realpathOrNull(dir) !== resolvedAtSignal) return true;
   }
   snapshot.watchRootMtimes.clear();
-  for (const [dir, mtime] of freshRoots) snapshot.watchRootMtimes.set(dir, mtime);
+  for (const [dir, mtime] of freshRoots.mtimes) snapshot.watchRootMtimes.set(dir, mtime);
   snapshot.watchRootsResolved.clear();
-  for (const dir of freshRoots.keys()) snapshot.watchRootsResolved.set(dir, realpathOrNull(dir));
+  for (const [dir, resolved] of freshRoots.resolved) snapshot.watchRootsResolved.set(dir, resolved);
+  snapshot.watchRootEntries.clear();
+  for (const [dir, fingerprint] of freshRoots.entries) snapshot.watchRootEntries.set(dir, fingerprint);
   snapshot.state.repoRoot = repoRoot;
   snapshot.state.resolvedWorkingDir = resolvedWorkingDir;
   return false;

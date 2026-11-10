@@ -570,6 +570,15 @@ export async function openLocalAgentRuntime(
           handle = await start(previous.sdkSessionId, current);
           appliedInstructions = applying;
         }
+        // 项目资源漂移(pi 本地根任务):发送前原地重建,重扫项目资源重算 argv ——
+        // 与上方 instructions 换代同一空闲窗口(尚未投递);空闲口径同
+        // hasRecyclableProjectResourceDrift,非 pi agent 恒 false 跳过。
+        if (handle.hasRecyclableProjectResourceDrift()) {
+          const previous = handle;
+          await previous.close();
+          assertCurrent(current);
+          handle = await start(previous.sdkSessionId, current);
+        }
         if (params.effort !== undefined) {
           await handle.setEffort(params.effort as Parameters<Session['setEffort']>[0]);
           effort = string(params.effort);

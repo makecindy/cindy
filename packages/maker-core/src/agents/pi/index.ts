@@ -245,8 +245,8 @@ import {
 import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
+  collectPiProjectResourceLaunchWatch,
   emptyPiProjectResourceCliPaths,
-  collectPiProjectResourceWatchRootMtimes,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
   piProjectResourcesDrifted,
@@ -4069,15 +4069,18 @@ export class PiAgent extends BaseAgent {
     // Local root tasks load project skills/prompts/extensions in place via
     // explicit CLI flags. Keep --no-approve so `.pi/settings.json` is unread.
     // 受邀者：只要会话目录内的技能与提示词模板，项目扩展不加载(会在本机执行)。
-    // watch 基线与 git 边界必须先于路径收集采样(见 snapshotPiProjectResourceLaunch):
-    // 三样同批且基线在前,采样窗口内新增的资源/边界变化只会让首次快检多一次重扫后
-    // 收敛;git root 只解析一次,经 hint 贯穿三样 —— 窗口内 .git 消失不会采出旧根
-    // 盯视面配新根路径集合的混合口径。
-    const projectResourceRepoRootAtLaunch = loadProjectResourcesInPlace && !guestRoot
+    // watch 基线(mtime/条目指纹/解析身份)与 git 边界必须先于路径收集采样(见
+    // snapshotPiProjectResourceLaunch):身份基线晚于 argv 采集,会把「采基线前的
+    // 改指」固化成一致基线,永久漏检(Codex P2,2026-11-10);基线在前则窗口内
+    // 新增的资源/边界变化只会让首次快检多一次重扫后收敛。git root 只解析一次,
+    // 经 hint 贯穿采样与收集 —— 窗口内 .git 消失不会采出旧根盯视面配新根路径
+    // 集合的混合口径。受邀者同样建快照(镜像同步进来的新技能必须能检出),裁剪
+    // 口径经 restrict 下发,比较对 fresh 做同一裁剪。
+    const projectResourceRepoRootAtLaunch = loadProjectResourcesInPlace
       ? resolvePiResourceRepoRoot(opts.workingDir)
       : null;
-    const projectResourceWatchRootMtimes = projectResourceRepoRootAtLaunch
-      ? collectPiProjectResourceWatchRootMtimes(opts.workingDir, projectResourceRepoRootAtLaunch)
+    const projectResourceLaunchWatch = projectResourceRepoRootAtLaunch
+      ? collectPiProjectResourceLaunchWatch(opts.workingDir, projectResourceRepoRootAtLaunch)
       : null;
     const collectedProjectResources = loadProjectResourcesInPlace
       ? guestRoot
@@ -4095,11 +4098,16 @@ export class PiAgent extends BaseAgent {
         }
       : collectedProjectResources;
     // 启动快照:供运行时空闲时的资源漂移检测(见 handle.hasProjectResourceDrift)。
-    // 快照存未经禁用过滤的原始收集结果,与 drift 检测的 fresh collect 同口径;
-    // 受邀者会话的 collected 已按 guestRoot 裁剪,与全量扫描口径不一致,不参与漂移检测。
-    const projectResourceLaunchSnapshot = projectResourceWatchRootMtimes && projectResourceRepoRootAtLaunch
+    // 快照存未经禁用过滤的原始收集结果(受邀者已按 guestRoot 裁剪),与 drift
+    // 检测的 fresh collect 经同一 restrict 裁剪后同口径可比;受邀者裁剪缺了会拿
+    // 全量比裁剪基线恒判漂移,回收死循环。
+    const projectResourceLaunchSnapshot = projectResourceLaunchWatch && projectResourceRepoRootAtLaunch
       ? snapshotPiProjectResourceLaunch(
-        opts.workingDir, collectedProjectResources, projectResourceWatchRootMtimes, projectResourceRepoRootAtLaunch)
+        opts.workingDir,
+        collectedProjectResources,
+        projectResourceRepoRootAtLaunch,
+        projectResourceLaunchWatch,
+        guestRoot ? (paths) => restrictPiGuestProjectResources(paths, guestRoot) : undefined)
       : null;
 
     // Own the entire managed-skill setup in the existing startup rollback:
