@@ -16,6 +16,10 @@
  *   node --import tsx scripts/eval-browser-tasks.mjs --check
  *     No model and no usage: drives batch and cdp through the MCP entry on the same real browser and
  *     fixture pages, and fails if a result is wrong. Run it after touching either action.
+ *   node --import tsx scripts/eval-browser-tasks.mjs --serve
+ *     Only serves the fixture pages and prints their address, one run id and its answers, for trying
+ *     the sidebar and "My browser" by hand from a running Cindy. /__state?run=<id> shows what the
+ *     pages recorded.
  *
  * Limits: the dedicated-browser runtime only (no sidebar, no "My browser"), fixture pages rather
  * than real sites, one harness (Claude Code print mode with only the browser tools). Results are
@@ -33,7 +37,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const { values } = parseArgs({ options: {
-  live: { type: 'boolean' }, mcp: { type: 'boolean' }, check: { type: 'boolean' },
+  live: { type: 'boolean' }, mcp: { type: 'boolean' }, check: { type: 'boolean' }, serve: { type: 'boolean' },
   'baseline-ref': { type: 'string' }, model: { type: 'string', default: 'claude-sonnet-5-5' },
   repeats: { type: 'string', default: '3' }, only: { type: 'string' },
   variants: { type: 'string', default: 'A,C' }, parallel: { type: 'string', default: '3' },
@@ -115,8 +119,8 @@ if (values.mcp) {
 // ---------------------------------------------------------------------------------------------
 const repeats = Number(values.repeats);
 const parallel = Number(values.parallel);
-if (!values.check && (!values.live || !values['baseline-ref'] || !Number.isInteger(repeats) || repeats < 1 || !Number.isInteger(parallel) || parallel < 1)) {
-  throw new Error('Require --check, or --live with --baseline-ref and positive --repeats / --parallel');
+if (!values.check && !values.serve && (!values.live || !values['baseline-ref'] || !Number.isInteger(repeats) || repeats < 1 || !Number.isInteger(parallel) || parallel < 1)) {
+  throw new Error('Require --check, --serve, or --live with --baseline-ref and positive --repeats / --parallel');
 }
 const variants = values.variants.split(',');
 if (variants.some((variant) => !['A', 'C'].includes(variant))) throw new Error('Invalid --variants');
@@ -161,6 +165,7 @@ async function handle(req, res, ports) {
   const send = (body, type = 'text/html; charset=utf-8', status = 200) => { res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' }); res.end(body); };
   if (!state) return send('unknown run', 'text/plain', 404);
   const q = `run=${state.id}`;
+  if (values.serve && url.pathname === '/__state') return send(JSON.stringify(state), 'application/json');
   switch (url.pathname) {
     case '/form':
       return send(page('Create account', `<form method="post" action="/form/submit?${q}">
@@ -309,6 +314,13 @@ const TASKS = [
     check: (s, final) => final.includes(s.extensions.Okafor) },
 ].filter((task) => !values.only || values.only.split(',').includes(task.id));
 if (!TASKS.length) throw new Error('No tasks selected');
+
+if (values.serve) {
+  const state = newRun();
+  console.log(JSON.stringify({ base, run: state.id, pages: ['form', 'catalog', 'orders', 'report', 'settings', 'vault', 'badge', 'embed', 'directory']
+    .map((name) => `${base}/${name}?run=${state.id}`), state: `${base}/__state?run=${state.id}`, answers: state }, null, 2));
+  await new Promise(() => {});
+}
 
 const out = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-browser-task-eval-'));
 

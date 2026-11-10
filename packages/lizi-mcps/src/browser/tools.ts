@@ -14,7 +14,7 @@ import {
   type ResolvedBrowserScreenshot,
 } from '../types.js';
 import type { BrowserToolContentBlock, BrowserToolRegistry, BrowserToolResult } from './tool-registry.js';
-import { cdpCommandIssue, runCdpCommands } from './cdp.js';
+import { cdpCommandIssue, runCdpCommands, type CdpCommand } from './cdp.js';
 import {
   buildExtractFnSource,
   collectSelectors,
@@ -801,7 +801,8 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
             });
             if (!checked.ok) return errorResult('batch', `steps[${index}] 参数不合法:${checked.issues.join('; ')}。整批未执行。`);
             // What the active browser cannot do is known up front too; do not find out halfway through.
-            const unsupportedStep = unsupportedByBackend(checked.data, deps);
+            const unsupportedStep = unsupportedByBackend(checked.data, deps)
+              ?? (action === 'cdp' && Array.isArray(checked.data.commands) ? cdpCommandIssue(checked.data.commands as CdpCommand[]) : undefined);
             if (unsupportedStep) return errorResult('batch', `steps[${index}] ${unsupportedStep} 整批未执行。`);
             steps.push(checked.data as typeof args);
           }

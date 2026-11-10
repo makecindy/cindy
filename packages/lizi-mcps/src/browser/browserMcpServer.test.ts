@@ -1981,6 +1981,8 @@ describe('browser · batch, cdp and target-tailored rules', () => {
     { action: 'navigate', url: 'https://example.test/', unknownField: true },
     // Not available on the active browser (here: no screenshots): known before the first step runs.
     { action: 'screenshot' },
+    // A protocol command the agent may not send is known up front too (seen live: it used to surface mid-batch).
+    { action: 'cdp', commands: [{ method: 'Network.getCookies' }] },
   ])('refuses the whole batch before dispatch when a step is %j', async (step) => {
     const h = await scripted(() => undefined, { setBackend: async (backend) => backend, backendCapabilities: () => ({ screenshot: false }) });
     try {
@@ -2024,6 +2026,37 @@ describe('browser · batch, cdp and target-tailored rules', () => {
       expect(sent.slice(1).every(([targetId]) => targetId === 'resolved-tab')).toBe(true);
       expect(sent.map(([, method]) => method)).not.toContain('Input.insertText');
       expect(sent.at(-1)).toEqual(['resolved-tab', 'Cindy.end']);
+    } finally { await h.cleanup(); }
+  });
+
+  // Seen live in the sidebar (2026-11-10): its pages sit in the background without focus, so inserted
+  // text went nowhere and the helper still reported success; the form was then submitted empty.
+  it.each([
+    { focused: true, editable: true, via: 'insertText' },
+    { focused: false, editable: true, via: 'value' },
+    { focused: false, editable: false, via: undefined },
+  ])('cdp type leaves the text in the field or says it did not: %j', async ({ focused, editable, via }) => {
+    let value = '';
+    const h = await scripted((request) => {
+      const command = request.recipeCommand as { method: string; params?: { text?: string; functionDeclaration?: string; arguments?: Array<{ value: string }> } };
+      if (command.method === 'Cindy.begin') return { data: { sessionId: 's1' } };
+      if (command.method === 'DOM.resolveNode') return { data: { object: { objectId: 'o1' } } };
+      if (command.method === 'Input.insertText') { if (focused) value = command.params!.text!; return { data: {} }; }
+      if (command.method !== 'Runtime.callFunctionOn') return { data: {} };
+      const fn = command.params!.functionDeclaration!;
+      if (fn.includes('dispatchEvent')) {
+        if (!editable) return { data: { result: {} } };
+        value = command.params!.arguments![0].value;
+      } else if (fn.includes('select')) return { data: { result: {} } };
+      return { data: { result: { value } } };
+    });
+    try {
+      const { isError, body } = await h.invoke({ action: 'cdp', targetId: 't1', commands: [{ method: 'type', params: { node: 21, text: 'E-46667' } }] });
+      expect(isError).toBe(via === undefined);
+      if (via) {
+        expect(body.data.results[0].result).toEqual({ typed: 21, via });
+        expect(value).toBe('E-46667');
+      } else expect(body.data.results[0].error).toContain('输入没有生效');
     } finally { await h.cleanup(); }
   });
 

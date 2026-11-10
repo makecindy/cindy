@@ -117,6 +117,24 @@ function nodeId(params: Record<string, unknown> | undefined): number {
   return id;
 }
 
+const READ_FIELD = 'function(){ return "value" in this ? this.value : this.textContent }';
+/** The prototype setter, so frameworks that wrap `value` on the element still see the change. */
+const SET_FIELD = `function(text){
+  if ("value" in this) {
+    const proto = this instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
+      : this instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value");
+    if (setter && setter.set) setter.set.call(this, text); else this.value = text;
+  } else if (this.isContentEditable) {
+    this.textContent = text;
+  } else {
+    return undefined;
+  }
+  this.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+  this.dispatchEvent(new Event("change", { bubbles: true }));
+  return "value" in this ? this.value : this.textContent;
+}`;
+
 export interface CdpStepResult {
   method: string;
   ok: boolean;
@@ -153,13 +171,14 @@ export async function runCdpCommands(
     if (!sent.ok) throw new Error(sent.message ?? `${method} failed`);
     return (sent.data ?? {}) as Record<string, unknown>;
   };
-  const callOn = async (backendNodeId: number, fn: string): Promise<unknown> => {
+  const callOn = async (backendNodeId: number, fn: string, args: unknown[] = []): Promise<unknown> => {
     const resolved = await send('DOM.resolveNode', { backendNodeId });
     const objectId = (resolved.object as { objectId?: unknown } | undefined)?.objectId;
     if (typeof objectId !== 'string') throw new Error('节点已不存在;重新用 nodes 获取 id');
     try {
       const called = await send('Runtime.callFunctionOn', {
         objectId, functionDeclaration: fn, returnByValue: true, awaitPromise: true, userGesture: true,
+        ...(args.length ? { arguments: args.map((value) => ({ value })) } : {}),
       });
       const failure = called.exceptionDetails as { exception?: { description?: unknown }; text?: unknown } | undefined;
       if (failure) throw new Error(String(failure.exception?.description ?? failure.text ?? '函数执行出错').slice(0, 500));
@@ -199,7 +218,16 @@ export async function runCdpCommands(
           // Replace what the field holds, like the normal `type` action.
           await callOn(backendNodeId, 'function(){ if (typeof this.select === "function") this.select(); }');
           await send('Input.insertText', { text: params.text });
-          result = { typed: backendNodeId };
+          // A page without focus (the sidebar keeps its pages in the background) takes no inserted text
+          // and reports no error. Check what the field holds; set it directly when the text did not land.
+          let via = 'insertText';
+          if (await callOn(backendNodeId, READ_FIELD) !== params.text) {
+            via = 'value';
+            if (await callOn(backendNodeId, SET_FIELD, [params.text]) !== params.text) {
+              throw new Error('输入没有生效:该节点不接受文字,或页面改写了输入。用 nodes / call 看它现在的内容再决定');
+            }
+          }
+          result = { typed: backendNodeId, via };
         } else if (method === 'call') {
           if (typeof params?.fn !== 'string') throw new Error('call 需要 params.fn,例如 "function(){ return this.textContent }"');
           result = bounded(await callOn(nodeId(params), params.fn), options.maxChars);
