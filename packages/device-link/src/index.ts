@@ -61,6 +61,7 @@ export * from "./orcaWorkerRoles.js";
 export * from "./sessionListTransport.js";
 export * from "./sessionMessageReuse.js";
 export * from "./historyViewDelta.js";
+export * from "./toolBodyStub.js";
 
 export * from "./clipboardSync.js";
 export * from "./clipboardSyncFailure.js";

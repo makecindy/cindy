@@ -19,6 +19,8 @@ import {
   PROTOCOL_VERSION,
   type InvokeResultPayload,
   SessionMessageReuse,
+  CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
+  CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
 } from '@cindy/device-link';
 import { versionMessageBody } from '../sessionMessageReuse';
 
@@ -174,6 +176,35 @@ describe('negotiated mobile tool projection', () => {
       .toHaveProperty('mobileToolInputProjection');
     expect(payload.resolvedContent).toBe(text);
     expect(row.content.input).toBe(input);
+  });
+  // Protocol contract (protocol-compatibility/device-link-tool-event-body-optional.md): each
+  // tool-body rule reaches only the controller that declared it. If not, an undeclared (old) Desktop
+  // would lose result text it may still read, or an old Mobile its tool inputs. Unit tier: production
+  // forwardPush, in-memory client.
+  it('drops tool event text and inputs only for controllers that declared it', () => {
+    const client = mkClient();
+    __testing.setActiveClient(client as never);
+    subscriptions.subscribe('old', ['session:s1'], 'old', []);
+    subscriptions.subscribe('desktop', ['session:s1'], 'desktop', [CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1]);
+    subscriptions.subscribe('mobile', ['session:s1'], 'mobile', [DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+      CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1, CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1]);
+    const output = 'ok line\n'.repeat(1_000);
+    const plan = { toolUseId: 'plan', toolName: 'update_plan', input: { plan: [{ step: 'Measure', status: 'in_progress' }] } };
+    const pushes: [string, Record<string, unknown>][] = [
+      ['maker:event', { sessionId: 's1', persistId: 'u', event: { type: 'tool_use', data: { toolUseId: 'use', toolName: 'Bash', input: { command: 'pnpm test' } } } }],
+      ['maker:event', { sessionId: 's1', persistId: 'r', resolvedContent: output, event: { type: 'tool_result_full', data: { toolUseId: 'use', fullText: output } } }],
+      ['maker:event', { sessionId: 's1', persistId: 'p', event: { type: 'tool_use', data: plan } }],
+    ];
+    for (const [channel, payload] of pushes) __testing.forwardPush(channel, payload);
+    const to = (dst: string) => client.sendPush.mock.calls.filter((call) => call[0] === dst).map((call) => call[2]);
+
+    expect(to('old')).toEqual(pushes.map(([, payload]) => payload));
+    expect(to('desktop')).toEqual([pushes[0][1],
+      { ...pushes[1][1], event: { type: 'tool_result_full', data: { toolUseId: 'use' } } }, pushes[2][1]]);
+    const [mobileUse, mobileResult, mobilePlan] = to('mobile');
+    expect(mobileUse.event.data).toEqual({ toolUseId: 'use', toolName: 'Bash', input: null });
+    expect(mobileResult).toEqual({ sessionId: 's1', persistId: 'r', event: { type: 'tool_result_full', data: { toolUseId: 'use' } } });
+    expect(mobilePlan.event.data).toEqual(plan);
   });
 });
 

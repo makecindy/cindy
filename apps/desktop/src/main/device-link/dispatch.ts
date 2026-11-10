@@ -134,6 +134,7 @@ import { HISTORY_WORK_PATCH_CHANNEL } from '@cindy/maker-shared/message-window';
 import { mapHistoryViewMessages, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
 import { createLogger } from '../logger';
 import { projectMobileMessagePage, projectMobileToolPush } from './mobileToolProjection';
+import { createToolBodyPushProjector } from './toolBodyProjection';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import type { readDeviceLinkSettings } from './settings-store.desktop';
 import type { noteControllerAccessAllowed, noteControllerAccessDenied, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
@@ -2421,15 +2422,16 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     : null;
   // Project lazily once, before batching/offline queueing. Another Desktop or old Mobile
   // on the same relay must still receive its unchanged payload.
-  let mobilePayload: unknown;
-  let mobilePayloadReady = false;
+  // Tool-body rules follow each controller's own declaration; guests keep their existing path.
+  // The Mobile projection follows and sees the already projected event.
+  const projectToolBodies = createToolBodyPushProjector(channel, remotePayload);
+  const mobilePayloads = new Map<unknown, unknown>();
   const projectedPayloadFor = (dst: string): unknown => {
-    if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return remotePayload;
-    if (!mobilePayloadReady) {
-      mobilePayload = projectMobileToolPush(channel, remotePayload);
-      mobilePayloadReady = true;
-    }
-    return mobilePayload;
+    const base = isSharedTaskPeer(dst) || isProviderSharePeer(dst) ? remotePayload
+      : projectToolBodies((capability) => subscriptions.controllerSupports(dst, capability));
+    if (!subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1)) return base;
+    if (!mobilePayloads.has(base)) mobilePayloads.set(base, projectMobileToolPush(channel, base));
+    return mobilePayloads.get(base);
   };
   // 共享任务访客只能看见本任务：新消息推送里的来源身份与 invoke 读取同口径脱敏。
   const payloadFor = (dst: string): unknown => {
