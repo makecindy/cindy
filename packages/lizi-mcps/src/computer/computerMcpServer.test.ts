@@ -824,6 +824,57 @@ describe('createComputerMcpServer', () => {
     await h.cleanup();
   });
 
+  // #9695 acceptance: Windows falls back to the window center when an indexed
+  // button has no UIA ScrollPattern. Exercise the real MCP entry so a screenshot
+  // point reaches the driver unchanged; the direction-only case above missed
+  // this strict-schema rejection. Unit tier, no native input or real waiting.
+  it('discovers and dispatches window-local scroll coordinates in the owning session', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ effect: 'unverifiable', summary: 'Wheel delivered' })),
+    };
+    const h = await makeHarness(deps, { sessionId: 'scroll-owner' });
+    try {
+      const catalogue = textPayload(await h.client.callTool({
+        name: 'list_tools', arguments: { names: ['scroll'] },
+      })) as { tools: Array<{ inputSchema: { properties: Record<string, unknown> } }> };
+      const args = { pid: 123, window_id: 7, x: 1055.5, y: 609, direction: 'down', amount: 1, by: 'line', delivery_mode: 'foreground' };
+      const payload = textPayload(await h.client.callTool({
+        name: 'call_tool', arguments: { name: 'scroll', args },
+      })) as { ok: boolean; outcome: { status: string } };
+      expect(payload.ok).toBe(true);
+      expect(payload.outcome.status).toBe('unknown');
+      expect(deps.callTool).toHaveBeenCalledWith('scroll', { ...args, session: 'scroll-owner' }, {
+        signal: expect.any(AbortSignal), sessionId: 'scroll-owner',
+      });
+      expect(catalogue.tools[0].inputSchema.properties).toMatchObject({
+        x: { type: 'number' }, y: { type: 'number' },
+      });
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it.each([
+    { window_id: 7, x: 10 },
+    { window_id: 7, y: 20 },
+    { x: 10, y: 20 },
+    { window_id: 7, x: 10, y: 20, element_index: 2 },
+    { window_id: 7, x: 10, y: 20, element_token: 's1:2' },
+  ])('refuses incomplete or ambiguous scroll coordinates before dispatch: %j', async (target) => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn() };
+    const h = await makeHarness(deps);
+    try {
+      const payload = textPayload(await h.client.callTool({
+        name: 'call_tool', arguments: { name: 'scroll', args: { pid: 123, direction: 'down', ...target } },
+      })) as { ok: boolean; errorCode: string };
+      expect(payload).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      expect(deps.callTool).not.toHaveBeenCalled();
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   it('injects the current session id into session-aware action tools', async () => {
     const deps: ComputerMcpDeps = {
       getStatus: vi.fn(),
