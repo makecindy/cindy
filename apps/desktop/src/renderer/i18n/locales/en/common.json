@@ -6213,7 +6213,7 @@
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
         "controllingThisMac": "Connected to Cindy",
-        "useThisDeviceModels": "Use models here",
+        "useThisDeviceModels": "Use this device's models",
         "allowModelUseAria": "Let {{name}} use this computer's models"
       },
       "toast": {
@@ -6223,7 +6223,7 @@
         "restoreFailed": "Failed to restore access",
         "modelUseRestored": "That computer can use this computer's models again",
         "modelUseRevoked": "That computer can no longer use this computer's models",
-        "modelUseFailed": "Couldn't save \"Use models here\". Please try again."
+        "modelUseFailed": "Couldn't save \"Use this device's models\". Please try again."
       },
       "sections": {
         "myDevices": "My devices",
