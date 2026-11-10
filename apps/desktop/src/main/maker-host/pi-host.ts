@@ -906,10 +906,7 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     configurable: false,
   });
   Object.defineProperties(config, {
-    memoryEnabled: {
-      get: () => readMemorySettings().pi,
-      enumerable: true,
-    },
+    // Pi 没有自己的记忆开关: 任务用不用 Cindy 记忆只看 Cindy 记忆的开关。
     makerMemoryEnabled: {
       get: () => readMemorySettings().maker,
       enumerable: true,

@@ -55,7 +55,7 @@
 | 例行任务 | `routine_list/save/delete/run_now/history/sources/delivery_targets`；内置「跟进」「夜间学习」 | 定时任务 `schedule_*`（`cindy_scheduler`）；项目仓库里的 `.cindy/automations/schedules.json`（改动只是预览，主人确认快照才生效） | **并入定时任务**。两者已共用调度执行器，`Schedule.source` 已有 `'bot'`。例行任务多出的只有：事件触发（插件事件、`host:sessions`）、多条件并列、送达方式（伙伴 / IM / 静默）——先补给定时任务，普通项目也能用。插件前置检查（`preRunPlugin`）已由 `schedule_create` / `schedule_update` / `routine_save` 共用，不是缺口；限制只在跨电脑不能设置、项目自动化配置文件不支持（[Agent 与用户同权](agent-user-parity.md)） |
 | 后台任务 | `start_session_task`、`check_session_task`、`message_session_task`、`stop_session_task`、路线检查与推进；完成回执与唤醒 | `send_to_session`、`get_task_digest`、插话、停止、队列工具（伙伴主任务已有，[伙伴运行时](cindy-bots-runtime.md) §6.4） | **并入通用任务工具**，委派只留一条「谁负责」关系。通用工具缺的任务卡、等你时代答、暂停与恢复、执行期限要先补齐 |
 | 工作台 | `get_workbench`、`read_workbench_task`、`continue_workbench_task`、`set_workbench_task_responsibility` | `list_sessions`、`get_chat_history`、`get_task_digest`、`send_to_session`（跨电脑发消息已支持） | 读和继续并入通用工具；「谁负责」保留为通用的任务关系（也是「按项目跟进」的基础） |
-| 记忆 | 伙伴记忆独立服务（`botMemoryService.ts`） | Cindy 记忆（`cindy_memory`），按工作目录隔离 | 伙伴即项目后合成一套；保留「全局记忆开关不影响伙伴记忆」 |
+| 记忆 | 伙伴记忆独立服务（`botMemoryService.ts`）；伙伴独有的只剩开关、「关于我的记忆」文本框、导入与云端恢复、改动后刷新运行中的主任务 | Cindy 记忆（`cindy_memory`）：账号级一份加每个项目一份（[Cindy 记忆](cindy-memory.md)）。记忆页（看 / 搜 / 改 / 删）与回复下方的保存回执已是通用能力：两边共用同一套列表、编辑、冲突处理（`memoryEntries.ts`、`MemoryEntriesView`）和同一条回执链路，普通任务在设置 › 个性化 › 记忆里查看 | 伙伴即项目后合成一套；保留「全局记忆开关不影响伙伴记忆」 |
 | 技能 | `save/list/read_teammate_skill`；核心 / 系统 / 用户三层 | 引擎原生项目技能、SkillHub | 用户技能并入项目技能；核心与系统技能由宿主提供 |
 | 关联项目 | `list_teammate_projects`、`set_teammate_project` | `list_projects` | 变成通用的「项目关联其他项目」 |
 | 待办 | `list/update_teammate_todo`、`preflight/record_teammate_todo_event` | 无 | 可升级为项目级待办（通用能力），优先级低 |

@@ -19,18 +19,38 @@
  *  - sqliteFactory / userDataPath 的具体值 (host 在 desktop 一侧处理 better-sqlite3 +
  *    app.getPath('userData'))
  *  - settings 持久化 (renderer localStorage 模式)
- *  - flush before compaction (那是 flush-controller 的职责, 后续阶段)
  */
 
+import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 import * as fsSync from 'node:fs';
 import type Database from 'better-sqlite3';
 
 import { MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
-import { parseBotMemoryScopeKey } from './storage.js';
+import {
+  isUserMemoryScopeKey,
+  MEMORY_INDEX_HEADING,
+  parseBotMemoryScopeKey,
+  SSH_SCOPE_KEY_PREFIX,
+  USER_MEMORY_SCOPE_KEY,
+} from './storage.js';
+import { resolveMemoryScopeKey } from './scope-resolver.js';
+import {
+  buildTidyPrompt,
+  curatedRecords,
+  isTidyDue,
+  parseTidyPlan,
+  TIDY_MAX_RUNS,
+  tidySnapshot,
+  validateTidyPlan,
+  type TidyChange,
+  type TidyRun,
+  type TidyState,
+} from './tidy.js';
 import {
   MemoryError,
   type MemoryConfig,
+  type MemoryRecord,
   type WriteOptions,
 } from './types.js';
 import type { BaseAgent } from '../agents/base-agent.js';
@@ -43,6 +63,26 @@ export type SqliteFactory = (filePath: string) => Database.Database;
 
 /** review 一次性调用预算: 一段 ≤200 词的建议, 给足 60s(LLM 冷启 + 长 dump)。 */
 const REVIEW_ONE_SHOT_OPTS = { maxTokens: 800, timeoutMs: 60_000 } as const;
+/** 整理一次性调用预算: 输出是合并后的正文, 比审查建议长得多。 */
+const TIDY_ONE_SHOT_OPTS = { maxTokens: 8000, timeoutMs: 120_000 } as const;
+
+/**
+ * 一次整理的结果:
+ *  - done: 模型审阅完成; run 为 null 表示没有需要改的;
+ *  - not-due: 自动触发线没到 (只对自动整理);
+ *  - busy: 同一份记忆正在整理;
+ *  - unavailable: 这份记忆不参与整理 (伙伴等独立作用域), 或没有可用的辅助模型
+ *    (宿主没接, 或链上没有任何产出); 记忆未改动;
+ *  - failed: 模型有产出但不是可解析的计划, 记忆未改动。
+ */
+export type TidyOutcome =
+  | { status: 'done'; run: TidyRun | null }
+  | { status: 'not-due' | 'busy' | 'unavailable' | 'failed' };
+
+/** 单条改动可以跳过的失败: 版本冲突、条目已不在、内容不合存储约束。边界与 IO 错误不在此列。 */
+function isSkippableTidyError(e: unknown): boolean {
+  return e instanceof MemoryError && e.code !== 'not-ready' && e.code !== 'io-error';
+}
 
 export interface MakerMemoryManagerDeps {
   /** Maker memory 文件根目录, host 注入 (e.g. <electron userData>/maker-memory) */
@@ -84,6 +124,11 @@ export interface MakerMemoryManagerDeps {
    * the global active-workdir projection/reset directory.
    */
   isIndependentScope?: (scopeKey: string) => boolean;
+  /**
+   * 不属于任何项目的任务目录 (desktop: 一次性对话目录)。这类作用域只用账号级记忆:
+   * 目录用完即弃, 记在它名下的内容以后的任务都读不到。缺席 = 没有这类目录。
+   */
+  isProjectlessScope?: (scopeKey: string) => boolean;
   /** SQLite open 工厂, host 注入 (better-sqlite3 是 native module, 不能在 maker-core require) */
   sqliteFactory: SqliteFactory;
   /** Agent 引用 — 强联动 setMemory(false) 关原生时用 */
@@ -142,6 +187,10 @@ interface PooledEntry {
 }
 
 const MEMORY_SUBDIR = 'maker-memory';
+/** 账号级记忆的落盘目录 (与 maker-memory 同级, 见 storage.ts USER_MEMORY_SCOPE_KEY)。 */
+const USER_MEMORY_SUBDIR = 'user-memory';
+/** 旧子目录记忆并入仓库根后留在来源目录的回执: 不重复并入, 来源文件保留备查。 */
+const SUBSCOPE_MERGE_RECEIPT = '.cindy-memory-merged-v1.json';
 const FTS_DB_FILENAME = 'fts.db';
 const STORAGE_MIGRATION_RECEIPT = '.cindy-memory-migration-v1.json';
 // This shape is only a candidate: sanitized project paths can match it too.
@@ -179,6 +228,49 @@ function copyLegacyMemoryShardsSync(sourceDir: string, targetDir: string): void 
   }
 }
 
+/**
+ * 把来源目录的分片并入目标目录, 返回并入条数。同名同内容跳过 (重复执行不产生副本);
+ * 同名不同内容换成 `<slug>-2`、`-3`… 并入, 两边的记忆都保留, 交给之后的整理去合并。
+ */
+function mergeLegacyShardsSync(sourceDir: string, targetDir: string): number {
+  let merged = 0;
+  for (const entry of fsSync.readdirSync(sourceDir, { withFileTypes: true })) {
+    const parsed = entry.isFile() ? parseFilename(entry.name) : null;
+    if (!parsed) continue;
+    const source = path.join(sourceDir, entry.name);
+    if (fsSync.lstatSync(source).isSymbolicLink()) continue;
+    const content = fsSync.readFileSync(source);
+    for (let n = 1; n < 100; n += 1) {
+      const suffix = n === 1 ? '' : `-${n}`;
+      const name = `${parsed.type}_${parsed.slug.slice(0, 64 - suffix.length)}${suffix}.md`;
+      const target = path.join(targetDir, name);
+      if (!fsSync.existsSync(target)) {
+        fsSync.writeFileSync(target, content);
+        merged += 1;
+        break;
+      }
+      if (fsSync.readFileSync(target).equals(content)) break;
+    }
+  }
+  return merged;
+}
+
+/** 一个还没被并入别处的旧作用域目录记录的路径; 已并入、读不出或不是路径时返回 null。 */
+async function readUnmergedScopePath(dir: string): Promise<string | null> {
+  try {
+    if (fsSync.existsSync(path.join(dir, SUBSCOPE_MERGE_RECEIPT))) return null;
+    const meta: unknown = JSON.parse(await fsSync.promises.readFile(path.join(dir, 'meta.json'), 'utf8'));
+    const absPath = meta && typeof meta === 'object' && 'absPath' in meta ? meta.absPath : undefined;
+    return typeof absPath === 'string' && absPath ? absPath : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 拼进 system prompt 时两份索引各自的标题; 括号里是 memory 工具的 scope 取值。 */
+const USER_INDEX_HEADING = `${MEMORY_INDEX_HEADING} — user (scope "user": applies in every project)`;
+const PROJECT_INDEX_HEADING = `${MEMORY_INDEX_HEADING} — project (scope "project": this repository or folder)`;
+
 export class MakerMemoryManager {
   private enabled: boolean;
   private readonly stores = new Map<string, PooledEntry>();
@@ -212,6 +304,10 @@ export class MakerMemoryManager {
    * 同时关闭该集合, 保证 reset 扫描前无任何 open 句柄。
    */
   private readonly openingStores = new Map<Database.Database, boolean>();
+  /** 已扫过旧子目录记忆的作用域 (`<ownerRoot>\n<scopeKey>`), 见 mergeLegacySubScopes。 */
+  private readonly mergedSubScopes = new Set<string>();
+  /** 正在整理的 store key; 同一份记忆不并发整理。 */
+  private readonly tidying = new Set<string>();
 
   constructor(private readonly deps: MakerMemoryManagerDeps) {
     this.enabled = deps.initialEnabled ?? false;
@@ -569,9 +665,14 @@ export class MakerMemoryManager {
 
     // 目录名派生见 memoryScopeDirName:本地键 = sanitizeWorkdir 原规则 (不迁移),
     // 远端 ssh: 键 = 碰撞安全的 hash 形态 (review R4 P2)。
-    const sanitized = memoryScopeDirName(absWorkdir);
-    const legacyStorageDir = path.join(rootAtEntry, MEMORY_SUBDIR, sanitized);
-    const resolvedStorageDir = this.deps.resolveStorageDir?.(absWorkdir, rootAtEntry);
+    const userScope = isUserMemoryScopeKey(absWorkdir);
+    const sanitized = userScope ? USER_MEMORY_SUBDIR : memoryScopeDirName(absWorkdir);
+    const legacyStorageDir = userScope
+      ? path.join(rootAtEntry, USER_MEMORY_SUBDIR)
+      : path.join(rootAtEntry, MEMORY_SUBDIR, sanitized);
+    const resolvedStorageDir = userScope
+      ? null
+      : this.deps.resolveStorageDir?.(absWorkdir, rootAtEntry);
     const storageDir = resolvedStorageDir?.trim() || legacyStorageDir;
     const dbPath = path.join(storageDir, FTS_DB_FILENAME);
 
@@ -617,6 +718,21 @@ export class MakerMemoryManager {
     }
     fs.mkdirSync(storageDir, { recursive: true });
 
+    // 旧记忆并入: 仓库子目录名下的并入仓库根, 一次性对话目录名下的并入账号级
+    // (伙伴 / SSH 没有这类旧数据)。
+    if (!independentScope && !absWorkdir.startsWith(SSH_SCOPE_KEY_PREFIX)) {
+      if (userScope) await this.mergeProjectlessIntoUser(rootAtEntry, storageDir, scopeAtEntry);
+      else await this.mergeLegacySubScopes(absWorkdir, rootAtEntry, storageDir, scopeAtEntry);
+      // 并入里有 git 探测的 await: 与上方同一组屏障复核后才打开 SQLite。
+      this.assertScopeUnchanged(scopeAtEntry);
+      if (this.resetInFlight > 0) {
+        throw new MemoryError('not-ready', 'memory reset started; retry shortly');
+      }
+      if (this.poolGeneration !== generationAtEntry) {
+        throw new MemoryError('not-ready', 'memory reset completed; retry against current state');
+      }
+    }
+
     const db = this.deps.sqliteFactory(dbPath);
     // 注册 in-flight 打开的 db (review #2388 Codex 26th P1): init 完成前不在
     // this.stores, resetAll 需能关闭它避免 Windows fs.rm EBUSY 跳过该 workdir。
@@ -626,7 +742,11 @@ export class MakerMemoryManager {
       absWorkdir,
       db,
       logger: this.logger.child(`memory:${sanitized}`),
-      ...(this.deps.config ? { config: this.deps.config } : {}),
+      // 伙伴等独立作用域不设索引硬上限: 它们有自己的整理流程 (夜间学习) 和导入入口,
+      // 硬上限会让一次导入中途被拒。
+      ...(independentScope
+        ? { config: { ...(this.deps.config ?? {}), hardIndexBytes: 0 } }
+        : this.deps.config ? { config: this.deps.config } : {}),
       // store 级 mutation 前置守卫 (review #2388 Codex 5th P1): 裸 store 在
       // manager 守卫之外被调用方使用 (withStore fn / agent prompt 注入路径),
       // 后置复核无法撤销已发生的写操作 —— 锚定 store 创建时 scope, 每次
@@ -721,6 +841,205 @@ export class MakerMemoryManager {
     });
     this.logger.debug('memory store opened', { workdir: absWorkdir, sanitized });
     return store;
+  }
+
+  // ── 账号级记忆与项目记忆 ─────────────────────────────────────────────────
+
+  /**
+   * 一次任务能读写哪几份记忆。工具层和提示词注入都从这里取, 不各自判断:
+   *  - 普通项目任务: 账号级 + 项目两份;
+   *  - 不属于任何项目的目录 (一次性对话): 只有账号级;
+   *  - 伙伴等独立作用域: 只有它自己那一份, 不读账号级 (伙伴记忆与 Cindy 记忆互不注入)。
+   */
+  memoryScopesFor(scopeKey: string): { user: string | null; project: string | null } {
+    if (isUserMemoryScopeKey(scopeKey)) return { user: USER_MEMORY_SCOPE_KEY, project: null };
+    // 伙伴的键按键形识别, 不只靠宿主注入的独立作用域判定: 没接这个端口的宿主里,
+    // 伙伴的 user 类记忆也绝不能落进账号级。
+    if (this.deps.isIndependentScope?.(scopeKey) === true || parseBotMemoryScopeKey(scopeKey) !== null) {
+      return { user: null, project: scopeKey };
+    }
+    if (this.deps.isProjectlessScope?.(scopeKey) === true) {
+      return { user: USER_MEMORY_SCOPE_KEY, project: null };
+    }
+    return { user: USER_MEMORY_SCOPE_KEY, project: scopeKey };
+  }
+
+  /**
+   * 任务启动时拼进 system prompt 的记忆索引快照: 账号级在前 (变动少, 对 prompt
+   * cache 前缀更友好), 项目在后。只有一份时不加作用域标题以外的内容。
+   */
+  async getPromptIndex(scopeKey: string): Promise<string> {
+    const scopes = this.memoryScopesFor(scopeKey);
+    if (!scopes.user) return (await this.getStore(scopeKey)).getIndex();
+    const user = (await (await this.getStore(scopes.user)).getIndex()).replace(
+      MEMORY_INDEX_HEADING,
+      USER_INDEX_HEADING,
+    );
+    if (!scopes.project) return user;
+    const project = (await (await this.getStore(scopes.project)).getIndex()).replace(
+      MEMORY_INDEX_HEADING,
+      PROJECT_INDEX_HEADING,
+    );
+    return `${user.trimEnd()}\n\n${project}`;
+  }
+
+  /**
+   * 列出当前账号下有内容的 Cindy 记忆作用域, 给「查看记忆」界面用: 账号级恒在首位
+   * (空的也列, 界面要能看到这一份存在), 之后是至少有一条记忆的项目。伙伴的记忆、
+   * 已并入别处的旧目录、一次性对话目录、只有 digest 的目录不列。不打开 store; 唯一的
+   * 写入是把一次性对话目录名下的旧记忆并入账号级 (与首次打开账号级记忆时做的是同一件事),
+   * 这样列表里的条数和点进去看到的一致。
+   */
+  async listScopes(): Promise<Array<{ scopeKey: string; kind: 'user' | 'project'; count: number }>> {
+    this.ensureOwnerScope();
+    const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
+    const root = this.resolvedBasePath!;
+    const countCurated = async (dir: string): Promise<number> => {
+      try {
+        return (await fsSync.promises.readdir(dir)).filter((name) => {
+          const parsed = parseFilename(name);
+          return parsed !== null && parsed.type !== 'digest';
+        }).length;
+      } catch {
+        return 0;
+      }
+    };
+    const userDir = path.join(root, USER_MEMORY_SUBDIR);
+    if (this.deps.isProjectlessScope && this.resetInFlight === 0) {
+      await fsSync.promises.mkdir(userDir, { recursive: true });
+      await this.mergeProjectlessIntoUser(root, userDir, scopeAtEntry);
+    }
+    const scopes: Array<{ scopeKey: string; kind: 'user' | 'project'; count: number }> = [
+      { scopeKey: USER_MEMORY_SCOPE_KEY, kind: 'user', count: await countCurated(userDir) },
+    ];
+    const memoryRoot = path.join(root, MEMORY_SUBDIR);
+    let entries: string[] = [];
+    try {
+      entries = await fsSync.promises.readdir(memoryRoot);
+    } catch {
+      /* 还没有任何项目记忆 */
+    }
+    for (const entry of entries) {
+      const dir = path.join(memoryRoot, entry);
+      if (fsSync.existsSync(path.join(dir, SUBSCOPE_MERGE_RECEIPT))) continue;
+      let absPath: unknown;
+      try {
+        const meta: unknown = JSON.parse(await fsSync.promises.readFile(path.join(dir, 'meta.json'), 'utf8'));
+        absPath = meta && typeof meta === 'object' && 'absPath' in meta ? meta.absPath : undefined;
+      } catch {
+        continue;
+      }
+      if (typeof absPath !== 'string' || !absPath || parseBotMemoryScopeKey(absPath) !== null) continue;
+      if (memoryScopeDirName(absPath) !== entry || this.deps.isProjectlessScope?.(absPath) === true) continue;
+      const count = await countCurated(dir);
+      if (count > 0) scopes.push({ scopeKey: absPath, kind: 'project', count });
+    }
+    this.assertScopeUnchanged(scopeAtEntry);
+    return scopes;
+  }
+
+  /**
+   * 把仓库子目录名下的旧记忆并入仓库根。
+   *
+   * 项目记忆原先按 cwd 隔离, 同一仓库的子目录各有一个目录; 现在归到仓库根
+   * (scope-resolver.ts), 不并入的话用户升级后那些记忆再也不会被读到。只并入
+   * **今天解析到本仓库**的目录: 嵌套的独立仓库不动; 已经不存在的目录按它最近一层
+   * 还在的上级目录判断。
+   * 来源目录只留回执, 文件保留备查; 同名但内容不同的分片换名并入, 不覆盖。
+   * 每个作用域每个进程只扫一次。
+   */
+  private async mergeLegacySubScopes(
+    scopeKey: string,
+    ownerRoot: string,
+    storageDir: string,
+    scopeAtEntry: string | null,
+  ): Promise<void> {
+    const onceKey = `${ownerRoot}\n${scopeKey}`;
+    if (this.mergedSubScopes.has(onceKey)) return;
+    const memoryRoot = path.join(ownerRoot, MEMORY_SUBDIR);
+    const fold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+    const prefix = fold(scopeKey.endsWith(path.sep) ? scopeKey : scopeKey + path.sep);
+    let entries: string[];
+    try {
+      entries = await fsSync.promises.readdir(memoryRoot);
+    } catch {
+      return;
+    }
+    // 主工作树根恒有 `.git` (目录, 或 separate-git-dir / worktree 的指针文件)。
+    const isRepositoryRoot = fsSync.existsSync(path.join(scopeKey, '.git'));
+    const sources: string[] = [];
+    for (const entry of entries) {
+      const dir = path.join(memoryRoot, entry);
+      if (dir === storageDir) continue;
+      const absPath = await readUnmergedScopePath(dir);
+      if (absPath === null || !fold(absPath).startsWith(prefix)) continue;
+      // 目录已经不在 (只在某个已删除的 worktree 里存在过的子目录): 用最近一层还在的
+      // 上级目录来判断它属于哪个仓库, 否则这些记忆再也没有任务会读到。只对 Git 仓库
+      // 这样做: 普通文件夹按目录各存一份, 删掉的子文件夹不该并进上级 (否则在主目录
+      // 开过任务的人, 所有已删除项目的记忆都会涌进主目录那一份)。
+      let probe = absPath;
+      if (isRepositoryRoot) {
+        while (probe.length > scopeKey.length && !fsSync.existsSync(probe)) probe = path.dirname(probe);
+      }
+      const resolved = await resolveMemoryScopeKey(probe).catch(() => probe);
+      if (resolved === scopeKey) sources.push(dir);
+    }
+    // 探测的 await 之后、落盘之前复核; 之后的拷贝与回执全是同步调用, 不再让出事件循环。
+    this.assertScopeUnchanged(scopeAtEntry);
+    this.mergeScopeDirsSync(sources, storageDir, scopeKey);
+    this.mergedSubScopes.add(onceKey);
+  }
+
+  /**
+   * 把不属于任何项目的目录 (一次性对话) 名下的旧记忆并入账号级。
+   *
+   * 这类任务现在只读写账号级记忆 (memoryScopesFor), 旧版本记在对话目录名下的内容
+   * 不并入就再也读不到。规则同 mergeLegacySubScopes: 来源保留并留回执, 同名不同内容
+   * 换名并入, 每个进程只扫一次。
+   */
+  private async mergeProjectlessIntoUser(
+    ownerRoot: string,
+    storageDir: string,
+    scopeAtEntry: string | null,
+  ): Promise<void> {
+    const isProjectless = this.deps.isProjectlessScope;
+    const onceKey = `${ownerRoot}\n${USER_MEMORY_SCOPE_KEY}`;
+    if (!isProjectless || this.mergedSubScopes.has(onceKey)) return;
+    const memoryRoot = path.join(ownerRoot, MEMORY_SUBDIR);
+    let entries: string[];
+    try {
+      entries = await fsSync.promises.readdir(memoryRoot);
+    } catch {
+      return;
+    }
+    const sources: string[] = [];
+    for (const entry of entries) {
+      const dir = path.join(memoryRoot, entry);
+      const absPath = await readUnmergedScopePath(dir);
+      if (absPath !== null && isProjectless(absPath)) sources.push(dir);
+    }
+    this.assertScopeUnchanged(scopeAtEntry);
+    this.mergeScopeDirsSync(sources, storageDir, USER_MEMORY_SCOPE_KEY);
+    this.mergedSubScopes.add(onceKey);
+  }
+
+  /** 逐个来源并入并留回执; 全是同步调用, 调用方在此之前已复核账号边界。 */
+  private mergeScopeDirsSync(sources: readonly string[], storageDir: string, mergedInto: string): void {
+    for (const dir of sources) {
+      try {
+        const merged = mergeLegacyShardsSync(dir, storageDir);
+        fsSync.writeFileSync(
+          path.join(dir, SUBSCOPE_MERGE_RECEIPT),
+          `${JSON.stringify({ schemaVersion: 1, mergedInto, mergedAt: new Date().toISOString() })}\n`,
+          'utf8',
+        );
+        this.logger.info('memory scope merged', { merged });
+      } catch (e) {
+        this.logger.warn('memory scope merge failed (source kept, will retry next launch)', {
+          error: String(e),
+        });
+      }
+    }
   }
 
   /** 当前是否已 open 过某 workdir 的 store (manager.getState 也能看, 这里给热路径用) */
@@ -837,6 +1156,21 @@ export class MakerMemoryManager {
       // 还没 open 的 workdir 文件也要清: 扫 basePath/maker-memory 下所有目录
       const fs = await import('node:fs/promises');
       this.assertScopeUnchanged(scopeAtEntry);
+      // 账号级记忆同属 Cindy 记忆, 「清空全部」一并清掉 (与 maker-memory 同级的目录)。
+      const userDir = path.join(path.dirname(memoryRoot), USER_MEMORY_SUBDIR);
+      try {
+        if ((await fs.stat(userDir)).isDirectory()) {
+          this.assertScopeUnchanged(scopeAtEntry);
+          await fs.rm(userDir, { recursive: true, force: true });
+          total += 1;
+        }
+      } catch (e) {
+        if (e instanceof MemoryError && e.code === 'not-ready') throw e;
+        if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+          this.logger.warn('resetAll: failed to remove user memory dir', { error: String(e) });
+        }
+      }
+      this.mergedSubScopes.clear();
       let entries: string[] = [];
       try {
         entries = await fs.readdir(memoryRoot);
@@ -847,7 +1181,7 @@ export class MakerMemoryManager {
         // 先复核 scope (review #2388 Greptile 23rd P1): readdir await 期间边界
         // 可能发生 — 不得把跨边界的 reset 误判为成功。
         this.assertScopeUnchanged(scopeAtEntry);
-        return { removedCount: 0 };
+        return { removedCount: total };
       }
       for (const entry of entries) {
         const dir = path.join(memoryRoot, entry);
@@ -902,8 +1236,13 @@ export class MakerMemoryManager {
     // (isOneShotRouteDisabled / agent 派发), 边界窗口内不得把旧 owner 的
     // memory dump 发给 review LLM — 构造/发送 prompt 前复核 scope。
     const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
-    const store = await this.getStore(absWorkdir);
-    const records = await store.list();
+    // 审查这次任务能读写的每一份记忆 (账号级 + 项目), 与工具层看到的范围一致。
+    const scopes = this.memoryScopesFor(absWorkdir);
+    const records: Array<MemoryRecord & { scope: 'user' | 'project' }> = [];
+    for (const [scope, key] of [['user', scopes.user], ['project', scopes.project]] as const) {
+      if (!key) continue;
+      for (const record of await (await this.getStore(key)).list()) records.push({ ...record, scope });
+    }
     if (records.length === 0) {
       return { suggestions: 'No memories in this workdir yet.' };
     }
@@ -917,7 +1256,7 @@ export class MakerMemoryManager {
     this.assertScopeUnchanged(scopeAtEntry);
 
     const summary = records
-      .map((r) => `### ${r.filename}\n- title: ${r.frontmatter.title}\n- description: ${r.frontmatter.description}\n- updatedAt: ${r.frontmatter.updatedAt}\n\n${r.body}`)
+      .map((r) => `### ${r.filename} (scope: ${r.scope})\n- title: ${r.frontmatter.title}\n- description: ${r.frontmatter.description}\n- updatedAt: ${r.frontmatter.updatedAt}\n\n${r.body}`)
       .join('\n\n---\n\n');
     const prompt = [
       'You are reviewing a memory store for consistency.',
@@ -959,6 +1298,191 @@ export class MakerMemoryManager {
     // 调用期间发生则建议文本基于旧 owner 数据 — 不得向当前 session 报 ok。
     this.assertScopeUnchanged(scopeAtEntry);
     return { suggestions };
+  }
+
+  // ── 整理 (见 tidy.ts) ────────────────────────────────────────────────────
+
+  /**
+   * 一轮任务结束后由宿主调用: 这次任务用到的每一份记忆 (项目、账号级) 各自检查
+   * 触发线, 到了才整理。不到线时只读一次状态文件和分片列表, 不调用模型。
+   * 伙伴等独立作用域不参与 (它们有自己的夜间学习); 总开关关闭时不整理。
+   */
+  async tidyIfDue(scopeKey: string): Promise<TidyRun[]> {
+    if (!this.isEnabled() || !this.deps.reviewOneShot) return [];
+    if (this.deps.isIndependentScope?.(scopeKey) === true) return [];
+    const scopes = this.memoryScopesFor(scopeKey);
+    const runs: TidyRun[] = [];
+    for (const key of [scopes.project, scopes.user]) {
+      if (!key) continue;
+      const outcome = await this.tidy(key, 'auto');
+      if (outcome.status === 'done' && outcome.run) runs.push(outcome.run);
+    }
+    return runs;
+  }
+
+  /**
+   * 整理一份记忆 (storeKey 是具体那一份的键: 项目 scope key 或账号级键)。
+   * 'auto' 先看触发线; 'manual' (用户点「现在整理」) 不看。
+   */
+  async tidy(storeKey: string, trigger: 'auto' | 'manual'): Promise<TidyOutcome> {
+    if (this.deps.isIndependentScope?.(storeKey) === true) return { status: 'unavailable' };
+    if (this.tidying.has(storeKey)) return { status: 'busy' };
+    this.tidying.add(storeKey);
+    try {
+      const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
+      const store = await this.getStore(storeKey);
+      const state = await store.readTidyState();
+      const records = curatedRecords(await store.list());
+      const now = Date.now();
+      if (
+        trigger === 'auto'
+        && !isTidyDue({ records, state, indexBytes: await store.getIndexSize(), config: store.config, now })
+      ) {
+        return { status: 'not-due' };
+      }
+      if (records.length < 2) return { status: 'done', run: null };
+      if (!this.deps.reviewOneShot) return { status: 'unavailable' };
+      const nowIso = new Date(now).toISOString();
+      // 先记下这次尝试: 辅助模型不可用或输出不可解析时, 不在每一轮任务结束后重试。
+      await store.writeTidyState({ ...state, lastAttemptAt: nowIso });
+      const text = await this.deps.reviewOneShot(buildTidyPrompt(records), TIDY_ONE_SHOT_OPTS);
+      // 模型调用横跨 await: 账号边界已变则丢弃提议, 不落盘。
+      this.assertScopeUnchanged(scopeAtEntry);
+      // 链上没有任何产出 = 没有可用的辅助模型 (界面据此指向模型设置); 有产出但不是计划 = 失败。
+      if (!text || !text.trim()) return { status: 'unavailable' };
+      const plan = parseTidyPlan(text);
+      if (!plan) return { status: 'failed' };
+      const valid = validateTidyPlan(plan, records, store.config);
+      const byName = new Map(records.map((r) => [r.filename, r]));
+      const changes: TidyChange[] = [];
+      let failure: unknown = null;
+      try {
+        for (const merge of valid.merges) {
+          // 保留最近改过的那一条的文件名, 其余并入后删除。
+          const [keep, ...rest] = merge.sources
+            .map((name) => byName.get(name)!)
+            .sort((a, b) => b.frontmatter.updatedAt.localeCompare(a.frontmatter.updatedAt));
+          if (!keep) continue;
+          let saved: MemoryRecord;
+          try {
+            saved = await store.update(keep.filename, keep.frontmatter.updatedAt, {
+              title: merge.title,
+              description: merge.description,
+              body: merge.body,
+            });
+          } catch (e) {
+            if (isSkippableTidyError(e)) continue;
+            throw e;
+          }
+          changes.push({
+            kind: 'updated',
+            filename: keep.filename,
+            before: tidySnapshot(keep),
+            after: {
+              title: saved.frontmatter.title,
+              description: saved.frontmatter.description,
+              body: saved.body,
+              updatedAt: saved.frontmatter.updatedAt,
+            },
+            reason: merge.reason,
+          });
+          for (const other of rest) {
+            try {
+              await store.delete(other.filename, other.frontmatter.updatedAt);
+              changes.push({ kind: 'deleted', filename: other.filename, before: tidySnapshot(other), reason: merge.reason });
+            } catch (e) {
+              if (!isSkippableTidyError(e)) throw e;
+            }
+          }
+        }
+        for (const del of valid.deletes) {
+          const record = byName.get(del.filename)!;
+          try {
+            await store.delete(record.filename, record.frontmatter.updatedAt);
+            changes.push({ kind: 'deleted', filename: record.filename, before: tidySnapshot(record), reason: del.reason });
+          } catch (e) {
+            if (!isSkippableTidyError(e)) throw e;
+          }
+        }
+      } catch (e) {
+        failure = e;
+      }
+      // 中途出错也要把已做的改动记下来, 否则它们无法撤销。
+      const run: TidyRun | null =
+        changes.length > 0 ? { id: randomUUID(), at: nowIso, trigger, changes } : null;
+      const next: TidyState = {
+        version: 1,
+        lastAttemptAt: nowIso,
+        lastTidyAt: failure ? state.lastTidyAt : nowIso,
+        runs: run ? [run, ...state.runs].slice(0, TIDY_MAX_RUNS) : state.runs,
+      };
+      if (failure) {
+        await store.writeTidyState(next).catch((e) =>
+          this.logger.warn('memory tidy: could not record partial run', { error: String(e) }));
+        throw failure;
+      }
+      await store.writeTidyState(next);
+      this.logger.info('memory tidy finished', { trigger, changes: changes.length });
+      return { status: 'done', run };
+    } finally {
+      this.tidying.delete(storeKey);
+    }
+  }
+
+  /** 这份记忆的整理记录 (新的在前)。关着总开关也能看。 */
+  async listTidyRuns(storeKey: string): Promise<TidyRun[]> {
+    const store = await this.getStore(storeKey, { skipDisabledCheck: true });
+    return (await store.readTidyState()).runs;
+  }
+
+  /**
+   * 撤销一次整理: 把改写过的条目改回去, 把删掉的条目写回来。整理之后被用户或模型
+   * 再改过的条目、已被同名新条目占位的条目不覆盖, 计入 skipped。
+   */
+  async undoTidy(storeKey: string, runId: string): Promise<{ restored: number; skipped: number }> {
+    const store = await this.getStore(storeKey, { skipDisabledCheck: true });
+    const state = await store.readTidyState();
+    const run = state.runs.find((r) => r.id === runId);
+    if (!run) throw new MemoryError('not-found', 'tidy run not found');
+    if (run.undoneAt) return { restored: 0, skipped: 0 };
+    let restored = 0;
+    let skipped = 0;
+    for (const change of run.changes) {
+      try {
+        if (change.kind === 'updated') {
+          if (!change.after) {
+            skipped += 1;
+            continue;
+          }
+          await store.update(change.filename, change.after.updatedAt, {
+            title: change.before.title,
+            description: change.before.description,
+            body: change.before.body,
+          });
+        } else {
+          const parsed = parseFilename(change.filename);
+          if (!parsed) {
+            skipped += 1;
+            continue;
+          }
+          await store.write({
+            type: parsed.type,
+            name: parsed.slug,
+            title: change.before.title,
+            description: change.before.description,
+            body: change.before.body,
+            mode: 'create',
+          });
+        }
+        restored += 1;
+      } catch (e) {
+        if (!isSkippableTidyError(e)) throw e;
+        skipped += 1;
+      }
+    }
+    run.undoneAt = new Date().toISOString();
+    await store.writeTidyState(state);
+    return { restored, skipped };
   }
 
   /** 直接给 store 一个 write 入口. mcp-server 层会拿这个 (而不是先 getStore 再 write) */

@@ -37,6 +37,8 @@ export interface MakerMemoryHostContext {
   logger: Logger;
   /** Bot scopes keep their records inside the Bot Home. */
   botMemoryDir?(ownerRoot: string, botId: string): string;
+  /** Task directories that belong to no project (Desktop: one-off dialogue folders). */
+  isProjectlessScope?(scopeKey: string): boolean;
   isOneShotRouteDisabled?(agent: AgentKind): Promise<boolean>;
   reviewOneShot?: MakerMemoryManagerDeps['reviewOneShot'];
   reviewAgent?: AgentKind;
@@ -77,6 +79,7 @@ export function createMakerMemoryManagerForHost(ctx: MakerMemoryHostContext): Ma
           isIndependentScope: (scopeKey: string) => parseBotMemoryScopeKey(scopeKey) !== null,
         }
       : {}),
+    ...(ctx.isProjectlessScope ? { isProjectlessScope: ctx.isProjectlessScope } : {}),
     sqliteFactory: ctx.sqliteFactory,
     agents: {},
     logger: ctx.logger,

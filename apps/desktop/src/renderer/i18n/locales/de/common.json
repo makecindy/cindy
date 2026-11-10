@@ -5091,59 +5091,103 @@
     },
     "memory": {
       "title": "Gedächtnis",
-      "description": "Ermöglicht arbeitsbereichsbezogene Erinnerungen. Nach einer Einstellungsänderung musst du normalerweise eine neue Agent-Sitzung starten, damit sie wirksam wird. Wenn die Erinnerungsfunktion Probleme macht, klicke auf „Zurücksetzen“ oder schalte sie aus.",
+      "description": "Damit merken sich Agents über Sitzungen hinweg, was dich und deine Projekte betrifft. Erinnerungen werden nur auf diesem Computer gespeichert. Änderungen am Schalter werden ab der nächsten Agent-Sitzung wirksam.",
+      "entries": {
+        "open": "Erinnerungen ansehen",
+        "title": "Gespeicherte Erinnerungen",
+        "description": "Erinnerungen unter „Über dich“ gelten in jedem Projekt. Die Erinnerungen eines Projekts gelten nur in diesem Repository oder Ordner. Änderungen und Löschungen werden ab der nächsten Agent-Sitzung wirksam.",
+        "disabledNotice": "Das Cindy-Gedächtnis ist aus. Erinnerungen werden weder gelesen noch gespeichert. Gespeicherte Erinnerungen kannst du weiterhin ansehen, bearbeiten und löschen.",
+        "scope": "Auswählen, welche Erinnerungen angezeigt werden",
+        "userScope": "Über dich",
+        "userScopeNote": "Gilt in jedem Projekt",
+        "deleteConfirm": "Cindy wird sich nicht mehr auf „{{title}}“ beziehen.",
+        "changed": "Cindy hat diese Erinnerung gerade aktualisiert",
+        "tidy": {
+          "name": "Erinnerungen aufräumen",
+          "about": "Fasst doppelte und widersprüchliche Erinnerungen zusammen. Das passiert auch automatisch, wenn es mehr Erinnerungen werden, und lässt sich jedes Mal rückgängig machen.",
+          "run": "Jetzt aufräumen",
+          "running": "Wird aufgeräumt…",
+          "offReason": "Das Cindy-Gedächtnis ist aus. Schalte es ein, um aufzuräumen.",
+          "tooFewReason": "Zum Aufräumen braucht es mindestens 2 Erinnerungen.",
+          "merged_one": "{{count}} Erinnerung aufgeräumt",
+          "merged_other": "{{count}} Erinnerungen aufgeräumt",
+          "nothing": "Keine Erinnerungen aufzuräumen",
+          "busy": "Diese Erinnerungen werden bereits aufgeräumt",
+          "failed": "Aufräumen nicht möglich. Deine Erinnerungen wurden nicht geändert.",
+          "unavailable": "Es ist kein Hilfsmodell verfügbar, daher konnte nicht aufgeräumt werden. Wähle eines unter Einstellungen → Personalisierung → Hilfsmodelle.",
+          "records": "Aufräumverlauf",
+          "auto": "Automatisch",
+          "manual": "Manuell",
+          "touched_one": "{{count}} Erinnerung",
+          "touched_other": "{{count}} Erinnerungen",
+          "quoted": "„{{title}}“",
+          "mergedInto": "{{sources}} zu {{title}} zusammengefasst",
+          "removed": "{{title}} war bereits in einer anderen Erinnerung enthalten und wurde entfernt",
+          "undo": "Rückgängig",
+          "undoAria": "Aufräumen rückgängig machen ({{time}})",
+          "undone": "Rückgängig gemacht",
+          "undoConfirm": {
+            "heading": "Dieses Aufräumen rückgängig machen?",
+            "body_one": "Die dabei geänderte Erinnerung ({{count}}) erhält wieder ihren vorherigen Inhalt. Seitdem bearbeitete Erinnerungen werden nicht überschrieben.",
+            "body_other": "Die {{count}} dabei geänderten Erinnerungen erhalten wieder ihren vorherigen Inhalt. Seitdem bearbeitete Erinnerungen werden nicht überschrieben.",
+            "confirm": "Aufräumen rückgängig machen",
+            "cancel": "Abbrechen"
+          },
+          "restored_one": "{{count}} Erinnerung wiederhergestellt",
+          "restored_other": "{{count}} Erinnerungen wiederhergestellt",
+          "restoredSkipped_one": "{{restored}} wiederhergestellt. {{count}} Erinnerung wurde nach dem Aufräumen bearbeitet und nicht wiederhergestellt.",
+          "restoredSkipped_other": "{{restored}} wiederhergestellt. {{count}} Erinnerungen wurden nach dem Aufräumen bearbeitet und nicht wiederhergestellt.",
+          "undoFailed": "Aufräumen konnte nicht rückgängig gemacht werden"
+        }
+      },
       "maker": {
         "label": "Cindy",
-        "description": "Erinnerungen werden über den Agent-Eintrag verwaltet, nicht für jedes Modell einzeln. Claude Code- und Codex-Sitzungen können Erinnerungen im selben Arbeitsverzeichnis gemeinsam nutzen.",
+        "description": "Gemeinsam genutzt von Claude Code, Codex und Pi. Ein Gedächtnis über dich und eines für jedes Projekt.",
         "toggleAria": "Cindy-Gedächtnis umschalten",
-        "resetAria": "Cindy-Erinnerungen zurücksetzen",
+        "resetAria": "Cindy-Erinnerungen löschen",
         "resetConfirm": {
-          "title": "Cindy-Erinnerungen zurücksetzen?",
-          "description": "Dadurch werden alle Cindy-Erinnerungen in sämtlichen Projekten dauerhaft gelöscht (gespeichert unter user-data, nicht in deinen Repos). Diese Aktion kann nicht rückgängig gemacht werden.",
-          "confirm": "Zurücksetzen",
+          "title": "Cindy-Erinnerungen löschen?",
+          "description": "Dadurch werden die Erinnerungen über dich und die aller Projekte dauerhaft gelöscht. Sie lassen sich nicht wiederherstellen. Die Erinnerungen von Teammitgliedern und die Dateien in deinen Projekten bleiben unberührt.",
+          "confirm": "Erinnerungen löschen",
           "cancel": "Abbrechen"
         },
         "toast": {
-          "enabled": "Cindy-Gedächtnis aktiviert",
-          "disabled": "Cindy-Gedächtnis deaktiviert",
-          "deferredSuffix": " — laufende Codex-Sitzungen übernehmen dies nach Abschluss ihrer aktuellen Aufgabe",
-          "toggleFailed": "Cindy-Gedächtnis konnte nicht umgeschaltet werden",
-          "resetSuccess_one": "Cindy-Erinnerungen zurückgesetzt — {{count}} Arbeitsverzeichnis entfernt",
-          "resetSuccess_other": "Cindy-Erinnerungen zurückgesetzt — {{count}} Arbeitsverzeichnisse entfernt",
-          "resetFailed": "Cindy-Erinnerungen konnten nicht zurückgesetzt werden"
+          "enabled": "Cindy-Gedächtnis eingeschaltet",
+          "disabled": "Cindy-Gedächtnis ausgeschaltet",
+          "deferredSuffix": " — laufende Codex-Sitzungen übernehmen dies nach Abschluss ihres aktuellen Durchgangs",
+          "toggleFailed": "Der Schalter für das Cindy-Gedächtnis konnte nicht geändert werden",
+          "resetSuccess_one": "Cindy-Erinnerungen gelöscht",
+          "resetSuccess_other": "Cindy-Erinnerungen gelöscht",
+          "resetFailed": "Cindy-Erinnerungen konnten nicht gelöscht werden"
         }
       },
       "agents": {
         "claude-code": {
           "label": "Claude Code",
-          "description": "Alle Modelle, die über den Claude Code-Eintrag verwendet werden, teilen dasselbe Gedächtnis."
+          "description": "Wenn das Cindy-Gedächtnis aus ist, nutzt Claude Code sein eigenes, integriertes Gedächtnis."
         },
         "codex": {
           "label": "Codex",
-          "description": "Alle Modelle, die über den Codex-Eintrag verwendet werden, teilen dasselbe Gedächtnis."
-        },
-        "pi": {
-          "label": "Pi",
-          "description": "Speichert komprimierte Zusammenfassungen langer Sitzungen im Cindy-Gedächtnis für künftige Pi-Sitzungen."
+          "description": "Wenn das Cindy-Gedächtnis aus ist, nutzt Codex sein eigenes, integriertes Gedächtnis."
         }
       },
       "agent": {
         "toggleAria": "Gedächtnis für {{label}} umschalten",
-        "resetAria": "Erinnerungen für {{label}} zurücksetzen",
+        "resetAria": "Erinnerungen von {{label}} löschen",
         "toast": {
-          "enabled": "Gedächtnis für {{label}} aktiviert",
-          "disabled": "Gedächtnis für {{label}} deaktiviert",
+          "enabled": "Gedächtnis von {{label}} eingeschaltet",
+          "disabled": "Gedächtnis von {{label}} ausgeschaltet",
           "takesEffectSuffix": " – wird ab der nächsten Agent-Sitzung wirksam",
-          "toggleFailed": "Gedächtniseinstellung konnte nicht aktualisiert werden",
-          "resetSuccess_one": "Erinnerungen für {{label}} zurückgesetzt — {{count}} Eintrag entfernt",
-          "resetSuccess_other": "Erinnerungen für {{label}} zurückgesetzt — {{count}} Einträge entfernt",
-          "resetSuccessGeneric": "Erinnerungen für {{label}} zurückgesetzt",
-          "resetFailed": "Gedächtnis konnte nicht zurückgesetzt werden"
+          "toggleFailed": "Der Gedächtnisschalter konnte nicht geändert werden",
+          "resetSuccess_one": "Erinnerungen von {{label}} gelöscht — {{count}} Eintrag entfernt",
+          "resetSuccess_other": "Erinnerungen von {{label}} gelöscht — {{count}} Einträge entfernt",
+          "resetSuccessGeneric": "Erinnerungen von {{label}} gelöscht",
+          "resetFailed": "Erinnerungen konnten nicht gelöscht werden"
         },
         "resetConfirm": {
-          "title": "Erinnerungen für {{label}} zurücksetzen?",
-          "description": "Dadurch werden alle Erinnerungen, die {{label}} in jedem Projekt angesammelt hat, dauerhaft gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.",
-          "confirm": "Zurücksetzen",
+          "title": "Erinnerungen von {{label}} löschen?",
+          "description": "Dadurch werden alle eigenen Erinnerungen von {{label}} dauerhaft gelöscht. Sie lassen sich nicht wiederherstellen. Erinnerungen, die {{label}} außerhalb von Cindy gespeichert hat, werden möglicherweise ebenfalls gelöscht.",
+          "confirm": "Erinnerungen löschen",
           "cancel": "Abbrechen"
         }
       }

@@ -417,8 +417,25 @@ export interface SchedulerHookScriptService {
  */
 export interface MemoryMcpDeps {
   withAccountDataAccess?: import('./account-data-access.js').AccountDataAccess;
-  /** Host captures the source turn before storage; invoked only for a successful write. */
-  beginWrite?: (context: LiziMcpSessionContext | undefined) => ((receipt: { key: string; title: string; action: 'created' | 'updated' }) => void);
+  /**
+   * Host captures the source turn before storage; invoked only for a successful write.
+   * `scope` names which of the task's memories was written (`user` = about the user, every
+   * project; `project` = this repository or folder). It is a name, never a path: receipts
+   * are stored on the message and travel wherever the message does.
+   */
+  beginWrite?: (context: LiziMcpSessionContext | undefined) => ((receipt: {
+    key: string;
+    title: string;
+    action: 'created' | 'updated';
+    scope?: 'user' | 'project';
+  }) => void);
+
+  /**
+   * A tool call added or rewrote entries in one memory store (`storeKey` is that store's
+   * scope key). The host uses it to decide when that store is worth tidying; it carries
+   * no content.
+   */
+  onStoreChanged?: (context: LiziMcpSessionContext | undefined, storeKey: string) => void;
 
   getManager(): import('@cindy/maker-core').MakerMemoryManager;
   workdir: string;

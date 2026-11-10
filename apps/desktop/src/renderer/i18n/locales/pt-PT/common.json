@@ -5147,61 +5147,110 @@
     },
     "memory": {
       "title": "Memória",
-      "description": "Ativa a memória por espaço de trabalho. Após alterar as definições, geralmente é necessário iniciar uma nova sessão do Agent para que tenham efeito. Se a memória não funcionar corretamente, clique em Repor ou desative-a.",
+      "description": "Permite que os Agents se lembrem, de uma sessão para outra, do que lhe diz respeito e aos seus projetos. As memórias ficam guardadas apenas neste computador. As alterações ao interruptor entram em vigor na próxima sessão do Agent.",
+      "entries": {
+        "open": "Ver memórias",
+        "title": "Memórias guardadas",
+        "description": "As memórias de «Sobre si» aplicam-se a todos os projetos. As memórias de um projeto aplicam-se apenas a esse repositório ou pasta. As alterações e eliminações entram em vigor na próxima sessão do Agent.",
+        "disabledNotice": "A memória da Cindy está desativada: as memórias não são lidas nem guardadas. Pode continuar a ver, editar e eliminar as memórias guardadas.",
+        "scope": "Escolher que memórias ver",
+        "userScope": "Sobre si",
+        "userScopeNote": "Aplica-se a todos os projetos",
+        "deleteConfirm": "A Cindy deixará de consultar «{{title}}».",
+        "changed": "A Cindy acabou de atualizar esta memória",
+        "tidy": {
+          "name": "Organizar memórias",
+          "about": "Junta memórias duplicadas ou contraditórias. Também acontece automaticamente quando as memórias aumentam, e cada organização pode ser anulada.",
+          "run": "Organizar agora",
+          "running": "A organizar…",
+          "offReason": "A memória da Cindy está desativada. Ative-a para organizar.",
+          "tooFewReason": "São necessárias pelo menos 2 memórias para organizar.",
+          "merged_one": "{{count}} memória organizada",
+          "merged_many": "{{count}} memórias organizadas",
+          "merged_other": "{{count}} memórias organizadas",
+          "nothing": "Não há memórias para organizar",
+          "busy": "Estas memórias já estão a ser organizadas",
+          "failed": "Não foi possível organizar. As memórias não foram alteradas.",
+          "unavailable": "Não há nenhum modelo auxiliar disponível, pelo que não foi possível organizar. Escolha um em Definições → Personalização → Modelos auxiliares.",
+          "records": "Histórico de organização",
+          "auto": "Automática",
+          "manual": "Manual",
+          "touched_one": "{{count}} memória",
+          "touched_many": "{{count}} memórias",
+          "touched_other": "{{count}} memórias",
+          "quoted": "«{{title}}»",
+          "mergedInto": "{{sources}} fundidas em {{title}}",
+          "removed": "{{title}} já estava contida noutra memória e foi removida",
+          "undo": "Anular",
+          "undoAria": "Anular a organização ({{time}})",
+          "undone": "Anulada",
+          "undoConfirm": {
+            "heading": "Anular esta organização?",
+            "body_one": "A memória alterada por esta organização ({{count}}) volta ao conteúdo anterior. As memórias editadas depois disso não são substituídas.",
+            "body_many": "As {{count}} memórias alteradas por esta organização voltam ao conteúdo anterior. As memórias editadas depois disso não são substituídas.",
+            "body_other": "As {{count}} memórias alteradas por esta organização voltam ao conteúdo anterior. As memórias editadas depois disso não são substituídas.",
+            "confirm": "Anular organização",
+            "cancel": "Cancelar"
+          },
+          "restored_one": "{{count}} memória restaurada",
+          "restored_many": "{{count}} memórias restauradas",
+          "restored_other": "{{count}} memórias restauradas",
+          "restoredSkipped_one": "Memórias restauradas: {{restored}}. {{count}} memória foi editada depois da organização e não foi restaurada.",
+          "restoredSkipped_many": "Memórias restauradas: {{restored}}. {{count}} memórias foram editadas depois da organização e não foram restauradas.",
+          "restoredSkipped_other": "Memórias restauradas: {{restored}}. {{count}} memórias foram editadas depois da organização e não foram restauradas.",
+          "undoFailed": "Não foi possível anular esta organização"
+        }
+      },
       "maker": {
         "label": "Cindy",
-        "description": "A memória é gerida pela entrada do Agent, não por cada modelo. As sessões do Claude Code e do Codex podem partilhar memória no mesmo diretório de trabalho.",
+        "description": "Partilhada pelo Claude Code, pelo Codex e pelo Pi. Uma memória sobre si e uma para cada projeto.",
         "toggleAria": "Ativar/desativar memória da Cindy",
-        "resetAria": "Repor memórias da Cindy",
+        "resetAria": "Limpar memórias da Cindy",
         "resetConfirm": {
-          "title": "Repor as memórias da Cindy?",
-          "description": "Esta ação eliminará permanentemente todas as memórias da Cindy de todos os projetos (armazenadas em user-data, não nos seus repositórios). Esta ação não pode ser anulada.",
-          "confirm": "Repor",
+          "title": "Limpar as memórias da Cindy?",
+          "description": "Esta ação eliminará permanentemente as memórias sobre si e as de todos os projetos. Não é possível recuperá-las. As memórias dos colegas e os ficheiros dos seus projetos não são afetados.",
+          "confirm": "Limpar memórias",
           "cancel": "Cancelar"
         },
         "toast": {
           "enabled": "Memória da Cindy ativada",
           "disabled": "Memória da Cindy desativada",
-          "deferredSuffix": " — as sessões do Codex em execução aplicarão esta alteração após terminarem a tarefa atual",
-          "toggleFailed": "Falha ao ativar/desativar a memória da Cindy",
-          "resetSuccess_one": "Memórias da Cindy repostas — removido {{count}} diretório de trabalho",
-          "resetSuccess_other": "Memórias da Cindy repostas — removidos {{count}} diretórios de trabalho",
-          "resetFailed": "Falha ao repor as memórias da Cindy",
-          "resetSuccess_many": "Memórias da Cindy repostas — removidos {{count}} diretórios de trabalho"
+          "deferredSuffix": " — as sessões do Codex em execução aplicarão esta alteração quando terminarem o turno atual",
+          "toggleFailed": "Não foi possível alterar o interruptor da memória da Cindy",
+          "resetSuccess_one": "Memórias da Cindy limpas",
+          "resetSuccess_other": "Memórias da Cindy limpas",
+          "resetFailed": "Não foi possível limpar as memórias da Cindy",
+          "resetSuccess_many": "Memórias da Cindy limpas"
         }
       },
       "agents": {
         "claude-code": {
           "label": "Claude Code",
-          "description": "Todos os modelos utilizados através da entrada Claude Code partilham a mesma memória."
+          "description": "Quando a memória da Cindy está desativada, o Claude Code usa a sua própria memória integrada."
         },
         "codex": {
           "label": "Codex",
-          "description": "Todos os modelos utilizados através da entrada Codex partilham a mesma memória."
-        },
-        "pi": {
-          "label": "Pi",
-          "description": "Guarda resumos da compressão de sessões longas na memória da Cindy para futuras sessões do Pi."
+          "description": "Quando a memória da Cindy está desativada, o Codex usa a sua própria memória integrada."
         }
       },
       "agent": {
         "toggleAria": "Ativar/desativar memória de {{label}}",
-        "resetAria": "Repor memórias de {{label}}",
+        "resetAria": "Limpar memórias de {{label}}",
         "toast": {
           "enabled": "Memória de {{label}} ativada",
           "disabled": "Memória de {{label}} desativada",
           "takesEffectSuffix": " — entra em vigor na próxima sessão do Agent",
-          "toggleFailed": "Falha ao atualizar a definição de memória",
-          "resetSuccess_one": "Memórias de {{label}} repostas — removida {{count}} entrada",
-          "resetSuccess_other": "Memórias de {{label}} repostas — removidas {{count}} entradas",
-          "resetSuccessGeneric": "Memórias de {{label}} repostas",
-          "resetFailed": "Falha ao repor a memória",
-          "resetSuccess_many": "Memórias de {{label}} repostas — removidas {{count}} entradas"
+          "toggleFailed": "Não foi possível alterar o interruptor da memória",
+          "resetSuccess_one": "Memórias de {{label}} limpas — removida {{count}} entrada",
+          "resetSuccess_other": "Memórias de {{label}} limpas — removidas {{count}} entradas",
+          "resetSuccessGeneric": "Memórias de {{label}} limpas",
+          "resetFailed": "Não foi possível limpar as memórias",
+          "resetSuccess_many": "Memórias de {{label}} limpas — removidas {{count}} entradas"
         },
         "resetConfirm": {
-          "title": "Repor as memórias de {{label}}?",
-          "description": "Esta ação eliminará permanentemente todas as memórias que {{label}} acumulou em todos os projetos. Esta ação não pode ser anulada.",
-          "confirm": "Repor",
+          "title": "Limpar as memórias de {{label}}?",
+          "description": "Esta ação eliminará permanentemente todas as memórias próprias de {{label}}. Não é possível recuperá-las. As que foram guardadas enquanto usava {{label}} fora da Cindy também podem ser eliminadas.",
+          "confirm": "Limpar memórias",
           "cancel": "Cancelar"
         }
       }

@@ -17,6 +17,9 @@
  *  storage 按目录串行变更，界面条件更新/删除与伙伴工具写入共享同一互斥。
  */
 
+import { promises as fs } from 'node:fs';
+import * as path from 'node:path';
+
 import type Database from 'better-sqlite3';
 
 import { MemoryFts } from './fts.js';
@@ -33,6 +36,10 @@ import {
   type WriteResult,
 } from './types.js';
 import type { Logger } from '../interfaces/logger.js';
+import { normalizeTidyState, type TidyState } from './tidy.js';
+
+/** 整理状态与撤销记录 (见 tidy.ts); 派生状态, 不是分片, 不进索引与 FTS。 */
+const TIDY_STATE_FILENAME = 'tidy-state.json';
 
 export interface MakerMemoryStoreDeps {
   /** 已就绪的目录绝对路径 (manager 算好) */
@@ -78,9 +85,12 @@ export class MakerMemoryStore {
   private readonly fts: MemoryFts;
   private readonly logger: Logger;
   private initialized = false;
+  /** 生效配置 (默认值 + 宿主覆盖)。 */
+  readonly config: MemoryConfig;
 
   constructor(private readonly deps: MakerMemoryStoreDeps) {
     const config = { ...DEFAULT_MEMORY_CONFIG, ...(deps.config ?? {}) };
+    this.config = config;
     this.storage = new MemoryStorage(
       deps.storageDir,
       config,
@@ -238,6 +248,33 @@ export class MakerMemoryStore {
     return { removedCount: matching.length };
   }
 
+  // ── 整理状态 ─────────────────────────────────────────────────────────────
+
+  async readTidyState(): Promise<TidyState> {
+    this.assertScopeOk();
+    await this.init();
+    let raw: unknown = null;
+    try {
+      raw = JSON.parse(await fs.readFile(path.join(this.storage.dir, TIDY_STATE_FILENAME), 'utf8'));
+    } catch {
+      /* 没有或损坏: 当作从未整理过 */
+    }
+    this.assertScopeOk();
+    return normalizeTidyState(raw);
+  }
+
+  /** 同目录临时文件再 rename, 中途退出不留半截文件。 */
+  async writeTidyState(state: TidyState): Promise<void> {
+    this.assertScopeOk();
+    await this.init();
+    const file = path.join(this.storage.dir, TIDY_STATE_FILENAME);
+    const tmp = `${file}.tmp-${process.pid}`;
+    await fs.writeFile(tmp, `${JSON.stringify(state)}\n`, 'utf8');
+    // 写临时文件的 await 之后、覆盖正式文件之前复核: 边界不得改旧 owner 的状态。
+    this.assertScopeOk();
+    await fs.rename(tmp, file);
+  }
+
   // ── 检索 ─────────────────────────────────────────────────────────────────
 
   async search(query: string, opts?: SearchOptions): Promise<SearchHit[]> {
@@ -275,7 +312,7 @@ export class MakerMemoryStore {
     // tryReadRaw 与 entry check 之间有 await 窗口 — 写 target 前再复核一次
     // (review #2388 Codex 7th P1), 边界不得写入旧 owner 文件。
     this.assertScopeOk();
-    const writeRes = await this.storage.write(writeOpts);
+    const writeRes = await this.storage.write(writeOpts, sourcesToDelete);
 
     // 删源 — 每次删除前复核 scope (review #2388 Codex 7th P1): target write 与
     // 删源之间有 await, 边界若在窗口内发生, 裸 storage.delete 仍会变更旧 owner
@@ -356,6 +393,8 @@ export class MakerMemoryStore {
     // 边界, 不得在旧 owner 的 fts.db 上 rebuild; not-ready 透传 fail-closed。
     this.assertScopeOk();
     try { this.fts.rebuild([]); } catch { /* swallow */ }
+    // 清空后旧的整理记录不得再能「撤销」出已被用户清掉的记忆。
+    await fs.rm(path.join(this.storage.dir, TIDY_STATE_FILENAME), { force: true }).catch(() => {});
     return { removedCount: all.length };
   }
 

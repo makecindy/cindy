@@ -813,7 +813,8 @@ translator、event loop、model 映射、usage 计量这些路径上的改动，
 
 命中依赖**请求前缀逐字节稳定**。system prompt 由多段按固定顺序拼接（SDK preset →
 `MAKER_SYSTEM_PROMPT_APPEND` → makerMemoryRules → host `runtimeConfig.systemPrompt` →
-per-workdir MEMORY.md index 快照 → per-call userPrompt，见 `claude-code/index.ts`）。禁止：
+记忆索引快照（账号级在前、项目在后，见 `MakerMemoryManager.getPromptIndex`）→ per-call
+userPrompt，见 `claude-code/index.ts`）。禁止：
 
 - 往稳定前缀里塞每轮都变的内容（时间戳、随机文案、易变计数器）；随机／易变内容只能
   进 per-call userPrompt 段。

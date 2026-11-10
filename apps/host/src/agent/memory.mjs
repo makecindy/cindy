@@ -16,7 +16,7 @@ import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.ts'
 import { createBetterSqliteDatabase } from '../../../desktop/src/main/localDb/betterSqliteFactory.ts';
 import { LOGGER } from './runtime.mjs';
 
-const DEFAULTS = Object.freeze({ maker: true, claudeCode: true, codex: true, pi: true });
+const DEFAULTS = Object.freeze({ maker: true, claudeCode: true, codex: true });
 
 /** `<ownerRoot>/memory-settings.json`, same file Desktop writes. */
 export function readMemorySettings(ownerRoot) {

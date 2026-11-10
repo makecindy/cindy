@@ -20,8 +20,8 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
     name: 'memory_search',
     category: 'search',
     description:
-      'FTS5 全文检索当前 workdir 的 memory (按 title/description/body)。返回按相关度排序的命中列表 ' +
-      '(filename / type / title / snippet 高亮 / score)。query 当前走精确短语匹配, ' +
+      'FTS5 全文检索这次任务能用的 memory (user 和 project 两份, 按 title/description/body)。返回按相关度排序的命中列表 ' +
+      '(scope / filename / type / title / snippet 高亮 / score)。query 当前走精确短语匹配, ' +
       '可选 type 限定类目, limit 默认 10 (上限 50)。' +
       ' 拿到候选后走 memory_read 拉全文。',
     inputShape: {
@@ -33,11 +33,17 @@ export function registerMemorySearchTool(registry: MemoryToolRegistry, deps: Mem
       limit: z.number().int().min(1).max(50).optional().describe('默认 10'),
     },
     handler: async ({ query, type, limit }) =>
-      withStore(deps, async (store) => {
+      withStore(deps, async (_store, ctx) => {
         const opts: { type?: typeof type; limit?: number } = {};
         if (type) opts.type = type;
         if (limit) opts.limit = limit;
-        const hits = await store.search(query, opts);
+        const all = [];
+        for (const scope of ['project', 'user'] as const) {
+          const store = await ctx.open(scope);
+          if (store) for (const hit of await store.search(query, opts)) all.push({ ...hit, scope });
+        }
+        // bm25: 越小越相关; 两份各自已排好, 合并后再取前 limit 条。
+        const hits = all.sort((a, b) => a.score - b.score).slice(0, limit ?? 10);
         return { hits, count: hits.length };
       }),
   });

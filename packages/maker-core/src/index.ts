@@ -76,6 +76,8 @@ export {
   sanitizeWorkdir,
   buildMemoryScopeKey,
   buildBotMemoryScopeKey,
+  isUserMemoryScopeKey,
+  USER_MEMORY_SCOPE_KEY,
   parseBotMemoryScopeKey,
   memoryScopeDirName,
   buildFilename,
@@ -113,11 +115,8 @@ export {
 export { isBotMcpServerAllowed } from './agents/shared/bot-runtime-policy.js';
 export { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from './agents/shared/managed-skill-policy.js';
 export { isSkillDisabled } from './agents/shared/skill-activation.js';
-export {
-  MemoryFlushController,
-  DEFAULT_FLUSH_THRESHOLDS,
-  type MemoryFlushControllerDeps,
-} from './memory/flush-controller.js';
+export type { TidyChange, TidyRun, TidySnapshot } from './memory/tidy.js';
+export type { TidyOutcome } from './memory/manager.js';
 export { MAKER_MEMORY_RULES } from './memory/system-prompt.js';
 
 export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';

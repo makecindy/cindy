@@ -6735,21 +6735,21 @@ interface ElectronAPI {
     setWritableDirs: (sessionId: string, dirs: string[]) => Promise<string[] | undefined>;
 
     // Memory 控制 (Settings → Personalization → Memory section)
-    memoryGet: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
+    memoryGet: (agentKind: 'claude-code' | 'codex') => Promise<{
       enabled: boolean;
       source: 'agent-default' | 'host-runtime' | 'user-config';
       stats?: { entryCount?: number; sizeBytes?: number; storagePath?: string };
     }>;
     memorySet: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex',
       enabled: boolean,
     ) => Promise<{
       effective: 'immediate' | 'next-session';
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
     }>;
-    memoryReset: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
+    memoryReset: (agentKind: 'claude-code' | 'codex') => Promise<{
       removedEntries?: number;
       removedBytes?: number;
     }>;
@@ -6762,7 +6762,7 @@ interface ElectronAPI {
       effective: 'next-session';
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
       /** true = Codex 正忙, 存活会话的软重启在任务结束后自动补做 (设置已生效) */
       codexRestartDeferred: boolean;
     }>;
@@ -6770,37 +6770,60 @@ interface ElectronAPI {
     /** Maker Memory 整库重置: 删 <userData>/maker-memory/ 全部 workdir 目录 */
     makerMemoryReset: () => Promise<{ removedCount: number }>;
 
-    /** 启动期拉 main 持久化的三个 memory 开关 — 见 preload memoryGetSettings 注释 */
+    /** Cindy 记忆「查看记忆」页: scopeKey 只能来自 scopes() 的结果, 仅本机窗口可用。 */
+    memoryEntries: {
+      /** 传任务位置时, 结果里指出该任务的项目是哪一份(保存回执点开时用)。 */
+      scopes: (
+        task?: import('../shared/makerMemoryEntries').MakerMemoryTaskLocation,
+      ) => Promise<import('../shared/makerMemoryEntries').MakerMemoryScopesResult>;
+      list: (
+        scopeKey: string,
+        query?: string,
+      ) => Promise<import('../shared/botMemory').BotMemorySummary[]>;
+      read: (
+        scopeKey: string,
+        filename: string,
+      ) => Promise<import('../shared/botMemory').BotMemoryDetail>;
+      update: (
+        body: import('../shared/makerMemoryEntries').MakerMemoryEntryUpdateInput,
+      ) => Promise<import('../shared/botMemory').BotMemoryDetail>;
+      delete: (body: import('../shared/makerMemoryEntries').MakerMemoryEntryDeleteInput) => Promise<void>;
+      /** 「现在整理」: 一次辅助模型调用, 可能要一两分钟。 */
+      tidy: (scopeKey: string) => Promise<import('../shared/makerMemoryEntries').MakerMemoryTidyResult>;
+      tidyRuns: (scopeKey: string) => Promise<import('../shared/makerMemoryEntries').MakerMemoryTidyRun[]>;
+      tidyUndo: (body: {
+        scopeKey: string;
+        runId: string;
+      }) => Promise<import('../shared/makerMemoryEntries').MakerMemoryTidyUndoResult>;
+    };
+
+    /** 启动期拉 main 持久化的 memory 开关 — 见 preload memoryGetSettings 注释 */
     memoryGetSettings: () => Promise<{
       maker: boolean;
       claudeCode: boolean;
       codex: boolean;
-      pi: boolean;
     }>;
     memoryGetSettingsState: () => Promise<{
       maker: boolean;
       claudeCode: boolean;
       codex: boolean;
-      pi: boolean;
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
     }>;
-    /** 启动期迁移旧版 renderer/native memory opt-out；null 表示 renderer marker 缺失。 */
+    /** 启动期迁移旧版 renderer memory opt-out；null 表示 renderer marker 缺失。 */
     memoryPreserveLegacyMakerDisabled: (legacyRendererValue: boolean | null) => Promise<{
       maker: boolean;
       claudeCode: boolean;
       codex: boolean;
-      pi: boolean;
     }>;
     memoryResetSettings: () => Promise<{
       maker: boolean;
       claudeCode: boolean;
       codex: boolean;
-      pi: boolean;
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
       /** true = Codex 正忙, 存活会话的软重启在任务结束后自动补做 (设置已生效) */
       codexRestartDeferred: boolean;
     }>;

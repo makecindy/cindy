@@ -1,6 +1,7 @@
 import type { TaskCompletionDeliveryHost } from './taskCompletionDeliveryHost.js';
 import { botLearningTracker } from './botLearningTracker.js';
 import { countNightlyLearningTurn } from './botNightlyLearningCounter.js';
+import { memoryTidyTrigger } from './memoryTidyTrigger.js';
 import { learningTurnIdentity } from './botLearningFeedback.js';
 import type { BotDelegationService } from './botDelegationService.js';
 import { settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupLaneTerminal } from './botGroupChatService.js';
@@ -667,6 +668,8 @@ export function finishSessionTerminalEvent(
         void countNightlyLearningTurn(session.id, turnBoundaryAssistantPersistId).catch(() =>
           deps.log.warn('Nightly learning turn count did not complete'));
       }
+      // 这一轮写过 Cindy 记忆的任务, 结束后看一眼那一份记忆到没到整理线 (没写过即空操作)。
+      void memoryTidyTrigger.onTurnDone(session.id);
       const callback = deps.onSuccessfulProductTurn;
       if (callback && terminalOwner) {
         void callback(session.id, terminalOwner).catch(() =>

@@ -8,7 +8,12 @@
  *  三者都不持久化, 重启后用户上次设置丢失 → 这里收口落 JSON。
  *
  * 文件: <userData>/memory-settings.json
- *   { "maker": true, "claudeCode": true, "codex": true, "pi": true }
+ *   { "maker": true, "claudeCode": true, "codex": true }
+ *
+ * Cindy 记忆开着时它统一为所有 harness 管理记忆, Claude Code / Codex 的原生记忆不生效,
+ * 设置页也不显示那两行; 关掉 Cindy 记忆后才轮到 `claudeCode` / `codex` 生效并显示
+ * (docs/product-rules/cindy-memory.md §6)。旧版本的 `pi` 字段 (Pi 压缩摘要的开关) 已随该
+ * 功能移除, 读取时忽略, 不改写文件。
  *
  * 默认值跟原 runtime-configs.ts / maker-memory-host.ts 的硬编码对齐:
  *  - maker      : true (默认开启，用户可以关闭)
@@ -36,14 +41,12 @@ export interface MemorySettings {
   maker: boolean;
   claudeCode: boolean;
   codex: boolean;
-  pi: boolean;
 }
 
 const DEFAULTS: MemorySettings = {
   maker: true,
   claudeCode: true,
   codex: true,
-  pi: true,
 };
 
 function settingsFilePath(rootPath?: string): string {
@@ -57,7 +60,6 @@ function normalize(raw: unknown): MemorySettings {
     maker: typeof r.maker === 'boolean' ? r.maker : DEFAULTS.maker,
     claudeCode: typeof r.claudeCode === 'boolean' ? r.claudeCode : DEFAULTS.claudeCode,
     codex: typeof r.codex === 'boolean' ? r.codex : DEFAULTS.codex,
-    pi: typeof r.pi === 'boolean' ? r.pi : DEFAULTS.pi,
   };
 }
 
@@ -89,7 +91,18 @@ export function readMemorySettings(options?: { rootPath?: string }): MemorySetti
 }
 
 export function readMemorySettingsState(): OverrideSettingsState<MemorySettings> {
-  return currentStore().readState();
+  return withoutRetiredKeys(currentStore().readState());
+}
+
+/**
+ * 旧版本写下的已移除字段 (`pi`) 仍留在文件里。它不再是设置: 不算「改过」,
+ * 否则设置页会出现一个什么也恢复不了的「恢复默认」。
+ */
+function withoutRetiredKeys(
+  state: OverrideSettingsState<MemorySettings>,
+): OverrideSettingsState<MemorySettings> {
+  const customizedKeys = state.customizedKeys.filter((key) => key in DEFAULTS);
+  return { ...state, customizedKeys, isCustomized: customizedKeys.length > 0 };
 }
 
 /**
@@ -104,7 +117,7 @@ export function writeMemorySetting<K extends keyof MemorySettings>(
     preserveDefaults: options?.preserveDefault === true,
   });
   log.info('memory setting written', { key, value });
-  return currentStore().readState();
+  return readMemorySettingsState();
 }
 
 /**
@@ -120,7 +133,7 @@ export function writeMemorySetting<K extends keyof MemorySettings>(
 export function preserveLegacyMakerMemoryDisabled(
   legacyRendererValue: boolean | null,
 ): MemorySettings {
-  const state = currentStore().readState();
+  const state = readMemorySettingsState();
   if (state.customizedKeys.includes('maker')) return state.value;
   if (legacyRendererValue === true) {
     // The new default is true, so keep an explicit legacy opt-in durable.

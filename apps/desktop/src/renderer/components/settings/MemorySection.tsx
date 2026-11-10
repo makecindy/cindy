@@ -3,6 +3,9 @@ import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /**
  * MemorySection — Settings → Personalization 下的 Memory 控制面板。
  * ---------------------------------------------------------------------------
+ * Cindy 记忆开着时只显示 Cindy 一行: 它统一为所有 harness 管理记忆, Claude Code / Codex
+ * 的原生记忆此时不生效, 对应的两行也不显示。关掉 Cindy 记忆后才显示那两行
+ * (docs/product-rules/cindy-memory.md §6)。
  *
  * 数据流:
  *   - 加载: window.electronAPI.maker.memoryGet(agentKind) on mount + agent
@@ -15,6 +18,7 @@ import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 import { Eraser, Sparkles } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -26,22 +30,20 @@ import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/sett
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
-import { PiMark } from '@/components/icons/PiMark';
 import { createLogger } from '@/lib/logger';
 import { useMemorySettings } from '@/hooks/useMemorySettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { MEMORY_ENTRIES_PANEL, MEMORY_ENTRIES_PARAMS } from './memoryEntriesRoute';
 
 const log = createLogger('MemorySection');
 
-type AgentKind = 'claude-code' | 'codex' | 'pi';
+type AgentKind = 'claude-code' | 'codex';
 
 interface AgentDescriptor {
   kind: AgentKind;
   /** 本地化展示用的稳定 key 段，与 i18n 表 settings.memory.agents.<key>.* 对齐。
       品牌名 (Claude / Codex) 不翻译，由 i18n 表里的 label 字段提供。 */
   Mark: () => ReactNode;
-  /** Pi 的压缩记忆写入 Cindy Memory；其开关仅在 Cindy Memory 启用时有意义。 */
-  requiresMaker?: boolean;
 }
 
 const AGENTS: readonly AgentDescriptor[] = [
@@ -52,11 +54,6 @@ const AGENTS: readonly AgentDescriptor[] = [
   {
     kind: 'codex',
     Mark: () => <CodexMark size={18} className="text-[var(--settings-section-title)]" />,
-  },
-  {
-    kind: 'pi',
-    Mark: () => <PiMark size={18} className="text-[var(--settings-section-title)]" />,
-    requiresMaker: true,
   },
 ] as const;
 
@@ -73,15 +70,27 @@ export function MemorySection() {
   const settingsRevision = useAppSettingsRevision('memory');
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
-  // Maker Memory 启用时，下方 Claude Code / Codex 运行时的原生 toggle 强制 disable + 视觉变灰。
-  // (manager.enable() 在 maker-core 层会自动调 setMemory(false), 这里 UI 防止用户
-  // 在状态不同步的窗口里点击 toggle 引发误解)。
+  const [, setSearchParams] = useSearchParams();
+  const openEntries = useCallback(() => {
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.set('tab', 'personalization');
+        next.set('openPanel', MEMORY_ENTRIES_PANEL);
+        next.delete('section');
+        for (const key of MEMORY_ENTRIES_PARAMS) next.delete(key);
+        return next;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
+  // Cindy 记忆开着时, 下方 Claude Code / Codex 的原生记忆两行不渲染
+  // (manager.enable() 在 maker-core 层会自动调 setMemory(false))。
   const { makerEnabled, setMakerEnabled } = useMemorySettings();
   const [settingsCustomized, setSettingsCustomized] = useState(false);
   const [slots, setSlots] = useState<Record<AgentKind, MemorySlotState>>({
     'claude-code': INITIAL,
     codex: INITIAL,
-    pi: INITIAL,
   });
   // pending 飞行中跳过 reload — 否则 toggle/reset 飞行期间 focus 触发 reload 会
   // 把用户刚改的乐观值或回滚状态覆盖掉。任一 slot pending 都跳过整轮 reload。
@@ -288,7 +297,7 @@ export function MemorySection() {
       }
     >
       <SettingsCard>
-        {/* Maker Memory cell — 顶部独立, 启用时下方 Claude / Codex 强制 disable + 视觉变灰 */}
+        {/* Cindy 记忆一行恒在; 关闭后下方才出现 Claude Code / Codex 的原生记忆两行 */}
         <SettingsRow
           lead={
             <span
@@ -304,6 +313,14 @@ export function MemorySection() {
           hint={t(personalizationDetailsSettings.memoryMakerLabel.descriptionKey)}
           trailing={
             <div className="flex items-center gap-2">
+              <Button data-setting-id={personalizationDetailsSettings.memoryEntriesTitle.id}
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={openEntries}
+              >
+                {t('settings.memory.entries.open')}
+              </Button>
               <Switch data-setting-id={personalizationDetailsSettings.memoryMakerLabel.id}
                 checked={makerEnabled}
                 disabled={makerResetPending || makerTogglePending}
@@ -329,22 +346,20 @@ export function MemorySection() {
           }
         />
 
-        {AGENTS.map((agent) => {
+        {!makerEnabled && AGENTS.map((agent) => {
           const slot = slots[agent.kind];
           const supported = slot.enabled !== null;
           const loading = slot.enabled === undefined;
           const checked = slot.enabled === true;
-          const disabled = (agent.requiresMaker ? !makerEnabled : makerEnabled)
-            || !supported || slot.pending || loading;
+          const disabled = !supported || slot.pending || loading;
           // Agent label/description 来自 i18n 表 (品牌名 Claude / Codex 也走 i18n
           // —— 各语种都保留品牌原文，只方便统一管理)。
-          const definition = agent.kind === 'claude-code' ? personalizationDetailsSettings.memoryAgentsClaudeCodeLabel : agent.kind === 'codex' ? personalizationDetailsSettings.memoryAgentsCodexLabel : personalizationDetailsSettings.memoryAgentsPiLabel;
+          const definition = agent.kind === 'claude-code' ? personalizationDetailsSettings.memoryAgentsClaudeCodeLabel : personalizationDetailsSettings.memoryAgentsCodexLabel;
           const label = t(definition.titleKey);
           const description = t(definition.descriptionKey);
           return (
             <SettingsRow
               key={agent.kind}
-              className={cn((agent.requiresMaker ? !makerEnabled : makerEnabled) && 'opacity-50')}
               lead={
                 <span
                   className={cn(

@@ -12,14 +12,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   DEFAULT_MEMORY_CONFIG,
+  MemoryError,
   MemoryStorage,
+  type MakerMemoryManager,
   type MakerMemoryStore,
   type SearchHit,
+  type TidyRun,
 } from '@cindy/maker-core';
 
 import { BOT_MEMORY_CHANGED } from '../../../shared/botMemory';
 import { importFailureCode } from '../../bot-import/types.js';
 import { botMemoryDescriptionFromBody, createBotMemoryService } from '../botMemoryService';
+import { createMakerMemoryEntriesService } from '../makerMemoryEntriesService';
 
 let dir = '';
 let storage: MemoryStorage;
@@ -209,6 +213,220 @@ describe('bot memory service', () => {
     await service.delete({ botId: 'bot-1', filename: current.filename, expectedUpdatedAt: current.updatedAt });
     flushTimers();
     expect(requestRefresh).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 测试价值(Cindy 记忆「查看记忆」页, docs/product-rules/cindy-memory.md §4)
+ * - 生产入口与可观察结果: `maker:memory-entries:*` 的 handler 业务体
+ *   (createMakerMemoryEntriesService): 范围列表的显示字段、读改删落盘、错误码。
+ * - 规则依据: renderer 带回的 scopeKey 必须在 listScopes() 里, 否则不打开存储; 总开关关闭时
+ *   已存的记忆仍可看和删(skipDisabledCheck); 保存 / 删除前比对 updatedAt。
+ * - 现有覆盖缺口: 上面的用例只经伙伴入口(botId), 不经范围校验与 Cindy 记忆的开关豁免。
+ * - 最小失败输入: 不在列表里的路径; 打开之后被任务改过的那条记忆。
+ * - tier: unit(真实 MemoryStorage 落在 mkdtemp 目录, 与本文件其余用例同一 fixture)。
+ */
+describe('Cindy memory entries service', () => {
+  const PROJECT = path.join(os.tmpdir(), 'cindy-memory-project');
+  const FILE = 'feedback_verify-before-claiming.md';
+
+  function setupEntries(options: { owner?: () => void; taskScopeKey?: string | null } = {}) {
+    const store = {
+      list: () => storage.list(),
+      read: (filename: string) => storage.read(filename),
+      update: (...args: Parameters<MemoryStorage['update']>) => storage.update(...args),
+      delete: (...args: Parameters<MemoryStorage['delete']>) => storage.delete(...args),
+      search: vi.fn(async () => hits),
+    } as unknown as MakerMemoryStore;
+    const getStore = vi.fn<(scopeKey: string, opts?: { skipDisabledCheck?: boolean }) => Promise<MakerMemoryStore>>(
+      async () => store,
+    );
+    const listScopes = vi.fn(async () => [
+      { scopeKey: 'user:account', kind: 'user' as const, count: 0 },
+      { scopeKey: PROJECT, kind: 'project' as const, count: 1 },
+      { scopeKey: 'ssh:build%20box:/srv/app', kind: 'project' as const, count: 2 },
+    ]);
+    // 整理由 MakerMemoryManager 完成(调用辅助模型), 这里用替身: 只看服务层的校验与摘要。
+    const tidy = vi.fn<MakerMemoryManager['tidy']>(async () => ({ status: 'done', run: null }));
+    const listTidyRuns = vi.fn<MakerMemoryManager['listTidyRuns']>(async () => []);
+    const undoTidy = vi.fn<MakerMemoryManager['undoTidy']>(async () => ({ restored: 0, skipped: 0 }));
+    const service = createMakerMemoryEntriesService({
+      getManager: () => ({ listScopes, getStore, tidy, listTidyRuns, undoTidy }),
+      resolveTaskScopeKey: async () => options.taskScopeKey ?? null,
+      captureOwner: () => ({ assertCurrent: options.owner ?? (() => {}) }),
+    });
+    return { service, getStore, tidy, listTidyRuns, undoTidy };
+  }
+
+  it('lists the account scope first, then projects with a folder name, path and SSH host', async () => {
+    expect(await setupEntries().service.scopes()).toEqual({
+      scopes: [
+        { scopeKey: 'user:account', kind: 'user', count: 0 },
+        { scopeKey: PROJECT, kind: 'project', count: 1, name: 'cindy-memory-project', path: PROJECT },
+        // 远程路径是稳定的 POSIX 形态(SSH 范围键的一部分), 不跟随本机分隔符。
+        { scopeKey: 'ssh:build%20box:/srv/app', kind: 'project', count: 2, name: 'app', path: '/srv/app', host: 'build box' },
+      ],
+      taskScopeKey: null,
+    });
+  });
+
+  it('points a task at its project only when that project is one of the listed scopes', async () => {
+    // 保存回执只带「写进了项目记忆」, 页面带回任务的工作目录; 解析结果只用来在列表里挑一项。
+    const task = { workingDir: path.join(PROJECT, 'packages', 'app') };
+    expect((await setupEntries({ taskScopeKey: PROJECT }).service.scopes(task)).taskScopeKey).toBe(PROJECT);
+    const unlisted = path.join(os.tmpdir(), 'no-memories-yet');
+    expect((await setupEntries({ taskScopeKey: unlisted }).service.scopes(task)).taskScopeKey).toBeNull();
+    await expect(setupEntries().service.scopes({ workingDir: 'relative/dir' })).rejects.toThrow('[INVALID_PARAMS]');
+  });
+
+  it('reads, edits and deletes a memory of a listed scope even while memory is switched off', async () => {
+    const { service, getStore } = setupEntries();
+    expect((await service.list(PROJECT)).map((entry) => entry.filename)).toEqual([FILE]);
+    const opened = await service.read(PROJECT, FILE);
+    const saved = await service.update({
+      scopeKey: PROJECT,
+      filename: FILE,
+      title: '先核实再说',
+      body: '区分已实现与已验证。其余照旧。',
+      expectedUpdatedAt: opened.updatedAt,
+    });
+    expect(saved).toMatchObject({ title: '先核实再说', body: '区分已实现与已验证。其余照旧。' });
+    expect((await storage.read(FILE)).frontmatter.description).toBe('区分已实现与已验证。');
+    await service.delete({ scopeKey: PROJECT, filename: FILE, expectedUpdatedAt: saved.updatedAt });
+    await expect(storage.read(FILE)).rejects.toThrow();
+    // 每次都按「清理路径」打开: 总开关关闭也不拒绝。
+    expect(getStore.mock.calls.every(([key, opts]) => key === PROJECT && opts?.skipDisabledCheck === true)).toBe(true);
+  });
+
+  it('never opens a store for a scope key that is not listed', async () => {
+    const { service, getStore } = setupEntries();
+    const stray = path.join(os.tmpdir(), 'somewhere-else');
+    const version = (await storage.read(FILE)).frontmatter.updatedAt;
+    await expect(service.list(stray)).rejects.toThrow('[NOT_FOUND]');
+    await expect(service.read(stray, FILE)).rejects.toThrow('[NOT_FOUND]');
+    await expect(
+      service.update({ scopeKey: stray, filename: FILE, title: 't', body: 'b', expectedUpdatedAt: version }),
+    ).rejects.toThrow('[NOT_FOUND]');
+    await expect(
+      service.delete({ scopeKey: stray, filename: FILE, expectedUpdatedAt: version }),
+    ).rejects.toThrow('[NOT_FOUND]');
+    await expect(service.list(undefined)).rejects.toThrow('[INVALID_PARAMS]');
+    expect(getStore).not.toHaveBeenCalled();
+    expect((await storage.read(FILE)).frontmatter.title).toBe('说结论前核实');
+  });
+
+  it('refuses to overwrite or delete a memory a task changed after it was opened', async () => {
+    const { service } = setupEntries();
+    const opened = await service.read(PROJECT, FILE);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await storage.write({
+      type: 'feedback',
+      name: 'verify-before-claiming',
+      title: '任务改过',
+      description: '任务改过',
+      body: '任务改过的正文',
+      mode: 'update',
+    });
+    const conflict = `[PRECONDITION_FAILED] ${BOT_MEMORY_CHANGED}`;
+    await expect(
+      service.update({ scopeKey: PROJECT, filename: FILE, title: 'mine', body: 'mine', expectedUpdatedAt: opened.updatedAt }),
+    ).rejects.toThrow(conflict);
+    await expect(
+      service.delete({ scopeKey: PROJECT, filename: FILE, expectedUpdatedAt: opened.updatedAt }),
+    ).rejects.toThrow(conflict);
+    expect((await storage.read(FILE)).body).toBe('任务改过的正文');
+  });
+
+  it('does not open a store or hand back memories once the account has changed', async () => {
+    let switched = false;
+    const { service, getStore } = setupEntries({
+      owner: () => {
+        if (switched) throw new Error('account changed');
+      },
+    });
+    switched = true;
+    await expect(service.list(PROJECT)).rejects.toThrow('account changed');
+    await expect(service.scopes()).rejects.toThrow('account changed');
+    expect(getStore).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 测试价值(整理: 「现在整理」、整理记录、撤销; docs/product-rules/cindy-memory.md §3、§4)
+   * - 生产入口与可观察结果: `maker:memory-entries:tidy / tidy-runs / tidy-undo` 的 handler 业务体;
+   *   界面拿到的是摘要(哪几条合并成了哪一条、哪条被移除), 整理前后的正文不离开 main。
+   * - 规则依据: 范围键不可信(§4), 不在 listScopes() 里就不整理、不读记录、不撤销; 撤销结果里的
+   *   skipped 是整理之后又被改过、没有恢复的条数(§3)。
+   * - 现有覆盖缺口: 整理本身由 maker-core 的 tidy.test.ts 覆盖; 服务层的范围校验、记录归组和
+   *   入参校验没有用例。
+   * - 最小失败输入: 不在列表里的路径; 一次合并(一条 updated 加同理由的 deleted)加一次移除;
+   *   不是字符串的 runId 与已不在记录里的 runId。
+   * - tier: unit(MakerMemoryManager 的整理用替身, 不调用模型)。
+   */
+  const snapshot = (title: string) => ({
+    type: 'feedback' as const,
+    title,
+    description: title,
+    body: `${title}(正文)`,
+    updatedAt: '2026-11-01T00:00:00.000Z',
+  });
+  const RUN: TidyRun = {
+    id: 'run-1',
+    at: '2026-11-09T21:40:00.000Z',
+    trigger: 'manual',
+    changes: [
+      { kind: 'updated', filename: 'feedback_use-pnpm.md', before: snapshot('用 pnpm'), after: snapshot('统一用 pnpm'), reason: '说的是同一件事' },
+      { kind: 'deleted', filename: 'feedback_no-npm.md', before: snapshot('不要用 npm'), reason: '说的是同一件事' },
+      { kind: 'deleted', filename: 'project_release-day.md', before: snapshot('周三发版'), reason: '较新的「周二发版」已覆盖' },
+    ],
+  };
+
+  it('never tidies, lists tidy runs or undoes one for a scope key that is not listed', async () => {
+    const { service, tidy, listTidyRuns, undoTidy } = setupEntries();
+    const stray = path.join(os.tmpdir(), 'somewhere-else');
+    await expect(service.tidy(stray)).rejects.toThrow('[NOT_FOUND]');
+    await expect(service.tidyRuns(stray)).rejects.toThrow('[NOT_FOUND]');
+    await expect(service.tidyUndo({ scopeKey: stray, runId: RUN.id })).rejects.toThrow('[NOT_FOUND]');
+    expect(tidy).not.toHaveBeenCalled();
+    expect(listTidyRuns).not.toHaveBeenCalled();
+    expect(undoTidy).not.toHaveBeenCalled();
+  });
+
+  it('returns a finished tidy as a summary of what was merged and removed, without memory bodies', async () => {
+    const { service, tidy } = setupEntries();
+    tidy.mockResolvedValueOnce({ status: 'done', run: RUN });
+    const result = await service.tidy(PROJECT);
+    expect(result).toEqual({
+      status: 'done',
+      run: {
+        id: 'run-1',
+        at: RUN.at,
+        trigger: 'manual',
+        undone: false,
+        count: 3,
+        changes: [
+          { kind: 'merged', title: '统一用 pnpm', mergedTitles: ['用 pnpm', '不要用 npm'], reason: '说的是同一件事' },
+          { kind: 'removed', title: '周三发版', mergedTitles: [], reason: '较新的「周二发版」已覆盖' },
+        ],
+      },
+    });
+    expect(tidy).toHaveBeenCalledWith(PROJECT, 'manual');
+    expect(JSON.stringify(result)).not.toContain('(正文)');
+    // 看过了、没有需要整理的: run 为 null 原样交给界面。
+    expect(await service.tidy(PROJECT)).toEqual({ status: 'done', run: null });
+  });
+
+  it('passes the undo result through and rejects a malformed or unknown run id', async () => {
+    const { service, undoTidy } = setupEntries();
+    undoTidy.mockResolvedValueOnce({ restored: 2, skipped: 1 });
+    expect(await service.tidyUndo({ scopeKey: PROJECT, runId: RUN.id })).toEqual({ restored: 2, skipped: 1 });
+    expect(undoTidy).toHaveBeenCalledWith(PROJECT, RUN.id);
+    // 不是字符串或为空: 不去动记忆。
+    await expect(service.tidyUndo({ scopeKey: PROJECT, runId: 42 })).rejects.toThrow('[INVALID_PARAMS]');
+    await expect(service.tidyUndo({ scopeKey: PROJECT, runId: '' })).rejects.toThrow('[INVALID_PARAMS]');
+    expect(undoTidy).toHaveBeenCalledTimes(1);
+    // 记录里已经没有这次整理(只保留最近 20 次)。
+    undoTidy.mockRejectedValueOnce(new MemoryError('not-found', 'tidy run not found'));
+    await expect(service.tidyUndo({ scopeKey: PROJECT, runId: 'run-gone' })).rejects.toThrow('[NOT_FOUND]');
   });
 });
 

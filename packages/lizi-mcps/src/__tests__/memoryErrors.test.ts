@@ -18,9 +18,12 @@ const mockStore = {
   delete: async () => ({ ok: true as const }),
 };
 
+/** 与真 manager 一致: 普通工作目录的任务有账号级 + 项目两份记忆。 */
+const memoryScopesFor = (scopeKey: string) => ({ user: 'user:account', project: scopeKey });
+
 function depsWithManager(manager: Partial<MakerMemoryManager>): MemoryMcpDeps {
   return {
-    getManager: () => manager as MakerMemoryManager,
+    getManager: () => ({ memoryScopesFor, ...manager }) as MakerMemoryManager,
     workdir: '/work',
   };
 }
@@ -56,6 +59,10 @@ describe('classifyMemoryError · owner not-ready (#2341)', () => {
       'ALREADY_EXISTS',
     );
     expect(classifyMemoryError(new MemoryError('shard-too-large', 'x')).code).toBe(
+      'INVALID_PARAMS',
+    );
+    // 索引硬上限拒绝的写入是调用方可自行纠正的 (先合并或删除再写), 不是内部错误。
+    expect(classifyMemoryError(new MemoryError('index-too-large', 'x')).code).toBe(
       'INVALID_PARAMS',
     );
     expect(classifyMemoryError(new Error('boom')).code).toBe('INTERNAL');

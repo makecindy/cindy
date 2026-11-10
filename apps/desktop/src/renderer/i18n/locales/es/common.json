@@ -5147,61 +5147,110 @@
     },
     "memory": {
       "title": "Memoria",
-      "description": "Proporciona memoria para el directorio de trabajo. Los cambios suelen requerir una nueva sesión de Agent para aplicarse. Si la memoria falla, selecciona Restablecer o desactívala.",
+      "description": "Permite que los Agents recuerden cosas sobre ti y tus proyectos de una sesión a otra. Los recuerdos solo se guardan en esta computadora. Los cambios del interruptor se aplican en la próxima sesión de Agent.",
+      "entries": {
+        "open": "Ver recuerdos",
+        "title": "Recuerdos guardados",
+        "description": "Los recuerdos de “Sobre ti” se aplican en todos los proyectos. Los recuerdos de un proyecto solo se aplican en ese repositorio o carpeta. Los cambios y las eliminaciones se aplican en la próxima sesión de Agent.",
+        "disabledNotice": "La memoria Cindy está desactivada: no se leen ni guardan recuerdos. Los recuerdos guardados se pueden seguir viendo, editando y eliminando.",
+        "scope": "Elegir qué recuerdos ver",
+        "userScope": "Sobre ti",
+        "userScopeNote": "Se aplica en todos los proyectos",
+        "deleteConfirm": "Cindy ya no usará “{{title}}” como referencia.",
+        "changed": "Cindy acaba de actualizar esta memoria",
+        "tidy": {
+          "name": "Organizar recuerdos",
+          "about": "Fusiona los recuerdos duplicados o contradictorios. También se hace de forma automática cuando los recuerdos aumentan, y cada organización se puede deshacer.",
+          "run": "Organizar ahora",
+          "running": "Organizando…",
+          "offReason": "La memoria Cindy está desactivada. Actívala para organizar.",
+          "tooFewReason": "Hacen falta al menos 2 recuerdos para organizar.",
+          "merged_one": "Se organizó {{count}} recuerdo",
+          "merged_many": "Se organizaron {{count}} recuerdos",
+          "merged_other": "Se organizaron {{count}} recuerdos",
+          "nothing": "No hay recuerdos que organizar",
+          "busy": "Estos recuerdos ya se están organizando",
+          "failed": "No se pudo organizar. Los recuerdos no han cambiado.",
+          "unavailable": "No hay ningún modelo auxiliar disponible, así que no se pudo organizar. Elige uno en Configuración → Personalización → Modelos auxiliares.",
+          "records": "Historial de organización",
+          "auto": "Automática",
+          "manual": "Manual",
+          "touched_one": "{{count}} recuerdo",
+          "touched_many": "{{count}} recuerdos",
+          "touched_other": "{{count}} recuerdos",
+          "quoted": "“{{title}}”",
+          "mergedInto": "{{sources}} se fusionaron en {{title}}",
+          "removed": "{{title}} ya estaba incluido en otro recuerdo y se eliminó",
+          "undo": "Deshacer",
+          "undoAria": "Deshacer la organización ({{time}})",
+          "undone": "Deshecha",
+          "undoConfirm": {
+            "heading": "¿Deshacer esta organización?",
+            "body_one": "Se restaurará {{count}} recuerdo que cambió esta organización. Los recuerdos editados después se quedan como están.",
+            "body_many": "Se restaurarán los {{count}} recuerdos que cambió esta organización. Los recuerdos editados después se quedan como están.",
+            "body_other": "Se restaurarán los {{count}} recuerdos que cambió esta organización. Los recuerdos editados después se quedan como están.",
+            "confirm": "Deshacer organización",
+            "cancel": "Cancelar"
+          },
+          "restored_one": "Se restauró {{count}} recuerdo",
+          "restored_many": "Se restauraron {{count}} recuerdos",
+          "restored_other": "Se restauraron {{count}} recuerdos",
+          "restoredSkipped_one": "Restaurados: {{restored}}. {{count}} recuerdo se editó después de la organización y no se restauró.",
+          "restoredSkipped_many": "Restaurados: {{restored}}. {{count}} recuerdos se editaron después de la organización y no se restauraron.",
+          "restoredSkipped_other": "Restaurados: {{restored}}. {{count}} recuerdos se editaron después de la organización y no se restauraron.",
+          "undoFailed": "No se pudo deshacer esta organización"
+        }
+      },
       "maker": {
         "label": "Cindy",
-        "description": "La memoria depende del tipo de Agent y no de cada modelo. Las sesiones de Claude Code y Codex pueden compartir memoria dentro del mismo directorio de trabajo.",
+        "description": "Compartida por Claude Code, Codex y Pi. Una memoria sobre ti y otra para cada proyecto.",
         "toggleAria": "Alternar memoria Cindy",
-        "resetAria": "Restablecer memorias Cindy",
+        "resetAria": "Vaciar los recuerdos de Cindy",
         "resetConfirm": {
-          "title": "¿Restablecer las memorias de Cindy?",
-          "description": "Esto eliminará permanentemente todas las memorias Cindy de cada proyecto (almacenadas en datos de usuario, no en sus repositorios). Esta acción no se puede deshacer.",
-          "confirm": "Restablecer",
+          "title": "¿Vaciar los recuerdos de Cindy?",
+          "description": "Se eliminarán permanentemente los recuerdos sobre ti y los de todos los proyectos. No se pueden recuperar. Los recuerdos de los compañeros y los archivos de tus proyectos no se ven afectados.",
+          "confirm": "Vaciar recuerdos",
           "cancel": "Cancelar"
         },
         "toast": {
-          "enabled": "Memoria Cindy habilitada",
-          "disabled": "Memoria Cindy deshabilitada",
-          "deferredSuffix": " — La ejecución de sesiones Codex aplicará esto después de que finalice la tarea actual.",
-          "toggleFailed": "No se pudo alternar la memoria Cindy",
-          "resetSuccess_one": "Restablecimiento de memorias Cindy: directorio de trabajo {{count}} eliminado",
-          "resetSuccess_other": "Restablecimiento de memorias Cindy: directorios de trabajo {{count}} eliminados",
-          "resetFailed": "No se pudieron restablecer las memorias Cindy",
-          "resetSuccess_many": "Restablecimiento de memorias Cindy: directorios de trabajo {{count}} eliminados"
+          "enabled": "Memoria Cindy activada",
+          "disabled": "Memoria Cindy desactivada",
+          "deferredSuffix": " — las sesiones de Codex en ejecución lo aplicarán cuando termine su turno actual",
+          "toggleFailed": "No se pudo cambiar el interruptor de la memoria Cindy",
+          "resetSuccess_one": "Recuerdos de Cindy vaciados",
+          "resetSuccess_other": "Recuerdos de Cindy vaciados",
+          "resetFailed": "No se pudieron vaciar los recuerdos de Cindy",
+          "resetSuccess_many": "Recuerdos de Cindy vaciados"
         }
       },
       "agents": {
         "claude-code": {
           "label": "Claude Code",
-          "description": "Todos los modelos utilizados hasta la entrada Claude Code comparten la misma memoria."
+          "description": "Cuando la memoria Cindy está desactivada, Claude Code usa su propia memoria integrada."
         },
         "codex": {
           "label": "Codex",
-          "description": "Todos los modelos utilizados hasta la entrada Codex comparten la misma memoria."
-        },
-        "pi": {
-          "label": "Pi",
-          "description": "Guarda resúmenes de compresión de sesiones largas en la memoria Cindy para futuras sesiones de Pi."
+          "description": "Cuando la memoria Cindy está desactivada, Codex usa su propia memoria integrada."
         }
       },
       "agent": {
         "toggleAria": "Alternar memoria {{label}}",
-        "resetAria": "Restablecer memorias {{label}}",
+        "resetAria": "Vaciar los recuerdos de {{label}}",
         "toast": {
-          "enabled": "Memoria {{label}} habilitada",
-          "disabled": "Memoria {{label}} deshabilitada",
+          "enabled": "Memoria de {{label}} activada",
+          "disabled": "Memoria de {{label}} desactivada",
           "takesEffectSuffix": " — se aplica en la próxima sesión de Agent",
-          "toggleFailed": "No se pudo actualizar la configuración de la memoria",
-          "resetSuccess_one": "Restablecimiento de memorias {{label}}: se eliminó la entrada {{count}}",
-          "resetSuccess_other": "Restablecimiento de memorias {{label}}: entradas {{count}} eliminadas",
-          "resetSuccessGeneric": "Restablecimiento de memorias {{label}}",
-          "resetFailed": "No se pudo restablecer la memoria",
-          "resetSuccess_many": "Restablecimiento de memorias {{label}}: entradas {{count}} eliminadas"
+          "toggleFailed": "No se pudo cambiar el interruptor de la memoria",
+          "resetSuccess_one": "Recuerdos de {{label}} vaciados: se eliminó {{count}} entrada",
+          "resetSuccess_other": "Recuerdos de {{label}} vaciados: se eliminaron {{count}} entradas",
+          "resetSuccessGeneric": "Recuerdos de {{label}} vaciados",
+          "resetFailed": "No se pudieron vaciar los recuerdos",
+          "resetSuccess_many": "Recuerdos de {{label}} vaciados: se eliminaron {{count}} entradas"
         },
         "resetConfirm": {
-          "title": "¿Restablecer las memorias de {{label}}?",
-          "description": "Esto eliminará permanentemente todos los recuerdos que {{label}} haya acumulado en cada proyecto. Esta acción no se puede deshacer.",
-          "confirm": "Restablecer",
+          "title": "¿Vaciar los recuerdos de {{label}}?",
+          "description": "Se eliminarán permanentemente todos los recuerdos propios de {{label}}. No se pueden recuperar. Es posible que también se eliminen los que guardó mientras usabas {{label}} fuera de Cindy.",
+          "confirm": "Vaciar recuerdos",
           "cancel": "Cancelar"
         }
       }

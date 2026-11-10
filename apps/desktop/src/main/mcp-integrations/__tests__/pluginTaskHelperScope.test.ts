@@ -131,7 +131,9 @@ it.each(['lead', 'worker'].flatMap(sessionId => (['codex', 'claude-code', 'pi'] 
     const f = fixture();
     const privateData = [{ id: 'private', displayName: 'Synthetic private contact', prompt: 'Synthetic private schedule' }];
     const read = vi.fn(async () => privateData);
-    const manager = vi.fn(() => ({ isEnabled: () => true, getStore: () => ({ list: async () => (await read()).map(item => ({ filename: 'private.md', frontmatter: { title: item.displayName } })) }) }));
+    // memoryScopesFor mirrors the real manager for an ordinary task: the account-level store plus the task's own.
+    const manager = vi.fn(() => ({ isEnabled: () => true, memoryScopesFor: (scopeKey: string) => ({ user: 'user:account', project: scopeKey }),
+      getStore: () => ({ list: async () => (await read()).map(item => ({ filename: 'private.md', frontmatter: { title: item.displayName } })) }) }));
     const scheduler = vi.fn(() => ({ list: read }));
     const getBridge = vi.fn(() => ({ availability: () => ({ bound: true, connected: true, serverSupportsTools: true }),
       callTool: async () => ({ ok: true, result: await read() }) }));

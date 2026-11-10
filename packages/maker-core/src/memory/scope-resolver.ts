@@ -1,41 +1,32 @@
 /**
  * scope-resolver.ts — resolveMemoryScopeKey: Maker Memory scope key 的 async
- * 归一化入口 (#2379 问题一)。
+ * 归一化入口。
  *
- * 背景: buildMemoryScopeKey (storage.ts) 是纯同步函数, 本地会话原样透传 workdir
- * 绝对路径。git linked worktree 的 cwd ≠ 主仓路径 → 同一仓库被拆成多个独立
- * Store, worktree 会话 memory_search 恒 0 命中 (实测主仓分片 80 条记录,
- * worktree 分片是空库基线)。
+ * 项目记忆按**仓库**共用一份: 本地会话的 cwd 归到它所在仓库的主工作树根。
+ *   /repo/apps/a                          → /repo   (子目录)
+ *   /repo/.cindy-worktrees/feat-x/apps/a  → /repo   (linked worktree)
+ *   /repo/vendor/sub                      → /repo   (submodule 跟外层项目)
+ * 不在 git 仓库里的目录仍按 cwd 原样。
  *
- * 本模块只做一件事: 本地会话取 scope key 前先做 worktree 归一化 ——
- *   linked worktree 的 cwd → `主仓根 + cwd 相对 worktree 根的子路径`
- *   例: /repo/.cindy-worktrees/feat-x/apps/a → /repo/apps/a
- * 即保留「按 cwd 隔离」的既有语义 (子目录仍是独立 scope), 只把 worktree 根
- * 替换回主仓根。「整个仓库共用一份 memory」是 scope 语义变更, 明确不在
- * 本模块做 (#2379 评论收敛)。
+ * 历史: buildMemoryScopeKey (storage.ts) 原样透传 workdir, linked worktree 的
+ * cwd ≠ 主仓路径 → 同一仓库被拆成多个 Store (#2379 先把 worktree 根换回主仓根,
+ * 子目录仍各自隔离)。2026-11 起子目录也归到仓库根: 在同一仓库的不同目录开任务
+ * 应当拿到同一份记忆。旧的子目录记忆由 manager 在打开仓库根 store 时并入
+ * (见 manager.ts mergeLegacySubScopes)。
  *
  * 分工:
  *  - buildMemoryScopeKey (同步): SSH 复合键规则 + 本地原样透传的既有契约, 不变。
  *  - resolveMemoryScopeKey (async, 本模块): 所有 getStore 调用方的统一入口。
  *    SSH 直接委托 buildMemoryScopeKey (不在控制端解析远端 git); 本地先归一化。
  *
- * 回落 (一律返回 cwd 原样, 与既有行为完全一致): 非 git 目录 / git 不可用 /
- * 探测超时 / bare repo / 非 linked-worktree 布局 (普通 clone /
- * --separate-git-dir checkout, gitdir == common-dir 且无 superproject) /
- * 非常规 common-dir 布局 / cwd 不在 toplevel 下。
- * 特例: linked worktree 内初始化过的 submodule 的 gitdir == common-dir
- * (都是 `<主仓>/.git/worktrees/<wt>/modules/<sub>`), 不能当普通 clone 回落;
- * `--show-superproject-working-tree` 只给直接父仓库, 二级 submodule 的父是
- * 另一层 submodule 而不是 worktree — 必须沿 superproject 链走到最外层
- * (linked worktree 或主仓) 再归一, 否则 `git worktree list` 会把 `.git`
- * 元数据目录报成唯一 worktree。
+ * 回落 (一律返回 cwd 原样): 非 git 目录 / git 不可用 / 探测超时 / bare repo 本体。
  * 非仓库目录由 `.git` 标记上溯预检直接短路, 连 git 进程都不 spawn
  * (hasGitMarkerUpward, 与 rev-parse 上溯语义一致)。
  *
  * 缓存: lizi-mcps withStore 在每次 memory 工具调用都经本函数, 不能每次 spawn
  * git 子进程 — 进程内 Map 缓存 (正/负结果同 TTL, in-flight promise 去重)。
  * TTL 兜底「目录身份在进程生命周期内变化」(目录后变成 worktree 等) 的极端
- * 场景; 归一化本身幂等 (主仓路径再解析返回自身), 缓存不破坏正确性。
+ * 场景; 归一化本身幂等 (仓库根再解析返回自身), 缓存不破坏正确性。
  */
 
 import { execFile } from 'node:child_process';
@@ -46,6 +37,7 @@ import { promisify } from 'node:util';
 import { buildMemoryScopeKey, SSH_SCOPE_KEY_PREFIX } from './storage.js';
 
 const BOT_SCOPE_KEY_PREFIX = 'bot:';
+const USER_SCOPE_KEY_PREFIX = 'user:';
 
 /** git 探测抽象: 跑一条 git 命令, resolve stdout。失败 (非 git 目录/超时/无 git) reject。 */
 export type GitProbe = (args: string[], cwd: string) => Promise<string>;
@@ -125,9 +117,13 @@ export async function resolveMemoryScopeKey(
   // 远端路径是远端机器上的字符串, 控制端不解析远端 git。
   if (remoteHostId) return buildMemoryScopeKey(workingDir, remoteHostId);
   if (!workingDir) return workingDir;
-  // 已经是复合键 (bot: / ssh:) 时不得再当本地路径做 git worktree 归一化。
+  // 已经是复合键 (bot: / ssh: / user:) 时不得再当本地路径做 git 归一化。
   // Bot scope 由 host 显式注入; SSH 复合键若被二次传入同样原样透传。
-  if (workingDir.startsWith(BOT_SCOPE_KEY_PREFIX) || workingDir.startsWith(SSH_SCOPE_KEY_PREFIX)) {
+  if (
+    workingDir.startsWith(BOT_SCOPE_KEY_PREFIX)
+    || workingDir.startsWith(SSH_SCOPE_KEY_PREFIX)
+    || workingDir.startsWith(USER_SCOPE_KEY_PREFIX)
+  ) {
     return workingDir;
   }
 
@@ -153,13 +149,10 @@ export async function resolveMemoryScopeKey(
 }
 
 /**
- * linked worktree cwd → `主仓根 + cwd 相对 worktree 根的子路径`。
- * 探测方式与 desktop WorktreeManager 同模式: rev-parse + path.resolve
- * 解析相对输出 (兼容不支持 --path-format 的旧 git)。单次 rev-parse 拿
- * toplevel / git-dir / git-common-dir / superproject 四个值 (输出顺序与
- * 参数一致; 无 superproject 时第四行为空); 确认是 linked worktree 或
- * worktree 内 submodule 后再用一次 `worktree list --porcelain` 取主仓根。
- * 失败抛错由调用方回落。
+ * 本地 cwd → 所在仓库的主工作树根。单次 rev-parse 拿 toplevel / git-dir /
+ * git-common-dir / superproject 四个值 (输出顺序与参数一致; 无 superproject 时
+ * 第四行为空), 探测方式与 desktop WorktreeManager 同模式: rev-parse + path.resolve
+ * 解析相对输出 (兼容不支持 --path-format 的旧 git)。失败抛错由调用方回落。
  */
 async function canonicalizeLocalWorkdir(workingDir: string, execGit: GitProbe): Promise<string> {
   const cwd = path.normalize(workingDir);
@@ -180,58 +173,62 @@ async function canonicalizeLocalWorkdir(workingDir: string, execGit: GitProbe): 
   const directSuper = resolveGitDirOutput(superRaw ?? '', cwd);
   if (!toplevel || !gitDir || !commonDir) return workingDir;
 
-  // 判定链 (Codex #2399 P1, linked-worktree submodule):
-  //  1. gitdir ≠ common-dir → 真 linked worktree, 归一到主仓根 + 相对路径。
-  //  2. gitdir == common-dir 且有 superproject → cwd 是 submodule。
-  //     主仓内 submodule 的 superproject == 主仓根, 原样返回 (与 round-1 契约一致)。
-  //     linked worktree 内 submodule 的 gitdir == common-dir (都是
-  //     `<主仓>/.git/worktrees/<wt>/modules/<sub>`), 不能当普通 clone 回落;
-  //     把**最外层** superproject (walk 链, 不是直接父) 当 mapping 根再走
-  //     同一套主仓映射, 得到 `/main/<nested-rel>` 而不是 `.git` 元数据目录。
-  //  3. gitdir == common-dir 且无 superproject → 普通 clone /
-  //     --separate-git-dir checkout, 原样返回。separate-git-dir 的 common-dir
-  //     basename 恰好也是 `.git`, 不先排除会把主仓根错误推导到 git 存储目录
-  //     (Codex review on #2399)。
+  // 判定链:
+  //  1. 有 superproject → cwd 在 submodule 里。submodule 属于外层项目, 把**最外层**
+  //     superproject (walk 链, 不是直接父) 当映射根: 二级 submodule 的直接父是另一层
+  //     submodule, 在那一层跑 `git worktree list` 会把 `.git` 元数据目录报成唯一
+  //     worktree (Codex #2399 P1)。
+  //  2. 无 superproject 且 gitdir == common-dir → 普通 clone / --separate-git-dir
+  //     checkout, 仓库根就是 toplevel, 不再问 `git worktree list`:
+  //     `git clone --separate-git-dir` 不写 core.worktree, git 会把 gitdir 的父目录
+  //     报成主工作树 (Codex review on #2399), 该布局下 toplevel 才是真实 checkout。
+  //  3. 无 superproject 且 gitdir ≠ common-dir → linked worktree, 归到主工作树根。
+  //     bare repo 的 worktree (common-dir 是 `<name>.git`) 没有主工作树可归,
+  //     用它自己的根。
   const outermostSuper = directSuper
     ? await walkOutermostSuperproject(directSuper, execGit)
     : null;
-  if (samePath(gitDir, commonDir)) {
-    if (!outermostSuper) return workingDir;
-  } else if (path.basename(commonDir) !== '.git') {
-    // bare repo 的 linked worktree (common-dir 是 `<name>.git`) 等非常规布局
-    // 无法可靠推断主仓根, 回落原样。submodule 走上面 superproject 分支,
-    // 不看这一条 (其 gitdir == common-dir)。
-    return workingDir;
+  if (!outermostSuper) {
+    if (samePath(gitDir, commonDir)) return callerSpelledRoot(workingDir, cwd, toplevel);
+    if (path.basename(commonDir) !== '.git') return callerSpelledRoot(workingDir, cwd, toplevel);
   }
 
   const mappingRoot = outermostSuper ?? toplevel;
-
-  // 主仓根不能从 common-dir 推导: 主 checkout 本身用 --separate-git-dir 建
-  // 时 common-dir 是 git 存储目录, dirname 不一定是工作树 (Codex review on
-  // #2399 第二轮)。统一用 `git worktree list --porcelain` 第一条记录 — git
-  // 保证主工作树排第一; 布局带 core.worktree 指针时取到真实主 checkout。
-  //
-  // 已知限制: `git clone --separate-git-dir` 不写 core.worktree, git 自身
-  // 也无法从 gitdir 反推真实 checkout (`git worktree list` 直接把 gitdir
-  // 父目录报为主工作树, 连从真实 checkout 里跑都一样)。这种布局下本函数
-  // 跟随 git 的 canonical 答案; 主 checkout 会话按 round-1 契约不归一化,
-  // 即该极端布局下主 checkout 与 worktree 的 memory 不共享 (与 PR 前行为
-  // 一致, 不回归)。
+  // 主工作树根不能从 common-dir 推导: 主 checkout 本身用 --separate-git-dir 建时
+  // common-dir 是 git 存储目录, dirname 不一定是工作树。统一用
+  // `git worktree list --porcelain` 第一条记录 — git 保证主工作树排第一。
   const mainRoot = await resolveMainWorktreeRoot(mappingRoot, execGit);
-  if (!mainRoot) return workingDir;
+  if (!mainRoot || samePath(mappingRoot, mainRoot)) {
+    return callerSpelledRoot(workingDir, cwd, mappingRoot);
+  }
+  return mainRoot;
+}
 
-  // 防御: 映射根即主仓根时无需归一化 (主仓内 cwd / 主仓内 submodule),
-  // 原样返回, 保持「本地原样返回」契约。
-  if (samePath(mappingRoot, mainRoot)) return workingDir;
-
-  // linked worktree (含其内 submodule): 子路径映射回主仓根下
-  // (该路径在主仓可以不存在 — scope key 只是身份字符串, 落盘目录名经
-  // memoryScopeDirName 派生)。
-  const rel = path.relative(mappingRoot, cwd);
-  if (rel === '') return mainRoot;
-  // cwd 不在映射根下 (symlink/大小写风格不一致等) — 不猜, 回落。
-  if (rel.startsWith('..') || path.isAbsolute(rel)) return workingDir;
-  return path.join(mainRoot, rel);
+/**
+ * cwd 所在的仓库根, 沿用调用方传入路径的写法。
+ *
+ * git 报的是物理路径; 调用方经符号链接进入仓库时 (macOS `/tmp` → `/private/tmp`),
+ * 直接返回 git 的写法会让同一仓库换一个 scope key, 旧记忆就找不到了。能按
+ * 调用方的写法逐级上溯到仓库根时用调用方的写法, 对不上再用 git 的写法。
+ */
+async function callerSpelledRoot(workingDir: string, cwd: string, root: string): Promise<string> {
+  let rel = path.relative(root, cwd);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    // 写法对不上 (符号链接): 用 cwd 的物理路径算出它在仓库里有多深, 再按调用方的
+    // 写法上溯同样多层。物理路径也对不上就用 git 的写法。
+    const real = await fs.realpath(cwd).catch(() => null);
+    rel = real ? path.relative(root, real) : rel;
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return root;
+  }
+  // cwd 就是仓库根: 去掉结尾的分隔符, 否则 `/repo/` 与从子目录解析出的 `/repo` 是两把钥匙。
+  if (rel === '') {
+    const trimmed = workingDir.replace(/[\\/]+$/, '');
+    // 文件系统根 (`/`、`C:\\`) 本身以分隔符结尾, 不动。
+    return trimmed && !trimmed.endsWith(':') ? trimmed : workingDir;
+  }
+  let dir = cwd;
+  for (const _segment of rel.split(path.sep)) dir = path.dirname(dir);
+  return dir;
 }
 
 /** git rev-parse 输出 → 绝对路径。空输出返 null (调用方回落)。 */

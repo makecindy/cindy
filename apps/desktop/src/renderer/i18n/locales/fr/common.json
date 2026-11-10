@@ -5147,61 +5147,110 @@
     },
     "memory": {
       "title": "Mémoire",
-      "description": "Gère la mémoire propre à chaque espace de travail. Après une modification des paramètres, il faut généralement démarrer une nouvelle session Agent pour qu'elle prenne effet. Si la mémoire se comporte mal, cliquez sur Réinitialiser ou désactivez-la.",
+      "description": "Permet aux Agents de retenir, d’une session à l’autre, ce qui vous concerne et ce qui concerne vos projets. Les mémoires ne sont stockées que sur cet ordinateur. Les changements de l’interrupteur prennent effet à la prochaine session Agent.",
+      "entries": {
+        "open": "Voir les mémoires",
+        "title": "Mémoires enregistrées",
+        "description": "Les mémoires de « À votre sujet » s’appliquent à tous les projets. Les mémoires d’un projet ne s’appliquent qu’à ce dépôt ou dossier. Les modifications et suppressions prendront effet à la prochaine session Agent.",
+        "disabledNotice": "La mémoire Cindy est désactivée : les mémoires ne sont ni lues ni enregistrées. Vous pouvez toujours consulter, modifier et supprimer les mémoires enregistrées.",
+        "scope": "Choisir les mémoires à afficher",
+        "userScope": "À votre sujet",
+        "userScopeNote": "S'applique à tous les projets",
+        "deleteConfirm": "Cindy ne fera plus référence à « {{title}} ».",
+        "changed": "Cindy vient de mettre à jour cette mémoire",
+        "tidy": {
+          "name": "Ranger les mémoires",
+          "about": "Fusionne les mémoires en double ou contradictoires. Le rangement se fait aussi automatiquement quand les mémoires s'accumulent, et chaque rangement peut être annulé.",
+          "run": "Ranger maintenant",
+          "running": "Rangement en cours…",
+          "offReason": "La mémoire Cindy est désactivée. Activez-la pour ranger.",
+          "tooFewReason": "Il faut au moins 2 mémoires pour ranger.",
+          "merged_one": "{{count}} mémoire rangée",
+          "merged_many": "{{count}} mémoires rangées",
+          "merged_other": "{{count}} mémoires rangées",
+          "nothing": "Aucune mémoire à ranger",
+          "busy": "Ces mémoires sont déjà en cours de rangement",
+          "failed": "Rangement impossible. Vos mémoires n'ont pas été modifiées.",
+          "unavailable": "Aucun modèle auxiliaire n’est disponible : le rangement n’a pas pu être effectué. Choisissez-en un dans Paramètres → Personnalisation → Modèles auxiliaires.",
+          "records": "Historique des rangements",
+          "auto": "Automatique",
+          "manual": "Manuel",
+          "touched_one": "{{count}} mémoire",
+          "touched_many": "{{count}} mémoires",
+          "touched_other": "{{count}} mémoires",
+          "quoted": "« {{title}} »",
+          "mergedInto": "{{sources}} fusionnées en {{title}}",
+          "removed": "{{title}} était déjà contenue dans une autre mémoire et a été supprimée",
+          "undo": "Annuler",
+          "undoAria": "Annuler le rangement ({{time}})",
+          "undone": "Annulé",
+          "undoConfirm": {
+            "heading": "Annuler ce rangement ?",
+            "body_one": "La mémoire modifiée par ce rangement ({{count}}) retrouvera son contenu d'avant. Les mémoires modifiées depuis ne sont pas écrasées.",
+            "body_many": "Les {{count}} mémoires modifiées par ce rangement retrouveront leur contenu d'avant. Les mémoires modifiées depuis ne sont pas écrasées.",
+            "body_other": "Les {{count}} mémoires modifiées par ce rangement retrouveront leur contenu d'avant. Les mémoires modifiées depuis ne sont pas écrasées.",
+            "confirm": "Annuler le rangement",
+            "cancel": "Garder le rangement"
+          },
+          "restored_one": "{{count}} mémoire restaurée",
+          "restored_many": "{{count}} mémoires restaurées",
+          "restored_other": "{{count}} mémoires restaurées",
+          "restoredSkipped_one": "Mémoires restaurées : {{restored}}. {{count}} mémoire modifiée après le rangement n'a pas été restaurée.",
+          "restoredSkipped_many": "Mémoires restaurées : {{restored}}. {{count}} mémoires modifiées après le rangement n'ont pas été restaurées.",
+          "restoredSkipped_other": "Mémoires restaurées : {{restored}}. {{count}} mémoires modifiées après le rangement n'ont pas été restaurées.",
+          "undoFailed": "Impossible d'annuler ce rangement"
+        }
+      },
       "maker": {
         "label": "Cindy",
-        "description": "La mémoire est gérée par le point d'entrée de l'Agent, et non par chaque modèle. Les sessions Claude Code et Codex peuvent partager la mémoire au sein d'un même répertoire de travail.",
+        "description": "Partagée par Claude Code, Codex et Pi. Une mémoire à votre sujet, et une pour chaque projet.",
         "toggleAria": "Activer ou désactiver la mémoire Cindy",
-        "resetAria": "Réinitialiser les mémoires Cindy",
+        "resetAria": "Vider les mémoires Cindy",
         "resetConfirm": {
-          "title": "Réinitialiser les mémoires Cindy ?",
-          "description": "Toutes les mémoires Cindy de tous les projets (stockées dans user-data, pas dans vos dépôts) seront définitivement supprimées. Cette action est irréversible.",
-          "confirm": "Réinitialiser",
+          "title": "Vider les mémoires Cindy ?",
+          "description": "Les mémoires qui vous concernent et celles de tous les projets seront définitivement supprimées. Elles ne pourront pas être récupérées. Les mémoires des coéquipiers et les fichiers de vos projets ne sont pas concernés.",
+          "confirm": "Vider les mémoires",
           "cancel": "Annuler"
         },
         "toast": {
           "enabled": "Mémoire Cindy activée",
           "disabled": "Mémoire Cindy désactivée",
-          "deferredSuffix": " (les sessions Codex en cours d'exécution l'appliqueront une fois leur tâche actuelle terminée)",
-          "toggleFailed": "Échec de l'activation ou de la désactivation de la mémoire Cindy",
-          "resetSuccess_one": "Mémoires Cindy réinitialisées : {{count}} répertoire de travail supprimé",
-          "resetSuccess_other": "Mémoires Cindy réinitialisées : {{count}} répertoires de travail supprimés",
-          "resetFailed": "Échec de la réinitialisation des mémoires Cindy",
-          "resetSuccess_many": "Mémoires Cindy réinitialisées : {{count}} répertoires de travail supprimés"
+          "deferredSuffix": " (les sessions Codex en cours l’appliqueront à la fin de leur tour actuel)",
+          "toggleFailed": "Impossible de modifier l’interrupteur de la mémoire Cindy",
+          "resetSuccess_one": "Mémoires Cindy vidées",
+          "resetSuccess_other": "Mémoires Cindy vidées",
+          "resetFailed": "Impossible de vider les mémoires Cindy",
+          "resetSuccess_many": "Mémoires Cindy vidées"
         }
       },
       "agents": {
         "claude-code": {
           "label": "Claude Code",
-          "description": "Tous les modèles utilisés via le point d'entrée Claude Code partagent la même mémoire."
+          "description": "Quand la mémoire Cindy est désactivée, Claude Code utilise sa propre mémoire intégrée."
         },
         "codex": {
           "label": "Codex",
-          "description": "Tous les modèles utilisés via le point d'entrée Codex partagent la même mémoire."
-        },
-        "pi": {
-          "label": "Pi",
-          "description": "Enregistre les résumés de compression des longues sessions dans la mémoire Cindy pour les futures sessions Pi."
+          "description": "Quand la mémoire Cindy est désactivée, Codex utilise sa propre mémoire intégrée."
         }
       },
       "agent": {
         "toggleAria": "Activer ou désactiver la mémoire {{label}}",
-        "resetAria": "Réinitialiser les mémoires {{label}}",
+        "resetAria": "Vider les mémoires {{label}}",
         "toast": {
           "enabled": "Mémoire {{label}} activée",
           "disabled": "Mémoire {{label}} désactivée",
           "takesEffectSuffix": " (prendra effet à la prochaine session Agent)",
-          "toggleFailed": "Échec de la mise à jour du paramètre de mémoire",
-          "resetSuccess_one": "Mémoires {{label}} réinitialisées : {{count}} entrée supprimée",
-          "resetSuccess_other": "Mémoires {{label}} réinitialisées : {{count}} entrées supprimées",
-          "resetSuccessGeneric": "Mémoires {{label}} réinitialisées",
-          "resetFailed": "Échec de la réinitialisation de la mémoire",
-          "resetSuccess_many": "Mémoires {{label}} réinitialisées : {{count}} entrées supprimées"
+          "toggleFailed": "Impossible de modifier l’interrupteur de la mémoire",
+          "resetSuccess_one": "Mémoires {{label}} vidées : {{count}} entrée supprimée",
+          "resetSuccess_other": "Mémoires {{label}} vidées : {{count}} entrées supprimées",
+          "resetSuccessGeneric": "Mémoires {{label}} vidées",
+          "resetFailed": "Impossible de vider les mémoires",
+          "resetSuccess_many": "Mémoires {{label}} vidées : {{count}} entrées supprimées"
         },
         "resetConfirm": {
-          "title": "Réinitialiser les mémoires {{label}} ?",
-          "description": "Toutes les mémoires accumulées par {{label}} dans tous les projets seront définitivement supprimées. Cette action est irréversible.",
-          "confirm": "Réinitialiser",
+          "title": "Vider les mémoires {{label}} ?",
+          "description": "Toutes les mémoires propres à {{label}} seront définitivement supprimées. Elles ne pourront pas être récupérées. Celles enregistrées lorsque vous utilisiez {{label}} en dehors de Cindy peuvent aussi être supprimées.",
+          "confirm": "Vider les mémoires",
           "cancel": "Annuler"
         }
       }

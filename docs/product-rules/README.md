@@ -23,6 +23,7 @@
 | 用量上限、重置时刻与自动继续 | [用量上限](usage-limit-auto-continue.md) |
 | 任务模型、来源、推理强度与 Fast | [运行时控制](session-runtime-control.md) |
 | 共享任务、跨账号访客与成员权限 | [共享任务](shared-task-mode.md) |
+| 普通任务的长期记忆：账号级与项目两份、按仓库归并、索引预算、按需整理、记忆页与保存回执 | [Cindy 记忆](cindy-memory.md) |
 | 伙伴身份、生命周期、fallback、工作目录、Skill / MCP 与委派 | [伙伴运行时](cindy-bots-runtime.md) |
 | 伙伴的工作方式属于伙伴：专属工具盘点、通用化方向与待裁决条款 | [伙伴专属能力台账](teammate-capability-ledger.md) |
 | 伙伴每轮代表谁（主人代办／受托／自主）、自主轮范围与转达凭证 | [伙伴授权](teammate-authority.md) |

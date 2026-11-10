@@ -5048,40 +5048,84 @@
     },
     "memory": {
       "title": "记忆",
-      "description": "助君成依工作区之记忆。更其设后，理当新开 Agent 差事方生效；若觉记忆有异，可点 Reset 或阖之。",
+      "description": "使 Agent 历诸差事而记君与诸案之事。记忆唯存于此机，更其开关后，次回 Agent 差事生效。",
+      "entries": {
+        "open": "观记忆",
+        "title": "已存之记忆",
+        "description": "「关于君」之记忆，诸案皆用；案之记忆，唯用于其仓库或文件夹。修与删，次回 Agent 差事生效。",
+        "disabledNotice": "Cindy 记忆已停，不读亦不存记忆。已存者仍可观、可修、可删。",
+        "scope": "择所观之记忆",
+        "userScope": "关于君",
+        "userScopeNote": "诸案皆用",
+        "deleteConfirm": "此后 Cindy 不复参「{{title}}」。",
+        "changed": "Cindy 方更此记忆",
+        "tidy": {
+          "name": "整理记忆",
+          "about": "并重复、相悖之记忆。记忆渐多，亦自整理；每回整理皆可撤。",
+          "run": "即整理",
+          "running": "方整理…",
+          "offReason": "Cindy 记忆已停，启之乃可整理",
+          "tooFewReason": "记忆足 2 条，方可整理",
+          "merged_one": "已整理记忆 {{count}} 条",
+          "merged_other": "已整理记忆 {{count}} 条",
+          "nothing": "无记忆需整理",
+          "busy": "此份记忆方整理中",
+          "failed": "整理未成，记忆未动",
+          "unavailable": "无可用之辅佐模型，整理未成。可于「规制 → 个性 → 辅佐模型」择之",
+          "records": "整理之录",
+          "auto": "自行整理",
+          "manual": "手动整理",
+          "touched_one": "记忆 {{count}} 条",
+          "touched_other": "记忆 {{count}} 条",
+          "quoted": "「{{title}}」",
+          "mergedInto": "{{sources}}并为{{title}}",
+          "removed": "{{title}}所载已见于他条，已移除",
+          "undo": "撤之",
+          "undoAria": "撤 {{time}} 之整理",
+          "undone": "已撤",
+          "undoConfirm": {
+            "heading": "撤此回整理乎？",
+            "body_one": "此回整理所动记忆 {{count}} 条，将复其整理前之文。其后又经修改者，不覆之。",
+            "body_other": "此回整理所动记忆 {{count}} 条，将复其整理前之文。其后又经修改者，不覆之。",
+            "confirm": "撤此整理",
+            "cancel": "罢"
+          },
+          "restored_one": "已复记忆 {{count}} 条",
+          "restored_other": "已复记忆 {{count}} 条",
+          "restoredSkipped_one": "已复 {{restored}} 条；{{count}} 条于整理后曾改，未复",
+          "restoredSkipped_other": "已复 {{restored}} 条；{{count}} 条于整理后曾改，未复",
+          "undoFailed": "撤此回整理未成"
+        }
+      },
       "maker": {
         "label": "Cindy",
-        "description": "记忆依 Agent 入口而掌，非依具体模型；同一工作目录下，Claude Code 与 Codex 入口之差事可共记忆",
+        "description": "Claude Code、Codex、Pi 共用之。关于君者一份，每案另存其一",
         "toggleAria": "启闭 Cindy 记忆",
         "resetAria": "尽清 Cindy 记忆",
         "resetConfirm": {
           "title": "尽清 Cindy 记忆？",
-          "description": "将永久删除诸案之 Cindy 记忆（存于 user-data 目录，不在君之代码仓库）。此举不可撤销。",
-          "confirm": "清之",
+          "description": "将永久删除「关于君」之记忆与诸案之记忆，不可复得。同僚之记忆与案中文件不受其扰。",
+          "confirm": "尽清记忆",
           "cancel": "罢"
         },
         "toast": {
           "enabled": "Cindy 记忆已启",
           "disabled": "Cindy 记忆已停",
-          "deferredSuffix": " — 方行之 Codex 差事，待此回行毕后施之",
-          "toggleFailed": "切换 Cindy 记忆未成",
-          "resetSuccess_one": "Cindy 记忆已重置 — 已移除工作目录 {{count}} 个",
-          "resetSuccess_other": "Cindy 记忆已重置 — 已移除工作目录 {{count}} 个",
-          "resetFailed": "重置 Cindy 记忆未成"
+          "deferredSuffix": "，方行之 Codex 差事待此回毕后生效",
+          "toggleFailed": "更 Cindy 记忆开关未成",
+          "resetSuccess_one": "Cindy 记忆已尽清",
+          "resetSuccess_other": "Cindy 记忆已尽清",
+          "resetFailed": "尽清 Cindy 记忆未成"
         }
       },
       "agents": {
         "claude-code": {
           "label": "Claude Code",
-          "description": "经 Claude Code 入口所用之诸模型，共一份记忆"
+          "description": "Cindy 记忆既停，Claude Code 用其自带之记忆"
         },
         "codex": {
           "label": "Codex",
-          "description": "经 Codex 入口所用之诸模型，共一份记忆"
-        },
-        "pi": {
-          "label": "Pi",
-          "description": "存长差事之压缩摘要于 Cindy 记忆，以供后来 Pi 差事续用"
+          "description": "Cindy 记忆既停，Codex 用其自带之记忆"
         }
       },
       "agent": {
@@ -5090,17 +5134,17 @@
         "toast": {
           "enabled": "{{label}} 记忆已启",
           "disabled": "{{label}} 记忆已停",
-          "takesEffectSuffix": " — 次回 Agent 差事生效",
-          "toggleFailed": "记忆之设更之未成",
-          "resetSuccess_one": "{{label}} 记忆已重置 — 已移除 {{count}} 条",
-          "resetSuccess_other": "{{label}} 记忆已重置 — 已移除 {{count}} 条",
-          "resetSuccessGeneric": "{{label}} 记忆已重置",
-          "resetFailed": "重置记忆未成"
+          "takesEffectSuffix": "，次回 Agent 差事生效",
+          "toggleFailed": "更记忆开关未成",
+          "resetSuccess_one": "{{label}} 记忆已尽清，凡 {{count}} 条",
+          "resetSuccess_other": "{{label}} 记忆已尽清，凡 {{count}} 条",
+          "resetSuccessGeneric": "{{label}} 记忆已尽清",
+          "resetFailed": "尽清记忆未成"
         },
         "resetConfirm": {
           "title": "尽清 {{label}} 记忆？",
-          "description": "将永久删除 {{label}} 于诸案所积之全部记忆。此举不可撤销。",
-          "confirm": "清之",
+          "description": "将永久删除 {{label}} 自带之全部记忆，不可复得。于 Cindy 之外用 {{label}} 时所存者，或亦并删。",
+          "confirm": "尽清记忆",
           "cancel": "罢"
         }
       }

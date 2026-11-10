@@ -16,7 +16,7 @@
 
 import { z } from 'zod';
 
-import { withStore } from './_shared.js';
+import { memoryScopeArg, storeForNew, storeHolding, withStore, type MemoryScopeName } from './_shared.js';
 import type { MemoryMcpDeps } from '../types.js';
 import type { MemoryToolRegistry } from '../cindy_memoryToolRegistry.js';
 import type { WriteOptions } from '@cindy/maker-core';
@@ -30,9 +30,11 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
       'name 是 filename slug ([a-z0-9_-]{1,64}, 不是显示文本); title 显示标题 (中英均可); ' +
       'description 一行 hook (用作 MEMORY.md 索引行, 无换行, ≤ 200 字符); body 主体内容。' +
       'mode 默认 create (撞名拒绝), 可选 update/append。' +
+      ' scope 选哪一份记忆: user = 关于用户本人、每个项目都生效; project = 只属于当前仓库或目录;' +
+      ' 不传时 user 类进 user, 其余进 project。' +
       ' 写入后 MEMORY.md 自动重建; 软超 size 上限返 warning + warningDetail' +
-      ' (sizeBytes/softLimitBytes, 分片警告另带 hardLimitBytes; 索引警告无硬上限),' +
-      ' 按超限幅度决定不动 / 微剪 / memory_consolidate。',
+      ' (sizeBytes/softLimitBytes/hardLimitBytes), 按超限幅度决定不动 / 微剪 / memory_consolidate;' +
+      ' 会让索引越过硬上限的写入被拒绝 (INVALID_PARAMS), 先合并或删除再写。',
     inputShape: {
       type: z.enum(['user', 'feedback', 'project', 'reference']),
       name: z
@@ -49,12 +51,25 @@ export function registerMemoryWriteTool(registry: MemoryToolRegistry, deps: Memo
         .describe('一行 hook, 无换行, 用作 MEMORY.md 索引'),
       body: z.string().min(1),
       mode: z.enum(['create', 'update', 'append']).optional(),
+      scope: memoryScopeArg,
     },
-    handler: async (args) => {
+    handler: async ({ scope, ...args }) => {
       const saved = deps.beginWrite?.(deps.getSessionContext?.());
-      const result = await withStore(deps, (store) => store.write(args as WriteOptions));
+      let writtenScope: MemoryScopeName | undefined;
+      const result = await withStore(deps, async (_store, ctx) => {
+        // 改已有条目时跟着文件走 (旧数据里 user 类可能还在项目那一份); 新建按规则选。
+        const target = args.mode === 'update' || args.mode === 'append'
+          ? await storeHolding(ctx, `${args.type}_${args.name}.md`, scope as MemoryScopeName | undefined)
+          : await storeForNew(ctx, scope as MemoryScopeName | undefined, args.type as string);
+        const written = await target.store.write(args as WriteOptions);
+        deps.onStoreChanged?.(deps.getSessionContext?.(), ctx.scopes[target.scope]!);
+        // 伙伴只有一份记忆, 回执不带 scope; Cindy 记忆才分账号级和项目。
+        if (ctx.scopes.user) writtenScope = target.scope;
+        return { ...written, scope: target.scope };
+      });
       if (!result.isError) saved?.({ key: `${args.type}_${args.name}.md`, title: args.title as string,
-        action: args.mode === 'update' || args.mode === 'append' ? 'updated' : 'created' });
+        action: args.mode === 'update' || args.mode === 'append' ? 'updated' : 'created',
+        ...(writtenScope ? { scope: writtenScope } : {}) });
       return result;
     },
   });

@@ -5048,59 +5048,103 @@
     },
     "memory": {
       "title": "记忆",
-      "description": "用于帮助用户实现基于工作区的记忆，改变设置之后理论上需要新建 Agent 会话才会生效，如果觉得记忆系统出现问题可以点击 Reset 或者关闭。",
+      "description": "让 Agent 长期记住关于你和项目的事。记忆只存在这台电脑上，更改开关后在下次 Agent 会话生效。",
+      "entries": {
+        "open": "查看记忆",
+        "title": "已存的记忆",
+        "description": "「关于你」的记忆在每个项目里都生效，项目的记忆只在那个仓库或文件夹里生效。修改和删除在下次 Agent 会话生效。",
+        "disabledNotice": "Cindy 记忆已关闭，不会读取或保存记忆。已存的记忆仍可查看、修改和删除。",
+        "scope": "选择要查看的记忆",
+        "userScope": "关于你",
+        "userScopeNote": "在每个项目里都生效",
+        "deleteConfirm": "Cindy 之后不会再参考「{{title}}」。",
+        "changed": "Cindy 刚更新了这条记忆",
+        "tidy": {
+          "name": "整理记忆",
+          "about": "合并重复和互相矛盾的记忆。记忆变多时也会自动整理，每次整理都可以撤销。",
+          "run": "现在整理",
+          "running": "正在整理…",
+          "offReason": "Cindy 记忆已关闭，开启后才能整理",
+          "tooFewReason": "至少有 2 条记忆才能整理",
+          "merged_one": "整理了 {{count}} 条记忆",
+          "merged_other": "整理了 {{count}} 条记忆",
+          "nothing": "没有需要整理的记忆",
+          "busy": "这份记忆正在整理中",
+          "failed": "未能整理，记忆没有改动",
+          "unavailable": "没有可用的辅助模型，未能整理。可在「设置 → 个性化 → 辅助模型」里选择",
+          "records": "整理记录",
+          "auto": "自动整理",
+          "manual": "手动整理",
+          "touched_one": "{{count}} 条记忆",
+          "touched_other": "{{count}} 条记忆",
+          "quoted": "「{{title}}」",
+          "mergedInto": "{{sources}}合并为{{title}}",
+          "removed": "{{title}}的内容已包含在其他记忆里，已移除",
+          "undo": "撤销",
+          "undoAria": "撤销 {{time}} 的整理",
+          "undone": "已撤销",
+          "undoConfirm": {
+            "heading": "撤销这次整理？",
+            "body_one": "这次整理改动的 {{count}} 条记忆会恢复成整理前的内容。整理之后又改过的记忆不会被覆盖。",
+            "body_other": "这次整理改动的 {{count}} 条记忆会恢复成整理前的内容。整理之后又改过的记忆不会被覆盖。",
+            "confirm": "撤销整理",
+            "cancel": "取消"
+          },
+          "restored_one": "已恢复 {{count}} 条记忆",
+          "restored_other": "已恢复 {{count}} 条记忆",
+          "restoredSkipped_one": "已恢复 {{restored}} 条，{{count}} 条在整理后被改过，未恢复",
+          "restoredSkipped_other": "已恢复 {{restored}} 条，{{count}} 条在整理后被改过，未恢复",
+          "undoFailed": "未能撤销这次整理"
+        }
+      },
       "maker": {
         "label": "Cindy",
-        "description": "记忆按 Agent 入口管理，而不是按具体模型管理；同一工作目录下，Claude Code 和 Codex 入口的任务可以共享记忆",
+        "description": "Claude Code、Codex 和 Pi 共用。一份关于你，每个项目另有一份",
         "toggleAria": "切换 Cindy 记忆",
-        "resetAria": "重置 Cindy 记忆",
+        "resetAria": "清空 Cindy 记忆",
         "resetConfirm": {
-          "title": "重置 Cindy 记忆？",
-          "description": "将永久删除所有项目下的 Cindy 记忆（存放在 user-data 目录下，不在你的代码仓库里）。此操作不可撤销。",
-          "confirm": "重置",
+          "title": "清空 Cindy 记忆？",
+          "description": "将永久删除「关于你」的记忆和所有项目的记忆，无法恢复。伙伴的记忆和项目里的文件不受影响。",
+          "confirm": "清空记忆",
           "cancel": "取消"
         },
         "toast": {
-          "enabled": "Cindy 记忆已启用",
-          "disabled": "Cindy 记忆已禁用",
-          "deferredSuffix": " — 运行中的 Codex 任务将在当前执行结束后应用",
-          "toggleFailed": "切换 Cindy 记忆失败",
-          "resetSuccess_one": "Cindy 记忆已重置 — 已移除 {{count}} 个工作目录",
-          "resetSuccess_other": "Cindy 记忆已重置 — 已移除 {{count}} 个工作目录",
-          "resetFailed": "重置 Cindy 记忆失败"
+          "enabled": "Cindy 记忆已开启",
+          "disabled": "Cindy 记忆已关闭",
+          "deferredSuffix": "，运行中的 Codex 任务在本轮结束后生效",
+          "toggleFailed": "未能更改 Cindy 记忆开关",
+          "resetSuccess_one": "已清空 Cindy 记忆",
+          "resetSuccess_other": "已清空 Cindy 记忆",
+          "resetFailed": "未能清空 Cindy 记忆"
         }
       },
       "agents": {
         "claude-code": {
           "label": "Claude Code",
-          "description": "通过 Claude Code 入口使用的所有模型，会共享同一份记忆"
+          "description": "Cindy 记忆关闭时，Claude Code 使用它自带的记忆"
         },
         "codex": {
           "label": "Codex",
-          "description": "通过 Codex 入口使用的所有模型，会共享同一份记忆"
-        },
-        "pi": {
-          "label": "Pi",
-          "description": "将长任务的压缩摘要保存到 Cindy 记忆，供后续 Pi 任务继续使用"
+          "description": "Cindy 记忆关闭时，Codex 使用它自带的记忆"
         }
       },
       "agent": {
         "toggleAria": "切换 {{label}} 记忆",
-        "resetAria": "重置 {{label}} 记忆",
+        "resetAria": "清空 {{label}} 记忆",
         "toast": {
-          "enabled": "{{label}} 记忆已启用",
-          "disabled": "{{label}} 记忆已禁用",
-          "takesEffectSuffix": " — 下次 Agent 会话生效",
-          "toggleFailed": "更新记忆设置失败",
-          "resetSuccess_one": "{{label}} 记忆已重置 — 已移除 {{count}} 条",
-          "resetSuccess_other": "{{label}} 记忆已重置 — 已移除 {{count}} 条",
-          "resetSuccessGeneric": "{{label}} 记忆已重置",
-          "resetFailed": "重置记忆失败"
+          "enabled": "{{label}} 记忆已开启",
+          "disabled": "{{label}} 记忆已关闭",
+          "takesEffectSuffix": "，下次 Agent 会话生效",
+          "toggleFailed": "未能更改记忆开关",
+          "resetSuccess_one": "已清空 {{label}} 记忆，共 {{count}} 条",
+          "resetSuccess_other": "已清空 {{label}} 记忆，共 {{count}} 条",
+          "resetSuccessGeneric": "已清空 {{label}} 记忆",
+          "resetFailed": "未能清空记忆"
         },
         "resetConfirm": {
-          "title": "重置 {{label}} 记忆？",
-          "description": "将永久删除 {{label}} 在所有项目中累积的全部记忆。此操作不可撤销。",
-          "confirm": "重置",
+          "title": "清空 {{label}} 记忆？",
+          "description": "将永久删除 {{label}} 自带的全部记忆，无法恢复。在 Cindy 之外使用 {{label}} 时存下的记忆也可能一并删除。",
+          "confirm": "清空记忆",
           "cancel": "取消"
         }
       }

@@ -110,6 +110,20 @@ export function parseBotMemoryScopeKey(scopeKey: string): string | null {
   }
 }
 
+/**
+ * 账号级记忆的作用域键: 关于用户本人、在每个项目都成立的记忆 (偏好、称呼、通用纠正)。
+ *
+ * 与项目记忆同属 Cindy 记忆: 跟随总开关, 「清空全部」时一并清空; 普通任务启动时
+ * 把它和项目索引一起注入。伙伴有自己的记忆, 不读这一份。本地键恒为绝对路径,
+ * 不会与它相同; 落盘在 `<owner>/user-memory/`, 不放进 `maker-memory/` ——
+ * 那里的目录名由路径派生, 放进去就要为撞名单独设防。
+ */
+export const USER_MEMORY_SCOPE_KEY = 'user:account';
+
+export function isUserMemoryScopeKey(scopeKey: string): boolean {
+  return scopeKey === USER_MEMORY_SCOPE_KEY;
+}
+
 /** buildMemoryScopeKey 的远端键前缀。本地键恒为绝对路径, 不会以它开头。 */
 export const SSH_SCOPE_KEY_PREFIX = 'ssh:';
 const BOT_SCOPE_KEY_PREFIX = 'bot:';
@@ -302,9 +316,9 @@ export class MemoryStorage {
    * 软警告 = 写入仍成功; warningDetail 附当前字节/软上限/硬上限,
    * 调用方据此判断超了多少再决定不动 / 微剪 / consolidate。
    */
-  async write(opts: WriteOptions): Promise<WriteResult> {
+  async write(opts: WriteOptions, replacing: readonly string[] = []): Promise<WriteResult> {
     this.validateOpts(opts);
-    return this.mutate(() => this.writeFile(opts, buildFilename(opts.type, opts.name)));
+    return this.mutate(() => this.writeFile(opts, buildFilename(opts.type, opts.name), replacing));
   }
 
   /** Edit a known file in place, including legacy names rejected for new shards. */
@@ -343,7 +357,15 @@ export class MemoryStorage {
     return current;
   }
 
-  private async writeFile(opts: WriteOptions, filename: string): Promise<WriteResult> {
+  /**
+   * @param replacing 这次写入之后马上要删掉的分片 (合并的来源)。索引硬上限按它们已经
+   *   不在来估算: 合并是先写结果再删来源, 不这样算的话, 超限的库连合并都会被拒。
+   */
+  private async writeFile(
+    opts: WriteOptions,
+    filename: string,
+    replacing: readonly string[] = [],
+  ): Promise<WriteResult> {
     this.validateOpts(opts);
     const fullPath = path.join(this.dir, filename);
 
@@ -393,6 +415,8 @@ export class MemoryStorage {
         `body ${Buffer.byteLength(nextBody, 'utf8')} bytes > 硬上限 ${this.config.hardShardBytes}`,
       );
     }
+
+    await this.assertIndexBudget(filename, nextFrontmatter, replacing);
 
     if (preserveBody) nextFrontmatter.bodyLength = nextBody.length;
     const fileText = matter.stringify({ content: nextBody }, nextFrontmatter);
@@ -519,32 +543,7 @@ export class MemoryStorage {
   }
 
   private async rebuildIndexInner(): Promise<void> {
-    const records = await this.list();
-    const grouped = new Map<MemoryType, MemoryRecord[]>();
-    for (const rec of records) {
-      const arr = grouped.get(rec.frontmatter.type) ?? [];
-      arr.push(rec);
-      grouped.set(rec.frontmatter.type, arr);
-    }
-    const lines: string[] = ['# Memory Index', ''];
-    if (records.length === 0) {
-      lines.push('_(empty — no memories saved yet for this workdir)_', '');
-    } else {
-      // 固定顺序 user → feedback → project → reference。**只列 curated 类型** ——
-      // `digest`(系统内部,如 pi 压缩摘要)故意排除:进 FTS 可 memory_search,但不进
-      // MEMORY.md、不进 system prompt(见 types.ts MEMORY_TYPES 注释)。新增 curated
-      // 类型时改 CURATED_MEMORY_TYPES;不要把 digest 加进来。
-      for (const type of CURATED_MEMORY_TYPES) {
-        const items = grouped.get(type);
-        if (!items || items.length === 0) continue;
-        lines.push(`## ${type}`);
-        for (const r of items) {
-          lines.push(`- [${r.filename}] ${r.frontmatter.title} — ${r.frontmatter.description}`);
-        }
-        lines.push('');
-      }
-    }
-    const content = lines.join('\n');
+    const content = renderMemoryIndex(await this.list());
     // 索引写盘前复核 (review #2388 Codex 13th P1): rebuildIndex 自身有多次
     // awaited shard reads, 边界不得在旧 owner 下重写 MEMORY.md。
     this.beforeFileWrite?.();
@@ -625,6 +624,36 @@ export class MemoryStorage {
   }
 
   /**
+   * 索引硬上限: 这次写入会让 MEMORY.md 变大并越过硬上限时拒绝, 文件不落盘。
+   * 只拦「变大」: 索引已超限的旧数据仍能改正文、缩短标题、删除与合并, 否则
+   * 超限的库就再也整理不回来。digest 不进索引, 不受影响。
+   */
+  private async assertIndexBudget(
+    filename: string,
+    next: MemoryFrontmatter,
+    replacing: readonly string[],
+  ): Promise<void> {
+    const hard = this.config.hardIndexBytes;
+    if (!(hard > 0) || !(CURATED_MEMORY_TYPES as readonly string[]).includes(next.type)) return;
+    const records = await this.list();
+    const before = Buffer.byteLength(renderMemoryIndex(records), 'utf8');
+    const after = Buffer.byteLength(
+      renderMemoryIndex([
+        ...records.filter((r) => r.filename !== filename && !replacing.includes(r.filename)),
+        { filename, slug: '', frontmatter: next, body: '', sizeBytes: 0 },
+      ]),
+      'utf8',
+    );
+    if (after > hard && after > before) {
+      throw new MemoryError(
+        'index-too-large',
+        `MEMORY.md 索引将达 ${after} 字节 > 硬上限 ${hard}; 先用 memory_consolidate 合并重复条目`
+          + '或 memory_delete 删除过时条目, 再写入',
+      );
+    }
+  }
+
+  /**
    * 重算某分片的软警告 (含索引侧)。分片侧读盘; 索引侧走 indexCache —
    * 本实例的 write/delete 都会刷新缓存, 因此反映的是**本实例视角**的最新状态;
    * 若 MEMORY.md 被其他实例/进程改写, 索引侧评估可能滞后。
@@ -654,6 +683,7 @@ export class MemoryStorage {
         kind: 'index-size-exceeded',
         sizeBytes: indexBytes,
         softLimitBytes: this.config.maxIndexBytes,
+        ...(this.config.hardIndexBytes > 0 ? { hardLimitBytes: this.config.hardIndexBytes } : {}),
       };
     }
     return undefined;
@@ -661,6 +691,51 @@ export class MemoryStorage {
 }
 
 // ── 模块级工具 ─────────────────────────────────────────────────────────────
+
+/** 每个作用域 MEMORY.md 的首行; 拼进 system prompt 时由 manager 换成带作用域的标题。 */
+export const MEMORY_INDEX_HEADING = '# Memory Index';
+
+/**
+ * 由分片 frontmatter 派生 MEMORY.md 文本 (纯函数; 写盘与硬上限预估共用同一份)。
+ *
+ *   # Memory Index
+ *
+ *   ## user
+ *   - [user_xxx.md] 标题 — 一行 hook (2026-10-21)
+ *
+ * 固定顺序 user → feedback → project → reference。**只列 curated 类型** ——
+ * `digest`(系统内部,如 pi 压缩摘要)故意排除:进 FTS 可 memory_search,但不进
+ * MEMORY.md、不进 system prompt(见 types.ts MEMORY_TYPES 注释)。新增 curated
+ * 类型时改 CURATED_MEMORY_TYPES;不要把 digest 加进来。
+ *
+ * 行尾日期取 updatedAt 的日期部分: 记忆是当时记下的线索, 模型要能看出它有多旧。
+ * 只到「天」, 同一天内的改写不改变索引文本。
+ */
+export function renderMemoryIndex(records: readonly MemoryRecord[]): string {
+  const grouped = new Map<MemoryType, MemoryRecord[]>();
+  for (const rec of records) {
+    const arr = grouped.get(rec.frontmatter.type) ?? [];
+    arr.push(rec);
+    grouped.set(rec.frontmatter.type, arr);
+  }
+  const lines: string[] = [MEMORY_INDEX_HEADING, ''];
+  let listed = 0;
+  for (const type of CURATED_MEMORY_TYPES) {
+    const items = grouped.get(type);
+    if (!items || items.length === 0) continue;
+    lines.push(`## ${type}`);
+    for (const r of items) {
+      const day = /^\d{4}-\d{2}-\d{2}/.exec(r.frontmatter.updatedAt)?.[0];
+      lines.push(
+        `- [${r.filename}] ${r.frontmatter.title} — ${r.frontmatter.description}${day ? ` (${day})` : ''}`,
+      );
+      listed += 1;
+    }
+    lines.push('');
+  }
+  if (listed === 0) lines.push('_(empty — no memories saved yet)_', '');
+  return lines.join('\n');
+}
 
 interface ParsedShard {
   frontmatter: MemoryFrontmatter;

@@ -7848,23 +7848,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Memory 控制 (Personalization → Memory section)。
     // 由 BaseAgent 子类落地; UI 层负责 Reset 前 confirm dialog。
     memoryGet: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex',
     ): Promise<{
       enabled: boolean;
       source: 'agent-default' | 'host-runtime' | 'user-config';
       stats?: { entryCount?: number; sizeBytes?: number; storagePath?: string };
     }> => ipcRenderer.invoke('maker:memory:get', agentKind),
     memorySet: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex',
       enabled: boolean,
     ): Promise<{
       effective: 'immediate' | 'next-session';
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
     }> => ipcRenderer.invoke('maker:memory:set', agentKind, enabled),
     memoryReset: (
-      agentKind: 'claude-code' | 'codex' | 'pi',
+      agentKind: 'claude-code' | 'codex',
     ): Promise<{
       removedEntries?: number;
       removedBytes?: number;
@@ -7883,7 +7883,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       effective: 'next-session';
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
       codexRestartDeferred: boolean;
     }> => ipcRenderer.invoke('maker:maker-memory:set-enabled', enabled),
 
@@ -7892,41 +7892,60 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:maker-memory:reset'),
 
     /**
-     * 启动期同步三个 memory 开关的真实持久化值 (main <userData>/memory-settings.json)。
+     * Cindy 记忆「查看记忆」页: 记忆范围 (账号级 + 各项目) 与其中记忆的看 / 搜 / 改 / 删。
+     * scopeKey 只能来自 scopes() 的结果, main 每次对照校验; 仅本机窗口可用。
+     */
+    memoryEntries: {
+      scopes: (task?: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('maker:memory-entries:scopes', task),
+      list: (scopeKey: string, query?: string): Promise<unknown> =>
+        ipcRenderer.invoke('maker:memory-entries:list', scopeKey, query),
+      read: (scopeKey: string, filename: string): Promise<unknown> =>
+        ipcRenderer.invoke('maker:memory-entries:read', scopeKey, filename),
+      update: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('maker:memory-entries:update', body),
+      delete: (body: unknown): Promise<void> =>
+        ipcRenderer.invoke('maker:memory-entries:delete', body),
+      tidy: (scopeKey: string): Promise<unknown> =>
+        ipcRenderer.invoke('maker:memory-entries:tidy', scopeKey),
+      tidyRuns: (scopeKey: string): Promise<unknown> =>
+        ipcRenderer.invoke('maker:memory-entries:tidy-runs', scopeKey),
+      tidyUndo: (body: unknown): Promise<unknown> =>
+        ipcRenderer.invoke('maker:memory-entries:tidy-undo', body),
+    },
+
+    /**
+     * 启动期同步 memory 开关的真实持久化值 (main <userData>/memory-settings.json)。
      * renderer localStorage 只是 UI 即时态镜像 — 启动时调一次, main 是 source of truth。
      */
     memoryGetSettings: (): Promise<{
       maker: boolean;
       claudeCode: boolean;
       codex: boolean;
-      pi: boolean;
     }> => ipcRenderer.invoke('maker:memory:get-settings'),
     memoryGetSettingsState: (): Promise<{
       maker: boolean;
       claudeCode: boolean;
       codex: boolean;
-      pi: boolean;
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
     }> => ipcRenderer.invoke('maker:memory:get-settings-state'),
-    /** 启动期迁移旧版 renderer/native memory opt-out；null 表示 renderer marker 缺失。 */
+    /** 启动期迁移旧版 renderer memory opt-out；null 表示 renderer marker 缺失。 */
     memoryPreserveLegacyMakerDisabled: (
       legacyRendererValue: boolean | null,
     ): Promise<{
       maker: boolean;
       claudeCode: boolean;
       codex: boolean;
-      pi: boolean;
     }> => ipcRenderer.invoke('maker:memory:preserve-legacy-maker-disabled', legacyRendererValue),
     memoryResetSettings: (): Promise<{
       maker: boolean;
       claudeCode: boolean;
       codex: boolean;
-      pi: boolean;
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
       codexRestartDeferred: boolean;
     }> => ipcRenderer.invoke('maker:memory:reset-settings'),
 

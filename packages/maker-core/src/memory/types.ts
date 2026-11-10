@@ -19,7 +19,9 @@ export const CURATED_MEMORY_TYPES = ['user', 'feedback', 'project', 'reference']
 /**
  * 全部 storage 允许的类型 = curated + `digest`。
  *
- * `digest` 是**系统内部类型**(当前:pi 压缩上下文时把被丢弃内容的摘要沉淀进来)。它:
+ * `digest` 是**系统内部类型**: 旧版本里 Pi 压缩上下文时把被丢弃内容的摘要存成这一类。
+ * 2026-11 起不再写入 (docs/product-rules/cindy-memory.md §5), 类型保留是为了旧数据仍被
+ * 正确识别、检索和清空, 不被当成用户记忆。它:
  *  - 可写入 store、进 FTS —— `memory_search` 能按需检索;
  *  - **排除出 MEMORY.md 索引**(rebuildIndex 只列 CURATED_MEMORY_TYPES),故**不自动注入
  *    system prompt**、不撑大上下文、不污染 curated 记忆;
@@ -96,7 +98,10 @@ export interface WriteWarningDetail {
   sizeBytes: number;
   /** 软上限 (默认分片 2048 / 索引 4096) */
   softLimitBytes: number;
-  /** 分片硬上限 (默认 8192, 超过将被 reject); 索引警告无硬上限, 不带此字段 */
+  /**
+   * 硬上限: 分片默认 8192, 索引默认 12288 (超过将被 reject)。
+   * 宿主把索引硬上限关掉 (hardIndexBytes = 0) 的作用域里, 索引警告不带此字段。
+   */
   hardLimitBytes?: number;
 }
 
@@ -117,6 +122,13 @@ export interface MemoryConfig {
   hardShardBytes: number;
   /** MEMORY.md 索引软上限 (返 warning), 默认 4096 */
   maxIndexBytes: number;
+  /**
+   * MEMORY.md 索引硬上限, 默认 12288; 0 = 不设硬上限。
+   * 索引整份进 system prompt: 会让索引变大并越过硬上限的写入被拒绝
+   * (index-too-large), 调用方先合并/删除再写。不让索引变大的写入 (改正文、
+   * 缩短标题、删除、合并) 始终放行, 已超限的旧数据仍能被整理。
+   */
+  hardIndexBytes: number;
   /** description 长度上限, 默认 200 */
   maxDescriptionLen: number;
   /** title 长度上限, 默认 100 */
@@ -129,6 +141,7 @@ export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   maxShardBytes: 2048,
   hardShardBytes: 8192,
   maxIndexBytes: 4096,
+  hardIndexBytes: 12288,
   maxDescriptionLen: 200,
   maxTitleLen: 100,
   maxSlugLen: 64,
@@ -140,6 +153,7 @@ export type MemoryErrorCode =
   | 'invalid-frontmatter'
   | 'invalid-filename'
   | 'shard-too-large'
+  | 'index-too-large'
   | 'description-too-long'
   | 'title-too-long'
   | 'description-has-newline'
