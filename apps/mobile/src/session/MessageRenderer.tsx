@@ -3249,7 +3249,7 @@ const RenderItemView = memo(function RenderItemView({
       || (item.type === 'work_group' && actions.companionTurnContinuation));
   const aligned = processAvatar ? (
     <View style={styles.companionAvatarRow} testID="companion.processRow">
-      <View style={styles.companionAvatarSlot}>{processAvatar}</View>
+      <View style={styles.companionProcessAvatarSlot}>{processAvatar}</View>
       <View style={styles.companionAvatarContent}>{node}</View>
     </View>
   ) : alignWithReplies ? (
@@ -9144,6 +9144,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // Desktop BotAvatar sm (28) + gap-2.5; the task card reuses the same inset.
   companionAvatarRow: { flexDirection: 'row', alignItems: 'flex-start', gap: COMPANION_AVATAR_GAP },
   companionAvatarSlot: { flexShrink: 0, marginTop: 2 },
+  // Center on TeammateProcess's 44pt header, not its expanded body.
+  companionProcessAvatarSlot: { flexShrink: 0, minHeight: 44, justifyContent: 'center' },
   companionAvatarPlaceholder: { width: COMPANION_AVATAR_SIZE },
   companionAvatarContent: { flex: 1, minWidth: 0 },
   companionAvatarInset: { paddingLeft: COMPANION_AVATAR_SIZE + COMPANION_AVATAR_GAP },
