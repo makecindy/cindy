@@ -65,6 +65,7 @@ test('distribution is explicit without changing historical delivery identities',
   assert.equal(Object.hasOwn(validate(mobileIdentity), 'distribution'), false);
   assert.equal(validate({...mobileIdentity, distribution:'ad-hoc'}).distribution, 'ad-hoc');
   assert.throws(() => validate({...mobileIdentity, distribution:'production'}), /distribution/);
+  assert.throws(() => validate({...mobileIdentity, distribution:null}), /distribution/);
   const profiles = Object.fromEntries(['', '.CindyNotificationService', '.CindyHomeWidgets', '.expo-sharing-extension']
     .map((suffix, i) => [mobileIdentity.bundleId + suffix, `Fixture profile ${i}`]));
   assert.deepEqual(validate({...mobileIdentity, distribution:'ad-hoc', exportProvisioningProfiles:profiles}).exportProvisioningProfiles, profiles);

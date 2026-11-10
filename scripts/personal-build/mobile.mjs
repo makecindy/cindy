@@ -17,7 +17,7 @@ export function mobileConfig(value, base, region) {
   const m = structuredClone(value);
   check(m && typeof m === 'object' && !Array.isArray(m), 'mobile must be an object');
   check(m.enabled === true && m.platform === 'ios', 'Personal mobile delivery requires enabled=true and platform=ios');
-  check(['development', 'ad-hoc'].includes(m.distribution ?? 'development'), 'Invalid mobile.distribution: use development or ad-hoc');
+  check(m.distribution === undefined || ['development', 'ad-hoc'].includes(m.distribution),'Invalid mobile.distribution: use development or ad-hoc');
   for (const key of ['bundleId', 'appGroupId']) check(typeof m[key] === 'string' && /^[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/.test(m[key]), `Invalid mobile.${key}`);
   check(m.appGroupId.startsWith('group.'), 'mobile.appGroupId must be an App Group');
   if (Object.hasOwn(m, 'exportProvisioningProfiles')) {
