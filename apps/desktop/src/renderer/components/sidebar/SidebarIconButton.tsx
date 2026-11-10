@@ -15,7 +15,7 @@ import '../ui/button.css';
 
 const BTN_BASE = 'cindy-button-frame flex shrink-0 items-center justify-center transition-colors';
 const RAIL_GEOMETRY = 'h-9 w-9 rounded-full';
-const IDLE = 'text-[hsl(var(--titlebar-icon))] enabled:hover:[--button-face-bg:var(--sidebar-item-hover)] enabled:active:[--button-face-bg:var(--sidebar-item-hover)]';
+const IDLE = 'text-[hsl(var(--titlebar-icon))] enabled:hover:[--button-face-bg:hsl(var(--sidebar-item-hover))] enabled:active:[--button-face-bg:hsl(var(--sidebar-item-hover))]';
 const ACTIVE = '[--button-face-bg:var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)]';
 
 /** rail 图标钮类名(给 Radix trigger 直接套用):rail 几何(圆钮)+ 同套配色。 */

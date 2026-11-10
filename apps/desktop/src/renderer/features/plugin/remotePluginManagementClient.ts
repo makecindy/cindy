@@ -17,7 +17,8 @@ import type {
   PluginManagementProjectState,
   PluginManagementProject,
 } from '../../../shared/pluginManagement';
-import type { PluginMarketDetail } from '../../../shared/pluginMarket';
+import type { PluginMarketDetail, PluginMarketPage, PluginMarketItem } from '../../../shared/pluginMarket';
+import { extractIpcError } from '@/utils/ipcError';
 import type { RemotePluginPreferenceSnapshot } from '../../../shared/pluginPreferences';
 
 const pluginManagementClient = {
@@ -78,6 +79,41 @@ export async function invokePluginManagement(
   )) as RemoteActionInvokeResponse;
   if (!boundedPluginResponse(response)) throw new Error('INVALID_RESPONSE');
   return response.result;
+}
+/** Old version-1 Hosts reject nonempty snapshot input before collecting their catalog. */
+export async function hasPluginCatalogPaging(deviceId: string): Promise<boolean> {
+  try {
+    const result = await invokePluginManagement(deviceId, 'snapshot', { read: 'capabilities' });
+    return !!result && (result as { catalogPaging?: unknown }).catalogPaging === true;
+  } catch (error) {
+    if (extractIpcError(error)?.code === 'INVALID_PARAMS') return false;
+    throw error;
+  }
+}
+export function parsePluginManagementMarketPage(value: unknown): PluginMarketPage {
+  const data = value as PluginMarketPage;
+  const snapshot = parsePluginManagementSnapshot({ version: 1, ghosts: [], market: value });
+  if (!boundedPluginResponse(value) || data.items.length > 100
+    || (data.nextCursor !== null && (typeof data.nextCursor !== 'string' || data.nextCursor.length > 2048))
+    || (data.customSourceCounts !== undefined && (!Array.isArray(data.customSourceCounts)
+      || !data.customSourceCounts.every(item => item && typeof item.name === 'string'
+        && data.customSourceNames.includes(item.name) && Number.isSafeInteger(item.count) && item.count >= 0)
+      || new Set(data.customSourceCounts.map(item => item.name)).size !== data.customSourceCounts.length))
+    || (data.counts !== null && (!data.counts || !['all', 'public', 'organization', 'personal', 'custom'].every(key => {
+      const count = data.counts![key as keyof typeof data.counts];
+      return Number.isSafeInteger(count) && count >= 0;
+    }) || data.counts.all !== data.counts.public + data.counts.organization + data.counts.personal + data.counts.custom)))
+    throw new Error('INVALID_RESPONSE');
+  return { ...data, ...snapshot.market };
+}
+export function parsePluginManagementRecommendations(value: unknown): PluginMarketItem[] {
+  const snapshot = parsePluginManagementSnapshot({ version: 1, ghosts: [], market: {
+    items: value, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [],
+  } });
+  if (snapshot.market.items.length > 12 || snapshot.market.items.some(item => item.scope !== 'public' || item.publisherKind !== 'official')
+    || new Set(snapshot.market.items.map(item => item.pluginId)).size !== snapshot.market.items.length)
+    throw new Error('INVALID_RESPONSE');
+  return snapshot.market.items;
 }
 export function parsePluginManagementSnapshot(value: unknown): PluginManagementSnapshot {
   const data = value as PluginManagementSnapshot;

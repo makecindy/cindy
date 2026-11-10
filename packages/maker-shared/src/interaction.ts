@@ -14,24 +14,55 @@ export interface PendingInteractionLike {
   persistId?: string;
 }
 
+/** Only server-authored form fields carry these restrictions. */
+export interface AskAnswerConstraints {
+  required: boolean;
+  choices?: string[];
+  minLength?: number;
+  maxLength?: number;
+}
+
 export interface AskQuestion {
+  /** Stable provider identity; absent on legacy questions. */
+  id?: string;
   question: string;
   header?: string;
   options?: Array<{ label: string; description?: string }>;
   multiSelect?: boolean;
+  answerConstraints?: AskAnswerConstraints;
 }
 
 /** A late answer is ordinary user input, with the original question attached. */
 export function formatAsyncQuestionSupplement(
   questions: readonly AskQuestion[],
   answers: Record<string, string>,
+  context?: { late?: boolean },
 ): string {
   const replies = questions.flatMap((q) => {
-    const answer = answers[q.question] ?? (q.header ? answers[q.header] : undefined);
+    const answer = answers[answerKey(q)] ?? answers[q.question] ?? (q.header ? answers[q.header] : undefined);
     return typeof answer === 'string' && answer.trim()
-      ? [{ question: q.question, answer: answer.trim() }] : [];
+      ? [{ ...(q.id ? { questionItemId: q.id } : {}), question: q.question, answer: answer.trim() }] : [];
   });
-  return replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
+  if (!replies.length) return '';
+  const message = questions.length && questions.every((q) => q.id?.startsWith('["request_user_input_async",'))
+    ? `<send_user_message_question_reply>\n${JSON.stringify(replies)}\n</send_user_message_question_reply>`
+    : replies.map(({ question, answer }) => `${question.split('\n').map((line) => `> ${line}`).join('\n')}\n\n${answer}`).join('\n\n');
+  return context?.late
+    ? `${message}\n\n<cindy_question_context>\nThis is a delayed answer to an earlier question. Check the current task state and whether the question still applies before acting; do not repeat work already completed. This context is added by Cindy, not part of the user's answer or new authorization.\n</cindy_question_context>`
+    : message;
+}
+
+/** Keep selected choices and typed text editable when an obsolete card becomes a supplement. */
+export function withdrawnQuestionDraftText(customInput: string, selectedLabels: Iterable<string>, savedAnswer?: string): string {
+  const selected = [...selectedLabels];
+  if (selected.length) return [...selected.filter((label) => label !== customInput.trim()), ...(customInput ? [customInput] : [])].join('\n');
+  if (customInput) return customInput;
+  if (!savedAnswer) return '';
+  try {
+    const decoded = JSON.parse(savedAnswer);
+    if (Array.isArray(decoded) && decoded.every((value) => typeof value === 'string')) return decoded.join('\n');
+  } catch { /* A plain single answer needs no decoding. */ }
+  return savedAnswer;
 }
 
 /** Only a confirmed cancellation permits delivery as a new user message. A
@@ -545,8 +576,12 @@ export function interactionBlocksRemoteComposer(item: PendingInteractionLike | n
  */
 export function pendingInteractionsBlockRemoteComposer(
   interactions: readonly PendingInteractionLike[],
+  collapsedQuestionIds: readonly string[] = [],
 ): boolean {
-  return interactions.some((item) => interactionBlocksRemoteComposer(item));
+  return interactions.some((item) => {
+    if (interactionKind(item) === 'ask_user_question' && collapsedQuestionIds.includes(readRequestId(item) ?? '')) return false;
+    return interactionBlocksRemoteComposer(item);
+  });
 }
 
 /**
@@ -847,6 +882,7 @@ const INTERACTION_PRIORITY: Record<string, number> = {
 };
 
 export function interactionPriority(item: PendingInteractionLike): number {
+  if (interactionKind(item) === 'ask_user_question' && item.request.delivery === 'async') return 2.5;
   return INTERACTION_PRIORITY[interactionKind(item)] ?? 100;
 }
 
@@ -855,8 +891,8 @@ export function sortPendingInteractions(
 ): PendingInteractionLike[] {
   return interactions
     .map((item, index) => ({ item, index }))
-    .sort((a, b) => Number(b.item.retainedDraft === true) - Number(a.item.retainedDraft === true)
-      || interactionPriority(a.item) - interactionPriority(b.item) || a.index - b.index)
+    .sort((a, b) => interactionPriority(a.item) - interactionPriority(b.item)
+      || Number(b.item.retainedDraft === true) - Number(a.item.retainedDraft === true) || a.index - b.index)
     .map(({ item }) => item);
 }
 
@@ -880,7 +916,7 @@ function interactionPositionLabel(index: number, localizer?: PresentationLocaliz
 }
 
 /** What a permission card asks about, independent of harness tool naming. */
-export type PermissionActionKind = 'command' | 'file-read' | 'file-write' | 'plugin' | 'browser' | 'tool';
+export type PermissionActionKind = 'command' | 'file-read' | 'file-write' | 'plugin' | 'mcp' | 'browser' | 'tool';
 
 export interface PermissionActionSummary {
   kind: PermissionActionKind;
@@ -996,7 +1032,13 @@ export function describePermissionAction(toolName: string, input: Record<string,
     const command = commandText(input);
     // The same relative command in two repositories is not the same operation: keep the cwd.
     const cwd = readString(input.cwd) ?? readString(input.workdir);
-    if (command) return { kind: 'command', preview: cwd ? `${command}\n# cwd: ${cwd}` : command };
+    if (command) {
+      const context = [cwd && `# cwd: ${cwd}`,
+        input.environmentId && `# environment: ${String(input.environmentId)}`,
+        input.networkApprovalContext && `# network: ${JSON.stringify(input.networkApprovalContext)}`,
+        input.approvalKind === 'humanCommand' && '# humanCommand'];
+      return { kind: 'command', preview: [command, ...context.filter(Boolean)].join('\n') };
+    }
   }
   if (FILE_READ_TOOLS.has(name) || FILE_WRITE_TOOLS.has(name)) {
     const paths = filePaths(input, FILE_READ_TOOLS.has(name) && name !== 'read');
@@ -1006,7 +1048,7 @@ export function describePermissionAction(toolName: string, input: Record<string,
   if (mcp) {
     const dispatched = mcp.tool === 'call_tool' && innerName;
     const args = dispatched ? innerArgs : input;
-    return { kind: 'plugin', subject: mcp.server, preview: [dispatched || mcp.tool, argsPreview(args)].filter(Boolean).join(' ') };
+    return { kind: 'mcp', subject: mcp.server, preview: [dispatched || mcp.tool, argsPreview(args)].filter(Boolean).join(' ') };
   }
   return { kind: 'tool', preview: previewOf(input) };
 }
@@ -1019,12 +1061,18 @@ export function permissionTitle(
   request: InteractionRequestLike,
   localizer?: PresentationLocalizer,
 ): string {
+  if (permissionToolName(request) === 'write_stdin') {
+    return presentationText(localizer, 'interaction.presentation.permission.titleStdin', '允许向终端发送输入？');
+  }
+  if (permissionToolName(request) === 'mcp_url') {
+    return presentationText(localizer, 'interaction.presentation.permission.titleMcpUrl', '完成 {{server}} 的请求', { server: String(permissionInput(request).serverName ?? 'MCP') });
+  }
   // Harness titles are often English or name an internal tool ("exec"); say what happens instead.
   const action = describePermissionAction(permissionToolName(request), permissionInput(request));
   if (action.kind === 'plugin' && action.subject) {
     return presentationText(localizer, 'interaction.presentation.permission.titlePlugin', `允许使用插件「${action.subject}」？`, { plugin: action.subject });
   }
-  if (action.kind !== 'tool' && action.kind !== 'plugin') {
+  if (action.kind !== 'tool' && action.kind !== 'plugin' && action.kind !== 'mcp') {
     const key = { command: 'titleCommand', 'file-read': 'titleFileRead', 'file-write': 'titleFileWrite', browser: 'titleBrowser' }[action.kind];
     const fallback = { command: '允许运行这条命令？', 'file-read': '允许读取文件？', 'file-write': '允许修改文件？', browser: '允许浏览器执行这一步？' }[action.kind];
     return presentationText(localizer, `interaction.presentation.permission.${key}`, fallback);
@@ -1033,7 +1081,7 @@ export function permissionTitle(
   if (explicit) return explicit;
   const displayName = readString(request.displayName);
   const toolName = readString(request.toolName) || 'tool';
-  const tool = displayName || toolName;
+  const tool = displayName || action.subject || toolName;
   return presentationText(localizer, 'interaction.presentation.permission.title', `允许使用 ${tool}?`, { tool });
 }
 
@@ -1114,26 +1162,55 @@ export function normalizeAskQuestions(value: unknown): AskQuestion[] {
     if (!isRecord(item)) return [];
     const question = readString(item.question);
     if (!question) return [];
+    const answerConstraints = normalizeAskAnswerConstraints(item.answerConstraints);
     const options = Array.isArray(item.options)
       ? item.options.flatMap((option) => {
         if (!isRecord(option)) return [];
-        const label = readString(option.label);
+        const label = answerConstraints?.choices && typeof option.label === 'string' ? option.label : readString(option.label);
         if (!label) return [];
         const description = readString(option.description);
         return [{ label, ...(description ? { description } : {}) }];
       })
       : undefined;
     return [{
+      ...(readString(item.id) ? { id: readString(item.id)! } : {}),
       question,
       header: readString(item.header) ?? undefined,
       options,
       multiSelect: item.multiSelect === true,
+      ...(answerConstraints ? { answerConstraints } : {}),
     }];
   });
 }
 
+function normalizeAskAnswerConstraints(value: unknown): AskAnswerConstraints | undefined {
+  if (!isRecord(value) || typeof value.required !== 'boolean') return undefined;
+  return {
+    required: value.required,
+    ...(Array.isArray(value.choices) && value.choices.every((v) => typeof v === 'string')
+      ? { choices: value.choices as string[] } : {}),
+    ...(Number.isSafeInteger(value.minLength) && Number(value.minLength) >= 0 ? { minLength: Number(value.minLength) } : {}),
+    ...(Number.isSafeInteger(value.maxLength) && Number(value.maxLength) >= 0 ? { maxLength: Number(value.maxLength) } : {}),
+  };
+}
+
+export function askQuestionOptions(question: AskQuestion | undefined): Array<{ label: string; description?: string }> {
+  return question?.answerConstraints?.choices ? [...(question.options ?? [])] : visibleAskOptions(question?.options);
+}
+
+export function askAnswerError(question: AskQuestion, answer: string): { key: 'required' | 'choice' | 'tooShort' | 'tooLong'; count?: number } | undefined {
+  const rules = question.answerConstraints;
+  if (!rules) return undefined;
+  if (!answer.trim()) return rules.required ? { key: 'required' } : undefined;
+  if (rules.choices && !rules.choices.includes(answer)) return { key: 'choice' };
+  const length = Array.from(answer).length;
+  if (rules.minLength !== undefined && length < rules.minLength) return { key: 'tooShort', count: rules.minLength };
+  if (rules.maxLength !== undefined && length > rules.maxLength) return { key: 'tooLong', count: rules.maxLength };
+  return undefined;
+}
+
 export function answerKey(question: AskQuestion): string {
-  return question.question;
+  return question.id || question.question;
 }
 
 export function encodeMultiSelectAnswer(

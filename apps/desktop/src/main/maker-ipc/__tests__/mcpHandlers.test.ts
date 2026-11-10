@@ -10,14 +10,14 @@ import type { McpProvider } from '@cindy/maker-core';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
-import { createCustomMcpServer, listCustomMcpServers, listCustomMcpRuntimeGenerations } from '../../maker-host/custom-mcp-store.js';
+import { createCustomMcpServer, listCustomMcpServers, listCustomMcpRuntimeGenerations } from '../../maker-host/custom-mcp-store.desktop.js';
 import { buildBotMcpCatalog } from '../../maker-host/botMcpCatalog.js';
 import {
   getBuiltinMcpServerNames,
   refreshCustomMcpProviders,
   registerCustomMcpArrays,
   resetCustomMcpRegistry,
-} from '../../mcp-integrations/custom-mcp-registry.js';
+} from '../../mcp-integrations/custom-mcp-registry.desktop.js';
 import type { CustomMcpConfig } from '../../../shared/customMcp.js';
 import { MAKER_INVOKE } from '../channels.js';
 import { createCustomMcpServerForSetup, createCustomMcpServerFromMain, registerMcpHandlers, type McpHandlerDeps } from '../mcpHandlers.js';

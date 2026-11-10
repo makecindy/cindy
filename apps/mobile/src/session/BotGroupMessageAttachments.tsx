@@ -1,4 +1,3 @@
-import { PreviewCollectionContext } from "./PreviewChrome";
 /**
  * 群聊时间线里各成员消息的附件（docs/product-rules/bot-group-chat.md §8）。
  *
@@ -114,9 +113,6 @@ export function BotGroupMessageAttachments({
     [attachments],
   );
   const [deviceFile, setDeviceFile] = useState<BotGroupAttachment | null>(null);
-  const [deviceCollection, setDeviceCollection] = useState<
-    readonly BotGroupAttachment[]
-  >([]);
   if (resolveServerMedia)
     return (
       <ServerAttachments
@@ -142,7 +138,6 @@ export function BotGroupMessageAttachments({
   };
   const open = (payload: MessagePayload) => {
     if (payload.kind === "media") {
-      setDeviceCollection([...readyAttachments]);
       setDeviceFile(
         readyAttachments.find(
           (attachment) => attachment.url === payload.media.url,
@@ -156,19 +151,7 @@ export function BotGroupMessageAttachments({
       ? `xdt-file://open?path=${encodeURIComponent(deviceFile.path)}`
       : null);
   return (
-    <PreviewCollectionContext.Provider
-      value={
-        deviceFile && deviceCollection.length > 1
-          ? {
-              names: deviceCollection.map((item) => item.name),
-              index: deviceCollection.findIndex(
-                (item) => item.id === deviceFile.id,
-              ),
-              onSelect: (index) => openDeviceFile(deviceCollection[index]),
-            }
-          : undefined
-      }
-    >
+    <>
       {/* Sent order: an attachment the computer has not fetched yet keeps its place with its state. */}
       {runs.map((run, index) =>
         run.kind === "pending" ? (
@@ -186,10 +169,7 @@ export function BotGroupMessageAttachments({
             align={align}
             layout={layout}
             onOpen={open}
-            onOpenFile={(index) => {
-              setDeviceCollection([...readyAttachments]);
-              openDeviceFile(run.attachments[index]);
-            }}
+            onOpenFile={(index) => openDeviceFile(run.attachments[index])}
             onResolveRemoteMedia={onResolveRemoteMedia}
             usePreviewState={useState}
           />
@@ -212,7 +192,7 @@ export function BotGroupMessageAttachments({
           onClose={() => setDeviceFile(null)}
         />
       ) : null}
-    </PreviewCollectionContext.Provider>
+    </>
   );
 }
 
@@ -450,31 +430,12 @@ function ServerAttachments({
   const readyAttachments = runs.flatMap((run) =>
     run.kind === "ready" ? run.attachments : [],
   );
-  const [openedCollection, setOpenedCollection] = useState<
-    readonly BotGroupAttachment[]
-  >([]);
   const open = (id: string) => {
-    setOpenedCollection([...readyAttachments]);
     const attachment = readyAttachments.find((item) => item.id === id);
     if (attachment) setFilePreview({ id, name: attachment.name });
   };
   return (
-    <PreviewCollectionContext.Provider
-      value={
-        filePreview && openedCollection.length > 1
-          ? {
-              names: openedCollection.map((item) => item.name),
-              index: openedCollection.findIndex(
-                (item) => item.id === filePreview.id,
-              ),
-              onSelect: (index) => {
-                const item = openedCollection[index];
-                if (item) setFilePreview({ id: item.id, name: item.name });
-              },
-            }
-          : undefined
-      }
-    >
+    <>
       {/* Stretch like a session strip, so the chip keeps the same width as in a task message. */}
       {displayRuns.map((run) =>
         run.kind === "pending" ? (
@@ -549,7 +510,7 @@ function ServerAttachments({
           }}
         />
       ) : null}
-    </PreviewCollectionContext.Provider>
+    </>
   );
 }
 

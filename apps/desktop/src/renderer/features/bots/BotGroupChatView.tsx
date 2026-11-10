@@ -1,3 +1,5 @@
+import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
+import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
 import { RemoveChatFromListButton } from './RemoveChatFromListButton';
 import { ChatInviteDialog } from './ChatInviteDialog';
 import { useThreadPanelResize } from './useThreadPanelResize';
@@ -121,7 +123,7 @@ import { botGroupApi, editBotGroupPlanStep, runBotGroupPlanAction, setBotGroupAu
 import { botGroupReadKey, markBotRead } from './botReadState';
 import { useGroupMask, useReadLocatedMention, type GroupMaskMention } from './groupMaskPresentation';
 import {
-  beginBotGroupTimelineRead, discardBotGroupOutbox, getBotGroupOutboxClaims,
+  enqueueBotGroupSend, botGroupSendSignature, beginBotGroupTimelineRead, discardBotGroupOutbox, getBotGroupOutboxClaims,
   getBotGroupOutboxPreviews, interleaveBotGroupOutbox, mergeBotGroupLocalAttachments,
   noteBotGroupTimeline, projectBotGroupOutbox, useBotGroupOutbox,
 } from './botGroupOutbox';
@@ -277,6 +279,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const jumpingToBottomRef = useRef(false);
+  const processScroll = useProcessDisclosureScroll(scrollRef, contentRef, stickToBottomRef, STICK_TO_BOTTOM_PX);
+  const { inspecting: inspectingProcessRef, resumeFollow: resumeBottomFollow } = processScroll;
   const [nearBottom, setNearBottom] = useState(true);
   const previousScrollTop = useRef(0);
   const jumpDown = useJumpToBottomVisibility();
@@ -285,7 +289,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     const element = scrollRef.current;
     if (!element) return;
     jumpingToBottomRef.current = true;
-    stickToBottomRef.current = true;
+    resumeBottomFollow();
     setJumpTarget(null);
     quoteLocateGeneration.current += 1;
     prependAnchorRef.current = null;
@@ -294,7 +298,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const interruptJumpToBottom = () => {
     jumpingToBottomRef.current = false;
     const element = scrollRef.current;
-    if (element) stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
+    if (element && !inspectingProcessRef.current) stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
   };
   const [seenThrough, setSeenThrough] = useState<string | null>(null);
   const readOwner = useRef(getDataOwnerGeneration());
@@ -1055,7 +1059,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     const api = botGroupApi();
     if (!api || continuing) return;
     setContinuing(true);
-    stickToBottomRef.current = true;
+    resumeBottomFollow();
     try {
       const result = await api.continueBotGroupRound(groupId);
       if (!result.ok) toast.error(t('bots.groupChat.timeline.continueFailed'));
@@ -1087,7 +1091,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     if (planPendingRef.current) return;
     planPendingRef.current = true;
     setPlanPending({ planId, action });
-    stickToBottomRef.current = true;
+    resumeBottomFollow();
     try {
       const result = await runBotGroupPlanAction(action, { groupId, planId });
       if (!result) return;
@@ -1173,7 +1177,18 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     if (entry.threadRootId) onOpenThread(entry.threadRootId, entry.messageId);
     else void actionsRef.current.locateQuoted({ messageId: entry.messageId, sequence: null });
   }, [onOpenThread]);
-  const onSending = useCallback(() => { stickToBottomRef.current = true; }, []);
+  const onSending = resumeBottomFollow;
+  const sendRichAnswer = useCallback(async (text: string) => {
+    const current = stateRef.current;
+    if (current.kind !== 'ready' || current.group.archived || current.group.dissolvedAt
+      || !isDataOwnerGenerationCurrent(readOwner.current)) return false;
+    const input = { groupId: current.group.id, ...(direct ? { conversationKind: 'direct' as const } : {}),
+      text, clientId: crypto.randomUUID(), mentions: { all: false, botIds: [] } };
+    await enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, ''), draft: text,
+      tracked: [], quote: null, files: [], attachmentScope: botGroupAttachmentScope(current.group.id) });
+    resumeBottomFollow();
+    return true;
+  }, [direct, resumeBottomFollow]);
   const locateNotification = useRef(locateQuoted); locateNotification.current = locateQuoted;
   useEffect(() => {
     if (state.kind !== 'ready' || !notificationTarget || handledNotification.current === location.key) return;
@@ -1336,17 +1351,33 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       <div
         ref={scrollRef}
         data-testid="bot-group-timeline"
-        onWheel={interruptJumpToBottom}
+        onCopy={copyChatSelection}
+        onClickCapture={event => {
+          processScroll.onClickCapture(event);
+          if (inspectingProcessRef.current) jumpingToBottomRef.current = false;
+        }}
+        onWheel={event => {
+          interruptJumpToBottom();
+          // A short timeline can resume following without emitting onScroll.
+          if (processScroll.onWheel(event)) acknowledgeSoon();
+        }}
         onTouchStart={interruptJumpToBottom}
-        onPointerDown={interruptJumpToBottom}
+        onPointerDown={event => {
+          interruptJumpToBottom();
+          processScroll.onPointerDown(event);
+        }}
+        onPointerUp={processScroll.onPointerUp}
+        onPointerCancel={processScroll.onPointerUp}
         onKeyDown={event => {
           if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) interruptJumpToBottom();
+          if (processScroll.onKeyDown(event)) acknowledgeSoon();
         }}
         onScroll={(event) => {
           const element = event.currentTarget;
+          const following = processScroll.onScroll(event);
           const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX;
           if (atBottom) jumpingToBottomRef.current = false;
-          stickToBottomRef.current = jumpingToBottomRef.current || atBottom;
+          stickToBottomRef.current = jumpingToBottomRef.current || following;
           setNearBottom(atBottom);
           jumpDown.onScroll(element.scrollTop - previousScrollTop.current, atBottom);
           previousScrollTop.current = element.scrollTop;
@@ -1412,6 +1443,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   readersEnabled={group.serverBacked && !direct && group.supportsMessageReaders === true}
                   reactionRevision={messageReactionRevision(group, message.id)}
                   readOnly={Boolean(group.archived || group.dissolvedAt)}
+                  onRichSend={sendRichAnswer}
                   quoteDisplay={quoteDisplays.get(message.id)?.display}
                   onLocateQuote={onLocateQuote}
                   onQuote={quotable ? onQuote : undefined}

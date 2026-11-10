@@ -98,6 +98,13 @@
     "stepFailed": "{{name}} はエラーのため、このステップを完了できませんでした",
     "stepTimeout": "{{name}} の作業に時間がかかりすぎたため、このステップを止めました",
     "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}}は待機期限内に処理を開始できませんでした。今回のリクエストは終了しました。",
+        "advice": "パートナーのオーナーに、所属するパソコンで Cindy が正常に動作し、ネットワークに接続されているか確認してもらってください。",
+        "details": "Cindy とネットワークが正常に戻ったら、メッセージを再送してください。"
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}}は返信できません：この仲間のデバイスのリモートセッション数が上限に達しました。",

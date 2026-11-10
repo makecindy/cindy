@@ -19,86 +19,82 @@ import { imBotSettings } from './ImBotSection.settings-search';
 import { helpSettings } from './HelpSection.settings-search';
 import { aboutSettings } from './AboutSection.settings-search';
 import { storageManagementCardSettings } from './StorageManagementCard.settings-search';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSyncExternalStore } from 'react';
-import { ArrowLeft, ChevronRight } from 'lucide-react';
-
+import { ArrowLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
 import { isLegacyAppearanceDeepLink, resolveSettingsSearchEntry } from './settingsSearchCatalog';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from './settingsRowClasses';
+import { SettingsCard, SettingsPageScope, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { SettingsSearchNavigationContext } from './SettingsSearchNavigation';
 import type { SettingsSearchContext } from './settingsSearchTypes';
 import { useSettingsSectionTarget } from './useSettingsSectionTarget';
 import { useSettingsEscape } from './useSettingsEscape';
 import { UserProfileCard } from './UserProfileCard';
-import { VoiceInputSection } from './VoiceInputSection';
-import { AppearanceSection } from './AppearanceSection';
-import { SubagentModelSection } from './SubagentModelSection';
-import { AuxiliaryModelSection } from './AuxiliaryModelSection';
-import { VisionBridgeSection } from './VisionBridgeSection';
-import { ProvidersSection } from './ProvidersSection';
-import { McpServersSection } from './McpServersSection';
-import { RemoteControlSection } from './RemoteControlSection';
-import { LocalAgentSection } from './LocalAgentSection';
-import { SharedTaskDialog } from '@/features/device-link/SharedTaskDialog';
 import { NotificationSection } from './NotificationSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
 import { ComposerSendShortcutSection } from './ComposerSendShortcutSection';
-import { KeyboardShortcutsSection } from './KeyboardShortcutsSection';
-import { AgentIslandSection } from './AgentIslandSection';
+import { DefaultNewTaskWorkingDirSection } from './DefaultNewTaskWorkingDirSection';
 import { LanguageSection } from './LanguageSection';
 import { LogoutSection } from './LogoutSection';
 import { ImBotSection, isImBotSettingsGroup, type ImBotSettingsGroup } from './ImBotSection';
-import { AboutSection } from './AboutSection';
-import { WorktreeRecycleCard } from './WorktreeRecycleCard';
-import { StorageManagementCard } from './StorageManagementCard';
-import { UserPromptSection } from './UserPromptSection';
-import { MemorySection } from './MemorySection';
 import { TerminalShellSection } from './TerminalShellSection';
 import { LinkOpenSection } from './LinkOpenSection';
-import { StreamFadeSection } from './StreamFadeSection';
 import { TipsSection } from './TipsSection';
 import { ExperimentalSection } from './ExperimentalSection';
 import { GitSafetySection } from './GitSafetySection';
-import { SessionImportSection } from './SessionImportSection';
-import { HelpSection } from './HelpSection';
 import { HelpAssistantPanel } from './HelpAssistantPanel';
 import { NewChatDefaultPermissionSection } from './NewChatDefaultPermissionSection';
 import { AgentResourceSection } from './AgentResourceSection';
-import { PiPackagesSection } from './PiPackagesSection';
 import { CollaborationSection } from './CollaborationSection';
 import { SetupMigrationSection } from './SetupMigrationSection';
-import { BuiltinToolsSection } from './BuiltinToolsSection';
-import { ComputerUseSection } from './ComputerUseSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLocale } from '@/hooks/useLocale';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
 import { isSceneWallpaper } from '@/lib/wallpaper';
 import { isCustomWallpaperVideo } from '../../../shared/appearanceSettings';
-import { SettingsCatalogPanel } from './SettingsCatalogPanel';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
-import { BillingSettingsSection } from '@/features/billing/BillingPage';
 import { BotsGlobalSettingsSection } from '@/features/bots/BotsGlobalSettingsSection';
 import { canAccessBillingSettings } from './billingVisibility';
 import { canAccessUsageSettings } from './usageVisibility';
-import { UsageHistorySection } from './usage/UsageHistorySection';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 import { useVoiceSpeakerFilterStatus } from '@/hooks/useVoiceSpeakerFilterStatus';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
-import { getAgentIslandEnabled, getAgentIslandSoundSettings, isAgentIslandSupported, subscribeAgentIslandSettings } from '@/hooks/useAgentIslandSettings';
+import { getAgentIslandEnabled, getAgentIslandLiveActivity, getAgentIslandSoundSettings, isAgentIslandSupported, loadAgentIslandLiveActivitySupport, subscribeAgentIslandSettings } from '@/hooks/useAgentIslandSettings';
+
+// Keep General available with the route; load other sections only when opened.
+const VoiceInputSection = lazy(() => import('./VoiceInputSection').then(module => ({ default: module.VoiceInputSection })));
+const AppearanceSection = lazy(() => import('./AppearanceSection').then(module => ({ default: module.AppearanceSection })));
+const SubagentModelSection = lazy(() => import('./SubagentModelSection').then(module => ({ default: module.SubagentModelSection })));
+const AuxiliaryModelSection = lazy(() => import('./AuxiliaryModelSection').then(module => ({ default: module.AuxiliaryModelSection })));
+const VisionBridgeSection = lazy(() => import('./VisionBridgeSection').then(module => ({ default: module.VisionBridgeSection })));
+const ProvidersSection = lazy(() => import('./ProvidersSection').then(module => ({ default: module.ProvidersSection })));
+const McpServersSection = lazy(() => import('./McpServersSection').then(module => ({ default: module.McpServersSection })));
+const RemoteControlSection = lazy(() => import('./RemoteControlSection').then(module => ({ default: module.RemoteControlSection })));
+const LocalAgentSection = lazy(() => import('./LocalAgentSection').then(module => ({ default: module.LocalAgentSection })));
+const SharedTaskDialog = lazy(() => import('@/features/device-link/SharedTaskDialog').then(module => ({ default: module.SharedTaskDialog })));
+const KeyboardShortcutsSection = lazy(() => import('./KeyboardShortcutsSection').then(module => ({ default: module.KeyboardShortcutsSection })));
+const AgentIslandSection = lazy(() => import('./AgentIslandSection').then(module => ({ default: module.AgentIslandSection })));
+const AboutSection = lazy(() => import('./AboutSection').then(module => ({ default: module.AboutSection })));
+const WorktreeRecycleCard = lazy(() => import('./WorktreeRecycleCard').then(module => ({ default: module.WorktreeRecycleCard })));
+const StorageManagementCard = lazy(() => import('./StorageManagementCard').then(module => ({ default: module.StorageManagementCard })));
+const UserPromptSection = lazy(() => import('./UserPromptSection').then(module => ({ default: module.UserPromptSection })));
+const MemorySection = lazy(() => import('./MemorySection').then(module => ({ default: module.MemorySection })));
+const StreamFadeSection = lazy(() => import('./StreamFadeSection').then(module => ({ default: module.StreamFadeSection })));
+const SessionImportSection = lazy(() => import('./SessionImportSection').then(module => ({ default: module.SessionImportSection })));
+const HelpSection = lazy(() => import('./HelpSection').then(module => ({ default: module.HelpSection })));
+const PiPackagesSection = lazy(() => import('./PiPackagesSection').then(module => ({ default: module.PiPackagesSection })));
+const BuiltinToolsSection = lazy(() => import('./BuiltinToolsSection').then(module => ({ default: module.BuiltinToolsSection })));
+const ComputerUseSection = lazy(() => import('./ComputerUseSection').then(module => ({ default: module.ComputerUseSection })));
+const SettingsCatalogPanel = lazy(() => import('./SettingsCatalogPanel').then(module => ({ default: module.SettingsCatalogPanel })));
+const BillingSettingsSection = lazy(() => import('@/features/billing/BillingPage').then(module => ({ default: module.BillingSettingsSection })));
+const UsageHistorySection = lazy(() => import('./usage/UsageHistorySection').then(module => ({ default: module.UsageHistorySection })));
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
@@ -129,10 +125,23 @@ function SettingsViewContent() {
   const voiceRefinementEnabled = useSyncExternalStore(subscribeVoiceSettings, getVoiceRefinementEnabled);
   const agentIslandEnabled = useSyncExternalStore(subscribeAgentIslandSettings, getAgentIslandEnabled);
   const agentIslandSoundEnabled = useSyncExternalStore(subscribeAgentIslandSettings, getAgentIslandSoundEnabled);
+  const agentIslandLiveActivity = useSyncExternalStore(subscribeAgentIslandSettings, getAgentIslandLiveActivity);
   const agentIslandSupported = isAgentIslandSupported();
+  const [agentIslandLiveActivitySupported, setAgentIslandLiveActivitySupported] = useState(false);
+  useEffect(() => {
+    if (!agentIslandSupported) return;
+    let cancelled = false;
+    void loadAgentIslandLiveActivitySupport().then((supported) => {
+      if (!cancelled) setAgentIslandLiveActivitySupported(supported);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentIslandSupported]);
   const navigate = useNavigate();
   const outletContext = useOutletContext<SettingsOutletContext | null>();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [isTabPending, startTransition] = useTransition();
   const { t } = useTranslation();
   const [searchActivation, setSearchActivation] = useState(0);
   const { mode, dataOwnerId, user } = useAuth();
@@ -191,14 +200,14 @@ function SettingsViewContent() {
     // 计费页不可见时它的深链意图(intent=topup)也一并作废,不留在 URL 上等着
     // 用户切到别的 tab 再被误消费。
     next.delete('intent');
-    setSearchParams(next, { replace: true });
+    startTransition(() => setSearchParams(next, { replace: true }));
   }, [canAccessBilling, rawTab, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (rawTab !== 'cindy-make') return;
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
-    setSearchParams(next, { replace: true });
+    startTransition(() => setSearchParams(next, { replace: true }));
   }, [rawTab, searchParams, setSearchParams]);
 
   // 「IM 机器人」官方/个人已纵向同页展示；?imGroup=cindy|personal 只负责把
@@ -220,7 +229,7 @@ function SettingsViewContent() {
 
   const handleSelectTab = useCallback(
     (tab: SettingsTab) => {
-      if (tab === activeTab && !piExtensionsPanelOpen) return;
+      if (tab === activeTab && !piExtensionsPanelOpen && !isTabPending) return;
       const next = new URLSearchParams(searchParams);
       next.delete('openPanel');
       next.delete('ghost');
@@ -237,9 +246,9 @@ function SettingsViewContent() {
       } else {
         next.set('tab', tab);
       }
-      setSearchParams(next, { replace: true });
+      startTransition(() => setSearchParams(next, { replace: true }));
     },
-    [activeTab, piExtensionsPanelOpen, searchParams, setSearchParams],
+    [activeTab, isTabPending, piExtensionsPanelOpen, searchParams, setSearchParams],
   );
 
   const handleSelectSearchResult = useCallback(
@@ -252,7 +261,7 @@ function SettingsViewContent() {
       if (tab === 'general') next.delete('tab');
       else next.set('tab', tab);
       next.set('section', sectionId);
-      setSearchParams(next, { replace: true });
+      startTransition(() => setSearchParams(next, { replace: true }));
     },
     [searchParams, setSearchParams],
   );
@@ -261,14 +270,14 @@ function SettingsViewContent() {
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
     next.set('openPanel', 'pi-extensions');
-    setSearchParams(next, { replace: true });
+    startTransition(() => setSearchParams(next, { replace: true }));
   }, [searchParams, setSearchParams]);
 
   const handleClosePiExtensions = useCallback(() => {
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
     next.delete('openPanel');
-    setSearchParams(next, { replace: true });
+    startTransition(() => setSearchParams(next, { replace: true }));
   }, [searchParams, setSearchParams]);
 
   // 设置是主窗口里的路由，Esc 与左上角返回按钮走同一出口，不关窗。
@@ -291,7 +300,7 @@ function SettingsViewContent() {
     setHelpAssistantOpen(true);
     const next = new URLSearchParams(searchParams);
     next.delete('openPanel');
-    setSearchParams(next, { replace: true });
+    startTransition(() => setSearchParams(next, { replace: true }));
   }, [activeTab, searchParams, setSearchParams]);
 
   const visibleTabIds = useMemo(
@@ -316,12 +325,18 @@ function SettingsViewContent() {
     speakerFilter: speakerFilterStatus ? {
       supported: speakerFilterStatus.supported, enrolled: speakerFilterStatus.enrolled,
     } : undefined,
-    agentIsland: { enabled: agentIslandEnabled, supported: agentIslandSupported, soundEnabled: agentIslandSoundEnabled },
+    agentIsland: {
+      enabled: agentIslandEnabled,
+      supported: agentIslandSupported,
+      soundEnabled: agentIslandSoundEnabled,
+      liveActivitySupported: agentIslandLiveActivitySupported,
+      liveActivity: agentIslandLiveActivity,
+    },
     voiceInput: voiceModelSelection.ready && voiceModelSelection.selection ? {
       serviceMode: voiceModelSelection.selection.serviceMode,
       asrProvider: voiceModelSelection.selection.asrProvider,
     } : undefined,
-  }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, speakerFilterStatus?.supported, speakerFilterStatus?.enrolled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled]);
+  }), [locale, wallpaperMotionAvailable, mode, user?.membershipKind, voiceModelSelection.ready, voiceModelSelection.selection, voiceRefinementEnabled, speakerFilterStatus?.supported, speakerFilterStatus?.enrolled, agentIslandEnabled, agentIslandSupported, agentIslandSoundEnabled, agentIslandLiveActivitySupported, agentIslandLiveActivity]);
   const requestedEntry = resolveSettingsSearchEntry(activeTab, searchParams.get('section'));
   const searchEntry = piExtensionsPanelOpen || (requestedEntry?.isVisible && !requestedEntry.isVisible(searchContext))
     ? null : requestedEntry;
@@ -346,7 +361,6 @@ function SettingsViewContent() {
       <div className="flex h-full min-h-0 w-full justify-start pb-5">
         {/* Inner sidebar mirrors the main sidebar width for a stable route transition. */}
         <aside
-          data-plugin-ui-element="sidebar"
           className="flex h-full min-h-0 shrink-0 flex-col gap-2 overflow-y-auto pl-6 pr-4 pt-7"
           style={{ width: menuWidth }}
           aria-label={t('settings.title')}
@@ -398,6 +412,9 @@ function SettingsViewContent() {
         >
           {/* key={activeTab}:切分区时 wrapper 重挂跑 150ms 淡入(面板内容本就
               按 activeTab 条件卸载重挂,key 不额外丢状态;滚动容器在外层不重挂)。 */}
+          {/* Keep the boundary outside the keyed panel: replacing it on each tab
+              forces a fresh fallback and React delays revealing even cached-fast loads. */}
+          <Suspense fallback={<div role="status" className="py-6 text-sm text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
           <div
             key={`${activeTab}:${piExtensionsPanelOpen ? 'pi-extensions' : 'root'}`}
             className={cn(
@@ -475,6 +492,14 @@ function SettingsViewContent() {
                       <ComposerSendShortcutSection />
                     </section>
 
+                    <section
+                      id={generalSettings.defaultNewTaskWorkingDir.targetId}
+                      className="py-[18px]"
+                      aria-label={t(generalSettings.defaultNewTaskWorkingDir.titleKey)}
+                    >
+                      <DefaultNewTaskWorkingDirSection ownerId={dataOwnerId} />
+                    </section>
+
                     {/* Section — 伙伴（功能级设置：怎么提醒你 + 带走/接回一个伙伴）。
                         单个伙伴的性格、记忆、能力与日程仍在 TA 自己的设置页里。 */}
                     <section
@@ -515,29 +540,16 @@ function SettingsViewContent() {
 
                     {/* Pi 扩展只在通用页提供一行入口，不占用设置一级菜单；与 Agent 相关设置放在一起。 */}
                     <section id={generalSettings.piExtensions.targetId} className="py-[18px]" aria-label={t('settings.piPackages.title')}>
-                      <div className="flex flex-col gap-[14px]">
-                        <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{t('settings.piPackages.title')}</h2>
-                        <div className={SETTINGS_CARD_CLASS}>
-                          <button data-setting-id={generalSettings.piExtensions.id}
-                            type="button"
+                      <SettingsSection title={t('settings.piPackages.title')}>
+                        <SettingsCard>
+                          <SettingsRow data-setting-id={generalSettings.piExtensions.id}
+                            title={t('settings.piPackages.manageLabel')}
+                            hint={t('settings.piPackages.entryDescription')}
+                            chevron
                             onClick={handleOpenPiExtensions}
-                            className={cn(
-                              SETTINGS_ROW_CLASS,
-                              'w-full rounded-xl text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                            )}
-                          >
-                            <span className="flex min-w-0 flex-col gap-1">
-                              <span className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-                                {t('settings.piPackages.manageLabel')}
-                              </span>
-                              <span className={SETTINGS_ROW_HINT_CLASS}>
-                                {t('settings.piPackages.entryDescription')}
-                              </span>
-                            </span>
-                            <ChevronRight size={16} aria-hidden="true" className="shrink-0 text-[var(--text-tertiary)]" />
-                          </button>
-                        </div>
-                      </div>
+                          />
+                        </SettingsCard>
+                      </SettingsSection>
                     </section>
 
                     {/* Section — Experimental (py 18). */}
@@ -599,37 +611,39 @@ function SettingsViewContent() {
                 id={personalizationSettings.personalization.targetId}
                 aria-labelledby="settings-tab-personalization"
               >
-                <section id={personalizationSettings.userPrompt.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.userPrompt.titleKey)}>
-                  <UserPromptSection />
-                </section>
-                <section id={personalizationDetailsSettings.memoryMakerLabel.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.memory.titleKey)}>
-                  <MemorySection />
-                </section>
-                <section id={personalizationSettings.subagents.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.subagents.titleKey)}>
-                  <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
-                </section>
-                <section id={personalizationDetailsSettings.auxiliaryModelsTitle.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.auxiliaryModels.titleKey)}>
-                  <AuxiliaryModelSection
-                    key={`auxiliary-models:${mode}:${dataOwnerId ?? 'none'}`}
-                  />
-                </section>
-                <section id={personalizationSettings.visionBridge.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.visionBridge.titleKey)}>
-                  <VisionBridgeSection key={`vision-bridge:${mode}:${dataOwnerId ?? 'none'}`} />
-                </section>
-                {/* RSB 默认终端 shell —— 改默认只影响新建 tab,已有 tab 不动 */}
-                <section id={personalizationDetailsSettings.terminalShellCardLabel.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.terminalShell.titleKey)}>
-                  <TerminalShellSection />
-                </section>
-                {/* 消息流链接/HTML 文件左键的默认打开位置(内置侧边栏 / 系统浏览器) */}
-                <section id={personalizationSettings.linkOpen.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.linkOpen.titleKey)}>
-                  <LinkOpenSection />
-                </section>
-                {/* "小技巧" section —— TipsSection 内部把多个功能性 cell
-                    (SilentEncryptedRetryCell / ChatEmbeddingCell) 装在一个共享灰底 container,
-                    形态跟 MemorySection 对齐 (单标题 + 多 cell + divider)。 */}
-                <section id={personalizationDetailsSettings.compatModeTitle.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.tips.titleKey)}>
-                  <TipsSection />
-                </section>
+                <SettingsSection variant="page" title={t('settings.personalization.title')}>
+                  <section id={personalizationSettings.userPrompt.targetId} aria-label={t(personalizationSettings.userPrompt.titleKey)}>
+                    <UserPromptSection />
+                  </section>
+                  <section id={personalizationDetailsSettings.memoryMakerLabel.targetId} aria-label={t(personalizationSettings.memory.titleKey)}>
+                    <MemorySection />
+                  </section>
+                  <section id={personalizationSettings.subagents.targetId} aria-label={t(personalizationSettings.subagents.titleKey)}>
+                    <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
+                  </section>
+                  <section id={personalizationDetailsSettings.auxiliaryModelsTitle.targetId} aria-label={t(personalizationSettings.auxiliaryModels.titleKey)}>
+                    <AuxiliaryModelSection
+                      key={`auxiliary-models:${mode}:${dataOwnerId ?? 'none'}`}
+                    />
+                  </section>
+                  <section id={personalizationSettings.visionBridge.targetId} aria-label={t(personalizationSettings.visionBridge.titleKey)}>
+                    <VisionBridgeSection key={`vision-bridge:${mode}:${dataOwnerId ?? 'none'}`} />
+                  </section>
+                  {/* RSB 默认终端 shell —— 改默认只影响新建 tab,已有 tab 不动 */}
+                  <section id={personalizationDetailsSettings.terminalShellCardLabel.targetId} aria-label={t(personalizationSettings.terminalShell.titleKey)}>
+                    <TerminalShellSection />
+                  </section>
+                  {/* 消息流链接/HTML 文件左键的默认打开位置(内置侧边栏 / 系统浏览器) */}
+                  <section id={personalizationSettings.linkOpen.targetId} aria-label={t(personalizationSettings.linkOpen.titleKey)}>
+                    <LinkOpenSection />
+                  </section>
+                  {/* "小技巧" section —— TipsSection 内部把多个功能性 cell
+                      (SilentEncryptedRetryCell / ChatEmbeddingCell) 装在一个共享灰底 container,
+                      形态跟 MemorySection 对齐 (单标题 + 多 cell + divider)。 */}
+                  <section id={personalizationDetailsSettings.compatModeTitle.targetId} aria-label={t(personalizationSettings.tips.titleKey)}>
+                    <TipsSection />
+                  </section>
+                </SettingsSection>
               </div>
             )}
 
@@ -681,8 +695,11 @@ function SettingsViewContent() {
                 aria-labelledby="settings-tab-remote-control"
               >
                 <section aria-label={t(localAgentSettings.connections.sectionKey)}>
-                  <RemoteControlSection />
-                  <LocalAgentSection />
+                  {/* 远程连接的页面标题在 RemoteControlSection 里，本机应用连接是它下面的分区。 */}
+                  <SettingsPageScope>
+                    <RemoteControlSection />
+                    <LocalAgentSection />
+                  </SettingsPageScope>
                 </section>
               </div>
             )}
@@ -709,13 +726,15 @@ function SettingsViewContent() {
                 id={builtinToolsSettings.builtinTools.targetId}
                 aria-labelledby="settings-tab-builtin-tools"
               >
-                <section className="pb-[18px]" aria-label={t(builtinToolsSettings.title.titleKey)}>
-                  <BuiltinToolsSection workingDir={workingDir ?? undefined} />
-                </section>
                 {/* 外部(自定义)MCP 与内置工具同页管理:内置在上、外部在下,组成「工具」页。 */}
-                <section className="pb-[18px]" aria-label={t(builtinToolsSettings.builtinTools.sectionKey)}>
-                  <McpServersSection />
-                </section>
+                <SettingsSection variant="page" title={t('settings.tabs.builtinTools')}>
+                  <section aria-label={t(builtinToolsSettings.title.titleKey)}>
+                    <BuiltinToolsSection workingDir={workingDir ?? undefined} />
+                  </section>
+                  <section aria-label={t(builtinToolsSettings.builtinTools.sectionKey)}>
+                    <McpServersSection />
+                  </section>
+                </SettingsSection>
               </div>
             )}
 
@@ -794,6 +813,7 @@ function SettingsViewContent() {
               </div>
             )}
           </div>
+          </Suspense>
         </div>
       </div>
       <HelpAssistantPanel open={helpAssistantOpen} onClose={() => setHelpAssistantOpen(false)} />

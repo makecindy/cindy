@@ -59,6 +59,7 @@ function harness() {
   const entries = new Map();
   const dismiss = vi.fn();
   const deps = {
+    maker: { getSession: () => ({ submitAsyncQuestionAnswer: vi.fn(async () => true) }) },
     createSharedPermission,
     getDeviceLinkInvokeContext: () => ({ sharedTask }),
     assertSharedTaskInteractionResolveCurrent,
@@ -86,7 +87,7 @@ function harness() {
     take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void; sharedPermission?: SharedPermission }>;
     resolveFromIpc: (event: unknown, id: string, decision: InteractionDecision) => Promise<{ accepted: boolean }>;
   };
-  const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler, signal?: AbortSignal) => {
+  const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler, signal?: AbortSignal, isBlocking?: boolean, delivery?: 'async') => {
     const session: InteractionSession = { id: sessionId, setInteractionListener: handler => { if (handler) listeners.set(sessionId, handler); } };
     runtime.install(session);
     const lease = channel ? beginInteractionRoute(session, {
@@ -96,7 +97,7 @@ function harness() {
       onCancel: () => true,
     }) : undefined;
     const settled = vi.fn();
-    const promise = listeners.get(sessionId)!({ kind, requestId: id, toolName: 'Shell', input: {} } as InteractionRequest, signal);
+    const promise = listeners.get(sessionId)!({ kind, requestId: id, ...(delivery ? { delivery } : {}), toolName: 'Shell', input: {}, ...(isBlocking === undefined ? {} : { isBlocking }) } as InteractionRequest, signal);
     void promise.then(settled);
     return { promise, settled, lease };
   };
@@ -187,6 +188,39 @@ it('rejects a guest replacement tool input without consuming the pending request
   const originalDecision = { kind: 'permission', behavior: 'allow' } as const;
   await expect(h.resolveFromIpc({}, 'permission', originalDecision)).resolves.toEqual({ accepted: true });
   await expect(p.promise).resolves.toEqual(originalDecision);
+});
+
+// Codex Default-mode RPCs must expire with an empty answer, never a selected option.
+it('times out an untouched optional question but keeps an active editor pending', async () => {
+  const h = harness();
+  const untouched = h.request('untouched', 'idle-task', 'ask_user_question', undefined, undefined, false);
+  const active = h.request('active', 'editing-task', 'ask_user_question', undefined, undefined, false);
+  const blocking = h.request('blocking', 'blocking-task', 'ask_user_question');
+  await vi.advanceTimersByTimeAsync(MINUTE);
+  expect(untouched.settled).not.toHaveBeenCalled();
+  expect(h.answer('active', { kind: 'ask_user_question', answers: {}, inProgress: true })).toBe(true);
+  expect(h.answer('blocking', { kind: 'ask_user_question', answers: {}, inProgress: true })).toBe(false);
+  expect(active.settled).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(2 * MINUTE);
+  await expect(untouched.promise).resolves.toEqual({ kind: 'ask_user_question', answers: {}, dismissed: true });
+  expect(active.settled).not.toHaveBeenCalled();
+  expect(blocking.settled).not.toHaveBeenCalled();
+  h.answer('active', { kind: 'ask_user_question', answers: { choice: 'User answer' } });
+  await expect(active.promise).resolves.toMatchObject({ answers: { choice: 'User answer' } });
+  h.cleanup('blocking-task', 'session_closed');
+});
+
+it.each(['session_aborted', 'turn_idle_reconcile'])('retains async questions across %s without bypassing an execution hold', async (reason) => {
+  const h = harness();
+  const q = h.request('async', 'task', 'ask_user_question', undefined, undefined, undefined, 'async');
+  h.hold('task', true);
+  h.cleanup('task', reason);
+  await vi.advanceTimersByTimeAsync(30 * MINUTE);
+  expect(q.settled).not.toHaveBeenCalled();
+  await expect(h.resolveFromIpc({}, 'async', { kind: 'ask_user_question', answers: { q: 'Yes' } })).resolves.toEqual({ accepted: false });
+  h.hold('task', false);
+  await expect(h.resolveFromIpc({}, 'async', { kind: 'ask_user_question', answers: { q: 'Yes' } })).resolves.toEqual({ accepted: true });
+  await expect(q.promise).resolves.toMatchObject({ answers: { q: 'Yes' } });
 });
 
 describe('permission timeout follows the task pause lifecycle', () => {

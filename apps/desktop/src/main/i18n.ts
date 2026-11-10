@@ -1,17 +1,3 @@
-/**
- * Main-process minimal i18n.
- *
- * Used for dialogs that fire before any renderer window exists (e.g. the
- * macOS App Translocation prompt at app-ready). The renderer's localStorage
- * language preference is not reachable at that moment, so we fall back to
- * the OS preferred language list via resolvePreferredSystemLocale.
- *
- * Locale JSONs are imported from the renderer's i18n bundle to avoid
- * duplicating string tables. They are pure data, so the cross-layer import
- * does not violate the main/renderer logic separation. If main-process
- * strings ever grow beyond a couple of dialogs, move the locales to
- * shared/i18n/locales/ and update both call sites.
- */
 import esCommon from '../renderer/i18n/locales/es/common.json';
 import frCommon from '../renderer/i18n/locales/fr/common.json';
 import deCommon from '../renderer/i18n/locales/de/common.json';
@@ -19,7 +5,6 @@ import ptPTCommon from '../renderer/i18n/locales/pt-PT/common.json';
 import ptBRCommon from '../renderer/i18n/locales/pt-BR/common.json';
 import lzhCommon from '../renderer/i18n/locales/zh-Hant-x-lzh/common.json';
 import lzhHansCommon from '../renderer/i18n/locales/zh-Hans-x-lzh/common.json';
-import { app } from 'electron';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { DEFAULT_CLASSICAL_REPLY_STYLE, type ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
 
@@ -70,27 +55,14 @@ const FALLBACK_CHAIN: Record<SupportedLocale, readonly SupportedLocale[]> = {
   ko: ['ko', 'en'],
 };
 
+/** Shared locale and fallback rules. Only system language discovery is platform specific. */
+export function createMainI18n(resolveSystemLanguages: () => string[]) {
 let cachedLocale: SupportedLocale | null = null;
 
 function resolveOsLocale(): SupportedLocale {
-  // app.getPreferredSystemLanguages() returns [] before app-ready. All
-  // current callers fire after ready, but defend anyway so a stray early
-  // t() call cannot throw.
-  let langs: string[] = [];
-  try {
-    langs = app.getPreferredSystemLanguages();
-  } catch {
-    /* not ready */
-  }
-  if (langs.length === 0) {
-    try {
-      langs = [app.getLocale()];
-    } catch {
-      /* not ready */
-    }
-  }
-  if (langs.length === 0) return DEFAULT_LOCALE;
-  return resolvePreferredSystemLocale(langs);
+  let languages: string[] = [];
+  try { languages = resolveSystemLanguages(); } catch { /* platform not ready */ }
+  return languages.length ? resolvePreferredSystemLocale(languages) : DEFAULT_LOCALE;
 }
 
 function getMainLocale(): SupportedLocale {
@@ -103,7 +75,7 @@ function getMainLocale(): SupportedLocale {
  * Keep main-process native surfaces in sync with the renderer language
  * preference after the renderer has mounted.
  */
-export function setMainLocale(locale: SupportedLocale): void {
+function setMainLocale(locale: SupportedLocale): void {
   cachedLocale = locale;
 }
 
@@ -113,11 +85,11 @@ let classicalStyle: ClassicalReplyStyleId = DEFAULT_CLASSICAL_REPLY_STYLE;
  * This computer's classical output style, mirrored from the renderer next to the
  * language. Remote clients send their own with each turn.
  */
-export function setMainClassicalStyle(style: ClassicalReplyStyleId): void {
+function setMainClassicalStyle(style: ClassicalReplyStyleId): void {
   classicalStyle = style;
 }
 
-export function getMainClassicalStyle(): ClassicalReplyStyleId {
+function getMainClassicalStyle(): ClassicalReplyStyleId {
   return classicalStyle;
 }
 
@@ -126,7 +98,7 @@ export function getMainClassicalStyle(): ClassicalReplyStyleId {
  * before). learn-host 用它决定蒸馏自述的语言(跟随系统语言配置,规则 9:
  * 用代码注入确定性语言,不靠模型从请求里猜)。
  */
-export function getResolvedMainLocale(): SupportedLocale {
+function getResolvedMainLocale(): SupportedLocale {
   return getMainLocale();
 }
 
@@ -148,7 +120,7 @@ function lookup(bundle: Record<string, unknown>, key: string): string | null {
  * {{appName}} 由品牌常量注入(本迷你 i18n 不支持其它变量,main 消费的 key 若
  * 需要更多插值,应像 bootstrap 菜单那样在调用点自行 replace)。
  */
-export function t(key: string, locale?: SupportedLocale): string {
+function t(key: string, locale?: SupportedLocale): string {
   const loc = locale ?? getMainLocale();
   let raw: string | null = null;
   for (const chainLocale of FALLBACK_CHAIN[loc]) {
@@ -160,10 +132,26 @@ export function t(key: string, locale?: SupportedLocale): string {
 }
 
 /**
+ * Plural form of `key` for `count`, i18next-style: picks `<key>_<plural category>` for the
+ * locale (falling back to `<key>_other`) and fills `{{count}}`.
+ */
+function tCount(key: string, count: number, locale?: SupportedLocale): string {
+  const loc = locale ?? getMainLocale();
+  let category = 'other';
+  try {
+    category = new Intl.PluralRules(loc).select(count);
+  } catch {
+    // Unknown tag: `other` is always present.
+  }
+  const raw = rawMainString(`${key}_${category}`, loc) ?? rawMainString(`${key}_other`, loc) ?? key;
+  return raw.replaceAll('{{count}}', String(count));
+}
+
+/**
  * 测试专用:用注入的资源表跑同一条 fallback 链(i18nFallback.test.ts 用人为
  * 删 key 的隔离负 fixture 验证 zh-TW → zh-CN → en → key,不污染真实资源)。
  */
-export function lookupWithFallbackForTest(
+function lookupWithFallbackForTest(
   bundles: Partial<Record<SupportedLocale, Record<string, unknown>>>,
   locale: SupportedLocale,
   key: string,
@@ -182,7 +170,7 @@ export function lookupWithFallbackForTest(
  * Raw template for `key` (no interpolation) walking the same fallback chain as t(), or null
  * when no locale has it. For native surfaces that fill their own placeholders.
  */
-export function rawMainString(key: string, locale?: SupportedLocale): string | null {
+function rawMainString(key: string, locale?: SupportedLocale): string | null {
   const loc = locale ?? getMainLocale();
   for (const chainLocale of FALLBACK_CHAIN[loc]) {
     const raw = lookup(resources[chainLocale], key);
@@ -192,7 +180,7 @@ export function rawMainString(key: string, locale?: SupportedLocale): string | n
 }
 
 /** Leaf keys under `prefix` in the default locale, relative to `prefix` (dot-separated). */
-export function mainStringKeysUnder(prefix: string): string[] {
+function mainStringKeysUnder(prefix: string): string[] {
   let cur: unknown = resources[DEFAULT_LOCALE];
   for (const part of prefix.split('.')) {
     if (typeof cur !== 'object' || cur === null) return [];
@@ -209,4 +197,7 @@ export function mainStringKeysUnder(prefix: string): string[] {
   };
   walk(cur, '');
   return keys;
+}
+
+return { setMainLocale, setMainClassicalStyle, getMainClassicalStyle, getResolvedMainLocale, t, tCount, lookupWithFallbackForTest, rawMainString, mainStringKeysUnder };
 }

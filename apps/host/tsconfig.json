@@ -1,0 +1,16 @@
+{
+  "extends": "../desktop/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "allowJs": true,
+    "checkJs": false,
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "../desktop/env.d.ts",
+    "../desktop/src/main/types/md-raw.d.ts",
+    "../desktop/src/renderer/vite-env.d.ts"
+  ]
+}

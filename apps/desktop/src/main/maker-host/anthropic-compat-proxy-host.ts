@@ -17,6 +17,7 @@
  */
 
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
+import { getSessionSubscriptionAccount } from '../subscription-accounts/session.js';
 import {
   createAnthropicCompatProxy,
   createActiveStripTransform,
@@ -51,10 +52,10 @@ import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { providerModelRecord, modelWithInterface, type Provider } from '@cindy/model-providers';
-import { outboundFetch } from './outbound-fetch.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { createClaudeProviderBridge } from './claude-provider-bridge.js';
-import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
 import { createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms } from './pi-subscription-websocket.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 import {
@@ -133,11 +134,13 @@ import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import {
   createClaudeSessionActivityResponseObserver,
+  isClaudeContextUsageProbeUrl,
   recordClaudeApiActivity,
 } from './claude-session-background-activity.js';
 import {
   authenticatePiProxySession,
   getPiProxySessionProvider,
+  getPiProxySubscriptionAccount,
   isPiProxySubagentRoute,
 } from './pi-proxy-session-auth.js';
 import { createXdToolResultImageNoticeTransform } from './xd-tool-result-image-notice.js';
@@ -745,7 +748,8 @@ export function createModelRoutingTransform(): RoutingTransform {
         // PI has already built the provider-native request. The local handler
         // authenticates and forwards it; the xAI forwarder also restores its
         // provider server tools, but no Claude protocol bridge runs.
-        localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId),
+        localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId, undefined,
+          getPiProxySubscriptionAccount(piSessionId, claimedPiSessionToken)),
       };
     }
     const isPiGatewayRequest = Boolean(
@@ -765,13 +769,16 @@ export function createModelRoutingTransform(): RoutingTransform {
     // 都记一笔活动时刻。routingTransform 会处理无 body 控制面请求与 JSON 请求；
     // 非 JSON 的 POST/PUT/PATCH 不经过这里,由响应侧 observer 兜底观察活动。
     // 开销 = 一次 header 读 + 一次活跃会话表反解 + Map.set,非 per-token 路径。
+    // count_tokens 上下文用量探测不算活动(#8671):/context 卡片触发的计量请求
+    // 不生成 token,计入会把查用量误点亮成「后台子任务运行中」;判据与响应侧
+    // observer 用同一处导出,两边必须一致。
     const sdkSessionId = ctx.headers['x-claude-code-session-id'];
     const ccSessionId = sdkSessionId && _resolveCcSessionId
       ? _resolveCcSessionId(sdkSessionId)
       : null;
     // 受邀者的托管会话不在活跃会话表里：会话由路由令牌的登记给出。
     const sessionId = piSessionId ?? (guest ? guest.sessionId : ccSessionId);
-    if (sdkSessionId) {
+    if (sdkSessionId && !isClaudeContextUsageProbeUrl(ctx.url)) {
       recordClaudeApiActivity(
         sdkSessionId,
         ccSessionId,
@@ -838,7 +845,8 @@ export function createModelRoutingTransform(): RoutingTransform {
       fastIdentities.set(ctx.headers, { sessionId, providerId: bridgeProviderId });
       const denied = authorizeClaudeRoute(bridgeProviderId, bridgedSubscriptionModel(wireModel));
       if (denied) return denied;
-      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined);
+      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined,
+        bridgeProviderId === 'openai' ? getSessionSubscriptionAccount(sessionId) : undefined);
       if (!bridgeHandler) {
         if (isExclusiveXaiModelId(wireModel)) {
           log.warn('exclusive xAI model but responses handler unavailable; refusing default gateway', {

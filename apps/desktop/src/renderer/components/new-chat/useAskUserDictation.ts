@@ -30,7 +30,7 @@ import { getVoiceInputWorkletUrl } from '@/voice-input/workletUrl';
 import { playVoiceInputEndCue, playVoiceInputStartCue, prepareVoiceInputCues } from '@/voice-input/startCue';
 import {
   isVoiceInputEventScopeActive,
-  shouldHandleVoiceInputEvent,
+  dispatchVoiceInputEvent,
 } from '@/voice-input/eventScope';
 import { useSpeakerFilterNotice } from '@/voice-input/useSpeakerFilterNotice';
 import type { WebMicAudioEngine } from '@/voice-input/WebMicAudioEngine';
@@ -180,12 +180,21 @@ export function useAskUserDictation(
   useEffect(() => {
     const subscribe = window.electronAPI?.voiceInput?.onEvent;
     if (!subscribe) return;
-    return subscribe((event: VoiceInputRendererEvent) => {
-      if (!shouldHandleVoiceInputEvent(
-        runIdRef.current,
-        event.runId,
-        anchorRef.current !== null && isVoiceInputEventScopeActive(stateRef.current),
-      )) return;
+    let subscribed = true;
+    const unsubscribe = subscribe((event: VoiceInputRendererEvent) => {
+      const attempt = attemptRef.current;
+      dispatchVoiceInputEvent(
+        event,
+        () => subscribed ? runIdRef.current : null,
+        startReadyRef.current.then(() => (
+          attemptRef.current === attempt && runIdRef.current
+            ? { ok: true as const, runId: runIdRef.current }
+            : { ok: false as const }
+        )),
+        handleEvent,
+      );
+    });
+    function handleEvent(event: VoiceInputRendererEvent): void {
       if (event.type === 'draft') {
         const anchor = anchorRef.current;
         if (!anchor) return;
@@ -264,7 +273,11 @@ export function useAskUserDictation(
         void stopEngine();
         void restoreMute();
       }
-    });
+    }
+    return () => {
+      subscribed = false;
+      unsubscribe();
+    };
   }, [formatError, reportError, restoreMute, setVoiceState, showSpeakerFiltered, stopEngine, t]);
 
   const start = useCallback((): boolean => {

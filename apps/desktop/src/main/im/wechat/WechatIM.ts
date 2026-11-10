@@ -546,6 +546,27 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     return this.#requireStore().getMostRecentPeer(epoch.binding.bindingEpoch);
   }
 
+  /** Main-only delivery snapshot; credentials and reply context never leave the transport. */
+  async getOwnerDeliveryTarget(): Promise<{
+    receiver: string; bindingEpoch: string; isCurrent: () => boolean;
+  } | null> {
+    const epoch = this.#epoch;
+    const isCurrent = () => !!epoch && this.#epoch === epoch
+      && !this.#compatibilityDisabled && !epoch.abort.signal.aborted
+      && this.#state.phase === 'connected';
+    if (!epoch || !isCurrent() || !epoch.credentials.userId) return null;
+    const receiver = epoch.credentials.userId;
+    const context = await this.#requireStore().getLatestPeerContext({
+      bindingEpoch: epoch.binding.bindingEpoch, peerId: receiver,
+    }).catch(error => {
+      // Teardown clears the store's key while an in-flight read may still finish.
+      if (!isCurrent()) return null;
+      throw error;
+    });
+    if (!isCurrent() || !context?.contextToken) return null;
+    return { receiver, bindingEpoch: epoch.binding.bindingEpoch, isCurrent };
+  }
+
   getActivePeerIdForSession(sessionId: string | undefined): string | null {
     return activePeerIdForSession(this.#activeTasks, sessionId);
   }

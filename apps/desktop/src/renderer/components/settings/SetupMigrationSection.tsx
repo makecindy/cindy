@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import {
   SetupMigrationChecklist,
   startChecklistWalkthrough,
@@ -21,14 +21,6 @@ import type {
   SetupMigrationDismissRequest,
   SetupMigrationState,
 } from '../../../shared/setupMigration';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_DIVIDER_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from './settingsRowClasses';
 
 export function SetupMigrationSection() {
   const { t } = useTranslation();
@@ -60,41 +52,41 @@ export function SetupMigrationSection() {
   const checklist = state?.lastRun?.checklist ?? [];
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{t('setupMigration.settings.title')}</h2>
-      <div className={SETTINGS_CARD_CLASS}>
-        <div className={SETTINGS_ROW_CLASS}>
-          {/* The section title already names the feature; the row carries only its one-line description. */}
-          <span className={cn('min-w-0', SETTINGS_ROW_LABEL_CLASS)}>{t('setupMigration.settings.description')}</span>
-          <Button variant="secondary" size="md" className="shrink-0" onClick={() => openSetupMigration()}>
-            {t('setupMigration.settings.start')}
-          </Button>
-        </div>
+    <SettingsSection title={t('setupMigration.settings.title')}>
+      <SettingsCard>
+        {/* The section title already names the feature; the row carries only its one-line description. */}
+        <SettingsRow
+          title={t('setupMigration.settings.description')}
+          trailing={
+            <Button variant="secondary" size="md" className="shrink-0" onClick={() => openSetupMigration()}>
+              {t('setupMigration.settings.start')}
+            </Button>
+          }
+        />
         {state?.lastRun && checklist.length > 0 ? (
           <>
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-            <div className="flex items-center justify-between gap-3 px-4 pt-4">
-              <span className="flex min-w-0 flex-col gap-1">
-                <span className={SETTINGS_ROW_LABEL_CLASS}>
-                  {pending.length > 0
-                    ? t('setupMigration.settings.pending', { count: pending.length })
-                    : t('setupMigration.settings.allDone')}
-                </span>
-                <span className={SETTINGS_ROW_HINT_CLASS}>
-                  {t('setupMigration.settings.from', { name: state.lastRun.sourceName })}
-                </span>
-              </span>
-              <Button
-                variant="secondary"
-                size="sm"
-                tone="quiet"
-                compact
-                className="shrink-0"
-                onClick={() => dismiss({ kind: 'checklist' })}
-              >
-                {t('setupMigration.settings.closeChecklist')}
-              </Button>
-            </div>
+            {/* 清单标题行紧贴下方清单，去掉行的下内边距。 */}
+            <SettingsRow
+              className="pb-0"
+              title={
+                pending.length > 0
+                  ? t('setupMigration.settings.pending', { count: pending.length })
+                  : t('setupMigration.settings.allDone')
+              }
+              hint={t('setupMigration.settings.from', { name: state.lastRun.sourceName })}
+              trailing={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  tone="quiet"
+                  compact
+                  className="shrink-0"
+                  onClick={() => dismiss({ kind: 'checklist' })}
+                >
+                  {t('setupMigration.settings.closeChecklist')}
+                </Button>
+              }
+            />
             <div className="pb-2">
               <SetupMigrationChecklist
                 items={checklist}
@@ -106,7 +98,7 @@ export function SetupMigrationSection() {
             </div>
           </>
         ) : null}
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

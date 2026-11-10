@@ -351,5 +351,44 @@
     "title": "Entwickler",
     "identity": "Kennungen",
     "updateInfo": "Update-Infos"
+  },
+  "handheld": {
+    "sectionTitle": "Handheld",
+    "label": "Handheld-Modus",
+    "entryHint": "Bediene Cindy mit dem eingebauten Controller eines Gaming-Handhelds und halte die Sprachtaste gedrückt, um zu sprechen.",
+    "on": "An",
+    "off": "Aus",
+    "openAccessibility": "Einstellungen für den Handheld-Modus öffnen",
+    "title": "Handheld-Modus",
+    "hint": "Bediene Cindy nur mit dem Controller: Steuerkreuz oder linker Stick bewegen den Fokus, A wählt aus, B geht zurück.",
+    "saveFailed": "Die Einstellung konnte nicht gespeichert werden. Sie gilt, bis du Cindy schließt.",
+    "reset": "Auf Standard zurücksetzen",
+    "voiceKey": {
+      "title": "Sprachtaste",
+      "hint": "Halte diese Taste gedrückt, um zu sprechen, und lass sie los, um aufzuhören. Der Text bleibt im Eingabefeld. Auf dem Startbildschirm startet langes Drücken eine neue Aufgabe. Wenn du A, B, L1 oder R1 wählst, verliert diese Taste ihre übliche Funktion.",
+      "capture": "Controller-Taste drücken, um sie festzulegen",
+      "capturing": "Drücke die gewünschte Taste…"
+    },
+    "display": {
+      "title": "Bildschirm",
+      "secondary": "Auf zweitem Bildschirm anzeigen",
+      "hint": "Cindy wechselt auf den zweiten Bildschirm, etwa den unteren Bildschirm eines Dual-Screen-Handhelds. Beim Ausschalten des Handheld-Modus kehrt Cindy auf den Hauptbildschirm zurück.",
+      "none": "Dieses Gerät hat nur einen Bildschirm. Cindy passt sich seiner Größe an.",
+      "current": "Aktueller Bildschirm",
+      "single": "Hauptbildschirm"
+    },
+    "controls": {
+      "title": "Controller",
+      "gamepad": "Controller",
+      "noGamepad": "Nicht erkannt",
+      "moveKeys": "Steuerkreuz / linker Stick",
+      "move": "Fokus bewegen",
+      "confirm": "Auswählen",
+      "back": "Zurück",
+      "voice": "Gedrückt halten zum Sprechen",
+      "scrollKeys": "Rechter Stick",
+      "scroll": "Scrollen",
+      "page": "Seite vor / zurück"
+    }
   }
 }

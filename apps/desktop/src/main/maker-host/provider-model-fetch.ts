@@ -28,14 +28,47 @@ import {
   deriveModelsDiscoveryUrl,
   readCachedGenericOAuthAccessToken,
   refreshGenericOAuthIfNeeded,
-} from './generic-oauth.js';
-import { outboundFetch } from './outbound-fetch.js';
+} from './generic-oauth.desktop.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 
 /** 拉取超时（与 test-connection 探测同量级）。 */
 const FETCH_TIMEOUT_MS = 10_000;
 /** 失败响应体最多读取的字节数（分类只看前几 KB）。 */
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
 const INVALID_DISCOVERY_URL = 'model discovery requires HTTP(S) URLs without embedded credentials';
+
+// Share only an in-flight Hinoki HTTP read, not parsed models or agent-bound
+// provenance receipts. Every caller keeps its own parsing/error policy below.
+const hinokiReads = new WeakMap<typeof fetch, Map<string, {
+  response: Promise<Response>;
+  consumers: number;
+}>>();
+
+async function fetchModelsResponse(url: string, init: RequestInit, fetchImpl: typeof fetch): Promise<Response> {
+  if (url !== 'https://inference.hinoki.security/v1/models') return fetchImpl(url, init);
+  let reads = hinokiReads.get(fetchImpl);
+  if (!reads) { reads = new Map(); hinokiReads.set(fetchImpl, reads); }
+  // The existing process-local HMAC includes all effective headers (including
+  // credentials) without retaining plaintext keys in the map key. Never share
+  // across redirect policies or injected transport/credential-owner closures.
+  const signature = `${modelSourceRequestSignature(url, init)}:${init.redirect ?? 'follow'}`;
+  let read = reads.get(signature);
+  if (!read) {
+    read = { response: Promise.resolve().then(() => fetchImpl(url, init)), consumers: 0 };
+    reads.set(signature, read);
+  }
+  read.consumers++;
+  try {
+    return (await read.response).clone();
+  } finally {
+    if (--read.consumers === 0) {
+      reads.delete(signature);
+      // Each consumer owns a clone. Release the unused original branch without
+      // awaiting stream tee cancellation, which waits for the clones to finish.
+      void read.response.then(response => response.body?.cancel().catch(() => undefined), () => undefined);
+    }
+  }
+}
 
 /** 一次「获取模型列表」的完整参数（表单值内存透传，不落盘）。 */
 export interface ProviderModelsFetchSpec {
@@ -283,7 +316,7 @@ export async function fetchProviderModels(
   const { url, init } = request;
   let res: Response;
   try {
-    res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    res = await fetchModelsResponse(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }, fetchImpl);
   } catch (err) {
     const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
     return { ok: false, code: cls.code, detail: cls.detail };
@@ -328,16 +361,37 @@ export async function fetchProviderModels(
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
     return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
   });
-  // Ollama Cloud's public, unfiltered catalog can legitimately be empty. Keep
+  // These exact OpenAI-compatible catalog views can legitimately be empty. Keep
   // that success distinct in every consumer (wizard, edit and saved refresh),
   // without treating an error envelope as an empty catalog or an account grant.
-  const ollamaCloudCatalog = url === 'https://ollama.com/v1/models';
-  const ollamaCloudError = ollamaCloudCatalog && json !== null && typeof json === 'object'
+  const emptyCatalogAllowed = url === 'https://ollama.com/v1/models'
+    || url === 'https://inference.hinoki.security/v1/models';
+  const catalogError = emptyCatalogAllowed && json !== null && typeof json === 'object'
     && 'error' in json && json.error != null && json.error !== '';
   // The parser can drop invalid members; only an originally empty data array is empty success.
-  const ollamaCloudEmpty = ollamaCloudCatalog && json !== null && typeof json === 'object'
+  const rawCatalogEmpty = emptyCatalogAllowed && json !== null && typeof json === 'object'
     && 'data' in json && Array.isArray(json.data) && json.data.length === 0;
-  if (!models || ollamaCloudError || (models.length === 0 && (ollamaCloudCatalog ? !ollamaCloudEmpty : !spec.allowEmpty))) {
+  // Magpie's enabled-model catalog can be empty. Identify the gateway rather
+  // than guessing from a user-editable port/name; never send credentials to hello.
+  let magpieEmpty = false;
+  const endpoint = new URL(url);
+  if (models?.length === 0 && !spec.allowEmpty && !emptyCatalogAllowed
+    && endpoint.pathname === '/v1/models' && !endpoint.search
+    && json !== null && typeof json === 'object' && !Array.isArray(json)
+    && 'data' in json && Array.isArray(json.data) && json.data.length === 0
+    && (!('error' in json) || json.error == null || json.error === '')
+    && (!('error_code' in json) || json.error_code === 0)) {
+    try {
+      const hello = await fetchImpl(new URL('/api/hello', endpoint).toString(), {
+        method: 'GET', redirect: 'error', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (hello.ok) {
+        const identity = JSON.parse(await readLimitedBody(hello, 16 * 1024));
+        magpieEmpty = identity?.name === 'magpie' && !identity.error;
+      } else await hello.body?.cancel();
+    } catch { /* An unconfirmed gateway keeps the existing conservative result. */ }
+  }
+  if (!models || catalogError || (models.length === 0 && (emptyCatalogAllowed ? !rawCatalogEmpty : !spec.allowEmpty && !magpieEmpty))) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return {
       ok: false,

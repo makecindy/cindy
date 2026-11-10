@@ -298,7 +298,7 @@ export function LiveCapturePanel({ begin, token, bridge, audioOptions }: { begin
   return <div className="pointer-events-none fixed inset-0 select-none text-12 text-[var(--text-primary)]">
     <div className="absolute border-2 border-[var(--focus-ring)]" style={{ left: begin.selection.x - 2, top: begin.selection.y - 2, width: begin.selection.width + 4, height: begin.selection.height + 4 }} />
     {phase === 'countdown' && <div className="absolute flex items-center justify-center" style={{ left: begin.selection.x, top: begin.selection.y, width: begin.selection.width, height: begin.selection.height }}>
-      <span role="status" aria-label={t('regionScreenshot.live.countdown', { count: countdown })} className="flex h-40 w-40 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] font-semibold leading-none tabular-nums shadow-lg" style={{ fontSize: 64 }}>{countdown}</span>
+      <span role="status" aria-label={t('regionScreenshot.live.countdown', { count: countdown })} className="flex h-40 w-40 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] font-semibold leading-none tabular-nums shadow-[shadow:var(--shadow-menu)]" style={{ fontSize: 64 }}>{countdown}</span>
     </div>}
     <section aria-label={t('regionScreenshot.live.video')} className="pointer-events-auto absolute flex flex-col gap-1 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-2" style={{ left: controls.x, top: controls.y, width: controls.width, height: controls.height }}>
     <div className="flex shrink-0 items-center gap-1">

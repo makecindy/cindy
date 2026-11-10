@@ -287,7 +287,10 @@ function toCatalogModel(
   providerDefaults?: ModelMetadata,
   metadataProviderId = providerId,
   generationDefaults?: ModelMetadata,
+  liveMetadata?: ModelMetadata,
 ): CatalogModel {
+  const discoveredMetadata = liveMetadata
+    ? mergeModelMetadata(m.discoveredMetadata, liveMetadata) : m.discoveredMetadata;
   // 显式 runtime 能力优先：reasoning:true 才导出 efforts；false = 明确无思考档。
   // 新代际缺项可沿同系列/变体/协议继承；本型号目录、实报和用户配置优先。
   // 空档位只表示不指定推理强度，不代表要求供应商关闭思考。
@@ -314,7 +317,7 @@ function toCatalogModel(
   const model: CatalogModel = {
     userModelConfig: { ...m },
     id: m.id,
-    discoveredMetadata: m.discoveredMetadata,
+    discoveredMetadata,
     ...(m.discoveredSource ? { discoveredSource: m.discoveredSource } : {}),
     ...(m.opaqueModelId ? { opaqueModelId: true as const } : {}),
     ...(m.discoveredCost ? { cost: m.discoveredCost } : {}),
@@ -343,13 +346,13 @@ function toCatalogModel(
   const user = runtimeUserModelMetadata(m);
   const resolved =
     (modelRegistry?.schemaVersion ?? 0) >= 4 ||
-    m.discoveredMetadata || m.selectedInterface ||
+    m.discoveredMetadata || liveMetadata || m.selectedInterface ||
     providerDefaults || (generationDefaults && Object.keys(generationDefaults).length > 0)
       ? resolveModelMetadata(
           modelRegistry ?? undefined,
           metadataProviderId,
           m.id,
-          m.discoveredMetadata,
+          discoveredMetadata,
           pickModelMetadata(user),
           agent,
           providerDefaults,
@@ -436,6 +439,12 @@ function toRouting(
 export interface BuildUserProviderOptions {
   modelRegistry?: ModelRegistry | null;
   presets?: readonly import("./types.js").ProviderPreset[];
+  /** Host-owned live reports. Merge as discovery, below force/user overrides; never save as edits. */
+  getDiscoveredModelMetadata?: (
+    agent: AgentKind,
+    model: ProviderRuntimeModelConfig,
+    routing: RoutingDescriptor,
+  ) => ModelMetadata | undefined;
 }
 
 export function buildUserProvider(
@@ -560,9 +569,9 @@ export function buildUserProvider(
             m.api ?? (agent === 'pi' ? m.piApi ?? wire : wire),
             !m.api && !m.piApi && !m.route)
           ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, resolvedBaseUrl, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry)
-            ? providerPresetModelRecord(rt.catalogPresetId, m.id) : undefined)
+            ? providerPresetModelRecord(rt.catalogPresetId, m.id, undefined, m.route?.baseUrl ?? resolvedBaseUrl) : undefined)
           ?? (followsPreset && sameRoute && m.api && presetModel?.api === m.api
-            ? providerPresetModelRecord(preset?.id, m.id, m.api) : undefined)
+            ? providerPresetModelRecord(preset?.id, m.id, m.api, m.route?.baseUrl ?? resolvedBaseUrl) : undefined)
           ?? providerModelGenerationRecord(m.id, m.route?.baseUrl ?? resolvedBaseUrl, m.api ?? m.piApi ?? wire, followsPreset ? preset?.id : undefined)
         : undefined;
       // Existing catalog identities keep their established execution path. A
@@ -630,6 +639,7 @@ export function buildUserProvider(
         defaults,
         nativeCodex ? 'openai' : undefined,
         generationDefaults,
+        options.getDiscoveredModelMetadata?.(agent, m, routing[agent]!),
       );
       const currentDeclaration = resolveDeclaration(registry);
       // Apply current Server identity after capability projection, including an

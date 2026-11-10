@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { PreRunPluginFields } from '@/features/scheduler/components/PreRunPluginFields';
 import { GHOST_CONTROL_POINTS } from '../../../shared/ghost';
@@ -418,9 +419,9 @@ export function BotRoutines({
         <fieldset ref={editorRef} disabled={busy} className="min-w-0 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <label className="flex items-center gap-2">
-              <Switch
+              <Checkbox
                 aria-label={t('routines.enabled')} checked={draft.enabled}
-                onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
+                onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
               />
               {t(draft.enabled ? 'routines.enabled' : 'routines.paused')}
             </label>
@@ -528,7 +529,7 @@ export function BotRoutines({
           <details className="space-y-3">
             <summary className="min-h-8 cursor-pointer rounded-full py-2 focus-visible:outline focus-visible:outline-[var(--focus-ring)]">{t('routines.advancedSettings')}</summary>
             <label className="flex min-h-8 items-center gap-2">
-              <Switch aria-label={t('routines.quiet')} checked={draft.silentWhenIdle ?? true} onCheckedChange={(silentWhenIdle) => setDraft({ ...draft, silentWhenIdle })} />
+              <Checkbox aria-label={t('routines.quiet')} checked={draft.silentWhenIdle ?? true} onChange={(event) => setDraft({ ...draft, silentWhenIdle: event.target.checked })} />
               {t('routines.quiet')}
             </label>
             <p className="text-12 text-[var(--text-secondary)]">{t('routines.quietHint')}</p>
@@ -688,7 +689,7 @@ export function BotRoutines({
           </fieldset>
           <div className="flex flex-wrap justify-end gap-2">
             {selected !== 'new' && !saved?.builtin && (
-              <Button variant="secondary" disabled={busy} onClick={() => setDeletePending(true)}>
+              <Button variant="secondary" tone="danger" disabled={busy} onClick={() => setDeletePending(true)}>
                 {t('routines.delete')}
               </Button>
             )}
@@ -722,6 +723,8 @@ export function BotRoutines({
                   {t('routines.keep')}
                 </Button>
                 <Button
+                  variant="secondary"
+                  tone="danger"
                   disabled={busy}
                   onClick={() =>
                     void act(async () => {
@@ -821,8 +824,6 @@ function TriggerFields({
     'subject',
     ...(source?.events.find((item) => item.type === trigger.eventType)?.fields ?? []),
   ];
-  const selectClass =
-    'w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2 text-12';
   return (
     <div className="space-y-2 py-2">
       <p className="text-12 text-[var(--text-secondary)]">
@@ -831,44 +832,40 @@ function TriggerFields({
       </p>
       {trigger.filters.map((filter, index) => (
         <div key={index} className="space-y-2 rounded-xl border border-[var(--border-default)] p-2">
-          <select
-            aria-label={t('routines.field')}
-            className={selectClass}
+          <Select
+            label={t('routines.field')}
+            width="full"
             value={filter.field}
-            onChange={(event) =>
+            // Radix items cannot carry an empty value; an empty field shows the placeholder.
+            options={[...new Set([...fields, filter.field])].filter(Boolean).map((field) => ({ value: field, label: field }))}
+            onValueChange={(field) =>
               onChange({
                 ...trigger,
                 filters: trigger.filters.map((item, i) =>
-                  i === index ? { ...item, field: event.target.value } : item,
+                  i === index ? { ...item, field } : item,
                 ),
               })
             }
-          >
-            {[...new Set([...fields, filter.field])].map((field) => (
-              <option key={field}>{field}</option>
-            ))}
-          </select>
-          <select
-            aria-label={t('routines.operator')}
-            className={selectClass}
+          />
+          <Select
+            label={t('routines.operator')}
+            width="full"
             value={filter.operator}
-            onChange={(event) =>
+            options={['equals', 'contains', 'not-equals'].map((operator) => ({
+              value: operator,
+              label: t(`routines.operators.${operator}`),
+            }))}
+            onValueChange={(operator) =>
               onChange({
                 ...trigger,
                 filters: trigger.filters.map((item, i) =>
                   i === index
-                    ? { ...item, operator: event.target.value as typeof filter.operator }
+                    ? { ...item, operator: operator as typeof filter.operator }
                     : item,
                 ),
               })
             }
-          >
-            {['equals', 'contains', 'not-equals'].map((operator) => (
-              <option key={operator} value={operator}>
-                {t(`routines.operators.${operator}`)}
-              </option>
-            ))}
-          </select>
+          />
           <Input
             aria-label={t('routines.value')}
             value={filter.value}
@@ -922,24 +919,23 @@ function CronFields({
     onChange({ ...trigger, expression: configToCron({ ...config, ...values }) });
   return (
     <div className="space-y-3 py-2">
-      <label className={fieldClass}>
-        <span className={fieldLabelClass}>{t('routines.schedule')}</span>
-        <select
-          className="w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2"
+      <div className={fieldClass}>
+        <span aria-hidden className={fieldLabelClass}>{t('routines.schedule')}</span>
+        <Select
+          label={t('routines.schedule')}
+          width="full"
           value={advanced ? 'custom' : config.mode}
-          onChange={(event) => {
-            const mode = event.target.value as typeof config.mode;
+          options={['hourly', 'daily', 'weekdays', 'weekly', 'monthly', 'custom'].map((mode) => ({
+            value: mode,
+            label: t(`routines.${mode === 'custom' ? 'advanced' : mode}`),
+          }))}
+          onValueChange={(value) => {
+            const mode = value as typeof config.mode;
             setAdvanced(mode === 'custom');
             if (mode !== 'custom') patch({ mode });
           }}
-        >
-          {['hourly', 'daily', 'weekdays', 'weekly', 'monthly', 'custom'].map((mode) => (
-            <option key={mode} value={mode}>
-              {t(`routines.${mode === 'custom' ? 'advanced' : mode}`)}
-            </option>
-          ))}
-        </select>
-      </label>
+        />
+      </div>
       {advanced ? (
         <label className={fieldClass}>
           <span className={fieldLabelClass}>{t('routines.expression')}</span>
@@ -965,23 +961,22 @@ function CronFields({
             </label>
           )}
           {config.mode === 'weekly' && (
-            <label className={fieldClass}>
-              <span className={fieldLabelClass}>{t('routines.weekday')}</span>
-              <select
-                className="w-full rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-2"
-                value={config.weekday}
-                onChange={(event) => patch({ weekday: Number(event.target.value) })}
-              >
-                {Array.from({ length: 7 }, (_, day) => (
-                  <option value={day} key={day}>
-                    {new Intl.DateTimeFormat(i18n.language, {
-                      weekday: 'long',
-                      timeZone: 'UTC',
-                    }).format(new Date(Date.UTC(2024, 0, 7 + day)))}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className={fieldClass}>
+              <span aria-hidden className={fieldLabelClass}>{t('routines.weekday')}</span>
+              <Select
+                label={t('routines.weekday')}
+                width="full"
+                value={String(config.weekday)}
+                options={Array.from({ length: 7 }, (_, day) => ({
+                  value: String(day),
+                  label: new Intl.DateTimeFormat(i18n.language, {
+                    weekday: 'long',
+                    timeZone: 'UTC',
+                  }).format(new Date(Date.UTC(2024, 0, 7 + day))),
+                }))}
+                onValueChange={(value) => patch({ weekday: Number(value) })}
+              />
+            </div>
           )}
           {config.mode === 'monthly' && (
             <label className={fieldClass}>
@@ -1128,7 +1123,7 @@ function NightlyLearningStatus({
       ) : null}
       <button
         type="button"
-        className="-ml-1.5 mt-1.5 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-12 leading-[1.5] text-[var(--text-secondary)] outline-none transition-colors duration-[var(--motion-instant)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        className="-ml-1.5 mt-1.5 inline-flex items-center gap-0.5 rounded-lg px-1.5 py-0.5 text-12 leading-[1.5] text-[var(--text-secondary)] outline-none transition-colors duration-[var(--motion-instant)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
         onClick={onOpen}
       >
         {t('routines.nightly.viewHistory')}

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { GhostPermissionItem } from '../../../shared/ghost.js';
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent.js';
 
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 
 import {
   buildGhostInstallConsentInteraction,

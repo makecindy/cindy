@@ -18,7 +18,7 @@ import {
 } from '../../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
-import { marketItemMatchesInstalledGhost } from './pluginMarketPresentation';
+import { marketItemMatchesInstalledGhost, type PluginPresentationOrigin } from './pluginMarketPresentation';
 
 export interface GhostPluginListItem {
   /** Instance key (storage part). Use this for enable/uninstall/panel IPC. */
@@ -30,6 +30,8 @@ export interface GhostPluginListItem {
   name: string;
   description: string;
   publisherKind?: PluginMarketItem['publisherKind'];
+  /** Source facts from the Host; omitted for unverifiable/legacy installations. */
+  origin?: PluginPresentationOrigin;
   version: string;
   enabled: boolean;
   canUse: boolean;
@@ -135,10 +137,12 @@ export function marketPresentationForInstalledGhost(
   ) return null;
   const publisherKind = marketItem.sourceType === 'server' && marketItem.scope === 'public'
     ? marketItem.publisherKind : undefined;
+  const publicAnonymous = marketItem.sourceType === 'server' && marketItem.scope === 'public'
+    && publisherKind !== 'official';
   if (marketItem.sourceType === 'server' && marketItem.installState === 'update-available'
     && marketItem.installedAuthor !== undefined) {
     return { name: ghost.manifest.name, description: ghost.manifest.description ?? '',
-      iconDataUrl: ghost.iconDataUrl, author: marketItem.installedAuthor, publisherKind };
+      iconDataUrl: ghost.iconDataUrl, author: publicAnonymous ? null : marketItem.installedAuthor, publisherKind };
   }
   if (
     marketItem.installState !== 'installed' ||
@@ -149,7 +153,7 @@ export function marketPresentationForInstalledGhost(
   return {
     name: marketItem.name,
     description: marketItem.description ?? '',
-    author: marketItem.author,
+    author: publicAnonymous ? null : marketItem.author,
     publisherKind,
     iconDataUrl:
       marketItem.sourceType === 'git-market' && !marketItem.icon
@@ -313,6 +317,10 @@ export function toGhostPluginListItem(
     name: display.name,
     description: display.description,
     publisherKind: presentation?.publisherKind,
+    origin: ghost.publishingSource?.kind === 'public-market' ? 'public'
+      : ghost.publishingSource?.kind === 'local' || (ghost.namespaceState === 'confirmed' && ghost.namespace === 'local') ? 'local'
+        : ghost.namespaceState === 'confirmed' && ghost.namespace && ghost.namespace !== 'local'
+          ? 'organization' : undefined,
     version: manifest.version,
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
@@ -349,7 +357,8 @@ export function toGhostPluginDetail(
     ...listItem,
     trust: listItem.trust!,
     releaseNotes: manifest.releaseNotes,
-    author: presentation ? presentation.author : ghostFallbackDisplayAuthor(ghost),
+    author: listItem.origin === 'public' && listItem.publisherKind !== 'official'
+      ? null : presentation ? presentation.author : ghostFallbackDisplayAuthor(ghost),
     contents: ghostContentKeys(manifest),
     permissions: ghostPermissionItems(manifest),
     tools: manifest.tools ?? [],

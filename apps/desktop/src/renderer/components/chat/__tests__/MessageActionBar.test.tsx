@@ -4,19 +4,6 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const pluginMenuMock = vi.hoisted(() => ({
-  views: [] as import('@cindy/maker-shared').PluginUiView[],
-  invoke: vi.fn(),
-  input: null as unknown,
-}));
-vi.mock('@/cindy-brain/PluginUiCommandMenu', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/cindy-brain/PluginUiCommandMenu')>()),
-  usePluginUiCommandMenu: (input: unknown) => {
-    pluginMenuMock.input = input;
-    return { views: pluginMenuMock.views, disabled: false, pending: new Set(), invoke: pluginMenuMock.invoke };
-  },
-}));
-
 vi.mock('react-i18next', async () => {
   const { default: en } = await import('@/i18n/locales/en/common.json');
   const voice: Record<string, unknown> = en.bots.voiceMode;
@@ -119,26 +106,10 @@ describe('MessageActionBar', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    pluginMenuMock.views = [];
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText },
     });
-  });
-
-  it('places a plugin command in the existing message menu with the exact target', () => {
-    const view: import('@cindy/maker-shared').PluginUiView = {
-      version: 1, viewId: 'view', revision: '1', point: 'message.actions', contributionId: 'format',
-      command: { shortcutId: `plugin:${'a'.repeat(64)}` }, controls: [],
-      actions: [{ id: 'run', label: 'Format' }], blocks: [], fallbackMarkdown: 'Format',
-    };
-    pluginMenuMock.views = [view];
-    render(<MessageActionBar copyText="message" align="left" hovered
-      pluginUiTarget={{ sessionId: 'task', id: 'message' }} />);
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Format' }));
-    expect(pluginMenuMock.invoke).toHaveBeenCalledWith(view, 'run', {});
-    expect(pluginMenuMock.input).toMatchObject({ sessionId: 'task', target: { kind: 'message', id: 'message' } });
   });
 
   it('keeps companion quote and copy visible and opens a topic from More with a persistent focus target', async () => {

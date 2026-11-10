@@ -10,8 +10,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildToolResultImageDescriptions,
   collectCindyMediaUrls,
-} from '../ghost.js';
-import type { CindyGhostsHostDeps } from '../ghost.js';
+} from '../ghost.desktop.js';
+import type { CindyGhostsHostDeps } from '../ghost.desktop.js';
 
 /** 合法 cindy-media:// 图片 URL(64 位 hex hash + .jpg)。 */
 const IMG_A = `cindy-media://blobs/${'a'.repeat(64)}.jpg`;
