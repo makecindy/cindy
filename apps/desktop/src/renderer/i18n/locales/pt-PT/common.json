@@ -17548,15 +17548,37 @@
       "customRolePlaceholder": "+ nome de função personalizado (opcional)",
       "customRolePredefinedError": "O nome de função personalizado não pode usar um nome de função predefinido",
       "agentLabel": "Agent",
-      "modelLabel": "Modelo",
       "permissionLabel": "Modo de permissões",
       "noAvailableModels": "Nenhum modelo {{agent}} disponível. Verifique a ligação ao fornecedor e as credenciais nas Definições.",
       "effortLabel": "Esforço de raciocínio",
       "initialTaskLabel": "Tarefa inicial",
-      "optional": "(opcional)",
-      "initialTaskPlaceholder": "Primeira tarefa opcional para este Worker",
+      "initialTaskPlaceholder": "Escreva a primeira coisa a entregar-lhe ou deixe em branco para o Lead distribuir o trabalho",
       "enableCollabTitle": "Iniciar colaboração",
       "enableCollabSubmit": "Iniciar colaboração",
+      "enableCollabDescription": "Esta tarefa passa a ser o Lead: distribui o trabalho e verifica os resultados. O Worker é outro Agent independente, que executa o trabalho e comunica o resultado.",
+      "templateLabel": "O que o Worker faz",
+      "templates": {
+        "developer": {
+          "name": "Desenvolver"
+        },
+        "reviewer": {
+          "name": "Rever",
+          "task": "Dê uma vista de olhos ao trabalho do Lead e faça algumas sugestões."
+        },
+        "tester": {
+          "name": "Testar",
+          "task": "Teste o trabalho do Lead até agora e comunique as falhas com os passos para as reproduzir."
+        }
+      },
+      "removePreset": "Remover {{role}}",
+      "removePresetConfirm": {
+        "title": "Remover «{{role}}»?",
+        "description": "Pode voltar a adicioná-la quando quiser em «Adicionar função».",
+        "confirm": "Remover função",
+        "cancel": "Cancelar"
+      },
+      "addRole": "Adicionar função",
+      "moreSettings": "Mais definições",
       "executionDeviceLabel": "Executar em",
       "thisComputer": "Locais",
       "deviceOnline": "Online",

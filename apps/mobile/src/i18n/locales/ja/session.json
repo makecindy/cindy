@@ -714,21 +714,34 @@
     "remoteDirPathHint": "実行デバイスでディレクトリを確認します。存在しない場合はエラーになり、Lead のディレクトリには切り替わりません。",
     "remoteDirInvalid": "実行デバイスの絶対パスを入力してください。",
     "roleLabel": "ロール名",
-    "roleHint": "複数の協力者を見分けるための名前で、能力は変わりません",
-    "customRole": "カスタム",
-    "customRolePlaceholder": "カスタムロール名",
-    "customRolePredefinedError": "カスタムロール名にプリセットのロール名は使えません",
+    "taskLabel": "Worker に任せること",
+    "enableHint": "このタスクが Lead となり、作業の割り振りと確認を担当します。Worker は別の独立した Agent で、作業を実行して結果を報告します。",
+    "roles": {
+      "reviewer": {
+        "name": "レビュー",
+        "task": "Lead の作業を確認して、いくつか提案してください。"
+      },
+      "developer": {
+        "name": "開発"
+      },
+      "tester": {
+        "name": "テスト",
+        "task": "Lead のここまでの成果をテストし、失敗した項目と再現手順を報告してください。"
+      }
+    },
+    "addRole": "ロールを追加",
+    "removeRoleHint": "長押しで削除",
+    "removeRoleConfirmTitle": "「{{role}}」を削除しますか？",
+    "removeRoleConfirmDesc": "「ロールを追加」からいつでも追加し直せます。",
+    "removeRoleConfirm": "ロールを削除",
+    "moreSettings": "その他の設定",
     "agentLabel": "Agent",
-    "modelLabel": "モデル",
     "modelDefault": "デフォルト",
     "modelDefaultHint": "コンピューター側の Worker 既定モデルを使います",
-    "permissionLabel": "権限モード",
     "permissionAuto": "自動承認",
     "permissionFull": "フルアクセス",
-    "permissionAutoHint": "ワークスペース内の読み書きを許可し、権限昇格を自動承認します。高リスクの操作は拒否または確認が必要になることがあります。",
-    "permissionFullHint": "任意のファイル変更やネットワークコマンドを確認なしで実行できます。最もリスクが高く、信頼できるタスク向けです。",
     "initialTaskLabel": "最初のタスク（任意）",
-    "initialTaskPlaceholder": "この Worker に任意で渡す最初のタスク",
+    "initialTaskPlaceholder": "最初に任せることを入力。空欄の場合は待機し、Lead が割り振ります",
     "workerCountSummary_one": "Worker {{count}} 件 · 実行中 {{running}}",
     "workerCountSummary_other": "Worker {{count}} 件 · 実行中 {{running}}",
     "loading": "Worker を読み込み中…",

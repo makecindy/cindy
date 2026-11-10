@@ -17318,15 +17318,37 @@
       "customRolePlaceholder": "+ 自定义角色名（可选）",
       "customRolePredefinedError": "自定义角色名不能使用预设角色名",
       "agentLabel": "Agent",
-      "modelLabel": "模型",
       "permissionLabel": "权限模式",
       "noAvailableModels": "没有可用的 {{agent}} 模型，请在设置中检查供应商连接和凭证。",
       "effortLabel": "推理强度",
       "initialTaskLabel": "初始任务",
-      "optional": "（可选）",
-      "initialTaskPlaceholder": "给这个 Worker 的可选第一条任务",
+      "initialTaskPlaceholder": "写下交给它的第一件事；留空则先待命，由 Lead 分派",
       "enableCollabTitle": "开启协同",
       "enableCollabSubmit": "开启协同",
+      "enableCollabDescription": "当前任务作为 Lead 分派和验收，另一个 Agent 作为 Worker 执行并回报。",
+      "templateLabel": "让 Worker 做什么",
+      "templates": {
+        "developer": {
+          "name": "开发"
+        },
+        "reviewer": {
+          "name": "审查",
+          "task": "看一下 Lead 的工作，给出一些建议。"
+        },
+        "tester": {
+          "name": "测试",
+          "task": "测试 Lead 目前的成果，报告没通过的地方和复现步骤。"
+        }
+      },
+      "removePreset": "移除 {{role}}",
+      "removePresetConfirm": {
+        "title": "移除「{{role}}」？",
+        "description": "随时可以用「添加角色」加回来。",
+        "confirm": "移除角色",
+        "cancel": "取消"
+      },
+      "addRole": "添加角色",
+      "moreSettings": "更多设置",
       "executionDeviceLabel": "运行设备",
       "thisComputer": "本机",
       "deviceOnline": "在线",

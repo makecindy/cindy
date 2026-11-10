@@ -714,21 +714,34 @@
     "remoteDirPathHint": "The folder is checked on the execution device. A missing folder causes an error; the Lead's folder is never used instead.",
     "remoteDirInvalid": "Enter an absolute path on the execution device.",
     "roleLabel": "Role name",
-    "roleHint": "Just a name to tell collaborators apart. It doesn't change capabilities.",
-    "customRole": "Custom",
-    "customRolePlaceholder": "Custom role name",
-    "customRolePredefinedError": "A custom role name can't match a preset role",
+    "taskLabel": "What the Worker does",
+    "enableHint": "This task becomes the Lead: it assigns work and checks the results. The Worker is a separate Agent that does the work and reports back.",
+    "roles": {
+      "reviewer": {
+        "name": "Review",
+        "task": "Take a look at the Lead’s work and give some suggestions."
+      },
+      "developer": {
+        "name": "Develop"
+      },
+      "tester": {
+        "name": "Test",
+        "task": "Test the Lead’s work so far and report what failed, with steps to reproduce."
+      }
+    },
+    "addRole": "Add role",
+    "removeRoleHint": "Touch and hold to remove",
+    "removeRoleConfirmTitle": "Remove “{{role}}”?",
+    "removeRoleConfirmDesc": "You can add it back anytime with Add role.",
+    "removeRoleConfirm": "Remove role",
+    "moreSettings": "More settings",
     "agentLabel": "Agent",
-    "modelLabel": "Model",
     "modelDefault": "Default",
     "modelDefaultHint": "Uses the computer's default Worker model",
-    "permissionLabel": "Permission mode",
     "permissionAuto": "Auto-review",
     "permissionFull": "Full access",
-    "permissionAutoHint": "Reads and writes inside the workspace and auto-reviews elevation requests. High-risk actions may be denied or need confirmation.",
-    "permissionFullHint": "Can change any file and run networked commands without asking again. Highest risk; use only for trusted tasks.",
     "initialTaskLabel": "Initial task (optional)",
-    "initialTaskPlaceholder": "An optional first task for this Worker",
+    "initialTaskPlaceholder": "Write the first thing to hand it, or leave blank and let the Lead assign work",
     "workerCountSummary_one": "{{count}} Worker · {{running}} running",
     "workerCountSummary_other": "{{count}} Workers · {{running}} running",
     "loading": "Loading Workers…",

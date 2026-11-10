@@ -710,21 +710,34 @@
     "remoteDirPathHint": "실행 기기에서 디렉터리를 확인합니다. 없으면 오류를 표시하며 Lead의 디렉터리로 전환하지 않습니다.",
     "remoteDirInvalid": "실행 기기의 절대 경로를 입력하세요.",
     "roleLabel": "역할 이름",
-    "roleHint": "여러 협업자를 구분하기 위한 이름일 뿐이며 능력은 바뀌지 않습니다",
-    "customRole": "사용자 지정",
-    "customRolePlaceholder": "사용자 지정 역할 이름",
-    "customRolePredefinedError": "사용자 지정 역할 이름에 기본 역할 이름을 쓸 수 없습니다",
+    "taskLabel": "Worker에게 맡길 일",
+    "enableHint": "이 작업이 Lead가 되어 일을 배분하고 결과를 확인합니다. Worker는 별도의 독립된 Agent로, 일을 수행하고 결과를 보고합니다.",
+    "roles": {
+      "reviewer": {
+        "name": "리뷰",
+        "task": "Lead의 작업을 살펴보고 몇 가지 제안을 해 주세요."
+      },
+      "developer": {
+        "name": "개발"
+      },
+      "tester": {
+        "name": "테스트",
+        "task": "Lead가 지금까지 만든 결과물을 테스트하고 실패한 항목과 재현 절차를 보고하세요."
+      }
+    },
+    "addRole": "역할 추가",
+    "removeRoleHint": "길게 눌러 제거",
+    "removeRoleConfirmTitle": "“{{role}}” 역할을 제거할까요?",
+    "removeRoleConfirmDesc": "‘역할 추가’로 언제든 다시 추가할 수 있습니다.",
+    "removeRoleConfirm": "역할 제거",
+    "moreSettings": "추가 설정",
     "agentLabel": "Agent",
-    "modelLabel": "모델",
     "modelDefault": "기본값",
     "modelDefaultHint": "컴퓨터의 Worker 기본 모델을 사용합니다",
-    "permissionLabel": "권한 모드",
     "permissionAuto": "자동 승인",
     "permissionFull": "전체 액세스",
-    "permissionAutoHint": "작업 공간 안에서 읽고 쓰며 권한 상승 요청을 자동 승인합니다. 위험도가 높은 작업은 거부되거나 확인이 필요할 수 있습니다.",
-    "permissionFullHint": "확인 없이 모든 파일을 수정하고 네트워크 명령을 실행할 수 있습니다. 위험도가 가장 높으니 신뢰할 수 있는 작업에만 사용하세요.",
     "initialTaskLabel": "초기 작업(선택)",
-    "initialTaskPlaceholder": "이 Worker에게 줄 선택적 첫 작업",
+    "initialTaskPlaceholder": "처음 맡길 일을 입력하세요. 비워 두면 대기하며 Lead가 배분합니다",
     "workerCountSummary_one": "Worker {{count}}개 · 실행 중 {{running}}",
     "workerCountSummary_other": "Worker {{count}}개 · 실행 중 {{running}}",
     "loading": "Worker를 불러오는 중…",

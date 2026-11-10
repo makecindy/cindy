@@ -128,6 +128,10 @@ let preparedContextPromise: Promise<DeviceLinkContextValue> | null = null;
 let didWarnRealDataLoad = false;
 const deletedDeviceIds = new Set<string>();
 const renamedDevices = new Map<string, string>();
+// 模拟电脑上的协同角色清单：最近使用在前，增删只在本次进程内生效。
+let workerRoles: Array<{ role: string; [key: string]: unknown }> = [
+  { role: 'reviewer' }, { role: 'developer' }, { role: 'tester' },
+];
 
 export function visualMockDevices(): DeviceView[] {
   const realData = realDataSnapshot;
@@ -492,6 +496,17 @@ async function visualMockInvoke<T = unknown>(
       return { success: true, items: [{ type: 'file', name: 'README.md', relPath: 'README.md' }] } as T;
     case 'maker:goal:get-status':
       return null as T;
+    case 'maker:plugins:get-state':
+      // 协同插件在模拟电脑上是开着的(项目与对话任务都可用)。
+      return (args[0] === 'collab' ? { effectiveEnabled: true, collabWorkspaceKind: args[2] } : {}) as T;
+    case 'maker:worker-roles:get':
+      return { roles: workerRoles } as T;
+    case 'maker:worker-roles:apply': {
+      const { kind, ...entry } = args[0] as { kind: string; role: string };
+      const rest = workerRoles.filter((item) => item.role !== entry.role);
+      workerRoles = kind === 'remember' ? [entry, ...rest] : rest;
+      return { ok: true } as T;
+    }
     default:
       return {} as T;
   }
@@ -969,6 +984,8 @@ function visualMockCapabilities(): unknown {
       { id: 'acceptEdits', displayName: 'Accept Edits' },
       { id: 'plan', displayName: 'Plan' },
     ],
+    // 模拟电脑支持协同：+ 面板里的「协同模式」表单可以直接看，不显示「版本过旧」。
+    supportsOrcaWorkerPermissionMode: true,
   };
 }
 

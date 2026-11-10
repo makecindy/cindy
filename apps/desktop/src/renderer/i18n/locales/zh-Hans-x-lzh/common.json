@@ -17318,15 +17318,37 @@
       "customRolePlaceholder": "+ 自拟角色名（可略）",
       "customRolePredefinedError": "自拟角色名不得与预设角色名同",
       "agentLabel": "Agent",
-      "modelLabel": "模型",
       "permissionLabel": "权柄模式",
       "noAvailableModels": "无可用之 {{agent}} 模型，请于规制中察供方之相通与凭证。",
       "effortLabel": "思之深浅",
       "initialTaskLabel": "首件差事",
-      "optional": "（可略）",
-      "initialTaskPlaceholder": "此 Worker 初阵之差事（可略）",
+      "initialTaskPlaceholder": "书其首事以付之；留空则待命，由 Lead 分派",
       "enableCollabTitle": "启协同",
       "enableCollabSubmit": "启协同",
+      "enableCollabDescription": "今之差事为 Lead，司分派与验收；另一 Agent 为 Worker，司执行而回报。",
+      "templateLabel": "Worker 所司何事",
+      "templates": {
+        "developer": {
+          "name": "开发"
+        },
+        "reviewer": {
+          "name": "审查",
+          "task": "览 Lead 之所为，略陈建言。"
+        },
+        "tester": {
+          "name": "测试",
+          "task": "测试 Lead 迄今之成果，报其未过者与重现之步。"
+        }
+      },
+      "removePreset": "除 {{role}}",
+      "removePresetConfirm": {
+        "title": "除「{{role}}」乎？",
+        "description": "日后可由「增角色」随时复增之。",
+        "confirm": "除角色",
+        "cancel": "罢"
+      },
+      "addRole": "增角色",
+      "moreSettings": "其余规制",
       "executionDeviceLabel": "行于何机",
       "thisComputer": "此机",
       "deviceOnline": "在线",
