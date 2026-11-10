@@ -13140,11 +13140,10 @@
     "prevMessageJump": "Ir para o pedido anterior: {{preview}}",
     "sessionLoading": "A carregar tarefa",
     "askUserQuestion": {
-    "unanswered": "Sem resposta",
-    "withdrawn": "Já não precisa de resposta",
-    "withdrawnDraft": "Esta pergunta já não precisa de resposta.\n{{reason}}\nO rascunho foi guardado e pode ser enviado como complemento.",
-    "sendSupplement": "Enviar complemento",
-
+      "unanswered": "Sem resposta",
+      "withdrawn": "Já não precisa de resposta",
+      "withdrawnDraft": "Esta pergunta já não precisa de resposta.\n{{reason}}\nO rascunho foi guardado e pode ser enviado como complemento.",
+      "sendSupplement": "Enviar complemento",
       "voice": {
         "hint": "Diga o número ou nome de uma opção. Para várias escolhas, diga depois «confirmar seleção».",
         "freeTextHint": "Diga a sua resposta, reveja-a e diga «confirmar seleção» para enviar.",
@@ -15933,7 +15932,11 @@
             "payments": "Pagamentos",
             "checkout": "Finalização da compra",
             "invoices": "Faturas",
-            "subscriptions": "Subscrições"
+            "subscriptions": "Subscrições",
+            "reviewComments": "Comentários de revisão",
+            "reviewThreads": "Discussões de revisão",
+            "checkRuns": "Execuções de verificação",
+            "commitStatus": "Estado do commit"
           },
           "actions": {
             "all": "Todas as alterações",
@@ -15955,7 +15958,12 @@
             "failed": "Falha",
             "paid": "Pago"
           }
-        }
+        },
+        "repositoriesLabel": "Repositórios",
+        "repositoriesHint": "Introduza owner/repository, um por linha. Apenas os repositórios autorizados para esta GitHub App podem iniciar a tarefa.",
+        "repositoriesInvalid": "Introduza 1–50 nomes de repositório válidos no formato owner/repository.",
+        "githubAppHint": "Ligue a GitHub App no computador que executa esta tarefa e autorize estes repositórios. Não é necessário um URL Webhook ou segredo separado.",
+        "githubAppPaused": "Esta tarefa está em pausa. Os eventos não a iniciam."
       },
       "trigger": {
         "label": "Modo de acionamento",

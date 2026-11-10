@@ -45,6 +45,32 @@ describe('ScheduleWebhookQueue', () => {
   beforeEach(() => vi.useFakeTimers({ now: 1_000_000 }));
   afterEach(() => vi.useRealTimers());
 
+  it('admits selected GitHub App events once and recovers omitted details without inventing a comment', async () => {
+    const h = setup();
+    const schedule = { id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1', events: ['issue_comment.created'],
+      source: { preset: 'github-app', repositories: ['example/project'] } } } as Schedule;
+    h.setSchedule(schedule);
+    await h.queue.start();
+    const comment = { ...event('comment', 'issue_comment'), action: 'created', repository: 'example/project' };
+    expect(await h.queue.acceptBatch('s1', [comment, { ...comment, deliveryId: 'wrong-repo', repository: 'private/other' },
+      { ...comment, deliveryId: 'wrong-action', action: 'edited' }], 0, 'e1')).toEqual(['queued', 'filtered', 'filtered']);
+    expect(await h.queue.accept('s1', comment)).toBe('duplicate');
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    expect(h.fire).toHaveBeenCalledTimes(1);
+    expect(h.fire.mock.calls[0]![1].events).toEqual([comment]);
+    const recovery = event('overflow', 'github.reconcile');
+    expect(await h.queue.acceptBatch('s1', [recovery], 5, 'e1', { reconcileGithub: true })).toEqual(['queued']);
+    await vi.advanceTimersByTimeAsync(LIMITS.minGapMs);
+    expect(h.fire.mock.calls[1]![1]).toEqual({ events: [recovery], omitted: 5 });
+    h.setSchedule({ ...schedule, status: 'paused' });
+    expect(await h.queue.acceptBatch('s1', [event('paused', 'github.reconcile')], 1, 'e1', { reconcileGithub: true })).toEqual(['ignored']);
+    h.setSchedule({ ...schedule, webhookTrigger: { ...schedule.webhookTrigger!, endpointId: 'new-scope' } });
+    expect(await h.queue.acceptBatch('s1', [comment], 0, 'e1')).toEqual(['ignored']);
+    await vi.advanceTimersByTimeAsync(LIMITS.minGapMs);
+    expect(h.fire).toHaveBeenCalledTimes(2);
+    h.queue.stop();
+  });
+
   it('collapses a burst into one run, and later events wait for the minimum gap', async () => {
     const h = setup();
     await h.queue.start();

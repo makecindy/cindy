@@ -22,15 +22,34 @@ export async function refreshGithubPrEvents(
   isCurrent: () => boolean, refresh: GithubPrRefresh,
 ): Promise<void> {
   const notify = new Set(refresh.notify);
-  for (const url of new Set(urls)) {
-    if (!isCurrent()) return;
-    const pr = query(url);
-    if (!pr) continue;
-    const [result] = await service.getStatuses([pr], { waitForFresh: true, refresh: true });
-    if (!isCurrent()) return;
-    if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
-    // CI changes are detected by onObserved; comments/overflow need a gate check
-    // even when the summary is identical. The gate still decides whether to run AI.
-    if (notify.has(url)) await watch.notify(url, isCurrent);
-  }
+  const pending = [...new Set(urls)];
+  let failed = false;
+  const worker = async () => {
+    while (pending.length && !failed && isCurrent()) {
+      const url = pending.shift()!;
+      const pr = query(url);
+      if (!pr) continue;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const [result] = await Promise.race([
+          service.getStatuses([pr], { waitForFresh: true, refresh: true }),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error('PR_VERIFICATION_TIMEOUT')), 30_000);
+            timer.unref?.();
+          }),
+        ]);
+        if (!isCurrent()) return;
+        if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
+        // CI uses the shared observer; comments/overflow also check unchanged summaries.
+        if (notify.has(url)) await watch.notify(url, isCurrent);
+      } catch (error) {
+        failed = true;
+        throw error;
+      } finally { if (timer) clearTimeout(timer); }
+    }
+  };
+  // Small bounded concurrency, independent of the ordinary Webhook lane.
+  const results = await Promise.allSettled(Array.from({ length: Math.min(4, pending.length) }, worker));
+  const error = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (error) throw error.reason;
 }

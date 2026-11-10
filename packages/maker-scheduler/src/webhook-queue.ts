@@ -117,7 +117,8 @@ export class ScheduleWebhookQueue {
   }
 
   /** Details, receipts and upstream omitted counts form one durable admission. */
-  async acceptBatch(id: string, events: ScheduleWebhookEvent[], omitted = 0, expectedEndpointId?: string): Promise<ScheduleWebhookAcceptResult[]> {
+  async acceptBatch(id: string, events: ScheduleWebhookEvent[], omitted = 0, expectedEndpointId?: string,
+    options?: { reconcileGithub?: boolean }): Promise<ScheduleWebhookAcceptResult[]> {
     if (this.stopped) throw new Error('schedule webhook queue is stopped');
     const results = await this.mutate(async state => {
       // Read after earlier writes finish, not from the host's asynchronous cache.
@@ -134,7 +135,10 @@ export class ScheduleWebhookQueue {
       endpoint.lastReceivedAt = now;
       const results = events.map((event): ScheduleWebhookAcceptResult => {
         if (endpoint.receipts[event.deliveryId] !== undefined && now - endpoint.receipts[event.deliveryId] < SCHEDULE_WEBHOOK_LIMITS.receiptTtlMs) return 'duplicate';
-        if (!scheduleWebhookEventMatches(schedule?.webhookTrigger?.events, event)) return 'filtered';
+        const source = schedule?.webhookTrigger?.source;
+        const reconcile = options?.reconcileGithub && source?.preset === 'github-app' && event.event === 'github.reconcile';
+        if (!reconcile && (!scheduleWebhookEventMatches(schedule?.webhookTrigger?.events, event)
+          || (source?.preset === 'github-app' && !source.repositories.some(repo => repo.toLowerCase() === event.repository?.toLowerCase())))) return 'filtered';
         const result = canReceive(schedule, now) ? 'queued' : 'ignored';
         if (result === 'queued') {
           endpoint.received += 1;

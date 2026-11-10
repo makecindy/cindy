@@ -13035,11 +13035,10 @@
     "prevMessageJump": "Zum vorherigen Prompt springen: {{preview}}",
     "sessionLoading": "Aufgabe wird geladen",
     "askUserQuestion": {
-    "unanswered": "Unbeantwortet",
-    "withdrawn": "Keine Antwort mehr nötig",
-    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
-    "sendSupplement": "Ergänzung senden",
-
+      "unanswered": "Unbeantwortet",
+      "withdrawn": "Keine Antwort mehr nötig",
+      "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
+      "sendSupplement": "Ergänzung senden",
       "voice": {
         "hint": "Sag die Nummer oder den Namen einer Option. Sag bei Mehrfachauswahl anschließend „Auswahl bestätigen“.",
         "freeTextHint": "Sag deine Antwort, prüfe sie und sag dann „Auswahl bestätigen“, um sie abzusenden.",
@@ -15787,7 +15786,11 @@
             "payments": "Zahlungen",
             "checkout": "Checkout",
             "invoices": "Rechnungen",
-            "subscriptions": "Abonnements"
+            "subscriptions": "Abonnements",
+            "reviewComments": "Review-Kommentare",
+            "reviewThreads": "Review-Diskussionen",
+            "checkRuns": "Prüfläufe",
+            "commitStatus": "Commit-Status"
           },
           "actions": {
             "all": "Alle Änderungen",
@@ -15809,7 +15812,12 @@
             "failed": "Fehlgeschlagen",
             "paid": "Bezahlt"
           }
-        }
+        },
+        "repositoriesLabel": "Repositorys",
+        "repositoriesHint": "Gib owner/repository ein, eines pro Zeile. Nur für diese GitHub App autorisierte Repositorys können die Aufgabe auslösen.",
+        "repositoriesInvalid": "Gib 1–50 gültige Repository-Namen im Format owner/repository ein.",
+        "githubAppHint": "Verbinde GitHub App auf dem Computer, der diese Aufgabe ausführt, und autorisiere diese Repositorys. Eine eigene Webhook-URL oder ein eigenes Secret ist nicht erforderlich.",
+        "githubAppPaused": "Diese Aufgabe ist pausiert. Ereignisse starten sie nicht."
       },
       "trigger": {
         "label": "Auslöseart",

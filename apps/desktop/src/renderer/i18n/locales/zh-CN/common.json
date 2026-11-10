@@ -13019,11 +13019,10 @@
     "prevMessageJump": "跳到上一条提问：{{preview}}",
     "sessionLoading": "正在加载任务",
     "askUserQuestion": {
-    "unanswered": "未回答",
-    "withdrawn": "无需再回答",
-    "withdrawnDraft": "这个问题已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作为补充发送。",
-    "sendSupplement": "发送补充",
-
+      "unanswered": "未回答",
+      "withdrawn": "无需再回答",
+      "withdrawnDraft": "这个问题已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作为补充发送。",
+      "sendSupplement": "发送补充",
       "voice": {
         "hint": "可以说“第一项”或选项名称；多选后请说“确认选择”。",
         "freeTextHint": "可以直接说出回答，检查后说“确认选择”提交。",
@@ -15721,7 +15720,11 @@
             "payments": "付款",
             "checkout": "结账",
             "invoices": "账单",
-            "subscriptions": "订阅"
+            "subscriptions": "订阅",
+            "reviewComments": "评审评论",
+            "reviewThreads": "评审讨论",
+            "checkRuns": "检查运行",
+            "commitStatus": "提交状态"
           },
           "actions": {
             "all": "全部变化",
@@ -15743,7 +15746,12 @@
             "failed": "失败",
             "paid": "已支付"
           }
-        }
+        },
+        "repositoriesLabel": "仓库",
+        "repositoriesHint": "每行填写一个 owner/repository。只有已授权给此 GitHub App 的仓库才能触发任务。",
+        "repositoriesInvalid": "请填写 1–50 个有效的 owner/repository 仓库名称。",
+        "githubAppHint": "请在运行此任务的电脑上连接 GitHub App，并授权这些仓库，无需另设 Webhook 地址或密钥。",
+        "githubAppPaused": "此任务已暂停，事件不会启动它。"
       },
       "trigger": {
         "label": "触发方式",

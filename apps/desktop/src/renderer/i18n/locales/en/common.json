@@ -13072,11 +13072,10 @@
     "prevMessageJump": "Jump to previous prompt: {{preview}}",
     "sessionLoading": "Loading task",
     "askUserQuestion": {
-    "unanswered": "Unanswered",
-    "withdrawn": "No longer needs an answer",
-    "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
-    "sendSupplement": "Send additional information",
-
+      "unanswered": "Unanswered",
+      "withdrawn": "No longer needs an answer",
+      "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
+      "sendSupplement": "Send additional information",
       "voice": {
         "hint": "Say an option number or name. For multiple choices, then say “confirm selection”.",
         "freeTextHint": "Say your answer, review it, then say “confirm selection” to submit.",
@@ -15787,7 +15786,11 @@
             "payments": "Payments",
             "checkout": "Checkout",
             "invoices": "Invoices",
-            "subscriptions": "Subscriptions"
+            "subscriptions": "Subscriptions",
+            "reviewComments": "Review comments",
+            "reviewThreads": "Review threads",
+            "checkRuns": "Check runs",
+            "commitStatus": "Commit status"
           },
           "actions": {
             "all": "All changes",
@@ -15809,7 +15812,12 @@
             "failed": "Failed",
             "paid": "Paid"
           }
-        }
+        },
+        "repositoriesLabel": "Repositories",
+        "repositoriesHint": "Enter owner/repository, one per line. Only repositories authorized for this GitHub App can trigger the task.",
+        "repositoriesInvalid": "Enter 1–50 valid repository names in owner/repository format.",
+        "githubAppHint": "Connect GitHub App on the computer running this task and authorize these repositories. No separate Webhook URL or secret is needed.",
+        "githubAppPaused": "This task is paused. Events will not start it."
       },
       "trigger": {
         "label": "Trigger mode",

@@ -89,6 +89,33 @@ Webhook 配置和详情提供「接收地址 已用 / 上限 · 管理」，管�
 - 排队事件持久记录本机触发路由 ID，准备与交接时都须匹配当前配置；关闭再开启后，旧路由的待执行、准备中及重试批次不得进入新配置。清空队列同时取消尚未完成的交接／顺延，迟到结果不能把旧事件重新塞入队列。旧版未记录路由 ID 的队列沿用当前配置恢复，后续落盘补齐 ID。
 - GitHub 不会自动重投失败的投递，超过配额或离线超过 24 小时的事件会丢。需要不漏事件的任务应保留低频定时条件兜底。
 
+## GitHub App 触发（2026-11-11，测试）
+
+任意普通自动任务（Agent 或脚本）都可在事件来源选择 **GitHub App**，填写一至五十个
+`owner/repository` 并选择事件或 `event.action`。这些仓库须已安装 App，且运行任务的电脑上已在
+GitHub 插件连接账号并通过仓库权限复核。不为每个任务另建公网地址或密钥。
+
+支持 PR、评审、评审评论／讨论、Issue／PR 评论、检查、提交状态、Issues、push、workflow_run
+和 release。普通 `github` 来源继续代表用户自行配置的仓库 Webhook，不自动转换成 App。
+只设置事件而不设置定时条件时沿用 `manual:true`；也可保留定时检查兜底。
+
+设备只维护一个 App 接收地址，订阅为显式任务的整仓库范围与已有 PR 跟进的精确范围之并集。
+服务端只发送固定元数据，客户端按当前仓库、事件筛选及任务状态再次校验，然后进入已有持久队列：
+15 秒合并、同一任务两轮至少五分钟、忙时等待、重复 delivery 去重，沿用脚本／Agent 的执行权限。
+显式选了 App 来源的 PR 跟进不会再由隐式 PR watcher 重复启动；定时计划仍按用户设置保留。
+暂停／删除或修改 App 仓库、事件范围会丢弃旧范围的待执行事件，修改范围同时更换本地队列身份，
+包括已经准备但尚未交付执行的一轮。App 来源不支持普通地址的密钥或轮换操作。
+
+若服务端报告暂存溢出，宿主加入 `github.reconcile` 恢复标记和遗漏计数，通过同一队列安排一次
+重新读取仓库事实；它不代表真的收到某种 GitHub 评论。仅事件触发不保证捕获入口离线期间的变化，
+重要任务仍应保留低频定时核对。GitHub 原始正文、标题、代码不进入事件提示或脚本输入。
+
+`schedule_create/update` 同样支持
+`webhookTrigger: {source: {preset: "github-app", repositories: ["owner/repository"]}, events: ["issue_comment.created"]}`。
+使用目标电脑的连接；旧执行端不认识来源时明确拒绝，不回退为普通 Webhook。服务端必须声明
+`automationSubscriptions:true` 才同步此类订阅；旧版 PR 跟进协议保留。
+手机／旧控制端编辑时省略未知来源会保留配置，新增来源的表单入口当前在 Desktop。
+
 ## 服务器通道
 
 正式入口是 webhook-server（`scheduler-host/webhook/remote.ts`），合同见 cindy-server 的 `docs/webhook-server.md`。

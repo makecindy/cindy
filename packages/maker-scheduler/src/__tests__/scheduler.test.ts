@@ -1533,6 +1533,20 @@ describe('Scheduler', () => {
     await expect(h.scheduler.update(sch.id, { recurring: false })).rejects.toThrow('recurring');
   });
 
+  // The managed source is configured through the same Scheduler entry as UI, MCP and remote edits.
+  it('preserves GitHub App subscriptions and invalidates queued scope when repositories change', async () => {
+    const sch = await h.scheduler.create({ ...baseInput, manual: true,
+      webhookTrigger: { source: { preset: 'github-app', repositories: ['Example/Project', 'example/project'] }, events: ['issue_comment.created'] } });
+    expect(sch.webhookTrigger?.source).toEqual({ preset: 'github-app', repositories: ['example/project'] });
+    const retained = await h.scheduler.update(sch.id, { webhookTrigger: { events: ['issue_comment.created'] } });
+    expect(retained.webhookTrigger?.endpointId).toBe(sch.webhookTrigger?.endpointId);
+    const changed = await h.scheduler.update(sch.id, { webhookTrigger: {
+      source: { preset: 'github-app', repositories: ['other/project'] }, events: ['issue_comment.created'] } });
+    expect(changed.webhookTrigger?.endpointId).not.toBe(sch.webhookTrigger?.endpointId);
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { events: ['invoice.paid'] } })).rejects.toThrow('unsupported GitHub App');
+    await expect(h.scheduler.update(sch.id, { webhookTrigger: { source: { preset: 'github-app', repositories: ['https://github.com/owner/repo'] } } })).rejects.toThrow('repository');
+  });
+
   it('rejects malformed webhook event filters', async () => {
     await expect(h.scheduler.create({ ...baseInput, webhookTrigger: { events: ['a b'] } })).rejects.toThrow('filter');
   });

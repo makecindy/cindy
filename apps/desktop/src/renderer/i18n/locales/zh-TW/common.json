@@ -13018,11 +13018,10 @@
     "jumpToBottom": "跳到底部",
     "prevMessageJump": "跳到上一則提問：{{preview}}",
     "askUserQuestion": {
-    "unanswered": "未回答",
-    "withdrawn": "無需再回答",
-    "withdrawnDraft": "這個問題已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作為補充傳送。",
-    "sendSupplement": "傳送補充",
-
+      "unanswered": "未回答",
+      "withdrawn": "無需再回答",
+      "withdrawnDraft": "這個問題已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作為補充傳送。",
+      "sendSupplement": "傳送補充",
       "voice": {
         "hint": "可以說「第一項」或選項名稱；多選後請說「確認選擇」。",
         "freeTextHint": "可以直接說出回答，檢查後說「確認選擇」提交。",
@@ -15721,7 +15720,11 @@
             "payments": "付款",
             "checkout": "結帳",
             "invoices": "帳單",
-            "subscriptions": "訂閱"
+            "subscriptions": "訂閱",
+            "reviewComments": "評審評論",
+            "reviewThreads": "評審討論",
+            "checkRuns": "檢查執行",
+            "commitStatus": "提交狀態"
           },
           "actions": {
             "all": "全部變化",
@@ -15743,7 +15746,12 @@
             "failed": "失敗",
             "paid": "已付款"
           }
-        }
+        },
+        "repositoriesLabel": "倉庫",
+        "repositoriesHint": "每行填寫一個 owner/repository。只有已授權給此 GitHub App 的倉庫才能觸發任務。",
+        "repositoriesInvalid": "請填寫 1–50 個有效的 owner/repository 倉庫名稱。",
+        "githubAppHint": "請在執行此任務的電腦上連接 GitHub App，並授權這些倉庫，無需另設 Webhook 位址或金鑰。",
+        "githubAppPaused": "此任務已暫停，事件不會啟動它。"
       },
       "trigger": {
         "label": "觸發方式",

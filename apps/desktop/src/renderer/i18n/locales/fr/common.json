@@ -13140,11 +13140,10 @@
     "prevMessageJump": "Aller au prompt précédent : {{preview}}",
     "sessionLoading": "Chargement de la tâche",
     "askUserQuestion": {
-    "unanswered": "Sans réponse",
-    "withdrawn": "Réponse désormais inutile",
-    "withdrawnDraft": "Cette question ne nécessite plus de réponse.\n{{reason}}\nVotre brouillon est conservé et peut être envoyé en complément.",
-    "sendSupplement": "Envoyer un complément",
-
+      "unanswered": "Sans réponse",
+      "withdrawn": "Réponse désormais inutile",
+      "withdrawnDraft": "Cette question ne nécessite plus de réponse.\n{{reason}}\nVotre brouillon est conservé et peut être envoyé en complément.",
+      "sendSupplement": "Envoyer un complément",
       "voice": {
         "hint": "Dites le numéro ou le nom d'une option. Pour un choix multiple, dites ensuite « confirmer la sélection ».",
         "freeTextHint": "Dites votre réponse, relisez-la, puis dites « confirmer la sélection » pour l'envoyer.",
@@ -15933,7 +15932,11 @@
             "payments": "Paiements",
             "checkout": "Passage en caisse",
             "invoices": "Factures",
-            "subscriptions": "Abonnements"
+            "subscriptions": "Abonnements",
+            "reviewComments": "Commentaires de revue",
+            "reviewThreads": "Discussions de revue",
+            "checkRuns": "Exécutions de vérification",
+            "commitStatus": "État du commit"
           },
           "actions": {
             "all": "Tous les changements",
@@ -15955,7 +15958,12 @@
             "failed": "Échec",
             "paid": "Paiement effectué"
           }
-        }
+        },
+        "repositoriesLabel": "Dépôts",
+        "repositoriesHint": "Saisissez owner/repository, un par ligne. Seuls les dépôts autorisés pour cette GitHub App peuvent déclencher la tâche.",
+        "repositoriesInvalid": "Saisissez 1 à 50 noms de dépôts valides au format owner/repository.",
+        "githubAppHint": "Connectez GitHub App sur l’ordinateur qui exécute cette tâche et autorisez ces dépôts. Aucune URL Webhook ni clé secrète distincte n’est nécessaire.",
+        "githubAppPaused": "Cette tâche est en pause. Les événements ne la démarreront pas."
       },
       "trigger": {
         "label": "Mode de déclenchement",

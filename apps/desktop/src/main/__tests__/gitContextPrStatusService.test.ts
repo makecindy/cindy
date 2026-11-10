@@ -53,6 +53,20 @@ describe('GitHub App status refresh policy', () => {
     expect(fetchPr).toHaveBeenCalledTimes(6); // user/event force refresh bypasses TTL
   });
 
+  it('times out a hung PR read without sending a follow-up notification', async () => {
+    vi.useFakeTimers();
+    const notify = vi.fn();
+    try {
+      const service = { getStatuses: () => new Promise(() => {}) } as unknown as PrStatusService;
+      const url = 'https://github.com/example/project/pull/1';
+      const check = refreshGithubPrEvents(service, { notify }, [url], () => true, { reason: 'event', notify: [url] });
+      const rejected = expect(check).rejects.toThrow('PR_VERIFICATION_TIMEOUT');
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      expect(notify).not.toHaveBeenCalled();
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
   it('rechecks all overflow PRs, propagates failures for retry, and keeps old-owner heads private', async () => {
     let scope = 'first';
     let current = true;
@@ -824,6 +838,33 @@ describe('PR follow watch', () => {
     expect(runNow).toHaveBeenCalledTimes(1);
     await watch.notify('https://github.com/makecindy/cindy/pull/85', () => true);
     expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  // A script-only follower had no preRunHook and missed App comments entirely. Busy peers must
+  // recover without another GitHub read, and must not rerun siblings that already handled the bell.
+  it('wakes script-only follows after capacity returns without repeating an already handled sibling', async () => {
+    vi.useFakeTimers();
+    let busy = true;
+    const url = 'https://github.com/example/project/pull/85';
+    const runNow = vi.fn<(id: string) => Promise<null>>(async () => null);
+    const watch = new PrFollowWatch({
+      listActive: async () => ['first', 'busy', 'paused', 'explicit-app'].map(id => schedule(id, url, {
+        preRunHook: undefined, executionMode: 'script', scriptConfig: { command: `node follow.mjs ${url}` },
+        status: id === 'paused' ? 'paused' : 'active',
+        webhookTrigger: id === 'explicit-app' ? { source: { preset: 'github-app', repositories: ['example/project'] } } : undefined,
+      })),
+      inflight: id => id === 'busy' && busy ? 1 : 0,
+      hasCapacity: () => true, autoRunAllowed: () => true, runNow,
+    });
+    try {
+      await watch.notify(url);
+      expect(runNow.mock.calls.map(call => call[0])).toEqual(['first']);
+      busy = false;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(runNow.mock.calls.map(call => call[0])).toEqual(['first', 'busy']);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(runNow).toHaveBeenCalledTimes(2);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
   });
 
   it('treats failed reads as no news and keeps the baseline', async () => {

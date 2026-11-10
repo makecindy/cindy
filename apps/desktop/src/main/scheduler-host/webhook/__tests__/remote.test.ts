@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -28,6 +29,7 @@ vi.mock('../../../plugin-oauth/identityStore.js', () => ({ oauthSecureStorageAva
 
 import { ScheduleWebhookHost } from '../index';
 import { ScheduleWebhookRemote } from '../remote';
+import { beginGithubConnect } from '../githubConnect';
 import { matchingGithubPrs, type GithubPrRefresh } from '../github';
 
 class FakeScheduler extends EventEmitter {
@@ -64,7 +66,7 @@ interface FakeEndpoint {
 /** 与 webhook-server 合同相同的最小实现。 */
 class FakeServer {
   github: { available: boolean; login: string; endpointId: string; repositories: string[]; unavailable?: string[];
-    prSubscriptions?: boolean; dailyQuotaExempt?: boolean } | null = null;
+    prSubscriptions?: boolean; dailyQuotaExempt?: boolean; automationSubscriptions?: boolean; deliveryHealthy?: boolean } | null = null;
   githubSubscriptionBodies: Record<string, unknown>[] = [];
   readonly releases = new Map<string, string>();
   accountManagement = false;
@@ -279,6 +281,44 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await host.stop();
     await server.close();
     fs.rmSync(dirs.root, { recursive: true, force: true });
+  });
+
+  // Real HTTP/WS and durable Host queue: repository selection, event filtering, dedup,
+  // task invocation and pause use the same path as ordinary automatic tasks.
+  it('runs a selected repository automation from App events without creating a task Webhook address', async () => {
+    server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [],
+      prSubscriptions: true, dailyQuotaExempt: true, automationSubscriptions: true };
+    const task = { ...schedule('app-script', ['issue_comment.created'], { preset: 'github-app', repositories: ['example/project'] }),
+      executionMode: 'script', scriptConfig: { command: 'node report.mjs', capabilities: [] } } as Schedule;
+    await start([task]);
+    await vi.waitFor(() => expect(host.status(task)?.connected).toBe(true));
+    expect(server.githubSubscriptionBodies.at(-1)).toEqual({ repositories: ['example/project'], pullRequests: [], repositorySubscriptions: ['example/project'] });
+    expect(server.endpoints.size).toBe(0);
+    await expect(host.setSecret(task)).rejects.toThrow('GITHUB_APP_MANAGED_CONNECTION');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const comment = { deliveryId: 'app-comment', event: 'issue_comment', action: 'created', repository: 'example/project', number: 10, receivedAt: Date.now() };
+      const batch = { batchId: 'app-batch', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
+        events: [comment, { ...comment, deliveryId: 'other', repository: 'private/other' },
+          { ...comment, deliveryId: 'ci', event: 'check_run', action: 'completed' }] };
+      server.push(batch);
+      await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'app-batch' }));
+      expect(host.status(task)?.received).toBe(1);
+      server.push({ ...batch, batchId: 'duplicate-batch' });
+      await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'duplicate-batch' }));
+      expect(host.status(task)?.received).toBe(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.waitFor(() => expect(scheduler.runNow).toHaveBeenCalledTimes(1));
+      expect(scheduler.runNow.mock.calls[0]).toEqual(['app-script', expect.objectContaining({
+        webhook: { events: [comment], omitted: 0 }, onRunCreated: expect.any(Function),
+      })]);
+      scheduler.schedules = [{ ...task, status: 'paused' }];
+      scheduler.emit('changed');
+      await vi.waitFor(() => expect(server.githubSubscriptionBodies.at(-1)?.repositorySubscriptions).toEqual([]));
+      server.push({ ...batch, batchId: 'paused-batch', events: [{ ...comment, deliveryId: 'paused-comment' }] });
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(scheduler.runNow).toHaveBeenCalledTimes(1);
+    } finally { await host.stop(); vi.clearAllTimers(); vi.useRealTimers(); }
   });
 
   // PR #8470: disabling while disconnected, then enabling with a new trigger
@@ -787,6 +827,8 @@ it('keeps the App connection visible when baseline reads fail, and excludes unav
   const baseUrl = await server.listen();
   const url = 'https://github.com/example/project/pull/12';
   const onGithubPrs = vi.fn<() => Promise<void>>(async () => { throw new Error('PR_VERIFICATION_FAILED'); });
+  const time = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(time);
   const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
     refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {}, onGithubPrs });
   try {
@@ -796,11 +838,25 @@ it('keeps the App connection visible when baseline reads fail, and excludes unav
     await expect(remote.githubStatus()).resolves.toMatchObject({ login: 'example-user', repositories: ['example/project'] });
     onGithubPrs.mockImplementation(async () => {});
     await remote.refresh();
-    expect(remote.githubEventsHealthy(url)).toBe(true);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(true));
+    const registrations = server.requests.filter(route => route === 'PUT /api/v1/github/repositories').length;
+    server.github.deliveryHealthy = false;
+    clock.mockReturnValue(time + 60_001);
+    server.sockets.at(-1)!.ping();
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(false));
+    server.github.deliveryHealthy = true;
+    clock.mockReturnValue(time + 120_002);
+    server.sockets.at(-1)!.ping();
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(true));
+    clock.mockReturnValue(time + 220_003);
+    expect(remote.githubEventsHealthy(url)).toBe(false); // A stale status cannot hide a failed drain.
+    server.sockets.at(-1)!.ping();
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(true));
+    expect(server.requests.filter(route => route === 'PUT /api/v1/github/repositories')).toHaveLength(registrations);
     server.github.unavailable = ['example/project'];
     await remote.refresh();
     expect(remote.githubEventsHealthy(url)).toBe(false);
-  } finally { remote.stop(); await server.close(); }
+  } finally { clock.mockRestore(); remote.stop(); await server.close(); }
 });
 
 // Real HTTP wire: narrowing/changing PRs in the same repository must reach the
@@ -817,7 +873,9 @@ it('negotiates precise PR subscriptions and separates custom Webhook quota from 
     refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {},
     onBatch: async () => {}, onGithubPrs: async () => {}, onQuotaExhausted });
   try {
-    await remote.sync([follow(12)]);
+    await remote.sync([follow(12), { ...follow(99), webhookTrigger: {
+      endpointId: 'explicit-app', source: { preset: 'github-app', repositories: ['example/project'] },
+    } }]);
     await vi.waitFor(() => expect(remote.githubEventsHealthy('https://github.com/example/project/pull/12')).toBe(true));
     expect(server.githubSubscriptionBodies.at(-1)).toEqual({ repositories: ['example/project'],
       pullRequests: [{ repository: 'example/project', number: 12 }] });
@@ -833,4 +891,76 @@ it('negotiates precise PR subscriptions and separates custom Webhook quota from 
     expect(server.githubSubscriptionBodies.at(-1)).toEqual({ repositories: ['example/project'] });
     expect(remote.githubEventsHealthy('https://github.com/example/project/pull/13')).toBe(false);
   } finally { remote.stop(); await server.close(); }
+});
+
+// Native callback uses a real ephemeral loopback listener; only the authenticated
+// server requests are substituted. No OAuth credential is needed by this regression.
+it('returns OAuth through the initiating Desktop once, with a matching private verifier', async () => {
+  let input!: { state: string; codeChallenge: string; redirectUri: string };
+  const onConnected = vi.fn();
+  const complete = vi.fn<(input: { state: string; code: string; verifier: string }) => Promise<{ url: string }>>(
+    async () => ({ url: 'https://github.com/apps/example-app/installations/new' }));
+  const attempt = await beginGithubConnect({ start: async value => {
+    input = value; return { url: `https://github.com/login/oauth/authorize?state=${value.state}&code_challenge_method=S256` };
+  },
+    complete, onConnected, isCurrent: () => true });
+  try {
+    expect(new URL(input.redirectUri).hostname).toBe('127.0.0.1');
+    expect((await fetch(`${input.redirectUri}?state=wrong&code=synthetic`, { redirect: 'manual' })).status).toBe(400);
+    expect(complete).not.toHaveBeenCalled();
+    const response = await fetch(`${input.redirectUri}?state=${input.state}&code=synthetic`, { redirect: 'manual' });
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe('https://github.com/apps/example-app/installations/new');
+    expect(complete).toHaveBeenCalledTimes(1);
+    const redemption = complete.mock.calls[0]![0];
+    expect(redemption.state).toBe(input.state);
+    expect(createHash('sha256').update(redemption.verifier).digest('base64url')).toBe(input.codeChallenge);
+    expect(onConnected).toHaveBeenCalledTimes(1);
+  } finally { attempt.close(); }
+});
+
+it('rejects the legacy unbound OAuth flow before opening the browser and closes its listener', async () => {
+  let redirect = '';
+  const complete = vi.fn();
+  await expect(beginGithubConnect({
+    start: async input => {
+      redirect = input.redirectUri;
+      return { url: 'https://github.com/login/oauth/authorize?state=legacy-server-state&code_challenge_method=S256' };
+    },
+    complete, onConnected: vi.fn(), isCurrent: () => true,
+  })).rejects.toThrow('GITHUB_CLIENT_BINDING_UNSUPPORTED');
+  await expect(fetch(redirect)).rejects.toThrow();
+  expect(complete).not.toHaveBeenCalled();
+});
+
+// A slow GitHub API must not hold the ordinary Webhook ACK lane or account controls.
+it('keeps ordinary Webhooks and connection status usable while a GitHub batch is waiting', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const onGithubPrs = vi.fn(async (_urls: string[], _current: () => boolean, refresh: GithubPrRefresh) => {
+    if (refresh.reason === 'event') await waiting;
+  });
+  const onBatch = vi.fn(async () => {});
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch, onGithubPrs });
+  const url = 'https://github.com/example/project/pull/1';
+  try {
+    await remote.sync([schedule('ordinary'), { ...schedule('follow'), webhookTrigger: undefined, recurring: true,
+      executionMode: 'script', scriptConfig: { command: `node follow.mjs ${url}`, capabilities: [] } }]);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(true));
+    server.push({ batchId: 'slow-github', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
+      events: [{ deliveryId: 'comment', event: 'issue_comment', repository: 'example/project', number: 1, receivedAt: 1 }] });
+    await vi.waitFor(() => expect(onGithubPrs).toHaveBeenCalledTimes(2));
+    server.push({ batchId: 'ordinary', endpointId: server.endpoints.get('ordinary')!.id, scheduleId: 'ordinary', omitted: 0,
+      events: [{ deliveryId: 'ordinary-event', event: 'issues', receivedAt: 1 }] });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'ordinary' }));
+    expect(onBatch).toHaveBeenCalledTimes(1);
+    expect(server.frames).not.toContainEqual({ type: 'ack', batchId: 'slow-github' });
+    await expect(remote.githubStatus()).resolves.toMatchObject({ login: 'example-user' });
+    release();
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'slow-github' }));
+  } finally { release(); remote.stop(); await server.close(); }
 });

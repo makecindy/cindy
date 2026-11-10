@@ -274,3 +274,11 @@ Claude Code／Pi 的非阻塞澄清恢复独立的 `ask_user_question_async`；P
 「未回答」和题干，已撤回的显示原因，正文不另复制一份。撤回后已编辑的选项与文字
 合成可编辑补充，只保留发送补充与关闭操作。用户在原轮次结束后回答时附带适用性提示，
 提醒模型核对当前状态、避免重复已完成操作；这段上下文不属于用户回答或新增授权。
+
+### GitHub App 自动任务（2026-11-11，测试）
+
+Desktop 来源选择与 `schedule_create/update` 共用 `source={preset:"github-app",repositories:["owner/repository"]}`
+和事件筛选；Agent 可按既有 `device` 选择运行电脑。连接账号仍在目标电脑的 GitHub 插件完成，工具不接收
+OAuth 代码、App 密钥或任务签名密钥。`schedule_get.webhookStatus` 返回接收状态，不伪造专属地址。
+旧执行端明确拒绝未知来源；旧控制端省略来源的编辑保持既有配置。手机当前保留／读取该配置，新增来源
+表单只在 Desktop；不把控制端本机的登录状态冒充运行电脑的连接状态。

@@ -13140,11 +13140,10 @@
     "prevMessageJump": "Ir al prompt anterior: {{preview}}",
     "sessionLoading": "Cargando tarea",
     "askUserQuestion": {
-    "unanswered": "Sin respuesta",
-    "withdrawn": "Ya no necesita respuesta",
-    "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",
-    "sendSupplement": "Enviar información adicional",
-
+      "unanswered": "Sin respuesta",
+      "withdrawn": "Ya no necesita respuesta",
+      "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",
+      "sendSupplement": "Enviar información adicional",
       "voice": {
         "hint": "Di el número o el nombre de una opción. Para seleccionar varias, di después «confirmar selección».",
         "freeTextHint": "Di tu respuesta, revísala y luego di «confirmar selección» para enviarla.",
@@ -15933,7 +15932,11 @@
             "payments": "Pagos",
             "checkout": "Finalización de compra",
             "invoices": "Facturas",
-            "subscriptions": "Suscripciones"
+            "subscriptions": "Suscripciones",
+            "reviewComments": "Comentarios de revisión",
+            "reviewThreads": "Conversaciones de revisión",
+            "checkRuns": "Ejecuciones de comprobación",
+            "commitStatus": "Estado del commit"
           },
           "actions": {
             "all": "Todos los cambios",
@@ -15955,7 +15958,12 @@
             "failed": "Fallo",
             "paid": "Pagado"
           }
-        }
+        },
+        "repositoriesLabel": "Repositorios",
+        "repositoriesHint": "Introduce owner/repository, uno por línea. Solo los repositorios autorizados para esta GitHub App pueden activar la tarea.",
+        "repositoriesInvalid": "Introduce entre 1 y 50 nombres de repositorio válidos con el formato owner/repository.",
+        "githubAppHint": "Conecta GitHub App en el ordenador que ejecuta esta tarea y autoriza estos repositorios. No se necesita una URL de Webhook ni un secreto aparte.",
+        "githubAppPaused": "Esta tarea está en pausa. Los eventos no la iniciarán."
       },
       "trigger": {
         "label": "Modo de activación",

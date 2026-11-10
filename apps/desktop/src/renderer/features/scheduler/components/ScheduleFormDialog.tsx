@@ -1206,13 +1206,15 @@ export function ScheduleFormDialog({
                         )}
                       </div>
                       {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
-                      {webhookSettingsVisible && <WebhookAccountManager allowOpenSchedule={false} />}
+                      {webhookSettingsVisible && form.webhookPreset !== 'github-app' && <WebhookAccountManager allowOpenSchedule={false} />}
                       {webhookSettingsVisible && (
                           <WebhookSourceFields
                             preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
                             signed={form.webhookSigned !== false}
                             formatText={form.webhookFormat ?? ''}
                             events={form.webhookEvents ?? ''}
+                            repositories={form.webhookRepositories ?? ''}
+                            onRepositoriesChange={(value) => setField('webhookRepositories', value)}
                             onEventsChange={(value) => setField('webhookEvents', value)}
                             onPresetChange={(value) => {
                               // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。

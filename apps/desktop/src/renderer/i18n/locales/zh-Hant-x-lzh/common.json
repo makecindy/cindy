@@ -13010,11 +13010,10 @@
     "jumpToBottom": "至底",
     "prevMessageJump": "至上一問：{{preview}}",
     "askUserQuestion": {
-    "unanswered": "未答",
-    "withdrawn": "無須再答",
-    "withdrawnDraft": "此問無須再答。\n{{reason}}\n草稿尚存，可另作補充傳送。",
-    "sendSupplement": "傳送補充",
-
+      "unanswered": "未答",
+      "withdrawn": "無須再答",
+      "withdrawnDraft": "此問無須再答。\n{{reason}}\n草稿尚存，可另作補充傳送。",
+      "sendSupplement": "傳送補充",
       "voice": {
         "hint": "可言「第一項」或選項之名；多選畢，請言「確認選擇」。",
         "freeTextHint": "可徑言其答，察畢言「確認選擇」以呈。",
@@ -15721,7 +15720,11 @@
             "payments": "付款",
             "checkout": "結帳",
             "invoices": "帳單",
-            "subscriptions": "訂閱"
+            "subscriptions": "訂閱",
+            "reviewComments": "評審留言",
+            "reviewThreads": "評審議論",
+            "checkRuns": "檢查運行",
+            "commitStatus": "提交狀態"
           },
           "actions": {
             "all": "全部變化",
@@ -15743,7 +15746,12 @@
             "failed": "失敗",
             "paid": "已付款"
           }
-        }
+        },
+        "repositoriesLabel": "倉庫",
+        "repositoriesHint": "每行一 owner/repository。倉庫須授權予此 GitHub App，方能啟動任務。",
+        "repositoriesInvalid": "請填一至五十個有效之 owner/repository 倉庫名。",
+        "githubAppHint": "於執行此任務之電腦連接 GitHub App，授權所列倉庫，無須另設 Webhook 位址或金鑰。",
+        "githubAppPaused": "任務已暫停，事件不啟之。"
       },
       "trigger": {
         "label": "觸發方式",

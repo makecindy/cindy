@@ -1588,14 +1588,14 @@ describe('getter / IPC', () => {
     }
   });
 
-  it('个人版无需 shell 导出即可选择两区测试服务，正式包不使用测试地址', () => {
+  it('个人版保留正式 Webhook 地址，只有明确的开发覆盖才使用本机服务', () => {
     resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
     vi.stubEnv('CINDY_PERSONAL_FIXED_APP', '/Applications/Example Personal.app');
     vi.stubEnv('XDT_WEBHOOK_CN_LOCAL_URL', '');
     vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', '');
     try {
-      expect(getClientEndpointForRealm('cn', 'webhookApiBaseUrl')).toBe('http://127.0.0.1:8794');
-      expect(getClientEndpointForRealm('global', 'webhookApiBaseUrl')).toBe('http://127.0.0.1:8793');
+      expect(getClientEndpointForRealm('cn', 'webhookApiBaseUrl')).not.toMatch(/127\.0\.0\.1/);
+      expect(getClientEndpointForRealm('global', 'webhookApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.webhookApiBaseUrl);
       expect(getClientEndpoint('authApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.authApiBaseUrl);
       vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', 'http://127.0.0.1:33356');
       expect(getClientEndpointForRealm('global', 'webhookApiBaseUrl')).toBe('http://127.0.0.1:33356');
