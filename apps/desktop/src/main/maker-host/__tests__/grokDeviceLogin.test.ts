@@ -10,7 +10,7 @@ vi.mock('electron', () => ({
   },
   safeStorage: { isEncryptionAvailable: () => false },
 }));
-vi.mock('../outbound-fetch.js', () => ({
+vi.mock('../outbound-fetch.desktop.js', () => ({
   outboundFetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
 }));
 vi.mock('../nativeProviderAuthBinding.js', () => ({
@@ -24,7 +24,7 @@ import {
   runGrokOAuthLogin,
   type GrokDeviceCode,
   type GrokTokenBlob,
-} from '../grok-oauth-login.js';
+} from '../grok-oauth-login.desktop.js';
 
 function response(status: number, body: unknown): Response {
   return {

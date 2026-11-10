@@ -209,6 +209,17 @@ describe('desktop MCP approval policy', () => {
         toolParams: { name: 'browser', args: { action: 'setBackend', backend } },
       })).toBe('auto-approve');
     }
+    // A batch must not carry a reviewed action past approval (2026-11-10); ordinary sequences stay quiet.
+    for (const [steps, policy] of [
+      [[{ action: 'navigate', url: 'https://example.test/' }, { action: 'upload', paths: ['/tmp/a.pdf'] }], 'prompt-each-time'],
+      [[{ action: 'batch', steps: [toUser] }], 'prompt-each-time'],
+      ['not-a-list', 'prompt-each-time'],
+      [[{ action: 'navigate', url: 'https://example.test/' }, { action: 'extract', extract: { fields: { title: 'h1' } } }], 'auto-approve'],
+    ] as const) {
+      expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_browser', toolName: 'call_tool',
+        toolParams: { name: 'browser', args: { action: 'batch', steps } },
+      })).toBe(policy);
+    }
   });
   it('never lets import discovery grant reusable approval to start a migration', () => {
     for (const operation of ['sources', 'preview', 'status', 'start', undefined]) {

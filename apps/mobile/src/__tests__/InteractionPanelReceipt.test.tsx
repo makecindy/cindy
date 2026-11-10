@@ -51,6 +51,7 @@ vi.mock('@/device-link/useMobileMakerTransport', () => ({
 // 代输入 card has its own tests; its native modules (clipboard, secure store) are out of scope here.
 vi.mock('@/inputHandoff/InputHandoffCard', () => ({ InputHandoffCard: () => null }));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
+vi.mock('@/components/PaperPlaneIcon', () => ({ PaperPlaneIcon: () => null }));
 vi.mock('react-native', async () => {
   const window = { width: 390, height: 844, scale: 3, fontScale: 1 };
   const { createElement } = await import('react');
@@ -627,7 +628,7 @@ it.each(['send', 'close', 'stopped', 'stopped-empty', 'already-answered', 'uncon
   await type('interaction.ask.textInput', '');
   const input = host.querySelector('[data-testid="interaction.ask.textInput"]');
   await act(async () => remoteSessionStore.setPendingInteractions('s1', [{
-    request: { kind: 'ask_user_question', requestId: 'new-question', questions: [{ question: 'New?' }] },
+    request: { kind: 'ask_user_question', requestId: 'new-question', delivery: 'async', questions: [{ question: 'New?' }] },
   }]));
   expect(host.querySelector('[data-testid="interaction.ask.textInput"]')).toBe(input);
   expect(host.textContent).toContain('Original?');
@@ -646,10 +647,10 @@ it.each(['send', 'close', 'stopped', 'stopped-empty', 'already-answered', 'uncon
   asyncReply.input.resume.mockResolvedValue({ ...projection, queuePaused: false });
   if (action === 'stopped') {
     await act(async () => remoteSessionStore.setInputProjection('s1', { ...projection, queuePaused: true }));
-    expect(host.textContent).toContain('interaction.panel.sendAndContinue');
+    expect(host.querySelector('[data-testid="interaction.ask.submitButton"]')?.getAttribute('aria-label')).toBe('interaction.panel.sendAndContinue');
   }
   if (action === 'stopped-empty') {
-    expect(host.textContent).toContain('interaction.panel.sendAndContinue');
+    expect(host.querySelector('[data-testid="interaction.ask.submitButton"]')?.getAttribute('aria-label')).toBe('interaction.panel.sendAndContinue');
     expect(asyncReply.input.enqueue).not.toHaveBeenCalled();
   }
   await click(action === 'close' ? 'interaction.ask.closeButton' : 'interaction.ask.submitButton');
@@ -664,8 +665,12 @@ it.each(['send', 'close', 'stopped', 'stopped-empty', 'already-answered', 'uncon
   if (action === 'send' || action === 'stopped' || action === 'stopped-empty') {
     expect(asyncReply.input.enqueue).toHaveBeenCalledOnce();
     expect(asyncReply.input.enqueue.mock.calls[0][1]).toMatchObject({
-      clientId: expect.stringMatching(/^question-reply:codex:test:0:[a-f0-9]{64}$/), text: '> Original?\n\nFinished',
+      clientId: expect.stringMatching(/^question-reply:codex:test:0:[a-f0-9]{64}$/),
     });
+    const text = asyncReply.input.enqueue.mock.calls[0][1].text;
+    expect(text.split('\n\n<cindy_question_context>')[0]).toBe('> Original?\n\nFinished');
+    expect(text).toContain('This is a delayed answer');
+    expect(text).toContain('do not repeat work already completed');
     expect(asyncReply.input.resume).toHaveBeenCalledTimes(action === 'stopped' ? 1 : 0);
   } else expect(asyncReply.input.enqueue).not.toHaveBeenCalled();
 });
@@ -1160,4 +1165,69 @@ it('cancels an MCP form explicitly without submitting a partial draft', async ()
   await type('interaction.ask.textInput', 'unfinished');
   await click('interaction.ask.cancelButton');
   expect(resolveInteraction).toHaveBeenCalledWith(requestId, { kind: 'ask_user_question', answers: {} });
+});
+
+// Regression: model withdrawal must not discard typing or send without a user gesture.
+// Entry: remote push -> real store and interaction form. Tier: unit.
+it.each([
+  { edited: false, companion: false },
+  { edited: true, companion: false },
+  { edited: true, companion: true },
+])('handles model withdrawal with edited=$edited companion=$companion', async ({ edited, companion }) => {
+  remoteSessionStore.setPendingInteractions('s1', [{ persistId: 'original-row', request: {
+    kind: 'ask_user_question', requestId, delivery: 'async', questions: [{ question: 'Original?', header: 'Device' }],
+  } }]);
+  await act(async () => root.render(<Harness companion={companion} />));
+  if (edited) await type('interaction.ask.textInput', 'Finished');
+  const input = host.querySelector('[data-testid="interaction.ask.textInput"]');
+  await act(async () => remoteSessionStore.applyRemotePush('d1', 'maker:interaction-dismissed', {
+    sessionId: 's1', requestId, reason: 'question_withdrawn', withdrawalReason: '已从日志确认',
+  }));
+  // A snapshot requested before withdrawal must not bring the old card back.
+  await act(async () => remoteSessionStore.setPendingInteractions('s1', [{ persistId: 'original-row', request: {
+    kind: 'ask_user_question', requestId, delivery: 'async', questions: [{ question: 'Original?' }],
+  } }]));
+  expect(asyncReply.input.enqueue).not.toHaveBeenCalled();
+  if (!edited) {
+    expect(host.querySelector('[data-testid="interaction.ask.card"]')).toBeNull();
+    return;
+  }
+  expect(host.querySelector('[data-testid="interaction.ask.textInput"]')).toBe(input);
+  expect(host.textContent).toContain('interaction.panel.questionWithdrawn');
+  expect(host.querySelector('[data-testid="interaction.ask.withdrawn"]')).not.toBeNull();
+  expect(readAskUserDraft(requestId)?.customInput).toBe('Finished');
+  expect(host.querySelector('[data-testid="interaction.ask.submitButton"]')?.getAttribute('aria-label')).toBe('interaction.panel.sendSupplement');
+  expect(remoteSessionStore.getVisiblePendingInteractions('s1')[0].request.withdrawalReason).toBe('已从日志确认');
+  resolveInteraction.mockResolvedValue({ accepted: false });
+  asyncReply.aroundMessagesByClientId.mockResolvedValue([{ clientId: 'original-row', role: 'ask_user',
+    content: { requestId, status: 'cancelled', withdrawalReason: '已从日志确认' } }]);
+  asyncReply.getSession.mockResolvedValue({ id: 's1', agentKind: 'codex', model: 'test', effort: 'medium',
+    permissionMode: 'ask', workingDir: '/repo' });
+  asyncReply.input.steer.mockResolvedValue(false);
+  asyncReply.input.enqueue.mockResolvedValue(remoteSessionStore.getInputProjection('s1'));
+  await click('interaction.ask.submitButton');
+  expect(asyncReply.input.enqueue).toHaveBeenCalledOnce();
+  expect(readAskUserDraft(requestId)).toBeNull();
+});
+
+// Withdrawal converts choices into editable text and removes obsolete controls without submitting.
+it('preserves selected choices and custom text as a withdrawn supplement', async () => {
+  remoteSessionStore.setPendingInteractions('s1', [{ persistId: 'original-row', request: {
+    kind: 'ask_user_question', requestId, delivery: 'async', questions: [{ question: 'Choose?',
+      multiSelect: true, options: [{ label: 'A' }, { label: 'B' }] }],
+  } }]);
+  await act(async () => root.render(<Harness />));
+  await click('interaction.ask.option.1');
+  await click('interaction.ask.showCustomButton');
+  await type('interaction.ask.customInput', 'More detail');
+  await act(async () => remoteSessionStore.applyRemotePush('d1', 'maker:interaction-dismissed', {
+    sessionId: 's1', requestId, reason: 'question_withdrawn', withdrawalReason: 'Already handled',
+  }));
+  expect(host.querySelector('[data-testid="interaction.ask.option.1"]')).toBeNull();
+  expect(host.querySelector('[data-testid="interaction.ask.skipButton"]')).toBeNull();
+  expect(host.querySelector('[data-testid="interaction.ask.closeButton"]')).not.toBeNull();
+  expect(host.querySelector<HTMLTextAreaElement>('[data-testid="interaction.ask.textInput"]')?.value).toBe('A\nMore detail');
+  expect(readAskUserDraft(requestId)?.customInput).toBe('A\nMore detail');
+  expect(resolveInteraction).not.toHaveBeenCalled();
+  expect(asyncReply.input.enqueue).not.toHaveBeenCalled();
 });

@@ -85,7 +85,7 @@ import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.j
 import { summarizeOpenPlan, buildPlanReconcileNote } from '../maker-ipc/planReconcile.js';
 import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
-import { enqueueDurableWrite } from '../messagePersistBroadcaster.js';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster.desktop.js';
 import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import {
@@ -101,8 +101,8 @@ import {
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
 
-import { resolveSafe as resolveXdtImage } from '../imageCacheStore.js';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js';
+import { resolveSafe as resolveXdtImage } from '../imageCacheStore.desktop.js';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop.js';
 import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/ingest.js';
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
@@ -153,7 +153,7 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
-import { getResolvedMainLocale, t } from '../i18n.js';
+import { getResolvedMainLocale, t } from '../i18n.desktop.js';
 import { modernLocaleOf } from '../../shared/locale.js';
 import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 

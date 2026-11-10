@@ -106,6 +106,24 @@ function session(id: string, partial: Partial<Session> = {}): Session {
 }
 
 describe('sessionsStore account boundaries', () => {
+  it('keeps the visible Host task list and fences a recovery that disconnected again', async () => {
+    const a = session('a', { status: 'active' });
+    mocks.list.mockResolvedValueOnce([a]);
+    await sessionsStore.ensureByFilter('active');
+    const pending = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(pending.promise);
+    let connected = true;
+    const refresh = sessionsStore.forceRefreshAll(() => connected);
+    expect(sessionsStore.getByFilter('active')).toEqual([a]);
+    connected = false;
+    pending.resolve([session('stale')]);
+    await refresh;
+    expect(sessionsStore.getByFilter('active')).toEqual([a]);
+    mocks.list.mockResolvedValueOnce([a, session('b', { status: 'active' })]);
+    await sessionsStore.forceRefreshAll(() => true);
+    expect(sessionsStore.getByFilter('active')?.map(s => s.id)).toEqual(['a', 'b']);
+  });
+
   beforeEach(() => {
     mocks.list.mockReset();
     stickyOrigin.deviceBySession.clear();

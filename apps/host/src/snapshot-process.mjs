@@ -1,11 +1,12 @@
 import { fork } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { hostRuntimeLayout } from './runtime-layout.mjs';
 
 /** Same cwd-bound worker as Desktop, with Node IPC preserving bigint identities. */
 export function createSnapshotProcess(parentDir) {
-  const child = fork(fileURLToPath(new URL('../../desktop/src/main/cindy-brain/ghostSnapshotWorkerProcess.ts', import.meta.url)), [], {
+  const layout = hostRuntimeLayout();
+  const child = fork(layout.snapshotWorker, [], {
     cwd: parentDir,
-    execArgv: ['--import', import.meta.resolve('tsx'), '--import', new URL('./loaders/register-raw.mjs', import.meta.url).href],
+    execArgv: layout.packaged ? [] : ['--import', import.meta.resolve('tsx'), '--import', new URL('./loaders/register-raw.mjs', import.meta.url).href],
     stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     serialization: 'advanced',
     env: { ...process.env, CINDY_SNAPSHOT_WORKER: '1' },

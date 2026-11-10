@@ -46,7 +46,7 @@ import type { Session } from '../../renderer/lib/ccAgent.types';
 import type { RewindFilesResult } from '@cindy/maker-core';
 
 import { createLogger } from '../logger';
-import { setLastAssistantTranscriptUuid } from '../messagePersistBroadcaster.js';
+import { setLastAssistantTranscriptUuid } from '../messagePersistBroadcaster.desktop.js';
 import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
 import { isCodexNativeThreadStart, resolveCodexForkEventTimestamp, resolveCodexTurnAnchor } from './fork';
 import {

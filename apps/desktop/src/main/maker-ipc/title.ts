@@ -22,7 +22,7 @@ import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-prov
 import type { AgentKind } from '@cindy/maker-core';
 import { AUTO_TITLE_MAX_CHARS } from '@cindy/maker-shared/session-title';
 
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
@@ -37,7 +37,7 @@ import {
   type RegenerateTitleMaterial,
 } from '../localDb/latestMessageText.js';
 import { createLogger } from '../logger.js';
-import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
