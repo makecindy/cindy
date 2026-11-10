@@ -6569,6 +6569,8 @@ const sessionEventDependencies: SessionEventDependencies = {
 };
 
 const sessionTurnObserverDependencies = {
+  onProviderInitiatedTurn: (session: Session, generation: number) =>
+    agentInputCoordinatorHolder?.noteProviderInitiatedTurn(session.id, generation),
   beforeLocalProviderStart: (session: Session) =>
     withCindyMakeProjectUse(app.getPath('userData'), session.workDir, async () => undefined),
   silentStopTurnLeaseGate,
