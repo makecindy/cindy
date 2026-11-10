@@ -4,14 +4,7 @@
     "stopMine": "Arrêter les miennes",
     "stopAll": "Tout arrêter",
     "stopAllHint": "Inclut les demandes des autres participants",
-    "step": "Étape {{step}}/{{total}}",
-    "viewProcess": "Afficher le travail"
-  },
-  "work": {
-    "queued": "En attente {{count}}",
-    "active": "En cours {{count}}",
-    "expand": "Développer l’activité des coéquipiers",
-    "collapse": "Réduire l’activité des coéquipiers"
+    "step": "Étape {{step}}/{{total}}"
   },
   "title": "Conversations de groupe",
   "memberSeparator": ", ",
@@ -191,6 +184,8 @@
     "start": "Lancer le plan",
     "dismiss": "Ignorer le plan",
     "editHint": "Pour changer qui fait quoi, dites-le simplement",
+    "autoContinue": "Lancer automatiquement l'étape suivante",
+    "autoContinueSaveFailed": "Impossible d'enregistrer le passage entre étapes. Réessayez.",
     "autoNote": "Chaque étape terminée lance automatiquement la suivante.",
     "pauseNote": "Le travail se met en pause après chaque étape jusqu'à ce que vous cliquiez sur « Lancer l'étape suivante ».",
     "superseded": "Mis à jour",

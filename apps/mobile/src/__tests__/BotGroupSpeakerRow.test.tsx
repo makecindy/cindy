@@ -135,7 +135,7 @@ it('hides original-task navigation while keeping the group stop action available
   await render({ sessionId: 'group-lane', deviceId: 'studio', online: false,
     footer: el('button', { onClick: stop }, 'Stop') });
   h.invoke.mockClear();
-  expect(node.textContent).not.toContain(i18n.t('groupChat.progress.viewProcess'));
+  expect(node.querySelectorAll('button')).toHaveLength(1);
   await act(async () => node.querySelector('button')!.click());
   expect(stop).toHaveBeenCalledOnce();
   expect(h.push).not.toHaveBeenCalled();

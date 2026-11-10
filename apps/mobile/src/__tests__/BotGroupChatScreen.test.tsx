@@ -176,6 +176,8 @@ vi.mock('@/platform/chrome/AnchoredPullDownMenu', () => ({ AnchoredPullDownMenu:
 vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
 vi.mock('@/platform/chrome', () => ({ showConfirm: h.confirm }));
+vi.mock('@/platform/chrome/NativeSwitch', () => ({ NativeSwitch: ({ testID, value, disabled, onValueChange }: any) =>
+  el('button', { 'data-testid': testID, role: 'switch', 'aria-checked': value, disabled, onClick: () => onValueChange(!value) }) }));
 vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
   usesNativePullDownMenu: () => h.nativeMenus,
   NativePullDownMenu: ({ actions, onAction, children, testID, disabled, longPress }: any) => {
@@ -1236,11 +1238,79 @@ describe('group timeline', () => {
     expect(h.chat.act).not.toHaveBeenCalled();
   });
 
+  // Bounded card copy must stay readable without granting plan management (unit).
+  it('reads the full step locally and closes its details when the plan revision changes', async () => {
+    h.chat.server = true;
+    const data = group();
+    data.plans[0] = { ...data.plans[0]!, canManage: false, revision: 1 };
+    const task = 'A long description that must remain available beyond the compact card preview. '.repeat(8);
+    data.plans[0]!.steps[0]!.task = task;
+    await render(data, 'ready', undefined, '');
+    await click('botGroup.plan.step');
+    expect(byId('botGroup.plan.stepDetails')?.textContent).toContain(task);
+    expect(byId('botGroup.plan.start')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
+    await render({ ...data, plans: [{ ...data.plans[0]!, revision: 2 }] }, 'ready', undefined, '');
+    expect(byId('botGroup.plan.stepDetails')).toBeNull();
+  });
+
   // The computer's 自动交接 survives the phone's parse, so the card does not promise a 继续 that never comes.
   it.each([[true, 'groupChat.plan.autoNote'], [undefined, 'groupChat.plan.pauseNote']] as const)('says how steps hand on (autoContinue=%s)', async (autoContinue, note) => {
     const data = group();
     await render(parseBotGroupChatData({ ...data, plans: data.plans.map(plan => ({ ...plan, ...(autoContinue ? { autoContinue } : {}) })) })!);
     expect(byId('botGroup.message.plan')?.textContent).toContain(note);
+  });
+
+  // Unit: the actual screen sends a setting write for the displayed work plan.
+  // Existing tests only read autoContinue; protect single-flight, authoritative
+  // readback and refusal/retry without a device or real network.
+  it('changes the computer handoff setting once, waits for its snapshot and allows retry after refusal', async () => {
+    const data = group();
+    data.plans[0] = { ...data.plans[0]!, kind: 'work', canManage: true, canSetAutoContinue: true, autoContinue: false, revision: 3 };
+    await render(data);
+    expect(byId('botGroup.plan.autoContinue')?.getAttribute('aria-checked')).toBe('false');
+    let reject!: (error: Error) => void;
+    h.chat.act.mockImplementationOnce(() => new Promise((_, no) => { reject = no; }));
+    await click('botGroup.plan.autoContinue');
+    expect(h.chat.act).toHaveBeenLastCalledWith('plan-auto-continue', { planId: 'p1', autoContinue: true, expectedPlanRevision: 3 });
+    expect(byId('botGroup.plan.autoContinue')?.disabled).toBe(true);
+    expect(byId('botGroup.plan.start')?.disabled).toBe(true);
+    await click('botGroup.plan.autoContinue');
+    expect(h.chat.act).toHaveBeenCalledTimes(1);
+    expect(byId('botGroup.plan.autoContinue')?.getAttribute('aria-checked')).toBe('false');
+    await act(async () => reject(new Error('PERMISSION_DENIED')));
+    expect(h.alert).toHaveBeenCalledWith('groupChat.errors.permissionDenied');
+    expect(byId('botGroup.plan.autoContinue')?.disabled).toBe(false);
+    await click('botGroup.plan.autoContinue');
+    expect(h.chat.act).toHaveBeenCalledTimes(2);
+    await render({ ...data, plans: [{ ...data.plans[0]!, autoContinue: true }] });
+    expect(byId('botGroup.plan.autoContinue')?.getAttribute('aria-checked')).toBe('true');
+    const waiting = { ...data, openPlan: { ...data.openPlan!, status: 'waiting' as const, currentStep: 0, currentStepStatus: 'done' as const },
+      plans: [{ ...data.plans[0]!, status: 'waiting' as const, currentStep: 0,
+        steps: data.plans[0]!.steps.map((step, index) => ({ ...step, status: index === 0 ? 'done' as const : 'pending' as const })) }] };
+    await render(waiting);
+    let finish!: () => void;
+    h.chat.act.mockImplementationOnce(() => new Promise<void>(yes => { finish = yes; }));
+    await click('botGroup.plan.autoContinue');
+    expect(byId('botGroup.followUp.continue')?.disabled).toBe(true);
+    expect(byId('botGroup.followUp.end')?.disabled).toBe(true);
+    await act(async () => finish());
+    h.chat.act.mockImplementationOnce(() => new Promise<void>(yes => { finish = yes; }));
+    await click('botGroup.followUp.continue');
+    expect(byId('botGroup.plan.autoContinue')?.disabled).toBe(true);
+    await act(async () => finish());
+  });
+
+  it.each(['legacy', 'other-plan', 'talk', 'read-only', 'direct', 'offline'] as const)('protects the computer setting in the %s view', async scenario => {
+    const data = group();
+    data.plans[0] = { ...data.plans[0]!, kind: scenario === 'talk' ? 'talk' : 'work', canManage: scenario !== 'read-only',
+      canSetAutoContinue: scenario !== 'legacy', autoContinue: false };
+    if (scenario === 'other-plan') data.openPlan = null;
+    if (scenario === 'offline') h.chat.online = false;
+    await render(data, 'ready', undefined, scenario === 'direct' ? '' : 'mac');
+    if (scenario === 'offline') expect(byId('botGroup.plan.autoContinue')?.disabled).toBe(true);
+    else expect(byId('botGroup.plan.autoContinue')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   it.each([undefined, true, false])('renders human-signed plans as organizer cards with working actions and read-only old plans (isSelf=%s)', async (isSelf) => {
@@ -3294,5 +3364,13 @@ it('shows the real step start and handoff time and keeps missing timing absent',
     round: { ...identified.round, speakers: identified.round.speakers.map((speaker, index) => index === 1 ? { ...speaker, startedAt: undefined } : speaker) },
     plans: identified.plans.map(plan => ({ ...plan, updatedAt: 35_000 })) });
   expect(card.textContent).not.toContain('6 秒');
+  // A work step may be accepted but still queued. Its old start timestamp must
+  // not turn that queue into active work or an elapsed timer (mobile, unit).
+  await render({ ...identified,
+    plans: identified.plans.map(plan => ({ ...plan, steps: plan.steps.map(step => step.position === 1
+      ? { ...step, executionStatus: 'queued' as const } : step) })) });
+  expect(card.textContent).toContain('groupChat.plan.stepQueued');
+  expect(card.textContent).not.toContain('6 秒');
+  expect(card.textContent).not.toContain('groupChat.plan.stepRunning');
   vi.useRealTimers();
 });

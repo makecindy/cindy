@@ -4,8 +4,7 @@
     "stopMine": "내 요청 중지",
     "stopAll": "모두 중지",
     "stopAllHint": "다른 사람의 요청도 포함",
-    "step": "{{step}}/{{total}}단계",
-    "viewProcess": "과정 보기"
+    "step": "{{step}}/{{total}}단계"
   },
   "title": "그룹 채팅",
   "memberSeparator": ", ",
@@ -182,6 +181,8 @@
     "start": "시작하기",
     "dismiss": "필요 없어요",
     "editHint": "담당이나 단계를 바꾸려면 그냥 말해 주세요",
+    "autoContinue": "끝나면 자동으로 다음 단계 시작",
+    "autoContinueSaveFailed": "단계 넘기기를 저장하지 못했습니다. 다시 시도해 주세요.",
     "autoNote": "단계가 끝나면 자동으로 다음 단계가 시작됩니다.",
     "pauseNote": "한 단계가 끝날 때마다 멈추고, ‘다음 단계 시작’을 누를 때까지 기다립니다.",
     "superseded": "업데이트됨",
@@ -225,12 +226,6 @@
     "stopping": "중지 중…",
     "planning": "역할을 나누는 중…",
     "step": "작업 중…"
-  },
-  "work": {
-    "queued": "대기 중 {{count}}",
-    "active": "진행 중 {{count}}",
-    "expand": "팀원 활동 펼치기",
-    "collapse": "팀원 활동 접기"
   },
   "task": {
     "state": {

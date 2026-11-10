@@ -423,6 +423,40 @@ describe('bot group remote resources', () => {
     })).rejects.toMatchObject({ code: 'INVALID_PARAMS', message: 'PLAN_CLOSED' });
   });
 
+  // Unit: the authenticated production provider changes the originating computer's
+  // local setting, not shared server configuration. Previously no remote write
+  // existed. The minimal valid input needs one manageable open local work plan.
+  it('projects and changes the computer handoff preference only for its manageable open work plan', async () => {
+    const group = detail({ serverBacked: true, singleSpeaker: true,
+      openPlan: { id: 'p1', kind: 'work', status: 'proposed', currentStep: null, stepCount: 1, currentBotName: null, currentStepStatus: null } });
+    group.plans[0] = { ...group.plans[0]!, kind: 'work', status: 'proposed', canManage: true, autoContinue: false, revision: 7 };
+    expect(botGroupRemoteChatData(group).plans[0]!.canSetAutoContinue).toBe(true);
+    service.getGroup.mockResolvedValue({ ok: true, group });
+    for (const autoContinue of [true, false]) {
+      await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+        resourceRef: ref('g1'), actionId: 'plan-auto-continue', input: { planId: 'p1', autoContinue, expectedPlanRevision: 7 } });
+      expect(service.updateGroup).toHaveBeenLastCalledWith({ groupId: 'g1', autoContinue });
+    }
+    service.updateGroup.mockClear();
+    await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      resourceRef: ref('g1'), actionId: 'plan-auto-continue', input: { planId: 'p1', autoContinue: true, expectedPlanRevision: 6 } })).rejects.toMatchObject({ message: 'PRECONDITION_FAILED' });
+    expect(service.updateGroup).not.toHaveBeenCalled();
+  });
+
+  it.each(['talk', 'closed', 'not-originating-here', 'denied', 'archived', 'other-plan', 'invalid-value'] as const)('refuses handoff changes for %s before writing a local preference', async scenario => {
+    const group = detail({ serverBacked: true, singleSpeaker: true,
+      openPlan: { id: 'p1', kind: 'work', status: 'running', currentStep: 0, stepCount: 1, currentBotName: '阿布', currentStepStatus: 'running' } });
+    group.plans[0] = { ...group.plans[0]!, kind: scenario === 'talk' ? 'talk' : 'work', status: scenario === 'closed' ? 'done' : 'running',
+      canManage: scenario !== 'denied', ...(scenario === 'not-originating-here' ? {} : { autoContinue: false }) };
+    if (scenario === 'archived') group.archived = true;
+    if (scenario === 'other-plan') group.openPlan = null;
+    if (scenario !== 'invalid-value') expect(botGroupRemoteChatData(group).plans[0]!.canSetAutoContinue).toBe(false);
+    service.getGroup.mockResolvedValue({ ok: true, group });
+    await expect(remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
+      resourceRef: ref('g1'), actionId: 'plan-auto-continue', input: { planId: 'p1', autoContinue: scenario === 'invalid-value' ? 'true' : true } })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(service.updateGroup).not.toHaveBeenCalled();
+  });
+
   it('never lets a phone set a folder or reach a hidden teammate', async () => {
     await remoteResourceRegistry.invoke(context, {
       client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'update', resourceRef: ref('g1'),

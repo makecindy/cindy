@@ -123,7 +123,6 @@ import {
   BotGroupPlanCard,
   BotGroupPlanEndDivider,
   BotGroupPlanFollowUpRow,
-  type BotGroupFollowUpAction,
   type BotGroupIdentityLookup,
   type BotGroupPlanCardAction,
 } from './BotGroupPlan';
@@ -139,15 +138,16 @@ import { botGroupRoute } from './botGroupNavigation';
 import { BotGroupThreadEntry, BotGroupThreadFollow, BotGroupThreadShare, BotGroupThreadPosted, BotGroupMessageActions } from './BotGroupThreadViews';
 import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
 
-/** Toast copy when a plan action fails without a more specific cause. */
-const PLAN_ACTION_FAILED: Record<BotGroupPlanAction, string> = {
+type MobilePlanAction = BotGroupPlanAction | 'auto-continue';
+const PLAN_ACTION_FAILED: Record<MobilePlanAction, string> = {
   start: 'groupChat.plan.startFailed',
   dismiss: 'groupChat.plan.dismissFailed',
   continue: 'groupChat.timeline.continuePlanFailed',
   retry: 'groupChat.timeline.retryFailed',
+  'auto-continue': 'groupChat.plan.autoContinueSaveFailed',
 };
 
-type PlanPending = { planId: string; action: BotGroupPlanAction | 'edit' };
+type PlanPending = { planId: string; action: MobilePlanAction | 'edit' };
 /** Follow new messages while the reader is within this distance of the bottom. */
 const STICK_TO_BOTTOM_PX = 48;
 /** Teammate replies hang 10pt right of the 28pt portrait, as in the 1:1 chat. */
@@ -577,13 +577,18 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   }, [continuing, processViewport.resume, chat.act, report]);
 
   /** 开始 / 不用了 / 继续 / 重试 / 结束分工; both transports re-read the authoritative state. */
-  const runPlanAction = useCallback(async (action: BotGroupPlanAction, planId: string, expectedRevision?: number) => {
+  const runPlanAction = useCallback(async (action: MobilePlanAction, planId: string, expectedRevision?: number, autoContinue?: boolean) => {
     if (planPendingRef.current) return;
+    if (action === 'auto-continue' && !deviceId) return;
     const pending = {}; planPendingRef.current = pending;
     setPlanPending({ planId, action });
-    processViewport.resume();
-    stickToBottom.current = true;
-    try { await chat.act(`plan-${action}`, { planId, ...(!deviceId ? { expectedRevision } : {}) }); } catch (error) {
+    if (action !== 'auto-continue') {
+      processViewport.resume();
+      stickToBottom.current = true;
+    }
+    try { await chat.act(`plan-${action}`, action === 'auto-continue'
+      ? { planId, autoContinue, ...(expectedRevision !== undefined ? { expectedPlanRevision: expectedRevision } : {}) }
+      : { planId, ...(!deviceId ? { expectedRevision } : {}) }); } catch (error) {
       if (planPendingRef.current === pending) report(error, PLAN_ACTION_FAILED[action]);
     } finally {
       if (planPendingRef.current === pending) { planPendingRef.current = null; setPlanPending(null); }
@@ -949,14 +954,6 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   </View></RichContentContext.Provider>;
 }
 
-function planCardPending(action: PlanPending['action'] | null): BotGroupPlanCardAction | null {
-  return action === 'start' || action === 'dismiss' || action === 'edit' ? action : null;
-}
-
-function followUpPending(action: PlanPending['action'] | null): BotGroupFollowUpAction | null {
-  return action === 'continue' || action === 'retry' || action === 'dismiss' ? action : null;
-}
-
 const EMPTY_PENDING: readonly DurableOutboxRecord[] = [];
 
 export const BotGroupTimeline = memo(function BotGroupTimeline({
@@ -978,7 +975,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
   continuing: boolean;
   planPending: PlanPending | null;
   onContinue(): void;
-  onPlanAction(action: BotGroupPlanAction, planId: string, revision?: number): void;
+  onPlanAction(action: MobilePlanAction, planId: string, revision?: number, autoContinue?: boolean): void;
   onEditStep(planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string, revision?: number): void;
   onMessageLayout?: (id: string, y: number, height: number) => void;
   onLocateMessage?: (id: string) => void;
@@ -1113,7 +1110,10 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
           plan={messagePlan}
           planActionable={!group.archived && !group.dissolvedAt && openPlan?.canManage !== false && message.kind === 'plan' && openPlan?.id === message.planId && openPlan.status === 'proposed'}
           planReassignable={!group.archived && !group.dissolvedAt && openPlan?.canManage !== false && openPlan?.kind !== 'talk' && message.kind === 'plan' && openPlan?.id === message.planId && openPlan.status === 'waiting'}
-          planPending={planCardPending(pendingFor(message.planId))}
+          planPending={pendingFor(message.planId)}
+          onPlanAutoContinue={deviceId && !group.archived && !group.dissolvedAt && message.kind === 'plan'
+            && openPlan?.id === message.planId && openPlan.kind === 'work' && openPlan.canManage === true
+            && openPlan.canSetAutoContinue === true ? on => onPlanAction('auto-continue', openPlan.id, openPlan.revision, on) : undefined}
           onPlanAction={(action) => { if (message.planId) onPlanAction(action, message.planId, planById.get(message.planId)?.revision); }}
           onEditStep={(step, action, botId) => { if (message.planId) onEditStep(message.planId, step, action, botId, planById.get(message.planId)?.revision); }} />
         </CompanionEntering>
@@ -1136,8 +1136,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
     <BotGroupMentionIdentity member={mentionedMember} anchor={mentioned?.anchor ?? null} deviceId={deviceId} onClose={() => setMentioned(null)} />
     {!threadRootId && !group.archived && !group.dissolvedAt && openPlan && openPlan.canManage !== false && followUp ? <View style={styles.indented}>
       <BotGroupPlanFollowUpRow plan={openPlan} followUp={followUp} identityFor={identityFor} deviceId={deviceId} online={online}
-        stepNumber={openPlan.steps.indexOf(followUp.kind === 'continue' ? followUp.next : followUp.failed) + 1} stepTotal={openPlan.steps.length}
-        pending={followUpPending(pendingFor(openPlan.id))}
+        pending={pendingFor(openPlan.id)}
         onContinue={() => onPlanAction('continue', openPlan.id, openPlan.revision)}
         onRetry={() => onPlanAction('retry', openPlan.id, openPlan.revision)}
         onEnd={() => onPlanAction('dismiss', openPlan.id, openPlan.revision)} />
@@ -1147,7 +1146,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
 
 function BotGroupTimelineItem({
   groupId, message, footer, topic = false, isRoot = false, onRetrySource, continued = false, quoteDisplay, onLocateQuote, member, members, deviceId, online, identityFor, mentionLabels, mentionContext, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
-  plan, planMessages, runningSince, planActionable, planReassignable, planPending, onPlanAction, onEditStep, onOpenDiagram, interactive = true, active = true,
+  plan, planMessages, runningSince, planActionable, planReassignable, planPending, onPlanAction, onEditStep, onPlanAutoContinue, onOpenDiagram, interactive = true, active = true,
 }: {
   groupId: string;
   onOpenDiagram?: (source: string) => void;
@@ -1182,6 +1181,7 @@ function BotGroupTimelineItem({
   planReassignable: boolean;
   planPending: BotGroupPlanCardAction | null;
   onPlanAction(action: 'start' | 'dismiss'): void;
+  onPlanAutoContinue?: (on: boolean) => void;
   onEditStep(step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string): void;
 }) {
   const { t } = useTranslation();
@@ -1256,7 +1256,7 @@ function BotGroupTimelineItem({
             return message ? [[step.position, message.createdAt] as const] : [];
           }))}
           actionable={planActionable} reassignable={planReassignable} pending={planPending}
-          onStart={() => onPlanAction('start')} onDismiss={() => onPlanAction('dismiss')} onEditStep={onEditStep} /> : null;
+          onStart={() => onPlanAction('start')} onDismiss={() => onPlanAction('dismiss')} onEditStep={onEditStep} onAutoContinueChange={onPlanAutoContinue} /> : null;
   if (message.kind === 'plan' && plan?.kind === 'talk') return <View style={styles.botRow} testID="botGroup.message.plan">
     <View style={styles.avatarSpacer} />
     <View style={styles.botColumn}>{planCard}</View>
@@ -1368,5 +1368,5 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   botColumn: { flex: 1, minWidth: 0, gap: spacing.xs },
   topicAuthorRow: { alignItems: 'baseline' },
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: BOT_GROUP_MESSAGE_AVATAR_SIZE },
-  authorName: { flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
+  authorName: { flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.regular },
 });

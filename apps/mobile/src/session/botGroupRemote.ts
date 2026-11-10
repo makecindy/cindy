@@ -304,8 +304,9 @@ function parsePlan(value: unknown): BotGroupPlanView | null {
     supportsPendingSkip: record.supportsPendingSkip === true,
     canManage: typeof record.canManage === 'boolean' ? record.canManage : undefined,
     canAdd: typeof record.canAdd === 'boolean' ? record.canAdd : undefined,
-    // The computer's 自动交接 for a 分工 it started; changed only there.
+    // The setting belongs to this computer; only a new host explicitly offers remote control.
     autoContinue: typeof record.autoContinue === 'boolean' ? record.autoContinue : undefined,
+    canSetAutoContinue: record.canSetAutoContinue === true,
     organizerBotId: id(record.organizerBotId) ?? '',
     organizerName: text(record.organizerName, MAX_NAME) ?? '',
     steps: steps as BotGroupPlanStepView[],

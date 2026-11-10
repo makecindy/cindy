@@ -4,14 +4,7 @@
     "stopMine": "Meine stoppen",
     "stopAll": "Alle stoppen",
     "stopAllHint": "Schließt Anfragen anderer Personen ein",
-    "step": "Schritt {{step}}/{{total}}",
-    "viewProcess": "Arbeit anzeigen"
-  },
-  "work": {
-    "queued": "In Warteschlange {{count}}",
-    "active": "In Bearbeitung {{count}}",
-    "expand": "Aktivität der Teammitglieder ausklappen",
-    "collapse": "Aktivität der Teammitglieder einklappen"
+    "step": "Schritt {{step}}/{{total}}"
   },
   "title": "Gruppenchats",
   "memberSeparator": ", ",
@@ -188,6 +181,8 @@
     "start": "Plan starten",
     "dismiss": "Plan überspringen",
     "editHint": "Sag einfach, wenn du die Aufgabenverteilung ändern möchtest",
+    "autoContinue": "Nächsten Schritt automatisch starten",
+    "autoContinueSaveFailed": "Die Schrittübergabe konnte nicht gespeichert werden. Versuch es erneut.",
     "autoNote": "Jeder abgeschlossene Schritt startet automatisch den nächsten.",
     "pauseNote": "Nach jedem Schritt pausiert die Arbeit, bis du auf „Nächsten Schritt starten“ klickst.",
     "superseded": "Aktualisiert",

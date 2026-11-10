@@ -4,14 +4,7 @@
     "stopMine": "Detener lo mío",
     "stopAll": "Detener todo",
     "stopAllHint": "Incluye solicitudes de otras personas",
-    "step": "Paso {{step}}/{{total}}",
-    "viewProcess": "Mostrar trabajo"
-  },
-  "work": {
-    "queued": "En cola {{count}}",
-    "active": "En curso {{count}}",
-    "expand": "Expandir actividad de compañeros",
-    "collapse": "Contraer actividad de compañeros"
+    "step": "Paso {{step}}/{{total}}"
   },
   "title": "Chats grupales",
   "memberSeparator": ", ",
@@ -191,6 +184,8 @@
     "start": "Plan de inicio",
     "dismiss": "Saltar plan",
     "editHint": "Para cambiar quién hace qué, solo dilo",
+    "autoContinue": "Iniciar el siguiente paso automáticamente",
+    "autoContinueSaveFailed": "No se pudieron guardar las transiciones entre pasos. Inténtalo de nuevo.",
     "autoNote": "Cada paso finalizado inicia el siguiente automáticamente.",
     "pauseNote": "El trabajo se detiene después de cada paso hasta que haga clic en \"Iniciar el siguiente paso\".",
     "superseded": "Actualizado",

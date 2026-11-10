@@ -15,8 +15,6 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
   Check,
-  ShieldCheck,
-  MessageCircle,
   ChevronDown,
   ChevronUp,
   CornerDownLeft,
@@ -414,7 +412,6 @@ function cardStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayou
 }
 
 function actionsStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayout, companion = false): StyleProp<ViewStyle> {
-  // Like PC, actions keep intrinsic widths and wrap from the trailing edge.
   if (companion) return [styles.actions, { gap: spacing.sm, justifyContent: 'flex-end', marginTop: spacing.sm }];
   return [
     styles.actions,
@@ -807,7 +804,6 @@ function PermissionCard({
   const companion = useContext(CompanionInteractionContext);
   const companionIdentity = useContext(CompanionIdentityContext);
   const hung = useContext(CompanionHungContext);
-  const { colors } = useTheme();
   const suggestions = sessionScopedPermissionSuggestions(item.request.suggestions);
   const requestId = readRequestId(item);
   const [armedDecision, setArmedDecision] = useState<'allow-once' | 'always-allow' | null>(null);
@@ -2174,9 +2170,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   askHeaderChip: { alignSelf: 'flex-start', borderRadius: radius.control, backgroundColor: colors.surfaceChip, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
   askHeaderChipLabel: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   companionDescription: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  companionRequester: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  companionRequesterAvatar: { flexShrink: 0 },
-  companionRequesterText: { flex: 1, minWidth: 0, gap: 2 },
   companionEvidence: { gap: spacing.sm },
   companionHungRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   companionHungAvatar: { flexShrink: 0, marginTop: 2 },
@@ -2186,9 +2179,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   companionMeta: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionMetaLabel: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionDetailsText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  companionFact: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
-  companionFactLabel: { width: 64, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  companionFactValue: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionDetailsButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, alignSelf: 'flex-start' },
   root: {
     borderBottomColor: colors.border,
@@ -2619,16 +2609,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 44,
     paddingHorizontal: spacing.md,
   },
-  inlineInputWide: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: colors.textPrimary,
-    fontSize: typeScale.body,
-    minHeight: 44,
-    paddingHorizontal: spacing.md,
-  },
   inlineButton: {
     backgroundColor: colors.cta,
     borderRadius: radius.pill,
@@ -2962,16 +2942,13 @@ const makeCompanionStyles = (colors: ThemeColors) => {
     askQuestion: { ...base.askQuestion, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
     permissionCodeBlock: { ...base.permissionCodeBlock, backgroundColor: colors.chatCodeSurface, borderRadius: radius.control, borderWidth: StyleSheet.hairlineWidth },
     codeText: { ...base.codeText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-    // PC prompt actions: intrinsic widths, outlined secondary, primary last; 44pt touch target on phones.
     primaryButton: { ...base.primaryButton, minHeight: COMPANION_BUTTON_HEIGHT, paddingHorizontal: spacing.md },
     secondaryButton: { ...base.secondaryButton, minHeight: COMPANION_BUTTON_HEIGHT, paddingHorizontal: spacing.md, borderWidth: StyleSheet.hairlineWidth, backgroundColor: 'transparent' },
     primaryText: { ...base.primaryText, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, textAlign: 'center' as const },
     secondaryText: { ...base.secondaryText, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, textAlign: 'center' as const },
     permissionRiskRow: { ...base.permissionRiskRow, borderRadius: radius.control },
-    // Like PC, answer choices share one bounded list and row dividers.
     optionList: { ...base.optionList, borderRadius: radius.control },
     inlineInput: { ...base.inlineInput, borderRadius: radius.control },
-    inlineInputWide: { ...base.inlineInputWide, borderRadius: radius.control },
     planEditor: { ...base.planEditor, borderRadius: radius.control },
     optionCustom: { ...base.optionCustom, fontStyle: 'normal' as const },
     pluginSetupStep: { ...base.pluginSetupStep, borderWidth: 0 },

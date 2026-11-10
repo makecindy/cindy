@@ -4,8 +4,7 @@
     "stopMine": "Stop Mine",
     "stopAll": "Stop All",
     "stopAllHint": "Includes other people’s requests",
-    "step": "Step {{step}}/{{total}}",
-    "viewProcess": "Show work"
+    "step": "Step {{step}}/{{total}}"
   },
   "title": "Group Chats",
   "memberSeparator": ", ",
@@ -182,6 +181,8 @@
     "start": "Start Plan",
     "dismiss": "Skip Plan",
     "editHint": "To change who does what, just say so",
+    "autoContinue": "Start the next step automatically",
+    "autoContinueSaveFailed": "Couldn’t save step handoffs. Try again.",
     "autoNote": "Each finished step starts the next one automatically.",
     "pauseNote": "Work pauses after each step until you click “Start Next Step”.",
     "superseded": "Updated",
@@ -225,12 +226,6 @@
     "stopping": "Stopping…",
     "planning": "Splitting the work…",
     "step": "Working on it…"
-  },
-  "work": {
-    "queued": "Queued {{count}}",
-    "active": "In progress {{count}}",
-    "expand": "Expand teammate activity",
-    "collapse": "Collapse teammate activity"
   },
   "task": {
     "state": {

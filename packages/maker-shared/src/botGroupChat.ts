@@ -451,6 +451,8 @@ export interface BotGroupPlanView {
    * A choice of the computer that made it, not shared chat state; absent where unsupported.
    */
   autoContinue?: boolean;
+  /** Remote host can change its local handoff setting for this open work plan. Absent on older hosts. */
+  canSetAutoContinue?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -801,6 +803,7 @@ export type BotGroupRemoteActionId =
   | 'plan-dismiss'
   | 'plan-continue'
   | 'plan-retry'
+  | 'plan-auto-continue'
   | 'plan-edit';
 
 /**

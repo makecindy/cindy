@@ -4,8 +4,7 @@
     "stopMine": "停止我發起的",
     "stopAll": "全部停止",
     "stopAllHint": "包括其他人發起的",
-    "step": "第 {{step}}/{{total}} 步",
-    "viewProcess": "看過程"
+    "step": "第 {{step}}/{{total}} 步"
   },
   "title": "群聊",
   "memberSeparator": "、",
@@ -182,6 +181,8 @@
     "start": "開始",
     "dismiss": "不用了",
     "editHint": "想換人或改步驟，直接說",
+    "autoContinue": "做完一步自動交給下一位",
+    "autoContinueSaveFailed": "分工交接沒能儲存，請再試一次",
     "autoNote": "做完一步會自動交給下一位。",
     "pauseNote": "每做完一步會停下來，等你點「繼續」。",
     "superseded": "已更新",
@@ -225,12 +226,6 @@
     "stopping": "正在停止…",
     "planning": "正在安排…",
     "step": "正在做…"
-  },
-  "work": {
-    "queued": "排隊 {{count}}",
-    "active": "進行中 {{count}}",
-    "expand": "展開夥伴動態",
-    "collapse": "收起夥伴動態"
   },
   "task": {
     "state": {

@@ -4,14 +4,7 @@
     "stopMine": "止我所发",
     "stopAll": "尽止",
     "stopAllHint": "兼及他人所发",
-    "step": "第 {{step}}/{{total}} 步",
-    "viewProcess": "观其过程"
-  },
-  "work": {
-    "queued": "待次 {{count}}",
-    "active": "行事中 {{count}}",
-    "expand": "展伙伴所事",
-    "collapse": "敛伙伴所事"
+    "step": "第 {{step}}/{{total}} 步"
   },
   "title": "群议",
   "memberSeparator": "、",
@@ -188,6 +181,8 @@
     "start": "始",
     "dismiss": "不必",
     "editHint": "欲易人或改步骤，直言之",
+    "autoContinue": "一步既毕，自交次者",
+    "autoContinueSaveFailed": "分工交接未能存，请再试",
     "autoNote": "一步既毕，自交次一位。",
     "pauseNote": "每毕一步即止，候君点「续」。",
     "superseded": "已更",

@@ -2,14 +2,6 @@ import { BotGroupProcessEntries } from './BotGroupProcess';
 import { TeammateProcess, useTeammateElapsedTitle } from './TeammateProcess';
 import { BOT_GROUP_CLIENT_ID, readBotGroupProcessMessages, type BotGroupProcessMessage } from '@cindy/maker-shared/botGroupChat';
 import { useRemoteSessionMessages } from './remoteSessionStore';
-/**
- * 正在发言 / 安排 / 做事的伙伴一行（对照桌面 BotGroupChatView 的 BotGroupSpeakingRow 与
- * BotGroupPendingInteraction）。
- *
- * 伙伴的群专线或分工 Session 是一条普通 Cindy Session：页面聚焦期间订阅它的
- * `session:<id>` 流并读一次挂起交互的快照，权限请求 / 提问就地用伙伴卡片样式显示在这位
- * 伙伴下面，作答走任务页同一条路径。等你确认时不再显示「正在…」。
- */
 import { useCallback, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
@@ -19,9 +11,10 @@ import { Text } from '@/components/AppText';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
 import { useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, lineHeight, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, lineHeight, spacing, typeScale } from '@/theme/tokens';
 import {
   BOT_GROUP_INLINE_AVATAR_SIZE,
+  BOT_GROUP_MESSAGE_AVATAR_SIZE,
   BotGroupAvatar,
   type BotGroupIdentity,
 } from './BotGroupAvatars';
@@ -29,6 +22,7 @@ import { InteractionPanel } from './InteractionPanel';
 import { remoteSessionStore, useSessionPendingInteractions } from './remoteSessionStore';
 import type { PendingInteraction } from './types';
 
+/** Owned-session prompts stay outside the collapsible execution progress. */
 export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, online, executionStatus, stopping, executionId, groupId, startedAt, workStep, revealWaiting = true, footer, onError }: {
   deviceId: string;
   executionId?: string;
@@ -73,12 +67,13 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
   const stateLabel = waiting ? t(revealWaiting ? 'groupChat.waitingConfirm' : 'groupChat.waitingForOwner', { name: '' }) : isStopping || executionStatus === 'queued' || activity === 'planning' ? label : elapsedTitle;
   return <View style={styles.row} testID="botGroup.speaking" accessibilityLabel={`${identity.name}, ${waiting ? t(revealWaiting ? 'groupChat.waitingConfirm' : 'groupChat.waitingForOwner', { name: identity.name }) : label}`}>
     <View style={styles.avatar}>
-      <BotGroupAvatar deviceId={deviceId} identity={identity} size={iconSize.xl} online={online} />
+      <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_MESSAGE_AVATAR_SIZE} online={online} />
     </View>
     <View style={styles.body}>
       <TeammateProcess id={`group-process:${executionId ?? lane}`} running
         title={`${identity.name} · ${stateLabel}`}
-        titleContent={<><Text style={styles.processName}>{identity.name}</Text><Text style={styles.processState}>{` · ${stateLabel}`}</Text></>}>
+        titleContent={<Text style={styles.processName}>{identity.name}</Text>}
+        titleAccessory={<Text numberOfLines={1} style={styles.processState}>{stateLabel}</Text>}>
         {workStep ? <Text style={styles.statusText}>{t('groupChat.progress.step', { step: workStep.position, total: workStep.total })} · {workStep.task}</Text> : null}
         {lane && groupId && executionId ? <BotGroupLiveNotes key={`${deviceId}:${lane}:${executionId}`} deviceId={deviceId} sessionId={lane}
           clientId={BOT_GROUP_CLIENT_ID.memberTurn(groupId, executionId, identity.botId)}
@@ -97,9 +92,9 @@ export function BotGroupSpeakerRow({ deviceId, identity, sessionId, activity, on
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
-  avatar: { width: iconSize.xl, height: iconSize.xl, marginTop: spacing.sm },
+  avatar: { width: BOT_GROUP_MESSAGE_AVATAR_SIZE, height: BOT_GROUP_MESSAGE_AVATAR_SIZE, marginTop: spacing.sm },
   body: { flex: 1, minWidth: 0 },
-  processName: { color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+  processName: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.regular },
   processState: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs },
   statusText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },

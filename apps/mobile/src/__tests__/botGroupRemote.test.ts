@@ -62,18 +62,19 @@ describe('parseBotGroupChatData', () => {
   });
   it('preserves skip permissions, pending-skip support, execution identity and skipped rows from the computer', () => {
     const base = chatData().plans[0];
-    const parsed = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', canManage: true, supportsPendingSkip: true,
+    const parsed = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', canManage: true, supportsPendingSkip: true, canSetAutoContinue: true,
       steps: [
         { ...base.steps[0], status: 'running', executionId: 'turn', executionStatus: 'queued' },
         { ...base.steps[1], status: 'skipped' },
       ],
     }] }))!;
-    expect(parsed.plans[0]).toMatchObject({ canManage: true, supportsPendingSkip: true, steps: [
+    expect(parsed.plans[0]).toMatchObject({ canManage: true, supportsPendingSkip: true, canSetAutoContinue: true, steps: [
       { executionId: 'turn', executionStatus: 'queued' }, { status: 'skipped' },
     ] });
-    const legacy = parseBotGroupChatData(chatData({ plans: [{ ...base, canManage: 'true', supportsPendingSkip: 'true' }] }))!;
+    const legacy = parseBotGroupChatData(chatData({ plans: [{ ...base, canManage: 'true', supportsPendingSkip: 'true', canSetAutoContinue: 'true' }] }))!;
     expect(legacy.plans[0].canManage).toBeUndefined();
     expect(legacy.plans[0].supportsPendingSkip).toBe(false);
+    expect(legacy.plans[0].canSetAutoContinue).toBe(false);
   });
   // The remote resource must preserve the queue semantics before choosing composer copy.
   it.each([

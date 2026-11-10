@@ -4,14 +4,7 @@
     "stopMine": "Parar minhas solicitações",
     "stopAll": "Parar tudo",
     "stopAllHint": "Inclui solicitações de outras pessoas",
-    "step": "Etapa {{step}}/{{total}}",
-    "viewProcess": "Mostrar trabalho"
-  },
-  "work": {
-    "queued": "Na fila {{count}}",
-    "active": "Em andamento {{count}}",
-    "expand": "Expandir atividade dos colegas",
-    "collapse": "Recolher atividade dos colegas"
+    "step": "Etapa {{step}}/{{total}}"
   },
   "title": "Conversas em grupo",
   "memberSeparator": ", ",
@@ -191,6 +184,8 @@
     "start": "Iniciar plano",
     "dismiss": "Pular plano",
     "editHint": "Para mudar quem faz o quê, é só pedir",
+    "autoContinue": "Iniciar a próxima etapa automaticamente",
+    "autoContinueSaveFailed": "Não foi possível salvar as transições entre etapas. Tente novamente.",
     "autoNote": "Cada etapa concluída inicia a próxima automaticamente.",
     "pauseNote": "O trabalho pausa após cada etapa até você clicar em “Iniciar próxima etapa”.",
     "superseded": "Atualizado",
