@@ -37,10 +37,14 @@ export type {
   InteractiveCardButton,
   InteractiveCardSpec,
   StreamingTextHandle,
+  StreamingFinalizeOptions,
+  StreamingProcessRecord,
   SendFileResult,
 } from './types.js';
 
 export { FeishuIM, createFeishuIM } from './feishu/index.js';
+export { startFeishuTurnCarrier } from './feishu/streamingText.js';
+export type { FeishuStreamingDeps, FeishuTurnCarrier } from './feishu/streamingText.js';
 export type { FeishuIMOptions } from './feishu/index.js';
 export {
   decodeLaneUserId as decodeFeishuLaneUserId,

@@ -77,6 +77,7 @@ vi.mock('@/config/devServerEnvironment', () => ({
 }));
 
 import {
+  type AuthedApiFetch,
   configureForegroundNotificationBehavior,
   retryPendingUnregister,
   syncPushRegistration,
@@ -89,6 +90,8 @@ import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import { clearNotificationBadge, isNotificationRouteVisible, createTaskBadgeSync } from '@/notifications/notificationBadge';
 import { createServerTaskBadgeSync, type TaskBadgeSnapshot } from '@/notifications/taskBadgeSync';
 import { readAndroidPushAvailability, setAndroidPushAvailability } from '../notifications/androidPushAvailability';
+
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
 const REGISTERED_KEY = 'cindy.push.registered';
 const PENDING_KEY = 'cindy.push.pendingUnregister';
@@ -241,6 +244,88 @@ describe('push notification realm routing', () => {
     await syncPushRegistration({ enabled: true, apiFetch: vi.fn().mockResolvedValue({}) });
     expect(mocks.requestPermissionsAsync).toHaveBeenCalledWith({ ios: { allowAlert: true, allowSound: true, allowBadge: true } });
   });
+  // Real mutation module + native token event simulation: old code re-PUT after logout DELETE.
+  // Also covers duplicate bootstrap events, which the separately mocked bridge test cannot prove.
+  it('fences native token callbacks during logout and permits a new authenticated lifecycle', async () => {
+    const requests: string[] = [], events: Promise<unknown>[] = [];
+    const apiFetch: AuthedApiFetch = async (_path, opts) => { requests.push(opts.method!); return {registered:true} as never; };
+    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => { requests.push(opts.method); return {ok:true,status:200}; }));
+    mocks.getDevicePushTokenAsync.mockImplementation(async () => {
+      const token = { type:'ios' as const, data:'apns-device-token' };
+      events.push(syncPushRegistration({enabled:true,apiFetch,deviceToken:token}));
+      return token;
+    });
+    await syncPushRegistration({enabled:true,apiFetch});
+    await Promise.all(events.splice(0));
+    expect(requests).toEqual(['PUT','PUT']);
+    // AuthContext clears the synchronous owner before its async cleanup, while React still
+    // presents isAuthenticated=true. Both listener and bootstrap work must be rejected here.
+    setMobileAuthOwner(null);
+    await unregisterPushTokenBestEffort('fixture-access-token','cn');
+    await syncPushRegistration({enabled:true,apiFetch});
+    await Promise.all(events.splice(0));
+    expect(requests).toEqual(['PUT','PUT','DELETE','DELETE']);
+    setMobileAuthOwner('next-user','cn');
+    await syncPushRegistration({enabled:true,apiFetch});
+    await Promise.all(events.splice(0));
+    expect(requests.slice(4)).toEqual(['PUT','PUT']);
+  });
+  // Codex review r4525360529: a failed first registration leaves no lease, which used to make
+  // every later valid token event a silent no-op until restart or re-login.
+  it('lets a later token event recover after the first registration failed', async () => {
+    const offline = vi.fn(async () => { throw new Error('offline'); });
+    await expect(syncPushRegistration({ enabled: true, apiFetch: offline as any })).rejects.toThrow();
+    const online = vi.fn().mockResolvedValue({ registered: true });
+    const token = { type: 'ios' as const, data: 'apns-device-token' };
+    await expect(syncPushRegistration({ enabled: true, apiFetch: online, deviceToken: token })).resolves.toBe('registered');
+    expect(online).toHaveBeenCalled();
+    await expect(syncPushRegistration({ enabled: true, apiFetch: online, deviceToken: token })).resolves.toBe('skipped');
+  });
+  it('retains per-service registration failure without leaking tokens or errors', async () => {
+    const apiFetch = vi.fn(async (path: string) => {
+      if (path === '/v1/push-token') throw Object.assign(new Error('secret-token-in-error'), { status: 503 });
+      return { registered: true };
+    });
+    await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).rejects.toThrow();
+    const raw = store.get('cindy.push.lastRegistration')!;
+    const result = JSON.parse(raw);
+    expect(result).toMatchObject({ realm: 'cn', appVariant: 'cn', apnsEnv: 'sandbox', stage: 'failed:registering' });
+    expect(result.endpoints).toEqual(expect.arrayContaining([
+      { service: 'device-link', outcome: 'accepted' },
+      { service: 'chat', outcome: 'failed', status: 503 },
+    ]));
+    expect(raw).not.toContain('secret-token-in-error');
+    expect(raw).not.toContain('apns-device-token');
+    expect(raw).not.toContain('https://');
+  });
+
+  // Codex review r4525113907: the deduped token-listener callback queued by the bootstrap
+  // read used to overwrite the real result with a bare `skipped` record.
+  it('keeps the registration result when the queued token event is deduplicated', async () => {
+    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    const events: Promise<unknown>[] = [];
+    mocks.getDevicePushTokenAsync.mockImplementation(async () => {
+      const token = { type: 'ios' as const, data: 'apns-device-token' };
+      events.push(syncPushRegistration({ enabled: true, apiFetch, deviceToken: token }));
+      return token;
+    });
+    await syncPushRegistration({ enabled: true, apiFetch });
+    await Promise.all(events.splice(0));
+    const record = JSON.parse(store.get('cindy.push.lastRegistration')!);
+    expect(record).toMatchObject({ stage: 'registered', apnsEnv: 'sandbox' });
+    expect(record.endpoints).toEqual(expect.arrayContaining([{ service: 'device-link', outcome: 'accepted' }]));
+  });
+
+  it('records native failure before HTTP and replaces it after a successful retry', async () => {
+    mocks.getDevicePushTokenAsync.mockRejectedValueOnce(new Error('private native details'));
+    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).rejects.toThrow();
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(JSON.parse(store.get('cindy.push.lastRegistration')!)).toMatchObject({ stage: 'failed:device-token' });
+    await syncPushRegistration({ enabled: true, apiFetch });
+    expect(JSON.parse(store.get('cindy.push.lastRegistration')!)).toMatchObject({ stage: 'registered' });
+  });
+
   // Unit r4512939585: first opt-in must notify the direct receiver before Google
   // resolves. Existing registration tests only inspect the final sync result.
   // Minimal input: permission granted, Google token promise pending indefinitely.
@@ -341,6 +426,8 @@ describe('push notification realm routing', () => {
     expect(await handler.handleNotification(notification)).toMatchObject({ shouldShowBanner: false, shouldPlaySound: false });
   });
   beforeEach(() => {
+    setMobileAuthOwner(null);
+    setMobileAuthOwner('fixture-user', 'cn');
     vi.clearAllMocks();
     store.clear();
     envState.platform = 'ios';
@@ -368,6 +455,22 @@ describe('push notification realm routing', () => {
     await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('registered');
     expect(apiFetch.mock.calls.find(([path]) => path === '/api/device-link/push-token')?.[1].body).toMatchObject({ apnsEnv: 'sandbox', taskBadgeVersion: 1 });
     expect(apiFetch.mock.calls.find(([path]) => path === '/v1/push-token')?.[1].body).not.toHaveProperty('taskBadgeVersion');
+  });
+
+  // Regression: iOS token reads emit another token event. A rotation callback
+  // must upload the supplied token, not request a token and feed itself forever.
+  it('registers a rotated token without requesting another native token', async () => {
+    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    await syncPushRegistration({ enabled: true, apiFetch });
+    apiFetch.mockClear(); mocks.getDevicePushTokenAsync.mockClear();
+    await expect(syncPushRegistration({ enabled: true, apiFetch,
+      deviceToken: { type: 'ios', data: 'rotated-device-token' },
+    })).resolves.toBe('registered');
+    expect(mocks.getDevicePushTokenAsync).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    for (const [, options] of apiFetch.mock.calls) {
+      expect(options.body).toMatchObject({ token: 'rotated-device-token', apnsEnv: 'sandbox' });
+    }
   });
 
   it('never uploads a token with an unknown signing environment', async () => {

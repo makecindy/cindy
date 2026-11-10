@@ -170,6 +170,8 @@ import {
   type DraftModelCalibrationResult,
 } from '@/lib/draftModelCalibration';
 import { resolveNewMakerDefaultTuple } from '@/lib/newMakerDefaultTuple';
+import { RUN_LOCATION_LOCAL } from '@/lib/providerRunLocation';
+import { useProviderBorrow } from '@/hooks/useProviderBorrow';
 import { showWorktreeError } from '@/lib/worktreeToast';
 import * as sessionService from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
@@ -3221,6 +3223,37 @@ export function NewMakerDraftRoute() {
       pushActiveDraftPref,
     ],
   );
+
+  // 供应商「运行于」另一台自己的电脑(provider-sharing.md §3)：本机新任务草稿选着这个供应商时，跟用户在
+  // 模型面板里点那台电脑上的同一个模型一样，把 Agent 落到那台。每个供应商 + 位置只落一次，用户之后再改选
+  // 以面板为准；那台下线时草稿由上面的落点校验退回本机。
+  const runLocationProvider = !isDeviceLinkDraft && !effectiveRemoteHostId && !sshCodexDraftHostId
+    && !effectiveAgentDeviceId && !activePluginModel && unifiedModelPanelActive && draft.vendor !== 'orca'
+    ? localProviders.find((provider) => provider.id === effectiveSourceId) ?? null
+    : null;
+  const runLocation = useProviderBorrow(runLocationProvider).location;
+  const runLocationAppliedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!runLocationProvider || !draftInitialModel) return;
+    if (runLocation === RUN_LOCATION_LOCAL) {
+      runLocationAppliedRef.current = null;
+      return;
+    }
+    const device = remoteAgentDevices?.find((candidate) => candidate.deviceId === runLocation);
+    const key = `${runLocationProvider.id}:${runLocation}`;
+    if (!device || runLocationAppliedRef.current === key) return;
+    runLocationAppliedRef.current = key;
+    handleUnifiedDraftSelect({
+      vendor: draft.vendor,
+      providerId: runLocationProvider.id,
+      modelId: draftInitialModel,
+      ...(draftInitialEffort ? { effort: draftInitialEffort } : {}),
+      fast: effectiveFastMode,
+      favoriteUid: selectedFavoriteUid,
+      agentDevice: { deviceId: device.deviceId, name: device.name },
+    });
+  }, [runLocationProvider, runLocation, remoteAgentDevices, draftInitialModel, draftInitialEffort, draft.vendor,
+    effectiveFastMode, selectedFavoriteUid, handleUnifiedDraftSelect]);
 
   // ─── 用户改 workingDir(FolderPicker)→ 写回 draft ─────────────────────
   // picker 选 "对话(不在项目中)" 时 dir=null,此时一并清掉 extraDirs,行为对齐

@@ -4,6 +4,7 @@ import {
   buildMessageSourceNote,
   describeMessageSourceSender,
   isCrossDeviceSourceSessionId,
+  parseSourceSessionTarget,
   messageSourceIdEntries,
   formatSourceRef,
   promptSafeSourceName,
@@ -267,5 +268,14 @@ describe('isCrossDeviceSourceSessionId', () => {
     for (const local of [undefined, '', 'task-1', '::task-1', 'dev-A::']) {
       expect(isCrossDeviceSourceSessionId(local)).toBe(false);
     }
+  });
+});
+
+// Routing must preserve the explicit device, while redacted/malformed sources stay inert.
+describe('parseSourceSessionTarget', () => {
+  it('splits a stamped source and preserves same-host legacy ids', () => {
+    expect(parseSourceSessionTarget('dev-A::task-1')).toEqual({ deviceId: 'dev-A', sessionId: 'task-1' });
+    expect(parseSourceSessionTarget('task-1')).toEqual({ sessionId: 'task-1' });
+    for (const id of [undefined, '', '::task-1', 'dev-A::']) expect(parseSourceSessionTarget(id)).toBeNull();
   });
 });

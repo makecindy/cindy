@@ -1,6 +1,6 @@
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
-import { createPersonalBuildMonitor } from './personalBuildMonitor.js';
+import { createPersonalBuildMonitor, personalMonitorEnvironment } from './personalBuildMonitor.js';
 import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
 import { observeDesktopStartupResult } from './devStartupStatus.js';
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
@@ -1627,6 +1627,13 @@ async function attemptStartSchedulerOnce(): Promise<void> {
   try {
     startGoalController({
       maker,
+      // 项目资源漂移(会话中途新增 skill/extension):空闲时经 Maker 以 runtime-refresh
+      // 回收,goal 直派随后的 ensureSession 活化即重扫重建(与桌面发送事务同口径)。
+      recyclePiRuntimeIfResourcesDrifted: async (sessionId) => {
+        const live = maker.getSession(sessionId);
+        if (!live) return false;
+        return maker.recyclePiRuntimeIfResourcesDrifted(live);
+      },
       getDb: () => getDbClient().drizzle,
       broadcastStatus: broadcastGoalStatus,
       ...automationGitBaselineHooks,
@@ -2155,6 +2162,13 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       const automationGitBaselineHooks = createAutomationUserTurnGitBaselineHooks();
       startGoalController({
         maker,
+        // 项目资源漂移(会话中途新增 skill/extension):空闲时经 Maker 以 runtime-refresh
+        // 回收,goal 直派随后的 ensureSession 活化即重扫重建(与桌面发送事务同口径)。
+        recyclePiRuntimeIfResourcesDrifted: async (sessionId) => {
+          const live = maker.getSession(sessionId);
+          if (!live) return false;
+          return maker.recyclePiRuntimeIfResourcesDrifted(live);
+        },
         getDb: () => getDbClient().drizzle,
         broadcastStatus: broadcastGoalStatus,
         ...automationGitBaselineHooks,
@@ -6914,12 +6928,12 @@ const registerIpcHandlers = () => {
       // 且远程控制端不会代替用户点被控端的更新重启。
       // Only the explicitly configured developer supervisor receives this handshake.
       // Packaged apps and ordinary dev launches retain their existing lifecycle.
-      if (process.platform === 'darwin' && !app.isPackaged && process.env.CINDY_PERSONAL_MONITOR_DIR && process.env.CINDY_PERSONAL_GENERATION) {
+      if (process.platform === 'darwin' && !app.isPackaged && personalMonitorEnvironment) {
         let personalReady = false;
         const stopObserving = observeDesktopStartupResult((ready) => { personalReady = ready; });
         const tick = createPersonalBuildMonitor({
-          directory: process.env.CINDY_PERSONAL_MONITOR_DIR,
-          generation: process.env.CINDY_PERSONAL_GENERATION,
+          directory: personalMonitorEnvironment.directory,
+          generation: personalMonitorEnvironment.generation,
           pid: process.pid, now: Date.now,
           ready: () => personalReady && !!mainWindowRef && !mainWindowRef.isDestroyed()
             && !mainWindowRef.webContents.isDestroyed() && !mainWindowRef.webContents.isCrashed(),

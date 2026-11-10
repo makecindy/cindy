@@ -930,6 +930,7 @@ const fanOutDeviceLinkRemotePush = createIpcFanOut('device-link:remote-push');
 const fanOutDeviceLinkControlledState = createIpcFanOut('device-link:controlled-state');
 const fanOutDeviceLinkAccessRevoked = createIpcFanOut('device-link:access-revoked');
 const fanOutDeviceLinkControlTargetChanged = createIpcFanOut('device-link:control-target-changed');
+const fanOutDeviceLinkControlEnabledChanged = createIpcFanOut('device-link:control-enabled-changed');
 const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake-changed');
 const fanOutProviderShareOwnedChanged = createIpcFanOut(PROVIDER_SHARE_IPC.OWNED_CHANGED);
 const fanOutProviderGroupChanged = createIpcFanOut(PROVIDER_GROUP_IPC.CHANGED);
@@ -5207,6 +5208,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** 被控端:恢复某控制端的访问权限 */
     restore: (deviceId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('device-link:restore', { deviceId }),
+    /** 被控端:单独开关某台同账号电脑的「用本机模型」 */
+    setModelUse: (deviceId: string, allowed: boolean): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('device-link:set-model-use', { deviceId, allowed }),
     onPresenceChanged: fanOutDeviceLinkPresenceChanged,
     onStatusChanged: fanOutDeviceLinkStatusChanged,
     onDeviceDirectoryInvalidated: fanOutDeviceLinkDeviceDirectoryInvalidated,
@@ -5221,6 +5225,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onControlTargetChanged: fanOutDeviceLinkControlTargetChanged,
     /** 「保持电脑唤醒」在其它共享 userData 实例被翻转后推送,payload: { keepAwake: boolean } */
     onKeepAwakeChanged: fanOutDeviceLinkKeepAwakeChanged,
+    onControlEnabledChanged: fanOutDeviceLinkControlEnabledChanged,
     /** 同机单持有者仲裁角色变化,payload: { standby: boolean }。 */
     onOwnershipChanged: fanOutDeviceLinkOwnershipChanged,
     /** 控制端:目标设备「无响应」熔断状态翻转,payload: { deviceId, unresponsive } */
@@ -6830,6 +6835,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:provider:list'),
     setProviderRemoteAccess: (input: { providerId: string; enabled: boolean }): Promise<{ ok: true; enabled: boolean }> =>
       ipcRenderer.invoke('maker:provider:remote-access:set', input),
+    /** 供应商「运行于」：deviceId、'local'，或 null 回到默认。 */
+    setProviderRunLocation: (input: { providerId: string; location: string | null }): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:provider:run-location:set', input),
     /** Refresh one built-in provider through its existing main-process discovery source. */
     refreshBuiltinProviderModels: (
       providerId: import('../shared/providerModelRefresh').BuiltinRefreshableProviderId,

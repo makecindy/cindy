@@ -4294,7 +4294,18 @@
           "ariaLabel": "Permitir que seus outros computadores e as pessoas com quem você compartilha usem este provedor",
           "writeFailed": "Não foi possível salvar a configuração de acesso remoto. Tente novamente."
         },
-        "moreActionsAria": "Mais ações"
+        "moreActionsAria": "Mais ações",
+        "runLocation": {
+          "label": "Executar em",
+          "optionLocal": "Este computador",
+          "notSignedIn": "Sem login",
+          "autoBorrowing": "Este computador não está conectado, então as novas tarefas rodam em {{device}}. Não é preciso fazer login.",
+          "local": "As novas tarefas rodam neste computador. Você pode escolher outro dos seus computadores conectados.",
+          "pinned": "As novas tarefas rodam em {{device}} com o login dele. As tarefas em andamento continuam onde estão.",
+          "inline": "Executa em",
+          "signInHere": "Fazer login neste computador",
+          "writeFailed": "Não foi possível salvar onde este provedor é executado. Tente novamente."
+        }
       },
       "detect": {
         "groupLabel": "Detectado neste dispositivo",
@@ -6262,13 +6273,18 @@
         "allowInboundAria": "Alternar permissão para {{name}} controlar este dispositivo",
         "peerControlOff": "Controle remoto não ativado nesse dispositivo",
         "masterOffHint": "Primeiro, ative a opção principal acima",
-        "controllingThisMac": "Conectado ao Cindy"
+        "controllingThisMac": "Conectado ao Cindy",
+        "useThisDeviceModels": "Usar os modelos daqui",
+        "allowModelUseAria": "Permitir que {{name}} use os modelos deste computador"
       },
       "toast": {
         "revoked": "Acesso revogado para este dispositivo",
         "revokeFailed": "Falha ao revogar acesso",
         "restored": "Acesso restaurado para este dispositivo",
-        "restoreFailed": "Falha ao restaurar acesso"
+        "restoreFailed": "Falha ao restaurar acesso",
+        "modelUseRestored": "Aquele computador pode usar os modelos deste de novo",
+        "modelUseRevoked": "Aquele computador não pode mais usar os modelos deste",
+        "modelUseFailed": "Não foi possível salvar “Usar os modelos daqui”. Tente novamente."
       },
       "sections": {
         "myDevices": "Meus dispositivos",
@@ -9136,6 +9152,8 @@
       "daysWindow": "{{days}}d"
     },
     "claude": {
+      "totalWeeklyLabel": "Semana total",
+      "temporarilyLimited": "Temporariamente limitado",
       "waitingDetail": "O uso da assinatura do Claude será atualizado após a conclusão do próximo turno.",
       "weeklyLabel": "Semanal",
       "modelWeeklyLabel": "{{model}} semanal",
@@ -11442,7 +11460,8 @@
       "toolSettings": "Configurações das ferramentas",
       "notTurnedOn": "Ainda não ativado neste computador",
       "turnOn": "Ativar",
-      "permissions": "Permissões"
+      "permissions": "Permissões",
+      "officialInherited": "Oficial da Cindy · Segue as configurações deste computador"
     },
     "systemSkills": {
       "followOffHint": "A Skill do sistema “Painel e acompanhamento” de {{name}} está desativada. Ative-a de novo em Capacidades para usar isto.",
@@ -19987,6 +20006,7 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "unassigned": "Conta não atribuída",
     "providerManagedAuth": "O provedor atual do Codex não disponibiliza informações da conta do ChatGPT. Ao adicionar o provedor, selecione “$t(subscriptionAccounts.signIn.anotherAccount)” para usar uma pasta separada.",
     "signIn": {
       "checking": "Verificando a conta local…",
@@ -20046,5 +20066,11 @@
     "keepDraft": "Seu rascunho será mantido. As tarefas serão sincronizadas quando a conexão for restabelecida.",
     "retry": "Reconectar",
     "desktopAuthHelp": "Atualize as configurações de conexão no terminal de inicialização e reabra este cliente experimental."
+  },
+  "remoteControlConsent": {
+    "title": "Permitir o controle remoto deste computador?",
+    "detail": "Solicitação de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e acessar arquivos. A opção permanece ativa até você desativá-la nas configurações.",
+    "decline": "Agora não",
+    "enable": "Ativar controle remoto"
   }
 }

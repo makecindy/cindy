@@ -4238,7 +4238,18 @@
           "ariaLabel": "Deinen anderen Computern und den Personen, mit denen du teilst, die Nutzung dieses Anbieters erlauben",
           "writeFailed": "Die Fernzugriffseinstellung konnte nicht gespeichert werden. Bitte versuche es erneut."
         },
-        "moreActionsAria": "Weitere Aktionen"
+        "moreActionsAria": "Weitere Aktionen",
+        "runLocation": {
+          "label": "Ausführen auf",
+          "optionLocal": "Dieser Computer",
+          "notSignedIn": "Nicht angemeldet",
+          "autoBorrowing": "Dieser Computer ist nicht angemeldet, daher laufen neue Aufgaben auf {{device}}. Keine Anmeldung nötig.",
+          "local": "Neue Aufgaben laufen auf diesem Computer. Du kannst stattdessen einen deiner anderen angemeldeten Computer wählen.",
+          "pinned": "Neue Aufgaben laufen auf {{device}} mit dessen Anmeldung. Laufende Aufgaben bleiben, wo sie sind.",
+          "inline": "Läuft auf",
+          "signInHere": "Auf diesem Computer anmelden",
+          "writeFailed": "Der Ausführungsort konnte nicht gespeichert werden. Bitte versuche es erneut."
+        }
       },
       "detect": {
         "groupLabel": "Auf diesem Gerät erkannt",
@@ -6201,13 +6212,18 @@
         "allowInboundAria": "Umschalten, ob {{name}} dieses Gerät steuern darf",
         "peerControlOff": "Die Fernsteuerung ist auf diesem Gerät nicht aktiviert",
         "masterOffHint": "Aktiviere zuerst den Hauptschalter oben",
-        "controllingThisMac": "Mit Cindy verbunden"
+        "controllingThisMac": "Mit Cindy verbunden",
+        "useThisDeviceModels": "Modelle hier nutzen",
+        "allowModelUseAria": "{{name}} die Modelle dieses Computers nutzen lassen"
       },
       "toast": {
         "revoked": "Zugriff für dieses Gerät widerrufen",
         "revokeFailed": "Zugriff konnte nicht widerrufen werden",
         "restored": "Zugriff für dieses Gerät wiederhergestellt",
-        "restoreFailed": "Zugriff konnte nicht wiederhergestellt werden"
+        "restoreFailed": "Zugriff konnte nicht wiederhergestellt werden",
+        "modelUseRestored": "Dieser Computer kann die Modelle wieder nutzen",
+        "modelUseRevoked": "Dieser Computer kann die Modelle nicht mehr nutzen",
+        "modelUseFailed": "„Modelle hier nutzen“ konnte nicht gespeichert werden. Bitte versuche es erneut."
       },
       "sections": {
         "myDevices": "Meine Geräte",
@@ -9066,6 +9082,8 @@
       "daysWindow": "{{days}} T"
     },
     "claude": {
+      "totalWeeklyLabel": "Woche gesamt",
+      "temporarilyLimited": "Vorübergehend begrenzt",
       "waitingDetail": "Die Claude-Abonutzung wird nach Abschluss der nächsten Gesprächsrunde aktualisiert.",
       "weeklyLabel": "Wöchentlich",
       "modelWeeklyLabel": "{{model}} wöchentlich",
@@ -11345,7 +11363,8 @@
       "toolSettings": "Tool-Einstellungen",
       "notTurnedOn": "Auf diesem Computer noch nicht eingeschaltet",
       "turnOn": "Einschalten",
-      "permissions": "Berechtigungen"
+      "permissions": "Berechtigungen",
+      "officialInherited": "Offiziell von Cindy · Folgt den Einstellungen dieses Computers"
     },
     "systemSkills": {
       "followOffHint": "Der System-Skill „Arbeitsplatz und Nachverfolgung“ von {{name}} ist aus. Schalte ihn unter „Fähigkeiten“ wieder ein, um dies zu nutzen.",
@@ -19800,6 +19819,7 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "unassigned": "Konto nicht zugewiesen",
     "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",
     "signIn": {
       "checking": "Lokales Konto wird geprüft…",
@@ -19859,5 +19879,11 @@
     "keepDraft": "Dein Entwurf bleibt erhalten. Der Aufgabenstatus wird nach Wiederherstellung der Verbindung synchronisiert.",
     "retry": "Erneut verbinden",
     "desktopAuthHelp": "Aktualisiere die Host-Verbindungseinstellungen im Startterminal und öffne diesen experimentellen Client erneut."
+  },
+  "remoteControlConsent": {
+    "title": "Fernsteuerung dieses Computers erlauben?",
+    "detail": "Anfrage von {{device}}\nZweck: {{purpose}}\n\nGeräte Ihres Kontos können diesen Computer steuern, Aufgaben ausführen und auf Dateien zugreifen. Die Einstellung bleibt aktiv, bis Sie sie in den Einstellungen deaktivieren.",
+    "decline": "Jetzt nicht",
+    "enable": "Fernsteuerung aktivieren"
   }
 }

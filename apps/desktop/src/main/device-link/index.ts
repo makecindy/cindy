@@ -1,3 +1,5 @@
+import { RemoteControlConsent, REMOTE_CONTROL_CONSENT_CHANNEL, consentDeviceName } from './remoteControlConsent.js';
+import { promptRemoteControlConsent } from './remoteControlConsentPrompt.js';
 import { PROVIDER_SHARE_AVAILABILITY_CAPABILITY, readShareAvailabilityCatalog } from './providerShareAvailability.js';
 import { pluginDeviceSync } from '../cindy-brain/index.js';
 import { PLUGIN_SYNC_CHANNEL } from '../cindy-brain/deviceSyncSlot.js';
@@ -118,6 +120,8 @@ import {
   clearControllerDisplayNames,
   getControllerDisplayName,
   setDispatchPresenceOfflineCheck,
+  revokeControllerModelUse,
+  notifyControllerModelUseRestored,
 } from './dispatch.desktop';
 import {
   clearControllerPlatforms,
@@ -691,6 +695,25 @@ function isDeviceRevoked(deviceId: string): boolean {
   return readDeviceLinkSettings().revokedControllers.includes(deviceId);
 }
 
+const remoteControlConsent = new RemoteControlConsent({
+  scope: activeOwnerScopeKey,
+  eligible: peer => !!client && client.getStatus() === 'online' && !isAppSessionBoundaryPending() &&
+    !isScopedPeer(peer) && peer !== client.getSelfDeviceId() && !isDeviceRevoked(peer) && !revokedByRemote.has(peer) &&
+    presenceOnlineByDevice.get(peer) === true && !isMobilePlatform(getControllerPlatform(peer)),
+  enabled: () => readDeviceLinkSettings().remoteControlEnabled,
+  send: (peer, frame) => client?.sendPush(peer, REMOTE_CONTROL_CONSENT_CHANNEL, frame),
+  prompt: async (peer, purpose, signal) => {
+    const { getDeepLinkMainWindow } = await import('../deepLink.js');
+    return promptRemoteControlConsent(getDeepLinkMainWindow(), consentDeviceName(presenceNameByDevice.get(peer), peer), purpose, signal);
+  },
+  enable: assertCurrent => setRemoteControlEnabled(true, assertCurrent),
+});
+
+/** The calling task waits for the target's local decision, then may retry its original operation. */
+export function requestRemoteControlConsent(peer: string, purpose: string) {
+  return remoteControlConsent.request(peer, purpose);
+}
+
 const pluginSyncAccess = new PluginSyncAccess({
   eligible: deviceId => !!client && !isAppSessionBoundaryPending() && !isScopedPeer(deviceId) &&
     deviceId !== client.getSelfDeviceId() && shouldExchangeDictionaryWith({
@@ -1035,6 +1058,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       presenceAvailableByDevice.set(change.deviceId, false);
       invalidatePluginOauth(change.deviceId);
       handleControllerOffline(change.deviceId, change);
+      remoteControlConsent.peerGone(change.deviceId);
       broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId: change.deviceId, offline: true });
     }
   });
@@ -1057,6 +1081,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     lastActivityUpload = undefined;
     taskActivityPublisher.setOnline(status === 'online');
     if (status !== 'online') {
+      remoteControlConsent.reset();
       stopFilePeers();
       invalidatePluginOauth();
       // The shared relay connection is a larger fault domain than one peer:
@@ -1194,7 +1219,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
     broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, directOnline ? { ...snap, online: true, remoteControlEnabled: available } : snap);
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
-    if (!online) handleControllerOffline(snap.deviceId);
+    if (!online) { handleControllerOffline(snap.deviceId); remoteControlConsent.peerGone(snap.deviceId); }
     // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后该设备
     // 的首帧 presence(wasAvailable=undefined)同样是「不可用→可用」翻转——重放
     // 循环在目标离线期间被 presence 门禁终止后,这里是唯一的恢复事件。目标本就
@@ -1303,6 +1328,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
     if (env.kind !== 'push') return;
     const p = env.payload as PushPayload;
+    if (p?.channel === REMOTE_CONTROL_CONSENT_CHANNEL) {
+      void remoteControlConsent.receive(env.src, p.payload);
+      return;
+    }
     const sharePeer = parseProviderSharePeer(env.src);
     const activeShareHost = sharePeer?.role === 'host' && getReceivedShares().some(share => share.shareId === sharePeer.shareId
       && share.hostDeviceId === sharePeer.deviceId && share.status === 'active');
@@ -1630,6 +1659,7 @@ export function getMobileNotifyGeneration(): number {
 function teardownActiveLink(): void {
   pluginDeviceSync.reset();
   pluginSyncAccess.reset();
+  remoteControlConsent.reset();
   invalidatePluginOauth();
   void stopSharedTaskRuntime().catch((error) => log.warn('sharedTask runtime teardown failed', error));
   stopProviderShareRuntime();
@@ -1752,11 +1782,14 @@ export function isDeviceLinkStandby(): boolean {
 }
 
 /** 切换「允许被控」开关:落盘 + 在线时即时 presence-set 广播;关闭时踢掉所有控制端 */
-export async function setRemoteControlEnabled(enabled: boolean): Promise<void> {
+export async function setRemoteControlEnabled(enabled: boolean, assertCurrent?: () => void): Promise<void> {
   // 先消化并 enforce 盘上的外部变化(另一实例可能刚改过授权),再应用本地修改;
   // 否则随后的快照刷新会把未 enforce 的外部撤销当成"已生效",吞掉即时踢断。
   pollExternalSettingsChange();
-  await writeDeviceLinkSetting('remoteControlEnabled', enabled);
+  await updateDeviceLinkSetting('remoteControlEnabled', () => {
+    assertCurrent?.(); // Recheck inside the existing write lock, after any queued settings writes.
+    return enabled;
+  });
   // A local control switch transition ends every retained routing context
   // before links are torn down. This must not depend on the controller
   // receiving link-close, and it must run before an in-flight inspect/admit
@@ -1771,6 +1804,7 @@ export async function setRemoteControlEnabled(enabled: boolean): Promise<void> {
   // 新授权变更,仅刷新基线会把它静默记为已生效、永不 enforce;poll 是幂等的,
   // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
   pollExternalSettingsChange();
+  broadcast(DEVICE_LINK_PUSH.CONTROL_ENABLED_CHANGED, { remoteControlEnabled: readDeviceLinkSettings().remoteControlEnabled });
   log.info(`remote control ${enabled ? 'enabled' : 'disabled'}`);
 }
 
@@ -1824,6 +1858,7 @@ export async function revokeController(deviceId: string): Promise<void> {
     forgetControllerInvokeState(deviceId);
     // 踢掉它的订阅 registry + 重算转发/横幅(复用对等下线的单设备清理路径)。
     handleControllerOffline(deviceId);
+    remoteControlConsent.peerGone(deviceId);
     purgeRevokedController(deviceId);
     // 末尾再 poll 一次(而非仅刷新基线):写锁释放到这里之间,别的实例可能已插入
     // 新授权变更,仅刷新基线会把它静默记为已生效、永不 enforce;poll 是幂等的,
@@ -1857,6 +1892,20 @@ export async function restoreController(deviceId: string): Promise<void> {
   // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
   pollExternalSettingsChange();
   log.info(`access restored for controller ${deviceId.slice(0, 8)}`);
+}
+
+/**
+ * 被控端:单独开关某台同账号电脑的「用本机模型」(远程 Agent)。它跟着「控制本机」：控制本机开着时默认
+ * 可用；关掉后结束它在本机的远程 Agent 任务并让它重读目录，其余远程控制不变。
+ */
+export async function setControllerModelUse(deviceId: string, allowed: boolean): Promise<void> {
+  pollExternalSettingsChange();
+  await updateDeviceLinkSetting('modelUseRevokedControllers', (latest) => allowed
+    ? latest.filter((id) => id !== deviceId)
+    : latest.includes(deviceId) ? latest : [...latest, deviceId]);
+  if (allowed) notifyControllerModelUseRestored(deviceId);
+  else await revokeControllerModelUse(deviceId);
+  log.info(`model use ${allowed ? 'restored' : 'revoked'} for controller ${deviceId.slice(0, 8)}`);
 }
 
 // ─── busy presence(被控端把「本机有 turn 在跑」上报,供控制端设备列表显示)──
@@ -1909,6 +1958,7 @@ function pollExternalSettingsChange(): void {
   if (!prev) return;
 
   if (prev.remoteControlEnabled !== remoteControlEnabled) {
+    broadcast(DEVICE_LINK_PUSH.CONTROL_ENABLED_CHANGED, { remoteControlEnabled });
     client.sendPresence({ remoteControlEnabled });
     if (!remoteControlEnabled) dropAllControllers(client, 'toggle-off');
     log.info(
@@ -1929,6 +1979,7 @@ function pollExternalSettingsChange(): void {
     }
     forgetControllerInvokeState(deviceId);
     handleControllerOffline(deviceId);
+    remoteControlConsent.peerGone(deviceId);
     purgeRevokedController(deviceId);
     log.info(`access revoked for controller ${deviceId.slice(0, 8)} (external settings change)`);
   }

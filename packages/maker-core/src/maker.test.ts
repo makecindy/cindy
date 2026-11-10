@@ -1392,6 +1392,31 @@ describe('Maker session close events', () => {
     queue.end();
   });
 
+  it('recycles drifted pi runtimes with the runtime-refresh reason for direct senders', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const handle = createHandle({ id: 'drifted', agentKind: 'pi' });
+    handle.hasProjectResourceDrift = () => true;
+    handle.events = () => queue;
+    const start = vi.fn().mockResolvedValue(handle);
+    const maker = new Maker({ agents: { pi: createAgent(start, 'pi') }, storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'drifted', agentKind: 'pi' as const, workingDir: '/repo', model: 'm' });
+    expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(true);
+    expect(maker.getSessionCloseReason(session)).toBe('runtime-refresh');
+    expect(maker.getSession(session.id)).toBeUndefined();
+    queue.end();
+  });
+
+  it('recycle is a no-op when project resources have not drifted', async () => {
+    const handle = createHandle({ id: 'fresh', agentKind: 'pi' });
+    handle.hasProjectResourceDrift = () => false;
+    const start = vi.fn().mockResolvedValue(handle);
+    const maker = new Maker({ agents: { pi: createAgent(start, 'pi') }, storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'fresh', agentKind: 'pi' as const, workingDir: '/repo', model: 'm' });
+    expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(false);
+    expect(maker.getSession(session.id)).toBe(session);
+    await session.close();
+  });
+
   it.each([
     { initial: 'runtime-refresh', begun: false, next: 'agent-switch', expected: 'agent-switch' },
     { initial: 'runtime-refresh', begun: false, next: 'requested', expected: 'requested' },

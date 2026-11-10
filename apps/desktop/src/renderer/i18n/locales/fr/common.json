@@ -4294,7 +4294,18 @@
           "ariaLabel": "Autoriser vos autres ordinateurs et les personnes avec qui vous partagez à utiliser ce fournisseur",
           "writeFailed": "Impossible d'enregistrer le paramètre d'accès à distance. Veuillez réessayer."
         },
-        "moreActionsAria": "Plus d'actions"
+        "moreActionsAria": "Plus d'actions",
+        "runLocation": {
+          "label": "Exécuter sur",
+          "optionLocal": "Cet ordinateur",
+          "notSignedIn": "Non connecté",
+          "autoBorrowing": "Cet ordinateur n’est pas connecté : les nouvelles tâches s’exécutent sur {{device}}. Aucune connexion nécessaire.",
+          "local": "Les nouvelles tâches s’exécutent sur cet ordinateur. Vous pouvez choisir un autre de vos ordinateurs connectés.",
+          "pinned": "Les nouvelles tâches s’exécutent sur {{device}} avec sa connexion. Les tâches en cours restent où elles sont.",
+          "inline": "S’exécute sur",
+          "signInHere": "Se connecter sur cet ordinateur",
+          "writeFailed": "Impossible d’enregistrer l’emplacement d’exécution. Veuillez réessayer."
+        }
       },
       "detect": {
         "groupLabel": "Détecté sur cet appareil",
@@ -6262,13 +6273,18 @@
         "allowInboundAria": "Autoriser ou non {{name}} à contrôler cet appareil",
         "peerControlOff": "Contrôle à distance non activé sur cet appareil",
         "masterOffHint": "Activez d'abord l'interrupteur principal ci-dessus",
-        "controllingThisMac": "Connecté à Cindy"
+        "controllingThisMac": "Connecté à Cindy",
+        "useThisDeviceModels": "Utiliser les modèles d’ici",
+        "allowModelUseAria": "Autoriser {{name}} à utiliser les modèles de cet ordinateur"
       },
       "toast": {
         "revoked": "Accès révoqué pour cet appareil",
         "revokeFailed": "Échec de la révocation de l'accès",
         "restored": "Accès rétabli pour cet appareil",
-        "restoreFailed": "Échec du rétablissement de l'accès"
+        "restoreFailed": "Échec du rétablissement de l'accès",
+        "modelUseRestored": "Cet ordinateur peut de nouveau utiliser les modèles d’ici",
+        "modelUseRevoked": "Cet ordinateur ne peut plus utiliser les modèles d’ici",
+        "modelUseFailed": "Impossible d’enregistrer « Utiliser les modèles d’ici ». Veuillez réessayer."
       },
       "sections": {
         "myDevices": "Mes appareils",
@@ -9136,6 +9152,8 @@
       "daysWindow": "{{days}} j"
     },
     "claude": {
+      "totalWeeklyLabel": "Semaine globale",
+      "temporarilyLimited": "Limité temporairement",
       "waitingDetail": "La consommation de l'abonnement Claude sera mise à jour à la fin du prochain tour.",
       "weeklyLabel": "Hebdomadaire",
       "modelWeeklyLabel": "{{model}} hebdomadaire",
@@ -11442,7 +11460,8 @@
       "toolSettings": "Réglages des outils",
       "notTurnedOn": "Pas encore activé sur cet ordinateur",
       "turnOn": "Activer",
-      "permissions": "Autorisations"
+      "permissions": "Autorisations",
+      "officialInherited": "Officiel Cindy · Suit les réglages de cet ordinateur"
     },
     "systemSkills": {
       "followOffHint": "Le skill système « Tableau de bord et suivi » de {{name}} est désactivé. Réactivez-le dans Capacités pour utiliser ceci.",
@@ -19987,6 +20006,7 @@
     "lineNumbers": "Numéros de ligne"
   },
   "subscriptionAccounts": {
+    "unassigned": "Compte non attribué",
     "providerManagedAuth": "Le fournisseur actuel de Codex ne permet pas de consulter le compte ChatGPT. Lors de l’ajout du fournisseur, choisissez « $t(subscriptionAccounts.signIn.anotherAccount) » pour utiliser un dossier séparé.",
     "signIn": {
       "checking": "Vérification du compte local…",
@@ -20046,5 +20066,11 @@
     "keepDraft": "Votre brouillon est conservé. L’état des tâches sera synchronisé au rétablissement de la connexion.",
     "retry": "Reconnecter",
     "desktopAuthHelp": "Mettez à jour les paramètres de connexion dans le terminal de lancement, puis rouvrez ce client expérimental."
+  },
+  "remoteControlConsent": {
+    "title": "Autoriser le contrôle à distance de cet ordinateur ?",
+    "detail": "Demande de {{device}}\nMotif : {{purpose}}\n\nLes appareils de votre compte pourront contrôler cet ordinateur, exécuter des tâches et accéder aux fichiers. Ce réglage reste actif jusqu’à sa désactivation dans les paramètres.",
+    "decline": "Pas maintenant",
+    "enable": "Activer le contrôle à distance"
   }
 }

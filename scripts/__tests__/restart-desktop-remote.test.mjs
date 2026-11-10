@@ -28,6 +28,7 @@ import {
 	formatDesktopStartupFailure,
 	inspectSharedUserDataRegion,
 	partitionDesktopDevProcesses,
+	assertNoRestartTargets,
 	commandBelongsToCheckout,
 	darwinTerminalLoggedCommand,
 	desktopDevTerminalLogPath,
@@ -1934,4 +1935,15 @@ test('whoami attributes a shared personal shell to its business checkout', { ski
   fs.unlinkSync(fixed+'.personal-install.json');
   assert.equal(identifyDesktopProcesses(processes,roots.map(rootDir=>({rootDir,branch:null}))).length,1);
  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+// Real kill partition: changing userData never makes a shared instance in this checkout safe
+// to restart. This is the missing regression behind personal manual-check's unsafe rehearsal.
+test('isolated preview refuses a shared instance in its checkout before stopping or clearing caches', () => {
+ const root='/tmp/fixture-personal-baseline';
+ const processes=[{pid:42,ppid:1,command:`/Users/fixture/Applications/Cindy Personal.app/Contents/MacOS/Electron ${root}/apps/desktop --user-data-dir=/tmp/shared`}];
+ const dev=processes.filter(p=>isRepositoryDesktopDevProcess(p,[root]));
+ assert.equal(dev.length,1);
+ assert.throws(()=>assertNoRestartTargets(dev,root,[root]),/occupied checkout/);
+ assert.doesNotThrow(()=>assertNoRestartTargets(processes,'/tmp/another-candidate',[root,'/tmp/another-candidate']));
 });

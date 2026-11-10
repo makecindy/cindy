@@ -4195,7 +4195,18 @@
           "ariaLabel": "他のパソコンと共有相手にこのプロバイダーの利用を許可",
           "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。"
         },
-        "moreActionsAria": "その他の操作"
+        "moreActionsAria": "その他の操作",
+        "runLocation": {
+          "label": "実行するコンピュータ",
+          "optionLocal": "このコンピュータ",
+          "notSignedIn": "未ログイン",
+          "autoBorrowing": "このコンピュータは未ログインのため、新しいタスクは {{device}} で実行します。ログインは不要です。",
+          "local": "新しいタスクはこのコンピュータで実行します。ログイン済みの別のコンピュータも選べます。",
+          "pinned": "新しいタスクは {{device}} で、そのコンピュータのログインを使って実行します。実行中のタスクはそのままです。",
+          "inline": "実行先",
+          "signInHere": "このコンピュータでログイン",
+          "writeFailed": "実行先を保存できませんでした。もう一度お試しください。"
+        }
       },
       "detect": {
         "groupLabel": "このデバイスで検出",
@@ -6158,13 +6169,18 @@
         "allowInboundAria": "{{name}} に本機の操作を許可するか切り替え",
         "peerControlOff": "相手側が操作を許可していません",
         "masterOffHint": "先に上のメインスイッチをオンにしてください",
-        "controllingThisMac": "Cindy に接続中"
+        "controllingThisMac": "Cindy に接続中",
+        "useThisDeviceModels": "このPCのモデルを使う",
+        "allowModelUseAria": "{{name}} にこのコンピュータのモデルの使用を許可"
       },
       "toast": {
         "revoked": "このデバイスのアクセス権を撤回しました",
         "revokeFailed": "撤回に失敗しました",
         "restored": "このデバイスのアクセス権を復元しました",
-        "restoreFailed": "復元に失敗しました"
+        "restoreFailed": "復元に失敗しました",
+        "modelUseRestored": "このコンピュータのモデルを再び使えるようにしました",
+        "modelUseRevoked": "このコンピュータのモデルを使えないようにしました",
+        "modelUseFailed": "「このPCのモデルを使う」を保存できませんでした。もう一度お試しください。"
       },
       "sections": {
         "myDevices": "マイデバイス",
@@ -9023,6 +9039,8 @@
       "daysWindow": "{{days}}日"
     },
     "claude": {
+      "totalWeeklyLabel": "週間合計",
+      "temporarilyLimited": "一時的に制限中",
       "waitingDetail": "Claude サブスクリプションの使用量は次回のターン完了後に更新されます。",
       "weeklyLabel": "週間",
       "modelWeeklyLabel": "{{model}} 週間",
@@ -11300,7 +11318,8 @@
       "toolSettings": "ツール設定",
       "notTurnedOn": "このコンピューターでまだオンになっていません",
       "turnOn": "オンにする",
-      "permissions": "権限"
+      "permissions": "権限",
+      "officialInherited": "Cindy 公式 · このコンピューターの設定に従う"
     },
     "systemSkills": {
       "followOffHint": "{{name}} のシステムスキル「ワークベンチとフォロー」はオフです。機能ページでオンに戻すと使えます。",
@@ -19728,6 +19747,7 @@
     "lineNumbers": "行番号"
   },
   "subscriptionAccounts": {
+    "unassigned": "アカウント未割り当て",
     "providerManagedAuth": "現在の Codex プロバイダーでは ChatGPT アカウント情報を取得できません。プロバイダーの追加時に「$t(subscriptionAccounts.signIn.anotherAccount)」を選ぶと、別のフォルダーを使用できます。",
     "signIn": {
       "checking": "ローカルアカウントを確認中…",
@@ -19787,5 +19807,11 @@
     "keepDraft": "入力中の下書きは保持されます。接続が回復すると、タスクの状態が同期されます。",
     "retry": "再接続",
     "desktopAuthHelp": "起動用ターミナルで接続設定を更新してから、この実験的なクライアントを開き直してください。"
+  },
+  "remoteControlConsent": {
+    "title": "このコンピューターのリモート操作を許可しますか？",
+    "detail": "要求元：{{device}}\n目的：{{purpose}}\n\n有効にすると、同じアカウントのデバイスからタスクの実行やファイルへのアクセスなど、このコンピューターを操作できます。設定で無効にするまで有効です。",
+    "decline": "今はしない",
+    "enable": "リモート操作を有効にする"
   }
 }

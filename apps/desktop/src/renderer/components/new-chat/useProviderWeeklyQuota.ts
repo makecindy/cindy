@@ -3,6 +3,7 @@ import type { KimiCodingUsageSnapshot } from '../../../shared/kimiCodingUsage';
 import type { OpenCodeGoUsageSnapshot } from '../../../shared/opencodeGoUsage';
 import { useEffect, useMemo, useState } from 'react';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
+import { useDraftClaudeAccount } from './DraftClaudeAccount';
 import type { ProviderView } from '@cindy/model-providers';
 import { providerWeeklyQuotaSource } from '../../../shared/providerQuotaSource';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
@@ -39,6 +40,8 @@ export interface ProviderWeeklyQuota {
  */
 export interface ProviderUsageScope {
   deviceId: string | null;
+  /** Explicit opt-in from the new-task composer; existing tasks keep their readers. */
+  previewSubscriptionPool?: boolean;
 }
 
 /**
@@ -175,7 +178,8 @@ export function useProviderUsageSnapshots(
     undefined,
     remoteDeviceId,
   );
-  const localClaude = useClaudeSubscriptionUsage(local && source === 'claude', provider.id);
+  const draftClaude = useDraftClaudeAccount(provider.id, scope.deviceId);
+  const localClaude = useClaudeSubscriptionUsage(local && source === 'claude' && !draftClaude, provider.id);
   const localXai = useXaiSubscriptionUsage(local && source === 'xai', provider.id);
   const remoteCodex = useRemoteCodexAccountUsage(
     source === 'codex' ? remoteDeviceId : null,
@@ -206,7 +210,7 @@ export function useProviderUsageSnapshots(
     opencodeGo: source === 'opencode-go' && accountUsage.result?.status === 'ready' && !accountUsage.result.stale
       && accountUsage.result.snapshot.kind === 'opencode-go-quota' ? accountUsage.result.snapshot : null,
     codex,
-    claude: source === 'claude' ? (local ? localClaude : remoteClaude) : null,
+    claude: source === 'claude' ? (local ? draftClaude ? draftClaude.usage : localClaude : remoteClaude) : null,
     xai: source === 'xai' ? (local ? localXai : remoteXai) : null,
   };
 }
