@@ -864,7 +864,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             sessionInstanceId: context.sessionInstanceId,
             workingDir: context.workingDir ?? '',
             path: absPath,
-            toolName: 'cindy_helper.ask_owner',
+            toolName: 'cindy_helper.request_input_handoff',
             operation: 'read',
           }, deps.getLiveSessionGrantState));
           if (!picture.ok) return picture;

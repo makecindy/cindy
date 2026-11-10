@@ -137,6 +137,12 @@ import {
   readPersistedWindowMaximized,
   type MainWindowMaximizeRecoveryController,
 } from './mainWindowMaximizeRecovery';
+import {
+  commitReplacedNormalBounds,
+  fitReplacementStartupBounds,
+  manageWindowStatePreservingNormalBounds,
+  planWindowRestore,
+} from './mainWindowWorkAreaBounds';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
@@ -4359,23 +4365,62 @@ const createWindow = () => {
   const persistedMaximized = readPersistedWindowMaximized(
     path.join(app.getPath('userData'), mainWindowStateFile),
   );
+  const defaultWindowWidth = 1280;
+  const defaultWindowHeight = 800;
   const mainWindowState = windowStateKeeper({
     file: mainWindowStateFile,
-    defaultWidth: 1280,
-    defaultHeight: 800,
+    defaultWidth: defaultWindowWidth,
+    defaultHeight: defaultWindowHeight,
     // Applying fullscreen while a hidden macOS window is still starting can
     // leave the restored window without native traffic lights.
     fullScreen: process.platform !== 'darwin',
   });
   const shouldRestoreMacFullscreen = process.platform === 'darwin' && mainWindowState.isFullScreen;
-  const shouldRestoreMaximized =
-    !shouldRestoreMacFullscreen && (persistedMaximized || Boolean(mainWindowState.isMaximized));
-
+  // Windows Snap persists a work-area rectangle with isMaximized=false (#9461).
+  // That becomes the unmaximize target, so the maximize button looks dead and an
+  // auto-hidden taskbar stays visible. Come back maximized, and create from the
+  // library default size so the first unmaximize is not the work area again.
+  // A later save writes the real maximize flag and keeps the last normal size.
+  const restorePlan = planWindowRestore(
+    {
+      x: mainWindowState.x,
+      y: mainWindowState.y,
+      width: mainWindowState.width,
+      height: mainWindowState.height,
+      isMaximized: persistedMaximized || Boolean(mainWindowState.isMaximized),
+      isFullScreen: Boolean(mainWindowState.isFullScreen),
+    },
+    screen,
+    { restoringMacFullscreen: shouldRestoreMacFullscreen },
+  );
+  const shouldRestoreMaximized = restorePlan.restoreMaximized;
+  // A snapped rectangle is not a legal restore size. Create from the same
+  // defaults the keeper uses on a first launch, but keep the saved x/y: that is
+  // the display the work-area fill was on. Omitting them centers on the primary
+  // display and the keeper would then remember the wrong monitor. The default
+  // 1280×800 is taller than a 1280×680 work area, so fit it before the window
+  // exists; the save right after construction persists whatever was created.
+  const replacementBounds = restorePlan.replaceWithDefaultSize
+    ? fitReplacementStartupBounds(
+        { x: mainWindowState.x, y: mainWindowState.y },
+        { width: defaultWindowWidth, height: defaultWindowHeight },
+        screen.getDisplayMatching({
+          x: mainWindowState.x,
+          y: mainWindowState.y,
+          width: defaultWindowWidth,
+          height: defaultWindowHeight,
+        }).workArea,
+      )
+    : null;
   const mainWindow = new BrowserWindow({
-    x: mainWindowState.x,
-    y: mainWindowState.y,
-    width: mainWindowState.width,
-    height: mainWindowState.height,
+    ...(replacementBounds
+      ? replacementBounds
+      : {
+          x: mainWindowState.x,
+          y: mainWindowState.y,
+          width: mainWindowState.width,
+          height: mainWindowState.height,
+        }),
     minWidth: 800,
     minHeight: 600,
     title: BRAND_NAME,
@@ -4524,7 +4569,17 @@ const createWindow = () => {
 
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
-  mainWindowState.manage(mainWindow);
+  // On Windows the keeper sees the last normal rectangle instead of a snapped
+  // work-area fill, so that fill cannot become the next restore size (#9461).
+  // The keeper keeps this filtered view for its whole lifetime; the window itself
+  // is untouched, so drag / sidebar reads still see the live rectangle.
+  manageWindowStatePreservingNormalBounds(mainWindowState, mainWindow, screen);
+  // The constructor size is not the rectangle the keeper will save. `saveState`
+  // copies the live normal bounds into its closure; `maximize()` after that only
+  // flips the flag, so quit no longer writes the old work-area rectangle back.
+  if (restorePlan.replaceWithDefaultSize) {
+    commitReplacedNormalBounds(mainWindowState, mainWindow);
+  }
   if (shouldRestoreMaximized && !mainWindow.isMaximized()) mainWindow.maximize();
   // Windows can transiently unmaximize during display/DPI re-layout. macOS
   // owns its native Zoom behavior, so do not install the Windows recovery

@@ -918,6 +918,33 @@ export function rebuildQueuedOrcaLeadMessage(
   };
 }
 
+/**
+ * 按 worker→lead 排队消息的原始派发格式重建正文,供 Worker「改写 / 合并自己排队中的回报」使用。
+ * 与 rebuildQueuedOrcaLeadMessage 对称:四处正文的格式耦合同源,身份与调度字段锚定原条目。
+ * `workerRole` 取当前 role(改名后的回报前缀跟随新名字),查不到时省略。
+ */
+export function rebuildQueuedOrcaWorkerMessage(
+  entry: AgentInputQueuedMessage,
+  rawContent: string,
+  workerId: string,
+  workerRole?: string,
+): AgentInputQueuedMessage {
+  const agentMessageText = formatAgentMessage('worker', rawContent, workerId, workerRole);
+  const persistedContent = formatOrcaCommunicationMessage('worker', rawContent);
+  return {
+    ...entry,
+    text: agentMessageText,
+    persistedContent,
+    chatMessage: {
+      ...entry.chatMessage,
+      content: persistedContent,
+    },
+    ...(entry.origin?.kind === 'orca'
+      ? { origin: { ...entry.origin, displayText: rawContent } }
+      : {}),
+  };
+}
+
 function buildQueuedOrcaInterAgentMessage(params: {
   clientId: string;
   agentMessageText: string;

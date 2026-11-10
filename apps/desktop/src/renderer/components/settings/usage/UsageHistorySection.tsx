@@ -12,7 +12,7 @@ import { ErrorNotice } from '@/components/ui/error-notice';
  * 账号快照。「最耗 token 的任务」只有本机任务数据, 选中其它电脑时隐藏。
  *
  * 两个窗口不同, 标题里分别写明:
- *   - 热力图走完整 days[]，按卡片实际宽度显示至少 20 周；连续活跃天数也走同一份历史
+ *   - 热力图走完整 days[]，固定显示近一年，方格按卡片宽度自适应；连续活跃天数也走同一份历史
  *   - 按模型 / 按 agent 走按筛选范围重聚合的 models[] 与 modelDaily
  *   - 每日柱图固定展示近 30 天, 与筛选范围无关
  *
@@ -57,9 +57,6 @@ import {
   type UsageHistoryRange,
 } from './usageHistoryStats';
 import { SettingsPageHeader } from '@/components/ui/settings-rows';
-
-/** 与 useUsageHistory 的拉取窗口一致 (20 周)。 */
-const HEATMAP_WINDOW_DAYS = 140;
 
 function Card({
   title,
@@ -135,7 +132,7 @@ export function UsageHistorySection(): React.JSX.Element {
   const initialDeviceSync =
     firstSyncSettled !== accountKey && (history === null || history.devicesSyncing === true);
   const [range, setRange] = useState<UsageHistoryRange>('30d');
-  const [heatmapWeeks, setHeatmapWeeks] = useState(20);
+  const [heatmapWeeks, setHeatmapWeeks] = useState(53);
 
   // The Today option is an exact-day range too: use the payload's main-side
   // date anchor so both dropdown and chart entry points show the same selection.
@@ -282,9 +279,10 @@ export function UsageHistorySection(): React.JSX.Element {
             subtitle={t('usageHistory.heatmap.subtitle', { count: heatmapWeeks })}
           >
             <UsageHeatmap
+              fillWidth
               days={chartHistory?.days ?? []}
               todayKey={chartHistory?.todayKey ?? ''}
-              windowDays={HEATMAP_WINDOW_DAYS}
+              windowDays="auto"
               metric="tokens"
               selectedDay={selectedDay}
               onDayClick={handleDayClick}
