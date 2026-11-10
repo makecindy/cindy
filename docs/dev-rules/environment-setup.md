@@ -161,7 +161,9 @@ rebase、fetch（包括 Cindy 自己的快照提交与 worktree 池 fetch）都�
   取发布满 24 小时的上游版本（同 mise 缺省的 `minimum_release_age`，不降级），下载时按上游校验和验证
   （Claude 官方发布清单、GitHub asset digest、ripgrep 官方 `.sha256`），SDK 取与 Claude Code 同步构建的版本；
   随后用真实二进制跑 `--version`、`scripts/smoke-claude-sdk.mjs` 与 maker-core 的 `integration` tier，任一失败即
-  恢复原 pin，通过才推到 `chore/vendor-pins` 并开／更新 PR。执行上游二进制的测试 job 不持有任何凭证；开 PR 的
+  恢复原 pin，通过才推到 `chore/vendor-pins` 并开／更新 PR。单个上游坏版本不拖住其它组件：失败的测试只指向本次升级的
+  组件时（Claude Code 与 SDK、Codex 与独立 Codex CLI 成对处理），只把它们留在原 pin，其余组件重跑测试门后照常进 PR；被拒绝的
+  版本写进 PR 说明，当天的 workflow 以失败结束直到有人适配。无法归因或失败的是未升级组件时，仍全部恢复。执行上游二进制的测试 job 不持有任何凭证；开 PR 的
   job 只按记录的版本重新下载、校验并写 pin，不执行上游代码；测试步骤也会剔除环境里的令牌类变量。改动 pin 的 PR
   同样触发这个测试 job，手改的 pin 也必须过测试门。Codex 只升到 `native-auto-review-policy.ts` 已核验的版本：
   上游更新时流程会提示先抓取新版原生 reviewer 策略并比对（见 `maker-core-and-agent-behavior.md`），核验后加入

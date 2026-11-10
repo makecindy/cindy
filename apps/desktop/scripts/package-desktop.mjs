@@ -574,8 +574,8 @@ async function main() {
     if (!target) throw new Error(`--vendors ${vendorsMode}: build-info.json 里没有 vendors.components`);
     console.log(`==> Agent runtimes: ${typeof target === 'string' ? target : `versions from ${vendorsMode}`} + smoke/integration gate`);
     if (!versionless) console.log('WARN: 这会在本机运行刚下载的上游二进制;本机若持有签名密钥,请改用缺省的 --vendors pinned。');
-    const { changes, steps, dirtyBefore, components } = await updateVendors({ target });
-    vendors = { mode: typeof target === 'string' ? target : 'from-build-info', changes, gate: steps, components };
+    const { changes, steps, dirtyBefore, components, rejected } = await updateVendors({ target });
+    vendors = { mode: typeof target === 'string' ? target : 'from-build-info', changes, gate: steps, components, rejected };
     vendorsDirtyBefore = dirtyBefore;
   }
 

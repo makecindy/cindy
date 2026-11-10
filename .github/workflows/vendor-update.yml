@@ -11,6 +11,10 @@ name: vendor-update
 #   pr    — holds the write token but never runs vendor code: it re-downloads the recorded
 #           versions, verifies upstream checksums, rewrites the pins and opens the PR.
 #
+# One bad upstream release does not hold back the others: when the failing tests point only at
+# runtimes bumped in this run, those stay on their previous pins, the rest are gated again and still
+# land, and the run ends red listing the rejected releases.
+#
 # Release builds (package-desktop.mjs, default --vendors pinned) run on the signing machine and never
 # execute these runtimes, so every pin must pass this gate before it lands: pull requests that change a
 # pin, the SDK version or the gate itself run the gate job alone on the PR's pins (--gate-only).
@@ -136,3 +140,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ secrets.VENDOR_UPDATE_TOKEN || github.token }}
+
+      # The other runtimes still land above; a rejected upstream release keeps this run red until
+      # someone adapts Cindy to it (or it is fixed upstream).
+      - name: Report rejected upstream releases
+        run: |
+          node -e '
+            const { rejected = [] } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).vendors;
+            for (const c of rejected) console.log(`::error title=${c.kind} ${c.to} rejected::kept ${c.from}; failed: ${c.reason}`);
+            process.exit(rejected.length ? 1 : 0);
+          ' "$RUNNER_TEMP/vendor-versions/vendors.json"

@@ -22,7 +22,7 @@
 //                    (`vendors.components`), so every platform of one release ships the same set.
 // --pins-only        update pins (download + checksum verification only) without running anything
 //                    downloaded; for the credentialed PR job, after a credential-free job ran the gate.
-// --record=<file>    write the passing versions as {vendors:{components}} for --versions-from.
+// --record=<file>    write the passing versions as {vendors:{components, rejected}} for --versions-from.
 // --min-age-hours    skip releases younger than N hours. Default 24, the same cooldown mise applies
 //                    by default (minimum_release_age = 24h); 0 takes the newest release at once.
 // --open-pr          after the gate passes, commit the new pins onto the chore/vendor-pins branch
@@ -292,7 +292,7 @@ export async function updateVendors({ target = 'latest', kinds = VENDOR_KINDS, m
       }
     }
     if (changes.length && !syncHeadlessProfiles()) fail('could not refreeze the Cindy Headless profile locks');
-    if (pinsOnly) return { changes, steps: [], dirtyBefore, components: vendorRecord() };
+    if (pinsOnly) return { changes, steps: [], dirtyBefore, components: vendorRecord(), rejected: [] };
     // Pinned builds still gate the exact binaries; make sure they are present first.
     if (!run(process.execPath, ['scripts/ensure-agent-binaries.mjs', '--kinds=claude,codex,pi,ripgrep']).ok) fail('could not ensure pinned binaries');
     const codexCliMarker = path.join(path.dirname(BINARY['codex-cli']), '.version');
@@ -303,18 +303,51 @@ export async function updateVendors({ target = 'latest', kinds = VENDOR_KINDS, m
     }
 
     // ── Gate ──
+    // A bad release of one runtime must not hold back the others (Claude Code ships almost daily).
+    // When floating to latest and the failures point only at runtimes this run bumped, put those
+    // back on their previous pins and gate the rest again. Anything else rolls everything back.
+    const rejected = [];
+    let steps = await runGate();
+    while (target === 'latest' && steps.some((st) => !st.ok)) {
+      const failing = steps.filter((st) => !st.ok);
+      if (failing.some((st) => !st.kinds?.length)) break; // not attributable to a runtime
+      const blamed = new Set(failing.flatMap((st) => st.kinds));
+      for (const [a, b] of [['claude', 'claude-sdk'], ['codex', 'codex-cli']]) if (blamed.has(a) || blamed.has(b)) blamed.add(a).add(b);
+      const drop = changes.filter((c) => blamed.has(c.kind));
+      // A failing step that involves no runtime bumped in this run points at the gate or the pins.
+      if (failing.some((st) => !st.kinds.some((k) => drop.some((c) => c.kind === k)))) break;
+      for (const c of drop) {
+        rejected.push({ ...c, reason: failing.filter((st) => st.kinds.includes(c.kind)).map((st) => st.name).join('; ') || 'moves with its partner runtime' });
+        changes.splice(changes.indexOf(c), 1);
+      }
+      log(`rejecting ${drop.map((c) => `${c.kind} ${c.to}`).join(', ')}; keeping ${drop.map((c) => `${c.kind} ${c.from}`).join(', ')} and gating the rest again`);
+      revertKinds(drop.map((c) => c.kind));
+      steps = await runGate();
+    }
+
+    const failed = steps.filter((s) => !s.ok);
+    if (failed.length) fail(`${failed.length} gate step(s) failed${changes.length || rejected.length ? '; pins restored' : ''}`);
+    for (const c of changes) log(`bumped ${c.kind}: ${c.from} → ${c.to}`);
+    for (const c of rejected) {
+      log(`REJECTED ${c.kind} ${c.to} (kept ${c.from}): ${c.reason}`);
+      if (process.env.GITHUB_ACTIONS) console.log(`::warning title=${c.kind} ${c.to} rejected::kept ${c.from}; failed: ${c.reason}`);
+    }
+    return { changes, steps, dirtyBefore, components: vendorRecord(), rejected };
+  }
+
+  async function runGate() {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-vendor-gate-'));
     const steps = [];
-    const step = (name, r) => { steps.push({ name, ok: r.ok, seconds: r.seconds }); log(`${r.ok ? 'PASS' : 'FAIL'} ${name} (${r.seconds}s)`); };
+    const step = (name, r, kinds) => { steps.push({ name, ok: r.ok, seconds: r.seconds, kinds }); log(`${r.ok ? 'PASS' : 'FAIL'} ${name} (${r.seconds}s)`); };
     try {
       for (const kind of ['claude', 'codex', 'codex-cli', 'pi', 'ripgrep']) {
         const r = spawnSync(BINARY[kind], ['--version'], {
           encoding: 'utf8', timeout: 30_000, env: { ...untrustedEnv(), CODEX_HOME: fs.mkdtempSync(path.join(scratch, 'codex-home-')) },
         });
         const out = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim().split('\n')[0];
-        step(`${kind} --version = ${pinnedVersion(kind)} (${out || r.error?.message})`, { ok: r.status === 0 && out.includes(pinnedVersion(kind)), seconds: 0 });
+        step(`${kind} --version = ${pinnedVersion(kind)} (${out || r.error?.message})`, { ok: r.status === 0 && out.includes(pinnedVersion(kind)), seconds: 0 }, [kind]);
       }
-      step('Claude Agent SDK + CLI smoke (scripts/smoke-claude-sdk.mjs)', run(process.execPath, ['scripts/smoke-claude-sdk.mjs', '--cli', BINARY.claude], { untrusted: true }));
+      step('Claude Agent SDK + CLI smoke (scripts/smoke-claude-sdk.mjs)', run(process.execPath, ['scripts/smoke-claude-sdk.mjs', '--cli', BINARY.claude], { untrusted: true }), ['claude', 'claude-sdk']);
 
       // The repo's manual `integration` tier for @cindy/maker-core (test-workspaces.config.mjs):
       // Cindy's own ClaudeCodeAgent / CodexAgent / PiAgent driving the real binaries over loopback
@@ -337,25 +370,43 @@ export async function updateVendors({ target = 'latest', kinds = VENDOR_KINDS, m
         },
       });
       let detail = 'no report';
+      let blamed = null; // unknown until the report says which runtime's tests failed
       try {
         const json = JSON.parse(fs.readFileSync(report, 'utf8'));
-        for (const f of json.testResults) for (const t of f.assertionResults) if (t.status === 'failed') log(`FAILED: ${t.fullName}`);
+        const kindOf = (file) => Object.entries(dirs).find(([, dir]) => file.includes(`/${dir}/`))?.[0];
+        blamed = new Set();
+        for (const f of json.testResults) {
+          const failedHere = f.assertionResults.filter((t) => t.status === 'failed');
+          for (const t of failedHere) log(`FAILED: ${t.fullName}`);
+          // A file that crashed before reporting assertions fails without failed assertions.
+          if (failedHere.length || f.status === 'failed') blamed.add(kindOf(f.name) ?? '*');
+        }
         // A runtime whose tests all skipped (binary not found) must not read as green.
         const silent = Object.entries(dirs).filter(([, dir]) => !json.testResults.some((f) =>
           f.name.includes(`/${dir}/`) && f.assertionResults.some((t) => t.status === 'passed')));
-        for (const [kind] of silent) log(`NOTHING PASSED for ${kind}: its binary was not exercised`);
+        for (const [kind] of silent) { log(`NOTHING PASSED for ${kind}: its binary was not exercised`); blamed.add(kind); }
         integration.ok = integration.ok && json.numFailedTests === 0 && silent.length === 0;
         detail = `${json.numPassedTests} passed, ${json.numFailedTests} failed, ${json.numPendingTests} skipped, ${json.testResults.length} files`;
       } catch { integration.ok = false; }
-      step(`maker-core integration tier: ${detail}`, integration);
+      // Claude Code tests drive the SDK; Codex tests drive the package Codex (codex-cli follows it).
+      const expand = { claude: ['claude', 'claude-sdk'], codex: ['codex'], pi: ['pi'] };
+      step(`maker-core integration tier: ${detail}`, integration,
+        integration.ok ? [] : blamed && !blamed.has('*') && blamed.size ? [...blamed].flatMap((k) => expand[k]) : null);
     } finally {
       fs.rmSync(scratch, { recursive: true, force: true });
     }
+    return steps;
+  }
 
-    for (const c of changes) log(`bumped ${c.kind}: ${c.from} → ${c.to}`);
-    const failed = steps.filter((s) => !s.ok);
-    if (failed.length) fail(`${failed.length} gate step(s) failed${changes.length ? '; pins restored' : ''}`);
-    return { changes, steps, dirtyBefore, components: vendorRecord() };
+  /** Put the given runtimes back on the pins they had before this run, binaries included. */
+  function revertKinds(kinds) {
+    const files = kinds.flatMap((k) => (k === 'claude-sdk' ? [...SDK_MANIFESTS, 'pnpm-lock.yaml'] : [PIN[k]]));
+    for (const rel of [...files, ...headlessProfileFiles()]) fs.writeFileSync(path.join(root, rel), snapshot.get(rel));
+    if (changes.length && !syncHeadlessProfiles()) fail('could not refreeze the Cindy Headless profile locks');
+    if (kinds.includes('claude-sdk') && !run('pnpm', ['install', '--frozen-lockfile'], { env: { XDT_SKIP_AGENT_BIN_INSTALL: '1' } }).ok) fail('claude-sdk: pnpm install failed while reverting');
+    if (kinds.includes('codex-cli') && !run(process.execPath, [UPDATER['codex-cli'], `--version=${pinnedVersion('codex-cli')}`, `--platform=${platformKey}`]).ok) fail('could not reinstall the standalone Codex CLI');
+    const ensured = kinds.filter((k) => k !== 'claude-sdk' && k !== 'codex-cli');
+    if (ensured.length && !run(process.execPath, ['scripts/ensure-agent-binaries.mjs', `--kinds=${ensured.join(',')}`]).ok) fail('could not reinstall the previous binaries');
   }
 }
 
@@ -364,7 +415,7 @@ export async function updateVendors({ target = 'latest', kinds = VENDOR_KINDS, m
  * refresh its pull request against main. Builds the commit in a scratch index, so the working
  * tree, the index and HEAD stay untouched. Needs push rights on origin and an authenticated `gh`.
  */
-export function openPinPullRequest({ changes, steps = [], dirtyBefore = [], cwd = root, log = defaultLog }) {
+export function openPinPullRequest({ changes, steps = [], rejected = [], dirtyBefore = [], cwd = root, log = defaultLog }) {
   if (dirtyBefore.length) {
     throw new Error(`pin files had local edits before the update (${dirtyBefore.join(', ')}); commit the pins by hand`);
   }
@@ -406,6 +457,8 @@ export function openPinPullRequest({ changes, steps = [], dirtyBefore = [], cwd 
     const body = ['## 这次改了什么', '',
       '由 `scripts/vendor-update.mjs` 自动生成：把 Agent 运行时升到上游最新且发布满 24 小时的版本，下载时已按上游校验和验证。', '',
       ...list.map((line) => `- ${line}`), '',
+      ...(rejected.length ? ['测试门拒绝了下列上游版本，本 PR 保持原 pin，需要先适配：', '',
+        ...rejected.map((c) => `- ❌ ${c.kind} ${c.to}（保持 ${c.from}）：${c.reason}`), ''] : []),
       '## 怎么验证的', '', '在新二进制上跑的测试门：', '',
       ...(steps.length ? steps.map((st) => `- ${st.ok ? '✅' : '❌'} ${st.name}`)
         : [`- ✅ 冒烟与 maker-core 集成测试已在无凭证的 job 中通过${process.env.GITHUB_RUN_ID
@@ -444,10 +497,12 @@ if (isMain) {
     kinds: arg('kinds')?.split(',').filter(Boolean),
     minAgeHours: Number(arg('min-age-hours') ?? DEFAULT_MIN_AGE_HOURS),
     pinsOnly: Boolean(opt['pins-only']),
-  }).then(({ changes, steps, dirtyBefore, components }) => {
-    if (arg('record')) fs.writeFileSync(path.resolve(arg('record')), JSON.stringify({ vendors: { components } }, null, 2) + '\n');
+  }).then(({ changes, steps, dirtyBefore, components, rejected }) => {
+    // The PR job has no gate of its own; the gate job's rejections travel in the record.
+    if (from) rejected = JSON.parse(fs.readFileSync(path.resolve(from), 'utf8')).vendors.rejected ?? [];
+    if (arg('record')) fs.writeFileSync(path.resolve(arg('record')), JSON.stringify({ vendors: { components, rejected } }, null, 2) + '\n');
     if (!changes.length) return defaultLog('nothing to bump.');
-    if (opt['open-pr']) return openPinPullRequest({ changes, steps, dirtyBefore });
+    if (opt['open-pr']) return openPinPullRequest({ changes, steps, rejected, dirtyBefore });
     defaultLog('pins updated — commit tools/*/latest.json, the SDK package.json files and pnpm-lock.yaml.');
   }).catch((error) => {
     console.error(`\x1b[31m[vendor-update]\x1b[0m ${error.message}`);
