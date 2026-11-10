@@ -265,7 +265,7 @@
     "estimateTooManyFiles": "案中檔案逾 {{limit, number}} 個，不可複製。請改錄檔案較少之案。"
   },
   "sharedTask": {
-    "officialRelayNote": "君今用自家中繼，共事之內容仍經 Cindy 官方中繼。",
+    "officialRelayNote": "Agent-Net 分享循邀請所定中轉；舊版分享仍經 Cindy 官方中轉。",
     "selfJoin": "此共事乃君所發起，無須加入。請自「吾所發起」啟之",
     "manageSharing": "共事之管",
     "manageMembers": "理成員…",
@@ -367,7 +367,7 @@
     "closeAllDescription": "諸賓皆不能再存取，差事紀錄仍留。"
   },
   "providerShare": {
-    "officialRelayNote": "君今用自家中繼，供方分享之內容仍經 Cindy 官方中繼。",
+    "officialRelayNote": "Agent-Net 分享循邀請所定中轉；舊版分享仍經 Cindy 官方中轉。",
     "owned": {
       "title": "吾所分享之供方"
     },
@@ -1351,6 +1351,7 @@
     "REMOTE_AGENT_SHARE_PAUSED": "模型未易：彼已暫停對君之分享。請易一模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "模型未易：此分享已不可用（彼已刪分享，或君已退出）。請易一模型。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未易：所分享之供方暫不可用（彼機不在線，或彼暫閉分享）。請稍後再試，或易一模型。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "模型未易：此乃舊版分享，啟「唯用 Agent-Net」時暫不可用。請關此開關，或易一模型。",
     "SSH_HOST_KEY_MISMATCH": "SSH 主機金鑰已易",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 不能讀來源附件，訊未遣。請將檔案另存至「下載」或他可存取之卷匣，移除原附件，再以附件按鈕納其副本而後遣之。"
   },
@@ -2391,12 +2392,12 @@
         "previewStarting": "請釋滑鼠與鍵盤，三秒後屏將覆；按任一鍵即鎖屏，再解之以試。",
         "previewUnavailable": "未能覆屏，請重啟 Cindy 再試。",
         "delay": {
-          "label": "離座幾時而覆屏",
-          "hint": "鍵盤滑鼠無人觸及逾此時，即覆以玄幕。預設同系統熄屏之時。",
           "30": "三十秒",
           "60": "一分",
           "120": "二分",
           "300": "五分",
+          "label": "離座幾時而覆屏",
+          "hint": "鍵盤滑鼠無人觸及逾此時，即覆以玄幕。預設同系統熄屏之時。",
           "system": "從系統"
         }
       }
@@ -5958,7 +5959,7 @@
         "current": "今用",
         "ownerName": "此機",
         "unavailable": "須登入 Cindy 名籍，且系統鑰匙圈可用，方能用自家中繼。",
-        "limits": "用自家中繼時，手機系統推播暫不可用；供方分享與共事仍經 Cindy 官方中繼。",
+        "limits": "Agent-Net 之分享，循邀請所定中轉；系統通知須備推播服務。舊版分享仍經 Cindy 官方中轉。",
         "actions": {
           "join": "入他處中繼",
           "useOfficial": "歸官方中繼",
@@ -5976,37 +5977,83 @@
           "scopeAllHint": "區域網路中之裝置可徑連。連線不加密，唯宜用於可信之網；手機須 https 位址方能連線。",
           "externalUrl": "他裝置連線之位址",
           "externalUrlPlaceholder": "如 https://relay.example.com",
-          "externalUrlHintAll": "將寫入加入連結。不填則用此機之區域網路位址。",
-          "externalUrlHintLocal": "將寫入加入連結。請填君之 Proxy 或穿透服務對外之位址。",
+          "externalUrlHintAll": "將寫入分享連結。不填則用此機之區域網路位址。",
+          "externalUrlHintLocal": "將寫入分享連結。請填君之 Proxy 或穿透服務對外之位址。",
           "suggested": "此機之位址：",
           "start": "啟",
           "save": "存之並重啟中繼",
           "cancel": "罷",
           "running": "中繼方行，他裝置連線位址：{{address}}"
         },
-        "add": {
-          "intro": "生加入連結，令手機或另一機入此中繼。",
-          "create": "增裝置",
-          "hint": "以手機相機掃之，或將連結遣至另一機，於「入他處中繼」中貼上。連結十分鐘內有效，僅可用一次。",
-          "qrAlt": "入中繼之 QR 碼",
+        "share": {
+          "action": "分享此中繼",
+          "title": "「{{name}}」分享連結已生",
+          "description": "以連結遣彼，得其請而許之，則彼帳號下之機與手機，皆可藉此中繼通其自家裝置。",
+          "descriptionOwn": "以連結予君之他機，或以手機相機掃之，許之則彼裝置入此中繼。",
+          "fieldLabel": "分享之鏈",
           "copy": "錄連結",
-          "copied": "加入連結已錄",
-          "newLink": "重生",
-          "waiting": "倚門候裝置來請…"
+          "copied": "已錄",
+          "copyFailed": "未能錄連結，請手選而錄之",
+          "oneTime": "僅可用一次",
+          "expiresIn": "{{time}} 後逾期",
+          "expired": "已逾期",
+          "regenerateHint": "逾期後可重生",
+          "generating": "方生連結…",
+          "scanHint": "對方以手機掃之，將示其先於電腦開之；其電腦既入，手機即見此中繼。",
+          "scanHintOwn": "君之手機可徑以相機掃碼而入。",
+          "ownAccountOnly": "此中繼今唯君之裝置可用。欲予他帳號，須先於「遠端連線」啟 Agent-Net (Beta)；伺服器上之中繼亦須升至最新版。",
+          "qrAlt": "分享中繼之 QR 碼",
+          "calloutIsolation": "彼唯能通其自家裝置，不見君之裝置；欲令彼用君之 Agent 或模型，須另行分享。",
+          "calloutPrivacy": "往來全程加密，君不得見其內容；然君為中繼之主，可見彼裝置何時往來、流量幾何。",
+          "calloutOwnDevices": "君自家裝置無需此連結，登同一帳號，即於路線之列自見此中繼。",
+          "calloutOwnFallback": "登同一帳號之裝置，常於線路列表徑見此中繼，無需連結；連不上 Cindy 帳號之服務時，方用此連結。",
+          "done": "畢",
+          "regenerate": "重生連結",
+          "regenerated": "新連結已生"
         },
         "requests": {
-          "item": "{{name}} 請入",
-          "verify": "合符碼",
-          "verifyHint": "與對方螢幕所示相符，方可許之。",
+          "title_one": "{{count}} 請待理",
+          "title_other": "{{count}} 請待理",
+          "waiting": "請入，候君處理",
+          "waitingAccount": "他帳號 · {{device}}，候君處之",
+          "open": "理之"
+        },
+        "tenants": {
+          "title": "所分享之帳號",
+          "devices_one": "裝置 {{count}} 台",
+          "devices_other": "裝置 {{count}} 台",
+          "online": "在線",
+          "offline": "不在線",
+          "revoke": "止其分享",
+          "revokeTitle": "止分享於 {{account}} 乎？",
+          "revokeDescription": "{{account}} 於此中繼上之線將刪，其裝置即斷。後欲再用，須君重新分享。"
+        },
+        "approve": {
+          "title": "{{device}} 請入「{{relay}}」",
+          "requestedAt": "{{time}}經君之分享連結來請",
+          "requestedViaLink": "經君之分享連結來請",
+          "pairingHint": "與此裝置螢幕所示合符碼相符，方可許之。",
+          "unverified": "無從核此裝置：其申請與此機所予之分享連結不符，或遭人竄改，唯可拒之。若為君自家裝置，請重生分享連結再試。",
+          "callout": "許之，則此裝置入「{{relay}}」，藉之與君他處裝置相通。",
           "replaces": "此裝置曾入，許之則其舊憑證失效。",
+          "calloutUnknown": "若不識此裝置，請拒之；拒則此連結作廢。",
           "approve": "許",
-          "reject": "拒",
-          "unverified": "無從核此裝置：其申請與此機所予之加入連結不符，或遭人竄改，唯可拒之。若為君自家裝置，請重生加入連結再試。"
+          "reject": "拒其請",
+          "later": "容後再理",
+          "toastApproved": "已許 {{device}} 入「{{relay}}」",
+          "toastRejected": "已拒 {{device}} 之請",
+          "titleAccount": "{{account}} 欲用「{{relay}}」",
+          "otherAccountDevice": "他帳號 · {{device}}",
+          "calloutAccount": "許之，則對方帳號於「{{relay}}」上自有一線：唯連其己之裝置，不見君與君之裝置。其帳號下他裝置此後徑入，不復來請。",
+          "calloutAccountRevoke": "君可隨時於中繼頁止其分享，對方裝置即斷。",
+          "calloutUnknownAccount": "若不識此帳號，請拒之；拒之則此連結作廢。",
+          "toastApprovedAccount": "已許 {{account}} 用「{{relay}}」",
+          "toastRejectedAccount": "已拒 {{account}} 之請"
         },
         "join": {
           "title": "入他處中繼",
-          "hint": "貼上主人之機「增裝置」所予之加入連結，俟對方許可後自行切換。",
-          "placeholder": "貼上加入連結",
+          "hint": "貼上彼所遣之分享連結，俟彼許可後自行切換。",
+          "placeholder": "貼上分享連結",
           "submit": "入",
           "connecting": "方連中繼…",
           "waiting": "申請已呈。請於 {{name}} 上核此串數字並按許：",
@@ -6021,17 +6068,19 @@
           "ownerTitle": "停此機之中繼乎？",
           "ownerDescription": "已入之裝置將斷線，並示中繼已停。此機歸 Cindy 官方中繼。",
           "memberTitle": "歸官方中繼乎？",
-          "memberDescription": "此機將退出「{{name}}」，改用 Cindy 官方中繼。此後欲再入，須對方重生加入連結。",
+          "memberDescription": "此機將退出「{{name}}」，改用 Cindy 官方中繼。此後欲再入，須對方重生分享連結。",
+          "sharedOwnerTitle": "切回官方中繼乎？",
+          "sharedOwnerDescription": "此機將離「{{name}}」，改用 Cindy 官方中繼；君帳號下經其而入之裝置亦一併斷開。後欲再用，須對方重新分享。",
           "serverTitle": "歸官方中繼乎？",
           "serverDescription": "伺服器上之中繼「{{name}}」將續行，已入之他裝置仍可藉之互連。此機隨時可改回。"
         },
         "errors": {
-          "INVALID_LINK": "加入連結或位址之格式有誤。",
+          "INVALID_LINK": "分享連結或位址之格式有誤。",
           "UNREACHABLE": "連不上此中繼。請確認此機能至連結中之位址。",
           "NOT_A_RELAY": "此位址非 Cindy 中繼。",
           "INCOMPATIBLE": "此中繼之版本與此機不相容，請將兩端 Cindy 皆更新至最新版。",
           "ACCOUNT_MISMATCH": "此中繼屬另一 Cindy 名籍。",
-          "CODE_INVALID": "加入連結已失效或已用，請令對方重生。",
+          "CODE_INVALID": "分享連結已失效或已用，請令對方重生。",
           "RATE_LIMITED": "嘗試過頻，請數分鐘後再試。",
           "REJECTED": "對方拒此番加入。",
           "EXPIRED": "候許逾時，請重新加入。",
@@ -6054,15 +6103,21 @@
           "RELAY_MISMATCH": "此伺服器上之中繼非此機所部署，Cindy 不動之。",
           "CERTIFICATE_FAILED": "申請 HTTPS 憑證未成。多因雲端主機安全群組未放行 80 連接埠，或網域尚未解析至此伺服器。處置後點再試。",
           "CA_UNREACHABLE": "伺服器連不上憑證機構 Let's Encrypt，自行再試數分鐘仍未成。請察伺服器能否連外網，稍後再試。",
-          "NOT_REACHABLE": "伺服器上之中繼已行，然此機連不上。請於雲端主機安全群組中放行 443 連接埠。",
+          "NOT_REACHABLE": "無法從這台電腦驗證中繼連線。請檢查 HTTPS 位址、憑證及 443 連接埠的存取。",
+          "AGENT_NET_START_FAILED": "伺服器上的 Agent-Net 服務尚未就緒。請檢查服務記錄，以及 3348/TCP、3479/UDP 連接埠是否被佔用。",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS 已連通，但 Agent-Net 身分與目錄驗證未通過。請檢查 V2 服務、反向 Proxy 路徑及配對資訊。",
           "BUNDLE_MISSING": "此版 Cindy 未附中繼程式，請更新 Cindy。",
           "DEPLOY_FAILED": "部署未竟。",
-          "PAIR_PROOF_INVALID": "無從核此裝置之申請，不可許之。請重生加入連結。",
+          "PAIR_PROOF_INVALID": "無從核此裝置之申請，不可許之。請重生分享連結。",
           "NOT_OWNER": "唯部署或開啟此中繼之機，方能理之。",
           "BUSY": "方部署，請稍候。",
           "INVALID_ADDRESS": "請填公網 IP 或網域，勿含 http:// 與連接埠。",
           "NO_DEPLOYMENT": "尚未部署至伺服器。",
-          "OWNER_MISMATCH": "中繼所回之憑證，非加入連結中之主人所簽發，或已連至他人偽造之中繼，加入已止。"
+          "OWNER_MISMATCH": "中繼所回之憑證，非分享連結中之主人所簽發，或已連至他人偽造之中繼，加入已止。",
+          "OWNER_UNAVAILABLE": "「{{device}}」無應。請確其開 Cindy 且已連網，或請其分享連結予君。",
+          "RELAY_UNAVAILABLE": "「{{device}}」已不用此中繼。",
+          "ACCOUNT_DIRECTORY_UNAVAILABLE": "暫連不上 Cindy 帳號之服務，不得讀君帳號下之中繼。可請對方分享連結予君。",
+          "SHARE_UNSUPPORTED": "此中繼屬他帳號，尚不能分享於他帳號。請對方啟 Agent-Net (Beta)（伺服器上之中繼須升至最新版）後重新分享。"
         },
         "deploy": {
           "title": "部署於我之伺服器",
@@ -6105,7 +6160,7 @@
             "uninstall": "方自伺服器移除…"
           },
           "done": {
-            "deploy": "部署已畢，大功告成。於「連線路線」中切換至此，即可增裝置。",
+            "deploy": "部署已畢，大功告成。於「連線路線」中切換至此，君他處裝置即可見而入之。",
             "upgrade": "伺服器上之中繼已升至 {{version}}，煥然一新。",
             "uninstall": "中繼已自伺服器移除"
           },
@@ -6148,13 +6203,15 @@
           "removeDescription": "將停止並刪除伺服器上之中繼程式與裝置檔案，方用之裝置將斷線。此後重新部署，諸裝置皆須重新加入。",
           "forget": "僅於此機除之",
           "forgetTitle": "僅於此機除之乎？",
-          "forgetDescription": "伺服器上之中繼不刪，然此機不復理之，亦不能再為之增裝置。確不再用彼伺服器時，方可為之。"
+          "forgetDescription": "伺服器上之中繼不刪，然此機不復理之，亦不能再分享之。確不再用彼伺服器時，方可為之。"
         },
         "route": {
           "title": "連線之途",
           "hint": "裝置之間遠端操控，經此路線轉送",
           "kindServer": "我之伺服器",
           "kindJoined": "已入",
+          "kindComputer": "我之機",
+          "kindShared": "他人所分享",
           "hostTitle": "此機充中繼",
           "hostHint": "他裝置須能徑連此機；此機休眠或結束 Cindy 時皆將斷線",
           "officialHint": "無須設定，萬般功能皆備",
@@ -6172,9 +6229,18 @@
           "statusOffline": "不可達",
           "switchTitle": "切至「{{name}}」乎？",
           "switchFromHost": "此機之中繼將停，已入之裝置將斷線。",
-          "switchFromMember": "此機將退出「{{name}}」，此後欲再入，須對方重生加入連結。",
+          "switchFromMember": "此機將退出「{{name}}」，此後欲再入，須對方重生分享連結。",
+          "switchFromShared": "此機將離「{{name}}」，君帳號下經其而入之裝置亦一併斷開。後欲再用，須對方重新分享。",
           "switchConfirm": "易之",
-          "switchFromOfficial": "裝置之間遠端操控將改經「{{name}}」轉送。用自家中繼時，手機系統推播暫不可用；供方分享與共事仍經 Cindy 官方中繼。"
+          "switchFromOfficial": "裝置遠控將改循「{{name}}」。Agent-Net 分享循邀請所定中轉；舊版分享仍經 Cindy 官方中轉。",
+          "switchToAccount": "此乃君帳號下之中繼，切換後由「{{device}}」放行，此機自入，無需分享連結。",
+          "accountJoining": "正入，候「{{device}}」放行…",
+          "accountManagedOn": "於「{{device}}」上理之",
+          "accountJoinedOn": "由「{{device}}」入之",
+          "sharedBy": "{{name}} 所分享",
+          "sharedByOther": "他帳號所分享",
+          "ownDevicesHint": "君他處之機與手機，登同一帳號即見此中繼，切換即入，無需連結。欲予他帳號用之，點中繼右側之分享。",
+          "sharedOwnDevicesHint": "君他處之機與手機，登同一帳號即見此中繼，切換即入。彼等唯連君己之裝置。"
         },
         "dialog": {
           "steps": {
@@ -6207,7 +6273,13 @@
           "certificateSite": "襲用網站憑證",
           "version": "中繼之版",
           "latest": "已為最新",
-          "remove": "除此中繼"
+          "remove": "除此中繼",
+          "protocolsBoth": "兼容 Device Link 與 Agent-Net",
+          "protocolsLegacy": "唯容 Device Link",
+          "upgradeForSharing": "升級後可分享於他帳號",
+          "connection": "此機之連線",
+          "connectionEncrypted": "對方亦啟 Agent-Net 時端對端加密",
+          "connectionLegacy": "未端對端加密"
         }
       },
       "title": "遠接",
@@ -6514,6 +6586,82 @@
         "title": "撤其存取權乎？",
         "description": "撤銷之後，該裝置即刻斷開，且不能再遠端連線此機。此後須於「規制 → 遠端連線」中恢復其存取權，對方方能重連。",
         "confirm": "撤存取權"
+      },
+      "v2": {
+        "switch": {
+          "title": "Agent-Net (Beta)",
+          "hint": "顯連接之圖，錄近事。兩端皆啟用且已完成 Agent-Net 配對，方用加密連接；其餘裝置循舊途。唯施於此機。"
+        },
+        "empty": "尚無他裝置。於他機或手機登同一帳號，即現於此。",
+        "stats": {
+          "online": "{{online}} / {{total}} 在線",
+          "direct": "{{count}} 直連",
+          "relay": "{{count}} 經中轉",
+          "unlinked": "{{count}} 未建鏈",
+          "attention": "{{count}} 待理",
+          "offline": "{{count}} 離線"
+        },
+        "node": {
+          "thisComputer": "此機"
+        },
+        "path": {
+          "direct": "直連",
+          "relay": "經「{{name}}」中轉",
+          "unlinked": "在線，未建鏈",
+          "offline": "離線"
+        },
+        "attention": {
+          "unresponsive": "連線無應，方重試"
+        },
+        "relay": {
+          "official": "Cindy 中轉"
+        },
+        "ms": "{{value}} ms",
+        "flow": {
+          "out": "方遣",
+          "in": "方受",
+          "both": "方往來"
+        },
+        "offlineFold": "離線者 {{count}}",
+        "offlineShow": "示離線裝置",
+        "offlineHide": "藏離線裝置",
+        "group": {
+          "direct": "直連",
+          "relay": "經中轉",
+          "unlinked": "未建鏈",
+          "attention": "待理",
+          "offline": "離線"
+        },
+        "recent": {
+          "title": "近事",
+          "online": "{{name}} 上線",
+          "offline": "{{name}} 下線",
+          "empty": "開此頁以來，裝置無上下線"
+        },
+        "popover": {
+          "status": "狀態",
+          "path": "路徑",
+          "activity": "訊",
+          "latency": "延遲",
+          "lastSeen": "末見",
+          "controlling": "方操控此機",
+          "rttNote": "近測",
+          "manage": "理裝置…",
+          "linkStatus": "與「{{name}}」",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "開遠端桌面不成",
+          "encryption": "加密",
+          "encrypted": "端間加密",
+          "legacyConnection": "舊版連線",
+          "encryptionUnknown": "尚未核實",
+          "legacyEncryptionHint": "舊路經中繼時，內容未施端間加密。"
+        },
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "唯用 Agent-Net",
+        "onlyEncryptedHint": "啟之則舊版裝置及仍循舊路之分享不可用。預設關閉。"
       }
     },
     "tina": {
@@ -13015,11 +13163,10 @@
     "jumpToBottom": "至底",
     "prevMessageJump": "至上一問：{{preview}}",
     "askUserQuestion": {
-    "unanswered": "未答",
-    "withdrawn": "無須再答",
-    "withdrawnDraft": "此問無須再答。\n{{reason}}\n草稿尚存，可另作補充傳送。",
-    "sendSupplement": "傳送補充",
-
+      "unanswered": "未答",
+      "withdrawn": "無須再答",
+      "withdrawnDraft": "此問無須再答。\n{{reason}}\n草稿尚存，可另作補充傳送。",
+      "sendSupplement": "傳送補充",
       "voice": {
         "hint": "可言「第一項」或選項之名；多選畢，請言「確認選擇」。",
         "freeTextHint": "可徑言其答，察畢言「確認選擇」以呈。",
@@ -14001,6 +14148,7 @@
       "REMOTE_AGENT_SHARE_PAUSED": "對方已暫停對君之分享，未復之前不可用此諸模型。可易他模型續之。",
       "REMOTE_AGENT_SHARE_REMOVED": "此分享已不可用（對方已刪分享，或君已退出）。可易他模型續之。",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "所分享之供方暫不可用：對方之機或不在線，或對方暫罷分享。可稍後再試，或易他模型續之。",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "此乃舊版分享，啟「唯用 Agent-Net」時暫不可用。關此開關即可續之，亦可易他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型之可用名籍已達耗用上限。可改用他模型，或待限額重置後續之。",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方組中之機今皆不能行此差事：或皆離線、已暫停分配、方冷卻，或無此模型。可至此供方之「遠端與分享」頁察組內之機。",
       "REMOTE_AGENT_DEVICE_LIMIT": "此裝置所留遠端差事之數已達上限。可封存暫不用之差事，或請遠方之機主於「遠端與分享」中提高上限。",
@@ -14802,6 +14950,7 @@
         "compactSuccess": "上下文已壓縮",
         "compactSuccessWithTokens": "上下文已縮：{{before}}k → {{after}}k tokens",
         "compactFailed": "壓縮未成",
+        "compactResumeFirst": "請先發一言以續此事，再約上下文。",
         "compactNothing": "無可壓縮者",
         "sessionBranches": "差事分支",
         "copySessionLink": "錄差事連結"

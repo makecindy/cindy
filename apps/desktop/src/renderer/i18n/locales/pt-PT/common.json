@@ -270,7 +270,7 @@
     "completeWithSkipped_many": "Copiado, {{count}} itens ignorados"
   },
   "sharedTask": {
-    "officialRelayNote": "Está a utilizar o seu próprio relay. O conteúdo das tarefas partilhadas continua a passar pelo relay da Cindy.",
+    "officialRelayNote": "O Agent-Net usa o relay indicado no convite; as partilhas antigas continuam a usar o relay da Cindy.",
     "selfJoin": "Iniciou esta tarefa partilhada, por isso não precisa de aderir. Abra-a em «Partilhadas por mim».",
     "manageSharing": "Gerir partilhas",
     "manageMembers": "Gerir membros…",
@@ -372,7 +372,7 @@
     "closeAllDescription": "Os convidados perderão o acesso. O histórico das tarefas é mantido."
   },
   "providerShare": {
-    "officialRelayNote": "Está a utilizar o seu próprio relay. O conteúdo da partilha de fornecedores continua a passar pelo relay da Cindy.",
+    "officialRelayNote": "O Agent-Net usa o relay indicado no convite; as partilhas antigas continuam a usar o relay da Cindy.",
     "owned": {
       "title": "Fornecedores que partilho"
     },
@@ -1382,6 +1382,7 @@
     "REMOTE_AGENT_SHARE_PAUSED": "Modelo não alterado: o proprietário suspendeu esta partilha para si. Escolha outro modelo.",
     "REMOTE_AGENT_SHARE_REMOVED": "Modelo não alterado: esta partilha já não está disponível (o proprietário removeu-a ou deixou de participar). Escolha outro modelo.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modelo não alterado: o fornecedor partilhado está temporariamente indisponível (o computador do proprietário está offline ou a partilha está desativada por agora). Tente novamente mais tarde ou escolha outro modelo.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Modelo não alterado: esta é uma partilha antiga e não pode ser usada enquanto \"Usar apenas Agent-Net\" estiver ativado. Desative esta opção ou escolha outro modelo.",
     "SSH_HOST_KEY_MISMATCH": "Chave do anfitrião SSH alterada",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "O Cindy não consegue ler o anexo de origem; a mensagem não foi enviada. Guarda uma cópia em Transferências ou noutra pasta acessível, remove o anexo original e adiciona a cópia com o botão de anexos antes de enviar novamente."
   },
@@ -2459,12 +2460,12 @@
         "previewStarting": "Largue o rato e o teclado. O ecrã fica tapado dentro de 3 segundos; prima qualquer tecla para o bloquear e, depois, desbloqueie-o.",
         "previewUnavailable": "Não foi possível tapar o ecrã. Reinicie o Cindy e tente novamente.",
         "delay": {
-          "label": "Tapar o ecrã após",
-          "hint": "Tempo sem tocar no teclado nem no rato até a camada aparecer. Por predefinição, igual ao repouso do ecrã.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Tapar o ecrã após",
+          "hint": "Tempo sem tocar no teclado nem no rato até a camada aparecer. Por predefinição, igual ao repouso do ecrã.",
           "system": "Sistema"
         }
       }
@@ -6059,7 +6060,7 @@
         "current": "Em utilização",
         "ownerName": "Este computador",
         "unavailable": "Para utilizar o seu próprio relay, inicie sessão na Cindy e certifique-se de que o porta-chaves do sistema está disponível.",
-        "limits": "Enquanto utilizar o seu próprio relay, as notificações push no telemóvel ficam indisponíveis. A partilha de fornecedores e as tarefas partilhadas continuam a passar pelo relay da Cindy.",
+        "limits": "As partilhas do Agent-Net usam o relay indicado no convite. As notificações do sistema requerem um serviço de push configurado nesse relay. As partilhas antigas continuam a usar o relay da Cindy.",
         "actions": {
           "join": "Aderir a outro relay",
           "useOfficial": "Voltar ao relay da Cindy",
@@ -6085,29 +6086,77 @@
           "cancel": "Cancelar",
           "running": "O relay está em execução. Os outros dispositivos ligam-se a {{address}}"
         },
-        "add": {
-          "intro": "Crie uma ligação de adesão para que um telemóvel ou outro computador possa aderir a este relay.",
-          "create": "Adicionar dispositivo",
-          "hint": "Leia com a câmara do telemóvel ou envie a ligação para outro computador e cole-a em Aderir a outro relay. A ligação só pode ser utilizada uma vez e expira em 10 minutos.",
-          "qrAlt": "Código QR para aderir ao relay",
+        "share": {
+          "action": "Partilhar este relay",
+          "title": "Ligação de partilha de «{{name}}» criada",
+          "description": "Envie a ligação à outra pessoa. Depois de aprovar o pedido, os computadores e telemóveis da conta dela poderão usar este relay para ligar os próprios dispositivos.",
+          "descriptionOwn": "Envie a ligação para outro computador seu ou leia-a com a câmara do telemóvel. Depois de aprovar, esse dispositivo adere a este relay.",
+          "fieldLabel": "Ligação de partilha",
           "copy": "Copiar ligação",
-          "copied": "Ligação de adesão copiada",
-          "newLink": "Nova ligação",
-          "waiting": "A aguardar um pedido de dispositivo…"
+          "copied": "Copiado",
+          "copyFailed": "Não foi possível copiar a ligação. Selecione-a e copie-a manualmente.",
+          "oneTime": "Utilização única",
+          "expiresIn": "Expira dentro de {{time}}",
+          "expired": "Expirada",
+          "regenerateHint": "Pode criar uma nova depois de esta expirar",
+          "generating": "A criar ligação…",
+          "scanHint": "Se o lerem com o telemóvel, serão convidados a abri-lo primeiro no computador. Quando o computador dessa pessoa aderir, os telemóveis dela veem este relay automaticamente.",
+          "scanHintOwn": "O seu telemóvel pode aderir lendo o código com a câmara.",
+          "ownAccountOnly": "Por agora, este relay só funciona para os seus próprios dispositivos. Para o partilhar com outras contas, ative primeiro o Agent-Net (Beta) em «Ligação remota»; um relay no seu servidor também precisa da versão mais recente.",
+          "qrAlt": "Código QR para partilhar o relay",
+          "calloutIsolation": "A outra pessoa só chega aos próprios dispositivos e não vê os seus. Para que use os seus agentes ou modelos, partilhe-os à parte.",
+          "calloutPrivacy": "As ligações são encriptadas ponto a ponto, pelo que não vê o conteúdo. Como dono do relay, vê quando os dispositivos dela comunicam e quantos dados usam.",
+          "calloutOwnDevices": "Os seus próprios dispositivos não precisam desta ligação: com sessão iniciada na mesma conta, veem este relay na lista de rotas.",
+          "calloutOwnFallback": "Os dispositivos com sessão iniciada na sua conta costumam ver este relay na lista sem ligação. Use esta ligação quando não for possível contactar o serviço de contas da Cindy.",
+          "done": "Concluir",
+          "regenerate": "Criar nova ligação",
+          "regenerated": "Nova ligação criada"
         },
         "requests": {
-          "item": "{{name}} quer aderir",
-          "verify": "Código de emparelhamento",
-          "verifyHint": "Aprove apenas se corresponder ao código nesse dispositivo.",
+          "title_one": "{{count}} pedido pendente",
+          "title_other": "{{count}} pedidos pendentes",
+          "title_many": "{{count}} pedidos pendentes",
+          "waiting": "Quer aderir · À espera de resposta",
+          "waitingAccount": "Outra conta · {{device}}, a aguardar resposta",
+          "open": "Rever"
+        },
+        "tenants": {
+          "title": "Partilhado com",
+          "devices_one": "{{count}} dispositivo",
+          "devices_many": "{{count}} dispositivos",
+          "devices_other": "{{count}} dispositivos",
+          "online": "Online",
+          "offline": "Offline",
+          "revoke": "Deixar de partilhar",
+          "revokeTitle": "Deixar de partilhar com {{account}}?",
+          "revokeDescription": "A linha de {{account}} neste relay é eliminada e os dispositivos dessa conta são desligados de imediato. Para voltar a permitir o uso, partilhe de novo."
+        },
+        "approve": {
+          "title": "{{device}} pede para aderir a «{{relay}}»",
+          "requestedAt": "Pedido {{time}} através da sua ligação de partilha",
+          "requestedViaLink": "Pedido através da sua ligação de partilha",
+          "pairingHint": "Aprove apenas se o código de emparelhamento corresponder ao apresentado nesse dispositivo.",
+          "unverified": "Não é possível verificar este pedido: não corresponde a uma ligação de partilha deste computador e pode ter sido adulterado, pelo que só pode ser recusado. Se for o seu dispositivo, crie uma nova ligação de partilha e tente novamente.",
+          "callout": "Depois de aprovado, este dispositivo adere a «{{relay}}» e liga-se através dele aos seus outros dispositivos.",
           "replaces": "Este dispositivo já aderiu anteriormente. A aprovação revoga a credencial antiga.",
+          "calloutUnknown": "Se não reconhecer este dispositivo, recuse. Ao recusar, esta ligação deixa de ser válida.",
           "approve": "Aprovar",
-          "reject": "Recusar",
-          "unverified": "Não é possível verificar este pedido: não corresponde a uma ligação de adesão deste computador e pode ter sido adulterado, pelo que só pode ser recusado. Se for o seu dispositivo, crie uma nova ligação de adesão e tente novamente."
+          "reject": "Recusar pedido",
+          "later": "Decidir mais tarde",
+          "toastApproved": "{{device}} pode aderir a «{{relay}}»",
+          "toastRejected": "Pedido de {{device}} recusado",
+          "titleAccount": "{{account}} quer usar «{{relay}}»",
+          "otherAccountDevice": "Outra conta · {{device}}",
+          "calloutAccount": "Se aprovar, essa conta passa a ter uma linha própria em «{{relay}}»: só chega aos seus próprios dispositivos e não vê o utilizador nem os seus dispositivos. Os outros dispositivos dessa conta aderem depois diretamente, sem voltar a pedir.",
+          "calloutAccountRevoke": "Pode deixar de partilhar a qualquer momento na página do relay; os dispositivos dessa conta são desligados de imediato.",
+          "calloutUnknownAccount": "Se não reconhecer esta conta, recuse. Ao recusar, esta ligação deixa de ser válida.",
+          "toastApprovedAccount": "{{account}} já pode usar «{{relay}}»",
+          "toastRejectedAccount": "Pedido de {{account}} recusado"
         },
         "join": {
           "title": "Aderir a outro relay",
-          "hint": "Cole a ligação de adesão de Adicionar dispositivo no computador do relay. A Cindy muda assim que o pedido for aprovado.",
-          "placeholder": "Colar a ligação de adesão",
+          "hint": "Cole a ligação de partilha que recebeu. A Cindy muda assim que o pedido for aprovado.",
+          "placeholder": "Colar a ligação de partilha",
           "submit": "Aderir",
           "connecting": "A ligar ao relay…",
           "waiting": "Pedido enviado. Em {{name}}, verifique se estes dígitos correspondem e aprove:",
@@ -6122,17 +6171,19 @@
           "ownerTitle": "Parar o relay neste computador?",
           "ownerDescription": "Os dispositivos que aderiram serão desligados e informados de que o relay foi parado. Este computador volta ao relay da Cindy.",
           "memberTitle": "Voltar ao relay da Cindy?",
-          "memberDescription": "Este computador sai de \"{{name}}\" e utiliza o relay da Cindy. Para voltar a aderir, peça uma nova ligação de adesão.",
+          "memberDescription": "Este computador sai de \"{{name}}\" e utiliza o relay da Cindy. Para voltar a aderir, peça uma nova ligação de partilha.",
+          "sharedOwnerTitle": "Voltar ao relay da Cindy?",
+          "sharedOwnerDescription": "Este computador sai de «{{name}}» e usa o relay da Cindy; os seus dispositivos que aderiram através dele também são desligados. Para voltar a usá-lo, peça uma nova partilha.",
           "serverTitle": "Voltar ao relay da Cindy?",
           "serverDescription": "O relay \"{{name}}\" continua em execução no seu servidor e os dispositivos que aderiram continuam a poder comunicar através dele. Pode voltar a mudar este computador a qualquer momento."
         },
         "errors": {
-          "INVALID_LINK": "A ligação de adesão ou o endereço não é válido.",
+          "INVALID_LINK": "A ligação de partilha ou o endereço não é válido.",
           "UNREACHABLE": "Não é possível aceder a este relay. Certifique-se de que este computador consegue abrir o endereço na ligação.",
           "NOT_A_RELAY": "Este endereço não é um relay da Cindy.",
           "INCOMPATIBLE": "A versão deste relay não é compatível. Atualize a Cindy em ambos os computadores.",
           "ACCOUNT_MISMATCH": "Este relay pertence a outra conta Cindy.",
-          "CODE_INVALID": "Esta ligação de adesão expirou ou já foi utilizada. Peça uma nova.",
+          "CODE_INVALID": "Esta ligação de partilha expirou ou já foi utilizada. Peça uma nova.",
           "RATE_LIMITED": "Demasiadas tentativas. Tente novamente dentro de alguns minutos.",
           "REJECTED": "O pedido foi recusado.",
           "EXPIRED": "O tempo de espera pela aprovação expirou. Volte a aderir.",
@@ -6155,15 +6206,21 @@
           "RELAY_MISMATCH": "O relay neste servidor não foi implementado a partir deste computador, pelo que a Cindy não o altera.",
           "CERTIFICATE_FAILED": "Não foi possível obter um certificado HTTPS. Normalmente, a porta 80 não está permitida no grupo de segurança da cloud ou o domínio ainda não aponta para este servidor. Corrija a situação e tente novamente.",
           "CA_UNREACHABLE": "O servidor não conseguiu aceder à autoridade de certificação Let's Encrypt, mesmo após várias tentativas durante alguns minutos. Verifique se o servidor consegue aceder à Internet e tente novamente mais tarde.",
-          "NOT_REACHABLE": "O relay está em execução no servidor, mas este computador não consegue aceder-lhe. Permita a porta 443 no grupo de segurança da cloud.",
+          "NOT_REACHABLE": "Não foi possível verificar a ligação ao relay a partir deste computador. Verifique o endereço HTTPS, o certificado e o acesso à porta 443.",
+          "AGENT_NET_START_FAILED": "O serviço Agent-Net no servidor não está pronto. Verifique os registos do serviço e se as portas 3348/TCP e 3479/UDP estão ocupadas.",
+          "AGENT_NET_VERIFY_FAILED": "O HTTPS está acessível, mas não foi possível verificar a identidade e o diretório do Agent-Net. Verifique o serviço V2, o caminho do proxy inverso e os dados de emparelhamento.",
           "BUNDLE_MISSING": "Esta versão da Cindy não inclui o relay. Atualize a Cindy.",
           "DEPLOY_FAILED": "A implementação não foi concluída.",
-          "PAIR_PROOF_INVALID": "Não é possível verificar o pedido deste dispositivo, pelo que não pode ser aprovado. Crie uma nova ligação de adesão.",
+          "PAIR_PROOF_INVALID": "Não é possível verificar o pedido deste dispositivo, pelo que não pode ser aprovado. Crie uma nova ligação de partilha.",
           "NOT_OWNER": "Apenas o computador que implementou ou iniciou este relay o pode gerir.",
           "BUSY": "Está em curso uma implementação. Aguarde.",
           "INVALID_ADDRESS": "Introduza um IP público ou domínio, sem http:// nem porta.",
           "NO_DEPLOYMENT": "Ainda não foi implementado nada num servidor.",
-          "OWNER_MISMATCH": "O relay devolveu um certificado que não foi emitido pelo proprietário indicado na ligação de adesão. Pode estar ligado a um relay falso, pelo que a adesão foi interrompida."
+          "OWNER_MISMATCH": "O relay devolveu um certificado que não foi emitido pelo proprietário indicado na ligação de partilha. Pode estar ligado a um relay falso, pelo que a adesão foi interrompida.",
+          "OWNER_UNAVAILABLE": "«{{device}}» não respondeu. Verifique se a Cindy está aberta e online nesse computador, ou peça uma ligação de partilha.",
+          "RELAY_UNAVAILABLE": "«{{device}}» já não usa este relay.",
+          "ACCOUNT_DIRECTORY_UNAVAILABLE": "Não foi possível contactar o serviço de contas da Cindy, pelo que os relays da sua conta não foram carregados. Pode pedir uma ligação de partilha.",
+          "SHARE_UNSUPPORTED": "Este relay pertence a outra conta e ainda não pode ser partilhado com outras contas. Peça que ativem o Agent-Net (Beta) (um relay no servidor também precisa da versão mais recente) e o partilhem de novo."
         },
         "deploy": {
           "title": "Implementar no meu servidor",
@@ -6206,7 +6263,7 @@
             "uninstall": "A remover o relay do seu servidor…"
           },
           "done": {
-            "deploy": "Implementado. Mude para este relay em Rota de ligação e poderá adicionar dispositivos.",
+            "deploy": "Implementado. Mude para este relay em Rota de ligação e os seus outros dispositivos poderão vê-lo e aderir.",
             "upgrade": "O relay no seu servidor está agora na versão {{version}}.",
             "uninstall": "Relay removido do seu servidor"
           },
@@ -6249,13 +6306,15 @@
           "removeDescription": "O relay e os seus registos de dispositivos são eliminados do servidor e os dispositivos que o utilizam são desligados. Se voltar a implementar, todos os dispositivos terão de voltar a aderir.",
           "forget": "Remover apenas deste computador",
           "forgetTitle": "Remover apenas deste computador?",
-          "forgetDescription": "O relay continua em execução no servidor, mas este computador deixa de o gerir e de poder adicionar-lhe dispositivos. Faça isto apenas se já não utilizar esse servidor."
+          "forgetDescription": "O relay continua em execução no servidor, mas este computador deixa de o gerir e de o poder partilhar. Faça isto apenas se já não utilizar esse servidor."
         },
         "route": {
           "title": "Rota de ligação",
           "hint": "O controlo remoto entre os seus dispositivos passa por esta rota",
           "kindServer": "O meu servidor",
           "kindJoined": "Adesão concluída",
+          "kindComputer": "O meu computador",
+          "kindShared": "Partilhado consigo",
           "hostTitle": "Este computador como relay",
           "hostHint": "Os outros dispositivos têm de conseguir aceder diretamente a este computador. São desligados quando este entra em suspensão ou a Cindy fecha",
           "officialHint": "Sem configuração necessária. Todas as funcionalidades disponíveis",
@@ -6273,9 +6332,18 @@
           "statusOffline": "Inacessível",
           "switchTitle": "Mudar para {{name}}?",
           "switchFromHost": "O relay neste computador para e os dispositivos que aderiram são desligados.",
-          "switchFromMember": "Este computador sai de {{name}}. Para voltar a aderir mais tarde, o proprietário tem de criar uma nova ligação de adesão.",
+          "switchFromMember": "Este computador sai de {{name}}. Para voltar a aderir mais tarde, o proprietário tem de criar uma nova ligação de partilha.",
+          "switchFromShared": "Este computador sai de «{{name}}», e os seus dispositivos que aderiram através dele também são desligados. Para voltar a usá-lo, peça uma nova partilha.",
           "switchConfirm": "Mudar",
-          "switchFromOfficial": "O controlo remoto entre os seus dispositivos passará por {{name}}. As notificações push no telemóvel não estão disponíveis enquanto utilizar o seu próprio relay. A partilha de fornecedores e as tarefas partilhadas continuam a passar pelo relay da Cindy."
+          "switchFromOfficial": "O controlo remoto entre dispositivos usará «{{name}}». O Agent-Net usa o relay do convite; as partilhas antigas continuam a usar o relay da Cindy.",
+          "switchToAccount": "Este relay é da sua conta. «{{device}}» autoriza este computador automaticamente, sem ligação de partilha.",
+          "accountJoining": "A aderir, à espera de que «{{device}}» autorize…",
+          "accountManagedOn": "Gerido em «{{device}}»",
+          "accountJoinedOn": "Adesão em «{{device}}»",
+          "sharedBy": "Partilhado por {{name}}",
+          "sharedByOther": "Partilhado por outra conta",
+          "ownDevicesHint": "Os seus outros computadores e telemóveis veem este relay com sessão iniciada na mesma conta e podem mudar para ele sem ligação. Para que outra conta o use, clique em Partilhar junto ao relay.",
+          "sharedOwnDevicesHint": "Os seus outros computadores e telemóveis veem este relay com sessão iniciada na mesma conta e podem mudar para ele. Só chegam aos seus próprios dispositivos."
         },
         "dialog": {
           "steps": {
@@ -6311,7 +6379,13 @@
           "remove": "Remover este relay",
           "deviceCount_many": "{{count}} dispositivos",
           "onlineCount_many": "{{count}} online",
-          "certificateDays_many": "Expira dentro de {{count}} dias"
+          "certificateDays_many": "Expira dentro de {{count}} dias",
+          "protocolsBoth": "Compatível com Device Link e Agent-Net",
+          "protocolsLegacy": "Compatível apenas com Device Link",
+          "upgradeForSharing": "Atualize para partilhar com outras contas",
+          "connection": "Ligação deste computador",
+          "connectionEncrypted": "Encriptada ponto a ponto quando o outro lado também usa o Agent-Net",
+          "connectionLegacy": "Sem encriptação ponto a ponto"
         }
       },
       "title": "Ligação remota",
@@ -6622,6 +6696,82 @@
         "title": "Revogar acesso?",
         "description": "Após a revogação, este dispositivo é desligado imediatamente e deixa de poder controlar esta máquina remotamente. Terá de restaurar o acesso em Definições → Ligação remota para que possa voltar a ligar-se.",
         "confirm": "Revogar acesso"
+      },
+      "v2": {
+        "switch": {
+          "title": "Agent-Net (Beta)",
+          "hint": "Mostra a topologia das ligações e a atividade recente. A ligação é cifrada quando ambos os dispositivos ativam o Agent-Net e foram emparelhados através do Agent-Net. Os outros dispositivos usam a ligação habitual. Aplica-se apenas a este computador."
+        },
+        "empty": "Ainda não há outros dispositivos. Inicie sessão com a mesma conta noutro computador ou telemóvel e ele aparecerá aqui.",
+        "stats": {
+          "online": "{{online}} / {{total}} online",
+          "direct": "{{count}} direto",
+          "relay": "{{count}} via relay",
+          "unlinked": "{{count}} sem ligação",
+          "attention": "{{count}} a verificar",
+          "offline": "{{count}} offline"
+        },
+        "node": {
+          "thisComputer": "Este computador"
+        },
+        "path": {
+          "direct": "Direto",
+          "relay": "Via {{name}}",
+          "unlinked": "Online, sem ligação",
+          "offline": "Offline"
+        },
+        "attention": {
+          "unresponsive": "Sem resposta, a tentar de novo"
+        },
+        "relay": {
+          "official": "Relay da Cindy"
+        },
+        "ms": "{{value}} ms",
+        "flow": {
+          "out": "A enviar",
+          "in": "A receber",
+          "both": "A enviar e a receber"
+        },
+        "offlineFold": "{{count}} offline",
+        "offlineShow": "Mostrar dispositivos offline",
+        "offlineHide": "Ocultar dispositivos offline",
+        "group": {
+          "direct": "Direto",
+          "relay": "Via relay",
+          "unlinked": "Sem ligação",
+          "attention": "A verificar",
+          "offline": "Offline"
+        },
+        "recent": {
+          "title": "Atividade recente",
+          "online": "{{name}} ficou online",
+          "offline": "{{name}} ficou offline",
+          "empty": "Nenhum dispositivo entrou ou saiu desde que esta página foi aberta"
+        },
+        "popover": {
+          "status": "Estado",
+          "path": "Caminho",
+          "activity": "Mensagens",
+          "latency": "Latência",
+          "lastSeen": "Visto pela última vez",
+          "controlling": "A controlar este computador",
+          "rttNote": "última medição",
+          "manage": "Gerir dispositivo…",
+          "linkStatus": "Com {{name}}",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "Não foi possível abrir o Ambiente de Trabalho Remoto",
+          "encryption": "Encriptação",
+          "encrypted": "Encriptação ponto a ponto",
+          "legacyConnection": "Ligação anterior",
+          "encryptionUnknown": "Não confirmado",
+          "legacyEncryptionHint": "O caminho pelo retransmissor da ligação anterior não tem encriptação ponto a ponto."
+        },
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "Usar apenas Agent-Net",
+        "onlyEncryptedHint": "Os dispositivos antigos e as partilhas que usam a ligação anterior ficarão indisponíveis. Desativado por predefinição."
       }
     },
     "tina": {
@@ -13145,11 +13295,10 @@
     "prevMessageJump": "Ir para o pedido anterior: {{preview}}",
     "sessionLoading": "A carregar tarefa",
     "askUserQuestion": {
-    "unanswered": "Sem resposta",
-    "withdrawn": "Já não precisa de resposta",
-    "withdrawnDraft": "Esta pergunta já não precisa de resposta.\n{{reason}}\nO rascunho foi guardado e pode ser enviado como complemento.",
-    "sendSupplement": "Enviar complemento",
-
+      "unanswered": "Sem resposta",
+      "withdrawn": "Já não precisa de resposta",
+      "withdrawnDraft": "Esta pergunta já não precisa de resposta.\n{{reason}}\nO rascunho foi guardado e pode ser enviado como complemento.",
+      "sendSupplement": "Enviar complemento",
       "voice": {
         "hint": "Diga o número ou nome de uma opção. Para várias escolhas, diga depois «confirmar seleção».",
         "freeTextHint": "Diga a sua resposta, reveja-a e diga «confirmar seleção» para enviar.",
@@ -14153,6 +14302,7 @@
       "REMOTE_AGENT_SHARE_PAUSED": "O proprietário colocou esta partilha em pausa para ti, pelo que estes modelos não podem ser usados até ser retomada. Muda para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_REMOVED": "Esta partilha já não está disponível (o proprietário removeu-a ou saíste). Muda para outro modelo para continuar.",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "O fornecedor partilhado está temporariamente indisponível. O computador do proprietário pode estar offline ou a partilha pode estar desativada por agora. Tenta mais tarde ou muda para outro modelo para continuar.",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Esta é uma partilha antiga e não pode ser usada enquanto \"Usar apenas Agent-Net\" estiver ativado. Desativa esta opção para continuar ou muda para outro modelo.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "As contas disponíveis para este modelo atingiram o limite de utilização. Muda de modelo ou continua quando a quota for reposta.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "Nenhum computador no grupo do fornecedor pode executar esta tarefa neste momento. Podem estar offline, em pausa, num período de espera ou sem este modelo. Verifique o grupo na página Acesso remoto e partilha deste fornecedor.",
       "REMOTE_AGENT_DEVICE_LIMIT": "Este dispositivo atingiu o limite de sessões remotas. Arquiva sessões não utilizadas ou pede ao proprietário do fornecedor para aumentar o limite em Acesso remoto e partilha.",
@@ -15012,6 +15162,7 @@
         "compactSuccess": "Contexto compactado",
         "compactSuccessWithTokens": "Contexto compactado: {{before}}k → {{after}}k tokens",
         "compactFailed": "Falha na compactação",
+        "compactResumeFirst": "Envie uma mensagem para retomar esta tarefa antes de compactar o contexto.",
         "compactNothing": "Ainda não há nada para compactar",
         "sessionBranches": "Branches da sessão",
         "copySessionLink": "Copiar ligação da sessão"

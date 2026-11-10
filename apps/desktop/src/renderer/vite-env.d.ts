@@ -159,6 +159,26 @@ interface DeviceLinkPresenceSnapshot {
   busy: boolean;
 }
 
+/** 远程连接拓扑:一条已协商可靠链路的本机视角(镜像 shared/deviceLinkIpc 的 DeviceLinkPeerLinkView) */
+interface DeviceLinkPeerLinkView {
+  deviceId: string;
+  encrypted?: boolean;
+  path: 'direct' | 'relay';
+  /** 可靠帧 ACK 的平滑往返;首个 ACK 之前为 null,闲置时是最近测得的值 */
+  rttMs: number | null;
+  /** link-open / link-accept 双向都已就绪 */
+  open: boolean;
+  /** 距本机最近一次发出业务消息多少毫秒(取快照时算);还没发过为 null */
+  sentAgoMs: number | null;
+  /** 距最近一次从对端收到业务消息多少毫秒;还没收到过为 null */
+  receivedAgoMs: number | null;
+}
+interface DeviceLinkPeerLinksSnapshot {
+  links: DeviceLinkPeerLinkView[];
+  /** 本机到主 relay 连接的心跳往返;离线 / 未测得为 null */
+  relayRttMs: number | null;
+}
+
 /** .cshare 导入向导的预览数据(main 侧 SharePreview 的镜像)。 */
 interface SessionSharePreview {
   title: string;
@@ -3180,7 +3200,7 @@ interface ElectronAPI {
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
         | { type: 'provider-import'; importId: string }
-        | { type: 'shared-task-join'; invitation: string; server: string }
+        | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
         | { type: 'chat-invite'; token: string }
         | { type: 'chat-invite-malformed' }
         | { type: 'provider-share-join'; link: string }
@@ -3204,7 +3224,7 @@ interface ElectronAPI {
     | { type: 'new-session'; workingDir: string }
     | { type: 'share-import'; filePath: string }
     | { type: 'provider-import'; importId: string }
-    | { type: 'shared-task-join'; invitation: string; server: string }
+    | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
     | { type: 'chat-invite'; token: string }
     | { type: 'chat-invite-malformed' }
     | { type: 'provider-share-join'; link: string }
@@ -4289,6 +4309,10 @@ interface ElectronAPI {
     ) => Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }>;
     listDevices: () => Promise<{ devices: DeviceLinkDeviceView[]; stale?: boolean;
       displayBudget?: { remainingMs: number } }>;
+    /** 远程连接拓扑:本机已建链对端的路径 / RTT 快照 */
+    getPeerLinks: () => Promise<DeviceLinkPeerLinksSnapshot>;
+    /** 对端链路拓扑变化,payload 为全量快照 */
+    onPeerLinksChanged: (cb: (payload: DeviceLinkPeerLinksSnapshot) => void) => () => void;
     renameDevice: (
       deviceId: string,
       name: string | null,

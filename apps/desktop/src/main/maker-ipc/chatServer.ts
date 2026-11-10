@@ -1233,6 +1233,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 for (const run of running.values()) if (run.execution.mask_owner_id && run.execution.conversation_id === change.entityId) void checkLease(run);
               }
               if (change.type === 'conversation.list.changed') personalList.merge(change.data);
+              // Only the account's own preferences reach this actor scope; consumers read the key themselves.
+              if (change.type === 'preference.changed' && typeof change.entityId === 'string') deps.onAccountPreferenceChanged?.(change.entityId);
               if (change.type === 'conversation.updated' && change.data?.dissolvedAt) retirePlanning(change.entityId);
               if (change.type === 'membership.changed' || change.type === 'conversation.updated') changed(change.entityId);
               // A Thread read on another device clears its unread here too.

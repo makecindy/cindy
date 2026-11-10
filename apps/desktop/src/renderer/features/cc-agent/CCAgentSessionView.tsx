@@ -2193,7 +2193,7 @@ function CCAgentSessionContent({
   const realAgentKind = dbToMakerAgentKind(session?.agentKind);
   const isCodex = displayAgentKind === 'codex';
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
-  // 其余 agent 声明 manualCompact.supported(当前仅 pi)→ maker:compact-session;其余无入口。
+  // 其余 agent 声明 manualCompact.supported(Pi / Codex)→ maker:compact-session;其余无入口。
   // 能力取**真实 agent**(displayAgentKind 在 pending switch 期间可能乐观指向目标 agent,
   // 用它判定会与 realAgentKind 分流不一致);remoteDeviceId 让远程 pi 取被控端能力。
   const { capabilities: realSessionCaps } = useAgentCapabilities(realAgentKind, remoteDeviceId);
@@ -4598,13 +4598,17 @@ function CCAgentSessionContent({
             toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
           } else if (result) {
             toast.success(t('ccAgent.sidebar.sessionMenu.compactSuccess'));
+          } else {
+            // Older device-link hosts may still return null for an unavailable handle.
+            toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
           }
-          // null:会话无 live 进程 / 不支持(入口已按 gate 隐藏,极少走到)。静默即可。
         } catch (err) {
           if (!compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)) return;
           // 失败给可理解提示,不泄漏裸 IPC 错误。
           log.warn('context ring compact-session failed', err);
-          toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+          toast.warning(t(extractIpcError(err)?.code === 'NOT_FOUND'
+            ? 'ccAgent.sidebar.sessionMenu.compactResumeFirst'
+            : 'ccAgent.sidebar.sessionMenu.compactFailed'));
         }
         return;
       }
@@ -6466,8 +6470,8 @@ function CCAgentSessionContent({
                       deviceId={remoteDeviceId}
                       onCompact={
                         // 按 agent 能力分流(#1927/#1933 review):claude-code 走 inputCoordinator,
-                        // 其余声明 manualCompact.supported(当前仅 pi)走 compact-session 通道;
-                        // codex 无手动 compact(上游自动压缩)保持纯展示。pi 的 SSH 远程会话
+                        // 其余声明 manualCompact.supported(Pi / Codex)走 compact-session 通道;
+                        // SSH 远程会话
                         // (remoteHostId)无 compact-session 路由 → 不开放(与 SessionContentHeader
                         // 压缩菜单仅本地/device-link 一致);device-link 远程 pi 走隧道,照常开放。
                         // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
@@ -6475,7 +6479,7 @@ function CCAgentSessionContent({
                         // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
                         !readOnly &&
                         compactChannel !== null &&
-                        !(realAgentKind === 'pi' && !!session?.remoteHostId) &&
+                        !(compactChannel === 'compact-session' && !!session?.remoteHostId) &&
                         session != null &&
                         agentStatus.contextTokens > 0 &&
                         !(compactChannel === 'compact-session' && agentStatus.isRunning)

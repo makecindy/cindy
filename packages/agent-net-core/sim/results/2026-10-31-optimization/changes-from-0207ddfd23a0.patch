@@ -1,0 +1,1085 @@
+--- a/src/connection.rs
++++ b/src/connection.rs
+@@ -74,8 +74,21 @@
+ /// 空闲分片缓冲的数量上限，避免收发路径上反复申请内存。
+ const MAX_SPARE_BUFFERS: usize = 256;
+ 
++/// 传输策略；只影响发送节奏和冗余，不改变线格式。
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub enum RecoveryPolicy {
++    /// 自动保护交互小消息，持续中断时回到保守探测。
++    #[default]
++    Auto,
++    /// 只重传缺失数据，省去主动副本、捎带和校验；恢复延迟可能增加。
++    Lean,
++    /// 更快启动并增加窗口受限路径的校验，可能明显增加流量。
++    Fast,
++}
++
+ #[derive(Clone, Debug)]
+ pub struct Config {
++    pub recovery_policy: RecoveryPolicy,
+     /// 单个 UDP 载荷的上限，含包头。
+     pub max_packet_size: usize,
+     /// 同时在途的分片上限。
+@@ -104,6 +117,7 @@
+ impl Default for Config {
+     fn default() -> Self {
+         Self {
++            recovery_policy: RecoveryPolicy::Auto,
+             max_packet_size: 1400,
+             send_window: 128,
+             recv_window: 128,
+@@ -120,6 +134,17 @@
+             probe_max_us: 5_000_000,
+             initial_sequence: 0,
+             initial_packet_number: 0,
++        }
++    }
++}
++
++impl Config {
++    /// 先取得所选策略的默认值，再通过字段覆写定制；不改调用方显式给出的字段。
++    pub fn for_policy(recovery_policy: RecoveryPolicy) -> Self {
++        Self {
++            recovery_policy,
++            ack_every: if recovery_policy == RecoveryPolicy::Fast { 1 } else { 2 },
++            ..Self::default()
+         }
+     }
+ }
+@@ -262,6 +287,7 @@
+     /// 晚到得足以堵住窗口的包占多少，单位百万分之一。
+     late_ppm: u32,
+     bundle_until: u64,
++    copy_backoff_until: u64,
+     /// 丢的包里紧挨着上一个丢包的比例，单位百万分之一。
+     lost_run_ppm: u32,
+     last_lost_packet: u64,
+@@ -307,10 +333,14 @@
+         let rtt = RttEstimator::new(config.initial_rto_us, config.min_rto_us, config.max_rto_us, config.ack_delay_us);
+         let packet_size = config.max_packet_size as u64;
+         let max_cwnd = config.send_window as u64 * packet_size;
++        let fast = config.recovery_policy == RecoveryPolicy::Fast;
++        let initial_segments = if fast { 128 } else { INITIAL_CWND_SEGMENTS };
+         let congestion = Bbr::new(
+-            (INITIAL_CWND_SEGMENTS * packet_size).min(max_cwnd),
++            (initial_segments * packet_size).min(max_cwnd),
+             (MIN_CWND_SEGMENTS * packet_size).min(max_cwnd),
+             max_cwnd,
++            if fast { Some(16_000_000) } else { None },
++            config.recovery_policy != RecoveryPolicy::Lean,
+         );
+         let (sequence, packet) = (config.initial_sequence, config.initial_packet_number);
+         Self {
+@@ -352,6 +382,7 @@
+             loss_samples: 0,
+             late_ppm: 0,
+             bundle_until: 0,
++            copy_backoff_until: 0,
+             lost_run_ppm: 0,
+             last_lost_packet: 0,
+             peer_una: sequence,
+@@ -424,6 +455,7 @@
+             self.sent.iter().zip(self.sent.iter().skip(1)).all(|(a, b)| a.number < b.number && a.sent_at <= b.sent_at),
+             "sent order"
+         );
++        assert!(self.lost.iter().zip(self.lost.iter().skip(1)).all(|(a, b)| a.packet.number < b.packet.number), "lost packet order");
+     }
+ 
+     /// 还有数据未被对端确认。
+@@ -851,12 +883,37 @@
+         self.advance_una(una);
+         self.peer_una = self.peer_una.max(una);
+         self.peer_window = ack.window;
++        self.retire_repaired_idle_packets(now_us);
+         self.detect_losses(now_us);
+ 
+         if !self.window_blocked() {
+             self.probe_at = None;
+             self.probe_due = false;
+             self.probe_interval_us = self.config.probe_initial_us;
++        }
++    }
++
++    /// 稀疏消息已经由副本或校验确认送达，原包过了判丢延迟后不再占着在途预算。
++    /// 持续满载的包仍按普通判丢处理，避免改变带宽、排队与限速采样。
++    fn retire_repaired_idle_packets(&mut self, now_us: u64) {
++        if self.rtt.srtt_us() == 0 {
++            return;
++        }
++        let mut index = 0;
++        while index < self.sent.len() {
++            let packet = self.sent[index];
++            if now_us.saturating_sub(packet.sent_at) < self.rtt.loss_delay_us() {
++                break;
++            }
++            let repaired = packet.app_idle && packet.segment_count > 0 && packet.segments[..packet.segment_count as usize].iter().all(|&sn| {
++                sn < self.snd_una || self.segments.get((sn - self.snd_una) as usize).is_some_and(|segment| segment.acked)
++            });
++            if repaired {
++                self.sent.remove(index);
++                self.declare_lost(now_us, &packet);
++            } else {
++                index += 1;
++            }
+         }
+     }
+ 
+@@ -1021,17 +1078,24 @@
+ 
+     fn declare_lost(&mut self, now_us: u64, packet: &SentPacket) {
+         self.bundle_until = now_us + BUNDLE_HOLD_US;
++        // 多个往返都没有确认，说明是中断而非零散丢包。暂时停止主动复制新消息，
++        // 让探测和最老数据先恢复；复用损失保护时长，避免间歇链路来回切换。
++        if self.rtt.srtt_us() > 0 && now_us.saturating_sub(self.last_heard) > (3 * self.rtt.srtt_us()).max(250_000) {
++            self.copy_backoff_until = now_us + BUNDLE_HOLD_US;
++        }
+         let run = if packet.number == self.last_lost_packet + 1 { 1_000_000 } else { 0 };
+         self.lost_run_ppm = self.lost_run_ppm - self.lost_run_ppm / LOST_RUN_SMOOTHING + run / LOST_RUN_SMOOTHING;
+         self.last_lost_packet = packet.number;
+         self.bytes_in_flight -= packet.bytes as u64;
+         self.observe_outcome(packet, true);
+         self.congestion.on_lost(packet.bytes as u64);
+-        if self.lost.len() >= self.config.send_window as usize {
++        let distance = self.largest_acked.unwrap_or(0).saturating_sub(packet.number);
++        // 修复过的旧包可能晚于新包退休；确认区间的二分查找要求这里始终按包号排序。
++        let index = self.lost.partition_point(|lost| lost.packet.number < packet.number);
++        self.lost.insert(index, LostPacket { packet: *packet, declared_at: now_us, distance });
++        if self.lost.len() > self.config.send_window as usize {
+             self.lost.pop_front();
+         }
+-        let distance = self.largest_acked.unwrap_or(0).saturating_sub(packet.number);
+-        self.lost.push_back(LostPacket { packet: *packet, declared_at: now_us, distance });
+         for &sn in &packet.segments[..packet.segment_count as usize] {
+             // 分片只有在旧包被判丢失后才会重发，所以同一分片不会同时在两个待确认的包里。
+             let Some(segment) = self.segment_mut(sn) else { continue };
+@@ -1145,6 +1209,9 @@
+         if self.timeout_deadline().is_some_and(|at| at <= now_us) {
+             // 一次判完所有超龄的包。只判最老的几个的话，其余的要等退避，整个窗口好几秒才能恢复。
+             let age = self.timeout_age_us();
++            // 尚未测得 RTT 时，初始超时只是猜测，可能比真实往返还短。
++            // 第一回先探测一个数据包，保留其余包用于测量；仍无回应时再按整批超时处理。
++            let initial_probe = self.rtt.srtt_us() == 0 && self.consecutive_timeouts == 0;
+             let mut lost_data = false;
+             while let Some(&packet) = self.sent.front() {
+                 if packet.sent_at + age > now_us || self.parity_hold_until(&packet).is_some_and(|at| at > now_us) {
+@@ -1154,6 +1221,9 @@
+                 self.stats.timeout_losses += 1;
+                 lost_data |= packet.segment_count > 0;
+                 self.declare_lost(now_us, &packet);
++                if initial_probe && packet.segment_count > 0 {
++                    break;
++                }
+             }
+             if lost_data {
+                 self.consecutive_timeouts += 1;
+@@ -1231,17 +1301,23 @@
+     /// 现在要不要发校验包，要的话每隔多少个新分片发一个。只有速度卡在窗口上时才值得：
+     /// 带宽才是瓶颈时，校验包要占数据的位置，比重传贵。瓶颈溢出和限速时再多发只会丢得更多。
+     fn parity_interval(&self) -> Option<u32> {
++        if self.config.recovery_policy == RecoveryPolicy::Lean {
++            return None;
++        }
+         // 晚到的包和丢掉的包一样堵窗口，校验包都能修。
+-        let holes = self.loss_ppm + self.late_ppm;
++        let fast = self.config.recovery_policy == RecoveryPolicy::Fast;
++        let warmup = fast && self.loss_samples < BUNDLE_WARMUP_PACKETS;
++        let holes = if warmup { 50_000 } else { self.loss_ppm + self.late_ppm };
+         let useful = (PARITY_MIN_LOSS_PPM..=PARITY_MAX_LOSS_PPM).contains(&holes);
+-        if !self.congestion.window_bound_path() || !useful || self.congestion.is_rate_limited() {
++        if (!warmup && !self.congestion.window_bound_path()) || !useful || self.congestion.is_rate_limited() {
+             return None;
+         }
+         // 成片地丢是撞上了容量，这时多发只会丢得更多，校验也修不过来。随机丢包是零散的。
+         if self.lost_run_ppm >= PARITY_LOST_RUN_PPM {
+             return None;
+         }
+-        Some(parity::repair_interval(holes, self.congestion.window_is_the_limit()))
++        let spare = warmup || self.congestion.window_is_the_limit();
++        Some(if fast { parity::fast_repair_interval(holes, spare) } else { parity::repair_interval(holes, spare) })
+     }
+ 
+     /// 校验包覆盖的范围：最近发出的、对端可能还缺的分片。
+@@ -1276,6 +1352,9 @@
+     }
+ 
+     fn should_duplicate(&self) -> bool {
++        if self.config.recovery_policy == RecoveryPolicy::Lean {
++            return false;
++        }
+         let threshold = if self.parity_interval().is_some() { DUPLICATE_WITH_PARITY_LOSS_PPM } else { DUPLICATE_LOSS_PPM };
+         self.congestion.random_loss_ppm() >= threshold
+             && !self.congestion.is_rate_limited()
+@@ -1365,6 +1444,10 @@
+ 
+         while !parity_sent && bundled_count < MAX_BUNDLED_SEGMENTS && self.may_send(now_us) {
+             let Some(sn) = self.next_duplicate() else { break };
++            // 同一分片的主动副本必须分开发包，同一个 UDP 包里的重复数据没有独立的送达机会。
++            if bundled[..bundled_count].contains(&sn) {
++                break;
++            }
+             let Some(segment) = self.segment_mut(sn) else { break };
+             if used + wire::DATA_HEADER_LEN + segment.data.len() > out.len() {
+                 break;
+@@ -1378,6 +1461,7 @@
+ 
+         let mut segments = [0u64; MAX_SEGMENTS_PER_PACKET];
+         let mut count = 0usize;
++        let mut small_copied = false;
+         let mut protected_by = 0;
+         // 校验包到期但这个包放不下时先停一下：双向传输时每个包都带确认，继续发新数据的话校验包永远轮不到。
+         while !parity_sent && !self.parity_due(now_us) && count < MAX_SEGMENTS_PER_PACKET && self.may_send(now_us) {
+@@ -1410,6 +1494,9 @@
+                     None => {}
+                 }
+             }
++            if !retransmission && self.queue_small_message_copies(now_us, sn) {
++                small_copied = true;
++            }
+             if retransmission {
+                 self.stats.retransmitted_segments += 1;
+                 if self.should_duplicate() {
+@@ -1420,7 +1507,7 @@
+             count += 1;
+         }
+         let bundling = self.loss_ppm >= BUNDLE_LOSS_PPM || now_us < self.bundle_until || self.loss_samples < BUNDLE_WARMUP_PACKETS;
+-        if count > 0 && bundling {
++        if self.config.recovery_policy != RecoveryPolicy::Lean && count > 0 && bundling && !small_copied {
+             (used, bundled_count) = self.bundle_unacked(out, used, &segments[..count], &mut bundled, bundled_count);
+         }
+ 
+@@ -1467,6 +1554,32 @@
+             self.congestion.on_sent(now_us, used as u64);
+         }
+         Some(used)
++    }
++
++    /// 稳定丢包时，把小消息的冗余分散到独立包中，不必等下一条消息才修复。
++    /// 副本预算沿用原来的捎带份数；已经复制的原件不再捎带旧数据，避免叠加两套冗余。
++    fn queue_small_message_copies(&mut self, now_us: u64, sn: u64) -> bool {
++        if self.config.recovery_policy == RecoveryPolicy::Lean
++            || self.segments[(sn - self.snd_una) as usize].data.len() > self.config.max_packet_size / 4
++            || (self.loss_ppm < BUNDLE_LOSS_PPM && now_us >= self.bundle_until)
++            || self.congestion.is_rate_limited()
++            || now_us < self.copy_backoff_until
++            || self.consecutive_timeouts > 0
++            || self.rtt.srtt_us() == 0
++            || now_us.saturating_sub(self.last_heard) >= self.rtt.loss_delay_us()
++            || self.lost_run_ppm >= PARITY_LOST_RUN_PPM
++        {
++            return false;
++        }
++        let mut copies = BUNDLE_COPIES.iter().find(|&&(loss, _)| self.loss_ppm >= loss).map_or(1, |&(_, copies)| copies);
++        if self.config.recovery_policy == RecoveryPolicy::Fast {
++            copies = copies.max(3);
++        }
++        if self.duplicates.len() + copies > MAX_DUPLICATES_QUEUED {
++            return false;
++        }
++        self.duplicates.extend(core::iter::repeat_n(sn, copies));
++        true
+     }
+ 
+     /// 丢包严重时，把还没确认的小消息捎带在这个包的空余位置里。
+--- a/src/congestion.rs
++++ b/src/congestion.rs
+@@ -15,8 +15,11 @@
+ const PROBE_RTT_US: u64 = 200_000;
+ const FULL_BW_GROWTH: u64 = 1250;
+ const FULL_BW_ROUNDS: u8 = 3;
+-/// 还没有测量值时的发送速率，约 8 Mbit/s。第一批确认到达后就换成实测值。
++/// 还没有测量值时的默认发送速率，约 32 Mbit/s。第一批确认到达后就换成实测值。
+ const INITIAL_RATE: u64 = 4_000_000;
++/// 第一批确认测到的速率贴着自身发送上限，且测得的 BDP 远大于初始窗口时，才加速探测。
++const TRAIN_PACING_HEADROOM: u64 = 4;
++const TRAIN_BDP_RATIO: u64 = 8;
+ /// 允许提前这么久发送，避免为每个包都单独起一次计时器。
+ const PACING_QUANTUM_US: u64 = 1_000;
+ /// 连续超时这么多次（约 20 个往返没有任何确认），旧的带宽估计就不能再信了。
+@@ -89,6 +92,9 @@
+     min_cwnd: u64,
+     max_cwnd: u64,
+     initial_cwnd: u64,
++    initial_rate: u64,
++    probe_sender_limited: bool,
++    app_idle_estimate: bool,
+     bw_samples: [u64; BW_WINDOW_ROUNDS],
+     round: usize,
+     next_round_delivered: u64,
+@@ -132,12 +138,15 @@
+ }
+ 
+ impl Bbr {
+-    pub(crate) fn new(initial_cwnd: u64, min_cwnd: u64, max_cwnd: u64) -> Self {
++    pub(crate) fn new(initial_cwnd: u64, min_cwnd: u64, max_cwnd: u64, initial_rate: Option<u64>, probe_sender_limited: bool) -> Self {
+         Self {
+             mode: Mode::Startup,
+             min_cwnd,
+             max_cwnd,
+             initial_cwnd,
++            initial_rate: initial_rate.unwrap_or(INITIAL_RATE),
++            probe_sender_limited,
++            app_idle_estimate: false,
+             bw_samples: [0; BW_WINDOW_ROUNDS],
+             round: 0,
+             next_round_delivered: 0,
+@@ -387,7 +396,7 @@
+ 
+     fn pacing_rate(&self) -> u64 {
+         if self.btl_bw == 0 {
+-            return INITIAL_RATE;
++            return self.initial_rate;
+         }
+         let gain = match self.mode {
+             Mode::Startup => return self.startup_rate(),
+@@ -405,7 +414,16 @@
+         // 排空阶段也不能：抬上去在途量就降不到一个 BDP，连接一直出不了排空，随机丢包率永远测不到。
+         let boost = self.window_limited && self.mode != Mode::Drain && !self.is_below_capacity();
+         let gain = if boost { gain.max(WINDOW_LIMITED_GAIN) } else { gain };
+-        (self.path_rate().saturating_mul(gain) / 1000).max(1)
++        let rate = (self.path_rate().saturating_mul(gain) / 1000).max(1);
++        // 稀疏消息测到的是应用发送速度，不能把它当作恢复积压时的路径上限。
++        // 仍受拥塞窗口限制；主动降速、排空、排队或已知限速时都不抬高，避免污染低速丢包样本。
++        if self.probe_sender_limited && self.app_idle_estimate && self.rate_cap == 0
++            && self.mode != Mode::Drain && self.mode != Mode::ProbeRtt && !self.is_below_capacity() && !self.queue_is_building()
++        {
++            rate.max(self.initial_rate.min(self.initial_cwnd.saturating_mul(1_000_000) / self.min_rtt_us.max(1)))
++        } else {
++            rate
++        }
+     }
+ 
+     pub(crate) fn bandwidth_estimate(&self) -> u64 {
+@@ -426,6 +444,11 @@
+         let measured = self.path_rate().saturating_mul(STARTUP_GAIN) / 1000;
+         let floor = self.initial_cwnd.saturating_mul(1_000_000).saturating_mul(STARTUP_GAIN) / 1000 / self.min_rtt_us.max(1);
+         let rate = measured.max(floor);
++        // 包列的确认间隔被自身发送节奏限制时，只能量到路径速率的下界。
++        // 仅在已经测得足够大的 BDP、没有排队时增加探测余量；仍受窗口与限速上限约束。
++        let sender_limited = self.probe_sender_limited && self.btl_bw >= self.initial_rate * 9 / 10
++            && self.bdp() >= self.initial_cwnd.saturating_mul(TRAIN_BDP_RATIO) && !self.queue_is_building();
++        let rate = if sender_limited { rate.max(self.initial_rate.saturating_mul(TRAIN_PACING_HEADROOM)) } else { rate };
+         if self.rate_cap > 0 { rate.min(self.rate_cap) } else { rate }
+     }
+ 
+@@ -444,6 +467,9 @@
+ 
+     pub(crate) fn on_ack(&mut self, now_us: u64, sample: &RateSample, delivered: u64, bytes_in_flight: u64) {
+         self.recovering = false;
++        if sample.delivery_rate >= self.btl_bw {
++            self.app_idle_estimate = sample.app_idle;
++        }
+         self.period_idle |= sample.app_idle;
+         let delivery_rate = sample.delivery_rate.max(self.train_rate(now_us, sample, delivered));
+         self.sample_period(now_us, delivered);
+--- a/src/parity.rs
++++ b/src/parity.rs
+@@ -136,10 +136,19 @@
+ 
+ /// 每隔多少个新分片发一个校验包。
+ pub(crate) fn repair_interval(loss_ppm: u32, spare_capacity: bool) -> u32 {
++    repair_interval_with_margin(loss_ppm, spare_capacity, MARGIN_PERCENT)
++}
++
++/// 速度优先策略只在窗口受限、或还未测得路径时扩大校验；带宽受限时仍用精简余量。
++pub(crate) fn fast_repair_interval(loss_ppm: u32, spare_capacity: bool) -> u32 {
++    repair_interval_with_margin(loss_ppm, spare_capacity, 1000)
++}
++
++fn repair_interval_with_margin(loss_ppm: u32, spare_capacity: bool, spare_margin_percent: u64) -> u32 {
+     const PPM: u64 = 1_000_000;
+     let loss = (loss_ppm as u64).min(PPM);
+     let (percent, floor, longest) =
+-        if spare_capacity { (MARGIN_PERCENT, MIN_MARGIN_PPM, MAX_INTERVAL) } else { (LEAN_MARGIN_PERCENT, LEAN_MIN_MARGIN_PPM, LEAN_MAX_INTERVAL) };
++        if spare_capacity { (spare_margin_percent, MIN_MARGIN_PPM, MAX_INTERVAL) } else { (LEAN_MARGIN_PERCENT, LEAN_MIN_MARGIN_PPM, LEAN_MAX_INTERVAL) };
+     let share = (loss + loss * percent / 100 + floor).min(PPM / 2);
+     ((PPM - share) / share).clamp(1, longest) as u32
+ }
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -16,4 +16,4 @@
+ mod rtt;
+ mod wire;
+ 
+-pub use connection::{Config, Connection, PacketError, Stats};
++pub use connection::{Config, Connection, PacketError, RecoveryPolicy, Stats};
+--- a/sim/src/lib.rs
++++ b/sim/src/lib.rs
+@@ -10,6 +10,9 @@
+ use std::collections::BinaryHeap;
+ 
+ use agent_net_core::{Config, Connection};
++
++/// 对比数据必须记录网络模型版本；v2 的突发日程不受发包数量影响。
++pub const NETWORK_MODEL: &str = "independent-burst-calendar-v2";
+ 
+ /// SplitMix64：简单、快、可复现，这里不需要密码学强度。
+ #[derive(Clone)]
+@@ -73,6 +76,7 @@
+ pub struct Link {
+     profile: LinkProfile,
+     rng: Rng,
++    burst_rng: Rng,
+     next_free: u64,
+     burst_start: u64,
+     burst_end: u64,
+@@ -85,7 +89,13 @@
+ impl Link {
+     pub fn new(profile: LinkProfile, seed: u64) -> Self {
+         let bucket_tokens = profile.bucket_depth_bytes;
+-        let mut link = Self { profile, rng: Rng::new(seed), next_free: 0, burst_start: u64::MAX, burst_end: 0, quota_window: 0, quota_used: 0, bucket_tokens, bucket_updated: 0 };
++        // 保留首段逐包损伤的旧随机序列，突发日程使用独立流，避免发包量改变时段。
++        let mut packet_rng = Rng::new(seed);
++        if profile.burst_every_us > 0 {
++            packet_rng.below(2 * profile.burst_every_us);
++            packet_rng.below(2 * profile.burst_len_us);
++        }
++        let mut link = Self { profile, rng: packet_rng, burst_rng: Rng::new(seed), next_free: 0, burst_start: u64::MAX, burst_end: 0, quota_window: 0, quota_used: 0, bucket_tokens, bucket_updated: 0 };
+         link.schedule_burst(0);
+         link
+     }
+@@ -94,8 +104,8 @@
+         if self.profile.burst_every_us == 0 {
+             return;
+         }
+-        let gap = 1 + self.rng.below(2 * self.profile.burst_every_us);
+-        let length = 1 + self.rng.below(2 * self.profile.burst_len_us);
++        let gap = 1 + self.burst_rng.below(2 * self.profile.burst_every_us);
++        let length = 1 + self.burst_rng.below(2 * self.profile.burst_len_us);
+         self.burst_start = after_us + gap;
+         self.burst_end = self.burst_start + length;
+     }
+@@ -719,3 +729,22 @@
+         holdout("留出 高铁 15Mbit 80ms 丢包 4% 短断网", LinkProfile { bits_per_second: 15_000_000, delay_us: 40_000, jitter_us: 12_000, loss: 0.04, burst_every_us: 4_000_000, burst_len_us: 400_000, burst_loss: 1.0, queue_us: 120_000, ..LinkProfile::default() }),
+     ]
+ }
++
++#[cfg(test)]
++mod link_tests {
++    use super::{Link, LinkProfile};
++
++    // 性能对照的时序合同：相同种子的突发时段不受算法发包量影响。
++    // Link::transmit 是 compare 和真实 UDP 损伤代理使用的入口；额外流量不应移动断网时段。
++    #[test]
++    fn burst_calendar_is_independent_of_packet_count() {
++        let profile = LinkProfile { burst_every_us: 100_000, burst_len_us: 50_000, burst_loss: 1.0, ..LinkProfile::default() };
++        let mut sparse = Link::new(profile.clone(), 71);
++        let mut busy = Link::new(profile, 71);
++        for now in (0..2_000_000).step_by(1_000) {
++            assert_eq!(sparse.transmit(now, 32).1, busy.transmit(now, 32).1, "burst calendar shifted at {now}us");
++            busy.transmit(now + 100, 32);
++            busy.transmit(now + 500, 32);
++        }
++    }
++}
+--- a/sim/tests/reliability.rs
++++ b/sim/tests/reliability.rs
+@@ -7,11 +7,11 @@
+ //! - 最小失败输入：每条失败都打印种子，用 `AGENT_NET_REPLAY=<种子>` 重放；固定场景的输入写在各用例里。
+ //! - tier：Rust integration，虚拟时间，无真实网络；独立通过 Cargo 运行，未接入 pnpm unit runner。
+ //!   用 `--profile sim` 打开溢出检查，默认 200 个种子；`AGENT_NET_SEEDS=10000` 跑扩展矩阵。
+-//! - 实测耗时：2026-10-31，本机 10000 个种子及本文件全部非 profiling 用例共 97.61 秒；
+-//!   包含传输性能回归和恶意包压力验证，不作为 5 秒内的轻量单测。原始记录见 sim/results/2026-10-31/validation.txt。
++//! - 实测耗时：2026-10-31，独立突发日程模型下，本机 10000 个默认种子、三策略各 1000 种子及固定用例共 92.21 秒；
++//!   包含性能回归和恶意包压力验证，不作为 5 秒内轻量单测。记录见 sim/results/2026-10-31-optimization/network-v2/tests.txt。
+ //! - 测试本身的有效性由 `sim/mutants.py` 验证：注入已知 bug，这里必须变红。
+ 
+-use agent_net_core::{Config, Connection, PacketError};
++use agent_net_core::{Config, Connection, PacketError, RecoveryPolicy};
+ use agent_net_sim::{CorePeer, LinkProfile, Rng, Workload, random_case, run, run_case};
+ 
+ /// 抓到过真实 bug 的种子，每次都跑。这些问题几十万个种子才出现一次，默认的 200 个碰不到。
+@@ -19,6 +19,10 @@
+ 
+ fn seed_count() -> u64 {
+     std::env::var("AGENT_NET_SEEDS").ok().and_then(|value| value.parse().ok()).unwrap_or(200)
++}
++
++fn seed_start() -> u64 {
++    std::env::var("AGENT_NET_SEED_START").ok().and_then(|value| value.parse().ok()).unwrap_or(0)
+ }
+ 
+ /// 不管网络多差，对端读到的都必须和发送的完全一致，并且要能传完。
+@@ -27,7 +31,7 @@
+     let seeds: Vec<u64> = match std::env::var("AGENT_NET_REPLAY") {
+         Ok(value) => vec![value.parse().expect("replay seed")],
+         Err(_) => {
+-            let start: u64 = std::env::var("AGENT_NET_SEED_START").ok().and_then(|value| value.parse().ok()).unwrap_or(0);
++            let start = seed_start();
+             HARD_SEEDS.into_iter().chain(start..start + seed_count()).collect()
+         }
+     };
+@@ -221,15 +225,23 @@
+     assert!(report.wire_bytes / 2_000 < 260, "{} bytes per message", report.wire_bytes / 2_000);
+ }
+ 
+-/// 丢包时小消息不用等一个往返：下一条消息顺带把它捎过去。
+-#[test]
+-fn lost_messages_arrive_with_the_next_one() {
++/// 自动策略将小消息的冗余分到独立包，丢失后不应再等下一条消息。
++/// 5% 随机丢包下旧捎带策略的 p99 约 41 ms；自动策略应靠近 20 ms 单程延迟，且流量有界。
++#[test]
++fn lost_messages_do_not_wait_for_the_next_one() {
+     let link = LinkProfile { loss: 0.05, ..path(100_000_000, 20_000) };
+     let config = Config::default();
+-    let report = agent_net_sim::run_interactive(CorePeer::new(config.clone()), CorePeer::new(config), link.clone(), link, 2_000, 200, 20_000, 15);
++    let report = agent_net_sim::run_interactive(CorePeer::new(config.clone()), CorePeer::new(config), link.clone(), link.clone(), 2_000, 200, 20_000, 15);
+     assert_eq!(report.delivered, report.sent);
+     assert!(report.percentile_ms(95.0) < 50.0, "p95 {}", report.percentile_ms(95.0));
+-    assert!(report.percentile_ms(99.0) < 70.0, "p99 {}", report.percentile_ms(99.0));
++    assert!(report.percentile_ms(99.0) < 30.0, "p99 {}", report.percentile_ms(99.0));
++    assert!(report.wire_bytes < 4 * 2_000 * 200, "{} wire bytes for 400000 payload bytes", report.wire_bytes);
++
++    // 手动选择省流量确实应减少线上字节，而不是只改变配置名称。
++    let config = Config::for_policy(RecoveryPolicy::Lean);
++    let lean = agent_net_sim::run_interactive(CorePeer::new(config.clone()), CorePeer::new(config), link.clone(), link, 2_000, 200, 20_000, 15);
++    assert_eq!(lean.delivered, lean.sent);
++    assert!(lean.wire_bytes * 4 < report.wire_bytes * 3, "lean {} bytes, auto {} bytes", lean.wire_bytes, report.wire_bytes);
+ }
+ 
+ /// 长 RTT 路径上丢一条小消息，后面十几条都被堵住。丢包率估计在两次丢包之间会掉下去，
+@@ -269,6 +281,7 @@
+ 
+ /// 反复断网时，超时要一次判完所有超龄的包，否则每次断网后要好几秒才恢复。
+ /// 断网时发的小消息要带上堵住队伍的最老分片：网一通第一个包就把它送到。
++/// 已经由副本确认的稀疏原包也要及时释放在途预算；八个固定种子的 p99 应低于 2 秒。
+ #[test]
+ fn repeated_outages_recover_fast() {
+     let link = LinkProfile { bits_per_second: 30_000_000, delay_us: 30_000, jitter_us: 10_000, loss: 0.02, burst_every_us: 5_000_000, burst_len_us: 1_000_000, burst_loss: 1.0, queue_us: 100_000, ..LinkProfile::default() };
+@@ -283,7 +296,7 @@
+         assert_eq!(report.delivered, report.sent);
+         merged.samples_us.extend(report.samples_us);
+     }
+-    assert!(merged.percentile_ms(99.0) < 2_400.0, "p99 {}", merged.percentile_ms(99.0));
++    assert!(merged.percentile_ms(99.0) < 2_000.0, "p99 {}", merged.percentile_ms(99.0));
+ }
+ 
+ /// 大传输不能把瓶颈队列一直顶满，否则同一连接上的交互全部多等一个往返。
+@@ -383,6 +396,19 @@
+     assert!(stats.srtt_us > 500_000, "srtt {}", stats.srtt_us);
+     assert!(stats.timeout_losses < 200, "{} timeouts", stats.timeout_losses);
+     assert!(outcome.finish_us < 12_000_000, "took {}us", outcome.finish_us);
++}
++
++/// 未测得 RTT 时，250 ms 的干净路径会先碰到 200 ms 初始超时。
++/// 旧版会重传同一时刻到期的多个包；先探测并保留其余确认机会，流量应仍接近净载荷。
++#[test]
++fn initial_timeout_keeps_the_first_flight_available_for_measurement() {
++    let bytes = 256 << 10;
++    let link = LinkProfile { jitter_us: 0, ..path(100_000_000, 125_000) };
++    let outcome = bulk(&link, 1024, bytes, 71);
++    assert!(outcome.finished, "{outcome:?}");
++    assert_eq!(outcome.violation, None);
++    assert!(outcome.final_stats[0].expect("stats").srtt_us >= 250_000);
++    assert!(outcome.wire_bytes < bytes * 103 / 100, "{} wire bytes for {bytes} payload bytes", outcome.wire_bytes);
+ }
+ 
+ /// 令牌桶和配额限速没有队列，RTT 不变，放行阶段的速率还远高于上限。
+@@ -578,6 +604,11 @@
+     let outcome = bulk(&link, 1024, bytes, 24);
+     assert!(outcome.finished, "{outcome:?}");
+     assert!(outcome.finish_us < 440_000, "took {}us", outcome.finish_us);
++
++    // 长往返时，包列贴着自身发送速率只能测出路径容量的下界，启动不能停在那里。
++    let link = LinkProfile { loss: 0.05, ..path(100_000_000, 150_000) };
++    let finish = (1..=8).map(|seed| bulk(&link, 1024, 8 << 20, seed).finish_us).sum::<u64>() / 8;
++    assert!(finish < 2_550_000, "long path took {finish}us");
+ }
+ 
+ fn packet_with(config: &Config, pump_from: &mut Connection, now: u64) -> Vec<u8> {
+@@ -725,3 +756,34 @@
+     }
+     println!("total {}ms", rows.iter().map(|row| row.0).sum::<u128>());
+ }
++
++/// 新策略会改变启动窗口、校验和副本的发送顺序；此前随机矩阵只覆盖默认策略。
++/// 三种策略都必须通过真实 Connection 入口保持字节完整、有序、可恢复和无空转。
++#[test]
++fn recovery_policies_keep_streams_intact_and_make_progress() {
++    for policy in [RecoveryPolicy::Lean, RecoveryPolicy::Auto, RecoveryPolicy::Fast] {
++        for seed in HARD_SEEDS.into_iter().chain(seed_start()..seed_start() + seed_count().min(1000)) {
++            let mut case = random_case(seed);
++            case.config.recovery_policy = policy;
++            case.config.ack_every = Config::for_policy(policy).ack_every;
++            let result = run_case(&case);
++            assert!(result.finished && result.violation.is_none() && result.spurious_wakes == 0,
++                "policy {policy:?} seed {seed}: {result:?}");
++        }
++    }
++}
++
++/// 策略只改变本地发送行为，不得要求对端选择同一策略；验证六种不同策略的双向互通。
++#[test]
++fn different_recovery_policies_interoperate() {
++    for a in [RecoveryPolicy::Lean, RecoveryPolicy::Auto, RecoveryPolicy::Fast] {
++        for b in [RecoveryPolicy::Lean, RecoveryPolicy::Auto, RecoveryPolicy::Fast] {
++            if a == b { continue; }
++            let link = LinkProfile { loss: 0.05, reorder: 0.03, reorder_extra_us: 30_000, ..path(20_000_000, 20_000) };
++            let workload = Workload { a_to_b_bytes: 128 << 10, b_to_a_bytes: 96 << 10, ..Workload::default() };
++            let result = run(CorePeer::new(Config::for_policy(a)), CorePeer::new(Config::for_policy(b)), link.clone(), link, &workload, 71);
++            assert!(result.finished && result.violation.is_none() && result.spurious_wakes == 0,
++                "policies {a:?}/{b:?}: {result:?}");
++        }
++    }
++}
+--- a/sim/src/bin/compare/report.rs
++++ b/sim/src/bin/compare/report.rs
+@@ -3,12 +3,18 @@
+ use std::sync::Mutex;
+ use std::sync::atomic::{AtomicUsize, Ordering};
+ 
+-use agent_net_core::Config;
++use agent_net_core::{Config, RecoveryPolicy};
+ use agent_net_sim::kcp::{KcpPeer, KcpVariant};
+ use agent_net_sim::{CorePeer, LatencyReport, LinkProfile, Peer, Scenario, Workload, run, run_interactive, scenarios};
+ 
+ fn core_config() -> Config {
+-    Config { max_packet_size: 1400, send_window: 128, recv_window: 128, ..Config::default() }
++    let policy = match std::env::var("AGENT_NET_POLICY").as_deref() {
++        Ok("lean") => RecoveryPolicy::Lean,
++        Ok("fast") => RecoveryPolicy::Fast,
++        Ok("auto") | Err(std::env::VarError::NotPresent) => RecoveryPolicy::Auto,
++        value => panic!("invalid AGENT_NET_POLICY {value:?}; expected auto, lean or fast"),
++    };
++    Config { max_packet_size: 1400, send_window: 128, recv_window: 128, ..Config::for_policy(policy) }
+ }
+ 
+ struct Summary {
+@@ -130,7 +136,7 @@
+ /// 每个场景的各个实现互不相关，按 CPU 核数并行跑。虚拟时钟下结果和串行完全一样。
+ fn measure_all(rows: &[Scenario], window: u32) -> Vec<Vec<Summary>> {
+     let core_config = Config { send_window: window, recv_window: window, send_buffer_bytes: 4 << 20, ..core_config() };
+-    // 调参时 KCP 的结果不会变，设 AGENT_NET_KCP=none 只跑自己，再和跑过一次的完整结果对比。
++    // KCP 代码与网络模型都未变时，设 AGENT_NET_KCP=none 只跑自己，再和同模型的完整对照比。
+     let variants: &[KcpVariant] = if std::env::var("AGENT_NET_KCP").is_ok_and(|value| value == "none") { &[] } else { &KcpVariant::ALL };
+     let implementations = 1 + variants.len();
+     let jobs = rows.len() * implementations;
+@@ -180,8 +186,9 @@
+         .collect();
+     let total = rows.len();
+     let summaries = measure_all(&rows, window);
++    let has_kcp = summaries.first().is_some_and(|row| row.len() > 1);
+     for (row, summaries) in rows.iter().zip(summaries) {
+-        println!("{}{}", row.label, if row.holdout { "（留出，未用于调参）" } else { "" });
++        println!("{}{}", row.label, if row.holdout { "（未参与本轮调参；历史已测）" } else { "" });
+         let (core, kcp) = summaries.split_first().unwrap();
+         print_row("agent-net", core);
+         for ((variant, summary), record) in KcpVariant::ALL.iter().zip(kcp).zip(&mut versus) {
+@@ -212,6 +219,10 @@
+             }
+         }
+     }
++    if !has_kcp {
++        println!("\n本次未运行 KCP，不生成胜负统计。\n");
++        return;
++    }
+     println!("\n胜/平（与 KCP 各种配置的最好值比，差距 1% 内算平，共 {total} 个场景）：");
+     for (index, name) in ["用时", "开销", "p50", "p95", "p99"].iter().enumerate() {
+         println!("  {name} 胜 {} 平 {}", wins[index], ties[index]);
+@@ -228,6 +239,8 @@
+ }
+ 
+ pub fn main() {
++    println!("agent-net 策略 {:?}；每场景 {SEEDS} 个种子", core_config().recovery_policy);
++    println!("网络模型 {}", agent_net_sim::NETWORK_MODEL);
+     // 对比用虚拟时钟，机器忙不影响结果；CPU 测速不行，要单独在空闲时跑。
+     // AGENT_NET_WINDOWS=1024 只跑一种窗口；AGENT_NET_NO_CPU=1 跳过 CPU 测速。
+     let windows = std::env::var("AGENT_NET_WINDOWS").unwrap_or_else(|_| "128,1024".into());
+--- a/sim/src/bin/netperf.rs
++++ b/sim/src/bin/netperf.rs
+@@ -13,7 +13,7 @@
+ use std::sync::{Arc, OnceLock};
+ use std::time::Instant;
+ 
+-use agent_net_core::Config;
++use agent_net_core::{Config, RecoveryPolicy};
+ use agent_net_sim::kcp::{KcpPeer, KcpVariant};
+ use agent_net_sim::{CorePeer, Link, LinkProfile, Peer, scenarios};
+ 
+@@ -32,6 +32,16 @@
+ const ECHO_BYTES: usize = 200;
+ const ECHO_INTERVAL_US: u64 = 20_000;
+ 
++/// 仅测试宿主读取环境变量；传输核心不依赖进程环境。
++fn recovery_policy() -> RecoveryPolicy {
++    match std::env::var("AGENT_NET_POLICY").as_deref() {
++        Ok("lean") => RecoveryPolicy::Lean,
++        Ok("fast") => RecoveryPolicy::Fast,
++        Ok("auto") | Err(std::env::VarError::NotPresent) => RecoveryPolicy::Auto,
++        value => panic!("invalid AGENT_NET_POLICY {value:?}; expected auto, lean or fast"),
++    }
++}
++
+ mod sys {
+     use std::ffi::{c_int, c_short, c_void};
+ 
+@@ -118,7 +128,7 @@
+     fn make(self, window: u32) -> Box<dyn Peer> {
+         match self {
+             Self::AgentNet => {
+-                let config = Config { send_window: window, recv_window: window, send_buffer_bytes: 8 << 20, ..Config::default() };
++                let config = Config { send_window: window, recv_window: window, send_buffer_bytes: 8 << 20, ..Config::for_policy(recovery_policy()) };
+                 let mut peer = CorePeer::new(config);
+                 peer.check_invariants = false;
+                 Box::new(peer)
+@@ -563,6 +573,7 @@
+ }
+ 
+ fn main() {
++    println!("agent-net 策略 {:?}", recovery_policy());
+     let args = Args(std::env::args().collect());
+     clock();
+     let command = args.0.get(1).cloned().unwrap_or_default();
+--- /dev/null
++++ b/sim/summarize.py
+@@ -0,0 +1,117 @@
++#!/usr/bin/env python3
++"""Compare saved deterministic matrices against every KCP configuration.
++
++No simulation is rerun. Keep the input files and their source versions with the
++report. Each metric is compared to its best KCP value independently; that is an
++envelope of twelve configurations, not one realizable KCP configuration.
++"""
++
++import argparse
++import json
++import math
++import re
++from pathlib import Path
++
++METRICS = ["用时 ms", "额外协议字节 %", "p50 ms", "p95 ms", "p99 ms"]
++ROW = re.compile(
++    r"^  (.*?)\s+用时\s*(\S+)ms 开销\s*(\S+)% "
++    r"p50\s*(\S+) p95\s*(\S+) p99\s*(\S+)ms 交互字节\s*(\S+)K"
++)
++ANNOTATIONS = ["（留出，未用于调参）", "（未参与本轮调参；历史已测）"]
++
++
++def network_model(path):
++    match = re.search(r"^网络模型 (\S+)", path.read_text(), re.MULTILINE)
++    return match[1] if match else "shared-burst-rng-v1"
++
++
++def read_matrix(path):
++    rows = {}
++    window = scene = None
++    for line in path.read_text().splitlines():
++        heading = re.match(r"^=== 窗口 (\d+)", line)
++        if heading:
++            window = int(heading[1])
++            scene = None
++            continue
++        match = ROW.match(line)
++        if match:
++            if window is None or scene is None:
++                raise ValueError(f"{path}: metric row without a scenario: {line}")
++            key = (window, scene)
++            name = match[1].strip()
++            values = [float(x) for x in match.groups()[1:]]
++            if any(math.isnan(x) for x in values):
++                raise ValueError(f"{path}: NaN result: {line}")
++            if name in rows.setdefault(key, {}):
++                raise ValueError(f"{path}: duplicate row {key}/{name}")
++            rows[key][name] = values
++        elif "用时" in line and line.startswith("  ") and "ms 开销" in line:
++            raise ValueError(f"{path}: unparsed metric row: {line}")
++        elif line and not line.startswith((" ", "=", "胜", "和", "落后", "本次", "agent-net 策略")):
++            scene = line
++            for annotation in ANNOTATIONS:
++                scene = scene.removesuffix(annotation)
++    return rows
++
++
++def compare(baseline, candidate):
++    records = []
++    for (window, scene), peers in candidate.items():
++        if set(peers) != {"agent-net"}:
++            raise ValueError("candidate must be an agent-net-only matrix (AGENT_NET_KCP=none)")
++        references = baseline.get((window, scene), {})
++        kcp = {name: values for name, values in references.items() if name != "agent-net"}
++        if len(kcp) != 12:
++            raise ValueError(f"expected twelve KCP rows for {window}/{scene}, got {len(kcp)}")
++        mine = peers["agent-net"]
++        if not all(math.isfinite(value) for value in mine[:5]):
++            raise ValueError(f"unfinished or non-finite candidate result for {window}/{scene}")
++        for index, metric in enumerate(METRICS):
++            name, values = min(kcp.items(), key=lambda item: item[1][index])
++            best = values[index]
++            verdict = "win" if mine[index] < best * 0.99 else "tie" if mine[index] <= best * 1.01 else "loss"
++            records.append(dict(window=window, scene=scene, metric=metric, ours=mine[index],
++                                kcp=best, kcp_config=name, verdict=verdict))
++    if not records:
++        raise ValueError("empty candidate matrix")
++    return records
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--baseline", type=Path, required=True)
++    parser.add_argument("--candidate", type=Path, action="append", required=True)
++    parser.add_argument("--output", type=Path, required=True, help="Markdown file; JSON goes beside it")
++    args = parser.parse_args()
++    model = network_model(args.baseline)
++    for path in args.candidate:
++        if network_model(path) != model:
++            raise ValueError(f"network model mismatch: {args.baseline} uses {model}, {path} uses {network_model(path)}")
++    baseline = read_matrix(args.baseline)
++    reports = {str(path): compare(baseline, read_matrix(path)) for path in args.candidate}
++    lines = ["# 与 KCP 十二种配置的逐项最好值比较", "", f"网络模型：`{model}`。", "",
++             "顺序为胜 / 平 / 负，差距 1% 内算平。各指标独立取 KCP 最好值，不能合成一套 KCP 配置。", "",
++             "按保存的表格精度计算：用时 1 ms，其余指标 0.1 单位；接近 1% 边界时需要更高精度复核。", "",
++             "| 输入 | 窗口 | 场景数 | " + " | ".join(METRICS) + " |",
++             "| --- | --- | --- | " + " | ".join(["---"] * len(METRICS)) + " |"]
++    for path, records in reports.items():
++        for window in sorted({row["window"] for row in records}):
++            subset = [row for row in records if row["window"] == window]
++            counts = ["/".join(str(sum(row["metric"] == metric and row["verdict"] == result for row in subset))
++                               for result in ["win", "tie", "loss"]) for metric in METRICS]
++            lines.append(f"| {Path(path).name} | {window} | {len(subset) // 5} | " + " | ".join(counts) + " |")
++    summary_end = len(lines)
++    for path, records in reports.items():
++        lines += ["", f"## {Path(path).name} 的全部落后项", "",
++                  "| 窗口 | 场景 | 指标 | agent-net | KCP 最好值 | KCP 配置 |",
++                  "| --- | --- | --- | --- | --- | --- |"]
++        lines += [f"| {r['window']} | {r['scene']} | {r['metric']} | {r['ours']:g} | {r['kcp']:g} | {r['kcp_config']} |"
++                  for r in records if r["verdict"] == "loss"]
++    args.output.write_text("\n".join(lines) + "\n")
++    args.output.with_suffix(".json").write_text(json.dumps(dict(network_model=model, baseline=str(args.baseline), rounded_input=True, reports=reports), ensure_ascii=False, indent=2) + "\n")
++    print("\n".join(lines[:summary_end]))
++
++
++if __name__ == "__main__":
++    main()
+--- a/README.md
++++ b/README.md
+@@ -24,6 +24,31 @@
+ let size = connection.recv(now_us, &mut buffer);
+ ```
+ 
++### 策略与显式覆盖
++
++默认 `Config::default()` 使用 `RecoveryPolicy::Auto`。也可以先取策略默认值，再覆盖公开字段：
++
++```rust
++use agent_net_core::{Config, RecoveryPolicy};
++
++let config = Config {
++    send_window: 1024,
++    recv_window: 1024,
++    send_buffer_bytes: 4 << 20,
++    ..Config::for_policy(RecoveryPolicy::Fast)
++};
++```
++
++| 策略 | 行为与代价 |
++| --- | --- |
++| `Auto`，默认 | 按路径调整校验；稳定零散丢包时，小消息用独立副本保护，持续中断时减少主动复制；不把稀疏消息的发送速度当成恢复积压时的路径上限 |
++| `Lean`，省流量 | 关闭主动副本、捎带和校验，只重传缺失数据；随机丢包和长往返下可能明显更慢 |
++| `Fast`，速度优先 | 扩大启动窗口、提高初始发送速率并增加校验和小消息副本；会增加流量，遇到限速或间歇中断也可能更慢 |
++
++当前 Auto 根据分片大小和路径观测做启发式保护，没有应用消息边界或流级优先级 API。
++策略只影响本地发送行为，不改变线格式，两端可选择不同策略。`Connection::new` 不重写调用方显式给出的字段。
++这是核心 API，尚未实现产品设置页面、偏好持久化或在线切换。最终产品采用「自动选择，支持手动覆盖」；默认值和覆盖的边界见产品规则。
++
+ ## 从 KCP 蒸馏了什么
+ 
+ | 处理 | 内容 |
+@@ -33,9 +58,10 @@
+ | 新增 | 确认之前完整校验包、拒绝确认未发送的数据、窗口打开时主动通知 |
+ | 第 2、4 步 | 多路流、加密与身份 |
+ 
+-## 为什么比 KCP 好
+-
+-KCP 关掉拥塞控制后，靠“发得快、重传得凶”换速度，代价是流量翻倍，遇到限速或小瓶颈甚至传不完。这里的思路相反：先弄清路径能承载多少、丢包是什么原因，再决定怎么发。
++## 传输机制与设计动机
++
++关闭拥塞控制的 KCP 配置会增加发送与重传，遇到限速或小瓶颈时流量开销可能很高。
++自研核心先估计路径容量和损伤，再决定发送节奏与冗余。
+ 
+ | 能力 | 做法 |
+ | --- | --- |
+@@ -45,10 +71,10 @@
+ | 校验包 | `parity.rs`。速度卡在窗口上时每隔几个分片发一个校验包，丢的分片当场算出来，省掉一个往返。用滑动窗口（思路同 RFC 8681）和 GF(256) 柯西码：相邻校验包的覆盖范围重叠，余量共用，所以开销只比丢包率高一点，丢的包等下一个校验包就能修。kcptun 的分组码要等整组发完才能修，确认成批回来，窗口每轮被拖慢几毫秒；每组还要单独留余量 |
+ | 校验只修能修的 | 晚到的包和零散丢掉的包一样堵窗口，都算进校验量。成片地丢是撞上了容量，不发。带宽是瓶颈时校验包要挤掉数据，余量收窄 |
+ | 乱序不算丢包 | 判丢的包如果确认后到，说明判错了，自动放宽判丢窗口。卡住窗口的那个包例外，它晚补一点全线都要等 |
+-| 小消息不等重传 | 把未确认的消息捎带在下一个包里，份数随丢包率增加（丢 3.5% 起带两份），让连续丢光的概率压到千分之一左右。丢过一个包后保持 30 秒，连接开头 128 个包之内也带：长 RTT 路径上丢一条要堵住十几条。断网时改带最老的分片，网一通第一个包就把它送到。干净网络上只有开头这一点流量，满载的包没有空位，不受影响 |
++| 小消息不等重传 | 自动策略在稳定零散丢包时把小消息的冗余分到独立 UDP 包，不必等下一条消息；不叠加旧消息捎带。持续中断时回到保守探测与最老分片优先。省流量策略关闭这些主动冗余 |
+ | 重传不再丢 | 随机丢包时，窗口被卡住的重传发两份，重传再丢一次就要多等一个往返 |
+-| 启动快 | 第一批包的确认间隔直接反映路径速率，不用多爬两三轮 |
+-| 不把队列顶满 | 启动时 RTT 一涨就停，巡航时发现排队就略微降速，大传输时交互延迟不被拖累 |
++| 启动快 | 第一批包的确认间隔直接反映路径速率；尚未测得 RTT 时第一次超时只探测一个数据包，保留其余测量机会，避免初始超时短于真实往返时批量误重传 |
++| 减少网络排队 | 启动时 RTT 一涨就停，巡航时发现排队就略微降速；同一字节流内部的顺序阻塞仍需后续多路流处理 |
+ | 断网省流量、恢复快 | 超时一次判完所有超龄的包。短中断最多退避到 2.25 倍，网络一恢复很快重连；连续超时 8 次才放慢到 5 倍，并且只发少量探测 |
+ 
+ ## 验证
+@@ -56,28 +82,64 @@
+ 可靠性验证用 `--profile sim`：速度接近 release，但打开了溢出检查。性能对比和真实 UDP 工具用 `--release`。
+ 
+ ```sh
+-cargo test --profile sim -p agent-net-sim --test reliability      # 默认 200 个种子，约 1 秒
++cargo test --profile sim -p agent-net-sim --test reliability      # 默认 200 个种子，另跑三种策略与固定回归
+ AGENT_NET_SEEDS=10000 cargo test --profile sim -p agent-net-sim --test reliability
+ AGENT_NET_REPLAY=<种子> cargo test --profile sim -p agent-net-sim --test reliability every_seed
+ python3 sim/mutants.py                                            # 注入 bug，约 15 分钟
+ ./sim/fetch-kcp.sh && cargo run --release -p agent-net-sim --features kcp --bin compare   # 12 种 KCP 配置，约 1 小时
+ AGENT_NET_KCP=none cargo run --release -p agent-net-sim --features kcp --bin compare       # 只跑 agent-net，20 秒，KCP 结果不变时用
+ AGENT_NET_TUNING=1 cargo run --release -p agent-net-sim --features kcp --bin compare       # 调参时用，不跑留出场景
++AGENT_NET_POLICY=fast AGENT_NET_KCP=none cargo run --release -p agent-net-sim --features kcp --bin compare  # auto / lean / fast
+ cargo run --release -p agent-net-sim --bin diagnose -- 丢包                                # 只看自研核心的内部统计
+ cargo run --release -p agent-net-sim --example trace -- 令牌桶 1024 1 8                    # 打印一条连接的时间线
+ cargo run --release -p agent-net-sim --features kcp --bin netperf -- local --filter 丢包    # 回环 UDP + 真实时钟
+ ```
+ 
+ `netperf` 用真实 UDP 和真实时钟，和 KCP 轮流跑，避免公网波动算到某一方头上。公网测试见 `sim/src/bin/netperf.rs` 文件头。
+-
+-`compare` 的留出场景不能拿来调参。看过结果后想针对它改算法，就要把它改成普通场景，再换一批新的，否则分数不算数。
++`compare` 与 `netperf` 都支持测试宿主环境变量 `AGENT_NET_POLICY=auto|lean|fast`；公网两端分别指定，输出策略名称。
++这些环境变量不进入传输核心，也不构成产品偏好持久化。
++
++`compare` 的五个历史保留场景未参与本轮调参，但之前已经看过结果，不能声称是新的盲测。新增独立验证应使用预先冻结的新网络条件与种子。
++`AGENT_NET_KCP=none` 不生成胜负统计；用 `sim/summarize.py` 将保存的自研矩阵与固定 KCP 原始矩阵比较，保留全部落后项。
+ 
+ 模拟器的时间是虚拟的，随机数来自种子，同一种子每次结果完全相同，所以任何失败都能精确复现。
+ 每个种子随机组合包大小、窗口、丢包（0–30%，含突发）、乱序、重复、抖动、延迟（最高 300 ms）、带宽、断网和序号回绕。
+ 
+ 判定卡死看**有没有进展**（120 秒无新数据送达），不看总时长：慢不等于卡死，吞吐好坏由 `compare` 衡量。
+ 
+-## 验证结果（2026-10-31，核心代码指纹 `0207ddfd23a0`）
++## 本轮优化（2026-10-31，核心代码指纹 `bc94b7e56a6d`）
++
++三种策略均已进入核心，43 项测试通过，1 项 profiling 按原设计忽略；包含 10000 个默认策略种子、
++三策略各 1000 个种子、六种不同策略的双向互通，另用 300000 起的新种子段验证。
++首轮超时、小消息副本、断网恢复和长往返启动均保留回归证据，没有放宽原有测试。
++
++32 个固定场景、每场景 16 个种子，使用修正后的独立突发日程模型，与十二种 KCP 配置逐项最好值比。
++按保存的表格精度计算，差距 1% 内算平，接近边界需高精度复核：
++批量负载为 8 MiB，交互为每 20 ms 一条 200 字节；二者分别测量，未覆盖并发大传输争用和全部应用消息尺寸。
++
++| 策略与窗口 | 传输用时：胜 / 平 / 负 | 交互 p95：胜 / 平 / 负 | 额外协议字节：胜 / 平 / 负 |
++| --- | --- | --- | --- |
++| Auto，128 | 16 / 2 / 14 | 21 / 9 / 2 | 5 / 1 / 26 |
++| Auto，1024 | 31 / 0 / 1 | 21 / 9 / 2 | 13 / 0 / 19 |
++| Lean，128 | 7 / 2 / 23 | 1 / 11 / 20 | 23 / 0 / 9 |
++| Lean，1024 | 26 / 0 / 6 | 1 / 11 / 20 | 17 / 0 / 15 |
++| Fast，128 | 19 / 3 / 10 | 24 / 6 / 2 | 2 / 0 / 30 |
++| Fast，1024 | 32 / 0 / 0 | 24 / 6 / 2 | 4 / 1 / 27 |
++
++这还不是全面赶超。完整 p50 / p99、每个落后项与对照配置见
++[`comparison.md`](sim/results/2026-10-31-optimization/comparison.md)。例如，Auto 的跨洋用时
++从 2467 ms 降至 2232 ms，仍比最快 KCP 的 2206 ms 慢约 1.2%；Fast 为 2102 ms，但额外协议字节更多。
++小窗口、最省字节与中断尾延迟仍有差距。不能把三种策略中事后挑出的最好成绩当作 Auto 的成绩。
++
++额外字节统一统计协议载荷与确认，不含 UDP/IP 和链路层包头；虚拟传输时间不含编码消耗的真实 CPU 时间。
++CPU 与公网验证的范围、原始数据和源码哈希见
++[`本轮记录`](sim/results/2026-10-31-optimization/README.md)。实验包原有 rustfmt 差异仍保留。
++公网 Auto / Fast 各 45 次轮换传输均完成，发送失败为零；下载领先本轮 KCP 对照，上传和部分尾延迟仍落后。
++同一核心的公网结果见 [`公网比较`](sim/results/2026-10-31-optimization/public-comparison.md)，只代表一条路径、每项三轮。
++
++## 历史基线（2026-10-31，核心代码指纹 `0207ddfd23a0`）
++
++下面的数字属于优化前基线，不能当作当前三种策略的验证。后续优化与版本边界见 [`sim/results/2026-10-31-optimization/README.md`](sim/results/2026-10-31-optimization/README.md)。
+ 
+ 三层验证：确定性模拟器、回环 UDP 加真实时钟、真实公网。原始结果和版本边界见 [`sim/results/2026-10-31/README.md`](sim/results/2026-10-31/README.md)。**只跑过一条公网路径，还没有经过真机、Wi-Fi 切蜂窝和国内三大运营商。**
+ 
+--- /dev/null
++++ b/sim/results/2026-10-31-optimization/network-v2/merge-reference.py
+@@ -0,0 +1,98 @@
++#!/usr/bin/env python3
++"""Build the v2 KCP reference from rerun bursts and unchanged non-burst rows.
++
++Run from any directory after kcp-rerun-raw.txt completes. All twelve KCP
++configurations in both control windows must exactly match the original run.
++The agent-net rows in both raw inputs are deliberately excluded.
++"""
++
++from pathlib import Path
++import hashlib
++import json
++import re
++import runpy
++
++HERE = Path(__file__).resolve().parent
++PACKAGE = HERE.parents[3]
++ORIGINAL = HERE.parent.parent / "2026-10-31/simulation-kcp-baseline.txt"
++RERUN = HERE / "kcp-rerun-raw.txt"
++HELPERS = runpy.run_path(str(HERE.parents[2] / "summarize.py"))
++MODEL = "independent-burst-calendar-v2"
++BURSTS = ["突发丢包", "Wi-Fi 200Mbit", "地铁", "山区", "留出 高铁"]
++
++
++def raw_rows(path):
++    rows = {}
++    window = scene = None
++    lines = path.read_text().splitlines()
++    for index, line in enumerate(lines):
++        heading = re.match(r"^=== 窗口 (\d+)", line)
++        if heading:
++            window = int(heading[1])
++            scene = None
++            continue
++        metric = HELPERS["ROW"].match(line)
++        if metric:
++            assert window is not None and scene is not None
++            rows.setdefault((window, scene), {})[metric[1].strip()] = line
++        elif window and index + 1 < len(lines) and HELPERS["ROW"].match(lines[index + 1]):
++            scene = line
++            for annotation in HELPERS["ANNOTATIONS"]:
++                scene = scene.removesuffix(annotation)
++    return rows
++
++
++def main():
++    original = HELPERS["read_matrix"](ORIGINAL)
++    rerun = HELPERS["read_matrix"](RERUN)
++    assert HELPERS["network_model"](RERUN) == MODEL
++    assert len(original) == 64
++    assert len(rerun) == 12, "six scenarios in two windows must finish before merging"
++    names = [name for name in next(iter(original.values())) if name != "agent-net"]
++    assert len(names) == 12
++    controls = []
++    for window in [128, 1024]:
++        key = (window, "无丢包 40ms")
++        for name in names:
++            assert rerun[key][name] == original[key][name], (key, name, rerun[key][name], original[key][name])
++        controls.append({"window": window, "scenario": key[1], "configurations_matching_exactly": 12})
++    old_raw, new_raw = raw_rows(ORIGINAL), raw_rows(RERUN)
++    lines = [f"网络模型 {MODEL}", "KCP-only derived reference; provenance in kcp-reference-provenance.json.", ""]
++    expected = {}
++    sources = []
++    for window in [128, 1024]:
++        lines.append(f"=== 窗口 {window}（KCP 参考）===")
++        for key in original:
++            if key[0] != window:
++                continue
++            affected = any(label in key[1] for label in BURSTS)
++            source = RERUN if affected else ORIGINAL
++            parsed = rerun if affected else original
++            raw = new_raw if affected else old_raw
++            lines.append(key[1])
++            expected[key] = {name: parsed[key][name] for name in names}
++            lines.extend(raw[key][name] for name in names)
++            sources.append({"window": window, "scenario": key[1], "source": str(source.relative_to(PACKAGE)), "rerun_burst": affected})
++        lines.append("")
++    assert sum(row["rerun_burst"] for row in sources) == 10
++    destination = HERE / "kcp-reference-merged.txt"
++    destination.write_text("\n".join(lines) + "\n")
++    assert HELPERS["read_matrix"](destination) == expected
++    provenance = {
++        "network_model": MODEL,
++        "original": {"path": str(ORIGINAL.relative_to(PACKAGE)), "sha256": hashlib.sha256(ORIGINAL.read_bytes()).hexdigest()},
++        "rerun": {"path": str(RERUN.relative_to(PACKAGE)), "sha256": hashlib.sha256(RERUN.read_bytes()).hexdigest()},
++        "control_validation": controls,
++        "reused_scenarios": 27,
++        "rerun_scenarios": 5,
++        "configurations": 12,
++        "seeds": 16,
++        "note": "Non-burst Link execution preserves its exact v1 random stream; all 54 Auto rows were also checked unchanged. No agent-net baseline rows are used.",
++        "rows": sources,
++    }
++    (HERE / "kcp-reference-provenance.json").write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n")
++    print("KCP reference: 768 rows, 27 compatible scenarios reused, 5 burst scenarios rerun; 24 control rows match exactly.")
++
++
++if __name__ == "__main__":
++    main()
