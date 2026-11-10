@@ -1072,6 +1072,11 @@ export const MAKER_PUSH = {
    */
   WORKER_CREATION_PREFS_APPLY: 'maker:worker-creation-prefs:apply',
   /**
+   * 手机或远程控制的电脑改了这台电脑的协同角色清单(记下一次创建 / 移除一个角色)：交给本机
+   * renderer 写回 workerCreationPrefs localStorage。只在本机消费，不进入 device-link 转发。
+   */
+  WORKER_ROLES_APPLY_REQUEST: 'maker:worker-roles:apply-request',
+  /**
    * 被控端本地 main → 自身 renderer:把控制端写穿的会话 pref 交给 renderer,renderer 调它原来的
    * 本地 setter 写真实会话记忆。仅本地窗口消费(不转发)。payload = SET_SESSION_MODEL_PREF 入参。
    */

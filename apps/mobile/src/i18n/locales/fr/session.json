@@ -729,21 +729,34 @@
     "remoteDirPathHint": "Le dossier est vérifié sur l'appareil d'exécution. Un dossier introuvable provoque une erreur ; le dossier du Lead n'est jamais utilisé à la place.",
     "remoteDirInvalid": "Saisissez un chemin absolu sur l'appareil d'exécution.",
     "roleLabel": "Nom du rôle",
-    "roleHint": "Simple nom pour distinguer les collaborateurs. Il ne modifie pas les capacités.",
-    "customRole": "Personnalisé",
-    "customRolePlaceholder": "Nom de rôle personnalisé",
-    "customRolePredefinedError": "Un nom de rôle personnalisé ne peut pas être identique à un rôle prédéfini",
+    "taskLabel": "Ce que fait le Worker",
+    "enableHint": "Cette tâche devient le Lead : elle répartit le travail et vérifie les résultats. Le Worker est un autre Agent indépendant qui exécute le travail et rend compte.",
+    "roles": {
+      "reviewer": {
+        "name": "Revue",
+        "task": "Jetez un œil au travail du Lead et faites quelques suggestions."
+      },
+      "developer": {
+        "name": "Développer"
+      },
+      "tester": {
+        "name": "Tester",
+        "task": "Testez le travail effectué jusqu'ici par le Lead et signalez les échecs avec les étapes pour les reproduire."
+      }
+    },
+    "addRole": "Ajouter un rôle",
+    "removeRoleHint": "Appuyez longuement pour retirer",
+    "removeRoleConfirmTitle": "Retirer « {{role}} » ?",
+    "removeRoleConfirmDesc": "Vous pourrez le rajouter à tout moment avec « Ajouter un rôle ».",
+    "removeRoleConfirm": "Retirer le rôle",
+    "moreSettings": "Autres paramètres",
     "agentLabel": "Agent",
-    "modelLabel": "Modèle",
     "modelDefault": "Par défaut",
     "modelDefaultHint": "Utilise le modèle Worker par défaut de l'ordinateur",
-    "permissionLabel": "Mode d'autorisation",
     "permissionAuto": "Revue automatique",
     "permissionFull": "Accès complet",
-    "permissionAutoHint": "Lit et écrit dans l'espace de travail et soumet automatiquement les demandes d'élévation à une revue. Les actions à haut risque peuvent être refusées ou nécessiter une confirmation.",
-    "permissionFullHint": "Peut modifier n'importe quel fichier et exécuter des commandes réseau sans redemander. Risque le plus élevé ; à réserver aux tâches de confiance.",
     "initialTaskLabel": "Tâche initiale (facultatif)",
-    "initialTaskPlaceholder": "Une première tâche facultative pour ce Worker",
+    "initialTaskPlaceholder": "Indiquez la première chose à lui confier, ou laissez vide pour que le Lead répartisse le travail",
     "workerCountSummary_one": "{{count}} Worker · {{running}} en cours",
     "workerCountSummary_other": "{{count}} Workers · {{running}} en cours",
     "loading": "Chargement des Workers…",

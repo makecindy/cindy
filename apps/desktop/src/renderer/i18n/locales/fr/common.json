@@ -17584,15 +17584,37 @@
       "customRolePlaceholder": "+ nom de rôle personnalisé (facultatif)",
       "customRolePredefinedError": "Le nom de rôle personnalisé ne peut pas reprendre un nom de rôle prédéfini",
       "agentLabel": "Agent",
-      "modelLabel": "Modèle",
       "permissionLabel": "Mode d'autorisation",
       "noAvailableModels": "Aucun modèle {{agent}} disponible. Vérifiez la connexion au fournisseur et les identifiants dans les Paramètres.",
       "effortLabel": "Effort de raisonnement",
       "initialTaskLabel": "Tâche initiale",
-      "optional": "(facultatif)",
-      "initialTaskPlaceholder": "Première tâche facultative pour ce Worker",
+      "initialTaskPlaceholder": "Indiquez la première chose à lui confier, ou laissez vide pour que le Lead répartisse le travail",
       "enableCollabTitle": "Démarrer la collaboration",
       "enableCollabSubmit": "Démarrer la collaboration",
+      "enableCollabDescription": "Cette tâche devient le Lead : elle répartit le travail et vérifie les résultats. Le Worker est un autre Agent indépendant qui exécute le travail et rend compte.",
+      "templateLabel": "Ce que fait le Worker",
+      "templates": {
+        "developer": {
+          "name": "Développer"
+        },
+        "reviewer": {
+          "name": "Revue",
+          "task": "Jetez un œil au travail du Lead et faites quelques suggestions."
+        },
+        "tester": {
+          "name": "Tester",
+          "task": "Testez le travail effectué jusqu'ici par le Lead et signalez les échecs avec les étapes pour les reproduire."
+        }
+      },
+      "removePreset": "Retirer {{role}}",
+      "removePresetConfirm": {
+        "title": "Retirer « {{role}} » ?",
+        "description": "Vous pourrez le rajouter à tout moment avec « Ajouter un rôle ».",
+        "confirm": "Retirer le rôle",
+        "cancel": "Annuler"
+      },
+      "addRole": "Ajouter un rôle",
+      "moreSettings": "Autres paramètres",
       "executionDeviceLabel": "Exécuter sur",
       "thisComputer": "Local",
       "deviceOnline": "En ligne",
