@@ -114,7 +114,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const authorization = createHostPluginAuthorization({ owner, root, current, assertCurrent,
     getGhost, list: () => options.manager.list(), secret, kv, identity,
     account: options.account ?? { hasLogin: () => false, post: unavailable, endpoint: unavailable,
-      openExternal: unavailable, modelAccessReady: () => false },
+      openExternal: unavailable },
     publish: options.publish, signal: stopSignal.signal });
   const require = createRequire(import.meta.url);
   const library = new GhostLibrarySlot({

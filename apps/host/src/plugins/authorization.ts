@@ -31,7 +31,6 @@ export interface PluginAccountPorts {
   post(service: 'oauthBrokerApiBaseUrl' | 'authApiBaseUrl', path: string, body: Record<string, unknown>): Promise<unknown>;
   endpoint(service: 'oauthBrokerApiBaseUrl'): string;
   openExternal(url: string): Promise<void>;
-  modelAccessReady(): boolean;
 }
 
 /** Owner-scoped assembly of the existing OAuth/setup services. The browser and
@@ -106,9 +105,8 @@ export function createHostPluginAuthorization(options: {
     assertCurrent(); const ghost = getGhost(id);
     if (!ghost) throw new Error('PLUGIN_SETUP_UNAVAILABLE');
     const storeId = installedGhostStoragePart(ghost);
-    return assessPluginSetup({ translate: i18n.t, manifest: ghost.manifest, probes: pluginSetupProbes(stores, storeId, ghost.manifest),
+    return assessPluginSetup({ manifest: ghost.manifest, probes: pluginSetupProbes(stores, storeId, ghost.manifest),
       revision: changes.currentRevision(storeId),
-      clientConfigReady: key => key === 'model-provider' && account.modelAccessReady(),
       reauthSuggestion: () => pluginOauthReauthSuggestion(oauth, storeId, ghost.manifest),
     });
   };

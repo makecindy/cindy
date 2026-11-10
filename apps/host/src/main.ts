@@ -549,7 +549,6 @@ async function ensureRuntime(ownerId: string): Promise<void> {
         },
       }),
       openExternal: async url => { await openSystemBrowser(url); },
-      modelAccessReady: () => Boolean(currentGateway()?.credential),
     },
     getSession: id => agentGraph?.maker.getSession(id),
     requestFileConfirmation: (id, payload) => fileConfirmation.request(id, payload),

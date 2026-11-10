@@ -12150,12 +12150,6 @@
         "ASSESSMENT_FAILED": "Der Einrichtungsstatus konnte nicht aktualisiert werden. Versuche es erneut.",
         "TIMEOUT": "Zeitüberschreitung bei der Einrichtung. Versuche es erneut."
       },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "KI-Modelldienst",
-          "description": "Verbinde einen verfügbaren Modelldienst, bevor du die von diesem Plugin angegebenen Bild- oder Videofunktionen nutzt."
-        }
-      },
       "form": {
         "placeholder": "{{label}} eingeben",
         "required": "{{label}} eingeben",

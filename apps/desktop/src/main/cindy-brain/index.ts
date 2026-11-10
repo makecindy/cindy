@@ -754,7 +754,7 @@ import { resolveGhostMediaHandoverTarget } from './ghostMediaHandoverTargetTrack
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { ghostSetupNavigationForAction } from './ghostSetupNavigation.js';
 import { assessPluginSetup, pluginSetupProbes, pluginOauthReauthSuggestion } from './pluginSetupService.js';
-import { isModelAccessReady } from '../model-access/readiness.js';
+import { isModelAccessReady, isModelAccessTransientlyUnavailable } from '../model-access/readiness.js';
 import {
   filterEnabledGatewayMediaModels,
   isMediaModelExecutable,
@@ -5961,6 +5961,8 @@ export function getGhostCindySlot(): GhostCindySlot {
       // model-access 下发值同源，模型别名和 Claude 原生 Web Search 工具定义
       // 留在主机侧，意识只拿规范化结果。
       searchWeb: (params) => getCindyProxySearchService().search(params),
+      isModelAccessReady,
+      isModelAccessTransientlyUnavailable,
       // 快问快答(text.oneshot):走轻量任务模型链(与会话起标题/任务摘要
       // 同一条,用户在设置里配置)。动态 import:utility-model 的传递依赖在
       // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本
@@ -6444,11 +6446,9 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const storeId = installedGhostStoragePart(ghost);
   const runtimeManifest = ghost.manifest;
   return assessPluginSetup({
-    translate: t,
     manifest: runtimeManifest,
     probes: getGhostSetupProbes(storeId, runtimeManifest),
     revision: getGhostSetupChangeBus().currentRevision(storeId),
-    clientConfigReady: configId => configId === 'model-provider' && isModelAccessReady(),
     reauthSuggestion: () => getGhostOauthReauthSuggest(runtimeManifest, storeId),
   });
 }

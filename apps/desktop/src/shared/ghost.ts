@@ -8781,7 +8781,13 @@ export type GhostPipeModelResult =
       message: string;
       /**
        * 结构化错误码(2026-07-31 起 oneshot_text 填写,2026-08-04 起
-       * embed_text 同样填写;媒体代办暂只有 message)。稳定值:
+       * embed_text 同样填写;媒体代办只在模型目录为空且 Cindy 模型服务未登录、
+       * 也不在账号切换、凭证下发或同步暂时失败中时填 'NO_CANDIDATE',表示需要
+       * 用户登录或连接供应商,不是稍后重试能好的;其余媒体失败仍只有 message)。
+       * 账号切换、凭证下发或同步暂时失败期间,oneshot_text / embed_text 的无候选回
+       * 'INTERNAL',search_web 的未就绪回 'UPSTREAM_UNAVAILABLE'。例外:oneshot_text
+       * 被用户钉在非 Cindy 供应商上时,凭证下发救不回这条路由,无候选仍回
+       * 'NO_CANDIDATE'(账号切换期间除外)。稳定值:
        * 'NO_CANDIDATE'(快速通道无可用模型/凭证;embed_text 复用它表示
        * 目录里没有可用的向量型号)、
        * 'BAD_MODEL_OUTPUT'(expectJson 下输出不可解析)、'RATE_LIMITED'、

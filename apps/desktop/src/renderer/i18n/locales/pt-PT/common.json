@@ -12248,12 +12248,6 @@
         "ASSESSMENT_FAILED": "Não foi possível atualizar o estado da configuração. Tente novamente.",
         "TIMEOUT": "O tempo limite da configuração foi excedido. Tente novamente."
       },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "Serviço de modelos de IA",
-          "description": "Liga um serviço de modelos disponível antes de usar as capacidades de imagem ou vídeo declaradas por este plugin."
-        }
-      },
       "form": {
         "placeholder": "Introduz {{label}}",
         "required": "Introduz {{label}}",
