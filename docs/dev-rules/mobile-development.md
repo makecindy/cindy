@@ -60,6 +60,21 @@ pnpm mobile:sim:start:cn
 `ANDROID_SDK_ROOT`、`ANDROID_HOME` 或 Windows 标准 Android Studio SDK 目录解析工具，
 不要求把 `adb`、`emulator` 加进 `PATH`。
 
+Windows 的 `mobile:sim:rebuild` 会给 Gradle 传入
+`-Pexpo.android.cmakeObjectPathMax=0`，让 App 和原生依赖保留 CMake 的平台默认路径上限与
+哈希缩短行为。Expo SDK 58 默认把上限提高到 1024，但 Android SDK 附带的旧 Ninja 仍可能
+在深层 worktree 中报 `mkdir(...): No such file or directory`。该参数只作用于本次 Windows
+开发构建，不修改系统长路径设置、SDK 或应用原生配置；macOS 构建保持原有行为。
+同一次 Windows 构建还通过 `sim-windows-native.gradle` 缩短 App 的 CMake staging 目录，
+在当前 worktree 根目录的 `.cxx/` 与系统临时目录的 `cx-<项目路径哈希>/` 中选较短者，给
+Gesture Handler 等生成目标的长名称留出路径空间；显式配置的 `buildStagingDirectory` 保持原值。
+缓存按当前 worktree 的 App 项目路径隔离并供后续构建复用，根目录的 `.cxx/` 已由 Git 忽略；
+临时目录被系统清理后会自动重建。这些目录只含可再生成的原生构建产物，不搬动源码、
+不修改 prebuild 生成文件，也不改变 APK 的输出位置。
+这不能保证任意深度的目录都可构建：若 CMake 仍警告对象文件 `cannot be safely placed under
+this directory`，需进一步缩短显式构建输出路径，或使用支持长路径的 Ninja 并启用 Windows
+长路径。单个原生库通过不能代替完整 APK 构建验证。
+
 修改原生依赖、Expo 原生配置，或切换到尚未安装对应开发包的区域时，重新构建：
 
 这里的 `rebuild` 是“准备兼容原生包”的入口：先复用匹配缓存，未命中才完整编译。
