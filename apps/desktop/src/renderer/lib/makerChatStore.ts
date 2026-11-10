@@ -7380,6 +7380,18 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
 }
 
 /**
+ * Start clock for a turn that is only now beginning.
+ * `Date.now()` can land on the previous turn's stamp. Alert ids are built from
+ * this number, so an equal stamp would make the next failure look like one that
+ * was already notified.
+ */
+function freshTurnStartedAt(status: AgentStatus, now = Date.now()): number {
+  return status.lastStartedAt != null && now <= status.lastStartedAt
+    ? status.lastStartedAt + 1
+    : now;
+}
+
+/**
  * `lastStartedAt` is the start clock of the turn that is current, not of the
  * turn that happened to run most recently. A turn that is already running keeps
  * its own clock (a late frame must not mint a second one). A turn that is only
@@ -7391,7 +7403,7 @@ function turnClockForRunning(
   status: AgentStatus,
   now = Date.now(),
 ): { startedAt: number; lastStartedAt: number } {
-  const startedAt = status.startedAt ?? now;
+  const startedAt = status.startedAt ?? freshTurnStartedAt(status, now);
   const lastStartedAt = status.startedAt != null
     ? (status.lastStartedAt ?? status.startedAt)
     : startedAt;
@@ -7512,7 +7524,9 @@ function handleStatusUpdate(
     // product turn running until its unclaimed terminal tail arrives.
     return state;
   }
-  const startedAt = update.isRunning ? (state.agentStatus.startedAt ?? Date.now()) : null;
+  const startedAt = update.isRunning
+    ? (state.agentStatus.startedAt ?? freshTurnStartedAt(state.agentStatus))
+    : null;
   // A new product turn (not running → running) gets its own start clock. Keeping
   // the previous turn's clock here made the next failure share that turn's alert
   // id, so the desktop ledger treated it as a duplicate and dropped it. Once this

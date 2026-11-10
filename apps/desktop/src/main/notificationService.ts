@@ -687,10 +687,6 @@ function assertValidSessionEventPayload(
     (p.inputHandoffRequestId !== undefined && (
       p.kind !== 'needs-reply' || typeof p.inputHandoffRequestId !== 'string'
       || p.inputHandoffRequestId.length === 0 || p.inputHandoffRequestId.length > 256
-    )) ||
-    (p.alertEventId !== undefined && (
-      p.kind === 'done' || typeof p.alertEventId !== 'string'
-      || p.alertEventId.length === 0 || p.alertEventId.length > ALERT_EVENT_ID_MAX_LENGTH
     ))
   ) {
     throw new TypeError('invalid session event payload');

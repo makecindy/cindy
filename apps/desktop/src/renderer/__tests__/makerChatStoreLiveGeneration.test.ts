@@ -149,4 +149,48 @@ describe('makerChatStore turn clock used by alert ids', () => {
       makerChatStore.purgeSession(sessionId);
     }
   });
+
+  // #9575 review: the previous turn already failed and was alerted. The next
+  // attempt never gets a running status frame, and its clock sample lands on
+  // that same millisecond. Reusing the stamp rebuilds the alert id main already
+  // saw, so the new failure must get its own clock.
+  it('alerts a new failure after the previous turn was already alerted, even without a running frame', () => {
+    const sessionId = `turn-clock-retry-${Math.random().toString(36).slice(2, 8)}`;
+    vi.useFakeTimers();
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(1_000);
+      applyStatus(sessionId, { isRunning: true, status: 'Working' });
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', data: { message: 'first boom', isTerminal: true },
+      });
+      const alreadyAlerted = sessionAlertEventId(
+        'error',
+        makerChatStore.getSnapshot(sessionId).agentStatus.lastStartedAt,
+      );
+      expect(alreadyAlerted).toBe('turn:1000:error');
+
+      // Same millisecond as the turn that was already alerted. Keeping that
+      // stamp would rebuild `turn:1000:error` and main would drop the toast.
+      now.mockReturnValue(1_000);
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', data: { message: 'still trying', isTerminal: false },
+      });
+      const midAttempt = makerChatStore.getSnapshot(sessionId).agentStatus;
+      expect(midAttempt.isRunning).toBe(true);
+      expect(midAttempt.startedAt).toBe(1_001);
+
+      now.mockReturnValue(1_400);
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', data: { message: 'second boom', isTerminal: true },
+      });
+      const stopped = makerChatStore.getSnapshot(sessionId).agentStatus;
+      expect(stopped.startedAt).toBeNull();
+      expect(stopped.lastStartedAt).toBe(1_001);
+      expect(sessionAlertEventId('error', stopped.lastStartedAt)).not.toBe(alreadyAlerted);
+    } finally {
+      now.mockRestore();
+      makerChatStore.purgeSession(sessionId);
+    }
+  });
 });

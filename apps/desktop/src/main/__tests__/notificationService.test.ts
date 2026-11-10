@@ -533,6 +533,27 @@ describe('notificationService — channels 分发', () => {
     expect(markSessionNeedsAttention).not.toHaveBeenCalled();
   });
 
+  // #9575 review: an alert id longer than 256 used to fail the whole payload
+  // check (`invalid session event payload`), so a legitimate long request key
+  // never toasted. The id is only a dedup key: drop it and still deliver.
+  // A repeat of that same over-long id is not kept, so it toasts again.
+  it('does not reject a needs-reply whose alert id is longer than 256', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const tooLong = 'plugin:' + 'k'.repeat(260);
+
+    await expect(invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: tooLong, channels,
+    })).resolves.toBeUndefined();
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: tooLong, channels,
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+  });
+
   it('mobile 通道同步抛错不 reject invoke,飞书分支照常执行', async () => {
     const { initNotificationService } = await freshService();
     const feishuIm = makeFeishuIm('ou_owner');
