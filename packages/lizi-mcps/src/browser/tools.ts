@@ -13,7 +13,8 @@ import {
   type BrowserMcpDeps,
   type ResolvedBrowserScreenshot,
 } from '../types.js';
-import type { BrowserToolRegistry } from './tool-registry.js';
+import type { BrowserToolContentBlock, BrowserToolRegistry, BrowserToolResult } from './tool-registry.js';
+import { cdpCommandIssue, runCdpCommands } from './cdp.js';
 import {
   buildExtractFnSource,
   collectSelectors,
@@ -103,7 +104,23 @@ const ACTIONS = [
   'saveRecipe',
   'recipeHelp',
   'readResult',
+  'batch',
+  'cdp',
 ] as const;
+
+/**
+ * Actions a `batch` step may be. Left out on purpose: `recipe`, `upload` and `setBackend` (each goes
+ * through the task's approval as its own call, so a batch must not carry them), nesting, lifecycle
+ * and the discovery/maintenance actions that never belong mid-sequence.
+ */
+const BATCH_ACTIONS = new Set([
+  'open', 'navigate', 'snapshot', 'screenshot', 'act', 'extract', 'requests', 'responseBody',
+  'tabs', 'focus', 'close', 'dialog', 'console', 'cdp',
+]);
+/** Batch steps that act on a tab and so follow the batch's current tab when they name none. */
+const BATCH_TAB_ACTIONS = new Set([...BATCH_ACTIONS].filter((action) => action !== 'open' && action !== 'tabs'));
+const BATCH_MAX_STEPS = 12;
+const BATCH_MAX_IMAGES = 3;
 
 const ACT_KINDS = [
   'click',
@@ -530,6 +547,7 @@ function unsupportedByBackend(args: Record<string, unknown>, deps: BrowserMcpDep
   if (action === 'focus' && caps.focus === false) return deny('切换活动标签页');
   if (action === 'close' && caps.close === false) return deny('关闭标签页');
   if (action === 'act' && kind === 'evaluate' && caps.evaluate === false) return deny('任意页面脚本(evaluate)');
+  if (action === 'cdp' && caps.rawProtocol === false) return deny('浏览器调试协议(cdp)');
   if (action === 'act' && (caps.pointer ?? caps.trustedInput) === false && (kind === 'clickCoords' || kind === 'drag' || kind === 'resize')) return deny(`act:${kind}`);
   return undefined;
 }
@@ -553,7 +571,7 @@ function recipeUnsupportedByBackend(recipe: Recipe, deps: BrowserMcpDeps): strin
 function toRuntimeRequest(args: Record<string, unknown>): BrowserControlRequest {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
-    if (value !== undefined && !['afterSnapshot', 'intent', 'deferValidation', 'resultId', 'offset'].includes(key)) out[key] = value;
+    if (value !== undefined && !['afterSnapshot', 'intent', 'deferValidation', 'resultId', 'offset', 'steps', 'commands'].includes(key)) out[key] = value;
   }
   return out as unknown as BrowserControlRequest;
 }
@@ -623,12 +641,26 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
       'status 返回实际浏览器模式; setBackend 切换并保存全局浏览器模式(内置 rsb-webview / 外置 external / 用户自己的浏览器 user-browser,即「我的浏览器」)。' +
       '优先使用 snapshot 返回的 ref 执行 click/type/press,不要猜测 CSS selector。' +
       'act/open/navigate/upload 可带 afterSnapshot:{}，一次返回动作结果和精简快照；可用 selector 限定区域。' +
+      '已经确定的连续几步用 action=batch + steps:[…] 一次做完(每步是本工具的一份普通参数,顺序执行,失败即停)。' +
       '注意:直接调用本工具时,wait/evaluate/saveResource 不是顶层 action(会报 INVALID_ARGS),它们只能作为 act 的 request.kind 子操作(配方 steps 里仅 wait/evaluate 是合法 DSL action,saveResource 在配方中同样不可用)。',
     rules: ['browser-workflow'],
     inputShape: {
       action: z.enum(ACTIONS).describe('浏览器操作类型'),
       intent: z.string().max(120).optional().describe('open/navigate/siteguide: 可选操作意图，用于本地匹配配方；不会自动执行'),
       deferValidation: z.boolean().optional().describe('saveRecipe: 仅明确读取步骤的新流程可存候选，下次真实任务校验；交互和任意脚本须当次验证，不为测试重放写操作'),
+      steps: z.array(z.record(z.string(), z.unknown())).min(1).max(BATCH_MAX_STEPS).optional().describe(
+        'action=batch: 按顺序执行的步骤,每步是本工具的一份普通参数(open/navigate/snapshot/screenshot/act/extract/requests/responseBody/tabs/focus/close/dialog/console/cdp)。' +
+          '任一步失败即停,返回已完成各步的结果,后面的不执行。没写 targetId 的步骤沿用 batch 的 targetId,或本次 batch 里 open/navigate 刚得到的标签页。' +
+          '例:[{action:"act",request:{kind:"type",ref:"e12",text:"Ada"}},{action:"act",request:{kind:"click",ref:"e20"},afterSnapshot:{}}]',
+      ),
+      commands: z.array(z.strictObject({
+        method: z.string().trim().min(1),
+        params: z.record(z.string(), z.unknown()).optional(),
+      })).min(1).max(BATCH_MAX_STEPS).optional().describe(
+        'action=cdp(需要 targetId): 在该标签页的同一个调试协议会话里顺序执行。辅助命令:{method:"nodes",params:{filter?}} 列出无障碍树 [id] role "name"(含封闭 Shadow DOM);' +
+          '{method:"click",params:{node:id}} 真实鼠标点击;{method:"type",params:{node:id,text}};{method:"call",params:{node:id,fn:"function(){ return this.textContent }"}}。' +
+          '也可发白名单内的原始命令(DOM.* / Input.* / Page.getFrameTree / Runtime.callFunctionOn 等)。',
+      ),
       resultId: z.string().optional().describe('readResult: 大结果返回的 fullResult.id'),
       offset: z.number().int().nonnegative().optional().describe('readResult: 原始 JSON 字符偏移'),
       backend: z
@@ -742,11 +774,69 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
         .optional()
         .describe('action=act 时的具体动作请求'),
     },
-    handler: async (args) => {
+    // Named so a batch can run each step through this same path (same checks, hints and bounds).
+    handler: async function handle(args, onTarget?: (targetId: string) => void): Promise<BrowserToolResult> {
       try {
         if (args.target === 'user-browser' || args.target === 'external' || args.target === 'rsb-webview') {
           const { target: _browserName, ...rest } = args;
           args = rest as typeof args;
+        }
+        if (args.steps !== undefined && args.action !== 'batch') return errorResult(args.action, 'steps 仅用于 action=batch');
+        if (args.commands !== undefined && args.action !== 'cdp') return errorResult(args.action, 'commands 仅用于 action=cdp');
+        if (args.action === 'batch') {
+          if (!args.steps?.length) return errorResult('batch', 'batch requires steps:[{action,...}, ...]');
+          if (args.afterSnapshot) return errorResult('batch', 'afterSnapshot 写在需要观察的那一步里,不写在 batch 外层');
+          // Validate every step before running any: a typo in step 3 must not leave steps 1-2 done.
+          const steps: Array<typeof args> = [];
+          for (const [index, raw] of args.steps.entries()) {
+            const action = typeof raw.action === 'string' ? raw.action : '';
+            if (!BATCH_ACTIONS.has(action)) {
+              return errorResult('batch', `steps[${index}].action="${action}" 不能放进 batch;可用:${[...BATCH_ACTIONS].join(' / ')}。recipe、upload、setBackend 等请单独调用。`);
+            }
+            const checked = registry.check('browser', {
+              ...(args.profile !== undefined && raw.profile === undefined ? { profile: args.profile } : {}),
+              // A snapshot inside a batch shares one result with the other steps; keep it bounded.
+              ...(action === 'snapshot' && raw.maxChars === undefined ? { maxChars: 6000 } : {}),
+              ...raw,
+            });
+            if (!checked.ok) return errorResult('batch', `steps[${index}] 参数不合法:${checked.issues.join('; ')}。整批未执行。`);
+            // What the active browser cannot do is known up front too; do not find out halfway through.
+            const unsupportedStep = unsupportedByBackend(checked.data, deps);
+            if (unsupportedStep) return errorResult('batch', `steps[${index}] ${unsupportedStep} 整批未执行。`);
+            steps.push(checked.data as typeof args);
+          }
+          let current = args.targetId;
+          const done: unknown[] = [];
+          const images: BrowserToolContentBlock[] = [];
+          let failed = false;
+          for (const step of steps) {
+            const inherits = current !== undefined && step.targetId === undefined && step.request?.targetId === undefined
+              && BATCH_TAB_ACTIONS.has(step.action);
+            const ran = await handle(inherits ? { ...step, targetId: current } : step, (targetId) => { current = targetId; });
+            const text = ran.content.find((block): block is { type: 'text'; text: string } => block.type === 'text')?.text;
+            let parsed: unknown = text ?? null;
+            try { if (text !== undefined) parsed = JSON.parse(text); } catch { /* Keep the raw text. */ }
+            done.push(parsed);
+            for (const block of ran.content) if (block.type === 'image' && images.length < BATCH_MAX_IMAGES) images.push(block);
+            if (ran.isError) { failed = true; break; }
+          }
+          return {
+            content: [
+              { type: 'text', text: resultText({
+                ok: !failed,
+                action: 'batch',
+                completed: failed ? done.length - 1 : done.length,
+                total: steps.length,
+                ...(failed ? {
+                  failedStep: done.length - 1,
+                  hint: '失败的这一步之后都没有执行。前面各步已经生效:先看它们的结果和当前页面,只补做剩下的,不要整批重放。',
+                } : {}),
+                steps: done,
+              }) },
+              ...images,
+            ],
+            isError: failed,
+          };
         }
         const scope = syncBackendScope();
         const scopeIsCurrent = () => syncBackendScope() === scope;
@@ -771,9 +861,9 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           return { content: [{ type: 'text', text: resultText({ ok: true, action: 'recipeHelp', rules: recipeAuthorRules, observations }) }] };
         }
         if (args.deferValidation !== undefined && args.action !== 'saveRecipe') return errorResult(args.action, 'deferValidation 仅用于 saveRecipe');
-        if (args.afterSnapshot && (!['act', 'open', 'navigate', 'upload'].includes(args.action)
+        if (args.afterSnapshot && (!['act', 'open', 'navigate', 'upload', 'cdp'].includes(args.action)
           || (args.action === 'act' && args.request?.kind === 'close'))) {
-          return errorResult(args.action, 'afterSnapshot 仅用于 act（不含 close）、open、navigate、upload');
+          return errorResult(args.action, 'afterSnapshot 仅用于 act（不含 close）、open、navigate、upload、cdp');
         }
         // Host configuration is not a vendored browser action. Await the same
         // lifecycle transition as Settings before issuing any new page actions.
@@ -794,6 +884,9 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
                 ok,
                 action: args.action,
                 data: { backend, scope: 'global', ...(ok ? { persisted: true } : {}) },
+                ...(ok && registry.rulesBackend && registry.rulesBackend !== 'all' && registry.rulesBackend !== backend
+                  ? { rulesHint: `之前读取的规则是按 ${registry.rulesBackend} 给出的:重新 list_tools({category:"browser"}) 读取 ${backend} 模式的规则。` }
+                  : {}),
                 ...(!ok ? { message: '浏览器模式已发生变化,请重新查询 status' } : {}),
               }),
             }],
@@ -1217,6 +1310,24 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               ...(args.timeoutMs ? { timeoutMs: args.timeoutMs } : {}),
             },
           } as BrowserControlRequest);
+        } else if (args.action === 'cdp') {
+          if (!args.commands?.length) return errorResult('cdp', 'cdp requires commands:[{method, params?}, ...]');
+          if (!args.targetId) return errorResult('cdp', 'cdp requires targetId(tabs / open 返回的标签页)');
+          const issue = cdpCommandIssue(args.commands);
+          if (issue) return errorResult('cdp', issue);
+          // Same guarded runtime as every other action: paused on a page where the owner just typed a secret.
+          const ran = await runCdpCommands(runtime, { profile: args.profile, targetId: args.targetId }, args.commands, {
+            ...(typeof args.maxChars === 'number' && args.maxChars > 0 ? { maxChars: args.maxChars } : {}),
+          });
+          result = {
+            ok: ran.ok,
+            action: 'cdp',
+            data: { targetId: ran.targetId, results: ran.results },
+            ...(ran.ok ? {} : {
+              errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+              message: ran.message ?? '有命令失败,后面的没有执行。已执行的命令可能已经改变页面:先观察再决定,不要整批重放。',
+            }),
+          } as unknown as BrowserControlResult;
         } else {
           result = await runtime.call(toRuntimeRequest(args));
         }
@@ -1287,13 +1398,14 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
         // Optional experience work must never turn a completed action into a
         // failure (especially a write that the agent might otherwise replay).
         const targetId = readTargetId(result) ?? args.request?.targetId ?? args.targetId;
+        if (targetId && result.ok && args.action !== 'close' && args.request?.kind !== 'close') onTarget?.(targetId);
         const targetKey = targetId && JSON.stringify([args.profile ?? '', targetId]);
         let retainResult = scopeIsCurrent();
         try {
           if (args.action === 'stop') { experiences.clear(); discovered.clear(); results.clear(); }
           const restricted = deps.pageReadsRestricted && await deps.pageReadsRestricted({ profile: args.profile, targetId }).catch(() => true);
           if (restricted) { retainResult = false; results.clear(); }
-          if (!scopeIsCurrent() || !result.ok || extractFailed || restricted || args.action === 'close' || args.request?.kind === 'close') {
+          if (!scopeIsCurrent() || !result.ok || extractFailed || restricted || args.action === 'close' || args.request?.kind === 'close' || args.action === 'cdp') {
             if (targetKey) experiences.clear(targetKey);
           } else if (args.action === 'open' || args.action === 'navigate' || args.action === 'snapshot') {
             const actualUrl = (result.data as { url?: unknown } | undefined)?.url;
@@ -1330,6 +1442,12 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
             }
           }
         } catch { /* Structural hints are best effort; the operation result wins. */ }
+        // The rules this session read were tailored to another target (the user or another task switched it).
+        const rulesBackend = registry.rulesBackend;
+        const activeBackend = deps.getBackendKind?.();
+        if (args.action === 'status' && result.ok && activeBackend && rulesBackend && rulesBackend !== 'all' && rulesBackend !== activeBackend) {
+          result = { ...result, rulesHint: `浏览器模式现在是 ${activeBackend},之前读取的规则是按 ${rulesBackend} 给出的:重新 list_tools({category:"browser"}) 读取当前模式的规则。` } as typeof result;
+        }
         const advisory = lintBrowserOutput((result.data as { result?: unknown } | undefined)?.result);
         if (advisory.length) result = { ...result, advisory } as typeof result;
         return {
