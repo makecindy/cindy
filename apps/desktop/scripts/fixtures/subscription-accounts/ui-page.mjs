@@ -14,6 +14,7 @@ export default {
     error: { about: 'Unavailable status read and inline retry on focus' },
     'provider-auth': { about: 'Codex provider-managed authentication explains the independent-account recovery action' },
     'provider-auth-preview': { about: 'Provider-managed authentication offers a separate account directory at 320px', viewport: { width: 320, height: 600 } },
+    empty: { about: 'Nothing signed in: no placeholder account, strategy or count, only Add account' },
   },
   async check(page, ui) {
     if (ui.case === 'provider-auth-preview') {
@@ -34,6 +35,14 @@ export default {
     }
     if (ui.case === 'error') {
       await page.getByRole('alert').waitFor();
+      return;
+    }
+    if (ui.case === 'empty') {
+      await page.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).waitFor();
+      await page.waitForFunction(() => !document.querySelector('.animate-spinner'));
+      assert.equal(await page.getByTestId('subscription-account').count(), 0);
+      assert.equal(await page.getByRole('radiogroup').count(), 0);
+      assert.equal(await page.getByRole('switch').count(), 0);
       return;
     }
     assert.equal(await page.getByRole('switch').count(), 3);

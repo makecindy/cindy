@@ -55,6 +55,22 @@ const statusDot: Record<SubscriptionAccountView['status'], string> = {
   unavailable: 'var(--remote-status-disconnected)',
 };
 
+/**
+ * Before anything signs in, the host still lists the CLI default slot. Alone, signed out, idle and
+ * with no known identity it is not an account yet: the provider header's sign-in (or Add) fills it,
+ * so nothing is listed. A known identity that needs signing in again stays listed.
+ */
+function isUnusedDefaultSlot(accounts: SubscriptionAccountView[]): boolean {
+  const [only, ...rest] = accounts;
+  return (
+    rest.length === 0 &&
+    only?.id === 'default' &&
+    only.status === 'signed-out' &&
+    only.running === 0 &&
+    !only.identity
+  );
+}
+
 function AccountTag({ children }: { children: ReactNode }) {
   return (
     <span className="flex h-[18px] shrink-0 items-center rounded-full border border-[var(--settings-integration-avatar-border)] px-2 text-11 font-medium text-[var(--text-tertiary)]">
@@ -150,6 +166,9 @@ export function SubscriptionAccountsSection({
     const result = await window.electronAPI.openPath(directory);
     if (shouldShowOpenPathError(result)) toast.error(t('subscriptionAccounts.openDirectoryFailed'));
   };
+  const accounts = view && !isUnusedDefaultSlot(view.accounts) ? view.accounts : [];
+  // Strategy and weights only choose between accounts; a single account has nothing to balance.
+  const balancing = accounts.length > 1;
   return (
     <section
       {...accountSetting.anchorProps}
@@ -161,8 +180,8 @@ export function SubscriptionAccountsSection({
           <h3 className="text-16 font-medium text-[var(--text-primary)]">
             {t('subscriptionAccounts.title')}
           </h3>
-          {view && (
-            <span className="text-12 text-[var(--text-tertiary)]">{view.accounts.length}</span>
+          {accounts.length > 0 && (
+            <span className="text-12 text-[var(--text-tertiary)]">{accounts.length}</span>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -207,39 +226,40 @@ export function SubscriptionAccountsSection({
         </div>
       )}
       {/* A failed refresh keeps the loaded list, whose default row already holds the card. */}
-      {defaultUsage &&
-        ((!view && failed) || view?.accounts.every((account) => account.id !== 'default')) && (
-          <div data-testid="provider-usage-module" className="-mx-4 mt-3">
-            {defaultUsage}
-          </div>
-        )}
-      {view && (
+      {defaultUsage && (view ? accounts.every((account) => account.id !== 'default') : failed) && (
+        <div data-testid="provider-usage-module" className="-mx-4 mt-3">
+          {defaultUsage}
+        </div>
+      )}
+      {view && accounts.length > 0 && (
         <>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-13 font-medium text-[var(--text-secondary)]">
-              {t('subscriptionAccounts.strategy')}
-            </span>
-            {/* Same control and option order as the provider group strategy (ProviderGroupSection). */}
-            <SegmentedControl
-              {...accountSetting.controlProps}
-              aria-label={t('subscriptionAccounts.strategy')}
-              value={view.strategy === 'usage' ? 'least' : view.strategy}
-              disabled={busy}
-              options={strategies.map((value) => ({
-                value,
-                label: t(`providerGroup.strategy.${value}`),
-              }))}
-              onValueChange={(value) => {
-                // Only a changed strategy is saved, as with the previous picker.
-                if (value === (view.strategy === 'usage' ? 'least' : view.strategy)) return;
-                void run({
-                  action: 'configure',
-                  providerId,
-                  strategy: value,
-                });
-              }}
-            />
-          </div>
+          {balancing && (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-13 font-medium text-[var(--text-secondary)]">
+                {t('subscriptionAccounts.strategy')}
+              </span>
+              {/* Same control and option order as the provider group strategy (ProviderGroupSection). */}
+              <SegmentedControl
+                {...accountSetting.controlProps}
+                aria-label={t('subscriptionAccounts.strategy')}
+                value={view.strategy === 'usage' ? 'least' : view.strategy}
+                disabled={busy}
+                options={strategies.map((value) => ({
+                  value,
+                  label: t(`providerGroup.strategy.${value}`),
+                }))}
+                onValueChange={(value) => {
+                  // Only a changed strategy is saved, as with the previous picker.
+                  if (value === (view.strategy === 'usage' ? 'least' : view.strategy)) return;
+                  void run({
+                    action: 'configure',
+                    providerId,
+                    strategy: value,
+                  });
+                }}
+              />
+            </div>
+          )}
           {/* One grid for every account: each usage card joins it as a subgrid, so the bars of all
               accounts start and end at the same columns. */}
           <QuotaWindowSubgridContext.Provider value={true}>
@@ -249,7 +269,7 @@ export function SubscriptionAccountsSection({
                 QUOTA_WINDOW_COLUMNS,
               )}
             >
-              {view.accounts.map((account, index) => {
+              {accounts.map((account, index) => {
                 const name =
                   account.identity ||
                   t('providerGroup.member.accountFallback', { index: index + 1 });
@@ -356,7 +376,7 @@ export function SubscriptionAccountsSection({
                             })
                           }
                         />
-                        {view.strategy === 'weight' && (
+                        {balancing && view.strategy === 'weight' && (
                           <Select
                             {...accountSetting.controlProps}
                             label={t('providerGroup.member.weightAria', { name })}
