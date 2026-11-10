@@ -1,4 +1,5 @@
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
+import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
@@ -8328,11 +8329,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return {
           success: true,
           ...result,
-          skills: activeCindyBuiltInAgentSkills(
+          skills: await markCindyOfficialSkills(activeCindyBuiltInAgentSkills(
             result.skills,
             descriptors,
             (source) => !disabled.has(skillActivationKey(source)),
-          ),
+          ), skillParams.remoteHostId),
         };
       } catch (err) {
         return toAgentSkillListFailure(err, {

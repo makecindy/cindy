@@ -11237,7 +11237,8 @@
       "toolSettings": "도구 설정",
       "notTurnedOn": "이 컴퓨터에서 아직 켜지지 않음",
       "turnOn": "켜기",
-      "permissions": "권한"
+      "permissions": "권한",
+      "officialInherited": "Cindy 공식 · 이 컴퓨터 설정 따름"
     },
     "guided": {
       "title": "파트너 만들기",

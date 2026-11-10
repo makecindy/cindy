@@ -14,6 +14,7 @@ export type BotCapabilityEntry = {
   description?: string;
   available: boolean;
   personal?: boolean;
+  cindyOfficial?: boolean;
   /** Kept from the companion's setup but not present on this computer. */
   missing?: boolean;
 };

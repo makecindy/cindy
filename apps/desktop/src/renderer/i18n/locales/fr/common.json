@@ -11379,7 +11379,8 @@
       "toolSettings": "Réglages des outils",
       "notTurnedOn": "Pas encore activé sur cet ordinateur",
       "turnOn": "Activer",
-      "permissions": "Autorisations"
+      "permissions": "Autorisations",
+      "officialInherited": "Officiel Cindy · Suit les réglages de cet ordinateur"
     },
     "guided": {
       "title": "Créer un coéquipier",

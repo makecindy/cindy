@@ -11,7 +11,7 @@ import { createBotRemoteAutomationsEditor, type BotRemoteAutomationService } fro
 import type { BotProjectOption } from '../../../shared/botWorkbench.js';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
-type Capability = { id: string; name: string; description: string; available: boolean; joined: boolean };
+type Capability = { id: string; name: string; description: string; available: boolean; joined: boolean; cindyOfficial?: boolean };
 export interface BotRemoteEditorDeps extends Pick<BotRemoteSettingsDeps, 'owner' | 'assertOwner' | 'read' | 'update' | 'skills'> {
   projects?: { list(botId: string): Promise<BotProjectOption[]>; set(botId: string, id: string, linked: boolean): Promise<unknown> };
   /** Learned skills, including turned-off ones (`enabled: false`). */
@@ -55,6 +55,7 @@ export const editorCopy = {
   toolset: text('Toolsets', '工具集', '工具集', 'ツールセット', '도구 모음', {"es":"Conjuntos de herramientas","fr":"Ensembles d’outils","de":"Toolsets","pt-PT":"Conjuntos de ferramentas","pt-BR":"Conjuntos de ferramentas","zh-Hant-x-lzh":"工具集","zh-Hans-x-lzh":"工具集"}),
   description: text('Description', '说明', '說明', '説明', '설명', {"es":"Descripción","fr":"Description","de":"Beschreibung","pt-PT":"Descrição","pt-BR":"Descrição","zh-Hant-x-lzh":"說明","zh-Hans-x-lzh":"说明"}),
   body: text('Content', '内容', '內容', '内容', '내용', {"es":"Contenido","fr":"Contenu","de":"Inhalt","pt-PT":"Conteúdo","pt-BR":"Conteúdo","zh-Hant-x-lzh":"內容","zh-Hans-x-lzh":"内容"}),
+  officialInherited: text('Cindy official · Follows this computer’s settings', 'Cindy 官方 · 跟随本机启停', 'Cindy 官方 · 跟隨本機啟停', 'Cindy 公式 · このコンピューターの設定に従う', 'Cindy 공식 · 이 컴퓨터 설정 따름'),
   joined: text('Available to This Teammate', '供此伙伴使用', '供此夥伴使用', 'このチームメイトで使用', '이 팀원에서 사용', {"es":"Disponible para este compañero","fr":"Disponible pour ce coéquipier","de":"Für dieses Teammitglied verfügbar","pt-PT":"Disponível para este colega de equipa","pt-BR":"Disponível para este colega de equipe","zh-Hant-x-lzh":"供此同僚用","zh-Hans-x-lzh":"供此同僚用"}),
   largeSkill: text('Preview only. Open this skill on your computer to read or edit the full content.', '仅预览部分内容。请在电脑上阅读或编辑完整技能。', '僅預覽部分內容。請在電腦上閱讀或編輯完整技能。', '一部のプレビューです。全文の閲覧・編集はパソコンで行ってください。', '일부 내용만 미리 봅니다. 전체 내용은 컴퓨터에서 읽거나 편집하세요.', {"es":"Solo vista previa. Abre esta habilidad en tu equipo para leer o editar el contenido completo.","fr":"Aperçu uniquement. Ouvrez cette compétence sur votre ordinateur pour lire ou modifier l’intégralité du contenu.","de":"Nur Vorschau. Öffne diesen Skill auf deinem Computer, um den vollständigen Inhalt zu lesen oder zu bearbeiten.","pt-PT":"Apenas pré-visualização. Abra esta competência no seu computador para ler ou editar o conteúdo completo.","pt-BR":"Somente prévia. Abra esta habilidade no seu computador para ler ou editar o conteúdo completo.","zh-Hant-x-lzh":"僅先覽其部分。全篇技藝請於機上閱之、修之。","zh-Hans-x-lzh":"仅先览其部分。全篇技艺请于机上阅之、修之。"}),
   save: text('Save', '保存', '儲存', '保存', '저장', {"es":"Guardar","fr":"Enregistrer","de":"Speichern","pt-PT":"Guardar","pt-BR":"Salvar","zh-Hant-x-lzh":"存之","zh-Hans-x-lzh":"存之"}),
@@ -280,11 +281,12 @@ export function createBotRemoteEditors(deps: BotRemoteEditorDeps, bind: ReturnTy
     const entry = catalog.find(entry => hash(entry.id) === entryId);
     if (!entry) throwIpcError('NOT_FOUND', 'Capability unavailable');
     resource.display.title = entry.name;
-    const panel = form('capability', editorCopy.joined, [{ id: 'joined', label: editorCopy.joined, kind: 'toggle' }], { joined: entry.joined });
-    resource.blocks = [panel.block]; resource.actions = [{ ...panel.action, disabled: !entry.available && !entry.joined }];
-    panel.block.fallbackMarkdown = entry.description;
+    const panel = form('capability', entry.cindyOfficial ? editorCopy.officialInherited : editorCopy.joined, [{ id: 'joined', label: editorCopy.joined, kind: 'toggle' }], { joined: entry.joined });
+    resource.blocks = [panel.block]; resource.actions = [{ ...panel.action, disabled: entry.cindyOfficial || (!entry.available && !entry.joined) }];
+    panel.block.fallbackMarkdown = entry.cindyOfficial ? `${resolveRemoteText(editorCopy.officialInherited, locale)}\n\n${entry.description}` : entry.description;
     return bind(context, resource, () => revision(), async request => {
       const input = request.input ?? {}; keys(input, ['joined']);
+      if (entry.cindyOfficial) fail();
       if (typeof input.joined !== 'boolean' || input.joined && !entry.available) fail();
       const field = { skill: 'skills', mcp: 'mcpServers', toolset: 'toolsets' }[kind];
       const selected = { skill: settings.skills, mcp: settings.connections, toolset: settings.toolsets }[kind];

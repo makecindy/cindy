@@ -11282,7 +11282,8 @@
       "toolSettings": "Tool-Einstellungen",
       "notTurnedOn": "Auf diesem Computer noch nicht eingeschaltet",
       "turnOn": "Einschalten",
-      "permissions": "Berechtigungen"
+      "permissions": "Berechtigungen",
+      "officialInherited": "Offiziell von Cindy · Folgt den Einstellungen dieses Computers"
     },
     "guided": {
       "title": "Teammitglied erstellen",

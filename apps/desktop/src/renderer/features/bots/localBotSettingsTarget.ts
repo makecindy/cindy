@@ -68,13 +68,21 @@ async function loadCatalog(
   const [personalResult, skillResult, toolsetResult] = results;
   const next: Partial<Record<BotCapabilityKind, BotCapabilityEntry[]>> = {};
   if (skillResult.status === 'fulfilled' && skillResult.value.success) {
-    // Match resolveBotSkillReferences: the last entry for a name wins.
+    // Match the runtime: the last entry for a name wins, except that an active
+    // Cindy official Skill keeps the name and disables its namesakes.
     // Map retains first-seen display order without changing discovery data.
-    const skillsByName = new Map((skillResult.value.skills ?? []).map((item) => [item.name, item]));
+    const discovered = skillResult.value.skills ?? [];
+    const skillsByName = new Map<string, (typeof discovered)[number]>();
+    for (const item of discovered) {
+      const kept = skillsByName.get(item.name);
+      if (kept?.cindyOfficial && kept.enabled !== false && kept.runtimeStatus !== 'failed' && !item.cindyOfficial) continue;
+      skillsByName.set(item.name, item);
+    }
     next.skill = [...skillsByName.values()].map((item) => ({
       id: item.name,
       name: item.name,
       description: item.description,
+      cindyOfficial: item.cindyOfficial,
       available: item.enabled !== false && item.runtimeStatus !== 'failed',
     }));
   }

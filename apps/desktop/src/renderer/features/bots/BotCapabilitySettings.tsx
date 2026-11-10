@@ -207,11 +207,11 @@ export function BotCapabilitySettings({
     const shown: Row[] = rows
       .filter((item) => matches(item.id, item.name, item.description))
       .map((item) => {
-        const checked = personal ? item.available : selectedIds.includes(item.id);
+        const checked = personal || item.cindyOfficial ? item.available : selectedIds.includes(item.id);
         return {
           ...item,
           checked,
-          disabled: personal ? !target.skills || pendingSkill !== null : !canEdit || (!item.available && !checked),
+          disabled: item.cindyOfficial ? true : personal ? !target.skills || pendingSkill !== null : !canEdit || (!item.available && !checked),
         };
       });
     return { mode, canEdit, selectedIds, total: rows.length, rows: shown };
@@ -278,7 +278,7 @@ export function BotCapabilitySettings({
       : t('bots.capabilities.selectedMeta', { count: checkedCount, total: data.total });
     const row = (item: Row) => (
       <ListRow key={item.id} title={item.name} hint={item.description} dim={!item.available}
-        note={item.available ? undefined : (
+        note={item.cindyOfficial ? t('bots.capabilities.officialInherited') : item.available ? undefined : (
           <>
             {t(item.missing ? 'bots.capabilities.notOnThisComputer' : kind === 'toolset' ? 'bots.capabilities.notTurnedOn' : 'bots.capabilities.unavailableHint')}
             {kind === 'toolset' && !item.missing && onConfigure ? (

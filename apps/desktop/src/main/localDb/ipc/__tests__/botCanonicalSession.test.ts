@@ -3169,6 +3169,20 @@ describe('Bot canonical Session lifecycle', () => {
     await expect(findBotCapabilities({ callerSessionId, kind: 'skill' })).resolves.toMatchObject({ capabilities: [{ id: 'release-check', joined: true }] });
   });
 
+  it('keeps an active official skill authoritative over its namesake until it is turned off', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+    const input = { callerSessionId: created.session.id, kind: 'skill' as const, id: 'pr', joined: true };
+    const serviceWith = (officialEnabled: boolean) => createBotCapabilityService({
+      ...capabilityDeps,
+      getMaker: () => ({ getSession: h.getSession, listAgentSkills: async () => ({ skills: [
+        { kind: 'agent-skill' as const, name: 'pr', source: 'skill' as const, cindyOfficial: true, enabled: officialEnabled },
+        { kind: 'agent-skill' as const, name: 'pr', source: 'user' as const, enabled: true },
+      ] }) }),
+    });
+    await expect(serviceWith(true).select(input)).resolves.toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_SELECTABLE' });
+    await expect(serviceWith(false).select(input)).resolves.toMatchObject({ ok: true });
+  });
+
   it.each(['skill', 'toolset-global', 'toolset-provider', 'mcp'] as const)(
     'revalidates newly added %s at the settings save boundary without blocking old references', async (scenario) => {
       const created = await invoke('local-db:bots:create-canonical-session', {

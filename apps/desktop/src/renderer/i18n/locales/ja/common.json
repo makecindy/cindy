@@ -11237,7 +11237,8 @@
       "toolSettings": "ツール設定",
       "notTurnedOn": "このコンピューターでまだオンになっていません",
       "turnOn": "オンにする",
-      "permissions": "権限"
+      "permissions": "権限",
+      "officialInherited": "Cindy 公式 · このコンピューターの設定に従う"
     },
     "guided": {
       "title": "パートナーを作成",

@@ -3,6 +3,7 @@ export default {
   real: 'BotCapabilitySettings groups (core, learned, local skills, built-in tools, MCP, permissions), folding, BotSkillPage core/learned pages and standard switches',
   notCovered: 'Teammate runtime, prompt and tool gating, persistence, remote computers and the phone page; covered by vitest and the isolated Desktop.',
   cases: {
+    official: { about: 'Official skills inherit local activation; personal skills stay opt-in' },
     default: { about: 'All groups with the owner’s real skills and tools; unfold the local skills' },
     core: { about: 'Core skill page with the plain-language summary and the original text' },
     learned: { about: 'A learned skill page with its switch, content, edit and delete' },

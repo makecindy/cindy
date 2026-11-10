@@ -327,10 +327,10 @@ export function createRemoteBotSettingsTarget(input: RemoteBotSettingsInput) {
       async load(bot) {
         const result = await invokeBotSettings<{
           personal: BotSkillSummary[];
-          entries: Partial<Record<BotCapabilityKind, Array<{ id: string; name: string; description?: string; available: boolean }>>>;
+          entries: Partial<Record<BotCapabilityKind, Array<{ id: string; name: string; description?: string; available: boolean; cindyOfficial?: boolean }>>>;
         }>(deviceId, 'capabilities.catalog', bot.id);
         const entries = (kind: BotCapabilityKind): BotCapabilityEntry[] =>
-          (result.entries[kind] ?? []).map(({ id, name, description, available }) => ({ id, name, description, available }));
+          (result.entries[kind] ?? []).map(({ id, name, description, available, cindyOfficial }) => ({ id, name, description, available, cindyOfficial }));
         return {
           skill: [
             ...result.personal.map((item) => ({ id: `personal:${item.slug}`, name: item.name, description: item.description || undefined, available: item.enabled !== false, personal: true })),

@@ -11237,7 +11237,8 @@
       "toolSettings": "工具设置",
       "notTurnedOn": "这台电脑还没开启",
       "turnOn": "去开启",
-      "permissions": "权限"
+      "permissions": "权限",
+      "officialInherited": "Cindy 官方 · 跟随本机启停"
     },
     "guided": {
       "title": "创建伙伴",

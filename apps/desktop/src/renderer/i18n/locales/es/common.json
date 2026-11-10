@@ -11379,7 +11379,8 @@
       "toolSettings": "Ajustes de herramientas",
       "notTurnedOn": "Aún no está activada en esta computadora",
       "turnOn": "Activar",
-      "permissions": "Permisos"
+      "permissions": "Permisos",
+      "officialInherited": "Oficial de Cindy · Sigue la configuración de este equipo"
     },
     "guided": {
       "title": "Crear un compañero",
