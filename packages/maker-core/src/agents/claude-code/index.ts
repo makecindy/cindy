@@ -3276,6 +3276,19 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 该代。await buildQuery 期间再切一次不会被这次 spawn 误标成已同步。
     let modelEnvGeneration = 0;
     let activeQueryModelEnvGeneration = modelEnvGeneration;
+    const applyModelOutputEnv = (): number => {
+      // MCP / transcript / skill preparation can await while a blocked setter
+      // changes the route. Resolve at spawn, and acknowledge only this snapshot.
+      const generation = modelEnvGeneration;
+      appliedMaxOutputTokens = resolveMaxOutputTokens(mutableModel);
+      for (const [targetEnv, fallback] of [[env, originalOutputTokenEnv], [remoteEnv, originalRemoteOutputTokenEnv]] as const) {
+        if (!targetEnv) continue;
+        const value = appliedMaxOutputTokens === null ? fallback : String(appliedMaxOutputTokens);
+        if (value === undefined) delete targetEnv.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+        else targetEnv.CLAUDE_CODE_MAX_OUTPUT_TOKENS = value;
+      }
+      return generation;
+    };
     // 拷贝进工作目录只允许作 Claude resume 不吃新 additionalDirectories 时的临时缺口。
     // 默认关闭;启用条件:extraDirsRebuildAttempted 且下一 Query 代际仍落后。落地后
     // library extraDirs 重建成功即删副本,不得把拷贝写成架构。
@@ -3749,13 +3762,6 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (override) throw new Error(workspaceSettingsOverrideMessage(override));
       }
       const currentSdkModel = sdkModelFor(mutableModel);
-      appliedMaxOutputTokens = resolveMaxOutputTokens(mutableModel);
-      for (const [targetEnv, fallback] of [[env, originalOutputTokenEnv], [remoteEnv, originalRemoteOutputTokenEnv]] as const) {
-        if (!targetEnv) continue;
-        const value = appliedMaxOutputTokens === null ? fallback : String(appliedMaxOutputTokens);
-        if (value === undefined) delete targetEnv.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
-        else targetEnv.CLAUDE_CODE_MAX_OUTPUT_TOKENS = value;
-      }
       const workingWindow = resolveModelContextWindow(mutableModel);
       appliedContextWindow = workingWindow;
       applyClaudeContextWindow(env, workingWindow, getAutoCompactThresholdPct());
@@ -3909,6 +3915,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
         ];
 
+        activeQueryModelEnvGeneration = applyModelOutputEnv();
         const startParams: Record<string, unknown> = {
           cwd: opts.workingDir,
           model: currentSdkModel,
@@ -4428,7 +4435,6 @@ export class ClaudeCodeAgent extends BaseAgent {
       activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
       activeQueryReadonlyDirs = [...mutableExtraDirs];
       extraDirsRebuildAttempted = false;
-      activeQueryModelEnvGeneration = modelEnvGeneration;
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
       sdkInPlanMode = sdkStartPermissionMode === 'plan';
       // Review 会话不带任何 Bot 身份/能力(与 botSkillPolicy 同口径)。
@@ -4637,6 +4643,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       try {
         companionEnvironment?.assertCurrent?.();
         if (managedPlugins && querySignal.aborted) throw new Error('Claude session closed before skill plugins were loaded');
+        activeQueryModelEnvGeneration = applyModelOutputEnv();
         const queryArgs = createLocalQueryArgs();
         if (newSdkSessionId) sdkSessionId = newSdkSessionId;
         onRuntimeStartAttempted();
@@ -6847,11 +6854,26 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
           }
           const forkSourceId = durableSdkSessionId;
-          q = await buildQuery({
-            ...(directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }),
-            forkSession: true,
-            permissionMode: snapSdkPermissionMode,
-          });
+          const sourceSdkSessionId = sdkSessionId;
+          for (;;) {
+            q = await buildQuery({
+              ...(directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }),
+              forkSession: true,
+              permissionMode: snapSdkPermissionMode,
+            });
+            if (resolveMaxOutputTokens(mutableModel) === appliedMaxOutputTokens || sendOpts?.signal?.aborted || closed) break;
+            // Native MCP selection can still await after spawn. A setter in
+            // that window must rebuild before this send reaches the old env.
+            rewindTransitionQueries.add(q);
+            unacceptedForks.delete(q);
+            try { q.close(); } catch (e) {
+              log.warn('model env drift: closing superseded rebuild failed', { error: String(e) });
+            }
+            inputQueue.end();
+            inputQueue = createAsyncQueue<SdkUserInput>();
+            abortController = new AbortController();
+            sdkSessionId = sourceSdkSessionId;
+          }
           const rebuiltQuery = q;
           const forkDestinationId = sdkSessionId;
           // Until the user input is accepted, a cancelled fork must retry its source.

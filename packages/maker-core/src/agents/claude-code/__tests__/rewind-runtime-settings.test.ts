@@ -213,6 +213,7 @@ async function startRewindableSession(
     availableModels?: ModelDescriptor[];
     resolveModelContextLimit?: AgentDeps['resolveModelContextLimit'];
     resolveModelMaxOutputTokens?: AgentDeps['resolveModelMaxOutputTokens'];
+    resolveLocalMcpDuplicateChoices?: AgentDeps['resolveLocalMcpDuplicateChoices'];
     providerId?: string;
     resolveModelCompactionPct?: AgentDeps['resolveModelCompactionPct'];
     resolveModelEfforts?: AgentDeps['resolveModelEfforts'];
@@ -249,6 +250,7 @@ async function startRewindableSession(
     capabilityAdditions: { availableModels: options.availableModels ?? TEST_MODELS },
     resolveModelContextLimit: options.resolveModelContextLimit,
     resolveModelMaxOutputTokens: options.resolveModelMaxOutputTokens,
+    resolveLocalMcpDuplicateChoices: options.resolveLocalMcpDuplicateChoices,
     resolveModelCompactionPct: options.resolveModelCompactionPct,
     ...(options.resolveModelEfforts ? { resolveModelEfforts: options.resolveModelEfforts } : {}),
     ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
@@ -338,6 +340,72 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       if (original === undefined) delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
       else process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = original;
     }
+  });
+
+  it.each([96_000, null])('uses the latest route output limit after async rebuild preparation (%s)', async (targetLimit) => {
+    let releasePreparation!: () => void;
+    let enteredPreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => { releasePreparation = resolve; });
+    const entered = new Promise<void>((resolve) => { enteredPreparation = resolve; });
+    const resolveChoices = vi.fn(async () => ({ skipHostServers: [], denyNativeServers: [] }));
+    const { handle } = await startRewindableSession({
+      providerId: 'connection-a',
+      resolveModelMaxOutputTokens: (provider) => provider === 'connection-a' ? 48_000 : targetLimit,
+      resolveLocalMcpDuplicateChoices: resolveChoices,
+    });
+    try {
+      await handle.commitRewindFiles?.('user-output-race', 'assistant-output-race');
+      resolveChoices.mockImplementationOnce(async () => {
+        enteredPreparation();
+        await preparation;
+        return { skipHostServers: [], denyNativeServers: [] };
+      });
+      sdkMock.query.mockReturnValue(createFakeQuery());
+      const send = handle.send({ type: 'user', content: 'continue after route switch' });
+      await entered;
+      await handle.setModel?.('claude-opus-4-6', { providerId: 'connection-b' });
+      releasePreparation();
+      await send;
+      const rebuilt = sdkMock.query.mock.calls[1][0].options;
+      expect(rebuilt.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS)
+        .toBe(targetLimit === null ? process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS : String(targetLimit));
+      expect(rebuilt.settings.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS)
+        .toBe(targetLimit === null ? undefined : String(targetLimit));
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6', { providerId: 'connection-b' })).toBe(false);
+      await handle.send({ type: 'user', content: 'same route again' });
+      expect(sdkMock.query).toHaveBeenCalledTimes(2);
+    } finally {
+      releasePreparation();
+      await handle.close();
+    }
+  });
+
+  it('retries a rebuild if the output route changes after its spawn snapshot', async () => {
+    const { handle } = await startRewindableSession({
+      providerId: 'connection-a',
+      resolveModelMaxOutputTokens: (provider) => provider === 'connection-a' ? 48_000 : 96_000,
+    });
+    try {
+      await handle.commitRewindFiles?.('user-late-output', 'assistant-late-output');
+      const superseded = createFakeQuery();
+      const finalQuery = createFakeQuery();
+      sdkMock.query.mockImplementationOnce(() => {
+        void handle.setModel?.('claude-opus-4-6', { providerId: 'connection-b' });
+        return superseded;
+      }).mockReturnValue(finalQuery);
+      await handle.send({ type: 'user', content: 'must use the latest output env' });
+      expect(sdkMock.query).toHaveBeenCalledTimes(3);
+      const stale = sdkMock.query.mock.calls[1][0];
+      const ready = sdkMock.query.mock.calls[2][0];
+      expect(stale.options.settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('48000');
+      expect(stale.prompt.pending).toBe(0);
+      expect(superseded.close).toHaveBeenCalledTimes(1);
+      expect(ready.options.settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('96000');
+      expect(ready.options.resume).toBe(stale.options.resume);
+      expect(ready.options.resumeSessionAt).toBe('assistant-late-output');
+      expect(ready.prompt.pending).toBe(1);
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6', { providerId: 'connection-b' })).toBe(false);
+    } finally { await handle.close(); }
   });
 
   it('leaves native subscription output defaults alone', async () => {
