@@ -48,6 +48,8 @@ vi.mock('@/session/SheetModal', () => ({ SheetModal: () => null }));
 // Screen reader toggle and the system action menu availability, for the companion menu case.
 const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));
 const viewportHarness = vi.hoisted(() => ({
+  measureStreamingWidth: false,
+  replyColumnWidth: 320,
   list: null as any,
   finishReveal: null as any,
   renders: 0,
@@ -62,13 +64,30 @@ vi.mock("react-native", async () => {
   const React = await import("react");
   const window = { width: 402, height: 874, scale: 3, fontScale: 1 };
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
-  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style, nativeRef }: any) =>
-    React.createElement(
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style, nativeRef, onLayout }: any) => {
+    const layoutRef = React.useRef<HTMLDivElement>(null);
+    const flatStyle = Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean));
+    React.useLayoutEffect(() => {
+      if (!viewportHarness.measureStreamingWidth || testID !== 'message.markdownBody' || !onLayout) return;
+      const bubble = layoutRef.current?.closest('[data-testid="message.agentBubble"]');
+      const geometry = JSON.parse(bubble?.getAttribute('data-layout-style') ?? '{}');
+      const available = viewportHarness.replyColumnWidth - 2 * (geometry.paddingHorizontal ?? 0);
+      // Native column-layout boundary: a stretch bubble gets the available width;
+      // a hugging bubble sizes from its child (including a previously pinned child).
+      const pinned = layoutRef.current?.firstElementChild?.getAttribute('data-layout-style');
+      const childWidth = JSON.parse(pinned ?? '{}').width;
+      const intrinsic = (layoutRef.current?.textContent?.length ?? 0) * 8;
+      const width = geometry.alignSelf === 'stretch' || geometry.width === '100%'
+        ? available : Math.min(available, childWidth ?? intrinsic);
+      onLayout({ nativeEvent: { layout: { width, height: 32, x: 0, y: 0 } } });
+    });
+    return React.createElement(
       "div",
       {
-        ref: nativeRef,
+        ref: nativeRef ?? layoutRef,
         "data-testid": testID,
-        "data-min-height": Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean)).minHeight,
+        "data-min-height": flatStyle.minHeight,
+        ...(viewportHarness.measureStreamingWidth ? { 'data-layout-style': JSON.stringify(flatStyle) } : {}),
         ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
         "aria-label": accessibilityLabel,
         ...(accessibilityHint ? { "data-hint": accessibilityHint } : {}),
@@ -78,6 +97,7 @@ vi.mock("react-native", async () => {
       },
       children,
     );
+  };
   class Value {
     constructor(public value: number) {}
     interpolate() {
@@ -818,6 +838,41 @@ describe('private group reply source', () => {
 // Render the real MessageRenderer with one completed reply and system menus available;
 // verify native selectable text and a working Reply action coexist (unit tier).
 describe("companion text selection and actions", () => {
+  // PR #7840 P2: the old tests used completed text and never dispatched native width layout.
+  // Unit through the real MessageRenderer/MarkdownBody/selection components. Only native
+  // column measurement is adapted; one final_answer grows from one character to a paragraph.
+  it('keeps a short-to-long streaming companion answer at the available width after resize', () => {
+    viewportHarness.measureStreamingWidth = true;
+    viewportHarness.replyColumnWidth = 320;
+    const answer = (text: string) => buildMobileMessageRenderItems([{
+      ...msg('stream-width', text, { assistantPhase: 'final_answer', isStreaming: true }), role: 'assistant',
+    }], { isSessionStreaming: true }).filter(item => item.type === 'message');
+    const h = mount([], { items: answer('好'), companion: true, isSessionStreaming: true });
+    try {
+      const widths = () => [...h.host.querySelectorAll('[data-testid="message.markdownBody"] [data-layout-style]')]
+        .map(node => JSON.parse(node.getAttribute('data-layout-style') ?? '{}').width)
+        .filter((width): width is number => typeof width === 'number');
+      expect(widths().length).toBeGreaterThan(0);
+      const initialWidth = widths()[0];
+      const text = '这段流式回复应当使用整列可用宽度，而不是挤在首个字的窄宽度里。'.repeat(8);
+      h.rerender({ items: answer(text) });
+      expect(h.host.querySelector('[data-testid="message.markdownBody"]')?.textContent).toBe(text);
+      expect(widths().every(width => width > 200)).toBe(true);
+      expect(initialWidth).toBeGreaterThan(200);
+      const before = widths()[0];
+      viewportHarness.replyColumnWidth = 260;
+      h.rerender({ items: answer(text + '完成。') });
+      expect(widths().every(width => width > 200 && width < before)).toBe(true);
+      h.rerender({ items: buildMobileMessageRenderItems([{
+        ...msg('stream-width', text + '完成。', { assistantPhase: 'final_answer', turnCompleted: true }), role: 'assistant',
+      }]).filter(item => item.type === 'message'), isSessionStreaming: false });
+      expect(h.host.querySelector('[data-selectable="true"]')).not.toBeNull();
+    } finally {
+      h.unmount();
+      viewportHarness.measureStreamingWidth = false;
+      viewportHarness.replyColumnWidth = 320;
+    }
+  });
   // The short-message case never enters the iOS long-message fallback. Removing
   // the separate selection sheet must keep partial selection after expansion too.
   it.each([

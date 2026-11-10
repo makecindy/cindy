@@ -330,4 +330,13 @@ it('opens the group advertised in the ordinary mock sidebar', async () => {
   expect(second?.id).not.toBe(group?.id);
   expect(second?.messages.at(-1)?.content).toContain('第二个群');
   expect(second?.messages.some(message => group?.messages.some(first => first.id === message.id))).toBe(false);
+  // PR #7840 merge regression (unit): the real mock roster/get path must expose both demos.
+  // The existing switch-only assertions missed the comparison row hidden by an early list return.
+  // Minimal input: list bot-groups from the default mock host, then open the comparison row.
+  const comparison = rows.find(row => row.ref.id === 'visual-comparison-group');
+  expect(comparison).toBeDefined();
+  const comparisonData = botGroupChatDataFromResource(await getRemoteResource(link.invoke, host, comparison!.ref, 'zh-CN', BOT_GROUP_CLIENT_PRIMITIVES));
+  expect(comparisonData?.id).toBe(comparison!.ref.id);
+  expect(comparisonData?.messages.some(message => message.authorKind === 'bot')).toBe(true);
+  expect(comparisonData?.messages.some(message => message.isSelf)).toBe(true);
 });

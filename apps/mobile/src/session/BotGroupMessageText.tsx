@@ -221,8 +221,8 @@ const BotGroupMarkdownBlock = memo(function BotGroupMarkdownBlock({ block, style
   return renderBlock(block, styles, options, diagramLabel, context);
 });
 
-export function BotGroupMarkdownText({ content, authorKind, mentionContext, richContent = false, interactive = true, active = true, onOpenDiagram, messageKey, messageId, readOnly = false }: {
-  content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext;
+export function BotGroupMarkdownText({ content, authorKind, mentionContext, availableWidth = 0, richContent = false, interactive = true, active = true, onOpenDiagram, messageKey, messageId, readOnly = false }: {
+  content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext; availableWidth?: number;
   messageKey?: string; messageId?: string; readOnly?: boolean;
 } & BodyOptions) {
   const { t } = useTranslation();
@@ -257,8 +257,9 @@ export function BotGroupMarkdownText({ content, authorKind, mentionContext, rich
       </MessageHeavyContentVisibilityContext.Provider>
     </SessionQuickSendProvider>
   );
+  const measuredBody = richContent && availableWidth > 0 && blocks.some(block => block.type === 'math' || block.type === 'mermaid');
   const diagramLabel = t('message.renderer.openDiagramDetail');
-  return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map(block =>
+  return <View ref={touch.ref} collapsable={false} style={[styles.body, measuredBody && { width: availableWidth }]} onTouchStart={touch.onTouchStart}>{blocks.map(block =>
     <BotGroupMarkdownBlock key={block.key} block={block} styles={styles} diagramLabel={diagramLabel}
       context={touch.context} richContent={richContent} interactive={interactive}
       active={block.type === 'mermaid' || block.type === 'math' ? active : undefined}
@@ -300,7 +301,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   syntaxNumber: { color: colors.syntaxNumber },
   syntaxFunction: { color: colors.syntaxFunction },
   syntaxProperty: { color: colors.syntaxProperty },
-  tableScroll: { maxWidth: '100%' },
+  tableScroll: { maxWidth: '100%', flexGrow: 0 },
   table: { borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.container, overflow: 'hidden' },
   tableRow: { flexDirection: 'row' },

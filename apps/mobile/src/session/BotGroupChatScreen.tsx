@@ -36,6 +36,7 @@ import {
   ScrollView,
   StyleSheet,
   View,
+  type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
@@ -102,6 +103,7 @@ import { CompanionEntering } from './CompanionEntering';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupComposer, type BotGroupSendInput } from './BotGroupComposer';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
+import { companionMessageBubble } from './companionMessageAppearance';
 import { MessageListVisibilityContext, useMessageListItemVisible, useScrollViewMessageVisibility } from './messageListVisibility';
 import { BotGroupTaskCard } from './BotGroupTaskCard';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
@@ -1165,6 +1167,10 @@ function BotGroupTimelineItem({
   const visible = useMessageListItemVisible(message.id);
   const visibility = useContext(MessageListVisibilityContext);
   const richContentActive = active && (!visibility || visible);
+  const [columnWidth, setColumnWidth] = useState(0);
+  const measureColumn = useCallback((event: LayoutChangeEvent) => {
+    setColumnWidth(Math.round(event.nativeEvent.layout.width));
+  }, []);
   const styles = useThemedStyles(makeStyles);
   const { colors: userBubbleColors } = useUserBubbleAppearance();
   if (message.kind === 'round-end') {
@@ -1238,7 +1244,7 @@ function BotGroupTimelineItem({
     {continued ? <View style={styles.avatarSpacer} /> : <View style={styles.avatarSlot}>
       {message.maskAttribution ? <GroupMaskAvatar {...message.maskAttribution} deviceId={deviceId} /> : <BotGroupAvatar deviceId={deviceId} identity={author} size={BOT_GROUP_MESSAGE_AVATAR_SIZE} online={online} />}
     </View>}
-    <View style={styles.botColumn}>
+    <View style={styles.botColumn} onLayout={measureColumn}>
       {continued ? null : <View style={[styles.authorRow, topic && styles.topicAuthorRow]}>
         <Text numberOfLines={1} style={styles.authorName}>{author.name}</Text>
         {topic ? <Text style={styles.threadCaption}>{new Date(message.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</Text> : null}
@@ -1251,7 +1257,7 @@ function BotGroupTimelineItem({
         ? <BotGroupPlanCard plan={plan} fallback={message.content} members={members} identityFor={identityFor} deviceId={deviceId} online={online}
           actionable={planActionable} reassignable={planReassignable} pending={planPending}
           onStart={() => onPlanAction('start')} onDismiss={() => onPlanAction('dismiss')} onEditStep={onEditStep} />
-        : <>
+        : <><View style={styles.botBubble} testID="botGroup.message.botBubble">
           {quoteDisplay ? <BotGroupQuote display={quoteDisplay} onPress={onLocateQuote} /> : null}
           {/* A task this teammate started from the group; mine is live, another owner's is a snapshot.
               An author no longer in the group is unknown: its task may run on another computer, so it
@@ -1261,12 +1267,15 @@ function BotGroupTimelineItem({
               the computer the group was opened through. */}
           {message.task ? <BotGroupTaskCard task={message.task} owned={member !== undefined && member.isOwned !== false}
             deviceId={member?.homeDeviceId || deviceId || ''} /> : null}
+          {/* Deferred rich blocks have no intrinsic width before their native view mounts.
+              Measure the stretched column, not the content-hugging bubble. */}
           <View style={styles.botMessageContent}>
             {renderAttachments('left')}
             {message.threadShare && !authoredShare ? <BotGroupThreadShare messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.threadShare.messageId}`} active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
-              : content.trim() ? <BotGroupMarkdownText readOnly={!!message.threadShare} messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.id}`} richContent active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
+              : content.trim() ? <BotGroupMarkdownText availableWidth={Math.max(0, columnWidth - 2 * styles.botBubble.paddingHorizontal)} readOnly={!!message.threadShare} messageId={message.id} messageKey={`group:${deviceId}:${groupId}:${message.id}`} richContent active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
           </View>
           <BotGroupHandoffFiles files={message.files} />
+        </View>
           {shareFooter}
           {footer}
         </>}
@@ -1326,7 +1335,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   userColumn: { flex: 1, minWidth: 0, alignItems: 'flex-end', gap: spacing.xs },
   userMessageContent: { width: '100%', alignItems: 'flex-end', gap: spacing.xs },
   botMessageContent: { gap: spacing.xs },
-  userBubble: { ...messageBubbleBase, ...userMessageBubble(colors) },
+  userBubble: { ...messageBubbleBase, ...userMessageBubble(colors), borderWidth: 0 },
   userBubbleCompact: compactMessageBubble,
   // The 1:1 reply geometry: avatar 28, 2pt down, 10 to the text.
   botRow: { flexDirection: 'row', alignItems: 'flex-start', gap: REPLY_AVATAR_GAP },
@@ -1334,6 +1343,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   avatarSlot: { marginTop: 2 },
   avatarSpacer: { width: BOT_GROUP_MESSAGE_AVATAR_SIZE },
   botColumn: { flex: 1, minWidth: 0, gap: spacing.xs },
+  botBubble: companionMessageBubble(colors),
   topicAuthorRow: { alignItems: 'baseline' },
   authorRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: BOT_GROUP_MESSAGE_AVATAR_SIZE },
   authorName: { flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
