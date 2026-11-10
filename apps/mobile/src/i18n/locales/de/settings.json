@@ -135,11 +135,16 @@
     "permissionDenied": "Erlaube Cindy-Benachrichtigungen in deinen Systemeinstellungen.",
     "unregisterQueued": "Deaktiviert. Die Abmeldung wird abgeschlossen, sobald du wieder online bist.",
     "preview": "Chatvorschauen anzeigen",
-    "background": "Chat im Hintergrund verbunden halten",
-    "backgroundActive": "Chatnachrichten werden im Hintergrund empfangen",
+    "background": "Hintergrundbenachrichtigungen",
+    "backgroundActive": "Benachrichtigungen werden im Hintergrund empfangen",
     "backgroundStop": "Empfang beenden",
-    "backgroundHint": "Die Hintergrundverbindung funktioniert ohne Google und zeigt eine dauerhafte Benachrichtigung an. Darüber kannst du sie beenden.",
-    "googleUnavailable": "Google-Push ist nicht verfügbar. Aktiviere die Hintergrundverbindung für den Chat, um Nachrichten zu empfangen."
+    "backgroundHint": "Cindy hält bei möglicherweise nicht verfügbarem Google-Push automatisch eine Hintergrundverbindung. Dabei erscheint eine dauerhafte Benachrichtigung.",
+    "googleUnavailable": "Google-Push ist nicht verfügbar. Die Hintergrundverbindung richtet sich nach deinen Benachrichtigungseinstellungen.",
+    "backgroundModes": {
+      "auto": "Automatisch",
+      "on": "Immer an",
+      "off": "Aus"
+    }
   },
   "about": {
     "sectionTitle": "Über dieses Smartphone",

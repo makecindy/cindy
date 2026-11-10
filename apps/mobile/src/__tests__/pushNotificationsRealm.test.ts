@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const store = vi.hoisted(() => new Map<string, string>());
 const envState = vi.hoisted(() => ({
+  platform: 'ios',
   activeRealm: 'cn' as 'cn' | 'global',
   buildRegion: 'cn' as 'cn' | 'global' | 'dev',
   endpointByRealm: {
@@ -42,7 +43,7 @@ vi.mock('expo-notifications', () => ({
 }));
 
 vi.mock('react-native', () => ({
-  Platform: { OS: 'ios' },
+  Platform: { get OS() { return envState.platform; } },
 }));
 
 vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: mocks.readIosPushEnvironment }));
@@ -67,9 +68,13 @@ import {
   configureForegroundNotificationBehavior,
   retryPendingUnregister,
   syncPushRegistration,
+  enablePushNotifications,
+  writePushEnabled,
+  readPushEnabled,
   unregisterPushTokenBestEffort,
 } from '@/notifications/pushNotifications';
 import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
+import { readAndroidPushAvailability, setAndroidPushAvailability } from '../notifications/androidPushAvailability';
 
 const REGISTERED_KEY = 'cindy.push.registered';
 const PENDING_KEY = 'cindy.push.pendingUnregister';
@@ -90,6 +95,66 @@ function readStoredRealms(key: string): string[] {
 }
 
 describe('push notification realm routing', () => {
+  // Unit r4512939585: first opt-in must notify the direct receiver before Google
+  // resolves. Existing registration tests only inspect the final sync result.
+  // Minimal input: permission granted, Google token promise pending indefinitely.
+  it('activates Android delivery after permission and before waiting for Google', async () => {
+    envState.platform = 'android';
+    await writePushEnabled(false);
+    let tokenEntered!: () => void;
+    const entered = new Promise<void>(resolve => { tokenEntered = resolve; });
+    let failToken!: (error: Error) => void;
+    mocks.getDevicePushTokenAsync.mockImplementationOnce(() => {
+      tokenEntered(); return new Promise((_, reject) => { failToken = reject; });
+    });
+    const onEnabled = vi.fn();
+    const sync = enablePushNotifications({ apiFetch: vi.fn(), onEnabled });
+    await entered;
+    try {
+      expect(await readPushEnabled()).toBe(true);
+      expect(onEnabled).toHaveBeenCalledTimes(1);
+    } finally { failToken(new Error('Google unavailable')); await sync; }
+  });
+  it.each(['ios', 'denied'])('does not early-activate delivery for %s', async condition => {
+    envState.platform = condition === 'ios' ? 'ios' : 'android';
+    if (condition === 'denied') mocks.getPermissionsAsync.mockResolvedValueOnce({ status: 'denied', canAskAgain: false });
+    const onEnabled = vi.fn();
+    mocks.getDevicePushTokenAsync.mockImplementationOnce(async () => {
+      expect(onEnabled).not.toHaveBeenCalled();
+      return { data: 'native-token' };
+    });
+    const result = await enablePushNotifications({ apiFetch: async <T,>() => ({} as T), onEnabled });
+    expect(result).toBe(condition === 'ios' ? 'registered' : 'permission-denied');
+    expect(onEnabled).toHaveBeenCalledTimes(condition === 'ios' ? 1 : 0);
+  });
+  // Unit: task-only registration cannot turn off the shared native fallback.
+  // Existing tests only covered throwing registration failures, not optional 404/405.
+  it.each([404, 405])('keeps direct delivery when task push succeeds but chat registration returns %s', async status => {
+    envState.platform = 'android'; envState.activeRealm = 'global';
+    setAndroidPushAvailability('available');
+    const apiFetch = vi.fn(async (path: string) => {
+      if (path === '/v1/push-token') throw Object.assign(new Error('unsupported'), { status });
+      return {};
+    });
+    await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).resolves.toBe('registered');
+    expect(readAndroidPushAvailability()).toBe('unavailable');
+    expect(readStoredRealms(REGISTERED_KEY)).toEqual(['global']);
+  });
+  it('allows stopping the shared direct service only after both push registrations succeed', async () => {
+    envState.platform = 'android';
+    setAndroidPushAvailability('unavailable');
+    await expect(syncPushRegistration({ enabled: true, apiFetch: vi.fn(async () => ({})) as any })).resolves.toBe('registered');
+    expect(readAndroidPushAvailability()).toBe('available');
+  });
+  // Unit: a cached FCM token must not make first enable fail when cloud registration is offline.
+  it('keeps Android opt-in usable through the direct channel when cloud registration fails', async () => {
+    envState.platform = 'android';
+    const apiFetch = vi.fn(async () => { throw new Error('offline'); });
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('local-only');
+    expect(readStoredRealms(REGISTERED_KEY)).toEqual(['cn']);
+    const { readAndroidPushAvailability } = await import('../notifications/androidPushAvailability');
+    expect(readAndroidPushAvailability()).toBe('unavailable');
+  });
   it('compensates both endpoints when first enable partially fails, retaining retry state if DELETE fails', async () => {
     let failDelete = true;
     const apiFetch = vi.fn(async (path: string, opts: { method?: string }) => {
@@ -123,6 +188,7 @@ describe('push notification realm routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     store.clear();
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     envState.buildRegion = 'cn';
     devEnvironmentState.active = 'dev';
@@ -290,6 +356,7 @@ describe('push notification realm routing', () => {
 
   it('切换区域前用旧 token 向显式冻结的旧区域撤销', async () => {
     setStoredRealms(REGISTERED_KEY, ['global']);
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     const fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
     vi.stubGlobal('fetch', fetch);
@@ -319,6 +386,7 @@ describe('push notification realm routing', () => {
   it('只用当前会话补偿当前区域，另一区域标记保持不动', async () => {
     setStoredRealms(REGISTERED_KEY, ['cn', 'global']);
     setStoredRealms(PENDING_KEY, ['cn', 'global']);
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     const cnApiFetch = vi.fn().mockResolvedValue({ deleted: true });
 
@@ -351,6 +419,7 @@ describe('push notification realm routing', () => {
 
   it('旧 token 不可用时不跨区请求，只保留旧区域标记', async () => {
     setStoredRealms(REGISTERED_KEY, ['global']);
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
@@ -371,6 +440,7 @@ describe('push notification realm routing', () => {
       syncPushRegistration({ enabled: false, apiFetch }),
     ).rejects.toThrow('offline');
 
+    envState.platform = 'ios';
     envState.activeRealm = 'cn';
     expect(readStoredRealms(PENDING_KEY)).toEqual(['global']);
   });
