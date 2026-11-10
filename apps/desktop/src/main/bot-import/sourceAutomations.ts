@@ -11,6 +11,19 @@ export function automationFingerprint(job: Record<string, unknown>): string {
     !['state', 'last_run_at', 'last_status', 'last_error', 'last_delivery_error', 'last_delivery_unverified', 'failure_streak', 'next_run_at', 'monitor_state', 'updatedAtMs'].includes(key))));
 }
 
+/**
+ * Whether the job needs more than a prompt on a schedule: a native command, a script or monitor
+ * before the turn, a script instead of the turn, or a run count. Imported jobs now become ordinary
+ * project automations, which only run their prompt, so these stay at their source.
+ */
+export function importedRuntimeRequired(kind: ImportSource['kind'], job: Record<string, unknown>): boolean {
+  const payload = object(job.payload);
+  const schedule = object(job.schedule);
+  const once = schedule.kind === 'once' || schedule.kind === 'at';
+  return (kind === 'openclaw' && payload.kind === 'command') || !!job.script || !!job.monitor_script || !!job.monitor_url
+    || job.no_agent === true || (!once && Number(object(job.repeat).times) > 0);
+}
+
 /** Snapshot only dependency providers, never the growing list of normalized jobs. */
 export function indexAutomationDependencies(items: readonly ImportItem[]) {
   const skills = new Map<string, ImportItem[]>();
@@ -94,7 +107,7 @@ export function normalizeAutomation(source: ImportSource, job: Record<string, un
   // These source-specific semantics are retained verbatim and require an explicit adapter.
   // Never start a simpler task while claiming it inherited a stricter tool policy/model/context.
   if (!command && (job.enabled_toolsets || Object.keys(object(job.tools)).length || dependencies.toolPolicy)) issues.push('SOURCE_TOOL_POLICY_NEEDS_MAPPING');
-  if (job.context_from) issues.push('AUTOMATION_CONTEXT_NEEDS_MAPPING');
+  if (job.context_from || importedRuntimeRequired(source.kind, job)) issues.push('AUTOMATION_CONTEXT_NEEDS_MAPPING');
   if (!command && (job.model || job.provider || job.base_url || payload.model || job.reasoning_effort || payload.thinking
     || dependencies.model)) issues.push('AUTOMATION_MODEL_NEEDS_MAPPING');
   if (job.workdir && path.resolve(string(job.workdir)) !== path.resolve(source.workspace)) issues.push('AUTOMATION_WORKDIR_NEEDS_MAPPING');
@@ -114,7 +127,7 @@ export function normalizeAutomation(source: ImportSource, job: Record<string, un
     input = parseRoutineInput({ ...draft, triggers: [] });
   }
   // A disabled draft can have no converted trigger. The entire original remains
-  // encrypted, and the existing execution guard rejects its unresolved issues.
+  // encrypted; a job with unresolved issues is never taken over.
 
   return {
     view: { id: `automation-${fingerprint(sourceId || [job, occurrence]).slice(0, 20)}`, category: 'automations', name, enabled, selected: true,

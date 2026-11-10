@@ -60,6 +60,21 @@ pnpm mobile:sim:start:cn
 `ANDROID_SDK_ROOT`、`ANDROID_HOME` 或 Windows 标准 Android Studio SDK 目录解析工具，
 不要求把 `adb`、`emulator` 加进 `PATH`。
 
+Windows 的 `mobile:sim:rebuild` 会给 Gradle 传入
+`-Pexpo.android.cmakeObjectPathMax=0`，让 App 和原生依赖保留 CMake 的平台默认路径上限与
+哈希缩短行为。Expo SDK 58 默认把上限提高到 1024，但 Android SDK 附带的旧 Ninja 仍可能
+在深层 worktree 中报 `mkdir(...): No such file or directory`。该参数只作用于本次 Windows
+开发构建，不修改系统长路径设置、SDK 或应用原生配置；macOS 构建保持原有行为。
+同一次 Windows 构建还通过 `sim-windows-native.gradle` 缩短 App 的 CMake staging 目录，
+在当前 worktree 根目录的 `.cxx/` 与系统临时目录的 `cx-<项目路径哈希>/` 中选较短者，给
+Gesture Handler 等生成目标的长名称留出路径空间；显式配置的 `buildStagingDirectory` 保持原值。
+缓存按当前 worktree 的 App 项目路径隔离并供后续构建复用，根目录的 `.cxx/` 已由 Git 忽略；
+临时目录被系统清理后会自动重建。这些目录只含可再生成的原生构建产物，不搬动源码、
+不修改 prebuild 生成文件，也不改变 APK 的输出位置。
+这不能保证任意深度的目录都可构建：若 CMake 仍警告对象文件 `cannot be safely placed under
+this directory`，需进一步缩短显式构建输出路径，或使用支持长路径的 Ninja 并启用 Windows
+长路径。单个原生库通过不能代替完整 APK 构建验证。
+
 修改原生依赖、Expo 原生配置，或切换到尚未安装对应开发包的区域时，重新构建：
 
 这里的 `rebuild` 是“准备兼容原生包”的入口：先复用匹配缓存，未命中才完整编译。
@@ -133,13 +148,19 @@ Metro，那里没有 Metro 响应时才退回 `8081`。`8081` 属于其他任务
 服务按执行电脑上报的完整快照汇总并发送 APNs，手机挂起时也可以接收系统更新。
 旧服务端返回 404/405、旧原生包或自建中转时，保留 Home 与 host live-activity 的本地同步。
 `cindy-agent-activity` 用 ActivityKit 维护一个聚合活动；等待操作的任务优先，其次未读完成／错误
-结果，最后是运行中；标题、角色状态与点击目标使用同一优先级。排除缓存种子、未确认新建、归档
+结果，最后是运行中；标题、角色状态与展开后的任务链接使用同一优先级。排除缓存种子、未确认新建、归档
 和离线电脑的任务，结果已读后移除。
 内容只包含截断标题、本地化状态、任务数和带电脑 ID 的任务深链，不放工具参数或消息正文；
 锁屏标题使用系统 `privacySensitive()`。退出账号／切换账号会结束旧活动。
 
 WidgetKit 的收起、最小、展开与锁屏视图在 `plugins/usage-widgets/CindyAgentActivityWidget.swift`，
 复用已有扩展；ActivityAttributes 从原生模块复制到扩展编译，避免两份 schema 漂移。
+收起／最小灵动岛点击固定进入首页，不因未读计数或最近一次推送的任务而改变。展开后点击
+任务标题／状态区域进入显示的任务，角色与计数区域仍回首页；锁屏／横幅展示具体任务，
+点击进入该任务。系统标记内容过期后，所有入口回首页，不再沿用旧任务目标。
+首页 URL 使用扩展的 `CindyURLScheme`，保持 Global／CN／beta 安装身份；任务深链继续
+使用既有 payload 的 `url`，本地同步与服务端 APNs 更新共用这套呈现逻辑，无须更改推送协议。
+现有实时活动 payload 不含消息 ID，因此任务链接进入对应任务，不承诺精确定位某条消息。
 美术直接复用桌面角色目录中的 Cindy（手机版选定角色）：`node apps/mobile/scripts/export-agent-activity-artwork.mjs`
 调用桌面 helper 的 `--export-mascots`，导出含眼睛和姿态的三张静帧，并从桌面实时活动导出
 运行中橙／待处理青／完成绿的颜色目录；手机计数使用「待关注 · 运行中」，待关注包含等待操作和
@@ -170,15 +191,29 @@ Desktop 仅在官方连接在线时上传本机完整活动摘要，排除远程
 本地降级模式的 `staleDate` 为更新时加 120 秒，前台每分钟续期，检测到连接中断则立即标记过期；
 账号清理与无任务结束不等待一秒合并。
 
-接口与发布顺序见[协议兼容的任务汇总与实时活动](protocol-compatibility.md#任务汇总与-activitykit-push2026-11-10未发布)。
+接口与发布顺序见[协议兼容的任务汇总与实时活动](protocol-compatibility/task-activity-summary-activitykit-push.md)。
 定向验证覆盖 token 轮换、旧服务端、自建中转跳过、账号切换与在途注册后注销；服务端另有真实
 PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成测试。原生编译不是系统
 推送验收：后台／冷启动、跨端已读与真实 APNs 仍需在部署后的签名安装包上核验。
 新增原生模块与扩展源码需要新 iOS 安装包，不能只发 OTA。共享 config plugin 的变更也会
 改变 Android 指纹（虽然没有新增 Android 功能），应随计划内双端原生发版交付；两端存量
-安装均需升级对应原生包才能继续接收新指纹的 OTA，按冷更门单独确认。
+安装均需升级对应原生包才能继续接收新指纹的 OTA，PR 须按冷更边界写明原因、影响与发版节奏。
 原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台过期和关闭实时活动。
 TypeScript 测试不能替代这些原生验收。
+
+### 推送 token 事件与验收
+
+iOS 每次 `getDevicePushTokenAsync()` 完成都会发出 token 事件，不代表 token 已轮换。
+`PushNotificationsBridge` 的监听器必须直接把事件携带的 token 交给注册函数，不能再次
+读取原生 token；否则“读取 → 事件 → 注册 → 读取”会持续向两个推送端点重复注册。
+事件注册必须持有本代次非事件注册成功产生的内存许可；相同 token 不再请求，真实轮换
+仍注册。注销同步撤销许可，注册全过程复查 AuthOwner，防止 React 仍显示已登录的清理
+窗口重新 PUT 旧账号。原生读取在注销时产生的事件也只能 skipped。
+回归分别由 `pushNotificationsBridge.test.ts`（事件接线与去重）和
+`pushNotificationsRealm.test.ts`（真实注册函数与端点请求）覆盖。
+
+注册 API 成功、桌面提交 notify 帧成功都不是 APNs 送达证明。验收需分别记录签名环境、
+手机注册结果、服务端 APNs 回执（可取得时）和真机是否实际收到，不能用本地通知代替。
 
 Release 构建必须使用 `NODE_ENV=production BABEL_ENV=production`，包括手动调用
 `xcodebuild`、Gradle 或 `expo export:embed --dev false`。Expo 会保留父进程的环境变量，
@@ -273,7 +308,7 @@ iOS 的系统选图器在确认后立即把选中项交给现有附件队列。�
 `useMobileLocalAttachments.ts`；回归：`deferredPhotoLibrary.test.ts`、
 `useMobileLocalAttachmentsAbandon.test.tsx`。新增原生模块需要冷更，不能作为旧安装包的 OTA
 独立交付；旧原生包缺模块时继续使用 Expo 选图入口。首次发布应随下一次 iOS 原生包交付，
-指纹与存量装机影响仍须按下文冷更门确认。Android 保持系统选图器和既有附件队列。
+指纹与存量装机影响仍须按下文冷更边界在 PR 中写明。Android 保持系统选图器和既有附件队列。
 
 ### 相册照片与视频附件
 
@@ -287,7 +322,7 @@ iOS 的 `CindyPhotoPicker.pickMedia` 在选择后立即把图片占位与视频�
 此回退在选择器内等原件就绪；新原生包保留延迟读取体验。原有 `pick` 方法继续提供照片选择合同，
 拍照仍仅拍照片，「文件」继续接收视频，不新增录像或专用视频编辑器。
 扩展原生模块会改变 iOS fingerprint，需随原生包发布，不能作为旧安装包的独立 OTA 交付；
-合并前遵守冷更确认门。Android 使用现有 Expo 系统混合选择器，无原生改动。
+PR 须按冷更边界写明原因、影响与发版节奏。Android 使用现有 Expo 系统混合选择器，无原生改动。
 
 实现：`modules/cindy-photo-picker/`、`deferredPhotoLibrary.ts`、`useMobileLocalAttachments.ts`；
 回归：`deferredPhotoLibrary.test.ts`、`useMobileLocalAttachmentsAbandon.test.tsx`。
@@ -519,6 +554,23 @@ A、B、L1、R1 会占用其原有操作，设置页有明确提示。
 偏好与跨页按住交接回归：`src/__tests__/handheldMode.test.ts`。Android 窗口按键拦截和换屏
 必须随新原生包交付，仍受下文冷更审核门约束。
 
+## 手机推送排障：注册不等于投递
+
+`cindy.push.enabled` 只记录偏好；`cindy.push.registered` 是请求前写入的注销补偿标记，
+不能证明服务器注册成功。Desktop 的 `sendNotify()` 返回 true 也只说明已向 relay 发送，
+不是 APNs 接受或手机展示的回执。不要据此宣布推送恢复。
+
+手机在 AsyncStorage `cindy.push.lastRegistration` 保留最近一次启用注册尝试的单条状态，
+CindyDev 按 `.dev` / `.release` 分开。状态记录时间、账号区域（不含身份）、签名对应的
+APNs 环境、失败阶段和 device-link/chat 分别接受、失败或不支持的结果及 HTTP 状态码。
+它不依赖调试日志开关，不含 token、账号 ID、地址、正文或原始错误；写入失败不影响注册。
+这是有时间戳的历史尝试，关闭推送或切换账号后不能当作当前订阅状态；`registered` 只证明
+注册 API 请求完成，不能替代实际通知验收。回归见 `pushNotificationsRealm.test.ts`。
+
+若注册成功仍无通知，继续核对签名 team/topic 与服务端配置、服务端 token 选择及 APNs
+响应，最后核对手机的系统通知展示条件。本地服务器源码不能证明线上部署；缺少投递日志时
+保留“尚未确定”的结论，不让用户反复切开关，也不通过不断广播测试通知替代定位。
+
 ## 原生配置与 runtime fingerprint(冷更边界)
 
 ### 伙伴通信通知
@@ -620,12 +672,10 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 - 确实必须冷更时(升原生依赖、改 config plugin / 原生模块、动 production 段 `app.json` /
   `eas.json`),PR Description 必须写明三件事:为什么冷更不可避免、存量装机影响范围、发版
   节奏建议。
-- **审查标准:会触发冷更的 PR 与技术框架变动同级,必须由仓库指定的把关人针对冷更明确
-  确认后才能合并。** 不看改动大小,也不看谁提的——提交者是不是维护者、有没有拿到普通
-  Approve、有没有被标回 Ready 都不构成例外;把关人自己提的 PR 同样要留下一条显式的冷更
-  确认。冷更 PR 可以保持 Ready 并正常进入自动审查,不因冷更要求新建讨论 issue 或转为
-  draft;冷更确认可直接留在 PR 中。未确认前不得合并(包括自动合并),把关人名单与确认
-  判定细则属维护者内部 gate。若同时命中其他独立的讨论或草稿门禁,仍按对应规则处理。
+- **审查标准:会触发冷更的 PR 按普通流程审查与合并,不需要指定把关人另外确认。** 审查时
+  逐条核对:是否确实必须冷更(同样效果能用不动指纹的写法达成时,要求改写),PR Description
+  是否写全上面三件事。冷更 PR 可以保持 Ready 并正常进入自动审查,不因冷更要求新建讨论
+  issue 或转为 draft。若同时命中其他独立的讨论、草稿或确认门禁,仍按对应规则处理。
 - 提交前自查:在改动前后各跑一次
   `node apps/mobile/scripts/ci-fingerprint.mjs compute --output <file>` 并比对 hash。PR 上
   出现 fingerprint guard 的 sticky comment 时,以它给出的 base(main) vs 合并结果对比为准。
@@ -638,7 +688,7 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
   `fingerprintConfig.test.ts` 校验排除文件的完整 macOS 编译保护，并使用 Expo 哈希器
   验证两端的排除项与保留项。移除平台保护或让手机依赖这些文件前，必须同步移除排除项。
   **首次采用此边界仍改变旧指纹**，须随计划内原生发版迁移；它只避免迁移后桌面专用
-  修改反复触发手机冷更，不为旧安装包伪造兼容 runtime，也不豁免上面的冷更确认门。
+  修改反复触发手机冷更，不为旧安装包伪造兼容 runtime，也不豁免上面的冷更说明要求。
 - 改 `app.json` / `app.config.js` 前先判断是否会动指纹。被哈希的是**解析后的
   ExpoConfig**(app.config.js 的输出),不是源文件本身:凡进入 resolved config 的字段,
   改了值就会变指纹;只有被 app.config.js **覆写 / 剥离、传不到 resolved config** 的值才指纹
@@ -724,13 +774,34 @@ JS OTA 仍按现有通道检查，设置页手动检查只报告内容更新。�
 `FCM_PROJECT_ID` 与 ADC（例如仓库外 `GOOGLE_APPLICATION_CREDENTIALS`）。不要把密钥提交到仓库。
 
 `cindy-chat-notifications` 是 Android Expo 本地模块，复用 Expo 的 token、通知点击和冷启动响应；
-FCM data 消息与显式开启的前台服务都通过同一通知入口，按账号／消息去重。预览关闭时本机再次去除内容与
+FCM data 消息与后台连接都通过同一通知入口，按账号／消息去重。普通任务以服务器生成的 notificationId 去重，聊天仍按消息 ID 去重。预览关闭时本机再次去除内容与
 发送者头像。群通知使用 MessagingStyle；伙伴回复有发送者时也使用 Person。普通任务仍沿用原通知。
+
+Android 后台连接默认「自动」：中国大陆账号、设备地区 CN、上海／重庆时区，或 FCM 获取／注册尚未成功时启用。
+地区和时区仅作为启用补充通道的信号，不用于修改账号区域或端点。FCM token 获取最多等 8 秒；缓存 token 不证明大陆网络可达，
+因此大陆信号仍保留直连。自动模式只有在任务与聊天两路云推送注册都成功时才允许停掉共用后台服务；
+旧聊天注册接口 404／405 仅兼容为任务注册成功，不代表聊天推送可用。
+用户可选始终开启／关闭，原有显式 1／0 偏好保持，通知栏停止也持续生效；总通知开关与系统通知权限始终优先。
+
+普通任务通过当前账号区域的 device-link `/api/device-link/push-stream` HTTPS SSE 接收，聊天继续走 Chat Server。
+两者连接独立，不占用手机远控 socket；聊天服务不可用不阻断普通任务。SSE 仅携带当前设备绑定的短期 token。
+聊天身份按账号及区域绑定；同账号短暂查询失败保留已有身份与本轮已知聊天配置，切换账号或退出时清除，防止跨账号接收。
+断线按 1–60 秒加抖动重连，服务端 5 分钟内主动换连以重新验证认证；本机仅保存账号范围内的游标与去重 ID。
+预览关闭时服务端及本机均删除正文／发送者信息。自建中转不把自建任务凭证转发到官方 SSE；当前自建中转的已有推送路径不变。
 
 后台连接声明 `specialUse` 前台服务，持续显示运行通知和停止按钮；没有开机启动、隐藏重启或凭证落盘。
 发行到 Play 前须完成对应前台服务用途申报。Doze、厂商电池策略和强行停止可能中断连接；FCM 也需要 Google
 服务及有效项目配置，不能承诺所有设备强杀后送达。
 
-本次 Swift 扩展、Android 原生模块和头像资源都需要新原生包，不能只发 OTA；按冷更门由指定把关人明确
-批准。上线顺序为服务端兼容接口／通道配置、各端原生包，再验证 token 注册、前后台、拒绝权限、预览关闭、
-停止后台连接、断网重连、通知点击定位及人／伙伴头像。旧服务端没有 chat push API 时手机保留已有任务通知。
+本次 Swift 扩展、Android 原生模块和头像资源都需要新原生包，不能只发 OTA；PR 须按冷更边界写明原因、
+存量装机影响与发版节奏。上线顺序为服务端兼容接口／通道配置、各端原生包，
+再验证 token 注册、前后台、拒绝权限、预览关闭、停止后台连接、断网重连、通知点击定位及人／伙伴头像。旧服务端没有 chat push API 时手机保留已有任务通知。
+
+普通任务直连新增 Android 原生接收器，必须随新 APK 冷更；旧包通过可选 native 方法检测继续使用原聊天接口，不能靠 OTA 获得任务直连。
+配套服务端先部署 SSE 和通知 ID，再发布 Android 新包。旧服务端 404 时后台退避一分钟并保留 FCM，不能把该状态记成直连可用。
+
+### 手动 APNs 诊断（iOS）
+
+「设置 → 开发者 → 推送诊断」仅在用户点击「读取推送状态」后读取系统通知权限、签名中的 APNs 环境和当前设备令牌。它不请求或变更通知权限，不写入诊断日志或持久存储，也不自行发送服务端请求；原生读取可能触发已有 token 事件，该事件继续遵守推送注册的账号围栏和去重。页面离开、应用进入后台或读取超时后丢弃结果，迟到的原生回调不能重新展示令牌。复制是独立的显式操作，剪贴板内容不会随页面退出自动清除。
+
+排查个人签名包时，应先核对该页的应用 ID、构建号和环境，再使用同一 Apple 开发者团队的 Push Notifications Console 给该设备令牌发送匹配环境的通知。不要把 ActivityKit token 当作 APNs device token，不把令牌粘贴到任务日志或提交到仓库；不要以「注册成功」或「服务端已发送」代替真机收到通知的验收。此入口只依赖现有 Expo 模块，不改变原生指纹、登录存储或应用身份。

@@ -32,7 +32,6 @@ import type { McpProviderContext } from '@cindy/maker-core';
 import type { McpAppRecord } from '../../shared/mcpApps.js';
 import { AppConnection, type AppServerConfig } from './connection.js';
 import { appServerRevision } from './host.js';
-import { getMcpAppsHost, readAppServer } from './runtime.js';
 import { toolVisibleTo, uiToolUri } from './protocol.js';
 import { createLogger } from '../logger.js';
 
@@ -125,7 +124,9 @@ class AppProxyServer extends McpServer {
 }
 
 /** Generic MCP facade: the harness keeps its own tool approval, while Main negotiates Apps. */
-export function createAppServerProxy(
+export function createAppServerProxyFactory(ports: Pick<ReturnType<typeof import('./runtimeCore.js').createMcpAppsRuntime>, 'getMcpAppsHost' | 'readAppServer'>) {
+const { getMcpAppsHost, readAppServer } = ports;
+function createAppServerProxy(
   readConfig: () => AppServerConfig,
   context: McpProviderContext,
 ): McpServer {
@@ -342,4 +343,7 @@ export function createAppServerProxy(
     void host.releaseConnection(connection).catch(() => {});
   };
   return server;
+}
+
+return createAppServerProxy;
 }

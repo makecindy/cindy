@@ -4,6 +4,8 @@
   "license": "Apache-2.0",
   "main": "index.js",
   "dependencies": {
+    "@cindy/agent-net": "workspace:*",
+    "@cindy/agent-net-protocol": "workspace:*",
     "@cindy/auth-client": "workspace:*",
     "@cindy/device-link": "workspace:*",
     "@cindy/maker-shared": "workspace:*",

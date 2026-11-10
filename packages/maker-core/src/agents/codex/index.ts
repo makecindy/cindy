@@ -64,6 +64,8 @@ import {
   type RefreshLocalModelsOptions,
   type SendOptions,
   type TurnPermissionPolicy,
+  botRuntimeSkillPolicy,
+  isolatedBotProfile,
 } from '../base-agent.js';
 import { skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
 import { snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
@@ -71,6 +73,7 @@ import type { AgentCredentialMode } from '../../interfaces/auth-adapter.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import type {
   Capabilities,
+  ManualCompactResult,
   EffortDescriptor,
   PermissionModeDescriptor,
 } from '../../types/capabilities.js';
@@ -1230,6 +1233,7 @@ const CAPABILITIES: Capabilities = {
   // 产品的“代码 + 对话”回退由 Git rollback 负责代码部分，再调用此能力裁剪对话。
   rewind: { supported: true },
   abort: { supported: true },
+  manualCompact: { supported: true },
   sameTurnSteer: { supported: true },
   memory: {
     supported: { supported: true },
@@ -3659,7 +3663,7 @@ assertRouteCurrent();
       })()
       : undefined;
     const botSkillGrants = !opts.remoteHostId && !reviewMode
-      ? snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy) : undefined;
+      ? snapshotManagedSkillGrants(isolatedBotProfile(opts.botRuntimeProfile)?.skillPolicy) : undefined;
     let refreshedBotSkillConfig: Record<string, unknown> | undefined;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Codex sessions only');
@@ -4670,6 +4674,54 @@ assertRouteCurrent();
     }
 
     let closed = false;
+    // A compact ACK only accepts the operation; its own native turn owns completion.
+    // Keep it separate from user-send recovery so a failed compact cannot replay a
+    // previous prompt or latch a context rollover.
+    let manualCompact: {
+      turnId: string | null;
+      boundarySeen: boolean;
+      cancelled: boolean;
+      error?: Error;
+      tokensBefore: number;
+      estimatedTokensAfter?: number;
+      resolve: (result: ManualCompactResult) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    } | null = null;
+    function ownsManualCompact(turnId: string): boolean {
+      if (!manualCompact || !turnId || completedTurnIds.has(turnId) || terminalErroredTurnIds.has(turnId)) return false;
+      manualCompact.turnId ??= turnId;
+      return manualCompact.turnId === turnId;
+    }
+    function finishManualCompact(error?: Error): void {
+      const operation = manualCompact;
+      if (!operation) return;
+      manualCompact = null;
+      clearTimeout(operation.timer);
+      if (operation.turnId) {
+        completedTurnIds.add(operation.turnId);
+        compactingTurnIds.delete(operation.turnId);
+        finalizeCodexGenerationTurn(translatorRt, operation.turnId);
+      }
+      isTurnInFlight = false;
+      currentTurnId = null;
+      resetUpstreamIdleForTurnEnd();
+      clearReconnectStall();
+      translatorRt.tokenSpeed.stop();
+      usageTracker.endTurn();
+      eventQueue.push({ type: 'status', data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false }, source: 'codex' });
+      if (error) operation.reject(error);
+      else operation.resolve(operation.boundarySeen ? {
+        tokensBefore: operation.tokensBefore,
+        estimatedTokensAfter: operation.estimatedTokensAfter,
+      } : { noop: true });
+    }
+    function retireManualCompact(error: Error): void {
+      finishManualCompact(error);
+      void closeSessionHandle().catch((cleanupError: unknown) => {
+        log.warn('failed to release Codex compact subscription', { error: String(cleanupError) });
+      });
+    }
     let subscriptionInvalidatedByTransport = false;
     let sessionHostForceRetired = false;
     let subscription: ThreadSubscription | null = null;
@@ -5363,7 +5415,7 @@ assertRouteCurrent();
         if (botSkillGrants !== undefined) {
           const unscopedError = refreshed.errors.find(error => !error.path);
           if (unscopedError) throw new Error(unscopedError.message);
-          refreshedBotSkillConfig = buildCodexBotSkillConfigOverrides(opts.botRuntimeProfile?.skillPolicy, {
+          refreshedBotSkillConfig = buildCodexBotSkillConfigOverrides(isolatedBotProfile(opts.botRuntimeProfile)?.skillPolicy, {
             grants: botSkillGrants,
             skills: [...refreshed.skills, ...refreshed.errors.flatMap(error =>
               error.path ? [{ path: error.path, enabled: false }] : [])],
@@ -5609,7 +5661,7 @@ assertRouteCurrent();
         'features.image_generation': false, 'features.multi_agent': false, 'features.multi_agent_v2': false,
         'memories.generate_memories': false, 'memories.use_memories': false });
     }
-    if (!reviewMode && opts.botRuntimeProfile?.mcpPolicy) {
+    if (!reviewMode && isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy) {
       try {
         const response = await host.request<{ config?: Record<string, unknown> }>(
           Method.ConfigRead, { includeLayers: false },
@@ -5622,7 +5674,7 @@ assertRouteCurrent();
           const match = /^mcp_servers\.([A-Za-z0-9_-]+)\.(?:url|command)$/.exec(key);
           if (match && typeof value === 'string' && value.trim()) transports.add(match[1]);
         }
-        botMcpConfig = buildCodexBotMcpConfigOverrides(opts.botRuntimeProfile.mcpPolicy, transports);
+        botMcpConfig = buildCodexBotMcpConfigOverrides(isolatedBotProfile(opts.botRuntimeProfile)!.mcpPolicy, transports);
         // Remote daemons keep this shared transport disabled for ordinary tasks.
         if (opts.remoteHostId && transports.has('cindy_helper')) {
           botMcpConfig['mcp_servers.cindy_helper.enabled'] = true;
@@ -5639,11 +5691,11 @@ assertRouteCurrent();
     capabilityRoutingConfig = mergeCodexSkillConfigOverrides(
       capabilityRoutingConfig,
       refreshedBotSkillConfig ?? buildCodexBotSkillConfigOverrides(
-        reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
+        reviewMode ? undefined : botRuntimeSkillPolicy(opts.botRuntimeProfile),
       ),
     );
     // 受邀者(另一个账号)不读本机用户的技能停用偏好(本机技能在上面已整体关闭)。
-    const disabledSkillPaths = opts.remoteHostId || opts.botRuntimeProfile || reviewMode || hostedGuest
+    const disabledSkillPaths = opts.remoteHostId || isolatedBotProfile(opts.botRuntimeProfile) || reviewMode || hostedGuest
       ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
     // 任务所在电脑提供了托管技能(已作为项目技能放在影子目录)：共用 CODEX_HOME 里本机的那份对这个线程停用。
     if (hosted?.controllerManagedSkills && !hostedGuest && !reviewMode) {
@@ -5677,8 +5729,9 @@ assertRouteCurrent();
       ...capabilityRoutingConfig,
       ...botMcpConfig,
       // Bot sessions must not absorb project AGENTS.md from the cwd chain —
-      // their context is the Bot profile, not the workspace.
-      ...(!reviewMode && opts.botRuntimeProfile ? { project_doc_max_bytes: 0 } : {}),
+      // their context is the Bot profile, not the workspace. A V2 teammate is
+      // an ordinary project task and loads them like one.
+      ...(!reviewMode && isolatedBotProfile(opts.botRuntimeProfile) ? { project_doc_max_bytes: 0 } : {}),
     };
     if (
       Object.keys(capabilityRoutingConfig).length > 0 &&
@@ -6583,7 +6636,7 @@ assertRouteCurrent();
         ...taskShellEnvConfig,
         // Keep companion memory in its own Home. Native delegation uses the
         // same feature settings and permissions as an ordinary task.
-        ...(opts.botRuntimeProfile ? {
+        ...(isolatedBotProfile(opts.botRuntimeProfile) ? {
           'memories.generate_memories': false,
           'memories.use_memories': false,
         } : {}),
@@ -6641,7 +6694,7 @@ assertRouteCurrent();
         // A bare `enabled` override for a server the host never bridged makes Codex
         // reject the whole thread ("invalid transport in mcp_servers.cindy_memory").
         // Hosts without the memory bridge (for example cindy-host) must omit it.
-        ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT] && !makerMemoryEnabled && !opts.botRuntimeProfile
+        ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT] && !makerMemoryEnabled && !isolatedBotProfile(opts.botRuntimeProfile)
           && (hostedLocalMcpNames.includes('cindy_memory') || memoryBridgeAvailable)
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
@@ -7007,7 +7060,7 @@ assertRouteCurrent();
     // 因此与 Claude 远端路径一致地 fail-closed，不把召回清单注入到不可达会话。
     // 设备托管(含受邀者)用任务所在电脑给的花名册：插件工具在那台，本机装的插件不进这个任务。
     const localGhostRoster = () => this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
-    const ghostRosterPrompt = opts.remoteHostId || reviewMode || opts.botRuntimeProfile
+    const ghostRosterPrompt = opts.remoteHostId || reviewMode || isolatedBotProfile(opts.botRuntimeProfile)
       ? ''
       : hosted
         ? deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, localGhostRoster)
@@ -7019,17 +7072,17 @@ assertRouteCurrent();
       // 本机任务逐字保持原值；设备托管时在末尾加上「项目在哪台电脑」的说明。
       runtimeSystemPrompt: hosted
         ? [
-            opts.botRuntimeProfile ? undefined : this.deps.runtimeConfig.systemPrompt,
+            isolatedBotProfile(opts.botRuntimeProfile) ? undefined : this.deps.runtimeConfig.systemPrompt,
             deviceHostedEnvironmentNote(hosted, opts.workingDir),
           ].filter((part): part is string => !!part && part.trim().length > 0).join('\n\n')
-        : opts.botRuntimeProfile
+        : isolatedBotProfile(opts.botRuntimeProfile)
           ? undefined
           : this.deps.runtimeConfig.systemPrompt,
       makerMemoryIndex,
       botProfilePrompt: reviewMode ? undefined : opts.botProfilePrompt,
       botProfileContextPrompt: reviewMode ? undefined : opts.botProfileContextPrompt,
       botUserProfilePrompt: reviewMode ? undefined : opts.botUserProfilePrompt,
-      userPrompt: reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt,
+      userPrompt: reviewMode || isolatedBotProfile(opts.botRuntimeProfile) ? undefined : opts.userPrompt,
     });
     const useProxyChannel = isCodexProxyChannelReady();
     let threadId!: string;
@@ -12289,6 +12342,17 @@ assertRouteCurrent();
       },
       descendantNotification: handleDescendantNotification,
       turnStarted: (params) => {
+        if (ownsManualCompact(params.turn.id)) {
+          currentTurnId = params.turn.id;
+          isTurnInFlight = true;
+          threadMayHaveRollout = true;
+          beginCodexGenerationTurn(translatorRt, params.turn.id);
+          if (manualCompact?.cancelled) {
+            void host.request(Method.TurnInterrupt, { threadId, turnId: params.turn.id })
+              .catch((error: unknown) => retireManualCompact(error instanceof Error ? error : new Error(String(error))));
+          }
+          return;
+        }
         // turn/start RPC 已失败(超时/拒绝)但 daemon 实际已建 turn — 迟到的孤儿
         // turnStarted 不得重新激活已报终态错误的会话 (greptile P1): 立墓碑 +
         // 补 interrupt 让 daemon 停掉这个没人消费的 turn。分支先于 stale 闸
@@ -12432,6 +12496,14 @@ assertRouteCurrent();
           cacheWrite > 0 ||
           last.outputTokens > 0 ||
           last.reasoningOutputTokens > 0;
+        // Native compact emits a context-only frame: cumulative billing is
+        // unchanged, all breakdown fields are zero, and last.totalTokens is
+        // the new context estimate. Refresh the gauge without charging it again.
+        if (!hasBillableLast && ownsManualCompact(params.turnId)
+          && Number.isFinite(last.totalTokens) && last.totalTokens > 0) {
+          manualCompact!.estimatedTokensAfter = last.totalTokens;
+          usageTracker.setContextTokensAfterCompact(last.totalTokens);
+        }
         // A lower cursor can be an out-of-order frame, so it is not sufficient
         // evidence of a new execution generation. A genuinely new thread gets
         // a distinct threadId and therefore a fresh map entry. Same-thread
@@ -12531,6 +12603,13 @@ assertRouteCurrent();
         publishTurnDiff(threadId, params.turnId, params.diff);
       },
       turnCompleted: (params) => {
+        if (ownsManualCompact(params.turn.id)) {
+          const error = params.turn.status === 'completed'
+            ? undefined
+            : new Error(params.turn.error?.message ?? manualCompact?.error?.message ?? `Codex compact ${params.turn.status}`);
+          finishManualCompact(error);
+          return;
+        }
         // buffered turn 的终态同样进队列等对账 (greptile R11 P1 + codex R12 P1):
         // 合法 → 激活后按序重放, handleTurnCompleted 自然收口 send; 孤儿 →
         // 整队丢弃。直接处理会让孤儿 completed 提前收口在飞 send
@@ -12688,6 +12767,7 @@ assertRouteCurrent();
         if (collabTerminalKey) handledCollabTerminalItemIds.add(collabTerminalKey);
         if (params.item.type === 'contextCompaction') {
           compactingTurnIds.delete(params.turnId);
+          if (ownsManualCompact(params.turnId)) manualCompact!.boundarySeen = true;
           if (threadModelProvider === localSummaryProvider && overloadRetry?.automaticRecoveryAttempted) {
             completedSummaryRecoveryTurnIds.add(params.turnId);
           }
@@ -12737,6 +12817,7 @@ assertRouteCurrent();
           rt: translatorRt,
           log,
           approvalDenialReason,
+          compactTrigger: manualCompact?.turnId === params.turnId ? 'manual' : 'auto',
           onCompactBoundary: handleCompactBoundary,
         });
         // A late V1 spawn completion is the spawn tool closing, not necessarily
@@ -12888,6 +12969,15 @@ assertRouteCurrent();
         }
       },
       error: (params) => {
+        if (manualCompact && (params.scope === 'transport' || !params.turnId || ownsManualCompact(params.turnId))) {
+          manualCompact.error = new Error(params.error?.message ?? 'Codex compact failed');
+          if (params.scope === 'transport') {
+            subscriptionInvalidatedByTransport = true;
+            retireManualCompact(manualCompact.error);
+          }
+          // A retryable error isn't a terminal; wait for the native turn result.
+          return;
+        }
         // buffered turn 的 error (含终态) 同样进队列等对账 (greptile R11 P1 +
         // codex R12 P1): 合法 → 激活后重放走正常终端路径收口 send; 孤儿 →
         // 丢弃, 不得让孤儿 error 终结合法 send。
@@ -13226,6 +13316,7 @@ assertRouteCurrent();
     ): Promise<void> {
       if (closed) return;
       closed = true;
+      finishManualCompact(new Error('Codex session closed during compaction'));
       cancelInteractionContinuation('session_closed', true);
       translatorRt.samplingSegments.clear();
       resetCodexGenerationTiming(translatorRt);
@@ -13324,6 +13415,7 @@ assertRouteCurrent();
       },
 
       async send(message: UserMessage, sendOpts?: SendOptions) {
+        if (manualCompact) throw new Error('Cannot send while Codex is compacting');
         if (rejectClosedOrCancelledSend(sendOpts, 'before start')) {
           return;
         }
@@ -14090,6 +14182,7 @@ assertRouteCurrent();
       },
 
       async steer(message: UserMessage, sendOpts?: SendOptions) {
+        if (manualCompact) throw new Error('Cannot steer while Codex is compacting');
         rejectIfCancelled(sendOpts, 'steer');
         assertCurrentHost('turn/steer');
         if (closed) {
@@ -14355,6 +14448,13 @@ assertRouteCurrent();
       },
 
       async abort() {
+        if (manualCompact) {
+          manualCompact.cancelled = true;
+          if (manualCompact.turnId) {
+            await host.request(Method.TurnInterrupt, { threadId, turnId: manualCompact.turnId });
+          }
+          return;
+        }
         const cancelledInteraction = cancelInteractionContinuation('turn_interrupted', true);
         if (cancelledInteraction) dismissAllPendingUserInput('turn_interrupted');
         const cancelledYield = cancelActiveYieldContinuation('aborted');
@@ -14468,11 +14568,14 @@ assertRouteCurrent();
         newModel: string,
         setOpts?: { providerId?: string | null; contextWindowBudget?: number | null },
       ) {
+        if (manualCompact) throw new Error('Cannot switch models while Codex is compacting');
         if (reviewMode) return;
         if (setOpts?.contextWindowBudget !== undefined) {
           mutableContextWindowBudget = setOpts.contextWindowBudget;
         }
-        if (await modelSwitchRequiresRebuild(newModel, setOpts)) {
+        const requiresRebuild = await modelSwitchRequiresRebuild(newModel, setOpts);
+        if (manualCompact) throw new Error('Cannot switch models while Codex is compacting');
+        if (requiresRebuild) {
           const error = new Error(
             'Codex model switch requires rebuilding the current session handle',
           );
@@ -14912,6 +15015,45 @@ assertRouteCurrent();
         return sdkSessionId ? { sdkSessionId } : {};
       },
 
+      compactSession(instructions?: string): Promise<ManualCompactResult> {
+        if (closed) return Promise.reject(new Error('Codex session is closed'));
+        if (instructions?.trim()) return Promise.reject(new Error('Codex native compaction does not support custom instructions'));
+        if (handle.isTurnRunning?.() || isTurnStartPending || inFlightStarts.size > 0) {
+          return Promise.reject(new Error('Cannot compact while a Codex turn is active'));
+        }
+        if (turnStartFailedWithoutTurnId) {
+          return Promise.reject(new Error('Codex has an unconfirmed previous turn; resume the task before compacting'));
+        }
+        assertCurrentHost('thread/compact/start');
+        resubscribeAfterTransportErrorIfNeeded();
+        discardOverloadRetry('manual compact');
+        compactionStormTracker.reset();
+        usageTracker.beginTurn();
+        const result = new Promise<ManualCompactResult>((resolve, reject) => {
+          manualCompact = {
+            turnId: null, boundarySeen: false, cancelled: false, resolve, reject,
+            tokensBefore: usageTracker.snapshot().contextTokens ?? 0,
+            timer: setTimeout(() => {
+              // No confirmed terminal: retire this handle before accepting another send.
+              retireManualCompact(new Error('Codex compaction timed out'));
+            }, 10 * 60_000),
+          };
+        });
+        const operation = manualCompact;
+        eventQueue.push({ type: 'status', data: { status: 'Compacting context…', ...usageTracker.snapshot(), isRunning: true }, source: 'codex' });
+        void host.request(Method.ThreadCompactStart, { threadId }).catch((error: unknown) => {
+          if (manualCompact !== operation) return; // A native terminal may precede the ACK.
+          // Admission may have timed out after the server accepted it. Unsubscribe
+          // rather than letting a late compact turn become the next user's turn.
+          retireManualCompact(error instanceof Error ? error : new Error(String(error)));
+        });
+        return result;
+      },
+
+      hasPendingHostOperation() {
+        return manualCompact !== null;
+      },
+
       isTurnRunning() {
         // 本方法是 Session.send() 的 in-flight guard 判据（另见上方 turn/start
         // 失败收口处的注释）。过载重投把这一轮拆成了两段 app-server 侧「没有活着
@@ -14930,7 +15072,7 @@ assertRouteCurrent();
         //
         // yield continuation claim 把 provider turn/completed 与产品结束拆开:
         // 等 cell / 续段尚未启动时 isTurnInFlight 已是 false, 但仍是同一产品请求。
-        return isTurnInFlight
+        return manualCompact !== null || isTurnInFlight
           || overloadRetryPending()
           || yieldContinuationInFlight
           || activeYieldContinuationClaim() != null

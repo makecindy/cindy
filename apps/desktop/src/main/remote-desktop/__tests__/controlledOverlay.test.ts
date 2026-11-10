@@ -33,7 +33,7 @@ const state = vi.hoisted(() => ({
   confirm: vi.fn(),
   themeMode: 'system' as 'system' | 'light' | 'dark',
 }));
-vi.mock('../../i18n', () => ({
+vi.mock('../../i18n.desktop', () => ({
   t: (key: string) => (key.endsWith('ByDevice') ? `${key}:{{name}}` : key),
 }));
 vi.mock('../../window-theme-mode-store', () => ({

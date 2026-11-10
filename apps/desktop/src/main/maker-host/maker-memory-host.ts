@@ -34,6 +34,7 @@ import {
   isAppSessionBoundaryPending,
 } from '../appSessionState.js';
 import { botProfileMemoryDir } from '../maker-ipc/botProfileFolder.js';
+import { teammateProjectMemoryStorageDir } from '../maker-ipc/botProjectMemory.js';
 import { dialogueWorkspaceRoots } from '../dialogue-workspace-settings.js';
 
 /**
@@ -75,6 +76,9 @@ export function createDesktopMakerMemoryManager(
     },
     ownerSegment: (ownerId) => dataOwnerStorageKey(ownerId),
     readEnabled: (ownerRoot) => readMemorySettings({ rootPath: ownerRoot ?? undefined }).maker,
+    // A V2 teammate's project keeps its memory inside the project (versioned with it), switched by
+    // the teammate's own setting; every other project keeps the historical place outside its folder.
+    projectMemoryDir: (scopeKey, ownerRoot) => teammateProjectMemoryStorageDir(scopeKey, ownerRoot),
     sqliteFactory,
     logger: desktopMakerLogger.child('maker-memory'),
     botMemoryDir: botProfileMemoryDir,

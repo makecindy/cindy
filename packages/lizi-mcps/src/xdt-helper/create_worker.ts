@@ -31,6 +31,7 @@ type CreateWorkerErrorCode =
   | 'REMOTE_AGENT_SHARE_PAUSED'
   | 'REMOTE_AGENT_SHARE_REMOVED'
   | 'REMOTE_AGENT_SHARE_UNAVAILABLE'
+  | 'REMOTE_AGENT_SHARE_LEGACY_DISABLED'
   | 'UNSUPPORTED_CAPABILITY';
 
 /** agent_device_id 里表示「这台电脑」(任务所在电脑)的取值。 */

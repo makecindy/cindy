@@ -37,6 +37,8 @@ import {
   type BotImConnectionAddInput,
   type BotImConnectionAddResult,
   type BotImConnectionGroupsPayload,
+  BOT_IM_DISCORD_ACCESS_VERSION,
+  type BotImDiscordChannelsPayload,
   type BotImConnectionListPayload,
   type BotImConnectionRecord,
   type BotImConnectionRemoveResult,
@@ -52,6 +54,7 @@ import {
   readBotImConnection,
   removeBotImConnectionRecord,
   secretKeyPrefixFor,
+  setBotImConnectionDiscordChannelAccess,
   setBotImConnectionGroupActivation,
   updateBotImConnectionRecord,
 } from './botImConnectionStore';
@@ -629,6 +632,34 @@ export async function setBotImConnectionGroupMode(
   return listBotImConnectionGroups(id);
 }
 
+/** 伙伴页「服务器频道」小节：这条 Discord 连接当前能看到的服务器 / 频道 + 它自己的白名单。 */
+export function listBotImDiscordChannels(id: string): BotImDiscordChannelsPayload {
+  const record = readBotImConnection(id);
+  if (!record || record.channel !== 'discord') throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  const transport = instances.get(id)?.transport;
+  const live = transport?.kind === 'discord' ? transport.im : null;
+  return {
+    connectionId: id,
+    accessVersion: BOT_IM_DISCORD_ACCESS_VERSION,
+    online: live?.getStatus().kind === 'connected',
+    guilds: live ? live.listGuilds() : [],
+    access: record.discordChannelAccess ?? { channels: [] },
+  };
+}
+
+/** 整份替换这条连接的白名单（含逐频道「允许成员」）；传输层下一条消息就按新配置判定。 */
+export async function setBotImDiscordChannelAccess(
+  id: string,
+  access: unknown,
+): Promise<BotImDiscordChannelsPayload> {
+  const updated = await setBotImConnectionDiscordChannelAccess(id, access);
+  if (!updated) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  const live = instances.get(id);
+  if (live) live.record = updated;
+  log.info(`bot im connection ${id}: discord channel access updated (${updated.discordChannelAccess?.channels.length ?? 0})`);
+  return listBotImDiscordChannels(id);
+}
+
 export async function removeBotImConnection(id: string): Promise<BotImConnectionRemoveResult> {
   const record = readBotImConnection(id);
   if (!record) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
@@ -790,6 +821,18 @@ export function registerBotImConnectionIpc(): void {
     const id = (payload as { id?: unknown } | null)?.id;
     if (!isBotImConnectionId(id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
     return listBotImConnectionGroups(id);
+  });
+  ipcMain.handle('botImConnection:list-discord-channels', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    const id = (payload as { id?: unknown } | null)?.id;
+    if (!isBotImConnectionId(id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    return listBotImDiscordChannels(id);
+  });
+  ipcMain.handle('botImConnection:set-discord-channel-access', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { id?: unknown; access?: unknown };
+    if (!isBotImConnectionId(p.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
+    return setBotImDiscordChannelAccess(p.id, p.access);
   });
   ipcMain.handle('botImConnection:set-group-activation', (e, payload) => {
     assertTrustedAppRendererEvent(e);

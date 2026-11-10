@@ -102,10 +102,10 @@ it.each(['codex', 'claude-code', 'pi'] as const)('keeps helper tools available a
   const history = { resolveSessionScope: vi.fn(async () => ({ ok: true as const, sessionIds: null })),
     listWorkdirs: vi.fn(), listSessions: vi.fn(async () => ({ ok: true as const, page: { items: [], nextCursor: null, hasMore: false } })),
     getMessages: vi.fn(), searchChatHistory: vi.fn() };
-  const listSessionQueue = vi.fn(), sendToSession = vi.fn(), messageAgent = vi.fn();
+  const listSessionQueue = vi.fn(), sendToSession = vi.fn(), listAgents = vi.fn();
   const server = createXdtHelperMcpServer({ resolveSurface: f.resolve, history,
     sessionQueue: { listSessionQueue, listSessionQueuedCounts: vi.fn() }, sendToSession,
-    botMessaging: { messageAgent, checkMessage: vi.fn() } },
+    botMessaging: { listAgents } },
   { agentKind, workingDir: '/answer', sessionId: 'worker' });
   const client = new Client({ name: 'plugin-helper-scope', version: '1' });
   const [ct, st] = InMemoryTransport.createLinkedPair();

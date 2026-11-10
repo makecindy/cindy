@@ -65,6 +65,7 @@ describe('PiAgent compaction digests', () => {
   let cwd = '';
   let writeMock: ReturnType<typeof vi.fn>;
   let resetDigestsMock: ReturnType<typeof vi.fn>;
+  let promptIndexMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     captured.onEvent = null;
@@ -72,6 +73,7 @@ describe('PiAgent compaction digests', () => {
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-cm-cwd-'));
     writeMock = vi.fn(async () => ({ ok: true, filename: 'digest_x.md' }));
     resetDigestsMock = vi.fn(async () => ({ removedCount: 2 }));
+    promptIndexMock = vi.fn(async () => '# Memory Index\n');
   });
   afterEach(() => {
     rmSync(agentHome, { recursive: true, force: true });
@@ -94,7 +96,7 @@ describe('PiAgent compaction digests', () => {
       },
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => agentHome,
-      ...(withManager ? { makerMemory: { write: writeMock, resetDigests: resetDigestsMock } as never } : {}),
+      ...(withManager ? { makerMemory: { write: writeMock, resetDigests: resetDigestsMock, getPromptIndex: promptIndexMock } as never } : {}),
     };
   }
 
@@ -118,6 +120,21 @@ describe('PiAgent compaction digests', () => {
     await Promise.resolve();
     expect(writeMock).not.toHaveBeenCalled();
     await handle.close();
+  });
+
+  it('an engine-level memory switch does not turn off a teammate whose own switch decided', async () => {
+    // A V2 teammate works in its project (no `bot:` scope); its memory follows its own setting.
+    const agent = new PiAgent(buildDeps(true));
+    await agent.setMemory(false);
+    const ordinary = await agent.startSession({ sessionId: 'plain', workingDir: cwd, model: 'm' });
+    expect(promptIndexMock).not.toHaveBeenCalled();
+    await ordinary.close();
+
+    const teammate = await agent.startSession({
+      sessionId: 'mate', workingDir: cwd, model: 'm', makerMemorySwitchOwned: true,
+    });
+    expect(promptIndexMock).toHaveBeenCalledTimes(1);
+    await teammate.close();
   });
 
   // 旧版本存下的摘要仍可经这个窄入口清掉, 不碰用户的四类记忆。

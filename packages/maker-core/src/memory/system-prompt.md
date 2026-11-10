@@ -54,4 +54,4 @@ If a user message starts with `Save in memory:` or `记到 memory:`, treat the r
 
 ## Current index
 
-Below this section, the live indexes are inlined: the `user` scope first, then the `project` scope. Use them to know what's already saved.
+Below this section, the live indexes are inlined: the `user` scope first, then the `project` scope. Use them to know what's already saved. They are a snapshot taken when this turn started: entries you write now show up in them from a later turn, so a missing new entry is not a failed save.

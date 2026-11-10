@@ -23,6 +23,7 @@ const state = vi.hoisted(() => ({
   receivedError: false,
   receivedDenied: false,
   boundaryPending: false,
+  legacyHidden: new Set<string>(),
 }));
 
 // This fixture exercises owner/delegation access without a cloud standby registration.
@@ -42,7 +43,7 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (id: string) => state.allowed.has(id),
 }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: state.remoteControl }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: state.remoteControl }) }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: {
     listOwned: async () => {
@@ -61,6 +62,7 @@ vi.mock('../providerShareApi.js', () => ({
   fetchIdentityCard: vi.fn(),
   sha256Hex: (value: string) => value,
   providerShareOwnerKey: () => state.scope,
+  providerShareHiddenByEncryptedOnly: (shareId: string) => state.legacyHidden.has(shareId),
   checkProviderShareDelegation: vi.fn(async () => ({ active: false })),
 }));
 vi.mock('../providerShareCrossRegion.js', async (importOriginal) => ({
@@ -834,6 +836,10 @@ describe('provider share guest routing', () => {
     startProviderShareGuest({ changed: vi.fn(), settled: vi.fn() });
     await expect(resolveRemoteAgentTargetWhenReady('share:share-1')).resolves.toBe(providerShareHostPeer('share-1', 'owner-mac'));
     expect(() => resolveRemoteAgentTarget('share:share-2')).toThrow(/REMOTE_AGENT_SHARE_REMOVED/);
+    // Bug (2026-11-10): 「仅使用 Agent-Net」hid a V1 share and the running task said its owner removed it.
+    state.legacyHidden.add('share-2');
+    expect(() => resolveRemoteAgentTarget('share:share-2')).toThrow(/^\[REMOTE_AGENT_SHARE_LEGACY_DISABLED\]/);
+    state.legacyHidden.clear();
   });
 
   it('retires only the changed share metadata target, not its neighbour', async () => {

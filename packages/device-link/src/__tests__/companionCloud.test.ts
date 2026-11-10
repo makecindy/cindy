@@ -41,10 +41,15 @@ describe("cloud companion device-link contract", () => {
         { deviceId: "" },
         "x",
         { deviceId: "b" },
+        // Version 4 homes list a computer too old for a V2 teammate as not selectable.
+        { deviceId: "c", name: "C", online: true, outdated: true },
+        { deviceId: "d", online: true, outdated: "yes" },
       ]),
     ).toEqual([
       { deviceId: "a", name: "A", online: true },
       { deviceId: "b", name: "", online: false },
+      { deviceId: "c", name: "C", online: true, outdated: true },
+      { deviceId: "d", name: "", online: true },
     ]);
     expect(parseCompanionCloudRemoteTargets({})).toEqual([]);
     expect(

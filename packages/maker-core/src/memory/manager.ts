@@ -192,7 +192,12 @@ const USER_MEMORY_SUBDIR = 'user-memory';
 /** 旧子目录记忆并入仓库根后留在来源目录的回执: 不重复并入, 来源文件保留备查。 */
 const SUBSCOPE_MERGE_RECEIPT = '.cindy-memory-merged-v1.json';
 const FTS_DB_FILENAME = 'fts.db';
-const STORAGE_MIGRATION_RECEIPT = '.cindy-memory-migration-v1.json';
+/**
+ * Written in a host-resolved store once the shards of its historical `<owner>/maker-memory/<scope>`
+ * folder were copied in; a host that moves them itself writes it too, so they are copied once.
+ */
+export const MEMORY_STORAGE_MIGRATION_RECEIPT = '.cindy-memory-migration-v1.json';
+const STORAGE_MIGRATION_RECEIPT = MEMORY_STORAGE_MIGRATION_RECEIPT;
 // This shape is only a candidate: sanitized project paths can match it too.
 const LEGACY_BOT_MEMORY_DIR = /^bot-.{0,24}-[a-f0-9]{16}$/;
 
@@ -224,7 +229,23 @@ function copyLegacyMemoryShardsSync(sourceDir: string, targetDir: string): void 
     const source = path.join(sourceDir, entry.name);
     if (fsSync.lstatSync(source).isSymbolicLink()) continue;
     const target = path.join(targetDir, entry.name);
-    if (!fsSync.existsSync(target)) fsSync.copyFileSync(source, target);
+    // Exclusive: an existing file (or a link planted there) is never written through.
+    try {
+      fsSync.copyFileSync(source, target, fsSync.constants.COPYFILE_EXCL);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+}
+
+/** fts.db and its journals are derived: a link in their place is removed, never opened through. */
+function removeLinkedDatabaseFilesSync(dbPath: string): void {
+  for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, `${dbPath}-journal`]) {
+    try {
+      if (fsSync.lstatSync(file).isSymbolicLink()) fsSync.unlinkSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
 }
 
@@ -706,10 +727,11 @@ export class MakerMemoryManager {
         copyLegacyMemoryShardsSync(legacyStorageDir, storageDir);
         const receipt = path.join(storageDir, STORAGE_MIGRATION_RECEIPT);
         const receiptTmp = `${receipt}.tmp-${process.pid}`;
+        fs.rmSync(receiptTmp, { force: true });
         fs.writeFileSync(
           receiptTmp,
           `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString() })}\n`,
-          'utf8',
+          { encoding: 'utf8', flag: 'wx' },
         );
         fs.renameSync(receiptTmp, receipt);
       } catch (error) {
@@ -717,6 +739,7 @@ export class MakerMemoryManager {
       }
     }
     fs.mkdirSync(storageDir, { recursive: true });
+    removeLinkedDatabaseFilesSync(dbPath);
 
     // 旧记忆并入: 仓库子目录名下的并入仓库根, 一次性对话目录名下的并入账号级
     // (伙伴 / SSH 没有这类旧数据)。
@@ -742,7 +765,7 @@ export class MakerMemoryManager {
       absWorkdir,
       db,
       logger: this.logger.child(`memory:${sanitized}`),
-      // 伙伴等独立作用域不设索引硬上限: 它们有自己的整理流程 (夜间学习) 和导入入口,
+      // 伙伴等独立作用域不设索引硬上限: 它们有自己的整理流程 (伙伴项目的记忆整理自动化) 和导入入口,
       // 硬上限会让一次导入中途被拒。
       ...(independentScope
         ? { config: { ...(this.deps.config ?? {}), hardIndexBytes: 0 } }
@@ -931,6 +954,8 @@ export class MakerMemoryManager {
       }
       if (typeof absPath !== 'string' || !absPath || parseBotMemoryScopeKey(absPath) !== null) continue;
       if (memoryScopeDirName(absPath) !== entry || this.deps.isProjectlessScope?.(absPath) === true) continue;
+      // 记忆放在自己项目文件夹里的作用域 (伙伴的项目) 不是 Cindy 记忆; 这里留下的只是搬走前的旧副本。
+      if (this.deps.isIndependentScope?.(absPath) === true) continue;
       const count = await countCurated(dir);
       if (count > 0) scopes.push({ scopeKey: absPath, kind: 'project', count });
     }
@@ -973,6 +998,8 @@ export class MakerMemoryManager {
       if (dir === storageDir) continue;
       const absPath = await readUnmergedScopePath(dir);
       if (absPath === null || !fold(absPath).startsWith(prefix)) continue;
+      // 独立作用域 (伙伴的项目) 有自己的记忆, 不并进外层仓库。
+      if (this.deps.isIndependentScope?.(absPath) === true) continue;
       // 目录已经不在 (只在某个已删除的 worktree 里存在过的子目录): 用最近一层还在的
       // 上级目录来判断它属于哪个仓库, 否则这些记忆再也没有任务会读到。只对 Git 仓库
       // 这样做: 普通文件夹按目录各存一份, 删掉的子文件夹不该并进上级 (否则在主目录
@@ -1305,7 +1332,7 @@ export class MakerMemoryManager {
   /**
    * 一轮任务结束后由宿主调用: 这次任务用到的每一份记忆 (项目、账号级) 各自检查
    * 触发线, 到了才整理。不到线时只读一次状态文件和分片列表, 不调用模型。
-   * 伙伴等独立作用域不参与 (它们有自己的夜间学习); 总开关关闭时不整理。
+   * 伙伴等独立作用域不参与 (伙伴项目有自己的记忆整理自动化); 总开关关闭时不整理。
    */
   async tidyIfDue(scopeKey: string): Promise<TidyRun[]> {
     if (!this.isEnabled() || !this.deps.reviewOneShot) return [];

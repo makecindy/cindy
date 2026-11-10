@@ -645,6 +645,8 @@ export class Session {
   private turnGeneration = 0;
   /** 已为哪个 turn 代号排过 abort 复核；同一 turn 上重复 abort 不重复排。 */
   private abortRecoveryScheduledFor: number | null = null;
+  /** Host operations can start new work without creating a user-turn generation. */
+  private abortRecoveryEpoch = 0;
   private lastEventType: string | null = null;
   /** 优雅停止所需的 turn 控制事实；不承担 UI/MCP 会话状态投影。 */
   private turnControlState: TurnControlState | null = null;
@@ -677,8 +679,8 @@ export class Session {
         && generation === this.turnGeneration,
       isLateAnswer: (generation) => generation !== this.turnGeneration || !this.handle.isTurnRunning?.(),
       resolve: (request) => this.interactionListener!(request),
-      deliver: async (text, signal, requestId) => {
-        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId);
+      deliver: async (text, signal, requestId, displayText) => {
+        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId, displayText);
         const options = { signal, [ASYNC_QUESTION_ANSWER]: true as const };
         if (this.handle.isTurnRunning?.()) {
           try { await this.steer(text, options); return; } catch (error) {
@@ -881,10 +883,13 @@ export class Session {
     return snapshot;
   }
 
-  private asyncQuestionAnswerDispatcher?: (text: string, signal: AbortSignal, requestId: string) => Promise<void>;
+  private asyncQuestionAnswerDispatcher?: (text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>;
 
-  /** Hosts with a durable input queue own admission/persistence of question replies. */
-  setAsyncQuestionAnswerDispatcher(dispatch: (text: string, signal: AbortSignal, requestId: string) => Promise<void>): void {
+  /**
+   * Hosts with a durable input queue own admission/persistence of question replies.
+   * `text` is the model's copy; `displayText` is what history and queues show.
+   */
+  setAsyncQuestionAnswerDispatcher(dispatch: (text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>): void {
     this.asyncQuestionAnswerDispatcher = dispatch;
   }
 
@@ -1142,7 +1147,12 @@ export class Session {
           // work. This path is safe to reschedule and must not arm the
           // ambiguous-tail drain used for unknown dispatch failures.
           dispatchConfirmedUndispatched = true;
-          return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+          // A cancelled adapter preflight is also a definite non-dispatch.
+          // Preserve Stop's reason so hosts do not report it as a send failure.
+          return {
+            accepted: false,
+            reason: reservation.cancelled ? 'cancelled-before-dispatch' : 'provider-rejected-before-dispatch',
+          };
         }
         // Cancellation cannot downgrade an explicitly ambiguous provider result
         // into "cancelled before dispatch"; that would skip the mandatory
@@ -2228,6 +2238,9 @@ export class Session {
   /** 手动压缩会话上下文(capability 见 Capabilities.manualCompact)。 */
   async compactSession(instructions?: string): Promise<ManualCompactResult> {
     this.ensureActive();
+    if (this.agentKind === 'codex' && (this.sendReservation !== null || this.hostTurnLeases.size > 0)) {
+      throw new Error('Cannot compact while a Codex send is reserved');
+    }
     if (!this.capabilities.manualCompact?.supported) {
       throw new NotSupportedError(
         'manualCompact',
@@ -2236,6 +2249,16 @@ export class Session {
     }
     if (!this.handle.compactSession) {
       throw new NotSupportedError('manualCompact', { supported: false, reason: 'not-implemented' });
+    }
+    if (this.agentKind === 'codex') {
+      // Only a fully settled prior turn may yield to native compaction. Retire
+      // its Stop check without inventing a new user turn; a Stop on the compact
+      // itself must still get a fresh, bounded recovery check.
+      if (this.isTurnRunning() || this.hasUnsettledTurn()) {
+        throw this.createSessionRunningError();
+      }
+      this.abortRecoveryEpoch += 1;
+      this.abortRecoveryScheduledFor = null;
     }
     return this.handle.compactSession(instructions);
   }
@@ -2344,6 +2367,26 @@ export class Session {
       this.permissionModeChangesInFlight > 0 ||
       this.isHandleTurnRunning()
     );
+  }
+
+  /**
+   * 项目资源漂移且满足回收空闲口径时返回 true(仅 pi 本地根任务实现,其余 agent
+   * 恒 false)。只判定不执行 close:close 必须由持有 Maker 的调用方走
+   * closeSessionIfCurrent(session, 'runtime-refresh'),让 session:closed 带上 Maker
+   * 认识的刷新原因 —— 直接 Session.close 绕过 Maker 的 closeReasons 登记,IM
+   * runner 会按 unexpected 清掉排队中的回合、丢失已接受的派发。空闲口径与
+   * closeIfIdle 一致:turn 运行中、结束未收口的 turn、换代续接、手动压缩 /
+   * rewind 等宿主排他操作进行中绝不回收。回收后由既有 lazy bootstrap 在下次
+   * 发送时重扫项目资源、重算 argv。
+   */
+  hasRecyclableProjectResourceDrift(): boolean {
+    if (this.status !== 'active' || this.closePromise) return false;
+    if (this.isTurnRunning() || this.hasUnsettledTurn()
+      || this.retirementContinuationGeneration === this.turnGeneration
+      || this.hasPendingHostOperation()) {
+      return false;
+    }
+    return this.handle.hasProjectResourceDrift?.() === true;
   }
 
   getCurrentTurnId(): string | null {
@@ -2740,7 +2783,13 @@ export class Session {
     isBackgroundEvent: boolean,
     isCurrentGeneration: boolean,
   ): boolean {
-    if (isBackgroundEvent || !isCurrentGeneration || !this.isNewTurnProgressEvent(event)) return false;
+    // Claude knows a top-level automatic turn started even when the first
+    // response is only an API-error envelope. Ordinary running/child statuses
+    // are not evidence: they can be leftover activity from the preceding turn.
+    const providerStart = event.source === 'claude-code' && event.type === 'status' &&
+      (event.data as { isRunning?: unknown; providerInitiatedTurn?: unknown } | null)?.isRunning === true &&
+      (event.data as { providerInitiatedTurn?: unknown } | null)?.providerInitiatedTurn === true;
+    if (isBackgroundEvent || !isCurrentGeneration || (!providerStart && !this.isNewTurnProgressEvent(event))) return false;
     const parentUuid = event.agentMeta?.parentUuid;
     if (typeof parentUuid === 'string' && parentUuid.length > 0) return false;
     const generation = this.turnGeneration;
@@ -3476,7 +3525,7 @@ export class Session {
     // 复核于是关掉一条其实还响应得动的会话(第十八轮 P1)。与 armTurnStallSlice、codex 的
     // armUpstreamIdleSlice、claude-code 的 armUpstreamResponseIdleSlice、scheduler 的
     // absorbSuspendGap、排队派发的 QUEUED_DISPATCH_SUSPEND_GAP_MS 同源:壁钟差 ≠ 清醒时间。
-    this.armAbortRecoverySlice(generation, graceMs, graceMs, trigger);
+    this.armAbortRecoverySlice(generation, graceMs, graceMs, trigger, ++this.abortRecoveryEpoch);
   }
 
   /** 宽限的分片计时:片尾核对壁钟,发现被冻结过就把那一片作废重开(额度不扣)。 */
@@ -3485,10 +3534,12 @@ export class Session {
     remainingMs: number,
     graceMs: number,
     trigger: 'stall-watchdog' | 'manual-abort',
+    recoveryEpoch: number,
   ): void {
     const slice = Math.min(remainingMs, TURN_STALL_SLICE_MS);
     const startedAt = Date.now();
     const timer = setTimeout(() => {
+      if (recoveryEpoch !== this.abortRecoveryEpoch) return;
       const elapsed = Date.now() - startedAt;
       if (elapsed > slice + TURN_STALL_SUSPEND_GAP_MS) {
         this.logger.info('abort recovery skipped a suspended slice', {
@@ -3496,12 +3547,12 @@ export class Session {
           sliceMs: slice,
           elapsedMs: elapsed,
         });
-        this.armAbortRecoverySlice(generation, remainingMs, graceMs, trigger);
+        this.armAbortRecoverySlice(generation, remainingMs, graceMs, trigger, recoveryEpoch);
         return;
       }
       const left = remainingMs - Math.max(0, elapsed);
       if (left > 0) {
-        this.armAbortRecoverySlice(generation, left, graceMs, trigger);
+        this.armAbortRecoverySlice(generation, left, graceMs, trigger, recoveryEpoch);
         return;
       }
       // 把真正生效的宽限与触发来源带进复核:两条路径的宽限不同(手动 60s / 看门狗 10s),

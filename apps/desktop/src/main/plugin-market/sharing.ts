@@ -3,7 +3,7 @@ import type { ShareContent } from '../../shared/share.js';
 import { getBuildClientEndpoint } from '../clientEndpointsService.js';
 import * as authManager from '../authManager.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
-import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { rememberIssuedClipboardText } from '../textClipboard.js';
 

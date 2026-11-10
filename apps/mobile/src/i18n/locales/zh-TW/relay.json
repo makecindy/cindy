@@ -1,10 +1,18 @@
 {
+  "agentNet": {
+    "enabled": "啟用 Agent-Net",
+    "onlyEncrypted": "僅使用加密連線",
+    "hint": "裝置之間使用端到端加密。僅使用加密連線時，兩端都需要啟用 Agent-Net。",
+    "updateRequired": "請安裝新版應用程式以使用 Agent-Net。",
+    "notConfigured": "目前中繼尚未提供 Agent-Net，請更新中繼或加入 V2 中繼。",
+    "failed": "無法修改 Agent-Net 設定，請檢查中繼連線後重試。"
+  },
   "settings": {
     "sectionTitle": "中繼服務",
     "currentLabel": "中繼服務",
     "official": "{{appName}} 官方中繼",
     "switchToOfficial": "切回官方中繼",
-    "officialHint": "裝置之間經 {{appName}} 官方中繼連線。要改用自建中繼，在中繼所在的電腦上顯示加入 QR 碼，用手機相機掃描加入。",
+    "officialHint": "裝置之間經 {{appName}} 官方中繼連線。你的電腦在用自己的中繼時會列在這裡，點一下即可加入；別人分享的中繼，用手機相機掃描對方給的 QR 碼加入。",
     "selfHostedHint": "裝置之間經自建中繼 {{address}} 連線；登入、模型和共享任務等仍使用 {{appName}} 官方服務。",
     "removedHint": "這臺手機已被移出中繼，或中繼已停用。可以切回官方中繼，或在電腦上重新加入。",
     "credentialMissingHint": "這臺手機上找不到中繼憑證。請在電腦上重新加入，或切回官方中繼。",
@@ -12,7 +20,15 @@
     "confirmBody": "這臺手機會退出「{{name}}」，改用 {{appName}} 官方中繼。之後要再用這個中繼，需要在電腦上重新加入。",
     "confirmAction": "切回",
     "switchFailed": "未能切回官方中繼，請稍後重試。",
-    "pushUnavailable": "使用自建中繼時，電腦上的任務通知不會推送到這臺手機。"
+    "pushUnavailable": "使用自建中繼時，電腦上的任務通知不會推送到這臺手機。",
+    "accountManagedOn": "在「{{device}}」上管理",
+    "accountSwitchTitle": "加入「{{name}}」？",
+    "accountSwitchBody": "這是你帳號下的中繼，由「{{device}}」放行，這台手機自動加入，不需要分享連結。使用自建中繼時，這台手機收不到電腦上的任務通知。",
+    "accountSwitchAction": "加入",
+    "sharedHint": "裝置之間經別人分享的中繼 {{address}} 連線，只能連線你自己的裝置；登入、模型和共享任務等仍使用 {{appName}} 官方服務。",
+    "sharedCurrent": "{{name}}（{{owner}} 分享）",
+    "accountSharedBy": "{{owner}} 分享 · 由「{{device}}」加入",
+    "accountSharedOn": "由「{{device}}」加入"
   },
   "issue": {
     "removedTitle": "已移出中繼",
@@ -34,22 +50,28 @@
     "retry": "重試",
     "signedOut": "請先登入 {{appName}}，再加入這個中繼。",
     "signIn": "去登入",
-    "invalidLink": "加入連結無效或已失效，請在電腦上重新產生。",
-    "cancelled": "已取消加入。要加入這個中繼，請在電腦上重新產生加入連結。"
+    "invalidLink": "分享連結無效或已失效，請在電腦上重新產生。",
+    "cancelled": "已取消加入。要加入這個中繼，請在電腦上重新產生分享連結。",
+    "accountRequesting": "正在請「{{device}}」放行…",
+    "accountWaiting": "正在加入，等待「{{device}}」放行…",
+    "openOnComputer": "這是其他帳號分享的中繼，請在你的電腦上開啟這條連結加入。電腦加入後，這台手機會在設定的中繼服務裡看到它，點一下即可加入。"
   },
   "errors": {
     "unreachable": "連不上這個中繼。請確認手機和電腦在同一網路，或手機能存取這個位址。",
-    "insecureUnreachable": "連不上這個中繼。手機只能透過 https 加入中繼，請在電腦上為中繼設定憑證後重新產生加入連結。",
-    "notRelay": "這個位址不是 {{appName}} 中繼，請檢查加入連結。",
+    "insecureUnreachable": "連不上這個中繼。手機只能透過 https 加入中繼，請在電腦上為中繼設定憑證後重新產生分享連結。",
+    "notRelay": "這個位址不是 {{appName}} 中繼，請檢查分享連結。",
     "incompatible": "這個中繼與目前版本的 {{appName}} 不相容，請把中繼和 {{appName}} 都更新到最新版本。",
     "accountMismatch": "這個中繼屬於另一個 {{appName}} 帳號。",
-    "codeInvalid": "加入連結已失效，請在電腦上重新產生。",
+    "codeInvalid": "分享連結已失效，請在電腦上重新產生。",
     "rateLimited": "嘗試次數太多，請稍後再試。",
     "rejected": "電腦上拒絕了這次加入。",
-    "expired": "等待同意逾時，請在電腦上重新產生加入連結。",
-    "ownerMismatch": "中繼回傳的憑證不是加入連結裡的主人簽發的，可能連到了別人偽造的中繼，已停止加入。",
+    "expired": "等待同意逾時，請在電腦上重新產生分享連結。",
+    "ownerMismatch": "中繼回傳的憑證不是分享連結裡的主人簽發的，可能連到了別人偽造的中繼，已停止加入。",
     "failed": "未能加入中繼，請稍後重試。",
-    "saveFailed": "已獲同意，但未能在這臺手機上儲存中繼憑證。請在電腦上重新產生加入連結後再試。",
-    "credentialUnavailable": "這臺手機沒有可用的中繼憑證。請重新加入，或在設定裡切回官方中繼。"
+    "saveFailed": "已獲同意，但未能在這臺手機上儲存中繼憑證。請在電腦上重新產生分享連結後再試。",
+    "credentialUnavailable": "這臺手機沒有可用的中繼憑證。請重新加入，或在設定裡切回官方中繼。",
+    "ownerUnavailable": "「{{device}}」沒有回應。請確認它開著 {{appName}} 並已連網，或請它分享連結給你。",
+    "relayUnavailable": "「{{device}}」已經不在用這個中繼了。",
+    "accountDirectoryUnavailable": "暫時連不上 {{appName}} 帳號服務，讀不到你帳號下的中繼。請稍後重試，或請對方分享連結給你。"
   }
 }

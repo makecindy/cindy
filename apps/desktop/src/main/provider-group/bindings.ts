@@ -20,12 +20,8 @@ import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { isProviderGroupProviderId } from '../../shared/providerGroup.js';
 import { captureProviderManagementScope, withProviderGroupMutation } from './managementScope.js';
-import {
-  completeProviderGroupBindingCleanup,
-  listProviderGroupBindingCleanups,
-  readProviderGroup,
-  type ProviderGroupBindingCleanup,
-} from './store.js';
+import type { ProviderGroupBindingCleanup } from './store.js';
+
 
 export interface ProviderGroupBinding {
   /** 组所属的供应商(组所在电脑上的供应商 id)。 */
@@ -61,11 +57,17 @@ interface ReleaseFile {
   sessions: Record<string, ProviderGroupRelease>;
 }
 
+export function createProviderGroupBindings(ports: {
+  completeProviderGroupBindingCleanup: typeof import('./store.js').completeProviderGroupBindingCleanup;
+  listProviderGroupBindingCleanups: typeof import('./store.js').listProviderGroupBindingCleanups;
+  readProviderGroup: typeof import('./store.js').readProviderGroup;
+}) {
+const { completeProviderGroupBindingCleanup, listProviderGroupBindingCleanups, readProviderGroup } = ports;
+
+
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const MEMBER_KEY_PATTERN = /^[A-Za-z0-9_.:-]{1,300}$/;
-const DEVICE_ID_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
-/** 只需覆盖仍可能继续的任务；超出时淘汰最久没有分配过的绑定。 */
-export const MAX_PROVIDER_GROUP_BINDINGS = 4000;
+const DEVICE_ID_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/; const MAX_PROVIDER_GROUP_BINDINGS = 4000;
 
 function normalizeBinding(raw: unknown, remote: boolean): ProviderGroupBinding | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -205,25 +207,16 @@ async function finishPendingCleanups(assertCurrent: () => void): Promise<void> {
       assertCurrent();
     }
   }
-}
-
-/** 这个任务的绑定(本机的组或另一台电脑上的组，至多一个)。 */
-export function readProviderGroupBinding(sessionId: string): ProviderGroupBinding | null {
+} function readProviderGroupBinding(sessionId: string): ProviderGroupBinding | null {
   if (!SESSION_ID_PATTERN.test(sessionId)) return null;
   const cleanups = listProviderGroupBindingCleanups();
   const local = readLocalFile().sessions[sessionId];
   if (local) return pendingRelease(local, cleanups) ? null : local;
   return remoteStore.read().sessions[sessionId] ?? null;
-}
-
-/** 本机的组的绑定(本机分配器据此统计各组内电脑上正在运行的任务)。 */
-export function listProviderGroupBindings(): Record<string, ProviderGroupBinding> {
+} function listProviderGroupBindings(): Record<string, ProviderGroupBinding> {
   const cleanups = listProviderGroupBindingCleanups();
   return Object.fromEntries(Object.entries(readLocalFile().sessions).filter(([, binding]) => !pendingRelease(binding, cleanups)));
-}
-
-/** 另一台电脑上的组的绑定(据此向组所在电脑报告正在运行的任务)。 */
-export function listRemoteProviderGroupBindings(): Record<string, ProviderGroupBinding> {
+} function listRemoteProviderGroupBindings(): Record<string, ProviderGroupBinding> {
   return remoteStore.read().sessions;
 }
 
@@ -248,13 +241,7 @@ async function writeIn(
     }
     return { sessions: prune(sessions) };
   });
-}
-
-/**
- * 写入(或解除)一个任务的绑定。带 `groupDeviceId` 写进另一台电脑的那份，并清掉本机那份里的同一任务，
- * 反之亦然：一个任务只属于一个组。
- */
-export async function writeProviderGroupBinding(
+} async function writeProviderGroupBinding(
   sessionId: string,
   binding: { providerId: string; memberKey: string; groupDeviceId?: string | null } | null,
   now: number = Date.now(),
@@ -287,10 +274,7 @@ export async function writeProviderGroupBinding(
     }
   });
   assertCurrent();
-}
-
-/** 这个任务曾因组内电脑被移出或这个组被删除而解除过这个组的绑定：不再自动纳入这个组(§9.4)。 */
-export function isProviderGroupReleased(sessionId: string, group: ProviderGroupRef): boolean {
+} function isProviderGroupReleased(sessionId: string, group: ProviderGroupRef): boolean {
   if (!SESSION_ID_PATTERN.test(sessionId)) return false;
   const cleanups = listProviderGroupBindingCleanups();
   const localFile = readLocalFile();
@@ -319,23 +303,13 @@ async function writeReleases(
     return { sessions: prune(sessions) };
   });
   assertCurrent();
-}
-
-/** 记下这个任务因组内电脑被移出或组被删除而解除了这个组的绑定。 */
-export async function markProviderGroupReleased(
+} async function markProviderGroupReleased(
   sessionId: string,
   group: ProviderGroupRef,
   now: number = Date.now(),
 ): Promise<void> {
   await writeReleases([sessionId], group, now);
-}
-
-/**
- * 组内电脑被移出或整个组被删除后，解除指向它们的任务绑定：这些任务成为普通任务，之后即使同一台电脑
- * 重新加入、或重建同一个组，也不会恢复自动换电脑。`keepMemberKeys` 为 null 表示整个组已删除。
- * 只作用于本机的组。
- */
-export async function pruneProviderGroupBindings(
+} async function pruneProviderGroupBindings(
   providerId: string,
   keepMemberKeys: ReadonlySet<string> | null,
   now: number = Date.now(),
@@ -364,6 +338,6 @@ export async function pruneProviderGroupBindings(
       return changed ? { sessions, released: prune(released) } : {};
     });
   });
+} const __testing = { normalize, normalizeRemote, normalizeReleased, prune };
+return { MAX_PROVIDER_GROUP_BINDINGS, readProviderGroupBinding, listProviderGroupBindings, listRemoteProviderGroupBindings, writeProviderGroupBinding, isProviderGroupReleased, markProviderGroupReleased, pruneProviderGroupBindings, __testing };
 }
-
-export const __testing = { normalize, normalizeRemote, normalizeReleased, prune };

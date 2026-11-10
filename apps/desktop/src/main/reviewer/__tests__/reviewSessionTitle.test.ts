@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { setMainLocale } from '../../i18n.js';
+import { setMainLocale } from '../../i18n.desktop.js';
 import { buildReviewSessionTitle } from '../reviewSessionTitle.js';
 
 afterEach(() => setMainLocale('en'));

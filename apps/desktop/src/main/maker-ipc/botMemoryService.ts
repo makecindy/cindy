@@ -61,6 +61,8 @@ export function splitImportedMemoryText(text: string): string[] {
 interface BotMemoryOwner {
   canonicalSessionId: string | null;
   assertCurrent?: () => void;
+  /** A project-mode teammate keeps its memory in its project, like an ordinary task there. */
+  scopeKey?: string;
 }
 
 export interface BotMemoryServiceDeps {
@@ -87,7 +89,7 @@ export function createBotMemoryService(deps: BotMemoryServiceDeps) {
     if (!owner) throwIpcError('NOT_FOUND', 'Teammate not found');
     try {
       owner.assertCurrent?.();
-      const store = await deps.getStore(buildBotMemoryScopeKey(botId));
+      const store = await deps.getStore(owner.scopeKey ?? buildBotMemoryScopeKey(botId));
       owner.assertCurrent?.();
       return { store, owner };
     } catch (error) {
