@@ -1502,6 +1502,9 @@ server.listen(PORT, '127.0.0.1', () => {
     return;
   }
   console.log(`cindy-host listening on ${baseUrl}`);
+  // Packaged logging captures console.* to disk. Operators and service
+  // supervisors still need the non-secret loopback readiness address on stdout.
+  process.stdout.write(`cindy-host listening on ${baseUrl}\n`);
   startup = (async () => {
     let owner = process.env.CINDY_HOST_OWNER?.trim() || '';
     let initialUser: AccountUser | null = null;

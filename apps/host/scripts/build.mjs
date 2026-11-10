@@ -122,6 +122,9 @@ async function copyPackage(source, parent, ancestors = new Map()) {
 function createNodePlugins(dependencies) { return [
   { name: 'runtime-dependencies', setup(builder) {
     builder.onResolve({ filter: /^[^./]/ }, args => {
+      // Raw browser assets must be resolved and embedded at build time, never
+      // externalized as a Node package subpath containing Vite's query suffix.
+      if (args.path.endsWith('?raw') || args.pluginData?.hostRawAsset) return;
       if (isBuiltin(args.path)) return { path: args.path, external: true };
       if (args.path === 'electron' || args.path.startsWith('electron/')) {
         throw new Error(`Node runtime imports Electron: ${path.relative(repo, args.importer)}`);
@@ -143,7 +146,8 @@ function createNodePlugins(dependencies) { return [
       const bare = args.path.slice(0, -4);
       const resolved = bare.startsWith('.') || path.isAbsolute(bare)
         ? { path: path.resolve(args.resolveDir, bare) }
-        : await builder.resolve(bare, { resolveDir: args.resolveDir, kind: args.kind });
+        : await builder.resolve(bare, { resolveDir: args.resolveDir, kind: args.kind,
+          pluginData: { hostRawAsset: true } });
       return { ...resolved, namespace: 'raw' };
     });
     builder.onLoad({ filter: /.*/, namespace: 'raw' }, async args => ({ contents: await fs.readFile(args.path, 'utf8'), loader: 'text' }));
