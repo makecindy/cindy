@@ -5258,6 +5258,19 @@ describe('coexisting Feishu bot manager', () => {
     expect(manager.snapshot().feishu).toMatchObject({ available: true, bindings: [{ bindingId: FEISHU_CONFIRMED.bindingId }, { bindingId: org.bindingId }] });
   });
 
+  // Review / unit: account unlink must not disable other permitted bot entry points.
+  it('keeps permitted bots connected after the final identity is unlinked', () => {
+    const { manager, transports, store } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'coexist', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, applications: [applications[0]!, { app: other, bindings: [] }] }), () => true);
+    manager.providerBindRevoke('feishu', FEISHU_CONFIRMED.bindingId!);
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_CONFIRMED, state: 'revoked', reason: 'user-revoked' }), () => true);
+    expect(store.get().feishuEnabled).toBe(true);
+    expect(manager.snapshot().feishu).toMatchObject({ enabled: true, status: 'connected', bindings: [], applications: [app, other] });
+    expect(manager.providerBindStart('feishu', 'cli_org')).toBe(true);
+  });
+
   // Review regression / unit: app display ordering is not the legacy account
   // projection. Prior tests used the projected app first and hid this distinction.
   it('keeps the projected app canonical when application ordering differs', async () => {

@@ -2021,7 +2021,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     // Persist the disabled intent so sync/restart cannot reopen an unlinked lane.
     if (
       (view.state === 'revoked' || view.state === 'superseded' || view.state === 'none')
-      && !(multiAppReady(lane) && (view.state === 'none' || view.reason === 'app_changed'))
+      && !(multiAppReady(lane) && (lane.applications.length > 0 || view.state === 'none' || view.reason === 'app_changed'))
       && !(storeMultiBindReady(lane) && (lane.confirmedBindings.length > 0 || lane.awaitingStateSnapshot))
     ) {
       lane.config.setEnabled(false);
