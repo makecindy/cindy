@@ -1665,7 +1665,12 @@ export function createTurnRunner(
         driftRecycled = !!(deps.acquirePendingAgentSwitch
           && await getMaker().recyclePiRuntimeIfResourcesDrifted(state.makerSession));
       } catch (err) {
-        log.warn('im send: resource-drift recycle failed, sending as-is',
+        // 两种失败必须分开:close 抛出时 Session 已停在 error(Session.performClose
+        // 不因异常回退),旧实例不可用 —— 这时继续 send 只会被 ensureActive 抛错,
+        // runner 永远绑在坏实例上、绕过 createSession 重建路径(Codex P2,
+        // 2026-11-10)。无 agent-switch 锁的装配不支持重建,保持原样投递。
+        driftRecycled = !!deps.acquirePendingAgentSwitch && state.makerSession.getStatus() !== 'active';
+        log.warn('im send: resource-drift recycle failed',
           err instanceof Error ? err.message : String(err));
       }
       if (driftRecycled) {

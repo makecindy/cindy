@@ -345,8 +345,13 @@ function makePermissionModeFake() {
 /** fake maker: createSession 返回"send 即接受、随后立刻 done"的会话。 */
 function makeFakeSession(id: string) {
   const permission = makePermissionModeFake();
+  let status: 'active' | 'aborting' | 'closed' | 'error' = 'active';
   return {
     id,
+    getStatus: () => status,
+    /** 测试注入:模拟 close 失败后 Session 停在 error(回收抛出的同款后果)。 */
+    __setStatus: (next: 'active' | 'aborting' | 'closed' | 'error') => { status = next; },
+
     ...({ instanceId: `instance-${id}` } as { instanceId?: string }),
     workDir: 'D:/repo',
     get permissionModeState() {
@@ -835,7 +840,7 @@ describe('hook task model selection on next send', () => {
   });
 
   it('keeps delivering on the live instance when the recycle itself fails', async () => {
-    // 回收本身失败 → 旧实例仍可用:原样投递(hook 轮次不因回收故障中断)。
+    // 回收本身失败但实例仍 active → 原样投递(hook 轮次不因回收故障中断)。
     const session = makeFakeSession('sess-new');
     session.send.mockResolvedValue({ accepted: true });
     fakeMaker.createSession.mockResolvedValueOnce(session);
@@ -847,6 +852,24 @@ describe('hook task model selection on next send', () => {
     expect(result.status).toBe('ok');
     expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
     expect(session.send).toHaveBeenCalledOnce();
+  });
+
+  it('rebuilds when the recycle fails and the session is no longer active', async () => {
+    // Codex P2:close 抛出时 Session 已停在 error,旧实例不可用 —— 必须重建,
+    // 否则 send 被 ensureActive 拒、runner 永远绑在坏实例上。
+    const broken = makeFakeSession('sess-new');
+    broken.__setStatus('error');
+    const rebuilt = makeFakeSession('sess-new');
+    rebuilt.send.mockResolvedValue({ accepted: true });
+    fakeMaker.createSession.mockResolvedValueOnce(broken).mockResolvedValueOnce(rebuilt);
+    fakeMaker.recyclePiRuntimeIfResourcesDrifted.mockRejectedValueOnce(new Error('close boom'));
+    const run = createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
+    await vi.waitFor(() => expect(rebuilt.send).toHaveBeenCalledOnce());
+    h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+    const result = await run;
+    expect(result.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(2);
+    expect(broken.send).not.toHaveBeenCalled();
   });
 
   it('does not send with the old model when applying the choice fails', async () => {

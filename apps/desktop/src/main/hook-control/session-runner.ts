@@ -982,7 +982,9 @@ export function createMakerHookSessionRunner(deps: {
       try {
         driftedRecycled = await maker.recyclePiRuntimeIfResourcesDrifted(session);
       } catch {
-        // 保持原样投递
+        // 回收抛出时 Session 已停在 error(close 失败不回退),旧实例不可用 ——
+        // 继续投递只会被 ensureActive 拒,必须走重建(Codex P2,2026-11-10)。
+        driftedRecycled = session.getStatus() !== 'active';
       }
       if (driftedRecycled) {
         try {

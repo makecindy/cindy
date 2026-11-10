@@ -9,10 +9,11 @@
  * 条目只改该子目录自身 mtime,漏盯哪层就在哪层漏检。
  */
 
+import fs from 'node:fs';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   collectPiProjectResourceCliPaths,
   collectPiProjectResourceLaunchWatch,
@@ -306,7 +307,44 @@ describe('piProjectResourcesDrifted', () => {
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
-  it('detects a manifest added inside an in-repo direct-linked skill within the same tick', () => {
+  it('keeps argv and baseline consistent when a manifest lands during the walk (no permanent miss)', () => {
+    // 回归(Greptile P2):「读清单存在性」早于「记基线」时,安装器在这两步之间
+    // 写入 SKILL.md → 基线记写后、argv 记写前 → 快检恒等、该 skill 永久不生效。
+    // 现在判断输入与基线同一次采样产出,交错只可能让 argv 领先基线(可收敛),
+    // 不可能落后。
+    writeFileSync(path.join(project, '.git'), '');
+    writeSkill(path.join('.pi', 'skills'), 'alpha');
+    mkdirSync(path.join(project, '.pi', 'skills', 'foo'), { recursive: true });
+    const skillsDir = path.join(realpathSync(project), '.pi', 'skills');
+    const fooDir = path.join(skillsDir, 'foo');
+    const originalReaddir = fs.readdirSync as typeof fs.readdirSync;
+    let injected = false;
+    const spy = vi.spyOn(fs, 'readdirSync').mockImplementation(((target: fs.PathLike, options?: unknown) => {
+      // 在「枚举 foo 目录」这一次读之前落地 SKILL.md:模拟安装器与采样的交错。
+      if (!injected && String(target) === fooDir) {
+        injected = true;
+        writeFileSync(path.join(fooDir, 'SKILL.md'), '---\nname: foo\ndescription: t\n---\n');
+      }
+      return (originalReaddir as never as (t: fs.PathLike, o?: unknown) => unknown)(target, options);
+    }) as never);
+    let surface;
+    try {
+      surface = collectPiProjectResourceSurface(project);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(injected).toBe(true);
+    const baseline = snapshotPiProjectResourceLaunch(project, surface.paths, surface.repoRoot, surface.watch);
+    // 断言「argv 与基线一致」:技能要么被收集,要么基线不含它;
+    // 两者任一成立都可在后续收敛,唯独不能「argv 漏收而基线已含」。
+    const collectedFoo = surface.paths.skills.includes(fooDir);
+    const baselineHasManifest = (surface.watch.entries.get(fooDir) ?? '').includes('SKILL.md');
+    expect(collectedFoo).toBe(true);
+    expect(baselineHasManifest).toBe(collectedFoo);
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+  });
+
+  it('detects a manifest installed between the sample and the decision (per-key single read)', () => {
     // 回归(Greptile P2 直链技能):collector 对仓内软链目标消费清单存在性 ——
     // 软键条目基线必须取清单存在性而非跳读,否则目标内同刻新增 SKILL.md
     // (namespace→skill 迁移)四路信号全盲:目标 mtime 量化等值、链接身份不变、
@@ -319,9 +357,10 @@ describe('piProjectResourcesDrifted', () => {
     symlinkSync(path.join(project, 'target-dir'), path.join(project, '.pi', 'skills', 'foo'), 'junction');
     const baseline = snapshot();
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
-    // 前提:仓内软键的条目基线是清单存在性指纹('M:' 前缀 + 空清单),不是 null
+    // 前提:仓内软键以完整条目列表为基线('L:' + 空目录),与判断输入同一次 readdir ——
+    // 而非旧实现的「先读 hasManifest 再记基线」两步窗口
     const linkKey = path.join(realpathSync(project), '.pi', 'skills', 'foo');
-    expect(baseline.watchRootEntries.get(linkKey)).toBe('M:');
+    expect(baseline.watchRootEntries.get(linkKey)).toBe('L:');
     // 同一刻新增普通文件 SKILL.md(显式把目标目录 mtime 恢复基线值,隔离 mtime 信号)
     writeFileSync(path.join(project, 'target-dir', 'SKILL.md'), '---\nname: foo\ndescription: t\n---\n');
     utimesSync(path.join(project, 'target-dir'), aligned, aligned);
