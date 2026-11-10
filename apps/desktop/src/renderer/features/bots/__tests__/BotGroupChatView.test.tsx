@@ -1149,6 +1149,9 @@ describe('BotGroupChatView', () => {
   });
 
   it.each(['image', 'text-trigger', 'text-control', 'text-body'])('lets %s attachment preview close first with Escape and retains the thread draft', async kind => {
+    // This case tests Escape/focus, not chunk download latency. Complete the
+    // real preview import before opening it; keep the lazy wrapper and viewer.
+    if (kind !== 'image') await import('@/components/chat/TextLightbox');
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [msg({
       attachments: [{ id: 'attachment', name: kind === 'image' ? 'photo.png' : 'note.md', category: kind === 'image' ? 'image' : 'text',
@@ -3631,6 +3634,7 @@ it.each(['End', 'wheel'])('acknowledges short main-group replies on explicit %s 
   try {
     await screen.findByText('Short process answer');
     const scroller = screen.getByTestId('bot-group-timeline');
+    await waitFor(() => expect(scroller.querySelector('button[data-scroll-disclosure-header]')).toBeTruthy());
     Object.defineProperties(scroller, {
       scrollHeight: { configurable: true, value: 600 }, clientHeight: { configurable: true, value: 600 },
       // jsdom has no scroll-range clamping; model the browser's zero-range result.
@@ -4164,6 +4168,7 @@ describe('thread previews and posting to the main chat', () => {
       const surface = context === 'topic' ? screen.getByRole('complementary') : await screen.findByTestId('bot-group-timeline');
       const scroller = (context === 'topic' ? surface.querySelector('div.overflow-y-auto') : surface) as HTMLDivElement;
       fireEvent.load(await within(surface).findByAltText('photo.png'));
+      await waitFor(() => expect(surface.querySelector('button[data-scroll-disclosure-header]')).toBeTruthy());
       Object.defineProperties(scroller, {
         scrollHeight: { configurable: true, value: 1400 }, clientHeight: { configurable: true, value: 600 },
       });
@@ -4211,6 +4216,7 @@ describe('thread previews and posting to the main chat', () => {
       fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
       const panel = screen.getByRole('complementary');
       await within(panel).findByText('Visible reply');
+      await waitFor(() => expect(panel.querySelector('button[data-scroll-disclosure-header]')).toBeTruthy());
       const scroller = panel.querySelector('div.overflow-y-auto') as HTMLDivElement;
       Object.defineProperties(scroller, {
         scrollHeight: { configurable: true, value: 1400 }, clientHeight: { configurable: true, value: 600 },

@@ -174,8 +174,13 @@ export function BotGroupProcessEntries({ messages, id, deviceId, sessionId, runn
         {activities.map(activity => {
           if (activity.kind !== 'tool') return null;
           const normalized = tools.get(activity.message.clientId);
-          return normalized ? <WorkToolActivityRow key={activity.key} actions={actions} contentLayout={contentLayout}
-            activity={{ ...activity, message: { ...activity.message, normalized } }} /> : null;
+          // Dispatch cards retain their summary but omit result details during
+          // normalization. Group process rows still need the paired result.
+          const tool = normalized?.orcaCard?.variant === 'dispatch'
+            ? { ...normalized, secondaryBody: normalized.secondaryBody ?? activity.toolResult }
+            : normalized;
+          return tool ? <WorkToolActivityRow key={activity.key} actions={actions} contentLayout={contentLayout}
+            activity={{ ...activity, message: { ...activity.message, normalized: tool } }} /> : null;
         })}
       </TeammateWorkSegment>;
     })}

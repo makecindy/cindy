@@ -58,7 +58,8 @@ vi.mock('@/session/MessageRenderer', async () => {
       history.toolActions = actions;
       const tool = activity.message.normalized;
       return el('div', { 'data-message-id': tool.source.id, 'data-session-id': tool.source.sessionId },
-        el('p', null, tool.label, tool.body, tool.secondaryBody, activity.toolResult),
+        // Match the native row: details come from the normalized message only.
+        el('p', null, tool.label, tool.body, tool.secondaryBody),
         ...readToolProcessMedia(tool.secondaryBody).map(media => el('button', { key: media.url, onClick: () => actions.onOpenPayload(buildMediaPayload({ ...media, previewable: false }, 'Process media')) }, 'Open process media')),
         tool.toolInputProjection && el('button', { disabled: !actions.onLoadToolInput, onClick: () => {
           void actions.onLoadToolInput(tool.toolInputProjection).then((detail: any) => actions.onOpenPayload(buildTextPayload('Full input', detail.body)));
@@ -312,6 +313,24 @@ it.each(['AskUserQuestion', 'ExitPlanMode'])('retains %s call, input and result 
   expect(node.textContent).toContain(toolName);
   expect(node.textContent).toContain('Interaction input detail');
   expect(node.textContent).toContain('Interaction result detail');
+});
+
+// #8979 r4511953405 / unit: dispatch cards omit normalized result details.
+// Existing Read/interaction cases never exercise those three dispatch branches.
+// Render the real group projection and open its payload, not activity.toolResult
+// in the native-row adapter (which previously hid this result-loss regression).
+it.each([
+  { toolName: 'create_worker', input: { label: 'Reader', initial_task: 'Inspect notes' }, result: '{"session_id":"dispatch-one"}', expected: 'dispatch-one' },
+  { toolName: 'create_workers', input: { workers: [{ label: 'Reader', initial_task: 'Inspect notes' }] }, result: '{"workers":[{"session_id":"dispatch-batch"}]}', expected: 'dispatch-batch' },
+  { toolName: 'send_to_worker', input: { target_session_id: 'dispatch-one', message: 'Continue' }, result: '{"error":"DISPATCH_TARGET_UNAVAILABLE"}', expected: 'DISPATCH_TARGET_UNAVAILABLE' },
+])('keeps $toolName dispatch results in the group detail and full payload', async ({ toolName, input, result, expected }) => {
+  await act(async () => root.render(el(BotGroupProcessEntries, { id: 'dispatch-history', deviceId: 'mac', sessionId: 'lane', messages: [source,
+    { clientId: 'dispatch', role: 'tool_use', toolUseId: 'dispatch-id', content: { toolName, toolUseId: 'dispatch-id', input }, agentMeta: meta },
+    { clientId: 'dispatch-result', role: 'tool_result', toolUseId: 'dispatch-id', content: result, agentMeta: meta }, final] })));
+  await act(async () => header().click());
+  expect(node.textContent).toContain(expected);
+  await act(async () => Array.from(node.querySelectorAll('button')).find(button => button.textContent === 'View full output')!.click());
+  expect(node.querySelector('[role="dialog"]')?.textContent).toContain(expected);
 });
 
 // PR #8979 / unit: real focused history and reader, native rendering adapted.
