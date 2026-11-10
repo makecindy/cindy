@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { modelsWithoutStalePaymentUpsell } from '../../../desktop/src/main/model-access/modelsSyncRefresh.js';
 
 const CACHE_MS = 5 * 60_000;
@@ -13,9 +12,11 @@ export function createProviderCatalog({ readProviders, fetchModels, applyModels,
   return async function listProviders(options) {
     const initial = readOwner?.();
     const owner = { dataOwnerId: options.ownerId ?? null, ownerGeneration: initial?.generation ?? options.ownerGeneration ?? 0 };
-    const key = createHash('sha256').update(JSON.stringify([
+    // In-memory identity of this connection, only ever compared for equality.
+    // It is not a stored or verified secret, so it is not hashed.
+    const key = JSON.stringify([
       owner.dataOwnerId, owner.ownerGeneration, options.gateway?.endpoint, options.gateway?.credential,
-    ])).digest('hex');
+    ]);
     const checkOwner = () => {
       const current = readOwner?.();
       if (current && (current.pending || current.dataOwnerId !== owner.dataOwnerId || current.generation !== owner.ownerGeneration))
