@@ -151,13 +151,22 @@ async function catalog(input: { callerSessionId: string; kind: Kind }, ctx: Pick
     });
     const skills = deps.markOfficialSkills
       ? await deps.markOfficialSkills(result.skills, ctx.remoteHostId ?? undefined) : result.skills;
-    items = skills.map((skill) => ({
-      cindyOfficial: skill.cindyOfficial === true,
-      id: skill.name,
-      name: skill.name,
-      description: skill.description ?? '',
-      available: skill.enabled !== false && skill.runtimeStatus !== 'failed',
-    }));
+    // Resolve namesakes like the runtime: the last entry wins, except that an
+    // active Cindy official Skill keeps the name.
+    const byName = new Map<string, Omit<Entry, 'joined'>>();
+    for (const skill of skills) {
+      const entry = {
+        cindyOfficial: skill.cindyOfficial === true,
+        id: skill.name,
+        name: skill.name,
+        description: skill.description ?? '',
+        available: skill.enabled !== false && skill.runtimeStatus !== 'failed',
+      };
+      const kept = byName.get(entry.id);
+      if (kept?.cindyOfficial && kept.available && !entry.cindyOfficial) continue;
+      byName.set(entry.id, entry);
+    }
+    items = [...byName.values()];
   } else if (input.kind === 'mcp') {
     const runtimeCatalog = await deps.listMcpServers({
       agentKind, workingDir, remoteHostId: ctx.remoteHostId ?? undefined,
