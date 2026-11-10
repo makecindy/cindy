@@ -113,6 +113,44 @@ test('Node provider assembly preserves first-use approval, explicit retry and pe
   } finally { disconnect(); confirmations.close(); service.close(); clearCurrentDbClient(database); }
 });
 
+// Unit: a headless plugin must read the owner's existing tasks through the
+// production helper provider, not a plugin-only list or a fabricated Session.
+// The minimal failure is one approved history group and one persisted task.
+test('Node history provider reads the current owner database and refuses a stale owner', async () => {
+  let ownerCurrent = true;
+  let afterRead = () => {};
+  const rows = [{ id: 'existing-task', title: 'Existing task', workingDir: '/project', agentKind: 'cc',
+    workspaceKind: 'project', model: 'fixture', status: 'active', source: 'desktop',
+    orcaRole: null, parentSessionId: null, createdAt: 1, updatedAt: 1, userSendAt: null,
+    hiddenAt: null, lastActivityAt: 1, companionJson: null }];
+  const database = { drizzle: { select(fields) {
+    const result = fields.cnt ? [{ sessionId: rows[0].id, cnt: 2 }] : rows;
+    const query = { then: resolve => { afterRead(); resolve(result); } };
+    for (const key of ['from', 'where', 'orderBy', 'groupBy', 'limit']) query[key] = () => query;
+    return query;
+  } } };
+  setCurrentDbClient(database, 'owner');
+  const ghost = { enabled: true, dir: '/fixture/history', approvedHostToolGroups: ['history'],
+    approval: { state: 'approved', revision: 'r1' }, manifest: { schemaVersion: 3,
+      id: 'history', name: 'History', version: '1.0.0', kind: 'chip', entry: 'main.js', agent: { hostTools: ['history'] } } };
+  const confirmations = createHostConfirmations({ current: () => ownerCurrent });
+  const service = createHostToolService({ profileDir: '/fixture', ownerId: 'owner', current: () => ownerCurrent,
+    owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), getGhost: () => ghost,
+    getSession: () => undefined, manager: {}, confirmations, t: key => key });
+  const call = () => service.request('history', { type: 'host-tool-request', server: 'cindy_helper',
+    tool: 'list_sessions', args: { limit: 10 } }, () => true);
+  const body = result => JSON.parse(result.content.find(item => item.type === 'text').text);
+  try {
+    const result = body(await call());
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.sessions[0].id, 'existing-task');
+    assert.equal(result.sessions[0].messageCount, 2);
+    afterRead = () => { ownerCurrent = false; };
+    assert.equal(body(await call()).ok, false, 'an owner change during the read never returns the old account data');
+    assert.equal(body(await call()).ok, false);
+  } finally { service.close(); confirmations.close(); clearCurrentDbClient(database); }
+});
+
 test('negotiated HTTP event streams deliver one live owner dialog without putting it in replay history', async t => {
   const confirmations = createHostConfirmations({ current: () => true });
   const events = createEventHub(), auth = createWebAuth();

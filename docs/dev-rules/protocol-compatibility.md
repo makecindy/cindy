@@ -122,6 +122,8 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   撤回 channel 可用，不占用或推进任务事件序号。旧客户端不协商就不投递此类帧；旧 Host
   忽略额外 query，任务事件流保持原行为。回答沿用同名 preload 契约，经已认证控制端绑定
   到原窗口确认桥；断线取消，不重试写操作。不改变 device-link 或自建中转 wire payload。
+  Node Host 的本机 `history` 查询增量接入相同回调和 owner 数据库，沿用原工具参数、分页、
+  错误与来源范围。任务动作的输入快照与确认复用共享实现，不新增身份字段、任务副本或批准记录。
 - 历史查询通道增量支持 `list_teammates`，复用同一个工具 registry 校验与宿主目录读取；不新增 channel。
   目录和指定 `teammate_id` 的关系分别分页，默认 100、最多 1000，返回 `nextCursor` / `hasMore`，游标复用历史查询的编码。
 - `control/delete_session` 为增量 Agent 工具，插件通过同一入口调用；本机复用 `patchSessionMetaInDb(status:'deleted')`，

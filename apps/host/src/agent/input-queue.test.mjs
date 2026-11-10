@@ -103,6 +103,29 @@ const waitFor = async (check) => {
   throw new Error('condition not reached');
 };
 
+// Unit: task actions must use accepted Host input and live modes; a later
+// queued message cannot replace the authority of the currently running turn.
+test('task action facts follow accepted input and the live permission generation', async () => {
+  const h = createHarness();
+  try {
+    await h.queue.enqueue('s', { clientId: 'accepted', text: 'owner input' });
+    await waitFor(() => h.maker.sessions.get('s')?.sent.length === 1);
+    const session = h.maker.sessions.get('s');
+    Object.assign(session, { instanceId: 'instance', workDir: '/tmp', isTurnRunning: () => true,
+      stablePermissionModeState: { mode: 'ask', generation: 1 }, stablePlanModeState: { enabled: false, generation: 1 } });
+    const active = h.queue.taskActionInput('s');
+    assert.equal(active.ownerInput, true);
+    assert.equal(active.automatic, false);
+    assert.equal(JSON.parse(active.key).input.clientId, 'accepted');
+    assert.equal(active.permission.isCurrent(), true);
+    await h.queue.enqueue('s', { clientId: 'later', text: 'pending input' });
+    assert.equal(h.queue.taskActionInput('s').key, active.key);
+    session.stablePermissionModeState = { mode: 'plan', generation: 2 };
+    assert.equal(active.permission.isCurrent(), false);
+    assert.equal(h.queue.taskActionInput('s').permission.permissionMode, 'plan');
+  } finally { await h.queue.dispose(); }
+});
+
 // Host lifecycle / integration: desktop runner tests inject the queue bridge;
 // these enter its real admission, persistence and accepted callback pipeline.
 const scheduledInput = (overrides = {}) => ({ sessionId: 'scheduled-task',

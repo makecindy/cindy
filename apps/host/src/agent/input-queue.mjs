@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
 import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
+import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
 
 function storedSessionOptions(stored) {
   return { agentKind: makerKind(stored.agentKind), model: stored.model || '',
@@ -274,6 +275,7 @@ export function createInputQueue(deps) {
       return project(coordinator.getProjection(id));
     }
     const api = {
+      taskActionInput: id => readTaskActionInput(id, sessionId => deps.getMaker()?.getSession(sessionId), coordinator),
       schedulerQueue: () => ({ ...scheduleBridge,
         ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),
         isSessionBusy: id => { assertCurrent(); return scheduleBridge.isSessionBusy(id); },

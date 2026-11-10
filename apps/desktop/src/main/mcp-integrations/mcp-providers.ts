@@ -98,18 +98,11 @@ import { readTeammateDirectory } from '../localDb/teammateDirectory.js';
 import { readDesktopHistoryAttachment } from './historyAttachment.desktop.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
 import {
-  listWorkdirsForHistory,
-  listSessionsForHistory,
-  getMessagesForHistory,
-} from '../localDb/chatHistoryReader.js';
-import {
   isDbClientNotReadyError,
   getDbClient,
   tryGetDbClient,
   getCurrentDbClientSnapshot,
 } from '../localDb/client/current.js';
-import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch.js';
-import { resolveBotHistorySessionIds } from '../localDb/botHistoryScope.js';
 import {
   listBotSkillsForSession,
   saveBotSkillForSession,
@@ -119,6 +112,7 @@ import { runBotProjectsTool } from '../maker-ipc/botLinkedProjects.js';
 import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
+import { createHistoryToolCallbacks } from './historyToolCallbacks.js';
 import { authorizePluginHostToolCall, getPluginHostToolCaller, setHostToolProviders } from './hostToolCaller.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
 import { forkTaskAtMessage } from '../maker-ipc/fork.js';
@@ -141,7 +135,6 @@ import { BUILTIN_LIZI_MCP_IDS, pluginIdForProviderName } from '../maker-host/plu
 import { isFrozenBuiltinPluginAllowed } from './codexBuiltinToolPolicy.js';
 import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import {
-  readChatHistoryMessages,
   type ChatHistoryReaderDeps,
 } from './remoteChatHistory.js';
 import { botSessionLinks, sessions } from '../localDb/schema.js';
@@ -392,11 +385,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       input: getTaskActionInputState, getSession: getTaskActionSession, confirm: confirmTaskAction,
     }),
   });
-  // Companion history uses the same account scope as ordinary task history.
   const botReadsAccountHistory = async (sessionId: string | undefined): Promise<boolean> => {
     if (!sessionId && getPluginHostToolCaller()) return true;
-    const result = await authorizeTaskToolCall({ sessionId, server: 'cindy_helper', tool: 'history', args: {} });
-    return result.ok;
+    return (await authorizeTaskToolCall({ sessionId, server: 'cindy_helper', tool: 'history', args: {} })).ok;
   };
 
   const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
@@ -1375,6 +1366,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         authorizePath: (request) => authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
       }),
       history: {
+        ...createHistoryToolCallbacks({ authorizeCall: authorizeTaskToolCall, invokeRemote: deps.invokeRemote }),
         readSessionAttachment: (args, context) => withAccountDataAccess(context?.sessionId, async assertCurrent => {
           const result = await readDesktopHistoryAttachment(args, context);
           await assertCurrent();
@@ -1387,38 +1379,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }),
         sessionUrl: (sessionId) => buildHistorySessionDeepLink(sessionId, getDeviceId()),
         remote: deps.historyRemote,
-        resolveSessionScope: async ({ callerSessionId, callerMemoryScopeKey }) => {
-          try {
-            if (await botReadsAccountHistory(callerSessionId)) return { ok: true, sessionIds: null };
-            const sessionIds = await resolveBotHistorySessionIds(
-              callerSessionId,
-              callerMemoryScopeKey,
-            );
-            return { ok: true, sessionIds };
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            const errorCode = /localDb not ready/i.test(message) ? 'HOST_NOT_READY' : 'INTERNAL';
-            return { ok: false, errorCode, message };
-          }
-        },
-        listWorkdirs: async (args) => {
-          try { const page = await listWorkdirsForHistory(args); return { ok: true, page }; }
-          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
-        },
-        listSessions: async (args) => {
-          try { const page = await listSessionsForHistory(args); return { ok: true, page }; }
-          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
-        },
-        getMessages: async (args) => {
-          return readChatHistoryMessages(args, {
-            readLocal: getMessagesForHistory,
-            invokeRemote: deps.invokeRemote,
-          });
-        },
-        searchChatHistory: async (args) => {
-          try { const result = await searchChatHistoryHybrid(args); return { ok: true, result }; }
-          catch (err) { const msg = err instanceof Error ? err.message : String(err); const errorCode = isDbClientNotReadyError(err) ? 'HOST_NOT_READY' : 'INTERNAL'; return { ok: false, errorCode, message: msg }; }
-        },
         searchCompanionRooms: async ({ callerSessionId, query, teammateId, roles, fromMs, toMs }) => {
           // 共享任务里的访客不是账号本人，不能经 Agent 读主人和伙伴的对话。
           const runtime = isSessionSharedTaskActive(callerSessionId) ? null : activeCompanionCloud();

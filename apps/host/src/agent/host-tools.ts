@@ -1,4 +1,4 @@
-import { createLiziMcpProviders } from '@cindy/mcps';
+import { createLiziMcpProviders, type ToolCallAuthorizer } from '@cindy/mcps';
 import type { Session } from '@cindy/maker-core';
 import type { DataOwnerPushStamp } from '../../../desktop/src/shared/dataOwnerPush.js';
 import { ghostInstallApprovalToken, type InstalledGhost } from '../../../desktop/src/shared/ghost.js';
@@ -8,7 +8,13 @@ import { ensurePluginTaskApproval, hasPluginHostToolGroupApproval, PluginTaskApp
 import type { GhostHostToolGroup } from '@cindy/plugin-protocol';
 import { createProviderHostToolRuntime, authorizePluginHostToolCall, getPluginHostToolCaller } from '../../../desktop/src/main/mcp-integrations/hostToolCaller.js';
 import { createTaskToolCallAuthorizer } from '../../../desktop/src/main/maker-ipc/taskToolCallAuthorizer.js';
-import { tryGetDbClient } from '../../../desktop/src/main/localDb/client/current.js';
+import { createDesktopTaskActionAuthorizer } from '../../../desktop/src/main/maker-ipc/taskActionHost.js';
+import { createTaskActionConfirmation } from '../../../desktop/src/main/maker-ipc/taskActionConfirmation.js';
+import { createHistoryToolCallbacks } from '../../../desktop/src/main/mcp-integrations/historyToolCallbacks.js';
+import { resolveHelperSurface, resolveHelperSystemSkillsOff } from '../../../desktop/src/main/mcp-integrations/helperSurface.js';
+import { DeviceLinkError } from '@cindy/device-link';
+import type { ChatHistoryReaderDeps } from '../../../desktop/src/main/mcp-integrations/remoteChatHistory.js';
+import { getCurrentDbClientSnapshot, tryGetDbClient } from '../../../desktop/src/main/localDb/client/current.js';
 import { getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { HostTerminalService } from '../../../desktop/src/main/terminal/hostTerminalService.js';
 import { createTerminalToolExecutor } from '../../../desktop/src/main/terminal/terminalToolAccess.js';
@@ -25,6 +31,8 @@ interface Options {
   getSession(id: string): Session | undefined;
   confirmations: ReturnType<typeof createHostConfirmations>;
   terminal?: HostTerminalService;
+  invokeRemote?: ChatHistoryReaderDeps['invokeRemote'];
+  taskActions?: Omit<Parameters<typeof createDesktopTaskActionAuthorizer>[0], 'getSession' | 'confirm'>;
   t(key: string): string;
 }
 
@@ -35,13 +43,40 @@ export function createHostToolService(options: Options) {
   const gate = new PluginTaskApprovalGate();
   let closed = false;
   const current = () => !closed && options.current();
-  const authorizeCall = createTaskToolCallAuthorizer({
+  const authorizeTaskCall = createTaskToolCallAuthorizer({
     getDb: () => current() ? tryGetDbClient() : null,
     isScopeCurrent: db => current() && db === tryGetDbClient(),
     authorizePluginCall: authorizePluginHostToolCall,
+    authorizeAction: options.taskActions ? createDesktopTaskActionAuthorizer({ ...options.taskActions,
+      getSession: options.getSession, confirm: createTaskActionConfirmation({ getSession: options.getSession, t: options.t }),
+    }) : async () => ({ ok: false, errorCode: 'HOST_NOT_READY', message: 'Task input authority is unavailable.' }),
   });
+  const authorizeCall: ToolCallAuthorizer = async call => {
+    const database = getCurrentDbClientSnapshot();
+    const decision = await authorizeTaskCall(call);
+    if (!decision.ok) return decision;
+    const assertCurrent = () => {
+      if (!current() || !database || database !== getCurrentDbClientSnapshot()) throw new Error('OWNER_SCOPE_CHANGED');
+    };
+    try { assertCurrent(); }
+    catch { return { ok: false, errorCode: 'OWNER_SCOPE_CHANGED', message: 'Host account changed.' }; }
+    return { ok: true, run: operation => {
+      const run = async () => { assertCurrent(); const result = await operation(); assertCurrent(); return result; };
+      return decision.run ? decision.run(run) : run();
+    } };
+  };
   const providers = createLiziMcpProviders({
     xdtHelper: { authorizeCall,
+      resolveSurface: async ({ sessionId }) => {
+        const db = current() ? tryGetDbClient() : null;
+        return db ? resolveHelperSurface(db, sessionId) : 'restricted';
+      },
+      resolveSystemSkillsOff: async ({ sessionId }) => {
+        const db = current() ? tryGetDbClient() : null;
+        return db ? resolveHelperSystemSkillsOff(db, sessionId) : [];
+      },
+      history: createHistoryToolCallbacks({ authorizeCall,
+        invokeRemote: options.invokeRemote ?? (async () => { throw new DeviceLinkError('NOT_CONNECTED', 'Device Link is unavailable'); }) }),
       terminal: createTerminalToolExecutor({ service: terminal, owner: options.owner,
         pending: () => !current(), pluginCall: getPluginHostToolCaller, getGhost: options.getGhost,
         getSession: options.getSession, pluginDirectory: id => ownerScopedPath(options.profileDir, options.ownerId, 'ghost-fs', id) }),
