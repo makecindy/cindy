@@ -7,6 +7,23 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+it('validates attachment reads against the same history scope before host I/O', async () => {
+  let denied = false;
+  const readSessionAttachment = vi.fn(async () => ({ ok: true as const, base64: 'dGV4dA==', nextOffset: null }));
+  const history = { readSessionAttachment, resolveSessionScope: async () => ({ ok: true as const, sessionIds: denied ? [] : null }),
+    listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn() };
+  const server = createXdtHelperMcpServer({ history }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' });
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0 })))
+    .toMatchObject({ ok: true, base64: 'dGV4dA==' });
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { message_id: 'm', attachment_index: 0 })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  denied = true;
+  expect(parsePayload(await server.hostTools.call('read_session_attachment', { session_id: 'target', message_id: 'm', attachment_index: 0 })))
+    .toMatchObject({ ok: false, errorCode: 'HISTORY_SCOPE_DENIED' });
+  expect(readSessionAttachment).toHaveBeenCalledOnce();
+  await server.close();
+});
+
 // Unit, real shared handler: ordinary tasks and plugins need the account directory,
 // including paused/hidden companions and stored relationships, without a bot identity.
 it('discovers the complete teammate directory through history for task and plugin callers', async () => {

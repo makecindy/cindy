@@ -4,12 +4,14 @@ import {
   XdtHelperToolRegistry,
   registerListSessionsTool,
   registerListTeammatesTool,
+  registerReadSessionAttachmentTool,
   registerSearchChatHistoryTool,
   historyPayload,
   type XdtHelperHistoryDeps,
 } from '@cindy/mcps';
 import { listSessionsForHistory } from '../chatHistoryReader.js';
 import { readTeammateDirectory } from '../teammateDirectory.js';
+import { resolveStoredHistoryAttachment } from '../../mcp-integrations/historyAttachment.desktop.js';
 import { searchChatHistoryHybrid } from '../chatHistorySearch.js';
 import { capReferenceMessageRows } from './history.js';
 import { getDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
@@ -17,7 +19,7 @@ import { requireObject, throwIpcError } from '../../utils/ipcValidate.js';
 
 /** Reuse MCP's strict input validation and the exact same readers/formatters on the source host. */
 export function createHistoryQueryHandler(
-  deps: Pick<XdtHelperHistoryDeps, 'listSessions' | 'searchChatHistory' | 'listTeammates'>,
+  deps: Pick<XdtHelperHistoryDeps, 'listSessions' | 'searchChatHistory' | 'listTeammates' | 'readSessionAttachment'>,
 ) {
   const registry = new XdtHelperToolRegistry();
   const unsupported = async () => ({
@@ -32,10 +34,11 @@ export function createHistoryQueryHandler(
   };
   registerListSessionsTool(registry, { history });
   registerListTeammatesTool(registry, { history });
+  registerReadSessionAttachmentTool(registry, { history });
   registerSearchChatHistoryTool(registry, { history });
   return async (value: unknown) => {
     const request = requireObject(value, 'request');
-    if (request.tool !== 'list_sessions' && request.tool !== 'search_chat_history' && request.tool !== 'list_teammates') {
+    if (request.tool !== 'list_sessions' && request.tool !== 'search_chat_history' && request.tool !== 'list_teammates' && request.tool !== 'read_session_attachment') {
       throwIpcError('INVALID_PARAMS', 'Unsupported history query');
     }
     const args = requireObject(request.args, 'args');
@@ -59,6 +62,10 @@ export function createHistoryQueryHandler(
 
 export function registerHistoryQueryIpc(): void {
   const execute = createHistoryQueryHandler({
+    readSessionAttachment: async args => {
+      const source = await resolveStoredHistoryAttachment(args);
+      return source ? { ok: true, ...source } : { ok: false, errorCode: 'NOT_FOUND', message: 'Message attachment does not exist.' };
+    },
     listTeammates: async () => ({ ok: true, teammates: await readTeammateDirectory() }),
     listSessions: async (args) => ({
       ok: true,

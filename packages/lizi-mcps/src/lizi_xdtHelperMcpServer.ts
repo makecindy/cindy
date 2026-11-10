@@ -40,6 +40,7 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import type { HostToolMcpServer, HostToolRuntime } from './host-tool-runtime.js';
 import { registerListTeammatesTool } from './xdt-helper/list_teammates.js';
+import { registerReadSessionAttachmentTool } from './xdt-helper/read_session_attachment.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
@@ -711,6 +712,7 @@ export function createXdtHelperMcpServer(
 
   // History 类工具: 仅 host 注入了 history 回调时注册。
   if (deps.history) {
+    registerReadSessionAttachmentTool(registry, { history: deps.history, getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx) });
     registerListTeammatesTool(registry, { history: deps.history, getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx) });
     const historyDeps = {
       history: deps.history,

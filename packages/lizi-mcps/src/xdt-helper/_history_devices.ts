@@ -8,7 +8,7 @@ import type { XdtHelperHistoryDeps } from "./_history_types.js";
 import { resolveHistoryScope } from "./_history_scope.js";
 import { errorPayload, okPayload } from "./_payload.js";
 
-export type HistoryQueryTool = "list_sessions" | "search_chat_history" | "list_teammates";
+export type HistoryQueryTool = "list_sessions" | "search_chat_history" | "list_teammates" | "read_session_attachment";
 export interface HistoryDevice {
   deviceId: string;
   deviceName: string;

@@ -91,6 +91,7 @@ import {
 } from '../maker-ipc/register.js';
 import { createBotProfile } from '../localDb/ipc/bots.js';
 import { readTeammateDirectory } from '../localDb/teammateDirectory.js';
+import { readDesktopHistoryAttachment } from './historyAttachment.desktop.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
 import {
   listWorkdirsForHistory,
@@ -1302,6 +1303,15 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         authorizePath: (request) => authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
       }),
       history: {
+        readSessionAttachment: (args, context) => withAccountDataAccess(context?.sessionId, async assertCurrent => {
+          const result = await readDesktopHistoryAttachment(args, context, {
+            query: (device, sourceArgs) => deps.historyRemote?.query(device, 'read_session_attachment', { ...sourceArgs })
+              ?? Promise.resolve({ ok: false, errorCode: 'REMOTE_UNSUPPORTED' }),
+            invoke: deps.invokeRemote,
+          });
+          await assertCurrent();
+          return result;
+        }),
         listTeammates: callerSessionId => withAccountDataAccess(callerSessionId, async assertCurrent => {
           const teammates = await readTeammateDirectory();
           await assertCurrent();

@@ -12,6 +12,7 @@ export * from './types.js';
 export * from './host-tool-runtime.js';
 export type { HostToolCaller } from './tool-call-authority.js';
 export { registerListTeammatesTool } from './xdt-helper/list_teammates.js';
+export { registerReadSessionAttachmentTool, type ReadSessionAttachmentArgs } from './xdt-helper/read_session_attachment.js';
 export * from './providers.js';
 export type { ToolCallAuthorization, ToolCallAuthorizer } from './tool-call-authority.js';
 
