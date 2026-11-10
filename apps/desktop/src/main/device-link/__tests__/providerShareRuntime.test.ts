@@ -25,6 +25,8 @@ const state = vi.hoisted(() => ({
   boundaryPending: false,
 }));
 
+// This fixture exercises owner/delegation access without a cloud standby registration.
+vi.mock('../providerShareAvailability.js', () => ({ prepareShareAvailability: vi.fn(async () => null) }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => state.scope,
   isAppSessionBoundaryPending: () => state.boundaryPending,
@@ -40,7 +42,7 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (id: string) => state.allowed.has(id),
 }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: state.remoteControl }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: state.remoteControl }) }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: {
     listOwned: async () => {
@@ -273,6 +275,23 @@ describe('delegated executor access', () => {
       expect(delegatedProviderShareReceiptAuthority(peer, 'other_task')).toBeNull();
       vi.setSystemTime(new Date(Date.now() + 5 * 60_000 + 1));
       expect(delegatedProviderShareReceiptAuthority(peer, 'long_task')).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('retains the cloud accounting destination after standby execution expires', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const peer = guest('m1');
+      const generation = '44444444-4444-4444-8444-444444444444';
+      await applyProviderShareDelegation('owner-pc', { op: 'delegate', action: 'grant',
+        shareId: 'share-1', memberId: 'm1', guestDeviceId: 'laptop', providerId: 'anthropic',
+        sessionId: 'cloud_task', model: 'model-one', generation }, async () => ({ active: true,
+        ownerDeviceId: 'owner-pc', generation, expiresAt: Date.now() + 30 * 60_000 }), true);
+      vi.setSystemTime(new Date(Date.now() + 30 * 60_000 + 1));
+      expect(delegatedProviderShareLeases()).toEqual([]);
+      expect(delegatedProviderShareReceiptAuthority(peer, 'cloud_task'))
+        .toEqual({ ownerDeviceId: 'owner-pc', generation, availability: true });
+      expect(delegatedProviderShareSessionAllowed(peer, 'cloud_task')).toBe(false);
     } finally { vi.useRealTimers(); }
   });
 

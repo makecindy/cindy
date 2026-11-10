@@ -10,7 +10,7 @@ import {
   refreshClaudeCliLoginStatus,
   readClaudeCliPlanUsage,
   runClaudeCliLogin,
-} from '../maker-host/claude-native-cli.js';
+} from '../maker-host/claude-native-cli.desktop.js';
 import { parseClaudeOAuthUsageResponse } from '../../shared/claudeSubscriptionUsage.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
@@ -70,12 +70,18 @@ export async function readNativeAccount(
   }
   const result = (await codexAccountRpc(directory, 'account/read', { refreshToken: false })) as {
     account?: { type?: string; email?: string; planType?: string } | null;
+    requiresOpenaiAuth?: boolean;
   };
   return {
     authenticated: result.account?.type === 'chatgpt',
     identity: result.account?.email,
     plan: result.account?.planType,
     authSource: 'oauth',
+    // The CLI can hide an existing ChatGPT login when its active provider owns
+    // authentication. Repeating login cannot make that provider expose the account.
+    ...(result.account === null && result.requiresOpenaiAuth === false
+      ? { errorReason: 'codex_provider_managed_auth' }
+      : {}),
   };
 }
 
@@ -88,13 +94,25 @@ export async function readNativeAccountUsage(provider: SubscriptionProvider, dir
       claudeUsage: usage ? parseClaudeOAuthUsageResponse(usage.rateLimits, Date.now()) : null,
     };
   }
+  const rateLimits = await codexAccountRpc(directory, 'account/rateLimits/read', {});
   return {
-    codexUsage: providerGroupCodexUsageFromReads(
-      null,
-      await codexAccountRpc(directory, 'account/rateLimits/read', {}),
-      Date.now(),
-    ),
+    codexUsage: providerGroupCodexUsageFromReads(null, rateLimits, Date.now()),
+    codexCredits: codexCredits(rateLimits),
   };
+}
+
+/** Settings shows the balance line of the provider usage card; scheduling ignores it. */
+function codexCredits(raw: unknown) {
+  const credits = (raw as { rateLimits?: { credits?: unknown } } | null)?.rateLimits?.credits;
+  if (!credits || typeof credits !== 'object') return null;
+  const { hasCredits, unlimited, balance } = credits as Record<string, unknown>;
+  return typeof hasCredits === 'boolean'
+    ? {
+        hasCredits,
+        unlimited: unlimited === true,
+        balance: typeof balance === 'string' ? balance.slice(0, 64) : null,
+      }
+    : null;
 }
 
 const codexRefreshes = new Map<string, Promise<unknown>>();
@@ -254,6 +272,11 @@ export async function loginNativeAccount(
       else resolve();
     });
   });
-  if (!(await readNativeAccount(provider, directory)).authenticated)
-    throw new Error('not_a_subscription');
+  const state = await readNativeAccount(provider, directory);
+  if (!state.authenticated)
+    throw new Error(
+      state.errorReason === 'codex_provider_managed_auth'
+        ? 'codex_provider_managed_auth'
+        : 'not_a_subscription',
+    );
 }

@@ -12,6 +12,14 @@
 
 import path from 'node:path';
 
+/** Permanent host rejection; transports must report unsupported instead of retrying. */
+export class UnsupportedInboundMediaError extends Error {
+  constructor(kind: 'image' | 'av') {
+    super(`IM inbound ${kind} bytes do not match a supported media type`);
+    this.name = 'UnsupportedInboundMediaError';
+  }
+}
+
 const IMAGE_MIME_BY_EXT: Readonly<Record<string, string>> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',

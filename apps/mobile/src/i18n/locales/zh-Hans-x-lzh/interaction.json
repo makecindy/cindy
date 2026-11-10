@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "已毕",
+    "mcpCancel": "取消",
     "mode": {
       "default": "常例权柄",
       "acceptEdits": "许修",
@@ -34,6 +36,11 @@
     "exit": "出谋划式"
   },
   "panel": {
+    "questionUnanswered": "未答",
+    "questionWithdrawn": "无须再答",
+    "withdrawnDraft": "此问无须再答。\n{{reason}}\n草稿尚存，可另作补充发送。",
+    "sendSupplement": "发送补充",
+
     "readOnlyKind": "待确",
     "readOnlyTitle": "机上方待确认",
     "pendingRequests": "待理之请",
@@ -98,7 +105,14 @@
     "planFeedbackPlaceholder": "告 Claude 当如何为之",
     "planFeedbackRequired": "书回馈方可呈。",
     "planFeedbackSubmit": "呈谋之回馈",
-    "planFeedbackAccessibility": "以回馈改其谋"
+    "planFeedbackAccessibility": "以回馈改其谋",
+    "validation": {
+      "required": "此项必填。",
+      "choice": "请择所列之项。",
+      "tooShort": "所填须足 {{count}} 字。",
+      "tooLong": "所填勿逾 {{count}} 字。"
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -385,6 +399,8 @@
       "submitting": "方呈"
     },
     "permission": {
+      "titleStdin": "可向终端输入乎？",
+      "titleMcpUrl": "应 {{server}} 之请",
       "highRiskTitle": "高险之授权须再确认",
       "highRiskDetail": "先核指令内容，再点一次确许；不确则拒之。",
       "sessionAllowTitle": "可唯许一次，亦可本差事常许",

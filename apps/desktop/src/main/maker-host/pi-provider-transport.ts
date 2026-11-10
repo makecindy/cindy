@@ -4,7 +4,7 @@ import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { once } from 'node:events';
 import type { ServerResponse } from 'node:http';
-import { ChatSseTranslator, translateResponsesRequestWithContext, type ResponsesRequest } from '@cindy/responses-chat-bridge';
+import { ChatSseTranslator, translateResponsesRequestWithContext, isUnsupportedResponsesFeatureError, unsupportedFeatureErrorBody, type ResponsesRequest } from '@cindy/responses-chat-bridge';
 import type { Api, Model, Context, AssistantMessage, TextContent, ImageContent, ThinkingLevel, ProviderStreams } from '@earendil-works/pi-ai';
 import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
 import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses';
@@ -19,7 +19,7 @@ import { PI_REASONING_EFFORTS, PROVIDER_MODEL_CATALOG, providerEndpointBindings,
 export function invocationModelRecord(model: CatalogModel, upstream: string, api?: PiModelApi): ProviderModelRecord | undefined {
   const selected = model.api ?? api;
   const known = providerModelRecord(model.id, upstream, selected)
-    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected) : undefined)
+    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected, upstream) : undefined)
     ?? providerModelGenerationRecord(model.id, upstream, selected, model.catalogPresetId);
   if (!selected && !known) return undefined;
   // The active catalog is authoritative; unknown capability must not silently
@@ -418,5 +418,14 @@ export async function handlePiProviderRequest(
       }
       if (!res.destroyed) res.end();
     } finally { await reader.cancel().catch(() => undefined); }
+  } catch (error) {
+    // 「协议特性不支持」是确定性错误:必须落成终态 400,不能冒泡出去让代理兜底包成
+    // 502 —— Codex 把 502 当成瞬态网关故障,会反复重提同一个失败请求(自动续跑死循环,#9344)。
+    if (isUnsupportedResponsesFeatureError(error) && !res.headersSent) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(unsupportedFeatureErrorBody(error)));
+      return;
+    }
+    throw error;
   } finally { res.off('close', closed); abort.abort(); }
 }

@@ -37,6 +37,8 @@ import { useTranslation } from 'react-i18next';
 import { PluginUsageCard } from './PluginUsageCard';
 import { PluginReadmeSection, usePluginReadme } from './PluginReadmeSection';
 import { PluginSharedUsage } from './PluginSharedUsage';
+import { PluginPublisherBadge, PluginPublisherDescription } from './PluginPublisherBadge';
+import { pluginPresentationOrigin, type PluginPresentationOrigin } from './lib/pluginMarketPresentation';
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
 import { GhostLibrarySection } from './GhostLibrarySection';
 import { GhostHandoffFilesSection } from './GhostHandoffFilesSection';
@@ -232,6 +234,8 @@ export function GhostPluginDetailView({
           author={detail.author}
           version={detail.version}
           marketItem={marketItem}
+          origin={detail.origin}
+          publisherKind={detail.publisherKind}
           installationLabel={detail.installationLabelKey ? t(`settings.ghosts.detail.${detail.installationLabelKey}`, { name: detail.installationNamespace }) : undefined}
           iconDataUrl={detail.iconDataUrl}
           onIconLoadError={onIconLoadError}
@@ -645,6 +649,8 @@ export function PluginDetailHeader({
   author,
   version,
   marketItem,
+  origin,
+  publisherKind,
   installationLabel,
   iconDataUrl,
   actions,
@@ -657,6 +663,8 @@ export function PluginDetailHeader({
   author?: string | null;
   version?: string;
   marketItem?: PluginMarketItem | null;
+  origin?: PluginPresentationOrigin;
+  publisherKind?: PluginMarketItem['publisherKind'];
   installationLabel?: string;
   iconDataUrl?: string;
   actions?: ReactNode;
@@ -665,6 +673,10 @@ export function PluginDetailHeader({
 }) {
   const { t } = useTranslation();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const source = marketItem ? pluginPresentationOrigin(marketItem) : origin;
+  const kind = marketItem?.sourceType === 'server' && marketItem.scope === 'public'
+    ? marketItem.publisherKind : publisherKind;
+  const visibleAuthor = source === 'public' && kind !== 'official' ? null : author;
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
   useLayoutEffect(() => {
@@ -719,15 +731,17 @@ export function PluginDetailHeader({
           onIconLoadError={onIconLoadError}
         />
         <div className="min-w-0">
-          <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
-            {name}
-          </h1>
-          <GhostPluginMetadata author={author} version={version} marketItem={marketItem} />
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">{name}</h1>
+            <PluginPublisherBadge origin={source} kind={kind} />
+          </div>
+          <GhostPluginMetadata author={visibleAuthor} version={version} marketItem={marketItem} />
           {installationLabel ? <p className="mt-1 break-words text-12 text-[var(--text-tertiary)]">{installationLabel}</p> : null}
         </div>
 
         {actions}
       </div>
+      <PluginPublisherDescription origin={source} kind={kind} />
       <div className="mt-5">
         <p
           ref={descriptionRef}
@@ -897,7 +911,7 @@ export function ToolDescriptionChip({ tool }: { tool: Pick<GhostToolDecl, 'name'
         sideOffset={8}
         className={cn(
           DETAIL_SURFACE_CLASS,
-          'z-[10000] w-[320px] rounded-xl p-4 text-[var(--text-primary)] shadow-[var(--shadow-menu)] data-[state=open]:animate-none data-[state=closed]:animate-none',
+          'z-[10000] w-[320px] rounded-xl p-4 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)] data-[state=open]:animate-none data-[state=closed]:animate-none',
         )}
       >
         <p className="text-13 leading-5 text-[var(--text-secondary)]">

@@ -10,11 +10,12 @@
  * 同一份状态显示已合并或关闭时宿主把它们藏起来,查不到状态时照原样显示。
  *
  * `button[data-ghost-task-archive="owner/repo#123"]` 是归档任务按钮,插件写成 display:none:
- * 这条 PR 已合并或关闭时宿主把它露出来(查不到状态时按插件的 -state 快照),回到开着时再藏起。
+ * 整个任务关联的 PR 都确认已合并时才露出；快照、未知状态和关闭未合并均不算完成。
  */
 import { Check, CircleMinus, CircleX, Clock, type LucideIcon } from 'lucide-react';
 import { prStatusItemKeys, type PrStatusItemKey, type PrStatusItemTone } from '@cindy/maker-shared';
 import type { PrStatusResult } from '@/lib/gitContext.types';
+import type { GhostCardTaskAutoArchiveState } from './ghostCardTaskArchive';
 import { appIconMarkup, preloadAppIconMarkup } from './ghostCardIcons';
 
 const SLOT_SELECTOR = 'div[data-ghost-pr-status]';
@@ -93,18 +94,15 @@ function applyOpenOnly(doc: Document, lookup: (key: string) => PrStatusResult | 
   }
 }
 
-/**
- * 归档任务按钮:PR 已合并或关闭时露出,否则藏起。返回是否有一颗露出的按钮可以在用户看过后
- * 自动归档——要求插件标了 -auto,且宿主自己查到这条 PR 已合并(快照和「已关闭」都不算)。
- */
-function applyTaskArchive(doc: Document, lookup: (key: string) => PrStatusResult | undefined): boolean {
+/** Task-wide eligibility is required even when this card's own PR is merged. */
+function applyTaskArchive(doc: Document, lookup: (key: string) => PrStatusResult | undefined, taskEligible: boolean, t: Label): boolean {
   let autoArchive = false;
   for (const el of Array.from(doc.querySelectorAll<HTMLElement>(TASK_ARCHIVE_SELECTOR))) {
     const key = prStatusSlotKey(el.getAttribute('data-ghost-task-archive') ?? '');
     const status = key ? lookup(key) : undefined;
     const live = status?.ok === true ? status.status : undefined;
-    const state = live ?? el.getAttribute('data-ghost-task-archive-state');
-    const ended = !!key && (state === 'merged' || state === 'closed');
+    const ended = taskEligible && !!key && live === 'merged';
+    el.setAttribute('aria-label', t('chat.ghostCall.taskArchiveNow'));
     if (ended) el.style.setProperty('display', 'inline-flex', 'important');
     else el.style.setProperty('display', 'none', 'important');
     if (ended && live === 'merged' && el.hasAttribute('data-ghost-task-archive-auto')) autoArchive = true;
@@ -114,36 +112,38 @@ function applyTaskArchive(doc: Document, lookup: (key: string) => PrStatusResult
 
 const AUTO_ARCHIVE_HINT_ATTR = 'data-x-auto-archive-hint';
 
-/**
- * 自动归档待生效时,在露出的归档按钮左边放一行宿主自己的提示:「离开后自动归档 · 本次不归档」。
- * 文字与行为都归宿主(插件只标了 -auto);不再待生效时去掉。可反复调用。
- */
+/** 在归档按钮旁分别呈现自动归档状态与取消操作；取消后保留结果提示。 */
 export function fillGhostCardTaskAutoArchiveHint(
   doc: Document,
-  pending: boolean,
-  labels: { pending: string; cancel: string },
+  state: GhostCardTaskAutoArchiveState,
+  labels: { pending: string; cancel: string; cancelled: string },
   onCancel: () => void,
 ): void {
   for (const el of Array.from(doc.querySelectorAll(`[${AUTO_ARCHIVE_HINT_ATTR}]`))) el.remove();
-  if (!pending) return;
+  if (state === 'inactive') return;
   const button = Array.from(doc.querySelectorAll<HTMLElement>(TASK_ARCHIVE_SELECTOR))
     .find((el) => el.hasAttribute('data-ghost-task-archive-auto') && el.style.display !== 'none');
   if (!button?.parentElement) return;
   const hint = doc.createElement('span');
   hint.setAttribute(AUTO_ARCHIVE_HINT_ATTR, '');
-  hint.style.cssText = 'display:inline-flex;align-items:center;gap:2px;margin-right:6px;font-size:12px;white-space:nowrap;color:var(--text-secondary)';
+  hint.style.cssText = 'display:inline-flex;align-items:center;gap:10px;margin-right:12px;font-size:12px;color:var(--text-secondary);min-width:0';
   const label = doc.createElement('span');
-  label.textContent = labels.pending;
-  const cancel = doc.createElement('button');
-  cancel.type = 'button';
-  cancel.textContent = labels.cancel;
-  cancel.style.cssText = 'height:32px;padding:0 8px;border:0;border-radius:9999px;background:transparent;' +
-    'font:inherit;font-weight:500;color:var(--text-primary);cursor:pointer';
-  cancel.addEventListener('click', (e) => {
-    e.stopPropagation();
-    onCancel();
-  });
-  hint.append(label, doc.createTextNode(' · '), cancel);
+  label.textContent = state === 'cancelled' ? labels.cancelled : labels.pending;
+  hint.append(label);
+  if (state === 'pending') {
+    const cancel = doc.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = labels.cancel;
+    cancel.style.cssText = 'display:inline-flex;align-items:center;flex:none;height:32px;padding:0 12px;' +
+      'border:1px solid var(--border-default);border-radius:9999px;font:inherit;font-size:13px;font-weight:500;' +
+      'color:var(--text-primary);cursor:pointer;--bg:var(--surface-elevated);background:var(--bg);' +
+      '--hover:color-mix(in srgb,var(--surface-elevated),var(--text-primary) 8%)';
+    cancel.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onCancel();
+    });
+    hint.append(cancel);
+  }
   button.parentElement.insertBefore(hint, button);
 }
 
@@ -156,9 +156,10 @@ export function fillGhostCardPrStatus(
   doc: Document,
   lookup: (key: string) => PrStatusResult | undefined,
   t: Label,
+  taskEligible = false,
 ): boolean {
   applyOpenOnly(doc, lookup);
-  const autoArchive = applyTaskArchive(doc, lookup);
+  const autoArchive = applyTaskArchive(doc, lookup, taskEligible, t);
   for (const slot of Array.from(doc.querySelectorAll<HTMLElement>(SLOT_SELECTOR))) {
     const key = prStatusSlotKey(slot.getAttribute('data-ghost-pr-status') ?? '');
     const status = key ? lookup(key) : undefined;

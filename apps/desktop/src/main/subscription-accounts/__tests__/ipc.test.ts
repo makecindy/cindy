@@ -28,6 +28,7 @@ vi.mock('../../device-link/invoke-context.js', () => ({
   getDeviceLinkInvokeContext: () => h.context,
 }));
 vi.mock('../../device-link/index.js', () => ({ broadcast: vi.fn() }));
+vi.mock('../../device-link/dispatch.desktop.js', () => ({ setRemoteSubscriptionPoolQuotaReader: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => `${h.owner}:${h.generation}`,
   getActiveAppSession: () => ({ dataOwnerId: h.owner }),
@@ -41,10 +42,13 @@ vi.mock('../service.js', () => ({ executeSubscriptionAccountCommand: h.execute }
 vi.mock('../runtime.js', () => ({
   onSubscriptionAccountsChanged: vi.fn(),
   readSubscriptionPoolUsage: vi.fn(async () => undefined),
+  readLegacySubscriptionPoolUsage: vi.fn(async () => undefined),
+  readSubscriptionSessionUsage: vi.fn(async () => undefined),
 }));
 import { registerSubscriptionAccountsIpc } from '../ipc.js';
 import { accountDirectory, accountOwnerPrefix, readBoundClaudeConfigDir } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
+import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 registerSubscriptionAccountsIpc();
 const invoke = (command: unknown) => h.handlers.get(SUBSCRIPTION_ACCOUNTS_CHANNEL)!({}, command);
 beforeEach(() => {
@@ -56,6 +60,13 @@ beforeEach(() => {
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
 });
 describe('subscription management boundary', () => {
+  // #9517, unit: CLI provider-managed auth must survive the real handler and
+  // renderer decoder as actionable copy, not the generic CLI/network failure.
+  it('reports provider-managed authentication through the owner IPC error protocol', async () => {
+    h.execute.mockRejectedValue(new Error('codex_provider_managed_auth'));
+    const error = await invoke({ action: 'connect', target: 'default', providerId: 'openai', loginKey: 'login' }).catch(error => error);
+    expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_CODEX_PROVIDER_AUTH');
+  });
   it('admits the trusted owner and paired owner remote context, never an untrusted frame or shared-task guest', async () => {
     const command = { action: 'read', providerId: 'anthropic' };
     await invoke(command);
@@ -71,6 +82,9 @@ describe('subscription management boundary', () => {
     for (const command of [
       { action: 'login', accountId: '../credentials', loginKey: 'login' },
       { action: 'add', loginKey: '../callback' },
+      { action: 'connect', target: '../credentials', loginKey: 'login' },
+      { action: 'connect', target: 'new', loginKey: '../callback' },
+      { action: 'connect', loginKey: 'login' },
       { action: 'configure', accountId: 'default', limit: 0 },
       { action: 'configure', paused: false },
       { action: 'configure', strategy: 'unknown' },
@@ -80,6 +94,21 @@ describe('subscription management boundary', () => {
       );
     expect(h.execute).not.toHaveBeenCalled();
   });
+  // The new intent must survive the real owner IPC parser. An old "add" fallback
+  // could silently attach the detected default instead of opening another login.
+  it.each(['anthropic', 'openai'])(
+    'preserves explicit %s preview/default/new intent across owner IPC',
+    async (providerId) => {
+      for (const command of [
+        { action: 'preview', providerId },
+        { action: 'connect', target: 'default', providerId, loginKey: 'existing' },
+        { action: 'connect', target: 'new', providerId, loginKey: 'another' },
+      ]) {
+        await expect(invoke(command)).resolves.toEqual({ accounts: [] });
+        expect(h.execute).toHaveBeenLastCalledWith(command);
+      }
+    },
+  );
   it('derives stable directories from the owner, refusing another owner’s account id', () => {
     const id = `cindy-${accountOwnerPrefix()}-12345678-1234-4123-8123-123456789abc`;
     const directory = accountDirectory('anthropic', id);

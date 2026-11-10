@@ -122,6 +122,7 @@ const waitForSource = { planId: 'fixture-plan', key: 'secrets', phase: 'running'
 const tools = [{ id: 'browser', name: 'Browser' }];
 
 async function next(page, ui) {
+  await page.getByRole('radio').first().check();
   await page.getByRole('button', { name: await ui.t('setupMigration.source.next'), exact: true }).click();
   await page.getByText('Gmail', { exact: true }).first().waitFor();
 }
@@ -150,8 +151,16 @@ export default {
   entry: './setup-migration-fixture.tsx',
   viewport: { width: 1040, height: 760 },
   real: 'SetupMigrationDialog (computer picker, review groups, batch plugin permissions with GhostInstallConsentContent, result and one-time checklist), SetupMigrationSection, translations and themes',
-  notCovered: 'Main-side snapshot, plan, plugin/skill installers, settings writes, key copy and SSH authorization (unit-tested in src/main/setup-migration and src/main/remote-ssh), the confirmation dialog on the other computer (native), device-link transport, the first-run suggestion timer, and two real computers',
+  notCovered: 'Main-side snapshot, plan, plugin/skill installers, settings writes, key copy and SSH authorization (unit-tested in src/main/setup-migration and src/main/remote-ssh), the confirmation dialog on the other computer (native), device-link transport, login behavior and two real computers',
   cases: {
+    'settings-entry': {
+      about: 'Opening Settings stays quiet; the explicit migration action opens an unselected source list',
+      data: { surface: 'settings', sources, plan, applyResponse, tools, state: { lastRun: null, suggestion: null } },
+    },
+    'same-name': {
+      about: 'Same-name development devices are distinguishable without a default selection',
+      data: { surface: 'dialog', sources: sources.map((source) => ({ ...source, name: 'Development Mac' })), plan, applyResponse, tools },
+    },
     source: { about: 'Pick a computer; offline and remote-control-off computers explain why they cannot be read', data: { surface: 'dialog', sources, plan, applyResponse, tools } },
     default: { about: 'Review what moves: plugins, skills, settings, providers/MCP, access switches and the one-time checklist', data: { surface: 'dialog', sources, plan, applyResponse, tools } },
     permissions: { about: 'One confirmation for the permissions of all selected market plugins', data: { surface: 'dialog', sources, plan, applyResponse, tools } },
@@ -177,6 +186,20 @@ export default {
     },
   },
   async check(page, ui) {
+    if (ui.case === 'settings-entry') {
+      assert.equal(await page.getByRole('dialog').count(), 0);
+      await page.getByRole('button', { name: await ui.t('setupMigration.settings.start'), exact: true }).click();
+      await page.getByRole('radio').first().waitFor();
+      assert.equal(await page.getByRole('radio').first().isChecked(), false);
+      assert.equal(await page.getByRole('button', { name: await ui.t('setupMigration.source.next'), exact: true }).isDisabled(), true);
+      return;
+    }
+    if (ui.case === 'same-name') {
+      await page.getByText('Development Mac (1)', { exact: true }).waitFor();
+      await page.getByText('Development Mac (2)', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('radio').first().isChecked(), false);
+      return;
+    }
     if (ui.case === 'settings') {
       await page.getByText(await ui.t('setupMigration.settings.description'), { exact: true }).waitFor();
       return;
@@ -186,11 +209,17 @@ export default {
       return;
     }
     if (ui.case === 'read-error') {
+      await page.getByRole('radio').first().check();
+      await page.getByRole('button', { name: await ui.t('setupMigration.source.next'), exact: true }).click();
       await page.getByText(await ui.t('setupMigration.errors.SETUP_SOURCE_OUTDATED', { name: 'MacBook Pro' }), { exact: true }).waitFor();
       return;
     }
     await page.getByText('MacBook Pro', { exact: true }).waitFor();
-    if (ui.case === 'source') return;
+    if (ui.case === 'source') {
+      assert.equal(await page.getByRole('radio').first().isChecked(), false);
+      assert.equal(await page.getByRole('button', { name: await ui.t('setupMigration.source.next'), exact: true }).isDisabled(), true);
+      return;
+    }
     await next(page, ui);
     if (ui.case === 'default') {
       // Already-identical items are summarized instead of listed.
@@ -202,7 +231,11 @@ export default {
       return;
     }
     await start(page, ui);
-    if (ui.case === 'permissions') return;
+    if (ui.case === 'permissions') {
+      const title = page.getByRole('heading', { name: await ui.t('setupMigration.permissions.title'), exact: true });
+      assert.equal(await title.evaluate((element) => element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight), true, 'Permission title must remain fully readable');
+      return;
+    }
     const confirm = await ui.t('setupMigration.permissions.confirm', { count: 2 });
     await page.getByRole('button', { name: confirm, exact: true }).click();
     if (ui.case === 'confirm') {

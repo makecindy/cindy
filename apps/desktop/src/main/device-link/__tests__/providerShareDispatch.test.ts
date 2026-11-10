@@ -18,8 +18,8 @@ const warn = vi.hoisted(() => vi.fn());
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn, error: vi.fn() }),
 }));
-vi.mock('../settings-store', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../settings-store')>()),
+vi.mock('../settings-store.desktop', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../settings-store.desktop')>()),
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, keepAwake: false, revokedControllers: [], disabledControlDeviceIds: [] }),
 }));
 
@@ -31,7 +31,10 @@ import {
   setProviderGroupRemoteHandler,
   setProviderShareAccess,
   setRemoteAgentHandler,
-} from '../dispatch';
+  setRemoteSubscriptionPoolQuotaReader,
+  setRemoteClaudeSubscriptionUsageReader,
+} from '../dispatch.desktop';
+import { readLegacySubscriptionQuota } from '../../subscription-accounts/legacyQuota';
 
 const GUEST = providerShareGuestPeer('share-1', 'member-1', 'laptop');
 const ACCESS = { shareId: 'share-1', memberId: 'member-1', providerId: 'anthropic' };
@@ -52,8 +55,47 @@ beforeEach(() => {
   setProviderShareAccess({ guestAccess: () => state.access, ensureKnown: async () => undefined, hasShares: () => false });
 });
 afterEach(() => {
+  setRemoteSubscriptionPoolQuotaReader(null);
+  setRemoteClaudeSubscriptionUsageReader(null);
   __testing.reset();
   setProviderShareAccess(null);
+});
+
+// Unit regression: old consumers cannot query maker:subscription-pool:quota.
+// Exercise real authorized dispatch with only legacy arguments; a full default
+// account must not hide a second usable account, or expose pool data to guests.
+describe('legacy controller quota compatibility', () => {
+  it.each([
+    ['maker:usage:claude-subscription', []],
+    ['maker:usage:account', ['codex']],
+    ['maker:usage:codex-rate-limits', []],
+  ])('answers %s using the available pooled account', async (channel, args) => {
+    const { __testing: registry } = await import('../invoke-registry');
+    const now = Date.now();
+    const window = { usedPercent: 12, windowMinutes: 300, resetsAt: now / 1000 + 3600 };
+    const bucket = { limitId: 'codex', limitName: null, updatedAt: now, primary: window, secondary: null };
+    const read = vi.fn(async () => ({
+      claudeUsage: { updatedAt: now, fiveHour: { utilization: 12, resetsAt: window.resetsAt }, sevenDay: null, scoped: [] },
+      codexUsage: { appServerBuckets: { codex: bucket }, webSnapshot: bucket },
+    }));
+    registry.register(channel, async () => ({ primary: { usedPercent: 100 } }));
+    setRemoteClaudeSubscriptionUsageReader(async () => ({ fiveHour: { utilization: 100 } }));
+    setRemoteSubscriptionPoolQuotaReader((name, values) => readLegacySubscriptionQuota(read, name, values));
+    try {
+      const reply = await runInvoke('same-account-controller', { channel, args });
+      expect(reply).toMatchObject({ ok: true, result: channel.includes('claude-subscription')
+        ? { fiveHour: { utilization: 12 } }
+        : channel.includes('codex-rate-limits')
+          ? { rateLimits: { primary: { usedPercent: 12 } }, resetOffer: null }
+          : { primary: { usedPercent: 12 } } });
+      state.access = ACCESS;
+      read.mockClear();
+      await expect(runInvoke(GUEST, { channel, args })).resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      registry.reset();
+    }
+  });
 });
 
 describe('provider share link admission', () => {
@@ -379,6 +421,17 @@ describe('provider group channel', () => {
 });
 
 describe('provider share revoke', () => {
+  it('requires the host cleanup acknowledgement for standby revocation', async () => {
+    setRemoteAgentHandler(null);
+    await expect(revokeProviderShareControllers(() => true, true, true)).rejects.toThrow('cleanup is unavailable');
+    const purgeControllers = vi.fn(async (_match: (peer: string) => boolean, _strict?: boolean) => { throw new Error('cleanup busy'); });
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll: vi.fn(), purgeControllers });
+    await expect(revokeProviderShareControllers(() => true, true, true)).rejects.toThrow('cleanup busy');
+    expect(purgeControllers).toHaveBeenCalledWith(expect.any(Function), true);
+    expect(purgeControllers.mock.calls[0][0](GUEST)).toBe(true);
+    expect(purgeControllers.mock.calls[0][0]('same-account-mac')).toBe(false);
+  });
+
   it('only touches provider-share guests and routes purge to the remote agent host', async () => {
     const abortControllers = vi.fn<(match: (controller: string) => boolean) => Promise<void>>(async () => undefined);
     const purgeControllers = vi.fn<(match: (controller: string) => boolean) => Promise<void>>(async () => undefined);

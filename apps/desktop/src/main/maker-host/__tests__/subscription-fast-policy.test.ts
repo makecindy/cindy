@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
   providers: [] as ProviderView[],
 }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.owner }));
-vi.mock('../../provider-group/bindings.js', () => ({
+vi.mock('../../provider-group/bindings.desktop.js', () => ({
   readProviderGroupBinding: () => state.binding,
 }));
 vi.mock('../../provider-group/store.js', () => ({

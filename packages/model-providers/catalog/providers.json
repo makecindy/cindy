@@ -2351,6 +2351,24 @@
       }
     },
     {
+      "id": "hinoki",
+      "name": "Hinoki",
+      "docsUrl": "https://hinoki.security",
+      "models": [{ "id": "hinoki-offensive", "name": "Hinoki Offensive One" }],
+      "runtimes": {
+        "codex": {
+          "baseUrl": "https://inference.hinoki.security/v1",
+          "modelsUrl": "https://inference.hinoki.security/v1/models",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://inference.hinoki.security/v1",
+          "modelsUrl": "https://inference.hinoki.security/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
       "id": "ollama-cloud",
       "name": "Ollama Cloud",
       "docsUrl": "https://docs.ollama.com/cloud",

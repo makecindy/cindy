@@ -1,3 +1,8 @@
+import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
+import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
+import { createPersonalBuildMonitor } from './personalBuildMonitor.js';
+import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
+import { observeDesktopStartupResult } from './devStartupStatus.js';
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
@@ -16,7 +21,7 @@ import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
 import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
-import { getQuotaOverviewService } from './quota-overview/service.js';
+import { getQuotaOverviewService, readUsageWidgetSnapshot } from './quota-overview/service.js';
 import {
   createLatestSourceVersionReader,
   sourceChannel,
@@ -47,7 +52,7 @@ import {
   writeCindyMakeSyncLatestBeforeBuild,
 } from './cindy-make/settingsStore.js';
 import { retainProviderPresentationAfterAuthChange } from './maker-host/provider-presentation-store.js';
-import { codexAccountState } from './maker-host/codex-account-auth.js';
+import { codexAccountState } from './maker-host/codex-account-auth.desktop.js';
 import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
 import {
   clearSubscriptionAccountDiscoveredModels,
@@ -87,9 +92,10 @@ import {
 import {
   resolveVibrancyConfig,
   resolveWindowVibrancyConfig,
+  setWindowDesktopBlur,
   setWindowWallpaperCovered,
 } from './vibrancyConfig';
-import { getSessionThinkingSnapshots, getHistoryToolName, drainPersistQueue } from './messagePersistBroadcaster';
+import { getSessionThinkingSnapshots, getHistoryToolName, drainPersistQueue } from './messagePersistBroadcaster.desktop';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import { rememberResolvedAppTheme, resolveAppThemeIsDark } from './resolved-app-theme';
 import {
@@ -119,6 +125,7 @@ import {
   recordDesktopDevAuthStartupResult,
   markDesktopDevStartupFailed,
   markDesktopDevWindowReady,
+  enableDesktopDevQuitRequests,
 } from './devStartupStatus';
 import {
   installWindowFullscreenStateBroadcast,
@@ -131,10 +138,17 @@ import {
   readPersistedWindowMaximized,
   type MainWindowMaximizeRecoveryController,
 } from './mainWindowMaximizeRecovery';
+import {
+  commitReplacedNormalBounds,
+  fitReplacementStartupBounds,
+  manageWindowStatePreservingNormalBounds,
+  planWindowRestore,
+} from './mainWindowWorkAreaBounds';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import {
+  setTurnChangeSetWindowBroadcast,
   waitForTurnChangeSetActions,
   waitForTurnChangeSetPersistence,
 } from './turn-change-set/store.js';
@@ -351,10 +365,11 @@ import {
   registerRsbNativePopupSurfaceIpc,
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
-import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
-import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
+import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.desktop.js';
+import { countLiveBridgeMcpSessions } from './mcp-integrations/codexHttpBridge.desktop.js';
+import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.desktop.js';
 import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
-import * as imageCacheStore from './imageCacheStore';
+import * as imageCacheStore from './imageCacheStore.desktop';
 import { readCachedImage } from './cindy-media/readCachedImage';
 import {
   collectStreamWithLimit,
@@ -380,7 +395,7 @@ import {
   cindyMediaSchemePrivilege,
   registerCindyMediaProtocolHandler,
 } from './cindy-media/cindyMediaProtocol';
-import * as cindyMediaBlobStore from './cindy-media/blobStore';
+import * as cindyMediaBlobStore from './cindy-media/blobStore.desktop';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
 import { getFixedDirectoryStats, openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
 import { openMakeSourceDirectory, openMakeToolsDirectory } from './cindy-make/toolsDirectory';
@@ -458,12 +473,23 @@ import {
 import { readFileThumbnail } from './fileThumbnail';
 import { createOpenWithHandlers, decodeRegOutput, parseChcpCodepage } from './openWithApps';
 import { resolveShellOpenPathTarget } from './shellOpenPath';
+import { posixDrivePathToWin32 } from '../shared/pathText';
 import { handleOpenFileInBrowser } from './openFileInBrowser';
 import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
 import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
+import {
+  claimProxiedChannels,
+  createHostClient,
+  installUnsupportedMakerFallbacks,
+  registerHostDelegatedIpc,
+  registerHostDelegatedSync,
+  resolveHostDelegation,
+  startHostEventBridge,
+  type HostDelegationConfig,
+} from './host-delegation';
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
@@ -529,8 +555,18 @@ import {
   beginSessionTurnEndedSuppression,
   freezeSessionActiveTurnMarkers,
 } from './localDb/sessionActiveTurn';
-import { getDrizzleDir } from './localDb/migrate';
-import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
+import { configureMigrationRuntime } from './localDb/migrationRuntime';
+import { configureLocalDbHostUi } from './localDb/hostUi';
+import { configureUiText } from './uiText';
+import { runPendingDbSlimmingAtStartup } from './localDb/dbSlimmingStartup';
+import { shouldShowNativeFatalDialog } from './localDb/fatalDialogPolicy';
+import { loadSqliteVec } from './localDb/sqliteVecLoader';
+import { getDrizzleDir, resolveDesktopDrizzleDir } from './localDb/migrate';
+import {
+  configureSqliteVecExtPath,
+  resolveDesktopSqliteVecExtPath,
+  resolveSqliteVecExtPath,
+} from './localDb/sqliteVecLoader';
 import {
   startEmbeddingHost,
   stopEmbeddingHost,
@@ -543,7 +579,7 @@ import {
   type EmbeddingService,
 } from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
-import { outboundFetch } from './maker-host/outbound-fetch';
+import { outboundFetch } from './maker-host/outbound-fetch.desktop';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import {
   acquirePiSubagentLaunchFence,
@@ -554,6 +590,7 @@ import {
 
 import { onQuit, installQuitHandler } from './lifecycle';
 import { initStartupDiagnostics } from './startup-diagnostics';
+import { isRunningUnderArm64Translation } from './arm64Translation';
 import { createStartupGateStallReporter } from './startupGateStallReport';
 import { STARTUP_GATE_STALL_CHANNEL } from '../shared/startupGateStall';
 import {
@@ -564,7 +601,7 @@ import {
   broadcastVoiceInputPowerState,
   installVoiceInputPowerRelease,
 } from './voice-input/powerReleaseNotifier';
-import { reapClaudeOrphansSync } from './claude-orphan-reaper';
+import { reapClaudeOrphansSync, reapHistoricalClaudeOrphans } from './claude-orphan-reaper';
 import { reapCodexToolTreesSync } from './codex-tool-tree-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
@@ -600,6 +637,7 @@ import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
   isTrustedCindyRendererWindow,
+  isTrustedTopLevelCindyRendererEvent,
 } from './security/trustedAppRenderer.js';
 
 import { isIpcError } from '../shared/ipc-errors';
@@ -625,9 +663,12 @@ import {
   setPhysicalInputShielded,
 } from './mcp-integrations/computer.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
+import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
 import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
+import { sidebarWindowExpansion } from './sidebarWindowExpansion';
+import { registerSidebarWindowExpansionIpc } from './sidebarWindowExpansionIpc';
 import { WindowManualDragController } from './windowManualDrag';
 import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
 import {
@@ -661,9 +702,10 @@ import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
   setHistoryToolNameReader,
+  setUsageWidgetSnapshotReader,
   pushSessionActivityToController,
   setSessionsSubscribedListener,
-} from './device-link/dispatch';
+} from './device-link/dispatch.desktop';
 import {
   registerDeviceLinkIpc,
   defaultDeps as deviceLinkIpcDeps,
@@ -715,12 +757,14 @@ import {
   builtInSkillDescriptors,
 } from './maker-host/built-in-skills.js';
 import { isCindyLearnSkillEnabled, isCindyLearnSkillEnabledForCommandListing } from './skillhub/activationPreferences';
+import { setHostClientMode } from './host-client-mode.js';
 // Maker Core 一阶段重构（新链路）—— 静态 import 避免 dynamic import 触发 vite chunking
 // 让 imageProtocol 等需要 app.ready 前注册的模块跑在错误时机。getMaker() 是 lazy 的，
 // 静态 import 不会触发 Maker / Agent 的实例化。
 import {
   desktopClaudeAuthAdapter,
   getMaker as getMakerCore,
+  setMakerClientMode,
   getMakerIfReady,
   resetMaker,
   shutdownLspServerPool,
@@ -767,7 +811,7 @@ import {
   refreshXaiModelsFromHttp,
 } from './maker-host/model-discovery/xai.js';
 import { notifyOpenAiMediaCredentialChanged } from './maker-host/model-discovery/openai-media.js';
-import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.js';
+import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.desktop.js';
 import {
   clearXaiRateLimitSnapshot,
   clearXaiSubscriptionUsageSnapshot,
@@ -783,7 +827,7 @@ import {
 import {
   disposeCodexProxy,
   getCodexProxyAuthInjectionState,
-} from './maker-host/codex-proxy-host.js';
+} from './maker-host/codex-proxy-host.desktop.js';
 import {
   disposeBrowserRuntime,
   registerBrowserBackendIpc,
@@ -793,7 +837,7 @@ import {
   setIsDetachedForBackend,
   setUserBrowserPageControlProvider,
 } from './mcp-integrations/browser.js';
-import { setPageControlGhostProvider } from './mcp-integrations/ghost.js';
+import { setPageControlGhostProvider } from './mcp-integrations/ghost.desktop.js';
 import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
@@ -906,7 +950,7 @@ import {
   onClaudeCliLoginStatusChange,
   readClaudeCliLoginStatus,
   runClaudeCliLogin,
-} from './maker-host/claude-native-cli.js';
+} from './maker-host/claude-native-cli.desktop.js';
 import { closeClaudeCliProxyBridge } from './maker-host/claude-cli-proxy-bridge.js';
 import { startLegacyClaudeConfigMigration } from './maker-host/claude-legacy-config-migration.js';
 import { isNativeProviderAuthBound, isNativeProviderAuthRevoked } from './maker-host/nativeProviderAuthBinding.js';
@@ -915,7 +959,7 @@ import {
   cancelGrokOAuthLogin,
   logoutGrok,
   hasGrokOAuthLogin,
-} from './maker-host/grok-oauth-login.js';
+} from './maker-host/grok-oauth-login.desktop.js';
 import { setGrokDeviceLoginConnectedHandler } from './maker-host/grok-device-login-service.js';
 import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
 import { clearXaiMediaModels } from './maker-host/model-discovery/xai-media.js';
@@ -1215,7 +1259,7 @@ import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
-import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.js';
+import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.desktop.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
@@ -1230,7 +1274,7 @@ import {
   getScheduleStorage,
   getScheduleStorageIfInitialized,
   getProjectAutomationLoader,
-} from './scheduler-host/index.js';
+} from './scheduler-host/index.desktop.js';
 import { configureRoutineHost } from './routines/service.js';
 import { configureBotAutonomyHost, initBotAutonomy } from './bot-autonomy/service.js';
 import { voiceCallCoordinator } from './voice-conversation/callCoordinator.js';
@@ -1238,10 +1282,12 @@ import { hasVoiceConversationLease } from './voice-conversation/lease.js';
 import { getBotRemoteResourceSource, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
+  awaitAccountSchedulerReady,
   attachSchedulerEventListeners,
   resetSchedulerReady,
 } from './maker-ipc/schedule.js';
-import { registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
+import { reconcileRenamedBuiltinGhostCards } from './cindy-brain/cardStoreDb.js';
+import { attachProjectAutomationEventListeners, registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
 import {
   startGoalController,
   getGoalController,
@@ -1255,6 +1301,141 @@ import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
 
 let makerProviderRefreshConfigured = false;
+
+/** Resolved once: client mode is a process-lifetime decision. */
+let hostDelegationConfig: HostDelegationConfig | null | undefined;
+function hostDelegation(): HostDelegationConfig | null {
+  if (hostDelegationConfig === undefined) {
+    hostDelegationConfig = resolveHostDelegation({
+      env: process.env,
+      userDataDir: app.getPath('userData'),
+    });
+  }
+  return hostDelegationConfig;
+}
+
+const hostClientMode = hostDelegation() !== null;
+if (hostClientMode) {
+  console.log('[bootstrap-electron] client mode requested at startup');
+}
+
+/** Client mode: the host owns every runtime channel; install its proxies now. */
+function installHostClientMode(): boolean {
+  const delegation = hostDelegation();
+  if (!delegation) return false;
+  setMakerClientMode(true);
+  // The host owns the profile's database too; a local open would be a second writer.
+  setHostClientMode(true);
+  const hostClient = createHostClient(delegation);
+  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
+  // Registered outside the runtime block by other modules; drop those so the
+  // host stays authoritative instead of throwing on a duplicate handler.
+  claimProxiedChannels(ipcMain, (channel) => {
+    console.log(`[bootstrap-electron] client mode keeps the host handler for ${channel}`);
+  });
+  installUnsupportedMakerFallbacks({
+    ipcMain,
+    log: (channel) => {
+      console.log(`[bootstrap-electron] client mode unsupported maker fallback for ${channel}`);
+    },
+  });
+  console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
+  console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
+  void registerHostDelegatedSync({
+    channel: 'ghosts:list',
+    path: '/api/ghosts',
+    client: hostClient,
+    map: (response) => ({ ghosts: Array.isArray(response) ? response : [] }),
+    ipcMain,
+  });
+  void registerHostDelegatedSync({
+    channel: 'maker:model-visibility:legacy-owner-claim-sync',
+    path: '/api/model-visibility/claim',
+    client: hostClient,
+    ipcMain,
+  });
+  authManager.setAuthRefreshOverride(async () =>
+    await hostClient.request('/api/auth/refresh', {}) as authManager.AuthState,
+  );
+  const sendToAllWindows = (channel: string, ...args: unknown[]) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(channel, ...args);
+    }
+  };
+  let hostConnectionState: HostConnectionState | null = null;
+  const eventBridge = startHostEventBridge({
+    baseUrl: delegation.baseUrl,
+    token: delegation.token,
+    beforeEvents: async (signal) => {
+      const auth = await hostClient.request('/api/auth/state', null, signal) as authManager.AuthState;
+      if (!signal.aborted) authManager.receiveHostAuthState(auth);
+    },
+    onConnectionState: (state) => {
+      hostConnectionState = state;
+      sendToAllWindows('host-client:connection', state);
+    },
+    onInputProjection: (payload) => sendToAllWindows('maker:input:projection', payload),
+    onInteractionRequest: (payload) => sendToAllWindows('maker:interaction-request', payload),
+    onInteractionDismissed: (payload) => sendToAllWindows('maker:interaction-dismissed', payload),
+    onAuthChanged: (payload) => authManager.receiveHostAuthState(payload as authManager.AuthState),
+    broadcast: (payload) => {
+      sendToAllWindows(MAKER_PUSH.EVENT, payload);
+    },
+    onSettingsChanged: (domain, value) => {
+      if (domain === 'appearance') {
+        sendToAllWindows('appearance-settings:changed', value);
+      } else if (domain === 'layout') {
+        sendToAllWindows('layout:changed', { layout: value });
+      } else if (domain === 'shortcuts') {
+        sendToAllWindows('app-shortcuts:changed', value);
+      } else if (domain === 'sidebar') {
+        const val = value as { pinnedProjectKeys?: unknown[]; hiddenProjectKeys?: unknown[] } | undefined;
+        if (Array.isArray(val?.pinnedProjectKeys)) {
+          sendToAllWindows('sidebar-settings:pinned-order-changed', val.pinnedProjectKeys);
+        }
+        if (Array.isArray(val?.hiddenProjectKeys)) {
+          sendToAllWindows('sidebar-settings:hidden-project-keys-changed', val.hiddenProjectKeys);
+        }
+      }
+    },
+    onSessionChanged: (event: any) => {
+      if (event?.action === 'create') {
+        sendToAllWindows('local-db:sessions:created', { sessionId: event.sessionId, session: event.session });
+      } else if (event?.action === 'update' || event?.patch) {
+        sendToAllWindows('local-db:sessions:patched', { sessionId: event.sessionId, patch: event.patch });
+      } else if (event?.action === 'delete' || event?.action === 'discard_provisional') {
+        sendToAllWindows('local-db:sessions:patched', { sessionId: event.sessionId, patch: { status: 'deleted' } });
+      }
+    },
+    onMessageCreated: (event: any) => {
+      sendToAllWindows('local-db:messages:created', { sessionId: event?.sessionId, message: event?.message });
+    },
+    onMessageDeleted: event => sendToAllWindows('local-db:messages:deleted', event),
+    onErrorPersisted: event => sendToAllWindows('local-db:session:error-persisted', event),
+    onSubagentRunsChanged: event => sendToAllWindows('local-db:subagent-runs:changed', event),
+    onProjectAliasesChanged: () => {
+      sendToAllWindows('local-db:project-aliases:changed', {});
+    },
+    onError: (error) => {
+      console.warn(
+        '[bootstrap-electron] host event bridge disconnected:',
+        error instanceof Error ? error.message : String(error),
+      );
+    },
+  });
+  ipcMain.on('host-client:observe', (event) => {
+    if (!isTrustedAppRendererEvent(event) || !hostConnectionState) return;
+    event.sender.send('host-client:connection', hostConnectionState);
+  });
+  ipcMain.on('host-client:retry', (event) => {
+    if (isTrustedAppRendererEvent(event)) eventBridge.reconnect();
+  });
+  app.once('before-quit', () => eventBridge());
+  return true;
+}
+
+if (hostClientMode) installHostClientMode();
+
 let startPendingAccountProviderReadiness: { ownerId: string; start: () => void } | null = null;
 
 function markMakerProviderRefreshConfigured(): void {
@@ -1351,6 +1532,7 @@ function attemptStartScheduler(): Promise<void> {
 }
 
 async function attemptStartSchedulerOnce(): Promise<void> {
+  if (hostClientMode) return;
   // 两个前置条件必须满足才能启动：
   //   1. maker 单例已构造 (splash check-environment 完成 → registerMakerIpcsAfterSplash)
   //   2. DbClient 已 smoke 通过 (user login → renderer 触发 'local-db:ensure-ready' IPC)
@@ -1425,7 +1607,7 @@ async function attemptStartSchedulerOnce(): Promise<void> {
           console.warn('[usage-limit] schedule reconciliation failed', error));
       });
       attachSchedulerEventListeners(scheduler, getScheduleStorage());
-      registerProjectAutomationIpc(getProjectAutomationLoader());
+      attachProjectAutomationEventListeners(getProjectAutomationLoader());
       _scheduleIpcRegistered.add(scheduler);
     }
   } catch (err) {
@@ -1669,7 +1851,9 @@ function rebindChatEmbeddingSettingsWatcher(): void {
   chatEmbeddingSettingsWatcher.rebind(ownerScopedUserDataPath('chat-embedding-settings.json'));
 }
 
-app.once('will-quit', () => chatEmbeddingSettingsWatcher.dispose());
+// The quit coordinator finishes with app.exit(), which bypasses will-quit.
+onQuit('chat-embedding-settings-watcher', () => chatEmbeddingSettingsWatcher.dispose());
+onQuit('workdir-probe-host', () => workdirProbeHostClient.dispose(), 'sync');
 
 /**
  * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
@@ -1709,8 +1893,75 @@ import {
   setCcDebugTailingEnabled,
   type LogLevel,
 } from './logger.js';
-initLogger();
+// Idempotent: index.ts already initialized the logger with its Electron facts.
+initLogger({
+  isPackaged: app.isPackaged,
+  userDataDir: app.getPath('userData'),
+  version: app.getVersion(),
+});
 const dbClientLog = createLogger('DbClient');
+// Storage paths are host facts: install them once so localDb never needs to
+// import Electron for packaged/dev layout questions.
+configureMigrationRuntime({
+  drizzleDir: resolveDesktopDrizzleDir(app.isPackaged),
+  isPackaged: app.isPackaged,
+});
+configureSqliteVecExtPath(resolveDesktopSqliteVecExtPath(app.isPackaged));
+// Database startup reaches the user through these ports; the Node host installs
+// headless equivalents instead of importing Electron.
+configureUiText((key, fallback) => {
+  const localized = t(key);
+  return localized === key ? fallback : localized;
+});
+configureLocalDbHostUi({
+  isPackaged: () => app.isPackaged,
+  reportFatal: (title, detail, code) => {
+    if (!shouldShowNativeFatalDialog(code)) {
+      console.error(JSON.stringify({ event: 'localDb.fatal.rendererOwned', code, title, detail }));
+      return;
+    }
+    try {
+      dialog.showMessageBoxSync({
+        type: 'error',
+        title,
+        message: title,
+        detail: `${detail}\n\n请重启应用，或在系统资源管理器中打开数据目录手动处理。`,
+        buttons: ['好的'],
+        defaultId: 0,
+      });
+    } catch (error) {
+      console.error('showFatalDialog failed', error);
+    }
+  },
+  broadcast: (channel, payload) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(channel, payload);
+      } catch {
+        /* destroyed renderer */
+      }
+    }
+  },
+  exitApp: (code) => app.exit(code),
+  showMessageBoxSync: (options) => dialog.showMessageBoxSync({
+    type: 'warning',
+    title: '本地 DB schema 仍有残留不一致',
+    message: '反射自愈无法修复以下不一致(改类型 / 删列 / 缺 NOT NULL 列等):',
+    detail: '选「Nuke 重建」会把当前 DB 改名为 .bak.nuke-<时间>(永久保留)；选「忽略继续」会带着不一致启动。',
+    buttons: options.buttons,
+    defaultId: options.defaultId ?? 0,
+    cancelId: options.cancelId ?? 1,
+  }),
+  showInfo: (title, message) => {
+    dialog.showMessageBoxSync({ type: 'info', title, message, buttons: ['好的'] });
+  },
+  runStartupSlimming: (args) => runPendingDbSlimmingAtStartup({
+    ...args,
+    loadVectorExtension: (maintenanceDb) => loadSqliteVec(maintenanceDb).loaded,
+    log: console as never,
+  }),
+});
 const authBoundaryLog = createLogger('auth-boundary');
 // 镜像缓存清理失败会把 MirrorCachePurgeError 的 root/remaining 本地缓存路径写进日志,单独一个
 // 子 scope,好让日志上报的来源白名单把它排除掉(auth-boundary 根只留不带路径的服务停止诊断)。
@@ -2299,14 +2550,14 @@ void clearStalePiSubagentLaunchFence(path.join(app.getPath('userData'), 'pi-agen
   },
 );
 
-try {
-  reapClaudeOrphansSync();
-} catch (err) {
-  // Defensive: reapClaudeOrphansSync already catches its own scan/kill errors
-  // and logs to debug. This only fires on truly unexpected throws (e.g. module
-  // load failure) and must never abort bootstrap.
+// Off the startup critical path: the Windows scan spawns PowerShell (~0.4 s,
+// up to 5 s). The startup variant only reaps dead-parent historical orphans,
+// so a task this instance launches before the scan returns is never killed.
+void reapHistoricalClaudeOrphans().catch((err: unknown) => {
+  // Defensive: the reaper already catches its own scan/kill errors and logs to
+  // debug. This only fires on truly unexpected throws and never aborts bootstrap.
   createLogger('claude-orphan-reaper').warn('initial reap threw', { error: String(err) });
-}
+});
 
 // ── agent 进程优先级降档 watcher(agent 资源占用治理)─────────────────────
 // 设置(processPriority)为 normal 且无欠恢复进程时,每 tick 零成本(不扫进程表);
@@ -2576,7 +2827,10 @@ setEnsureHostForBackend((sessionId) => rsbWindowController.ensureOpenForAutomati
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
 // 「我的浏览器」后端经 browserExtension 插件槽拿页面控制桥接;槽归 cindy-brain,
 // 这里倒置依赖,browser.ts 不反向 import 插件基座。
-setUserBrowserPageControlProvider(() => getGhostBrowserExtensionSlot().getPageControl());
+setUserBrowserPageControlProvider(
+  () => getGhostBrowserExtensionSlot().getPageControl(),
+  () => getGhostBrowserExtensionSlot().getPageControlUnavailableReason(),
+);
 // The plugin providing "My browser" hides its own page tools from agents: one way to drive the user's browser.
 setPageControlGhostProvider(() => getGhostBrowserExtensionSlot().getPageControl()?.instanceId ?? null);
 setBrowserSessionUploadRootResolver(async (sessionId) => {
@@ -2645,7 +2899,9 @@ setRemotePluginManagementServices({
     write: async (id, visible, assertCurrent) => { await setLocalMainViewHidden(id, !visible, assertCurrent); },
   },
   market: {
-    snapshot: () => getPluginMarketService().snapshot({ discoveryOnly: true }),
+    snapshot: legacyCatalog => getPluginMarketService().snapshot({ discoveryOnly: true, legacyCatalog }),
+    query: input => getPluginMarketService().query(input),
+    recommendations: () => getPluginMarketService().recommendations(),
     detail: id => getPluginMarketService().detail(id),
     install: async (id, options, prompt, assertCurrent, assertScope) => {
       await getPluginMarketService().install(id, options, { consent: { prompt, initiator: 'user' }, assertCurrent, assertScope });
@@ -2769,6 +3025,11 @@ import started from 'electron-squirrel-startup';
 
 import { APPLICATION_MENU_LABELS, type ApplicationMenuLocale } from './applicationMenuLabels.js';
 import { installCindyCliCommand, CLI_COMMAND_NAME } from './installCliCommand.js';
+// Keep these three last. Static imports evaluate in source order, so listing them
+// first would load everything they reach ahead of the existing startup sequence.
+import { workdirProbeHostClient } from './workdir-probe-host/index.js';
+import { setToolProcessMediaRemoteReader } from './cindy-media/toolProcessMedia.js';
+import { materializeSshRemoteMedia } from './file-browser/ssh-media.js';
 
 if (started) {
   app.quit();
@@ -3268,14 +3529,12 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
  * paths natively and `fs` can read them as-is. On Windows the SDK frequently
  * emits `/x/...` style paths in tool args (Read/Write/Edit `file_path`); the
  * Node `fs` API on Windows treats those as ENOENT, surfacing in the
- * TextLightbox as "File not found".
+ * TextLightbox as "File not found". The `/D:/x` URI-pathname spelling of a
+ * drive path (#8726) is converted by the same helper.
  */
 function posixToWin32(p: string): string {
   if (process.platform !== 'win32' || !p) return p;
-  // `/x/rest` → `X:\rest`. Single drive letter only; deeper segments preserved.
-  const m = /^\/([a-zA-Z])\/(.*)$/.exec(p);
-  if (m) return `${m[1].toUpperCase()}:\\${m[2].replace(/\//g, '\\')}`;
-  return p;
+  return posixDrivePathToWin32(p);
 }
 
 function isPathAllowed(filePath: string): boolean {
@@ -3514,6 +3773,7 @@ const linuxTray = createLinuxTrayController<Menu>({
     return new Tray(icon);
   },
   buildMenu: buildDesktopTrayMenu,
+  tooltip: BRAND_NAME,
   showWindow: () => focusMainWindow(),
   onError: (error) => {
     linuxTrayLog.error('Linux tray operation failed', {
@@ -4107,23 +4367,62 @@ const createWindow = () => {
   const persistedMaximized = readPersistedWindowMaximized(
     path.join(app.getPath('userData'), mainWindowStateFile),
   );
+  const defaultWindowWidth = 1280;
+  const defaultWindowHeight = 800;
   const mainWindowState = windowStateKeeper({
     file: mainWindowStateFile,
-    defaultWidth: 1280,
-    defaultHeight: 800,
+    defaultWidth: defaultWindowWidth,
+    defaultHeight: defaultWindowHeight,
     // Applying fullscreen while a hidden macOS window is still starting can
     // leave the restored window without native traffic lights.
     fullScreen: process.platform !== 'darwin',
   });
   const shouldRestoreMacFullscreen = process.platform === 'darwin' && mainWindowState.isFullScreen;
-  const shouldRestoreMaximized =
-    !shouldRestoreMacFullscreen && (persistedMaximized || Boolean(mainWindowState.isMaximized));
-
+  // Windows Snap persists a work-area rectangle with isMaximized=false (#9461).
+  // That becomes the unmaximize target, so the maximize button looks dead and an
+  // auto-hidden taskbar stays visible. Come back maximized, and create from the
+  // library default size so the first unmaximize is not the work area again.
+  // A later save writes the real maximize flag and keeps the last normal size.
+  const restorePlan = planWindowRestore(
+    {
+      x: mainWindowState.x,
+      y: mainWindowState.y,
+      width: mainWindowState.width,
+      height: mainWindowState.height,
+      isMaximized: persistedMaximized || Boolean(mainWindowState.isMaximized),
+      isFullScreen: Boolean(mainWindowState.isFullScreen),
+    },
+    screen,
+    { restoringMacFullscreen: shouldRestoreMacFullscreen },
+  );
+  const shouldRestoreMaximized = restorePlan.restoreMaximized;
+  // A snapped rectangle is not a legal restore size. Create from the same
+  // defaults the keeper uses on a first launch, but keep the saved x/y: that is
+  // the display the work-area fill was on. Omitting them centers on the primary
+  // display and the keeper would then remember the wrong monitor. The default
+  // 1280×800 is taller than a 1280×680 work area, so fit it before the window
+  // exists; the save right after construction persists whatever was created.
+  const replacementBounds = restorePlan.replaceWithDefaultSize
+    ? fitReplacementStartupBounds(
+        { x: mainWindowState.x, y: mainWindowState.y },
+        { width: defaultWindowWidth, height: defaultWindowHeight },
+        screen.getDisplayMatching({
+          x: mainWindowState.x,
+          y: mainWindowState.y,
+          width: defaultWindowWidth,
+          height: defaultWindowHeight,
+        }).workArea,
+      )
+    : null;
   const mainWindow = new BrowserWindow({
-    x: mainWindowState.x,
-    y: mainWindowState.y,
-    width: mainWindowState.width,
-    height: mainWindowState.height,
+    ...(replacementBounds
+      ? replacementBounds
+      : {
+          x: mainWindowState.x,
+          y: mainWindowState.y,
+          width: mainWindowState.width,
+          height: mainWindowState.height,
+        }),
     minWidth: 800,
     minHeight: 600,
     title: BRAND_NAME,
@@ -4133,6 +4432,7 @@ const createWindow = () => {
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
+    transparent: true,
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
           backgroundMaterial: winBackdropConfig.backgroundMaterial,
@@ -4271,7 +4571,17 @@ const createWindow = () => {
 
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
-  mainWindowState.manage(mainWindow);
+  // On Windows the keeper sees the last normal rectangle instead of a snapped
+  // work-area fill, so that fill cannot become the next restore size (#9461).
+  // The keeper keeps this filtered view for its whole lifetime; the window itself
+  // is untouched, so drag / sidebar reads still see the live rectangle.
+  manageWindowStatePreservingNormalBounds(mainWindowState, sidebarWindowExpansion.persistenceView(mainWindow), screen);
+  // The constructor size is not the rectangle the keeper will save. `saveState`
+  // copies the live normal bounds into its closure; `maximize()` after that only
+  // flips the flag, so quit no longer writes the old work-area rectangle back.
+  if (restorePlan.replaceWithDefaultSize) {
+    commitReplacedNormalBounds(mainWindowState, mainWindow);
+  }
   if (shouldRestoreMaximized && !mainWindow.isMaximized()) mainWindow.maximize();
   // Windows can transiently unmaximize during display/DPI re-layout. macOS
   // owns its native Zoom behavior, so do not install the Windows recovery
@@ -4536,7 +4846,7 @@ const databaseSizeWarningSettingsWatcher = createDatabaseSizeWarningSettingsWatc
   broadcastDatabaseSizeWarningChanged();
 });
 
-app.once('will-quit', () => databaseSizeWarningSettingsWatcher.dispose());
+onQuit('database-size-warning-settings-watcher', () => databaseSizeWarningSettingsWatcher.dispose());
 
 function rebindDatabaseSizeWarningSettingsWatcher(): void {
   databaseSizeWarningSettingsWatcher.rebind(getDatabaseSizeWarningSettingsFilePath());
@@ -4693,6 +5003,7 @@ const registerIpcHandlers = () => {
     isCompletionHandledByTeammate: (sessionId) => getAgentIslandService()?.waitForCompletionNotification(sessionId)
       ?? isCompletionHandledByTeammate(sessionId),
     isTaskAlertShownElsewhere: (kind) => getAgentIslandService()?.ownsTaskAlert(kind) === true,
+    shouldSilenceTaskNotification: (kind) => getAgentIslandService()?.shouldSilenceTaskNotification(kind) === true,
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
@@ -4728,7 +5039,7 @@ const registerIpcHandlers = () => {
       if (win) dispatchApplicationMenuCommand(win, resolveNewMakerMenuCommand(false));
     },
   });
-  app.once('will-quit', stopMenubarService);
+  onQuit('menubar-service', stopMenubarService);
   // macOS「离开时继续工作」(默认关):开着时本机不因空闲熄屏锁屏;主人离开后盖黑色遮罩,
   // 本机有人按键/点击即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
   if (!authManager.isPassiveSharedUserDataInstance()) {
@@ -4743,11 +5054,11 @@ const registerIpcHandlers = () => {
   }
   // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
   const agentIsland = getAgentIslandService();
-  if (agentIsland) app.once('will-quit', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
+  if (agentIsland) onQuit('agent-island-quota', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
 
   // 全局框选截图快捷键 (键盘快捷键设置里可改)，支持复制、保存、贴图与新任务。
   initRegionScreenshot();
-  app.once('will-quit', stopRegionScreenshot);
+  onQuit('region-screenshot', stopRegionScreenshot);
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
   ipcMain.handle(
@@ -4873,16 +5184,23 @@ const registerIpcHandlers = () => {
     const win = mainWindowRef;
     if (!win || win.isDestroyed()) return;
     const config = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
-    if (process.platform === 'darwin') {
-      win.setVibrancy(config.vibrancy as 'under-window' | null);
-    }
+
     if (process.platform === 'win32' && config.backgroundMaterial) {
       win.setBackgroundMaterial(config.backgroundMaterial);
       win.webContents.send(WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL, config.backgroundMaterial);
     }
-    win.setBackgroundColor(config.backgroundColor);
+    if (process.platform === 'darwin') applyMacWindowBackdrop(win, config);
+    else win.setBackgroundColor(config.backgroundColor);
     applyVibrancyToSecondaryWindows(familyId, isDark);
   }
+
+  // Ephemeral local geometry, scoped to the trusted top-level sender's own window.
+  // No persistence, remote channel, window identifier or native handle crosses IPC.
+  ipcMain.on('theme:set-sidebar-width', (event, width: unknown) => {
+    if (process.platform !== 'darwin' || !isTrustedTopLevelCindyRendererEvent(event)) return;
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) setMacSidebarWidth(win, width);
+  });
 
   ipcMain.on('theme:apply-vibrancy', (event, rawPayload: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -4893,6 +5211,7 @@ const registerIpcHandlers = () => {
       const senderWindow = BrowserWindow.fromWebContents(event.sender);
       if (senderWindow && !senderWindow.isDestroyed()) {
         setWindowWallpaperCovered(senderWindow, payload.wallpaperCovered);
+        setWindowDesktopBlur(senderWindow, payload.desktopBlur ?? null);
       }
     }
     if (process.platform === 'win32') {
@@ -4915,6 +5234,10 @@ const registerIpcHandlers = () => {
   ipcMain.on('get-os-release', (event) => {
     event.returnValue = os.release();
   });
+
+  // 只读布尔值，但仍只回答 Cindy 自有顶层页面；其它来源一律视为未转译。
+  ipcMain.handle('app:get-arm64-translation', (event) =>
+    isTrustedTopLevelCindyRendererEvent(event) && isRunningUnderArm64Translation());
 
   // 首启亮色门的同步会话线索(见 authSessionHint.ts):renderer bootstrap 在
   // 任何渲染前判定「真首启」,localStorage 为空但主进程持有存量会话(持久化
@@ -5703,6 +6026,7 @@ const registerIpcHandlers = () => {
   // 窗口控件按 event.sender 解析目标窗口 —— 「在新窗口打开」会有多个完整窗口,
   // min/max 必须操作"点按钮的那个窗口"而非全局主窗。fallback 到 mainWindowRef 兜底
   // 极端情况(sender 已销毁等)。
+  registerSidebarWindowExpansionIpc();
   ipcMain.on('window-minimize', (event) => {
     const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
     if (window) minimizeWindow(window);
@@ -6529,6 +6853,12 @@ const registerIpcHandlers = () => {
   disposePiRuntimeRecovery = () => piRuntimeRecovery.dispose();
   const registerMakerIpcsAfterSplash = async (): Promise<void> => {
     if (makerIpcsRegistered) return;
+    // Client mode already installed the host proxies; the desktop runtime must
+    // never register competing handlers.
+    if (hostClientMode) {
+      makerIpcsRegistered = true;
+      return;
+    }
     // Compose here: IM runtime and hook IPC depend on maker-host, so the host
     // receives a reader instead of importing those modules during tool calls.
     setBotConversationConnectionsReader(async (botId) => {
@@ -6582,9 +6912,36 @@ const registerIpcHandlers = () => {
       //
       // 不进 device-link allowlist:updater 类 channel 按 allowlist 顶部注释属「永不放行」,
       // 且远程控制端不会代替用户点被控端的更新重启。
+      // Only the explicitly configured developer supervisor receives this handshake.
+      // Packaged apps and ordinary dev launches retain their existing lifecycle.
+      if (process.platform === 'darwin' && !app.isPackaged && process.env.CINDY_PERSONAL_MONITOR_DIR && process.env.CINDY_PERSONAL_GENERATION) {
+        let personalReady = false;
+        const stopObserving = observeDesktopStartupResult((ready) => { personalReady = ready; });
+        const tick = createPersonalBuildMonitor({
+          directory: process.env.CINDY_PERSONAL_MONITOR_DIR,
+          generation: process.env.CINDY_PERSONAL_GENERATION,
+          pid: process.pid, now: Date.now,
+          ready: () => personalReady && !!mainWindowRef && !mainWindowRef.isDestroyed()
+            && !mainWindowRef.webContents.isDestroyed() && !mainWindowRef.webContents.isCrashed(),
+          remoteReady: () => getDeviceLinkStatus() === 'online',
+          idle: () => powerMonitor.getSystemIdleTime() >= 120,
+          busy: () => hasUpdateRelaunchBusyActivity({
+            readSynchronousBusy: () => isAppSessionBoundaryPending() || authManager.isAuthFlowBusy()
+              || getUpdateRelaunchControllers().length > 0 || hasInFlightRemoteInvokes(),
+            readScheduleBusy: async () => (await evaluateRelaunchBusyActivity(readRelaunchActivitySources())).busy,
+          }),
+          quitting: () => isQuitting,
+          quit: () => app.quit(),
+          updateLocalPlugins: updatePersonalLocalPlugins,
+        });
+        const monitorTimer = setInterval(() => { void tick().catch(() => {}); }, 2_000);
+        monitorTimer.unref();
+        app.once('will-quit', () => { clearInterval(monitorTimer); stopObserving(); });
+      }
       registerRelaunchBusyActivityIpc(readRelaunchActivitySources, {
         describeTurns: () => describeRelaunchTurns(() => listInTurnSessionIds(getMakerIfReady())),
       });
+      // Client mode returned above and never reaches the runtime assembly.
       // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
       // await 确保第一个会话的 mcpProviders 数组已填入已保存的自定义 MCP（P2 冷启动竞态修复）。
       getMakerCore();
@@ -6686,8 +7043,12 @@ const registerIpcHandlers = () => {
           return null;
         }
       });
-      // maker:goal:* handler 同样提前一次性注册(eager);handler 内部 getGoalController()
-      // 取单例,invoke 时 controller 已由 attemptStartScheduler → startGoalController 启动。
+      // Project automation shares the scheduler gate; register even before its loader exists.
+      registerProjectAutomationIpc(async () => {
+        await awaitAccountSchedulerReady();
+        return getProjectAutomationLoader();
+      });
+      // Goal handlers also wait for account-host readiness when startup is still in flight.
       registerGoalHandlers();
       // clear-context 清目标 / turn 收尾 idle 兜底续跑(setter 注入,null-safe)。
       setGoalClearObserver((sid) => {
@@ -6728,6 +7089,15 @@ const registerIpcHandlers = () => {
       // 不阻塞启动 —— 老链路仍可用; 下次 splash retry 再尝试。
     }
 
+    // The change-set store no longer imports Electron; the desktop supplies its
+    // window fan-out here.
+    setTurnChangeSetWindowBroadcast((payload, ownerStamp) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (win.isDestroyed()) continue;
+        win.webContents.send(MAKER_PUSH.TURN_CHANGE_SET_UPDATED, payload, ownerStamp);
+      }
+    });
+
     startReadyWorktreeMaintenance();
     // 删除 worktree 时因拿不到全局 safe.directory 锁而落盘的残留路径, 启动期补清。
     void reconcilePendingSafeDirectoryCleanups().catch((err) => {
@@ -6735,11 +7105,6 @@ const registerIpcHandlers = () => {
         '[bootstrap-electron] safe.directory cleanup reconcile failed (non-fatal):',
         err,
       );
-    });
-    // 同窗口的 shadow savepoint 对账:owning session 已删除的孤儿保存点链
-    // (refs/cindy/savepoints/<sid>)启动期补删。fire-and-forget,不阻塞启动。
-    void reconcileSavepointRefsForDeletedSessions().catch((err) => {
-      console.error('[bootstrap-electron] savepoint reconcile failed (non-fatal):', err);
     });
 
     // Scheduler / Goal / Learn 统一由 localDb onReady 在 provider readiness settle 后启动。
@@ -9379,6 +9744,7 @@ const WINDOWS_APP_USER_MODEL_ID = CURRENT_APP_ID;
  *      `node_modules\electron\dist\electron.exe` 且 Arguments 为空的一律删除
  *
  * 静默 try/catch：用户手动删过 / 没装过 / 权限问题 / PowerShell 异常都不影响主流程。
+ * 快路径在调用时同步执行；返回的 Promise 在防御扫描结束后 resolve，启动流程不等待它。
  */
 function cleanupLegacyDevShortcut(): Promise<void> {
   if (process.platform !== 'win32') return Promise.resolve();
@@ -9533,7 +9899,13 @@ app.on('ready', async () => {
   //
   // 必须在创建任何 Notification 之前调用。macOS / Linux 不需要。
   if (process.platform === 'win32') {
-    await cleanupLegacyDevShortcut();
+    // 旧快捷方式清理不阻塞建窗：已知文件名的快路径在调用时同步完成；防御扫描要冷启
+    // PowerShell（约 0.4–0.5 秒），放到后台。扫描只删目标为 dev electron.exe 且无参数的
+    // .lnk（已知来源注册的是 XdtMaker.Dev 等旧 AUMID），打包版自己的快捷方式指向安装目录，
+    // 不会被匹配；下面设置 AUMID 也不依赖它们，晚一点删掉不影响本次启动的通知。
+    void cleanupLegacyDevShortcut().catch((err: unknown) => {
+      console.warn('[AUMID] legacy dev shortcut cleanup failed: %s', err);
+    });
     app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
     console.log('[AUMID] runtime=%s', WINDOWS_APP_USER_MODEL_ID);
   }
@@ -9583,6 +9955,7 @@ app.on('ready', async () => {
   // 首登轻量数据迁移(mToc)的确认弹窗 IPC —— 必须先于 registerLocalDbIpc 注册,
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
+  setToolProcessMediaRemoteReader(materializeSshRemoteMedia);
   setHistoryToolNameReader(getHistoryToolName);
   registerLocalDbIpc({
     isSessionTurnPendingCompletion,
@@ -9620,6 +9993,7 @@ app.on('ready', async () => {
     discardStaleOwner: (userId) =>
       lifecycleDbClientManager.dispose(`stale-owner-after-ready:${userId}`),
     beforeEnsureReady: async (userId) => {
+      if (hostClientMode) return;
       // Provider discovery is detached from DB read readiness for the same owner, but a
       // different owner must not replace the DB while the previous account task can still
       // update owner-scoped catalogs or agent environments.
@@ -9698,6 +10072,7 @@ app.on('ready', async () => {
       }
     },
     onReady: async (userId) => {
+      if (hostClientMode) return;
       const startupHooksStartedAt = performance.now();
       let startupPhaseStartedAt = startupHooksStartedAt;
       const logStartupPhase = (phase: string): void => {
@@ -9745,6 +10120,10 @@ app.on('ready', async () => {
         }
         return;
       }
+      // Await idempotent history repair after DB takeover, including same-owner retries.
+      // Failure goes through ensure-ready's existing retry path, never a false completion.
+      await reconcileRenamedBuiltinGhostCards(userId);
+      dbClientLog.info('builtin ghost card rename reconciliation completed');
       if (getActiveAppSession().dataOwnerId === userId) {
         void getGhostManager().retryInterruptedMutationsAfterDbReady().catch((error) => {
           dbClientLog.warn('ghost mutation recovery after DB readiness failed', {
@@ -10179,6 +10558,7 @@ app.on('ready', async () => {
   // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
   // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
   initLogUploadService();
+  initCrashDiagnosisService();
   initPerformanceTraceService(() => mainWindowRef);
   // Local profiles bypass authManager's cloud claim path. Await the same
   // asynchronous PID provenance scan before the first BrowserWindow exists so
@@ -10202,7 +10582,9 @@ app.on('ready', async () => {
   initHeartbeatService();
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
+  setUsageWidgetSnapshotReader(readUsageWidgetSnapshot);
   initDeviceLinkService({
+    taskActivity: getAgentIslandService() ?? undefined,
     onControlledStateChanged: refreshQuotaPanelsControlState,
     onUpdateRelaunchBusyChanged: (busy) => {
       const transition = decideUpdateRelaunchBusyTransition(updateRelaunchRemoteBusy, busy);
@@ -10302,6 +10684,7 @@ app.on('ready', async () => {
   const stopMemoryLog = startMemoryLog({
     getMetrics: () => app.getAppMetrics(),
     memoryUsage: () => process.memoryUsage(),
+    counters: () => ({ mcpBridgeSessions: countLiveBridgeMcpSessions() }),
     log: createLogger('memory-usage'),
     intervalMs: app.isPackaged ? 10 * 60_000 : 30_000,
   });
@@ -10742,6 +11125,11 @@ onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
 // original mode (5s), then await Electron geometry (5s). Keep a margin before
 // the existing 20s hard-exit watchdog; completed disposers never wait this long.
 installQuitHandler(16000);
+if (!app.isPackaged && process.platform === 'win32') {
+  const stopQuitRequests = enableDesktopDevQuitRequests(() => app.quit());
+  onQuit('dev-quit-requests', stopQuitRequests);
+  process.once('exit', stopQuitRequests);
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -11025,6 +11413,11 @@ function startReadyWorktreeMaintenance(): void {
       if (!isReady() || tryGetDbClient() !== db) return;
       await WorktreePool.recoverPool().catch((error) =>
         dbClientLog.warn('worktree pool recovery postponed', error),
+      );
+      if (!isReady() || tryGetDbClient() !== db) return;
+      // This DB-backed repair used to run at Maker registration, before DB takeover.
+      await reconcileSavepointRefsForDeletedSessions().catch((error) =>
+        dbClientLog.warn('savepoint reconcile postponed', error),
       );
       if (tryGetDbClient() === db) lastWorktreeMaintenanceDb = db;
     },

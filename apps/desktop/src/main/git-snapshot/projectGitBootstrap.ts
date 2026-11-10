@@ -12,7 +12,7 @@ import { operationFileSystem } from '../utils/operationFileSystem';
 import { operationCheckpoint, operationWait } from '../utils/operationBudget';
 import path from 'node:path';
 
-import { detectCwd } from '../worktree/WorktreeManager';
+import { detectCwd } from '../worktree/detectCwd';
 import { gitExec } from '../worktree/gitExec';
 import { createLogger } from '../logger';
 import { createSnapshotDetailed, type CreateSnapshotDetailedResult } from './gitSnapshotService';

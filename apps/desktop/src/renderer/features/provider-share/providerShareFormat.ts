@@ -1,5 +1,5 @@
 /**
- * 供应商分享界面的纯函数：倒计时、用量合计、头像首字、错误归类与已收到分享的变化比对。
+ * 供应商分享界面的纯函数：倒计时、头像首字、错误归类与已收到分享的变化比对。
  * 不读 window、不碰 i18n，便于单测。
  */
 import type { ProviderShareReceived, ProviderShareRequestItem } from '@cindy/device-link';
@@ -9,7 +9,6 @@ import { formatCompactTokens, formatTurnCostMoney } from '@/lib/usageFormat';
 
 import {
   PROVIDER_SHARE_AGENT_DEVICE_PREFIX,
-  type ProviderShareModelUsageView,
   type ProviderShareMoney,
   type ProviderShareMemberView,
   type ProviderShareOwnedView,
@@ -74,34 +73,6 @@ export function formatShareMoney(money: ProviderShareMoney): string {
     approximate: true,
     kind: 'value-estimate',
   });
-}
-
-export interface ProviderShareUsageTotals {
-  /** 输入 + 输出 token。 */
-  tokens: number;
-  /** 所选时间段内的估算金额；没有可估算的行、或币种不一致时为 null。 */
-  amount: ProviderShareMoney | null;
-}
-
-/** 一个人在所选时间段内的用量合计。不同币种不换算、不伪造合计。 */
-export function summarizeShareUsage(
-  models: readonly ProviderShareModelUsageView[],
-): ProviderShareUsageTotals {
-  let tokens = 0;
-  let amount: ProviderShareMoney | null = null;
-  let mixedCurrency = false;
-  for (const model of models) {
-    tokens += Math.max(0, model.inputTokens) + Math.max(0, model.outputTokens);
-    if (!model.amount) continue;
-    if (!amount) {
-      amount = { amount: model.amount.amount, currency: model.amount.currency };
-    } else if (amount.currency === model.amount.currency) {
-      amount = { amount: amount.amount + model.amount.amount, currency: amount.currency };
-    } else {
-      mixedCurrency = true;
-    }
-  }
-  return { tokens, amount: mixedCurrency ? null : amount };
 }
 
 /** 头像缺省时显示的首字：取第一个字符(含 emoji / 汉字)，英文转大写。 */

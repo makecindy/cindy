@@ -119,6 +119,7 @@ import {
   migrateExistingLoginAsConsented,
 } from '@/analytics/analyticsConsentStore';
 import { unregisterPushTokenBestEffort } from '@/notifications/pushNotifications';
+import { unregisterActivityPush } from '@/widgets/agentActivityPush';
 import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
@@ -890,6 +891,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const clearAccountScopedRuntimeForSwitch = useCallback(async () => {
     invalidateMobileAuthOwnerForSwitch();
     await Promise.all([
+      unregisterActivityPush(accessTokenRef.current, activeAuthRealmRef.current),
       unregisterPushTokenBestEffort(
         accessTokenRef.current,
         activeAuthRealmRef.current,
@@ -1908,7 +1910,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // SSO returns through cindycn://auth or cindy://auth. The pending PKCE verifier
   // lives in SecureStore so a browser-triggered app restart can still finish safely.
   useEffect(() => {
-    const handleDeepLink = (url: string | null) => {
+    const handleDeepLink = (url: string | null | undefined) => {
       if (!url || !matchesOAuthCallbackUrl(url, MOBILE_REDIRECT_URL)) return;
       void completeOAuthCallback(url).catch(() => undefined);
     };
@@ -2944,6 +2946,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 迟到的 canary / XD beta 探测仍会把旧账号结果写回本地。
     authGenerationRef.current += 1;
     refreshInFlightRef.current = null;
+    await unregisterActivityPush(accessTokenRef.current, activeAuthRealmRef.current);
     await unregisterPushTokenBestEffort(
       accessTokenRef.current,
       activeAuthRealmRef.current,

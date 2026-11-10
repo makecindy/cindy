@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { app } from 'electron';
-import { writeBlob } from '../../cindy-media/blobStore.js';
+import { writeBlob } from '../../cindy-media/blobStore.desktop.js';
 import { recordBlob, type LedgerDb } from '../../cindy-media/ledger.js';
 import { sniffImageMime } from '../../lightboxMediaActions.js';
 import { toSdrAvatarImage } from '../../hdrAvatarToSdr.js';

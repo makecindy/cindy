@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Done",
+    "mcpCancel": "Cancel",
     "mode": {
       "default": "Default permissions",
       "acceptEdits": "Allow edits",
@@ -34,6 +36,11 @@
     "exit": "Exit plan mode"
   },
   "panel": {
+    "questionUnanswered": "Unanswered",
+    "questionWithdrawn": "No longer needs an answer",
+    "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
+    "sendSupplement": "Send additional information",
+
     "readOnlyKind": "Pending",
     "readOnlyTitle": "Waiting for confirmation on your computer",
     "pendingRequests": "Pending requests",
@@ -98,7 +105,14 @@
     "planFeedbackPlaceholder": "Tell Claude what to do",
     "planFeedbackRequired": "Enter feedback before submitting.",
     "planFeedbackSubmit": "Submit plan feedback",
-    "planFeedbackAccessibility": "Give feedback to change the plan"
+    "planFeedbackAccessibility": "Give feedback to change the plan",
+    "validation": {
+      "required": "Complete this required field.",
+      "choice": "Choose one of the listed options.",
+      "tooShort": "Enter at least {{count}} characters.",
+      "tooLong": "Enter no more than {{count}} characters."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -385,6 +399,8 @@
       "submitting": "Submitting"
     },
     "permission": {
+      "titleStdin": "Allow input to this terminal?",
+      "titleMcpUrl": "Complete the request from {{server}}",
       "highRiskTitle": "High-risk permission needs confirmation",
       "highRiskDetail": "Review the command, then confirm again to allow it. Deny it if you're unsure.",
       "sessionAllowTitle": "Allow once or always allow for this task",

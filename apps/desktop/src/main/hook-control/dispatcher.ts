@@ -72,6 +72,9 @@ import {
   type TurnEndPayload,
   type TelegramCommandMenu,
   makeProviderCommandsSet,
+  CHANNEL_HISTORY_MAX_MESSAGES,
+  CHANNEL_HISTORY_ENTRY_MAX_CHARS,
+  CHANNEL_HISTORY_ATTACHMENT_TEXT_MAX_CHARS,
 } from '@cindy/slack-hook-protocol';
 import { createTelegramMessageLifecycle, type TelegramMessageLifecycle } from '@cindy/im';
 import type { SendOrigin } from '@cindy/maker-core';
@@ -538,9 +541,10 @@ const SOURCE_TRIGGER_MESSAGE_ID_MAX = 64;
 const SOURCE_CHANNEL_NAME_MAX = 160;
 const SOURCE_TEAM_ID_MAX = 128;
 const SOURCE_TEAM_NAME_MAX = 160;
-const SOURCE_THREAD_CONTEXT_MAX = 20;
+const SOURCE_THREAD_CONTEXT_MAX = CHANNEL_HISTORY_MAX_MESSAGES;
 const SOURCE_THREAD_AUTHOR_MAX = 128;
-const SOURCE_THREAD_TEXT_MAX = 4_000;
+// History body plus timestamp and bounded attachment status must remain visible.
+const SOURCE_THREAD_TEXT_MAX = CHANNEL_HISTORY_ENTRY_MAX_CHARS + CHANNEL_HISTORY_ATTACHMENT_TEXT_MAX_CHARS + 256;
 
 /**
  * Bound IM display metadata before it reaches session persistence. The wire
@@ -565,7 +569,7 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
   const displayContext = source.im === 'x' && source.triggerMessageId && source.userText?.trim()
     ? source.threadContext?.filter((entry) => entry.messageId !== source.triggerMessageId)
     : source.threadContext;
-  const threadContext = displayContext?.slice(0, SOURCE_THREAD_CONTEXT_MAX).map((entry) => ({
+  const threadContext = displayContext?.slice(-SOURCE_THREAD_CONTEXT_MAX).map((entry) => ({
     ...(entry.messageId !== undefined ? { messageId: entry.messageId.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) } : {}),
     ...(entry.authorId !== undefined ? { authorId: entry.authorId.slice(0, SOURCE_THREAD_AUTHOR_MAX) } : {}),
     ...(entry.replyToMessageId !== undefined ? { replyToMessageId: entry.replyToMessageId?.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) ?? null } : {}),

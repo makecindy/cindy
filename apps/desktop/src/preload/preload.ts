@@ -1,3 +1,4 @@
+import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { APP_PREFERENCE_REQUEST, APP_PREFERENCE_REPLY, APP_SETTINGS_CHANGED, type AppPreferenceControlBridge } from '../shared/appPreferenceControl.js';
 import type { VoiceConversationApi } from '../shared/voiceConversation';
 import { PERFORMANCE_TRACE_CHANNEL, PERFORMANCE_TRACE_EVENTS_CHANNEL, PERFORMANCE_TRACE_STATE_CHANNEL, type PerformanceTraceAPI, type PerformanceTraceState } from '../shared/performanceTrace';
@@ -747,6 +748,7 @@ const fanOutVoiceInputPowerStateChange = createIpcFanOut(VOICE_INPUT_POWER_STATE
 // 应用级快捷键 override 变化广播 (设置页改绑 / reset 后 main 推全量 overrides,
 // renderer 侧 appShortcutStore 订阅热更新)。
 const fanOutAppShortcutsChanged = createIpcFanOut('app-shortcuts:changed');
+const fanOutLocalThemesChanged = createIpcFanOut('local-themes:changed');
 // 主界面布局树变化广播 (layout:set / layout:reset 后 main 推全量布局快照,
 // 多窗口热更新;见 main/layout/index.ts)。
 const fanOutLayoutChanged = createIpcFanOut('layout:changed');
@@ -838,6 +840,7 @@ const fanOutHookControlWorkspaceProviderSource = createIpcFanOut(
 );
 
 // ─── Maker Core 一阶段重构（新链路）── 与 cc-agent:* / codex:* 双轨并行 ─────
+const fanOutHostConnection = createIpcFanOut('host-client:connection');
 const fanOutMakerEvent = createIpcFanOut('maker:event');
 const fanOutMakerAgentsChanged = createIpcFanOut('maker:agents:changed');
 const fanOutMakerTurnChangeSetUpdated = createIpcFanOut('maker:turn-change-set:updated');
@@ -1143,6 +1146,17 @@ const readMicrophonePermissionSnapshot = createMicrophonePermissionSnapshot();
 const voiceInputDataSnapshot = createVoiceInputDataSnapshot();
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  hostConnection: {
+    client: 'desktop',
+    onStateChanged: (callback: (state: HostConnectionState) => void): (() => void) => {
+      const unsubscribe = fanOutHostConnection(data => callback(data as HostConnectionState));
+      // Only explicit Host client mode installs the observer. Normal desktop
+      // startup neither opens a connection nor receives a connection banner.
+      ipcRenderer.send('host-client:observe');
+      return unsubscribe;
+    },
+    retry: (): void => ipcRenderer.send('host-client:retry'),
+  },
   appPreferenceControl: {
     onSettingsChanged(listener) {
       const receive = (_event: Electron.IpcRendererEvent, value: Parameters<typeof listener>[0]) => listener(value);
@@ -1276,11 +1290,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }),
   osRelease: ipcRenderer.sendSync('get-os-release') as string,
   appVersion: ipcRenderer.sendSync('get-app-version') as string,
+  getArm64Translation: (): Promise<boolean> => ipcRenderer.invoke('app:get-arm64-translation'),
   clientEndpoints: { websiteUrl: clientEndpointsInfo?.websiteUrl ?? '' },
   preferredSystemLocale: readInitialPreferredSystemLocale(),
   appDisplayVersion: appDisplayVersionInfo.display,
   appDisplayVersionDetail: appDisplayVersionInfo.detail,
   getDeviceId: (): Promise<string> => ipcRenderer.invoke('get-device-id'),
+  windowSidebarExpansion: (width: number, shrink?: number, adopt?: boolean): Promise<number> => ipcRenderer.invoke('window-sidebar-expansion', width, shrink, adopt),
+  onSidebarWindowUserResize: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('window-sidebar-user-resize', listener);
+    return () => ipcRenderer.removeListener('window-sidebar-user-resize', listener);
+  },
   windowMinimize: () => ipcRenderer.send('window-minimize'),
   windowMaximize: () => ipcRenderer.send('window-maximize'),
   windowExitFullscreen: () => ipcRenderer.send('window-exit-fullscreen'),
@@ -1372,6 +1393,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 任何路径参数。失败走 IPC 错误协议(reject,renderer 用 extractIpcError 解码)。
     importExternal: (): Promise<LocalThemeImportResult> =>
       ipcRenderer.invoke('local-themes:import') as Promise<LocalThemeImportResult>,
+    onChanged: (cb: (payload: LocalThemesResult) => void): (() => void) =>
+      fanOutLocalThemesChanged((data) => cb(data as LocalThemesResult)),
   },
 
   // RSB terminal tab(PTY 后端 + xterm.js)
@@ -1751,6 +1774,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   pluginMarket: {
+    lookup: (ghostIds: string[]): Promise<import('../shared/pluginMarket').PluginMarketSnapshot> =>
+      ipcRenderer.invoke('plugin-market:lookup', ghostIds),
+    query: (input: import('../shared/pluginMarket').PluginMarketQuery): Promise<import('../shared/pluginMarket').PluginMarketPage> =>
+      ipcRenderer.invoke('plugin-market:query', input),
+    recommendations: (): Promise<import('../shared/pluginMarket').PluginMarketItem[]> =>
+      ipcRenderer.invoke('plugin-market:recommendations'),
     snapshot: (): Promise<import('../shared/pluginMarket').PluginMarketSnapshot> =>
       ipcRenderer.invoke('plugin-market:snapshot'),
     detail: (pluginId: string): Promise<import('../shared/pluginMarket').PluginMarketDetail> =>
@@ -3081,12 +3110,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // E4D 毛玻璃:family 切换/启动时通知 main 开关 macOS vibrancy(仅 CINDY 透壁纸)
   theme: {
+    setSidebarWidth: (width: number): void => {
+      ipcRenderer.send('theme:set-sidebar-width', width);
+    },
     applyVibrancy: (
       familyId: string,
       isDark: boolean,
       mode: 'system' | 'light' | 'dark',
       systemModeFollowsSystem: boolean,
       wallpaperCovered?: boolean,
+      desktopBlur?: number | null,
     ): void => {
       ipcRenderer.send('theme:apply-vibrancy', {
         familyId,
@@ -3094,6 +3127,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         mode,
         systemModeFollowsSystem,
         wallpaperCovered,
+        desktopBlur,
       });
     },
   },
@@ -4105,6 +4139,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
     inputHandoffRequestId?: string;
+    remoteDeviceId?: string;
     channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
     markAttention?: boolean;
   }): Promise<void> => ipcRenderer.invoke('notification:show-session-event', payload),
@@ -4568,6 +4603,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ): Promise<string> => ipcRenderer.invoke('app:start-cindy-make-task', input),
   cancelCindyMakeTask: (runId: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('app:cancel-cindy-make-task', runId),
+
+  // 本机重启诊断：只预填草稿，不上传或发送。
+  getCrashDiagnosis: (): Promise<import('../shared/crashDiagnosis').CrashDiagnosisSummary | null> =>
+    ipcRenderer.invoke('crash-diagnosis:get'),
+  prepareCrashDiagnosis: (): Promise<import('../shared/crashDiagnosis').CrashDiagnosisEvidence | null> =>
+    ipcRenderer.invoke('crash-diagnosis:prepare'),
+  dismissCrashDiagnosis: (): Promise<void> => ipcRenderer.invoke('crash-diagnosis:dismiss'),
 
   // ── 客户端日志上报(Settings → About)──
   // 真相在 main:是否配置了上报目标、是否已同意隐私政策、开关的 override 状态都由 main
@@ -5686,6 +5728,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ── session-git-pr-context: 会话分支感知 + PR 关联状态 ──
   gitContext: {
+    checkCindyStar: (): Promise<boolean | null> => ipcRenderer.invoke('git-context:github-star:check'),
+    starCindy: (): Promise<boolean | null> => ipcRenderer.invoke('git-context:github-star:add'),
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown): Promise<unknown> =>
       ipcRenderer.invoke('git-context:github-read', { method, args }),
     githubConnection: (): Promise<import('../shared/githubSetup').GithubConnectionState> =>

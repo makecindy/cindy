@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}}개 실행 중",
       "limitAria": "{{name}}의 동시 실행 한도",
-      "limitOption_other": "한도 {{count}}",
+      "limitOption_other": "동시 {{count}}개",
       "weightAria": "{{name}}의 가중치",
       "weightOption": "가중치 {{weight}}",
       "assignAria": "{{name}}에 배정",
@@ -873,6 +873,7 @@
         "pausedLocal": "다른 컴퓨터의 새 작업 수신 중지",
         "cooling": "대기 중",
         "coolingUntil": "대기 중 · {{time}}쯤 복구",
+        "quotaExhausted": "할당량 소진",
         "offline": "오프라인",
         "unreachableHere": "이 컴퓨터에서 연결할 수 없음",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "각 계정의 할당량을 고르게 쓰기 위해 이 메시지는 {{label}}에서 보내는 것을 권장합니다({{quota}}). 최근 몇 번의 대화와 요약은 이어지지만, 그 이전의 세부 내용은 빠질 수 있습니다.",
       "quota": "{{left}}% 남음",
       "quotaReset": "{{left}}% 남음 · {{reset}}",
-      "confirm": "전환",
-      "cancel": "취소",
-      "remember": "앞으로 묻지 않고 자동 전환(이 작업만)"
+      "confirm": "이번에만 전환",
+      "cancel": "지금은 전환 안 함",
+      "remember": "앞으로 묻지 않고 자동 전환",
+      "disable": "자동 전환 및 확인 안 함",
+      "disableFailed": "선택이 저장되었는지 확인하지 못했습니다. 연결을 확인하고 작업이 있는 컴퓨터의 Cindy가 최신 버전인지 확인한 후 다시 시도해 주세요. 이 메시지는 평소대로 전송됩니다.",
+      "choiceLabel": "전환 방식(이 작업에만 적용)",
+      "send": "메시지 보내기"
     },
     "deleteConfirm": {
       "title": "{{provider}} 제공자 그룹을 삭제할까요?",
@@ -1460,6 +1465,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "공유",
+      "note": "계정 전체가 함께 사용하는 한도이며, 나에게만 배정된 한도가 아닙니다.",
+      "highestWeekly": "공유 · 주간 잔여 최대",
+      "highestWeeklyNote": "조회 가능한 계정 중 주간 잔여량이 가장 많은 계정입니다. 합산하거나 개인에게 할당한 한도가 아닌 계정 공용 한도입니다.",
+      "from": "{{name}}님의 공유"
+    },
     "balance": {
       "name": "Cindy 잔액",
       "quotaName": "Cindy 이번 기간 할당량",
@@ -2248,6 +2260,10 @@
         },
         "visibilityLabel": "배경화면 표시 강도",
         "visibilityHint": "0%에서는 배경화면을 숨기고, 100%에서는 원본 그대로 표시합니다.",
+        "desktopVisibilityLabel": "바탕 화면 투명도",
+        "desktopVisibilityHint": "Cindy 뒤의 바탕 화면과 창이 비칩니다. 텍스트와 컨트롤은 선명하게 유지됩니다.",
+        "desktopBlurLabel": "바탕 화면 흐림",
+        "desktopBlurHint": "창 뒤의 바탕 화면을 흐리게 합니다. 0이면 꺼지고 값이 클수록 더 흐려집니다. 강도 조절을 지원하지 않는 시스템은 기본 효과를 사용합니다.",
         "blurLabel": "배경화면 흐림",
         "blurHint": "배경화면만 흐리게 합니다. 0이면 꺼집니다. 움직이는 배경화면을 흐리게 하면 GPU 사용량이 늘어납니다.",
         "motionLabel": "표시 방식",
@@ -2414,7 +2430,7 @@
       "skinLabel": "캐릭터",
       "skinHint": "Agent Notch와 Dynamic Island에 표시할 캐릭터입니다.",
       "soundLabel": "이벤트 사운드",
-      "soundHint": "알림마다 8-bit 효과음을 고를 수 있으며 Agent Notch와 Dynamic Island에서 함께 사용합니다. 탭 소리는 Agent Notch를 탭할 때만 재생됩니다.",
+      "soundHint": "이벤트 효과음을 설정하면 선택한 소리만 재생됩니다. 설정하지 않았거나 효과음을 끄면 시스템 알림 설정을 따릅니다.",
       "soundAria": "Agent Notch 사운드 전환",
       "soundSelectAria": "{{event}} 사운드",
       "soundPreviewAria": "{{event}} 사운드 미리 듣기",
@@ -2469,7 +2485,7 @@
         "select": "클릭 동작"
       },
       "soundOptions": {
-        "none": "없음",
+        "none": "시스템 설정 따르기",
         "startup-chime": "시작 차임",
         "ring-chime": "링 차임",
         "item-found": "아이템 발견",
@@ -5247,6 +5263,15 @@
         "ariaLabel": "{{shortcut}}로 메시지 보내기"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "새 작업의 기본 작업 디렉터리",
+      "label": "이 컴퓨터의 기본 작업 디렉터리",
+      "hint": "프로젝트를 선택하지 않은 새 로컬 작업에 이 디렉터리를 미리 선택합니다. 명시적으로 선택한 프로젝트, 대화 또는 원격 컴퓨터가 우선합니다.",
+      "unset": "설정되지 않음 (디렉터리를 미리 선택하지 않음)",
+      "choose": "디렉터리 선택",
+      "clear": "기본값 지우기",
+      "failed": "기본 작업 디렉터리를 저장하지 못했습니다. 다시 시도해 주세요."
+    },
     "linkOpen": {
       "title": "링크 열기",
       "description": "메시지의 링크를 열 위치를 선택합니다. 링크를 오른쪽 클릭하면 그 링크만 다른 위치에서 열 수 있습니다.",
@@ -5550,12 +5575,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome 플러그인 설치",
           "enablePluginTitle": "Cindy Chrome 플러그인 켜기",
-          "installExtensionTitle": "브라우저에 Cindy 확장 추가",
+          "connectExtensionTitle": "브라우저 확장이 연결되지 않음",
           "pluginBody": "내 브라우저는 Cindy Chrome 플러그인과 그 브라우저 확장을 통해 Chrome / Edge에 연결됩니다. 먼저 Cindy에서 플러그인을 설치한 뒤 안내에 따라 확장을 추가하세요.",
-          "extensionBody": "‘브라우저 확장 추가’를 누르면 사용 중인 브라우저에서 Cindy 확장의 스토어 페이지가 열립니다. ‘추가’를 누르면 이곳이 자동으로 연결됨으로 바뀝니다. 이미 추가했다면 브라우저의 확장 관리에서 켜세요.",
+          "connectionBody": "Cindy와 브라우저를 실행한 상태에서 Cindy 확장이 활성화되어 있는지 확인하세요. 연결되지 않았다고 재설치가 필요한 것은 아닙니다. 다시 연결되면 상태가 자동으로 업데이트됩니다.",
           "installPlugin": "플러그인 설치",
           "enablePlugin": "켜러 가기",
-          "installExtension": "브라우저 확장 추가",
+          "openExtensionStore": "확장 스토어 열기",
+          "updatingTitle": "브라우저 연결 업데이트 중",
+          "updatingBody": "업데이트가 끝나면 자동으로 다시 연결됩니다.",
+          "selectPluginTitle": "브라우저 확장 프로그램 선택",
+          "selectPluginBody": "플러그인 상세 정보에서 “이 브라우저 확장 프로그램 사용”을 선택하여 Cindy가 사용할 확장 프로그램을 확인하세요.",
+          "selectPlugin": "플러그인 열기",
           "updatePluginTitle": "Cindy Chrome 플러그인 업데이트",
           "updatePluginBody": "설치된 Cindy Chrome 플러그인이 오래되어 내 브라우저를 지원하지 않습니다. 최신 버전으로 업데이트한 뒤 안내에 따라 확장을 추가하세요.",
           "updatePlugin": "업데이트하러 가기",
@@ -6080,7 +6110,7 @@
           "switchFromHost": "이 컴퓨터의 중계가 중지되고, 참여한 기기는 연결이 끊어집니다.",
           "switchFromMember": "이 컴퓨터는 {{name}}에서 나갑니다. 다시 참여하려면 상대방이 새 참여 링크를 만들어야 합니다.",
           "switchConfirm": "전환",
-          "switchFromOfficial": "기기 간 원격 제어가 {{name}}을(를) 거쳐 중계됩니다. 내 중계를 사용하는 동안에는 휴대폰 시스템 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다."
+          "switchFromOfficial": "기기 간 원격 제어가 {{name}}을(를) 거쳐 중계됩니다. 내 중계를 사용하는 동안에는 휴대폰 푸시 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다."
         },
         "dialog": {
           "steps": {
@@ -7351,6 +7381,11 @@
         "installedExpand": "설치된 플러그인 {{count}}개 모두 보기",
         "installedCollapse": "추가 설치 플러그인 숨기기",
         "recommendedSection": "추천",
+        "todayRecommendations": "오늘의 추천",
+        "marketSection": "플러그인 마켓",
+        "browseMarket": "플러그인 마켓 둘러보기",
+        "searching": "검색 중…",
+        "allLoaded": "플러그인 {{count}}개를 모두 표시했습니다",
         "updatesAvailable": "플러그인 업데이트 {{count}}개 사용 가능",
         "updateAll": "모두 업데이트",
         "ignoreRound": "이번은 무시",
@@ -7380,7 +7415,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "공식"
+          "official": "공식",
+          "community": "커뮤니티"
+        },
+        "publisherDescription": {
+          "official": "Cindy 공식 배포 및 유지 관리",
+          "community": "커뮤니티 개발자가 배포 및 유지 관리",
+          "team": "조직에서 권한이 있는 구성원에게 공유",
+          "custom": "추가한 Git 또는 로컬 폴더 마켓에서 제공",
+          "local": "로컬 파일에서 설치하거나 이 컴퓨터에서 개발"
         },
         "scopeAria": "플러그인 출처 필터",
         "scope": {
@@ -9896,6 +9939,8 @@
     "banner": {
       "title": "{{version}}로 업데이트됨",
       "subtitle": "재시작해 적용",
+      "nativeBuildTitle": "Apple 칩 버전이 준비되었습니다",
+      "nativeBuildSubtitle": "재시작하면 전환됩니다. 작업과 설정은 그대로 유지됩니다",
       "viewNotes": "업데이트 소식 보기",
       "viewNotesAria": "{{version}} 업데이트 소식 보기",
       "button": "재시작",
@@ -10025,6 +10070,12 @@
       "description": "데이터베이스는 약 {{size}}이며 {{threshold}} G를 초과했습니다. 저장 공간에서 정리하는 것이 좋습니다.",
       "openSettings": "저장 공간 열기",
       "disable": "다시 알리지 않기"
+    },
+    "nativeBuild": {
+      "title": "Intel 버전 Cindy를 사용 중입니다",
+      "description": "이 Mac은 Apple 칩이라 Intel 버전은 변환을 거쳐 훨씬 느리게 실행됩니다. Apple 칩 버전으로 바꿔 설치해도 데이터는 그대로 유지됩니다.",
+      "dismiss": "이번에는 숨기기",
+      "download": "다운로드"
     },
     "horizontalTabbarAria": "메인 뷰 전환",
     "tabs": {
@@ -10698,6 +10749,9 @@
         "stepFailed": "{{name}} 님이 오류로 이 단계를 끝내지 못했습니다",
         "stepTimeout": "{{name}} 님의 작업이 너무 오래 걸려 이 단계를 멈췄습니다",
         "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}이(가) 대기 시간 내에 처리를 시작하지 못해 이번 요청이 종료되었습니다.\n파트너의 소유자에게 해당 컴퓨터에서 Cindy가 정상 실행 중이고 네트워크에 연결되어 있는지 확인해 달라고 요청하세요."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}이(가) 답장할 수 없습니다. 이 동료가 있는 기기의 원격 세션 수가 한도에 도달했습니다.\n동료의 소유자에게 사용하지 않는 세션을 보관해 달라고 요청하거나, 원격 컴퓨터의 소유자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
           "REMOTE_TOTAL_LIMIT": "{{name}}이(가) 답장할 수 없습니다. 원격 컴퓨터의 전체 원격 세션 수가 한도에 도달했습니다.\n해당 컴퓨터의 소유자에게 불필요한 세션을 해제하거나 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
@@ -11343,6 +11397,9 @@
       "databaseDriver": "데이터베이스 드라이버를 불러올 수 없습니다. Cindy를 업데이트하거나 복구한 뒤 다시 시도하세요.",
       "databaseUnavailable": "원본 데이터베이스를 읽을 수 없습니다. 원본은 변경되지 않았으며 복구 후 다시 시도할 수 있습니다.",
       "fileTooLarge": "파일 또는 전체 자료가 읽기 한도를 초과했습니다. 내용을 잘라서 가져오지 않았습니다.",
+      "sourceFileTooLarge": "개별 파일이 읽기 한도를 초과했습니다. 이 항목을 완전히 가져오지 못했습니다.",
+      "snapshotTooLarge": "이번에 읽는 데이터의 총량이 한도를 초과했습니다. 가져오기가 완료되지 않았습니다.",
+      "itemTooLarge": "이 항목의 파일 총크기가 128 MiB를 초과했습니다. 이 항목을 완전히 가져오지 못했습니다.",
       "memoryMetadata": "기억 요약 또는 제목이 저장 요건에 맞지 않습니다.",
       "memoryWrite": "기억 저장 또는 무결성 확인에 실패했습니다. 다시 시도할 수 있습니다.",
       "memoryChanged": "저장된 기억이 변경되어 덮어쓰지 않았습니다.",
@@ -11486,7 +11543,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "연결됨",
@@ -11617,6 +11675,22 @@
           "existing": "Cindy에 설정된 봇 사용",
           "manual": "새 인증 정보 입력",
           "moveNote": "이 봇은 설정 → IM 봇에서 옮겨지며 그곳은 비게 됩니다. 기존 개인 채팅과 그룹 채팅은 {{name}}이(가) 이어서 답합니다."
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles 서버",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API 비밀번호",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "내 iMessage 주소",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "채팅 GUID (쉼표로 구분)",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "로컬 수신 주소",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "로컬 수신 포트",
+          "listenPortPlaceholder": "18747",
+          "hint": "로컬 네트워크의 BlueBubbles에 연결하여 선택한 채팅만 처리합니다. 연결 전에 해당 채팅의 다른 자동 응답 프로그램을 중지하세요.",
+          "uncertain": "메시지 {{count}}개의 처리 결과를 확인해야 합니다. 중복을 피하려면 재시도 전에 채팅 기록을 확인하세요."
         }
       },
       "removeConfirm": {
@@ -12435,6 +12509,12 @@
       "missingDir": "폴더를 찾을 수 없음"
     },
     "pendingQueue": {
+      "stopping": "중지 처리 중",
+      "queued": "대기 중",
+      "editingInComposer": "아래 입력창에서 편집 중…",
+      "moveUp": "한 칸 앞으로",
+      "moveDown": "한 칸 뒤로",
+      "cancelSend": "전송 취소",
       "regionAria": "전송 대기 중인 메시지 큐",
       "listAria": "큐의 메시지",
       "pausedFooter": "작업 중지됨, 대기열 일시정지",
@@ -12682,6 +12762,10 @@
       "defer": "나중에 다운로드"
     },
     "permissionPrompt": {
+      "titleStdin": "터미널 입력을 허용할까요?",
+      "titleMcpUrl": "{{server}} 요청 완료",
+      "mcpComplete": "완료",
+      "mcpCancel": "취소",
       "alwaysAllowScoped": "이 세션에서 {{scope}} 항상 허용",
       "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
       "alwaysAllowSessionHint": "이번 요청 한 번이 아니라 이 세션 전체에 적용됩니다.",
@@ -12882,6 +12966,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "이 응답에 표시할 처리 기록이 없습니다",
+      "unavailable": "처리 기록을 불러오지 못했습니다",
       "record": "작업 내역",
       "operations": "작업 기록",
       "elapsed": "처리 중 {{duration}}",
@@ -12927,6 +13013,11 @@
     "prevMessageJump": "이전 질문으로 이동: {{preview}}",
     "sessionLoading": "세션 불러오는 중",
     "askUserQuestion": {
+    "unanswered": "답변 없음",
+    "withdrawn": "더 이상 답변이 필요하지 않습니다",
+    "withdrawnDraft": "이 질문에 더 이상 답변할 필요가 없습니다.\n{{reason}}\n초안은 보관되며 추가 정보로 보낼 수 있습니다.",
+    "sendSupplement": "추가 정보 보내기",
+
       "voice": {
         "hint": "옵션 번호나 이름을 말하세요. 여러 개를 선택한 뒤에는 “선택 확인”이라고 말하세요.",
         "freeTextHint": "답변을 말하고 내용을 검토한 뒤 “선택 확인”이라고 말하여 제출하세요.",
@@ -12946,7 +13037,13 @@
       "sendAndContinue": "보내고 계속",
       "close": "닫기",
       "customAnswer": "다른 답변 입력…",
-      "answerPlaceholder": "답변을 입력하세요…"
+      "answerPlaceholder": "답변을 입력하세요…",
+      "validation": {
+        "required": "이 필수 항목을 입력하세요.",
+        "choice": "목록의 옵션 중 하나를 선택하세요.",
+        "tooShort": "{{count}}자 이상 입력하세요.",
+        "tooLong": "{{count}}자 이하로 입력하세요."
+      }
     },
     "planReviewBubble": {
       "title": "계획 검토",
@@ -14031,8 +14128,11 @@
       "mailLegacy": "초안 기록 (읽기 전용)",
       "taskAutoArchived": "\"{{title}}\"을(를) 보관했습니다",
       "taskAutoArchivedUndo": "실행 취소",
-      "taskAutoArchivePending": "나가면 자동 보관",
-      "taskAutoArchiveCancel": "이번에는 보관 안 함"
+      "taskAutoArchivePending": "이 작업을 나가면 자동으로 보관됩니다",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」 작업 공간에 커밋하지 않은 변경 사항이 있어 자동 보관하지 않았습니다",
+      "taskAutoArchiveCancel": "취소",
+      "taskAutoArchiveCancelled": "이번에는 자동으로 보관하지 않습니다",
+      "taskArchiveNow": "지금 보관"
     },
     "ghostHook": {
       "blockedFallback": "메시지가 플러그인에 의해 차단되어 전송되지 않았습니다",
@@ -19209,6 +19309,7 @@
       "apply": "옮기기"
     },
     "source": {
+      "receivingOn": "받는 기기: {{name}}",
       "description": "같은 계정으로 로그인한 컴퓨터를 선택하세요. 그 컴퓨터의 플러그인, 스킬, 설정, 연결을 이 컴퓨터에 그대로 설정합니다. 키는 그 컴퓨터에서 허용한 후에만 복사되며, 로그인 상태는 그 컴퓨터를 벗어나지 않습니다.",
       "loading": "다른 컴퓨터를 찾는 중…",
       "empty": "이 계정의 다른 컴퓨터를 찾지 못했습니다. 다른 컴퓨터에서 Cindy에 로그인한 뒤 다시 열어 주세요",
@@ -19621,11 +19722,22 @@
     "lineNumbers": "줄 번호"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "현재 Codex 제공자에서는 ChatGPT 계정 정보를 확인할 수 없습니다. 제공자를 추가할 때 ‘$t(subscriptionAccounts.signIn.anotherAccount)’를 선택하면 별도 폴더를 사용할 수 있습니다.",
+    "signIn": {
+      "checking": "로컬 계정 확인 중…",
+      "detected": "로그인된 계정을 찾았습니다",
+      "useAccount": "이 계정 사용",
+      "anotherAccount": "다른 계정으로 로그인",
+      "keepExisting": "새 계정은 이 공급업체에 추가됩니다. 기존 로그인은 유지됩니다.",
+      "checkFailed": "로컬 계정을 확인하지 못했습니다. 다시 시도해 주세요.",
+      "retry": "다시 시도",
+      "useCodex": "Codex로 로그인"
+    },
     "title": "구독 계정",
-    "note": "첫 계정은 CLI 기본 폴더를 사용합니다. 추가 계정은 별도로 로그인합니다. 새 작업은 계정에 분산되고 기존 작업은 원래 계정을 유지합니다.",
     "strategy": "부하 분산",
     "add": "계정 추가",
     "default": "기본 폴더",
+    "defaultTag": "기본",
     "ready": "연결됨",
     "signedOut": "로그인 필요",
     "unavailable": "상태를 확인할 수 없음",
@@ -19634,8 +19746,40 @@
     "removeTitle": "{{name}} 계정을 제거할까요?",
     "removeDescription": "Cindy가 이 계정에 작업을 배정하지 않습니다. CLI 로그인과 대화 기록은 이 컴퓨터에 유지됩니다.",
     "failed": "계정을 읽거나 업데이트하지 못했습니다. CLI 로그인과 네트워크 연결을 확인한 후 다시 시도하세요.",
-    "used": "{{percent}}% 사용",
-    "directory": "계정 폴더",
+    "openDirectory": "계정 폴더 열기",
+    "openDirectoryFailed": "계정 폴더를 열 수 없습니다. 이동되었거나 삭제되었을 수 있습니다.",
+    "loginAgain": "다시 로그인",
     "login": "로그인"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy가 예기치 않게 종료되었습니다",
+    "description": "원인을 진단할까요? 종료 정보와 민감 정보를 제거한 로그를 작업 초안으로 준비합니다. 확인 후 전송할 수 있습니다. 강제 종료나 정전으로도 발생할 수 있습니다.",
+    "diagnose": "문제 진단",
+    "later": "나중에",
+    "logExcerpt": "관련 로그(발췌, 일부 누락 가능)",
+    "logsUnavailable": "관련 로그가 없습니다. 원인은 아직 알 수 없습니다.",
+    "failed": "진단 정보를 준비하지 못했습니다. 다시 시도해 주세요."
+  },
+  "githubStar": {
+    "title": "Cindy가 마음에 드시나요?",
+    "description": "GitHub에서 스타를 눌러 Cindy를 응원해 주세요.",
+    "dismiss": "다시 표시하지 않기",
+    "action": "Cindy 응원하기",
+    "starring": "별을 밝히는 중…",
+    "thanks": "스타를 눌러 주셔서 감사합니다!",
+    "thanksDescription": "여러분의 응원이 Cindy의 성장에 도움이 됩니다.",
+    "browserFallback": "GitHub를 열어 Cindy에 스타를 눌러 주세요.",
+    "openGithub": "GitHub 열기",
+    "openFailed": "GitHub를 열지 못했습니다."
+  },
+  "hostConnection": {
+    "connecting": "Cindy에 연결 중…",
+    "restoring": "작업 상태 복원 중…",
+    "retrying": "작업 상태를 다시 동기화하는 중…",
+    "pairing": "연결 인증이 필요합니다",
+    "pairingHelp": "이 페이지를 열어 두세요. Cindy Host를 시작한 터미널에서 웹 화면을 여는 명령을 다시 실행하고 새 페이지에서 페어링한 후 돌아오세요.",
+    "keepDraft": "작성 중인 초안은 유지됩니다. 연결이 복구되면 작업 상태가 동기화됩니다.",
+    "retry": "다시 연결",
+    "desktopAuthHelp": "시작 터미널에서 연결 설정을 업데이트한 후 이 실험용 클라이언트를 다시 여세요."
   }
 }

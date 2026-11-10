@@ -1,3 +1,5 @@
+import { configureUserDataDir } from '../../../userDataPath.js';
+import { configureOwnerContext } from '../../../ownerContext.js';
 import { registerMakerSessionCreateHandler } from '../../../maker-ipc/sessionCreateHandler';
 import { MAKER_INVOKE } from '../../../maker-ipc/channels';
 import { withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
@@ -134,7 +136,7 @@ vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() 
 vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
-vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
+vi.mock('../../../imageCacheStore.desktop', () => ({ removeSession: vi.fn(async () => undefined) }));
 vi.mock('../../../device-link/sharedTaskRuntime.js', () => ({
   closeSharedTaskForTask: h.closeSharedTask,
   prepareSharedTaskClosureForTask: h.prepareSharedTaskClosure,
@@ -160,11 +162,14 @@ vi.mock('../../../security/trustedAppRenderer.js', () => ({
     !w.isDestroyed() && w.trusted !== false,
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
-vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../toolResultCompaction.js', () => ({
   compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
 }));
-vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
+vi.mock('../../../sessionIds', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../sessionIds')>(),
+  resolveBusinessSessionId: (id: string) => id,
+}));
 vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
 }));
@@ -392,6 +397,11 @@ beforeEach(() => {
   h.withRehydrateCloseSuppressed.mockImplementation(async (_sessionId, task) => task());
   h.getMakerIfReady.mockReturnValue({ isSessionAlive: () => false, closeSession: h.closeSession });
   h.userDataDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-sessions-update-'));
+  configureUserDataDir(h.userDataDir);
+  configureOwnerContext({
+    read: () => ({ dataOwnerId: 'owner-a', generation: 1, boundaryPending: false }),
+    fallbackBaseDir: () => h.userDataDir!,
+  });
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
   setSessionRuntimeCleanup(h.runtimeCleanup);

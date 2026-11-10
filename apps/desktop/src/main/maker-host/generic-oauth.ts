@@ -36,19 +36,7 @@ import {
   type OAuthResultPageLang,
 } from '../oauthResultPage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
-import { outboundFetch } from './outbound-fetch.js';
 
-const log = desktopMakerLogger.child('generic-oauth');
-
-const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
-/** access_token 剩余寿命低于此(ms)就触发后台刷新。 */
-const REFRESH_MARGIN_MS = 120_000;
-/** 刷新 fetch 超时 —— 在 per-provider mutex 链内，必须有界。 */
-const REFRESH_FETCH_TIMEOUT_MS = 15_000;
-/** 授权码换 token 的 fetch 超时——没有它,tokenUrl 挂起会让登录 spinner 永久卡死(只能手动取消)。 */
-const TOKEN_EXCHANGE_TIMEOUT_MS = 30_000;
-/** 响应缺 expires_in 时的兜底 TTL（不能沿用旧 expires_at，防刷新自打转，同 grok）。 */
-const DEFAULT_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 // ── 注入点（默认 no-op，host 启动期接线；测试注入内存实现）──────────────────────
 export interface GenericOAuthStorage {
@@ -70,6 +58,65 @@ interface GenericOAuthIo {
   now: () => number;
   sleep: (ms: number, signal: AbortSignal) => Promise<void>;
 }
+
+// ── 凭证 blob ───────────────────────────────────────────────────────────────────
+interface OAuthTokenBlob {
+  access_token: string;
+  refresh_token?: string;
+  /** epoch ms。 */
+  expires_at?: number;
+  obtained_at?: number;
+  scope?: string;
+}
+
+interface TokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  scope?: string;
+  expires_at?: number;
+}
+
+export interface GenericOAuthLoginResult {
+  ok: boolean;
+  reason?: string;
+}
+
+export interface GenericOAuthDeviceCodeProgress {
+  phase: 'device-code';
+  verificationUrl: string;
+  userCode: string;
+  expiresAt: number;
+}
+
+export interface GenericOAuthLoginOptions {
+  onProgress?: (progress: GenericOAuthDeviceCodeProgress) => void;
+  /**
+   * 凭证成功落盘后交出一次竞态安全的回滚闭包。只有当前凭证仍是本次登录写入的 blob
+   * 时才删除；若后续登录/刷新已换新则 no-op，避免迟到取消误删新凭证。
+   */
+  onCredentialPersisted?: (rollback: () => boolean) => void;
+}
+
+
+
+export { parseModelsListResponse } from "@cindy/model-providers";
+
+/** Shared OAuth state machine; the launcher supplies only transport and presentation. */
+export function createGenericOAuthService(ports: { fetchImpl: typeof fetch }) {
+
+
+const log = desktopMakerLogger.child('generic-oauth');
+
+const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+/** access_token 剩余寿命低于此(ms)就触发后台刷新。 */
+const REFRESH_MARGIN_MS = 120_000;
+/** 刷新 fetch 超时 —— 在 per-provider mutex 链内，必须有界。 */
+const REFRESH_FETCH_TIMEOUT_MS = 15_000;
+/** 授权码换 token 的 fetch 超时——没有它,tokenUrl 挂起会让登录 spinner 永久卡死(只能手动取消)。 */
+const TOKEN_EXCHANGE_TIMEOUT_MS = 30_000;
+/** 响应缺 expires_in 时的兜底 TTL（不能沿用旧 expires_at，防刷新自打转，同 grok）。 */
+const DEFAULT_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.reject(new Error('login_cancelled'));
@@ -94,7 +141,7 @@ let io: GenericOAuthIo = {
     remove: () => true,
   },
   // 第三方 provider 的 token / device / refresh 端点多在境外,默认走吃系统代理的通道。
-  fetchImpl: outboundFetch,
+  fetchImpl: ports.fetchImpl,
   openExternal: async () => {
     throw new Error('generic-oauth openExternal not configured');
   },
@@ -103,7 +150,7 @@ let io: GenericOAuthIo = {
 };
 
 /** host 启动期 / 测试注入依赖（部分覆盖）。 */
-export function configureGenericOAuth(partial: Partial<GenericOAuthIo>): void {
+function configureGenericOAuth(partial: Partial<GenericOAuthIo>): void {
   io = { ...io, ...partial };
 }
 
@@ -115,24 +162,6 @@ const genVerifier = (): string => base64URLEncode(randomBytes(32));
 const genChallenge = (v: string): string =>
   base64URLEncode(createHash('sha256').update(v).digest());
 const genState = (): string => base64URLEncode(randomBytes(16));
-
-// ── 凭证 blob ───────────────────────────────────────────────────────────────────
-interface OAuthTokenBlob {
-  access_token: string;
-  refresh_token?: string;
-  /** epoch ms。 */
-  expires_at?: number;
-  obtained_at?: number;
-  scope?: string;
-}
-
-interface TokenResponse {
-  access_token: string;
-  refresh_token?: string;
-  expires_in?: number;
-  scope?: string;
-  expires_at?: number;
-}
 
 function blobFromTokenResponse(t: TokenResponse, prev?: OAuthTokenBlob | null): OAuthTokenBlob {
   const now = io.now();
@@ -181,12 +210,12 @@ function writeBlob(providerId: string, b: OAuthTokenBlob): boolean {
 }
 
 /** 该供应商本机是否已登录（有 access_token）。连接态判定用。 */
-export function hasGenericOAuthLogin(providerId: string): boolean {
+function hasGenericOAuthLogin(providerId: string): boolean {
   return readBlob(providerId) !== null;
 }
 
 /** 登出：持久凭证删除成功后才清缓存，失败时保持登录态并通知调用方。 */
-export function logoutGenericOAuth(providerId: string): boolean {
+function logoutGenericOAuth(providerId: string): boolean {
   if (!io.storage.remove(providerId)) return false;
   blobCache.set(providerId, null);
   // 链上若有 in-flight 刷新也安全:doRefresh 落盘前会复核 blob 已清则不回写。
@@ -198,7 +227,7 @@ export function logoutGenericOAuth(providerId: string): boolean {
  * 可回滚地删除凭证。配置写入与 safeStorage 无法组成同一个数据库事务，因此调用方在
  * 配置提交失败时必须用返回的闭包恢复旧 blob；成功提交后直接丢弃闭包即可。
  */
-export function removeGenericOAuthCredentialsReversibly(
+function removeGenericOAuthCredentialsReversibly(
   providerId: string,
 ): (() => boolean) | null {
   let previousRaw: string | null;
@@ -230,7 +259,7 @@ export function removeGenericOAuthCredentialsReversibly(
  * 清空全部内存缓存。生产用于「账号切换清空本机密钥」后失效缓存
  * （providerSecretStore 的 secretsClearedListener 接线），测试用于切换注入 storage。
  */
-export function resetGenericOAuthMemoryCache(): void {
+function resetGenericOAuthMemoryCache(): void {
   blobCache.clear();
   refreshChains.clear();
 }
@@ -318,7 +347,7 @@ async function doRefresh(providerId: string, oauth: OAuthProviderDescriptor): Pr
 }
 
 /** 单飞刷新：同 provider 的并发刷新排队串行，链头异常不断链。 */
-export function refreshGenericOAuthIfNeeded(
+function refreshGenericOAuthIfNeeded(
   providerId: string,
   oauth: OAuthProviderDescriptor,
 ): Promise<void> {
@@ -341,7 +370,7 @@ export function refreshGenericOAuthIfNeeded(
  * 读内存缓存；发现临期时**后台**触发单飞刷新（不阻塞本次路由——首个请求可能仍用旧
  * token，401 后下一请求即拿到新 token）。descriptor 由调用方现查目录传入。
  */
-export function readCachedGenericOAuthAccessToken(
+function readCachedGenericOAuthAccessToken(
   providerId: string,
   oauth: OAuthProviderDescriptor | undefined,
 ): string | null {
@@ -524,37 +553,22 @@ class CallbackListener {
   }
 }
 
-export interface GenericOAuthLoginResult {
-  ok: boolean;
-  reason?: string;
-}
-
-export interface GenericOAuthDeviceCodeProgress {
-  phase: 'device-code';
-  verificationUrl: string;
-  userCode: string;
-  expiresAt: number;
-}
-
-export interface GenericOAuthLoginOptions {
-  onProgress?: (progress: GenericOAuthDeviceCodeProgress) => void;
-  /**
-   * 凭证成功落盘后交出一次竞态安全的回滚闭包。只有当前凭证仍是本次登录写入的 blob
-   * 时才删除；若后续登录/刷新已换新则 no-op，避免迟到取消误删新凭证。
-   */
-  onCredentialPersisted?: (rollback: () => boolean) => void;
-}
-
 // 同一时刻每个 provider 只允许一个登录流。
 const activeLogins = new Map<string, { abort: AbortController; close: () => void }>();
 
 /** 取消某供应商进行中的登录。 */
-export function cancelGenericOAuthLogin(providerId: string): void {
+function cancelGenericOAuthLogin(providerId: string): void {
   const cur = activeLogins.get(providerId);
   if (!cur) return;
   cur.abort.abort();
   cur.close();
   activeLogins.delete(providerId);
+}
+
+/** Stop callback listeners and device-code polling when their runtime exits. */
+function stopGenericOAuth(): void {
+  for (const id of [...activeLogins.keys()]) cancelGenericOAuthLogin(id);
+  resetGenericOAuthMemoryCache();
 }
 
 function safeVerificationUrl(value: unknown): string | null {
@@ -692,7 +706,7 @@ async function runDeviceCodeGrant(
  * 跑一次描述符驱动的 OAuth 登录。支持浏览器回环 PKCE 与 Device Authorization Grant；
  * 成功后凭证 blob 写 safeStorage（provider_oauth_<id>）。
  */
-export async function runGenericOAuthLogin(
+async function runGenericOAuthLogin(
   provider: { id: string; name: string },
   oauth: OAuthProviderDescriptor,
   options?: GenericOAuthLoginOptions,
@@ -825,7 +839,7 @@ export async function runGenericOAuthLogin(
  * 约定：Anthropic 兼容端点为 `{base}/v1/models`；OpenAI 兼容 baseUrl 常以 `/v1` 结尾，
  * 此时只追加 `/models`。自定义 OAuth 供应商靠这条推导免去用户手填发现端点。
  */
-export function deriveModelsDiscoveryUrl(baseUrl: string): string {
+function deriveModelsDiscoveryUrl(baseUrl: string): string {
   const url = new URL(baseUrl);
   url.hash = '';
   let pathname = url.pathname;
@@ -846,7 +860,7 @@ export function deriveModelsDiscoveryUrl(baseUrl: string): string {
  * （含 GET /v1/models）都强制要求 `anthropic-version`，缺失直接 400 → 发现静默失败；
  * 与 provider-diagnostics.buildProbeRequest 的 cc 分支同口径。
  */
-export async function discoverGenericOAuthModels(
+async function discoverGenericOAuthModels(
   providerId: string,
   oauth: OAuthProviderDescriptor,
   discoveryUrl?: string,
@@ -892,6 +906,5 @@ export async function discoverGenericOAuthModels(
     ? issueModelSourceSnapshot(models, agent ?? 'claude-code', modelSourceRequestSignature(url, { headers }))
     : null;
 }
-
-
-export { parseModelsListResponse } from "@cindy/model-providers";
+return { configureGenericOAuth, hasGenericOAuthLogin, logoutGenericOAuth, removeGenericOAuthCredentialsReversibly, resetGenericOAuthMemoryCache, refreshGenericOAuthIfNeeded, readCachedGenericOAuthAccessToken, cancelGenericOAuthLogin, stopGenericOAuth, runGenericOAuthLogin, deriveModelsDiscoveryUrl, discoverGenericOAuthModels };
+}

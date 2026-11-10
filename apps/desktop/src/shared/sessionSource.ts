@@ -10,6 +10,7 @@ export const SESSION_SOURCES = [
   'wechat',
   'dingtalk',
   'wecom',
+  'imessage',
   'scheduler',
   'learn',
   'review',
@@ -84,6 +85,7 @@ export const DESKTOP_VISIBLE_SESSION_SOURCES: SessionSource[] = [
   'wechat',
   'dingtalk',
   'wecom',
+  'imessage',
   'scheduler',
   'learn',
   'review',
@@ -110,6 +112,7 @@ export function normalizeSessionSource(source: unknown): SessionSource {
     source === 'wechat' ||
     source === 'dingtalk' ||
     source === 'wecom' ||
+    source === 'imessage' ||
     source === 'scheduler' ||
     source === 'learn' ||
     source === 'review' ||

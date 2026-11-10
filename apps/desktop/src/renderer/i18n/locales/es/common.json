@@ -875,8 +875,8 @@
       "runningCount_one": "Tarea {{count}} ejecutándose",
       "runningCount_other": "Tareas {{count}} en ejecución",
       "limitAria": "Límite de tareas para {{name}}",
-      "limitOption_one": "Max {{count}}",
-      "limitOption_other": "Max {{count}}",
+      "limitOption_one": "{{count}} tarea",
+      "limitOption_other": "{{count}} tareas",
       "weightAria": "Peso para {{name}}",
       "weightOption": "Peso {{weight}}",
       "assignAria": "Asignar tareas a {{name}}",
@@ -891,6 +891,7 @@
         "pausedLocal": "No aceptar nuevas tareas de otras computadoras",
         "cooling": "Enfriándose",
         "coolingUntil": "En espera · Disponible aproximadamente a las {{time}}",
+        "quotaExhausted": "Cuota agotada",
         "offline": "Sin conexión",
         "unreachableHere": "No puedo acceder desde esta computadora",
         "unavailable": {
@@ -928,7 +929,7 @@
       },
       "accountCount_many": "cuentas {{count}}",
       "runningCount_many": "Tareas {{count}} en ejecución",
-      "limitOption_many": "Max {{count}}"
+      "limitOption_many": "{{count}} tareas"
     },
     "rebalance": {
       "title": "¿Continuar en {{label}}?",
@@ -937,9 +938,13 @@
       "description": "Para utilizar la cuota de cada cuenta de manera uniforme, envíe este mensaje desde {{label}} ({{quota}}). Los últimos mensajes y un resumen se conservan; Es posible que se pierdan detalles más antiguos.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
-      "confirm": "Cambiar",
-      "cancel": "Cancelar",
-      "remember": "Cambiar automáticamente a partir de ahora (solo esta tarea)"
+      "confirm": "Cambiar solo esta vez",
+      "cancel": "Ahora no",
+      "remember": "Cambiar automáticamente sin volver a preguntar",
+      "disable": "No cambiar automáticamente ni volver a preguntar",
+      "disableFailed": "No se pudo confirmar si se guardó tu elección. Comprueba la conexión y que Cindy esté actualizado en el ordenador donde está la tarea, e inténtalo de nuevo. Este mensaje se enviará con normalidad.",
+      "choiceLabel": "Cambio de ordenador (solo esta tarea)",
+      "send": "Enviar mensaje"
     },
     "deleteConfirm": {
       "title": "¿Eliminar el grupo de proveedores {{provider}}?",
@@ -1494,6 +1499,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Compartido",
+      "note": "Esta asignación es compartida por la cuenta, no reservada para usted.",
+      "highestWeekly": "Compartido · mayor saldo semanal",
+      "highestWeeklyNote": "Mayor cuota semanal restante entre las cuentas consultables. Es compartida por la cuenta, no una suma ni una cuota personal.",
+      "from": "Compartido por {{name}}"
+    },
     "balance": {
       "name": "balanza Cindy",
       "quotaName": "Cuota Cindy",
@@ -2316,6 +2328,10 @@
         },
         "visibilityLabel": "Visibilidad del fondo de pantalla",
         "visibilityHint": "0% oculta el fondo de pantalla; El 100% lo muestra sin superposición.",
+        "desktopVisibilityLabel": "Transparencia del escritorio",
+        "desktopVisibilityHint": "Muestra el escritorio y las ventanas detrás de Cindy. El texto y los controles se mantienen nítidos.",
+        "desktopBlurLabel": "Desenfoque del escritorio",
+        "desktopBlurHint": "Desenfoca el escritorio detrás de la ventana. 0 lo desactiva; un valor mayor aumenta el desenfoque. Los sistemas sin ajuste de intensidad usan su efecto predeterminado.",
         "blurLabel": "Fondo de pantalla borroso",
         "blurHint": "Desenfoca solo el fondo de pantalla. Establezca en 0 para apagar. El fondo de pantalla animado borroso aumenta el uso de GPU.",
         "motionLabel": "Pantalla",
@@ -2482,7 +2498,7 @@
       "skinLabel": "Personaje",
       "skinHint": "El personaje que aparece en Agent Notch y en la Dynamic Island.",
       "soundLabel": "Sonidos de eventos",
-      "soundHint": "Elija un sonido de 8 bits para cada aviso; Agent Notch y la Dynamic Island lo comparten. El sonido de toque solo suena al pulsar Agent Notch.",
+      "soundHint": "Si se configura un sonido de evento, solo se reproduce ese sonido. Si no se configura o se desactiva, se usan los ajustes de notificación del sistema.",
       "soundAria": "Alternar sonidos de Agent Notch",
       "soundSelectAria": "Sonido para {{event}}",
       "soundPreviewAria": "Vista previa del sonido {{event}}",
@@ -2537,7 +2553,7 @@
         "select": "Haga clic en acción"
       },
       "soundOptions": {
-        "none": "Ninguno",
+        "none": "Seguir al sistema",
         "startup-chime": "Timbre de inicio",
         "ring-chime": "timbre",
         "item-found": "Artículo encontrado",
@@ -5348,6 +5364,15 @@
         "ariaLabel": "Utilice {{shortcut}} para enviar mensajes"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Directorio de trabajo predeterminado para tareas nuevas",
+      "label": "Directorio predeterminado en este equipo",
+      "hint": "Se preselecciona para tareas locales nuevas sin proyecto elegido. Tienen prioridad los proyectos, diálogos o equipos remotos seleccionados explícitamente.",
+      "unset": "Sin configurar (no se preselecciona ningún directorio)",
+      "choose": "Elegir directorio",
+      "clear": "Borrar valor predeterminado",
+      "failed": "No se pudo guardar el directorio de trabajo predeterminado. Inténtalo de nuevo."
+    },
     "linkOpen": {
       "title": "Enlaces abiertos",
       "description": "Elija dónde se abren los enlaces en los mensajes. Haga clic derecho en un enlace para usar otra opción solo para ese enlace.",
@@ -5651,12 +5676,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Instale el complemento Cindy Chrome",
           "enablePluginTitle": "Habilite el complemento Cindy Chrome",
-          "installExtensionTitle": "Agregue la extensión Cindy a su navegador",
+          "connectExtensionTitle": "Extensión del navegador sin conexión",
           "pluginBody": "Mi navegador llega a su Chrome o Edge a través del complemento Cindy Chrome y su extensión de navegador. Primero instale el complemento en Cindy, luego siga las indicaciones para agregar la extensión.",
-          "extensionBody": "Agregar extensión del navegador abre la página de tienda de la extensión Cindy en su navegador; elija Agregar y esto cambiará a conectado por sí solo. ¿Ya agregado? Habilítelo en la configuración de extensión del navegador.",
+          "connectionBody": "Mantén Cindy y el navegador abiertos y comprueba que la extensión Cindy esté activada. La falta de conexión no significa que debas reinstalarla. El estado se actualiza automáticamente al reconectarse.",
           "installPlugin": "Instalar complemento",
           "enablePlugin": "Activar",
-          "installExtension": "Agregar extensión del navegador",
+          "openExtensionStore": "Abrir tienda de extensiones",
+          "updatingTitle": "Actualizando la conexión del navegador",
+          "updatingBody": "La conexión se restablecerá automáticamente al terminar la actualización.",
+          "selectPluginTitle": "Elegir extensión del navegador",
+          "selectPluginBody": "Abre los detalles del complemento y elige «Usar esta extensión del navegador» para confirmar cuál usará Cindy.",
+          "selectPlugin": "Abrir complemento",
           "updatePluginTitle": "Actualice el complemento Cindy Chrome",
           "updatePluginBody": "El complemento Cindy Chrome instalado es demasiado antiguo para Mi navegador. Actualícelo a la última versión y luego siga las indicaciones para agregar la extensión.",
           "updatePlugin": "Actualizar",
@@ -7459,6 +7489,11 @@
         "installedExpand": "Mostrar los {{count}} complementos instalados",
         "installedCollapse": "Ocultar complementos instalados adicionales",
         "recommendedSection": "Recomendado",
+        "todayRecommendations": "Recomendados de hoy",
+        "marketSection": "Mercado de complementos",
+        "browseMarket": "Explorar el mercado de complementos",
+        "searching": "Buscando…",
+        "allLoaded": "Se muestran los {{count}} complementos",
         "updatesAvailable": "{{count}} actualizaciones de complementos disponibles",
         "updateAll": "Actualizar todos",
         "ignoreRound": "Ignorar esta vez",
@@ -7488,7 +7523,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Oficial"
+          "official": "Oficial",
+          "community": "Comunidad"
+        },
+        "publisherDescription": {
+          "official": "Publicado y mantenido por Cindy",
+          "community": "Publicado y mantenido por desarrolladores de la comunidad",
+          "team": "Compartido por tu organización con los miembros autorizados",
+          "custom": "De un mercado Git o de una carpeta local que añadiste",
+          "local": "Instalado desde un archivo local o desarrollado en este equipo"
         },
         "scopeAria": "Filtrar orígenes de complementos",
         "scope": {
@@ -10019,6 +10062,8 @@
     "banner": {
       "title": "Actualizado a {{version}}",
       "subtitle": "Reiniciar para aplicar",
+      "nativeBuildTitle": "Versión para Apple silicon lista",
+      "nativeBuildSubtitle": "Reinicia para cambiar; tus tareas y ajustes se conservan",
       "viewNotes": "Ver novedades",
       "viewNotesAria": "Ver las novedades de {{version}}",
       "button": "Reiniciar",
@@ -10148,6 +10193,12 @@
       "description": "La base de datos ocupa aproximadamente {{size}}, por encima de {{threshold}} G. Considera limpiarla en Almacenamiento.",
       "openSettings": "Abrir Almacenamiento",
       "disable": "No volver a recordármelo"
+    },
+    "nativeBuild": {
+      "title": "Estás usando la versión para Intel",
+      "description": "Esta Mac tiene Apple silicon y la versión para Intel va mucho más lenta por la traducción. Instala la versión para Apple silicon; tus datos se conservan.",
+      "dismiss": "Ocultar por ahora",
+      "download": "Descargar"
     },
     "horizontalTabbarAria": "Selector de vista principal",
     "tabs": {
@@ -10830,6 +10881,9 @@
         "stepFailed": "{{name}} tuvo un problema y no completó este paso",
         "stepTimeout": "{{name}} tardó demasiado, por lo que se detuvo este paso.",
         "stepUnavailable": "{{name}} no está disponible y no puede realizar este paso",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}} no empezó a procesar dentro del plazo de espera. Esta solicitud ha finalizado.\nPide al propietario del compañero que compruebe que Cindy está funcionando y que su ordenador tiene conexión de red."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} no puede responder: el dispositivo del compañero alcanzó su límite de sesiones remotas.\nPídele al propietario del compañero que archive las sesiones sin usar o al propietario de la computadora remota que aumente el límite en Acceso remoto y uso compartido.",
           "REMOTE_TOTAL_LIMIT": "{{name}} no puede responder: la computadora remota alcanzó su límite total de sesiones remotas.\nPídele al propietario de esa computadora que libere las sesiones sin usar o aumente el límite en Acceso remoto y uso compartido.",
@@ -11485,6 +11539,9 @@
       "databaseDriver": "No se pudo cargar el controlador de la base de datos. Actualice o repare Cindy y luego vuelva a intentarlo.",
       "databaseUnavailable": "No se pudo leer la base de datos de origen. Los datos originales no se modifican; Vuelva a intentarlo después de la reparación.",
       "fileTooLarge": "Un archivo o esta importación excede el límite de lectura. El contenido no fue truncado.",
+      "sourceFileTooLarge": "Un archivo supera el límite de lectura. Este elemento no se ha importado por completo.",
+      "snapshotTooLarge": "El volumen total de datos de esta lectura supera el límite. La importación está incompleta.",
+      "itemTooLarge": "Los archivos de este elemento superan los 128 MiB en total. Este elemento no se ha importado por completo.",
       "memoryMetadata": "El resumen o título de la memoria excede los requisitos de almacenamiento.",
       "memoryWrite": "Falló la escritura en memoria o la verificación de integridad. Puedes volver a intentarlo.",
       "memoryChanged": "La memoria guardada fue modificada y no se ha sobrescrito.",
@@ -11628,7 +11685,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "Conectado",
@@ -11761,6 +11819,22 @@
           "existing": "Usar el bot ya configurado en Cindy",
           "manual": "Ingresar nuevas credenciales",
           "moveNote": "El bot se retira de Configuración → Bots de mensajería instantánea, que quedará vacío. Sus chats continúan con {{name}}."
+        },
+        "imessage": {
+          "serverUrlLabel": "Servidor BlueBubbles",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "Contraseña de API",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "Tu dirección de iMessage",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "GUID de chats (separados por comas)",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "Dirección local de escucha",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "Puerto local de escucha",
+          "listenPortPlaceholder": "18747",
+          "hint": "Conecta BlueBubbles en la red local. Solo se procesan los chats seleccionados. Detén las demás respuestas automáticas de esos chats antes de conectar.",
+          "uncertain": "Hay {{count}} entregas por comprobar. Revisa el historial antes de reintentar para evitar duplicados."
         }
       },
       "removeConfirm": {
@@ -12579,6 +12653,12 @@
       "missingDir": "Carpeta no encontrada"
     },
     "pendingQueue": {
+      "stopping": "Parando",
+      "queued": "En cola",
+      "editingInComposer": "Editando en el cuadro de entrada a continuación…",
+      "moveUp": "Mover antes",
+      "moveDown": "Mover más tarde",
+      "cancelSend": "Cancelar envío",
       "regionAria": "Cola de mensajes pendientes",
       "listAria": "Mensajes en cola",
       "pausedFooter": "Tarea detenida, cola en pausa",
@@ -12827,6 +12907,10 @@
       "defer": "Ahora no"
     },
     "permissionPrompt": {
+      "titleStdin": "¿Permitir entrada en este terminal?",
+      "titleMcpUrl": "Completar la solicitud de {{server}}",
+      "mcpComplete": "Listo",
+      "mcpCancel": "Cancelar",
       "alwaysAllowScoped": "Permitir siempre {{scope}} durante esta sesión",
       "alwaysAllowScopedHint": "Se aplica a toda la sesión y solo a lo que se indica aquí.",
       "alwaysAllowSessionHint": "Se aplica a toda la sesión, no solo a esta solicitud.",
@@ -13050,6 +13134,11 @@
     "prevMessageJump": "Ir al prompt anterior: {{preview}}",
     "sessionLoading": "Cargando tarea",
     "askUserQuestion": {
+    "unanswered": "Sin respuesta",
+    "withdrawn": "Ya no necesita respuesta",
+    "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",
+    "sendSupplement": "Enviar información adicional",
+
       "voice": {
         "hint": "Di el número o el nombre de una opción. Para seleccionar varias, di después «confirmar selección».",
         "freeTextHint": "Di tu respuesta, revísala y luego di «confirmar selección» para enviarla.",
@@ -13069,7 +13158,13 @@
       "sendAndContinue": "Enviar y continuar",
       "close": "Cerrar",
       "customAnswer": "Escribe algo más…",
-      "answerPlaceholder": "Escribe tu respuesta…"
+      "answerPlaceholder": "Escribe tu respuesta…",
+      "validation": {
+        "required": "Completa este campo obligatorio.",
+        "choice": "Elige una de las opciones de la lista.",
+        "tooShort": "Introduce al menos {{count}} caracteres.",
+        "tooLong": "Introduce como máximo {{count}} caracteres."
+      }
     },
     "planReviewBubble": {
       "title": "Revisión del plan",
@@ -14193,8 +14288,11 @@
       "mailLegacy": "Historial de borradores (solo lectura)",
       "taskAutoArchived": "Se archivó «{{title}}»",
       "taskAutoArchivedUndo": "Deshacer",
-      "taskAutoArchivePending": "Se archiva al salir",
-      "taskAutoArchiveCancel": "Conservar esta vez"
+      "taskAutoArchivePending": "Se archivará al salir de esta tarea",
+      "taskAutoArchiveBlockedDirty": "No se archivó «{{title}}» automáticamente: hay cambios sin confirmar en su espacio de trabajo",
+      "taskAutoArchiveCancel": "Cancelar",
+      "taskAutoArchiveCancelled": "No se archivará automáticamente esta vez",
+      "taskArchiveNow": "Archivar ahora"
     },
     "ghostHook": {
       "blockedFallback": "Mensaje bloqueado por un complemento; no se envió",
@@ -14238,6 +14336,8 @@
       "closeFailed": "No se pudo cerrar el chat secundario. Inténtalo de nuevo."
     },
     "teammateProcess": {
+      "empty": "No hay detalles del proceso para esta respuesta",
+      "unavailable": "No se pudieron cargar los detalles del proceso",
       "record": "Actividad",
       "operations": "Registro de actividad",
       "elapsed": "Lleva {{duration}} trabajando",
@@ -14349,7 +14449,7 @@
       "running": "En ejecución…",
       "waitingWorkflow": "Esperando a Workflow…",
       "waitingWorkflowProgress": "Esperando a Workflow · {{done}}/{{total}} Agents",
-      "turnStart": "{{status}}",
+      "turnStart": "Procesando, {{name}}…",
       "issueTip": "{{name}}, prueba /issue para enviarnos comentarios o sugerencias",
       "runningTool": "{{tool}} en ejecución…"
     },
@@ -19455,6 +19555,7 @@
       "apply": "Transferir"
     },
     "source": {
+      "receivingOn": "Equipo de destino: {{name}}",
       "description": "Elija una computadora que haya iniciado sesión con esta cuenta. Sus plugins, habilidades, ajustes y conexiones se configuran aquí de la misma forma; los inicios de sesión y las claves solo salen de esa computadora si usted lo permite en ella.",
       "loading": "Buscando sus otras computadoras…",
       "empty": "No se encontraron otras computadoras para esta cuenta. Inicie sesión en Cindy en otra computadora y vuelva a abrir esto",
@@ -19880,11 +19981,22 @@
     "lineNumbers": "Números de línea"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "El proveedor actual de Codex no permite consultar la cuenta de ChatGPT. Al añadir el proveedor, elige «$t(subscriptionAccounts.signIn.anotherAccount)» para usar una carpeta independiente.",
+    "signIn": {
+      "checking": "Comprobando la cuenta local…",
+      "detected": "Se encontró una cuenta conectada",
+      "useAccount": "Usar esta cuenta",
+      "anotherAccount": "Iniciar sesión con otra cuenta",
+      "keepExisting": "La cuenta nueva se añade a este proveedor. Las sesiones existentes se conservan.",
+      "checkFailed": "No se pudo comprobar la cuenta local. Inténtalo de nuevo.",
+      "retry": "Reintentar",
+      "useCodex": "Iniciar sesión con Codex"
+    },
     "title": "Cuentas de suscripción",
-    "note": "La primera cuenta usa la carpeta predeterminada de la CLI. Las cuentas adicionales inician sesión por separado. Las tareas nuevas se distribuyen; las existentes conservan su cuenta.",
     "strategy": "Equilibrio de carga",
     "add": "Añadir cuenta",
     "default": "Carpeta predeterminada",
+    "defaultTag": "Predeterminada",
     "ready": "Conectada",
     "signedOut": "Requiere iniciar sesión",
     "unavailable": "Estado no disponible",
@@ -19893,8 +20005,40 @@
     "removeTitle": "¿Quitar {{name}}?",
     "removeDescription": "Cindy dejará de asignar tareas a esta cuenta. La sesión de la CLI y el historial de conversaciones permanecerán en este equipo.",
     "failed": "No se pudo leer o actualizar la cuenta. Comprueba el inicio de sesión de la CLI y la conexión, e inténtalo de nuevo.",
-    "used": "{{percent}}% utilizado",
-    "directory": "Carpeta de la cuenta",
+    "openDirectory": "Abrir carpeta de la cuenta",
+    "openDirectoryFailed": "No se pudo abrir la carpeta de la cuenta. Puede que se haya movido o eliminado.",
+    "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy se cerró inesperadamente",
+    "description": "¿Quieres diagnosticar la causa? Prepararemos un borrador de tarea con los detalles del cierre y registros sin datos sensibles para que lo revises antes de enviarlo. También puede deberse a un cierre forzado o un corte de energía.",
+    "diagnose": "Diagnosticar problema",
+    "later": "Ahora no",
+    "logExcerpt": "Registros relevantes (extracto, puede estar incompleto)",
+    "logsUnavailable": "No hay registros relevantes disponibles. La causa aún se desconoce.",
+    "failed": "No se pudo preparar el diagnóstico. Inténtalo de nuevo."
+  },
+  "githubStar": {
+    "title": "¿Te gusta Cindy?",
+    "description": "Dale una estrella a Cindy en GitHub para apoyar el proyecto.",
+    "dismiss": "No volver a mostrar",
+    "action": "Apoyar a Cindy",
+    "starring": "Encendiendo una estrella…",
+    "thanks": "¡Gracias por la estrella!",
+    "thanksDescription": "Tu apoyo ayuda a Cindy a crecer.",
+    "browserFallback": "Abre GitHub para darle una estrella a Cindy.",
+    "openGithub": "Abrir GitHub",
+    "openFailed": "No se pudo abrir GitHub."
+  },
+  "hostConnection": {
+    "connecting": "Conectando con Cindy…",
+    "restoring": "Restaurando el estado de las tareas…",
+    "retrying": "Las tareas aún no están sincronizadas. Reintentando…",
+    "pairing": "Se necesita autorizar la conexión",
+    "pairingHelp": "Mantén esta página abierta. En el terminal donde iniciaste Cindy Host, repite el comando para abrir el cliente web. Vincula la nueva página y vuelve aquí.",
+    "keepDraft": "Tu borrador se conserva. Las tareas se sincronizarán cuando se restablezca la conexión.",
+    "retry": "Reconectar",
+    "desktopAuthHelp": "Actualiza la configuración de conexión en el terminal de inicio y vuelve a abrir este cliente experimental."
   }
 }

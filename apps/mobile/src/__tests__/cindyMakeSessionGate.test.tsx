@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement, useEffect, type ReactNode } from 'react';
+import { Profiler, act, createElement, useEffect, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -570,4 +570,26 @@ describe('mobile Cindy Make links', () => {
     expect(container.textContent).toContain('session.entry.loading');
     expect(Content).not.toHaveBeenCalled();
   });
+});
+
+// Unrelated home refreshes must not schedule this conversation's entry gate.
+it('ignores unrelated task updates while still enforcing own source changes', () => {
+  state.sessions = [{ id: 'current', deviceLinkDeviceId: 'device-a', source: 'desktop' }];
+  const commit = vi.fn();
+  act(() => root.render(<Profiler id="entry" onRender={commit}>
+    <CindyMakeSessionGate sessionId="current" deviceId="device-a"><span>Composer</span></CindyMakeSessionGate>
+  </Profiler>));
+  commit.mockClear();
+  for (let index = 0; index < 10; index++) act(() => {
+    state.sessions = [state.sessions[0]!, { id: `other-${index}`, deviceLinkDeviceId: 'device-a', source: 'desktop' }];
+    state.listeners.forEach(listener => listener());
+  });
+  expect(commit).not.toHaveBeenCalled();
+  expect(container.textContent).toBe('Composer');
+  act(() => {
+    state.sessions = [{ id: 'current', deviceLinkDeviceId: 'device-a', source: 'cindy-make' }];
+    state.listeners.forEach(listener => listener());
+  });
+  expect(container.textContent).toBe('redirect:/');
+  expect(commit).toHaveBeenCalled();
 });
