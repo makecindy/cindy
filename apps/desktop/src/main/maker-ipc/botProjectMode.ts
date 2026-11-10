@@ -42,9 +42,46 @@ import type { BotModelRoute } from '../../shared/botModelChain.js';
 
 const log = createLogger('maker-ipc:bot-project-mode');
 
-/** Copy durable memory records into the project's memory; existing project records win. */
+async function writeIfMissing(filePath: string, content: string): Promise<boolean> {
+  try {
+    await fs.writeFile(filePath, content, { encoding: 'utf8', flag: 'wx' });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw error;
+  }
+}
+
+/** A folder's entries; a missing folder has none. Any other read failure is thrown, so the upgrade retries. */
+async function readEntries(dir: string) {
+  return fs.readdir(dir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+}
+
+async function sameContent(a: string, b: string): Promise<boolean> {
+  const [left, right] = await Promise.all([fs.readFile(a), fs.readFile(b)]);
+  return left.equals(right);
+}
+
+/** The free name beside `file` for an older copy: `name-from-v1.ext`, then `-2`, … */
+async function besideName(file: string): Promise<string> {
+  const ext = path.extname(file);
+  const stem = file.slice(0, file.length - ext.length);
+  for (let index = 1; ; index++) {
+    const candidate = `${stem}-from-v1${index === 1 ? '' : `-${index}`}${ext}`;
+    if (!await fs.lstat(candidate).then(() => true, () => false)) return candidate;
+  }
+}
+
+/**
+ * Copy durable memory records into the project's memory. A record of the same name already there is
+ * a later version of the same memory (the project's copy is the newer one) and wins; the older one
+ * stays where it was.
+ */
 async function copyMemoryRecords(sourceDir: string, targetDir: string): Promise<number> {
-  const entries = await fs.readdir(sourceDir, { withFileTypes: true }).catch(() => []);
+  const entries = await readEntries(sourceDir);
   let copied = 0;
   for (const entry of entries) {
     // Only curated records; MEMORY.md, fts.db and meta.json are rebuilt by the store.
@@ -60,32 +97,76 @@ async function copyMemoryRecords(sourceDir: string, targetDir: string): Promise<
   return copied;
 }
 
-/** Copy each Skill folder that the project does not have yet; never follows symlinks. */
-async function copySkillFolders(sourceDir: string, targetDir: string): Promise<number> {
-  const entries = await fs.readdir(sourceDir, { withFileTypes: true }).catch(() => []);
-  let copied = 0;
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-    const target = path.join(targetDir, entry.name);
-    if (await fs.lstat(target).then(() => true, () => false)) continue;
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.cp(path.join(sourceDir, entry.name), target, {
-      recursive: true, errorOnExist: false, force: false,
-      filter: async (source) => !(await fs.lstat(source)).isSymbolicLink(),
-    });
-    copied++;
-  }
-  return copied;
+/** Whether `target` lies inside `root` (both real paths). */
+function inside(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-async function writeIfMissing(filePath: string, content: string): Promise<boolean> {
-  try {
-    await fs.writeFile(filePath, content, { encoding: 'utf8', flag: 'wx' });
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
-    throw error;
+/**
+ * Merge one Skill folder into the project's copy, file by file: a missing file is copied, a file the
+ * project has with other content keeps the project's and gets the old one beside it. A link to a
+ * file inside the Skill folder is copied as that file; a link leading outside it is not followed
+ * (it could expose anything on the computer) and is reported. Returns the files written.
+ */
+async function mergeSkillTree(sourceRoot: string, source: string, target: string, skipped: string[]): Promise<number> {
+  let written = 0;
+  for (const entry of await readEntries(source)) {
+    const from = path.join(source, entry.name);
+    const to = path.join(target, entry.name);
+    let real = from;
+    let stat = await fs.lstat(from);
+    if (stat.isSymbolicLink()) {
+      const resolved = await fs.realpath(from).catch(() => null);
+      if (!resolved || !inside(sourceRoot, resolved)) {
+        skipped.push(path.relative(path.dirname(sourceRoot), from));
+        continue;
+      }
+      real = resolved;
+      stat = await fs.stat(resolved);
+    }
+    if (stat.isDirectory()) {
+      if (real !== from) {
+        // A linked folder inside the Skill: copy its files (links inside it are left out).
+        await fs.mkdir(to, { recursive: true });
+        written += await mergeSkillTree(real, real, to, skipped);
+      } else {
+        await fs.mkdir(to, { recursive: true });
+        written += await mergeSkillTree(sourceRoot, from, to, skipped);
+      }
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    await fs.mkdir(target, { recursive: true });
+    try {
+      await fs.copyFile(real, to, fsConstants.COPYFILE_EXCL);
+      written++;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (await sameContent(real, to)) continue;
+      const siblings = (await readEntries(target)).map((item) => path.join(target, item.name))
+        .filter((file) => file !== to && path.basename(file).startsWith(`${path.basename(to, path.extname(to))}-from-v1`));
+      let present = false;
+      for (const sibling of siblings) if (await sameContent(real, sibling).catch(() => false)) present = true;
+      if (present) continue;
+      await fs.copyFile(real, await besideName(to), fsConstants.COPYFILE_EXCL);
+      written++;
+    }
   }
+  return written;
+}
+
+/** Merge each Skill folder into the project's Skills; the project's own files are never overwritten. */
+async function copySkillFolders(sourceDir: string, targetDir: string): Promise<{ copied: number; skippedLinks: string[] }> {
+  let copied = 0;
+  const skippedLinks: string[] = [];
+  const root = await fs.realpath(sourceDir).catch(() => sourceDir);
+  for (const entry of await readEntries(sourceDir)) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    const skillRoot = path.join(root, entry.name);
+    if (await mergeSkillTree(skillRoot, skillRoot, path.join(targetDir, entry.name), skippedLinks) > 0) copied++;
+  }
+  return { copied, skippedLinks };
 }
 
 /**
@@ -268,6 +349,8 @@ export interface BotProjectPreparation {
   registered: boolean;
   memoriesCopied: number;
   skillsCopied: number;
+  /** Links in the teammate's Skills that lead outside their Skill folder: not copied. */
+  skippedSkillLinks: string[];
 }
 
 /** Idempotent. Never overwrites existing files, history or a user-chosen project name. */
@@ -283,7 +366,7 @@ export async function prepareBotProjectWorkspace(input: {
   const moved = await moveTeammateMemoryIntoProject({ botId: input.botId, ownerRoot: input.ownerRoot, workspace });
   const v1Copied = await copyMemoryRecords(botProfileMemoryDir(input.ownerRoot, input.botId), teammateProjectMemoryDir(workspace));
   const memoriesCopied = (moved ?? 0) + v1Copied;
-  const skillsCopied = await copySkillFolders(
+  const skills = await copySkillFolders(
     path.join(botProfileDir(input.ownerRoot, input.botId), 'skills'),
     path.join(workspace, '.agents', 'skills'),
   );
@@ -316,7 +399,7 @@ export async function prepareBotProjectWorkspace(input: {
     await nameBotProject(input.botId, projectDir, input.displayName);
     broadcastProjectRegistered(projectDir);
   }
-  return { workingDir: workspace, repository, registered, memoriesCopied, skillsCopied };
+  return { workingDir: workspace, repository, registered, memoriesCopied, skillsCopied: skills.copied, skippedSkillLinks: skills.skippedLinks };
 }
 
 /** One recognisable name for every teammate project, so it never reads like a same-named repo. */

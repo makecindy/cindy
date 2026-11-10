@@ -26,15 +26,16 @@ export interface RoutineConversion {
   note: string | null;
 }
 
-/** A whole-minute interval that a five-field cron can express exactly. */
-function intervalCron(intervalMs: number): string | null {
+/**
+ * The cron an interval automation also stores (shown if the owner switches it to a schedule):
+ * the same rhythm where a five-field cron has it, hourly otherwise. The interval decides runs.
+ */
+function intervalCron(intervalMs: number): string {
   const minutes = intervalMs / 60_000;
-  if (!Number.isInteger(minutes) || minutes <= 0) return null;
-  if (minutes < 60 && 60 % minutes === 0) return `*/${minutes} * * * *`;
+  if (Number.isInteger(minutes) && minutes > 0 && minutes < 60 && 60 % minutes === 0) return `*/${minutes} * * * *`;
   const hours = minutes / 60;
-  if (Number.isInteger(hours) && hours < 24 && 24 % hours === 0) return `0 */${hours} * * *`;
-  if (hours === 24) return '0 9 * * *';
-  return null;
+  if (Number.isInteger(hours) && hours > 0 && hours < 24 && 24 % hours === 0) return `0 */${hours} * * *`;
+  return '0 * * * *';
 }
 
 function onceCron(at: number, timezone: string): string | null {
@@ -96,19 +97,22 @@ export function convertRoutine(
   options: { now: number; timezone: string },
 ): RoutineConversion {
   const skipped: string[] = [];
-  const schedules: Array<{ cronExpr: string; timezone: string; recurring: boolean }> = [];
+  const schedules: Array<{ cronExpr: string; timezone: string; recurring: boolean; intervalMs?: number }> = [];
+  const ran: string[] = [];
   for (const trigger of routine.triggers) {
     if (trigger.kind === 'cron') {
       schedules.push({ cronExpr: trigger.expression, timezone: trigger.timezone || options.timezone, recurring: true });
     } else if (trigger.kind === 'interval') {
-      const cronExpr = intervalCron(trigger.intervalMs);
-      if (cronExpr) schedules.push({ cronExpr, timezone: options.timezone, recurring: true });
-      else skipped.push(`every ${Math.round(trigger.intervalMs / 60_000)} min`);
+      // Every N, as before (the engine runs interval automations by the interval itself).
+      if (Number.isFinite(trigger.intervalMs) && trigger.intervalMs >= 60_000) {
+        schedules.push({ cronExpr: intervalCron(trigger.intervalMs), timezone: options.timezone, recurring: true, intervalMs: trigger.intervalMs });
+      } else skipped.push(`every ${Math.round(trigger.intervalMs / 1000)} s`);
     } else if (trigger.kind === 'once') {
       const cronExpr = trigger.at > options.now ? onceCron(trigger.at, options.timezone) : null;
       if (cronExpr) schedules.push({ cronExpr, timezone: options.timezone, recurring: false });
       else if (trigger.at > options.now) skipped.push(`once at ${new Date(trigger.at).toISOString()}`);
-      // A one-off time already in the past has nothing left to run.
+      // A one-off time already in the past has nothing left to run; it is still listed.
+      else ran.push(`once at ${new Date(trigger.at).toISOString()}`);
     } else {
       skipped.push(`event ${trigger.sourceId}/${trigger.eventType}`);
     }
@@ -133,8 +137,10 @@ export function convertRoutine(
     config: { id: migratedAutomationId(routine.id, index), ...shared, ...schedule },
     enabled: routine.enabled && !lostCheck && !lostModel,
   }));
-  if (automations.length === 0 && skipped.length > 0) {
-    // Nothing can trigger it on its own any more: keep it as a manual automation, paused.
+  // A draft without triggers, or triggers that cannot be carried: nothing can start it on its own
+  // any more, so it is kept as a manual automation, paused. A finished one-off is not recreated.
+  const draft = routine.triggers.length === 0;
+  if (automations.length === 0 && (skipped.length > 0 || draft)) {
     automations.push({
       config: {
         id: migratedAutomationId(routine.id, 0), ...shared,
@@ -145,6 +151,8 @@ export function convertRoutine(
   }
   const reasons = [
     ...(skipped.length > 0 ? [`trigger not carried: ${skipped.join(', ')}`] : []),
+    ...(draft ? ['it had no trigger; kept as a manual automation, paused'] : []),
+    ...(automations.length === 0 && ran.length > 0 ? [`its one-off run (${ran.join(', ')}) is past; not recreated, its definition is in v1-archive/routines.json`] : []),
     ...(lostCheck ? ['plugin check not carried, created paused'] : []),
     // Running it here on another model would not be the same job: it waits for the owner.
     ...(lostModel ? ['its model on another computer could not be carried, created paused'] : []),
@@ -173,13 +181,17 @@ export interface CarryoverInput {
     waiting?: LegacyLedgerItem[]; corrections?: LegacyLedgerItem[];
   } | null;
   routineNotes?: string[];
+  /** What the upgrade could not bring over itself (unreadable files, Skill links leading outside). */
+  upgradeNotes?: string[];
 }
 
 export type CarryoverLabel =
-  | 'title' | 'intro' | 'todos' | 'work' | 'threads' | 'commitments' | 'waiting' | 'corrections' | 'routines';
+  | 'title' | 'intro' | 'todos' | 'work' | 'threads' | 'commitments' | 'waiting' | 'corrections' | 'routines' | 'upgrade';
 
-const text = (value: unknown, max = 400): string =>
-  typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '';
+// Carried in full: a shortened item could lose the part that matters (and two items that only
+// differ at the end would merge).
+const text = (value: unknown): string =>
+  typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
 
 const day = (value: unknown): string => {
   const ms = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN;
@@ -200,15 +212,15 @@ export function buildCarryover(input: CarryoverInput, label: (key: CarryoverLabe
     .sort((a, b) => day(b.createdAt).localeCompare(day(a.createdAt)))
     .map((item) => {
       const next = item.next && typeof item.next === 'object' ? text((item.next as { label?: unknown }).label) : '';
-      return line(text(item.title, 200), next || text(item.progress), day(item.createdAt));
+      return line(text(item.title), next || text(item.progress), day(item.createdAt));
     })
     .filter((row) => row !== '- ');
   sections.push(['todos', todos]);
   const work = Object.values(input.workbench?.tasks ?? {})
     .filter((task) => task.verdict !== 'done')
     .map((task) => {
-      const ref = text(task.ref, 300);
-      return line(text(task.title, 200), [text(task.next), ref].filter(Boolean).join(' '));
+      const ref = text(task.ref);
+      return line(text(task.title), [text(task.next), ref].filter(Boolean).join(' '));
     });
   sections.push(['work', work]);
   const ledger = input.workingMemory ?? {};
@@ -218,6 +230,7 @@ export function buildCarryover(input: CarryoverInput, label: (key: CarryoverLabe
   sections.push(['waiting', (ledger.waiting ?? []).map((item) => line(text(item.text), ''))]);
   sections.push(['corrections', (ledger.corrections ?? []).map((item) => line(text(item.text), ''))]);
   sections.push(['routines', (input.routineNotes ?? []).map((note) => `- ${note}`)]);
+  sections.push(['upgrade', (input.upgradeNotes ?? []).map((note) => `- ${note}`)]);
   const filled = sections
     .map(([key, rows]) => [key, [...new Set(rows.filter((row) => row.length > 2))]] as const)
     .filter(([, rows]) => rows.length > 0);

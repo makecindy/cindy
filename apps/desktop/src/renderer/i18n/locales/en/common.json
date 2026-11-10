@@ -10259,7 +10259,8 @@
           "commitments": "Promised",
           "waiting": "Waiting on",
           "corrections": "Corrections you made",
-          "routines": "Routines to check"
+          "routines": "Routines to check",
+          "upgrade": "Not carried over automatically"
         }
       }
     },

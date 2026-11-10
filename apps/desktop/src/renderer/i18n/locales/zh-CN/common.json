@@ -10214,7 +10214,8 @@
           "commitments": "答应过的",
           "waiting": "在等",
           "corrections": "你纠正过的做法",
-          "routines": "需要看一下的例行任务"
+          "routines": "需要看一下的例行任务",
+          "upgrade": "升级时没能自动带过来的"
         }
       }
     },

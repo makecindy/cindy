@@ -5,7 +5,7 @@ import type { Routine } from '@cindy/maker-scheduler';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  root: '', routines: [] as Routine[], bindings: {} as Record<string, unknown>,
+  root: '', routines: [] as Routine[], runs: [] as Array<Record<string, unknown>>, bindings: {} as Record<string, unknown>,
   write: vi.fn(), remove: vi.fn(), moveMemory: vi.fn(async () => 0),
   projectMode: true, updateProfile: vi.fn(),
 }));
@@ -28,13 +28,16 @@ vi.mock('../botProfileFolder.js', () => ({
   },
 }));
 vi.mock('../botProjectMode.js', () => ({
-  prepareBotProjectWorkspace: async () => ({ workingDir: path.join(h.root, 'bots', 'import_ada', 'workspace') }),
+  prepareBotProjectWorkspace: async () => ({ workingDir: path.join(h.root, 'bots', 'import_ada', 'workspace'), skippedSkillLinks: [] }),
   ensureBotProjectAutomations: vi.fn(async () => true),
   moveTeammateMemoryIntoProject: h.moveMemory,
   ensureTeammateTemplate: async () => false,
 }));
 vi.mock('../botV1Routines.js', () => ({
-  readV1Routines: async (_root: string, botId: string) => h.routines.filter(routine => routine.botId === botId),
+  readV1RoutineSlice: async (_root: string, botId: string) => {
+    const routines = h.routines.filter(routine => routine.botId === botId);
+    return { routines, runs: h.runs.filter(run => routines.some(item => item.id === run.routineId)), next: {}, unreadable: null };
+  },
   removeV1Routine: async (_root: string, id: string) => { h.remove(id); h.routines = h.routines.filter(routine => routine.id !== id); },
 }));
 vi.mock('../botRoutineAutomations.js', () => ({
@@ -59,7 +62,7 @@ const routine = (id: string, patch: Partial<Routine> = {}): Routine => ({
 beforeEach(async () => {
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-v2-migration-'));
   h.write.mockReset(); h.remove.mockReset(); h.moveMemory.mockClear(); h.updateProfile.mockReset();
-  h.projectMode = true;
+  h.projectMode = true; h.runs = [];
 });
 afterEach(async () => { await fs.rm(h.root, { recursive: true, force: true }); });
 
@@ -113,4 +116,37 @@ it('carries the open todos a V1 computer uploaded into the project, once', async
   const carryover = await fs.readFile(path.join(h.root, 'bots', BOT, 'workspace', 'CARRYOVER.md'), 'utf8');
   expect(carryover.match(/Ship the fix/g)).toHaveLength(1);
   expect(carryover).not.toContain('Done one');
+});
+
+// QA 2026-11-10: the upgrade deleted a routine's runs (results, the events that started them,
+// queued ones) without keeping them, counted an unreadable state file as "nothing open", and
+// skipped its todos when the project already had a carryover file.
+it('keeps routine runs, reports unreadable files and adds to an existing carryover', async () => {
+  h.routines = [routine('own')];
+  h.runs = [
+    { id: 'r1', routineId: 'own', status: 'success', resultText: 'UNIQUE_OLD_RESULT', events: [], triggerIds: [], revision: 1, createdAt: 1 },
+    { id: 'r2', routineId: 'own', status: 'queued', events: [{ sourceId: 'mail', event: { type: 'new', payload: 'QUEUED_EVENT_BODY' } }], triggerIds: [], revision: 1, createdAt: 2 },
+  ];
+  const home = path.join(h.root, 'bots', BOT);
+  await fs.mkdir(path.join(home, 'workspace'), { recursive: true });
+  await fs.writeFile(path.join(home, 'workspace', 'CARRYOVER.md'), '# Earlier\n\n- from another computer\n');
+  await fs.writeFile(path.join(home, 'todos.v1.json'), JSON.stringify({ items: [{ title: 'Ship it', status: 'open' }] }));
+  await fs.writeFile(path.join(home, 'working-memory.json'), '{"threads": [');
+  await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('migrated');
+  const runs = await fs.readFile(path.join(home, 'v1-archive', 'routine-runs.json'), 'utf8');
+  expect(runs).toContain('UNIQUE_OLD_RESULT');
+  expect(runs).toContain('QUEUED_EVENT_BODY');
+  const carryover = await fs.readFile(path.join(home, 'workspace', 'CARRYOVER.md'), 'utf8');
+  expect(carryover).toContain('from another computer');
+  expect(carryover).toContain('Ship it');
+  expect(carryover).toContain('own: 1 run(s) were still waiting');
+  expect(carryover).toContain('working-memory.json could not be read');
+  expect(await fs.readFile(path.join(home, 'v1-archive', 'working-memory.json'), 'utf8')).toBe('{"threads": [');
+});
+
+it('retries instead of finishing when a state file cannot be read', async () => {
+  const home = path.join(h.root, 'bots', BOT);
+  await fs.mkdir(path.join(home, 'todos.v1.json'), { recursive: true });
+  await expect(migrateTeammateToV2(BOT, h.root)).rejects.toThrow();
+  await expect(fs.lstat(path.join(home, 'v2-migration.json'))).rejects.toThrow();
 });

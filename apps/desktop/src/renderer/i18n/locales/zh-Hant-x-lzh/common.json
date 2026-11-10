@@ -10214,7 +10214,8 @@
           "commitments": "所諾",
           "waiting": "所待",
           "corrections": "君所糾正",
-          "routines": "例行之務待查"
+          "routines": "例行之務待查",
+          "upgrade": "升級時未能自攜者"
         }
       }
     },

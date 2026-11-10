@@ -31,6 +31,18 @@ describe('convertRoutine', () => {
       .toMatchObject({ enabled: true, config: { agentKind: 'codex', model: 'm', providerId: 'p' } });
   });
 
+  // QA 2026-11-10: every 7 minutes became a paused manual automation, every 24 h a fixed 9:00,
+  // and a paused draft without triggers produced nothing and no note before its source was removed.
+  it('keeps any interval as an interval and a triggerless draft as a paused manual automation', () => {
+    const every = (intervalMs: number) => convertRoutine(routine({ enabled: true,
+      triggers: [{ id: 'i', kind: 'interval', intervalMs }] }), route, { now: 0, timezone: 'UTC' });
+    expect(every(7 * 60_000)).toMatchObject({ note: null, automations: [{ enabled: true, config: { intervalMs: 420_000, recurring: true } }] });
+    expect(every(86_400_000).automations[0].config).toMatchObject({ intervalMs: 86_400_000 });
+    const draft = convertRoutine(routine({ triggers: [] }), route, { now: 0, timezone: 'UTC' });
+    expect(draft.automations).toEqual([{ enabled: false, config: expect.objectContaining({ manual: true, prompt: 'check PRs' }) }]);
+    expect(draft.note).toContain('no trigger');
+  });
+
   it('turns what cannot run on its own into a paused manual automation with a note', () => {
     const result = convertRoutine(routine({
       enabled: true,
@@ -84,4 +96,14 @@ describe('buildCarryover', () => {
     expect(doc).not.toMatch(/Deleted one|Done one|PR #2|## ROUTINES|## THREADS/);
     expect(buildCarryover({ todos: { items: [{ title: 'x', status: 'done' }] } }, (key) => key)).toBeNull();
   });
+});
+
+// QA 2026-11-10: items were cut to 400 characters, so two long corrections that differ only at the
+// end merged into one and both endings were lost.
+it('carries long items in full', () => {
+  const head = 'x'.repeat(500);
+  const content = buildCarryover({ workingMemory: { corrections: [{ text: `${head} END_ONE` }, { text: `${head} END_TWO` }] } },
+    (key) => key) ?? '';
+  expect(content).toContain('END_ONE');
+  expect(content).toContain('END_TWO');
 });

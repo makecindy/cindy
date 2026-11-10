@@ -10259,7 +10259,8 @@
           "commitments": "Zugesagt",
           "waiting": "Wartet auf",
           "corrections": "Deine Korrekturen",
-          "routines": "Zu prüfende Routinen"
+          "routines": "Zu prüfende Routinen",
+          "upgrade": "Nicht automatisch übernommen"
         }
       }
     },

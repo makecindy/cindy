@@ -10214,7 +10214,8 @@
           "commitments": "約束したこと",
           "waiting": "待っていること",
           "corrections": "あなたが訂正したこと",
-          "routines": "確認が必要な定期タスク"
+          "routines": "確認が必要な定期タスク",
+          "upgrade": "自動では引き継げなかったもの"
         }
       }
     },

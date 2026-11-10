@@ -153,4 +153,39 @@ describe('prepareBotProjectWorkspace', () => {
     await expect(fs.readFile(path.join(skill, 'SKILL.md'), 'utf8')).resolves.toBe(own);
     await expect(fs.readFile(path.join(skill, 'checklist.md'), 'utf8')).resolves.toBe('company checklist');
   });
+
+  // QA 2026-11-10: a Skill folder the project already had was skipped whole (its other files lost),
+  // every link was dropped (a Skill's own `instructions.md -> real.md` broke), and a memory folder
+  // that could not be read counted as empty, so the upgrade finished without the memories.
+  it.skipIf(process.platform === 'win32')('merges Skill files, keeps links inside a Skill and retries an unreadable memory folder', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-skill-merge-'));
+    const legacy = path.join(root, 'bots', 'bot_mia', 'skills', 'report');
+    await fs.mkdir(legacy, { recursive: true });
+    await fs.writeFile(path.join(legacy, 'SKILL.md'), 'v1 skill');
+    await fs.writeFile(path.join(legacy, 'real.md'), 'the steps');
+    await fs.symlink('real.md', path.join(legacy, 'instructions.md'));
+    await fs.writeFile(path.join(root, 'secret.txt'), 'outside');
+    await fs.symlink(path.join(root, 'secret.txt'), path.join(legacy, 'outside.md'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    const existing = path.join(workspace, '.agents', 'skills', 'report');
+    await fs.mkdir(existing, { recursive: true });
+    await fs.writeFile(path.join(existing, 'SKILL.md'), 'project skill');
+
+    const prepared = await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
+    await expect(fs.readFile(path.join(existing, 'SKILL.md'), 'utf8')).resolves.toBe('project skill');
+    await expect(fs.readFile(path.join(existing, 'SKILL-from-v1.md'), 'utf8')).resolves.toBe('v1 skill');
+    await expect(fs.readFile(path.join(existing, 'instructions.md'), 'utf8')).resolves.toBe('the steps');
+    await expect(fs.lstat(path.join(existing, 'outside.md'))).rejects.toThrow();
+    expect(prepared.skippedSkillLinks).toEqual([path.join('report', 'outside.md')]);
+
+    const memory = path.join(root, 'bots', 'bot_mia', 'memories');
+    await fs.mkdir(memory, { recursive: true });
+    await fs.writeFile(path.join(memory, 'user_tea.md'), 'tea');
+    await fs.chmod(memory, 0o000);
+    try {
+      await expect(prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root })).rejects.toThrow();
+    } finally {
+      await fs.chmod(memory, 0o755);
+    }
+  });
 });

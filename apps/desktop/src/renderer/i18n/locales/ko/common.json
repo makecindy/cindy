@@ -10214,7 +10214,8 @@
           "commitments": "약속한 일",
           "waiting": "기다리는 일",
           "corrections": "내가 바로잡은 점",
-          "routines": "확인이 필요한 루틴"
+          "routines": "확인이 필요한 루틴",
+          "upgrade": "자동으로 옮기지 못한 항목"
         }
       }
     },

@@ -10341,7 +10341,8 @@
           "commitments": "Promis",
           "waiting": "En attente de",
           "corrections": "Vos corrections",
-          "routines": "Routines à vérifier"
+          "routines": "Routines à vérifier",
+          "upgrade": "Non repris automatiquement"
         }
       }
     },

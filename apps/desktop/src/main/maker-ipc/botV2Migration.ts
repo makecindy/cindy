@@ -32,7 +32,7 @@ import { botProfileDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
 import { ensureBotProjectAutomations, ensureTeammateTemplate, moveTeammateMemoryIntoProject, prepareBotProjectWorkspace } from './botProjectMode.js';
 import { TEAMMATE_V2_RECEIPT_FILE, teammateWorkspaceDir } from './botProjectMemory.js';
 import { writeRoutineAutomations } from './botRoutineAutomations.js';
-import { readV1Routines, removeV1Routine } from './botV1Routines.js';
+import { readV1RoutineSlice, removeV1Routine } from './botV1Routines.js';
 import {
   BOT_V2_CARRYOVER_FILE,
   buildCarryover,
@@ -50,8 +50,24 @@ const V1_STATE = ['todos.v1.json', 'working-memory.json', 'nightly-learning.json
 /** Still read by V2 (its directories are the linked projects): archived as a copy, left in place. */
 const V1_COPIED_STATE = ['workbench.json'];
 
+/**
+ * null: no file. A file that cannot be read for another reason throws, so the upgrade retries
+ * instead of counting it as empty; `unreadable` marks one whose content is not valid JSON.
+ */
+async function readJsonFile<T>(file: string): Promise<{ value: T | null; unreadable: boolean }> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { value: null, unreadable: false };
+    throw error;
+  }
+  try { return { value: JSON.parse(raw) as T, unreadable: false }; } catch { return { value: null, unreadable: true }; }
+}
+
+/** The upgrade's own bookkeeping files: an unparseable one starts over (they are rebuilt from the source). */
 async function readJson<T>(file: string): Promise<T | null> {
-  try { return JSON.parse(await fs.readFile(file, 'utf8')) as T; } catch { return null; }
+  return (await readJsonFile<T>(file)).value;
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -85,9 +101,17 @@ async function importedRoutinesToPause(ownerRoot: string, botId: string,
 }
 
 async function migrateRoutines(botId: string, ownerRoot: string, workingDir: string, archiveDir: string,
-  config: Record<string, unknown>, assertCurrent: () => void): Promise<string[]> {
-  const all = await readV1Routines(ownerRoot, botId);
+  config: Record<string, unknown>, assertCurrent: () => void, upgradeNotes: string[]): Promise<string[]> {
+  const slice = await readV1RoutineSlice(ownerRoot, botId);
+  const all = slice.routines;
   assertCurrent();
+  if (slice.unreadable !== null) {
+    // The account's routine file cannot be parsed: keep a copy with this teammate and say so.
+    await fs.mkdir(archiveDir, { recursive: true });
+    const copy = path.join(archiveDir, 'routines-unreadable.json');
+    if (!await exists(copy)) await writeAtomic(copy, slice.unreadable);
+    upgradeNotes.push(`The routines file could not be read, so no routine was converted; a copy is in v1-archive/routines-unreadable.json.`);
+  }
   // Retired built-ins have no V2 counterpart (the project's own memory review replaced nightly
   // learning); only their leftover definitions and backing schedules go.
   const retired = (routine: Routine) => routine.builtin === 'nightly-learning' || routine.builtin === 'follow-up'
@@ -101,6 +125,24 @@ async function migrateRoutines(botId: string, ownerRoot: string, workingDir: str
   const archived = (await readJson<Array<{ id?: unknown }>>(archiveFile)) ?? [];
   const kept = new Set(all.map((routine) => routine.id));
   await writeAtomic(archiveFile, JSON.stringify([...archived.filter((item) => !kept.has(String(item?.id))), ...all], null, 2));
+  // Their runs (results, the events that started them, queued ones) and timers go with them.
+  const runsFile = path.join(archiveDir, 'routine-runs.json');
+  const savedRuns = (await readJson<{ runs?: Array<{ id?: unknown }>; next?: Record<string, number> }>(runsFile)) ?? {};
+  const runIds = new Set(slice.runs.map((run) => run.id));
+  await writeAtomic(runsFile, JSON.stringify({
+    runs: [...(savedRuns.runs ?? []).filter((run) => !runIds.has(String(run?.id))), ...slice.runs],
+    next: { ...(savedRuns.next ?? {}), ...slice.next },
+  }, null, 2));
+  const waiting = slice.runs.filter((run) => run.status === 'queued' || run.status === 'running');
+  const runNotes = all.filter((routine) => !retired(routine)).flatMap((routine) => {
+    const count = waiting.filter((run) => run.routineId === routine.id).length;
+    return count > 0 ? [`${routine.name}: ${count} run(s) were still waiting or running and did not finish; their events are in v1-archive/routine-runs.json.`] : [];
+  });
+  if (runNotes.length > 0) {
+    // Kept with the routine notes before the routines go, so a rerun still lists them.
+    await writeAtomic(notesFile, JSON.stringify([...new Set([...savedNotes, ...runNotes])], null, 2));
+    savedNotes.push(...runNotes);
+  }
   const [route] = await readEffectiveBotModelChain(config).catch(() => []);
   const imported = botId.startsWith('import_') ? await importedRoutinesToPause(ownerRoot, botId, assertCurrent) : new Map<string, string | null>();
   const notes: string[] = [];
@@ -151,18 +193,28 @@ export async function carryLegacyTodos(botId: string, ownerRoot: string, items: 
   await pointRulesToCarryover(workingDir);
 }
 
-async function writeCarryover(home: string, workingDir: string, routineNotes: string[]): Promise<boolean> {
+/**
+ * The unfinished V1 items, written into the project's carryover file. A file already there (an
+ * earlier partial run, or items that arrived from another computer) gets what it lacks appended.
+ */
+async function writeCarryover(home: string, workingDir: string, routineNotes: string[], upgradeNotes: string[]): Promise<boolean> {
   const target = path.join(workingDir, BOT_V2_CARRYOVER_FILE);
-  if (await exists(target)) return true;
-  const [todos, workbench, workingMemory] = await Promise.all([
-    readJson<never>(path.join(home, 'todos.v1.json')),
-    readJson<never>(path.join(home, 'workbench.json')),
-    readJson<never>(path.join(home, 'working-memory.json')),
-  ]);
-  const content = buildCarryover({ todos, workbench, workingMemory, routineNotes },
-    (key: CarryoverLabel) => t(`bots.homeFolder.projectMode.carryover.${key}`));
-  if (!content) return false;
-  await writeAtomic(target, content);
+  const files = ['todos.v1.json', 'workbench.json', 'working-memory.json'] as const;
+  const [todos, workbench, workingMemory] = await Promise.all(files.map((name) => readJsonFile<never>(path.join(home, name))));
+  const notes = [...upgradeNotes];
+  [todos, workbench, workingMemory].forEach((file, index) => {
+    // Never counted as "nothing open": the original is archived as it is, and the teammate is told.
+    if (file.unreadable) notes.push(`${files[index]} could not be read; the original is in v1-archive/${files[index]}.`);
+  });
+  const content = buildCarryover({ todos: todos.value, workbench: workbench.value, workingMemory: workingMemory.value,
+    routineNotes, upgradeNotes: notes }, (key: CarryoverLabel) => t(`bots.homeFolder.projectMode.carryover.${key}`));
+  const current = await fs.readFile(target, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!content) return current !== null;
+  if (current?.includes(content.trim())) return true;
+  await writeAtomic(target, current ? `${current.replace(/\s*$/, '')}\n\n${content}` : content);
   await pointRulesToCarryover(workingDir);
   return true;
 }
@@ -228,9 +280,12 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
   assertCurrent();
   const workingDir = await ensureBotWorkspaceDir(ownerRoot, botId, legacyUserDataDir);
   const archiveDir = path.join(home, ARCHIVE_DIR);
-  const routineNotes = await migrateRoutines(botId, ownerRoot, workingDir, archiveDir, capabilities, assertCurrent);
+  const upgradeNotes = prepared.skippedSkillLinks.length > 0
+    ? [`Links in its skills that lead outside the skill folder were not copied: ${prepared.skippedSkillLinks.join(', ')}. The originals stay in the teammate's skills folder.`]
+    : [];
+  const routineNotes = await migrateRoutines(botId, ownerRoot, workingDir, archiveDir, capabilities, assertCurrent, upgradeNotes);
   assertCurrent();
-  const carried = await writeCarryover(home, workingDir, routineNotes);
+  const carried = await writeCarryover(home, workingDir, routineNotes, upgradeNotes);
   assertCurrent();
   await archiveV1State(home, archiveDir);
   assertCurrent();

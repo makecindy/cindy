@@ -10341,7 +10341,8 @@
           "commitments": "Prometido",
           "waiting": "A la espera de",
           "corrections": "Tus correcciones",
-          "routines": "Rutinas por revisar"
+          "routines": "Rutinas por revisar",
+          "upgrade": "No se pudo trasladar automáticamente"
         }
       }
     },
