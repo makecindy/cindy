@@ -3,7 +3,7 @@ import { DirectLinkTransport } from './DirectLinkTransport';
 import { tryMobilePeerInvoke, resetMobilePeer } from './peerFileRegistry';
 import { isHistoryViewUnavailable, type HistoryWorkPatch } from '@cindy/maker-shared/message-window';
 import { findRemoteHistoryView } from '@/session/remoteHistoryView';
-import { BACKGROUND_SUSPEND_SUSPECT_MS, createBackgroundConnection } from './backgroundConnection';
+import { createBackgroundConnection } from './backgroundConnection';
 import { invokeWithHistoryViewCapability } from './historyViewCapability';
 import { createRecoveryDiagnostics, settleMeasuredSnapshot, type RecoveryPhase } from './recoveryDiagnostics';
 import { confirmTrackedSubscription, SubscriptionAcknowledgements } from './subscriptionAcknowledgements';
@@ -384,6 +384,13 @@ function subscribeRemoteResourceChanged(
 const BACKGROUND_STOP_GRACE_MS = 2_500;
 /** 断开前最多等最后一轮 heavy unsubscribe 应答;超时仍停止,避免后台 socket 久留。 */
 const BACKGROUND_FINAL_UNSUBSCRIBE_WAIT_MS = 1_000;
+/**
+ * 回前台时若「宽限计时器还挂着」但后台时长已超过此阈值,说明 JS 在计时器触发前
+ * 被 iOS 挂起——socket 大概率已被系统回收,但状态机还认为 online。此时主动换新
+ * 连接,别等心跳(~20s)才发现假活。
+ */
+const BACKGROUND_SUSPEND_SUSPECT_MS = 10_000;
+
 /** 桌面端 presence 闪断宽限:短暂离线不立刻清空该设备的会话镜像与能力缓存。 */
 const PRESENCE_OFFLINE_WIPE_GRACE_MS = 5_000;
 

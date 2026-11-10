@@ -1,6 +1,3 @@
-// Grace (2.5s), final unsubscribe (1s), and suspension margin. Mobile only.
-export const BACKGROUND_SUSPEND_SUSPECT_MS = 4_000;
-
 export const BACKGROUND_TRANSITION_TIMEOUT_MS = 4_000;
 
 export interface BackgroundConnectionDiagnostic {
