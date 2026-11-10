@@ -89,6 +89,14 @@ export const generalSettings = defineSettings({
     titleKey: 'settings.sections.gitSafety',
     sectionKey: 'settings.sections.gitSafety',
   },
+  commitAttribution: {
+    id: 'general.commitAttributionSection',
+    tab: 'general',
+    targetId: 'settings-search-target-general-commit-attribution',
+    titleKey: 'settings.commitAttribution.title',
+    sectionKey: 'settings.commitAttribution.title',
+    aliases: ['Commit 署名', 'commit attribution', 'Assisted-by'],
+  },
   experimental: {
     id: 'general.experimental',
     tab: 'general',

@@ -7986,6 +7986,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     agentResourceSettingsReset: (): Promise<unknown> =>
       ipcRenderer.invoke('maker:agent-resource-settings:reset'),
 
+    /** Cindy 在 Commit / PR 中的署名偏好；下次 Agent 会话启动时生效。 */
+    commitAttributionGet: (): Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+    }> => ipcRenderer.invoke('maker:commit-attribution:get'),
+    commitAttributionSet: (enabled: boolean): Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'new-agent-sessions';
+    }> => ipcRenderer.invoke('maker:commit-attribution:set', enabled),
+    commitAttributionReset: (): Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'new-agent-sessions';
+    }> => ipcRenderer.invoke('maker:commit-attribution:reset'),
+
     silentEncryptedRetryGet: (): Promise<{
       enabled: boolean;
       isCustomized?: boolean;

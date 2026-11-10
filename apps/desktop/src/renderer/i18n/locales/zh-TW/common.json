@@ -4535,6 +4535,13 @@
       "toggleAria": "檔案恢復點模式",
       "saveFailed": "儲存 Git 安全設定失敗"
     },
+    "commitAttribution": {
+      "title": "Commit 署名",
+      "label": "Cindy 署名",
+      "description": "在 Cindy 建立的 Commit 和 PR 中加入「Assisted-by: Cindy (https://cindy.app)」。在新的 Agent 會話啟動時生效。",
+      "toggleAria": "Cindy 署名",
+      "saveFailed": "未能儲存 Commit 署名設定"
+    },
     "feishuBot": {
       "title": "飛書 / Lark 機器人",
       "description": "透過飛書或 Lark 機器人隨時隨地連線 {{appName}} 進行工作。",

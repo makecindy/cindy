@@ -4578,6 +4578,13 @@
       "toggleAria": "File recovery point mode",
       "saveFailed": "Failed to save Git safety setting"
     },
+    "commitAttribution": {
+      "title": "Commit Attribution",
+      "label": "Cindy Attribution",
+      "description": "Add “Assisted-by: Cindy (https://cindy.app)” to commits and pull requests Cindy creates. Applies when a new agent session starts.",
+      "toggleAria": "Cindy attribution",
+      "saveFailed": "Failed to save commit attribution setting"
+    },
     "feishuBot": {
       "title": "Feishu / Lark Bot",
       "description": "Connect to {{appName}} via a Feishu or Lark bot to work anywhere, anytime.",

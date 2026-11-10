@@ -87,6 +87,7 @@ vi.mock('../StreamFadeSection', () => ({ StreamFadeSection: Stub }));
 vi.mock('../TipsSection', () => ({ TipsSection: Stub }));
 vi.mock('../ExperimentalSection', () => ({ ExperimentalSection: Stub }));
 vi.mock('../GitSafetySection', () => ({ GitSafetySection: Stub }));
+vi.mock('../CommitAttributionSection', () => ({ CommitAttributionSection: Stub }));
 vi.mock('../SessionImportSection', () => ({ SessionImportSection: Stub }));
 vi.mock('../AgentResourceSection', () => ({ AgentResourceSection: Stub }));
 vi.mock('../CollaborationSection', () => ({ CollaborationSection: Stub }));

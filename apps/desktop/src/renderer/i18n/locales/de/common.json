@@ -4578,6 +4578,13 @@
       "toggleAria": "Modus für Datei-Wiederherstellungspunkte",
       "saveFailed": "Git-Sicherheitseinstellung konnte nicht gespeichert werden"
     },
+    "commitAttribution": {
+      "title": "Commit-Zuordnung",
+      "label": "Cindy-Zuordnung",
+      "description": "Fügt „Assisted-by: Cindy (https://cindy.app)“ zu von Cindy erstellten Commits und Pull Requests hinzu. Wird beim Start einer neuen Agent-Sitzung angewendet.",
+      "toggleAria": "Cindy-Zuordnung",
+      "saveFailed": "Commit-Zuordnung konnte nicht gespeichert werden"
+    },
     "feishuBot": {
       "title": "Feishu / Lark Bot",
       "description": "Verbinde dich über einen Feishu- oder Lark-Bot mit {{appName}}, um jederzeit und überall zu arbeiten.",

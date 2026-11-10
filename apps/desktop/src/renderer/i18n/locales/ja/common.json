@@ -4535,6 +4535,13 @@
       "toggleAria": "ファイル復元ポイントのモード",
       "saveFailed": "Git セーフティ設定の保存に失敗しました"
     },
+    "commitAttribution": {
+      "title": "コミットの帰属表示",
+      "label": "Cindy の帰属表示",
+      "description": "Cindy が作成したコミットと pull request に「Assisted-by: Cindy (https://cindy.app)」を追加します。新しい Agent セッションの開始時に適用されます。",
+      "toggleAria": "Cindy の帰属表示",
+      "saveFailed": "コミットの帰属表示設定を保存できませんでした"
+    },
     "feishuBot": {
       "title": "Feishu / Lark ボット",
       "description": "Feishu または Lark ボット経由で {{appName}} に接続し、いつでもどこでも作業できます。",

@@ -36,6 +36,7 @@ export default {
     'general', 'appearance', 'personalization', 'voice-input', 'shortcuts',
     'remote-control', 'import', 'builtin-tools', 'storage', 'help', 'about', 'agent-island', 'usage', 'billing', 'shared-tasks', 'ghosts',
   ].map(tab => [tab === 'general' ? 'default' : tab, { about: `Real ${tab} settings and all rendered rows`, data: { tab } }])),
+    'commit-attribution': { about: 'Commit attribution is searchable and scrolls into view', data: { tab: 'general', commitAttribution: true } },
   },
   async check(page, ui) {
     const panel = page.getByRole('tabpanel');
@@ -125,13 +126,15 @@ export default {
     }
     // Search for a rendered setting through the real sidebar and verify the
     // resulting highlight and scroll position, not just the URL or catalog data.
-    const entry = await panel.evaluate((el, tab) => {
-      const controls = [...el.querySelectorAll('[data-setting-id]')].reverse();
-      const entries = window.settingsFixtureEntries;
-      return controls.map(control => entries.find(item => item.id === control.dataset.settingId && item.tab === tab))
-        .find(item => item && document.getElementById(item.targetId))
-        ?? entries.find(item => item.tab === tab && item.targetId === el.id);
-    }, ui.data.tab);
+    const entry = ui.data.commitAttribution
+      ? await panel.evaluate(() => window.settingsFixtureEntries.find(item => item.id === 'general.commitAttribution'))
+      : await panel.evaluate((el, tab) => {
+        const controls = [...el.querySelectorAll('[data-setting-id]')].reverse();
+        const entries = window.settingsFixtureEntries;
+        return controls.map(control => entries.find(item => item.id === control.dataset.settingId && item.tab === tab))
+          .find(item => item && document.getElementById(item.targetId))
+          ?? entries.find(item => item.tab === tab && item.targetId === el.id);
+      }, ui.data.tab);
     assert.ok(entry, 'page has a searchable definition');
     const search = page.getByRole('combobox', { name: await ui.t('settings.search.ariaLabel') });
     await search.fill(await ui.t(entry.titleKey));

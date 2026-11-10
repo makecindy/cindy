@@ -57,7 +57,7 @@ const manifests: Record<string, any>[] = [];
 let failedRequests = 0;
 for (const profile of ['claude', 'codex', 'pi']) {
   const hostRoot = path.join(repo, 'apps/desktop/src/main/maker-host');
-  const sections = ['host-system-prompt.md', ...(profile === 'pi' ? [] : ['skill-source-precedence-prompt.md']), `${profile}-system-prompt.md`];
+  const sections = ['host-system-prompt.md', 'commit-attribution-prompt.md', 'host-runtime-prompt.md', ...(profile === 'pi' ? [] : ['skill-source-precedence-prompt.md']), `${profile}-system-prompt.md`];
   const original = (await Promise.all(sections.map(file => readFile(path.join(hostRoot, file), 'utf8'))))
     .map(section => section.trim()).filter(Boolean).join('\n\n');
   for (const variant of ['before', 'after'] as const) {

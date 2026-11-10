@@ -1,6 +1,12 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+
+vi.mock('../../maker-host/commit-attribution-settings-store.js', () => ({
+  readCommitAttributionSettings: () => ({ enabled: true }),
+}));
 import { buildDesktopClaudeRuntimeConfig, desktopCodexRuntimeConfig } from '../../maker-host/runtime-configs.js';
 import hostPrompt from '../../maker-host/host-system-prompt.md?raw';
+import attribution from '../../maker-host/commit-attribution-prompt.md?raw';
+import runtime from '../../maker-host/host-runtime-prompt.md?raw';
 import ownership from '../../maker-host/business-ownership-prompt.md?raw';
 import precedence from '../../maker-host/skill-source-precedence-prompt.md?raw';
 import claudePrompt from '../../maker-host/claude-system-prompt.md?raw';
@@ -16,7 +22,7 @@ it('keeps the upstream Desktop system prompt unchanged by remote authorization',
     [desktopCodexRuntimeConfig, codexPrompt],
   ] as const;
   for (const [config, harnessPrompt] of cases) {
-    expect(config.systemPrompt).toBe([hostPrompt, ownership, precedence, harnessPrompt]
+    expect(config.systemPrompt).toBe([hostPrompt, attribution, runtime, ownership, precedence, harnessPrompt]
       .map(section => section.trim()).filter(Boolean).join('\n\n'));
     expect(config.systemPrompt).not.toContain('Plugin accounts and remote authorization');
   }

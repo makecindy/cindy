@@ -674,6 +674,12 @@ import {
 } from '../maker-host/agent-resource-settings-store.js';
 import { createAgentResourceSettingsIpc } from './agent-resource-settings-ipc.js';
 import {
+  readCommitAttributionSettingsState,
+  resetCommitAttributionSettings,
+  writeCommitAttributionEnabled,
+} from '../maker-host/commit-attribution-settings-store.js';
+import { createCommitAttributionSettingsIpc } from './commit-attribution-settings-ipc.js';
+import {
   createBotDelegationService,
   discardDelegationQueuedInputs,
   hasExplicitSessionTaskModel,
@@ -2467,6 +2473,14 @@ const agentResourceSettingsIpc = createAgentResourceSettingsIpc({
   readState: readAgentResourceSettingsState,
   write: writeAgentResourceSetting,
   reset: resetAgentResourceSettings,
+});
+
+const commitAttributionSettingsIpc = createCommitAttributionSettingsIpc({
+  assertTrustedSender: (event) =>
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+  readState: readCommitAttributionSettingsState,
+  write: writeCommitAttributionEnabled,
+  reset: resetCommitAttributionSettings,
 });
 
 function memorySettingsWire() {
@@ -17109,6 +17123,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_RESET, async (e) =>
     agentResourceSettingsIpc.reset(e),
   );
+
+  ipcMain.handle(MAKER_INVOKE.COMMIT_ATTRIBUTION_GET, async (e) =>
+    commitAttributionSettingsIpc.get(e),
+  );
+  ipcMain.handle(MAKER_INVOKE.COMMIT_ATTRIBUTION_SET, async (e, enabled: unknown) =>
+    commitAttributionSettingsIpc.set(e, enabled),
+  );
+  ipcMain.handle(MAKER_INVOKE.COMMIT_ATTRIBUTION_RESET, async (e) =>
+    commitAttributionSettingsIpc.reset(e),
+  );
+  registerRuntimeSettingsSection({
+    id: 'commit-attribution',
+    title: 'Commit 署名',
+    description: 'Cindy 创建 Commit 和 PR 时是否添加 Assisted-by 署名；下次 Agent 会话启动时生效。',
+    effective: 'new-agent-sessions',
+    schema: settingsSchema.strictObject({ enabled: settingsSchema.boolean().optional() }),
+    read: readCommitAttributionSettingsState,
+    update: async (patch) => {
+      writeCommitAttributionEnabled(patch.enabled as boolean);
+    },
+    reset: resetCommitAttributionSettings,
+  });
 
   // ─── Idle watcher ────────────────────────────────────────────────────────
   // 只扫描 active team/session，避免已归档 Worker 被终态筛选重新捞起。

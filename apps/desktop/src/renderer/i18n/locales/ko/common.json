@@ -4535,6 +4535,13 @@
       "toggleAria": "파일 복구 지점 모드",
       "saveFailed": "Git 안전 설정 저장에 실패했습니다"
     },
+    "commitAttribution": {
+      "title": "커밋 출처 표시",
+      "label": "Cindy 출처 표시",
+      "description": "Cindy가 생성한 커밋과 pull request에 “Assisted-by: Cindy (https://cindy.app)”를 추가합니다. 새 Agent 세션이 시작될 때 적용됩니다.",
+      "toggleAria": "Cindy 출처 표시",
+      "saveFailed": "커밋 출처 표시 설정을 저장하지 못했습니다"
+    },
     "feishuBot": {
       "title": "Feishu / Lark 봇",
       "description": "Feishu 또는 Lark 봇을 통해 언제 어디서나 {{appName}}에 연결하여 작업하세요.",

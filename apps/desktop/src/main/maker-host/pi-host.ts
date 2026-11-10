@@ -99,10 +99,8 @@ import {
 import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
-import hostSystemPrompt from './host-system-prompt.md?raw';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
-import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
-import piSystemPrompt from './pi-system-prompt.md?raw';
+import { composeDesktopPiSystemPrompt } from './pi-prompt-composer.js';
 import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { DEFAULT_MODEL_COMPACTION_PCT } from '../../shared/modelContextLimit.js';
@@ -864,21 +862,16 @@ export const desktopPiAuthAdapter: AuthAdapter = new DesktopPiAuthAdapter();
 
 // ── RuntimeConfig ────────────────────────────────────────────────────────────
 
-export function composePiSystemPrompt(hostPrompt: string, agentPrompt: string): string {
-  return [hostPrompt, agentPrompt]
-    .map((section) => section.trim())
-    .filter(Boolean)
-    .join('\n\n');
-}
-
 function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
   const ripgrepPath = getRipgrepBinaryPath();
   const config: AgentRuntimeConfig = {
     behaviorFlags: (ctx) => ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv(),
     // 代输入: sudo / ssh / git password prompts of this task go to the owner.
     taskShellEnv: inputHandoffTaskShellEnv,
-    // 保留 host 共用身份段,再追加 Pi 专属行为段；maker-core 会整体追加到 Pi 原生 prompt。
-    systemPrompt: composePiSystemPrompt(`${hostSystemPrompt.trim()}\n\n${businessOwnershipPrompt.trim()}`, piSystemPrompt),
+    // 保留 host 共用身份段与可选署名,再追加 Pi 专属行为段；新会话读取最新设置。
+    get systemPrompt() {
+      return composeDesktopPiSystemPrompt();
+    },
     answerDeliveryPrompt: PI_ANSWER_DELIVERY_PROMPT,
     // Pi 的 grep 以及 Cindy 覆盖的 find 都固定复用随 Desktop 校验、打包的 rg。
     // 下发绝对路径而非 PATH，避免 Windows 从不受信工作目录优先命中同名 rg.exe。

@@ -6839,6 +6839,25 @@ interface ElectronAPI {
     ) => Promise<AgentResourceSettingsWire>;
     agentResourceSettingsReset: () => Promise<AgentResourceSettingsWire>;
 
+    /** Cindy 在 Commit / PR 中的署名偏好；下次 Agent 会话启动时生效。 */
+    commitAttributionGet: () => Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+    }>;
+    commitAttributionSet: (enabled: boolean) => Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'new-agent-sessions';
+    }>;
+    commitAttributionReset: () => Promise<{
+      enabled: boolean;
+      isCustomized: boolean;
+      defaultEnabled: boolean;
+      effective: 'new-agent-sessions';
+    }>;
+
     /** Silent invalid_encrypted_content recovery setting. */
     silentEncryptedRetryGet: () => Promise<{
       enabled: boolean;

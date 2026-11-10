@@ -4634,6 +4634,13 @@
       "toggleAria": "Mode des points de restauration des fichiers",
       "saveFailed": "Impossible d'enregistrer le paramètre de sécurité Git"
     },
+    "commitAttribution": {
+      "title": "Attribution des commits",
+      "label": "Attribution de Cindy",
+      "description": "Ajouter « Assisted-by: Cindy (https://cindy.app) » aux commits et pull requests créés par Cindy. Appliqué au démarrage d’une nouvelle session Agent.",
+      "toggleAria": "Attribution de Cindy",
+      "saveFailed": "Échec de l’enregistrement du paramètre d’attribution des commits"
+    },
     "feishuBot": {
       "title": "Bot Feishu / Lark",
       "description": "Connectez-vous à {{appName}} via un bot Feishu ou Lark pour travailler où que vous soyez, à tout moment.",

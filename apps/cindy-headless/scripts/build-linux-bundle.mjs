@@ -81,6 +81,8 @@ await cp(piRuntimeDir, path.join(outputDir, 'bin', 'pi'), { recursive: true });
 await copyFile(nodeBinary, path.join(outputDir, 'bin', 'node'));
 const desktopPromptDir = path.resolve(appDir, '..', 'desktop', 'src', 'main', 'maker-host');
 const desktopHost = await readFile(path.join(desktopPromptDir, 'host-system-prompt.md'), 'utf8');
+const desktopCommitAttribution = await readFile(path.join(desktopPromptDir, 'commit-attribution-prompt.md'), 'utf8');
+const desktopHostRuntime = await readFile(path.join(desktopPromptDir, 'host-runtime-prompt.md'), 'utf8');
 const desktopClaude = await readFile(path.join(desktopPromptDir, 'claude-system-prompt.md'), 'utf8');
 const desktopCodex = await readFile(path.join(desktopPromptDir, 'codex-system-prompt.md'), 'utf8');
 const desktopPi = await readFile(path.join(desktopPromptDir, 'pi-system-prompt.md'), 'utf8');
@@ -88,9 +90,9 @@ const composePrompt = (...parts) => parts
   .map((part) => part.replace(/\r\n?/g, '\n').trim())
   .filter(Boolean)
   .join('\n\n') + '\n';
-const productionPrompt = composePrompt(desktopHost, desktopClaude);
-const codexPrompt = composePrompt(desktopHost, desktopCodex);
-const piPrompt = composePrompt(desktopHost, desktopPi);
+const productionPrompt = composePrompt(desktopHost, desktopCommitAttribution, desktopHostRuntime, desktopClaude);
+const codexPrompt = composePrompt(desktopHost, desktopCommitAttribution, desktopHostRuntime, desktopCodex);
+const piPrompt = composePrompt(desktopHost, desktopCommitAttribution, desktopHostRuntime, desktopPi);
 await writeFile(path.join(outputDir, 'prompt.md'), productionPrompt, 'utf8');
 await writeFile(path.join(outputDir, 'codex-prompt.md'), codexPrompt, 'utf8');
 await writeFile(path.join(outputDir, 'pi-prompt.md'), piPrompt, 'utf8');

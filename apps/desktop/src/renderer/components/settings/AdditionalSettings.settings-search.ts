@@ -100,6 +100,16 @@ export const additionalSettings = defineSettings({
     sectionKey: 'settings.tabs.storage',
     aliases: ['工作目录', 'working directory'],
   },
+  commitAttribution: {
+    id: 'general.commitAttribution',
+    tab: 'general',
+    targetId: 'settings-commit-attribution',
+    fallbackTargetId: 'settings-search-target-general-commit-attribution',
+    titleKey: 'settings.commitAttribution.label',
+    descriptionKey: 'settings.commitAttribution.description',
+    sectionKey: 'settings.commitAttribution.title',
+    aliases: ['署名', 'attribution', 'Assisted-by', 'commit attribution'],
+  },
   botModel: {
     id: 'general.botModel',
     tab: 'general',

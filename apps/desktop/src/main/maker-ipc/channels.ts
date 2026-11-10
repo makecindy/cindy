@@ -700,6 +700,10 @@ export const MAKER_INVOKE = {
   AGENT_RESOURCE_SETTINGS_GET: 'maker:agent-resource-settings:get',
   AGENT_RESOURCE_SETTINGS_SET: 'maker:agent-resource-settings:set',
   AGENT_RESOURCE_SETTINGS_RESET: 'maker:agent-resource-settings:reset',
+  /** Commit / PR 的 Cindy 署名偏好；在下次 Agent 会话启动时读取。 */
+  COMMIT_ATTRIBUTION_GET: 'maker:commit-attribution:get',
+  COMMIT_ATTRIBUTION_SET: 'maker:commit-attribution:set',
+  COMMIT_ATTRIBUTION_RESET: 'maker:commit-attribution:reset',
   // Plugin system (Phase 1)
   PLUGINS_LIST: 'maker:plugins:list',
   // Read one plugin's enable state by id — works for plugins hidden from

@@ -47,6 +47,7 @@ import { LinkOpenSection } from './LinkOpenSection';
 import { TipsSection } from './TipsSection';
 import { ExperimentalSection } from './ExperimentalSection';
 import { GitSafetySection } from './GitSafetySection';
+import { CommitAttributionSection } from './CommitAttributionSection';
 import { HelpAssistantPanel } from './HelpAssistantPanel';
 import { NewChatDefaultPermissionSection } from './NewChatDefaultPermissionSection';
 import { AgentResourceSection } from './AgentResourceSection';
@@ -527,6 +528,14 @@ function SettingsViewContent() {
                     {/* Section — Git safety savepoints (formal setting, not experimental). */}
                     <section id={generalSettings.gitSafety.targetId} className="py-[18px]" aria-label={t(generalSettings.gitSafety.titleKey)}>
                       <GitSafetySection />
+                    </section>
+
+                    <section
+                      id={generalSettings.commitAttribution.targetId}
+                      className="py-[18px]"
+                      aria-label={t(generalSettings.commitAttribution.titleKey)}
+                    >
+                      <CommitAttributionSection />
                     </section>
 
                     {/* Pi 扩展只在通用页提供一行入口，不占用设置一级菜单；与 Agent 相关设置放在一起。 */}

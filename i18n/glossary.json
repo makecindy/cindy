@@ -1965,6 +1965,7 @@
         "desktop:settings.computerUse.codexRefreshDeferred",
         "desktop:settings.computerUse.directControl.permissions.linuxHint",
         "desktop:settings.computerUse.directControl.toggleHint",
+        "desktop:settings.commitAttribution.description",
         "desktop:settings.lspMode.toast.disabled",
         "desktop:settings.memory.agent.toast.takesEffectSuffix",
         "desktop:settings.sessionImport.description",

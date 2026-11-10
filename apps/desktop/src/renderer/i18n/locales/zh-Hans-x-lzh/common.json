@@ -4535,6 +4535,13 @@
       "toggleAria": "卷复原点之式",
       "saveFailed": "Git 安全之设存之未成"
     },
+    "commitAttribution": {
+      "title": "Commit 署名",
+      "label": "Cindy 署名",
+      "description": "Cindy 所作 Commit、PR，皆附「Assisted-by: Cindy (https://cindy.app)」。新 Agent 会话启时用之。",
+      "toggleAria": "Cindy 署名",
+      "saveFailed": "Commit 署名设置未得存"
+    },
     "feishuBot": {
       "title": "飞书 / Lark 机器人",
       "description": "经飞书或 Lark 机器人，随时随地连 {{appName}} 以理事。",

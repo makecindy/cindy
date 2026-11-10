@@ -6,6 +6,11 @@ let memorySettings = {
   codex: false,
   pi: false,
 };
+let commitAttributionEnabled = true;
+
+vi.mock('../commit-attribution-settings-store.js', () => ({
+  readCommitAttributionSettings: () => ({ enabled: commitAttributionEnabled }),
+}));
 
 import { configureUserDataDir } from '../../userDataPath.js';
 
@@ -56,6 +61,7 @@ describe('runtime-configs', () => {
       codex: false,
       pi: false,
     };
+    commitAttributionEnabled = true;
   });
 
   it('propagates persisted Maker Memory enablement into agent runtime configs', async () => {
@@ -135,6 +141,29 @@ describe('runtime-configs', () => {
       );
       // 产品侧只表达来源级规则：不得出现具体 selector、Skill 名或本机路径。
       expect(prompt).not.toMatch(/\$[\w:-]+|\/(?:Users|home)\/|[A-Z]:\\/u);
+    }
+  });
+
+  it('reads the commit attribution preference when each agent session starts', async () => {
+    vi.doMock('../memory-settings-store.js', () => ({
+      readMemorySettings: () => memorySettings,
+    }));
+
+    const { buildDesktopClaudeRuntimeConfig, desktopCodexRuntimeConfig } = await import(
+      '../runtime-configs.js'
+    );
+    const claudeConfig = buildDesktopClaudeRuntimeConfig(() => 'http://127.0.0.1:1234');
+
+    for (const prompt of [claudeConfig.systemPrompt, desktopCodexRuntimeConfig.systemPrompt]) {
+      expect(prompt).toContain('Assisted-by: Cindy (https://cindy.app)');
+    }
+
+    commitAttributionEnabled = false;
+    for (const prompt of [claudeConfig.systemPrompt, desktopCodexRuntimeConfig.systemPrompt]) {
+      expect(prompt).not.toContain('Assisted-by:');
+      expect(prompt).toContain('You are Cindy, an open-source AI assistant.');
+      expect(prompt).toContain('## User-facing plans');
+      expect(prompt).toContain('## Skill source precedence');
     }
   });
 
