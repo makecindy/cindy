@@ -1663,9 +1663,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
    * Bind replies are not globally ordered with the provider's own callbacks
    * (for example a user completing the bind inside the provider app). Keep the
    * local state monotonic by accepting only the newest request reply and only
-   * events that name the current attempt/binding. The first state snapshot
-   * after a welcome is the sole exception: it is authoritative and may clear
-   * an offline persisted cache, unless a newer local mutation already began.
+   * events that name the current attempt/binding. State snapshots are
+   * authoritative, including later unsolicited pushes. Their binding list is
+   * reconciled separately from an explicitly tracked
+   * authorization so that UI progress cannot retain removed traffic authority.
    */
   function shouldApplyProviderBindStatus(
     lane: NeutralProviderLane,
@@ -1705,7 +1706,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       );
     }
 
-    if (isStateSnapshot && lane.awaitingStateSnapshot) {
+    if (isStateSnapshot && (lane.awaitingStateSnapshot || storeMultiBindReady(lane))) {
       lane.awaitingStateSnapshot = false;
       if (!storeMultiBindReady(lane) || (!multiAppReady(lane) && lane.bindingScopeId !== payload.scopeId)) lane.bindRequest = null;
       return true;
@@ -1713,16 +1714,13 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
 
     const current = lane.binding;
     if (storeMultiBindReady(lane)) {
-      if (isStateSnapshot) return false;
       if (payload.state === 'confirmed') {
-        if (lane.revokedBindingIds.has(payload.bindingId!)) return false;
-        const completesCurrentAttempt =
-          (current?.state === 'pending' || current?.state === 'awaiting_confirmation') &&
-          current.attemptId !== null && payload.completedAttemptId === current.attemptId;
+        const completesCurrentAttempt = current?.attemptId != null
+          && payload.completedAttemptId === current.attemptId;
         // New authority comes from this live attempt or the connection snapshot.
         // Delayed callbacks cannot restore an offline-unlinked identity. Uncertain
         // authorizations can be retried by the user without server compensation.
-        return completesCurrentAttempt || (!lane.awaitingStateSnapshot &&
+        return completesCurrentAttempt || (!lane.revokedBindingIds.has(payload.bindingId!) && !lane.awaitingStateSnapshot &&
           lane.confirmedBindings.some((row) => row.bindingId === payload.bindingId));
       }
     }
@@ -1901,6 +1899,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           }
           lane.snapshotChanges.clear();
         } else if (view.state === 'confirmed' && view.bindingId) {
+          lane.revokedBindingIds.delete(view.bindingId);
           const index = lane.confirmedBindings.findIndex((row) => row.bindingId === view.bindingId);
           if (index < 0) lane.confirmedBindings.push(view);
           else lane.confirmedBindings[index] = view;
@@ -1942,6 +1941,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       if (previous?.expiresAt && activeAttempt) armLaneBindWatchdog(lane, previous.expiresAt);
       notifyStatus(toView());
       return;
+    }
+    if (isStateSnapshot && (activeAttempt || awaitingStart)) {
+      lane.bindRequest = null;
+      lane.openRequestId = null;
     }
     lane.binding = storeMultiBindReady(lane) && (view.state === 'revoked' || view.state === 'superseded')
       ? lane.confirmedBindings[0] ?? view : view;
@@ -3037,8 +3040,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     clearLaneBindWatchdog(lane);
     lane.openRequestId = null;
     lane.bindRequest = null;
-    if (storeMultiBindReady(lane) &&
-      (lane.binding?.state === 'pending' || lane.binding?.state === 'awaiting_confirmation')) {
+    if (storeMultiBindReady(lane) && lane.binding !== null && isProviderAttemptState(lane.binding.state)) {
       lane.binding = { ...lane.binding, state: 'failed', attemptId: null, connectUrl: null,
         bindCode: null, expiresAt: null, reason: 'connection-changed', actions: ['retry'] };
     }

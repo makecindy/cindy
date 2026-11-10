@@ -540,7 +540,8 @@ describe('Feishu store multi-account contract', () => {
     roundTrip(makeProviderBindState({ ...first, bindings: [first, second] }));
     roundTrip(makeProviderBindUpdate({ ...second, completedAttemptId: 'attempt-2' }));
     for (const rows of [[first, first], [first, { ...second, scopeId: 'different-app' }],
-      [first, { ...second, bindings: [] }], [second]]) {
+      [first, { ...second, bindings: [] }], [second], [second, first],
+      [{ ...first, principalName: 'different-name' }, second], [{ ...first, actions: [] }, second]]) {
       expectReject(makeProviderBindState({ ...first, bindings: rows }), 'bindings');
     }
     expectReject(makeProviderBindUpdate({ ...first, bindings: [first] }), 'bindings');
@@ -559,6 +560,10 @@ describe('Feishu application coexistence contract', () => {
     const applications = [{ app, bindings: [first] }, { app: other, bindings: [org] }];
     roundTrip(makeProviderBindState({ ...first, applications }));
     roundTrip(makeProviderBindState(first));
+    const secondary = { ...first, bindingId: 'store-second', principalId: 'store-user-2' };
+    expectReject(makeProviderBindState({ ...secondary, applications: [{ app, bindings: [first, secondary] }, applications[1]!] }), 'applications');
+    expectReject(makeProviderBindState({ ...first, applications: [{ app, bindings: [{ ...first, principalName: 'different-name' }] }, applications[1]!] }), 'applications');
+    expectReject(makeProviderBindState({ ...first, bindings: [secondary, first], applications: [{ app, bindings: [first, secondary] }, applications[1]!] }), 'applications');
     for (const invalid of [
       [applications[0], applications[0]],
       [{ app, bindings: [org] }, applications[1]],

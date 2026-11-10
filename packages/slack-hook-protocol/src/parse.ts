@@ -885,6 +885,19 @@ const PROVIDER_BIND_FAILURE_STATES = [
   'superseded',
 ] as const;
 
+/** Compare binding data, excluding snapshot carriers and request correlation. */
+function sameProviderBindingProjection(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const fields = ['provider', 'state', 'attemptId', 'bindingId', 'principalId', 'principalName',
+    'scopeId', 'scopeName', 'connectUrl', 'bindCode', 'expiresAt', 'reason', 'remediationUrl', 'tenantKey'] as const;
+  if (!fields.every((field) => (a[field] ?? null) === (b[field] ?? null))) return false;
+  if (!Array.isArray(a.actions) || !Array.isArray(b.actions)
+    || a.actions.length !== b.actions.length || a.actions.some((action, index) => action !== (b.actions as unknown[])[index])) return false;
+  const left = isPlainObject(a.appInfo) ? a.appInfo : null;
+  const right = isPlainObject(b.appInfo) ? b.appInfo : null;
+  if (left === null || right === null) return left === right;
+  return ['appId', 'brand', 'appType', 'botName', 'organization'].every((key) => left[key] === right[key]);
+}
+
 /** provider.bind.update/state share one strict, replacement-safe snapshot shape. */
 function validateProviderBindStatus(
   p: Record<string, unknown>,
@@ -954,10 +967,10 @@ function validateProviderBindStatus(
     }
     if (!apps.has(p.scopeId as string)) return `${label}.applications must include the legacy scope`;
     const projection = p.applications.find((entry: Record<string, unknown>) => (entry.app as Record<string, unknown>).appId === p.scopeId)!.bindings as Array<Record<string, unknown>>;
-    if (p.state === 'confirmed' ? !projection.some((row) => row.bindingId === p.bindingId && row.principalId === p.principalId)
+    if (p.state === 'confirmed' ? (projection.length === 0 || !sameProviderBindingProjection(p, projection[0]!))
       : p.state !== 'none' || projection.length !== 0) return `${label}.applications must agree with the legacy state`;
     if (p.bindings !== undefined && (!Array.isArray(p.bindings) || p.bindings.length !== projection.length
-      || p.bindings.some((row: unknown) => !isPlainObject(row) || !projection.some((item) => item.bindingId === row.bindingId)))) return `${label}.applications must agree with bindings`;
+      || p.bindings.some((row: unknown, index: number) => !isPlainObject(row) || !sameProviderBindingProjection(row, projection[index]!)))) return `${label}.applications must agree with bindings`;
   }
   if (p.tenantKey !== undefined && (p.provider !== 'feishu' || !isNullableNonEmptyString(p.tenantKey))) {
     return `${label}.tenantKey must be a Feishu installation tenant or null`;
@@ -984,7 +997,7 @@ function validateProviderBindStatus(
       ids.add(id); principals.add(principal);
     }
     if (p.bindings.length === 0 ? p.state !== 'none' : p.state !== 'confirmed'
-      || !p.bindings.some((row: Record<string, unknown>) => row.bindingId === p.bindingId && row.principalId === p.principalId)) {
+      || !sameProviderBindingProjection(p, p.bindings[0] as Record<string, unknown>)) {
       return `${label}.bindings must agree with the legacy binding`;
     }
   }
