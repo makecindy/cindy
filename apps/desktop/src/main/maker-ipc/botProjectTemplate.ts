@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-export const TEAMMATE_TEMPLATE_VERSION = 1;
+export const TEAMMATE_TEMPLATE_VERSION = 2;
 /** What the project started from and which template files it still has untouched. */
 export const TEAMMATE_TEMPLATE_RECORD = path.join('.cindy', 'template.json');
 const PENDING_DIR = path.join('.cindy', 'template');
@@ -40,15 +40,15 @@ export function teammateTemplateFiles(displayName: string): Record<string, strin
     '.agents/skills/hand-off/SKILL.md': [
       '---',
       'name: hand-off',
-      'description: Handing work to another task or teammate with send_to_session, getting the result back, and answering how handed-off work is going.',
+      'description: Handing work to another task or teammate with send_to_session, and answering how handed-off work is going.',
       '---',
       '',
       '# Hand-off',
       '',
       '- Say what is wanted and how to tell it is done. The other side can read this conversation with `get_chat_history` (its session id comes with your message); point to it for background instead of copying everything.',
-      '- When the owner is waiting on one piece of work, ask the other side to send its result back to this conversation with `send_to_session` when done, and give it this conversation\'s session id (`get_current_session_id`). For a batch the owner will check on later, do not ask for replies.',
+      '- Do not ask a task to send its result back: the owner is notified when it finishes and reads it there. Ask for a send-back (with this conversation\'s session id from `get_current_session_id`) only when the owner wants you to take the result further, such as combining it or continuing from it.',
       '- When asked how things are going, read `get_task_digest` for each task; open the full history only when needed. Do not wait in a loop.',
-      '- Before telling the owner a result, check it against what was asked.',
+      '- When a result does come back, read it against what was asked. If something is missing or wrong, ask that task to fix it; do not redo the work yourself.',
       '',
     ].join('\n'),
   };
