@@ -5,6 +5,7 @@ import { setSessionProvider, clearSessionProvider } from '../../../desktop/src/m
 import { toDesktopSessionDispatchOutcome } from '../../../desktop/src/main/maker-host/send-outcome.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
@@ -128,7 +129,17 @@ export function createTurnExecutor(deps) {
     try {
       const session = await turn.preparing;
       check();
+      // Text an MCP App sends is page content, not the user's own words: it must
+      // never count as fresh human authorization for Auto mode. Host keeps no
+      // authored-text history to restore from, so a delegated continuation
+      // grants nothing and every sensitive action still asks (fail closed).
+      const delegated = sendOpts[AUTO_REVIEW_DELEGATED_CONTINUATION] === true
+        || typeof sendOpts[MCP_APP_MESSAGE_GUARD] === 'function';
       const result = await session.send(message, { messageUuid: sendOpts.messageUuid,
+        ...(delegated ? {
+          [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
+          resolveAutoReviewUserIntent: async () => restoreAutoReviewUserIntent([]),
+        } : {}),
         ...(sendOpts.origin ? { origin: sendOpts.origin } : {}),
         signal: sendOpts.signal, onTurnReserved: generation => {
           turn.generation = generation;
@@ -151,7 +162,12 @@ export function createTurnExecutor(deps) {
           try {
             await deps.persistMessage(sessionId, { clientId: persist.clientId, role: 'user',
               content: persist.content, agentKind: turn.dbKind,
-              ...(persist.origin ? { agentMeta: { origin: persist.origin } } : {}),
+              ...(persist.origin || persist.sourcePlugin || delegated ? { agentMeta: {
+                ...(persist.origin ? { origin: persist.origin } : {}),
+                // Attribution for history reconciliation, not an authorization input.
+                ...(persist.sourcePlugin ? { sourcePlugin: persist.sourcePlugin } : {}),
+                ...(delegated ? { autoReviewUserText: { kind: 'delegated-continuation' } } : {}),
+              } } : {}),
             }, {
               expectedClearBoundaryMs: persist.expectedClearBoundaryMs,
               shouldBroadcast: persist.shouldBroadcast,

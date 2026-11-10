@@ -59,10 +59,18 @@ function composeInput(item, stored) {
   // AsyncLocalStorage belongs to authenticated dispatch, never the wire item.
   const remote = isDeviceLinkInvoke();
   if (remote && isMobileControllerInvoke()) result.fromMobileClient = true;
-  return stampTrustedDeviceLinkQueuedOrigin(
-    stampTrustedDesktopQueuedOrigin(result, true), // Browser input has no native desktop command privilege.
+  // An MCP App message is page content relayed by the in-process App service.
+  // The desktop stamp would record its text as the user's own authored intent,
+  // and the device stamp strips the source plugin it exists to forge-proof, so
+  // keep the delegated receipt and restore the plugin the service minted.
+  const fromApp = typeof item[MCP_APP_MESSAGE_GUARD] === 'function';
+  const stamped = stampTrustedDeviceLinkQueuedOrigin(
+    // Browser input has no native desktop command privilege.
+    fromApp ? result : stampTrustedDesktopQueuedOrigin(result, true),
     remote, readDeviceLinkInvokeSourceDevice(),
   );
+  if (fromApp) stamped.sourcePlugin = result.sourcePlugin;
+  return stamped;
 }
 
 /** Node assembly of the desktop input transaction. There is one queue state
