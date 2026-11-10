@@ -176,7 +176,7 @@ PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成
 推送验收：后台／冷启动、跨端已读与真实 APNs 仍需在部署后的签名安装包上核验。
 新增原生模块与扩展源码需要新 iOS 安装包，不能只发 OTA。共享 config plugin 的变更也会
 改变 Android 指纹（虽然没有新增 Android 功能），应随计划内双端原生发版交付；两端存量
-安装均需升级对应原生包才能继续接收新指纹的 OTA，按冷更门单独确认。
+安装均需升级对应原生包才能继续接收新指纹的 OTA，PR 须按冷更边界写明原因、影响与发版节奏。
 原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台过期和关闭实时活动。
 TypeScript 测试不能替代这些原生验收。
 
@@ -287,7 +287,7 @@ iOS 的 `CindyPhotoPicker.pickMedia` 在选择后立即把图片占位与视频�
 此回退在选择器内等原件就绪；新原生包保留延迟读取体验。原有 `pick` 方法继续提供照片选择合同，
 拍照仍仅拍照片，「文件」继续接收视频，不新增录像或专用视频编辑器。
 扩展原生模块会改变 iOS fingerprint，需随原生包发布，不能作为旧安装包的独立 OTA 交付；
-合并前遵守冷更确认门。Android 使用现有 Expo 系统混合选择器，无原生改动。
+PR 须按冷更边界写明原因、影响与发版节奏。Android 使用现有 Expo 系统混合选择器，无原生改动。
 
 实现：`modules/cindy-photo-picker/`、`deferredPhotoLibrary.ts`、`useMobileLocalAttachments.ts`；
 回归：`deferredPhotoLibrary.test.ts`、`useMobileLocalAttachmentsAbandon.test.tsx`。
