@@ -995,7 +995,11 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
       }
       onChanged();
     } catch (error) {
-      if (!String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED')) toast.error(t('subscriptionAccounts.failed'));
+      const code = extractIpcError(error)?.code;
+      if (code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
+        toast.error(t(code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
+          ? 'subscriptionAccounts.providerManagedAuth'
+          : 'subscriptionAccounts.failed'));
     } finally { login.current = null; setBusy(false); }
   };
   return <DetailHeader provider={provider ? { ...provider, connected } : provider} children={children}

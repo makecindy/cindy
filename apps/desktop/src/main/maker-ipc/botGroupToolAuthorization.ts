@@ -1,5 +1,5 @@
 import type { MessageSourceGroup } from '@cindy/maker-shared/message-source';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 
 /** A group link identifies a lane, not an authorization. Only its live Chat Server
  * execution may supply authority; persisted route keys cannot recreate a grant. */

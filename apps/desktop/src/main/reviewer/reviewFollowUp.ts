@@ -1,4 +1,4 @@
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import {
   followUpReplyLanguageInstruction,
   type ReviewReplyLanguage,

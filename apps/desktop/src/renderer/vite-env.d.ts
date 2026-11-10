@@ -1158,6 +1158,7 @@ type ElectronLocalDbSessionListUsageOptions = Omit<
 };
 
 interface ElectronAPI {
+  hostConnection?: import('@cindy/maker-shared/host-event-stream').HostConnectionApi;
   performanceTrace: import('../shared/performanceTrace').PerformanceTraceAPI;
   localAgent: import('../shared/localAgent').LocalAgentSettingsApi;
   botMarket: import('../shared/botMarket').BotMarketApi;

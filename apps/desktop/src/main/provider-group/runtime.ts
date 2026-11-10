@@ -27,7 +27,7 @@ import { isMobilePlatform } from '../device-link/controllerPlatform.js';
 import { deviceName } from '../device-link/deviceName.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { readDeviceProviderCatalog, readDeviceProviderViews } from '../remote-agent/controller/deviceCatalog.js';
-import { listProviderGroupBindings } from './bindings.js';
+import { listProviderGroupBindings } from './bindings.desktop.js';
 import { readProviderGroupCooling, writeProviderGroupCooling } from './coolingStore.js';
 import { createProviderGroupDirectory, type ProviderGroupCatalogRead, type ProviderGroupDirectory } from './directory.js';
 import { createProviderGroupExternalLoad, type ProviderGroupExternalLoad } from './externalLoad.js';

@@ -11,7 +11,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 const electron = vi.hoisted(() => ({ requestResponse: vi.fn() }));
 vi.mock('../http', () => electron);
 
-import { executeOnce } from '../transport';
+import { executeOnce } from '../transport.desktop';
 import { withRetry } from '../retry';
 import { DownloadError, type DownloadOptions } from '../types';
 import { readMeta, writeMeta } from '../resume';

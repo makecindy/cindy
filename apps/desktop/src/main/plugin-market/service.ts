@@ -17,7 +17,7 @@ import {
   type VisiblePluginSummary,
   type PluginResolveTarget,
 } from '@cindy/plugin-protocol';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { readGhostReadmeFromDir } from '../cindy-brain/ghostReadme.js';
 import { app, dialog } from 'electron';
 
@@ -121,7 +121,7 @@ import {
   type GhostInstallConsentPrompt,
 } from '../cindy-brain/ghostInstallConsent.js';
 import type { GhostInstallConsentInitiator } from '../../shared/ghostInstallConsent.js';
-import { isPluginMarketPassthroughErrorCode, PluginMarketApi } from './api.js';
+import { isPluginMarketPassthroughErrorCode, PluginMarketApi, PluginMarketEndpointUnsupportedError } from './api.js';
 import { createOrganizationPrefixStore } from './organizationPrefixStore.js';
 import { downloadVerifiedPlugin } from './download.js';
 import {
@@ -1165,7 +1165,13 @@ export class PluginMarketService {
     if (existing) return existing;
     const request = Promise.resolve().then(() => {
       requireSameMarketOwner(owner);
-      return legacyCatalog ? this.api.listAll() : this.loadMaintenanceCatalog(owner, refresh);
+      if (legacyCatalog) return this.api.listAll();
+      return this.loadMaintenanceCatalog(owner, refresh).catch((error: unknown) => {
+        // 客户端先于 plugin-server 上线时没有 defaults 接口：回到改版前的整份目录对账。
+        if (!(error instanceof PluginMarketEndpointUnsupportedError)) throw error;
+        requireSameMarketOwner(owner);
+        return this.api.listAll();
+      });
     });
     this.catalogFlights.set(key, request);
     const clear = () => { if (this.catalogFlights.get(key) === request) this.catalogFlights.delete(key); };
@@ -1385,6 +1391,29 @@ export class PluginMarketService {
       if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
       return response.plugins.map(plugin => this.toItem(plugin, local));
     } catch { return []; }
+  }
+
+  /**
+   * 本机安装记录里确认来自官方市场、且与磁盘上的包对得上的插件。只读本机，不访问服务端；
+   * 供迁移助理在官方目录这次没读到时判断来源，不能代替目录可见性。
+   */
+  async installedServerMarketRecords(): Promise<Array<{ pluginId: string; ghostId: string; namespace?: string | null }>> {
+    const owner = captureMarketOwner();
+    const local = await this.readLocalInstallSnapshot(owner);
+    requireSameMarketOwner(owner);
+    return Object.values(local.installations).flatMap((record) => {
+      if (!record.installed || (record.source !== 'market' && record.source !== 'legacy-adopted')
+        || !isValidPluginResourceId(record.pluginId)) return [];
+      // Report the instance that actually passed verification, so a same-id copy
+      // (for example a `local` development install) never inherits this record.
+      const verified = (local.ghostsById.get(record.ghostId) ?? []).find((ghost) =>
+        ghost.namespace !== 'local'
+        && (record.namespace === undefined || ghost.namespace === undefined || ghost.namespace === record.namespace)
+        && serverRecordMatchesInstalledGhost(record.pluginId, ghost, record, snapshotManifestIdentity(local, ghost)));
+      if (!verified) return [];
+      const namespace = verified.namespace !== undefined ? verified.namespace : record.namespace;
+      return [{ pluginId: record.pluginId, ghostId: record.ghostId, ...(namespace !== undefined ? { namespace } : {}) }];
+    });
   }
 
   async lookup(ghostIds: string[]): Promise<PluginMarketSnapshot> {

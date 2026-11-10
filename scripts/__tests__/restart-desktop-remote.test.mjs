@@ -45,6 +45,8 @@ import {
 	shouldRefuseHostedRestart,
 	commandContainsPath,
 	inheritedUserDataBlocksNamedIsolation,
+	requestWindowsDesktopQuit,
+	stopWindowsDesktopDevProcesses,
 } from "../restart-desktop-remote.mjs";
 import {
 	DESKTOP_DEV_VERDICT_PREFIX,
@@ -93,6 +95,67 @@ function appleScriptLines(args) {
 // 且 path.resolve 会补盘符)。测试的合成路径也必须走同一套 path API,才能在
 // macOS / Windows 上都与生产实际所见一致——硬编码 POSIX 字面量只在 *nix 成立。
 const stepScript = (root, name) => path.join(root, "scripts", name);
+
+// Unit: Windows restart must let Electron persist its clean exit before killing
+// any launcher/renderer. Existing tests only covered process selection, not stop order.
+test("Windows stop waits for main disposal, then kills only surviving original targets", async () => {
+	const root = path.resolve("sandbox-repo");
+	const targets = [
+		{ pid: 10, ppid: 0, command: `node "${stepScript(root, "desktop-dev-runner.mjs")}" remote` },
+		{ pid: 11, ppid: 10, command: `"${path.join(root, "node_modules", "electron", "dist", "electron.exe")}" .` },
+		{ pid: 13, ppid: 11, command: `electron --type=crashpad-handler --user-data-dir=${path.join(root, "profile")} /prefetch:4 --no-rate-limit --monitor-self-annotation=ptype=crashpad-handler` },
+		{ pid: 12, ppid: 11, command: `electron --type=renderer --user-data-dir="${path.join(root, "profile")}"` },
+	];
+	for (const outcome of ["clean", "timeout", "legacy"]) {
+		const calls = [];
+		await stopWindowsDesktopDevProcesses(targets, root, {
+			requestQuit: instance => {
+				assert.equal(instance.pid, 11);
+				assert.equal(instance.userDataDir, path.join(root, "profile"));
+				calls.push("request");
+				return outcome === "legacy" ? null : () => calls.push("cleanup");
+			},
+			waitForExit: async (timeout, filter) => {
+				assert.ok(timeout > 20_000);
+				assert.deepEqual(targets.filter(filter).map(p => p.pid), [11]);
+				assert.deepEqual(calls, ["request"]);
+				calls.push("wait");
+			},
+			listProcesses: () => [
+				...(outcome === "clean" ? [targets[0]] : targets),
+				{ pid: 99, ppid: 0, command: "other checkout" },
+			],
+			forceKill: pid => calls.push(`kill:${pid}`), log: () => {},
+		});
+		assert.deepEqual(calls, outcome === "clean"
+			? ["request", "wait", "kill:10", "cleanup"]
+			: outcome === "timeout" ? ["request", "wait", "kill:10", "kill:11", "kill:13", "kill:12", "cleanup"]
+			: ["request", "kill:10", "kill:11", "kill:13", "kill:12"]);
+	}
+});
+
+test("Windows quit request requires matching supported provenance and uses its generation", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dev-quit-"));
+	try {
+		const records = path.join(dir, ".dev-instances");
+		fs.mkdirSync(records);
+		const instance = { pid: 123, userDataDir: dir, rootDir: path.join(dir, "repo") };
+		const record = { ...instance, quitRequestProtocol: 1, instanceId: "12345678-1234-1234-1234-123456789abc" };
+		for (const invalid of [{ ...record, quitRequestProtocol: undefined }, { ...record, pid: 456 },
+			{ ...record, rootDir: path.join(dir, "another-repo") }, { ...record, instanceId: "../bad" }]) {
+			fs.writeFileSync(path.join(records, "123.json"), JSON.stringify(invalid));
+			assert.equal(requestWindowsDesktopQuit(instance, 100), null);
+		}
+		fs.writeFileSync(path.join(records, "123.json"), JSON.stringify(record));
+		const cleanup = requestWindowsDesktopQuit(instance, 100);
+		const request = path.join(records, `123-${record.instanceId}.quit`);
+		assert.deepEqual(JSON.parse(fs.readFileSync(request, "utf8")), {
+			action: "quit", pid: 123, instanceId: record.instanceId, expiresAt: 30100,
+		});
+		cleanup();
+		assert.equal(fs.existsSync(request), false);
+	} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("macOS Terminal launch runs command before activating Terminal", () => {
 	const lines = appleScriptLines(osascriptLaunchDarwinTerminalArgs("echo test"));

@@ -15,6 +15,7 @@ import { publishClaudeCliLoginStatus } from '../../../desktop/src/main/maker-hos
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 import { configureOwnerContext } from '../../../desktop/src/main/ownerContext.ts';
 import { configureUserDataDir } from '../../../desktop/src/main/userDataPath.ts';
+import { commitVolatileAppSession, getActiveAppSession, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.ts';
 
 /**
  * Install the host's owner facts once, so owner-scoped stores resolve to the
@@ -22,11 +23,15 @@ import { configureUserDataDir } from '../../../desktop/src/main/userDataPath.ts'
  */
 export function configureHostOwner(options) {
   configureUserDataDir(options.userDataDir);
+  // Caller has verified the membership before publishing its runtime owner.
+  // The canonical generation invalidates the same caches and request scopes on
+  // both launchers; a constant Host-only generation would retain stale work.
+  commitVolatileAppSession(options.ownerId ? 'cloud' : 'signed-out', options.ownerId, true);
   configureOwnerContext({
     read: () => ({
-      dataOwnerId: options.ownerId,
-      generation: 0,
-      boundaryPending: false,
+      dataOwnerId: getActiveAppSession().dataOwnerId,
+      generation: getActiveAppSession().generation,
+      boundaryPending: isAppSessionBoundaryPending(),
     }),
     // The host has no signed-out temp namespace: an unresolved owner must fail
     // closed instead of writing into a shared directory.

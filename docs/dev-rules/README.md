@@ -15,7 +15,7 @@
 | 已发生过的任务体验回归、测试入口与运行命令 | [任务回归台账](session-regressions.md) |
 | Desktop 启动、重启与验证 | [桌面开发](desktop-development.md) |
 | 免登录 UI 模拟数据、`--mock` 启动、数据正本与写入边界 | [UI 模拟数据](ui-mock-data.md) |
-| Mobile 开发、模拟器、原生配置／依赖与冷更确认 | [手机开发](mobile-development.md) |
+| Mobile 开发、模拟器、原生配置／依赖与冷更边界 | [手机开发](mobile-development.md) |
 | Renderer、preload、窗口、IPC、CSP 与特权边界 | [Electron 进程边界](electron-security-and-process-boundaries.md) |
 | 凭证、持久数据、临时文件与测试目录 | [本地存储](credentials-and-local-storage.md) |
 | 媒体生成、导入、附件、缓存、协议与回收 | [媒体存储](media-storage-and-protocols.md) |
@@ -34,7 +34,7 @@
 | 日志采集、脱敏、上报、行格式与崩溃标记 | [日志上报](log-upload-and-redaction.md) |
 | 本地协议包、插件分发来源、device-link、relay、wire protocol 与 allowlist | [协议兼容](protocol-compatibility.md) |
 | 服务器请求、订阅、同步、轮询与重试的调用方式、共享压力及缺陷审查 | [服务器通道调用审查](server-channel-review.md) |
-| package 依赖、Main 模块加载与布局树 | [架构原则与不变量](architecture-invariants.md) |
+| package 依赖、Main 模块加载、共用主体与桌面／Host 装配、布局树 | [架构原则与不变量](architecture-invariants.md) |
 | Settings、配置文件、偏好、运行时 profile 与能力开关 | [配置与 override](configuration-and-overrides.md) |
 | workdir、Agent 进程、任务数据、IPC／推送与断链恢复 | [远程与手机适配](remote-and-mobile-adaptation.md) |
 | 托管 worktree、提交、PR、直推、review、项目知识归属与文档整理原则 | [开发工作流](development-workflow.md) |

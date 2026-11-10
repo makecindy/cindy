@@ -99,6 +99,7 @@ describe('production plugin instance assembly', () => {
         ownerScopedUserDataPath: (...parts: string[]) => path.join(tmp, ...parts),
         activeOwnerScopeKey: () => 'owner', getActiveAppSession: () => ({ dataOwnerId: 'owner' }),
         anonymousDownloadRoots: new Map(), sendToGhostLogic: send, createDownloader: () => download,
+        guardedOutboundFetch: vi.fn(async () => { throw new Error('Unexpected direct download fetch'); }),
         BrowserWindow: { fromWebContents: () => ({ isDestroyed: () => false }) }, dialog: { showMessageBox },
         shell: { openExternal }, t: (key: string) => key,
         log: { debug: vi.fn(), warn: vi.fn() },
