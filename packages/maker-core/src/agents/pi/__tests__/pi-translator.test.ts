@@ -2605,7 +2605,7 @@ describe('pi translator live token speed', () => {
     }
   });
 
-  // Recorded Pi sessions (17 741 Grok replies): the streamed thinking was a third of the real
+  // Recorded Pi sessions with Grok: the streamed thinking was a third of the real
   // reasoning, so a reply in flight showed 45% of its output. Unit tier through translatePiEvent.
   it('counts streamed thinking for what the last reply showed it to stand for', () => {
     vi.useFakeTimers();

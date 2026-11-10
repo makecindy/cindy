@@ -85,7 +85,7 @@ const SUMMARY_LEAD_SCALE = 0.5;
 /** Output tokens a Claude tool call spends on its framing, which no delta carries. */
 export const CLAUDE_TOOL_CALL_OVERHEAD_TOKENS = 60;
 
-/** Fitted on 4 445 real Claude 5 responses; held-out per-response error p10–p90 0.91–1.16. */
+/** Fitted on a few thousand real Claude 5 responses; held-out per-response error p10–p90 0.91–1.16. */
 const NARROW_CHARS_PER_TOKEN = 2.14;
 const WIDE_TOKENS_PER_CHAR = 1.26;
 
