@@ -20,6 +20,13 @@ export interface OrcaRemoteLead {
 export interface OrcaRemotePendingReport {
   clientIds: string[];
   baselineMessageId: string | null;
+  /** Host-only handoff identity; receipt reconciliation never replays an unknown send. */
+  delivery?: {
+    clientId: string;
+    inputClientIds: string[];
+    kind: 'manual' | 'automatic';
+    messageId?: string;
+  };
 }
 
 const MAX_TEXT = 200;

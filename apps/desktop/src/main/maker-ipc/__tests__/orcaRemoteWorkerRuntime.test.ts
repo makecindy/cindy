@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentInputProjection } from '../../../shared/agentInputQueue.js';
+import type { OrcaRemotePendingReport } from '../../../shared/orcaRemoteWorker.js';
 
 import {
   createOrcaRemoteWorkerRuntime,
@@ -130,7 +131,11 @@ function setup(device: Partial<FakeDevice> = {}) {
     }
   });
   const onTurnEnded = vi.fn(async (_proxySessionId: string, _turn: RemoteWorkerTurnEnd) => true);
+  let reportId = 0;
   const deps: OrcaRemoteWorkerRuntimeDeps = {
+    createReportId: () => `report-${++reportId}`,
+    readLeadReportReceipt: vi.fn(async () => 'unknown' as const),
+    captureReportedTurn: () => async commit => { await commit(true); },
     invoke,
     deviceName: () => 'Mac mini',
     saveReport: vi.fn(async () => undefined),
@@ -153,6 +158,209 @@ function setup(device: Partial<FakeDevice> = {}) {
 }
 
 describe('orca remote worker runtime', () => {
+  // #9346 P1, unit: the Lead queue survives but remote retirement fails/crashes.
+  // Previous tests only restored pending inputs, never this ownership-transfer gap.
+  it.each(['pending', 'accepted', 'removed', 'unknown'] as const)(
+    'reconciles a persisted report handoff with a %s Lead receipt while the Worker is offline', async receipt => {
+      const first = setup();
+      await first.runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'Review', clientId: 'c-1' });
+      let saved: OrcaRemotePendingReport | null = null;
+      vi.mocked(first.deps.saveReport).mockImplementation(async (_worker, pending) => {
+        if (!pending) throw new Error('crash before retirement');
+        saved = structuredClone(pending);
+      });
+      const deliver = vi.fn(async (id: string) => {
+        expect(saved?.delivery?.clientId).toBe(id); // intent precedes the actual handoff
+        return { accepted: true };
+      });
+      await expect(first.runtime.runReportDelivery('proxy-1', ['c-1'], deliver, r => r.accepted))
+        .rejects.toThrow('crash before retirement');
+      expect(deliver).toHaveBeenCalledOnce();
+      first.runtime.stop();
+
+      const restored = setup({ offline: true });
+      restored.runtime.untrack('proxy-1');
+      restored.runtime.track({ ...ref, pendingReport: structuredClone(saved) });
+      vi.mocked(restored.deps.readLeadReportReceipt).mockResolvedValue(receipt);
+      await restored.runtime.pollNow();
+      expect(restored.deps.readLeadReportReceipt).toHaveBeenCalledWith('lead-1', 'report-1');
+      expect(restored.deps.onTurnEnded).not.toHaveBeenCalled();
+      expect(restored.runtime.hasPendingReport('proxy-1')).toBe(receipt === 'unknown');
+      if (receipt === 'unknown') {
+        const resend = vi.fn(async () => true);
+        await expect(restored.runtime.runReportDelivery('proxy-1', ['c-1'], resend, Boolean, { alreadyReported: true }))
+          .rejects.toThrow('REPORT_DELIVERY_UNCONFIRMED');
+        expect(resend).not.toHaveBeenCalled();
+        expect(restored.deps.saveReport).not.toHaveBeenCalled();
+      } else expect(restored.deps.saveReport).toHaveBeenCalledWith('worker-1', null, undefined, true);
+      restored.runtime.stop();
+    },
+  );
+
+  it('preserves an automatic error status and newer assignment while retiring the report', async () => {
+    const h = setup();
+    await h.runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'A', clientId: 'a' });
+    await h.runtime.runReportDelivery('proxy-1', ['a'], async () => {
+      await h.runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'B', clientId: 'b' });
+      return true;
+    }, Boolean, { messageId: 'error-reply', alreadyReported: true });
+    expect(h.runtime.hasPendingReport('proxy-1')).toBe(true);
+    expect(h.deps.saveReport).toHaveBeenLastCalledWith('worker-1', {
+      clientIds: ['b'], baselineMessageId: 'msg-0',
+    }, 'error-reply');
+    expect(h.runtime.get('proxy-1')?.lastBridgedMessageId).toBe('error-reply');
+    // Explicit reports are different messages, not a hash of the assigned input.
+    const ids: string[] = [];
+    for (let i = 0; i < 2; i++) await h.runtime.runReportDelivery('proxy-1', ['b'], async id => {
+      ids.push(id); return true;
+    }, Boolean);
+    expect(new Set(ids).size).toBe(2);
+    h.runtime.stop();
+  });
+
+  it('does not send when the handoff intent cannot be persisted', async () => {
+    const h = setup();
+    await h.runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'A', clientId: 'a' });
+    vi.mocked(h.deps.saveReport).mockRejectedValueOnce(new Error('disk unavailable'));
+    const deliver = vi.fn(async () => true);
+    await expect(h.runtime.runReportDelivery('proxy-1', ['a'], deliver, Boolean)).rejects.toThrow('disk unavailable');
+    expect(deliver).not.toHaveBeenCalled();
+    await h.runtime.runReportDelivery('proxy-1', ['a'], deliver, Boolean);
+    expect(deliver).toHaveBeenCalledOnce();
+    h.runtime.stop();
+  });
+
+  it.each(['rejected', 'unknown', 'receipt-won'] as const)('keeps report retry evidence distinct: %s', async outcome => {
+    const h = setup();
+    await h.runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'A', clientId: 'a' });
+    if (outcome === 'receipt-won') vi.mocked(h.deps.readLeadReportReceipt).mockResolvedValue('accepted');
+    await h.runtime.runReportDelivery('proxy-1', ['a'], async (_id, onRejected) => {
+      if (outcome !== 'unknown') onRejected();
+      return false;
+    }, Boolean);
+    if (outcome === 'receipt-won') {
+      expect(h.runtime.hasPendingReport('proxy-1')).toBe(false);
+    } else if (outcome === 'rejected') {
+      expect(h.runtime.hasPendingReport('proxy-1')).toBe(true);
+      const retry = vi.fn(async () => true);
+      await h.runtime.runReportDelivery('proxy-1', ['a'], retry, Boolean);
+      expect(retry).toHaveBeenCalledOnce();
+    } else {
+      const retry = vi.fn(async () => true);
+      await expect(h.runtime.runReportDelivery('proxy-1', ['a'], retry, Boolean, { alreadyReported: true })).rejects.toThrow('REPORT_DELIVERY_UNCONFIRMED');
+      expect(retry).not.toHaveBeenCalled();
+    }
+    h.runtime.stop();
+  });
+
+  it('retires a confirmed old handoff after the bounded pending inputs have advanced', async () => {
+    const h = setup({ offline: true });
+    const newer = Array.from({ length: 64 }, (_, i) => `new-${i}`);
+    h.runtime.untrack('proxy-1');
+    h.runtime.track({ ...ref, pendingReport: { clientIds: newer, baselineMessageId: 'new-baseline',
+      delivery: { clientId: 'old-report', inputClientIds: ['old-input'], kind: 'manual' },
+    } });
+    vi.mocked(h.deps.readLeadReportReceipt).mockResolvedValue('accepted');
+    await h.runtime.pollNow();
+    expect(h.deps.saveReport).toHaveBeenCalledWith('worker-1', { clientIds: newer, baselineMessageId: 'new-baseline' });
+    expect(h.runtime.hasPendingReport('proxy-1')).toBe(true);
+    const send = vi.fn(async () => true);
+    await h.runtime.runReportDelivery('proxy-1', ['new-0'], send, Boolean);
+    expect(send).toHaveBeenCalledOnce();
+    h.runtime.stop();
+  });
+
+  // Unknown does not authorize replay, but a new explicit report must have an
+  // atomic recovery exit. Disk failure keeps the old intent and its input debt.
+  it.each(['accepted', 'write-failed', 'crash-after-write'] as const)('atomically replaces an unknown report for a new explicit send: %s', async mode => {
+    const h = setup({ offline: true });
+    const old: OrcaRemotePendingReport = { clientIds: ['a'], baselineMessageId: null,
+      delivery: { clientId: 'old-report', inputClientIds: ['a'], kind: 'manual' },
+    };
+    h.runtime.untrack('proxy-1');
+    h.runtime.track({ ...ref, pendingReport: old });
+    let saved: OrcaRemotePendingReport | null = structuredClone(old);
+    vi.mocked(h.deps.saveReport).mockImplementation(async (_worker, pending) => {
+      if (mode === 'write-failed') throw new Error('disk failure');
+      saved = structuredClone(pending);
+      if (mode === 'crash-after-write') throw new Error('process exit after commit');
+    });
+    const send = vi.fn(async (id: string) => {
+      expect(saved).toMatchObject({ clientIds: ['a'], delivery: { clientId: id, inputClientIds: ['a'] } });
+      expect(id).not.toBe('old-report');
+      return true;
+    });
+    const result = h.runtime.runReportDelivery('proxy-1', ['a'], send, Boolean);
+    if (mode === 'accepted') {
+      await result;
+      expect(send).toHaveBeenCalledOnce();
+      expect(saved).toBeNull();
+    } else {
+      await expect(result).rejects.toThrow(mode === 'write-failed' ? 'disk failure' : 'process exit');
+      expect(send).not.toHaveBeenCalled();
+      expect(saved?.delivery?.clientId).toBe(mode === 'write-failed' ? 'old-report' : 'report-1');
+      expect(saved?.clientIds).toEqual(['a']);
+      // Recreate from the durable state; neither crash window auto-replays A.
+      h.runtime.untrack('proxy-1');
+      h.runtime.track({ ...ref, pendingReport: saved });
+      await h.runtime.pollNow();
+      expect(h.deps.onTurnEnded).not.toHaveBeenCalled();
+    }
+    h.runtime.stop();
+  });
+
+  it('allows only a verified new completed input to replace an unknown automatic report', async () => {
+    const h = setup();
+    h.runtime.stop();
+    const send = vi.fn(async () => true);
+    const contexts: string[][] = [];
+    const runtime = createOrcaRemoteWorkerRuntime({ ...h.deps,
+      captureTurnEnded: () => async (_turn, report) => {
+        contexts.push(report.inputClientIds);
+        return runtime.runReportDelivery('proxy-1', report.inputClientIds, send, Boolean,
+          { messageId: report.messageId, alreadyReported: true });
+      },
+    });
+    runtime.track({ ...ref, pendingReport: { clientIds: ['a'], baselineMessageId: 'msg-0',
+      delivery: { clientId: 'old-report', inputClientIds: ['a'], kind: 'automatic', messageId: 'reply-a' },
+    } });
+    h.state.history = [
+      { id: 'input-a', clientId: 'a', role: 'user', content: 'A' },
+      { id: 'reply-a', role: 'assistant', content: 'Completed A' },
+    ];
+    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'B', clientId: 'b' });
+    runtime.confirmDispatchAccepted('proxy-1', 'b');
+    await runtime.pollNow();
+    expect(send).not.toHaveBeenCalled(); // B merely enqueued does not unlock A.
+    h.state.receipts.b = 'accepted';
+    h.state.history.push({ id: 'input-b', clientId: 'b', role: 'user', content: 'B' },
+      { id: 'reply-b', role: 'assistant', content: 'Completed B' });
+    await runtime.pollNow();
+    expect(contexts).toEqual([['b']]);
+    expect(send).toHaveBeenCalledOnce();
+    expect(h.deps.saveReport).toHaveBeenCalledWith('worker-1', {
+      clientIds: ['b'], baselineMessageId: 'msg-0',
+      delivery: { clientId: 'report-1', inputClientIds: ['b'], kind: 'automatic', messageId: 'reply-b' },
+    });
+    expect(runtime.hasPendingReport('proxy-1')).toBe(false);
+    expect(runtime.get('proxy-1')?.lastBridgedMessageId).toBe('reply-b');
+    runtime.stop();
+  });
+
+  it('keeps polling device status while a manual report is awaiting Lead acceptance', async () => {
+    const h = setup();
+    await h.runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'A', clientId: 'a' });
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const report = h.runtime.runReportDelivery('proxy-1', ['a'], async () => { entered(); await gate; return true; }, Boolean);
+    await started;
+    try {
+      await h.runtime.pollNow();
+      expect(h.invoke).toHaveBeenCalledWith('mac-mini', 'maker:list-active', [{ summary: true, snapshotVersion: 2 }]);
+      expect(h.deps.readLeadReportReceipt).not.toHaveBeenCalled();
+    } finally { release(); await report; h.runtime.stop(); }
+  });
   it('enqueues a Lead message on the execution device with the device task’s own settings', async () => {
     const { runtime, state } = setup();
     await expect(

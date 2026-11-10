@@ -17,6 +17,8 @@ import {
   awaitAgentInputQueueSnapshotPersistence,
   loadAgentInputQueueSnapshotCounts,
   loadAgentInputQueueSnapshot,
+  loadAgentInputQueueSnapshotState,
+  listQueuedOrcaReportSessionIds,
   saveAgentInputQueueSnapshot,
   saveCancelledInputDelivery,
   hasInputDeliveryCancellation,
@@ -70,6 +72,61 @@ function installDb(
 }
 
 describe('agent input queue snapshot durability boundary', () => {
+  // #9346, db tier: an empty-queue Stop had no durable representation. Exercise
+  // the real writer/readers, discovery, counts and receipts without creating a message.
+  it('persists an empty report Stop separately from queued messages and clears it on resume', async () => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`
+      CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER DEFAULT 1);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);
+      INSERT INTO sessions VALUES ('stopped-lead', NULL);
+    `);
+    mocks.getDbClient.mockReturnValue({ drizzle: drizzle(sqlite),
+      query: async (text: string, args: unknown[]) => sqlite.prepare(text).all(...args) });
+    const sid = 'stopped-lead';
+    const report = { ...queued('report'), origin: { kind: 'orca' as const, senderLabel: 'reviewer' },
+      orcaReportDelivery: { workerId: 'worker' } };
+    try {
+      await saveAgentInputQueueSnapshot(sid, [], true);
+      expect(await loadAgentInputQueueSnapshotState(sid)).toEqual({ items: [], orcaReportsStopped: true });
+      expect(await loadAgentInputQueueSnapshotCounts([sid])).toEqual({ [sid]: 0 });
+      await saveAgentInputQueueSnapshot(sid, [report], true);
+      expect(await loadAgentInputQueueSnapshotState(sid)).toEqual({ items: [report], orcaReportsStopped: true });
+      expect(await loadAgentInputQueueSnapshot(sid)).toEqual([report]);
+      expect(await loadAgentInputQueueSnapshotCounts([sid])).toEqual({ [sid]: 1 });
+      expect(await listQueuedOrcaReportSessionIds()).toEqual([]);
+      expect(await readInputDeliveryReceipts(sid, [report.clientId])).toEqual([{ clientId: report.clientId, state: 'pending' }]);
+      await saveAgentInputQueueSnapshot(sid, [report]);
+      expect(await loadAgentInputQueueSnapshotState(sid)).toEqual({ items: [report], orcaReportsStopped: false });
+      expect(await listQueuedOrcaReportSessionIds()).toEqual([sid]);
+      // Message extension fields must never grant Main-only stop authority.
+      const withMarkerFields = { ...report, type: 'orca-report-stop', version: 1 };
+      await saveAgentInputQueueSnapshot(sid, [withMarkerFields]);
+      expect(await loadAgentInputQueueSnapshotState(sid)).toEqual({ items: [withMarkerFields], orcaReportsStopped: false });
+      expect(await listQueuedOrcaReportSessionIds()).toEqual([sid]);
+      await saveAgentInputQueueSnapshot(sid, []);
+      expect(sqlite.prepare('SELECT * FROM agent_input_queue_snapshots').all()).toEqual([]);
+    } finally { sqlite.close(); }
+  });
+
+  // DB-tier: startup discovery must find retained Worker reports without loading
+  // ordinary message bodies or waking stopped reports; malformed legacy rows stay harmless.
+  it('discovers only eligible report snapshots for startup restoration', async () => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER)');
+    const insert = sqlite.prepare('INSERT INTO agent_input_queue_snapshots VALUES (?, ?, 1)');
+    const report = { ...queued('report'), origin: { kind: 'orca', senderLabel: 'reviewer' },
+      orcaReportDelivery: { workerId: 'worker' } };
+    insert.run('pending', JSON.stringify([null, 'legacy', report]));
+    insert.run('stopped', JSON.stringify([{ ...report, orcaReportDelivery: { workerId: 'worker', recoveryBlocked: true } }]));
+    insert.run('ordinary', JSON.stringify([queued('ordinary')]));
+    insert.run('corrupt', '{');
+    mocks.getDbClient.mockReturnValue({ query: async (text: string, args: unknown[]) => sqlite.prepare(text).all(...args) });
+    try { expect(await listQueuedOrcaReportSessionIds()).toEqual(['pending']); }
+    finally { sqlite.close(); }
+  });
+
   it.each([false, true])('matches restoration when a persisted array contains malformed rows (all malformed: %s)', async (allMalformed) => {
     const sqlite = new Database(':memory:');
     sqlite.exec(`

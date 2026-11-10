@@ -29,6 +29,21 @@ const log = createLogger('agent-input-queue-snapshots');
 const MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const SNAPSHOT_COUNT_QUERY_BATCH_SIZE = 200;
 
+/** Main-only queue metadata; never a message or part of a remote projection. */
+export interface AgentInputQueueSnapshotState {
+  items: AgentInputQueuedMessage[];
+  orcaReportsStopped: boolean;
+}
+// Keep the existing array format: older readers ignore this non-message record
+// while retaining every real queued item. No schema or wire migration is needed.
+const ORCA_REPORT_STOP = { type: 'orca-report-stop', version: 1 } as const;
+export function isOrcaReportStopSnapshotMarker(value: unknown): boolean {
+  return !!value && typeof value === 'object'
+    && Object.keys(value).length === 2
+    && (value as typeof ORCA_REPORT_STOP).type === ORCA_REPORT_STOP.type
+    && (value as typeof ORCA_REPORT_STOP).version === 1;
+}
+
 /** per-session 写链:只做覆盖写/删除排队保序,无读改写。 */
 const _writeChains = new Map<string, Promise<void>>();
 /** 最近一次真实队列快照写入的结果；取消墓碑不能替代队列落盘证明。 */
@@ -226,20 +241,24 @@ function stripInlineBase64(items: AgentInputQueuedMessage[]): AgentInputQueuedMe
 export function saveAgentInputQueueSnapshot(
   sessionId: string,
   items: AgentInputQueuedMessage[],
+  orcaReportsStopped = false,
 ): Promise<void> {
   return chainWrite(sessionId, 'snapshot', async (owner) => {
     try {
       const db = owner.client.drizzle;
-      if (items.length === 0) {
+      if (items.length === 0 && !orcaReportsStopped) {
         await db
           .delete(agentInputQueueSnapshots)
           .where(eq(agentInputQueueSnapshots.sessionId, sessionId));
         return;
       }
       const persistableItems = items.map(sanitizeQueuedMessageForPersistence);
-      let payload = JSON.stringify(persistableItems);
+      const encode = (rows: AgentInputQueuedMessage[]) => JSON.stringify(
+        orcaReportsStopped ? [...rows, ORCA_REPORT_STOP] : rows,
+      );
+      let payload = encode(persistableItems);
       if (payload.length > MAX_PAYLOAD_BYTES) {
-        payload = JSON.stringify(stripInlineBase64(persistableItems));
+        payload = encode(stripInlineBase64(persistableItems));
         if (payload.length > MAX_PAYLOAD_BYTES) {
           log.warn('queue snapshot too large even after stripping inline base64; keeping previous snapshot', {
             sessionId,
@@ -282,6 +301,31 @@ export async function loadAllQueueSnapshotPayloads(): Promise<string[]> {
     .select({ payload: agentInputQueueSnapshots.payload })
     .from(agentInputQueueSnapshots);
   return rows.map((r) => r.payload);
+}
+
+/** Startup discovery only; restoration still validates the receipt, clear boundary and Orca link. */
+export async function listQueuedOrcaReportSessionIds(): Promise<string[]> {
+  const owner = queueOwner();
+  const rows = await owner.client.query<{ sessionId: string }>(
+    `SELECT session_id AS sessionId FROM agent_input_queue_snapshots
+     WHERE EXISTS (
+       SELECT 1 FROM json_each(CASE WHEN json_valid(payload) THEN payload ELSE '[]' END) AS item
+       WHERE CASE WHEN item.type = 'object' THEN
+         json_type(item.value, '$.orcaReportDelivery.workerId') = 'text'
+         AND COALESCE(json_extract(item.value, '$.orcaReportDelivery.recoveryBlocked'), 0) = 0
+         AND json_extract(item.value, '$.origin.kind') = 'orca'
+       ELSE 0 END
+     ) AND NOT EXISTS (
+       SELECT 1 FROM json_each(CASE WHEN json_valid(payload) THEN payload ELSE '[]' END) AS marker
+       WHERE CASE WHEN marker.type = 'object' THEN
+         json_extract(marker.value, '$.type') = 'orca-report-stop'
+         AND json_extract(marker.value, '$.version') = 1
+         AND (SELECT count(*) FROM json_each(marker.value)) = 2
+       ELSE 0 END
+     )`, [],
+  );
+  assertQueueOwner(owner);
+  return rows.map(row => row.sessionId);
 }
 
 /**
@@ -390,6 +434,12 @@ export function isRestorableQueuedMessage(value: unknown): value is AgentInputQu
 export async function loadAgentInputQueueSnapshot(
   sessionId: string,
 ): Promise<AgentInputQueuedMessage[]> {
+  return (await loadAgentInputQueueSnapshotState(sessionId)).items;
+}
+
+export async function loadAgentInputQueueSnapshotState(
+  sessionId: string,
+): Promise<AgentInputQueueSnapshotState> {
   const db = getDbClient().drizzle;
   const rows = await db
     .select({ payload: agentInputQueueSnapshots.payload })
@@ -397,7 +447,7 @@ export async function loadAgentInputQueueSnapshot(
     .where(eq(agentInputQueueSnapshots.sessionId, sessionId))
     .limit(1);
   const payload = rows[0]?.payload;
-  if (payload === undefined) return [];
+  if (payload === undefined) return { items: [], orcaReportsStopped: false };
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
@@ -407,15 +457,17 @@ export async function loadAgentInputQueueSnapshot(
   if (!Array.isArray(parsed)) {
     log.warn('discarding corrupt queue snapshot', { sessionId, bytes: payload.length });
     void saveAgentInputQueueSnapshot(sessionId, []).catch(() => undefined);
-    return [];
+    return { items: [], orcaReportsStopped: false };
   }
+  const orcaReportsStopped = parsed.some(isOrcaReportStopSnapshotMarker);
   const validItems = parsed.filter(isRestorableQueuedMessage);
   const items = validItems.map(sanitizeQueuedMessageForPersistence);
-  if (items.length !== parsed.length) {
+  const malformedCount = parsed.filter(item => !isRestorableQueuedMessage(item) && !isOrcaReportStopSnapshotMarker(item)).length;
+  if (malformedCount > 0) {
     log.warn('dropped malformed rows from queue snapshot', {
       sessionId,
       kept: items.length,
-      dropped: parsed.length - items.length,
+      dropped: malformedCount,
     });
   }
   if (items.some((item, index) => item !== validItems[index])) {
@@ -423,9 +475,9 @@ export async function loadAgentInputQueueSnapshot(
       sessionId,
       items: items.length,
     });
-    void saveAgentInputQueueSnapshot(sessionId, items).catch(() => undefined);
+    void saveAgentInputQueueSnapshot(sessionId, items, orcaReportsStopped).catch(() => undefined);
   }
-  return items;
+  return { items, orcaReportsStopped };
 }
 
 export async function getPersistedInputClientIds(

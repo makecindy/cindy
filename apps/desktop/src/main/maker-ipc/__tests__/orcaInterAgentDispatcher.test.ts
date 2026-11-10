@@ -1,4 +1,6 @@
 import type { SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
+import type { AgentEvent, Logger, Maker, Session } from '@cindy/maker-core';
+import { createOrcaWorkerBridgeMcpProvider } from '@cindy/orca-workflow';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, appendAutoReviewUserIntent, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -126,6 +128,146 @@ describe('sender-chosen steering into an active turn', () => {
     senderLabel: 'Worker', workerId: 'worker-1', meta: { source: 'orca', context: 'report-test' },
   };
   const steerReport = { ...report, delivery: 'steer' as const };
+  // #9346, unit: healthy live reports bypassed the empty Stop, including a Stop
+  // arriving during preparation. Lead dispatch is not a Worker report.
+  it.each(['initial', 'preparation', 'history', 'handoff'])('queues a Worker report behind an empty Stop (%s)', async timing => {
+    let stopped = timing === 'initial';
+    const h = createHarness({ shouldQueueNewTurn: (_sid, orcaReport) => stopped && orcaReport === true,
+      prepareUnhealthySession: async () => { if (timing === 'preparation') stopped = true; },
+      readAutoReviewHistory: async () => { if (timing === 'history') stopped = true; return []; },
+      peekPendingHandoff: async () => { if (timing === 'handoff') stopped = true; return null; } });
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(report);
+    expect(result).toMatchObject({ ok: true, mode: 'queued' });
+    expect(h.queuedItems).toHaveLength(1);
+    expect(h.liveSession.send).not.toHaveBeenCalled();
+    const lead = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, source: 'lead' });
+    expect(lead).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(h.liveSession.send).toHaveBeenCalledOnce();
+  });
+  // #9346 P1, unit: preparation can fail before a report reaches any queue/send.
+  // Existing cancellation tests start inside send; retaining these untouched
+  // reports as unknown permanently blocks automatic recovery after preparation heals.
+  it.each(['health', 'history', 'handoff', 'queue-preparation', 'row-read', 'image-validation'] as const)(
+    'proves an untouched report can retry after %s recovers', async stage => {
+      let failing = true;
+      const prepare = async () => { if (failing) throw new Error('preparation unavailable'); };
+      const h = createHarness({
+        ...(stage === 'health' ? { prepareUnhealthySession: prepare } : {}),
+        ...(stage === 'history' ? { readAutoReviewHistory: async () => { await prepare(); return []; } } : {}),
+        ...(stage === 'handoff' ? { peekPendingHandoff: async () => { await prepare(); return null; } } : {}),
+        ...(stage === 'queue-preparation' ? { shouldQueueNewTurn: () => true } : {}),
+        ...(stage === 'image-validation' ? { validateImageAttachments: async () => {
+          await prepare(); return { ok: true as const, images: [] };
+        } } : {}),
+      });
+      if (stage === 'queue-preparation') {
+        const build = h.deps.buildCreateOptsForQueuedSession;
+        h.deps.buildCreateOptsForQueuedSession = async (...args) => { await prepare(); return build(...args); };
+      }
+      if (stage === 'row-read') {
+        const read = h.deps.getSessionRowSnapshot;
+        h.deps.getSessionRowSnapshot = async id => { await prepare(); return read(id); };
+      }
+      const input = { ...report, reportClientId: 'durable-report',
+        ...(stage === 'image-validation' ? { imagePaths: ['/report.png'] } : {}) };
+      await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(input))
+        .resolves.toMatchObject({ ok: false, reportRejected: true });
+      expect(h.liveSession.send).not.toHaveBeenCalled();
+      expect(h.deps.enqueueQueuedMessage).not.toHaveBeenCalled();
+      failing = false;
+      await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(input)).resolves.toMatchObject({ ok: true });
+      expect(h.liveSession.send.mock.calls.length + vi.mocked(h.deps.enqueueQueuedMessage).mock.calls.length).toBe(1);
+    },
+  );
+  // Route application can allocate/open an Agent even before session.send. A
+  // report needing that work must first reach the durable coordinator, whose
+  // recoveryBlocked checkpoint owns startup and unknown-allocation recovery.
+  it.each([true, undefined])('retains a report before a pending or uninspectable route can bootstrap (%s)', async pending => {
+    const apply = vi.fn(async () => { throw new Error('[SHARED_TASK_STAGE_allocation] [SHARED_TASK_RECOVERY_timeout]'); });
+    const h = createHarness({ applyPendingAgentSwitch: apply,
+      ...(pending === undefined ? {} : { hasPendingAgentSwitch: () => pending }),
+    });
+    await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' }))
+      .resolves.toMatchObject({ ok: true, mode: 'queued', clientId: 'durable-report' });
+    expect(apply).not.toHaveBeenCalled();
+    expect(h.liveSession.send).not.toHaveBeenCalled();
+    expect(firstQueuedItem(h.queuedItems)).toMatchObject({ clientId: 'durable-report', durableDelivery: true,
+      orcaReportDelivery: { workerId: 'worker-1' } });
+  });
+  it('keeps a healthy report direct without entering the route bootstrap path', async () => {
+    const apply = vi.fn(async () => { throw new Error('must not bootstrap'); });
+    const h = createHarness({ applyPendingAgentSwitch: apply, hasPendingAgentSwitch: () => false });
+    await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' }))
+      .resolves.toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(apply).not.toHaveBeenCalled();
+    expect(h.liveSession.send).toHaveBeenCalledOnce();
+    expect(h.deps.enqueueQueuedMessage).not.toHaveBeenCalled();
+  });
+  it('keeps an uncertain queue write unconfirmed even if it throws before returning a receipt', async () => {
+    const h = createHarness({ getLiveSession: () => null, enqueueQueuedMessage: async () => { throw new Error('queue receipt lost'); } });
+    await expect(h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' }))
+      .rejects.toThrow('queue receipt lost');
+  });
+  it('does not requeue a report when send throws SESSION_RUNNING without a rejection receipt', async () => {
+    const session = createLiveSession(async () => { throw Object.assign(new Error('unknown send'), { code: 'SESSION_RUNNING' }); });
+    const h = createHarness({ getLiveSession: () => session });
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' });
+    expect(result).toMatchObject({ ok: false });
+    expect(result).not.toHaveProperty('reportRejected');
+    expect(h.deps.enqueueQueuedMessage).not.toHaveBeenCalled();
+  });
+  it.each(['cancelled', 'throw', 'accepted-then-error'] as const)('only stamps proven report rejection: %s', async mode => {
+    const session = createLiveSession(async () => {
+      if (mode === 'throw') throw new Error('send result unknown');
+      return mode === 'cancelled' ? { accepted: false, reason: 'cancelled-before-dispatch' } : { accepted: true };
+    });
+    const h = createHarness({ getLiveSession: () => session,
+      onDirectInputDispatched: async () => { throw new Error('activity write failed after acceptance'); },
+    });
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' });
+    expect(result.ok).toBe(false);
+    expect('reportRejected' in result ? result.reportRejected : undefined).toBe(mode === 'cancelled' ? true : undefined);
+  });
+  // #9346 P2, unit: persist the real dispatcher's cold report, then recreate both
+  // dispatcher and bridge provider. Existing capture tests kept the old closure.
+  it.each(['complete', 'cancelled'] as const)('rebinds a restored report capture at acceptance: %s', async mode => {
+    const cold = createHarness({ getLiveSession: () => null });
+    await cold.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'durable-report' });
+    const item = JSON.parse(JSON.stringify(firstQueuedItem(cold.queuedItems))) as AgentInputQueuedMessage;
+    expect(item.clientId).toBe('durable-report');
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const lead = { id: 'target-session', getStatus: () => 'idle', isTurnRunning: () => false,
+      onEvent: (handler: (event: AgentEvent) => void) => { listeners.add(handler); return () => { listeners.delete(handler); }; },
+    } as unknown as Session;
+    const log = { ...mocks.logger, debug: vi.fn(), child: () => log } as unknown as Logger;
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => ({ getSession: () => lead }) as unknown as Maker,
+      logger: log, persistUserMessage: vi.fn(), wireSession: vi.fn(),
+      orcaTeamStore: { updateWorkerStatus: vi.fn(), getWorkerLink: async () => ({
+        workerId: 'worker-1', workerSessionId: 'worker-session', workflowId: 'team-1',
+        leadSessionId: 'target-session', leadSession: { sessionId: 'target-session', agentKind: 'codex', workingDir: '/repo', model: 'model' },
+      }) },
+    });
+    const restored = createHarness({ prepareRestoredReportAcceptance: provider.prepareLeadReportAcceptance });
+    // Startup / inspection does not capture or mark a turn running.
+    expect(listeners.size).toBe(0);
+    await restored.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', item, true);
+    if (mode === 'complete') {
+      for (const fn of listeners) fn({ type: 'text', data: { text: 'Lead reply after restart', isFinal: true } } as AgentEvent);
+      for (const fn of listeners) fn({ type: 'done', data: {} } as AgentEvent);
+    }
+    await restored.dispatcher.settleQueuedOrcaInterAgentAcceptedCallback('target-session', {
+      persistUserMessage: { clientId: item.clientId, content: 'Review complete', delivery: 'turn' },
+    }, mode === 'complete' ? { kind: 'session-dispatch', source: 'maker-ipc', dispatched: true }
+      : { kind: 'session-dispatch', source: 'maker-ipc', dispatched: false,
+        reason: 'cancelled-before-dispatch', context: 'restored-report', message: 'Cancelled before dispatch' });
+    const result = await provider.invokeTool({ sessionId: 'worker-session', agentKind: 'codex', workingDir: '/repo',
+      mcpCallerAttested: true, mcpCallerKind: 'root', vendorOptions: { orcaRole: 'worker', orcaWorkerId: 'worker-1' },
+    }, 'read_lead', { worker_id: 'worker-1' });
+    expect(result.isError).toBe(false);
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject(mode === 'complete'
+      ? { status: 'done', result: 'Lead reply after restart' } : { status: 'idle', result: '' });
+  });
   function setup(outcome: 'steered' | 'queued' | 'not-attempted' | 'rejected' = 'steered') {
     const live = { ...createLiveSession(async () => ({ accepted: true })),
       isTurnRunning: vi.fn(() => true), getTurnGeneration: vi.fn(() => 7),
@@ -140,6 +282,27 @@ describe('sender-chosen steering into an active turn', () => {
     });
     return { ...h, live, steer, lock };
   }
+  // Unit regression: no-live reports used to bootstrap before retaining the
+  // message, and a queued ACK could precede persistence. Exercise the dispatcher.
+  it('retains a cold Lead report and waits for its queue receipt before acknowledging', async () => {
+    let release!: () => void;
+    const persisted = new Promise<void>(resolve => { release = resolve; });
+    const h = createHarness({ getLiveSession: () => null,
+      enqueueQueuedMessage: vi.fn(async () => persisted),
+    });
+    let accepted = false;
+    const pending = h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session', rawContent: 'Review complete', source: 'worker',
+      senderLabel: 'reviewer', workerId: 'worker-1', meta: { source: 'mcp-tool', context: 'report' },
+    }).then(result => { accepted = true; return result; });
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
+    expect(h.deps.enqueueQueuedMessage).toHaveBeenCalledOnce();
+    expect(accepted).toBe(false);
+    release();
+    await expect(pending).resolves.toMatchObject({ ok: true, mode: 'queued', clientId: 'client-1' });
+  });
+
   it('uses same-turn delivery with Orca identity and never runs turn-start callbacks', async () => {
     const h = setup();
     const order: string[] = [];
@@ -1012,8 +1175,8 @@ describe('Orca lead/worker dispatcher', () => {
 
     const internal = createHarness({ resolveWorkerSenderLabel, getLiveSession: vi.fn(() => null) });
     await internal.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(params);
-    expect(internal.deps.sendToSessionInternal).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expectedText }),
+    expect(internal.deps.enqueueQueuedMessage).toHaveBeenCalledWith(
+      params.targetSessionId, expect.objectContaining({ text: expectedText }),
     );
 
     const reserved = createHarness({ resolveWorkerSenderLabel });

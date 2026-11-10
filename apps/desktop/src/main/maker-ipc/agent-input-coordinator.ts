@@ -45,6 +45,7 @@ import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText } from './au
 import type { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
 import type { touchUserSendInDb } from '../localDb/ipc/sessions.js';
+import type { AgentInputQueueSnapshotState } from '../localDb/agentInputQueueSnapshots.js';
 import {
   isContinuationOnlyAutoResumeReason,
   type InterruptedTurnErrorSignals,
@@ -104,6 +105,7 @@ import {
 } from './sessionQueueInspection.js';
 
 const log = createLogger('maker-input-coordinator');
+export const SESSION_REWIND_INPUT_LOCK_ID = 'session-rewind';
 const SESSION_RUNNING_RETRY_DELAY_MS = 250;
 /**
  * Codex 的 reconnect-stalled / ordinary idle 清理要等两次 turn/interrupt ACK，每次最多 10s。
@@ -335,6 +337,9 @@ export type AgentInputSendResult =
     };
 
 export interface AgentInputCoordinatorDeps {
+  /** Revalidate a saved report against the current account's active Orca link. */
+  canRestoreOrcaReport?: (sessionId: string, item: AgentInputQueuedMessage) => Promise<boolean>;
+  awaitQueuePersistence?: (sessionId: string) => Promise<void>;
   sendToAgent: (
     sessionId: string,
     message: AgentInputMakerMessage,
@@ -678,16 +683,17 @@ export interface AgentInputCoordinatorDeps {
   hasPendingCredentialSwitch?: (sessionId: string) => boolean;
   /**
    * 排队输入崩溃恢复(issue #761)。persistQueueSnapshot:队列内容变化时覆盖写
-   * 快照(items 为空 = 删行),实现方自行 fire-and-forget + 保序,绝不阻塞派发;
+   * 快照(items 为空且无报告停止标记时删行),实现方自行 fire-and-forget + 保序,绝不阻塞派发;
    * loadClearBoundary:ensureQueueRestored 恢复快照前先水合 durable /clear 边界；
    * loadQueueSnapshot:随后读回快照。生产侧三者一起注入，任一读取失败都保持未恢复态。
    */
   persistQueueSnapshot?: (
     sessionId: string,
     items: AgentInputQueuedMessage[],
+    orcaReportsStopped?: boolean,
   ) => void | Promise<void>;
   loadClearBoundary?: (sessionId: string) => Promise<unknown>;
-  loadQueueSnapshot?: (sessionId: string) => Promise<AgentInputQueuedMessage[]>;
+  loadQueueSnapshot?: (sessionId: string) => Promise<AgentInputQueuedMessage[] | AgentInputQueueSnapshotState>;
   getPersistedClientIds?: (sessionId: string, clientIds: string[]) => Promise<Set<string>>;
 }
 
@@ -772,6 +778,8 @@ interface SessionInputState {
   /** Direct composer steers have no pendingQueue row while delivery is still reversible. */
   directSteeringItems: AgentInputQueuedMessage[];
   queuePaused: boolean;
+  /** Main-only Stop/rewind latch, persisted even when no report is queued. */
+  orcaReportsStopped?: boolean;
   /**
    * 当前 queuePaused 是否来自崩溃快照恢复(restoreQueueSnapshot 的静默会话分支),
    * 而非用户显式 Stop / steer 不确定投递。区分的意义:恢复暂停只是"重启后不自动
@@ -1333,6 +1341,7 @@ export class AgentInputCoordinator {
   /** Only this saved continuation can cross a restore pause; the ordinary queue stays paused. */
   private readonly restoredUsageLimitRetryItems = new WeakSet<AgentInputQueuedMessage>();
   private readonly restoredQueueItems = new WeakSet<AgentInputQueuedMessage>();
+  private readonly restoredOrcaReports = new WeakSet<AgentInputQueuedMessage>();
   private readonly restoreAttempted = new Set<string>();
   private readonly queueRestorePromises = new Map<string, Promise<void>>();
   private readonly lastQueueSnapshotJson = new Map<string, string>();
@@ -1634,8 +1643,11 @@ export class AgentInputCoordinator {
       }
     }
     let items: AgentInputQueuedMessage[];
+    let savedOrcaReportsStopped = false;
     try {
-      items = (await this.deps.loadQueueSnapshot!(sessionId))
+      const snapshot = await this.deps.loadQueueSnapshot!(sessionId);
+      savedOrcaReportsStopped = !Array.isArray(snapshot) && snapshot.orcaReportsStopped;
+      items = (Array.isArray(snapshot) ? snapshot : snapshot.items)
         .map(sanitizeQueuedMessageForPersistence)
         .map(normalizeRestoredSyntheticTrigger)
         .map(restoreTrustedDesktopQueuedOrigin);
@@ -1658,6 +1670,8 @@ export class AgentInputCoordinator {
     // 去重:内存态 + DB 已落库的消息。DB 查询覆盖"消息已被 agent 接受落库但删快照
     // 写尚未提交"的崩溃窗口——该 clientId 已属 interrupted-turn 辖区,不应二次恢复。
     const existingIds = new Set(state.pendingQueue.map((q) => q.clientId));
+    // A local Stop/resume/input during the read is newer than the saved latch.
+    state.orcaReportsStopped ??= savedOrcaReportsStopped;
     if (state.activeTurn?.item) existingIds.add(state.activeTurn.item.clientId);
     if (this.deps.getPersistedClientIds && items.length > 0) {
       try {
@@ -1687,6 +1701,15 @@ export class AgentInputCoordinator {
         });
         throw err;
       }
+    }
+    const resumableReports = new Set<string>();
+    if (this.deps.canRestoreOrcaReport) {
+      for (const item of items) {
+        if (item.orcaReportDelivery && !item.orcaReportDelivery.recoveryBlocked
+          && item.origin?.kind === 'orca' && !existingIds.has(item.clientId)
+          && await this.deps.canRestoreOrcaReport(sessionId, item)) resumableReports.add(item.clientId);
+      }
+      if (this.getState(sessionId) !== preState || preState.generation !== preGeneration) return;
     }
     // A clear boundary survives process restart while the queue snapshot is
     // only an optimization. Compare it with the host-owned acceptance receipt;
@@ -1726,7 +1749,7 @@ export class AgentInputCoordinator {
     // 收口点直接跳过,避免每次打开会话都发一次冗余覆盖写/删除。只要有丢弃项就
     // 留空，让 maybePersistQueueSnapshot 把清理后的快照写回盘面。
     if (staleClearItems.length === 0) {
-      this.lastQueueSnapshotJson.set(sessionId, JSON.stringify(items));
+      this.lastQueueSnapshotJson.set(sessionId, JSON.stringify([items, savedOrcaReportsStopped]));
     } else {
       this.lastQueueSnapshotJson.delete(sessionId);
     }
@@ -1784,7 +1807,12 @@ export class AgentInputCoordinator {
       state.activeTurn === null &&
       state.steeringQueueClientIds.length === 0 &&
       !this.deps.isTurnRunning(sessionId);
-    for (const item of restored) this.restoredQueueItems.add(item);
+    for (const item of restored) {
+      this.restoredQueueItems.add(item);
+      if (item.orcaReportDelivery && state.orcaReportsStopped) {
+        item.orcaReportDelivery.recoveryBlocked = true;
+      } else if (resumableReports.has(item.clientId)) this.restoredOrcaReports.add(item);
+    }
     state.pendingQueue = quotaHead
       ? [quotaHead, ...restored, ...state.pendingQueue.filter(item => item !== quotaHead)]
       : [...restored, ...state.pendingQueue];
@@ -1801,14 +1829,16 @@ export class AgentInputCoordinator {
     // queueRestorePromises,必须在此之前清掉否则 getDrainableHead 永远返回 null。
     this.queueRestorePromises.delete(sessionId);
     this.emit(sessionId);
-    if (!state.queuePaused) this.scheduleDrain(sessionId, 'queue-snapshot-restored');
+    if (!state.queuePaused || this.restoredOrcaReports.has(state.pendingQueue[0]))
+      this.scheduleDrain(sessionId, 'queue-snapshot-restored');
   }
 
-  shouldQueueNewTurn(sessionId: string): boolean {
+  shouldQueueNewTurn(sessionId: string, orcaReport = false): boolean {
     // 未恢复的会话可能有崩溃前的排队快照:强制入队直到恢复完成,防止新消息跳过旧排队。
     if (this.deps.loadQueueSnapshot && !this.restoredQueueSessions.has(sessionId)) return true;
     const state = this.getState(sessionId);
     return (
+      (orcaReport && state.orcaReportsStopped === true) ||
       state.pendingQueue.length > 0 ||
       state.pendingCompacts.length > 0 ||
       state.queuePaused ||
@@ -1932,10 +1962,20 @@ export class AgentInputCoordinator {
   /** Preserve queued input but keep it paused while rewind changes history. */
   pausePendingQueueForRewind(sessionId: string): AgentInputProjection {
     const state = this.getState(sessionId);
+    this.blockAutomaticOrcaReports(state);
     state.queuePaused = state.pendingQueue.length > 0 || state.pendingCompacts.length > 0;
     state.queuePausedByRestore = false;
     this.emit(sessionId);
     return this.getProjection(sessionId);
+  }
+
+  /** Explicit history/Stop boundaries also apply to reports arriving later. */
+  private blockAutomaticOrcaReports(state: SessionInputState): void {
+    state.orcaReportsStopped = true;
+    for (const item of [...state.pendingQueue, ...(state.activeTurn?.item ? [state.activeTurn.item] : [])]) {
+      if (item.orcaReportDelivery) item.orcaReportDelivery.recoveryBlocked = true;
+      this.restoredOrcaReports.delete(item);
+    }
   }
 
   /** 近期已受理 clientId 窗口容量:覆盖控制端秒级重发窗口即可,防无界增长。 */
@@ -1967,6 +2007,29 @@ export class AgentInputCoordinator {
     }
   }
 
+  /** A host receipt must not race vendor dispatch or a failed snapshot write. */
+  async enqueueDurably(sessionId: string, item: AgentInputQueuedMessage, ownerIsCurrent: () => boolean = () => true): Promise<void> {
+    const state = this.getState(sessionId);
+    const generation = state.generation;
+    await this.ensureQueueRestored(sessionId);
+    const current = () => ownerIsCurrent() && this.states.get(sessionId) === state;
+    if (!current() || state.generation !== generation || !this.deps.awaitQueuePersistence) throw new Error('Durable input is unavailable');
+    const lock = `durable-input:${item.clientId}`;
+    this.setInteractionLock(sessionId, lock, true);
+    try {
+      this.enqueue(sessionId, item);
+      await this.deps.awaitQueuePersistence(sessionId);
+      if (!current() || !state.pendingQueue.some(queued => queued.clientId === item.clientId)) {
+        throw new Error('Durable input was cancelled');
+      }
+    } catch (error) {
+      if (current()) this.remove(sessionId, item.clientId);
+      throw error;
+    } finally {
+      if (current()) this.setInteractionLock(sessionId, lock, false);
+    }
+  }
+
   enqueue(
     sessionId: string,
     item: AgentInputQueuedMessage,
@@ -1995,6 +2058,22 @@ export class AgentInputCoordinator {
       return this.getProjection(sessionId);
     }
     item = stampHostAcceptedAt(item, state.clearBoundaryMs);
+    // Fresh host reports have already passed the dispatcher's relationship
+    // checks. Like validated snapshot reports, they may cross a restore-only
+    // pause when they reach the head, but never a user's Stop (including its
+    // resume-on-input variant). Persist that Stop for reports arriving later.
+    if (item.origin?.kind === 'orca' && item.orcaReportDelivery) {
+      if (state.orcaReportsStopped
+        || state.queueInteractionLocks.includes(SESSION_REWIND_INPUT_LOCK_ID)) {
+        item.orcaReportDelivery.recoveryBlocked = true;
+        if (!state.queuePaused) {
+          state.queuePaused = true;
+          state.queuePausedByRestore = true;
+        }
+      } else if (!item.orcaReportDelivery.recoveryBlocked) {
+        this.restoredOrcaReports.add(item);
+      }
+    }
     this.rememberEnqueuedClientId(state, item.clientId);
     // 真的有一条**新**消息进队了 = 这个会话被别的内容推进(见 deps.onUserEnqueue)。
     // 必须放在幂等去重**之后**: 被去重丢弃的重传(弱网 / 移动端补发)压根没推进任何
@@ -2008,7 +2087,17 @@ export class AgentInputCoordinator {
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
     const schedulerOrigin = isSchedulerOriginItem(item) && !isManualSchedulerContinuation(item);
     const automaticOrigin = isAutomaticOriginItem(item);
-    if (!schedulerOrigin) {
+    if (!automaticOrigin) state.orcaReportsStopped = false;
+    const recoveringReport = state.pendingQueue[0];
+    const preservesReportRecovery = item.origin?.kind === 'orca' && Boolean(item.orcaReportDelivery)
+      && state.autoResumePending?.reason === 'orca-report-preparation'
+      && state.recovery?.kind === 'queue-head' && state.recovery.clientId === recoveringReport?.clientId
+      && recoveringReport?.origin?.kind === 'orca' && Boolean(recoveringReport.orcaReportDelivery)
+      && !recoveringReport.orcaReportDelivery?.recoveryBlocked;
+    // Another accepted report is only a FIFO tail, not an intervention in the
+    // failed head. Keep both the coordinator lease and the host's retry timer.
+    const preservesAutoResume = schedulerOrigin || preservesReportRecovery;
+    if (!preservesAutoResume) {
       // 自动续跑可能已经从 pendingQueue 进入 activeTurn、但仍卡在持久化或其它
       // pre-vendor await。用户此时接管不能只作废 host waiter：那会让隐藏 Continue
       // 继续派发、而新输入排在它后面。复用 Stop 的 generation 取消边界，先确认
@@ -2025,7 +2114,7 @@ export class AgentInputCoordinator {
       if (state.recovery?.kind !== 'queue-head') {
         this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
       }
-    } else if (automaticOrigin && !schedulerOrigin) {
+    } else if (automaticOrigin && !preservesAutoResume) {
       this.deps.onAutomaticEnqueue?.(sessionId, item);
     } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
@@ -2034,7 +2123,7 @@ export class AgentInputCoordinator {
         this.deps.onOwnerMessage?.(sessionId, item);
       }
     }
-    if (!schedulerOrigin) {
+    if (!preservesAutoResume) {
       // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。
       // Scheduler 只是同一串行队列里的自动输入，不代表用户接手，不能取消正在退避的
       // 自动续跑；它会保持 FIFO，等当前恢复生命周期收口后再派发。
@@ -2055,7 +2144,7 @@ export class AgentInputCoordinator {
         clientId: item.clientId,
       });
     }
-    if (!schedulerOrigin) {
+    if (!preservesAutoResume) {
       this.abandonActiveTurnRecoveryForUserAction(state);
       this.clearErrorUnlessQueueHeadBlocked(state);
     }
@@ -2388,10 +2477,11 @@ export class AgentInputCoordinator {
       ? state.pendingQueue.find((queued) => queued.clientId === target.queuedClientId)
       : target.item;
     if (!item) return 'rejected';
+    const generation = state.generation;
     if (
       this.deps.getTurnSessionIdentity?.(sessionId) !== expectedTurn.session ||
       this.deps.getTurnGeneration?.(sessionId) !== expectedTurn.turnGeneration ||
-      this.isControlSteerBlocked(sessionId, state, item.clientId, { fromQueue, ownSteer: false })
+      this.isControlSteerBlocked(sessionId, state, item, { fromQueue, ownSteer: false })
     ) return 'not-attempted';
 
     const observed = await this.steerObserved(sessionId, item, {
@@ -2407,18 +2497,27 @@ export class AgentInputCoordinator {
     if (observed.policyBlocked) return 'rejected';
     // In particular, preserve ACK-uncertain items and their protective pause.
     // Do not infer non-delivery from the live turn ending during the request.
-    return this.hasPendingQueueItem(sessionId, item.clientId) ? 'queued' : 'not-attempted';
+    if (!this.hasPendingQueueItem(sessionId, item.clientId)) return 'not-attempted';
+    if (item.orcaReportDelivery && item.durableDelivery) {
+      if (!this.deps.awaitQueuePersistence) throw new Error('Durable input is unavailable');
+      await this.deps.awaitQueuePersistence(sessionId);
+      if (this.states.get(sessionId) !== state || state.generation !== generation
+        || !this.hasPendingQueueItem(sessionId, item.clientId)) throw new Error('Durable input was cancelled');
+    }
+    return 'queued';
   }
 
   /** Shared by the pre-check and the pre-provider re-check of agent-chosen steering. */
   private isControlSteerBlocked(
     sessionId: string,
     state: SessionInputState,
-    clientId: string,
+    item: AgentInputQueuedMessage,
     opts: { fromQueue: boolean; ownSteer: boolean },
   ): boolean {
+    const clientId = item.clientId;
     return (
       !this.isQueueRestored(sessionId) ||
+      Boolean(item.orcaReportDelivery && state.orcaReportsStopped) ||
       !this.deps.isTurnRunning(sessionId) ||
       state.queuePaused || state.queueAbortPending || state.abortBoundaryToken !== null ||
       state.queueInteractionLocks.length > 0 ||
@@ -2570,6 +2669,10 @@ export class AgentInputCoordinator {
       this.cancelPreparedAutoResume(sessionId, state);
     }
 
+    // Only a new user action may release Stop. Late ACK/persistence callbacks
+    // still update activity, but must not release a newer input boundary.
+    if (opts?.touchUserSend) state.orcaReportsStopped = false;
+
     if (!this.isTurnSteerable(sessionId, state)) {
       if (opts?.fallbackToTurn === false) return false;
       this.fallbackPreparedAsTurn(sessionId, item, opts?.removeFromQueue === true);
@@ -2611,6 +2714,12 @@ export class AgentInputCoordinator {
     const steerAbort = new AbortController();
     const inputBoundarySignal = this.getInputAbortSignal(sessionId, steerGeneration);
     this.registerSteerAbortController(sessionId, item.clientId, steerAbort);
+    // Steering may be accepted without an observable ACK. Persist the report as
+    // non-replayable before handing it to the provider, including crash windows.
+    if (item.orcaReportDelivery) {
+      item.orcaReportDelivery = { ...item.orcaReportDelivery, recoveryBlocked: true };
+      this.restoredOrcaReports.delete(item);
+    }
     this.emit(sessionId);
 
     // 意识拦截钩(订阅槽①):同轮注入与普通派发同权——drain() 在派发前筛,
@@ -2703,6 +2812,10 @@ export class AgentInputCoordinator {
       }
     };
     try {
+      if (item.orcaReportDelivery && item.durableDelivery) {
+        if (!this.deps.awaitQueuePersistence) throw new Error('Durable input is unavailable');
+        await this.deps.awaitQueuePersistence(sessionId);
+      }
       const referenceContexts = await this.resolveReferenceContexts(item);
       await assertSteerAuthority();
       // A pause/Stop can arrive while references are being prepared. Recheck
@@ -2712,7 +2825,7 @@ export class AgentInputCoordinator {
         || current.queueAbortPending || inputBoundarySignal.aborted || steerAbort.signal.aborted
         || !this.isCurrentSteerRequest(current, item.clientId, steerGeneration, steerRequestToken)
         || (opts?.controlInput !== undefined && this.isControlSteerBlocked(
-          sessionId, current, item.clientId, { fromQueue: opts.controlInput.fromQueue, ownSteer: true },
+          sessionId, current, item, { fromQueue: opts.controlInput.fromQueue, ownSteer: true },
         ))) {
         const latest = current;
         if (
@@ -3143,6 +3256,7 @@ export class AgentInputCoordinator {
     if (sharedTask) opts = { ...opts, keepQueue: true };
     const state = this.getState(sessionId);
     const preserveQueue = opts?.keepQueue === true;
+    this.blockAutomaticOrcaReports(state);
     this.supersedePendingAutoResumeRecoveries(sessionId);
     this.cancelPreparedAutoResume(sessionId, state);
     this.abortInputBoundary(sessionId);
@@ -3243,6 +3357,7 @@ export class AgentInputCoordinator {
   resume(sessionId: string): AgentInputProjection {
     assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.send');
     const state = this.getState(sessionId);
+    state.orcaReportsStopped = false;
     const recovery = state.recovery;
     const pausedQueueHeadRecoveryClientId =
       state.queuePaused &&
@@ -3331,6 +3446,7 @@ export class AgentInputCoordinator {
     }
     // 自动动作（中断自愈 / 额度重置后继续）：隐藏气泡、不算用户发送、保留原 Plan/权限选项。
     const automatic = Boolean(opts?.auto || usageWait);
+    if (!automatic) state.orcaReportsStopped = false;
     // auto 路径的第二道守卫:接管态必须**仍然**成立。
     //
     // 只看 recovery 不够 —— 用户在退避窗口里自己发了消息时 `enqueue` 清的是接管态,
@@ -3521,9 +3637,11 @@ export class AgentInputCoordinator {
         });
       }
     }
-    // Only the verified group quota rejection can arm a queue-head wait: selection failed
-    // before dispatch, so retry the existing input/receipt, never clone an uncertain send.
-    const waitingQueueHead = usageWait && recovery.kind === 'queue-head'
+    // Verified group quota and safe report preparation failures happen before
+    // dispatch. Retry the existing input/receipt, never clone an uncertain send.
+    const reportPreparation = opts?.auto && previousAutoResumeInfo?.reason === 'orca-report-preparation'
+      && state.pendingQueue[0]?.orcaReportDelivery && !state.pendingQueue[0].orcaReportDelivery.recoveryBlocked;
+    const waitingQueueHead = (usageWait || reportPreparation) && recovery.kind === 'queue-head'
       && state.pendingQueue[0]?.clientId === recovery.clientId;
     if (automatic && !waitingQueueHead && (recovery.kind !== 'active-turn' || (!continueItem && !progressKnown))) {
       log.debug('auto retry skipped — progress state is not safe to resend', {
@@ -3567,7 +3685,7 @@ export class AgentInputCoordinator {
       // Keep the original user input/receipt and user-turn accounting. Only the
       // recovery activity metadata travels with its first durable user row.
       state.pendingQueue[0].autoResumeInfo = automaticResumeInfo;
-      if (state.queuePausedByRestore) this.restoredUsageLimitRetryItems.add(state.pendingQueue[0]);
+      if (usageWait && state.queuePausedByRestore) this.restoredUsageLimitRetryItems.add(state.pendingQueue[0]);
     }
     if (recovery.kind === 'active-turn') {
       let item = continueItem;
@@ -3783,6 +3901,9 @@ export class AgentInputCoordinator {
   }
 
   private preserveRestoredQueueProvenance(current: AgentInputQueuedMessage, replacement: AgentInputQueuedMessage): AgentInputQueuedMessage {
+    // An edited/merged row is no longer the original automatic report. Its
+    // normal queue delivery remains available, but restart must await the user.
+    delete replacement.orcaReportDelivery;
     if (current.clientId === replacement.clientId) {
       if (this.restoredQueueItems.has(current)) this.restoredQueueItems.add(replacement);
       // Editing content cannot erase or forge the host's stable retry lineage.
@@ -4646,7 +4767,13 @@ export class AgentInputCoordinator {
     // interrupted,恢复出的副本没有等待方;心跳 prompt 每轮 fire 重新生成,
     // 陈旧副本无价值,恢复它只会造成"暂停队列里的僵尸自动化"(restore 侧
     // 有对老快照的同款过滤,见 restoreQueueSnapshot)。
-    return [...activeItem, ...state.pendingQueue]
+    const queued = [...activeItem, ...state.pendingQueue];
+    // Only trusted durable reports need a pre-ACK steer receipt. Ordinary
+    // composer steers keep their existing lifetime and recovery behavior.
+    const steeringReports = state.directSteeringItems.filter(item =>
+      item.orcaReportDelivery && item.durableDelivery
+      && !queued.some(queuedItem => queuedItem.clientId === item.clientId));
+    return [...queued, ...steeringReports]
       .filter((item) => item.origin?.kind !== 'scheduler')
       .map(sanitizeQueuedMessageForPersistence);
   }
@@ -4658,10 +4785,13 @@ export class AgentInputCoordinator {
     const state = this.states.get(sessionId);
     if (!state) return;
     const items = this.computeQueueSnapshotItems(state);
-    const json = JSON.stringify(items);
+    const orcaReportsStopped = state.orcaReportsStopped === true;
+    const json = JSON.stringify([items, orcaReportsStopped]);
     if (this.lastQueueSnapshotJson.get(sessionId) === json) return;
     this.lastQueueSnapshotJson.set(sessionId, json);
-    const result = this.deps.persistQueueSnapshot(sessionId, items);
+    const result = orcaReportsStopped
+      ? this.deps.persistQueueSnapshot(sessionId, items, true)
+      : this.deps.persistQueueSnapshot(sessionId, items);
     if (result && typeof (result as Promise<void>).catch === 'function') {
       (result as Promise<void>).catch(() => {
         if (this.lastQueueSnapshotJson.get(sessionId) === json) {
@@ -4675,7 +4805,7 @@ export class AgentInputCoordinator {
     const pendingQueue = state.pendingQueue.map((item) => this.toProjectedItem(item));
     // 供应商组正在换电脑：错误先不呈现(没有红横幅、没有限额倒计时)，聊天流里只有「正在换一台电脑继续」。
     const groupSwitchHeld = isProviderGroupSwitchHoldLive(state);
-    const error = groupSwitchHeld ? null : state.error;
+    const error = groupSwitchHeld || state.autoResumePending?.reason === 'orca-report-preparation' ? null : state.error;
     // Draining removes the queue row before asynchronous preparation starts.
     // Keep the existing recovery projection until dispatch settles; derive it
     // from the active owner so cancellation/failure cannot leave a stale flag.
@@ -4741,6 +4871,7 @@ export class AgentInputCoordinator {
     Reflect.deleteProperty(projected, TASK_ACTION_INPUT_GUARD);
     delete projected[HOST_ONLY_AGENT_PREFIX];
     delete projected.hostAcceptedAtMs;
+    delete projected.orcaReportDelivery;
     delete projected.autoReviewUserText;
     delete projected.botTaskCoordination;
     delete projected.fromDeviceLinkClient;
@@ -5092,7 +5223,9 @@ export class AgentInputCoordinator {
     if (this.restoreAttempted.has(sessionId) && !this.restoredQueueSessions.has(sessionId))
       return 'queue-restore-failed';
     if (state.pendingQueue.length === 0) return 'queue-empty';
-    if (state.queuePaused && !(state.queuePausedByRestore && this.restoredUsageLimitRetryItems.has(state.pendingQueue[0])))
+    if (state.pendingQueue[0].orcaReportDelivery && state.orcaReportsStopped) return 'orca-report-stopped';
+    if (state.queuePaused && !(state.queuePausedByRestore && (this.restoredUsageLimitRetryItems.has(state.pendingQueue[0])
+      || this.restoredOrcaReports.has(state.pendingQueue[0]))))
       return state.queuePausedByRestore ? 'queue-paused-by-restore' : 'queue-paused';
     if (state.queueAbortPending) return 'abort-pending';
     if (state.queueInteractionLocks.length > 0) return 'interaction-lock';
@@ -5349,6 +5482,15 @@ export class AgentInputCoordinator {
         referenceContexts,
       );
       const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
+      if (head.orcaReportDelivery) {
+        // A crash after allocation may leave a committed grant without a user
+        // row. Persist the uncertain attempt before entering the startup path;
+        // only a proven safe rejection below can re-arm automatic delivery.
+        head.orcaReportDelivery.recoveryBlocked = true;
+        this.maybePersistQueueSnapshot(sessionId);
+        await this.deps.awaitQueuePersistence?.(sessionId);
+        if (!this.isActiveTurnCurrent(sessionId, active)) return;
+      }
       // Wire-only: derived from the live queue at this dispatch. The queue item and the stored
       // replay copy (agentFacingWireContent, readable through history) never carry it.
       const wireUserMessage = appendNoteToMakerUserMessage(
@@ -5602,6 +5744,7 @@ export class AgentInputCoordinator {
             ...(err.limit.resetAtMs === null ? {} : { usageResetAt: err.limit.resetAtMs }),
           });
         }
+        this.recoverOrcaReportPreparation(sessionId, latest, head, err);
         this.emit(sessionId);
         return;
       }
@@ -5698,6 +5841,21 @@ export class AgentInputCoordinator {
     }
   }
 
+  private recoverOrcaReportPreparation(
+    sessionId: string, state: SessionInputState, item: AgentInputQueuedMessage, failure: unknown,
+  ): void {
+    if (!item.orcaReportDelivery) return;
+    item.orcaReportDelivery.recoveryBlocked = true;
+    if (isTurnDispatchUnconfirmedError(failure)) return;
+    const takeover = this.notifyResumableTurnError(sessionId, item, state.error ?? undefined,
+      { reason: 'orca-report-preparation' }, false);
+    if (takeover) {
+      delete item.orcaReportDelivery.recoveryBlocked;
+      state.autoResumePending = takeover;
+      state.autoResumeAttemptToken = takeover.sessionTotal;
+    }
+  }
+
   private handleSendNotDispatched(
     sessionId: string,
     active: ActiveTurn,
@@ -5756,6 +5914,7 @@ export class AgentInputCoordinator {
         result.kind === 'session-dispatch' &&
         result.reason === 'cancelled-before-dispatch';
       if (!cancelledByUserBoundary) this.notifyRejectedUserTurn(sessionId, item);
+      if (!cancelledByUserBoundary) this.recoverOrcaReportPreparation(sessionId, latest, item, result);
       this.emit(sessionId);
       return;
     }

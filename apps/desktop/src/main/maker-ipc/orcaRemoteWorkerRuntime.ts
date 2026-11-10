@@ -43,6 +43,15 @@ export interface RemoteWorkerTurnEnd {
   diagnostic?: string;
 }
 
+/** Local host context, not a Device Link payload. */
+export interface RemoteWorkerReportContext {
+  proxySessionId: string;
+  inputClientIds: string[];
+  messageId?: string;
+}
+type ReportDelivery = NonNullable<OrcaRemotePendingReport['delivery']>;
+type SettleReport = (commit: (markWorkerDone: boolean) => Promise<boolean>) => Promise<void>;
+
 export type RemoteWorkerDispatchResult =
   | {
       ok: true;
@@ -57,6 +66,9 @@ export type RemoteWorkerDispatchResult =
     };
 
 export interface OrcaRemoteWorkerRuntimeDeps {
+  createReportId(): string;
+  readLeadReportReceipt(leadSessionId: string, clientId: string): Promise<'pending' | 'accepted' | 'removed' | 'unknown'>;
+  captureReportedTurn(proxySessionId: string): SettleReport;
   /** 调用运行设备的 channel；失败抛出 Error(message 形如 `[CODE] ...`)。 */
   invoke(deviceId: string, channel: string, args: unknown[]): Promise<unknown>;
   deviceName(deviceId: string): string;
@@ -69,7 +81,7 @@ export interface OrcaRemoteWorkerRuntimeDeps {
   isOwnerCurrent?(): boolean;
   onTurnStarted(proxySessionId: string): Promise<void>;
   /** 同步冻结已完成宿主 accepted 生命周期的回报身份，异步收尾不得重新读取新派活身份。 */
-  captureTurnEnded(proxySessionId: string): (turn: RemoteWorkerTurnEnd) => Promise<boolean>;
+  captureTurnEnded(proxySessionId: string): (turn: RemoteWorkerTurnEnd, report: RemoteWorkerReportContext) => Promise<boolean>;
   /** 可达性或运行状态变化，供协同面板刷新。 */
   onWorkerStateChanged(leadSessionId: string): void;
   now(): number;
@@ -112,7 +124,7 @@ interface AwaitingReport {
   startedNotified: boolean;
   turnStartPromise?: Promise<void>;
   missingReplyPolls: number;
-  terminalHandler: ((turn: RemoteWorkerTurnEnd) => Promise<boolean>) | null;
+  terminalHandler: ReturnType<OrcaRemoteWorkerRuntimeDeps['captureTurnEnded']> | null;
   /** 宿主 accepted 回调失败时恢复上一代原对象；确认成功后释放。 */
   previous: AwaitingReport | null;
   historyScan: ReportHistoryScan | null;
@@ -132,6 +144,8 @@ interface WorkerState {
   /** 运行设备上的工作目录(只做展示)；重启后首次轮询时补读。 */
   workingDir: string | null;
   persistence: Promise<void>;
+  reporting: Promise<void> | null;
+  delivery: ReportDelivery | undefined;
 }
 
 function errorCode(err: unknown): string | null {
@@ -262,6 +276,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
             ? {
                 clientIds: pending.clientIds,
                 baselineMessageId: pending.baselineMessageId,
+                ...(state.delivery ? { delivery: state.delivery } : {}),
               }
             : null,
           messageId,
@@ -454,11 +469,15 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     turn: RemoteWorkerTurnEnd,
     messageId: string | null,
     awaiting: AwaitingReport,
+    inputClientIds: string[],
   ) {
     if (!current(state) || state.awaiting !== awaiting) return;
     state.inTurn = false;
     // TeamService 拒收回报时正常返回；必须取得结清确认后才推进去重游标。
-    if (!(await awaiting.terminalHandler!(turn)) || !current(state)) return;
+    if (!(await awaiting.terminalHandler!(turn, {
+      proxySessionId: state.ref.proxySessionId, inputClientIds: [...inputClientIds],
+      ...(messageId ? { messageId } : {}),
+    })) || !current(state) || state.awaiting !== awaiting) return;
     await persist(state, awaiting, messageId ?? undefined);
     deps.onWorkerStateChanged(state.ref.leadSessionId);
   }
@@ -466,7 +485,11 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
   async function checkAwaiting(state: WorkerState, running: boolean): Promise<void> {
     const awaiting = state.awaiting;
     if (!awaiting?.terminalHandler) return;
-    const clientIds = awaiting.clientIds;
+    const pendingIds = awaiting.clientIds;
+    // Unknown old reports stay fenced. New assignments still have their own
+    // acceptance/history checks; merely enqueueing B cannot re-report A.
+    const clientIds = pendingIds.filter(id => !state.delivery?.inputClientIds.includes(id));
+    if (!clientIds.length) return;
     if (running) {
       awaiting.historyScan = null;
       awaiting.missingReplyPolls = 0;
@@ -478,7 +501,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       return;
     }
     const delivery = await readDelivery(state.ref, clientIds);
-    if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== clientIds) return;
+    if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== pendingIds) return;
     if (delivery.waitingForTurn) {
       awaiting.historyScan = null;
       awaiting.missingReplyPolls = 0;
@@ -497,6 +520,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         },
         null,
         awaiting,
+        clientIds,
       );
       return;
     }
@@ -514,12 +538,12 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       scan,
     );
     // 历史读取期间又派入新任务时保留新的 awaiting，下一轮按完整输入集合复核。
-    if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== clientIds) return;
+    if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== pendingIds) return;
     // A retry can start while a history page is in flight. Recheck before using
     // its candidate, even for a partial scan, so a pre-recovery cursor/text
     // cannot survive into the completed continuation and hide its final reply.
     const latest = await readDelivery(state.ref, clientIds);
-    if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== clientIds) return;
+    if (!current(state) || state.awaiting !== awaiting || awaiting.clientIds !== pendingIds) return;
     if (latest.waitingForTurn || latest.states.some((value, index) => value !== states[index])) {
       awaiting.historyScan = null;
       awaiting.missingReplyPolls = 0;
@@ -538,6 +562,7 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         { status: last.terminalError ? 'error' : 'done', finalText: last.text },
         last.id,
         awaiting,
+        clientIds,
       );
       return;
     }
@@ -556,11 +581,22 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         },
         null,
         awaiting,
+        clientIds,
       );
     }
   }
 
   async function pollDevice(deviceId: string, states: WorkerState[]): Promise<void> {
+    // Lead already owns these reports even when the execution device is offline.
+    for (const state of states) {
+      if (!current(state) || !state.delivery || state.reporting) continue;
+      try { await withReportLock(state, () => reconcileReportDelivery(state)); }
+      catch (error) {
+        if (current(state)) deps.log.warn('orca remote worker: report reconciliation failed', {
+          workerId: state.ref.workerId, err: errorMessage(error),
+        });
+      }
+    }
     let active: Map<string, boolean>;
     try {
       const result = (await deps.invoke(deviceId, 'maker:list-active', [
@@ -628,6 +664,148 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     }
   }
 
+  function withReportLock<T>(state: WorkerState, task: () => Promise<T>): Promise<T> {
+    const operation = (state.reporting ?? Promise.resolve()).then(task);
+    const tail = operation.then(() => undefined, () => undefined);
+    state.reporting = tail;
+    void tail.then(() => { if (state.reporting === tail) state.reporting = null; });
+    return operation;
+  }
+
+  function captureReportSettlement(
+    proxySessionId: string, reportedInputClientIds: readonly string[] = [],
+    settleTeam?: SettleReport, delivery?: ReportDelivery,
+  ): () => Promise<boolean> {
+    const state = workers.get(proxySessionId);
+    const awaiting = state?.awaiting;
+    const reported = new Set(reportedInputClientIds.filter(id => awaiting?.clientIds.includes(id)));
+    return async () => {
+      if (!state || !current(state) || (!reported.size && (!delivery || state.delivery !== delivery))) return false;
+      if (awaiting) awaiting.startedNotified = true;
+      await awaiting?.turnStartPromise;
+      const write = state.persistence.catch(() => undefined).then(async () => {
+        const pending = state.awaiting;
+        const ownsDelivery = () => !!delivery && state.delivery === delivery;
+        if (!current(state) || (!pending?.clientIds.some(id => reported.has(id)) && !ownsDelivery())) return false;
+        const retire = async (markWorkerDone: boolean): Promise<boolean> => {
+          const latest = state.awaiting;
+          if (!current(state) || (!latest?.clientIds.some(id => reported.has(id)) && !ownsDelivery())) return false;
+          const remaining = latest?.clientIds.filter(id => !reported.has(id)) ?? [];
+          const retainedDelivery = state.delivery === delivery ? undefined : state.delivery;
+          const next = remaining.length ? {
+            clientIds: remaining, baselineMessageId: latest!.baselineMessageId,
+            ...(retainedDelivery ? { delivery: retainedDelivery } : {}),
+          } : null;
+          // Automatic completion has already persisted done/error. Recovery must preserve it.
+          if (markWorkerDone && delivery?.kind !== 'automatic') {
+            await deps.saveReport(state.ref.workerId, next, delivery?.messageId, true);
+          } else if (delivery?.messageId) {
+            await deps.saveReport(state.ref.workerId, next, delivery.messageId);
+          } else await deps.saveReport(state.ref.workerId, next);
+          if (!current(state)) return false;
+          if (state.delivery === delivery) state.delivery = undefined;
+          if (delivery?.messageId) state.ref = { ...state.ref, lastBridgedMessageId: delivery.messageId };
+          // Prune rollback chains too, so a failed B cannot resurrect reported A.
+          state.awaiting = pruneReportedInputs(state.awaiting, reported);
+          return true;
+        };
+        if (pending?.clientIds.length && pending.clientIds.every(id => reported.has(id)) && settleTeam) await settleTeam(retire);
+        else await retire(false);
+        return current(state) && state.awaiting === null;
+      });
+      state.persistence = write.then(() => undefined, () => undefined);
+      return write;
+    };
+  }
+
+  async function reconcileReportDelivery(state: WorkerState): Promise<void> {
+    const delivery = state.delivery;
+    if (!delivery || !current(state)) return;
+    const settle = captureReportSettlement(state.ref.proxySessionId, delivery.inputClientIds,
+      deps.captureReportedTurn(state.ref.proxySessionId), delivery);
+    const receipt = await deps.readLeadReportReceipt(state.ref.leadSessionId, delivery.clientId);
+    if (!current(state) || state.delivery !== delivery || receipt === 'unknown') return;
+    // pending/accepted transfer ownership to Lead; removed is an explicit cancellation.
+    await settle();
+  }
+
+  function pruneReportedInputs(node: AwaitingReport | null, retired: ReadonlySet<string>): AwaitingReport | null {
+    if (!node) return null;
+    node.previous = pruneReportedInputs(node.previous, retired);
+    const ids = node.clientIds.filter(id => !retired.has(id));
+    if (!ids.length) return null;
+    if (ids.length !== node.clientIds.length) {
+      node.clientIds = ids;
+      node.historyScan = null;
+      node.missingReplyPolls = 0;
+    }
+    return node;
+  }
+
+  async function prepareReportDelivery(state: WorkerState, delivery: ReportDelivery): Promise<void> {
+    const previous = state.delivery;
+    const superseded = new Set(previous?.inputClientIds.filter(id => !delivery.inputClientIds.includes(id)));
+    const write = state.persistence.catch(() => undefined).then(async () => {
+      if (!current(state)) throw new Error('remote worker owner changed');
+      const pending = state.awaiting;
+      if (!pending) throw new Error('remote worker report inputs retired');
+      // Replacing an unknown intent and retiring its exclusive inputs is one
+      // durable write. A crash/failure cannot leave a gap with neither intent.
+      await deps.saveReport(state.ref.workerId, {
+        clientIds: pending.clientIds.filter(id => !superseded.has(id)),
+        baselineMessageId: pending.baselineMessageId, delivery,
+      });
+      if (!current(state)) return;
+      state.delivery = delivery;
+      // Dispatch may have added another input during the write. Preserve it and
+      // prune rollback chains without marking the unknown old turn successful.
+      state.awaiting = pruneReportedInputs(state.awaiting, superseded);
+    });
+    state.persistence = write;
+    await write;
+  }
+
+  async function runReportDelivery<T>(
+    proxySessionId: string, inputClientIds: readonly string[],
+    deliver: (clientId: string, onRejected: () => void) => Promise<T>, isAccepted: (result: T) => boolean,
+    automatic?: { messageId?: string; alreadyReported: T },
+  ): Promise<T> {
+    const state = workers.get(proxySessionId);
+    if (!state || !current(state)) throw new Error('remote worker owner changed');
+    const ids = [...inputClientIds].filter(id => state.awaiting?.clientIds.includes(id));
+    const settleTeam = deps.captureReportedTurn(proxySessionId);
+    return withReportLock(state, async () => {
+      await reconcileReportDelivery(state);
+      if (!current(state)) throw new Error('remote worker owner changed');
+      const delivery: ReportDelivery = {
+        clientId: deps.createReportId(), inputClientIds: ids.filter(id => state.awaiting?.clientIds.includes(id)),
+        kind: automatic ? 'automatic' : 'manual', ...(automatic?.messageId ? { messageId: automatic.messageId } : {}),
+      };
+      // Repeated explicit reports are distinct, including after their inputs were retired.
+      if (!delivery.inputClientIds.length) return automatic
+        ? automatic.alreadyReported : deliver(delivery.clientId, () => {});
+      if (automatic && state.delivery && delivery.inputClientIds.some(id => state.delivery!.inputClientIds.includes(id))) {
+        throw new Error('[REPORT_DELIVERY_UNCONFIRMED] Previous report delivery is unknown; check the Lead task before explicitly sending a new report.');
+      }
+      const settle = captureReportSettlement(proxySessionId, delivery.inputClientIds, settleTeam, delivery);
+      await prepareReportDelivery(state, delivery);
+      if (!current(state)) throw new Error('remote worker owner changed');
+      let rejected = false;
+      const result = await deliver(delivery.clientId, () => { rejected = true; });
+      if (isAccepted(result)) await settle();
+      else if (rejected && current(state) && state.delivery === delivery) {
+        await reconcileReportDelivery(state);
+        if (!current(state) || state.delivery !== delivery) return result;
+        // Only a definite no-acceptance result permits the existing automatic retry.
+        state.delivery = undefined;
+        try { await persist(state); }
+        catch (error) { if (!state.delivery) state.delivery = delivery; throw error; }
+      }
+      else await reconcileReportDelivery(state);
+      return result;
+    });
+  }
+
   return {
     track(ref: RemoteWorkerRef, opts: { workingDir?: string } = {}): void {
       const existing = workers.get(ref.proxySessionId);
@@ -641,6 +819,8 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           inTurn: false,
           workingDir,
           persistence: Promise.resolve(),
+          reporting: null,
+          delivery: ref.pendingReport?.delivery,
           awaiting: ref.pendingReport
             ? {
                 ...ref.pendingReport,
@@ -830,57 +1010,8 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     },
 
     /** Retire only inputs attested by the execution host, never the whole queued group. */
-    captureReportSettlement(
-      proxySessionId: string, reportedInputClientIds: readonly string[] = [],
-      settleTeam?: (commit: (markWorkerDone: boolean) => Promise<boolean>) => Promise<void>,
-    ): () => Promise<boolean> {
-      const state = workers.get(proxySessionId);
-      const awaiting = state?.awaiting;
-      const reported = new Set(reportedInputClientIds.filter(id => awaiting?.clientIds.includes(id)));
-      return async () => {
-        // Old peers without input evidence keep the automatic-report fallback.
-        if (!state || !awaiting || !reported.size || !current(state)) return false;
-        awaiting.startedNotified = true;
-        await awaiting.turnStartPromise;
-        const write = state.persistence.catch(() => undefined).then(async () => {
-          const pending = state.awaiting;
-          if (!current(state) || !pending || !pending.clientIds.some(id => reported.has(id))) return false;
-          const retire = async (markWorkerDone: boolean): Promise<boolean> => {
-            // Re-read after the Team lookup/transition wait, which can prepare a new B.
-            const latest = state.awaiting;
-            if (!current(state) || !latest || !latest.clientIds.some(id => reported.has(id))) return false;
-            const remaining = latest.clientIds.filter(id => !reported.has(id));
-            const next = remaining.length
-              ? { clientIds: remaining, baselineMessageId: latest.baselineMessageId } : null;
-            if (markWorkerDone) await deps.saveReport(state.ref.workerId, next, undefined, true);
-            else await deps.saveReport(state.ref.workerId, next);
-            if (!current(state)) return false;
-            // Prune rollback chains too, so a failed B cannot resurrect reported A.
-            const prune = (node: AwaitingReport | null): AwaitingReport | null => {
-              if (!node) return null;
-              node.previous = prune(node.previous);
-              const ids = node.clientIds.filter(id => !reported.has(id));
-              if (ids.length === 0) return null;
-              if (ids.length !== node.clientIds.length) {
-                node.clientIds = ids;
-                node.historyScan = null;
-                node.missingReplyPolls = 0;
-              }
-              return node;
-            };
-            state.awaiting = prune(state.awaiting);
-            return true;
-          };
-          if (pending.clientIds.every(id => reported.has(id)) && settleTeam) await settleTeam(retire);
-          else await retire(false);
-          return current(state) && state.awaiting === null;
-        });
-        // The caller observes the failure; the serialization tail must not create
-        // a second, unobserved rejection while waiting for the next poll.
-        state.persistence = write.then(() => undefined, () => undefined);
-        return write;
-      };
-    },
+    captureReportSettlement,
+    runReportDelivery,
 
     /** accepted 回调的原有异常继续上抛；这里只恢复 runtime 对应的旧回报代次。 */
     async rejectDispatchAcceptance(proxySessionId: string, clientId: string): Promise<void> {

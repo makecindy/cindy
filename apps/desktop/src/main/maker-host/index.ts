@@ -134,6 +134,7 @@ import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 import {
   dispatchInterAgentMessage,
   captureRemoteWorkerReportSettlement,
+  deliverRemoteWorkerReport,
   captureLocalWorkerReport,
   getOrcaWorkerReportQueue,
   getSessionActiveInputClientIds,
@@ -433,6 +434,11 @@ let _maker: Maker | null = null;
 setPluginModelPickerAgentProvider(() => _maker?.listAvailableAgents() ?? []);
 setPluginRouteAgentStatusProvider(async (agent) => _maker?.getAgentStatus(agent as AgentKind));
 let remoteWorkerBridge: ReturnType<typeof createOrcaRemoteWorkerBridge> | null = null;
+let workerBridgeProvider: ReturnType<typeof createOrcaWorkerBridgeMcpProvider> | null = null;
+
+export function prepareRestoredOrcaReportAcceptance(sessionId: string) {
+  return workerBridgeProvider?.prepareLeadReportAcceptance(sessionId);
+}
 
 export function handleRemoteWorkerBridge(
   raw: unknown,
@@ -1358,6 +1364,7 @@ export function getMaker(): Maker {
       },
     } satisfies OrcaBridgeMcpDeps;
     const orcaWorkerBridgeProvider = createOrcaWorkerBridgeMcpProvider(orcaBridgeDeps);
+    workerBridgeProvider = orcaWorkerBridgeProvider;
     remoteWorkerBridge = createOrcaRemoteWorkerBridge({
       getOwnerToken: getCurrentDbClientSnapshot,
       readSession: getRemoteOrcaSession,
@@ -1365,7 +1372,10 @@ export function getMaker(): Maker {
       activeTeamId: async id => (await getActiveTeamByLead(id))?.id ?? null,
       remoteInvoke,
       // Remote runtime settles only the reported inputs; queued assignments keep running.
-      invokeTool: (ctx, tool, args) => orcaWorkerBridgeProvider.invokeTool(ctx, tool, args, { manageWorkerStatus: false }),
+      invokeTool: (ctx, tool, args, reportClientId, onReportRejected) => orcaWorkerBridgeProvider.invokeTool(ctx, tool, args, {
+        manageWorkerStatus: false, ...(reportClientId ? { reportClientId } : {}), onReportRejected,
+      }),
+      deliverReport: (sessionId, ids, send) => deliverRemoteWorkerReport(sessionId, ids, send, result => !result.isError),
       getActiveInputClientIds: getSessionActiveInputClientIds,
       getAcceptedInputProvenance: sessionId => getSessionInputProvenance(sessionId).input,
       captureReportSettlement: captureRemoteWorkerReportSettlement,
@@ -3135,6 +3145,7 @@ export function resetMaker(): void {
   // Callers keep this Maker when PI teardown is unconfirmed, preserving supervision.
   releaseSessionBindingsForOwnerBoundary();
   remoteWorkerBridge = null;
+  workerBridgeProvider = null;
   void disposeLocalAgentHost();
   disposeRemoteAgentHost();
   _sessionArchiveSync?.stop();
