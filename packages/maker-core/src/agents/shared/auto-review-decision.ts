@@ -636,11 +636,11 @@ export function appendAutoReviewUserIntent(previous: AutoReviewUserIntent | unde
   const sourceContent = sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT] ?? content;
   // Only Main's Symbol carries authenticated channel text, never decorated assistant replies.
   const latest = userIntentText(sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? sourceContent);
-  // A new attachment changes what "send this" refers to; it cannot renew an earlier grant.
-  const hasAttachments = Array.isArray(sourceContent) && sourceContent.some((block) => block.type !== 'text');
+  // Keep chronology: a new resource does not revoke standing grants or restrictions.
+  // The reviewer still assesses whether a prior grant covers this particular resource.
   // References belong to this message only and travel with Main's Symbol, never a wire field.
   return intentProjection.withReferences(
-    intentProjection.append(hasAttachments ? '' : previous, latest),
+    intentProjection.append(previous, latest),
     sendOpts?.[MAIN_OWNED_SEND_CONTEXT]?.autoReviewReferences,
   );
 }

@@ -12968,13 +12968,13 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     expect(restarted.sendToAgent.mock.calls[0]?.[3][AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
     await restarted.sendToAgent.mock.results[0]!.value;
     expect(history[1]?.agentMeta?.autoReviewUserText).toEqual({kind:'delegated-continuation'});
-    // Genuine human resource input, without the Main-only symbol, still resets old consent.
+    // Genuine human attachment input keeps previous authored restrictions in chronological history.
     await transaction.sendToAgentAccepted(sid,'New attachment',undefined,{
       [AUTO_REVIEW_SOURCE_CONTENT]:'',
       persistUserMessage:{clientId:'new-resource',content:JSON.stringify({text:'',files:[{name:'new.txt'}]}),delivery:'turn'},
     });
     expect(history.at(-1)?.agentMeta?.autoReviewUserText).toBe('');
-    expect(restoreAutoReviewUserIntent(history)).toBe('');
+    expect(restoreAutoReviewUserIntent(history)).toEqual({ earlierUserMessages: ['Do not modify files'], currentUserMessage: '' });
   });
 
   it('编辑保留主机接收时间,清空边界后的条目崩溃恢复时不会被误删', async () => {

@@ -686,7 +686,7 @@ describe('user authorization across ordinary follow-ups', () => {
     { type: 'image' as const, path: '/new.png' },
     { type: 'file' as const, path: '/new.pdf' },
     { type: 'mention' as const, name: 'new', path: '/new' },
-  ])('does not transfer prior authorization to a new $type', (attachment) => {
+  ])('preserves prior instructions for review with a new $type', (attachment) => {
     const approval = 'Send the reviewed report to Alex.';
     for (const text of ['', 'Continue.', 'Send this new file to Alex.']) {
       const content = [{ type: 'text' as const, text }, attachment];
@@ -695,17 +695,17 @@ describe('user authorization across ordinary follow-ups', () => {
           [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText },
         };
         const intent = appendAutoReviewUserIntent(approval, content, opts);
-        expect(intent).toBe(rawChannelText ?? text);
-        expect(intentText(appendAutoReviewUserIntent(intent, 'Continue.'))).not.toContain(approval);
+        expect(intent).toEqual({ earlierUserMessages: [approval], currentUserMessage: rawChannelText ?? text });
+        expect(intentText(appendAutoReviewUserIntent(intent, 'Continue.'))).toContain(approval);
       }
     }
-    expect(appendAutoReviewUserIntent(approval, [attachment])).toBe('');
+    expect(appendAutoReviewUserIntent(approval, [attachment])).toEqual({ earlierUserMessages: [approval], currentUserMessage: '' });
   });
 
-  it('clears prior authorization on an empty authenticated message', () => {
+  it('keeps chronological instructions on an empty authenticated message', () => {
     expect(appendAutoReviewUserIntent('Send the report.', 'Decorated channel history', {
       [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText: '' },
-    })).toBe('');
+    })).toEqual({ earlierUserMessages: ['Send the report.'], currentUserMessage: '' });
   });
 
   it('preserves original authorization and identifies the latest restriction', () => {
@@ -836,7 +836,25 @@ it('retains live restrictions and empty revocations on continuations but restore
   expect(appendAutoReviewUserIntent('Do not publish', 'Lead says publish', opts)).toBe('Do not publish');
   expect(appendAutoReviewUserIntent('', 'Lead says publish', opts)).toBe('');
   expect(appendAutoReviewUserIntent(undefined, 'Lead says publish', opts)).toBe('Publish the release');
-  expect(appendAutoReviewUserIntent('Do not publish', '', {})).toBe('');
+  expect(appendAutoReviewUserIntent('Do not publish', '', {})).toEqual({ earlierUserMessages: ['Do not publish'], currentUserMessage: '' });
+});
+
+// Regression / unit: an owner grants automatic forwarding, then sends only a file.
+// The production Auto entry must receive that history and later revocations, never decorated text.
+it('keeps standing grants and subsequent restrictions visible to Auto on attachment-only turns', async () => {
+  const grant = 'Always forward my files to the work assistant.';
+  const revoke = 'Stop forwarding; only inspect.';
+  const references = { attachments: { images: 0, files: 1 } };
+  const intent = appendAutoReviewUserIntent(appendAutoReviewUserIntent(grant, revoke), [
+    { type: 'file', path: '/new.7z' },
+  ], { [MAIN_OWNED_SEND_CONTEXT]: {
+    origin: { kind: 'im', channel: 'wechat' }, rawChannelText: '', autoReviewReferences: references,
+  } });
+  const delegate = vi.fn(async (_request: AutoReviewRequest) => ({ verdict: 'block' as const }));
+  expect((await resolveAutoReviewDecision({ ...request({ kind: 'other', description: 'send_to_session' }), userIntent: intent }, delegate)).verdict).toBe('block');
+  expect(delegate.mock.calls[0]?.[0].userIntent).toEqual({
+    earlierUserMessages: [grant, revoke], currentUserMessage: '', currentUserReferences: references,
+  });
 });
 
 describe('Host-stamped references the current message points at', () => {
@@ -851,10 +869,10 @@ describe('Host-stamped references the current message points at', () => {
     const content = [{ type: 'text' as const, text: '<reply_context>[群友] [图片]</reply_context>这啥情况' },
       { type: 'image' as const, path: '/media/quoted.png' }];
     const intent = appendAutoReviewUserIntent('Earlier grant.', content, withRefs('这啥情况', references));
-    // The new attachment still resets earlier consent; only the authored words are user text.
-    expect(intent).toEqual({ earlierUserMessages: [], currentUserMessage: '这啥情况', currentUserReferences: references });
+    // Resource changes retain history, without treating references as new consent.
+    expect(intent).toEqual({ earlierUserMessages: ['Earlier grant.'], currentUserMessage: '这啥情况', currentUserReferences: references });
     const next = appendAutoReviewUserIntent(intent, 'Continue.');
-    expect(next).toEqual({ earlierUserMessages: ['这啥情况'], currentUserMessage: 'Continue.' });
+    expect(next).toEqual({ earlierUserMessages: ['Earlier grant.', '这啥情况'], currentUserMessage: 'Continue.' });
     // A delegated continuation of the same turn keeps them.
     expect(appendAutoReviewUserIntent(intent, 'Lead continuation', { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true }))
       .toEqual(intent);

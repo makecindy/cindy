@@ -95,3 +95,12 @@ Telegram 提供群名、发起人、消息链接；事件里没有话题名时�
 
 核心回归：`sharedPermissionRoute.test.ts`、`permissionPresentation.test.ts`、
 Hook `sharedPermission.test.ts`，以及各文字渠道交互测试。
+
+## 仅附件消息的已有授权
+
+同一已核实请求者的新附件或空正文不撤销之前的授权与限制。自动审批保留有序的用户原话，
+当前附件只作为当前消息的参考；先前一次性授权是否涵盖新资源仍由原审批流程判断，
+不能把保留历史等同于自动扩大授权。明确撤销、宿主显式空授权快照、身份切换和
+缺少可信来源的历史仍沿用原校验；附件正文和 Agent 自述不能建立授权。
+实现与回归见 maker-shared 的 `autoReviewIntent.ts`、maker-core 的
+`auto-review-decision.test.ts` 以及 Desktop 的 `autoReviewProjection.test.ts`。
