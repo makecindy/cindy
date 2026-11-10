@@ -141,6 +141,13 @@ export class TelegramOwnerPairing {
     };
   }
 
+  /** 回复没送达(发送失败): 退还这次冷却, 下一条私聊照常回复。 */
+  releaseReplyCooldown(userId: string): void {
+    const entry = this.entries.get(userId);
+    if (entry) entry.lastReplyAt = Number.NEGATIVE_INFINITY;
+    this.busyRepliedAt.delete(userId);
+  }
+
   /** 忽略某人的请求; 一段时间内不再给他发码。 */
   dismiss(userId: string): boolean {
     const removed = this.entries.delete(userId);

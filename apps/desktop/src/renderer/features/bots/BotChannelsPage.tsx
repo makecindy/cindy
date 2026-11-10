@@ -386,7 +386,7 @@ function OwnerPairingPanel({
   };
 
   return (
-    <div className="mt-2 flex flex-col gap-2 rounded-lg border border-[var(--border-default)] px-3 py-2">
+    <div className="mt-2 flex flex-col gap-2 rounded-xl border border-[var(--border-default)] px-3 py-2">
       <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">
         {t('bots.channels.pairing.hint', { bot: botHandle, name: botName })}
       </p>

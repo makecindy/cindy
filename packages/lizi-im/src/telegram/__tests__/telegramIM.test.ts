@@ -3550,6 +3550,39 @@ describe('TelegramIM 主人配对', () => {
     expect(codeOf(2)).not.toBe(first);
   });
 
+  // PR #9697 review: 发码曾直连 api.call, 429 不重试且冷却已占用, 用户 60s 内再发也收不到码。
+  it('发码遇 429 按 retry_after 重试一次; 仍没送达不占冷却, 再发一条马上拿到同一个码', async () => {
+    const originalCall = api.call.bind(api);
+    let rateLimited = 2;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage' && rateLimited > 0) {
+        rateLimited -= 1;
+        throw new TelegramApiError('sendMessage', 429, 'Too Many Requests: retry after 5', 5);
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    vi.useFakeTimers();
+    try {
+      api.pushUpdates([privateMessage('hi', 4242, 1)]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(rateLimited).toBe(1);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(rateLimited).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(rateLimited).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(codeReplies()).toHaveLength(0);
+    expect(pairingIm.getConfigState().pendingOwnerPairings).toHaveLength(1);
+
+    // 配对时钟没动, 仍在 60s 冷却内: 没送达的那次不算数。
+    api.pushUpdates([privateMessage('hi?', 4242, 2)]);
+    await vi.waitFor(() => expect(codeReplies()).toHaveLength(1));
+    expect(await pairingIm.approveOwnerPairing('4242', codeOf(0))).toMatchObject({ ok: true });
+  });
+
   it('名额满时回一句稍后再试(沿用冷却); 连续输错 5 次锁定; 对过期请求的尝试不计入失败', async () => {
     api.pushUpdates([1, 2, 3, 4].map((n) => privateMessage('hi', 5000 + n, n)));
     await vi.waitFor(() => expect(codeReplies()).toHaveLength(3));

@@ -734,9 +734,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private handleOwnerPairingRequest(m: TgMessage): void {
     const from = m.from;
     if (!from || from.is_bot) return;
-    const displayName = [from.first_name, from.last_name].filter(Boolean).join(' ') || String(from.id);
+    const userId = String(from.id);
+    const displayName = [from.first_name, from.last_name].filter(Boolean).join(' ') || userId;
     const result = this.ownerPairing.request({
-      userId: String(from.id),
+      userId,
       displayName,
       ...(from.username ? { username: from.username } : {}),
     });
@@ -746,8 +747,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return;
     }
     if (result.kind === 'issued') this.emitOwnerPairingChange();
-    const api = this.api;
-    if (!api) return;
+    if (!this.api) return;
     let text: string;
     if (result.kind === 'busy') {
       this.log.info('telegram owner pairing request deferred (busy)');
@@ -756,16 +756,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       const minutes = Math.max(1, Math.round((result.expiresAt - (this.opts.ownerPairingClock?.() ?? Date.now())) / 60_000));
       text = this.opts.ownerPairingNotice?.(result.code, minutes) ?? defaultOwnerPairingNotice(result.code, minutes);
     }
-    void api
-      .call('sendMessage', {
-        chat_id: String(m.chat.id),
-        text,
-        reply_parameters: { message_id: m.message_id, allow_sending_without_reply: true },
-      })
-      .catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.log.warn(`telegram owner pairing reply failed (non-fatal): ${msg}`);
-      });
+    // 走 callSend: 429 按 retry_after 退避重试一次, 等待随连接停止取消。
+    // 仍没发出去就退还这次冷却, 用户再发一条就能重新拿到码。
+    void this.callSend('sendMessage', {
+      chat_id: String(m.chat.id),
+      text,
+      reply_parameters: { message_id: m.message_id, allow_sending_without_reply: true },
+    }).catch((err) => {
+      this.ownerPairing.releaseReplyCooldown(userId);
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`telegram owner pairing reply failed (non-fatal): ${msg}`);
+    });
   }
 
   /** 当前主人的 Telegram 用户 id(未配置为空串)。 */
