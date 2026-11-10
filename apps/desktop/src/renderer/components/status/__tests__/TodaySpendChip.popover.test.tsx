@@ -59,6 +59,9 @@ vi.mock('react-i18next', () => ({
         'todaySpend.openClaudeUsage': '打开 Claude 用量页面',
         'todaySpend.openCodexUsage': '打开 Codex 用量页面',
         'todaySpend.claude.weeklyLabel': '周限',
+        'todaySpend.claude.totalWeeklyLabel': '总周',
+        'todaySpend.claude.temporarilyLimited': '暂时受限',
+        'quotaCard.limitRejected': '已触发套餐限额',
         'todaySpend.claude.modelWeeklyLabel': '{{model}} 周限',
         'todaySpend.claude.windowSegment': '{{label}} 剩余 {{remaining}}',
         'todaySpend.codex.weekWindow': '周限',
@@ -595,7 +598,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(trigger.textContent).toContain('本任务价值 $7.82');
   });
 
-  it('服务端拒绝时整条变红兜底，即使 chip 上只有黄色窗口', () => {
+  it('服务端拒绝单独标红，额度按自身水位上色且任务价值保持常色', () => {
     mocks.claudeSnapshot = {
       source: 'unified-headers',
       rateLimitStatus: 'rejected',
@@ -606,8 +609,49 @@ describe('TodaySpendChip Claude subscription popover', () => {
     renderClaudeSubscriptionChip();
 
     const trigger = screen.getByTestId('task-usage-trigger');
-    expect(trigger.className).toContain('error-fg');
+    expect(trigger.className).not.toContain('error-fg');
+    expect(trigger.querySelector('[class*="error-fg"]')?.textContent).toBe('暂时受限');
+    expect(trigger.querySelector('[class*="quota-bar-warn"]')?.textContent).toBe('25%');
+    const { card } = openCardFromHover();
+    expect(within(card).getByText('已触发套餐限额')).toBeTruthy();
+  });
+
+  it('显示吃紧的总周额度，恢复后收起，分模型额度和价值不继承颜色', () => {
+    const money = usdMoney(8.15, 'value-estimate');
+    mocks.sessionUsage = { actualMoney: null, estimatedValueMoney: money, totalMoney: money };
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      fiveHour: { utilization: 25 },
+      sevenDay: { utilization: 76, severity: 'warning' },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 10, severity: 'normal' }],
+    };
+    const props = { vendorKey: 'cc' as const, providerId: 'anthropic', modelId: 'claude-fable-5-2', sessionId: 'session-1' };
+    const { rerender } = render(<TodaySpendChip {...props} />);
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.textContent).toContain('Fable 周限 剩余 90%');
+    expect(trigger.textContent).toContain('总周 剩余 24%');
+    expect(trigger.textContent).toContain('本任务价值 $8.15');
+    expect(trigger.className).not.toContain('error-fg');
+    expect(Array.from(trigger.querySelectorAll('[class*="quota-bar-warn"]')).map(el => el.textContent)).toEqual(['24%']);
     expect(trigger.querySelector('[class*="error-fg"]')).toBeNull();
+    mocks.claudeSnapshot = { ...mocks.claudeSnapshot, sevenDay: { utilization: 20, severity: 'normal' } };
+    rerender(<TodaySpendChip {...props} />);
+    expect(trigger.textContent).not.toContain('总周');
+    expect(trigger.textContent).toContain('Fable 周限');
+  });
+
+  it('没有分模型窗口时不重复总周额度；其它模型的预警不影响当前任务', () => {
+    mocks.claudeSnapshot = {
+      source: 'unified-headers', rateLimitStatus: 'allowed_warning',
+      fiveHour: { utilization: 25 }, sevenDay: { utilization: 76 },
+      scoped: [{ modelDisplayName: 'Fable', utilization: 100, severity: 'critical' }],
+    };
+    renderClaudeSubscriptionChip(); // Opus
+    const trigger = screen.getByTestId('task-usage-trigger');
+    expect(trigger.textContent).not.toContain('总周');
+    expect(trigger.textContent).not.toContain('暂时受限');
+    expect(trigger.className).not.toContain('error-fg');
+    expect(trigger.querySelector('[class*="quota-bar-warn"]')?.textContent).toBe('24%');
   });
 
   it.each([true, false])('returns focus after reset confirmation accepted=%s', async accepted => {
