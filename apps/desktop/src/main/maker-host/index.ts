@@ -131,6 +131,7 @@ import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 import {
   dispatchInterAgentMessage,
   captureRemoteWorkerReportSettlement,
+  isRemoteWorkerLeadAssignedInput,
   captureLocalWorkerReport,
   getOrcaWorkerReportQueue,
   getSessionActiveInputClientIds,
@@ -1373,6 +1374,7 @@ export function getMaker(): Maker {
       getActiveInputClientIds: getSessionActiveInputClientIds,
       getAcceptedInputProvenance: sessionId => getSessionInputProvenance(sessionId).input,
       captureReportSettlement: captureRemoteWorkerReportSettlement,
+      isLeadAssignedInput: isRemoteWorkerLeadAssignedInput,
     });
     // Cindy Make 个人版任务专属工具:只有 sessions.source='cindy-make' 的任务在
     // bootstrapSession 时拿到 vendorOptions 标记;Claude 据标记决定注册,Pi 按会话

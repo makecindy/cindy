@@ -3033,6 +3033,11 @@ Lead 的自动回报同时识别既有 `autoResumePending`、`usageLimitWait` �
 同步捕获本轮已消费输入，不接受模型参数指定。Lead 仅结清相交的等待输入；仍在排队的新
 输入保持持久等待记录和运行状态。旧端缺少此字段时不清除等待记录，保留自动回报兜底；
 新字段不改变四个 MCP 工具 schema，也不改变本机 Worker 的回报路径。
+`send_to_lead` 另带可选 `acceptedInputClientId`（安全 ID）：运行宿主当前已接受输入的
+`clientId`，Lead 仅在它属于本机 Main 派给该 Worker 的输入时转交，否则返回
+`NOT_LEAD_ASSIGNED_TURN`。新 Lead 拒绝缺少此字段的旧运行设备请求（旧运行设备因来源被剥掉
+本就无法主动回报，仍由自动回报兜底）；旧 Lead 忽略此字段，此时运行设备只转发经 device-link
+进入且无本机自动来源的输入。
 `caps` 可选增加 `workerBridge: true`，协议版本仍为 1，既有 open/release 载荷不变；
 桥接沿既有同账号远控授权，Lead 电脑未开放反向远控时也保留自动回报，不扩大授权。
 旧端忽略可选字段或返回 `CHANNEL_NOT_ALLOWED`，保留原有完成后自动回报，不降级为通用 handoff，

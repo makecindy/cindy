@@ -19,7 +19,6 @@ import {
 } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
-import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
 import { normalizeWorkingDirForStorage, workingDirEquals } from '../../shared/workingDir.js';
 import { workdirDiagnosticContext, workdirDiagnosticErrorCode, workdirDiagnosticId, type WorkdirDiagnosticLogger } from '../workdirDiagnostics.js';
@@ -235,34 +234,6 @@ export function stampTrustedDeviceLinkQueuedOrigin(
   delete stamped.botTaskCoordination;
   if (deviceLinkInvoke && sourceDevice) stamped.sourceDevice = { ...sourceDevice };
   return stamped;
-}
-
-/**
- * Execution-device Worker: the Lead's assignment arrives through device-link input IPC,
- * where the stamps above drop every wire origin. Restore the Orca Lead origin only when
- * the server-stamped caller is the Lead computer recorded on this task's active
- * collaboration binding; any other caller keeps the stripped item. The wire contributes
- * only the display text. The label is fixed, and no sender session is claimed because the
- * Lead task does not exist on this computer.
- */
-export function stampTrustedRemoteLeadQueuedOrigin(
-  item: AgentInputQueuedMessage,
-  wireOrigin: AgentInputQueuedMessage['origin'],
-  caller: { controllerDeviceId: string; sharedTask?: unknown } | null,
-  binding: { status: string; orcaRemoteLead: OrcaRemoteLead | null } | null,
-): AgentInputQueuedMessage {
-  const lead = binding?.orcaRemoteLead;
-  if (wireOrigin?.kind !== 'orca' || !caller?.controllerDeviceId || caller.sharedTask
-    || binding?.status !== 'active' || !lead || lead.releasedAt !== undefined
-    || caller.controllerDeviceId !== lead.leadDeviceId) return item;
-  return {
-    ...item,
-    origin: {
-      kind: 'orca',
-      senderLabel: 'Lead',
-      ...(typeof wireOrigin.displayText === 'string' ? { displayText: wireOrigin.displayText } : {}),
-    },
-  };
 }
 
 export function restoreTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage): AgentInputQueuedMessage {

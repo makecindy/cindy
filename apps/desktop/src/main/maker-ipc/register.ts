@@ -591,7 +591,6 @@ import {
   archiveWorkersByTeam,
   createActiveTeam,
   getActiveTeamByLead,
-  getRemoteOrcaSession,
   getSessionOrcaRole,
   getWorkerLink,
   isActiveWorkerStatus,
@@ -1033,7 +1032,6 @@ import {
   prepareDirectoryGrantsForBootstrap,
   stampTrustedDeviceLinkQueuedOrigin,
   stampTrustedDesktopQueuedOrigin,
-  stampTrustedRemoteLeadQueuedOrigin,
   TRUSTED_DESKTOP_QUEUE_ORIGIN,
 } from './makerSendTransaction.js';
 import { createAgentPrewarmer, isAgentPrewarmEligible } from './agentPrewarm.js';
@@ -3236,6 +3234,12 @@ export async function restoreOrcaRemoteWorkersForCurrentOwner(): Promise<void> {
 /** 账号边界：停掉上一账号远端 Worker 的轮询与补发，避免写进下一个账号的数据库。 */
 export function stopOrcaRemoteWorkersForOwnerBoundary(): void {
   orcaRemoteWorkersForHost?.stop();
+}
+
+export async function isRemoteWorkerLeadAssignedInput(
+  sessionId: string, clientId: string,
+): Promise<boolean> {
+  return (await orcaRemoteWorkersForHost?.isLeadAssignedInput(sessionId, clientId)) ?? false;
 }
 
 export function captureRemoteWorkerReportSettlement(
@@ -22212,7 +22216,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrentInputGeneration();
         // 手机来源在**入队这一刻**盖章:drain 派发时已脱离本 invoke 的 async context。
         // 无条件覆盖 —— item 来自 wire,客户端自填的 fromMobileClient 一律不生效。
-        const stampedQueued = stampTurnUiLanguage(
+        const queued = stampTurnUiLanguage(
           stampTrustedDeviceLinkQueuedOrigin(
             stampTrustedDesktopQueuedOrigin(
               stampMobileClientOrigin(
@@ -22235,13 +22239,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             fallbackClassicalStyle: getMainClassicalStyle(),
           },
         );
-        // 运行设备上的远端 Worker：上面的盖章剥掉了 wire origin。只有 relay 盖章的调用方正是
-        // 本任务协同登记的 Lead 电脑时，才恢复 Lead 来源，send_to_lead 据此识别 Lead 派活。
-        const queued = deviceLinkInvoke && parsed.origin?.kind === 'orca'
-          ? stampTrustedRemoteLeadQueuedOrigin(
-            stampedQueued, parsed.origin, getDeviceLinkInvokeContext(), await getRemoteOrcaSession(sid),
-          )
-          : stampedQueued;
         assertCurrentInputGeneration();
         sendTrace?.stage('prepare');
         const commitAutoTitle = await prepareDeviceLinkAutoTitle(sid, queued);

@@ -631,16 +631,20 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 派发说明携带 Lead 分配的 `worker_id`；当前任务查询和历史任务列表投影来源标记，
 `parentSessionId` 继续只表示 Fork。运行设备在转发前核验根 Agent 身份，Lead 核验来源设备、
 真实任务、Worker 与当前 active team 后执行同一套本地桥接 handler，不接受任意工具或目标任务。
-运行宿主在任何异步查询前同步捕获协调器当前已接受输入的来源与本轮已消费的输入 ID。
-主动回报只允许当前输入来自 Orca 派活且具有已消费输入；用户在运行设备直接发送、已接受的
+运行宿主在任何异步查询前同步捕获协调器当前已接受输入与本轮已消费的输入 ID。
+主动回报只允许当前输入是 Lead 派活且具有已消费输入；用户在运行设备直接发送、已接受的
 人工插话接管或没有活动输入时返回 `NOT_LEAD_ASSIGNED_TURN`，不转发或结清。不能仅凭持久
 Worker 归属或累计回复 ID 判断当前输入仍属 Lead；只读 Lead 工具与本机 Worker 路径保持不变。
-「来自 Orca 派活」由运行设备在 `maker:input:enqueue` 边界确认：device-link 输入的盖章会剥掉
-wire 带来的全部 `origin`，之后只有当 relay 盖章的调用方设备正是该任务 `orcaRemoteLead`
-登记的 Lead 电脑、协同未结束且不是共享任务访客时，`stampTrustedRemoteLeadQueuedOrigin`
-才恢复固定标签的 Lead 来源（只沿用 wire 的展示正文，不声明来源任务）。缺了这一步，Lead
-派活在运行设备上永远没有来源，主动回报全部退化为轮询代报（2026-11 修复）。回归见
-`agent-input-coordinator.test.ts`「INPUT_ENQUEUE execution-device Worker assignment from the Lead」。
+「是 Lead 派活」不靠运行设备上的 `origin`：device-link 输入在 `maker:input:enqueue` 边界剥掉
+wire 来源，来源设备也分不清 Lead 自动派活与那台电脑上的其他输入（见
+`remote-and-mobile-adaptation.md`）。运行设备只预筛：当前输入须带 Main 盖章的
+`fromDeviceLinkClient`，且没有本机自动来源（定时任务、其他任务等）；再把它的 `clientId`
+（自动续跑取 `retrySourceClientId`）作为 `acceptedInputClientId` 传给 Lead。Lead 用本机 Main
+的派活记录核对（`orcaRemoteWorkerRuntime.isAssignedInput`：本机派出的最近 64 条及持久等待
+记录，投递前记入、确认未送达时移除），不在记录里就回 `NOT_LEAD_ASSIGNED_TURN`；结清后同轮
+再次回报仍可送达。缺少该字段的旧运行设备一律拒绝（它们本就从未成功转发）；新运行设备遇到
+旧 Lead 时，只剩预筛把关。2026-11 前要求运行设备上 `originKind === 'orca'`，而该来源永远被
+剥掉，主动回报全部退化为轮询代报（PR #9690）。
 已消费输入 ID 经可选 `reportedInputClientIds` 传给 Lead，
 不向模型工具增加参数。主动回报成功只剔除这些输入的运行期和持久等待记录；即使 B 已经
 排队，A 的回报也不能清掉 B 或提前把 Worker 标为 done。新派活的回滚链同步剔除已回报输入，

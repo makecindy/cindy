@@ -527,37 +527,28 @@ describe('MCP App queued message grants', () => {
   });
 });
 
-// Bug: an execution-device Worker could never report through send_to_lead. Device-link
-// input IPC strips every wire origin, so the Lead's assignment reached the coordinator with
-// no Orca origin and the bridge answered NOT_LEAD_ASSIGNED_TURN; only the end-of-turn poll
-// reported. The bridge tests stub provenance, so nothing exercised the real IPC boundary.
-// Minimal input: one Lead assignment enqueued through the production handler. Unit tier.
+// Bug: an execution-device Worker could never report through send_to_lead. Device-link input
+// IPC strips every wire origin (the source device cannot tell a Lead assignment from other input
+// there), but the bridge required an `orca` origin, so it always answered NOT_LEAD_ASSIGNED_TURN
+// and only the end-of-turn poll reported. The bridge tests stub provenance, so nothing ran the
+// real IPC boundary. Minimal input: one Lead assignment through the production handler. Unit tier.
 describe('INPUT_ENQUEUE execution-device Worker assignment from the Lead', () => {
-  const remoteLead: OrcaRemoteLead = {
-    leadDeviceId: 'lead-computer', leadDeviceName: 'Lead Computer', leadSessionId: 'lead-1',
-    leadTitle: 'Lead', workerLabel: 'tester',
-  };
-
-  it.each([
-    ['the recorded Lead computer', { controllerDeviceId: 'lead-computer' }, remoteLead, true],
-    ['another same-account computer', { controllerDeviceId: 'other-computer' }, remoteLead, false],
-    ['a shared-task guest', { controllerDeviceId: 'lead-computer', sharedTask: {} }, remoteLead, false],
-    ['a released collaboration', { controllerDeviceId: 'lead-computer' }, { ...remoteLead, releasedAt: 1 }, false],
-  ] as const)('lets send_to_lead report a turn assigned from %s only when trusted', async (_name, caller, lead, trusted) => {
+  it('forwards send_to_lead with the accepted input for the Lead to verify', async () => {
     const h = createHarness(), sid = 'remote-worker-task';
     h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
-    const binding = { status: 'active', orcaRemoteLead: lead };
-    const { enqueue } = createInputEnqueueHarness(h.coordinator, { invokeCaller: caller, remoteOrcaSession: binding });
-    await enqueue({}, sid, buildRemoteWorkerQueuedMessage({
+    await createInputEnqueueHarness(h.coordinator).enqueue({}, sid, buildRemoteWorkerQueuedMessage({
       workerId: 'worker-1', clientId: 'lead-a', rawContent: 'Run the check',
       createOpts: { agentKind: 'claude-code', workingDir: '/repo', model: 'model' },
       createdAt: '2026-11-10T00:00:00.000Z',
     }));
     await flush();
-    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({
-      clientId: 'lead-a', originKind: trusted ? 'orca' : undefined,
-    });
+    // The wire origin stays stripped; it grants no identity on the execution device.
+    expect(h.coordinator.getAcceptedInputProvenance(sid)).toMatchObject({ clientId: 'lead-a', originKind: undefined });
     const remoteInvoke = vi.fn(async () => ({ ok: true as const, result: { content: [], isError: false } }));
+    const remoteLead: OrcaRemoteLead = {
+      leadDeviceId: 'lead-computer', leadDeviceName: 'Lead Computer', leadSessionId: 'lead-1',
+      leadTitle: 'Lead', workerLabel: 'tester',
+    };
     const bridge = createOrcaRemoteWorkerBridge({
       getOwnerToken: () => 1,
       readSession: async () => ({ status: 'active', orcaRemoteLead: remoteLead }),
@@ -569,15 +560,10 @@ describe('INPUT_ENQUEUE execution-device Worker assignment from the Lead', () =>
       { sessionId: sid, workingDir: '/repo', agentKind: 'claude-code', mcpCallerAttested: true, mcpCallerKind: 'root' },
       'send_to_lead', { worker_id: 'worker-1', message: 'done' },
     );
-    if (trusted) {
-      expect(result?.isError).toBe(false);
-      expect(remoteInvoke).toHaveBeenCalledWith('lead-computer', expect.any(String), [
-        expect.objectContaining({ reportedInputClientIds: ['lead-a'] }),
-      ]);
-    } else {
-      expect(result?.content[0]?.text).toContain('NOT_LEAD_ASSIGNED_TURN');
-      expect(remoteInvoke).not.toHaveBeenCalled();
-    }
+    expect(result?.isError).toBe(false);
+    expect(remoteInvoke).toHaveBeenCalledWith('lead-computer', expect.any(String), [
+      expect.objectContaining({ acceptedInputClientId: 'lead-a', reportedInputClientIds: ['lead-a'] }),
+    ]);
   });
 });
 

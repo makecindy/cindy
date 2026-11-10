@@ -28,8 +28,16 @@ export interface OrcaRemoteWorkerBridgeDeps {
   remoteInvoke(deviceId: string, channel: string, args: unknown[]): Promise<InvokeResultPayload>;
   getActiveInputClientIds?(sessionId: string): readonly string[];
   /** Host-owned accepted input; cumulative reply IDs alone survive human steering. */
-  getAcceptedInputProvenance?(sessionId: string): { originKind?: string } | null;
+  getAcceptedInputProvenance?(sessionId: string): {
+    clientId?: string; retrySourceClientId?: string; originKind?: string; fromDeviceLinkClient?: boolean;
+  } | null;
   captureReportSettlement?(proxySessionId: string, reportedInputClientIds: readonly string[]): () => Promise<void>;
+  /**
+   * Lead computer only: whether its own Main dispatched this input to the Worker. Device-link
+   * input IPC strips wire origins, and the source device cannot tell a Lead assignment from
+   * other input on that computer, so this Main-owned dispatch record is the proof.
+   */
+  isLeadAssignedInput?(proxySessionId: string, clientId: string): Promise<boolean>;
 }
 
 const toolError = (error: string, code: string): OrcaToolResult => ({
@@ -54,8 +62,15 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
         return null;
       // Freeze before any await: another input can be queued or start during the round trip.
       // These IDs come from the execution host, never from model-supplied tool arguments.
-      const leadAssignedTurn = tool === 'send_to_lead'
-        && deps.getAcceptedInputProvenance?.(ctx.sessionId)?.originKind === 'orca';
+      // A Lead assignment arrives through device-link input, whose origin is stripped; the
+      // Lead verifies the accepted input against its own dispatch record. Input typed on this
+      // computer or with a local automatic origin (scheduler, another task, ...) is never a
+      // Lead assignment, which also holds when an older Lead cannot verify.
+      const accepted = tool === 'send_to_lead' ? deps.getAcceptedInputProvenance?.(ctx.sessionId) : null;
+      const acceptedInputClientId = accepted?.fromDeviceLinkClient === true
+        && (accepted.originKind === undefined || accepted.originKind === 'orca')
+        ? accepted.retrySourceClientId ?? accepted.clientId
+        : undefined;
       const reportedInputClientIds = tool === 'send_to_lead'
         ? [...(deps.getActiveInputClientIds?.(ctx.sessionId) ?? [])]
           .filter(isOrcaRemoteWorkerSessionId).slice(-64)
@@ -81,7 +96,7 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
         const auth = authorizeSendToLeadCaller(ctx);
         if (!auth.ok)
           return { content: [{ type: 'text', text: JSON.stringify(auth.error) }], isError: true };
-        if (!leadAssignedTurn || !reportedInputClientIds?.length) {
+        if (!isOrcaRemoteWorkerSessionId(acceptedInputClientId) || !reportedInputClientIds?.length) {
           return toolError(
             'This turn was not assigned by the Lead. Reply in the execution-device task instead.',
             'NOT_LEAD_ASSIGNED_TURN',
@@ -94,6 +109,7 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
         tool,
         args,
         ...(reportedInputClientIds ? { reportedInputClientIds } : {}),
+        ...(acceptedInputClientId ? { acceptedInputClientId } : {}),
       });
       try {
         const response = await deps.remoteInvoke(
@@ -158,6 +174,17 @@ export function createOrcaRemoteWorkerBridge(deps: OrcaRemoteWorkerBridgeDeps) {
       ) {
         throwIpcError('PERMISSION_DENIED', 'remote worker does not belong to this active team');
       }
+      // The execution device's accepted input must be one this Main dispatched. A same-device
+      // renderer or a direct user turn on the execution device has no such dispatch record.
+      if (request.tool === 'send_to_lead' && !(request.acceptedInputClientId
+        && await deps.isLeadAssignedInput?.(worker.sessionId, request.acceptedInputClientId))) {
+        assertOwner(owner);
+        return toolError(
+          'This turn was not assigned by the Lead. Reply in the execution-device task instead.',
+          'NOT_LEAD_ASSIGNED_TURN',
+        );
+      }
+      assertOwner(owner);
       // The model cannot supply a local context or select an arbitrary Lead. Reuse local
       // schemas, sender labels, dispatch/queue semantics and manual-report settlement.
       const settle =

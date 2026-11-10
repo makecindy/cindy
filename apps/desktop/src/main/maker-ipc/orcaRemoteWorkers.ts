@@ -331,6 +331,15 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
       };
     },
 
+    /** 该输入是否由本机派给这个远端 Worker：跨设备 send_to_lead 的派活凭据。 */
+    async isLeadAssignedInput(sessionId: string, clientId: string): Promise<boolean> {
+      try {
+        return (await isRemoteWorker(sessionId)) && runtime.isAssignedInput(sessionId, clientId);
+      } catch {
+        return false;
+      }
+    },
+
     /**
      * 按当前账号恢复待回报与结束通知；同一数据库 owner 重入不清除现有派活。
      */

@@ -2,11 +2,10 @@ import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
 import { AgentInputCoordinator, markManualSchedulerContinuation } from '../agent-input-coordinator.js';
-import { stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin, stampTrustedRemoteLeadQueuedOrigin } from '../makerSendTransaction.js';
+import { stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin } from '../makerSendTransaction.js';
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import { isAutomaticInputOriginKind, type AgentInputProjection, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import type { SchedulerQueuedPromptRequest } from '../register.js';
-import type { OrcaRemoteLead } from '../../../shared/orcaRemoteWorker.js';
 
 // Execute the production IPC handler while injecting only its host services.
 // Shared by queue tests and the real scheduler-runner continuation regression.
@@ -25,10 +24,6 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
   mobile?: boolean;
   resumeInterruptedScheduleRun?: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun;
   getSessionFsSnapshot?: () => Promise<{ planModeEnabled?: boolean } | null>;
-  /** Server-stamped device-link caller; defaults to the source device below. */
-  invokeCaller?: { controllerDeviceId: string; sharedTask?: unknown } | null;
-  /** This task's execution-device collaboration binding, if any. */
-  remoteOrcaSession?: { status: string; orcaRemoteLead: OrcaRemoteLead | null } | null;
 } = {}) {
   const { remote = true, mobile = false, resumeInterruptedScheduleRun = async () => null } = options;
   const noop = () => undefined;
@@ -58,10 +53,6 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     readDeviceLinkInvokeSourceDevice: () => mobile
       ? { deviceId: 'phone', name: 'Phone', platform: 'android' }
       : { deviceId: 'lead-computer', name: 'Lead Computer', platform: 'windows' },
-    getDeviceLinkInvokeContext: () => remote
-      ? options.invokeCaller ?? { controllerDeviceId: mobile ? 'phone' : 'lead-computer' }
-      : null,
-    getRemoteOrcaSession: async () => options.remoteOrcaSession ?? null,
     readClaimedUiLanguage: noop,
     readClaimedClassicalStyle: noop,
     getResolvedMainLocale: () => 'zh-CN',
@@ -76,7 +67,6 @@ export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, op
     stampTurnUiLanguage: sameItem,
     stampTrustedDesktopQueuedOrigin,
     stampTrustedDeviceLinkQueuedOrigin,
-    stampTrustedRemoteLeadQueuedOrigin,
     stampMobileClientOrigin,
     isAutomaticInputOriginKind,
     prepareDeviceLinkAutoTitle: async () => noop,
