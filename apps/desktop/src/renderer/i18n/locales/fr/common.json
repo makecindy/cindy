@@ -19987,6 +19987,7 @@
     "lineNumbers": "Numéros de ligne"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "Le fournisseur actuel de Codex ne permet pas de consulter le compte ChatGPT. Lors de l’ajout du fournisseur, choisissez « $t(subscriptionAccounts.signIn.anotherAccount) » pour utiliser un dossier séparé.",
     "signIn": {
       "checking": "Vérification du compte local…",
       "detected": "Compte connecté détecté",
