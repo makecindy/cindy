@@ -233,6 +233,11 @@ let autoRelaunchPollTimer: ReturnType<typeof setInterval> | null = null;
 let isRelaunching = false;
 let lastErrorCode: string | undefined;
 let autoRelaunchInProgress = false;
+/**
+ * 清单在 apply 已提交时要求作废 staged 补丁。那时不能删正在被读取的文件,
+ * 只记一笔;abortApply 回收失败后真正清掉。成功清除或下一次 apply 开始时归零。
+ */
+let discardRequestedDuringApply = false;
 /** The auto-relaunch decision kicked off by the latest `ready` broadcast, if any. */
 let pendingStatusReadyDecision: Promise<void> | null = null;
 /** 资格检查(含异步 busyProbe)进行中的次数。这段窗口暂缓清补丁。 */
@@ -418,8 +423,12 @@ async function getAutoRelaunchBlockReasonForCurrentState(): Promise<AutoRelaunch
   const dev = isDev();
   const status = currentStatus;
   const relaunching = isRelaunching || autoRelaunchInProgress;
+  const applyAborted = lastErrorCode === UPDATE_APPLY_ABORTED_ERROR_CODE;
   const nowMs = Date.now();
   if (hasBusyTasksNow) lastBusyAtMs = nowMs;
+  // abortApply can record update_apply_aborted while this probe is awaiting.
+  // The check above the await is stale; a still-ready status must not relaunch.
+  if (applyAborted) return 'not-ready';
 
   return getAutoRelaunchBlockReason({
     enabled,
@@ -509,14 +518,26 @@ async function requestAutoRelaunch(
     const blockReason = useStartupPolicy
       ? await getStartupRelaunchBlockReason()
       : await getAutoRelaunchBlockReasonForCurrentState();
-    if (blockReason) {
-      if (blockReason !== lastAutoRelaunchBlockReason) {
-        lastAutoRelaunchBlockReason = blockReason;
+    // The background decision awaited the busy probe. An abort recorded during
+    // that wait is not part of the reason above when the probe resolved first.
+    // Re-read it here, before the channel and file checks, so the commit below
+    // cannot raise autoRelaunchInProgress for a cancelled attempt.
+    const blockReasonAfterProbe = !useStartupPolicy && lastErrorCode === UPDATE_APPLY_ABORTED_ERROR_CODE
+      ? 'not-ready'
+      : blockReason;
+    if (blockReasonAfterProbe) {
+      if (blockReasonAfterProbe !== lastAutoRelaunchBlockReason) {
+        lastAutoRelaunchBlockReason = blockReasonAfterProbe;
         if (readAutoUpdateSettings().autoRelaunchOnIdle && currentStatus === 'ready') {
-          log.info('auto relaunch blocked (%s)', blockReason);
+          log.info(
+            blockReasonAfterProbe === 'not-ready' && lastErrorCode === UPDATE_APPLY_ABORTED_ERROR_CODE
+              ? 'auto relaunch aborted — apply was aborted during eligibility check'
+              : 'auto relaunch blocked (%s)',
+            blockReasonAfterProbe,
+          );
         }
       }
-      return { accepted: false, blockReason };
+      return { accepted: false, blockReason: blockReasonAfterProbe };
     }
 
     if (syncObservedUpdateChannel()) {
@@ -532,6 +553,13 @@ async function requestAutoRelaunch(
 
     if (!readyFilePath || !fs.existsSync(readyFilePath)) {
       log.info('auto relaunch aborted — staged patch disappeared during eligibility check');
+      return { accepted: false, blockReason: 'not-ready' };
+    }
+
+    // Commit boundary, after the file check. The re-read above covers an abort
+    // that landed during the busy probe; this covers one that lands after it.
+    if (lastErrorCode === UPDATE_APPLY_ABORTED_ERROR_CODE) {
+      log.info('auto relaunch aborted — apply was aborted during eligibility check');
       return { accepted: false, blockReason: 'not-ready' };
     }
 
@@ -935,13 +963,16 @@ function isCurrentPatchNewerThanDeferred(
 
 function discardStagedPatchFiles(): void {
   // A background manifest check can resume while the native updater is already
-  // reading this same file. Keep the patch intact in that window; the apply
-  // path owns cleanup after it either succeeds or reports a spawn failure.
+  // reading this same file. Keep the bytes in that window, but remember the
+  // withdrawal so abortApply does not put the rejected candidate back to ready.
   if (isUpdateApplyCommitted()) {
+    discardRequestedDuringApply = true;
     log.info('skipping staged patch discard — update apply already in flight');
     return;
   }
-  if (autoRelaunchDecisionDepth > 0) {
+  // A withdrawal recorded during apply must delete now. Deferring it again would
+  // leave the manifest-rejected zip staged after abortApply released the attempt.
+  if (autoRelaunchDecisionDepth > 0 && !discardRequestedDuringApply) {
     rememberDeferredStagedPatch();
     // Keep the payload until the async eligibility check settles, but remove
     // the marker now so a channel/app relaunch cannot revive this patch.
@@ -964,6 +995,7 @@ function discardStagedPatchFiles(): void {
   if (flag?.version === discardedVersion) {
     clearReloginFlag();
   }
+  discardRequestedDuringApply = false;
   if (
     currentStatus === 'ready' ||
     currentStatus === 'superseding' ||
@@ -1544,9 +1576,22 @@ function releaseApplyAttempt(): void {
  * that was already in flight.
  */
 async function abortApply(reason: string): Promise<void> {
-  log.info('Update apply aborted before spawn (reason=%s); staged candidate kept', reason);
+  const discardPending = discardRequestedDuringApply;
+  log.info(
+    discardPending
+      ? 'Update apply aborted before spawn (reason=%s); withdrawn staged candidate discarded'
+      : 'Update apply aborted before spawn (reason=%s); staged candidate kept',
+    reason,
+  );
   const supersedingInFlight = currentStatus === 'superseding' && downloadingVersion !== undefined;
   releaseApplyAttempt();
+  if (discardPending) {
+    // Flags are down, so this call deletes. A manifest withdrawal beats both the
+    // ready rollback and the superseding hold: the candidate is no longer valid.
+    discardStagedPatchFiles();
+    await pendingStatusReadyDecision?.catch(() => undefined);
+    return;
+  }
   if (supersedingInFlight) {
     // 新版 B 还在下,保持 superseding 与 downloadingVersion,只在错误码里表达这次安装已取消。
     // 重复 abort 落到同一个错误码时不再广播,和 setStatus 对未变化 payload 的处理一致。
@@ -2070,6 +2115,10 @@ async function executeRelaunchUnguarded(
     return;
   }
   isRelaunching = true;
+  // A new attempt. A withdrawal recorded against an earlier attempt must not
+  // discard this candidate if this attempt later aborts without a new one.
+  // Withdrawals during this attempt set the flag again after this line.
+  discardRequestedDuringApply = false;
   // A previous abort recorded update_apply_aborted so the splash and the idle
   // poller would not immediately retry. This attempt is that retry, so the code
   // must not keep blocking it. Cleared after the in-progress guard, matching
