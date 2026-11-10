@@ -1217,7 +1217,6 @@ import {
   interruptGhostCallsForAccountBoundary,
   reconcileGhostOauthAccountsForActiveOwner,
   refreshGhostLocalization,
-  refreshPluginUsageBindings,
   registerGhostIpc,
   setRemotePluginManagementServices,
   runStableOwnerPostCommitTask,
@@ -2932,7 +2931,6 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
   // Market and OAuth are owner-private follow-ups and stay behind this gate.
   if (dataOwnerId === null) return needsRetry ? 'failed' : 'completed';
   if (activeOwnerScopeKey() !== scopeKey || isAppSessionBoundaryPending()) return 'deferred';
-  await refreshPluginUsageBindings();
   let deferred = false;
   const marketOutcome = await marketPostCommitStep.run(scopeKey, async () => {
     if (!isCurrent()) return 'deferred';
@@ -10044,16 +10042,6 @@ app.on('ready', async () => {
             userId,
             error: error instanceof Error ? error.message : String(error),
           });
-        });
-      }
-      // 插件使用绑定只是辅助元数据：插件目录不可读（如 Windows EPERM）时不能让
-      // onReady 抛错——否则 ownerEnsureCoordinator 会丢弃已就绪的本地库并报
-      // DB_INIT_FAILED（#6870）。失败只记日志，由后续 post-commit 重试补齐。
-      try {
-        await refreshPluginUsageBindings();
-      } catch (error) {
-        dbClientLog.warn('plugin usage bindings refresh failed (non-fatal)', {
-          error: error instanceof Error ? error.message : String(error),
         });
       }
       checkDatabaseSizeWarningAtStartup();

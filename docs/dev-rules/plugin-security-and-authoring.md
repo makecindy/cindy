@@ -887,8 +887,8 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 - 循环内不得调用带默认 `listMarketInstallations()` 参数的
   `installedGhostMatchingMarketPlugin`；先取一次快照并传入。锁内需要复核单项时，用精确实例
   查找，不要重新全量 list。
-- `ghosts:usage-summary` 只读；`bind` 只在安装、启动或身份 revision 变化时执行。统计卡片
-  可见时轮询，隐藏时停止，前一次未完成不叠加。
+- `ghosts:usage-summary` 只读；`bind` 只在安装、启动、首次使用或身份 revision 变化时
+  执行。统计卡片可见时轮询，隐藏时停止，前一次未完成不叠加。
 - 自定义来源发现必须有超时和部分结果；超时不能阻塞首屏。Library 用量扫描有熔断和条目
   上限，面板投影不得为每条记录重扫全部文件。
 - 验收：翻 10 页 `GhostManager.list()` 1 次；精确实例查找 0 次；连续 summary 3 次写事务
