@@ -384,6 +384,9 @@ jobs:
       - name: Run Windows test runner self-tests
         run: pnpm test:runner
 
+      - name: Run Windows resource integration tests
+        run: pnpm run test:workspaces --workspace desktop --tier windows-resource
+
       - name: Check Windows Codex credential publication
         run: node --experimental-strip-types apps/desktop/scripts/check-windows-codex-auth-move.mjs
 

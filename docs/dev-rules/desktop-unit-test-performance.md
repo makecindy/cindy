@@ -15,6 +15,22 @@ pnpm benchmark:desktop-workers -- --workers 1,2,4,8 --runs 1 --output <report.js
 或分池前后必须使用同一 checkout、同一机器和同一测试范围比较；单次数据需同时保留稳定性
 结果，不得只挑最快的一次。
 
+## Windows 原生资源验证（2026-11-10）
+
+真实 PowerShell / Win32 mutex 用例从默认 unit 拆到 `windows-resource` tier，
+使用独立临时目录、单 worker 串行执行。Windows 的 `windows-runner-checks` job
+在 runner 自测之后执行该层，仍由必需检查 `Windows unit tests` 汇总阻断；非 Windows
+平台标为不适用。这样避免 PowerShell 冷启动与整片 unit 的模块转换争用资源。
+普通单测通过可控进程事件和假时钟验证冷启动、锁等待、探测及超时清理，生产超时预算不变。
+
+Windows 本地可运行：
+
+```bash
+pnpm run test:workspaces --workspace desktop --tier windows-resource
+```
+
+以下 worker 基准仍只测 unit，不包含这个真实资源层；Windows 原生行为须以专用 CI 的实际结果为准。
+
 ## 2026-10-16 CI 关键路径与分片调整
 
 数据来自 main 上两次成功的 client-ci（run 38819825618、38805666371，当时为 2 个分片）：

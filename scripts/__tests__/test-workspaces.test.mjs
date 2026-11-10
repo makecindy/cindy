@@ -770,6 +770,20 @@ test("desktop unit excludes integration, migration, direct db-tier, and source-c
 	);
 });
 
+// A real PowerShell/Win32 helper must not contend with the ordinary unit pool.
+test("desktop Windows resources stay outside unit and run in a serial platform tier", () => {
+	const desktop = manifest.workspaces.find(workspace => workspace.name === "desktop");
+	const native = "apps/desktop/src/main/__tests__/windowsPackagedInstanceBarrier.windows-resource.test.ts";
+	const unit = "apps/desktop/src/main/__tests__/windowsPackagedInstanceBarrier.test.ts";
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, [native, unit]), [unit]);
+	const tier = desktop.tiers["windows-resource"];
+	assert.equal(tier.status, process.platform === "win32" ? "manual" : "notApplicable");
+	assert.equal(tier.execution, "exclusive");
+	assert.deepEqual(selectFilesForTier(desktop, tier, [native, unit]), [native]);
+	assert.ok(tier.command.args.includes("--maxWorkers=1"));
+	assert.ok(tier.command.args.includes("--pool=forks"));
+});
+
 test("desktop real-Git coverage is an explicit coordinated tier outside default unit", () => {
 	const desktopPackage = readWorkspacePackageJson("apps/desktop");
 	const desktop = manifest.workspaces.find(

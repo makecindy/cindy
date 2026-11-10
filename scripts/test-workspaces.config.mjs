@@ -367,6 +367,7 @@ export default {
             desktopUnitPool(),
           ),
           exclude: [
+            '**/*.windows-resource.test.ts',
             '**/*.git-integration.test.ts',
             '**/*.integration.test.ts',
             '**/*.e2e.test.ts',
@@ -383,6 +384,14 @@ export default {
             ...desktopGuardInclude,
             '**/*.bench.ts',
           ],
+        },
+        'windows-resource': {
+          status: process.platform === 'win32' ? 'manual' : 'notApplicable',
+          reason: 'Real PowerShell and Win32 resources run serially on the dedicated Windows CI runner.',
+          execution: 'exclusive',
+          coverage: 'allowlist',
+          command: vitestBin('run', '--pool=forks', '--maxWorkers=1', '--no-file-parallelism'),
+          include: ['src/main/**/*.windows-resource.test.ts'],
         },
         integration: {
           status: 'manual',

@@ -1,12 +1,39 @@
 import { EventEmitter } from 'node:events';
-import os from 'node:os';
-import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { spawn } from 'node:child_process';
+import { PassThrough } from 'node:stream';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   acquireWindowsPackagedInstanceBarrier,
   __testing,
 } from '../windowsPackagedInstanceBarrier.js';
+
+vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.clearAllMocks();
+});
+
+function helperProcess() {
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    stdin: { end: vi.fn(() => exit(0)) },
+    exitCode: null as number | null,
+    signalCode: null,
+    kill: vi.fn(() => { exit(1); return true; }),
+  });
+  function exit(code: number) {
+    child.exitCode = code;
+    child.emit('exit', code, null);
+  }
+  vi.mocked(spawn).mockReturnValue(child as never);
+  return {
+    child,
+    status: (status: string) => child.stdout.write(`${JSON.stringify({ status })}\n`),
+  };
+}
 
 describe('windowsPackagedInstanceBarrier', () => {
   it('parses only complete helper statuses', () => {
@@ -48,6 +75,7 @@ describe('windowsPackagedInstanceBarrier', () => {
   });
 
   it('waits for the helper exit after forced termination', async () => {
+    vi.useFakeTimers();
     const child = new EventEmitter() as EventEmitter & {
       exitCode: number | null;
       signalCode: NodeJS.Signals | null;
@@ -63,12 +91,8 @@ describe('windowsPackagedInstanceBarrier', () => {
         finished = true;
       });
 
-    await vi.waitFor(() => expect(child.kill).toHaveBeenCalledOnce(), {
-      // 20ms 的强制终止定时器在有负载的 runner 上可能晚触发；
-      // 只放宽观察窗口，不改变「exit 事件前不得 finish」的断言。
-      timeout: 200,
-      interval: 5,
-    });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(child.kill).toHaveBeenCalledOnce();
     expect(finished).toBe(false);
     child.exitCode = 1;
     child.emit('exit', 1, null);
@@ -76,37 +100,40 @@ describe('windowsPackagedInstanceBarrier', () => {
     expect(finished).toBe(true);
   });
 
-  it.runIf(process.platform === 'win32')(
-    'holds the packaged startup mutex until release and allows a later retry',
-    async () => {
-      const programName = `CindyBarrierTest${process.pid}`;
-      const userDataDir = path.join(os.tmpdir(), programName);
-      const first = await acquireWindowsPackagedInstanceBarrier({
-        userDataDir,
-        programName,
-        timeoutMs: 1_000,
-      });
-      try {
-        expect(first.isHeld()).toBe(true);
-        await expect(
-          acquireWindowsPackagedInstanceBarrier({
-            userDataDir,
-            programName,
-            timeoutMs: 50,
-          }),
-        ).rejects.toThrow('startup barrier is busy');
-      } finally {
-        await first.release();
-      }
-      expect(first.isHeld()).toBe(false);
+  // CI cold starts must not consume the mutex wait budget. Real Win32 behavior
+  // lives in the windows-resource tier; this unit drives the production handshake.
+  it('keeps cold start and probe time independent from mutex contention', async () => {
+    vi.useFakeTimers();
+    const helper = helperProcess();
+    const acquiring = acquireWindowsPackagedInstanceBarrier({
+      userDataDir: 'test-profile', programName: 'CindyTest', timeoutMs: 50,
+    });
+    await vi.advanceTimersByTimeAsync(14_000);
+    helper.status('started');
+    await vi.advanceTimersByTimeAsync(1_000);
+    helper.status('locked');
+    await vi.advanceTimersByTimeAsync(14_000);
+    helper.status('acquired');
+    const lease = await acquiring;
+    expect(lease.isHeld()).toBe(true);
+    expect(helper.child.kill).not.toHaveBeenCalled();
+    await lease.release();
+    expect(lease.isHeld()).toBe(false);
+  });
 
-      const retry = await acquireWindowsPackagedInstanceBarrier({
-        userDataDir,
-        programName,
-        timeoutMs: 1_000,
-      });
-      expect(retry.isHeld()).toBe(true);
-      await retry.release();
-    },
-  );
+  it.each([
+    { stage: 'starting', statuses: [], delay: 15_000 },
+    { stage: 'waiting for', statuses: ['started'], delay: 1_050 },
+    { stage: 'probing', statuses: ['started', 'locked'], delay: 15_000 },
+  ])('terminates a helper stalled while $stage', async ({ stage, statuses, delay }) => {
+    vi.useFakeTimers();
+    const helper = helperProcess();
+    const rejected = expect(acquireWindowsPackagedInstanceBarrier({
+      userDataDir: 'test-profile', programName: 'CindyTest', timeoutMs: 50,
+    })).rejects.toThrow(`timed out ${stage} Windows packaged-instance barrier`);
+    for (const status of statuses) helper.status(status);
+    await vi.advanceTimersByTimeAsync(delay);
+    await rejected;
+    expect(helper.child.kill).toHaveBeenCalled();
+  });
 });
