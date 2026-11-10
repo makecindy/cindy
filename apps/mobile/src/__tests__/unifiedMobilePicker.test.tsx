@@ -285,6 +285,67 @@ it('removes the opened stale copy rather than another favorite matching its fall
   expect(test.prefs.favorites).toEqual([other]);
 });
 
+// Follow-up to #9591, unit: the model row must recognize a seeded favorite
+// (stored effort null/empty, shown as the catalog default) and unfavorite it.
+// A non-default tier or a retired effort must not match that default. Adjusting
+// the opened copy must say the original is kept, including on another computer.
+const modelRow = (remote: boolean) => test.view.groups.flatMap((group: any) => group.rows)
+  .find((row: any) => !row.favorite && !!row.remoteDevice === remote);
+it.each([
+  [false, ''],
+  [false, null],
+  [true, ''],
+] as const)('unfavorites a seeded default from the model row instead of saving a duplicate (remote=%s, effort=%s)', async (remote, effort) => {
+  const saved = {uid:'seed',providerId:remote ? studioSource : 'account',modelId:'model',agent:'codex',effort,fast:false};
+  test.prefs.favorites=[saved];
+  await (remote ? mountRemote(null) : mount());
+  await act(async()=>test.view.onOptions(modelRow(remote)));
+  expect(test.view.options.row.favorite).toBeUndefined();
+  expect(test.view.options.row.config.effort).toBe('medium');
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async()=>test.view.options.onFavorite());
+  expect(test.prefs.favorites).toEqual([]);
+  expect(test.view.options.isFavorite).toBe(false);
+  expect(test.view.groups.some((group:any)=>group.key==='favorites')).toBe(false);
+});
+it.each([
+  {effort:'',selected:'high'},
+  {effort:'retired',selected:'medium'},
+])('keeps the star hollow when stored effort $effort is not the displayed $selected row', async ({effort,selected}) => {
+  const saved = {uid:'seed',providerId:'account',modelId:'model',agent:'codex',effort,fast:false};
+  test.prefs.favorites=[saved];
+  await mount(undefined,{selectedEffort:selected});
+  await act(async()=>test.view.onOptions(modelRow(false)));
+  expect(test.view.options.isFavorite).toBe(false);
+  await act(async()=>test.view.options.onFavorite());
+  expect(test.prefs.favorites).toHaveLength(2);
+  expect(test.prefs.favorites[0]).toEqual(saved);
+});
+it.each([false, true])('says the original favorite is kept when a seeded favorite changes parameters (remote=%s)', async remote => {
+  const saved = {uid:'seed',providerId:remote ? studioSource : 'account',modelId:'model',agent:'codex',effort:'',fast:false};
+  test.prefs.favorites=[saved];
+  const {onSelect}=remote ? await mountRemote(null) : await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  expect(test.view.options.notice).toBe('models.unified.originalFavoriteKept');
+  expect(test.prefs.favorites).toEqual([saved]);
+  expect(test.view.options.isFavorite).toBe(false);
+  if (remote) expect(onSelect).not.toHaveBeenCalled();
+});
+it('rejects saving a seeded favorite onto another copy of the same default', async () => {
+  const seed = {uid:'seed',providerId:'account',modelId:'model',agent:'codex',effort:'',fast:false};
+  const explicit = {...seed,uid:'explicit',effort:'medium'};
+  test.prefs.favorites=[seed,explicit];
+  await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async()=>test.view.options.onEditFavorite());
+  await act(async()=>test.view.options.onSaveEdit());
+  expect(test.view.error).toBe('models.unified.favoriteExists');
+  expect(test.save).not.toHaveBeenCalled();
+  expect(test.prefs.favorites).toEqual([seed,explicit]);
+});
+
 it('adjusts model preferences from favorite details without overwriting the original copy', async () => {
   const saved = {uid:'original',providerId:'account',modelId:'model',agent:'codex',effort:'high',fast:true};
   test.prefs.favorites=[saved];

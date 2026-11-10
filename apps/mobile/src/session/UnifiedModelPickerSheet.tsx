@@ -779,27 +779,33 @@ export function UnifiedModelPickerSheet(
     }
   };
   const favoriteSource = row ? favoriteSourceOf(row) : null;
-  // A source model can have several saved configurations. Match the complete
-  // configuration without applying capability fallbacks to the saved values.
+  // A source model can have several saved configurations. Missing effort is the
+  // catalog default (seeded favorites store none). A non-empty effort the catalog
+  // no longer offers stays unmatched, so a retired tier is not this default row.
   const favoriteEntries = row?.remoteDevice
     ? remoteDirectories.find(directory => directory.catalog.deviceId === row.remoteDevice!.deviceId)?.entries ?? []
     : entries;
-  const matchingFavorite =
-    row &&
-    favoriteSource !== null &&
-    prefs.value.favorites.find(
-      (item) =>
-        item.providerId === favoriteSource &&
-        resolveStoredModelEntry(favoriteEntries, row.entry.providerId, item.modelId) === row.entry &&
-        sameConfiguration(
-          { ...item, providerId: row.config.providerId, modelId: row.config.modelId },
-          row.config,
-        ),
+  const storedFavoriteMatches = (item: MobileModelFavorite): boolean => {
+    if (!row || favoriteSource === null || item.providerId !== favoriteSource) return false;
+    if (resolveStoredModelEntry(favoriteEntries, row.entry.providerId, item.modelId) !== row.entry) return false;
+    const capability = row.entry.capabilities[item.agent];
+    const effort = item.effort
+      ? item.effort
+      : capability?.defaultEffort ?? capability?.efforts[0] ?? "";
+    return sameConfiguration(
+      { ...item, providerId: row.config.providerId, modelId: row.config.modelId, effort },
+      row.config,
     );
+  };
+  const matchingFavorite =
+    row && favoriteSource !== null
+      ? prefs.value.favorites.find(storedFavoriteMatches)
+      : undefined;
   // An opened copy keeps its identity when catalog defaults or capability
   // fallbacks change its displayed configuration (notably seeded favorites).
-  // Once the user adjusts parameters, the ordinary exact-match rule applies.
-  // Keep matchingFavorite separate for duplicate detection during explicit edits.
+  // Once the user adjusts parameters, the ordinary match rule applies.
+  // Hints use this identity. Explicit edits must ignore the copy being edited:
+  // a seeded favorite matches its own default and would hide another copy.
   const favoriteToRemove =
     row && originFavorite && sameConfiguration(
       resolveMobileModelConfig(row.entry, {
@@ -927,7 +933,7 @@ export function UnifiedModelPickerSheet(
         // 从收藏打开的详情显示的是那份副本(target.config),与本机收藏一样跟着调整走;原收藏不变。
         if (target?.config) {
           setTarget({ ...target, config });
-          if (matchingFavorite && !reset)
+          if (favoriteToRemove && !reset)
             setNotice(t("models.unified.originalFavoriteKept"));
         }
         if (row.selected) return;
@@ -1007,7 +1013,7 @@ export function UnifiedModelPickerSheet(
           t(
             reset
               ? "models.unified.restoredHint"
-              : matchingFavorite
+              : favoriteToRemove
                 ? "models.unified.originalFavoriteKept"
                 : "models.unified.parametersSaved",
           ),
@@ -1239,8 +1245,10 @@ export function UnifiedModelPickerSheet(
                     return;
                   }
                   if (
-                    matchingFavorite &&
-                    matchingFavorite.uid !== original.uid
+                    prefs.value.favorites.some(
+                      (item) =>
+                        item.uid !== original.uid && storedFavoriteMatches(item),
+                    )
                   ) {
                     setError(t("models.unified.favoriteExists"));
                     return;
