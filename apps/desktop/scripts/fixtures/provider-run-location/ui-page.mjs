@@ -14,7 +14,8 @@ export default {
   },
   cases: {
     default: { about: 'This computer is signed in; Automatic keeps tasks here' },
-    borrowing: { about: 'This computer is not signed in; Automatic borrows MBP-M5' },
+    borrowing: { about: 'This computer is not signed in; new tasks run on MBP-M5 and the page reads as usable' },
+    pinned: { about: 'Signed in here, but the user chose to run this provider on MBP-M5' },
     'single-computer': { about: 'No other computer offers the provider: the row is hidden' },
   },
   async ready(page) {
@@ -40,7 +41,6 @@ export default {
     await row.getByRole('combobox').click();
     await page.getByRole('option', { name: 'MBP-M5' }).waitFor();
     await ui.capture('menu');
-    await page.getByRole('option', { name: 'MBP-M5' }).click();
-    await ui.capture('pinned');
+    await page.keyboard.press('Escape');
   },
 };

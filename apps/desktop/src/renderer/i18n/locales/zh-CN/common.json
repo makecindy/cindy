@@ -4200,13 +4200,12 @@
           "label": "在哪台电脑运行",
           "optionLocal": "这台电脑",
           "notSignedIn": "未登录",
-          "offline": "离线",
           "autoBorrowing": "这台电脑还没登录，新任务在 {{device}} 上运行，不用再登录。",
           "local": "新任务在这台电脑运行。也可以改选你另一台已登录的电脑。",
           "pinned": "新任务在 {{device}} 上运行，用那台电脑的登录。已在运行的任务不受影响。",
-          "pinnedOffline": "{{device}} 离线，新任务暂时无法运行。可以改选其他电脑。",
           "inline": "运行于",
-          "signInHere": "在这台电脑登录"
+          "signInHere": "在这台电脑登录",
+          "writeFailed": "「运行于」未能保存，请重试"
         }
       },
       "detect": {

@@ -1124,6 +1124,8 @@ function projectInvokeResultForTunnel(
     // 只有远程 Agent 的选择入口按它筛选。只放行布尔值。
     delete rest.remoteInvocationEnabled;
     if (typeof p.remoteInvocationEnabled === 'boolean') rest.remoteInvocationEnabled = p.remoteInvocationEnabled;
+    // 「运行于」是这台电脑自己的偏好，不给其他电脑。
+    delete rest.runLocation;
     // Only the host's narrow Cindy AI identity override may supersede brand inference.
     const logoKind = p.id === 'xd' && p.logoKind === 'xd'
       ? 'xd'

@@ -4243,13 +4243,12 @@
           "label": "Run on",
           "optionLocal": "This computer",
           "notSignedIn": "Not signed in",
-          "offline": "Offline",
           "autoBorrowing": "This computer isn't signed in, so new tasks run on {{device}}. No sign-in needed.",
           "local": "New tasks run on this computer. You can pick another of your signed-in computers instead.",
           "pinned": "New tasks run on {{device}} with its sign-in. Running tasks stay where they are.",
-          "pinnedOffline": "{{device}} is offline, so new tasks can't start. Pick another computer.",
           "inline": "Runs on",
-          "signInHere": "Sign in on this computer"
+          "signInHere": "Sign in on this computer",
+          "writeFailed": "Couldn't save where this provider runs. Please try again."
         }
       },
       "detect": {

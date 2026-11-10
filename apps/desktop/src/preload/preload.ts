@@ -6833,6 +6833,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('maker:provider:list'),
     setProviderRemoteAccess: (input: { providerId: string; enabled: boolean }): Promise<{ ok: true; enabled: boolean }> =>
       ipcRenderer.invoke('maker:provider:remote-access:set', input),
+    /** 供应商「运行于」：deviceId、'local'，或 null 回到默认。 */
+    setProviderRunLocation: (input: { providerId: string; location: string | null }): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:provider:run-location:set', input),
     /** Refresh one built-in provider through its existing main-process discovery source. */
     refreshBuiltinProviderModels: (
       providerId: import('../shared/providerModelRefresh').BuiltinRefreshableProviderId,

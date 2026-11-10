@@ -74,6 +74,7 @@ mountPage({
       for (const id of ['mbp', 'mini']) fixture.catalogs.set(id, { providers: remote, loading: false, error: null });
     }
     if (ctx.case === 'borrowing') snapshot.providers[0] = { ...snapshot.providers[0], connected: false };
+    if (ctx.case === 'pinned') snapshot.providers[0] = { ...snapshot.providers[0], runLocation: 'mbp' } as typeof snapshot.providers[0];
     refreshControl.defer = ctx.case === 'wizard-reopen';
     if (ctx.case === 'builtin-save-guard') snapshot.providers.push({
       ...provider('anthropic'), id: 'gemini', name: 'Gemini', connected: false,
@@ -110,6 +111,7 @@ mountPage({
         scanLocalCli: async () => ({ detections: [] }),
         requestProviderModelsAutoRefresh: async () => ({ ok: true }),
         setProviderOrder: forbid('setProviderOrder'),
+        setProviderRunLocation: async () => ({ ok: true }),
         listProviderPresets: async () => ({ presets: BUNDLED_CATALOG.presets ?? [] }),
         localModelList: async () => ({ status: { kind: 'ready' }, models: [], memoryGb: 0 }),
         localModelStatus: async () => ({ kind: 'ready' }),
