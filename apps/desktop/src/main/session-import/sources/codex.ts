@@ -454,7 +454,7 @@ async function materialize(session: SourceSession, ctx: ReadContext): Promise<Na
   // 按需加载：这两个模块加载时会读应用路径，扫描与读取不需要它们。
   const [{ codexImportedThreadModelProviderId }, { getCodexProxyAuthInjectionState }] = await Promise.all([
     import('../../maker-host/codex-credential-switch.js'),
-    import('../../maker-host/codex-proxy-host.js'),
+    import('../../maker-host/codex-proxy-host.desktop.js'),
   ]);
   const modelProvider = codexImportedThreadModelProviderId({
     providerId: ctx.route?.providerId ?? null,

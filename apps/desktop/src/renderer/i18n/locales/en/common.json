@@ -865,8 +865,8 @@
       "runningCount_one": "{{count}} task running",
       "runningCount_other": "{{count}} tasks running",
       "limitAria": "Task limit for {{name}}",
-      "limitOption_one": "Limit {{count}}",
-      "limitOption_other": "Limit {{count}}",
+      "limitOption_one": "{{count}} task",
+      "limitOption_other": "{{count}} tasks",
       "weightAria": "Weight for {{name}}",
       "weightOption": "Weight {{weight}}",
       "assignAria": "Assign tasks to {{name}}",
@@ -881,6 +881,7 @@
         "pausedLocal": "Not accepting new tasks from other computers",
         "cooling": "Cooling down",
         "coolingUntil": "Cooling down · back around {{time}}",
+        "quotaExhausted": "Quota exhausted",
         "offline": "Offline",
         "unreachableHere": "Can’t reach it from this computer",
         "unavailable": {
@@ -922,9 +923,13 @@
       "description": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). The last few messages and a summary carry over; older details may be lost.",
       "quota": "{{left}}% left",
       "quotaReset": "{{left}}% left · {{reset}}",
-      "confirm": "Switch",
-      "cancel": "Cancel",
-      "remember": "Switch automatically from now on (this task only)"
+      "confirm": "Switch this time only",
+      "cancel": "Not now",
+      "remember": "Switch automatically from now on",
+      "disable": "Do not switch automatically",
+      "disableFailed": "Couldn't confirm whether your choice was saved. Check the connection and make sure Cindy on the task’s computer is up to date, then try again. This message will still be sent as usual.",
+      "choiceLabel": "Switching preference (this task only)",
+      "send": "Send message"
     },
     "deleteConfirm": {
       "title": "Delete the {{provider}} provider group?",
@@ -4233,7 +4238,18 @@
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
           "writeFailed": "Couldn't save the remote access setting. Please try again."
         },
-        "moreActionsAria": "More Actions"
+        "moreActionsAria": "More Actions",
+        "runLocation": {
+          "label": "Run on",
+          "optionLocal": "This computer",
+          "notSignedIn": "Not signed in",
+          "autoBorrowing": "This computer isn't signed in, so new tasks run on {{device}}. No sign-in needed.",
+          "local": "New tasks run on this computer. You can pick another of your signed-in computers instead.",
+          "pinned": "New tasks run on {{device}} with its sign-in. Running tasks stay where they are.",
+          "inline": "Runs on",
+          "signInHere": "Sign in on this computer",
+          "writeFailed": "Couldn't save where this provider runs. Please try again."
+        }
       },
       "detect": {
         "groupLabel": "Detected on this device",
@@ -5301,6 +5317,15 @@
         "ariaLabel": "Use {{shortcut}} to send messages"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Default working directory for new tasks",
+      "label": "Default directory on this computer",
+      "hint": "Preselect this directory for new local tasks with no project chosen. An explicitly selected project, dialogue, or remote computer takes priority.",
+      "unset": "Not set (no directory preselected)",
+      "choose": "Choose directory",
+      "clear": "Clear default",
+      "failed": "Could not save the default working directory. Try again."
+    },
     "linkOpen": {
       "title": "Open Links",
       "description": "Choose where links in messages open. Right-click a link to use another option just for that link.",
@@ -6187,13 +6212,18 @@
         "allowInboundAria": "Toggle whether {{name}} can control this device",
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
-        "controllingThisMac": "Connected to Cindy"
+        "controllingThisMac": "Connected to Cindy",
+        "useThisDeviceModels": "Use this device's models",
+        "allowModelUseAria": "Let {{name}} use this computer's models"
       },
       "toast": {
         "revoked": "Access revoked for this device",
         "revokeFailed": "Failed to revoke access",
         "restored": "Access restored for this device",
-        "restoreFailed": "Failed to restore access"
+        "restoreFailed": "Failed to restore access",
+        "modelUseRestored": "That computer can use this computer's models again",
+        "modelUseRevoked": "That computer can no longer use this computer's models",
+        "modelUseFailed": "Couldn't save \"Use this device's models\". Please try again."
       },
       "sections": {
         "myDevices": "My devices",
@@ -7410,6 +7440,11 @@
         "installedExpand": "Show all {{count}} installed plugins",
         "installedCollapse": "Hide additional installed plugins",
         "recommendedSection": "Recommended",
+        "todayRecommendations": "Today's picks",
+        "marketSection": "Plugin marketplace",
+        "browseMarket": "Browse plugin marketplace",
+        "searching": "Searching…",
+        "allLoaded": "All {{count}} plugins shown",
         "updatesAvailable": "{{count}} plugin updates available",
         "updateAll": "Update all",
         "ignoreRound": "Ignore this round",
@@ -7439,7 +7474,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Official"
+          "official": "Official",
+          "community": "Community"
+        },
+        "publisherDescription": {
+          "official": "Published and maintained by Cindy",
+          "community": "Published and maintained by community developers",
+          "team": "Shared by your organization with authorized members",
+          "custom": "From a Git or local folder marketplace you added",
+          "local": "Installed from a local file or developed on this computer"
         },
         "scopeAria": "Filter plugin sources",
         "scope": {
@@ -9039,6 +9082,8 @@
       "daysWindow": "{{days}}d"
     },
     "claude": {
+      "totalWeeklyLabel": "Total Week",
+      "temporarilyLimited": "Temporarily Limited",
       "waitingDetail": "Claude subscription usage will update after the next turn completes.",
       "weeklyLabel": "Weekly",
       "modelWeeklyLabel": "{{model}} weekly",
@@ -11415,6 +11460,9 @@
       "databaseDriver": "The database driver could not load. Update or repair Cindy, then retry.",
       "databaseUnavailable": "The source database could not be read. Original data is unchanged; retry after repair.",
       "fileTooLarge": "A file or this import exceeds the read limit. Content was not truncated.",
+      "sourceFileTooLarge": "One file exceeds the read limit. This item was not fully imported.",
+      "snapshotTooLarge": "The total data for this read exceeds the limit. The import is incomplete.",
+      "itemTooLarge": "The files in this item exceed 128 MiB in total. This item was not fully imported.",
       "memoryMetadata": "The memory summary or title exceeds storage requirements.",
       "memoryWrite": "Memory writing or integrity verification failed. You can retry.",
       "memoryChanged": "The saved memory was changed and has not been overwritten.",
@@ -13042,6 +13090,11 @@
     "prevMessageJump": "Jump to previous prompt: {{preview}}",
     "sessionLoading": "Loading task",
     "askUserQuestion": {
+    "unanswered": "Unanswered",
+    "withdrawn": "No longer needs an answer",
+    "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
+    "sendSupplement": "Send additional information",
+
       "voice": {
         "hint": "Say an option number or name. For multiple choices, then say “confirm selection”.",
         "freeTextHint": "Say your answer, review it, then say “confirm selection” to submit.",
@@ -14166,6 +14219,7 @@
       "taskAutoArchived": "Archived \"{{title}}\"",
       "taskAutoArchivedUndo": "Undo",
       "taskAutoArchivePending": "Will archive when you leave this task",
+      "taskAutoArchiveBlockedDirty": "“{{title}}” was not auto-archived: its workspace has uncommitted changes",
       "taskAutoArchiveCancel": "Cancel",
       "taskAutoArchiveCancelled": "Will not auto-archive this time",
       "taskArchiveNow": "Archive now"
@@ -19764,6 +19818,8 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "unassigned": "Account not assigned",
+    "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",
       "detected": "Signed-in account found",
@@ -19775,10 +19831,10 @@
       "useCodex": "Sign in with Codex"
     },
     "title": "Subscription accounts",
-    "note": "The first account uses the CLI’s default folder. Additional accounts sign in separately. New tasks are balanced across accounts; existing tasks keep their account.",
     "strategy": "Load balancing",
     "add": "Add account",
     "default": "Default folder",
+    "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",
     "unavailable": "Status unavailable",
@@ -19812,5 +19868,15 @@
     "browserFallback": "Open GitHub to star Cindy.",
     "openGithub": "Open GitHub",
     "openFailed": "Could not open GitHub."
+  },
+  "hostConnection": {
+    "connecting": "Connecting to Cindy…",
+    "restoring": "Restoring task state…",
+    "retrying": "Task state is not yet synced. Retrying…",
+    "pairing": "Connect authorization required",
+    "pairingHelp": "Keep this page open. In the terminal used to start Cindy Host, run the command to open the web client again. Pair the new page, then return here.",
+    "keepDraft": "Your draft stays here. Task state will sync when the connection recovers.",
+    "retry": "Retry connection",
+    "desktopAuthHelp": "Update the Host connection settings in your launch terminal, then reopen this experimental client."
   }
 }

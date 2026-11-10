@@ -3,7 +3,7 @@ import { eq, lt, sql } from 'drizzle-orm';
 import { getDeviceId } from '../authManager';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 import { githubObservations } from '../localDb/schema';
-import { outboundFetch } from '../maker-host/outbound-fetch';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { getSharedGhCliTokenSource } from './ghCliTokenSource';
 import { GithubReadService, type Journal } from './githubReadService';
 import { GithubReadTransport } from './githubReadTransport';

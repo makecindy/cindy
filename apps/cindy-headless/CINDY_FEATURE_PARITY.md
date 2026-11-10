@@ -5,6 +5,12 @@ This inventory applies to Cindy Headless `0.4.3`, based on Cindy upstream commit
 only when the Headless CLI or Harbor adapter can exercise it; vendored source
 alone is not sufficient.
 
+## Runtime pin alignment: 2026-11-10
+
+Claude example and smoke profiles now follow Claude Code `2.1.321` (from
+`tools/claude/latest.json`), and the `cindy-production-claude` lock was
+regenerated with `pnpm profiles:freeze`. Pi and Codex pins are unchanged.
+
 ## Runtime pin alignment: 2026-10-30
 
 Example and smoke profiles now follow Claude Code `2.1.312` and Pi `1.4.0`,

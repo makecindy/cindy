@@ -466,6 +466,9 @@ export async function readSubscriptionPool(
         ...(account.id === 'default' && legacyCodexDefault(provider) ? { legacy: true } : {}),
         identity: info.auth.identity,
         plan: info.auth.plan,
+        ...(info.auth.errorReason === 'codex_provider_managed_auth'
+          ? { authIssue: 'codex-provider-managed-auth' as const }
+          : {}),
         status:
           pool.disconnected && !preview
             ? ('signed-out' as const)
@@ -701,18 +704,25 @@ export async function runSubscriptionAccountCommand(
     try {
       if (
         command.action === 'add' &&
-        !useDefault &&
         (!initial || initial.accounts.every((a) => a.id === 'default'))
       ) {
-        const first = await snapshot(state, provider, 'default', true);
+        // Explicit Add may inspect an unbound default, while ordinary snapshots
+        // intentionally hide its native auth until the user connects it.
+        const firstAuth = useDefault
+          ? await (legacyCodexDefault(provider)
+              ? readLegacyCodexAccount()
+              : readNativeAccount(provider, directoryFor(provider, 'default')))
+          : (await snapshot(state, provider, 'default', true)).auth;
         assertOwner(state);
         if (abort.signal.aborted) throw new Error('login_cancelled');
-        if (!first.auth.authenticated) {
+        if (firstAuth.errorReason === 'codex_provider_managed_auth') {
+          if (accountId === 'default') accountId = `cindy-${accountOwnerPrefix()}-${randomUUID()}`;
+        } else if (!firstAuth.authenticated) {
           accountId = 'default';
-          state.logins.set(key, { abort, accountId });
-          if (state.running.get(keyOf(provider, accountId))?.size)
-            throw new Error('Account is in use');
         }
+        state.logins.set(key, { abort, accountId });
+        if (state.running.get(keyOf(provider, accountId))?.size)
+          throw new Error('Account is in use');
       }
       if (adding) {
         await updatePool(provider, (pool) => {
@@ -739,14 +749,18 @@ export async function runSubscriptionAccountCommand(
       if (abort.signal.aborted) throw new Error('login_cancelled');
       // Only an explicit default-account choice (or legacy Add) may attach the
       // detected login. "New" always uses a fresh, host-generated directory.
-      const attachDefault =
-        adding &&
-        accountId === 'default' &&
-        (
-          await (legacyCodexDefault(provider)
-            ? readLegacyCodexAccount()
-            : readNativeAccount(provider, directory))
-        ).authenticated;
+      const legacy = accountId === 'default' && legacyCodexDefault(provider);
+      const currentAuth =
+        (adding && accountId === 'default') || (provider === 'openai' && !legacy)
+          ? await (legacy
+              ? readLegacyCodexAccount()
+              : readNativeAccount(provider, directory))
+          : undefined;
+      assertOwner(state);
+      if (abort.signal.aborted) throw new Error('login_cancelled');
+      if (currentAuth?.errorReason === 'codex_provider_managed_auth')
+        throw new Error('codex_provider_managed_auth');
+      const attachDefault = adding && accountId === 'default' && currentAuth?.authenticated;
       if (!attachDefault) {
         if (accountId === 'default' && legacyCodexDefault(provider))
           await loginLegacyCodexAccount(abort.signal);

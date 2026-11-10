@@ -11,7 +11,7 @@ import { BrowserWindow } from 'electron';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { patchMessageAgentMetaWithResult } from '../localDb/ipc/messages.js';
-import { drainPersistQueue, enqueueDurableWrite } from '../messagePersistBroadcaster.js';
+import { drainPersistQueue, enqueueDurableWrite } from '../messagePersistBroadcaster.desktop.js';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import { isAutomaticInputOriginKind } from '../../shared/agentInputQueue.js';
 import { recordNightlyLearningTurn } from './botNightlyLearningState.js';

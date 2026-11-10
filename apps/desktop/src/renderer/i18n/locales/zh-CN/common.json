@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 个任务运行中",
       "limitAria": "{{name}} 的并发上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同时 {{count}}",
       "weightAria": "{{name}} 的权重",
       "weightOption": "权重 {{weight}}",
       "assignAria": "给 {{name}} 分配任务",
@@ -873,6 +873,7 @@
         "pausedLocal": "已暂停接收外部新任务",
         "cooling": "冷却中",
         "coolingUntil": "冷却中 · 约 {{time}} 恢复",
+        "quotaExhausted": "配额已用完",
         "offline": "不在线",
         "unreachableHere": "从这台电脑连不上",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几轮对话和摘要，更早的细节可能记不全。",
       "quota": "还剩 {{left}}%",
       "quotaReset": "还剩 {{left}}%，{{reset}}",
-      "confirm": "换过去",
-      "cancel": "取消",
-      "remember": "以后自动换，不再询问（仅本任务）"
+      "confirm": "仅这次换过去",
+      "cancel": "暂不切换",
+      "remember": "以后自动切换，不再询问",
+      "disable": "不自动切换，不再询问",
+      "disableFailed": "未能确认选择是否已保存。请检查连接，并确认任务所在电脑上的 Cindy 已更新后重试。这条消息仍照常发送。",
+      "choiceLabel": "切换方式（仅本任务）",
+      "send": "继续发送"
     },
     "deleteConfirm": {
       "title": "删除 {{provider}} 的供应商组？",
@@ -4190,7 +4195,18 @@
           "ariaLabel": "允许你的其他电脑和你分享的人调用此供应商",
           "writeFailed": "远程调用设置未能保存，请重试"
         },
-        "moreActionsAria": "更多操作"
+        "moreActionsAria": "更多操作",
+        "runLocation": {
+          "label": "在哪台电脑运行",
+          "optionLocal": "这台电脑",
+          "notSignedIn": "未登录",
+          "autoBorrowing": "这台电脑还没登录，新任务在 {{device}} 上运行，不用再登录。",
+          "local": "新任务在这台电脑运行。也可以改选你另一台已登录的电脑。",
+          "pinned": "新任务在 {{device}} 上运行，用那台电脑的登录。已在运行的任务不受影响。",
+          "inline": "运行于",
+          "signInHere": "在这台电脑登录",
+          "writeFailed": "「运行于」未能保存，请重试"
+        }
       },
       "detect": {
         "groupLabel": "检测到本机 CLI",
@@ -5192,6 +5208,15 @@
         "ariaLabel": "使用 {{shortcut}} 发送消息"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任务默认工作目录",
+      "label": "本机默认工作目录",
+      "hint": "新建本机任务且未选择项目时，预选此目录。明确选择的项目、对话或远程设备仍优先。",
+      "unset": "未设置（不预选目录）",
+      "choose": "选择目录",
+      "clear": "清除默认目录",
+      "failed": "保存默认工作目录失败，请重试"
+    },
     "linkOpen": {
       "title": "打开链接",
       "description": "选择消息链接的打开位置，右键可临时更换",
@@ -6144,13 +6169,18 @@
         "allowInboundAria": "切换是否允许 {{name}} 控制本机",
         "peerControlOff": "对方未允许远程控制",
         "masterOffHint": "需先开启上方总开关",
-        "controllingThisMac": "已连接到 Cindy"
+        "controllingThisMac": "已连接到 Cindy",
+        "useThisDeviceModels": "用本机模型",
+        "allowModelUseAria": "允许 {{name}} 用本机的模型"
       },
       "toast": {
         "revoked": "已撤销该设备的访问权限",
         "revokeFailed": "撤销失败",
         "restored": "已恢复该设备的访问权限",
-        "restoreFailed": "恢复失败"
+        "restoreFailed": "恢复失败",
+        "modelUseRestored": "已允许这台电脑用本机的模型",
+        "modelUseRevoked": "这台电脑不能再用本机的模型",
+        "modelUseFailed": "「用本机模型」未能保存，请重试"
       },
       "sections": {
         "myDevices": "我的设备",
@@ -7367,6 +7397,11 @@
         "installedExpand": "展开全部 {{count}} 个已安装插件",
         "installedCollapse": "收起更多已安装插件",
         "recommendedSection": "推荐",
+        "todayRecommendations": "今日推荐",
+        "marketSection": "插件市场",
+        "browseMarket": "浏览插件市场",
+        "searching": "正在搜索…",
+        "allLoaded": "已显示全部 {{count}} 个插件",
         "updatesAvailable": "{{count}} 个插件有可用更新",
         "updateAll": "全部更新",
         "ignoreRound": "忽略本轮",
@@ -7396,7 +7431,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官方"
+          "official": "官方",
+          "community": "社区"
+        },
+        "publisherDescription": {
+          "official": "由 Cindy 官方发布和维护",
+          "community": "由社区开发者发布和维护",
+          "team": "由当前组织共享给有权限的成员",
+          "custom": "来自你添加的 Git 或本地文件夹市场",
+          "local": "从本机文件安装，或在本机开发"
         },
         "scopeAria": "筛选插件来源",
         "scope": {
@@ -8996,6 +9039,8 @@
       "daysWindow": "{{days}}天"
     },
     "claude": {
+      "totalWeeklyLabel": "总周",
+      "temporarilyLimited": "暂时受限",
       "waitingDetail": "Claude 订阅余量会在下一轮完成后更新。",
       "weeklyLabel": "周限",
       "modelWeeklyLabel": "{{model}} 周限",
@@ -11370,6 +11415,9 @@
       "databaseDriver": "数据库驱动无法加载，请更新或修复 Cindy 后重试。",
       "databaseUnavailable": "无法读取来源数据库，原数据未改动。修复后可重试。",
       "fileTooLarge": "文件或本次资料超过读取上限，未截断导入。",
+      "sourceFileTooLarge": "单个文件超过读取上限，此项未完整导入。",
+      "snapshotTooLarge": "本次读取的资料累计超过上限，未能完整导入。",
+      "itemTooLarge": "此项文件的总大小超过 128 MiB，未完整导入。",
       "memoryMetadata": "记忆摘要或标题不符合存储要求。",
       "memoryWrite": "记忆写入或完整性检查失败，可重试。",
       "memoryChanged": "已保存的记忆发生变化，未覆盖。",
@@ -12989,6 +13037,11 @@
     "prevMessageJump": "跳到上一条提问：{{preview}}",
     "sessionLoading": "正在加载任务",
     "askUserQuestion": {
+    "unanswered": "未回答",
+    "withdrawn": "无需再回答",
+    "withdrawnDraft": "这个问题已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作为补充发送。",
+    "sendSupplement": "发送补充",
+
       "voice": {
         "hint": "可以说“第一项”或选项名称；多选后请说“确认选择”。",
         "freeTextHint": "可以直接说出回答，检查后说“确认选择”提交。",
@@ -14100,6 +14153,7 @@
       "taskAutoArchived": "已归档「{{title}}」",
       "taskAutoArchivedUndo": "撤销",
       "taskAutoArchivePending": "离开此任务后将自动归档",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作区有未提交改动，未自动归档",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "本次不会自动归档",
       "taskArchiveNow": "立即归档"
@@ -19692,6 +19746,8 @@
     "lineNumbers": "行号"
   },
   "subscriptionAccounts": {
+    "unassigned": "账号待分配",
+    "providerManagedAuth": "Codex 当前供应商未提供 ChatGPT 账号信息。请在添加供应商时选择「$t(subscriptionAccounts.signIn.anotherAccount)」，使用独立目录",
     "signIn": {
       "checking": "正在检测本机账号…",
       "detected": "检测到已登录账号",
@@ -19703,10 +19759,10 @@
       "useCodex": "使用 Codex 登录"
     },
     "title": "订阅账号",
-    "note": "首个账号沿用 CLI 默认目录，新增账号独立登录。新任务按策略分配，已有任务保留原账号。",
     "strategy": "负载均衡",
     "add": "添加账号",
     "default": "默认目录",
+    "defaultTag": "默认",
     "ready": "已连接",
     "signedOut": "需要登录",
     "unavailable": "暂时读不到状态",
@@ -19740,5 +19796,15 @@
     "browserFallback": "前往 GitHub 为 Cindy 点 Star",
     "openGithub": "打开 GitHub",
     "openFailed": "未能打开 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正在连接 Cindy 后台…",
+    "restoring": "正在恢复任务状态…",
+    "retrying": "任务状态暂未同步，正在重试…",
+    "pairing": "需要重新连接授权",
+    "pairingHelp": "请保留此页。在启动 Cindy 后台的终端重新运行打开网页的命令，完成新页面的配对，再回到此页。",
+    "keepDraft": "已输入的草稿会保留。连接恢复后将自动同步任务状态。",
+    "retry": "重试连接",
+    "desktopAuthHelp": "请在启动终端更新后台连接设置，然后重新打开这个实验客户端。"
   }
 }

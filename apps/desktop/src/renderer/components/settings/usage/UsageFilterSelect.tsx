@@ -1,12 +1,13 @@
 /**
  * UsageFilterSelect — 用量页的胶囊下拉(时间范围、使用方、组内电脑)。外观与设置 → 用量的时间范围、
- * 设备选择器一致(usage-history-charts.md「设备范围」)：36px 胶囊触发器，面板与触发器等宽，长名称截断，
+ * 设备选择器一致(usage-history-charts.md「设备范围」)：共享 Select 的 36px 胶囊触发器，面板与触发器等宽，长名称截断，
  * 选项下方的说明 12px tertiary、在面板内换行。
  */
 
 import React from 'react';
-import { SelectParts as Select } from '@/components/ui/select';
+import { SelectParts as Select, SELECT_WIDTHS } from '@/components/ui/select';
 import { Check, ChevronDown } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 import { cn } from '@/lib/utils';
 
@@ -33,24 +34,28 @@ export function UsageFilterSelect({
   onValueChange: (value: string) => void;
   ariaLabel: string;
   disabled?: boolean;
-  /** 触发器宽度；缺省与设置 → 用量的时间范围选择器同宽(190px)。 */
+  /** 触发器宽度；缺省与设置 → 用量的时间范围选择器同宽(220px 预设)。 */
   className?: string;
 }): React.JSX.Element {
   return (
     <Select.Root value={value} onValueChange={onValueChange} disabled={disabled}>
-      <Select.Trigger
-        aria-label={ariaLabel}
-        className={cn(
-          'flex h-9 w-[190px] max-w-full items-center justify-between gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-default disabled:opacity-50',
-          className,
-        )}
-      >
-        <span className="min-w-0 truncate">
-          <Select.Value />
-        </span>
-        <Select.Icon asChild>
-          <ChevronDown size={15} className="shrink-0 text-[var(--text-tertiary)]" />
-        </Select.Icon>
+      {/* Shared Select trigger (secondary Button, 36px pill) at the 220px width preset;
+          SelectParts keeps the two-line options the shared Select does not render. */}
+      <Select.Trigger data-settings-search-action="Filter the usage view by this dimension" asChild>
+        <Button data-settings-search-action="Filter the usage view by this dimension"
+          pressFeedback={false}
+          variant="secondary"
+          size="lg"
+          aria-label={ariaLabel}
+          className={cn(SELECT_WIDTHS.sm, 'min-w-0 max-w-full justify-between gap-2 px-3 font-normal', className)}
+        >
+          <span className="min-w-0 truncate text-left">
+            <Select.Value />
+          </span>
+          <Select.Icon asChild>
+            <ChevronDown size={14} className="shrink-0" aria-hidden="true" />
+          </Select.Icon>
+        </Button>
       </Select.Trigger>
       <Select.Portal>
         <Select.Content

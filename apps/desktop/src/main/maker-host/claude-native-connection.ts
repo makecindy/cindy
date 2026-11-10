@@ -11,7 +11,7 @@ import {
   unbindNativeProviderAuth,
 } from './nativeProviderAuthBinding.js';
 import { retainProviderPresentationAfterAuthChange } from './provider-presentation-store.js';
-import { readClaudeCliLoginStatus, type ClaudeCliLoginStatus } from './claude-native-cli.js';
+import { readClaudeCliLoginStatus, type ClaudeCliLoginStatus } from './claude-native-cli.desktop.js';
 
 /** 按需重读 CLI 登录态。已连接时返回登录态,否则 null。 */
 export async function readClaudeNativeLogin(options?: { maxAgeMs?: number }): Promise<ClaudeCliLoginStatus | null> {

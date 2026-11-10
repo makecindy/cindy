@@ -36,6 +36,11 @@
     "exit": "Sair do modo de planeamento"
   },
   "panel": {
+    "questionUnanswered": "Sem resposta",
+    "questionWithdrawn": "Já não precisa de resposta",
+    "withdrawnDraft": "Esta pergunta já não precisa de resposta.\n{{reason}}\nO rascunho foi guardado e pode ser enviado como complemento.",
+    "sendSupplement": "Enviar complemento",
+
     "readOnlyKind": "Pendente",
     "readOnlyTitle": "A aguardar confirmação no seu computador",
     "pendingRequests": "Pedidos pendentes",

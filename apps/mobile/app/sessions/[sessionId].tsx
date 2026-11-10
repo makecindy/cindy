@@ -1,3 +1,5 @@
+import { parseSourceSessionTarget } from '@cindy/maker-shared/message-source';
+import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { composerRowChrome } from '@/session/composerGeometry';
 import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
 import { useComposerDragOpen } from '@/session/useComposerDragOpen';
@@ -4949,6 +4951,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     () => historyView.snapshot.ready ? historyView.snapshot.nextCursor : oldestMessageCursor(latestMessagesRef.current),
     [messageStructureToken, historyView.snapshot],
   );
+  // Only an authoritative pending snapshot can distinguish a live question from
+  // an unanswered card left behind by a closed/restarted executor.
+  const pendingQuestionIds = useMemo(() => pendingInteractionsAuthoritative
+    ? new Set(pending.filter((item) => item.request.kind === 'ask_user_question')
+      .map((item) => String(item.request.requestId))) : undefined,
+  [pending, pendingInteractionsAuthoritative]);
   const streamingRenderPrefixRef = useRef<MobileStreamingRenderPrefixCache | null>(null);
   const renderWindow = useMemo(
     () => {
@@ -4965,19 +4973,20 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             renderOrphanTaskUpdates: makerTurnRunning,
             sessionId,
             sessionSource: currentSession?.source,
+            pendingQuestionIds,
           },
           prefixCache: streamingRenderPrefixRef,
           taskUpdates,
         },
         history: {
           view: historyView.view, snapshot: historyView.snapshot, messages: projectedMessages,
-          streaming: isMessageListStreaming, sessionId, sessionSource: currentSession?.source, taskUpdates,
+          streaming: isMessageListStreaming, sessionId, sessionSource: currentSession?.source, taskUpdates, pendingQuestionIds,
           pendingHandoff: handoff.pending, staleTail: handoff.tail, localUserClientIds,
         },
         forkOrigin, errorTailClientId, activeErrorClientId, previousRenderState: previousRenderItemsRef.current,
       });
     },
-    [optimisticUsers, currentSession?.source, localUserClientIds, renderMessageStructureToken, historyView.snapshot, historyView.view, handoff.pending, handoff.tail, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
+    [pendingQuestionIds, optimisticUsers, currentSession?.source, localUserClientIds, renderMessageStructureToken, historyView.snapshot, historyView.view, handoff.pending, handoff.tail, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
   );
   // Search, media and sharing only see durable user rows. Local user boundaries
   // still participate in grouping and in the message list below.
@@ -4986,7 +4995,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   [renderWindow.items, optimisticClientIds]);
   const renderItemsStructureKey = useMemo(
     () => ({}),
-    [optimisticUsers, historyView.snapshot, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
+    [pendingQuestionIds, optimisticUsers, historyView.snapshot, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
   );
   // Reconciliation must only use committed rows. Unlike the prefix cache above, a speculative
   // render-item baseline could leak rows from an abandoned render and destabilize tail memoization.
@@ -10059,12 +10068,20 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     router,
   ]);
 
-  // 「由任务「X」发送」来源标签:工具只在同一设备的任务之间投递,来源任务与当前任务同设备。
+  // 跨电脑来源按宿主记录的设备打开；无前缀的历史来源仍属于当前任务所在设备。
   const openOriginSession = useCallback((originSessionId: string) => {
-    if (!deviceId || !originSessionId || originSessionId === sessionId) return;
+    const target = parseSourceSessionTarget(originSessionId);
+    const targetDeviceId = target?.deviceId ?? deviceId;
+    if (!target || !targetDeviceId) return;
+    if (target.sessionId === sessionId && targetDeviceId === deviceId) return;
+    const targetDevice = remoteSessionStore.getDeviceIdentity().find((item) => item.deviceId === targetDeviceId);
     router.push({
       pathname: '/sessions/[sessionId]',
-      params: { sessionId: originSessionId, deviceId, deviceName },
+      params: {
+        sessionId: target.sessionId,
+        deviceId: targetDeviceId,
+        deviceName: targetDevice?.name ?? (targetDeviceId === deviceId ? deviceName : targetDeviceId),
+      },
     });
   }, [deviceId, deviceName, router, sessionId]);
 
@@ -11632,6 +11649,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   </RouteActionButton>
                 </View>
               ) : null}
+              <TaskArchiveUndoSlot active={liveScreensFocused} />
               <SessionResourceCards state={sessionResourceCards} />
               {!sessionResourceCards.blocked ? (
                           <SessionComposerInput

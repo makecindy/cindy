@@ -1874,7 +1874,7 @@ describe('Session provider-initiated turns (harness wake-ups)', () => {
     await session.close();
   });
 
-  it('settles a provider-initiated turn that ends in an error as a failure, not as the earlier success', async () => {
+  it.each(['text', 'status'] as const)('settles a provider-initiated %s turn failure instead of the earlier success', async (start) => {
     const h = createControllableHandle({ agentKind: 'claude-code' });
     const session = makeSession(h.handle, 'claude-code');
     const terminals: string[] = [];
@@ -1894,7 +1894,10 @@ describe('Session provider-initiated turns (harness wake-ups)', () => {
     expect(terminals).toEqual(['done']);
 
     h.setTurnRunning(true);
-    await h.emit({ type: 'text', data: { text: 'woke up' } }, { keepRunning: true });
+    await h.emit(start === 'text'
+      ? { type: 'text', data: { text: 'woke up' } }
+      : { type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } },
+      { keepRunning: true });
     await h.emit({ type: 'error', data: { message: 'wake failed' } });
     await h.emit({ type: 'done', data: {} });
     expect(terminals.slice(1, 2)).toEqual(['error']);
@@ -1919,6 +1922,8 @@ describe('Session provider-initiated turns (harness wake-ups)', () => {
     // Background subagent output while the parent is idle is not a wake-up.
     await h.emit({ type: 'text', data: { text: 'subagent' }, agentMeta: { parentUuid: 'toolu_1' } });
     await h.emit({ type: 'status', data: { status: 'idle', isRunning: false } });
+    await h.emit({ type: 'status', source: 'claude-code', data: { isRunning: true } });
+    await h.emit({ type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true }, turnScope: 'background' });
     await h.emit({ type: 'text', data: { text: 'late child' }, turnScope: 'background' });
     expect(wakes).toEqual([]);
 

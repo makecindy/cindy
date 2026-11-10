@@ -19,9 +19,9 @@ import { storageManagementCardSettings } from './StorageManagementCard.settings-
 
 import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
-import { SelectParts as Select } from '@/components/ui/select';
+import { Select } from '@/components/ui/select';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -37,6 +37,7 @@ import { Switch } from '@/components/ui/switch';
 import { SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { SettingsTextInput } from './SettingsTextInput';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
 import { ProjectsRootSection } from './ProjectsRootSection';
 import {
@@ -373,7 +374,7 @@ export function StorageManagementCard() {
                 <CardButton onClick={handleOpenLegacyImagesDir}>
                   {t('settings.about.storage.legacyImagesOpenButton')}
                 </CardButton>
-                <CardButton onClick={handleClearLegacyImagesDir}>
+                <CardButton danger onClick={handleClearLegacyImagesDir}>
                   {t('settings.about.storage.legacyImagesClearButton')}
                 </CardButton>
               </div>
@@ -387,7 +388,7 @@ export function StorageManagementCard() {
                 <CardButton onClick={handleOpenChatAttachmentsDir}>
                   {t('settings.about.storage.chatAttachmentsOpenButton')}
                 </CardButton>
-                <CardButton onClick={handleClearChatAttachmentsDir}>
+                <CardButton danger onClick={handleClearChatAttachmentsDir}>
                   {t('settings.about.storage.chatAttachmentsClearButton')}
                 </CardButton>
               </div>
@@ -402,7 +403,7 @@ export function StorageManagementCard() {
             }
             hint={t(storageManagementCardSettings.aboutStorageRemoteMediaLabel.descriptionKey)}
             trailing={
-              <CardButton onClick={handleClearRemoteMedia}>
+              <CardButton danger onClick={handleClearRemoteMedia}>
                 {t('settings.about.storage.remoteMediaClearButton')}
               </CardButton>
             }
@@ -871,71 +872,23 @@ function DatabaseSlimmingSection({
           {t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
         </label>
         <div className="flex items-center">
-          <Select.Root
+          <Select data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
+            id="db-slimming-archive-age"
+            size="compact"
+            width="sm"
             value={String(archiveAge)}
             onValueChange={handleArchiveAgeChange}
             disabled={scanLoading}
-          >
-            <Select.Trigger data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
-              id="db-slimming-archive-age"
-              aria-label={t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
-              className={cn(
-                'flex h-8 min-w-[104px] items-center justify-between gap-2 rounded-full border px-3 text-12 outline-none transition-colors',
-                'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-              )}
-            >
-              <Select.Value />
-              <Select.Icon asChild>
-                <ChevronDown
-                  size={13}
-                  className="shrink-0 text-[var(--settings-eye-icon)]"
-                  aria-hidden="true"
-                />
-              </Select.Icon>
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Content
-                position="popper"
-                side="bottom"
-                align="end"
-                sideOffset={6}
-                className={cn(
-                  'z-[10010] w-[var(--radix-select-trigger-width)] rounded-xl p-1.5',
-                  'border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)]',
-                )}
-              >
-                <Select.Viewport className="flex flex-col gap-0.5">
-                  {DB_SLIMMING_ARCHIVE_AGE_OPTIONS.map((age) => (
-                    <Select.Item
-                      key={age}
-                      value={String(age)}
-                      className={cn(
-                        'flex h-8 cursor-pointer select-none items-center justify-between gap-2 rounded-lg px-2.5 text-12 outline-none transition-colors',
-                        'text-[var(--settings-input-text)]',
-                        'data-[state=checked]:font-medium data-[state=checked]:text-[var(--settings-menu-text-selected)]',
-                      )}
-                    >
-                      <Select.ItemText>
-                        {t(
-                          age === '7-days'
-                            ? 'settings.about.storage.dbSlimmingArchiveAgeOption7Days'
-                            : `settings.about.storage.dbSlimmingArchiveAgeOption${age}`,
-                        )}
-                      </Select.ItemText>
-                      <Select.ItemIndicator>
-                        <Check
-                          size={14}
-                          className="shrink-0 text-[var(--settings-theme-icon-active)]"
-                        />
-                      </Select.ItemIndicator>
-                    </Select.Item>
-                  ))}
-                </Select.Viewport>
-              </Select.Content>
-            </Select.Portal>
-          </Select.Root>
+            label={t('settings.about.storage.dbSlimmingArchiveAgeLabel')}
+            options={DB_SLIMMING_ARCHIVE_AGE_OPTIONS.map((age) => ({
+              value: String(age),
+              label: t(
+                age === '7-days'
+                  ? 'settings.about.storage.dbSlimmingArchiveAgeOption7Days'
+                  : `settings.about.storage.dbSlimmingArchiveAgeOption${age}`,
+              ),
+            }))}
+          />
         </div>
 
         <label
@@ -1047,25 +1000,32 @@ function DatabaseSlimmingSection({
         >
           {({ error, ...control }) => (
             <div className="flex items-center gap-1.5">
-              <input data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.id}
+              {/* Group reset sits left of the first control, only when customized (CONTROLS decision 3). */}
+              <DefaultOverrideControls
+                isCustomized={warningCustomized}
+                disabled={warningSaving}
+                onReset={() => void persistWarningSettings()}
+              />
+              <SettingsTextInput data-setting-id={storageManagementCardSettings.aboutStorageDbSizeWarningThresholdLabel.id}
                 {...control}
                 type="number"
+                size="sm"
+                surface="ivory"
                 min={1}
                 max={1024}
                 step={1}
                 value={warningThresholdDraft}
                 disabled={warningSaving}
-                onChange={(event) => {
+                error={error}
+                onChange={(next) => {
                   warningThresholdDirtyRef.current = true;
                   warningThresholdEditVersionRef.current += 1;
-                  setWarningThresholdDraft(event.target.value);
+                  setWarningThresholdDraft(next);
                   setWarningThresholdInvalid(false);
                 }}
                 onBlur={() => void saveWarningThreshold()}
-                className={cn(
-                  'h-8 w-16 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-2.5 text-center text-12 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50',
-                  error && 'border-[var(--error-border)] focus-visible:ring-[var(--error-fg)]',
-                )}
+                className="w-16"
+                inputClassName="text-center"
               />
               <span className="text-12 text-[var(--settings-section-sublabel)]">G</span>
             </div>
@@ -1090,15 +1050,6 @@ function DatabaseSlimmingSection({
           onCheckedChange={(checked) => void persistWarningSettings({ disabled: checked })}
           aria-label={t(storageManagementCardSettings.aboutStorageDbSizeWarningDisableLabel.titleKey)}
         />
-        <div className="col-span-2 flex justify-end">
-          <DefaultOverrideControls
-            isCustomized={warningCustomized}
-            alwaysVisible
-            showCustomizedBadge={false}
-            disabled={warningSaving}
-            onReset={() => void persistWarningSettings()}
-          />
-        </div>
       </div>
     </SettingsField>
   );
@@ -1269,18 +1220,22 @@ function CardButton({
   children,
   onClick,
   emphasis = false,
+  danger = false,
   disabled = false,
   busy = false,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   emphasis?: boolean;
+  /** Irreversible clears use the danger tone (CONTROLS decision 4). */
+  danger?: boolean;
   disabled?: boolean;
   busy?: boolean;
 }) {
   return (
     <Button data-settings-search-action="Run the labeled storage cleanup or folder action"
       variant={emphasis ? 'cta' : 'secondary'}
+      tone={danger ? 'danger' : 'default'}
       size="sm"
       compact
       type="button"

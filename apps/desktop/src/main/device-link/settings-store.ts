@@ -1,4 +1,4 @@
-import { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolicy.js';
+import type { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolicy.js';
 /**
  * device-link-settings-store —— 跨设备远程控制的 main 端持久化设置。
  *
@@ -9,6 +9,9 @@ import { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolic
  *    开关打开即授权,同账号设备无需逐次批准;详见 device-link 设计稿)
  *  - revokedControllers: 逐设备访问黑名单(被撤销访问权限的控制端 deviceId 列表)。
  *    全局开着时,名单内的设备单独被挡;持久化,被控端重启 / 离线后仍生效(恢复才解除)。
+ *  - modelUseRevokedControllers: 被单独关掉「用本机模型」的同账号控制端 deviceId 列表。
+ *    「用本机模型」跟着「控制本机」：控制本机开着时默认可用，名单内的设备借不到本机的模型
+ *    (远程 Agent)，其余远程控制不受影响。
  *  - disabledControlDeviceIds: 本机不再主动控制的目标设备 deviceId 列表。它只影响本机
  *    控制其它设备的镜像 / 入口,不改变对方的被控授权。
  *  - lastKnownDeviceNames: 本机最后一次看见的有效设备名缓存。relay 离线后 Redis presence
@@ -22,13 +25,12 @@ import { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolic
  * 撤销控制端)能被持有 relay 连接的实例看到;持有者对变化的响应轮询在 index.ts。
  */
 
-import { app } from 'electron';
+import type { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { createLogger } from '../logger';
 
-const log = createLogger('device-link-settings');
 
 export interface DeviceLinkSettings {
   /** Full desktop viewing/input is a separate, local opt-in. */
@@ -42,23 +44,35 @@ export interface DeviceLinkSettings {
   keepAwake: boolean;
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单)。 */
   revokedControllers: string[];
+  /** 单独关掉「用本机模型」的同账号控制端 deviceId 列表(远程 Agent 拒绝它们)。 */
+  modelUseRevokedControllers: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   /** deviceId → last known non-placeholder display name, local-only cache. */
   lastKnownDeviceNames: Record<string, string>;
 }
+export interface DeviceLinkSettingsStorePorts {
+getUserDataDir: () => string;
+withAvailabilityPolicyMutation: typeof withAvailabilityPolicyMutation;
+}
+export function createDeviceLinkSettingsStore(ports: DeviceLinkSettingsStorePorts) {
+const { getUserDataDir, withAvailabilityPolicyMutation } = ports;
+
+
+const log = createLogger('device-link-settings');
 
 const DEFAULTS: DeviceLinkSettings = {
   remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
+  modelUseRevokedControllers: [],
   disabledControlDeviceIds: [],
   lastKnownDeviceNames: {},
 };
 
 function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'device-link-settings.json');
+  return path.join(getUserDataDir(), 'device-link-settings.json');
 }
 
 function normalize(raw: unknown): DeviceLinkSettings {
@@ -71,6 +85,7 @@ function normalize(raw: unknown): DeviceLinkSettings {
     revokedControllers: Array.isArray(r.revokedControllers)
       ? r.revokedControllers.filter((x): x is string => typeof x === 'string')
       : [],
+    modelUseRevokedControllers: normalizeStringList(r.modelUseRevokedControllers),
     disabledControlDeviceIds: normalizeStringList(r.disabledControlDeviceIds),
     lastKnownDeviceNames: normalizeDeviceNameMap(r.lastKnownDeviceNames),
   };
@@ -114,7 +129,7 @@ function statMtimeMs(file: string): number | null {
   }
 }
 
-export function readDeviceLinkSettings(): DeviceLinkSettings {
+function readDeviceLinkSettings(): DeviceLinkSettings {
   const file = settingsFilePath();
   const mtimeMs = statMtimeMs(file);
   if (cached && mtimeMs === cachedMtimeMs) return cached;
@@ -207,7 +222,7 @@ async function acquireWriteLock(file: string): Promise<(() => void) | null> {
 /** 进程内写序列化:异步 acquire 之间可能交错,同进程写者先排队再抢跨进程锁 */
 let writeChain: Promise<unknown> = Promise.resolve();
 const settingsChangeListeners = new Set<(key: keyof DeviceLinkSettings) => void>();
-export function onDeviceLinkSettingChanged(listener: (key: keyof DeviceLinkSettings) => void): () => void {
+function onDeviceLinkSettingChanged(listener: (key: keyof DeviceLinkSettings) => void): () => void {
   settingsChangeListeners.add(listener);
   return () => { settingsChangeListeners.delete(listener); };
 }
@@ -242,11 +257,11 @@ function writeMergedOnce<K extends keyof DeviceLinkSettings>(
 
 /**
  * 以 updater 形式更新某个 key:updater 在写锁内基于盘上最新值执行。
- * 数组 / map 类 key(revokedControllers / disabledControlDeviceIds /
+ * 数组 / map 类 key(revokedControllers / modelUseRevokedControllers / disabledControlDeviceIds /
  * lastKnownDeviceNames)的增删改**必须**走本函数,不要在锁外算好整值再
  * writeDeviceLinkSetting(见 writeMergedOnce 注释)。返回最终写入的值。
  */
-export function updateDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
+function updateDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
   key: K,
   updater: (current: DeviceLinkSettings[K]) => DeviceLinkSettings[K],
 ): Promise<DeviceLinkSettings[K]> {
@@ -282,14 +297,14 @@ export function updateDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
 }
 
 /** 整值覆盖写(布尔开关等标量 key 用;数组 / map 增删改请用 updateDeviceLinkSetting) */
-export function writeDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
+function writeDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
   key: K,
   value: DeviceLinkSettings[K],
 ): Promise<void> {
   return updateDeviceLinkSetting(key, () => value).then(() => undefined);
 }
 
-export function readLastKnownDeviceNames(): Record<string, string> {
+function readLastKnownDeviceNames(): Record<string, string> {
   const names = { ...readDeviceLinkSettings().lastKnownDeviceNames };
   for (const [deviceId, pending] of pendingLastKnownDeviceNameByDevice) {
     if (pending.name === null) delete names[deviceId];
@@ -298,7 +313,7 @@ export function readLastKnownDeviceNames(): Record<string, string> {
   return names;
 }
 
-export function writeLastKnownDeviceNames(names: Record<string, string>): Promise<void> {
+function writeLastKnownDeviceNames(names: Record<string, string>): Promise<void> {
   return writeDeviceLinkSetting('lastKnownDeviceNames', { ...names });
 }
 
@@ -335,7 +350,7 @@ function enqueueLastKnownDeviceNameMutation<T>(
   return task;
 }
 
-export async function setDeviceControlEnabled(
+async function setDeviceControlEnabled(
   deviceId: string,
   enabled: boolean,
 ): Promise<string[]> {
@@ -355,7 +370,7 @@ export async function setDeviceControlEnabled(
   });
 }
 
-export async function rememberLastKnownDeviceName(deviceId: string, name: string): Promise<boolean> {
+async function rememberLastKnownDeviceName(deviceId: string, name: string): Promise<boolean> {
   const normalizedName = normalizeCachedDeviceName(name);
   if (!deviceId.trim() || !normalizedName) return false;
   return enqueueLastKnownDeviceNameMutation(deviceId, normalizedName, async () => {
@@ -377,7 +392,7 @@ export async function rememberLastKnownDeviceName(deviceId: string, name: string
   });
 }
 
-export async function forgetLastKnownDeviceName(deviceId: string): Promise<boolean> {
+async function forgetLastKnownDeviceName(deviceId: string): Promise<boolean> {
   const normalizedDeviceId = deviceId.trim();
   if (!normalizedDeviceId) return false;
   return enqueueLastKnownDeviceNameMutation(normalizedDeviceId, null, async () => {
@@ -401,15 +416,17 @@ export async function forgetLastKnownDeviceName(deviceId: string): Promise<boole
   });
 }
 
-export function normalizeCachedDeviceName(name: string): string | null {
+function normalizeCachedDeviceName(name: string): string | null {
   const trimmed = name.trim();
   if (!trimmed || isPlaceholderDeviceName(trimmed)) return null;
   return trimmed;
 }
 
-export function isPlaceholderDeviceName(name: string): boolean {
+function isPlaceholderDeviceName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   return normalized === 'unknown' || normalized === 'no';
 }
 
-export const __testing = { normalize };
+const __testing = { normalize };
+return { readDeviceLinkSettings, onDeviceLinkSettingChanged, updateDeviceLinkSetting, writeDeviceLinkSetting, readLastKnownDeviceNames, writeLastKnownDeviceNames, setDeviceControlEnabled, rememberLastKnownDeviceName, forgetLastKnownDeviceName, normalizeCachedDeviceName, isPlaceholderDeviceName, __testing };
+}

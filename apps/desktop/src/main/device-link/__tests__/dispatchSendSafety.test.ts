@@ -41,11 +41,11 @@ const deviceLinkSettings = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
-import { __testing, runInvoke, wireInboundDispatch, setRemoteTurnChangeAction } from '../dispatch';
+import { __testing, runInvoke, wireInboundDispatch, setRemoteTurnChangeAction } from '../dispatch.desktop';
 import { __testing as registry } from '../invoke-registry';
 import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 import { currentDbRpcAdmissionClass } from '../../localDb/client/rpcAdmission';

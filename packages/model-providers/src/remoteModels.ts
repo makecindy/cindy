@@ -1,8 +1,23 @@
 import type { ProviderView } from './registry.js';
 import { PROVIDER_MEDIA_FIELDS } from './providerMediaModels.js';
 
+/** Selection views consume the source host's budget; settings retain the catalog default. */
+export function withEffectiveModelContextWindows(provider: ProviderView): ProviderView {
+  let changed = false;
+  const models = Object.fromEntries(Object.entries(provider.models ?? {}).map(([agent, rows]) => [
+    agent, rows?.map((model) => {
+      const limit = model.contextWindowOverride;
+      if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0 || limit === model.contextWindow) return model;
+      changed = true;
+      return { ...model, contextWindow: limit };
+    }),
+  ]));
+  return changed ? { ...provider, models } : provider;
+}
+
 /** Remote Agent selection only. A remote-control view of the computer itself retains its full catalog. */
 export function remoteInvocationModels(provider: ProviderView): ProviderView {
+  provider = withEffectiveModelContextWindows(provider);
   if (provider.remoteModelIds === undefined) return provider;
   const ids = provider.remoteModelIds;
   const allowed = new Set(Array.isArray(ids) && ids.every((id) => typeof id === 'string') ? ids : []);

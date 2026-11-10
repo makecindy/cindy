@@ -29,7 +29,15 @@ import {
   type MobileModelConfiguration,
   type MobileModelFavorite,
 } from "./unifiedMobileModels";
-import { useDraftModelMemoryVersion } from "./draftModelMemory";
+import {
+  useDraftModelMemoryVersion,
+  type MobileModelMemoryAccessors,
+} from "./draftModelMemory";
+import {
+  hydrateRemoteAgentModelMemory,
+  remoteAgentModelMemoryFor,
+  useRemoteAgentModelMemoryVersion,
+} from "./remoteAgentModelMemory";
 import { useSessionModelMirrorVersion } from "./sessionModelMirror";
 import { UnifiedModelPickerView } from "./UnifiedModelPickerView";
 import { budgetRowDisabled, presentPickerPrice } from "./modelPickerRows";
@@ -46,6 +54,49 @@ import {
 import { remoteFilterId } from "./remoteSourceFilters";
 
 const NO_REMOTE_CATALOGS: readonly RemoteAgentCatalog[] = [];
+
+function remoteParameterOverride(
+  memory: MobileModelMemoryAccessors | undefined,
+  entry: UnifiedModelEntry,
+  agents: readonly AgentKind[],
+): boolean {
+  if (!memory) return false;
+  return agents.some((agent) => {
+    const capability = entry.capabilities[agent];
+    if (!capability) return false;
+    const effort = memory.getEffort(agent, entry.providerId, capability.wireModelId);
+    const fast = memory.getFast(agent, entry.providerId, capability.wireModelId);
+    return (
+      (effort !== undefined &&
+        (!!memory.clearEffort ||
+          effort !== (capability.defaultEffort ?? capability.efforts[0] ?? ""))) ||
+      (fast !== undefined && (!!memory.clearFast || fast))
+    );
+  });
+}
+
+function rememberRemoteParameters(
+  memory: MobileModelMemoryAccessors | undefined,
+  entry: UnifiedModelEntry,
+  config: MobileModelConfiguration,
+  agents: readonly AgentKind[],
+  reset: boolean,
+): void {
+  if (!memory) return;
+  if (reset) {
+    for (const agent of agents) {
+      const capability = entry.capabilities[agent];
+      if (!capability) continue;
+      memory.clearEffort?.(agent, entry.providerId, capability.wireModelId);
+      memory.clearFast?.(agent, entry.providerId, capability.wireModelId);
+    }
+    return;
+  }
+  if (config.effort) {
+    memory.setEffort(config.agent, entry.providerId, config.modelId, config.effort);
+  }
+  memory.setFast(config.agent, entry.providerId, config.modelId, config.fast);
+}
 const NO_PROVIDER_GROUPS: MobileProviderGroups = {
   hidden: new Set(),
   sizes: new Map(),
@@ -208,8 +259,10 @@ export function UnifiedModelPickerSheet(
     p.providers,
   );
   const prefs = useMobileModelPreferences(p.unified.scope, p.visible, p.unified.preferenceScope === 'request');
+  const rememberRemote = p.unified.preferenceScope !== 'request';
   useDraftModelMemoryVersion();
   useSessionModelMirrorVersion();
+  useRemoteAgentModelMemoryVersion();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
   const [target, setTarget] = useState<{
@@ -220,8 +273,8 @@ export function UnifiedModelPickerSheet(
     /** 另一台电脑目录里的行;缺省 = 被控电脑的。 */
     deviceId?: string;
   } | null>(null);
-  // 另一台电脑目录里的行:手机这边的偏好与档位记忆都按被控电脑的供应商记,不写给它们;
-  // 详情页里调的档位 / 引擎只在这次打开期间跟着那一行。
+  // 另一台电脑的 effort / Fast 按那台电脑单独记在手机上。引擎调整没有独立记忆,
+  // 仍然只在这次打开期间跟着该行。
   const [remoteConfigs, setRemoteConfigs] = useState<
     ReadonlyMap<string, MobileModelConfiguration>
   >(new Map());
@@ -243,6 +296,7 @@ export function UnifiedModelPickerSheet(
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!p.visible) return;
+    if (rememberRemote) void hydrateRemoteAgentModelMemory();
     opening.current += 1;
     setQuery("");
     setFilter("all");
@@ -269,7 +323,7 @@ export function UnifiedModelPickerSheet(
       cancelled = true;
       opening.current += 1;
     };
-  }, [p.visible, p.unified.scope]);
+  }, [p.visible, p.unified.scope, rememberRemote]);
   const remoteCatalogs = p.unified.remote?.catalogs ?? NO_REMOTE_CATALOGS;
   /** 选中态属于哪台其他电脑的目录;null = 被控电脑自己的(含没有远程 Agent 的情况)。 */
   const selectedDeviceId = p.unified.remote?.selectedDeviceId ?? null;
@@ -585,7 +639,7 @@ export function UnifiedModelPickerSheet(
     const provider = catalog.providers.find(
       (item) => item.id === entry.providerId,
     );
-    // 不用手机这边按被控电脑供应商记的引擎偏好与档位记忆:同 id 的供应商在两台电脑上不是同一个。
+    // 不用被控电脑自己的引擎偏好和档位记忆:同 id 的供应商在两台电脑上不是同一个。
     // 收藏行按收藏副本解析(位置已从 providerId 里拆出来,这里是那台电脑上的供应商 id)。
     const config =
       (!selected && !favorite ? remoteConfigs.get(key) : undefined) ??
@@ -595,6 +649,7 @@ export function UnifiedModelPickerSheet(
           ? { ...selection, providerId: directory.sourceId ?? "" }
           : undefined,
         pinned: p.existingSessionRoute ? p.agentKind : undefined,
+        memory: rememberRemote ? remoteAgentModelMemoryFor(catalog.deviceId) : undefined,
         // Remote catalog capabilities are independent of the host installation.
         fastCapable: () => true,
       });
@@ -802,23 +857,41 @@ export function UnifiedModelPickerSheet(
     }
   };
   const favoriteSource = row ? favoriteSourceOf(row) : null;
-  // A source model can have several saved configurations. Match the complete
-  // configuration without applying capability fallbacks to the saved values.
+  // A source model can have several saved configurations. Missing effort is the
+  // catalog default (seeded favorites store none). A non-empty effort the catalog
+  // no longer offers stays unmatched, so a retired tier is not this default row.
   const favoriteEntries = row?.remoteDevice
     ? remoteDirectories.find(directory => directory.catalog.deviceId === row.remoteDevice!.deviceId)?.entries ?? []
     : entries;
-  const matchingFavorite =
-    row &&
-    favoriteSource !== null &&
-    prefs.value.favorites.find(
-      (item) =>
-        item.providerId === favoriteSource &&
-        resolveStoredModelEntry(favoriteEntries, row.entry.providerId, item.modelId) === row.entry &&
-        sameConfiguration(
-          { ...item, providerId: row.config.providerId, modelId: row.config.modelId },
-          row.config,
-        ),
+  const storedFavoriteMatches = (item: MobileModelFavorite): boolean => {
+    if (!row || favoriteSource === null || item.providerId !== favoriteSource) return false;
+    if (resolveStoredModelEntry(favoriteEntries, row.entry.providerId, item.modelId) !== row.entry) return false;
+    const capability = row.entry.capabilities[item.agent];
+    const effort = item.effort
+      ? item.effort
+      : capability?.defaultEffort ?? capability?.efforts[0] ?? "";
+    return sameConfiguration(
+      { ...item, providerId: row.config.providerId, modelId: row.config.modelId, effort },
+      row.config,
     );
+  };
+  const matchingFavorite =
+    row && favoriteSource !== null
+      ? prefs.value.favorites.find(storedFavoriteMatches)
+      : undefined;
+  // An opened copy keeps its identity when catalog defaults or capability
+  // fallbacks change its displayed configuration (notably seeded favorites).
+  // Once the user adjusts parameters, the ordinary match rule applies.
+  // Hints use this identity. Explicit edits must ignore the copy being edited:
+  // a seeded favorite matches its own default and would hide another copy.
+  const favoriteToRemove =
+    row && originFavorite && sameConfiguration(
+      resolveMobileModelConfig(row.entry, {
+        favorite: originFavorite,
+        fastCapable: row.remoteDevice ? () => true : fastCapable,
+      }),
+      row.config,
+    ) ? originFavorite : matchingFavorite;
   const recommendedConfig =
     row &&
     resolveMobileModelConfig(row.entry, {
@@ -856,9 +929,14 @@ export function UnifiedModelPickerSheet(
           (fast !== undefined && (!!p.modelMemory?.clearFast || fast))
         );
       }));
-  // 另一台电脑目录里的行:只有这次打开期间调过档位 / 引擎才能恢复推荐。
+  // 另一台电脑:推荐值以外的档位 / Fast,或这次打开里改过的引擎,都可以恢复推荐。
   const canReset = row?.remoteDevice
-    ? !row.selected && remoteConfigs.has(row.key)
+    ? !sameConfiguration(row.config, recommendedConfig!) ||
+      remoteParameterOverride(
+        rememberRemote ? remoteAgentModelMemoryFor(row.remoteDevice.deviceId) : undefined,
+        row.entry,
+        resetAgents,
+      )
     : localCanReset;
   useEffect(() => {
     if (target && !row) {
@@ -923,9 +1001,10 @@ export function UnifiedModelPickerSheet(
     }
     const remoteDevice = row.remoteDevice;
     if (remoteDevice) {
-      // 另一台电脑目录里的行:正在用的那行直接生效;其余只在这次打开期间跟着该行,
-      // 不写手机的引擎偏好与档位记忆(那些按被控电脑的供应商记)。
+      // 正在用的那行直接生效。effort / Fast 记在这台远程电脑自己的记忆里,
+      // 不写被控电脑的引擎偏好或本机模型记忆。引擎调整仍只留在这次打开期间。
       const key = row.key;
+      const canonicalKey = `remote:${remoteDevice.deviceId}:${modelKey(row.entry.providerId, row.entry.modelId)}`;
       void transact(async (isCurrent) => {
         if (
           row.selected &&
@@ -935,17 +1014,28 @@ export function UnifiedModelPickerSheet(
         )
           return;
         if (!isCurrent()) return;
+        if (rememberRemote) {
+          rememberRemoteParameters(
+            remoteAgentModelMemoryFor(remoteDevice.deviceId),
+            row.entry,
+            config,
+            resetAgents,
+            reset,
+          );
+        }
         // 从收藏打开的详情显示的是那份副本(target.config),与本机收藏一样跟着调整走;原收藏不变。
         if (target?.config) {
           setTarget({ ...target, config });
-          if (matchingFavorite && !reset)
+          if (favoriteToRemove && !reset)
             setNotice(t("models.unified.originalFavoriteKept"));
         }
-        if (row.selected) return;
+        if (row.selected && !reset) return;
         setRemoteConfigs((current) => {
           const next = new Map(current);
-          if (reset) next.delete(key);
-          else next.set(key, config);
+          if (reset) {
+            next.delete(key);
+            next.delete(canonicalKey);
+          } else next.set(key, config);
           return next;
         });
       });
@@ -1018,7 +1108,7 @@ export function UnifiedModelPickerSheet(
           t(
             reset
               ? "models.unified.restoredHint"
-              : matchingFavorite
+              : favoriteToRemove
                 ? "models.unified.originalFavoriteKept"
                 : "models.unified.parametersSaved",
           ),
@@ -1200,7 +1290,7 @@ export function UnifiedModelPickerSheet(
                 .join(" · "),
               price: price ? `${price.title}\n${price.amountsLine}` : null,
               favoritesDisabled: !prefs.favoritesReady || favoriteSource === null,
-              isFavorite: !!matchingFavorite,
+              isFavorite: !!favoriteToRemove,
               canReset,
               configurationSummary: [
                 mobileAgentLabel(row.config.agent),
@@ -1250,8 +1340,10 @@ export function UnifiedModelPickerSheet(
                     return;
                   }
                   if (
-                    matchingFavorite &&
-                    matchingFavorite.uid !== original.uid
+                    prefs.value.favorites.some(
+                      (item) =>
+                        item.uid !== original.uid && storedFavoriteMatches(item),
+                    )
                   ) {
                     setError(t("models.unified.favoriteExists"));
                     return;
@@ -1280,11 +1372,11 @@ export function UnifiedModelPickerSheet(
                 if (!prefs.favoritesReady || favoriteEdit || favoriteSource === null)
                   return;
                 void transact(async (isCurrent) => {
-                  if (matchingFavorite) {
+                  if (favoriteToRemove) {
                     await prefs.save({
                       ...prefs.value,
                       favorites: prefs.value.favorites.filter(
-                        (item) => item.uid !== matchingFavorite.uid,
+                        (item) => item.uid !== favoriteToRemove.uid,
                       ),
                     });
                     if (isCurrent())
