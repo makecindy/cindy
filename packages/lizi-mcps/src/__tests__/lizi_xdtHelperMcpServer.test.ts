@@ -1479,7 +1479,12 @@ describe("direct Bot MCP tools", () => {
       expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ projectDir: undefined, workingDir: '/tmp/checkout' }));
       const dialogue = await client.callTool({ name: 'start_session_task', arguments: { instruction: 'Discuss', project_path: null } });
       expect(parsePayload(dialogue)).toMatchObject({ ok: true, project_path: null });
+      expect(parsePayload(dialogue)).not.toHaveProperty('project_note');
       expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ projectDir: null }));
+      // The host placed an omitted membership by execution directory: the receipt says so.
+      start.mockResolvedValueOnce({ ok: true as const, taskId: 'task-2', projectDir: '/project', projectFromWorkingDir: true } as never);
+      const placed = await client.callTool({ name: 'start_session_task', arguments: { instruction: 'Work', working_dir: '/project/app' } });
+      expect(parsePayload(placed)).toMatchObject({ ok: true, project_path: '/project', project_note: expect.stringContaining('contains working_dir') });
       const discovered = parsePayload(await client.callTool({ name: "list_tools", arguments: { category: "bots" } })).tools as Array<{ name: string; description: string }>;
       expect(task?.description).toBe(discovered.find(tool => tool.name === "start_session_task")?.description);
       expect(first.tools.map(t => t.name)).toEqual(expect.arrayContaining([
@@ -1501,7 +1506,7 @@ describe("direct Bot MCP tools", () => {
         expect(parsePayload(await client.callTool({ name: "start_session_task", arguments: { project_path: '/project', instruction: "denied" } })))
           .toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       }
-      expect(start).toHaveBeenCalledTimes(3);
+      expect(start).toHaveBeenCalledTimes(4);
     } finally {
       await client.close();
       await server.close();

@@ -1,5 +1,5 @@
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
-import { setMainLocale } from '../../i18n.js';
+import { setMainLocale } from '../../i18n.desktop.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { captureAgentRequest, delegationReviewTarget, ownerChannelInputEvidence } from '../forwardedRequest.js';
 import { beginChannelToolScope, readChannelToolScope } from '../../im/shared/channelToolScope.js';

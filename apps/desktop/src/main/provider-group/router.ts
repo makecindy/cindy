@@ -22,7 +22,7 @@ import type {
   ProviderGroupView,
   ProviderGroupUsageLimit,
 } from '../../shared/providerGroup.js';
-import type { ProviderGroupBinding } from './bindings.js';
+import type { ProviderGroupBinding } from './bindings.desktop.js';
 import type { ProviderGroupDirectory, ResolvedProviderGroupMember } from './directory.js';
 import { pickProviderGroupMember, type SchedulableMember } from './scheduler.js';
 import { createGuestSupportReader } from './sharedStatus.js';

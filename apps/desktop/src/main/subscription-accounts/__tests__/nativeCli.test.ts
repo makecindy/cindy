@@ -22,7 +22,7 @@ vi.mock('@cindy/maker-core', () => ({
   }),
 }));
 vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => h.binary }));
-vi.mock('../../maker-host/claude-native-cli.js', () => ({
+vi.mock('../../maker-host/claude-native-cli.desktop.js', () => ({
   refreshClaudeCliLoginStatus: vi.fn(),
   readClaudeCliPlanUsage: vi.fn(),
   runClaudeCliLogin: vi.fn(),

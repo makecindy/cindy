@@ -1,5 +1,5 @@
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
-import type { ControlSteerOutcome } from './agent-input-coordinator.js';
+import type { ControlSteerOutcome } from './agent-input-coordinator.desktop.js';
 
 export type SessionQueueControlFailureCode =
   'QUEUED_MESSAGE_NOT_FOUND' | 'MESSAGE_CONSUMING' | 'NOT_AUTHORIZED' | 'INVALID_ARGS';

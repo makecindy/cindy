@@ -56,18 +56,21 @@ const codex = (primary: number, secondary: number): SubscriptionAccountUsage => 
 });
 
 /** Mirrors ProvidersSection: the provider card sits in the default row, the usage page in the header. */
-function Section({ codexPool }: { codexPool: boolean }) {
+function Section({ codexPool, signedOut }: { codexPool: boolean; signedOut: boolean }) {
   const { t } = useTranslation();
   if (codexPool) return <SubscriptionAccountsSection providerId="openai" />;
   return (
     <SubscriptionAccountsSection
       providerId="anthropic"
+      // Signed out, the provider has no usage card to hand over.
       defaultUsage={
-        <QuotaHoverCard
-          variant="embedded"
-          hideIdentity
-          account={buildClaudeUsageCard(defaultSnapshot, t)}
-        />
+        signedOut ? undefined : (
+          <QuotaHoverCard
+            variant="embedded"
+            hideIdentity
+            account={buildClaudeUsageCard(defaultSnapshot, t)}
+          />
+        )
       }
       dashboard={{ label: t('settings.providers.usage.openClaudeUsage'), onOpen: () => undefined }}
     />
@@ -120,6 +123,24 @@ void mountPage({
         },
       ],
     };
+    // Nothing signed in yet: the host lists only the unbound CLI default slot.
+    if (ctx.case === 'empty')
+      view = {
+        providerId: 'anthropic',
+        configured: false,
+        strategy: 'least',
+        accounts: [
+          {
+            id: 'default',
+            directory: '/Users/alex/.claude',
+            status: 'signed-out',
+            running: 0,
+            limit: 4,
+            weight: 1,
+            paused: false,
+          },
+        ],
+      };
     return {
       openPath: async () => ({ success: true }),
       subscriptionAccounts: {
@@ -148,7 +169,10 @@ void mountPage({
       className="mx-auto w-full max-w-[680px] min-w-0"
       style={ctx.case === 'narrow' || ctx.case === 'narrow-weight' ? { maxWidth: 320 } : undefined}
     >
-      <Section codexPool={ctx.case === 'codex' || ctx.case === 'narrow-weight'} />
+      <Section
+        codexPool={ctx.case === 'codex' || ctx.case === 'narrow-weight'}
+        signedOut={ctx.case === 'empty'}
+      />
     </main>
   ),
 });

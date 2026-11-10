@@ -58,11 +58,11 @@ vi.mock('../../logger', async (importOriginal) => ({
   createLogger: () => diagnosticLog,
 }));
 
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 // Observe dispatch's teardown calls without loading the unrelated desktop runtime.
-vi.mock('../../remote-desktop', () => ({ remoteDesktop: { stop: vi.fn(), signalingLost: vi.fn() } }));
+vi.mock('../../remote-desktop', () => ({ remoteDesktop: { stop: vi.fn(), signalingLost: vi.fn() }, requestRemoteDesktop: vi.fn() }));
 const sharedTask = vi.hoisted(() => ({ refresh: vi.fn(), capture: vi.fn() }));
 vi.mock('../sharedTaskDispatch.js', async (original) => ({
   ...await original<typeof import('../sharedTaskDispatch.js')>(),
@@ -87,7 +87,7 @@ import {
   pushSessionActivityToController,
   wireInboundDispatch,
   hasRemoteInvokeWorkForPeer,
-} from '../dispatch';
+} from '../dispatch.desktop';
 import { __testing as invokeRegistry } from '../invoke-registry';
 import * as subscriptions from '../subscriptions';
 import { tapWindowBroadcast, tapRemoteModelCatalogChange } from '../broadcast-tap';
