@@ -6529,6 +6529,8 @@
             "copied": "Código de vinculação copiado",
             "hint": "Ou envie este código ao bot Cindy por mensagem direta no Feishu / Lark"
           },
+          "linkedAccounts": "Contas vinculadas: {{count}}",
+          "connectionTenant": "Empresa conectada: {{tenant}}",
           "setWorkingDevice": "Definir como computador de trabalho",
           "workingDeviceSet": "Computador de trabalho definido"
         }

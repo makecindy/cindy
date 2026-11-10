@@ -6529,6 +6529,8 @@
             "copied": "Code d'association copié",
             "hint": "Ou envoyez ce code au bot Cindy en message privé dans Feishu / Lark"
           },
+          "linkedAccounts": "Comptes associés : {{count}}",
+          "connectionTenant": "Entreprise connectée : {{tenant}}",
           "setWorkingDevice": "Définir comme ordinateur de travail",
           "workingDeviceSet": "Ordinateur de travail défini"
         }

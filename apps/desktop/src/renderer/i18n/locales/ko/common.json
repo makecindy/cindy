@@ -6421,6 +6421,8 @@
             "copied": "연동 코드를 복사했습니다",
             "hint": "또는 Feishu / Lark에서 Cindy bot에게 이 코드를 개인 메시지로 보내세요"
           },
+          "linkedAccounts": "연결된 계정: {{count}}",
+          "connectionTenant": "연결된 기업 식별자: {{tenant}}",
           "setWorkingDevice": "작업 컴퓨터로 설정",
           "workingDeviceSet": "작업 컴퓨터로 설정했습니다"
         }

@@ -6421,6 +6421,8 @@
             "copied": "關聯碼已錄",
             "hint": "或於飛書中將關聯碼私遣予 Cindy 機器人"
           },
+          "linkedAccounts": "已繫帳號：{{count}}",
+          "connectionTenant": "所連企業之識：{{tenant}}",
           "setWorkingDevice": "設為工作電腦",
           "workingDeviceSet": "已設為工作電腦"
         }

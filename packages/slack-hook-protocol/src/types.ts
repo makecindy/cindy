@@ -958,6 +958,12 @@ export interface ProviderBindStatusPayload {
   /** Optional safe recovery/provider URL interpreted by the host application. */
   remediationUrl: string | null;
   actions: ProviderBindAction[];
+  /** Store-app multi-account snapshot, only after feishu-store-multi-bind-v1 negotiation. */
+  bindings?: ProviderBindStatusPayload[];
+  /** The exact additive attempt completed by this confirmation. */
+  completedAttemptId?: string;
+  /** Installation tenant, used to distinguish store accounts; not a global person identifier. */
+  tenantKey?: string | null;
 }
 
 export type ProviderBindUpdatePayload = ProviderBindStatusPayload;
@@ -1389,6 +1395,8 @@ export const HOOK_FEATURE_MULTI_TEAM = 'multi-team';
 
 /** Both peers must advertise this before using provider.bind.* frames. */
 export const HOOK_FEATURE_PROVIDER_BIND = 'provider-bind-v1';
+/** Additive Feishu identities for store apps only; both peers must advertise it. */
+export const HOOK_FEATURE_FEISHU_STORE_MULTI_BIND = 'feishu-store-multi-bind-v1';
 
 /** Both peers must advertise this before using provider.prefs.* frames. */
 export const HOOK_FEATURE_PROVIDER_PREFS = 'provider-prefs-v1';

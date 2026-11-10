@@ -18,6 +18,7 @@ import {
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
+  HOOK_FEATURE_FEISHU_STORE_MULTI_BIND,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -123,6 +124,10 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
     },
     setLifecycleAnnouncementOverride(enabled) {
       state = { ...state, lifecycleAnnouncementOverride: enabled };
+      return state;
+    },
+    setFeishuBindingsCache(entries) {
+      state = { ...state, feishuBindingsCache: entries.map((row) => ({ ...row })), feishuBindingCache: entries[0] ?? null };
       return state;
     },
     setProviderBindingCache(provider, entry) {
@@ -3267,7 +3272,7 @@ describe('官方 IM 解绑与连接释放', () => {
     cleanups.push(() => manager.dispose());
     manager.sync();
     const current = connections.find(({ opts }) => opts.url === `wss://${provider}.test`)!;
-    const features = [...(current.opts.buildHello().features ?? []), `provider:${provider}`];
+    const features = [...(current.opts.buildHello().features ?? []).filter((feature) => feature !== HOOK_FEATURE_FEISHU_STORE_MULTI_BIND), `provider:${provider}`];
     const confirmed = { ...FEISHU_CONFIRMED, provider };
     current.opts.onWelcome?.({ serverName: provider, features });
     current.opts.onStatus('connected', null);
@@ -3365,7 +3370,7 @@ describe('官方飞书 / Lark provider lane', () => {
     if (opts === undefined) throw new Error('Feishu transport was not created');
     expect(opts.url).toBe('ws://127.0.0.1:8794');
     // 第一里程碑由服务端排版: 不得声明 msg.op 或任何 Telegram 专属能力。
-    expect(opts.buildHello().features).toEqual(FEISHU_FEATURES);
+    expect(opts.buildHello().features).toEqual([...FEISHU_FEATURES, HOOK_FEATURE_FEISHU_STORE_MULTI_BIND]);
     expect(opts.buildHello().features).not.toContain(HOOK_FEATURE_MESSAGE_OPS);
     expect(opts.buildHello().statusReactions).toBeUndefined();
 
@@ -4865,5 +4870,262 @@ describe('多 workspace 绑定(multi-team)', () => {
       ),
     );
     await expect(promise).resolves.toEqual({ bound: true, prefs: [] });
+  });
+});
+
+
+// Production manager entry points: a second store identity must work while the first
+// stays bound; old single-identity tests could not catch authority loss or snapshot races.
+describe('store Feishu multi-account manager', () => {
+  const second: ProviderBindStatusPayload = { ...FEISHU_CONFIRMED, bindingId: 'binding-feishu-2', principalId: 'ou_second',
+    principalName: 'Second User', tenantKey: 'tenant-b', actions: ['revoke', 'select_device'] };
+  const features = [...FEISHU_FEATURES, HOOK_FEATURE_FEISHU_STORE_MULTI_BIND];
+  it('authorizes each identity, delegates shared defaults to the store server, and clears hot state at the Cindy account boundary', async () => {
+    const notifyProviderPrefs = vi.fn();
+    const { manager, transports, sent } = feishuLaneHarness({ notifyProviderPrefs }, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED, second] }), () => true);
+    for (const [principalId, expected] of [['ou_user', true], ['ou_second', true], ['ou_unlinked', false]] as const) {
+      const replies: HookMessage[] = [];
+      opts.onMessage(makeQueryRequest({ queryId: principalId, kind: 'workspaces', recipient: { scopeId: 'cli_app', principalId } }),
+        (frame) => { replies.push(frame); return true; });
+      await vi.waitFor(() => expect(replies).toHaveLength(1), { interval: 1 });
+      expect(replies[0]).toMatchObject({ type: 'query.response', payload: { ok: expected } });
+    }
+    const writing = manager.setProviderWorkspacePrefs('feishu', 'chat', { model: 'store-model' });
+    const request = sent.findLast((frame) => frame.type === 'provider.prefs.set')!;
+    if (request.type !== 'provider.prefs.set') throw new Error('prefs request missing');
+    expect(request.payload.bindingId).toBe(FEISHU_CONFIRMED.bindingId);
+    opts.onMessage(makeProviderPrefsState({ provider: 'feishu', bindingId: request.payload.bindingId, scopeId: null,
+      replyTo: request.payload.requestId, bound: true, prefs: [] }), () => true);
+    await writing;
+    opts.onMessage(makeProviderPrefsState({ provider: 'feishu', bindingId: second.bindingId!, scopeId: null,
+      replyTo: null, bound: true, prefs: [] }), () => true);
+    expect(notifyProviderPrefs).not.toHaveBeenCalled();
+    opts.onMessage(makeProviderPrefsState({ provider: 'feishu', bindingId: FEISHU_CONFIRMED.bindingId!, scopeId: null,
+      replyTo: null, bound: true, prefs: [] }), () => true);
+    expect(notifyProviderPrefs).toHaveBeenCalledOnce();
+    await manager.deactivateAccount();
+    expect(manager.snapshot().feishu.bindings).toEqual([]);
+    expect(manager.snapshot().feishu.binding).toBeNull();
+  });
+
+  it('keeps revocations across repeated hello and stale snapshots of the same application', () => {
+    const { manager, transports } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED, second] }), () => true);
+    opts.onMessage(makeProviderBindUpdate({ ...second, state: 'revoked', reason: 'user-revoked' }), () => true);
+    opts.onWelcome?.({ serverName: 'store', features });
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED] }), () => true);
+    opts.onMessage(makeProviderBindUpdate(second), () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.principalId)).toEqual(['ou_user']);
+  });
+
+  it('keeps another account selection alive while unlinking one identity', async () => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED, second] }), () => true);
+    const selecting = manager.providerBindSelect('feishu', second.bindingId!);
+    const result = selecting.then(() => 'selected', () => 'cancelled');
+    const request = sent.findLast((frame) => frame.type === 'provider.bind.select')!;
+    if (request.type !== 'provider.bind.select') throw new Error('selection missing');
+    manager.providerBindRevoke('feishu', FEISHU_CONFIRMED.bindingId!);
+    opts.onMessage(makeProviderBindSelection({ ...request.payload, ok: true }), () => true);
+    expect(await result).toBe('selected');
+  });
+
+  it.each(['before', 'after'] as const)('rejects an offline-unlinked identity confirmed %s the reconnect snapshot without extra requests', (delivery) => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED, second] }), () => true);
+    manager.providerBindStart('feishu');
+    const start = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
+    if (start.type !== 'provider.bind.start') throw new Error('link missing');
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: start.payload.requestId, attemptId: 'offline-attempt' }), () => true);
+    opts.onStatus('connecting', null);
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    const frameCount = sent.length;
+    const lateConfirmation = makeProviderBindUpdate({ ...second, completedAttemptId: 'offline-attempt' });
+    if (delivery === 'before') opts.onMessage(lateConfirmation, () => true);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED] }), () => true);
+    opts.onMessage(lateConfirmation, () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.principalId)).toEqual(['ou_user']);
+    expect(sent).toHaveLength(frameCount);
+    expect(manager.providerBindStart('feishu')).toBe(true);
+  });
+
+  it.each(['before', 'after'] as const)('invalidates an unseen authorization on active rebuild before its late confirmation arrives %s the snapshot', (delivery) => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const original = transports[0]!;
+    original.onWelcome?.({ serverName: 'store', features }); original.onStatus('connected', null);
+    original.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED] }), () => true);
+    manager.providerBindStart('feishu');
+    const start = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
+    if (start.type !== 'provider.bind.start') throw new Error('link missing');
+    original.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: start.payload.requestId, attemptId: 'rebuild-attempt' }), () => true);
+    // sync() actively replaces the transport; its old stopped callback is ignored.
+    manager.sync(); original.onStatus('stopped', null);
+    const reconnected = transports[1]!;
+    reconnected.onWelcome?.({ serverName: 'store', features }); reconnected.onStatus('connected', null);
+    const frameCount = sent.length;
+    const lateConfirmation = makeProviderBindUpdate({ ...second, completedAttemptId: 'rebuild-attempt' });
+    if (delivery === 'before') reconnected.onMessage(lateConfirmation, () => true);
+    reconnected.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED] }), () => true);
+    reconnected.onMessage(lateConfirmation, () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.principalId)).toEqual(['ou_user']);
+    expect(manager.snapshot().feishu.binding?.attemptId).not.toBe('rebuild-attempt');
+    expect(sent).toHaveLength(frameCount);
+    expect(manager.providerBindStart('feishu')).toBe(true);
+  });
+
+  it('retains an active authorization across hello but releases the channel after its cancelled attempt loses the last identity', () => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED] }), () => true);
+    manager.providerBindStart('feishu');
+    const start = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
+    if (start.type !== 'provider.bind.start') throw new Error('start missing');
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: start.payload.requestId, attemptId: 'in-progress' }), () => true);
+    opts.onWelcome?.({ serverName: 'store', features });
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED] }), () => true);
+    expect(manager.snapshot().feishu.binding?.attemptId).toBe('in-progress');
+    expect(manager.providerBindCancel('feishu')).toBe(true);
+    const cancel = sent.findLast((frame) => frame.type === 'provider.bind.cancel')!;
+    if (cancel.type !== 'provider.bind.cancel') throw new Error('cancel missing');
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: cancel.payload.requestId,
+      state: 'failed', attemptId: 'in-progress', reason: 'cancelled', connectUrl: null, bindCode: null, expiresAt: null }), () => true);
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_CONFIRMED, state: 'revoked', reason: 'user-revoked' }), () => true);
+    expect(manager.snapshot().feishu.bindings).toEqual([]);
+    expect(manager.snapshot().feishu.enabled).toBe(false);
+  });
+
+  it.each([{ features: [] }, { features: FEISHU_FEATURES }])('invalidates store authorization when negotiated capabilities are lost: $features', ({ features: unavailableFeatures }) => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED] }), () => true);
+    manager.providerBindStart('feishu');
+    const start = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
+    if (start.type !== 'provider.bind.start') throw new Error('link missing');
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: start.payload.requestId, attemptId: 'old-capability' }), () => true);
+    opts.onWelcome?.({ serverName: 'store', features: unavailableFeatures });
+    opts.onWelcome?.({ serverName: 'store', features });
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED] }), () => true);
+    opts.onMessage(makeProviderBindUpdate({ ...second, completedAttemptId: 'old-capability' }), () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.principalId)).toEqual(['ou_user']);
+    expect(manager.providerBindStart('feishu')).toBe(true);
+  });
+
+  it('records an unseen revocation so a delayed confirmation cannot restore that identity', () => {
+    const { manager, transports } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED] }), () => true);
+    opts.onMessage(makeProviderBindUpdate({ ...second, state: 'revoked', reason: 'user-revoked' }), () => true);
+    opts.onMessage(makeProviderBindUpdate({ ...second, completedAttemptId: 'old-append' }), () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.principalId)).toEqual(['ou_user']);
+  });
+
+  it('accepts both durable revocations when account unlink requests overlap', () => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED, second] }), () => true);
+    for (const row of [FEISHU_CONFIRMED, second]) expect(manager.providerBindRevoke('feishu', row.bindingId!)).toBe(true);
+    const requests = sent.filter((frame) => frame.type === 'provider.bind.revoke');
+    for (const row of [FEISHU_CONFIRMED, second]) {
+      const request = requests.find((frame) => frame.type === 'provider.bind.revoke' && frame.payload.bindingId === row.bindingId)!;
+      if (request.type !== 'provider.bind.revoke') throw new Error('unlink missing');
+      opts.onMessage(makeProviderBindUpdate({ ...row, replyTo: request.payload.requestId, state: 'revoked', reason: 'user-revoked' }), () => true);
+    }
+    expect(manager.snapshot().feishu.bindings).toEqual([]);
+    expect(manager.snapshot().feishu.enabled).toBe(false);
+  });
+
+  it('keeps an optimistic new authorization when an older OAuth confirmation arrives first', () => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED] }), () => true);
+    expect(manager.providerBindStart('feishu')).toBe(true);
+    const start = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
+    if (start.type !== 'provider.bind.start') throw new Error('link missing');
+    opts.onMessage(makeProviderBindUpdate({ ...second, completedAttemptId: 'previous-authorization' }), () => true);
+    expect(manager.snapshot().feishu.binding?.state).toBe('pending');
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: start.payload.requestId, attemptId: 'current-authorization' }), () => true);
+    expect(manager.snapshot().feishu.binding).toMatchObject({ state: 'pending', attemptId: 'current-authorization' });
+    expect(manager.snapshot().feishu.bindings).toHaveLength(1);
+  });
+
+  it('uses the existing link action to append, keeps both authorized, and revokes only the requested account', () => {
+    const dispatcher = stubDispatcher();
+    const { manager, transports, sent, dispose } = feishuLaneHarness({ dispatcher }, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED] }), () => true);
+    expect(manager.providerBindStart('feishu')).toBe(true);
+    const start = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
+    if (start.type !== 'provider.bind.start') throw new Error('link request missing');
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: start.payload.requestId, attemptId: 'append' }), () => true);
+    opts.onMessage(makeTaskDispatch({ requestId: 'first-still-works', externalKey: 'feishu:dm:cli_app:ou_user:g1',
+      prompt: 'run', workspace: 'chat', source: { im: 'feishu' } }), () => true);
+    expect(dispatcher.handleDispatch).toHaveBeenCalledOnce();
+    opts.onMessage(makeProviderBindUpdate({ ...second, completedAttemptId: 'append' }), () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.principalId)).toEqual(['ou_user', 'ou_second']);
+    expect(manager.providerBindRevoke('feishu', second.bindingId!)).toBe(true);
+    const revoke = sent.findLast((frame) => frame.type === 'provider.bind.revoke')!;
+    if (revoke.type !== 'provider.bind.revoke') throw new Error('unlink missing');
+    opts.onMessage(makeProviderBindUpdate({ ...second, replyTo: revoke.payload.requestId, state: 'revoked', reason: 'user-revoked' }), () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.principalId)).toEqual(['ou_user']);
+    expect(manager.snapshot().feishu.enabled).toBe(true);
+    expect(dispose).not.toHaveBeenCalled();
+    const rejected: HookMessage[] = [];
+    opts.onMessage(makeTaskDispatch({ requestId: 'revoked-account', externalKey: 'feishu:dm:cli_app:ou_second:g1',
+      prompt: 'no', workspace: 'chat', source: { im: 'feishu' } }), (frame) => { rejected.push(frame); return true; });
+    expect(rejected).toContainEqual(expect.objectContaining({ type: 'task.ack', payload: expect.objectContaining({ result: 'rejected' }) }));
+  });
+
+  it('merges early revocations and waits for a snapshot before granting an untracked identity', () => {
+    const { manager, transports } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    const third = { ...second, bindingId: 'third', principalId: 'ou_third' };
+    opts.onMessage(makeProviderBindUpdate({ ...second, state: 'revoked', reason: 'user-revoked' }), () => true);
+    opts.onMessage(makeProviderBindUpdate(third), () => true);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED, second] }), () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.principalId)).toEqual(['ou_user']);
+    opts.onMessage(makeProviderBindUpdate(second), () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.principalId)).toEqual(['ou_user']);
+    opts.onWelcome?.({ serverName: 'store', features });
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED, third] }), () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.principalId)).toEqual(['ou_user', 'ou_third']);
+  });
+
+  it('selects a specific account and keeps existing identities after cancelling another authorization', async () => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, bindings: [FEISHU_CONFIRMED, second] }), () => true);
+    const selecting = manager.providerBindSelect('feishu', second.bindingId!);
+    const select = sent.findLast((frame) => frame.type === 'provider.bind.select')!;
+    if (select.type !== 'provider.bind.select') throw new Error('selection missing');
+    expect(select.payload.bindingId).toBe(second.bindingId);
+    opts.onMessage(makeProviderBindSelection({ ...select.payload, ok: true }), () => true); await selecting;
+    expect(manager.providerBindStart('feishu')).toBe(true);
+    const start = sent.findLast((frame) => frame.type === 'provider.bind.start')!;
+    if (start.type !== 'provider.bind.start') throw new Error('link missing');
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: start.payload.requestId, attemptId: 'cancel-new' }), () => true);
+    expect(manager.providerBindCancel('feishu')).toBe(true);
+    const cancel = sent.findLast((frame) => frame.type === 'provider.bind.cancel')!;
+    if (cancel.type !== 'provider.bind.cancel') throw new Error('cancel missing');
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, connectUrl: null, bindCode: null, expiresAt: null,
+      state: 'failed', reason: 'cancelled', replyTo: cancel.payload.requestId, attemptId: 'cancel-new' }), () => true);
+    expect(manager.snapshot().feishu.bindings).toHaveLength(2);
+    expect(manager.snapshot().feishu.enabled).toBe(true);
   });
 });

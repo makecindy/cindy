@@ -6464,6 +6464,8 @@
             "copied": "Verknüpfungscode kopiert",
             "hint": "Oder sende diesen Code in Feishu / Lark per Direktnachricht an den Cindy-Bot"
           },
+          "linkedAccounts": "Verknüpfte Konten: {{count}}",
+          "connectionTenant": "Verbundener Mandant: {{tenant}}",
           "setWorkingDevice": "Als Arbeitscomputer festlegen",
           "workingDeviceSet": "Arbeitscomputer festgelegt"
         }

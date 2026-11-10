@@ -928,6 +928,36 @@ function validateProviderBindStatus(
     return `${label}.actions must not contain duplicates`;
   }
 
+  if (p.tenantKey !== undefined && (p.provider !== 'feishu' || !isNullableNonEmptyString(p.tenantKey))) {
+    return `${label}.tenantKey must be a Feishu installation tenant or null`;
+  }
+  if (p.completedAttemptId !== undefined && (p.provider !== 'feishu' || p.state !== 'confirmed'
+    || !isNonEmptyString(p.completedAttemptId))) {
+    return `${label}.completedAttemptId must identify a completed Feishu attempt`;
+  }
+  if (p.bindings !== undefined) {
+    if (label !== 'provider.bind.state' || p.provider !== 'feishu' || !Array.isArray(p.bindings)) {
+      return `${label}.bindings is only valid on a Feishu state snapshot`;
+    }
+    const ids = new Set<string>();
+    const principals = new Set<string>();
+    for (const row of p.bindings) {
+      if (!isPlainObject(row) || row.bindings !== undefined || row.completedAttemptId !== undefined
+        || row.provider !== 'feishu' || row.state !== 'confirmed' || row.scopeId !== p.scopeId
+        || validateProviderBindStatus(row, label) !== null) {
+        return `${label}.bindings must contain confirmed bindings in the same scope`;
+      }
+      const id = row.bindingId as string;
+      const principal = row.principalId as string;
+      if (ids.has(id) || principals.has(principal)) return `${label}.bindings must not contain duplicate identities`;
+      ids.add(id); principals.add(principal);
+    }
+    if (p.bindings.length === 0 ? p.state !== 'none' : p.state !== 'confirmed'
+      || !p.bindings.some((row: Record<string, unknown>) => row.bindingId === p.bindingId && row.principalId === p.principalId)) {
+      return `${label}.bindings must agree with the legacy binding`;
+    }
+  }
+
   const state = p.state as ProviderBindStatusPayload['state'];
   const attemptState =
     state === 'pending' ||

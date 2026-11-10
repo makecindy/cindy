@@ -6421,6 +6421,8 @@
             "copied": "关联码已复制",
             "hint": "或者在飞书里把关联码私聊发给 Cindy 机器人"
           },
+          "linkedAccounts": "已关联账号：{{count}}",
+          "connectionTenant": "连接企业标识：{{tenant}}",
           "setWorkingDevice": "设为工作电脑",
           "workingDeviceSet": "已设为工作电脑"
         }

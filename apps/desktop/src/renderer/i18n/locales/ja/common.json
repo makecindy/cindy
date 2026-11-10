@@ -6421,6 +6421,8 @@
             "copied": "連携コードをコピーしました",
             "hint": "または Feishu / Lark で Cindy bot にこのコードをダイレクトメッセージで送信してください"
           },
+          "linkedAccounts": "連携済みアカウント：{{count}}",
+          "connectionTenant": "接続先企業の識別子：{{tenant}}",
           "setWorkingDevice": "作業用パソコンに設定",
           "workingDeviceSet": "作業用パソコンに設定しました"
         }

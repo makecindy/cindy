@@ -529,3 +529,21 @@ describe('working computer selection', () => {
     expectReject({ ...makeProviderBindSelection({ ...payload, ok: true }), payload: { ...payload, ok: 'true' } }, 'ok');
   });
 });
+
+
+// Multi-account snapshots grant task authority. The production parser must reject
+// ambiguous/nested identities rather than letting the UI authorize an unrelated account.
+describe('Feishu store multi-account contract', () => {
+  it('round-trips distinct identities and rejects nested, duplicate, cross-app or mismatched snapshots', () => {
+    const first: ProviderBindStatusPayload = { ...CONFIRMED, provider: 'feishu', tenantKey: 'tenant-a' };
+    const second: ProviderBindStatusPayload = { ...first, bindingId: 'binding-2', principalId: 'ou_second', tenantKey: 'tenant-b' };
+    roundTrip(makeProviderBindState({ ...first, bindings: [first, second] }));
+    roundTrip(makeProviderBindUpdate({ ...second, completedAttemptId: 'attempt-2' }));
+    for (const rows of [[first, first], [first, { ...second, scopeId: 'different-app' }],
+      [first, { ...second, bindings: [] }], [second]]) {
+      expectReject(makeProviderBindState({ ...first, bindings: rows }), 'bindings');
+    }
+    expectReject(makeProviderBindUpdate({ ...first, bindings: [first] }), 'bindings');
+    expectReject(makeProviderBindState({ ...first, provider: 'telegram', tenantKey: undefined, bindings: [first] }), 'bindings');
+  });
+});

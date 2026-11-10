@@ -19,6 +19,9 @@ export default {
     `,
   },
   cases: {
+    store: { about: 'Store app: multiple linked accounts with the existing link action', data: { kind: 'store' } },
+    'store-failed': { about: 'Failed additional authorization retains existing accounts and shows its error', data: { kind: 'store-failed' } },
+    'store-pending': { about: 'Existing store accounts remain visible while another account authorizes', data: { kind: 'store-pending' } },
     default: {
       about: 'Pending bind: authorize-page actions plus the one-time link code with copy',
       data: { kind: 'pending' },
@@ -41,6 +44,13 @@ export default {
   },
   async check(page, ui) {
     const card = page.locator('#cindy-im-feishu-panel');
+    if (ui.data.kind === 'store' || ui.data.kind === 'store-pending' || ui.data.kind === 'store-failed') {
+      assert.ok(await card.getByText('Alice', { exact: true }).isVisible());
+      assert.ok(await card.getByText('Bob', { exact: true }).isVisible());
+      assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.unlink'), exact: true }).count(), 2);
+      if (ui.data.kind === 'store') assert.ok(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.connect'), exact: true }).isVisible());
+      if (ui.data.kind === 'store-failed') assert.ok(await card.getByText(await ui.t('settings.remoteControl.hook.feishu.status.failed'), { exact: true }).isVisible());
+    }
     if (ui.data.kind === 'released') {
       const row = page.locator('#cindy-im-feishu');
       assert.equal(await row.getByRole('status').textContent(), await ui.t('settings.remoteControl.hook.feishu.status.disabled'));

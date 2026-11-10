@@ -16,6 +16,16 @@ const disabledLane = {
 };
 
 function view(kind: string): SlackHookView {
+  if (kind === 'store' || kind === 'store-pending' || kind === 'store-failed') {
+    const base = view(kind === 'store' ? 'confirmed' : 'pending');
+    const first = { ...view('confirmed').feishu.binding!, principalName: 'Alice', tenantKey: 'tenant-acme' };
+    base.feishu = { ...base.feishu, multiBindAvailable: true,
+      bindings: [first, { ...first, bindingId: 'b2', principalId: 'ou_2', principalName: 'Bob', tenantKey: 'tenant-xd' }] };
+    if (kind === 'store-failed') base.feishu.binding = { ...base.feishu.binding!, state: 'failed',
+      reason: 'access-denied', connectUrl: null, bindCode: null, expiresAt: null, actions: ['retry'] };
+    return base;
+  }
+
   const feishu =
     kind === 'unavailable'
       ? { ...disabledLane, enabled: true, url: 'ws://127.0.0.1:8794', status: 'connected' as const }

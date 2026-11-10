@@ -594,6 +594,52 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     expect(screen.queryByRole('button', { name: FEISHU_CARD })).toBeNull();
   });
 
+  // Store-app requirement: the ordinary link action stays available after binding;
+  // per-row actions carry that account's binding ID, including during another authorization.
+  it('links through the existing action and targets each store account independently', async () => {
+    const first: NonNullable<SlackHookView['feishu']['binding']> = {
+      provider: 'feishu', state: 'confirmed', attemptId: null, bindingId: 'alice-binding',
+      principalId: 'ou_alice', principalName: 'Alice', tenantKey: 'tenant-a', scopeId: 'cli_store', scopeName: 'Cindy',
+      connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null, actions: ['revoke', 'select_device'],
+    };
+    const second = { ...first, bindingId: 'bob-binding', principalId: 'ou_bob', principalName: 'Bob', tenantKey: 'tenant-b' };
+    const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu,
+      enabled: true, available: true, status: 'connected', url: 'wss://feishu.example.test',
+      multiBindAvailable: true, binding: first, bindings: [first, second],
+    } };
+    ipc.get.mockResolvedValue({ hook }); ipc.providerBindStart.mockResolvedValue({ hook });
+    let finishSelection!: (value: { hook: SlackHookView }) => void;
+    ipc.providerBindSelect.mockImplementation(() => new Promise((resolve) => { finishSelection = resolve; }));
+    ipc.providerBindRevoke.mockResolvedValue({ hook });
+    dialog.confirm.mockResolvedValue(true);
+    const entry = resolveSettingsSearchEntry('im-bot', 'imBot.cindy.feishu.workingDevice');
+    render(<SettingsSearchNavigationContext.Provider value={{ entry, activation: 1 }}>
+      <HookConnectionsSection />
+    </SettingsSearchNavigationContext.Provider>);
+    await screen.findByText('Alice'); expect(screen.getByText('Bob')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.hook.feishu.connect' }));
+    await waitFor(() => expect(ipc.providerBindStart).toHaveBeenCalledWith('feishu'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.setWorkingDevice' })[1]!);
+    await waitFor(() => expect(ipc.providerBindSelect).toHaveBeenCalledWith('feishu', 'bob-binding'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.unlink' })[0]!);
+    await waitFor(() => expect(ipc.providerBindRevoke).toHaveBeenCalledWith('feishu', 'alice-binding'));
+    await act(async () => finishSelection({ hook }));
+    expect(toast.success).toHaveBeenCalledWith('settings.remoteControl.hook.feishu.workingDeviceSet');
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.remoteControl.hook.feishu.unlink' })[1]!);
+    await waitFor(() => expect(ipc.providerBindRevoke).toHaveBeenCalledWith('feishu', 'bob-binding'));
+    const listener = ipc.onStatusChanged.mock.calls[0]![0];
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu, binding: { ...first,
+      state: 'pending', bindingId: null, principalId: null, principalName: null, attemptId: 'new-auth',
+      actions: ['cancel'], expiresAt: Date.now() + 60_000 }, bindings: [first] } }));
+    expect(screen.getByText('Alice')).toBeTruthy(); expect(screen.queryByText('Bob')).toBeNull();
+    expect(screen.getByRole('button', { name: 'settings.remoteControl.hook.feishu.cancel' })).toBeTruthy();
+    await act(async () => listener({ ...hook, feishu: { ...hook.feishu,
+      binding: { ...first, state: 'failed', bindingId: null, principalId: null, attemptId: 'new-auth', reason: 'denied', actions: ['retry'] },
+      bindings: [first] } }));
+    expect(screen.getByText('Alice')).toBeTruthy();
+    expect(screen.getAllByText('settings.remoteControl.hook.feishu.status.failed').length).toBeGreaterThan(0);
+  });
+
   it.each(['success', 'failure', 'old-server', 'unlink'] as const)('offers a concise working-computer action with a confirmed result: %s', async (outcome) => {
     const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu,
       enabled: true, available: true, status: 'connected', url: 'wss://feishu.example.test',

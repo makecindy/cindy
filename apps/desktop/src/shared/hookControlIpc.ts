@@ -131,6 +131,7 @@ export interface ProviderBindingView {
   bindingId: string | null;
   principalId: string | null;
   principalName: string | null;
+  tenantKey?: string | null;
   scopeId: string | null;
   scopeName: string | null;
   connectUrl: string | null;
@@ -161,6 +162,9 @@ export interface ProviderHookView {
   /** Telegram 行为设置增量能力；旧 main 快照缺省时按 false。 */
   behaviorAvailable?: boolean;
   binding: ProviderBindingView | null;
+  /** Store-app identities; a binding attempt is shown separately in binding. */
+  bindings?: ProviderBindingView[];
+  multiBindAvailable?: boolean;
   /**
    * 派发任务时使用的默认工作目录别名(null = 内置「对话」伪目录)。
    *
