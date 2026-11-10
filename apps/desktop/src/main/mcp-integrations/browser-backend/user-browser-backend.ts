@@ -248,7 +248,7 @@ export class UserBrowserBackend implements BrowserBackend {
   private readonly recipePumps = new Map<string, () => Promise<void>>();
   private nextAlias = 1;
   private disposed = false;
-  private preparingBrowser: Promise<void> | null = null;
+  private preparing: { wantsLaunch: boolean; promise: Promise<void> } | null = null;
 
   constructor(private readonly opts: UserBrowserBackendOptions) {}
 
@@ -280,24 +280,40 @@ export class UserBrowserBackend implements BrowserBackend {
   private async ensureConnected(req: BackendRequest): Promise<void> {
     const control = this.opts.getPageControl();
     if (!control || !this.opts.startBrowser || this.connectedClients(control).length > 0) return;
-    if (!this.preparingBrowser) {
+    // A named connection may belong to a different browser/profile. Never substitute the OS
+    // default for it. Requests without a profile may still join a wait that began earlier and
+    // ask it to launch the default browser, so the first caller's profile does not decide for all.
+    if (!req.profile && this.preparing) this.preparing.wantsLaunch = true;
+    if (!this.preparing) {
+      const state: { wantsLaunch: boolean; promise: Promise<void> } = {
+        wantsLaunch: !req.profile,
+        promise: Promise.resolve(),
+      };
+      const stillCurrent = () => !this.disposed && this.opts.getPageControl()?.bridge === control.bridge;
       const prepare = async () => {
-        const status = await control.bridge.status();
+        let status = await control.bridge.status();
         // Pairing is a separate boundary; opening more browsers cannot resolve it.
-        if (this.disposed || this.opts.getPageControl()?.bridge !== control.bridge) return;
-        if (!status.ok || status.clients.some(c => c.connected || c.trusted === false)) return;
-        // A named connection may belong to a different browser/profile. Never substitute
-        // the OS default for it. Still allow the extension time to reconnect below.
-        if (!req.profile) await this.opts.startBrowser!();
+        if (!stillCurrent() || !status.ok || status.clients.some(c => c.connected || c.trusted === false)) return;
+        let launched = false;
+        const launchIfWanted = async () => {
+          if (!state.wantsLaunch || launched) return;
+          launched = true;
+          await this.opts.startBrowser!();
+        };
+        await launchIfWanted();
         const deadline = (this.opts.now ?? Date.now)() + (this.opts.startupWaitMs ?? 35_000);
-        while (!this.disposed && this.opts.getPageControl()?.bridge === control.bridge &&
-               this.connectedClients(control).length === 0 && (this.opts.now ?? Date.now)() < deadline) {
-          await sleep(250);
+        while (stillCurrent() && this.connectedClients(control).length === 0 && (this.opts.now ?? Date.now)() < deadline) {
+          await sleep(500);
+          await launchIfWanted();
+          status = await control.bridge.status();
+          // The extension came online but still needs the user's approval: waiting cannot fix that.
+          if (status.ok && status.clients.some(c => c.trusted === false)) return;
         }
       };
-      this.preparingBrowser = prepare().finally(() => { this.preparingBrowser = null; });
+      state.promise = prepare().finally(() => { this.preparing = null; });
+      this.preparing = state;
     }
-    await this.preparingBrowser;
+    await this.preparing.promise;
   }
 
   async dispose(): Promise<void> {

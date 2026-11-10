@@ -1193,6 +1193,49 @@ describe('automatic browser startup', () => {
     expect(startBrowser).not.toHaveBeenCalled(); expect(fake.jobs).toHaveLength(0);
   });
 
+  it('launches the default browser for a profile-less request that joins a profile request already waiting', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.68' });
+      fake.responses.set('open', payload => ({ ok: true, tabId: 8, url: payload.url }));
+      const startBrowser = vi.fn(async () => { setTimeout(() => clients.push('chrome'), 1000); });
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+      const named = b.call({ action: 'tabs', profile: 'specific-account' });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(startBrowser).not.toHaveBeenCalled();
+      const unnamed = b.call({ action: 'open', url: 'https://example.test/' });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+      expect((await unnamed).ok).toBe(true);
+      await named;
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('stops waiting as soon as the launched browser reports an extension that still needs pairing', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] }), startBrowser = vi.fn(async () => {});
+      const empty = await fake.control.bridge.status();
+      if (!empty.ok) throw new Error('fixture status failed');
+      let pairing = false;
+      fake.control.bridge.status = vi.fn(async () => ({ ...empty, clients: pairing ? [{
+        id: 'pending', browser: 'chrome' as const, version: '0.4.68', protocolVersion: '0.4.13',
+        connected: false, trusted: false, identitySupported: true, nativeBindingRequired: true,
+        origin: 'chrome-extension://fixture', extensionId: 'fixture',
+      }] : [] }));
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, startBrowser, logger: { info: vi.fn(), warn: vi.fn() } });
+      const call = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(600);
+      pairing = true;
+      await vi.advanceTimersByTimeAsync(1000); // far below the 35 s startup wait
+      const result = await call;
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).toContain('配对');
+    } finally { vi.useRealTimers(); }
+  });
+
   it('reports disconnected when startup completes but no extension arrives', async () => {
     vi.useFakeTimers();
     try {

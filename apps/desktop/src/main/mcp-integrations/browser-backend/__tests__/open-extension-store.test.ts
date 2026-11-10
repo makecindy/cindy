@@ -47,7 +47,7 @@ describe('startUserBrowser', () => {
     const executablePath = platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : '/browser/chrome';
     await startUserBrowser({ platform, launch, resolveBrowser: () => ({ kind: 'chrome', executablePath, userDataDir: '/private/profile' }) });
     expect(launch).toHaveBeenCalledWith(platform === 'darwin' ? '/usr/bin/open' : executablePath,
-      platform === 'darwin' ? ['-g', '-a', '/Applications/Google Chrome.app', '--args', '--start-minimized'] : ['--start-minimized']);
+      platform === 'darwin' ? ['-g', '-n', '-a', '/Applications/Google Chrome.app', '--args', '--start-minimized'] : ['--start-minimized']);
   });
   it('reports launch failure instead of claiming the extension connected', async () => {
     await expect(startUserBrowser({ platform: 'linux', resolveBrowser: () => ({ kind: 'chrome', executablePath: '/chrome', userDataDir: '/u' }), launch: async () => { throw Error('ENOENT'); } })).rejects.toThrow('未能启动浏览器');
