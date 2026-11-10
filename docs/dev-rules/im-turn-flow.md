@@ -189,6 +189,22 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
     终稿和附件不领取下一轮排队消息的锚点。空结果撤回进度卡且不发占位，图片／文件仍正常投递；
     新消息发送失败时保留进度卡并尝试就地展示终稿，撤回失败不得重复发送已成功的终稿。
 
+13. **飞书终稿完整送达、过程可回看**：终稿不截断。一张卡片装不下（请求体 30 KB，或单个富文本组件
+    超过 4 个表格）时，`@cindy/im` 的 `feishu/cardSplit.ts` 按内容边界分段：优先段落之间，其次行之间
+    （切在代码块里就补收尾围栏并在下一段重开，切在表格里就给下一段补表头），最后才按字符；第一段更新
+    原进度卡，其余按顺序在本轮回复位置另发，每张底部带页码；正文之外的图片挂不下时同样另起卡片。
+    后续某一张发不出去就停下并说明，不跳过它继续发；第一段都没送达时不再发后面的。写作中的中间帧只有
+    一张卡片，装不下时展示装得下的开头并说明写完后分条发送。
+    正常完成的轮次，`turnRunner` 把过程记录（`turnActivity.buildActivityRecord`：本轮全部工作项，最多
+    列 50 项，更早的只计数）经 `StreamingTextHandle.finalize(text, { process })` 交给渠道；飞书把它收成
+    正文上方一个默认折叠的面板，正文保持干净。没有工作项的快答不带记录，终稿与以前一致。失败收口仍把
+    过程区留在正文里（用户要看到停在哪一步）。其它卡片渠道的 handle 忽略这份记录，行为不变；
+    Telegram 的「成功终稿只含正文」裁决不受影响。
+    飞书卡片的排版只有 `@cindy/im` 的 `feishu/streamingText.ts` 这一份：它对外只依赖一条发送通道
+    （`FeishuStreamingDeps`：建卡、更新、放终稿第一张、发后续卡片）。个人 bot 与伙伴连接的通道直接调
+    飞书接口；官方飞书 / Lark 的通道经 `msg.op` 交给服务端执行（`hook-control/feishuTurnCarrier.ts`）。
+    改飞书回复长什么样只改这一处，不在服务端或 hook-control 里另写排版。
+
 ## 4. 状态模型（一轮）
 
 ```
@@ -253,9 +269,14 @@ inbound ──► admitted ──► queued? ──► dispatching ──► run
 
 - lane：私聊 `feishu:dm:…`，群消息一律在话题里回复 `feishu:topic:…`；`deriveLaneKind` 把话题 lane 视为群轮次，
   与官方 Telegram 群一样在 send 后持有 session turn lease（不改权限档）。
-- 出站：第一里程碑由服务端排版，客户端 hello 只声明 provider-bind / provider-prefs / `provider:feishu`，
-  不声明 `session-picker-v1`（查询不带收件身份，不交出本机任务列表）、`msg-op-v1` 与任何 `telegram-*` 能力；进度、终稿与确认卡沿用 legacy
-  `turn.progress` / `turn.end` / `interaction.request`。后台轮次回传（`backgroundResults`）暂不覆盖飞书。
+- 出站（2026-11-10 起电脑排版）：客户端 hello 在 provider-bind / provider-prefs / `provider:feishu` 之外声明
+  `msg-op-v1`、`feishu-progress-ops-v1`、`feishu-final-ops-v1`；服务端 welcome 同时宣告才生效，逐项独立。生效后
+  进度卡与**不带附件的成功终稿**由本端用个人飞书 bot 同一份排版经 `msg.op` 发布（`dispatcher` 里与官方 Telegram
+  共用的轮次载体流程，飞书的实现是 `feishuTurnCarrier.ts`）：`turn.progress` 照发（续期），终稿全部确认后
+  `turn.end` 带 `clientFinal.complete=true`，否则交回服务端发布完整终稿。发布前照旧先把不带 `clientFinal` 的
+  `turn.end` 写进持久出箱。失败 / 取消 / 带附件的终稿、确认卡仍由服务端排版（`turn.end` / `interaction.request`）；
+  任一侧没有声明时全部照旧由服务端排版。不声明 `session-picker-v1`（查询不带收件身份，不交出本机任务列表）与任何
+  `telegram-*` 能力。后台轮次回传（`backgroundResults`）暂不覆盖飞书。
 - 会话：`sessions.source` 复用 `feishu`（个人飞书会话靠 `feishu_bot_app_id` 区分）；`vendorOptions.source`
   用 `feishu-hook`，让 `cindy_feishu_bot` 追加官方会话提示而不把它当个人渠道；模型说明为
   `buildHookPromptNote('feishu')`。

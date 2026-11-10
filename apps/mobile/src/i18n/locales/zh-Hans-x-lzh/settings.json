@@ -135,11 +135,16 @@
     "permissionDenied": "告之权柄未开，请于系统设置中允许 Cindy 发送通知。",
     "unregisterQueued": "已阖，连网后自动完成注销。",
     "preview": "示讯之先览",
-    "background": "于背景保持讯之连接",
+    "background": "后台通知",
     "backgroundActive": "方于背景收讯",
     "backgroundStop": "止收",
-    "backgroundHint": "背景连接不依赖 Google，将示常驻之告；可随时于通知栏止之。",
-    "googleUnavailable": "Google 推播暂不可用。可启背景讯之连接以收讯。"
+    "backgroundHint": "Google 推播或不可用时，Cindy 自维后台之连，连通时常驻示之。",
+    "googleUnavailable": "Google 推播暂不可用，将依通知之设维后台之连。",
+    "backgroundModes": {
+      "auto": "自动",
+      "on": "常启",
+      "off": "关闭"
+    }
   },
   "about": {
     "sectionTitle": "关于此手机",

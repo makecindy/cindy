@@ -678,6 +678,8 @@ export interface BrowserMcpDeps {
   resolveProfile?(profile?: string): string | undefined;
   /** Existing host lifecycle/backend identities; changes invalidate session evidence. */
   getBackendScope?(): { lifecycle: object; backend: object };
+  /** Active automation target; lets the workflow rules carry only what applies to it. Absent → all rules. */
+  getBackendKind?(): BrowserBackendKind;
   /**
    * Resolve a successful screenshot runtime result into verified image bytes.
    * The host owns file-system access so this package never receives a generic
