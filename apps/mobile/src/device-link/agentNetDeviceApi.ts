@@ -6,7 +6,7 @@ import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGe
 import { isMobileAgentNetActive } from './agentNetRuntime';
 import { ensureMobileAgentNetIdentity, type MobileAgentNetEnrollmentOptions } from './agentNetIdentity';
 import { getMobileAgentNetPreferences, mobileAgentNetRequiresEncryption } from './agentNetPreferences';
-import { getSelfHostedRelayRouteGeneration, normalizeSelfHostedRelayBase } from './selfHostedRelayRouting';
+import { getActiveSelfHostedRelay, getSelfHostedRelayRouteGeneration, isAgentNetOnlyRoute, normalizeSelfHostedRelayBase } from './selfHostedRelayRouting';
 import { writeMobileAgentNetDirectory } from './agentNetDirectoryCache';
 
 /** Preserve the ordinary device API and mixed-version directory. V2 devices
@@ -67,12 +67,27 @@ export async function mobileAgentNetDeviceRequest<T>(path: string, opts: Omit<Ap
       }
     } else if (match[1] && ['PATCH', 'DELETE'].includes(method)) {
       const target = decodeURIComponent(match[1]);
-      if (!mobileAgentNetRequiresEncryption()) {
+      const relay = getActiveSelfHostedRelay(), synchronizeLegacy = !!relay && !isAgentNetOnlyRoute(relay);
+      if (!mobileAgentNetRequiresEncryption() || synchronizeLegacy) {
         const directory = await identity.api.directory(); guard();
-        if (!directory.some(view => view.certificate.deviceId === target)) return { handled: false };
+        if (!directory.some(view => view.certificate.deviceId === target)) {
+          if (!synchronizeLegacy) return { handled: false };
+          const value = await readLegacy(); guard();
+          return { handled: true, value };
+        }
       }
       const response = await identity.api.request<{ name?: string }>(method, '/devices/' + encodeURIComponent(target), method === 'PATCH' ? opts.body : undefined, { signal: opts.signal });
       guard();
+      if (synchronizeLegacy) {
+        // The private relay has independent V1/V2 membership stores. This is a
+        // management write, matching Desktop even when business traffic is V2-only.
+        try { await readLegacy(); }
+        catch (error) {
+          const legacy = error as { status?: unknown; code?: unknown };
+          if (legacy.status !== 404 || legacy.code !== 'NOT_FOUND') throw error;
+        }
+        guard();
+      }
       result = method === 'DELETE' ? { deviceId: target, deleted: true }
         : { deviceId: target, name: response.name ?? (opts.body as { name: string }).name };
     } else throw new Error('AGENT_NET_UNSUPPORTED_DEVICE_REQUEST');
