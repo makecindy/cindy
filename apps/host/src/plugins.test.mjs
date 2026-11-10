@@ -202,13 +202,15 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   } });
   const owner = () => ({ dataOwnerId: 'fixture-owner', ownerGeneration: 1 });
   const directoryStat = fs.statSync(dir, { bigint: true });
-  const selectedDirectory = { ref: 'fixture-files', path: fs.realpathSync(dir), dev: directoryStat.dev.toString(), ino: directoryStat.ino.toString() };
+  // Match the native pick issuer's realpath semantics, including Windows casing.
+  const selectedDirectory = { ref: 'fixture-files', path: await fs.promises.realpath(dir), dev: directoryStat.dev.toString(), ino: directoryStat.ino.toString() };
   const fileService = new GhostFsSlot({ getGhost: () => ghost, ownerKey: () => 'fixture-owner:1', dataRootDir: () => dir,
     // Only the native-selection receipt is supplied by this fixture. Worker,
     // private control pipe, public gateway, shared registry and filesystem are real.
     resolvePickedDirectory: (id, ref) => id === 'test-node' && ref === selectedDirectory.ref ? selectedDirectory : null,
     callInfo: () => null, inFlightCallInfo: () => null, getSessionSnapshot: async () => null,
-    requestWriteConfirm: async () => ({ confirmed: false, reason: 'cancelled' }), writeSaveDeposit: async () => null });
+    requestWriteConfirm: async () => ({ confirmed: false, reason: 'cancelled' }), writeSaveDeposit: async () => null,
+    log: { warn: (message, details) => t.diagnostic(`${message}: ${details.error}`) } });
   const handoff = new GhostHandoffStore({ root: () => path.join(dir, 'handoff') });
   const kv = createGhostKvStore({ getRootDir: () => path.join(dir, 'storage-kv') });
   const sharedValue = { title: 'shared business record', count: 2 };

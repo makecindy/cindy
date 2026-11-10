@@ -1,6 +1,5 @@
 import { setPluginEnabled } from './pluginEnableService.js';
 import { createGhostExecutionPipe } from './executionPipe.js';
-import { watcherHostClient } from '../watcher-host/index.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
 import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
 import { importPickedFiles } from './pickedFiles.js';
@@ -6975,6 +6974,7 @@ export function getGhostFsSlot(): GhostFsSlot {
       resolvePickedDirectory: getGhostPickedDirectory,
       getCallSignal: (id, callId) => getGhostPipeDispatcher().getPendingCallSignal(id, callId),
       watchDirectory: async (root, changed, failed) => {
+        const { watcherHostClient } = await import('../watcher-host/index.js');
         if (watcherHostClient.isDegraded) throw new Error('FILE_WATCH_UNAVAILABLE');
         const subscription = await watcherHostClient.subscribe(root, [], events => {
           for (const event of events) {
