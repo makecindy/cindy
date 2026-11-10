@@ -475,3 +475,9 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 
 证据保存在本机 `artifacts/desktop-isolated-20261111/report.md` 及其日志目录；
 各结果绑定上述源码版本，后续主线变化须以新增验证记录为准。
+
+发布前同步 main `7fa3bda908`，合并检查点 `fa2a99d1fe`：Desktop/Host 类型检查、
+桌面启动与协议 105 项、Host 185 项、文档合同 10 项、测试规范及 DCO 均通过。
+两个修改的单测文件单独运行分别为 1.18 秒（deepLink，93 项）及 0.812 秒
+（ccMgrUpgradeStore，3 项）。UI 批次和独立构建产物仍绑定前述构建版本，
+没有把同步后的定向检查写成重新执行了打包运行或全量桌面验收。
