@@ -58,7 +58,12 @@ const view: ProviderGroupView = {
   members: [{ ...member, state: 'available', running: 0, appVersion: '0.1.130' }],
 };
 
-function pool(data: { states?: boolean; long?: boolean; single?: boolean }): SubscriptionPoolView {
+function pool(data: {
+  states?: boolean;
+  long?: boolean;
+  single?: boolean;
+  missingUsage?: boolean;
+}): SubscriptionPoolView {
   const first = account('default', {
     identity: data.long
       ? 'a-very-long-account-name-for-the-default-subscription@example.com'
@@ -70,7 +75,7 @@ function pool(data: { states?: boolean; long?: boolean; single?: boolean }): Sub
       ? 'another-very-long-account-name-for-work@example.com'
       : 'second@example.com',
     paused: data.states,
-    usage: { claude: claude(12, 40, null) },
+    usage: data.missingUsage ? undefined : { claude: claude(12, 40, null) },
   });
   return {
     providerId: 'anthropic',
@@ -95,7 +100,15 @@ void mountPage({
       onChanged: subscription('groupChanged'),
     },
     subscriptionAccounts: {
-      command: async () => pool(ctx.data as { states?: boolean; long?: boolean; single?: boolean }),
+      command: async () =>
+        pool(
+          ctx.data as {
+            states?: boolean;
+            long?: boolean;
+            single?: boolean;
+            missingUsage?: boolean;
+          },
+        ),
       onChanged: subscription('subscriptionAccounts'),
     },
     maker: {

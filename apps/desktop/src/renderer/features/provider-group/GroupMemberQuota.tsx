@@ -263,7 +263,9 @@ export function GroupMemberQuota({
   const accounts = useGroupMemberAccounts(
     target.kind === 'share' ? null : target.providerId,
     remoteDeviceId,
-    !quotaOffline && !!provider && providerWeeklyQuotaSource({ ...provider, suspended: false }) !== null,
+    // 枚举账号不要求已有登录有效，否则全部掉登录时连「需要登录」也看不到。
+    !quotaOffline && !!provider && !provider.removed && provider.auth?.method === 'oauth' &&
+      (!provider.access || provider.access.kind === 'subscription'),
   );
   const multipleAccounts = accounts && accounts.length > 1 ? accounts : null;
   const onlyAddedAccount = accounts?.length === 1 && accounts[0].account.id !== 'default' ? accounts[0].account : null;

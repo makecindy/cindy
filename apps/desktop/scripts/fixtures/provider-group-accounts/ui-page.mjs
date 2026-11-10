@@ -28,6 +28,10 @@ export default {
       about: 'A paused account and one that needs signing in again',
       data: { states: true },
     },
+    'missing-usage': {
+      about: 'An authenticated account whose first usage snapshot is unavailable',
+      data: { missingUsage: true },
+    },
     narrow: {
       about: 'Long account names at a narrow settings width',
       viewport: { width: 420, height: 760 },
@@ -81,6 +85,13 @@ export default {
         .getByText(await ui.t('subscriptionAccounts.signedOut'), { exact: true })
         .waitFor();
       assert.equal(await accounts.nth(2).getByRole('progressbar').count(), 0);
+    }
+    if (ui.case === 'missing-usage') {
+      await accounts
+        .nth(1)
+        .getByText(await ui.t('quotaCard.noWindows'), { exact: true })
+        .waitFor();
+      assert.equal(await accounts.nth(1).getByRole('progressbar').count(), 0);
     }
   },
 };

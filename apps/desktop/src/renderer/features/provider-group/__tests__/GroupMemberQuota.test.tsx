@@ -841,6 +841,22 @@ describe('GroupMemberQuota', () => {
     expect(screen.getByTestId('quota-card').textContent).toBe('This computer’s Claude');
   });
 
+  // r4523414503: account enumeration must survive expired logins; the old quota
+  // gate hid the whole pool, so existing mixed signed-in/signed-out coverage missed it.
+  it.each(['anthropic', 'openai'])('lists %s accounts even when all logins need renewal', async (providerId) => {
+    mocks.local = [{ ...claude(providerId), connected: providerId === 'openai',
+      ...(providerId === 'openai' ? { openAiAccount: { reconnectRequired: true } } : {}) }];
+    mocks.cards = {};
+    mocks.poolCommand.mockResolvedValue(pool([
+      poolAccount('default', { identity: 'first@example.com', status: 'signed-out' }),
+      poolAccount('work', { identity: 'second@example.com', status: 'signed-out' }),
+    ], providerId));
+    await show({ kind: 'local', providerId });
+    const rows = screen.getAllByTestId('provider-group-member-account');
+    expect(rows.map(row => row.querySelector('[title]')?.textContent)).toEqual(['first@example.com', 'second@example.com']);
+    expect(rows.every(row => row.textContent?.includes('subscriptionAccounts.signedOut'))).toBe(true);
+  });
+
   it('shows the signed-in account alone instead of an unused default slot', async () => {
     mocks.poolCommand.mockResolvedValue(pool([
       poolAccount('default', { status: 'signed-out' }),
@@ -855,6 +871,7 @@ describe('GroupMemberQuota', () => {
     mocks.poolCommand.mockResolvedValue(pool([
       poolAccount('default', { identity: 'first@example.com', status: 'signed-out' }),
       poolAccount('work', { identity: 'second@example.com', paused: true, usage: claudeUsage(25) }),
+      poolAccount('new', { identity: 'third@example.com' }),
     ]));
     mocks.cards = {};
     await show({ kind: 'local', providerId: 'anthropic' });
@@ -863,6 +880,9 @@ describe('GroupMemberQuota', () => {
     expect(rows[0].querySelector('[data-testid="quota-card"]')).toBeNull();
     expect(rows[1].textContent).toContain('providerGroup.member.status.paused');
     expect(rows[1].className).toContain('opacity-60');
+    // r4523414514: authenticated with no first usage snapshot needs an explanation.
+    expect(rows[2].textContent).toContain('quotaCard.noWindows');
+    expect(rows[2].querySelector('[data-testid="quota-card"]')).toBeNull();
   });
 
   it('rereads the accounts when they change on this computer', async () => {
@@ -881,6 +901,8 @@ describe('GroupMemberQuota', () => {
   it('does not list accounts for a named or API-key connection', async () => {
     await show({ kind: 'device', deviceId: 'mini', providerId: 'anthropic-1a2b' });
     await show({ kind: 'device', deviceId: 'pc', providerId: 'openrouter' });
+    mocks.local = [apiKey('anthropic')];
+    await show({ kind: 'local', providerId: 'anthropic' });
     expect(mocks.remoteInvoke).not.toHaveBeenCalled();
     expect(mocks.poolCommand).not.toHaveBeenCalled();
   });

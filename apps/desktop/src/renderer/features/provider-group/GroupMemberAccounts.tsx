@@ -133,7 +133,9 @@ export function GroupMemberAccountList({
           const status = account.paused
             ? t('providerGroup.member.status.paused')
             : account.status === 'ready'
-              ? null
+              ? usage
+                ? null
+                : t('quotaCard.noWindows')
               : t(
                   `subscriptionAccounts.${account.status === 'signed-out' ? 'signedOut' : account.status}`,
                 );
