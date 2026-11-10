@@ -218,6 +218,7 @@ async function startRewindableSession(
     resolveModelCompactionPct?: AgentDeps['resolveModelCompactionPct'];
     resolveModelEfforts?: AgentDeps['resolveModelEfforts'];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
+    stream?: ReturnType<typeof createControlledStream>;
   } = {},
 ) {
   const configDir = await makeTempDir();
@@ -226,7 +227,7 @@ async function startRewindableSession(
   process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = String(options.idleTimeoutMs ?? 0);
   const workingDir = await makeTempDir();
 
-  const firstQuery = createFakeQuery();
+  const firstQuery = createFakeQuery(options.stream);
   sdkMock.query.mockReturnValue(firstQuery);
   const remoteStartParams: Array<Record<string, unknown>> = [];
   const remoteCcQueryFactory = options.remoteHostId
@@ -582,6 +583,37 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await vi.waitFor(async () => {
       await expect(fs.stat(settingsPath)).rejects.toMatchObject({ code: 'ENOENT' });
     });
+  });
+
+  it('removes the long-catalog settings file when the handle dies without close() (#9753)', async () => {
+    // teardownDeadHandle() sets closed = true before close() is ever called, and
+    // close() returns early in that state — so the dead-handle path has to drop the
+    // temp settings file itself, or every crashed run leaves one behind.
+    const availableModels = Array.from({ length: 1000 }, (_, index) => ({
+      id: `vendor/model-${String(index).padStart(4, '0')}-gateway-route`,
+      displayName: `Model ${index}`,
+      contextWindow: 128_000,
+      efforts: ['high' as const],
+      defaultEffort: 'high' as const,
+    }));
+    const stream = createControlledStream();
+    const { handle } = await startRewindableSession({
+      model: availableModels[0].id,
+      availableModels,
+      stream,
+    });
+    const startArgs = sdkMock.query.mock.calls[0]?.[0] as { options: { settings?: string | object } };
+    const settingsPath = startArgs.options.settings as string;
+    expect(typeof settingsPath).toBe('string');
+    await expect(fs.stat(settingsPath)).resolves.toBeTruthy();
+
+    stream.fail(new Error('transport crashed'));
+
+    await vi.waitFor(async () => {
+      await expect(fs.stat(settingsPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+    // 死亡路径已经删过一次, 宿主后来补的 close() 再删一遍必须是安全的空操作。
+    await expect(handle.close()).resolves.toBeUndefined();
   });
 
   it('keeps the selected and catalog Claude wire models available for a live model switch', async () => {
