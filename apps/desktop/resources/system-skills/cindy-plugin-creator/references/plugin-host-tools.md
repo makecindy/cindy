@@ -18,6 +18,10 @@
 | `terminal` | `cindy_helper` | 宿主管理的命令、交互终端与后台作业 |
 | `files` | `cindy_helper` | 授权目录的文件操作与监听；调用 `file_request` |
 | `storage` | `cindy_helper` | 本插件存储接口与每次确认的跨插件副本分享；调用 `storage_request` |
+| `browser` | `cindy_browser` | 当前浏览器的统一自动操作工具 |
+| `computer` | `cindy_computer` | 本机窗口、键盘和鼠标工具 |
+| `ssh` | `cindy_ssh` | 已配置 SSH 连接与远程命令 |
+| `docs` | `cindy_docs` | 插件私有目录内的文档生成、转换与读取 |
 
 每组在安装、更新确认和详情页各列一行权限。新增组需要批准；移除组立即收权。旧安装记录不会自动获得新能力，首次调用可请求宿主确认。用户拒绝后由详情页手动重试，插件不要循环请求。未知组按 Manifest v3 原样保存，当前宿主不授权。
 
@@ -40,9 +44,40 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 
 组批准后，`auto-approve` 工具直接执行；其余工具由宿主原生确认展示插件名、工具和参数，仅允许本次调用。取消、窗口不可用、账号切换、安装更新、停用或卸载均使旧请求失效。插件没有可继承的任务权限档，不能要求永久允许高风险操作。
 
-本入口仅支持上述两项服务的已声明组。插件管理（`ghost_*` 等）、主人代输入或 `ask_owner`、应用更新和反馈不开放。Node 子进程不提供此 API；应由声明的插件 Node 工作进程调用。
+本入口仅支持表中服务的已声明组。插件管理（`ghost_*` 等）、主人代输入或 `ask_owner`、应用更新和反馈不开放。Node 子进程不提供此 API；应由声明的插件 Node 工作进程调用。
 
 底层管子消息为 `{type:'host-tool-request',server,tool,args}`。身份由宿主从逻辑页或 Node 私有通道核验，不接受参数中的 `pluginId`、`sessionId` 或账号作为调用方身份。旧宿主和未提供此能力的执行宿主应按不支持处理。
+
+## 使用与提供宿主服务
+
+四个服务复用 Agent 的同一 registry、参数校验和宿主处理器，直接传具体工具名：
+
+```js
+const status = await cindy.host.call('cindy_browser', 'browser', { action: 'status' });
+const windows = await cindy.host.call('cindy_computer', 'list_windows', {});
+const hosts = await cindy.host.call('cindy_ssh', 'ssh_list_hosts', {});
+const document = await cindy.host.call('cindy_docs', 'make_docx', {
+  outPath: 'documents/report.docx', markdown: '# Report\n\nContent'
+});
+```
+
+浏览器使用用户已选择的后端；切换到「我的浏览器」、recipe、upload 等保留现有风险规则。
+页面中的主人私密输入保护保持生效，插件不能调用代输入确认或取得秘密。依赖真实任务的文件授权
+仍须由原工具确认上下文；缺少上下文时保留其错误，不借用正在前台的任务。
+电脑观察快照按插件实例保留，停用、换版或账号变化后失效。录制等文件操作和文档工具的根目录
+为本插件私有文件目录；文档不能用路径参数越界。需要读取产物字节时另声明 `fs:true`，
+通过 `cindy.fs({op:'read',root:'data',path:'documents/report.docx'})` 读取；不能从宿主内部路径获取其他数据。
+SSH 使用当前账号已配置的连接池，沿用原连接管理和风险确认，私钥或认证值不进入插件。
+每个执行 Host 必须已提供对应服务；Node Host 未装配浏览器、电脑、SSH 或文档时返回
+`UNSUPPORTED_CAPABILITY`，不会因 manifest 声明自行安装或启动第二套实现。
+
+媒体生成继续使用已有 `cindy.media` / 模型目录接口；当前没有独立媒体 MCP server，
+不声明不存在的 `media` 工具组。
+
+提供浏览器实现请沿用 [`browserExtension.pageControl`](plugin-browser-extension.md)。普通插件可随包提供
+扩展并实现既有页面控制契约，用户在详情页选择它作为「我的浏览器」执行端；Agent、Cindy 与其他
+获准 browser 组的插件都消费相同后端。无需注册新的服务中心，不能从插件代码替用户激活自己。
+停用、卸载、换版和来源变化撤销旧桥接，已有配对和用户选择按原实例保存，多个实现不静默混用。
 
 ## 定时任务与应用设置
 

@@ -23,6 +23,7 @@ import {
   POSTCHECK_ACTION_TOOLS,
 } from "./tools.js";
 import { logToolResultErrorCode } from "../tool-error-telemetry.js";
+import type { HostToolMcpServer } from '../host-tool-runtime.js';
 import { WindowSnapshotTracker } from "./snapshot-tracker.js";
 import { computerResultOutcome, isUnavailableWindowObservation, normalizeInputFailureAdvice, normalizePointerAdvice } from "./result.js";
 import {
@@ -360,10 +361,12 @@ function readCallContext(options: ComputerMcpServerOptions): ComputerMcpCallCont
   const sessionContext = options.getSessionContext?.();
   const sessionId = sessionContext?.sessionId ?? options.sessionId;
   const agentKind = sessionContext?.agentKind;
-  return sessionId || agentKind
+  const hostCaller = sessionContext?.hostCaller;
+  return sessionId || agentKind || hostCaller
     ? {
         ...(sessionId ? { sessionId } : {}),
         ...(agentKind ? { agentKind } : {}),
+        ...(hostCaller ? { hostCaller } : {}),
       }
     : undefined;
 }
@@ -482,7 +485,7 @@ async function resolveReplayBoundPath(
 export function createComputerMcpServer(
   deps: ComputerMcpDeps,
   options: ComputerMcpServerOptions = {},
-): McpServer {
+): HostToolMcpServer {
   const server = new McpServer({ name: 'cindy_computer', version: '0.1.0' });
   // 快照代际状态。claude 路径下每 session 一个 server 实例;codex HTTP bridge 下
   // 单实例跨 session 共享,所以 tracker 内部按 sessionId 分键。
@@ -1796,7 +1799,11 @@ export function createComputerMcpServer(
     return snapshotId;
   }
 
-  return server;
+  return Object.assign(server, { hostTools: {
+    describe: (name: string) => getComputerTool(name) ? { name, category: 'computer' } : undefined,
+    call: (name: string, args?: Record<string, unknown>, signal?: AbortSignal) => handleCallTool(name, args, signal),
+    close: async () => { await deps.closeContext?.(readCallContext(options)); await server.close(); },
+  } });
 }
 
 

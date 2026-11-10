@@ -196,7 +196,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   批准后，插件创建的任务及 Worker 中的 Agent 按普通任务的权限使用已连接工具；
   创建回执仅约束插件直接管理该任务，不参与任务内 Agent 的工具权限判定。
   插件直接调用 `cindy.tasks` 仍只管理本插件的任务。
-- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` 工具组，每组独立展示和批准。
+- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` / `browser` / `computer` / `ssh` / `docs` 工具组，每组独立展示和批准。
   receipt 的可选 `approvedHostToolGroups` 仅记录显式批准；旧记录缺失时首次调用复用现有确认，拒绝后由详情页手动重试。
   新增组算扩权，同来源更新只保留仍声明的已批准组，移除或卸载即失效，不改变旧插件其它能力。
   `cindy.host.call(server, tool, args)` 的 UI 与 Node 请求共用 `hostToolSlot`，通过同一 provider / registry 调用 Agent 工具处理器，禁止另写插件业务实现。
@@ -207,6 +207,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   每次批准查询均重新读取和验证 receipt，不使用授权缓存或同步段去重。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
+  `browser/computer/ssh/docs` 直接复用相应现有 MCP server 的 validated handler；新组不改公共调用或调用方签名。
+  browser recipe/切换用户浏览器/upload、电脑敏感输入与系统权限、SSH 认证和文档文件边界沿用原规则。
+  电脑快照按插件实例和安装代次保留，停用/撤权/换版/owner 变化销毁；文档与电脑文件输出绑定本插件私有根，
+  文档写入在原 writer 的 IO 边界复核插件调用授权。未提供服务的 Node Host 明确返回不支持，不装配新平台主体。
+  服务提供者沿用已有 browserExtension.pageControl 的普通插件准入、详情页激活、配对和生命周期，不另造注册中心。
+  当前媒体生成没有独立 MCP server，继续用已有 cindy.media 接口，不虚设 media 组。
   `terminal` 复用 `main/terminal/PtyManager`，界面与 MCP 共用 `HostTerminalService` 的同一注册表；
   不另写插件进程实现。Host 核准的插件实例/安装代次或真实 Session 绑定作业 owner，id 不授予归属。
   启动及输入等变更走原风险规则；命令具有用户级本机能力，确认中必须明确说明，不能宣称文件沙箱。

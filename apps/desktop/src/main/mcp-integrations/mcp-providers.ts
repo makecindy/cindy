@@ -708,7 +708,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     //   inspectPdf:     回读 PDF 结构靠一次性 utility process 里的 pdfjs。
     docs: {
       logger: createLogger('mcp/cindy_docs'),
-      writeDocsOutput,
+      writeDocsOutput: input => {
+        const plugin = getPluginHostToolCaller();
+        if (!plugin) return writeDocsOutput(input);
+        const current = input.isCurrent;
+        return writeDocsOutput({ ...input, isCurrent: () => {
+          try { plugin.assertCurrent(); return current?.() !== false; } catch { return false; }
+        } });
+      },
       renderHtmlToPdf,
       inspectPdf,
     },

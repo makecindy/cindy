@@ -22,6 +22,10 @@ import { createGhostKvStore } from '../../desktop/src/main/cindy-brain/ghostKvSt
 import { defaultPtySpawn } from '../../desktop/src/main/terminal/ptyFactory.ts';
 import { createHostToolService } from './agent/host-tools.ts';
 import { createHostConfirmations } from './host-confirmations.ts';
+import { createLiziMcpProviders } from '@cindy/mcps';
+import { createProviderHostToolRuntime } from '../../desktop/src/main/mcp-integrations/hostToolCaller.ts';
+import { handlePluginHostToolRequest } from '../../desktop/src/main/cindy-brain/hostToolSlot.ts';
+import { hasPluginHostToolGroupApproval } from '../../desktop/src/main/cindy-brain/taskCapability.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 
 import { dataOwnerStorageKey } from '../../desktop/src/main/dataOwnerPath.ts';
@@ -129,7 +133,7 @@ test('runs and reaps real plugin workers through the common broker', async t => 
         const response = await cindy.fetch({ url: 'https://api.example.test/account' });
         result = { response, receivedSecrets: !!request.cindy?.secrets };
       } else if (request.method === 'terminal') {
-        const response = await cindy.host.call('cindy_helper', request.params.tool, request.params.args);
+        const response = await cindy.host.call(request.params.server || 'cindy_helper', request.params.tool, request.params.args);
         result = JSON.parse(response.content.find(item => item.type === 'text').text);
       } else result = { value: request.params.value, pid: process.pid,
         filtered: process.env.CINDY_TEST_PRIVATE_HOST_VALUE === undefined,
@@ -152,11 +156,11 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   const ghost = { manifest: { id: 'test-node', name: 'Node fixture', version: '1.0.0', node: {
     entry: 'worker.cjs', protocol: 'json-rpc-stdio', entries: ['child.cjs'], childSpawn: true,
     secretBindings: [{ key: 'raw_account', label: 'Account', oauthSecret: 'account', methods: ['raw-account'] }],
-  }, agent: { hostTools: ['terminal', 'files', 'storage'] }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
+  }, agent: { hostTools: ['terminal', 'files', 'storage', 'browser'] }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
     secrets: [{ key: 'account', label: 'Account', source: 'oauth', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] },
       oauth: { authorizeUrl: 'https://accounts.example.test/authorize', tokenUrl: 'https://accounts.example.test/token', scopes: ['read'], clientId: 'fixture-client' } }] } }, dir, enabled: true,
     namespace: null, namespaceState: 'confirmed',
-    approval: { state: 'approved', revision: 'real-worker-fixture' }, approvedHostToolGroups: ['terminal', 'files', 'storage'] };
+    approval: { state: 'approved', revision: 'real-worker-fixture' }, approvedHostToolGroups: ['terminal', 'files', 'storage', 'browser'] };
   const receiverDir = path.join(dir, 'receiver'); fs.mkdirSync(receiverDir);
   fs.copyFileSync(path.join(dir, 'worker.cjs'), path.join(receiverDir, 'worker.cjs'));
   const receiver = { manifest: { id: 'test-receiver', name: 'Receiver fixture', version: '1.0.0',
@@ -234,8 +238,17 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     getGhost, getSession: () => undefined, current: () => true, confirmations, t: key => key,
     manager: { approveTaskCapability: async () => { throw new Error('fixture group was already approved'); } },
   });
+  // This fixture supplies a browser driver, as Desktop does. Node Host's default
+  // assembly remains unsupported; Worker/FD/gateway/registry are the real path.
+  const browserProviders = createLiziMcpProviders({ browser: { getRuntime: () => ({ call: async request =>
+    ({ ok: true, action: request.action, data: { source: 'shared-browser-handler' } }) }) } });
   const broker = createHostNodeRuntimeBroker(workerEntry, { getGhost,
-    hostToolRequest: hostTools.request, onStopped: hostTools.stopPlugin,
+    hostToolRequest: (id, request, current) => request.server === 'cindy_browser'
+      ? handlePluginHostToolRequest(id, request, current, { getGhost, owner,
+        createRuntime: (server, caller) => createProviderHostToolRuntime(browserProviders, server, caller),
+        approveGroup: async (pluginId, group, active) => active() && hasPluginHostToolGroupApproval(getGhost(pluginId), group),
+        policy: () => 'auto-approve', confirm: async () => false })
+      : hostTools.request(id, request, current), onStopped: hostTools.stopPlugin,
     resolveOauthSecret: (id, key, accountId) => oauth.getNodeAccessToken(id, key, ghost.manifest.network.secrets[0].oauth, accountId),
     networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request) });
   try {
@@ -261,6 +274,15 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     const raw = await broker.handleRequest('test-node', { type: 'node-request', method: 'raw-account' });
     assert.equal(raw.ok, false);
     assert.equal(raw.errorCode, 'HOST_INJECTION_REQUIRED');
+    const browser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
+      server: 'cindy_browser', tool: 'browser', args: { action: 'status' } } });
+    assert.equal(browser.ok, true, JSON.stringify(browser));
+    assert.equal(browser.result.ok, true, JSON.stringify(browser));
+    assert.equal(browser.result.data.source, 'shared-browser-handler');
+    ghost.approvedHostToolGroups = ghost.approvedHostToolGroups.filter(group => group !== 'browser');
+    const unapprovedBrowser = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: {
+      server: 'cindy_browser', tool: 'browser', args: { action: 'status' } } });
+    assert.equal(unapprovedBrowser.result.errorCode, 'PERMISSION_DENIED');
     const terminalCall = async (tool, args = {}) => {
       const result = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: { tool, args } });
       assert.equal(result.ok, true, JSON.stringify(result));

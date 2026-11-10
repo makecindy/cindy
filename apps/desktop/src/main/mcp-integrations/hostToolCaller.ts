@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { HostToolCaller, LiziMcpProvider, LiziMcpSessionContext, ToolCallAuthorizer } from '@cindy/mcps';
+import type { HostToolCaller, HostToolRuntime, LiziMcpProvider, LiziMcpSessionContext, ToolCallAuthorizer } from '@cindy/mcps';
 import { admitPluginTaskAction, runTaskActionRequest } from '../maker-ipc/taskActionAuthorization.js';
 import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import type { ScheduleMutationGuard } from '@cindy/maker-scheduler';
@@ -20,8 +20,25 @@ const callerScope = new AsyncLocalStorage<PluginHostToolCaller>();
 let activeCallers = 0;
 let providers: readonly LiziMcpProvider[] = [];
 let providerOwner: DataOwnerPushStamp | null = null;
+// Computer element/snapshot references survive individual calls, scoped to the plugin.
+const computerRuntimes = new Map<string, { runtime: HostToolRuntime; revision: string }>();
+
+export function disposePluginHostTools(id: string): void {
+  const entry = computerRuntimes.get(id);
+  computerRuntimes.delete(id);
+  void entry?.runtime.close().catch(() => {});
+}
+
+export function reconcilePluginHostTools(revisions: ReadonlyMap<string, string>): void {
+  for (const [id, entry] of computerRuntimes) {
+    if (revisions.get(id) !== entry.revision) disposePluginHostTools(id);
+  }
+}
 
 export function setHostToolProviders(current: readonly LiziMcpProvider[], owner: DataOwnerPushStamp): void {
+  if (providerOwner?.dataOwnerId !== owner.dataOwnerId || providerOwner.ownerGeneration !== owner.ownerGeneration) {
+    for (const id of computerRuntimes.keys()) disposePluginHostTools(id);
+  }
   providers = current;
   providerOwner = owner;
 }
@@ -60,9 +77,30 @@ export const authorizePluginHostToolCall: ToolCallAuthorizer = async call => {
 };
 
 /** Same providers and injected Host services as ordinary Agent tasks. */
-export function createHostToolRuntime(server: string, caller: Extract<HostToolCaller, { kind: 'plugin' }>) {
+export function createHostToolRuntime(server: string, caller: Extract<HostToolCaller, { kind: 'plugin' }>, workingDir = '', revision = '') {
   if (!providerOwner || providerOwner.dataOwnerId !== caller.dataOwnerId || providerOwner.ownerGeneration !== caller.ownerGeneration) return null;
-  return createProviderHostToolRuntime(providers, server, caller);
+  const context = pluginContext(caller, workingDir);
+  const provider = providers.find(item => item.name === server && item.toHostTools);
+  if (!provider?.toHostTools || provider.isEnabled?.(context) === false) {
+    if (server === 'cindy_computer') disposePluginHostTools(caller.pluginId);
+    return null;
+  }
+  if (server !== 'cindy_computer') return provider.toHostTools(context);
+  let entry = computerRuntimes.get(caller.pluginId);
+  if (entry && entry.revision !== revision) { disposePluginHostTools(caller.pluginId); entry = undefined; }
+  if (!entry) {
+    entry = { runtime: provider.toHostTools(context), revision };
+    computerRuntimes.set(caller.pluginId, entry);
+  }
+  const { runtime } = entry;
+  // The original runtime owns observations until plugin stop/account switch.
+  return { describe: runtime.describe, call: runtime.call, close: async () => {} };
+}
+
+function pluginContext(caller: Extract<HostToolCaller, { kind: 'plugin' }>, workingDir: string): LiziMcpSessionContext {
+  const context: LiziMcpSessionContext = { agentKind: 'claude-code', workingDir, hostCaller: caller };
+  context.getSessionContext = () => context;
+  return context;
 }
 
 /** Node Host and Desktop bind the same provider to an attested plugin caller. */
@@ -70,10 +108,8 @@ export function createProviderHostToolRuntime(current: readonly LiziMcpProvider[
   caller: Extract<HostToolCaller, { kind: 'plugin' }>) {
   const provider = current.find(item => item.name === server && item.toHostTools);
   if (!provider?.toHostTools) return null;
-  const context: LiziMcpSessionContext = {
-    agentKind: 'claude-code', workingDir: '', hostCaller: caller,
-  };
+  const context = pluginContext(caller, '');
   // An explicit accessor prevents a nested Agent tool call's ambient ALS from being inherited.
-  context.getSessionContext = () => context;
+  if (provider.isEnabled?.(context) === false) return null;
   return provider.toHostTools(context);
 }

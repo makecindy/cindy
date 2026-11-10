@@ -234,7 +234,7 @@ export interface GhostCardNeeds {
  * 声明 `agent` 默认只允许消费宿主在真实用户点击插件卡片时签发的
  * 一次性通行票；可选加档由 Desktop 如实展示，并由 Host 在运行时守门。
  */
-export const GHOST_HOST_TOOL_GROUPS = ['history', 'control', 'handoff', 'settings', 'scheduler', 'terminal', 'files', 'storage'] as const;
+export const GHOST_HOST_TOOL_GROUPS = ['history', 'control', 'handoff', 'settings', 'scheduler', 'terminal', 'files', 'storage', 'browser', 'computer', 'ssh', 'docs'] as const;
 export type GhostHostToolGroup = (typeof GHOST_HOST_TOOL_GROUPS)[number];
 
 /** Unknown groups survive normalization but never become runtime authority. */

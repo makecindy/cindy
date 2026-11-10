@@ -37,6 +37,14 @@ function installed(
 }
 
 describe('plugin install consent', () => {
+  it.each(['browser', 'computer', 'ssh', 'docs'] as const)('requires explicit approval for a newly recognized %s group', group => {
+    const next = manifest({ agent: { hostTools: [group] } });
+    const old = installed(next);
+    expect(evaluateGhostInstallConsent(old, next)).toMatchObject({ kind: 'update',
+      added: expect.arrayContaining([expect.objectContaining({ key: `agent:host-tools:${group}` })]) });
+    expect(evaluateGhostInstallConsent({ ...old, approvedHostToolGroups: [group] }, next)).toBeNull();
+  });
+
   // §21 unit: a group retained as unknown by an older Host is not an explicit
   // filesystem approval. Existing cases did not cover a newly recognized group.
   it('将亲选目录 files 组单列为扩权，旧声明不补批准', () => {

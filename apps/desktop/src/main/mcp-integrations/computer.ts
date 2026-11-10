@@ -31,6 +31,7 @@ import {
 } from './computer-contract.js';
 import { computerResultOutcome, getComputerTool, isUnavailableWindowObservation } from '@cindy/mcps/computer';
 import { callComputerToolWithOutputValidation } from './computer-output.js';
+import { getPluginHostToolCaller } from './hostToolCaller.js';
 
 const logger = createLogger('mcp/cindy_computer');
 const DRIVER_COMMAND = 'cua-driver';
@@ -3814,6 +3815,7 @@ async function callComputerDriverToolImpl(
   }
   const sessionCloseVersion = getCuaMcpSessionCloseVersion(sessionId);
   const assertActive = () => {
+    context?.assertCurrent?.();
     assertInputCurrent();
     signal?.throwIfAborted();
     assertComputerDriverToolDispatchAvailable();
@@ -4005,11 +4007,23 @@ export function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): Comput
     await runtimePreparation;
   };
   return {
+    closeContext: async context => {
+      if (context?.hostCaller) await cleanupComputerDriverSession(pluginDriverScope(context.hostCaller));
+    },
     getStatus: async () => {
       await ensureRuntime();
       return getComputerDriverStatus();
     },
     callTool: async (name, args, context) => {
+      const caller = context?.hostCaller;
+      const plugin = caller ? getPluginHostToolCaller() : undefined;
+      if (caller) {
+        if (!plugin || context?.sessionId !== undefined || caller.pluginId !== plugin.caller.pluginId ||
+            caller.dataOwnerId !== plugin.caller.dataOwnerId || caller.ownerGeneration !== plugin.caller.ownerGeneration)
+          throw new Error('PERMISSION_DENIED');
+        // Only the native driver's connection key: no Cindy task is created or looked up.
+        context = { ...context, sessionId: pluginDriverScope(caller), assertCurrent: plugin.assertCurrent };
+      }
       if (options.isComputerUseEnabled && !options.isComputerUseEnabled(context)) {
         throw new ComputerDriverError(
           'Computer Use is disabled in Settings. Tell the person this step needs it: Settings → Built-in tools → Computer Use (link: cindy://settings/builtin-tools; macOS also asks for Accessibility and Screen Recording there). Only they can enable it; do not simulate input from the shell.',
@@ -4017,6 +4031,7 @@ export function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): Comput
         );
       }
       await ensureRuntime();
+      plugin?.assertCurrent();
       return callComputerDriverTool(name, args, context);
     },
     // Loaded on use: the 代输入 driver brings the native input helpers with it.
@@ -4024,4 +4039,8 @@ export function getComputerMcpDeps(options: ComputerMcpDepsOptions = {}): Comput
     describeDesktop: async () => ({ screen_locked: isDesktopScreenLocked() }),
     logger,
   };
+}
+
+function pluginDriverScope(caller: NonNullable<ComputerMcpCallContext['hostCaller']>): string {
+  return `plugin:${JSON.stringify([caller.dataOwnerId, caller.ownerGeneration, caller.pluginId])}`;
 }

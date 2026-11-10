@@ -109,7 +109,7 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   只有改变既有字段结构或安全语义时才需要协调协议升级。
 - 插件必须检测接口并处理不支持响应，局部降级或提示升级。`minCindyVersion` 不能替代
   这些处理：手动导入、旧版或其它安装渠道仍可能将包交给不适配客户端。
-- `agent.hostTools: string[]` 增量声明宿主工具组，当前识别 history/control/handoff/settings/scheduler/terminal/files/storage。
+- `agent.hostTools: string[]` 增量声明宿主工具组，当前识别 history/control/handoff/settings/scheduler/terminal/files/storage/browser/computer/ssh/docs。
   未知字符串保留但不授权；receipt 增量可选 `approvedHostToolGroups` 不改变版本，旧记录可继续读取，缺少批准只影响新接口。
   UI 管子新增 `host-tool-request`，Node 私有通道使用同类型加 `reqId`，共用宿主校验及 Agent 工具处理器；返回原始 MCP 结果。
   旧宿主可保留清单但不支持接口，插件须检测 `cindy.host?.call` 并处理不支持响应。无 Session 的插件调用方不会改变原任务调用方协议或身份；不涉及 device-link wire 变更。
@@ -135,6 +135,9 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   不新增管子、device-link 或 relay 字段。跨插件只交付原 handoff 副本，同账号本机、同组织且身份已确认，
   可信确认和摘要复核不接受插件自报批准。新增组不把历史未知字符串变成批准事实，原存储布局与已有 API 不变。
   handoff 新接口的分块读返回 base64/nextOffset/sha256，旧页面与原网络上传仍按旧通道读取同一份副本。
+  browser/computer/ssh/docs 增量扩展现有组和 server 准入，复用原 MCP registry 校验和风险规则；
+  不改变 host.call、host-tool-request 或 HostToolCaller 签名，不新增跨端字段。文档路径根为插件私有目录。
+  服务提供者继续使用 browserExtension.pageControl 原声明与详情页选择，不改变扩展 wire 协议。
 - 历史查询通道增量支持 `list_teammates`，复用同一个工具 registry 校验与宿主目录读取；不新增 channel。
   目录和指定 `teammate_id` 的关系分别分页，默认 100、最多 1000，返回 `nextCursor` / `hasMore`，游标复用历史查询的编码。
 - `control/delete_session` 为增量 Agent 工具，插件通过同一入口调用；本机复用 `patchSessionMetaInDb(status:'deleted')`，

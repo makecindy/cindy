@@ -19,15 +19,18 @@ export interface PluginHostToolPorts {
 }
 
 const fail = (errorCode: string, message?: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, errorCode, ...(message ? { message } : {}) }) }] });
+const SERVICE_GROUPS: Readonly<Record<string, GhostHostToolGroup>> = {
+  cindy_browser: 'browser', cindy_computer: 'computer', cindy_ssh: 'ssh', cindy_docs: 'docs',
+};
 
 /** Both logic pages and Node workers enter here with a Host-verified installation identity. */
 export async function handlePluginHostToolRequest(id: string, payload: unknown, pageCurrent: () => boolean, ports: PluginHostToolPorts) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return fail('INVALID_PARAMS');
   const raw = payload as Partial<GhostPipeHostToolRequest>;
-  if (raw.type !== 'host-tool-request' || typeof raw.tool !== 'string' || !/^[a-z][a-z0-9_:-]{0,127}$/.test(raw.tool) ||
+  if (raw.type !== 'host-tool-request' || typeof raw.server !== 'string' || typeof raw.tool !== 'string' || !/^[a-z][a-z0-9_:-]{0,127}$/.test(raw.tool) ||
     !raw.args || typeof raw.args !== 'object' || Array.isArray(raw.args)) return fail('INVALID_PARAMS');
   // Plugin management, owner input, app updates and feedback are outside this entry.
-  if (raw.server !== 'cindy_helper' && raw.server !== 'cindy_scheduler') return fail('PERMISSION_DENIED');
+  if (raw.server !== 'cindy_helper' && raw.server !== 'cindy_scheduler' && !Object.hasOwn(SERVICE_GROUPS, raw.server ?? '')) return fail('PERMISSION_DENIED');
   const server = raw.server, tool = raw.tool;
   let args: Record<string, unknown>;
   try { args = JSON.parse(JSON.stringify(raw.args)); } catch { return fail('INVALID_PARAMS'); }
@@ -48,7 +51,7 @@ export async function handlePluginHostToolRequest(id: string, payload: unknown, 
   let closeStarted = false;
   try {
     const definition = runtime.describe(tool);
-    const group = GHOST_HOST_TOOL_GROUPS.find(item => item === definition?.category);
+    const group = SERVICE_GROUPS[server] ?? GHOST_HOST_TOOL_GROUPS.find(item => item === definition?.category);
     if (!definition || !group) return fail('PERMISSION_DENIED');
     if (!await ports.approveGroup(id, group, current)) return fail('PERMISSION_DENIED');
     const authorized = () => current() && hasPluginHostToolGroupApproval(ports.getGhost(id), group);

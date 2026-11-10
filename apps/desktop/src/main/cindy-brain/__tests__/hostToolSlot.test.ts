@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { handlePluginHostToolRequest, type PluginHostToolPorts } from '../hostToolSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
-import { authorizePluginHostToolCall, getPluginHostToolCaller } from '../../mcp-integrations/hostToolCaller.js';
+import { authorizePluginHostToolCall, createHostToolRuntime, disposePluginHostTools, getPluginHostToolCaller, setHostToolProviders } from '../../mcp-integrations/hostToolCaller.js';
 import { createTaskToolCallAuthorizer } from '../../maker-ipc/taskToolCallAuthorizer.js';
 import { captureTaskActionSyncGuard, captureTaskActionDeliveryGuard, hasTaskActionAuthorization } from '../../maker-ipc/taskActionAuthorization.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
@@ -66,6 +66,71 @@ describe('plugin Host tool entry', () => {
     f.ports.createRuntime = (server, caller) => ({ ...create(server, caller)!, close });
     expect(code(await f.call())).toBe('PERMISSION_DENIED');
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('rejects malformed server identities before service lookup', async () => {
+    const f = fixture();
+    expect(code(await handlePluginHostToolRequest('dashboard', {
+      type: 'host-tool-request', server: { toString: null }, tool: 'browser', args: {},
+    }, () => true, f.ports))).toBe('INVALID_PARAMS');
+    expect(f.ports.approveGroup).not.toHaveBeenCalled();
+  });
+
+  it('keeps computer observations per plugin until stop and honors live provider disable', async () => {
+    const owner = { dataOwnerId: 'owner', ownerGeneration: 4 };
+    const caller = { ...owner, kind: 'plugin' as const, pluginId: 'one' };
+    let enabled = true;
+    const close = vi.fn(async () => {});
+    const create = vi.fn(() => { let count = 0; return {
+      describe: (name: string) => ({ name, category: 'computer' }),
+      call: async () => ({ content: [{ type: 'text' as const, text: String(++count) }] }), close,
+    }; });
+    setHostToolProviders([{ name: 'cindy_computer', isEnabled: () => enabled, toClaudeSdkConfig: () => null, toHostTools: create }], owner);
+    try {
+      const first = createHostToolRuntime('cindy_computer', caller)!;
+      expect((await first.call('status')).content[0]).toMatchObject({ text: '1' });
+      await first.close();
+      const next = createHostToolRuntime('cindy_computer', caller)!;
+      expect((await next.call('status')).content[0]).toMatchObject({ text: '2' });
+      expect(create).toHaveBeenCalledTimes(1);
+      expect((await createHostToolRuntime('cindy_computer', { ...caller, pluginId: 'two' })!.call('status')).content[0]).toMatchObject({ text: '1' });
+      enabled = false;
+      expect(createHostToolRuntime('cindy_computer', caller)).toBeNull();
+      enabled = true;
+      disposePluginHostTools('one');
+      expect((await createHostToolRuntime('cindy_computer', caller)!.call('status')).content[0]).toMatchObject({ text: '1' });
+      setHostToolProviders([], { ...owner, ownerGeneration: 5 });
+      expect(createHostToolRuntime('cindy_computer', caller)).toBeNull();
+      expect(close).toHaveBeenCalledTimes(3);
+    } finally { setHostToolProviders([], { ...owner, ownerGeneration: 6 }); }
+  });
+
+  // Item 26: these existing services were inaccessible from the public plugin entry.
+  // One approved plugin is enough to expose group/category confusion and risky calls.
+  it.each([
+    ['cindy_browser', 'browser', 'browser', { action: 'status' }, false],
+    ['cindy_browser', 'browser', 'browser', { action: 'setBackend', backend: 'user-browser' }, true],
+    ['cindy_computer', 'computer', 'status', {}, false],
+    ['cindy_ssh', 'ssh', 'ssh_exec', { host: 'example', command: 'pwd' }, true],
+    ['cindy_docs', 'docs', 'read_sheet', { path: 'own.csv' }, false],
+    ['cindy_docs', 'docs', 'make_docx', { outPath: 'own.docx', markdown: 'Report' }, true],
+  ] as const)('opens %s/%s through its existing risk policy', async (server, group, tool, args, confirmed) => {
+    const f = fixture();
+    f.ghost.manifest.agent!.hostTools = [group];
+    f.ghost.approvedHostToolGroups = [group];
+    f.ports.createRuntime = () => ({ describe: name => ({ name, category: group === 'docs' ? 'read' : group }),
+      call: async () => f.result, close: async () => {} });
+    f.ports.policy = (serverName, name, input) => getDesktopMcpToolApprovalPolicy(serverName === 'cindy_docs'
+      ? { serverName, toolName: name, toolParams: input }
+      : { serverName, toolName: 'call_tool', toolParams: { name, args: input } });
+    const call = () => handlePluginHostToolRequest('dashboard', { type: 'host-tool-request', server, tool, args }, () => true, f.ports);
+    expect(await call()).toEqual(f.result);
+    expect(f.ports.confirm).toHaveBeenCalledTimes(confirmed ? 1 : 0);
+    f.ghost.approvedHostToolGroups = [];
+    expect(code(await call())).toBe('PERMISSION_DENIED');
+    f.ghost.approvedHostToolGroups = [group];
+    f.ghost.manifest.agent!.hostTools = ['history'];
+    expect(code(await call())).toBe('PERMISSION_DENIED');
   });
 
   it('routes the public UI API through the real IPC dispatcher using the sender identity', async () => {

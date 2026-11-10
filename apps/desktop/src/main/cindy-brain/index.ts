@@ -103,7 +103,7 @@ import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
 import { PluginTargetSlot, type PluginTargetAdapter } from './pluginTargetSlot.js';
 import { handlePluginObserveRequest, type PluginObserveAdapter } from './pluginObserveSlot.js';
 import { createCompanionWatchHub, handlePluginCompanionRequest, type CompanionWatchHub, type PluginCompanionAdapter } from './pluginCompanionSlot.js';
-import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, pluginHostToolGroup, pluginEventTopic, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
+import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, hasPluginHostToolGroupApproval, pluginCapabilityApproval, pluginHostToolGroup, pluginEventTopic, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
 import {
   registerGhostCardRemoteProvider,
   persistGhostCardWithRemoteChange,
@@ -160,13 +160,20 @@ function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm
 /** UI and Node requests share this exact gateway, including first-use and per-call approval. */
 function requestPluginHostToolCall(id: string, payload: unknown, current: () => boolean) {
   return handlePluginHostToolRequest(id, payload, current, withPluginSchedulerApproval(id, {
-    getGhost: findGhostForInstanceId, owner: getActiveDataOwnerPushStamp, createRuntime: createHostToolRuntime,
+    getGhost: findGhostForInstanceId, owner: getActiveDataOwnerPushStamp,
+    createRuntime: (server, caller) => {
+      const root = server === 'cindy_docs' || server === 'cindy_computer' ? ownerScopedUserDataPath('ghost-fs', caller.pluginId) : '';
+      if (root) fs.mkdirSync(root, { recursive: true });
+      return createHostToolRuntime(server, caller, root, ghostInstallApprovalToken(findGhostForInstanceId(caller.pluginId)?.approval));
+    },
     approveGroup: (pluginId, group, active) => requestPluginTaskApproval(pluginId, active, facts => {
       const window = getDeepLinkMainWindow();
       if (!window || !isTrustedAppRendererWindow(window)) return Promise.resolve(false);
       return createWindowGhostInstallConsentPrompt(window.webContents)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts });
     }, false, `host-tools:${group}`),
-    policy: (serverName, name, args) => getDesktopMcpToolApprovalPolicy({ serverName, toolName: 'call_tool', toolParams: { name, args } }),
+    policy: (serverName, name, args) => getDesktopMcpToolApprovalPolicy(serverName === 'cindy_docs'
+      ? { serverName, toolName: name, toolParams: args }
+      : { serverName, toolName: 'call_tool', toolParams: { name, args } }),
     confirm: async ({ pluginId, pluginName, server, tool, args }) => {
       const parent = getDeepLinkMainWindow();
       if (!parent || parent.isDestroyed() || !isTrustedAppRendererWindow(parent)) return false;
@@ -719,7 +726,7 @@ import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { guardedOutboundFetch, outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { getDesktopMcpToolApprovalPolicy, setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
-import { createHostToolRuntime } from '../mcp-integrations/hostToolCaller.js';
+import { createHostToolRuntime, disposePluginHostTools, reconcilePluginHostTools } from '../mcp-integrations/hostToolCaller.js';
 import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
 import { handlePluginHostToolRequest } from './hostToolSlot.js';
 import { withPluginSchedulerApproval } from './pluginSchedulerApproval.js';
@@ -2662,7 +2669,7 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
       authenticatedFetch: (ghostId, request, authorization, assertCurrent, signal) =>
         getGhostNetworkSlot().handleAuthenticatedNodeFetch(ghostId, request, authorization, assertCurrent, signal),
       hostToolRequest: requestPluginHostToolCall,
-      onStopped: id => { getDesktopHostTerminalService().disposePlugin(id); fsSlotSingleton?.disposePlugin(id); },
+      onStopped: id => { getDesktopHostTerminalService().disposePlugin(id); fsSlotSingleton?.disposePlugin(id); disposePluginHostTools(id); },
       networkRequest: (id, request) => request.op === 'fetch'
         ? getGhostNetworkSlot().handleFetchRequest(id, request)
         : getGhostNetworkSlot().handleNetworkRequest(id, request),
@@ -11654,6 +11661,8 @@ function broadcastGhostsChanged(
   },
 ): void {
   if (!opts?.projectionOnly) {
+    reconcilePluginHostTools(new Map(ghosts.filter(ghost => hasPluginHostToolGroupApproval(ghost, 'computer'))
+      .map(ghost => [installedGhostStoragePart(ghost), ghostInstallApprovalToken(ghost.approval)])));
     taskEventIndex.replace(ghosts, getGhostOwnerPushStamp());
     setTaskChangeListener((event, owner) => {
       if (isGhostOwnerStampCurrent(owner)) taskEventIndex.publish(event, owner, getGhostSubscriptionGateway);
