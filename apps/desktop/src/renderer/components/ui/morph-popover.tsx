@@ -206,6 +206,20 @@ function releasePinnedScrollHeights(root: HTMLElement): void {
   }
 }
 
+/**
+ * 松掉定高会让内滚列表临时展开到完整内容高度,浏览器随即把 scrollTop 夹回 0。
+ * 量高前后把偏移存下来再写回,删除目录 / 扫描结果更新时列表才不会跳回顶部。
+ */
+function captureInnerScrollOffsets(root: HTMLElement): Array<[HTMLElement, number]> {
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-morph-scroll="inner"]'))
+    .filter(node => node.scrollTop > 0)
+    .map(node => [node, node.scrollTop] as [HTMLElement, number]);
+}
+
+function restoreInnerScrollOffsets(offsets: Array<[HTMLElement, number]>): void {
+  for (const [node, top] of offsets) node.scrollTop = top;
+}
+
 /** 面板写入的 height 是 border-box,内容区可用高度必须扣掉上下边框。 */
 function panelBorderY(panel: HTMLElement): number {
   const style = getComputedStyle(panel);
@@ -295,6 +309,8 @@ export function MorphPopover({
       panel.style.height = 'auto';
       // 内滚层的定高会算进 scrollHeight;不松掉就会把上一轮的整段高度当成内容高度量出来,
       // 再加边框 → 短列表在内容没变时也会一路长到上限 (codex P2, #9536)。
+      // 松掉定高时列表会临时展开、scrollTop 被夹回 0,所以先把偏移存下来。
+      const scrollOffsets = captureInnerScrollOffsets(panel);
       releasePinnedScrollHeights(panel);
       let desiredW: number;
       if (panelWidthMode === 'trigger') {
@@ -346,6 +362,8 @@ export function MorphPopover({
           ? Math.max(0, maxContentHeight)
           : Number.POSITIVE_INFINITY;
       const targetH = Math.min(panel.scrollHeight + borderY, Math.max(0, avail), contentCap);
+      // 偏移在定高重新写回后再恢复:此时列表已回到真实可见高度,位置不会再被夹。
+      restoreInnerScrollOffsets(scrollOffsets);
       panel.style.width = prevW;
       panel.style.height = prevH;
       return { w: targetW, h: targetH };
