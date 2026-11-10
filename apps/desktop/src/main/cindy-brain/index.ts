@@ -102,7 +102,7 @@ import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
 import { PluginTargetSlot, type PluginTargetAdapter } from './pluginTargetSlot.js';
 import { handlePluginObserveRequest, type PluginObserveAdapter } from './pluginObserveSlot.js';
 import { createCompanionWatchHub, handlePluginCompanionRequest, type CompanionWatchHub, type PluginCompanionAdapter } from './pluginCompanionSlot.js';
-import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, pluginHostToolGroup, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
+import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, pluginHostToolGroup, pluginEventTopic, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
 import {
   registerGhostCardRemoteProvider,
   persistGhostCardWithRemoteChange,
@@ -569,6 +569,7 @@ import {
   confirmedTaskCapability,
   confirmedAutoTools,
   confirmedHostToolGroups,
+  confirmedEventTopics,
   confirmedControlPoints,
   confirmedUiCapability,
   obtainGhostInstallConsent,
@@ -668,6 +669,8 @@ import {
   type GhostScreenResult,
   type MinimalAgentEvent,
 } from './subscriptionGateway.js';
+import { GhostTaskEventIndex } from './taskEventIndex.js';
+import { setTaskChangeListener } from '../localDb/taskEvents.js';
 import {
   GhostExternalLinkGate,
   GhostPreviewGate,
@@ -1422,6 +1425,7 @@ export function suspendCindyAccountGhosts(): void {
  * setup writes, and post-dispatch cleanup cannot cross into the next owner.
  */
 export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
+  taskEventIndex.replace([]);
   managerSingleton?.disposeNotificationIndex();
   await revokePluginAppServers();
   pluginDownloads.abortAll();
@@ -2821,6 +2825,7 @@ export const GHOST_ASSISTANT_REWRITTEN_CHANNEL = 'ghosts:assistant-message-rewri
 export const GHOST_ASSISTANT_PENDING_CHANNEL = 'ghosts:assistant-message-pending';
 
 let subscriptionGatewaySingleton: GhostSubscriptionGateway | null = null;
+const taskEventIndex = new GhostTaskEventIndex();
 
 /**
  * 订阅网关单例(卡槽①):did- 旁听扇出与 will- 拦截裁决的装配点。
@@ -7801,6 +7806,7 @@ async function installAndDockLocked(
     approvedControlPoints: confirmedControlPoints(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedHostToolGroups: confirmedHostToolGroups(opts.consent.decision, installedBefore, opts.consent.manifest),
+    approvedEventTopics: confirmedEventTopics(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     initiallyEnabled: opts.enable ?? false,
@@ -8001,6 +8007,7 @@ async function updateLocalGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(consent, previousGhost, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           approvedHostToolGroups: confirmedHostToolGroups(consent, previousGhost, inspected.manifest),
+          approvedEventTopics: confirmedEventTopics(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
@@ -8586,6 +8593,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(expected.consent, installed, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           approvedHostToolGroups: confirmedHostToolGroups(expected.consent, installed, inspected.manifest),
+          approvedEventTopics: confirmedEventTopics(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
@@ -9033,6 +9041,9 @@ export function registerGhostIpc(): void {
   });
   if (ipcRegistered) return;
   ipcRegistered = true;
+  setTaskChangeListener((event, owner) => {
+    if (isGhostOwnerStampCurrent(owner)) taskEventIndex.publish(event, owner, getGhostSubscriptionGateway);
+  });
   // 插件工具审批按真实已装实例与 receipt 判定，调用参数里的名字只用来定位。
   setGhostToolApprovalResolver(({ ghostId, namespace, tool }) => {
     const ghost = findGhostForInstanceId(ghostId, namespace);
@@ -10974,7 +10985,8 @@ export function registerGhostIpc(): void {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !id.trim()) throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
     const hostGroup = typeof capability === 'string' ? pluginHostToolGroup(capability) : undefined;
-    if (capability !== undefined && capability !== 'observe' && capability !== 'companions' && !hostGroup) {
+    const eventTopic = typeof capability === 'string' ? pluginEventTopic(capability) : undefined;
+    if (capability !== undefined && capability !== 'observe' && capability !== 'companions' && !hostGroup && !eventTopic) {
       throwIpcError('INVALID_PARAMS', 'unknown plugin capability');
     }
     requireGhostAvailableForActiveSession(id);
@@ -10983,7 +10995,7 @@ export function registerGhostIpc(): void {
     };
     const granted = await requestPluginTaskApproval(id, isCurrent, facts =>
       createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true,
-      hostGroup ? `host-tools:${hostGroup}` : capability === 'observe' || capability === 'companions' ? capability : 'tasks');
+      eventTopic ? `event:${eventTopic}` : hostGroup ? `host-tools:${hostGroup}` : capability === 'observe' || capability === 'companions' ? capability : 'tasks');
     if (granted) broadcastGhostsChanged(getGhostManager().list());
     return { granted };
   });
@@ -11515,6 +11527,7 @@ function broadcastGhostsChanged(
   },
 ): void {
   if (!opts?.projectionOnly) {
+    taskEventIndex.replace(ghosts, getGhostOwnerPushStamp());
     managerSingleton?.invalidateNotificationCandidates();
     refreshPluginApps(ghosts, { find: findGhostForInstanceId,
       evidence: id => getGhostManager().approvedInstallEvidence(id), available: () => !isGhostBoundaryPending() });

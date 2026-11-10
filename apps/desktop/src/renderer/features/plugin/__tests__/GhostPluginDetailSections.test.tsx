@@ -504,6 +504,20 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.hostToolsRequest' })).toBeNull();
   });
 
+  // Unit UI: legacy content declarations need an explicit Host confirmation; existing tests only cover Agent groups.
+  it('lets the user approve each new content topic independently', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const requestTaskApproval = vi.fn(async () => ({ granted: false }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest: { subscribe: { topics: ['message', 'task-state'] } }, enabled: true } as InstalledGhost;
+    const view = (approved = false) => <GhostPluginDetailView ghost={{ ...ghost, ...(approved ? { approvedEventTopics: ['message' as const] } : {}) }} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+    const { rerender } = render(view());
+    await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: 'settings.ghosts.perm.hostToolsRequest' })[0]!); });
+    expect(requestTaskApproval).toHaveBeenCalledWith(detail.id, 'event:message');
+    rerender(view(true));
+    expect(screen.getAllByRole('button', { name: 'settings.ghosts.perm.hostToolsRequest' })).toHaveLength(1);
+  });
+
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(
       'ResizeObserver',

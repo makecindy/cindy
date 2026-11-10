@@ -685,6 +685,27 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     expect(manager.list()[0]?.approvedHostToolGroups).toBeUndefined();
   });
 
+  // Unit installer contract: previously unknown content topics do not inherit metadata consent.
+  it('persists explicit event topic consent and removes it on update/uninstall', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'subscribe'], subscribe: { topics: ['session', 'message', 'task-state'] } };
+    const pkg = await makeCindy('content-events.cindy', manifest, { 'main.js': '// content' });
+    await manager.install(pkg);
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected.approvedEventTopics).toBeUndefined();
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'event:message')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'event:message')).toBe(true);
+    expect(manager.list()[0]?.approvedEventTopics).toEqual(['message']);
+    const update = await makeCindy('content-events-update.cindy', { ...manifest, version: '1.0.1', subscribe: { topics: ['session', 'task-state'] } }, { 'main.js': '// updated' });
+    const result = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    expect(result).not.toHaveProperty('ghost.approvedEventTopics');
+    await manager.uninstall(id);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'event:message')).toBe(false);
+    await manager.install(pkg);
+    expect(manager.list()[0]?.approvedEventTopics).toBeUndefined();
+  });
+
   it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {
     await writeLegacyInstall('hello', {...goodManifest(), slots:['tool','agent'], agent:{tasks}});
     await manager.migrateLegacyApprovalsOnce();

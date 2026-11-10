@@ -37,6 +37,9 @@ import {
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { GhostNotificationIndex } from '../ghostNotificationIndex.js';
+import { GhostTaskEventIndex } from '../taskEventIndex.js';
+import { decodeCursor } from '@cindy/mcps/history-cursor';
+import type { Message } from '../../../renderer/lib/ccAgent.types.js';
 
 const createSessionNotification = createGhostProductionCallbacks<{
   notifyGhostSessionEvent(
@@ -286,6 +289,73 @@ function ghost(
     enabled,
   } as InstalledGhost;
 }
+
+// Unit through the production gateway: unknown declarations preserved by old Hosts
+// must not start delivering message content after an upgrade without explicit consent.
+it('does not deliver a newly recognized message topic without its receipt approval', () => {
+  const g = ghost('reader', { topics: ['message'] });
+  g.approval = { state: 'approved', revision: 'r1' };
+  const { gw, sent, running } = makeGateway({ listGhosts: () => [g] });
+  running.add('reader');
+  gw.publish('message' as never, 'did-message-created' as never, { sessionId: 'task' });
+  expect(sent).toHaveLength(0);
+});
+
+// Unit: production content index -> gateway. Existing metadata tests never exercise saved
+// message content, attachment path removal or an install replaced during cold-start delivery.
+describe('indexed task content and state events', () => {
+  const owner = { dataOwnerId: 'owner', ownerGeneration: 1 };
+  const row = { id: 'message', role: 'assistant', createdAt: '2026-11-10T00:00:00.000Z', rowid: 4,
+    content: { text: 'saved reply', images: [{ url: '/private/image.png', name: 'image.png' }],
+      files: [{ path: '/private/file.txt', name: 'file.txt' }], reasoning: 'private thinking' } } as Message;
+  const subscriber = (): InstalledGhost => ({ ...ghost('reader', { topics: ['message', 'task-state'] }),
+    approval: { state: 'approved', revision: 'r1' }, approvedEventTopics: ['message', 'task-state'] });
+
+  it('delivers saved content with a usable history cursor and attachment positions through the existing queue', async () => {
+    const g = subscriber() as InstalledGhost;
+    const { gw, sent } = makeGateway({ findGhostForDelivery: () => g });
+    const index = new GhostTaskEventIndex();
+    index.replace([g], owner);
+    index.publish({ kind: 'message', sessionId: 'task', message: row }, owner, () => gw);
+    index.publish({ kind: 'state', sessionId: 'task', state: { status: 'archived' } }, owner, () => gw);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent.map(item => item.payload.name)).toEqual(['did-message-created', 'did-task-state-changed']);
+    const payload = sent[0]!.payload;
+    if (!('data' in payload)) throw new Error('expected content event');
+    const data = payload.data as { content: unknown; historyCursor: string };
+    expect(data.content).toEqual({ text: 'saved reply', attachments: [{ attachment_index: 0, name: 'image.png' }, { attachment_index: 1, name: 'file.txt' }] });
+    expect(decodeCursor(data.historyCursor)).toEqual({ createdAt: Date.parse(row.createdAt), id: 'message', rowid: 4 });
+  });
+
+  it.each(['no-subscriber', 'unapproved', 'owner-change', 'removed'] as const)('does no discovery or projection after %s', scenario => {
+    const index = new GhostTaskEventIndex();
+    const g = subscriber() as InstalledGhost;
+    if (scenario === 'unapproved') g.approvedEventTopics = undefined;
+    index.replace(scenario === 'no-subscriber' ? [] : [g], owner);
+    if (scenario === 'removed') index.replace([], owner);
+    const gateway = vi.fn();
+    index.publish({ kind: 'message', sessionId: 'task', get message(): Message { throw new Error('must not project'); } },
+      scenario === 'owner-change' ? { ...owner, ownerGeneration: 2 } : owner, gateway);
+    expect(gateway).not.toHaveBeenCalled();
+  });
+
+  it.each(['revision', 'uninstalled', 'revoked', 'disabled'] as const)('drops buffered content when %s changes before wake completes', async change => {
+    const g = subscriber() as InstalledGhost;
+    let live: InstalledGhost | null = g;
+    let wake!: () => void;
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => live,
+      wake: () => new Promise<void>(resolve => { wake = resolve; }) });
+    gw.publishIndexed([g], 'message', 'did-message-created', { sessionId: 'task', content: 'secret' });
+    live = change === 'uninstalled' ? null : { ...g,
+      ...(change === 'revision' ? { approval: { state: 'approved', revision: 'r2' } } : {}),
+      ...(change === 'revoked' ? { approvedEventTopics: [] } : {}),
+      ...(change === 'disabled' ? { enabled: false } : {}),
+    };
+    running.add('reader'); wake();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sent).toEqual([]);
+  });
+});
 
 function makeGateway(overrides: Partial<GhostSubscriptionGatewayDeps> = {}) {
   const sent: Array<{ ghostId: string; payload: GhostPipeEventPush }> = [];

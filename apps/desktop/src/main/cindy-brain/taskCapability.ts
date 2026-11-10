@@ -1,4 +1,4 @@
-import { ghostPermissionItems, type InstalledGhost } from '../../shared/ghost.js';
+import { declaredGhostTaskEventTopics, ghostTaskEventApproved, GHOST_TASK_EVENT_TOPICS, ghostPermissionItems, type GhostTaskEventTopic, type InstalledGhost } from '../../shared/ghost.js';
 import type { GhostInstallConsentFacts } from '../../shared/ghostInstallConsent.js';
 import { declaredGhostHostToolGroups, GHOST_HOST_TOOL_GROUPS, type GhostHostToolGroup } from '@cindy/plugin-protocol';
 
@@ -38,13 +38,18 @@ export function hasPluginDelegationApproval(ghost: InstalledGhost | null | undef
   return hasPluginTargetApproval(ghost) && ghost?.manifest.agent?.delegation === true && ghost.delegationCapabilityApproved === true;
 }
 
-export type PluginTaskCapability = 'tasks' | 'targets' | 'delegation' | 'observe' | 'companions' | `host-tools:${GhostHostToolGroup}`;
+export type PluginTaskCapability = 'tasks' | 'targets' | 'delegation' | 'observe' | 'companions' | `host-tools:${GhostHostToolGroup}` | `event:${GhostTaskEventTopic}`;
+export function pluginEventTopic(capability: string): GhostTaskEventTopic | undefined {
+  return GHOST_TASK_EVENT_TOPICS.find(topic => capability === `event:${topic}`);
+}
 
 export function pluginHostToolGroup(capability: string): GhostHostToolGroup | undefined {
   return GHOST_HOST_TOOL_GROUPS.find(group => capability === `host-tools:${group}`);
 }
 
 export function pluginDeclaresCapability(manifest: InstalledGhost['manifest'], capability: PluginTaskCapability): boolean {
+  const topic = pluginEventTopic(capability);
+  if (topic) return declaredGhostTaskEventTopics(manifest).includes(topic);
   const group = pluginHostToolGroup(capability);
   if (group) return declaredGhostHostToolGroups(manifest).includes(group);
   return capability === 'observe' || capability === 'companions'
@@ -57,6 +62,8 @@ export function hasPluginHostToolGroupApproval(ghost: InstalledGhost | null | un
 }
 
 export function pluginCapabilityApproval(capability: PluginTaskCapability): (ghost: InstalledGhost | null | undefined) => boolean {
+  const topic = pluginEventTopic(capability);
+  if (topic) return ghost => !!ghost?.enabled && ghost.manifest.subscribe?.topics?.includes(topic) === true && ghostTaskEventApproved(ghost, topic);
   const group = pluginHostToolGroup(capability);
   if (group) return ghost => hasPluginHostToolGroupApproval(ghost, group);
   return capability === 'companions' ? hasPluginCompanionsApproval : capability === 'observe' ? hasPluginObserveApproval
@@ -107,7 +114,8 @@ export async function ensurePluginTaskApproval(
     return false;
   const revision = ghost.approval.revision;
   const permissions = ghostPermissionItems(ghost.manifest).filter((item) => item.kind !== 'tool');
-  const added = permissions.filter((item) => item.key === `agent:${capability}`);
+  const topic = pluginEventTopic(capability);
+  const added = permissions.filter((item) => item.key === (topic ? `subscribe:topics:${topic}` : `agent:${capability}`));
   if (added.length !== 1) return false;
   const confirmed = await deps.confirm({
     kind: 'update',

@@ -60,6 +60,7 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
   declaredGhostControlPoints,
+  declaredGhostTaskEventTopics,
   ghostDeclaresHiddenTasks,
   ghostToolDeclaresHandoff,
   ghostTrustLabelKey,
@@ -624,6 +625,17 @@ export function GhostPluginDetailView({
             }
           }}>
             {t('settings.ghosts.perm.hostToolsRequest', { group: t(`settings.ghosts.perm.hostTools_${group}`) })}
+          </Button>
+        )) : null}
+
+        {!remote && enabled && ghost ? declaredGhostTaskEventTopics(ghost.manifest).filter(topic => !ghost.approvedEventTopics?.includes(topic)).map(topic => (
+          <Button key={topic} variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try { await window.electronAPI.ghosts.requestTaskApproval(detail.id, `event:${topic}`); }
+            catch { toast.error(t('settings.ghosts.errors.generic')); }
+            finally { setTaskApprovalPending(false); }
+          }}>
+            {t('settings.ghosts.perm.hostToolsRequest', { group: t(`settings.ghosts.perm.${topic === 'message' ? 'subscribeMessage' : 'subscribeTaskState'}`) })}
           </Button>
         )) : null}
 

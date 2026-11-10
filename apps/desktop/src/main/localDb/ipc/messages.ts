@@ -81,6 +81,7 @@ import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botR
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { createHistoryViewReader, MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from './historyViewReader';
 import { setHistoryWorkPageReader } from '../../device-link/historyViewPush';
+import { publishTaskChange } from '../taskEvents.js';
 
 const log = createLogger('localDb/messages');
 
@@ -903,6 +904,7 @@ export function broadcastMessageRow(
   const message = content === msg.content ? msg : { ...msg, content };
   broadcastOwnedPayload('local-db:messages:created', { sessionId, message }, ownerScope);
   if (msg.role === 'user' || msg.role === 'assistant') {
+    publishTaskChange({ kind: 'message', sessionId, message }, ownerStampForBroadcast(ownerScope));
     scheduleBotRemoteResourceChangedForSession(sessionId, ownerScope?.ownerScopeKey);
   }
 }

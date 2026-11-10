@@ -22,7 +22,10 @@ export default {
       for (const group of ['history', 'control', 'handoff', 'settings', 'scheduler']) {
         assert.equal(await page.getByRole('button', { name: await ui.t('settings.ghosts.perm.hostToolsRequest', { group: await ui.t(`settings.ghosts.perm.hostTools_${group}`) }), exact: true }).count(), 1);
       }
-      await page.getByRole('button', { name: await ui.t('settings.ghosts.perm.hostToolsRequest', { group: await ui.t('settings.ghosts.perm.hostTools_history') }), exact: true }).scrollIntoViewIfNeeded();
+      for (const key of ['subscribeMessage', 'subscribeTaskState']) {
+        assert.equal(await page.getByRole('button', { name: await ui.t('settings.ghosts.perm.hostToolsRequest', { group: await ui.t(`settings.ghosts.perm.${key}`) }), exact: true }).count(), 1);
+      }
+      await page.getByRole('button', { name: await ui.t('settings.ghosts.perm.hostToolsRequest', { group: await ui.t('settings.ghosts.perm.subscribeTaskState') }), exact: true }).scrollIntoViewIfNeeded();
       await ui.capture('host-group-approval');
       return;
     }

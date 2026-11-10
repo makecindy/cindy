@@ -13,6 +13,8 @@
 import { declaredGhostHostToolGroups, pluginHasToolUi, type GhostHostToolGroup } from '@cindy/plugin-protocol';
 import {
   declaredAutoApproveTools,
+  declaredGhostTaskEventTopics,
+  type GhostTaskEventTopic,
   declaredGhostControlPoints,
   GHOST_CONTROL_POINTS,
   type GhostControlPointId,
@@ -70,6 +72,12 @@ export function confirmedHostToolGroups(decision: GhostInstallConsentDecision, i
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return declaredGhostHostToolGroups(next).filter(group => shown?.some(item => item.key === `agent:host-tools:${group}`));
+}
+export function confirmedEventTopics(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): GhostTaskEventTopic[] {
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return declaredGhostTaskEventTopics(next).filter(topic => shown?.some(item => item.key === `subscribe:topics:${topic}`));
 }
 
 /** Use only after assertGhostInstallConsent binds the confirmed facts to this package/receiver. */

@@ -112,6 +112,7 @@ import {
 import {
   assertManagedPluginParentSync,
   approvedHostToolGroupsField,
+  approvedEventTopicsField,
   createGhostInstallReceipt,
   effectiveInstallOrigin,
   legacyFirstPartyEligibilityAfterUpdate,
@@ -3084,6 +3085,7 @@ export class GhostManager {
           ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
           ...(receipt.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
           ...approvedHostToolGroupsField(receipt.approvedHostToolGroups, receipt.manifest),
+          ...approvedEventTopicsField(receipt.approvedEventTopics, receipt.manifest),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
             ? {
@@ -3304,10 +3306,13 @@ export class GhostManager {
           !findInstalledGhostByInstanceId(this.list(), id)?.enabled) return false;
       const field = capability === 'companions' ? 'companionsCapabilityApproved' : capability === 'observe' ? 'observeCapabilityApproved' : capability === 'delegation' ? 'delegationCapabilityApproved' : capability === 'targets' ? 'targetCapabilityApproved' : 'taskCapabilityApproved';
       const group = pluginHostToolGroup(capability);
-      if (group ? !approval.receipt.approvedHostToolGroups?.includes(group) : approval.receipt[field] !== true) {
+      const topic = capability === 'event:message' ? 'message' : capability === 'event:task-state' ? 'task-state' : undefined;
+      if (topic ? !approval.receipt.approvedEventTopics?.includes(topic) : group ? !approval.receipt.approvedHostToolGroups?.includes(group) : approval.receipt[field] !== true) {
         const expired = new Error('Task capability approval owner changed');
         try {
-          await this.receiptStore.write({ ...approval.receipt, ...(group
+          await this.receiptStore.write({ ...approval.receipt, ...(topic
+            ? { approvedEventTopics: [...approval.receipt.approvedEventTopics ?? [], topic] }
+            : group
             ? { approvedHostToolGroups: [...approval.receipt.approvedHostToolGroups ?? [], group] }
             : { [field]: true }) }, {
             relId,
@@ -4042,6 +4047,7 @@ export class GhostManager {
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
       approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4078,6 +4084,7 @@ export class GhostManager {
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
       approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4259,6 +4266,7 @@ export class GhostManager {
           ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
           approvedHostToolGroups: opts?.approvedHostToolGroups,
+          approvedEventTopics: opts?.approvedEventTopics,
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
           trust,
@@ -4393,6 +4401,7 @@ export class GhostManager {
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
       approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4426,6 +4435,7 @@ export class GhostManager {
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
       approvedAutoTools?: readonly string[];
       approvedHostToolGroups?: readonly string[];
+      approvedEventTopics?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4722,6 +4732,10 @@ export class GhostManager {
         approvedHostToolGroups: [
           ...(opts.approvedHostToolGroups ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedHostToolGroups ?? [] : []),
+        ],
+        approvedEventTopics: [
+          ...(opts.approvedEventTopics ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedEventTopics ?? [] : []),
         ],
         ...((opts.observeCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.observeCapabilityApproved === true)) &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
@@ -5145,6 +5159,7 @@ export class GhostManager {
         approvedControlPoints: approvedManifest.subscribe?.hooks ?? [],
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
         approvedHostToolGroups: current.state === 'approved' ? current.receipt.approvedHostToolGroups : undefined,
+        approvedEventTopics: current.state === 'approved' ? current.receipt.approvedEventTopics : undefined,
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&

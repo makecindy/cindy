@@ -33,6 +33,7 @@ import {
   GHOST_CONTROL_POINTS,
   ghostControlPointActive,
   ghostInstallApprovalToken,
+  ghostTaskEventApproved,
   type GhostActivityEventName,
   type GhostControlPointData,
   type GhostControlPointFailureAction,
@@ -217,6 +218,7 @@ export class GhostSubscriptionGateway {
   private readonly entries = new Map<string, SubEntry>();
   private readonly pendingHooks = new Map<string, PendingHook>();
   private discovery: { owner: unknown; promise: Promise<InstalledGhost[]> } | null = null;
+  private readonly contentRecipients = new WeakMap<GhostPipeEventPush, InstalledGhost>();
 
   constructor(private readonly deps: GhostSubscriptionGatewayDeps) {}
 
@@ -264,6 +266,11 @@ export class GhostSubscriptionGateway {
     this.publishTo(this.deps.listGhosts(), topic, name, data);
   }
 
+  /** Indexed content/state subscribers; avoids discovery on every message or state event. */
+  publishIndexed(ghosts: InstalledGhost[], topic: GhostSubscribeTopic, name: GhostDidEventName, data: GhostDidEventData): void {
+    this.publishTo(ghosts, topic, name, data);
+  }
+
   private publishTo(
     ghosts: InstalledGhost[],
     topic: GhostSubscribeTopic,
@@ -276,7 +283,7 @@ export class GhostSubscriptionGateway {
         ? this.deps.findGhostForDelivery(installedGhostStoragePart(candidate))
         : candidate;
       if (!ghost || ghostInstallApprovalToken(ghost.approval) !== ghostInstallApprovalToken(candidate.approval)) continue;
-      if (!ghost.enabled) continue;
+      if (!ghost.enabled || !ghostTaskEventApproved(ghost, topic)) continue;
       if (!ghost.manifest.subscribe?.topics?.includes(topic)) continue;
       this.dispatchTo(ghost, topic, name, data);
     }
@@ -326,6 +333,7 @@ export class GhostSubscriptionGateway {
       ts: this.deps.now(),
       data,
     };
+    if (topic === 'message' || topic === 'task-state') this.contentRecipients.set(evt, ghost);
 
     // 直投条件:在跑 + 缓冲已清 + 无唤醒在途——三者缺一都排队,否则新事件
     // 会插到缓冲里旧事件前面(seq 乱序)。投递失败(刚崩窗口期)同样回落缓冲。
@@ -346,6 +354,13 @@ export class GhostSubscriptionGateway {
     if (!this.ownerScopeUsable(ownerScope)) {
       this.invalidateOwner(ghostId, e);
       return false;
+    }
+    const recipient = this.contentRecipients.get(evt);
+    if (recipient && 'topic' in evt) {
+      const live = this.deps.findGhostForDelivery ? this.deps.findGhostForDelivery(ghostId) : recipient;
+      // A queue belongs to the exact approved install. Drop stale events instead of retrying into an update.
+      if (!live?.enabled || ghostInstallApprovalToken(live.approval) !== ghostInstallApprovalToken(recipient.approval)
+        || !live.manifest.subscribe?.topics?.includes(evt.topic) || !ghostTaskEventApproved(live, evt.topic)) return true;
     }
     const payload = e.pendingDropped > 0 ? { ...evt, dropped: e.pendingDropped } : evt;
     try {

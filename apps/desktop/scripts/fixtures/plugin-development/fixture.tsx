@@ -22,6 +22,7 @@ const marketGhost: InstalledGhost = { ...ghost, namespace: null, instanceKey: '_
   publishingSource: { kind: 'public-market', pluginId: 'fixture-plugin' } };
 const hostToolsGhost: InstalledGhost = { ...ghost, manifest: { ...ghost.manifest,
   name: 'Task dashboard', agent: { hostTools: ['history', 'control', 'handoff', 'settings', 'scheduler'] },
+  subscribe: { topics: ['message', 'task-state'] },
 } };
 const candidateInstances = [
   { instanceId: '_root__example', version: '1.0.0', origin: 'public' as const, enabled: true },

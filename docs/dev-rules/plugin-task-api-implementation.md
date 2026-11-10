@@ -44,7 +44,8 @@ getRun/listRuns/readMessages 复用本机回执和历史、按原插件/账号�
 
 伙伴任务完成后向伙伴自己的时间线回报，是伙伴的业务流程。插件新建任务不默认附带该流程；
 普通任务创建入口不发送完成回叫。插件根据需要读取回执和结果，无需模拟一个伙伴。
-当前没有任务事件订阅接口，请查询持久回执；不要把「已创建」或「已接受输入」显示成「执行完成」。
+任务事件通过独立声明并批准的 `subscribe.topics: ['message','task-state']` 投递；持久执行事实仍查询回执。
+不要把「已创建」或「已接受输入」显示成「执行完成」。
 
 ### 作者使用示例
 
@@ -428,6 +429,9 @@ DB 中下一条输入的 armed 值为 false 不代表原生执行已退出 Plan�
 `list_teammates` 返回伙伴及保存的任务关系，`read_session_attachment` 按明确的任务、消息和附件序号读取，
 不接收任意路径；插件取件沿用媒体 grant 或文件 handoff，返回分块字节与摘要，不暴露宿主路径。
 完整历史导出由插件基于 `get_chat_history` 游标页组装。作者说明见[宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
+消息与任务状态订阅使用 `subscribe.topics` 中的 `message` / `task-state`，receipt 可选 `approvedEventTopics` 只记录明确批准。
+宿主消息保存和规范状态变化走同一事件源，花名册变化时重建 `GhostTaskEventIndex`；热路径只访问该 topic 的订阅者，零订阅不读目录、投影正文或唤醒进程。
+投递与缓冲补投均核对当前安装、批准和 owner；断线补拉复用历史游标，不新增持久事件账本。
 插件先核对 `tasks.capabilities().messageAttachments`，无此能力时停止发送截图，不能静默丢图或回退文件路径。
 只接受插件自己提供的字节；不接受 Host 路径、URL、其他会话的媒体 URI 或自报 MIME。
 Host 校验规范 base64，嗅探 PNG/JPEG/WebP，最多 4 张、合计 20 MiB；附件字节指纹和名称参与幂等签名，回执不保存 base64。

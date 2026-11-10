@@ -87,6 +87,10 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   UI 管子新增 `host-tool-request`，Node 私有通道使用同类型加 `reqId`，共用宿主校验及 Agent 工具处理器；返回原始 MCP 结果。
   旧宿主可保留清单但不支持接口，插件须检测 `cindy.host?.call` 并处理不支持响应。无 Session 的插件调用方不会改变原任务调用方协议或身份；不涉及 device-link wire 变更。
 - 历史查询通道增量支持 `list_teammates`，复用同一个工具 registry 校验与宿主目录读取；不新增 channel。
+- `subscribe.topics` 增量识别 `message` / `task-state`，事件名为 `did-message-created` / `did-task-state-changed`，复用现有管子事件封装。
+  receipt 增量可选 `approvedEventTopics`，不改变版本；旧宿主保存的未知 topic 不自动获得批准，原有 topic 继续原行为。
+  新消息事件只提供正文和附件位置，不提供宿主路径；`historyCursor` 复用 `get_chat_history` 编解码，序号不作为持久重放凭证。
+  无新跨设备 channel、轮询、事件持久化或中转协议；旧端可保留新声明但不投递。
   旧端拒绝未知查询时按既有远程错误报告，聚合结果保留 `partial`，不当成空目录。
   `list_sessions.hiddenAt` 为可选增量字段，旧响应缺失不推断隐藏；跨电脑伙伴目录中的任务关系使用 `deviceId::sessionId`，伙伴 id 保持原值。
 - `read_session_attachment` 的公开工具结果为分块 base64（最多 64 KiB）与内容摘要，插件媒体与普通文件分别复用 grant / handoff。

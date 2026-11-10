@@ -417,7 +417,7 @@ export interface GhostCindyNeeds {
  * 正文级主题(消息内容旁听)刻意不开——隐私最重,等真实场景再议,权限文案
  * 也要另分一档。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'message', 'task-state'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
 
 /**

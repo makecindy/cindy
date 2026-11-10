@@ -696,8 +696,17 @@ export interface GhostCindyNeeds {
  * 正文级主题(消息内容旁听)刻意不开——隐私最重,等真实场景再议,权限文案
  * 也要另分一档。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
+export const GHOST_TASK_EVENT_TOPICS = ['message', 'task-state'] as const;
+export type GhostTaskEventTopic = (typeof GHOST_TASK_EVENT_TOPICS)[number];
+export function declaredGhostTaskEventTopics(manifest: Pick<GhostManifest, 'subscribe'>): GhostTaskEventTopic[] {
+  return GHOST_TASK_EVENT_TOPICS.filter(topic => manifest.subscribe?.topics?.includes(topic));
+}
+export function ghostTaskEventApproved(ghost: InstalledGhost, topic: GhostSubscribeTopic): boolean {
+  return !GHOST_TASK_EVENT_TOPICS.includes(topic as GhostTaskEventTopic) ||
+    (ghost.approval?.state === 'approved' && ghost.approvedEventTopics?.includes(topic as GhostTaskEventTopic) === true);
+}
 
 /**
  * 订阅槽 will- 拦截钩子(真 hook:主机停等裁决)。两个点,一进一出:
@@ -1932,6 +1941,7 @@ export interface InstalledGhost {
   /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
   companionsCapabilityApproved?: true;
   approvedHostToolGroups?: GhostHostToolGroup[];
+  approvedEventTopics?: GhostTaskEventTopic[];
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2615,6 +2625,11 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       // unshift 排到清单最顶(敏感项排最上)。
       const topics = manifest.subscribe?.topics;
       if (topics?.length) {
+        for (const topic of declaredGhostTaskEventTopics(manifest)) items.push({
+          key: `subscribe:topics:${topic}`, kind: 'subscribe',
+          labelKey: topic === 'message' ? 'subscribeMessage' : 'subscribeTaskState',
+          detailKey: topic === 'message' ? 'subscribeMessageDetail' : 'subscribeTaskStateDetail',
+        });
         // 旧 key 只在真订了 turn / session 时产出:纯 activity 插件不该在确认框里
         // 多出一行"旁听轮次与会话事件"——网关根本不给它投 turn / session,那行是凭空
         // 多报的能力,用户可能据此误拒。存量已批准插件必然含 turn 或 session(activity
@@ -2897,10 +2912,11 @@ export function diffGhostPermissionItems(
  */
 function withoutUnapprovedControlPoints(installed: InstalledGhost): GhostManifest['subscribe'] {
   const subscribe = installed.manifest.subscribe;
-  if (!subscribe?.hooks) return subscribe;
-  const hooks = subscribe.hooks.filter((hook) =>
+  if (!subscribe) return subscribe;
+  const topics = subscribe.topics?.filter(topic => ghostTaskEventApproved(installed, topic));
+  const hooks = subscribe.hooks?.filter((hook) =>
     !isGhostControlPointId(hook) || installed.approvedControlPoints?.includes(hook) === true);
-  return { ...subscribe, hooks: hooks.length > 0 ? hooks : undefined };
+  return { ...subscribe, topics, hooks: hooks?.length ? hooks : undefined };
 }
 
 /** 声明了 `approval: "auto"` 但用户从没确认过的工具,不算旧权限。 */
@@ -8854,6 +8870,8 @@ export type GhostActivityEventName =
 
 /** did- 旁听事件名(topic 归属:turn / session / activity)。 */
 export type GhostDidEventName =
+  | 'did-message-created'
+  | 'did-task-state-changed'
   | 'did-turn-start'
   | 'did-turn-end'
   | 'did-session-created'
@@ -8916,7 +8934,16 @@ export type GhostEventActivityData = GhostEventThinkingData | GhostEventInteract
 
 /** 所有 did- 旁听事件共享的安全元数据载荷。 */
 export type GhostDidEventData =
-  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData;
+  GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData;
+export interface GhostTaskEventData {
+  sessionId: string;
+  messageId?: string;
+  role?: 'user' | 'assistant';
+  content?: unknown;
+  createdAt?: string;
+  historyCursor?: string;
+  state?: Record<string, unknown>;
+}
 
 export type GhostMessageHookData = { sessionId: string; text: string; model?: string };
 

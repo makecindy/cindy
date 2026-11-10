@@ -20,6 +20,8 @@ import {
   GHOST_LOCALE_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
   declaredAutoApproveTools,
+  declaredGhostTaskEventTopics,
+  type GhostTaskEventTopic,
   ghostManifestToAuthorFormat,
   isValidGhostId,
   validateGhostManifestLocaleResource,
@@ -146,6 +148,7 @@ export interface GhostInstallReceipt {
   observeCapabilityApproved?: true;
   companionsCapabilityApproved?: true;
   approvedHostToolGroups?: GhostHostToolGroup[];
+  approvedEventTopics?: GhostTaskEventTopic[];
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
@@ -1304,8 +1307,13 @@ export function approvedHostToolGroupsField(raw: unknown, manifest: GhostManifes
   const approved = Array.isArray(raw) ? declaredGhostHostToolGroups(manifest).filter(group => raw.includes(group)) : [];
   return approved.length > 0 ? { approvedHostToolGroups: approved } : {};
 }
+export function approvedEventTopicsField(raw: unknown, manifest: GhostManifest): { approvedEventTopics?: GhostTaskEventTopic[] } {
+  const approved = Array.isArray(raw) ? declaredGhostTaskEventTopics(manifest).filter(topic => raw.includes(topic)) : [];
+  return approved.length ? { approvedEventTopics: approved } : {};
+}
 
 export function createGhostInstallReceipt(input: {
+  approvedEventTopics?: readonly string[];
   approvedHostToolGroups?: readonly string[];
   simulatorPreviousRelId?: string;
   simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
@@ -1359,6 +1367,7 @@ export function createGhostInstallReceipt(input: {
     ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
     ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
     ...approvedHostToolGroupsField(input.approvedHostToolGroups, input.manifest),
+    ...approvedEventTopicsField(input.approvedEventTopics, input.manifest),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
@@ -1580,6 +1589,7 @@ function validateReceipt(
       ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
       ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
       ...approvedHostToolGroupsField(value.approvedHostToolGroups, manifestResult.manifest),
+      ...approvedEventTopicsField(value.approvedEventTopics, manifestResult.manifest),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),

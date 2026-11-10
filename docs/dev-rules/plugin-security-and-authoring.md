@@ -203,6 +203,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   调用方显式为插件实例与请求时 owner 快照，不绑定任务；组批准与共享风险规则的原生逐次确认替代任务权限档，执行前及返回前复核账号和安装版本，现有写入钩子同样复核。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
+- `subscribe.topics` 的 `message` / `task-state` 独立展示和批准，receipt 可选 `approvedEventTopics` 只记录显式事实，不从旧未知声明推断。
+  消息仅在持久化后通知，结构化附件使用不透明位置引用；状态复用宿主规范投影。
+  花名册变动时建立 topic 索引，禁止每个消息/状态事件扫描全部插件；缓冲补投重查安装版本、批准和 owner。
+  断线按 `get_chat_history` 游标补拉，旧 `turn` / `session` / `activity` 订阅和既有插件批准保持原行为。
+  作者契约见 [事件订阅](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-event-subscriptions.md)。
 - `agent.targets` 必须与 `agent.tasks: true` 同时声明，独立列出 `agent:targets` 权限并要求 Host receipt 的 `targetCapabilityApproved` 显式批准。
   可查询本机项目、任务和伙伴的目标元数据，并投递文字/图片；该接口本身不授予其他任务的历史读取、设置修改或停止权限。
   安装/更新复用既有权限确认；历史 tasks 批准和未知 targets 字段不能自动扩权，缺新批准时只阻止新目标接口，首次调用复用既有宿主确认。
