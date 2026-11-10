@@ -133,11 +133,13 @@ describe('resolveSessionGitDir', () => {
   function deps(opts: {
     contents: string[];
     gitDirs: Record<string, string>; // dir → branch(返回 head);不在表里 = 非 git(null)
+    linkedWorktrees?: string[];
   }): ResolveSessionGitDirDeps {
     return {
       recentToolUseContents: async () => opts.contents,
       probeGitDir: async (dir) =>
         opts.gitDirs[dir] !== undefined ? branchHead(opts.gitDirs[dir]) : null,
+      isLinkedWorktree: async (dir) => opts.linkedWorktrees?.includes(dir) ?? false,
     };
   }
 
@@ -150,6 +152,37 @@ describe('resolveSessionGitDir', () => {
       }),
     );
     expect(res).toMatchObject({ workdir: path.resolve('/Users/x/wt-a'), source: 'telemetry', head: branchHead('integration') });
+  });
+
+  it('uses the newly selected worktree instead of a valid but stale tool directory', async () => {
+    const res = await resolveSessionGitDir(
+      { sessionId: 's', fallbackWorktreePath: null, fallbackWorkingDir: '/Users/x/wt-b' },
+      deps({
+        contents: [toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-a' })],
+        gitDirs: { '/Users/x/wt-a': 'fix/old', '/Users/x/wt-b': 'fix/new' },
+        linkedWorktrees: ['/Users/x/wt-b'],
+      }),
+    );
+    expect(res).toEqual({
+      workdir: path.resolve('/Users/x/wt-b'),
+      head: branchHead('fix/new'),
+      source: 'workingDir',
+    });
+  });
+
+  it('keeps the app-managed worktree binding when earlier tool-use still points to another checkout', async () => {
+    const res = await resolveSessionGitDir(
+      { sessionId: 's', fallbackWorktreePath: '/Users/x/app-wt', fallbackWorkingDir: '/Users/x/main' },
+      deps({
+        contents: [toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-a' })],
+        gitDirs: { '/Users/x/wt-a': 'fix/old', '/Users/x/app-wt': 'fix/current' },
+      }),
+    );
+    expect(res).toEqual({
+      workdir: path.resolve('/Users/x/app-wt'),
+      head: branchHead('fix/current'),
+      source: 'worktree',
+    });
   });
 
   it('遥测命中:最近一条候选目录是 git → source=telemetry', async () => {
