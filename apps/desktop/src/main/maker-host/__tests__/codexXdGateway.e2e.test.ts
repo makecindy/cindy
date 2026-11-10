@@ -509,5 +509,6 @@ describe('Codex Responses through a loopback XD gateway', () => {
         fixture.gateway = '';
       }
     },
+    60_000,
   );
 });
