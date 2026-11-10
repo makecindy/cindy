@@ -21,7 +21,15 @@ const requested =
   (process.env.CINDY_CUA_SMOKE === '1' || cursorGoalDemo);
 
 /** Explicit, isolated, real-driver smoke. It operates only on its own disposable window. */
-export async function runComputerUseSmokeIfRequested(): Promise<void> {
+export async function runComputerUseSmokeIfRequested(mainWindow?: BrowserWindow): Promise<void> {
+  if (!started && !app.isPackaged && process.env.XDT_ISOLATED === '1'
+    && process.env.XDT_UI_MOCK === '1' && process.env.CINDY_CUA_SMOKE === 'folder-picker'
+    && mainWindow) {
+    started = true;
+    const { runFolderPickerWheelSmoke } = await import('./folderPickerWheelSmoke.js');
+    await runFolderPickerWheelSmoke(mainWindow);
+    return;
+  }
   if (started || !requested) return;
   started = true;
   const sessionId = `cua-smoke-${randomUUID()}`;

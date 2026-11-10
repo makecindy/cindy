@@ -196,6 +196,31 @@ describe('FolderPickerPopover wheel routing', () => {
     expect(list.scrollTop).toBe(40);
   });
 
+  it('routes recent-folder header wheels to its separate list without intercepting its rows', () => {
+    // The legacy picker has a separate scroll node and no project-search ref.
+    // One cancelable header event must still cancel before manual forwarding.
+    localStorage.setItem('cc-agent-recent-folders', JSON.stringify(manyProjects));
+    try {
+      render(
+        <FolderPickerPopover open onOpenChange={vi.fn()} onSelect={vi.fn()}>
+          <button type="button">trigger</button>
+        </FolderPickerPopover>,
+      );
+      const list = scrollList();
+      const headerWheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 24 });
+      fireEvent(screen.getByText('newChat.folderPicker.recent'), headerWheel);
+      expect(headerWheel.defaultPrevented).toBe(true);
+      expect(list.scrollTop).toBe(24);
+
+      const rowWheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 24 });
+      fireEvent(list.querySelector('svg')!, rowWheel);
+      expect(rowWheel.defaultPrevented).toBe(false);
+      expect(list.scrollTop).toBe(24);
+    } finally {
+      localStorage.removeItem('cc-agent-recent-folders');
+    }
+  });
+
   it('attaches to a late portal, detaches on close, and forwards only once after reopening', () => {
     const props = { onOpenChange: vi.fn(), onSelect: vi.fn(), projectOptions: manyProjects };
     const picker = (open: boolean) => (
