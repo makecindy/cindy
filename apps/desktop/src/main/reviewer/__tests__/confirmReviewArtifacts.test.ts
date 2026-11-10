@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ trust: vi.fn(), parent: vi.fn(), show: vi.fn() }));
 vi.mock('electron', () => ({ BrowserWindow: { fromWebContents: mocks.parent } }));
 vi.mock('../../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent: mocks.trust }));
-vi.mock('../../i18n', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../reviewArtifactConfirmWindow', () => ({ showReviewArtifactConfirmWindow: mocks.show }));
 

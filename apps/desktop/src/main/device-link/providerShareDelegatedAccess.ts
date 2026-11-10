@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { getDeviceId } from '../authManager.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { checkProviderShareDelegation, providerShareOwnerKey } from './providerShareApi.js';
-import { readDeviceLinkSettings } from './settings-store.js';
+import { readDeviceLinkSettings } from './settings-store.desktop.js';
 import { groupFastPolicyStore } from '../provider-group/fastPolicyStore.js';
 import { hostSessionIdFor } from '../remote-agent/host/sessionIdentity.js';
 import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';

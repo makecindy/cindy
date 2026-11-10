@@ -54,7 +54,7 @@ vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: (code: string) => 
 vi.mock('../invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => null }));
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Test computer' }));
 vi.mock('../providerShareApi.js', () => ({ providerShareLinkApp: () => 'cindy' }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true }) }));
 vi.mock('../selfHostedRelayFrameAuth.js', () => ({ refreshRelayCertificatesSoon: vi.fn() }));
 vi.mock('../index.js', () => ({
   broadcast: vi.fn(), getDeviceLinkConnectionIssue: () => null,

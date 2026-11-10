@@ -28,7 +28,7 @@ vi.mock('../../device-link/invoke-context.js', () => ({
   getDeviceLinkInvokeContext: () => h.context,
 }));
 vi.mock('../../device-link/index.js', () => ({ broadcast: vi.fn() }));
-vi.mock('../../device-link/dispatch.js', () => ({ setRemoteSubscriptionPoolQuotaReader: vi.fn() }));
+vi.mock('../../device-link/dispatch.desktop.js', () => ({ setRemoteSubscriptionPoolQuotaReader: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => `${h.owner}:${h.generation}`,
   getActiveAppSession: () => ({ dataOwnerId: h.owner }),
@@ -48,6 +48,7 @@ vi.mock('../runtime.js', () => ({
 import { registerSubscriptionAccountsIpc } from '../ipc.js';
 import { accountDirectory, accountOwnerPrefix, readBoundClaudeConfigDir } from '../store.js';
 import { SUBSCRIPTION_ACCOUNTS_CHANNEL } from '../../../shared/subscriptionAccounts.js';
+import { mapIpcErrorToI18nKey } from '../../../shared/ipcError.js';
 registerSubscriptionAccountsIpc();
 const invoke = (command: unknown) => h.handlers.get(SUBSCRIPTION_ACCOUNTS_CHANNEL)!({}, command);
 beforeEach(() => {
@@ -59,6 +60,13 @@ beforeEach(() => {
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
 });
 describe('subscription management boundary', () => {
+  // #9517, unit: CLI provider-managed auth must survive the real handler and
+  // renderer decoder as actionable copy, not the generic CLI/network failure.
+  it('reports provider-managed authentication through the owner IPC error protocol', async () => {
+    h.execute.mockRejectedValue(new Error('codex_provider_managed_auth'));
+    const error = await invoke({ action: 'connect', target: 'default', providerId: 'openai', loginKey: 'login' }).catch(error => error);
+    expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_CODEX_PROVIDER_AUTH');
+  });
   it('admits the trusted owner and paired owner remote context, never an untrusted frame or shared-task guest', async () => {
     const command = { action: 'read', providerId: 'anthropic' };
     await invoke(command);

@@ -35,15 +35,15 @@ import { TencentIlinkTransport } from '@cindy/wechat-ilink';
 import { inboundFileStaging } from './shared/inboundFileStaging';
 import { verifiedInboundMediaMime } from './shared/inboundMediaVerify';
 import { createLogger } from '../logger';
-import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore';
+import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore.desktop';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop';
 import {
   integrationCacheGet,
   integrationCacheKey,
   integrationCachePut,
 } from '../cindy-media/integrationCache';
 import { pinBlob } from '../cindy-media/ledger';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { discordUiText } from './discord/uiText';
 import { telegramUiText } from './telegram/uiText';
 import {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { groupWorkRuns, type MessageRenderItem, type ToolSegmentRenderItem, type RenderItem } from '@/components/chat/messageWorkGroups';
-import { botProcessItems, latestSettledAssistantMs, simplifyBotRenderItems, tailReplyClientIds } from '../botConversationPresentation';
+import { botProcessItems, botTurnContinuations, latestSettledAssistantMs, simplifyBotRenderItems, tailReplyClientIds } from '../botConversationPresentation';
 
 const message = (id: string, role: ChatMessage['role'], content = id,
   extra: Partial<ChatMessage> = {}): MessageRenderItem => ({
@@ -37,6 +37,19 @@ it('keeps working prose through streaming metadata and tools, folding only after
 });
 
 describe('teammate final-result presentation', () => {
+  // #8864: the production projection must keep the process and answer under one
+  // portrait without joining separate user/proactive turns. Existing UI fixtures
+  // only covered a single turn. Unit tier; two tools and sealed answers suffice.
+  it.each([true, false])('keeps one portrait per turn, including proactive turns (user boundary=%s)', userBoundary => {
+    const rows = [message('u', 'user'), tool('one'),
+      message('answer-one', 'assistant', 'First result', { turnCompleted: true }),
+      ...(userBoundary ? [message('u2', 'user')] : []), tool('two'),
+      message('answer-two', 'assistant', 'Second result', { turnCompleted: true }),
+      message('u3', 'user'), message('answer-only', 'assistant', 'Direct result', { turnCompleted: true })];
+    const projected = botProcessItems(groupWorkRuns(rows, false), false);
+    expect([...botTurnContinuations(projected)]).toEqual(['msg-answer-one', 'msg-answer-two']);
+  });
+
   // Runtime regression: persisted private prose was lifted back into the owner chat on reload.
   it.each([true, false])('keeps private prose out of the owner chat, including folded history (streaming=%s)', streaming => {
     const trace = message('trace', 'assistant', '', { systemCardType: 'bot-direct-message' });

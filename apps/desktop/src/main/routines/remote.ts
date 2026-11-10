@@ -1,5 +1,5 @@
 import { SUPPORTED_LOCALES } from '../../shared/locale.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { getBotRoutineRemoteResource, invokeBotRoutineRemoteAction } from './companionResource.js';
 import type { createBotRemoteSettingsResource } from '../localDb/ipc/botRemoteSettingsResource.js';
 import { randomUUID } from 'node:crypto';
