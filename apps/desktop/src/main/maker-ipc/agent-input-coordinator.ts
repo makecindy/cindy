@@ -1383,8 +1383,6 @@ export class AgentInputCoordinator {
   /** Authority follows the active input, never pending steering or cumulative reply attribution. */
   getAcceptedInputProvenance(sessionId: string): {
     clientId: string; autoResume?: boolean; retrySourceClientId?: string; authoredText?: string; originKind?: string; orcaSenderSessionId?: string; delegatedRequest?: ForwardedRequestSource;
-    /** Main-stamped at the input IPC boundary: this input entered through device-link. */
-    fromDeviceLinkClient?: boolean;
   } | null {
     const active = this.states.get(sessionId)?.activeTurn;
     const item = active?.item;
@@ -1395,7 +1393,6 @@ export class AgentInputCoordinator {
       delegatedRequest: typeof item.autoReviewUserText === 'object' ? item.autoReviewUserText.request : undefined,
       originKind: item.origin?.kind,
       orcaSenderSessionId: item.origin?.kind === 'orca' ? item.origin.senderSessionId : undefined,
-      ...(item.fromDeviceLinkClient === true ? { fromDeviceLinkClient: true } : {}),
       retrySourceClientId: item.retrySourceClientId ?? item.supersedesUserClientId };
   }
 

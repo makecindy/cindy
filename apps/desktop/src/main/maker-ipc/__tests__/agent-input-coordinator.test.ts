@@ -527,13 +527,14 @@ describe('MCP App queued message grants', () => {
   });
 });
 
-// Bug: an execution-device Worker could never report through send_to_lead. Device-link input
-// IPC strips every wire origin (the source device cannot tell a Lead assignment from other input
-// there), but the bridge required an `orca` origin, so it always answered NOT_LEAD_ASSIGNED_TURN
-// and only the end-of-turn poll reported. The bridge tests stub provenance, so nothing ran the
-// real IPC boundary. Minimal input: one Lead assignment through the production handler. Unit tier.
+// Bug (PR #9690): an execution-device Worker never reported through send_to_lead. Device-link
+// input IPC strips every wire origin (the source device cannot tell a Lead assignment from other
+// input there), but the bridge required an `orca` origin, so it always answered
+// NOT_LEAD_ASSIGNED_TURN and only the end-of-turn poll reported. The bridge tests stubbed
+// provenance, so nothing ran the real IPC boundary. Minimal input: one Lead assignment through
+// the production handler. Unit tier.
 describe('INPUT_ENQUEUE execution-device Worker assignment from the Lead', () => {
-  it('forwards send_to_lead with the accepted input for the Lead to verify', async () => {
+  it('lets the Worker report to the Lead with the consumed assignment', async () => {
     const h = createHarness(), sid = 'remote-worker-task';
     h.sendToAgent.mockImplementationOnce(async () => { h.setRunning(true); return sendSuccess(); });
     await createInputEnqueueHarness(h.coordinator).enqueue({}, sid, buildRemoteWorkerQueuedMessage({
@@ -554,7 +555,6 @@ describe('INPUT_ENQUEUE execution-device Worker assignment from the Lead', () =>
       readSession: async () => ({ status: 'active', orcaRemoteLead: remoteLead }),
       listWorkers: vi.fn(), activeTeamId: vi.fn(), invokeTool: vi.fn(), remoteInvoke,
       getActiveInputClientIds: id => h.coordinator.getActiveInputClientIds(id),
-      getAcceptedInputProvenance: id => h.coordinator.getAcceptedInputProvenance(id),
     });
     const result = await bridge.forwardTool(
       { sessionId: sid, workingDir: '/repo', agentKind: 'claude-code', mcpCallerAttested: true, mcpCallerKind: 'root' },
@@ -562,7 +562,7 @@ describe('INPUT_ENQUEUE execution-device Worker assignment from the Lead', () =>
     );
     expect(result?.isError).toBe(false);
     expect(remoteInvoke).toHaveBeenCalledWith('lead-computer', expect.any(String), [
-      expect.objectContaining({ acceptedInputClientId: 'lead-a', reportedInputClientIds: ['lead-a'] }),
+      expect.objectContaining({ tool: 'send_to_lead', reportedInputClientIds: ['lead-a'] }),
     ]);
   });
 });

@@ -60,13 +60,6 @@ function setup() {
   const captureSettlement = vi.fn((_proxy: string, _inputs: readonly string[]) => settled);
   const activeInputIds = ['input-a'];
   const getActiveInputClientIds = vi.fn(() => activeInputIds);
-  // Device-link input IPC strips wire origins, so a real Lead assignment has no origin here.
-  const getAcceptedInputProvenance = vi.fn<() => {
-    clientId?: string; originKind?: string; fromDeviceLinkClient?: boolean;
-  } | null>(() => ({ clientId: 'input-a', fromDeviceLinkClient: true }));
-  // The Lead computer's Main-owned dispatch record.
-  const leadAssigned = new Set(['input-a']);
-  const isLeadAssignedInput = vi.fn(async (_proxy: string, clientId: string) => leadAssigned.has(clientId));
   const provider = createOrcaWorkerBridgeMcpProvider({
     getMaker: () => ({ getSession: () => leadSession }) as unknown as Maker,
     logger: log,
@@ -94,7 +87,6 @@ function setup() {
     remoteInvoke: vi.fn(),
     invokeTool: (ctx, tool, args) => provider.invokeTool(ctx, tool, args, { manageWorkerStatus: false }),
     captureReportSettlement: captureSettlement,
-    isLeadAssignedInput,
   });
   const remoteInvoke = vi.fn(async (_device: string, _channel: string, args: unknown[]) => ({
     ok: true as const,
@@ -106,7 +98,6 @@ function setup() {
     readSession,
     remoteInvoke,
     getActiveInputClientIds,
-    getAcceptedInputProvenance,
     listWorkers: vi.fn(),
     activeTeamId: vi.fn(),
     invokeTool: vi.fn(),
@@ -144,8 +135,6 @@ function setup() {
     captureSettlement,
     activeInputIds,
     getActiveInputClientIds,
-    getAcceptedInputProvenance,
-    isLeadAssignedInput,
     remoteInvoke,
     dispatch,
     readSession,
@@ -160,31 +149,21 @@ function setup() {
 const json = (result: { content: Array<{ text: string }> }) => JSON.parse(result.content[0].text);
 
 describe('cross-device Worker bridge', () => {
-  // PR #6659 discussion_r4336139384: a persisted remote link does not authorize
-  // execution-device user turns. Existing tests checked root Agent identity only.
-  // Unit: real MCP/bridge handlers must reject before dispatch or settlement, even
-  // when cumulative reply IDs still include the Lead's input after human steering.
-  // PR #9690 review (discussion_r4522207424): device-link input carries no trustworthy origin,
-  // and the source device cannot tell a Lead assignment from other input on that computer.
-  // The Lead's Main-owned dispatch record decides; a forged `orca` origin proves nothing.
+  // PR #9690: a cross-device Worker reports like a local one. Device-link input carries no
+  // trustworthy origin, so the former Lead-assigned-turn gate (#6659) rejected every real
+  // assignment and left only the end-of-turn poll. A local Worker's send_to_lead is never
+  // gated by turn origin either; host-captured input IDs only choose what the report settles.
+  // Unit: real MCP/bridge handlers deliver once, passing exactly the captured IDs to settlement.
   it.each([
-    { name: 'user turn typed on the execution device', origin: { clientId: 'user-1' }, ids: ['user-1'], crosses: false },
-    { name: 'user turn from another controller', origin: { clientId: 'user-1', fromDeviceLinkClient: true }, ids: ['user-1'], crosses: true },
-    { name: 'accepted human steering', origin: { clientId: 'user-1', fromDeviceLinkClient: true }, ids: ['input-a', 'user-1'], crosses: true },
-    { name: 'forged Lead origin from the Lead computer', origin: { clientId: 'forged', originKind: 'orca', fromDeviceLinkClient: true }, ids: ['forged'], crosses: true },
-    { name: 'local automatic input', origin: { clientId: 'input-a', originKind: 'scheduler', fromDeviceLinkClient: true }, ids: ['input-a'], crosses: false },
-    { name: 'no active input', origin: null, ids: [], crosses: false },
-  ])('rejects a report from $name', async ({ origin, ids, crosses }) => {
+    { name: 'direct user turn', ids: ['user-1'] },
+    { name: 'no active input', ids: [] },
+  ])('delivers a report from a $name like a local Worker', async ({ ids }) => {
     const s = setup();
-    s.getAcceptedInputProvenance.mockReturnValue(origin);
     s.activeInputIds.splice(0, s.activeInputIds.length, ...ids);
     const result = await s.executionProvider.invokeTool(s.ctx, 'send_to_lead', s.request.args);
-    expect(result.isError).toBe(true);
-    expect(json(result)).toMatchObject({ code: 'NOT_LEAD_ASSIGNED_TURN' });
-    expect(s.remoteInvoke).toHaveBeenCalledTimes(crosses ? 1 : 0);
-    expect(s.dispatch).not.toHaveBeenCalled();
-    expect(s.captureSettlement).not.toHaveBeenCalled();
-    expect(s.worker.status).toBe('running');
+    expect(json(result)).toMatchObject({ ok: true, worker_id: 'worker-1' });
+    expect(s.dispatch).toHaveBeenCalledTimes(1);
+    expect(s.captureSettlement).toHaveBeenCalledWith('proxy-1', ids);
   });
 
   it('delivers a real remote Worker report to a busy Lead and settles it once', async () => {
@@ -206,7 +185,6 @@ describe('cross-device Worker bridge', () => {
     expect(s.worker.status).toBe('done');
     expect(s.settled).toHaveBeenCalledTimes(1);
     expect(s.captureSettlement).toHaveBeenCalledWith('proxy-1', ['input-a']);
-    expect(s.isLeadAssignedInput).toHaveBeenCalledWith('proxy-1', 'input-a');
   });
 
   // 2026-11-10: the four queued-report tools are registered for every Worker, but only the four
@@ -230,7 +208,6 @@ describe('cross-device Worker bridge', () => {
     s.settled.mockImplementationOnce(async () => {});
     s.readSession.mockImplementationOnce(async () => {
       s.activeInputIds.splice(0, 1, 'input-b');
-      s.getAcceptedInputProvenance.mockReturnValue({});
       return { status: 'active', orcaRemoteLead: s.remoteLead };
     });
     const result = await s.executionProvider.invokeTool(s.ctx, 'send_to_lead', s.request.args);
@@ -243,7 +220,6 @@ describe('cross-device Worker bridge', () => {
     'routes %s to the same owning Lead',
     async (tool) => {
       const s = setup();
-      s.getAcceptedInputProvenance.mockReturnValue({});
       const result = await s.executionProvider.invokeTool(s.ctx, tool, { worker_id: 'worker-1' });
       expect(json(result)).toMatchObject({ worker_id: 'worker-1', lead_session_id: 'lead-1' });
       if (tool === 'read_lead_history')
@@ -357,6 +333,5 @@ describe('cross-device Worker bridge', () => {
     expect(s.readSession).not.toHaveBeenCalled();
     expect(s.remoteInvoke).not.toHaveBeenCalled();
     expect(s.getActiveInputClientIds).not.toHaveBeenCalled();
-    expect(s.getAcceptedInputProvenance).not.toHaveBeenCalled();
   });
 });

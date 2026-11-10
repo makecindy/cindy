@@ -60,11 +60,6 @@ export interface OrcaRemoteWorkerBridgeRequest {
   args: Record<string, unknown>;
   /** Host-captured inputs consumed by the reporting turn; absent on older peers. */
   reportedInputClientIds?: string[];
-  /**
-   * Execution host's accepted input for the reporting turn. The Lead accepts send_to_lead only
-   * when its own Main dispatched this input; absent on older peers, which are then refused.
-   */
-  acceptedInputClientId?: string;
 }
 
 export function parseOrcaRemoteWorkerBridgeRequest(raw: unknown): OrcaRemoteWorkerBridgeRequest {
@@ -75,8 +70,7 @@ export function parseOrcaRemoteWorkerBridgeRequest(raw: unknown): OrcaRemoteWork
     || (raw.reportedInputClientIds !== undefined
       && (!Array.isArray(raw.reportedInputClientIds)
         || raw.reportedInputClientIds.length > 64
-        || !raw.reportedInputClientIds.every(isOrcaRemoteWorkerSessionId)))
-    || (raw.acceptedInputClientId !== undefined && !isOrcaRemoteWorkerSessionId(raw.acceptedInputClientId))) {
+        || !raw.reportedInputClientIds.every(isOrcaRemoteWorkerSessionId)))) {
     throw new Error('[INVALID_PARAMS] invalid remote worker bridge request');
   }
   return { sessionId: raw.sessionId, leadSessionId: raw.leadSessionId,
@@ -84,7 +78,6 @@ export function parseOrcaRemoteWorkerBridgeRequest(raw: unknown): OrcaRemoteWork
     ...(raw.reportedInputClientIds !== undefined
       ? { reportedInputClientIds: [...new Set(raw.reportedInputClientIds as string[])] }
       : {}),
-    ...(raw.acceptedInputClientId !== undefined ? { acceptedInputClientId: raw.acceptedInputClientId as string } : {}),
   };
 }
 

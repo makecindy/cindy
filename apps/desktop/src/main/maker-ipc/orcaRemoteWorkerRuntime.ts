@@ -132,11 +132,6 @@ interface WorkerState {
   /** 运行设备上的工作目录(只做展示)；重启后首次轮询时补读。 */
   workingDir: string | null;
   persistence: Promise<void>;
-  /**
-   * Inputs this Main dispatched to the Worker (newest last). The bridge accepts send_to_lead
-   * only for these, including repeated reports after the obligation is already settled.
-   */
-  assignedClientIds: string[];
 }
 
 function errorCode(err: unknown): string | null {
@@ -277,12 +272,6 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
       });
     state.persistence = write;
     return write;
-  }
-
-  function recordAssigned(state: WorkerState, clientId: string): void {
-    state.assignedClientIds = [
-      ...state.assignedClientIds.filter((id) => id !== clientId), clientId,
-    ].slice(-64);
   }
 
   function deviceUnreachable(err: unknown): boolean {
@@ -652,7 +641,6 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
           inTurn: false,
           workingDir,
           persistence: Promise.resolve(),
-          assignedClientIds: [...(ref.pendingReport?.clientIds ?? [])],
           awaiting: ref.pendingReport
             ? {
                 ...ref.pendingReport,
@@ -671,13 +659,6 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
     untrack(proxySessionId: string): void {
       workers.delete(proxySessionId);
       if (workers.size === 0) schedule();
-    },
-
-    /** Whether this Main dispatched the input; the bridge's proof of a Lead-assigned turn. */
-    isAssignedInput(proxySessionId: string, clientId: string): boolean {
-      const state = workers.get(proxySessionId);
-      return !!state && current(state) && (state.assignedClientIds.includes(clientId)
-        || !!state.awaiting?.clientIds.includes(clientId));
     },
 
     isRemote(proxySessionId: string): boolean {
@@ -763,8 +744,6 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         }
         if (!current(state) || state.awaiting !== prepared)
           throw new Error('remote worker owner or dispatch changed');
-        // Record before delivery: the Worker can report as soon as the input starts.
-        recordAssigned(state, params.clientId);
         const accept = async (): Promise<RemoteWorkerDispatchResult> => {
           setReachable(ref.deviceId, true);
           schedule();
@@ -810,9 +789,6 @@ export function createOrcaRemoteWorkerRuntime(deps: OrcaRemoteWorkerRuntimeDeps)
         }
         return accept();
       } catch (err) {
-        // Only an input that did not reach the device is forgotten; an unknown delivery
-        // returned above as accepted and keeps its record.
-        state.assignedClientIds = state.assignedClientIds.filter((id) => id !== params.clientId);
         if (prepared && current(state) && state.awaiting === prepared) {
           state.awaiting = prepared.previous;
           await persist(state).catch((persistError) =>

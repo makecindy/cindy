@@ -33,9 +33,6 @@ describe('parseOrcaRemoteWorkerBridgeRequest', () => {
     const parsed = parseOrcaRemoteWorkerBridgeRequest({ ...request, reportedInputClientIds: ids });
     ids.push('c');
     expect(parsed.reportedInputClientIds).toEqual(['a', 'b']);
-    // The accepted input is the Lead's proof of a Lead-assigned turn (PR #9690).
-    expect(parseOrcaRemoteWorkerBridgeRequest({ ...request, acceptedInputClientId: 'a' }).acceptedInputClientId).toBe('a');
-    expect(() => parseOrcaRemoteWorkerBridgeRequest({ ...request, acceptedInputClientId: '../x' })).toThrow(/INVALID_PARAMS/);
   });
   it.each([null, 'a', ['../x'], Array.from({ length: 65 }, (_, i) => `input-${i}`)])(
     'rejects invalid input correlation %j', (ids) => {

@@ -3236,12 +3236,6 @@ export function stopOrcaRemoteWorkersForOwnerBoundary(): void {
   orcaRemoteWorkersForHost?.stop();
 }
 
-export async function isRemoteWorkerLeadAssignedInput(
-  sessionId: string, clientId: string,
-): Promise<boolean> {
-  return (await orcaRemoteWorkersForHost?.isLeadAssignedInput(sessionId, clientId)) ?? false;
-}
-
 export function captureRemoteWorkerReportSettlement(
   sessionId: string, reportedInputClientIds: readonly string[],
 ): () => Promise<void> {

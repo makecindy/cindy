@@ -218,26 +218,6 @@ describe('orca remote worker runtime', () => {
     expect(runtime.hasPendingReport('proxy-1')).toBe(false);
   });
 
-  // PR #9690 review (discussion_r4522207424): the Lead's own dispatch record is the bridge's
-  // proof of a Lead-assigned turn. It must still cover a second report after the first one
-  // settled the obligation, survive a restart via the persisted pending identity, and never
-  // include an input that failed to reach the device or one this Main did not send.
-  it('keeps the Main-owned dispatch record that proves a Lead-assigned turn', async () => {
-    const { runtime, coreRuntime, state } = setup();
-    await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'a', clientId: 'c-1' });
-    await runtime.captureReportSettlement('proxy-1', ['c-1'])();
-    expect(runtime.hasPendingReport('proxy-1')).toBe(false);
-    expect(runtime.isAssignedInput('proxy-1', 'c-1')).toBe(true);
-    expect(runtime.isAssignedInput('proxy-1', 'typed-on-device')).toBe(false);
-    state.enqueueError = new Error('[SEND_FAILED] rejected');
-    await expect(runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'b', clientId: 'c-2' }))
-      .resolves.toMatchObject({ ok: false });
-    expect(runtime.isAssignedInput('proxy-1', 'c-2')).toBe(false);
-    coreRuntime.reset();
-    coreRuntime.track({ ...ref, pendingReport: { clientIds: ['c-3'], baselineMessageId: null } });
-    expect(coreRuntime.isAssignedInput('proxy-1', 'c-3')).toBe(true);
-  });
-
   it('does not let an older manual report settle a newly dispatched task', async () => {
     const { runtime } = setup();
     await runtime.dispatch({ proxySessionId: 'proxy-1', rawContent: 'old', clientId: 'c-1' });
