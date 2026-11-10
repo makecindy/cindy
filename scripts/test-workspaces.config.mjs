@@ -386,11 +386,11 @@ export default {
         },
         integration: {
           status: 'manual',
-          reason: 'Local application Agent protocol tests open real loopback sockets and temporary authorization stores.',
+          reason: 'Local Agent protocol tests use real sockets; Skill archive size regressions perform large encrypted disk transfers.',
           execution: 'exclusive',
           coverage: 'allowlist',
           command: vitestBin('run', '--maxWorkers=2'),
-          include: ['src/main/local-agent/__tests__/*.integration.test.ts'],
+          include: ['src/main/local-agent/__tests__/*.integration.test.ts', 'src/main/bot-import/__tests__/skillArchive.integration.test.ts'],
         },
         'git-integration': {
           status: 'manual',

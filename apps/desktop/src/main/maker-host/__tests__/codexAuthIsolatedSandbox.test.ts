@@ -304,6 +304,45 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(true);
   });
 
+  // 测试价值（unit）：Release 凭证上挂着升级前 profile 留下的残留硬链(nlink>1)时,只读
+  // Dev 的 mode:'local' 重连也不能去清 —— 清残留硬链 = 换掉 Release 的 inode(写操作),
+  // 违背「Release 凭证的字节与 inode 都不变」的边界(上面的契约用例);本地 Codex 消费的
+  // 是快照副本,Release 那份的 nlink 与这个进程无关(#9316 review 第十二轮)。现有覆盖只
+  // 验证了「Release 文件上没有残留硬链」的场景。最小失败输入:Release auth.json 带一条
+  // 残留硬链 + 只读 Dev 的 mode:'local' 重连。
+  it('只读 Dev 的本地重连不清 Release 凭证上的残留硬链', async () => {
+    const { localAuth, releaseAuth, systemAuth } = fixture();
+    fs.rmSync(systemAuth);
+    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+    fs.writeFileSync(
+      releaseAuth,
+      JSON.stringify({
+        account: { email: 'release@example.test' },
+        tokens: { access_token: 'release-token', account_id: 'acct-release' },
+      }),
+    );
+    // 升级前的 profile 留下的残留硬链:Codex 0.165+ 拒绝写 nlink>1,可读 Dev 也不该管。
+    const residualLink = path.join(path.dirname(releaseAuth), 'auth.json.legacy-hardlink');
+    fs.linkSync(releaseAuth, residualLink);
+    bindReleaseOpenAi(releaseAuth);
+    const releaseBytes = fs.readFileSync(releaseAuth);
+    const releaseStat = fs.statSync(releaseAuth);
+    h.dataOwnerId = 'owner-a';
+    const adapter = new DesktopCodexAuthAdapter();
+    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
+
+    await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
+      authenticated: true,
+      credentialScope: 'system-shared',
+    });
+
+    // Release 凭证的字节与 inode 都不变;本地拿到的是独立快照副本。
+    expect(fs.readFileSync(releaseAuth)).toEqual(releaseBytes);
+    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
+    expect(fs.statSync(localAuth).ino).not.toBe(releaseStat.ino);
+    fs.rmSync(residualLink);
+  });
+
   // 测试价值（unit）：2026-10-23 实例反复复制已过期的 Release 授权，重新检测持续 401。
   // 现有覆盖只区分文件缺失、owner 和失效标记，没有过期 Release + 有效本机授权的输入。
   // 通过真实 getState/getAccessToken 验证选中的授权及落盘结果；下方矩阵保护共享目录与账号边界。
@@ -392,33 +431,44 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(useCli ? systemAuth : releaseAuth);
   });
 
-  it('共享 Dev 直接使用 Release 登录态，不重链接或改 binding', async () => {
-    const { releaseAuth, systemAuth } = fixture();
-    h.userDataDir = path.join(h.appDataDir, 'CindyGlobal');
-    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
-    fs.writeFileSync(
-      releaseAuth,
-      JSON.stringify({
-        account: { email: 'release@example.test' },
-        tokens: { access_token: 'release-token', account_id: 'acct-release' },
-      }),
-    );
-    const releaseBinding = bindReleaseOpenAi(releaseAuth);
-    const releaseStat = fs.statSync(releaseAuth);
-    const releaseBindingBytes = fs.readFileSync(releaseBinding);
-    h.dataOwnerId = 'owner-a';
-    const adapter = new DesktopCodexAuthAdapter();
+  // #9316 / unit: a junction to the Release profile must preserve the same-entry
+  // read-only exception; making a snapshot there would replace Release auth itself.
+  it.each([false, true])(
+    '共享 Dev 直接使用 Release 登录态，不重链接或改 binding (alias=%s)',
+    async (alias) => {
+      const { releaseAuth, systemAuth } = fixture();
+      fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+      if (alias) {
+        fs.symlinkSync(path.dirname(releaseAuth), path.join(h.userDataDir, 'codex-home'), 'junction');
+      } else {
+        h.userDataDir = path.join(h.appDataDir, 'CindyGlobal');
+      }
+      fs.writeFileSync(
+        releaseAuth,
+        JSON.stringify({
+          account: { email: 'release@example.test' },
+          tokens: { access_token: 'release-token', account_id: 'acct-release' },
+        }),
+      );
+      const releaseBinding = bindReleaseOpenAi(releaseAuth);
+      if (alias)
+        fs.copyFileSync(releaseBinding, path.join(h.userDataDir, 'native-provider-auth.json'));
+      const releaseStat = fs.statSync(releaseAuth);
+      const releaseBindingBytes = fs.readFileSync(releaseBinding);
+      h.dataOwnerId = 'owner-a';
+      const adapter = new DesktopCodexAuthAdapter();
 
-    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
-      authenticated: true,
-      credentialScope: 'system-shared',
-      oauthWritesBlocked: true,
-    });
-    await expect(adapter.getAccessToken()).resolves.toBe('release-token');
-    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
-    expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
-    expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-token');
-  });
+      await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+        authenticated: true,
+        credentialScope: 'system-shared',
+        oauthWritesBlocked: true,
+      });
+      await expect(adapter.getAccessToken()).resolves.toBe('release-token');
+      expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
+      expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
+      expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-token');
+    },
+  );
 
   it('共享 Dev 遇到未绑定的 Release 残留时不覆盖或回落', async () => {
     const { releaseAuth, systemAuth } = fixture();
@@ -917,11 +967,13 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     fs.renameSync(replacement, systemAuth);
     const renewedSystemBytes = fs.readFileSync(systemAuth);
     const renewedSystemStat = fs.statSync(systemAuth);
-    if (process.platform === 'win32') {
+    // 「系统文件被整体替换」后本地看到什么，取决于共享方式：文件软链跟随系统
+    // 路径（#9277 起 Windows 与 POSIX 都是软链），只有独立副本才留在旧代。
+    if (fs.lstatSync(localAuth).isSymbolicLink()) {
+      expect(fs.readFileSync(localAuth)).toEqual(renewedSystemBytes);
+    } else {
       expect(fs.readFileSync(localAuth)).toEqual(oldLocalBytes);
       expect(fs.readFileSync(localAuth)).not.toEqual(renewedSystemBytes);
-    } else {
-      expect(fs.readFileSync(localAuth)).toEqual(renewedSystemBytes);
     }
 
     const chmod = vi.spyOn(fs.promises, 'chmod');
