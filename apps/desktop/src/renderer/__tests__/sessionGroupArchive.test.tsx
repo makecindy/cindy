@@ -13,6 +13,7 @@ import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { emitRefresh } from '@/lib/sessionsBus';
 import { toast } from '@/lib/toast';
+import { discardDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import type { ConfirmOptions } from '@/components/ui/confirm-dialog-provider';
 import type { AutomationScheduleSessionInfo } from '@/features/cc-agent/lib/automationSidebarGrouping';
 
@@ -37,12 +38,12 @@ vi.mock('@/lib/makerChatStore', () => ({
     getRunningSnapshot: () => liveRunning,
   },
 }));
-vi.mock('@/lib/composerDraftStore', () => ({ discardDraft: vi.fn() }));
 vi.mock('@/lib/sessionsBus', () => ({ emitRefresh: vi.fn() }));
 vi.mock('@/lib/toast', () => ({ toast: { warning: vi.fn(), success: vi.fn(), error: vi.fn() } }));
 
 const worktreeRemovalPreview = vi.fn();
 const resolveSession = vi.fn();
+const cleanupStagedChatAttachments = vi.fn();
 
 function automationScope(members: Session[]) {
   return {
@@ -116,7 +117,12 @@ beforeEach(() => {
   vi.mocked(sessionService.resolveStatusWriteTarget).mockResolvedValue({ kind: 'local' });
   resolveSession.mockReset().mockResolvedValue({ attached: false });
   worktreeRemovalPreview.mockReset().mockResolvedValue({ hasWorktree: true, dirty: false });
-  vi.stubGlobal('electronAPI', { worktreeRemovalPreview, binding: { resolveSession } });
+  cleanupStagedChatAttachments.mockReset().mockResolvedValue(undefined);
+  vi.stubGlobal('electronAPI', {
+    worktreeRemovalPreview,
+    binding: { resolveSession },
+    cleanupStagedChatAttachments,
+  });
 });
 afterEach(() => {
   cleanup();
@@ -375,6 +381,32 @@ describe('session group bulk lifecycle', () => {
     );
     expect(sessionService.restoreIfArchived).not.toHaveBeenCalled();
     expect(view.options.navigate).toHaveBeenCalledWith('/cc-agent');
+  });
+
+  // Regression: group archive discarded each member's unsent composer draft and
+  // its staged attachment copy, so Restore brought the history back without it.
+  // Real composerDraftStore; minimal input: one archived member with a draft.
+  it('keeps an archived member unsent draft and staged attachment for restore', async () => {
+    const stagedPath = 'C:/cache/chat-attachments/notes.bin';
+    saveDraft('eligible', {
+      text: plainTextToTiptapDoc('unsent'),
+      attachments: [{
+        id: 'att-1', name: 'notes.txt', path: stagedPath, ext: 'txt', size: 5,
+        category: 'text', mimeType: 'text/plain',
+      }],
+    });
+    try {
+      const view = mount([session('eligible')]);
+      await act(async () => {
+        await view.result.current({ kind: 'dialogue', sessions: [session('eligible')] });
+      });
+      expect(view.writes.get('eligible')?.status).toBe('archived');
+      expect(getDraft('eligible')?.text).toEqual(plainTextToTiptapDoc('unsent'));
+      expect(getDraft('eligible')?.attachments.map((file) => file.path)).toEqual([stagedPath]);
+      expect(cleanupStagedChatAttachments).not.toHaveBeenCalled();
+    } finally {
+      discardDraft('eligible');
+    }
   });
 
   it('rejects an automation owned by another computer before confirming or writing', async () => {
