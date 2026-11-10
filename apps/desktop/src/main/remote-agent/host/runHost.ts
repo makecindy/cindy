@@ -223,6 +223,8 @@ export interface RemoteAgentHostDeps {
   forkHosted?(kind: RemoteAgentKind, options: ForkSdkSessionOptions): Promise<ForkSdkSessionResult>;
   /** 本机仍允许该控制端远程控制(总开关打开且未撤销)。 */
   isControllerAuthorized(controller: string): boolean;
+  /** 同账号的这台电脑被关了「用本机模型」：拒绝时报「没有开放供应商」而不是「不能远程控制」。 */
+  isControllerModelUseRevoked?(controller: string): boolean;
   /**
    * 控制端是否是本机同账号的设备。不提供 = 全部按同账号处理(现有接线)。返回 guest 时：
    * 载荷按白名单复核、只开放已隔离的 Agent、只能恢复自己建立的会话。
@@ -3072,7 +3074,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   async function handleRequest(controller: string, request: RemoteAgentRequest,
     signal?: AbortSignal, directLocked = false): Promise<unknown> {
-    if (!deps.isControllerAuthorized(controller)) fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
+    if (!deps.isControllerAuthorized(controller)) {
+      if (deps.isControllerModelUseRevoked?.(controller)) {
+        fail('REMOTE_AGENT_PROVIDER_NOT_ALLOWED', 'this computer does not let you use its models');
+      }
+      fail('REMOTE_AGENT_UNAVAILABLE', 'remote control is not allowed');
+    }
     switch (request.op) {
       case 'native-history': {
         if (trustOf(controller) !== 'owner' || !deps.nativeHistory) fail('REMOTE_AGENT_UNSUPPORTED', 'native history transfer is unavailable');

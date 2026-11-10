@@ -4196,7 +4196,18 @@
           "ariaLabel": "許君之他機與君所分享之人呼叫此供方",
           "writeFailed": "遠端呼叫之設未能存，請再試"
         },
-        "moreActionsAria": "餘者"
+        "moreActionsAria": "餘者",
+        "runLocation": {
+          "label": "運於何機",
+          "optionLocal": "此機",
+          "notSignedIn": "未登",
+          "autoBorrowing": "此機未登，新務借 {{device}} 以運之，無須再登。",
+          "local": "新務運於此機；亦可改擇汝他機之已登者。",
+          "pinned": "新務運於 {{device}}，用彼機之登錄；已行之務不移。",
+          "inline": "運於",
+          "signInHere": "於此機登錄",
+          "writeFailed": "運處未能存，請再試。"
+        }
       },
       "detect": {
         "groupLabel": "察得此機 CLI",
@@ -6159,13 +6170,18 @@
         "allowInboundAria": "切換是否許 {{name}} 控此機",
         "peerControlOff": "對方未許遠端操控",
         "masterOffHint": "須先開上方總開關",
-        "controllingThisMac": "已連 Cindy"
+        "controllingThisMac": "已連 Cindy",
+        "useThisDeviceModels": "用此機之模",
+        "allowModelUseAria": "許 {{name}} 用此機之模"
       },
       "toast": {
         "revoked": "已撤此裝置之存取權",
         "revokeFailed": "撤銷未成",
         "restored": "已復此裝置之存取權",
-        "restoreFailed": "恢復未成"
+        "restoreFailed": "恢復未成",
+        "modelUseRestored": "彼機復得用此機之模",
+        "modelUseRevoked": "彼機不復得用此機之模",
+        "modelUseFailed": "「用此機之模」未能存，請再試。"
       },
       "sections": {
         "myDevices": "我之裝置",
@@ -9024,6 +9040,8 @@
       "daysWindow": "{{days}}日"
     },
     "claude": {
+      "totalWeeklyLabel": "週總",
+      "temporarilyLimited": "暫限",
       "waitingDetail": "Claude 訂閱餘量將於下一輪畢後更新。",
       "weeklyLabel": "週限",
       "modelWeeklyLabel": "{{model}} 週限",
@@ -11301,7 +11319,8 @@
       "toolSettings": "器具之設",
       "notTurnedOn": "此機尚未開",
       "turnOn": "往開",
-      "permissions": "權"
+      "permissions": "權",
+      "officialInherited": "Cindy 官方 · 隨本機啟停"
     },
     "systemSkills": {
       "followOffHint": "{{name}} 之系統技藝「案頭與督促」已關，於才能頁復開之乃可用。",
@@ -13279,8 +13298,10 @@
     },
     "backgroundActivity": {
       "status": "後臺子差事方行，模型耗用未止…",
-      "bashStatus_one": "後臺差事方行（{{count}} 件）…",
-      "bashStatus_other": "後臺差事方行（{{count}} 件）…",
+      "bashWorkStatus_one": "後臺猶作（令 {{count}} 道）…",
+      "bashServiceStatus_one": "後臺常役方行（{{count}} 件）",
+      "bashWorkStatus_other": "後臺猶作（令 {{count}} 道）…",
+      "bashServiceStatus_other": "後臺常役方行（{{count}} 件）",
       "stopAll": "盡止",
       "stopAllTitle": "闔此差事之後臺程序，盡止後臺作業（差事仍可續用）",
       "stopBashTitle": "止此差事尚在行之後臺作業（不闔言談程序）",
@@ -19729,6 +19750,7 @@
     }
   },
   "subscriptionAccounts": {
+    "unassigned": "帳號待定",
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 帳號資訊。請於新增供方時選「$t(subscriptionAccounts.signIn.anotherAccount)」，另用獨立目錄",
     "signIn": {
       "checking": "正察本機帳號…",
@@ -19788,5 +19810,11 @@
     "keepDraft": "草稿仍存。連接復通，任務之態將自同步。",
     "retry": "重試連接",
     "desktopAuthHelp": "請於啟動終端更新後臺連接設定，再啟此實驗客戶端。"
+  },
+  "remoteControlConsent": {
+    "title": "許遠控此機乎？",
+    "detail": "請求來自「{{device}}」\n所為：{{purpose}}\n\n啟用後，同帳號裝置可遠控此機，執行任務、存取檔案。此設長效，可隨時於設定中關閉。",
+    "decline": "暫不開啟",
+    "enable": "開啟遠端控制"
   }
 }

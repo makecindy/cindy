@@ -44,6 +44,8 @@ export interface DeviceLinkSettings {
   controlledBy: ActiveController[];
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单)。 */
   revokedControllers: string[];
+  /** 单独关掉「用本机模型」的同账号电脑 deviceId 列表。 */
+  modelUseRevokedControllers: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   listError: string | null;
@@ -61,6 +63,8 @@ export interface DeviceLinkSettings {
   restore: (deviceId: string) => Promise<void>;
   /** 控制端本地偏好:是否允许本机主动控制某个目标设备。 */
   setDeviceControlEnabled: (deviceId: string, enabled: boolean) => Promise<void>;
+  /** 单独开关某台电脑的「用本机模型」。 */
+  setModelUse: (deviceId: string, allowed: boolean) => Promise<void>;
 }
 
 const POLL_INTERVAL_MS = 30_000;
@@ -76,6 +80,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const [devices, setDevices] = useState<DeviceLinkDeviceView[] | null>(null);
   const [controlledBy, setControlledBy] = useState<ActiveController[]>([]);
   const [revokedControllers, setRevokedControllers] = useState<string[]>([]);
+  const [modelUseRevokedControllers, setModelUseRevokedControllers] = useState<string[]>([]);
   const [disabledControlDeviceIds, setDisabledControlDeviceIds] = useState<string[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -84,6 +89,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const disabledControlDeviceIdsRef = useRef<string[]>([]);
   // getState() 与 ownership push 可能乱序返回;事件版本推进后,旧快照不得覆盖新事实。
   const ownershipEventVersion = useRef(0);
+  const enabledEventVersion = useRef(0);
 
   const applyDisabledControlDeviceIds = useCallback((ids: string[]) => {
     disabledControlDeviceIdsRef.current = ids;
@@ -137,6 +143,11 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       setStandby(p.standby === true);
     });
     const ownershipVersionAtGetState = ownershipEventVersion.current;
+    const enabledVersionAtGetState = enabledEventVersion.current;
+    const offEnabled = window.electronAPI.deviceLink.onControlEnabledChanged?.((p) => {
+      enabledEventVersion.current++;
+      setEnabledState(p.remoteControlEnabled);
+    });
     let controllerRevision = 0;
     let disposed = false;
     const offControlled = window.electronAPI.deviceLink.onControlledState((p) => {
@@ -147,7 +158,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       .getState()
       .then((s) => {
         if (disposed || !mounted.current) return;
-        setEnabledState(s.remoteControlEnabled);
+        if (enabledEventVersion.current === enabledVersionAtGetState) setEnabledState(s.remoteControlEnabled);
         setLinkStatus(s.linkStatus);
         setConnectionIssue(s.connectionIssue ?? null);
         if (ownershipEventVersion.current === ownershipVersionAtGetState) {
@@ -155,6 +166,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         }
         if (controllerRevision === 0) setControlledBy(s.controlledBy ?? []);
         setRevokedControllers(s.revokedControllers ?? []);
+        setModelUseRevokedControllers(s.modelUseRevokedControllers ?? []);
         applyDisabledControlDeviceIds(s.disabledControlDeviceIds ?? []);
       })
       .catch((err) => log.warn('getState failed', err));
@@ -181,6 +193,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       offStatus();
       offIssue();
       offOwnership();
+      offEnabled?.();
       offControlled();
       offControlTarget();
       clearInterval(timer);
@@ -190,6 +203,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const setEnabled = useCallback(
     async (next: boolean) => {
       const prev = enabled;
+      const version = ++enabledEventVersion.current;
       setEnabledState(next);
       try {
         await window.electronAPI.deviceLink.setEnabled(next);
@@ -198,7 +212,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         );
       } catch (err) {
         log.warn('setEnabled failed', err);
-        setEnabledState(prev);
+        if (version === enabledEventVersion.current) setEnabledState(prev);
         toast.error(t('settings.devices.toast.toggleFailed'));
       }
     },
@@ -297,6 +311,22 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     [revokedControllers, t],
   );
 
+  const setModelUse = useCallback(
+    async (deviceId: string, allowed: boolean) => {
+      const prev = modelUseRevokedControllers;
+      setModelUseRevokedControllers((r) => allowed ? r.filter((id) => id !== deviceId) : r.includes(deviceId) ? r : [...r, deviceId]);
+      try {
+        await window.electronAPI.deviceLink.setModelUse(deviceId, allowed);
+        toast.success(t(allowed ? 'settings.remoteControl.toast.modelUseRestored' : 'settings.remoteControl.toast.modelUseRevoked'));
+      } catch (err) {
+        log.warn('setModelUse failed', err);
+        setModelUseRevokedControllers(prev);
+        toast.error(t('settings.remoteControl.toast.modelUseFailed'));
+      }
+    },
+    [modelUseRevokedControllers, t],
+  );
+
   const setDeviceControlEnabled = useCallback(
     async (deviceId: string, next: boolean) => {
       const prev = disabledControlDeviceIdsRef.current;
@@ -341,6 +371,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     devices,
     controlledBy,
     revokedControllers,
+    modelUseRevokedControllers,
     disabledControlDeviceIds,
     listError,
     refreshing,
@@ -352,5 +383,6 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     revoke,
     restore,
     setDeviceControlEnabled,
+    setModelUse,
   };
 }
