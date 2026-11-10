@@ -594,6 +594,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   连接分类、用户名和来源，不返回响应原文。插件设置页只能读取 `hostAvailable`、
   `hostManagedSetup` 布尔与备用 PAT 的 `saved/tail` 状态。该来源
   不允许 `exchange` 或 `setup.requires` 引用。安装确认须说明它能使用本机 GitHub 账号的实际权限。
+- OAuth 已连接账号复用沿用现有 `source:'oauth'` 服务端点、scope 与注入范围声明，由
+  `GhostOauthAccountManager` 管理。只列当前 owner 下已批准、启用的来源，授权/token 端点必须相同，
+  注入头形态一致且目标范围不超出原来源，所需 scope 不超出现有授权面。宿主原生确认不可由插件
+  代答；缺确认回调就拒绝复用。原 OAuth 账号记录只保存引用，不复制 refresh/client 凭证，
+  每次出网重新核对来源与目标声明/安装代次；停用、断开、撤销或范围不再匹配立即失效。
+  broker 刷新仍以原来源插件身份执行，不向受用插件授予 broker 资格。401 作废走原来源缓存，
+  断开受用插件只删除该引用。复用结果只供宿主网络注入，`node.secretBindings` 返回
+  `HOST_INJECTION_REQUIRED`，不能借旧 Node 明文绑定读取所引用的账号令牌。旧账号存储保持原义。
 - `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
   Membership 生效。资格有两条默认基座：当前组织的 Plugin Market organization 安装记录仍有效、
   且安装目录 `ghost.json` 的 raw SHA（旧记录迁移前为集中 legacy digest）与记录一致；

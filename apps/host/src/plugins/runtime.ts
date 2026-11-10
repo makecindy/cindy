@@ -204,8 +204,9 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     readSecret: secret.readGhostSecret, secretSaved: secret.ghostSecretSaved,
     resolveOauthSecret: async (id, key, accountId) => {
       const decl = getGhost(id)?.manifest.network?.secrets?.find(item => item.key === key && item.source === 'oauth')?.oauth;
-      return decl ? authorization.oauth.getFreshAccessToken(id, key, decl, accountId)
-        : { ok: false, error: 'NO_ACCOUNT' };
+      if (!decl) return { ok: false, error: 'NO_ACCOUNT' };
+      const resolved = await authorization.oauth.getFreshAccessToken(id, key, decl, accountId);
+      return resolved.ok && resolved.reused ? { ok: false, error: 'HOST_INJECTION_REQUIRED' } : resolved;
     },
     getCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId),
     getCallSessionId: (id, callId) => dispatcher.getPendingCallSessionId(id, callId),

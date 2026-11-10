@@ -2669,12 +2669,13 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
           : undefined;
         if (source?.source !== 'oauth' || !source.oauth)
           return { ok: false, error: 'INVALID_DECLARATION' };
-        return getGhostOauthAccountManager().getFreshAccessToken(
+        const resolved = await getGhostOauthAccountManager().getFreshAccessToken(
           ghostId,
           secretKey,
           source.oauth,
           accountId,
         );
+        return resolved.ok && resolved.reused ? { ok: false, error: 'HOST_INJECTION_REQUIRED' } : resolved;
       },
       sendToGhost: (ghostId, payload) => {
         sendToGhostLogic(ghostId, payload);
@@ -6291,6 +6292,12 @@ export async function reconcileGhostOauthAccountsForActiveOwner(): Promise<boole
 function getGhostOauthAccountManager(): GhostOauthAccountManager {
   if (!ghostOauthManagerSingleton) {
     ghostOauthManagerSingleton = new GhostOauthAccountManager({
+      connectionSources: () => isGhostBoundaryPending() ? [] : getGhostManager().list().flatMap(installed => {
+        const instanceKey = installedGhostStoragePart(installed);
+        const ghost = findGhostForInstanceId(instanceKey);
+        return ghost?.enabled && ghost.approval?.state === 'approved' && isGhostAvailableForActiveSession(instanceKey)
+          ? [{ instanceKey, name: ghost.manifest.name, manifest: ghost.manifest }] : [];
+      }),
       vault: {
         read: (ghostId, storageKey) => readGhostSecret(ghostId, storageKey),
         readStrict: (ghostId, storageKey) => readGhostSecretStrict(ghostId, storageKey),

@@ -65,6 +65,11 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 
 ## 3. Ghost manifest 与 Cindy 专属界面能力
 
+- OAuth 账号清单增量增加 Host 私有的 `reused` 账号引用，`/oauth` 账号视图可带
+  `reused:true`（不含来源凭证），插件原有列表/默认/断开调用保持兼容。普通账号字段、
+  刷新路径与 manifest 不变，旧账号无需迁移或重配。引用账号需要新 Host；旧 Host 不识别
+  引用时原来源的凭证仍保留，不得将其复制进受用插件作为回退。此项不新增 grant 账本。
+
 - `network.hosts` 的 string 数组增量接受精确 HTTP(S)/WS(S) origin；普通域名维持 HTTPS:443。
   复用原声明、权限行和 receipt，不新增 schema 或批准存储。原客户端会在安装时拒绝新格式，
   使用此能力的包须标明实际支持版本；已装旧插件的规范值与批准范围不变。凭证范围比较按协议、

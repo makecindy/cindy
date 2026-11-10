@@ -870,7 +870,7 @@ export function ghostNetworkHostMatches(pattern: string, hostname: string): bool
   return hostname === pattern;
 }
 
-function ghostNetworkHostPatternWithinCap(actual: string, reviewed: string): boolean {
+export function ghostNetworkHostPatternWithinCap(actual: string, reviewed: string): boolean {
   if (actual.includes('://')) return ghostNetworkTargetMatches(reviewed, new URL(actual));
   if (reviewed.includes('://')) return false;
   if (!actual.startsWith('*.')) return ghostNetworkHostMatches(reviewed, actual);

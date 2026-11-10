@@ -69,6 +69,12 @@ export function createHostPluginAuthorization(options: {
     });
   }
   const oauth = new GhostOauthAccountManager({
+    connectionSources: () => !current() ? [] : options.list().flatMap(installed => {
+      const instanceKey = installedGhostStoragePart(installed);
+      const ghost = getGhost(instanceKey);
+      return ghost?.enabled && ghost.approval?.state === 'approved'
+        ? [{ instanceKey, name: ghost.manifest.name, manifest: ghost.manifest }] : [];
+    }),
     vault: { read: secret.readGhostSecret, readStrict: secret.readGhostSecretStrict,
       store: secret.storeGhostSecret, remove: secret.removeGhostSecret },
     fetchImpl: (url, init) => hostOutbound.outboundFetch(url, { ...init,
