@@ -46,7 +46,8 @@ function localFileUrl(value: string, workspace: ExecutorWorkspace): string {
   return value;
 }
 
-function localText(value: string, workspace: ExecutorWorkspace, context: PathTextContext = 'text'): string {
+/** 事件正文与 MCP 文本入参共用的还原；URL、JSON 转义和源码分隔符沿用同一判据。 */
+export function localText(value: string, workspace: ExecutorWorkspace, context: PathTextContext = 'text'): string {
   // 先处理 JSON 字符串，保留 Windows 转义、正文格式和非字符串字节。
   if (/^\s*[{["]/.test(value)) {
     try {

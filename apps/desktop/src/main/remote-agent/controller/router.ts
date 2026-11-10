@@ -15,6 +15,7 @@ import { CINDY_EXEC_MCP_SERVER, handleExecMcpRequest } from '../executor/ccMcp';
 import { ExecutorRequestError, type RemoteExecutor } from '../executor/executor';
 import { resolveExecutorShell } from '../executor/shell';
 import { pathTextContext } from '../executor/workspace';
+import { localText } from './eventProjection';
 
 /** 本任务可用的一个本机 MCP 服务：完整地址(已带本任务身份)与要附加的请求头。 */
 export interface LocalMcpTarget {
@@ -34,13 +35,16 @@ export interface ReverseHttpRouterDeps {
 const FORWARD_REQUEST_HEADERS = new Set(['content-type', 'accept', 'mcp-session-id', 'mcp-protocol-version', 'last-event-id']);
 const FORWARD_RESPONSE_HEADERS = new Set(['content-type', 'mcp-session-id', 'mcp-protocol-version']);
 
-/** 本机工具已有的路径参数；兼容 MCP snake_case 与宿主 camelCase，除 prompt 外正文和插件业务参数不做文本替换。 */
+/** 本机工具已有的路径参数；兼容 MCP snake_case 与宿主 camelCase。 */
 const PATH_ARGUMENTS = new Set([
   'path', 'paths', 'filepath', 'filepaths', 'directory', 'directories', 'dir', 'dirs',
   'workingdir', 'workdir', 'cwd', 'root', 'libraryroot', 'sourcepath', 'destinationpath',
   'savedir', 'outpath', 'htmlpath', 'imagepath', 'iconsource', 'attachments', 'extradirs', 'writabledirs',
   'debugimageout',
 ]);
+
+/** 只还原明确的正文参数；标识、凭证及其它不透明业务字符串保持原样。 */
+const TEXT_ARGUMENTS = new Set(['message', 'commitmessage', 'body', 'content', 'text', 'description']);
 
 function json(status: number, value: unknown): Extract<RemoteAgentReply, { type: 'http' }> {
   return {
@@ -74,12 +78,12 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
   const doFetch = deps.fetch ?? fetch;
   const workspace = deps.executor.workspace;
 
-  const mapArguments = (value: unknown, key = ''): unknown => {
+  const mapArguments = (value: unknown, key = '', textContent = true): unknown => {
     if (typeof value === 'string') {
       if (key === 'args') {
         try {
           const parsed = JSON.parse(value);
-          if (parsed && typeof parsed === 'object') return JSON.stringify(mapArguments(parsed));
+          if (parsed && typeof parsed === 'object') return JSON.stringify(mapArguments(parsed, '', textContent));
         } catch { /* 普通字符串参数保持原样。 */ }
       }
       if (/^(?:cmd|command)$/.test(key)) return workspace.mapCommand(value, resolveExecutorShell().dialect);
@@ -88,11 +92,17 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
       const fieldContext = pathTextContext(key);
       if (fieldContext === 'ambiguous-path') return workspace.mapTextFromAgent(value, fieldContext);
       if (fieldContext === 'path' || PATH_ARGUMENTS.has(key.replace(/_/g, '').toLowerCase())) return workspace.mapAlias(value);
+      if (textContent && TEXT_ARGUMENTS.has(key.replace(/_/g, '').toLowerCase()) && !value.includes('\0')) {
+        return localText(value, workspace);
+      }
       return value;
     }
-    if (Array.isArray(value)) return value.map((item) => mapArguments(item, key));
+    if (Array.isArray(value)) return value.map((item) => mapArguments(item, key, textContent));
     if (!value || typeof value !== 'object') return value;
-    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, mapArguments(item, name)]));
+    // 如 GitLab actions[].encoding=base64：不解码或改写非文本载荷，路径参数仍按原规则处理。
+    const encoding = (value as Record<string, unknown>).encoding;
+    const plainText = textContent && (encoding === undefined || (typeof encoding === 'string' && /^(?:text|utf-?8)$/i.test(encoding)));
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, mapArguments(item, name, plainText)]));
   };
   const projectResult = (value: unknown, key = ''): unknown => {
     if (typeof value === 'string') {
