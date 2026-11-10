@@ -19762,5 +19762,11 @@
     "browserFallback": "GitHub を開いて Cindy にスターを付けてください。",
     "openGithub": "GitHub を開く",
     "openFailed": "GitHub を開けませんでした。"
+  },
+  "remoteControlConsent": {
+    "title": "このコンピューターのリモート操作を許可しますか？",
+    "detail": "要求元：{{device}}\n目的：{{purpose}}\n\n有効にすると、同じアカウントのデバイスからタスクの実行やファイルへのアクセスなど、このコンピューターを操作できます。設定で無効にするまで有効です。",
+    "decline": "今はしない",
+    "enable": "リモート操作を有効にする"
   }
 }

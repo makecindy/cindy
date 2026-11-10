@@ -19762,5 +19762,11 @@
     "browserFallback": "前往 GitHub 為 Cindy 點 Star",
     "openGithub": "開啟 GitHub",
     "openFailed": "無法開啟 GitHub"
+  },
+  "remoteControlConsent": {
+    "title": "允許遠端控制這台電腦？",
+    "detail": "請求來自「{{device}}」\n用途：{{purpose}}\n\n開啟後，同帳號裝置可以遠端控制這台電腦，包括執行任務和存取檔案。此設定持續有效，可隨時在設定中關閉。",
+    "decline": "暫不開啟",
+    "enable": "開啟遠端控制"
   }
 }

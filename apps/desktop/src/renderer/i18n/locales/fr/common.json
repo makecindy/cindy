@@ -20021,5 +20021,11 @@
     "browserFallback": "Ouvrez GitHub pour ajouter une étoile à Cindy.",
     "openGithub": "Ouvrir GitHub",
     "openFailed": "Impossible d’ouvrir GitHub."
+  },
+  "remoteControlConsent": {
+    "title": "Autoriser le contrôle à distance de cet ordinateur ?",
+    "detail": "Demande de {{device}}\nMotif : {{purpose}}\n\nLes appareils de votre compte pourront contrôler cet ordinateur, exécuter des tâches et accéder aux fichiers. Ce réglage reste actif jusqu’à sa désactivation dans les paramètres.",
+    "decline": "Pas maintenant",
+    "enable": "Activer le contrôle à distance"
   }
 }

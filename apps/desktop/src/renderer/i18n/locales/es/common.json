@@ -20021,5 +20021,11 @@
     "browserFallback": "Abre GitHub para darle una estrella a Cindy.",
     "openGithub": "Abrir GitHub",
     "openFailed": "No se pudo abrir GitHub."
+  },
+  "remoteControlConsent": {
+    "title": "¿Permitir el control remoto de este ordenador?",
+    "detail": "Solicitud de {{device}}\nMotivo: {{purpose}}\n\nLos dispositivos de tu cuenta podrán controlar este ordenador, ejecutar tareas y acceder a archivos. Seguirá activado hasta que lo desactives en Ajustes.",
+    "decline": "Ahora no",
+    "enable": "Activar control remoto"
   }
 }

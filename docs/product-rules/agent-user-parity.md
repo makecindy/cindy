@@ -260,3 +260,10 @@ Claude Code／Pi 的非阻塞澄清恢复独立的 `ask_user_question_async`；P
 无需先检索 MCP。Codex 保持原生提问入口。独立的 `request_input_handoff` 处理窗口与截图二维码，
 三个 Harness 直接可发现；Grok 登录恢复 auth 类目的 `start_grok_device_login`。移除 `ask_owner`，
 既有同步提问、卡片和回答生命周期保持不变。
+
+### 同账号电脑开启远控的授权请求（2026-11-10）
+
+用户可在目标电脑本机开启远程控制；Agent 的 `request_remote_control` 可请求该电脑显示
+本机确认框，用户直接点击开启，不必另找设置。工具发现为 `devices.remote-consent`，
+精确目标来自 `list_machines`。此入口只请求确认，不能远程改开关；原任务收到 enabled 后
+继续工作。未授权消息通道与普通远控命令分离，详情见 [机器能力](cindy-machines.md)。

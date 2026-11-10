@@ -19834,5 +19834,11 @@
     "browserFallback": "Open GitHub to star Cindy.",
     "openGithub": "Open GitHub",
     "openFailed": "Could not open GitHub."
+  },
+  "remoteControlConsent": {
+    "title": "Allow remote control of this computer?",
+    "detail": "Request from {{device}}\nPurpose: {{purpose}}\n\nEnabling this setting lets devices on your account control this computer, including running tasks and accessing files. It stays enabled until you turn it off in Settings.",
+    "decline": "Not now",
+    "enable": "Enable remote control"
   }
 }

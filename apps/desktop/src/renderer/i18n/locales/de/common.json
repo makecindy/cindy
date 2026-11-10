@@ -19834,5 +19834,11 @@
     "browserFallback": "Öffne GitHub, um Cindy einen Stern zu geben.",
     "openGithub": "GitHub öffnen",
     "openFailed": "GitHub konnte nicht geöffnet werden."
+  },
+  "remoteControlConsent": {
+    "title": "Fernsteuerung dieses Computers erlauben?",
+    "detail": "Anfrage von {{device}}\nZweck: {{purpose}}\n\nGeräte Ihres Kontos können diesen Computer steuern, Aufgaben ausführen und auf Dateien zugreifen. Die Einstellung bleibt aktiv, bis Sie sie in den Einstellungen deaktivieren.",
+    "decline": "Jetzt nicht",
+    "enable": "Fernsteuerung aktivieren"
   }
 }
