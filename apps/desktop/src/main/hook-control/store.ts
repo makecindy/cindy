@@ -44,7 +44,7 @@ export interface ProviderBindingCacheEntry {
   principalId: string;
   principalName: string | null;
   scopeId: string;
-  scopeName: string;
+  scopeName: string | null;
 }
 
 /** 持久化的单配置(不含任何凭证)。 */
@@ -345,8 +345,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       !row.principalId ||
       typeof row.scopeId !== 'string' ||
       !row.scopeId ||
-      typeof row.scopeName !== 'string' ||
-      !row.scopeName
+      (row.scopeName !== null && (typeof row.scopeName !== 'string' || !row.scopeName))
     ) {
       return null;
     }

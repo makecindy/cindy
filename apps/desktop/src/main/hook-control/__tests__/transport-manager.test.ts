@@ -3216,8 +3216,9 @@ function feishuLaneHarness(
   const transports: HookTransportOpts[] = [];
   const sent: HookMessage[] = [];
   const dispose = vi.fn();
+  const store = memoryStore({ url: 'wss://slack-hook.example.test', enabled: false, ...storeInit });
   const manager = makeManager(
-    memoryStore({ url: 'wss://slack-hook.example.test', enabled: false, ...storeInit }),
+    store,
     {
       getFeishuUrl: () => 'ws://127.0.0.1:8794',
       createTransport: (opts) => {
@@ -3234,7 +3235,7 @@ function feishuLaneHarness(
     },
   );
   cleanups.push(() => manager.dispose());
-  return { manager, transports, sent, dispose };
+  return { manager, transports, sent, dispose, store };
 }
 
 describe('官方 IM 解绑与连接释放', () => {
@@ -4889,6 +4890,18 @@ describe('store Feishu multi-account manager', () => {
   const second: ProviderBindStatusPayload = { ...FEISHU_CONFIRMED, bindingId: 'binding-feishu-2', principalId: 'ou_second',
     principalName: 'Second User', tenantKey: 'tenant-b', actions: ['revoke', 'select_device'] };
   const features = [...FEISHU_FEATURES, HOOK_FEATURE_FEISHU_STORE_MULTI_BIND];
+  // Review regression / unit: scopeName is optional display data, not binding
+  // authority. Existing cache tests only used named scopes and missed this drop.
+  it('keeps nameless confirmed bindings in the cache and preserves their first-account position', () => {
+    const { manager, transports, store } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'store', features }); opts.onStatus('connected', null);
+    const nameless = { ...FEISHU_CONFIRMED, scopeName: null };
+    opts.onMessage(makeProviderBindState({ ...nameless, bindings: [nameless, second] }), () => true);
+    expect(store.get().feishuBindingsCache?.map((row) => row.bindingId)).toEqual([nameless.bindingId, second.bindingId]);
+    expect(store.get().feishuBindingCache).toMatchObject({ bindingId: nameless.bindingId, scopeName: null });
+  });
+
   // Review regressions / unit: real manager receives protocol frames; prior tests
   // did not reuse a revoked ID or complete a cancelled attempt. No recovery I/O.
   it('accepts a re-linked identity only with the exact current attempt and clears its tombstone', () => {
@@ -5225,6 +5238,12 @@ describe('coexisting Feishu bot manager', () => {
     expect(dispatcher.handleDispatch).not.toHaveBeenCalled();
     expect(replies).toContainEqual(expect.objectContaining({ type: 'task.ack', payload: expect.objectContaining({ result: 'rejected' }) }));
     expect(manager.providerBindStart('feishu', 'cli_app')).toBe(false);
+    // An app hidden by policy can later return with the same durable binding.
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, applications }), () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.bindingId)).toEqual([FEISHU_CONFIRMED.bindingId, org.bindingId]);
+    opts.onMessage(makeTaskDispatch({ requestId: 'restored-app', externalKey: 'feishu:dm:cli_app:ou_user:g1', prompt: 'allow',
+      workspace: 'chat', source: { im: 'feishu' } }), () => true);
+    expect(dispatcher.handleDispatch).toHaveBeenCalledOnce();
   });
 
   it('authorizes both app identities and keeps the other bot active after one unlink', async () => {

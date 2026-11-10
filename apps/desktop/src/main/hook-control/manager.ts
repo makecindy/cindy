@@ -1422,7 +1422,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function persistFeishuBindings(lane: NeutralProviderLane): void {
     try {
       store.setFeishuBindingsCache(lane.confirmedBindings.flatMap((row) =>
-        row.bindingId && row.principalId && row.scopeId && row.scopeName ? [{
+        row.bindingId && row.principalId && row.scopeId ? [{
           bindingId: row.bindingId, principalId: row.principalId, principalName: row.principalName,
           scopeId: row.scopeId, scopeName: row.scopeName, tenantKey: row.tenantKey,
         }] : []));
@@ -1883,13 +1883,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       if (storeMultiBindReady(lane)) {
         if (isStateSnapshot) {
           lane.bindingScopeId = payload.scopeId;
-          const snapshotIds = new Set(acceptedPayload.bindings!.map((row) => row.bindingId));
-          for (const row of lane.confirmedBindings) {
-            if (row.bindingId && !snapshotIds.has(row.bindingId) &&
-              lane.snapshotChanges.get(row.bindingId)?.state !== 'confirmed') {
-              lane.revokedBindingIds.add(row.bindingId);
-            }
-          }
+          // Absence withdraws current authority; it is not an explicit unlink.
+          // A later policy snapshot may restore the same durable binding ID.
           lane.confirmedBindings = acceptedPayload.bindings!.filter((row) => !lane.revokedBindingIds.has(row.bindingId!)).map((row) =>
             providerBindingView('feishu', lane.config.normalizeBindingPayload?.(row) ?? row));
           for (const [id, change] of lane.snapshotChanges) {
