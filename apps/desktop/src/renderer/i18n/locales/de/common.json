@@ -14868,6 +14868,7 @@
         "compactSuccess": "Kontext komprimiert",
         "compactSuccessWithTokens": "Kontext komprimiert: {{before}}k → {{after}}k Tokens",
         "compactFailed": "Komprimierung fehlgeschlagen",
+        "compactResumeFirst": "Sende zuerst eine Nachricht, um diese Aufgabe fortzusetzen, bevor du den Kontext komprimierst.",
         "compactNothing": "Noch nichts zu komprimieren",
         "sessionBranches": "Sitzungszweige",
         "copySessionLink": "Sitzungslink kopieren"

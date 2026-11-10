@@ -15012,6 +15012,7 @@
         "compactSuccess": "Contexto compactado",
         "compactSuccessWithTokens": "Contexto compactado: {{before}}k → {{after}}k tokens",
         "compactFailed": "Falha na compactação",
+        "compactResumeFirst": "Envie uma mensagem para retomar esta tarefa antes de compactar o contexto.",
         "compactNothing": "Ainda não há nada para compactar",
         "sessionBranches": "Branches da sessão",
         "copySessionLink": "Copiar ligação da sessão"

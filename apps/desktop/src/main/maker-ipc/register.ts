@@ -25190,16 +25190,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       const sess = maker.getSession(sessionId);
       if (!sess) {
-        log.debug('compact-session: session not found, no-op', { sessionId });
-        return null;
+        throwIpcError('NOT_FOUND', 'Resume the task before compacting its context');
       }
       if (!sess.capabilities.manualCompact?.supported) {
-        // 调用方应先按 capabilities 隐藏入口,这里兜底 no-op。
-        log.debug('compact-session: agent does not support manual compact, no-op', {
-          sessionId,
-          agentKind: sess.agentKind,
-        });
-        return null;
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
       }
       return sess.compactSession(instructions);
     },

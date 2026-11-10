@@ -14868,6 +14868,7 @@
         "compactSuccess": "Context compacted",
         "compactSuccessWithTokens": "Context compacted: {{before}}k → {{after}}k tokens",
         "compactFailed": "Compaction failed",
+        "compactResumeFirst": "Send a message to resume this task before compacting its context.",
         "compactNothing": "Nothing to compact yet",
         "sessionBranches": "Session branches",
         "copySessionLink": "Copy session link"

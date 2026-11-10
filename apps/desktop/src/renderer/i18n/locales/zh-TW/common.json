@@ -14802,6 +14802,7 @@
         "compactSuccess": "上下文已壓縮",
         "compactSuccessWithTokens": "上下文已壓縮：{{before}}k → {{after}}k tokens",
         "compactFailed": "壓縮失敗",
+        "compactResumeFirst": "請先傳送一則訊息恢復任務，再壓縮上下文。",
         "compactNothing": "暫無可壓縮內容",
         "sessionBranches": "任務分支",
         "copySessionLink": "複製任務連結"
