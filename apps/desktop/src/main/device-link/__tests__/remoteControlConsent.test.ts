@@ -19,7 +19,7 @@ function harness() {
   const consent = new RemoteControlConsent({ scope: () => scope, eligible: () => eligible, enabled: () => enabled, send, prompt, enable });
   return { consent, send, prompt, enable, revoke: () => { eligible = false; }, switchAccount: () => { scope = 'owner-b'; } };
 }
-const request = () => ({ version: 1, kind: 'request', id, purpose: 'Download source', expiresAt: Date.now() + 45_000 });
+const request = () => ({ version: 1, kind: 'request', id, purpose: 'Download source', ttlMs: 45_000 });
 afterEach(() => vi.useRealTimers());
 describe('remote control consent', () => {
   // Regression: unparented macOS dialogs ignore AbortSignal.
@@ -99,10 +99,21 @@ describe('remote control consent', () => {
   });
   it('ignores invalid or expired requests before showing a dialog', async () => {
     const h = harness();
-    for (const frame of [null, { ...request(), expiresAt: Date.now() - 1 }, { ...request(), purpose: 'x'.repeat(501) }, { ...request(), version: 2 }]) {
+    for (const frame of [null, { ...request(), ttlMs: 0 }, { ...request(), purpose: 'x'.repeat(501) }, { ...request(), version: 2 }]) {
       await h.consent.receive('other', frame);
     }
     expect(h.prompt).not.toHaveBeenCalled();
+  });
+  it('counts the dialog lifetime on the receiving clock, not the sender clock', async () => {
+    const h = harness();
+    const sent = vi.spyOn(Date, 'now');
+    try {
+      sent.mockReturnValue(1_000_000);
+      const frame = request(); // sender's wall clock is irrelevant: only a relative lifetime travels
+      sent.mockReturnValue(1_000_000 - 600_000); // receiver is ten minutes behind
+      await h.consent.receive('other', frame);
+      expect(h.prompt).toHaveBeenCalledOnce();
+    } finally { sent.mockRestore(); }
   });
   it('matches replies to both the target and request, and does not send concurrent duplicates', async () => {
     const h = harness(); const pending = h.consent.request('other', 'Download source');

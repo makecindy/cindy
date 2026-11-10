@@ -46,7 +46,7 @@ export class RemoteControlConsent {
         resolve(result);
       };
       this.outgoing.set(id, { peer, scope: this.deps.scope(), finish });
-      try { this.deps.send(peer, { version: 1, kind: 'request', id, purpose: purpose.trim(), expiresAt: Date.now() + TTL }); }
+      try { this.deps.send(peer, { version: 1, kind: 'request', id, purpose: purpose.trim(), ttlMs: TTL }); }
       catch { finish('unavailable'); }
     });
   }
@@ -64,12 +64,14 @@ export class RemoteControlConsent {
       return;
     }
     if (frame.kind !== 'request' || typeof frame.purpose !== 'string' || !frame.purpose.trim() || frame.purpose.length > 500 ||
-      typeof frame.expiresAt !== 'number' || !Number.isFinite(frame.expiresAt)) return;
-    const expiresAt = frame.expiresAt;
-    const remaining = expiresAt - Date.now();
-    if (remaining <= 0 || remaining > TTL + 5_000) return;
-    const key = `${peer}:${id}`;
+      typeof frame.ttlMs !== 'number' || !Number.isFinite(frame.ttlMs)) return;
+    // A relative lifetime, counted on this computer's own clock: two computers' clocks
+    // may differ by far more than the dialog lifetime.
     const now = Date.now();
+    const remaining = Math.min(frame.ttlMs, TTL);
+    if (remaining <= 0) return;
+    const expiresAt = now + remaining;
+    const key = `${peer}:${id}`;
     for (const [entry, expiry] of this.seen) if (expiry <= now) this.seen.delete(entry);
     if (this.seen.has(key)) return;
     // Bounds unsolicited requests and avoids repeatedly presenting a replayed dialog.
