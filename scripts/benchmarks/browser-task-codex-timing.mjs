@@ -11,6 +11,8 @@
  *   calls      tool calls that returned
  *   approval   time spent in automatic approval reviews: the sum of every review turn
  *              (task_started -> task_complete in a guardian_review session) that began inside the task
+ *              and belongs to that task's own session (the review session's parent_thread_id), so
+ *              another Codex conversation running at the same time is not counted
  *   tool       time between a tool call and its result, minus approval
  *   model      total minus the time between tool calls and their results
  *   net        total minus approval
@@ -44,24 +46,25 @@ const files = [];
 
 const seconds = (iso) => Date.parse(iso) / 1000;
 const round = (value) => Math.round(value * 10) / 10;
-const reviews = [], rounds = [];
+const reviews = [], rounds = [];  // reviews: [parent session id, start, end]
 for (const file of files) {
   const raw = readFileSync(file, 'utf8');
   const guardian = raw.includes('"turn_trigger":"guardian_review"');
   if (!guardian && !(raw.includes('"turn_trigger":"composer"') && raw.includes(`run=${runId}`))) continue;
   const events = raw.split('\n').filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
+  const meta = events.find((event) => event.type === 'session_meta')?.payload ?? {};
   if (guardian) {
     // One review session can review several actions: one turn per review.
     let started = null;
     for (const event of events) {
       if (event.payload?.type === 'task_started') started = seconds(event.timestamp);
-      if (event.payload?.type === 'task_complete' && started !== null) { reviews.push([started, seconds(event.timestamp)]); started = null; }
+      if (event.payload?.type === 'task_complete' && started !== null) { reviews.push([meta.parent_thread_id, started, seconds(event.timestamp)]); started = null; }
     }
-  } else rounds.push(events);
+  } else rounds.push({ id: meta.id, events });
 }
 
 const result = {};
-for (const events of rounds) {
+for (const { id: sessionId, events } of rounds) {
   const begun = events.find((event) => event.payload?.type === 'task_started');
   const done = events.filter((event) => event.payload?.type === 'task_complete').at(-1);
   const prompt = events.find((event) => event.type === 'response_item' && event.payload?.role === 'user'
@@ -77,8 +80,8 @@ for (const events of rounds) {
     if (type === 'function_call' && id) pending.set(id, seconds(event.timestamp));
     if (type === 'function_call_output' && pending.has(id)) gaps.push(seconds(event.timestamp) - pending.get(id));
   }
-  const mine = reviews.filter(([from]) => from >= start && from <= end);
-  const approval = mine.reduce((sum, [from, to]) => sum + to - from, 0);
+  const mine = reviews.filter(([parent, from]) => parent === sessionId && from >= start && from <= end);
+  const approval = mine.reduce((sum, [, from, to]) => sum + to - from, 0);
   const gap = gaps.reduce((sum, value) => sum + value, 0);
   result[task] = { startMs: Math.round(start * 1000), endMs: Math.round(end * 1000), total: round(end - start), calls: gaps.length,
     approvals: mine.length, approval: round(approval), tool: round(gap - approval), model: round(end - start - gap),
