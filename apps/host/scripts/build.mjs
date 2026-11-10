@@ -230,6 +230,7 @@ try {
     format: 'iife', globalName: 'CindyPluginBridge', target: 'es2022' });
   // The machine ID module is loaded through createRequire in both login paths.
   packages.set('node-machine-id', packageRoot('node-machine-id', hostRequire));
+  packages.set('node-pty', packageRoot('node-pty', desktopRequire));
   packages.set('sharp', packageRoot('sharp', desktopRequire));
   packages.set('playwright-core', packageRoot('playwright-core', hostRequire));
   for (const [name, source] of packages) {

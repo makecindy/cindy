@@ -13,13 +13,11 @@ import { createPluginControlPipe } from '../../desktop/src/main/cindy-brain/node
 import { GhostNetworkSlot } from '../../desktop/src/main/cindy-brain/networkSlot.ts';
 import { GhostOauthAccountManager } from '../../desktop/src/main/cindy-brain/ghostOauthAccounts.ts';
 import { createHostNodeRuntimeBroker } from './plugins/node-process.ts';
-import { createXdtHelperMcpServer } from '@cindy/mcps';
 import { HostTerminalService } from '../../desktop/src/main/terminal/hostTerminalService.ts';
 import { defaultPtySpawn } from '../../desktop/src/main/terminal/ptyFactory.ts';
-import { createTerminalToolExecutor } from '../../desktop/src/main/terminal/terminalToolAccess.ts';
-import { handlePluginHostToolRequest } from '../../desktop/src/main/cindy-brain/hostToolSlot.ts';
-import { authorizePluginHostToolCall, getPluginHostToolCaller } from '../../desktop/src/main/mcp-integrations/hostToolCaller.ts';
-import { getDesktopMcpToolApprovalPolicy } from '../../desktop/src/main/maker-host/mcp-tool-approval-policy.ts';
+import { createHostToolService } from './agent/host-tools.ts';
+import { createHostConfirmations } from './host-confirmations.ts';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../desktop/src/main/localDb/client/current.ts';
 
 import { dataOwnerStorageKey } from '../../desktop/src/main/dataOwnerPath.ts';
 import { listInstalledPlugins } from './plugins.mjs';
@@ -146,7 +144,7 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   process.env.CINDY_TEST_PRIVATE_HOST_VALUE = 'synthetic-secret-for-filter-test';
   t.after(() => { if (previous === undefined) delete process.env.CINDY_TEST_PRIVATE_HOST_VALUE;
     else process.env.CINDY_TEST_PRIVATE_HOST_VALUE = previous; });
-  const ghost = { manifest: { id: 'test-node', version: '1.0.0', node: {
+  const ghost = { manifest: { id: 'test-node', name: 'Node fixture', version: '1.0.0', node: {
     entry: 'worker.cjs', protocol: 'json-rpc-stdio', entries: ['child.cjs'], childSpawn: true,
     secretBindings: [{ key: 'raw_account', label: 'Account', oauthSecret: 'account', methods: ['raw-account'] }],
   }, agent: { hostTools: ['terminal'] }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
@@ -189,17 +187,19 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     return pty;
   } });
   const owner = () => ({ dataOwnerId: 'fixture-owner', ownerGeneration: 1 });
-  const terminalTools = createTerminalToolExecutor({ service: terminals, owner, pending: () => false,
-    getGhost: () => ghost, getSession: () => undefined, pluginDirectory: () => dir, pluginCall: getPluginHostToolCaller });
-  const hostToolPorts = { owner, getGhost: () => ghost,
-    createRuntime: (_server, caller) => createXdtHelperMcpServer({ terminal: terminalTools, authorizeCall: authorizePluginHostToolCall },
-      { agentKind: 'codex', workingDir: '', hostCaller: caller }).hostTools,
-    approveGroup: async (_id, group, current) => current() && ghost.approvedHostToolGroups.includes(group),
-    policy: (server, tool, args) => getDesktopMcpToolApprovalPolicy({ serverName: server, toolName: 'call_tool', toolParams: { name: tool, args } }),
-    confirm: async () => true };
+  const database = { drizzle: {} }; setCurrentDbClient(database, 'fixture-owner');
+  const confirmations = createHostConfirmations({ current: () => true });
+  const disconnect = confirmations.connect('web:fixture', event => {
+    if (event.channel === 'ghosts:confirm-request') queueMicrotask(() =>
+      confirmations.resolve('web:fixture', 'confirm', event.payload.requestId, true));
+    return true;
+  });
+  const hostTools = createHostToolService({ terminal: terminals, profileDir: dir, ownerId: 'fixture-owner', owner,
+    getGhost: () => ghost, getSession: () => undefined, current: () => true, confirmations, t: key => key,
+    manager: { approveTaskCapability: async () => { throw new Error('fixture group was already approved'); } },
+  });
   const broker = createHostNodeRuntimeBroker(workerEntry, { getGhost: () => ghost,
-    hostToolRequest: (id, request, current) => handlePluginHostToolRequest(id, request, current, hostToolPorts),
-    onStopped: id => terminals.disposePlugin(id),
+    hostToolRequest: hostTools.request, onStopped: hostTools.stopPlugin,
     resolveOauthSecret: (id, key, accountId) => oauth.getNodeAccessToken(id, key, ghost.manifest.network.secrets[0].oauth, accountId),
     networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request) });
   try {
@@ -253,7 +253,10 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     assert.throws(() => process.kill(first.result.pid, 0), { code: 'ESRCH' });
     ghost.enabled = false;
     assert.equal((await broker.handleRequest('test-node', { type: 'node-request', method: 'echo' })).ok, false);
-  } finally { terminals.disposeScoped(); await network.disposeAll(); await broker.stopAndWait('test-node'); broker.destroyAll(); }
+  } finally {
+    disconnect(); confirmations.close(); hostTools.close(); clearCurrentDbClient(database);
+    await network.disposeAll(); await broker.stopAndWait('test-node'); broker.destroyAll();
+  }
 });
 
 // Unit: private IPC must decode arbitrary OS fragmentation and settle pending

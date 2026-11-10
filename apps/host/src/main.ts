@@ -75,6 +75,10 @@ import { initializeHostPluginRemoteAuthorization } from './plugins/remote-author
 import { ownerScopedPath } from '../../desktop/src/main/dataOwnerPath.js';
 import { createHostPluginRuntime } from './plugins/runtime.js';
 import { createHostPluginGateway } from './plugins/gateway.js';
+import { createHostToolService } from './agent/host-tools.js';
+import { createHostConfirmations } from './host-confirmations.js';
+import { createMainI18n } from '../../desktop/src/main/i18n.js';
+import { GHOST_HOST_TOOL_GROUPS } from '@cindy/plugin-protocol';
 import { toolAutoReviewAction } from '@cindy/maker-core';
 import { GhostGrantConfirmBridge } from '../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.js';
 import { getGhostCard, listGhostCardsBySession } from '../../desktop/src/main/cindy-brain/cardStoreDb.js';
@@ -418,6 +422,8 @@ let stopPluginAuthorization: (() => void) | null = null;
 let plugins: Awaited<ReturnType<typeof createHostPluginRuntime>> | null = null;
 let pluginGateway: ReturnType<typeof createHostPluginGateway> | null = null;
 let pluginManager: ReturnType<typeof createHostGhostManager> | null = null;
+let hostTools: ReturnType<typeof createHostToolService> | null = null;
+let hostConfirmations: ReturnType<typeof createHostConfirmations> | null = null;
 let availabilityPolicy: ReturnType<typeof createAvailabilityPolicy> | null = null;
 let modelAccess: ReturnType<typeof createHostModelAccess> | null = null;
 const currentGateway = () => modelAccess?.gateway.credential && modelAccess.gateway.endpoint ? modelAccess.gateway : null;
@@ -529,7 +535,16 @@ async function ensureRuntime(ownerId: string): Promise<void> {
         .catch(error => console.warn('[host] plugin reconciliation failed:', error.message));
     },
   });
+  const toolOwnerCurrent = () => activeOwnerScopeKey() === pluginOwner && !isAppSessionBoundaryPending();
+  const i18n = createMainI18n(() => [Intl.DateTimeFormat().resolvedOptions().locale]);
+  hostConfirmations = createHostConfirmations({ current: toolOwnerCurrent });
+  hostTools = createHostToolService({ profileDir: dataDir, ownerId,
+    owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
+    current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null, manager: pluginManager,
+    getSession: id => agentGraph?.maker.getSession(id), confirmations: hostConfirmations, t: i18n.t,
+  });
   plugins = await createHostPluginRuntime({ profileDir: dataDir, ownerId, manager: pluginManager, credentials,
+    hostToolRequest: hostTools.request, onPluginStopped: hostTools.stopPlugin,
     getLoginEmail: () => accountUser?.email ?? null,
     getUser: () => accountUser,
     account: {
@@ -642,7 +657,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
       storage: sessionStorage,
       gateway,
       makerMemory,
-      mcpProviders: await pluginGateway.prepareMcpProviders([...createHostMemoryMcpProviders(makerMemory), pluginGateway.provider]),
+      mcpProviders: await pluginGateway.prepareMcpProviders([...hostTools.providers, ...createHostMemoryMcpProviders(makerMemory), pluginGateway.provider]),
       userDataDir: dataDir,
     });
     attachAgentsToMakerMemory(makerMemory, agentGraph.instances);
@@ -965,7 +980,15 @@ const serverDeps = {
     if (!agentAuth) throw new Error('Agent runtime is unavailable');
     return agentAuth.invoke(channel, args, caller);
   },
-  releaseAuthCaller: (caller: string) => agentAuth?.releaseCaller(caller),
+  releaseAuthCaller: (caller: string) => { agentAuth?.releaseCaller(caller); hostConfirmations?.cancelCaller(caller); },
+  connectController: (caller: string, send: Parameters<NonNullable<typeof hostConfirmations>['connect']>[1]) =>
+    hostConfirmations?.connect(caller, send),
+  resolvePluginConfirmation: (caller: string, kind: 'confirm' | 'install', requestId: string, confirmed: boolean) =>
+    hostConfirmations?.resolve(caller, kind, requestId, confirmed) ?? false,
+  requestPluginTaskApproval: async (id: string, capability: string) => {
+    const group = GHOST_HOST_TOOL_GROUPS.find(value => capability === `host-tools:${value}`);
+    return { granted: !!group && !!hostTools && await hostTools.approveGroup(id, group, () => plugins?.current() === true, true) };
+  },
   cancelPendingAuth: async () => {
     agentAuth?.close();
     await providerConfig?.cancelLogins();
@@ -1397,6 +1420,7 @@ async function disposeOwnerRuntime(): Promise<void> {
     // Keep storage alive until all execution and memory writers have settled,
     // but still release every resource when any individual teardown fails.
     fileConfirmation.cleanupAll('session_closed');
+    hostConfirmations?.close(); hostTools?.close();
     stopPluginAuthorization?.(); stopPluginAuthorization = null;
     interactionBroker.dispose();
     await attempt(() => agentAuth?.close());
@@ -1423,6 +1447,8 @@ async function disposeOwnerRuntime(): Promise<void> {
     plugins = null;
     pluginGateway = null;
     pluginManager = null;
+    hostTools = null;
+    hostConfirmations = null;
     agentGraph = null;
     mcpRuntime = null;
     codexRuntime = null;

@@ -164,6 +164,8 @@ export function claimProxiedChannels(ipcMain: unknown, log: (channel: string) =>
 
 export interface HostDelegatedIpcDeps {
   readonly client: HostClient;
+  /** Newly delegated approval paths require the real registered top-level window. */
+  readonly authorizePluginApproval?: (event: IpcMainInvokeEvent, channel: string, args: unknown[]) => boolean;
   readonly ipcMain: {
     removeHandler(channel: string): void;
     handle(
@@ -196,7 +198,10 @@ export function registerHostDelegatedIpc(deps: HostDelegatedIpcDeps): string[] {
 
   for (const entry of PROXIED_CHANNELS) {
     deps.ipcMain.removeHandler(entry.channel);
-    rawHandle(entry.channel, async (_event, ...args: unknown[]) => {
+    rawHandle(entry.channel, async (event, ...args: unknown[]) => {
+      if (['ghosts:request-task-approval', 'ghosts:confirm:resolve', 'ghosts:install-consent:resolve'].includes(entry.channel)
+        && deps.authorizePluginApproval?.(event, entry.channel, args) !== true)
+        throw createIpcError('PERMISSION_DENIED', 'Host approval requires its trusted owner window.');
       const response = await deps.client.request(entry.path, entry.body(args));
       return entry.map ? entry.map(response) : response;
     });
@@ -302,6 +307,7 @@ export interface HostEventBridgeInput {
   readonly onInteractionRequest?: (payload: unknown) => void;
   readonly onInteractionDismissed?: (payload: unknown) => void;
   readonly onAuthChanged?: (payload: unknown) => void;
+  readonly onPluginPush?: (channel: string, payload: unknown) => void;
   readonly onError?: (error: unknown) => void;
   readonly onConnectionState?: (state: HostConnectionState) => void;
   readonly beforeEvents?: (signal: AbortSignal) => Promise<void>;
@@ -313,6 +319,7 @@ export interface HostEventBridgeInput {
  */
 export function startHostEventBridge(input: HostEventBridgeInput): (() => void) & { reconnect(): void } {
   const connection = startHostEventStream({
+    confirmations: true,
     open: (query, signal) => fetch(`${input.baseUrl}/events${query}`, {
       headers: { authorization: `Bearer ${input.token}` }, signal,
     }),
@@ -328,6 +335,8 @@ export function startHostEventBridge(input: HostEventBridgeInput): (() => void) 
         input.onInteractionDismissed?.({ sessionId: payload.sessionId, requestId: payload.requestId, reason: payload.reason });
       } else if (payload?.type === 'auth_changed') {
         input.onAuthChanged?.(payload);
+      } else if (payload?.type === 'plugin_push') {
+        input.onPluginPush?.(payload.channel, payload.payload);
       } else if (payload?.type === 'settings_changed') {
         input.onSettingsChanged?.(payload.domain, payload.value);
       } else if (payload?.type === 'appearance_changed') {

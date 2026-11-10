@@ -249,6 +249,15 @@ export function createHostServer(input) {
           response.write(`${idLine}data: ${JSON.stringify(event)}\n\n`);
           response.flush?.();
         });
+        // Confirmations go to one authenticated controller and never enter the
+        // replay buffer. Disconnect cancels its pending answers; replay cannot
+        // resurrect an old permission dialog.
+        const confirmationCaller = deps.webAuth.caller?.(request.headers.cookie)
+          ?? (isAuthorized(request.headers.authorization, deps.token) ? `local-api:${deps.instanceId}` : null);
+        const disconnectController = confirmationCaller && versioned && url.searchParams.get('confirmations') === '1' ? deps.connectController?.(confirmationCaller, event => {
+          if (response.writableEnded || response.destroyed || !isWebAuthorized(request, deps)) return false;
+          response.write(`data: ${JSON.stringify({ type: 'host_prompt', channel: event.channel, payload: event.payload })}\n\n`); response.flush?.(); return true;
+        }) : undefined;
         const keepAlive = setInterval(() => {
           if (response.writableEnded) return;
           if (!isWebAuthorized(request, deps)) { response.end(); return; }
@@ -256,6 +265,7 @@ export function createHostServer(input) {
         }, 15_000);
         const revoke = deps.webAuth.onRevoke(() => response.end());
         request.on('close', () => {
+          disconnectController?.();
           revoke();
           clearInterval(keepAlive);
           unsubscribe();

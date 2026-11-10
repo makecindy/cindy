@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent';
 import { GhostInstallConsentHost } from '../GhostInstallConsentHost';
+import { GhostConfirmDialogHost } from '../GhostConfirmDialogHost';
 
 const mocks = vi.hoisted(() => ({ confirm: vi.fn() }));
 
@@ -54,6 +55,29 @@ describe('GhostInstallConsentHost', () => {
   afterEach(() => {
     cleanup();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  // Node Host can retract a dialog when its controller disconnects or plugin
+  // stops. A late UI promise must answer false, even after it yielded true.
+  it('retracts a pending Host tool dialog and rejects a late affirmative UI result', async () => {
+    let request: Parameters<typeof window.electronAPI.ghosts.onConfirmRequest>[0] | undefined;
+    let dismiss: ((payload: { requestId: string }) => void) | undefined;
+    let finish: ((value: boolean) => void) | undefined;
+    const resolveConfirm = vi.fn(async () => ({ handled: false }));
+    Object.assign(window.electronAPI.ghosts, {
+      onConfirmRequest: (callback: typeof request) => { request = callback; return () => {}; },
+      onConfirmDismissed: (callback: typeof dismiss) => { dismiss = callback; return () => {}; },
+      resolveConfirm,
+    });
+    mocks.confirm.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
+    render(<GhostConfirmDialogHost />);
+    await act(async () => request?.({ requestId: 'command', ghostId: 'demo', ghostName: 'Demo',
+      body: 'Run terminal_start', confirmText: null, cancelText: null, danger: false }));
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    const signal = mocks.confirm.mock.calls[0][1] as AbortSignal;
+    await act(async () => { dismiss?.({ requestId: 'command' }); finish?.(true); });
+    expect(signal.aborted).toBe(true);
+    await waitFor(() => expect(resolveConfirm).toHaveBeenCalledWith('command', false));
   });
 
   it('shows the added permissions of an update and returns the answer to Main', async () => {

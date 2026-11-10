@@ -49,6 +49,7 @@ import { handleGhostConnectionsRequest } from '../../../desktop/src/main/cindy-b
 import type { User } from '../../../desktop/src/shared/authUser.js';
 import { hostOutbound } from '../outbound.mjs';
 import { prepareHostPluginAssets } from './assets.mjs';
+import type { GhostNodeRuntimeBrokerDeps } from '../../../desktop/src/main/cindy-brain/nodeRuntimeBroker.js';
 
 interface PluginRuntimeOptions {
   profileDir: string;
@@ -63,6 +64,8 @@ interface PluginRuntimeOptions {
   getSession(id: string): Session | undefined;
   requestFileConfirmation: GhostGrantConfirmBridge['request'];
   publish(channel: string, payload: unknown): void;
+  hostToolRequest?: GhostNodeRuntimeBrokerDeps['hostToolRequest'];
+  onPluginStopped?(id: string): void;
   /** Built/release paths only, never plugin-provided. */
   assets?: Awaited<ReturnType<typeof prepareHostPluginAssets>>;
 }
@@ -201,6 +204,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const ownerScope = { capture: () => owner, isCurrent: (value: unknown) => value === owner && current(), isStable: (value: unknown) => value === owner && current() };
   const node = createHostNodeRuntimeBroker(assets.nodeWorker!, { getGhost, ownerScope,
+    hostToolRequest: options.hostToolRequest, onStopped: options.onPluginStopped,
     readSecret: secret.readGhostSecret, secretSaved: secret.ghostSecretSaved,
     resolveOauthSecret: async (id, key, accountId) => {
       const decl = getGhost(id)?.manifest.network?.secrets?.find(item => item.key === key && item.source === 'oauth')?.oauth;
@@ -217,6 +221,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     send: (id, event) => { void sandbox.deliver(id, event); }, download: createDownloader(), guardedFetch: hostOutbound.guardedOutboundFetch });
   const notify = new GhostNotifySlot({ getGhost, broadcast: payload => options.publish('ghosts:notify', payload), log });
   const pipe = createGhostExecutionPipe({ dispatcher: () => dispatcher,
+    hostTools: options.hostToolRequest,
     fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload) => fsSlot.handleFsRequest(id, payload),
     network: (id, payload) => network.handleNetworkRequest(id, payload),
     library: (id, payload) => library.handleLibraryRequest(id, payload),
@@ -285,7 +290,10 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     }),
   });
   const runtime = new GhostRuntime({ adapter: sandbox.adapter, log,
-    onStateChanged: (id, state) => { if (state !== 'running') network.disposeGhost(id); dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() }); } });
+    onStateChanged: (id, state) => {
+      if (state !== 'running') { network.disposeGhost(id); options.onPluginStopped?.(id); }
+      dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() });
+    } });
   const dispatcher = new GhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
     spawn: ghost => runtime.spawnForTool(ghost), sendToGhost: sandbox.deliver, ownerScope, log });
   async function reconcileInstalled() {

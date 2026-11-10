@@ -212,6 +212,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   启动及输入等变更走原风险规则；命令具有用户级本机能力，确认中必须明确说明，不能宣称文件沙箱。
   精确环境沿用 Node 插件的系统路径/语言/用户配置目录筛选，不继承宿主秘密或 Node 注入变量。
   输出按独立游标保留且有界；读取断开不杀进程，显式停用/更新/卸载、账号切换清理对应资源。
+  Node Host 通过同一 `createLiziMcpProviders` / `HostTerminalService` 装配终端，逻辑页与 Node
+  私有通道均进入公共 `hostToolSlot`。首次组批准继续使用 `ensurePluginTaskApproval` 和原 receipt。
+  无任务的确认复用 `WindowConfirmationBridge`，只接受被选中、已认证控制端的回答；Cindy 桌面
+  控制端再绑定真实顶层应用窗口，插件页面和其它窗口不能代答。无可用客户端、断线和超时均拒绝。
+  确认载荷不进任务事件回放，不借用或伪造 Session；Node 仍按实际已装配 provider 报告能力。
 - `subscribe.topics` 的 `message` / `task-state` 独立展示和批准，receipt 可选 `approvedEventTopics` 只记录显式事实，不从旧未知声明推断。
   消息仅在持久化后通知，结构化附件使用不透明位置引用；附件读取只覆盖已有宿主授权的本机媒体和 grant / deposit / handoff 引用，复用既有账本和交接。历史 JSON 的 `files.path`、绝对路径、旧文件直读 URL 及跨电脑附件返回 `UNSUPPORTED_CAPABILITY`，不以消息形状授予文件读取权限，不新增可信来源表或确认流程。
   状态只发布生命周期变化（开始、结束、出错、等待权限/回答、排队、取消及归档/恢复/删除），复用宿主规范投影，不含活动摘要、标题标签或工具参数；不发布高频进度和活动变化。

@@ -62,7 +62,13 @@ export const authorizePluginHostToolCall: ToolCallAuthorizer = async call => {
 /** Same providers and injected Host services as ordinary Agent tasks. */
 export function createHostToolRuntime(server: string, caller: Extract<HostToolCaller, { kind: 'plugin' }>) {
   if (!providerOwner || providerOwner.dataOwnerId !== caller.dataOwnerId || providerOwner.ownerGeneration !== caller.ownerGeneration) return null;
-  const provider = providers.find(item => item.name === server && item.toHostTools);
+  return createProviderHostToolRuntime(providers, server, caller);
+}
+
+/** Node Host and Desktop bind the same provider to an attested plugin caller. */
+export function createProviderHostToolRuntime(current: readonly LiziMcpProvider[], server: string,
+  caller: Extract<HostToolCaller, { kind: 'plugin' }>) {
+  const provider = current.find(item => item.name === server && item.toHostTools);
   if (!provider?.toHostTools) return null;
   const context: LiziMcpSessionContext = {
     agentKind: 'claude-code', workingDir: '', hostCaller: caller,

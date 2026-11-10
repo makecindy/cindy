@@ -127,6 +127,18 @@ output = unpack(await cindy.host.call('cindy_helper', 'terminal_read', {
 对应资源，Host 进程退出后不会自动重放命令。SSH 工作区返回 `REMOTE_TERMINAL_UNSUPPORTED`，
 不把远端路径当本机路径；旧 Host 未注册这些工具时按不支持处理。
 
+### 无界面宿主
+
+Node Host 为逻辑页和 Node Worker 装配相同的公共入口、helper registry 与宿主终端服务。
+无需打开插件页面；已批准组的读取可直接执行。首次组批准与逐次确认仍须由已配对的
+Cindy 客户端在宿主对话框中回答；未连接支持确认的客户端时返回拒绝，不默认同意。
+详情页的重新批准沿用同一 receipt，不要求重装插件。
+
+确认只发送给一个已认证控制端，不写入任务事件回放。断线、停用、更新或账号边界使
+旧确认失效；插件应把取消作为本次未获批准，不能循环重试或伪造回答。
+终端作业留在执行 Host，重新调用列表和续读不会再次启动程序。Node Host 当前已装配
+的工具以其实际 registry 为准；执行位置、桌面集成或工具未提供时按不支持处理。
+
 ## 完整历史与附件
 
 `list_teammates({device:'all',limit:100})` 分页枚举伙伴目录（含隐藏、暂停和归档），返回 `teammates`。
