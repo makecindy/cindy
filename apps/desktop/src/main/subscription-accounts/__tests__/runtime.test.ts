@@ -108,6 +108,29 @@ beforeEach(() => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // #9517 review, unit: Add must recover a bound provider-managed default into
+  // a new directory. Existing coverage only exercises explicit connect/new.
+  it('adds an isolated account when the only configured default uses provider-managed authentication', async () => {
+    h.pools.openai = { strategy: 'least', accounts: [account('default')] };
+    const signedIn = new Set<string>();
+    h.read.mockImplementation(async (_provider, directory: string) =>
+      directory === 'openai/default'
+        ? { authenticated: false, errorReason: 'codex_provider_managed_auth' }
+        : { authenticated: signedIn.has(directory), identity: 'new@example.test' },
+    );
+    h.login.mockImplementation(async (_provider, directory: string) => { signedIn.add(directory); });
+
+    const result = await runSubscriptionAccountCommand({ action: 'add', providerId: 'openai', loginKey: 'recover' });
+
+    expect(h.login).toHaveBeenCalledOnce();
+    const newAccount = result.accounts.find((entry) => entry.id !== 'default');
+    expect(newAccount).toMatchObject({ status: 'ready', identity: 'new@example.test' });
+    expect(h.login).toHaveBeenCalledWith('openai', `openai/${newAccount!.id}`, expect.any(AbortSignal));
+    expect(h.pools.openai!.accounts.map((entry) => entry.id)).toEqual(['default', newAccount!.id]);
+    expect(result.accounts[0]).toMatchObject({ id: 'default', status: 'signed-out', authIssue: 'codex-provider-managed-auth' });
+    expect(h.legacyLogin).not.toHaveBeenCalled();
+  });
+
   // #9517, unit: the real connection/reconnection entry must reject the CLI's
   // provider-managed auth state before login. Existing cases only cover signed-in/out.
   it.each([
@@ -629,19 +652,19 @@ describe('native account assignment on the executing computer', () => {
     expect(secondary?.account.configDir).toBe('openai/second');
     secondary?.release();
   });
-  it('reuses the default folder when the saved first account is no longer logged in', async () => {
-    h.pools.anthropic!.accounts = [account('default')];
+  it.each(['anthropic', 'openai'] as const)('reuses the %s default folder when the saved first account is no longer logged in', async (providerId) => {
+    h.pools[providerId] = { strategy: 'least', accounts: [account('default')] };
     h.read.mockResolvedValue({ authenticated: false });
     h.login.mockImplementation(async () => {
       h.read.mockResolvedValue({ authenticated: true });
     });
     await runSubscriptionAccountCommand({
       action: 'add',
-      providerId: 'anthropic',
+      providerId,
       loginKey: 'reconnect-first',
     });
-    expect(h.login).toHaveBeenCalledWith('anthropic', 'anthropic/default', expect.any(AbortSignal));
-    expect(h.pools.anthropic!.accounts.map((a) => a.id)).toEqual(['default']);
+    expect(h.login).toHaveBeenCalledWith(providerId, `${providerId}/default`, expect.any(AbortSignal));
+    expect(h.pools[providerId]!.accounts.map((a) => a.id)).toEqual(['default']);
   });
   it('only marks the selected account disconnected after a rejected bridge credential', async () => {
     h.pools.openai = { strategy: 'round', accounts: [account('default'), account('second')] };

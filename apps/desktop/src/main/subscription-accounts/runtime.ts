@@ -710,7 +710,7 @@ export async function runSubscriptionAccountCommand(
         const first = await snapshot(state, provider, 'default', true);
         assertOwner(state);
         if (abort.signal.aborted) throw new Error('login_cancelled');
-        if (!first.auth.authenticated) {
+        if (!first.auth.authenticated && first.auth.errorReason !== 'codex_provider_managed_auth') {
           accountId = 'default';
           state.logins.set(key, { abort, accountId });
           if (state.running.get(keyOf(provider, accountId))?.size)
