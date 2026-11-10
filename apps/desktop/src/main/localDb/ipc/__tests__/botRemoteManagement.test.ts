@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock('../../../routines/service.js', () => ({ routineTools: { deliveryTargets: h.deliveryTargets } }));
 vi.mock('../../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owner', isAppSessionBoundaryPending: () => false }));
-vi.mock('../../../device-link/settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }) }));
+vi.mock('../../../device-link/settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }) }));
 vi.mock('../botRemoteSessionAccess.js', () => ({ readRemoteBotSessionAccess: async () => 'visible' }));
 // These services belong to other settings pages and must not initialize for a recipient query.
 vi.mock('../../../bot-autonomy/hub.js', () => ({ getBotAutonomySettingsView: vi.fn(), resetBotAutonomySchedulerSettings: vi.fn(), setBotAutonomySchedulerBotId: vi.fn() }));

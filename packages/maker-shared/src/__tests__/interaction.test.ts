@@ -32,7 +32,6 @@ import {
   isFreeTextAskOptionLabel,
   normalizeAskQuestions,
   normalizeIssueConfirm,
-  pendingInteractionsBlockRemoteComposer,
   permissionRiskSummary,
   permissionTitle,
   remoteInteractionHandling,

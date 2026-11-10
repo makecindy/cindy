@@ -41,7 +41,8 @@ vi.mock('../../usageBroadcaster.js', () => ({
   broadcastCodexAccountAuthStarted: vi.fn(),
   broadcastCodexAccountAuthReady: vi.fn(),
 }));
-vi.mock('../codex-auth-state.js', () => ({
+vi.mock('../codex-auth-state.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../codex-auth-state.js')>(),
   terminateCodexLoginProcess: (child: EventEmitter) => child.emit('exit', 1),
 }));
 vi.mock('node:child_process', () => ({
@@ -73,7 +74,7 @@ import {
   parseCodexAccountIdentity,
   prepareCodexAccountHome,
   setCodexAccountRetirement,
-} from '../codex-account-auth';
+} from '../codex-account-auth.desktop';
 import { broadcastCodexAccountAuthReady, broadcastCodexAccountAuthStarted } from '../../usageBroadcaster.js';
 
 function credential(subject: string, account = 'workspace') {

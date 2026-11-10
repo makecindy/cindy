@@ -46,7 +46,7 @@ vi.mock('../../logger.js', () => ({ createLogger: () => h.log }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({ desktopMakerLogger: h.log }));
 vi.mock('../settingsGroups.js', () => ({ SETUP_SETTINGS_GROUPS: [] }));
 vi.mock('../rendererPrefsHost.js', () => ({ registerSetupMigrationRendererHost: () => ({ read: h.blocked }) }));
-vi.mock('../../device-link/dispatch.js', () => ({
+vi.mock('../../device-link/dispatch.desktop.js', () => ({
   setSetupSnapshotRemoteHandler: h.snapshotHandler, setSetupTransferRemoteHandler: h.transferHandler,
 }));
 vi.mock('../transfer.js', () => ({ createSetupTransferSource: () => h.blocked, requestSetupTransfer: h.blocked }));
@@ -57,10 +57,10 @@ vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: h.blocked, get
 vi.mock('../../cindy-brain/index.js', () => ({ createWindowGhostInstallConsentPrompt: h.blocked, getGhostManager: h.blocked, getGhostSetupAssessment: h.blocked, readGhostUserSecretsForSetup: h.blocked, hasGhostUserSecretsForSetup: h.blocked, setGhostEnabledForUser: h.blocked, storeGhostUserSecretsForSetup: h.blocked }));
 vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: h.blocked }));
 vi.mock('../../device-link/ipc.js', () => ({ defaultDeps: h.blocked, handleListDevices: h.blocked }));
-vi.mock('../../device-link/settings-store.js', () => ({ readDeviceLinkSettings: h.blocked }));
+vi.mock('../../device-link/settings-store.desktop.js', () => ({ readDeviceLinkSettings: h.blocked }));
 vi.mock('../../im/ownerScopedStorage.js', () => ({ ownerScopedImSecrets: h.blocked }));
 vi.mock('../../maker-host/active-catalog.js', () => ({ getActiveCatalog: h.blocked }));
-vi.mock('../../maker-host/custom-mcp-store.js', () => ({ listCustomMcpNamesForSetup: h.blocked, listCustomMcpServers: h.blocked }));
+vi.mock('../../maker-host/custom-mcp-store.desktop.js', () => ({ listCustomMcpNamesForSetup: h.blocked, listCustomMcpServers: h.blocked }));
 vi.mock('../../maker-host/custom-provider-header-secrets.js', () => ({ hydrateCustomProviderHeaders: h.blocked }));
 vi.mock('../../maker-host/custom-provider-store.js', () => ({ listCustomProviders: h.blocked }));
 vi.mock('../../maker-ipc/mcpHandlers.js', () => ({ createCustomMcpServerForSetup: h.blocked }));

@@ -1,24 +1,21 @@
 /**
  * Chat endpoint: one prompt in, the repo's own agent events out as SSE.
  *
- * Events are forwarded verbatim from `Session.onEvent` (the same projection the
- * Desktop consumes); this module adds no second event vocabulary. The stream
+ * Events come from the shared queue and message persistence stream. The stream
  * ends on the product terminal event, so a client reconnect sees a real end
  * rather than a hang.
  */
 
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { isSafeSessionPathSegment } from '../../desktop/src/main/sessionIds.ts';
+import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
+import { isTerminalTurnErrorEvent } from '../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
+import { clientErrorMessage } from './client-error.mjs';
 
 const MAX_PROMPT_CHARS = 100_000;
 
 class BadRequest extends Error {}
-
-function toMakerAgentKind(kind) {
-  if (kind === 'codex') return 'codex';
-  if (kind === 'pi') return 'pi';
-  return 'claude-code';
-}
 
 function parseChatBody(raw) {
   let body;
@@ -34,117 +31,107 @@ function parseChatBody(raw) {
   if (body.agentKind !== undefined && body.agentKind !== 'claude-code' && body.agentKind !== 'codex' && body.agentKind !== 'pi' && body.agentKind !== 'cc') {
     throw new BadRequest('unsupported_agent');
   }
-  const allowed = new Set(['prompt', 'sessionId', 'workDir', 'model', 'title', 'agentKind']);
+  const allowed = new Set(['prompt', 'sessionId', 'clientId', 'workDir', 'model', 'title', 'agentKind']);
   for (const key of Object.keys(body)) {
     if (!allowed.has(key)) throw new BadRequest(`unknown field: ${key}`);
+  }
+  for (const key of ['sessionId', 'clientId']) {
+    if (body[key] !== undefined && (typeof body[key] !== 'string' || !body[key] || body[key].length > 256)) {
+      throw new BadRequest(`invalid ${key}`);
+    }
+  }
+  if (body.sessionId && !isSafeSessionPathSegment(body.sessionId)) throw new BadRequest('invalid sessionId');
+  if (body.workDir !== undefined && (typeof body.workDir !== 'string' || !path.isAbsolute(body.workDir))) {
+    throw new BadRequest('workDir must be absolute');
   }
   return body;
 }
 
 /** Read the request body with a hard cap; the API is loopback-only and JSON. */
-function readBody(request, limitBytes = 1_000_000) {
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    const chunks = [];
-    request.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > limitBytes) {
-        reject(new BadRequest('body too large'));
-        request.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    request.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    request.on('error', reject);
-  });
+async function readBody(request, limitBytes = 1_000_000) {
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > limitBytes) throw new BadRequest('body too large');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
-/**
- * @param {{maker: any, defaultWorkDir: string}} deps
- */
+/** The streaming compatibility entry uses the same durable input service as the UI. */
 export function createChatHandler(deps) {
   return async function handleChat(request, response) {
     let payload;
-    try {
-      payload = parseChatBody(await readBody(request));
-    } catch (error) {
+    try { payload = parseChatBody(await readBody(request)); }
+    catch (error) {
       response.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({ error: error instanceof BadRequest ? error.message : 'bad_request' }));
       return;
     }
-
-    const sessionId = typeof payload.sessionId === 'string' && payload.sessionId ? payload.sessionId : randomUUID();
-    // Only absolute, existing directories are accepted as a workdir; the host
-    // never invents one from a request-supplied relative path.
-    const workDir = typeof payload.workDir === 'string' && path.isAbsolute(payload.workDir)
-      ? payload.workDir
-      : deps.defaultWorkDir;
-
-    response.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-store',
-      connection: 'keep-alive',
-    });
-    const write = (event) => {
-      if (response.writableEnded) return;
-      response.write(`data: ${JSON.stringify(event)}\n\n`);
-    };
-
-    let session;
+    const sessionId = payload.sessionId ?? randomUUID();
+    const clientId = payload.clientId ?? randomUUID();
     let unsubscribe = () => {};
+    const cleanup = () => { unsubscribe(); unsubscribe = () => {}; };
+    response.once('close', cleanup);
+    const write = event => {
+      if (!response.destroyed && !response.writableEnded) response.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    const end = () => {
+      cleanup();
+      if (!response.destroyed && !response.writableEnded) response.end('event: end\ndata: {}\n\n');
+    };
     try {
-      const stored = deps.readSession ? await deps.readSession(sessionId) : null;
-      const rawKind = stored?.agentKind || payload.agentKind || 'claude-code';
-      session = deps.maker.getSession(sessionId) ?? await deps.maker.createSession({
-        agentKind: toMakerAgentKind(rawKind),
-        id: sessionId,
-        workingDir: stored?.workingDir || workDir,
-        model: stored?.model || (typeof payload.model === 'string' ? payload.model : deps.defaultModel),
-        providerId: stored?.providerId ?? undefined,
-        resumeSessionId: stored?.sdkSessionId || undefined,
-        effort: stored?.effort || undefined,
-        permissionMode: stored?.permissionMode || undefined,
-        fastMode: stored?.fastMode ?? undefined,
-        planMode: stored?.planModeEnabled ?? undefined,
-        title: typeof payload.title === 'string' ? payload.title : undefined,
+      const stored = await deps.readSession(sessionId);
+      if (!stored) await deps.createSession({ id: sessionId,
+        ...(payload.workDir ? { workingDir: payload.workDir, workspaceKind: 'project' } : { workspaceKind: 'dialogue' }),
+        model: payload.model ?? deps.defaultModel,
+        agentKind: payload.agentKind ?? 'claude-code', title: payload.title,
       });
-      // Tool calls need a resolver: without one the session denies every request
-      // as `no_listener_attached`. The broker publishes it on the event stream and
-      // resolves it from `POST /api/interactions/respond`.
-      deps.interactions?.attach(session, session.id);
-      write({ type: 'session', sessionId: session.id });
-
-      let finished = false;
-      const done = new Promise((resolve) => {
-        unsubscribe = session.onEvent((event) => {
-          write(event);
-          const terminal = event.type === 'done' || (event.type === 'error' && event.turnScope !== 'background');
-          if (terminal && !finished) {
-            finished = true;
-            resolve();
-          }
-        });
+      else if (stored.status === 'deleted') throw new Error('session not found');
+      response.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-store', connection: 'keep-alive',
       });
-
-      const result = await session.send(payload.prompt);
-      // Session accepts with `{ accepted: true }`; anything else means the turn
-      // never started and the client must see that instead of an empty stream.
-      if (!result || result.accepted !== true) {
-        write({ type: 'error', reason: 'send_rejected', detail: result ?? null });
-        unsubscribe();
-        response.end();
-        return;
+      write({ type: 'session', sessionId, clientId });
+      unsubscribe = deps.events.subscribe(event => {
+        if (event.type === 'auth_changed' && event.canEnterApp === false) { end(); return; }
+        if (event.sessionId !== sessionId) return;
+        // Queue projections and questions remain task-wide; model events must
+        // belong to this exact input, not the turn ahead of it in the queue.
+        if (event.inputClientId && event.inputClientId !== clientId) return;
+        write(event);
+        // Dispatch can fail after admission (session start, pre-send preparation).
+        // The queue then keeps this input as the recoverable head and publishes
+        // only a projection with an error: no agent terminal event will follow,
+        // so release the stream with the same receipt a reconnect would get.
+        const recovery = event.type === 'input_projection' ? event.projection?.recovery : null;
+        if (recovery?.kind === 'queue-head' && recovery.clientId === clientId) {
+          write({ type: 'input_receipt', sessionId, clientId, status: 'interrupted' });
+          end();
+          return;
+        }
+        if (event.inputClientId === clientId && event.turnScope !== 'background'
+          && !isTurnContinuationBoundaryEvent(event)
+          && (event.type === 'done' || isTerminalTurnErrorEvent(event))) end();
+      });
+      const projection = await deps.enqueue(sessionId, { clientId, text: payload.prompt });
+      write({ type: 'input_projection', sessionId, projection });
+      // A reconnect with the same clientId is idempotent. Previously recorded
+      // input is not evidence of successful completion; history holds its result.
+      const status = await deps.inputStatus(sessionId, clientId);
+      if (status === 'recorded' || status === 'interrupted') {
+        write({ type: 'input_receipt', sessionId, clientId, status });
+        end();
       }
-      deps.onSessionSent?.(sessionId);
-      await done;
-      unsubscribe();
-      response.write('event: end\ndata: {}\n\n');
-      response.end();
+      // Return after durable admission. The SSE subscription owns the response,
+      // and disconnecting the caller never aborts the accepted background work.
+      if (response.destroyed || response.writableEnded) cleanup();
     } catch (error) {
-      unsubscribe();
-      write({ type: 'error', reason: 'chat_failed', message: error instanceof Error ? error.message : String(error) });
-      response.end();
+      cleanup();
+      if (!response.headersSent) response.writeHead(500, { 'content-type': 'text/event-stream; charset=utf-8' });
+      write({ type: 'error', reason: 'chat_failed', message: clientErrorMessage(error) });
+      end();
     }
   };
 }

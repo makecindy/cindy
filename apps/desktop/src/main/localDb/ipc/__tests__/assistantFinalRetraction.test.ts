@@ -9,7 +9,7 @@ import * as prRefsStore from '../../../git-context/prRefsStore';
 import * as previewRows from '../../latestMessageText';
 import { commitMessageMediaRefs } from '../../../cindy-media/chatAttachments';
 import { onAssistantTextEvent, clearSessionPersistState, drainPersistQueue,
-  flushAssistantBlock, noteSessionClearBoundary } from '../../../messagePersistBroadcaster';
+  flushAssistantBlock, noteSessionClearBoundary } from '../../../messagePersistBroadcaster.desktop';
 
 const h = vi.hoisted(() => ({
   sqlite: null as Database.Database | null,

@@ -1,3 +1,5 @@
+// Media IO is a platform port; authorization tests use the real dispatcher and projections.
+vi.mock('../cindy-media/toolProcessMedia.js', () => ({ materializeToolProcessMedia: vi.fn(async value => value) }));
 vi.mock('../device-link/providerShareAvailability.js', () => ({ prepareShareAvailability: vi.fn() }));
 /**
  * device-link 被控端 dispatch 单测:runInvoke 的双层校验(被控开关 + allowlist)
@@ -7,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 let remoteControlEnabled = true;
 let revokedControllers: string[] = [];
-vi.mock('../device-link/settings-store', () => ({
+vi.mock('../device-link/settings-store.desktop', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled, revokedControllers }),
 }));
 const diagnosticLog = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
@@ -20,6 +22,7 @@ vi.mock('electron', () => ({
 // boundary isolated; delegated guest admission is exercised in providerShareRuntime.test.ts.
 vi.mock('../device-link/providerShareDelegatedAccess.js', () => ({
   delegatedProviderShareGuestAccess: () => null,
+  delegatedProviderShareLeases: () => [], invalidateProviderShareDelegation: vi.fn(),
 }));
 // This suite exercises dispatch authorization, not authenticated ICE HTTP setup.
 vi.mock('../task-migration/service', () => ({ requestTaskMigration: vi.fn() }));
@@ -45,7 +48,7 @@ import {
   handleControllerOffline,
   __testing as dispatchTesting,
   type ActiveController,
-} from '../device-link/dispatch';
+} from '../device-link/dispatch.desktop';
 import { __testing as registry, dispatchLocalInvoke } from '../device-link/invoke-registry';
 import {
   deviceLinkInvokeControllerSupports,
@@ -514,7 +517,7 @@ import {
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
   pushSessionActivityToController,
-} from '../device-link/dispatch';
+} from '../device-link/dispatch.desktop';
 import {
   applyControllerDisplayNameDirectorySnapshot,
   applyControllerDisplayNamePresence,

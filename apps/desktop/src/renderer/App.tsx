@@ -1,3 +1,4 @@
+import { HostConnectionNotice } from '@/components/HostConnectionNotice';
 import { AppPreferenceControl } from './components/AppPreferenceControl';
 import { AppWindowSync } from './components/layout/AppWindowSync';
 import { readLocalWorkerCreationSelection } from './state/workerCreationPrefs';
@@ -455,6 +456,7 @@ export function App() {
             <ConfirmDialogProvider>
               <EnvCheckProvider>
                 <AuthProvider>
+                  <HostConnectionNotice />
                   <PluginReviewUpdatesProvider>
                   <AppShellCoverProvider>
                     <WorktreeProvider>
