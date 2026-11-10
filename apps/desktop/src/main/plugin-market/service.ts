@@ -17,7 +17,7 @@ import {
   type VisiblePluginSummary,
   type PluginResolveTarget,
 } from '@cindy/plugin-protocol';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { readGhostReadmeFromDir } from '../cindy-brain/ghostReadme.js';
 import { app, dialog } from 'electron';
 

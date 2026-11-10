@@ -55,7 +55,7 @@ import { getActiveCatalog } from './active-catalog.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { readClaudeApiKey, readCodexOneShotCreds } from './auth-adapters.js';
-import { outboundUndiciFetch } from './outbound-fetch.js';
+import { outboundUndiciFetch } from './outbound-fetch.desktop.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { validateTitleOutput } from './title-output-validation.js';
 

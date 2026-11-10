@@ -5,7 +5,7 @@ import { normalizeCustomWallpaperUrl } from '../shared/appearanceSettings.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
 import { createLogger } from './logger.js';
 import manifest from '../shared/wallpaper-video-manifest.json';
-import { blobUrl } from './cindy-media/blobStore.js';
+import { blobUrl } from './cindy-media/blobStore.desktop.js';
 import { readBoundedFileNoFollowSync } from './utils/readBoundedFile.js';
 
 const filePath = () => path.join(app.getPath('userData'), 'custom-wallpaper.json');

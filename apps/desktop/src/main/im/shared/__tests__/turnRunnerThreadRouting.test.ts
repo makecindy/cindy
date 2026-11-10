@@ -75,7 +75,7 @@ vi.mock('../../../localDb/client/current', () => ({
   })),
 }));
 vi.mock('../../../localDb/schema', () => ({ sessions: {} }));
-vi.mock('../../../imageCacheStore', () => ({ resolveSafe: mocks.resolveXdtImageUrl }));
+vi.mock('../../../imageCacheStore.desktop', () => ({ resolveSafe: mocks.resolveXdtImageUrl }));
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
   toCoreAgentKind: (kind: string) => (kind === 'codex' ? 'codex' : 'claude-code'),

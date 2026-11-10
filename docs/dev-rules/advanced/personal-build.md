@@ -290,6 +290,17 @@ change signing. Its APNs token may change: open the newly installed app so it re
 then test the normal server path. Production signing alone does not prove server credentials or
 notification delivery. Private keys remain in Keychain/Xcode, never in the configuration.
 
+Persist a successful distribution choice in the source configuration used by the next `prepare`,
+including a separate mobile configuration if configured. Updating only a one-off export request
+does not change future builds. Back up the source configuration, retain historical reports unchanged,
+and use a tool bundle that understands `distribution` and validates the final exported certificate.
+
+Acceptance has separate receipts: signed artifact, installed build identity, registration outcome,
+normal server-path delivery, and task completion/deep-link behavior. For the last step, lock the
+phone without force-quitting Cindy, finish a real desktop task while the desktop window is not
+focused, then confirm both notification receipt and navigation to that same task after tapping.
+A synthetic notification or Apple Console delivery does not cover the completion trigger or routing.
+
 #### Migrating an existing SHA-1 certificate pin
 
 New configuration uses `signingCertificateSha256` (64 hex characters). SHA-1-only and mixed
@@ -949,5 +960,11 @@ and the target phone before calling delivery successful.
 自动升级仍默认关闭，不能仅凭若干次通过就打开。
 
 后续独立阶段：正式打包产物、完整真实交接演练、执行文件删除的清理流程、证书身份迁移。
-这些需要独立验收；本轮没有改变当前运行实例或安装手机包。Push 注册缺陷独立于个人版工具
-交付，注册成功不是 APNs 送达证据；应分别核对签名环境、注册回执与目标真机收到通知。
+这些需要独立验收，不能从脚本单测通过推断当前实例已部署或手机已安装。Push 注册缺陷
+也影响普通手机版；即使与个人版工具同批交付，仍需单独验证。注册成功不是 APNs 送达证据，
+应分别核对签名环境、注册回执与目标真机收到通知。
+
+本地补丁收拢到 PR 后，先确认远端 PR 的最终内容包含所需修复，再从源配置移除对应
+`app.localRefs`。其它功能已有自己的未合并 PR 时由正常 PR 发现流程纳入，不重复挂本地
+分支，也不混入个人版 PR。保留原分支、冻结报告和已安装版本用于追溯；下一轮重新发现
+PR 并冻结新 SHA，不能修改已验收候选来冒充新构建。

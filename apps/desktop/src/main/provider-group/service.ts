@@ -44,7 +44,7 @@ import {
   interruptedTurnResumeDelayMs,
   type InterruptedTurnErrorSignals,
 } from '../maker-ipc/interruptedTurnAutoResume.js';
-import type { ProviderGroupBinding, ProviderGroupRef } from './bindings.js';
+import type { ProviderGroupBinding, ProviderGroupRef } from './bindings.desktop.js';
 import type { ProviderGroupDirectory } from './directory.js';
 import type { ProviderGroupGuestSwitch } from './guestSwitch.js';
 import { isProviderGroupLocalCapacityError } from './localCapacity.js';
