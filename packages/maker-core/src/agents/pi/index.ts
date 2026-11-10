@@ -245,7 +245,7 @@ import {
 import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
-  collectPiProjectResourceLaunchWatch,
+  collectPiProjectResourceSurface,
   emptyPiProjectResourceCliPaths,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
@@ -4069,24 +4069,19 @@ export class PiAgent extends BaseAgent {
     // Local root tasks load project skills/prompts/extensions in place via
     // explicit CLI flags. Keep --no-approve so `.pi/settings.json` is unread.
     // 受邀者：只要会话目录内的技能与提示词模板，项目扩展不加载(会在本机执行)。
-    // watch 基线(mtime/条目指纹/解析身份)与 git 边界必须先于路径收集采样(见
-    // snapshotPiProjectResourceLaunch):身份基线晚于 argv 采集,会把「采基线前的
-    // 改指」固化成一致基线,永久漏检(Codex P2,2026-11-10);基线在前则窗口内
-    // 新增的资源/边界变化只会让首次快检多一次重扫后收敛。git root 只解析一次,
-    // 经 hint 贯穿采样与收集 —— 窗口内 .git 消失不会采出旧根盯视面配新根路径
-    // 集合的混合口径。受邀者同样建快照(镜像同步进来的新技能必须能检出),裁剪
-    // 口径经 restrict 下发,比较对 fresh 做同一裁剪。
-    const projectResourceRepoRootAtLaunch = loadProjectResourcesInPlace
-      ? resolvePiResourceRepoRoot(opts.workingDir)
+    // 项目资源表面(spawn 采样):argv 路径集合与盯视基线出自**同一次遍历**
+    // (collectPiProjectResourceSurface)—— 结构不变量:基线与 argv 消费的状态
+    // 不可能不一致,快检只需检测「盘上 ≠ 基线」。分两次调用会重新造出「集合与
+    // 基线不同批」的永久漏检窗口(Codex P2,2026-11-10)。受邀者同样建快照
+    // (镜像同步进来的新技能必须能检出),裁剪口径经 restrict 下发,比较对
+    // fresh 做同一裁剪。
+    const projectResourceSurfaceAtLaunch = loadProjectResourcesInPlace
+      ? collectPiProjectResourceSurface(opts.workingDir)
       : null;
-    const projectResourceLaunchWatch = projectResourceRepoRootAtLaunch
-      ? collectPiProjectResourceLaunchWatch(opts.workingDir, projectResourceRepoRootAtLaunch)
-      : null;
-    const collectedProjectResources = loadProjectResourcesInPlace
+    const collectedProjectResources = projectResourceSurfaceAtLaunch
       ? guestRoot
-        ? restrictPiGuestProjectResources(
-          collectPiProjectResourceCliPaths(opts.workingDir, projectResourceRepoRootAtLaunch ?? undefined), guestRoot)
-        : collectPiProjectResourceCliPaths(opts.workingDir, projectResourceRepoRootAtLaunch ?? undefined)
+        ? restrictPiGuestProjectResources(projectResourceSurfaceAtLaunch.paths, guestRoot)
+        : projectResourceSurfaceAtLaunch.paths
       : emptyPiProjectResourceCliPaths();
     const projectResourceCli = loadProjectResourcesInPlace
       ? {
@@ -4101,12 +4096,12 @@ export class PiAgent extends BaseAgent {
     // 快照存未经禁用过滤的原始收集结果(受邀者已按 guestRoot 裁剪),与 drift
     // 检测的 fresh collect 经同一 restrict 裁剪后同口径可比;受邀者裁剪缺了会拿
     // 全量比裁剪基线恒判漂移,回收死循环。
-    const projectResourceLaunchSnapshot = projectResourceLaunchWatch && projectResourceRepoRootAtLaunch
+    const projectResourceLaunchSnapshot = projectResourceSurfaceAtLaunch
       ? snapshotPiProjectResourceLaunch(
         opts.workingDir,
         collectedProjectResources,
-        projectResourceRepoRootAtLaunch,
-        projectResourceLaunchWatch,
+        projectResourceSurfaceAtLaunch.repoRoot,
+        projectResourceSurfaceAtLaunch.watch,
         guestRoot ? (paths) => restrictPiGuestProjectResources(paths, guestRoot) : undefined)
       : null;
 

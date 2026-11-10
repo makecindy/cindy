@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   collectPiProjectResourceCliPaths,
   collectPiProjectResourceLaunchWatch,
+  collectPiProjectResourceSurface,
   piProjectResourcesDrifted,
   resolvePiResourceRepoRoot,
   snapshotPiProjectResourceLaunch,
@@ -70,10 +71,9 @@ function bumpMtime(target: string): void {
 }
 
 function snapshot(restrict?: (paths: PiProjectResourceCliPaths) => PiProjectResourceCliPaths) {
-  // 与生产调用点同序:watch 采样(含解析身份)先于路径收集(见 snapshotPiProjectResourceLaunch)。
-  const repoRoot = resolvePiResourceRepoRoot(project);
-  const watch = collectPiProjectResourceLaunchWatch(project, repoRoot);
-  return snapshotPiProjectResourceLaunch(project, collectPiProjectResourceCliPaths(project, repoRoot), repoRoot, watch, restrict);
+  // 与生产调用点同口径:surface 一次遍历同批产出基线与路径(结构上不可分离)。
+  const surface = collectPiProjectResourceSurface(project);
+  return snapshotPiProjectResourceLaunch(project, surface.paths, surface.repoRoot, surface.watch, restrict);
 }
 
 describe('piProjectResourcesDrifted', () => {
@@ -133,10 +133,9 @@ describe('piProjectResourcesDrifted', () => {
     writeFileSync(path.join(project, '.git'), '');
     const nested = path.join(project, 'sub');
     mkdirSync(nested, { recursive: true });
-    const nestedRepoRoot = resolvePiResourceRepoRoot(nested);
-    const nestedWatch = collectPiProjectResourceLaunchWatch(nested, nestedRepoRoot);
+    const nestedSurface = collectPiProjectResourceSurface(nested);
     const baseline = snapshotPiProjectResourceLaunch(
-      nested, collectPiProjectResourceCliPaths(nested, nestedRepoRoot), nestedRepoRoot, nestedWatch);
+      nested, nestedSurface.paths, nestedSurface.repoRoot, nestedSurface.watch);
     writeSkill(path.join('.agents', 'skills'), 'gamma');
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
@@ -223,21 +222,18 @@ describe('piProjectResourcesDrifted', () => {
     expect(roots.has(canon(path.join(project, '.pi', 'extensions', 'myext')))).toBe(true);
   });
 
-  it('launch snapshot samples watch roots before path collection (race-safe order)', () => {
-    // 生产调用点先采基线后收集路径。基线采样与路径收集之间新增的资源已在集合
-    // 里且基线较旧:首次快检多一次重扫确认集合一致后刷新基线 —— 既不误报漂移,
-    // 也不会静默漏检(反序才会漏)。
-    const repoRoot = resolvePiResourceRepoRoot(project);
-    const watch = collectPiProjectResourceLaunchWatch(project, repoRoot);
+  it('paths and watch table come from one surface walk (self-consistent baseline)', () => {
+    // argv 与基线出自同一次遍历:基线描述的就是 argv 消费的状态,结构上不可能
+    // 不一致;快检只需检测「盘上 ≠ 基线」。
     writeSkill(path.join('.pi', 'skills'), 'alpha');
-    const baseline = snapshotPiProjectResourceLaunch(
-      project, collectPiProjectResourceCliPaths(project, repoRoot), repoRoot, watch);
+    const surface = collectPiProjectResourceSurface(project);
+    const baseline = snapshotPiProjectResourceLaunch(project, surface.paths, surface.repoRoot, surface.watch);
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     expect(baseline.watchRootMtimes.get(canon(path.join(project, '.pi', 'skills'))))
       .toBe(statMtime(path.join(project, '.pi', 'skills')));
   });
 
-  it('samples resolved identity before collecting paths (launch-window retarget is drift)', () => {
+  it('retarget between the surface walk and snapshot publish is drift (argv and baseline are same-batch)', () => {
     // 回归(Codex P2,2026-11-10):身份基线若在 argv 收集之后采样,「采基线前的
     // 改指」会被固化成一致基线(mtime 孪生树碰撞时无任何信号)→ 永久漏检。
     // 按生产序复刻:① 采 watch(含解析身份)→ ② 收集 argv → ③ 窗口内改指孪生树
@@ -257,12 +253,12 @@ describe('piProjectResourcesDrifted', () => {
     const link = path.join(project, 'wd-link');
     const linkType = process.platform === 'win32' ? 'junction' : 'dir';
     symlinkSync(realA, link, linkType);
-    const launchRepoRoot = resolvePiResourceRepoRoot(link);
-    const watch = collectPiProjectResourceLaunchWatch(link, launchRepoRoot); // ① 采 watch
-    const paths = collectPiProjectResourceCliPaths(link, launchRepoRoot); // ② argv 来自 A
+    // surface 一次遍历:argv 与基线同批,均来自 A —— 生产不可能再出现「基线与
+    // 集合不同批」;发布前的改指仍必须由身份信号检出。
+    const surface = collectPiProjectResourceSurface(link);
     rmSync(link);
-    symlinkSync(realB, link, linkType); // ③ 窗口内改指 B(mtime 已对齐)
-    const baseline = snapshotPiProjectResourceLaunch(link, paths, launchRepoRoot, watch); // ④ 建快照
+    symlinkSync(realB, link, linkType); // 发布前改指 B(mtime 已对齐)
+    const baseline = snapshotPiProjectResourceLaunch(link, surface.paths, surface.repoRoot, surface.watch);
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
@@ -294,12 +290,11 @@ describe('piProjectResourcesDrifted', () => {
       promptTemplates: Object.freeze(p.promptTemplates.filter((s) => s.startsWith(scope))),
       extensions: Object.freeze([] as readonly string[]),
     });
-    const launchRepoRoot = resolvePiResourceRepoRoot(wd);
-    const collected = collectPiProjectResourceCliPaths(wd, launchRepoRoot);
+    const surface = collectPiProjectResourceSurface(wd);
+    const collected = surface.paths;
     // 前提:全量收集含 mirror 外的技能(链上 .agents 越过 guestRoot)
     expect(collected.skills.some((s) => !s.startsWith(scope))).toBe(true);
-    const watch = collectPiProjectResourceLaunchWatch(wd, launchRepoRoot);
-    const baseline = snapshotPiProjectResourceLaunch(wd, restrict(collected), launchRepoRoot, watch, restrict);
+    const baseline = snapshotPiProjectResourceLaunch(wd, restrict(collected), surface.repoRoot, surface.watch, restrict);
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     // mirror 外新增:有信号(链上 .agents 被盯),裁剪口径下集合未变 → 不回收
     writeSkill(path.join('.agents', 'skills'), 'global-2');
@@ -308,6 +303,28 @@ describe('piProjectResourcesDrifted', () => {
     // mirror 内新增:受邀者 argv 真会变 → 漂移
     writeSkill(path.join('mirror', 'sub', '.pi', 'skills'), 'beta');
     bumpMtime(path.join(wd, '.pi', 'skills'));
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('detects a manifest added inside an in-repo direct-linked skill within the same tick', () => {
+    // 回归(Greptile P2 直链技能):collector 对仓内软链目标消费清单存在性 ——
+    // 软键条目基线必须取清单存在性而非跳读,否则目标内同刻新增 SKILL.md
+    // (namespace→skill 迁移)四路信号全盲:目标 mtime 量化等值、链接身份不变、
+    // 条目跳读、manifest watcher 只盯软链清单。
+    writeFileSync(path.join(project, '.git'), '');
+    mkdirSync(path.join(project, '.pi', 'skills'), { recursive: true });
+    mkdirSync(path.join(project, 'target-dir'), { recursive: true });
+    const aligned = new Date(Math.floor(Date.now() / 1000) * 1000);
+    utimesSync(path.join(project, 'target-dir'), aligned, aligned);
+    symlinkSync(path.join(project, 'target-dir'), path.join(project, '.pi', 'skills', 'foo'), 'junction');
+    const baseline = snapshot();
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+    // 前提:仓内软键的条目基线是清单存在性指纹('M:' 前缀 + 空清单),不是 null
+    const linkKey = path.join(realpathSync(project), '.pi', 'skills', 'foo');
+    expect(baseline.watchRootEntries.get(linkKey)).toBe('M:');
+    // 同一刻新增普通文件 SKILL.md(显式把目标目录 mtime 恢复基线值,隔离 mtime 信号)
+    writeFileSync(path.join(project, 'target-dir', 'SKILL.md'), '---\nname: foo\ndescription: t\n---\n');
+    utimesSync(path.join(project, 'target-dir'), aligned, aligned);
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 
@@ -322,13 +339,11 @@ describe('piProjectResourcesDrifted', () => {
     mkdirSync(path.join(project, 'repo', '.pi', 'skills'), { recursive: true });
     symlinkSync(path.join(project, 'outside', 'big'), path.join(project, 'repo', '.pi', 'skills', '@scope'), 'junction');
     const wd = path.join(project, 'repo');
-    const launchRepoRoot = resolvePiResourceRepoRoot(wd);
-    const watch = collectPiProjectResourceLaunchWatch(wd, launchRepoRoot);
+    const surface = collectPiProjectResourceSurface(wd);
     // 前提:软链 namespace 键的条目基线为 null(快检将跳读)。键是链接路径本体,
     // 不能用 canon 查(canonical 化会把键解析成目标路径)
-    expect(watch.entries.get(path.join(realpathSync(wd), '.pi', 'skills', '@scope'))).toBeNull();
-    const baseline = snapshotPiProjectResourceLaunch(
-      wd, collectPiProjectResourceCliPaths(wd, launchRepoRoot), launchRepoRoot, watch);
+    expect(surface.watch.entries.get(path.join(realpathSync(wd), '.pi', 'skills', '@scope'))).toBeNull();
+    const baseline = snapshotPiProjectResourceLaunch(wd, surface.paths, surface.repoRoot, surface.watch);
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     // 目标树内部增删:集合不变 → 不漂移(mtime 跟随目标会触发一次重扫后收敛)
     writeSkill(path.join('outside', 'big'), 'more');
@@ -371,10 +386,9 @@ describe('piProjectResourcesDrifted', () => {
     writeSkill(path.join('outer', '.agents', 'skills'), 'outer-skill');
     const nested = path.join(project, 'outer', 'sub');
     mkdirSync(nested, { recursive: true });
-    const nestedRepoRoot = resolvePiResourceRepoRoot(nested);
-    const nestedWatch = collectPiProjectResourceLaunchWatch(nested, nestedRepoRoot);
+    const nestedSurface = collectPiProjectResourceSurface(nested);
     const baseline = snapshotPiProjectResourceLaunch(
-      nested, collectPiProjectResourceCliPaths(nested, nestedRepoRoot), nestedRepoRoot, nestedWatch);
+      nested, nestedSurface.paths, nestedSurface.repoRoot, nestedSurface.watch);
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     // 子目录自己 git init:枚举链截断,outer skill 不再属于本项目边界
     mkdirSync(path.join(nested, '.git'), { recursive: true });
@@ -388,10 +402,9 @@ describe('piProjectResourcesDrifted', () => {
     const nested = path.join(project, 'outer', 'sub');
     mkdirSync(path.join(nested, '.pi', 'skills', 'alpha'), { recursive: true });
     writeFileSync(path.join(nested, '.pi', 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\ndescription: t\n---\n');
-    const nestedRepoRoot = resolvePiResourceRepoRoot(nested);
-    const nestedWatch = collectPiProjectResourceLaunchWatch(nested, nestedRepoRoot);
+    const nestedSurface = collectPiProjectResourceSurface(nested);
     const baseline = snapshotPiProjectResourceLaunch(
-      nested, collectPiProjectResourceCliPaths(nested, nestedRepoRoot), nestedRepoRoot, nestedWatch);
+      nested, nestedSurface.paths, nestedSurface.repoRoot, nestedSurface.watch);
     // 嵌套目录 git init:被截断的上层链没有任何项目资源,集合不变,不应触发回收
     mkdirSync(path.join(nested, '.git'), { recursive: true });
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
@@ -489,13 +502,12 @@ describe('piProjectResourcesDrifted', () => {
     const link = path.join(project, 'wd-link');
     const linkType = process.platform === 'win32' ? 'junction' : 'dir';
     symlinkSync(realA, link, linkType);
-    const launchRepoRoot = resolvePiResourceRepoRoot(link);
-    const launchWatch = collectPiProjectResourceLaunchWatch(link, launchRepoRoot);
+    const surface = collectPiProjectResourceSurface(link);
     const baseline = snapshotPiProjectResourceLaunch(
       link,
-      collectPiProjectResourceCliPaths(link, launchRepoRoot),
-      launchRepoRoot,
-      launchWatch,
+      surface.paths,
+      surface.repoRoot,
+      surface.watch,
     );
     expect(piProjectResourcesDrifted(baseline)).toBe(false);
     rmSync(link);
