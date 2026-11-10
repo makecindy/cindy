@@ -119,6 +119,25 @@ describe('FolderPickerPopover project search', () => {
     expect(onSelect).toHaveBeenCalledWith(manyProjects[4].path, 'project', manyProjects[4]);
   });
 
+  it('fades whichever edge can still scroll once the portal content mounts', () => {
+    const height = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(392);
+    const client = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(252);
+    try {
+      renderPicker(manyProjects);
+      const list = document.querySelector('[data-folder-picker-scroll]') as HTMLElement;
+      expect(list.className).toContain('folder-picker-fade-bottom');
+      expect(list.className).not.toContain('folder-picker-fade-top');
+
+      list.scrollTop = 140;
+      fireEvent.scroll(list);
+      expect(list.className).toContain('folder-picker-fade-top');
+      expect(list.className).not.toContain('folder-picker-fade-bottom');
+    } finally {
+      height.mockRestore();
+      client.mockRestore();
+    }
+  });
+
   it('keeps fading the list itself while it scrolls independently in the ample state', () => {
     // 保留 main 的 Portal 挂载后测量、滚动时切换边缘渐隐的回归覆盖。
     // 上半区放得下(scrollHeight 300 < clientHeight 400),列表自身可滚(392 > 252),
