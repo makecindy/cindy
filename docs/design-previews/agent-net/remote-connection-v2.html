@@ -340,13 +340,13 @@ const PATHS = {
   offline:  { name: '离线', short: '离线', rank: 4 },
 };
 const RELAYS = { official: { name: 'Cindy 中转', where: '上海', ms: 18 }, mine: { name: '我的中转', where: 'tap-fp', ms: 25 } };
-const DEVICES = {
+const DEVICES = Object.assign(Object.create(null), {
   mini:   { name: 'LiziXDMini', glyph: 'mini', model: 'Mac mini' },
   mbp:    { name: 'MacBook Pro', glyph: 'laptop', model: 'MacBook Pro · macOS 15' },
   iphone: { name: 'iPhone', glyph: 'phone', model: 'iPhone 17 Pro' },
   home:   { name: '家里的 Mac mini', glyph: 'mini', model: 'Mac mini · Cindy 0.1.121' },
   studio: { name: 'Mac Studio', glyph: 'studio', model: 'Mac Studio' },
-};
+});
 // 经中转的设备，ms 是「中转 → 设备」这一段；到这台电脑的总延迟 = 中转那一段 + 这一段。
 const SCENARIOS = {
   daily: { mini: { path: 'lan', ms: 1, down: .4, up: .1 }, mbp: { path: 'official', ms: 16, down: 1.6, up: .3, why: '公司网络不支持跨网络直连，自动走中转' },
@@ -701,6 +701,8 @@ function month30() {
 
 // ---------- 弹出卡片 ----------
 function openPop(key) {
+  if (typeof key !== 'string' || !Object.hasOwn(DEVICES, key) && key !== 'hub' && key !== 'add' && key !== 'checkup'
+    && !(key.startsWith('relay-') && Object.hasOwn(RELAYS, key.slice(6)))) return;
   state.selected = key;
   paintNodes();
   const pop = $('pop');
@@ -709,7 +711,7 @@ function openPop(key) {
   requestAnimationFrame(() => pop.classList.add('open'));
   refreshPop();
   const input = pop.querySelector('input[data-name]');
-  if (input) input.addEventListener('input', e => { if (e.target.value.trim()) { DEVICES[key].name = e.target.value.trim(); paintNodes(); } });
+  if (input && Object.hasOwn(DEVICES, key)) input.addEventListener('input', e => { if (e.target.value.trim()) { DEVICES[key].name = e.target.value.trim(); paintNodes(); } });
 }
 function closePop() {
   const was = state.selected;

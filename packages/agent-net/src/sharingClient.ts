@@ -1,4 +1,4 @@
-import { MAX_CONTROL_BYTES, requestPayload, sharingIdentityPayload } from '@cindy/agent-net-protocol';
+import { MAX_CONTROL_BYTES, requestPayload, sharingIdentityPayload, stripTrailingSlashes } from '@cindy/agent-net-protocol';
 import { concatBytes, decodeUtf8, toBase64Url, utf8 } from './portableBytes.js';
 import type { AgentNetSigner } from './portableClient.js';
 
@@ -33,7 +33,7 @@ export class AgentNetSharingClient {
     const url = new URL(options.base);
     if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:'
       && (options.ownerPinnedHttp || ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))))) throw new Error('SECURE_AGENT_NET_URL_REQUIRED');
-    this.base = options.base.replace(/\/+$/, '');
+    this.base = stripTrailingSlashes(options.base);
   }
   private current(check?: () => boolean) {
     if (this.closed || check?.() === false) throw new Error('AGENT_NET_OWNER_CHANGED');

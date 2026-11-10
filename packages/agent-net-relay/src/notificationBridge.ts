@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { stripTrailingSlashes } from '@cindy/agent-net-protocol';
 import type { RelayOptions } from './server.js';
 export interface NotificationBridgeConfig { url: string; secretFile: string; }
 /** Shared Node-host configuration for embedded and CLI relays. The secret is
@@ -12,7 +13,7 @@ export function readNotificationBridgeConfig(env: NodeJS.ProcessEnv = process.en
   if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.protocol !== 'https:'
     && !(parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname))) throw new Error('INVALID_NOTIFICATION_BRIDGE_URL');
   if (!path.isAbsolute(secretFile)) throw new Error('NOTIFICATION_SECRET_FILE_MUST_BE_ABSOLUTE');
-  return { url: url.replace(/\/+$/, ''), secretFile };
+  return { url: stripTrailingSlashes(url), secretFile };
 }
 export async function createNotificationBridge(config: NotificationBridgeConfig | undefined,
   options: { fetch?: typeof fetch; readSecret?: (file: string) => Promise<string> } = {}): Promise<RelayOptions['notify']> {

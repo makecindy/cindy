@@ -1,4 +1,10 @@
 import type { DeviceCertificate } from './index.js';
+/** Linear-time URL suffix normalization, including long caller-supplied paths. */
+export function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
+}
 export interface SharingOrigin { server: string; networkId: string; rootPublicKey: string; region: 'cn' | 'global'; }
 export function agentNetSharingSubject(accountId: string, accountRegion: 'cn' | 'global', networkRegion: 'cn' | 'global'): string {
   return accountRegion === networkRegion ? accountId : 'x:' + accountRegion + ':' + accountId;
@@ -11,7 +17,7 @@ export function sharingOriginValid(value: unknown): value is SharingOrigin {
   try {
     const url = new URL(r.server);
     return Object.keys(r).every(k => ['server', 'networkId', 'rootPublicKey', 'region'].includes(k))
-      && r.server.length <= 2048 && r.server === r.server.replace(/\/+$/, '') && !url.username && !url.password && !url.hash && !url.search
+      && r.server.length <= 2048 && r.server === stripTrailingSlashes(r.server) && !url.username && !url.password && !url.hash && !url.search
       && (url.protocol === 'https:' || url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
       && typeof r.networkId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(r.networkId)
       && typeof r.rootPublicKey === 'string' && /^[A-Za-z0-9_-]{43}$/.test(r.rootPublicKey)

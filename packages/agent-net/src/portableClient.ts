@@ -1,7 +1,7 @@
 import {
   decodeDatagrams, encodeDatagrams, MAX_CONTROL_BYTES, MAX_FRAME_BYTES, MAX_MEDIA_BINARY_CHUNK_BYTES, requestPayload,
   delegationRequestPolicyValid, type Delegation, type DelegationRequest, type DeviceCertificate, type DeviceView,
-  guestRequestPath, delegationVisibleTo,
+  guestRequestPath, delegationVisibleTo, stripTrailingSlashes,
 } from '@cindy/agent-net-protocol';
 import { fromBase64Url, toBase64Url, utf8 } from './portableBytes.js';
 import { SocketEvents } from './socketEvents.js';
@@ -51,7 +51,7 @@ export class PortableAgentNetClient implements SocketClient {
       && !(url.protocol === 'http:' && (options.ownerPinnedHttp || ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))))) {
       throw new Error('SECURE_AGENT_NET_URL_REQUIRED');
     }
-    this.base = base.replace(/\/+$/, '');
+    this.base = stripTrailingSlashes(base);
     this.identity = signer.identity;
     const d = options.delegation;
     if (!options.verifyCertificate(rootPublicKey, certificate) || (!d && (certificate.deviceId !== this.identity.deviceId

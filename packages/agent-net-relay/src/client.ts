@@ -3,7 +3,7 @@ import { createCipheriv, createDecipheriv, createPublicKey, diffieHellman, gener
 import WebSocket from 'ws';
 import {
   API, MAX_FRAME_BYTES, MAX_CONTROL_BYTES, MAX_MEDIA_BINARY_CHUNK_BYTES, decodeDatagrams, encodeDatagrams, enrollmentPayload, transportModePayload,
-  guestRequestPath, delegationVisibleTo, delegationPrincipalMatches, delegationPayload,
+  guestRequestPath, delegationVisibleTo, delegationPrincipalMatches, delegationPayload, stripTrailingSlashes,
   type Delegation, type DeviceCertificate, type DeviceView, type JoinRequest, type EnrollmentRequest, type TransportModeProof,
 } from '@cindy/agent-net-protocol';
 import { createDelegation, createRequestProof, sha256, signature, verifySignature, verifyCertificate, verifyDelegation, type Identity, type TenantJoinRequest } from './identity.js';
@@ -52,7 +52,7 @@ export function verifyTransportModeProof(certificate: DeviceCertificate, to: str
 function checkBase(base: string, transport: AgentNetClientTransport = {}): string {
   const url = new URL(base);
   if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && (transport.ownerPinnedHttp || ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))))) throw new Error('SECURE_AGENT_NET_URL_REQUIRED');
-  return base.replace(/\/+$/, '');
+  return stripTrailingSlashes(base);
 }
 export function authorization(identity: Identity, certificate: DeviceCertificate, method: string, path: string, body: string | Uint8Array = ''): string {
   return 'AgentNet ' + Buffer.from(JSON.stringify({ certificate, proof: createRequestProof(identity, method, path, body) })).toString('base64url');
