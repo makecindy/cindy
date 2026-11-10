@@ -116,7 +116,8 @@ describe('Cindy managed skill catalog', () => {
     await fs.writeFile(foreign, '---\nname: pr\ncindyOfficial: true\n---');
     const catalog = [{ name: 'pr', path: alias }, { name: 'pr', path: foreign, cindyOfficial: true }];
     expect((await markCindyOfficialSkills(catalog)).map(skill => skill.cindyOfficial)).toEqual([true, false]);
-    expect((await markCindyOfficialSkills(catalog))[0]?.path).toBe(source);
+    // Attested through the alias's resolved file, yet the discovered (lexical) path stays its identity.
+    expect((await markCindyOfficialSkills(catalog))[0]?.path).toBe(alias);
     expect((await markCindyOfficialSkills(catalog, 'ssh-host')).map(skill => skill.cindyOfficial)).toEqual([false, false]);
     state.disabled = [alias];
     expect((await markCindyOfficialSkills(catalog))[0]).toMatchObject({ cindyOfficial: true, enabled: false });

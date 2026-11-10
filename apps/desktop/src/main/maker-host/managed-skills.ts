@@ -102,16 +102,14 @@ export async function markCindyOfficialSkills<T extends { path?: string }>(
   const disabled = new Set(remoteHostId ? [] : readDisabledSkillPathsForListing());
   return skills.map(skill => {
     let cindyOfficial = false;
-    let sourcePath = skill.path;
+    // Attest by the resolved file, but keep the discovered path as the Skill's identity:
+    // a task frozen with the lexical (symlink) path must still match it on resume.
     if (!remoteHostId && skill.path) {
       try {
-        const source = fs.realpathSync.native(skill.path);
-        cindyOfficial = officialPaths.has(source);
-        if (cindyOfficial) sourcePath = source;
+        cindyOfficial = officialPaths.has(fs.realpathSync.native(skill.path));
       } catch { /* Missing source. */ }
     }
     return { ...skill, cindyOfficial,
-      ...(cindyOfficial ? { path: sourcePath } : {}),
       ...(!remoteHostId && skill.path && disabled.has(skillActivationKey(skill.path)) ? { enabled: false } : {}),
     };
   });
