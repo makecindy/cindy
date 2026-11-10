@@ -6,7 +6,7 @@ import { isCodexGatewayWireModel, type AuthStrategy, type CatalogModel, type Pro
 import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole, orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
 import path from 'node:path';
 
-import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
+import { isCredentialModeSwitchBusyError } from '../maker-host/credentialSwitchError.js';
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort, OrcaWorkerStatus } from './orcaTeamService.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';

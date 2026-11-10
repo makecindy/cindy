@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { app, BrowserWindow, ipcMain, powerMonitor, powerSaveBlocker, screen } from 'electron';
 import { createLogger } from '../logger';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { onQuit } from '../lifecycle';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { requireBoolean, throwIpcError } from '../utils/ipcValidate';

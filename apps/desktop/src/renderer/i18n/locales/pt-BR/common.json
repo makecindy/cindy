@@ -4295,7 +4295,18 @@
           "ariaLabel": "Permitir que seus outros computadores e as pessoas com quem você compartilha usem este provedor",
           "writeFailed": "Não foi possível salvar a configuração de acesso remoto. Tente novamente."
         },
-        "moreActionsAria": "Mais ações"
+        "moreActionsAria": "Mais ações",
+        "runLocation": {
+          "label": "Executar em",
+          "optionLocal": "Este computador",
+          "notSignedIn": "Sem login",
+          "autoBorrowing": "Este computador não está conectado, então as novas tarefas rodam em {{device}}. Não é preciso fazer login.",
+          "local": "As novas tarefas rodam neste computador. Você pode escolher outro dos seus computadores conectados.",
+          "pinned": "As novas tarefas rodam em {{device}} com o login dele. As tarefas em andamento continuam onde estão.",
+          "inline": "Executa em",
+          "signInHere": "Fazer login neste computador",
+          "writeFailed": "Não foi possível salvar onde este provedor é executado. Tente novamente."
+        }
       },
       "detect": {
         "groupLabel": "Detectado neste dispositivo",
@@ -5365,6 +5376,15 @@
         "ariaLabel": "Usar {{shortcut}} para enviar mensagens"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Diretório de trabalho padrão para novas tarefas",
+      "label": "Diretório padrão neste computador",
+      "hint": "Pré-selecionado para novas tarefas locais sem projeto escolhido. Um projeto, uma conversa ou um computador remoto selecionado explicitamente tem prioridade.",
+      "unset": "Não definido (nenhum diretório pré-selecionado)",
+      "choose": "Escolher diretório",
+      "clear": "Limpar padrão",
+      "failed": "Não foi possível salvar o diretório de trabalho padrão. Tente novamente."
+    },
     "linkOpen": {
       "title": "Abrir links",
       "description": "Escolha onde abrir os links das mensagens. Clique com o botão direito em um link para usar outra opção apenas para ele.",
@@ -6327,13 +6347,18 @@
         "allowInboundAria": "Alternar permissão para {{name}} controlar este dispositivo",
         "peerControlOff": "Controle remoto não ativado nesse dispositivo",
         "masterOffHint": "Primeiro, ative a opção principal acima",
-        "controllingThisMac": "Conectado ao Cindy"
+        "controllingThisMac": "Conectado ao Cindy",
+        "useThisDeviceModels": "Usar os modelos daqui",
+        "allowModelUseAria": "Permitir que {{name}} use os modelos deste computador"
       },
       "toast": {
         "revoked": "Acesso revogado para este dispositivo",
         "revokeFailed": "Falha ao revogar acesso",
         "restored": "Acesso restaurado para este dispositivo",
-        "restoreFailed": "Falha ao restaurar acesso"
+        "restoreFailed": "Falha ao restaurar acesso",
+        "modelUseRestored": "Aquele computador pode usar os modelos deste de novo",
+        "modelUseRevoked": "Aquele computador não pode mais usar os modelos deste",
+        "modelUseFailed": "Não foi possível salvar “Usar os modelos daqui”. Tente novamente."
       },
       "sections": {
         "myDevices": "Meus dispositivos",
@@ -9277,6 +9302,8 @@
       "daysWindow": "{{days}}d"
     },
     "claude": {
+      "totalWeeklyLabel": "Semana total",
+      "temporarilyLimited": "Temporariamente limitado",
       "waitingDetail": "O uso da assinatura do Claude será atualizado após a conclusão do próximo turno.",
       "weeklyLabel": "Semanal",
       "modelWeeklyLabel": "{{model}} semanal",
@@ -13996,7 +14023,7 @@
         },
         "agentSwitch": {
           "usage-limit": "{{from}} atingiu o limite de uso; continuou em {{to}}",
-          "auth": "{{from}} está sem login; continuou em {{to}}",
+          "auth": "{{from}} não está autenticado; continuou em {{to}}",
           "unavailable": "Não foi possível acessar {{from}}; continuou em {{to}}",
           "overload": "{{from}} estava sobrecarregado; continuou em {{to}}",
           "failed": "{{from}} teve um problema; continuou em {{to}}"
@@ -14596,7 +14623,7 @@
       "running": "Em execução…",
       "waitingWorkflow": "Aguardando Workflow…",
       "waitingWorkflowProgress": "Aguardando Workflow · {{done}}/{{total}} Agents",
-      "turnStart": "{{status}}",
+      "turnStart": "Processando, {{name}}…",
       "issueTip": "{{name}}, experimente /issue para nos enviar comentários ou sugestões",
       "runningTool": "{{tool}} em execução…"
     },
@@ -20128,6 +20155,8 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "unassigned": "Conta não atribuída",
+    "providerManagedAuth": "O provedor atual do Codex não disponibiliza informações da conta do ChatGPT. Ao adicionar o provedor, selecione “$t(subscriptionAccounts.signIn.anotherAccount)” para usar uma pasta separada.",
     "signIn": {
       "checking": "Verificando a conta local…",
       "detected": "Conta conectada encontrada",
@@ -20176,5 +20205,15 @@
     "browserFallback": "Abra o GitHub para dar uma estrela ao Cindy.",
     "openGithub": "Abrir GitHub",
     "openFailed": "Não foi possível abrir o GitHub."
+  },
+  "hostConnection": {
+    "connecting": "Conectando ao Cindy…",
+    "restoring": "Restaurando o estado das tarefas…",
+    "retrying": "Tarefas ainda não sincronizadas. Tentando novamente…",
+    "pairing": "É necessário autorizar a conexão",
+    "pairingHelp": "Mantenha esta página aberta. No terminal usado para iniciar o Cindy Host, execute novamente o comando para abrir o cliente web. Faça o pareamento na nova página e volte aqui.",
+    "keepDraft": "Seu rascunho será mantido. As tarefas serão sincronizadas quando a conexão for restabelecida.",
+    "retry": "Reconectar",
+    "desktopAuthHelp": "Atualize as configurações de conexão no terminal de inicialização e reabra este cliente experimental."
   }
 }

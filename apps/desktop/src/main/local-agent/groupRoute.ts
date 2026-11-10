@@ -2,7 +2,7 @@
 import type { AgentKind } from '@cindy/maker-core';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import type { ProviderGroupRemoteClient } from '../provider-group/remoteClient.js';
-import type { ProviderGroupBinding } from '../provider-group/bindings.js';
+import type { ProviderGroupBinding } from '../provider-group/bindings.desktop.js';
 import type { ProviderGroupRouter } from '../provider-group/router.js';
 
 export interface LocalAgentExecutionRoute {

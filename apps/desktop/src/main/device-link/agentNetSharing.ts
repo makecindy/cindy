@@ -14,8 +14,8 @@ import { AgentNetClient } from '@cindy/agent-net-relay/client';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getCurrentUserId, getDeviceId, getAuthState, getActiveAuthRealm } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { agentNetClientForRelay, currentAgentNetClient, currentAgentNetScopedTarget, isAgentNetActive, openScopedAgentNetAppSocket } from './agentNetRuntime.js';
 import { currentOfficialAgentNetClient } from './agentNetOfficial.js';
 import { relayDataPath, secureStorageAvailable, readRelayConfig } from './selfHostedRelayConfig.js';
@@ -26,7 +26,7 @@ import { agentNetSelectionKey } from './agentNetRuntime.js';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { createSharedTaskJournal } from '../localDb/sharedTasks.js';
 import { agentNetMediaBinding, agentNetSharingSubject } from '@cindy/agent-net-protocol';
-import { readDeviceLinkSettings } from './settings-store.js';
+import { readDeviceLinkSettings } from './settings-store.desktop.js';
 
 type Kind = AgentNetSharingInvitation['kind'];
 export interface AgentNetSharingRoute extends Omit<AgentNetSharingInvitation, 'invitation'> {

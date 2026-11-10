@@ -24,7 +24,7 @@ import {
   isDataOwnerBroadcastScopeCurrent,
   type DataOwnerBroadcastScope,
 } from '../../device-link/broadcast-tap.js';
-import { setRemoteAgentHandler } from '../../device-link/dispatch.js';
+import { setRemoteAgentHandler } from '../../device-link/dispatch.desktop.js';
 import { getSelfDeviceId, remoteBackgroundInvoke } from '../../device-link/index.js';
 import { getProviderShareHostLoadedSnapshot, onProviderShareHostChanged, ownedProviderShareGuestAccess, providerShareGuestAccess, verifyProviderShareMemberGeneration } from '../../device-link/providerShareHost.js';
 import { applyProviderShareDelegation, clearProviderShareDelegations, delegatedProviderShareGuestAccess, delegatedProviderShareLeases, delegatedProviderShareModelAllowed, delegatedProviderShareReceiptAuthority, delegatedProviderShareSessionAllowed, delegatedProviderShareTaskAccess, invalidateProviderShareDelegation, revokeDelegatedProviderShareGuest } from '../../device-link/providerShareDelegatedAccess.js';
@@ -45,7 +45,7 @@ import { remoteAgentPollerFor } from '../controller/service';
 import { RemoteAgentRunClient, type RemoteAgentInvoke } from '../controller/runClient.js';
 import { getProviderShareUsageStore, installProviderShareUsageStore, type ProviderShareDirectReceiptRoute } from '../../device-link/providerShareUsageStore.js';
 import { currentProviderPartyUsageStore, flushProviderPartyUsage } from '../../usage/providerPartyUsageStore.js';
-import { onDeviceLinkSettingChanged, readDeviceLinkSettings } from '../../device-link/settings-store.js';
+import { onDeviceLinkSettingChanged, readDeviceLinkSettings } from '../../device-link/settings-store.desktop.js';
 import { readTurnUsageResetAt } from '../../goal-host/usageLimit.js';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService.js';
 import { bindHostedSessionProvider, hasHostedSessionModelAccess } from '../../maker-host/session-provider-store.js';
@@ -271,7 +271,8 @@ export function installRemoteAgentHost(options: {
   const isControllerAuthorized = (controller: string): boolean => {
     if (isProviderSharePeer(controller)) return providerShareGuestAccess(controller) !== null;
     const settings = readDeviceLinkSettings();
-    return settings.remoteControlEnabled && !settings.revokedControllers.includes(controller);
+    return settings.remoteControlEnabled && !settings.revokedControllers.includes(controller)
+      && !(settings.modelUseRevokedControllers ?? []).includes(controller);
   };
   // 同一份受邀者分配器同时提供匿名状态，沿用实际分配时记录的版本兼容情况。
   const groupRelay = createProviderGroupGuestRelay({
@@ -895,6 +896,8 @@ export function installRemoteAgentHost(options: {
     ownerModelAllowed: (hostSessionId, providerId, kind, model) => hasHostedSessionModelAccess(hostSessionId)
       && hostedProviderOffersModel(hostSessionId, providerId, kind, model),
     isControllerAuthorized,
+    isControllerModelUseRevoked: (controller) => !isProviderSharePeer(controller)
+      && (readDeviceLinkSettings().modelUseRevokedControllers ?? []).includes(controller),
     controllerTrust: (controller) => (isProviderSharePeer(controller) ? 'guest' : 'owner'),
     providerAccess: {
       models: async (kind, providerId, controller, sessionId) => {

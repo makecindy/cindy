@@ -12,6 +12,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 
 vi.mock('../localDb/ipc/messages.js', () => ({
+  broadcastMessageDeleted: vi.fn(),
+  discardPersistedAssistantMessage: vi.fn(async () => false),
   broadcastMessageAgentMetaUpdate: vi.fn(async () => true),
   broadcastMessageRow: vi.fn(),
   createMessage: vi.fn(async () => ({}) as unknown),
@@ -27,6 +29,9 @@ vi.mock('../logger.js', () => ({
 }));
 vi.mock('../cindy-media/chatAttachments.js', () => ({
   commitMessageMediaRefs: vi.fn(async () => null),
+}));
+vi.mock('../cindy-media/toolProcessMedia.js', () => ({
+  materializeToolProcessMedia: vi.fn(async () => []),
 }));
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
@@ -46,7 +51,7 @@ import {
   onToolResultEvent,
   onToolResultFullEvent,
   onToolUseEvent,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 import {
   TOOL_RESULT_PERSIST_CONTENT_LIMIT,
   TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX,

@@ -190,9 +190,10 @@ export function RemoteControlSection() {
             />
             {v2.enabled ? (
               <SettingsRow
-                title={t('settings.remoteControl.v2.onlyEncrypted')}
-                hint={t('settings.remoteControl.v2.onlyEncryptedHint')}
-                trailing={<Switch data-settings-search-action="Toggle encrypted-only Agent-Net connections" checked={v2.onlyEncrypted} onCheckedChange={v2.setOnlyEncrypted} aria-label={t('settings.remoteControl.v2.onlyEncrypted')} />}
+                id={remoteControlSettings.onlyEncrypted.targetId}
+                title={t(remoteControlSettings.onlyEncrypted.titleKey)}
+                hint={t(remoteControlSettings.onlyEncrypted.descriptionKey)}
+                trailing={<Switch data-setting-id={remoteControlSettings.onlyEncrypted.id} checked={v2.onlyEncrypted} onCheckedChange={v2.setOnlyEncrypted} aria-label={t(remoteControlSettings.onlyEncrypted.titleKey)} />}
               />
             ) : null}
           </SettingsCard>

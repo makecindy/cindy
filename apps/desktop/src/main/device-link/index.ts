@@ -17,7 +17,7 @@ import { PluginSyncAccess } from './pluginSyncAccess.js';
 import os from 'node:os';
 import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
 import { createTaskActivityPublisher, projectHostTaskActivity } from './taskActivity.js';
-import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 import { tryPeerInvoke, stopFilePeers } from './filePeer';
 import { desktopDirectRuntime } from './directLink';
 import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';
@@ -76,7 +76,7 @@ import { markStartupMilestone } from '../startupTimeline';
 import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch';
+import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop';
 import {
   DeviceLinkOwnershipArbiter,
   createSqliteExclusiveFileLock,
@@ -98,7 +98,7 @@ import {
   rememberLastKnownDeviceName,
   updateDeviceLinkSetting,
   writeDeviceLinkSetting,
-} from './settings-store';
+} from './settings-store.desktop';
 import { keepAwakeController } from './power-blocker';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { createDnsFallbackLookup } from './dnsFallbackLookup';
@@ -120,7 +120,9 @@ import {
   clearControllerDisplayNames,
   getControllerDisplayName,
   setDispatchPresenceOfflineCheck,
-} from './dispatch';
+  revokeControllerModelUse,
+  notifyControllerModelUseRestored,
+} from './dispatch.desktop';
 import {
   clearControllerPlatforms,
   getControllerPlatform,
@@ -1945,6 +1947,20 @@ export async function restoreController(deviceId: string): Promise<void> {
   // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
   pollExternalSettingsChange();
   log.info(`access restored for controller ${deviceId.slice(0, 8)}`);
+}
+
+/**
+ * 被控端:单独开关某台同账号电脑的「用本机模型」(远程 Agent)。它跟着「控制本机」：控制本机开着时默认
+ * 可用；关掉后结束它在本机的远程 Agent 任务并让它重读目录，其余远程控制不变。
+ */
+export async function setControllerModelUse(deviceId: string, allowed: boolean): Promise<void> {
+  pollExternalSettingsChange();
+  await updateDeviceLinkSetting('modelUseRevokedControllers', (latest) => allowed
+    ? latest.filter((id) => id !== deviceId)
+    : latest.includes(deviceId) ? latest : [...latest, deviceId]);
+  if (allowed) notifyControllerModelUseRestored(deviceId);
+  else await revokeControllerModelUse(deviceId);
+  log.info(`model use ${allowed ? 'restored' : 'revoked'} for controller ${deviceId.slice(0, 8)}`);
 }
 
 // ─── busy presence(被控端把「本机有 turn 在跑」上报,供控制端设备列表显示)──

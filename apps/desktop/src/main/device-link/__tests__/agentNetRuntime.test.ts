@@ -13,7 +13,7 @@ const state = vi.hoisted(() => ({ owner: 'membership-a', pending: false, enabled
 vi.mock('electron', () => ({ app: { getAppPath: () => '/unit-only-app' } }));
 vi.mock('../../authManager.js', () => ({ getCurrentUserId: () => state.owner, getDeviceId: () => 'device-a' }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.owner, isAppSessionBoundaryPending: () => state.pending }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ agentNetEnabled: state.enabled, agentNetOnlyEncrypted: state.onlyEncrypted }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ agentNetEnabled: state.enabled, agentNetOnlyEncrypted: state.onlyEncrypted }) }));
 vi.mock('../selfHostedRelayRouting.js', () => ({ activeSelfHostedRelay: () => ({
   relayId: '11111111-1111-4111-8111-111111111111', name: 'unit relay', baseUrl: 'http://127.0.0.1:1', role: 'owner',
   deviceId: 'device-a', ownerPublicKey: state.secrets?.agentNet?.rootPublicKey,
@@ -23,7 +23,7 @@ vi.mock('../selfHostedRelayConfig.js', () => ({
   writeRelaySecrets: (_id: string, value: unknown) => { state.writes.push(value); state.secrets = value; },
   relayDataPath: () => '/unit-only-never-written',
 }));
-vi.mock('../../maker-host/outbound-fetch.js', () => ({ createOutboundHttpAgent: vi.fn(), outboundFetch: vi.fn() }));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ createOutboundHttpAgent: vi.fn(), outboundFetch: vi.fn() }));
 vi.mock('../agentNetOfficial.js', () => ({ officialAgentNetBase: () => '', currentOfficialAgentNetClient: () => null }));
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Unit device' }));
 import { ensureOwnerAgentNetBootstrap, currentAgentNetClient, agentNetAllowsLegacy, createAgentNetOrLegacySocket,

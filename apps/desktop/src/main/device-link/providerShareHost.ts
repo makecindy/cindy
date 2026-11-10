@@ -30,7 +30,7 @@ import {
   readProviderShareApprovalWindows,
   updateProviderShareApprovalWindows,
 } from './providerShareApprovalWindows.js';
-import { readDeviceLinkSettings } from './settings-store.js';
+import { readDeviceLinkSettings } from './settings-store.desktop.js';
 
 export { PROVIDER_SHARE_REMOTE_LINK_WINDOW_MS } from './providerShareApprovalWindows.js';
 

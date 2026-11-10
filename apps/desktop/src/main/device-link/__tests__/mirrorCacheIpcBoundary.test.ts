@@ -66,7 +66,7 @@ vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: (): string => 'cloud:owner-x:1',
   ownerScopedUserDataPath: (...parts: string[]): string => ['/data/owners/x', ...parts].join('/'),
 }));
-vi.mock('../../i18n', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
 // 读路径还会查 purge 队列是否有待清记录;边界测试只关心授权,给"干净"。
 vi.mock('../mirrorCachePurgeQueue', () => ({
   enqueuePurge: vi.fn(async () => undefined),
@@ -88,7 +88,7 @@ vi.mock('../../appCapabilities', () => ({
 vi.mock('../mirrorCacheStore', () => ({
   getMirrorCache: () => h.cache,
 }));
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   serverApiFetch: vi.fn(),
   ServerApiError: class ServerApiError extends Error {},
 }));
@@ -127,6 +127,7 @@ vi.mock('../index', () => ({
   remoteUnsubscribe: vi.fn(),
   disconnectAllControllers: vi.fn(),
   revokeController: vi.fn(),
+  setControllerModelUse: vi.fn(),
   restoreController: vi.fn(),
   broadcast: vi.fn(),
   deviceLinkApiBase: 'https://example.invalid',
@@ -142,7 +143,7 @@ vi.mock('../index', () => ({
     authoritativeName: null,
   }),
 }));
-vi.mock('../dispatch', () => ({ getActiveControllers: () => [] }));
+vi.mock('../dispatch.desktop', () => ({ getActiveControllers: () => [] }));
 vi.mock('../filePeer', () => ({ tryUploadPeerAttachment: vi.fn(async () => null) }));
 vi.mock('../outboundMedia', () => ({
   rewriteOutboundMedia: vi.fn(async (_c, a) => a),
@@ -152,7 +153,7 @@ vi.mock('../outboundSessionReferences', () => ({
   outboundSessionReferencesRequested: () => false,
   rewriteOutboundSessionReferences: vi.fn(async (_c, a) => a),
 }));
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   forgetLastKnownDeviceName: vi.fn(),
   isPlaceholderDeviceName: () => false,
   normalizeCachedDeviceName: (name: string) => name.trim() || null,
@@ -188,7 +189,7 @@ import {
   disconnectAllControllers,
   remoteInvoke,
 } from '../index';
-import { setDeviceControlEnabled } from '../settings-store';
+import { setDeviceControlEnabled } from '../settings-store.desktop';
 
 const senderEvents = new EventEmitter();
 const FRAME = { detached: false };

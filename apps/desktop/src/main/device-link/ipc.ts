@@ -18,7 +18,7 @@ import {
   isProviderSharePeer,
 } from '@cindy/device-link';
 import { confirmRemoteSkillMutation, isRemoteSkillApproval } from './remoteSkillConfirmation';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { createHash, randomBytes } from 'node:crypto';
 import { ipcMain, shell, clipboard, dialog, BrowserWindow } from 'electron';
 import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
@@ -40,7 +40,7 @@ import {
   type LinkAcceptPayload,
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
-import { ServerApiError } from '../serverApiClient';
+import { ServerApiError } from '../serverApiClient.desktop';
 import { deviceLinkApiFetch } from './deviceLinkApi.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
@@ -78,6 +78,7 @@ import {
   disconnectAllControllers,
   revokeController,
   restoreController,
+  setControllerModelUse,
   broadcast,
   applyControllerDisplayNameListSnapshot,
   applyControllerPresenceListSnapshot,
@@ -89,7 +90,7 @@ import {
   waitForNewerControllerDisplayNameDirectoryRefresh,
   getDeviceLinkPeerLinks,
 } from './index';
-import { getActiveControllers } from './dispatch';
+import { getActiveControllers } from './dispatch.desktop';
 import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
 import { createSentImageRetainer } from './remoteMediaPersistentCache';
 import { withOutboundReviewConfirmation } from '../maker-ipc/reviewOutboundInput.js';
@@ -121,7 +122,7 @@ import {
   readLastKnownDeviceNames,
   rememberLastKnownDeviceName,
   setDeviceControlEnabled,
-} from './settings-store';
+} from './settings-store.desktop';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import {
   coerceCachedSession,
@@ -184,6 +185,7 @@ export interface DeviceLinkIpcDeps {
   disconnectAll(): void;
   revoke(deviceId: string): Promise<void>;
   restore(deviceId: string): Promise<void>;
+  setModelUse(deviceId: string, allowed: boolean): Promise<void>;
   setDeviceControlEnabled(deviceId: string, enabled: boolean): Promise<string[]>;
   /** 清理本机禁用目标的响应性熔断状态。 */
   clearDeviceResponsiveness?(deviceId: string): void;
@@ -235,6 +237,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         standby: isDeviceLinkStandby(),
         controlledBy: getActiveControllers(),
         revokedControllers: s.revokedControllers,
+        modelUseRevokedControllers: s.modelUseRevokedControllers,
         disabledControlDeviceIds: s.disabledControlDeviceIds,
         unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
@@ -256,6 +259,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     disconnectAll: disconnectAllControllers,
     revoke: revokeController,
     restore: restoreController,
+    setModelUse: setControllerModelUse,
     setDeviceControlEnabled,
     clearDeviceResponsiveness,
     broadcast,
@@ -362,6 +366,7 @@ export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
     standby: false,
     controlledBy: [],
     revokedControllers: [],
+    modelUseRevokedControllers: [],
     disabledControlDeviceIds: [],
     unresponsiveDeviceIds: [],
   };
@@ -1951,6 +1956,16 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleRevoke(deps, p.deviceId);
+  });
+  ipcMain.handle(DEVICE_LINK_INVOKE.SET_MODEL_USE, async (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
+    requireDeviceLinkCapability();
+    const p = (payload ?? {}) as { deviceId?: unknown; allowed?: unknown };
+    if (typeof p.deviceId !== 'string' || !p.deviceId.trim() || typeof p.allowed !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'deviceId and allowed are required');
+    }
+    await deps.setModelUse(p.deviceId, p.allowed);
+    return { ok: true };
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.RESTORE, (e, payload: unknown) => {
     assertTrustedAppRendererEvent(e);

@@ -8,8 +8,8 @@ import { AgentNetClient, acceptEnrollment, createEnrollmentRequest } from '@cind
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { getActiveAuthRealm, getCurrentUserId, getDeviceId } from '../authManager.js';
-import { serverApiFetch } from '../serverApiClient.js';
-import { outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-fetch.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
+import { outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { readRelaySecrets, writeRelaySecrets, relayDataPath, type RelaySecrets } from './selfHostedRelayConfig.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { withCrossProcessLock } from './crossProcessLock.js';

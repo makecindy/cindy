@@ -244,7 +244,7 @@ vi.mock('../clipboard', () => ({
   transferDesktopClipboard: vi.fn(),
   transferDesktopClipboardContent: vi.fn(),
 }));
-vi.mock('../../device-link/settings-store', () => ({
+vi.mock('../../device-link/settings-store.desktop', () => ({
   readDeviceLinkSettings: () => ({}),
   writeDeviceLinkSetting: vi.fn(),
 }));
@@ -965,7 +965,7 @@ it('uses native Hyprland capture for video and relay without opening a portal pi
 });
 
 it('authorizes channel requests exactly like the relay and only for small control ops', async () => {
-  const settings = await import('../../device-link/settings-store');
+  const settings = await import('../../device-link/settings-store.desktop');
   const config = {
     remoteDesktopEnabled: true,
     remoteControlEnabled: true,
@@ -1023,7 +1023,7 @@ it('authorizes channel requests exactly like the relay and only for small contro
 
 it('advertises native Wayland geometry to existing viewers without a 16:9 placeholder', async () => {
   h.wayland = h.hyprland = true;
-  const settings = await import('../../device-link/settings-store');
+  const settings = await import('../../device-link/settings-store.desktop');
   const { screen } = await import('electron');
   vi.spyOn(settings, 'readDeviceLinkSettings').mockReturnValue({
     remoteDesktopEnabled: true,
@@ -1045,7 +1045,7 @@ it.each([true, false])(
     try {
       h.wayland = h.hyprland = true;
       h.linuxInput = supported;
-      const settings = await import('../../device-link/settings-store');
+      const settings = await import('../../device-link/settings-store.desktop');
       const { screen } = await import('electron');
       vi.spyOn(settings, 'readDeviceLinkSettings').mockReturnValue({
         remoteDesktopEnabled: true,
@@ -1339,7 +1339,7 @@ it('advertises and starts X11 input while retaining the local opt-in', async () 
   try {
     h.wayland = h.hyprland = false;
     h.linuxInput = true;
-    const settings = await import('../../device-link/settings-store');
+    const settings = await import('../../device-link/settings-store.desktop');
     const { screen } = await import('electron');
     vi.spyOn(screen, 'getAllDisplays').mockReturnValue([
       { id: 1, size: { width: 800, height: 600 }, bounds: { x: 0, y: 0, width: 800, height: 600 } },

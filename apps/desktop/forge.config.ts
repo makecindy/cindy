@@ -2274,7 +2274,7 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          entry: 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts',
+          entry: 'src/main/cindy-brain/nodeRuntimeWorkerProcess.desktop.ts',
           config: 'vite.preload.config.ts',
           // 正式包关闭 RunAsNode fuse；随包插件改由 Electron utilityProcess
           // 承载。独立 CJS entry 与 main bundle 同目录，dev / packaged 同路径。

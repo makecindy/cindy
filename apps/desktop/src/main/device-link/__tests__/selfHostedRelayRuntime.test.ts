@@ -72,7 +72,7 @@ vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: (code: string) => 
 vi.mock('../invoke-context.js', () => ({ getDeviceLinkInvokeContext: () => null }));
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Test computer' }));
 vi.mock('../providerShareApi.js', () => ({ providerShareLinkApp: () => 'cindy' }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true, agentNetOnlyEncrypted: h.onlyEncrypted }),
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ keepAwake: true, agentNetOnlyEncrypted: h.onlyEncrypted }),
   writeDeviceLinkSetting: async (key: string, value: boolean) => { if (key === 'agentNetOnlyEncrypted') h.onlyEncrypted = value; },
 }));
 vi.mock('../selfHostedRelayFrameAuth.js', () => ({ refreshRelayCertificatesSoon: vi.fn() }));
@@ -114,7 +114,7 @@ vi.mock('../selfHostedRelayConfig.js', () => ({
   readHostNotificationBridgeConfig: () => undefined,
 }));
 
-vi.mock('../maker-host/outbound-fetch.js', () => ({
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({
   outboundFetch: (input: string, init?: RequestInit) => fetch(input, init),
   createOutboundHttpAgent: async () => undefined,
 }));

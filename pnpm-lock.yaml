@@ -675,6 +675,9 @@ importers:
 
   apps/host:
     dependencies:
+      '@cindy/anthropic-compat-proxy':
+        specifier: workspace:*
+        version: link:../../packages/anthropic-compat-proxy
       '@cindy/auth-client':
         specifier: workspace:*
         version: link:../../packages/auth-client
@@ -687,15 +690,24 @@ importers:
       '@cindy/maker-shared':
         specifier: workspace:*
         version: link:../../packages/maker-shared
+      '@cindy/mcps':
+        specifier: workspace:*
+        version: link:../../packages/lizi-mcps
       '@cindy/model-providers':
         specifier: workspace:*
         version: link:../../packages/model-providers
       better-sqlite3:
         specifier: ^12.9.0
         version: 12.11.1
+      cindy-tools:
+        specifier: workspace:*
+        version: link:../../packages/cindy-tools
       node-machine-id:
         specifier: ^1.1.12
         version: 1.1.12
+      playwright-core:
+        specifier: 1.60.0
+        version: 1.60.0
       ws:
         specifier: ^8.18.0
         version: 8.21.1

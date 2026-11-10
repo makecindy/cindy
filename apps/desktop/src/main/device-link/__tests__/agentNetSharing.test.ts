@@ -31,15 +31,15 @@ vi.mock('../../authManager.js', () => ({ getCurrentUserId: () => 'account-' + st
   getActiveAuthRealm: () => 'global',
   getAuthState: () => ({ isAuthenticated: true }) }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://auth.example.test' }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: state.card }));
-vi.mock('../../maker-host/outbound-fetch.js', () => ({ outboundFetch: state.http }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: state.card }));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ outboundFetch: state.http }));
 vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => null }));
 vi.mock('../../localDb/sharedTasks.js', () => ({ createSharedTaskJournal: () => ({ latest: async () => [] }) }));
 vi.mock('../selfHostedRelayConfig.js', () => ({ secureStorageAvailable: () => true,
   readRelayConfig: () => state.config,
   relayDataPath: () => '/unit-only-vault/' + state.key + '/sharing.enc' }));
 vi.mock('../selfHostedRelayRouting.js', () => ({ activeSelfHostedRelay: () => state.relay }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ agentNetEnabled: state.agentNetEnabled }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ agentNetEnabled: state.agentNetEnabled }) }));
 vi.mock('../agentNetRuntime.js', () => ({ currentAgentNetClient: () => state.api, isAgentNetActive: () => true,
   agentNetAllowsLegacy: () => false, agentNetOnlyEncryptedByUser: () => state.onlyEncrypted, agentNetSelectionKey: () => 'selected-private', agentNetClientForRelay: () => null,
   openScopedAgentNetAppSocket: vi.fn() }));

@@ -93,7 +93,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 import { applyScheduledModelSelection, createScheduledModelScope, resolveScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import type { ProviderView } from '@cindy/model-providers';
 import type { Scheduler } from '@cindy/maker-scheduler';

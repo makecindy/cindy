@@ -348,6 +348,7 @@ function PendingRequests({ state, bare = false }: { state: SelfHostedRelayState;
             variant="secondary"
             size="sm"
             compact
+            data-settings-search-action="Open this relay join request for approval"
             onClick={(event) => presentRelayApproval(request.requestId, event.currentTarget)}
           >
             {t(`${k}.open`)}

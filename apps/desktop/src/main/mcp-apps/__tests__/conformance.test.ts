@@ -16,7 +16,7 @@ import {
 import { AppConnection } from '../connection.js';
 import { handleMcpAppOperation } from '../operations.js';
 import { McpAppsHost, appServerRevision } from '../host.js';
-import { createAppServerProxy } from '../serverProxy.js';
+import { createAppServerProxy } from '../serverProxy.desktop.js';
 import { registerAppServer, setMcpAppsHost, clearAppServerConfigs } from '../runtime.js';
 import type { McpAppRecord, McpAppDocument } from '../../../shared/mcpApps.js';
 

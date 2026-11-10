@@ -11,7 +11,7 @@ const imageResolve = vi.hoisted(() => vi.fn());
 const ownerScope = vi.hoisted(() => ({ value: 'owner-a' }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => ownerScope.value }));
 const videoResolve = vi.hoisted(() => vi.fn());
-vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: imageResolve }));
+vi.mock('../../imageCacheStore.desktop.js', () => ({ resolveSafe: imageResolve }));
 vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: videoResolve }));
 
 const uploadLocalFile = vi.hoisted(() => vi.fn());

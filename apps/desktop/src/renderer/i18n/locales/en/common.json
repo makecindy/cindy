@@ -4239,7 +4239,18 @@
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
           "writeFailed": "Couldn't save the remote access setting. Please try again."
         },
-        "moreActionsAria": "More Actions"
+        "moreActionsAria": "More Actions",
+        "runLocation": {
+          "label": "Run on",
+          "optionLocal": "This computer",
+          "notSignedIn": "Not signed in",
+          "autoBorrowing": "This computer isn't signed in, so new tasks run on {{device}}. No sign-in needed.",
+          "local": "New tasks run on this computer. You can pick another of your signed-in computers instead.",
+          "pinned": "New tasks run on {{device}} with its sign-in. Running tasks stay where they are.",
+          "inline": "Runs on",
+          "signInHere": "Sign in on this computer",
+          "writeFailed": "Couldn't save where this provider runs. Please try again."
+        }
       },
       "detect": {
         "groupLabel": "Detected on this device",
@@ -5307,6 +5318,15 @@
         "ariaLabel": "Use {{shortcut}} to send messages"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Default working directory for new tasks",
+      "label": "Default directory on this computer",
+      "hint": "Preselect this directory for new local tasks with no project chosen. An explicitly selected project, dialogue, or remote computer takes priority.",
+      "unset": "Not set (no directory preselected)",
+      "choose": "Choose directory",
+      "clear": "Clear default",
+      "failed": "Could not save the default working directory. Try again."
+    },
     "linkOpen": {
       "title": "Open Links",
       "description": "Choose where links in messages open. Right-click a link to use another option just for that link.",
@@ -6264,13 +6284,18 @@
         "allowInboundAria": "Toggle whether {{name}} can control this device",
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
-        "controllingThisMac": "Connected to Cindy"
+        "controllingThisMac": "Connected to Cindy",
+        "useThisDeviceModels": "Use this device's models",
+        "allowModelUseAria": "Let {{name}} use this computer's models"
       },
       "toast": {
         "revoked": "Access revoked for this device",
         "revokeFailed": "Failed to revoke access",
         "restored": "Access restored for this device",
-        "restoreFailed": "Failed to restore access"
+        "restoreFailed": "Failed to restore access",
+        "modelUseRestored": "That computer can use this computer's models again",
+        "modelUseRevoked": "That computer can no longer use this computer's models",
+        "modelUseFailed": "Couldn't save \"Use this device's models\". Please try again."
       },
       "sections": {
         "myDevices": "My devices",
@@ -9205,6 +9230,8 @@
       "daysWindow": "{{days}}d"
     },
     "claude": {
+      "totalWeeklyLabel": "Total Week",
+      "temporarilyLimited": "Temporarily Limited",
       "waitingDetail": "Claude subscription usage will update after the next turn completes.",
       "weeklyLabel": "Weekly",
       "modelWeeklyLabel": "{{model}} weekly",
@@ -19939,6 +19966,8 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "unassigned": "Account not assigned",
+    "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",
       "detected": "Signed-in account found",
@@ -19987,5 +20016,15 @@
     "browserFallback": "Open GitHub to star Cindy.",
     "openGithub": "Open GitHub",
     "openFailed": "Could not open GitHub."
+  },
+  "hostConnection": {
+    "connecting": "Connecting to Cindy…",
+    "restoring": "Restoring task state…",
+    "retrying": "Task state is not yet synced. Retrying…",
+    "pairing": "Connect authorization required",
+    "pairingHelp": "Keep this page open. In the terminal used to start Cindy Host, run the command to open the web client again. Pair the new page, then return here.",
+    "keepDraft": "Your draft stays here. Task state will sync when the connection recovers.",
+    "retry": "Retry connection",
+    "desktopAuthHelp": "Update the Host connection settings in your launch terminal, then reopen this experimental client."
   }
 }

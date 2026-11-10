@@ -7,7 +7,7 @@
  * - 只走 V2 的网络(别人分享的中转,§5.5):设备目录、改名、移除走 V2 的签名请求;没有旧版 REST。
  */
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
+import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop.js';
 import { activeSelfHostedRelay, isAgentNetOnlyRelay, type ActiveSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { readCurrentDeviceDirectory, projectAgentNetDevice as legacyDeviceView } from './agentNetDeviceDirectory.js';
 

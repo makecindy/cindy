@@ -24,8 +24,8 @@ vi.mock('../selfHostedRelayConfig.js', () => ({
   relayDataPath: (...parts: string[]) => '/unit-only-never-written/' + parts.join('/'),
 }));
 vi.mock('../crossProcessLock.js', () => ({ withCrossProcessLock: async (_path: string, _options: unknown, action: any) => action({ held: true }) }));
-vi.mock('../../maker-host/outbound-fetch.js', () => ({ outboundFetch: vi.fn(), createOutboundHttpAgent: vi.fn() }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: vi.fn(async (_path: string, options: any) => {
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ outboundFetch: vi.fn(), createOutboundHttpAgent: vi.fn() }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: vi.fn(async (_path: string, options: any) => {
   options.baseUrl(); state.requests++;
   const body = options.body;
   expect(verifySignature(body.signingKey, enrollmentPayload(body), body.signature)).toBe(true);

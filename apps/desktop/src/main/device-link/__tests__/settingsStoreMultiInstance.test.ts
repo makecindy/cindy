@@ -26,7 +26,7 @@ import {
   readDeviceLinkSettings,
   updateDeviceLinkSetting,
   writeDeviceLinkSetting,
-} from '../settings-store';
+} from '../settings-store.desktop';
 
 const FILE = 'device-link-settings.json';
 

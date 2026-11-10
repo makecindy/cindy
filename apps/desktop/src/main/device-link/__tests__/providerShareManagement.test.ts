@@ -60,7 +60,7 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: state.owner, ownerGeneration: 1 }),
 }));
 vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device' }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),
@@ -88,7 +88,7 @@ vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
     acknowledgeDirectCleanup: usageStores.acknowledgeDirectCleanup }),
   providerUsageLocalDay: () => '2026-10-17',
 }));
-vi.mock('../settings-store.js', () => ({ onDeviceLinkSettingChanged: () => () => undefined, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
+vi.mock('../settings-store.desktop.js', () => ({ onDeviceLinkSettingChanged: () => () => undefined, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: api,
   fetchIdentityCard: identityCard,
@@ -96,7 +96,7 @@ vi.mock('../providerShareApi.js', () => ({
   providerShareLinkFor: () => 'https://cindy.app/s#test-link',
   providerShareOwnerKey: () => state.owner,
 }));
-vi.mock('../dispatch.js', () => ({
+vi.mock('../dispatch.desktop.js', () => ({
   notifyProviderShareCatalogChanged: fastPolicy.publish,
   getControllerDisplayName: vi.fn(), providerShareActiveControllers: vi.fn(),
   revalidateRemoteModelAccess: vi.fn(async () => undefined), revokeProviderShareControllers: vi.fn(async () => undefined), setProviderShareAccess: vi.fn(),
@@ -107,6 +107,7 @@ vi.mock('../providerShareReshare.js', async (importOriginal) => ({
 }));
 vi.mock('../providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(), stopProviderShareHost: vi.fn(),
+  getProviderShareHostLoadedSnapshot: () => null, onProviderShareHostChanged: () => () => {},
   refreshProviderShareHost: host.refresh, getProviderShareHostSnapshot: host.snapshot,
   clearProviderShareRequestQuiet: vi.fn(),
   providerShareAccessRevision: vi.fn(), providerShareGuestAccess: vi.fn(), ownedProviderShareGuestAccess: vi.fn(),
@@ -143,7 +144,7 @@ import { setBroadcastTapListener } from '../broadcast-tap';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledModelCatalog';
 import { PROVIDER_SHARE_IPC } from '../../../shared/providerShare';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
-import { revokeProviderShareControllers } from '../dispatch';
+import { revokeProviderShareControllers } from '../dispatch.desktop';
 import {
   clearAllProviderShareCatalogs,
   getCachedProviderShareCatalogs,

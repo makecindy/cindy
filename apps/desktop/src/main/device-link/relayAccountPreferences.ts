@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { getAccessToken, refresh } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_WRITE_ATTEMPTS = 4;

@@ -10,7 +10,7 @@ import type { PiUsageWrite } from '../../localDb/worker/opHandlers/piUsageTx.js'
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
 import { createContextOverflowRollover } from '../contextOverflowRollover.js';
-import { setMainLocale } from '../../i18n.js';
+import { setMainLocale } from '../../i18n.desktop.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
 import { onChannelTurn } from '../channelTurnSignal.js';
 import { createSessionBindingLifecycle } from '../sessionBindingLifecycle.js';
@@ -132,13 +132,13 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
 vi.mock('../../maker-host/claude-session-route-registry.js', () => ({
   readClaudeSessionRoute: effects.fn('readClaudeSessionRoute'),
 }));
-vi.mock('../../maker-host/codex-proxy-host.js', () => ({
+vi.mock('../../maker-host/codex-proxy-host.desktop.js', () => ({
   getCodexProxyAuthInjection: effects.fn('getCodexProxyAuthInjection'),
 }));
 vi.mock('../../maker-host/provider-route.js', () => ({
   isUserProviderSession: effects.fn('isUserProviderSession'),
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   reserveTurnErrorPersistId: effects.fn('reserveTurnErrorPersistId'),
   backgroundTurnPredatesSessionClear: effects.fn('backgroundTurnPredatesSessionClear'),
   noteAgentMeta: effects.fn('noteAgentMeta'),
@@ -153,6 +153,7 @@ vi.mock('../../messagePersistBroadcaster.js', () => ({
   onThinkingEvent: effects.fn('onThinkingEvent'),
   onToolResultEvent: effects.fn('onToolResultEvent'),
   onToolResultFullEvent: effects.fn('onToolResultFullEvent'),
+  persistToolProcessMedia: effects.fn('persistToolProcessMedia'),
   onToolUseEvent: effects.fn('onToolUseEvent'),
   consumeLastAssistantPersistId: effects.fn('consumeLastAssistantPersistId'),
   consumeLastTopLevelAssistantPersistId: effects.fn('consumeLastTopLevelAssistantPersistId'),
@@ -1627,10 +1628,10 @@ describe('provider turn observer on real Session.send', () => {
   });
 
   it.each([
-    [undefined, 'provider-wake-local'],
-    [{ kind: 'user' as const, surface: 'im' as const }, 'provider-wake'],
-    [{ kind: 'scheduler' as const, scheduleId: 'hook:slack', surface: 'im' as const }, 'provider-wake'],
-  ])('inherits the dispatched origin %j when announcing a harness wake-up', async (origin, expectedSource) => {
+    [undefined, 'provider-wake-local', true],
+    [{ kind: 'user' as const, surface: 'im' as const }, 'provider-wake', false],
+    [{ kind: 'scheduler' as const, scheduleId: 'hook:slack', surface: 'im' as const }, 'provider-wake', false],
+  ])('inherits the dispatched origin %j when announcing a harness wake-up', async (origin, expectedSource, zeroOutput) => {
     const pushed: Array<AgentEvent | null> = [];
     let wake: (() => void) | null = null;
     let running = false;
@@ -1661,7 +1662,11 @@ describe('provider turn observer on real Session.send', () => {
       await microtasks();
     };
     const order: string[] = [];
-    const dispose = installSessionTurnObserver(observerDeps(), session);
+    const dispose = installSessionTurnObserver({ ...observerDeps(), onProviderInitiatedTurn: (target, generation) => {
+      expect(target).toBe(session);
+      expect(generation).toBe(session.getTurnGeneration());
+      order.push('recovery-boundary');
+    } }, session);
     const unsubscribe = onChannelTurn((target, phase, source) => {
       if (target === session) order.push(`${phase}:${source ?? 'none'}`);
     });
@@ -1670,9 +1675,11 @@ describe('provider turn observer on real Session.send', () => {
       await session.send('launch background work', { origin });
       await emit(event('text', { text: 'launched agents' }));
       await emit(event('done'));
-      await emit(event('text', { text: 'agent result' }));
+      await emit(zeroOutput
+        ? event('status', { isRunning: true, providerInitiatedTurn: true }, { source: 'claude-code' })
+        : event('text', { text: 'agent result' }));
       await emit(event('done'));
-      expect(order).toEqual(['starting:none', 'text', 'done', `starting:${expectedSource}`, 'text', 'done']);
+      expect(order).toEqual(['starting:none', 'text', 'done', 'recovery-boundary', `starting:${expectedSource}`, zeroOutput ? 'status' : 'text', 'done']);
     } finally { off(); unsubscribe(); dispose(); await session.close(); }
   });
 

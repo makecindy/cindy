@@ -123,7 +123,7 @@ vi.mock('../../device-link/invoke-context', () => ({
     return peer ? { controllerDeviceId: peer } : null;
   },
 }));
-vi.mock('../../device-link/settings-store', () => ({
+vi.mock('../../device-link/settings-store.desktop', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }),
 }));
 vi.mock('../../device-link', () => ({
@@ -184,7 +184,7 @@ vi.mock('../../device-link/remoteAttachment', () => ({
   },
 }));
 vi.mock('../../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent() {} }));
-vi.mock('../../cindy-media/refCompensationJournal', () => ({
+vi.mock('../../cindy-media/refCompensationJournal.desktop', () => ({
   captureMediaRefCompensationScope: () => ({}),
 }));
 vi.mock('../../im/binding', () => ({ bindingStore: { findByTarget: () => null } }));

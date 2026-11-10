@@ -56,7 +56,7 @@ import {
   type RelayServerHandle,
 } from '@cindy/device-link-relay';
 import * as authManager from '../authManager.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -121,7 +121,7 @@ import { hostJoinBaseUrl, suggestedRelayUrls as suggestedUrls } from './selfHost
 import { AgentNetClientError, submitJoin, pollJoin, submitTenantJoin, pollTenantJoin, type AgentNetClient } from '@cindy/agent-net-relay/client';
 import { startRelayGateway } from '@cindy/agent-net';
 import { agentNetClientForRelay, approveAgentNetMember, createAgentNetTenantRequest, isAgentNetActive, ensureOwnerAgentNetBootstrap, memberAgentNetIdentity, memberAgentNetSecrets } from './agentNetRuntime.js';
-import { readDeviceLinkSettings, writeDeviceLinkSetting } from './settings-store.js';
+import { readDeviceLinkSettings, writeDeviceLinkSetting } from './settings-store.desktop.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 
 async function sharingAuthConfig(): Promise<SharingAuthConfig> {

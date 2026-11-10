@@ -12,7 +12,7 @@ vi.mock('../../appSessionState.js', () => ({
 }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://chat.example' }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {} }) }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ parseBlobUrl: (url: string) => url === 'cindy-media://blob/held.png' ? { hash: 'held' } : null }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ parseBlobUrl: (url: string) => url === 'cindy-media://blob/held.png' ? { hash: 'held' } : null }));
 vi.mock('../../cindy-media/ledger.js', () => ({ hasRef: async () => false, pinBlob: state.pin, addRef: state.add,
   removeRefById: state.remove, removeRefs: state.remove }));
 import { chatSendJournal } from '../chatSendJournal.js';

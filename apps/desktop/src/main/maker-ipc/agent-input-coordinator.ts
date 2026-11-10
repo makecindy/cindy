@@ -42,9 +42,9 @@ import { isAccountUsageLimitError } from './usageLimitAutoResume.js';
 import type { UsageLimitRecoverySnapshot } from './usageLimitRecoveryStore.js';
 import { createLogger } from '../logger.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText } from './autoReviewUserIntent.js';
-import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
+import type { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { REPLY_QUOTE_SOURCE_CONTENT } from './chatReplyQuoteNote.js';
-import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
+import type { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import {
   isContinuationOnlyAutoResumeReason,
   type InterruptedTurnErrorSignals,
@@ -54,7 +54,7 @@ import {
   restoreTrustedDesktopQueuedOrigin,
   revokeTrustedDesktopQueuedOrigin,
   TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT,
-} from './makerSendTransaction.js';
+} from './queuedInputOrigin.js';
 import type {
   DesktopSessionDispatchFailure,
   HostSendFailureCode,
@@ -395,11 +395,11 @@ export interface AgentInputCoordinatorDeps {
     userClientId: string,
   ) => Promise<RecoveryContextSnapshot>;
   /**
-   * Durable user-row writer shared with direct maker sends.  The fallback keeps
-   * the coordinator usable in narrow unit harnesses, while the registered host
-   * injects its FIFO writer so steer and drain persistence share one ordering.
+   * Durable user-row writer supplied by the launcher. Steer and drain must
+   * share its owner boundary and FIFO persistence ordering.
    */
-  createUserMessage?: typeof createDbMessage;
+  createUserMessage: typeof createDbMessage;
+  touchUserSend: typeof touchUserSendInDb;
   /** Hide a user row that was written after `/clear` won the persistence race. */
   rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string, options?: { discard?: boolean }) => Promise<void>;
   /**
@@ -789,6 +789,8 @@ interface SessionInputState {
   queueEditLocks: string[];
   queueAbortPending: boolean;
   activeTurn: ActiveTurn | null;
+  /** Last completed owner input, only reusable by a wake-up of that live SDK turn. */
+  providerContinuationCandidate?: { turn: ActiveTurn; sessionIdentity: object };
   error: string | null;
   /** Stable error reason for live projections; null when no terminal error is active. */
   errorReason: string | null;
@@ -4066,6 +4068,22 @@ export class AgentInputCoordinator {
     };
   }
 
+  /** Restore the accepted input boundary for a provider wake-up, not a new send.
+   * No history lookup or guessed owner: missing/stale context remains an external turn.
+   */
+  noteProviderInitiatedTurn(sessionId: string, vendorTurnGeneration: number): void {
+    const state = this.getState(sessionId);
+    const candidate = state.providerContinuationCandidate;
+    state.providerContinuationCandidate = undefined;
+    if (!candidate || state.activeTurn || state.recovery || state.error || state.queuePaused ||
+        state.queueAbortPending || state.pendingQueue.length > 0 ||
+        candidate.sessionIdentity !== this.deps.getTurnSessionIdentity?.(sessionId) ||
+        candidate.turn.vendorTurnGeneration !== vendorTurnGeneration ||
+        candidate.turn.generation !== state.generation ||
+        candidate.turn.clearBoundaryMs !== state.clearBoundaryMs) return;
+    state.activeTurn = candidate.turn;
+  }
+
   /**
    * Host-owned continuation (silent-stop auto-resume) keeps the same product turn on a
    * new vendor generation. `sendHostTurnContinuation` bypasses the send transaction that
@@ -4178,6 +4196,7 @@ export class AgentInputCoordinator {
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
     if (type === 'error') {
+      state.providerContinuationCandidate = undefined;
       if (
         active &&
         state.recovery?.kind === 'queue-head' &&
@@ -4433,6 +4452,11 @@ export class AgentInputCoordinator {
     state.error = null;
     clearErrorProjectionSignals(state);
     state.recovery = null;
+    const sessionIdentity = this.deps.getTurnSessionIdentity?.(sessionId);
+    if (active?.persisted && active.item && !active.controlKind && sessionIdentity &&
+        !active.item.sharedTaskAuthor && !isSchedulerOriginItem(active.item)) {
+      state.providerContinuationCandidate = { turn: active, sessionIdentity };
+    }
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'turn-done');
   }
@@ -4467,6 +4491,7 @@ export class AgentInputCoordinator {
     },
   ): void {
     const state = this.getState(sessionId);
+    state.providerContinuationCandidate = undefined;
     // Planned-upgrade suppression is per Session incarnation. Replacement
     // Sessions restart generation; a leftover marker would silence a later
     // genuine remote_daemon_closed on the reused generation.
@@ -6321,7 +6346,10 @@ export class AgentInputCoordinator {
       }
     }
     const state = this.states.get(sessionId);
-    if (state) state.autoResumeAttemptToken = null;
+    if (state) {
+      state.autoResumeAttemptToken = null;
+      state.providerContinuationCandidate = undefined;
+    }
   }
 
   /**
@@ -6722,14 +6750,16 @@ export class AgentInputCoordinator {
   private noteUserAction(sessionId: string): void {
     // Use host time, not a remote sender's clock. State clear/owner teardown also
     // clears this clock; an app restart has no running turn to yield to.
-    this.getState(sessionId).lastUserActionAt = Date.now();
+    const state = this.getState(sessionId);
+    state.lastUserActionAt = Date.now();
+    state.providerContinuationCandidate = undefined;
     this.deps.onUserAction?.(sessionId);
   }
 
   private touchUserSend(sessionId: string, atMs?: number): void {
     // 真人接手在派发/落库失败时也成立；限额预算与渠道 turn 的认领分别通知。
     this.noteUserAction(sessionId);
-    void touchUserSendInDb(sessionId, atMs).catch((err) => {
+    void this.deps.touchUserSend(sessionId, atMs).catch((err) => {
       log.warn('touchUserSend failed', { sessionId, error: errorMessage(err) });
     });
   }
@@ -7574,7 +7604,7 @@ export class AgentInputCoordinator {
     if (!this.isTurnGenerationCurrent(sessionId, active)) return 'stale';
     this.notifyUserMessagePersisting(sessionId, item);
     try {
-      const createUserMessage = this.deps.createUserMessage ?? createDbMessage;
+      const createUserMessage = this.deps.createUserMessage;
       await createUserMessage(
         sessionId,
         {

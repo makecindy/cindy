@@ -4,14 +4,12 @@ import type { MakerSendTransaction } from '../maker-ipc/makerSendTransaction.js'
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../maker-ipc/autoReviewUserIntent.js';
 import { appMessageInput, MCP_APP_MESSAGE_CLIENT_PREFIX, MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from './message.js';
 
-interface AppMessageSenderDeps<Meta> {
+interface AppMessageQueueDeps<Meta> {
   owner(): object | null | undefined;
   readClearBoundary(sessionId: string): Promise<number | null | undefined>;
   restoreQueue(sessionId: string): Promise<void>;
   clearBoundary(sessionId: string): number | null;
-  shouldQueue(sessionId: string): boolean;
   getSessionMeta(sessionId: string): Promise<Meta | null | undefined>;
-  buildCreateOpts(sessionId: string, meta: NonNullable<Meta>): Promise<Parameters<MakerSendTransaction['sendToAgentAccepted']>[2]>;
   createClientId(): string;
   buildQueueItem(params: {
     targetSessionId: string;
@@ -23,9 +21,17 @@ interface AppMessageSenderDeps<Meta> {
     autoReviewUserText: { kind: 'delegated-continuation' };
     files?: AgentInputSerializedFile[];
   }): Promise<AgentInputQueuedMessage>;
-  enqueue(sessionId: string, item: AgentInputQueuedMessage): void;
-  sendToAgentAccepted: MakerSendTransaction['sendToAgentAccepted'];
+  enqueue(sessionId: string, item: AgentInputQueuedMessage): void | Promise<unknown>;
 }
+type AppMessageSenderDeps<Meta> = AppMessageQueueDeps<Meta> & ({
+  /** A launcher which persists every accepted input before dispatch. */
+  queueOnly: true;
+} | {
+  queueOnly?: false;
+  shouldQueue(sessionId: string): boolean;
+  buildCreateOpts(sessionId: string, meta: NonNullable<Meta>): Promise<Parameters<MakerSendTransaction['sendToAgentAccepted']>[2]>;
+  sendToAgentAccepted: MakerSendTransaction['sendToAgentAccepted'];
+});
 
 /** The App's card grant is checked after preparation and at the final send fence. */
 export function createAppMessageSender<Meta>(deps: AppMessageSenderDeps<Meta>) {
@@ -56,7 +62,7 @@ export function createAppMessageSender<Meta>(deps: AppMessageSenderDeps<Meta>) {
     const sourcePlugin = { pluginId: `mcp-app:${record.serverId}`,
       name: typeof plugin?.name === 'string' ? plugin.name : record.serverId };
     const clientId = `${MCP_APP_MESSAGE_CLIENT_PREFIX}${deps.createClientId()}`;
-    if (deps.shouldQueue(sessionId)) {
+    if (deps.queueOnly || deps.shouldQueue(sessionId)) {
       const meta = await deps.getSessionMeta(sessionId);
       if (!meta) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
       const item = await deps.buildQueueItem({
@@ -67,7 +73,7 @@ export function createAppMessageSender<Meta>(deps: AppMessageSenderDeps<Meta>) {
       await assertDispatchCurrent();
       // The symbol survives Main queue copies but never enters JSON/IPC.
       const guardedItem = { ...item, [MCP_APP_MESSAGE_GUARD]: assertDispatchCurrent };
-      deps.enqueue(sessionId, guardedItem);
+      await deps.enqueue(sessionId, guardedItem);
       return;
     }
     const meta = await deps.getSessionMeta(sessionId);
