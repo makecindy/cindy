@@ -119,7 +119,7 @@ export function useDeferUpdateBannerWhileBusy(
       cancelled = true;
       if (timer !== null) clearTimeout(timer);
     };
-  }, [status, versionOrNull, dismissApi.dismissed, dismissApi.reason, dismissApi.pinnedByUser, dismissApi.revealRequested]);
+  }, [status, versionOrNull, dismissApi.dismissed, dismissApi.reason, dismissApi.pinnedByUser, dismissApi.revealRequested, dismissApi.revealSeq]);
 
   return hideUntilDecided;
 }

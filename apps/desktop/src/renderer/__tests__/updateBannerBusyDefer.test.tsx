@@ -362,6 +362,21 @@ describe('manual update check reveals banner', () => {
     act(() => dismissUpdateBanner('ready', '1.2.3'));
     expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
   });
+  // 评审回归：同一次下载期间用户关闭提醒后再次点击检查，要重新展开（每次明确检查都生效）。
+  it('reveals again on a second manual check after dismissing during superseding', async () => {
+    anyActivityBlockingRelaunch.mockResolvedValue(true);
+    updateStatus.current = { status: 'superseding', version: '1.2.3', errorCode: null };
+    window.electronAPI.checkForUpdate = vi.fn().mockResolvedValue({ result: 'downloading' });
+    render(<UpdateBanner isCollapsed={false} />);
+    await act(async () => { await checkForUpdateWithToast((key) => key); });
+    await waitFor(() => expect(getUpdateBannerDismissState().pinnedByUser).toBe(true));
+    act(() => dismissUpdateBanner('superseding', '1.2.3'));
+    expect(getUpdateBannerDismissState().dismissed).toBe(true);
+    await act(async () => { await checkForUpdateWithToast((key) => key); });
+    await waitFor(() => expect(getUpdateBannerDismissState().dismissed).toBe(false));
+    expect(getUpdateBannerDismissState().pinnedByUser).toBe(true);
+  });
+
   // 评审回归：superseding 期间手动检查（主进程回 downloading），旧补丁版本不能吞掉请求；
   // 新版 ready 且任务忙碌时仍要展开，且之后用户关闭不会被重新弹出。
   it('keeps the request through superseding and reveals the new version while busy', async () => {

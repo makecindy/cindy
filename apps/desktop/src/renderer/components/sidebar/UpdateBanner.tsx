@@ -672,8 +672,13 @@ export function UpdateBanner({
 /** 原侧栏不可见时，显式请求的更新提醒仍在窗口左下角显示。 */
 export function FloatingUpdateBanner({
   enabled,
+  ownsPrerequisiteDialogs = false,
   onOpenVersionNotice,
-}: { enabled: boolean } & Pick<UpdateBannerProps, 'onOpenVersionNotice'>) {
+}: {
+  enabled: boolean;
+  /** 没有侧栏实例（设置页）时由浮窗负责自动弹出安装提示；否则交给侧栏，避免叠开两次。 */
+  ownsPrerequisiteDialogs?: boolean;
+} & Pick<UpdateBannerProps, 'onOpenVersionNotice'>) {
   const { revealRequested, pinnedByUser, dismissed } = useUpdateBannerDismiss();
   if (!enabled || (!revealRequested && (!pinnedByUser || dismissed))) return null;
   return (
@@ -681,7 +686,7 @@ export function FloatingUpdateBanner({
       <UpdateBanner
         isCollapsed={false}
         onOpenVersionNotice={onOpenVersionNotice}
-        autoOpenPrerequisiteDialogs={false}
+        autoOpenPrerequisiteDialogs={ownsPrerequisiteDialogs}
       />
     </div>
   );

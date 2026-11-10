@@ -1999,6 +1999,7 @@ export function MainLayout() {
       {/* 手动检查的结果在设置页、隐藏侧栏和窄轨模式也必须可见；复用原横幅及重启确认。 */}
       <FloatingUpdateBanner
         enabled={isSettingsRoute || isSidebarCollapsed || isRailMode}
+        ownsPrerequisiteDialogs={isSettingsRoute}
         onOpenVersionNotice={openVersionNotice}
       />
       {/* Update notice dialog -- mounted inside FeatureSidebarSlotProvider (ThemeProvider scope) */}
