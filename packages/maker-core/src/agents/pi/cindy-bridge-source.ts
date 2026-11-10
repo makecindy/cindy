@@ -4755,17 +4755,19 @@ export default async function cindyBridge(piApi: any) {
   installTextOnlyTurnPolicy(pi);
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
-  const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
-    : (() => {
-      try {
-        return JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'));
-      } catch (error) {
-        // Durable child homes may have no settings file: Pi uses its defaults.
-        // Keep malformed/unreadable settings visible instead of hiding them.
-        if (error?.code === 'ENOENT') return {};
-        throw error;
-      }
-    })();
+  // Load-time file snapshot. Pi action APIs such as pi.getSettings() throw during
+  // extension loading, so bash and the legacy fallback both reuse this one read.
+  // Runtime handlers below may still prefer pi.getSettings() once the session is live.
+  const initialNativeSettings = (() => {
+    try {
+      return JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR, 'settings.json'), 'utf8'));
+    } catch (error) {
+      // Durable child homes may have no settings file: Pi uses its defaults.
+      // Keep malformed/unreadable settings visible instead of hiding them.
+      if (error?.code === 'ENOENT') return {};
+      throw error;
+    }
+  })();
   pi.registerCommand('cindy-native-provider-refresh', {
     description: 'Cindy internal native provider refresh',
     handler: async (args: string, ctx: any) => {
@@ -4932,7 +4934,7 @@ export default async function cindyBridge(piApi: any) {
     if (commandPrefix) forwarded.commandPrefix = commandPrefix;
     return forwarded;
   }
-  const piBashSettings = typeof pi.getSettings === 'function' ? pi.getSettings() : initialNativeSettings;
+  const piBashSettings = initialNativeSettings;
   const bashTool = createBashTool(process.cwd(), {
     // PI_SESSION_FILE 会暴露 agentHome，继而让一次获批的 shell 定位并篡改
     // permission file；其余 PI_SESSION_* 元数据对完成编码任务也不是必需能力。
