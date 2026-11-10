@@ -8120,7 +8120,7 @@
         "confirm": "Can ask for your confirmation in a dialog",
         "confirmDetail": "Before acting it can open a dialog that looks like Cindy's own to ask you. The question comes from the plugin and the dialog is labeled with its name; only you can click confirm or cancel — the plugin cannot. At most one dialog at a time, and asking too often is blocked.",
         "fsWrite": "Can manage its private files",
-        "fsWriteDetail": "Can read, write, list and delete its own private data. During an active Agent call, it can also read, list and watch the task's working directory. Writes and deletions follow the task's permissions; approving a write does not approve deletion. Watching stops when the call ends. All file operations run in the host.",
+        "fsWriteDetail": "Can read, write, list and delete its own private data. During an Agent call, it can also read, list and watch the task's working directory. Writes and deletions follow the task's permissions; approving a write does not approve deletion. Watching stops when the call ends. All file operations run in the host.",
         "deviceSync": "Sync plugin data between your computers",
         "deviceSyncDetail": "Exchanges this plugin’s data with the same plugin on your other online computers signed in to the same Cindy account. Transfers are encrypted. The plugin controls merging and deletions; no credentials or other plugins’ data are shared.",
         "libraryPersist": "Can use a durable library (large files and databases)",
