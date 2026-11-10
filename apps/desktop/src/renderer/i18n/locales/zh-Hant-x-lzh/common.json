@@ -6454,6 +6454,10 @@
             "self_built": "組織自建應用",
             "store": "商店應用"
           },
+          "linkedBotsSummary": "已聯機器人 {{bots}} · 飛書帳號 {{accounts}}",
+          "chooseBot": "擇機器人以聯，可並用多者。",
+          "connectBot": "聯此機器人",
+          "linkAnotherAccount": "另聯飛書帳號",
           "botFallback": "Cindy 機器人",
           "sharedSettings": "諸機器人共用本機工作目錄與模型之設，各有差事，工作電腦亦各自擇之。"
         }

@@ -1194,7 +1194,11 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 t(`settings.remoteControl.hook.${provider}.status.none`),
               );
     /** 绑定态一行(收起行摘要与展开区共用文案)。 */
-    const bindingLine = view.enabled && view.multiBindAvailable && (view.bindings?.length ?? 0) > 0 && state === 'confirmed'
+    const linkedAccounts = provider === 'feishu' && view.applications?.length ? view.bindings ?? [] : [];
+    const linkedBots = new Set(linkedAccounts.map((account) => account.scopeId)).size;
+    const bindingLine = view.enabled && view.available && linkedBots > 0
+      ? t('settings.remoteControl.hook.feishu.linkedBotsSummary', { bots: linkedBots, accounts: linkedAccounts.length })
+      : view.enabled && view.multiBindAvailable && (view.bindings?.length ?? 0) > 0 && state === 'confirmed'
       ? t('settings.remoteControl.hook.feishu.linkedAccounts', { count: view.bindings!.length })
       : view.enabled && view.available && !view.capabilityPending && view.status === 'connected' &&
       state !== 'none' && state !== 'revoked'
@@ -1506,16 +1510,25 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     const busy = view.binding?.state === 'pending' || view.binding?.state === 'awaiting_confirmation';
     return <>
       {!view.enabled ? <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.disabledHint')}</p> : null}
+      {view.enabled && view.available && view.status === 'connected' && !busy && (view.bindings?.length ?? 0) === 0
+        ? <p className="text-11 leading-relaxed text-[var(--text-secondary)]">{t('settings.remoteControl.hook.feishu.chooseBot')}</p> : null}
       {view.applications!.map((app: FeishuAppView) => {
         const accounts = (view.bindings ?? []).filter((row) => row.scopeId === app.appId);
         const own = view.binding?.scopeId === app.appId ? view.binding : accounts[0] ?? null;
-        const state = providerCardState('feishu', { ...view, binding: own, bindings: accounts, multiBindAvailable: app.appType === 'store' });
+        const state = providerCardState('feishu', { ...view, binding: own, bindings: accounts, multiBindAvailable: app.appType === 'store' && view.multiBindAvailable === true });
         const active = busy && view.binding?.scopeId === app.appId;
-        return <SettingsCard key={app.appId}>
+        const failed = own && ['failed', 'denied', 'expired', 'superseded'].includes(own.state);
+        const badge = !view.enabled || !view.available || view.status !== 'connected' || view.capabilityPending
+          ? state.badge
+          : active ? { tone: 'progress' as const, label: t('settings.remoteControl.hook.authorizing') }
+          : failed ? { tone: 'error' as const, label: t(`settings.remoteControl.hook.feishu.status.${own.state}`) }
+          : accounts.length > 0 ? { tone: 'ok' as const, label: t('settings.remoteControl.hook.feishu.linkedAccounts', { count: accounts.length }) }
+          : { tone: 'attention' as const, label: t('settings.remoteControl.hook.feishu.status.none') };
+        return <SettingsCard key={app.appId} role="group" aria-label={app.botName ?? t('settings.remoteControl.hook.feishu.botFallback')}>
           <SettingsRow wrap title={app.botName ?? t('settings.remoteControl.hook.feishu.botFallback')}
+            trailing={<ChannelStatusBadge tone={badge.tone} label={badge.label} />}
             hint={<>
               <span>{t(`settings.remoteControl.hook.feishu.appType.${app.appType}`)}{app.organization ? ` · ${app.organization}` : ''}</span>
-              {state.bindingLine && !state.confirmed ? <span className="mt-1 block">{state.bindingLine}</span> : null}
             </>} />
           {accounts.map((account) => <SettingsRow key={account.bindingId} wrap
             title={account.principalName ?? account.principalId}
@@ -1547,10 +1560,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 data-settings-search-action="Start or cancel linking this bot account"
                 onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindCancel('feishu'))}>{t('settings.remoteControl.hook.feishu.cancel')}</Button> : null}
             </> : <>
-              {app.appType === 'store' || accounts.length === 0 ? <Button variant="secondary" size="xs" compact type="button"
+              {(app.appType === 'store' && view.multiBindAvailable) || accounts.length === 0 ? <Button variant="secondary" size="xs" compact type="button"
                 data-settings-search-action="Start or cancel linking this bot account"
                 disabled={busy || !view.enabled || !view.available || view.status !== 'connected'}
-                onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart('feishu', app.appId))}>{t('settings.remoteControl.hook.feishu.connect')}</Button> : null}
+                onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart('feishu', app.appId))}>{t(`settings.remoteControl.hook.feishu.${accounts.length > 0 ? 'linkAnotherAccount' : 'connectBot'}`)}</Button> : null}
             </>}
               <Button variant="secondary" size="xs" compact type="button" data-settings-search-action="Open the channel connection or group setup link"
                 disabled={!view.enabled || !view.available || view.status !== 'connected'}

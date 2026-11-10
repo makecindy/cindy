@@ -6562,6 +6562,10 @@
             "self_built": "Application de l’organisation",
             "store": "Application de la boutique"
           },
+          "linkedBotsSummary": "Bots liés : {{bots}} · comptes : {{accounts}}",
+          "chooseBot": "Choisissez un bot à lier. Vous pouvez utiliser plusieurs bots en même temps.",
+          "connectBot": "Lier ce bot",
+          "linkAnotherAccount": "Lier un autre compte Feishu",
           "botFallback": "Bot Cindy",
           "sharedSettings": "Ces bots partagent les dossiers de travail et les réglages des modèles sur cet ordinateur. Chaque bot conserve ses propres tâches et son choix d’ordinateur de travail."
         }

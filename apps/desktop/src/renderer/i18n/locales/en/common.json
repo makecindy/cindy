@@ -6497,6 +6497,10 @@
             "self_built": "Organization app",
             "store": "Store app"
           },
+          "linkedBotsSummary": "Linked bots: {{bots}} · accounts: {{accounts}}",
+          "chooseBot": "Choose a bot to link. You can use multiple bots at the same time.",
+          "connectBot": "Link This Bot",
+          "linkAnotherAccount": "Link Another Feishu Account",
           "botFallback": "Cindy bot",
           "sharedSettings": "These bots share workspace and model settings on this computer. Each bot has separate tasks and a separate working computer selection."
         }

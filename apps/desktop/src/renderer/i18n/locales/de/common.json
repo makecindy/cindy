@@ -6497,6 +6497,10 @@
             "self_built": "Organisations-App",
             "store": "Store-App"
           },
+          "linkedBotsSummary": "Verknüpfte Bots: {{bots}} · Konten: {{accounts}}",
+          "chooseBot": "Wähle einen Bot zum Verknüpfen. Du kannst mehrere Bots gleichzeitig verwenden.",
+          "connectBot": "Diesen Bot verknüpfen",
+          "linkAnotherAccount": "Weiteres Feishu-Konto verknüpfen",
           "botFallback": "Cindy-Bot",
           "sharedSettings": "Diese Bots teilen Arbeitsordner und Modelleinstellungen auf diesem Computer. Aufgaben und die Auswahl des Arbeitscomputers bleiben für jeden Bot getrennt."
         }

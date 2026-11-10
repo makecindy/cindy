@@ -6454,6 +6454,10 @@
             "self_built": "組織のカスタムアプリ",
             "store": "ストアアプリ"
           },
+          "linkedBotsSummary": "連携済みボット: {{bots}} · アカウント: {{accounts}}",
+          "chooseBot": "連携するボットを選んでください。複数のボットを同時に使えます。",
+          "connectBot": "このボットを連携",
+          "linkAnotherAccount": "別の Feishu アカウントを連携",
           "botFallback": "Cindy ボット",
           "sharedSettings": "これらのボットは、このパソコンの作業フォルダーとモデル設定を共有します。タスクと作業用パソコンの選択はボットごとに独立しています。"
         }

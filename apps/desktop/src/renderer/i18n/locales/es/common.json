@@ -6562,6 +6562,10 @@
             "self_built": "Aplicación de la organización",
             "store": "Aplicación de la tienda"
           },
+          "linkedBotsSummary": "Bots vinculados: {{bots}} · cuentas: {{accounts}}",
+          "chooseBot": "Elige un bot para vincular. Puedes usar varios bots a la vez.",
+          "connectBot": "Vincular este bot",
+          "linkAnotherAccount": "Vincular otra cuenta de Feishu",
           "botFallback": "Bot de Cindy",
           "sharedSettings": "Estos bots comparten las carpetas de trabajo y la configuración de modelos en este ordenador. Cada bot conserva sus propias tareas y su selección de ordenador de trabajo."
         }

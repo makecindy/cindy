@@ -16,6 +16,21 @@ const disabledLane = {
 };
 
 function view(kind: string): SlackHookView {
+  if (kind === 'org-only' || kind === 'choose-bot' || kind === 'coexist-store-failed') {
+    const base = view('coexist');
+    if (kind === 'org-only') {
+      base.feishu.applications = base.feishu.applications!.filter((app) => app.appType === 'self_built');
+      base.feishu.bindings = base.feishu.bindings!.filter((account) => account.scopeId === 'cli_org');
+      base.feishu.binding = base.feishu.bindings[0]!;
+    } else if (kind === 'choose-bot') {
+      base.feishu.binding = null;
+      base.feishu.bindings = [];
+    } else {
+      base.feishu.binding = { ...view('pending').feishu.binding!, state: 'failed', reason: 'denied',
+        bindCode: null, connectUrl: null, expiresAt: null, actions: ['retry'] };
+    }
+    return base;
+  }
   if (kind === 'coexist' || kind === 'coexist-pending' || kind === 'coexist-error') {
     const base = view(kind === 'coexist-pending' ? 'store-pending' : 'store');
     const org = { ...base.feishu.bindings![0]!, bindingId: 'org-binding', scopeId: 'cli_org', principalName: '张三', tenantKey: null };
