@@ -4,6 +4,8 @@ import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermission
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
+export type { GhostModelRoute } from '@cindy/plugin-protocol';
+import type { GhostModelRoute } from '@cindy/plugin-protocol';
 import { parseMailReader } from '@cindy/maker-shared/mail-message';
 import { isPluginModelSelection, parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult, type PluginModelSelection } from '@cindy/device-link';
 import {
@@ -717,7 +719,7 @@ export type GhostMessageHook = (typeof GHOST_MESSAGE_HOOKS)[number];
 export const GHOST_CONTROL_POINT_FAILURE_ACTIONS = ['allow', 'skip', 'block'] as const;
 export type GhostControlPointFailureAction = (typeof GHOST_CONTROL_POINT_FAILURE_ACTIONS)[number];
 
-export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route';
+export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route' | 'transform';
 
 export interface GhostControlPointSpec {
   /** 插件可返回的裁决(allow 恒可用)。route 只用于开新任务时选模型。 */
@@ -767,6 +769,24 @@ export const GHOST_CONTROL_POINTS = {
     permissionKey: 'subscribe:hooks:start-task',
     labelKey: 'subscribeStartTask',
     detailKey: 'subscribeStartTaskDetail',
+  },
+  'will-start-turn': {
+    actions: ['allow', 'route', 'skip', 'block'],
+    failureActions: ['allow', 'skip', 'block'],
+    defaultOnFailure: 'block',
+    timeoutMs: 8_000,
+    permissionKey: 'subscribe:hooks:start-turn',
+    labelKey: 'subscribeStartTurn',
+    detailKey: 'subscribeStartTurnDetail',
+  },
+  'will-model-request': {
+    actions: ['allow', 'route', 'transform', 'skip', 'block'],
+    failureActions: ['allow', 'skip', 'block'],
+    defaultOnFailure: 'block',
+    timeoutMs: 8_000,
+    permissionKey: 'subscribe:hooks:model-request',
+    labelKey: 'subscribeModelRequest',
+    detailKey: 'subscribeModelRequestDetail',
   },
 } as const satisfies Record<string, GhostControlPointSpec>;
 export type GhostControlPointId = keyof typeof GHOST_CONTROL_POINTS;
@@ -8921,16 +8941,6 @@ export interface GhostRoutineRunPointData {
   events: { id: string; type: string; sourceId?: string; occurredAt: number; subject?: string; data: Record<string, unknown> }[];
 }
 
-/** 模型路由(插件看到与回传的同一形状)。agentKind: cc = Claude Code。 */
-export interface GhostModelRoute {
-  /** Agent location relative to the task computer; omitted = local. */
-  agentDeviceId?: string;
-  agentKind: 'cc' | 'codex' | 'pi';
-  model: string;
-  providerId: string;
-  effort?: string;
-}
-
 /** 开新任务时(will-start-task)交给插件的数据：第一条消息与用户当前选的模型。不含本机路径。 */
 export interface GhostStartTaskPointData {
   /** 用户选中的、由本插件发布的模型 id。 */
@@ -8942,7 +8952,19 @@ export interface GhostStartTaskPointData {
   route: GhostModelRoute;
 }
 
-export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData;
+export interface GhostRuntimePointData {
+  sessionId: string;
+  route: GhostModelRoute;
+  text?: string;
+  attachmentCount?: number;
+  /** Pi selects the native model before serialization, then processes its payload. */
+  phase?: 'select' | 'payload';
+  request?: Record<string, unknown>;
+}
+
+export const GHOST_MODEL_REQUEST_MAX_CHARS = 1_048_576;
+
+export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData | GhostRuntimePointData;
 
 /** 选择器里的一个插件模型(已按当前语言解析文案)。 */
 export interface GhostPickerModel {
@@ -8969,6 +8991,9 @@ export type GhostControlPointResult =
       failure: boolean;
     }
   | { action: 'route'; ghostId: string; ghostName: string; route: GhostModelRoute; reason: string };
+
+export type GhostRuntimeControlPointResult = GhostControlPointResult
+  | { action: 'transform'; ghostId: string; ghostName: string; request: Record<string, unknown> };
 
 
 /**
@@ -9106,7 +9131,9 @@ export type GhostPipeEventPush =
 export interface GhostPipeEventVerdict {
   type: 'event-verdict';
   hookId: string;
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform';
+  /** Provider request JSON body, only for will-model-request phase=payload. */
+  request?: Record<string, unknown>;
   /** route 时选定的模型(仅开新任务时)。 */
   route?: GhostModelRoute;
   /** block 时展示的理由。 */

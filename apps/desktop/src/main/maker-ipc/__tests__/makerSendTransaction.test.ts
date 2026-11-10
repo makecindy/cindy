@@ -2,6 +2,7 @@ import { ROUTINE_TRIGGER_DATA_LEAD } from '../../../shared/botAutonomy.js';
 import {
   CodexResumePreparationBlockedError,
   PI_CACHE_RECOVERY_EXPECTATION,
+  MODEL_REQUEST_CONTROL,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
   INHERITED_CAPABILITY_SELECTION,
@@ -67,6 +68,19 @@ function withUiLanguageUserMessage(content: string): { type: 'user'; content: st
 }
 
 describe('local application task takeover', () => {
+  // Runtime plugin contract, unit: the route is applied before bootstrap and
+  // the host-only callback survives the normal send transaction unchanged.
+  it('prepares runtime plugins before pending route application and forwards the request callback', async () => {
+    const order: string[] = [];
+    const control = vi.fn(async () => ({}));
+    const { deps, session } = createDeps();
+    deps.prepareRuntimeTurn = async () => { order.push('plugin'); return { options: { [MODEL_REQUEST_CONTROL]: control } }; };
+    deps.applyPendingAgentSwitch = async () => { order.push('route'); };
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
+    expect(order).toEqual(['plugin', 'route']);
+    expect(vi.mocked(session.send).mock.calls[0][1]?.[MODEL_REQUEST_CONTROL]).toBe(control);
+  });
+
   // #7631 review P0. Runtime tests do not cover the ordinary send transaction.
   // Minimal regression (unit): a live external Session must be retired before
   // selecting the send target; failed handoff must never dispatch Cindy input.

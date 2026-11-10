@@ -32,6 +32,15 @@ const validManifest = {
 } as const;
 
 describe('Ghost manifest contract', () => {
+  // Runtime controls are on-demand entry points. Unlike message hooks, selecting
+  // one must not require a resident process (protocol contract, unit).
+  it('accepts on-demand runtime controls without making message hooks non-resident', () => {
+    const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
+    const result = validateGhostManifest({ ...base, subscribe: { hooks: ['will-start-turn', 'will-model-request'] } });
+    expect(result).toMatchObject({ ok: true, manifest: { subscribe: { hooks: ['will-start-turn', 'will-model-request'] } } });
+    expect(validateGhostManifest({ ...base, subscribe: { hooks: ['will-user-message'] } }).ok).toBe(false);
+  });
+
   it.each([2, 3])('preserves the optional Host task card visibility flag in schema v%s', (schemaVersion) => {
     const base = {
       ...validManifest,

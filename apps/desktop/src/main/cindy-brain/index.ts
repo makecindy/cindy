@@ -465,6 +465,7 @@ import {
   type GhostControlPointInfo,
   type GhostControlPointFailureAction,
   type GhostControlPointResult,
+  type GhostRuntimeControlPointResult,
 } from '../../shared/ghost.js';
 import { GhostPipeDispatcher } from './pipeDispatcher.js';
 import { GhostCardService, parseCardHeightReport } from './cardService.js';
@@ -3133,11 +3134,21 @@ export async function screenGhostUserMessage(
  * 插件不可用或出错时按任务的 onFailure 处理。owner 在询问期间切换时按放行收口，调用方的
  * 流程自己也会因 owner 失效而中止；网关本身异常同样按 onFailure 处理，不静默放行。
  */
+export function screenGhostControlPoint(
+  point: 'will-start-turn' | 'will-model-request',
+  data: GhostControlPointData,
+  target: { pluginId: string; onFailure: GhostControlPointFailureAction },
+): Promise<GhostRuntimeControlPointResult>;
+export function screenGhostControlPoint(
+  point: Exclude<GhostControlPointId, 'will-start-turn' | 'will-model-request'>,
+  data: GhostControlPointData,
+  target: { pluginId: string; onFailure: GhostControlPointFailureAction },
+): Promise<GhostControlPointResult>;
 export async function screenGhostControlPoint(
   point: GhostControlPointId,
   data: GhostControlPointData,
   target: { pluginId: string; onFailure: GhostControlPointFailureAction },
-): Promise<GhostControlPointResult> {
+): Promise<GhostRuntimeControlPointResult> {
   const ownerStamp = getGhostOwnerPushStamp();
   try {
     const result = await getGhostSubscriptionGateway().screenControlPoint(point, data, target);
@@ -4304,7 +4315,7 @@ export function getGhostModelPicker(): GhostModelPicker {
 }
 
 /** 卡内模型下拉框回传的模型:远程位置还须是当前可选的位置。 */
-async function isPluginModelRouteAvailableNow(route: PluginModelPickerRoute): Promise<boolean> {
+export async function isPluginModelRouteAvailableNow(route: PluginModelPickerRoute): Promise<boolean> {
   const owner = activeOwnerScopeKey();
   const available = await isGhostCardModelRouteAvailable(route, {
     localViews: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),

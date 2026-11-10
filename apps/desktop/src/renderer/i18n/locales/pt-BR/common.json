@@ -1,4 +1,10 @@
 {
+  "runtimePlugins": {
+    "title": "Plugins da tarefa",
+    "description": "Selecione os plugins desta tarefa. As alterações valem a partir da próxima mensagem.",
+    "unsupported": "O processamento de cada solicitação só está disponível com Pi local. O mecanismo desta tarefa não oferece suporte.",
+    "failed": "Não foi possível carregar ou salvar as configurações. Reabra este painel para tentar novamente."
+  },
   "sharedTaskRecovery": {
     "title": "Não é possível retomar no computador original",
     "description": "Escolha outro computador ou fornecedor para continuar com uma transferência de contexto. As mensagens são mantidas, mas o estado completo da execução no computador original não é transferido.",
@@ -8108,8 +8114,12 @@
         "subscribeScheduleRunDetail": "As automações em que você o escolher em Verificação prévia consultam-no primeiro. Ele vê o nome e as instruções e pode pular ou parar essa execução, mas não aprovar nada por você.",
         "subscribeRoutineRun": "Pode verificar rotinas de colegas escolhidas antes de executarem",
         "subscribeRoutineRunDetail": "As rotinas em que você o escolher em Verificação prévia consultam-no primeiro. Ele vê as instruções e os eventos que as acionaram e pode pular ou parar essa execução, mas não aprovar nada por você.",
+        "subscribeStartTurn": "Pode escolher um modelo antes de cada resposta nas sessões selecionadas",
+        "subscribeStartTurnDetail": "Somente as sessões em que você seleciona este plugin compartilham a mensagem atual com ele. Ele pode escolher um modelo conectado, o esforço de raciocínio e Fast. Os erros seguem a configuração da sessão; ele não pode aprovar ações por você.",
+        "subscribeModelRequest": "Pode processar cada solicitação ao modelo nas sessões selecionadas",
+        "subscribeModelRequestDetail": "Somente as sessões em que você seleciona este plugin compartilham com ele as solicitações ao modelo. Ele pode ajustar modelos, parâmetros e conteúdo. Atualmente, apenas o Pi local é compatível; os erros seguem a configuração da sessão. As credenciais de conexão não são incluídas.",
         "subscribeStartTask": "Pode escolher o modelo de novas tarefas",
-        "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo oferecido por ele, ele lê a primeira mensagem e escolhe um dos seus modelos conectados. Escolhe uma vez; o modelo não muda durante a tarefa.",
+        "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo oferecido por ele, ele lê a primeira mensagem e escolhe um dos seus modelos conectados. Esta etapa é executada apenas antes da primeira mensagem.",
         "card": "Renderiza cartões de mensagens",
         "cardExternalLink": "Os cartões podem declarar links externos que abrem seu navegador após confirmação",
         "cardExternalLinkDetail": "Clicar em um link de cartão exibe uma caixa de diálogo de confirmação; a URL só abre no navegador do sistema após sua aprovação. Apenas endereços http/https são permitidos.",

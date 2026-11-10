@@ -5,6 +5,7 @@ import { teammateRoutineReviewIntent } from '../../shared/botAutonomy.js';
 import type { AutoReviewUserIntent } from '@cindy/maker-core';
 import {
   PI_CACHE_RECOVERY_EXPECTATION,
+  MODEL_REQUEST_CONTROL,
   CodexResumePreparationBlockedError,
   AUTO_REVIEW_SOURCE_CONTENT,
   AUTO_REVIEW_USER_INTENT,
@@ -135,6 +136,7 @@ type IpcUserMessage =
 
 
 type MakerSendOptions = {
+  readonly [MODEL_REQUEST_CONTROL]?: import('@cindy/maker-core').ModelRequestControl;
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('@cindy/maker-core').SendOptions[typeof PI_CACHE_RECOVERY_EXPECTATION];
   /** Main-only live card guard, never serialized to queue history or provider options. */
   readonly [MCP_APP_MESSAGE_GUARD]?: McpAppMessageGuard;
@@ -270,6 +272,9 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  prepareRuntimeTurn?(sessionId: string, message: unknown, signal?: AbortSignal): Promise<{
+    options?: Partial<SessionSendOptions>; failure?: DesktopMakerSendResult;
+  }> | undefined;
   getSession(sessionId: string): MakerSendTransactionSession | undefined | null;
   closeSession(sessionId: string): Promise<void>;
   /** 资源漂移回收必须走 Maker 的 runtime-refresh 原因(直接 Session.close 会被
@@ -1070,9 +1075,15 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
       if (deps.prepareExternalInput) await deps.prepareExternalInput(sessionId);
       const dispatchProductTurn = deps.prepareProductTurn?.(sessionId);
-      const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
+      const requestedSendOpts = { ...((sendOpts ?? {}) as MakerSendOptions) };
       if (!requestedSendOpts.signal?.aborted) {
         await deps.restoreArchivedSessionForSend?.(sessionId);
+      }
+      const runtimePreparation = deps.prepareRuntimeTurn?.(sessionId, message, requestedSendOpts.signal);
+      if (runtimePreparation) {
+        const runtime = await runtimePreparation;
+        if (runtime.failure) return runtime.failure;
+        Object.assign(requestedSendOpts, runtime.options);
       }
       // session-agent-switch:pending 切换在发送时刻生效(用户语义:「消息真正发出
       // 去时才切」)。必须在 getSession 之前——apply 会 close 旧引擎的 live session,
@@ -1286,7 +1297,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         throwIpcError('INVALID_PARAMS', 'ackInterruptedTurnOnDispatch must be a boolean');
       }
       let outgoingMessage = message;
-      let outgoingSendOpts = sendOpts;
+      let outgoingSendOpts: unknown = requestedSendOpts;
       let cleanupAfterAcceptance: (() => void) | undefined;
       let cleanupBeforeAcceptance: (() => void | Promise<void>) | undefined;
       let cleanupLocalMaterialization: (() => void | Promise<void>) | undefined;
@@ -1810,6 +1821,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           signal: so.signal,
           [ASYNC_QUESTION_ANSWER]: so[ASYNC_QUESTION_ANSWER],
           [PI_CACHE_RECOVERY_EXPECTATION]: so[PI_CACHE_RECOVERY_EXPECTATION],
+          ...(so[MODEL_REQUEST_CONTROL] ? { [MODEL_REQUEST_CONTROL]: so[MODEL_REQUEST_CONTROL] } : {}),
           ...(so.onVendorTurnReserved ? { onTurnReserved: so.onVendorTurnReserved } : {}),
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。

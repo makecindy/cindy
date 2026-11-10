@@ -71,6 +71,7 @@ import {
   BaseAgent,
   LOCAL_AGENT_CLIENT,
   MAIN_OWNED_SEND_CONTEXT,
+  MODEL_REQUEST_CONTROL,
   ASYNC_QUESTION_ANSWER,
   PINNED_SKILL_INVOCATION,
   PI_REQUEST_BODY_RECOVERY_EXHAUSTED,
@@ -86,6 +87,7 @@ import {
   type AgentSessionHandle,
   type AgentSessionTeardownOptions,
   type MainOwnedSendContext,
+  type ModelRequestControl,
   type PiExtraSpawnConfig,
   type PiExtensionUiStrings,
   type PiManagedPackageRuntimeConvergence,
@@ -105,6 +107,7 @@ import {
 import {
   CINDY_BRIDGE_EXTENSION_FILENAME,
   CINDY_PI_TEXT_ONLY_INPUT_PREFIX,
+  CINDY_PI_MODEL_REQUEST_INPUT_PREFIX,
   CINDY_PI_TEXT_ONLY_READY_PREFIX,
   CINDY_PI_TEXT_ONLY_CLOSED_PREFIX,
   CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX,
@@ -3557,6 +3560,7 @@ export class PiAgent extends BaseAgent {
       nativeFastEnabled = fast;
     };
     let activeToolsDisabled = false;
+    let activeModelRequestControl: ModelRequestControl | undefined;
     let textOnlyPolicyReady = false;
     let providerRequestSequence = 0;
     let providerRequestObservedAt: number | undefined;
@@ -3567,6 +3571,8 @@ export class PiAgent extends BaseAgent {
       if (!textOnlyPolicyReady) throw new Error('Pi text-only input policy is unavailable.');
       return `${CINDY_PI_TEXT_ONLY_INPUT_PREFIX}${runtimeInstanceId}\n${text}`;
     };
+    const runtimeControlledInput = (text: string): string => activeModelRequestControl
+      ? `${CINDY_PI_MODEL_REQUEST_INPUT_PREFIX}${runtimeInstanceId}\n${textOnlyInput(text)}` : textOnlyInput(text);
     // 子代理运行期快照(model + provider)。与权限档同机制:文件而非 env —— env 在 spawn
     // 时定型,会话中途 setModel 后子代理会继续用启动时的旧模型(greptile P1),而 BYOM /
     // 本地 provider 不一起传还会让同名模型落到错误 endpoint(codex P2,pi-harness §3 要求
@@ -5924,6 +5930,28 @@ export class PiAgent extends BaseAgent {
               currentModelIds: [mutableModel, mutableWireModel],
               readNativeFast: (provider, model) => !requestPrefsClosed && nativeFastEnabled &&
                 fastModels.some(candidate => candidate.provider === provider && candidate.id === model),
+              controlModelRequest: async input => {
+                const control = activeModelRequestControl;
+                if (!control || closed || accountBoundaryTeardown) throw new Error('Model request control is unavailable');
+                const native = typeof input.provider === 'string' ? nativeProviderById.get(input.provider) : undefined;
+                const sourceModel = native?.models.find(candidate => candidate.id === input.model || candidate.wireId === input.model);
+                const result = await control({ phase: input.phase,
+                  providerId: input.provider === PI_PROVIDER_ID ? 'xd' : resolveSourceProvider(input.provider),
+                  model: sourceModel?.id ?? input.model,
+                  ...(input.request ? { request: input.request } : {}),
+                });
+                if (control !== activeModelRequestControl || closed || accountBoundaryTeardown) throw new Error('Model request control expired');
+                if (result.skip) markPiHostAbortRequested(ctx);
+                if (!result.route) return result;
+                const route = result.route;
+                const target = nativeProviderForSource(route.providerId);
+                if (!target && !['xd', PI_PROVIDER_ID].includes(route.providerId)) throw new Error('Requested provider is unavailable');
+                const provider = target?.id ?? PI_PROVIDER_ID;
+                return { ...result, route: { provider, model: resolveWireModel(provider, route.model),
+                  ...(route.effort ? { thinkingLevel: route.effort === 'ultra' ? 'max' : route.effort } : {}),
+                  ...(route.fastMode !== undefined ? { fastMode: route.fastMode === true } : {}),
+                } };
+              },
               workspaceRoots: [logicalWorkingDir],
               readRoots: [logicalWorkingDir, ...mutableExtraDirs, ...mutableWritableDirs],
               writableRoots: [logicalWorkingDir, ...mutableWritableDirs],
@@ -7828,6 +7856,9 @@ export class PiAgent extends BaseAgent {
       // Full Access 下 fail-closed 拒绝带策略的 send(与 capability
       // turnPermissionPolicy.unsupportedPermissionModes 一致,也与 CC/Codex 同口径)。
       validateSendOptions(sendOpts: SendOptions) {
+        if (sendOpts[MODEL_REQUEST_CONTROL] && (remote || hosted)) {
+          throw new Error('Per-request model control is supported only by local Pi.');
+        }
         if (sendOpts.toolsDisabled && remote) {
           throw new Error('Host text-only Pi turns require a local runtime, not a shared remote daemon.');
         }
@@ -7861,7 +7892,9 @@ export class PiAgent extends BaseAgent {
         // (plan 审批实施轮 / 自动继续)不经 send,仍读这份闭包值继承(§7.10)。
         // provider 接受前任何失败都必须撤销,避免"任务显示已开始、实际未启动"却残留策略。
         const previousTurnPermissionPolicy = activeTurnPermissionPolicy;
+        const previousModelRequestControl = activeModelRequestControl;
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        activeModelRequestControl = sendOpts?.[MODEL_REQUEST_CONTROL];
         let providerAccepted = false;
         let promptRequestStarted = false;
         let reviewIntentUpdated = false;
@@ -7946,7 +7979,7 @@ export class PiAgent extends BaseAgent {
           }
           const command: Record<string, unknown> = {
             type: 'prompt',
-            message: textOnlyInput(escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest)),
+            message: runtimeControlledInput(escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest)),
           };
           if (images.length > 0) command.images = images;
           // send 语义 = 排队开新 turn;pi streaming 中裸 prompt 会被拒,补 followUp。
@@ -8197,6 +8230,7 @@ export class PiAgent extends BaseAgent {
           // turn 没启动；此时恢复旧 policy 会让正在运行的新 turn 用错安全边界。
           if (!providerAccepted) {
             activeTurnPermissionPolicy = previousTurnPermissionPolicy;
+            activeModelRequestControl = previousModelRequestControl;
             if (reviewIntentUpdated) {
               currentAutoReviewIntent = '';
               currentAutoReviewAuthority = null;
@@ -9183,6 +9217,8 @@ export class PiAgent extends BaseAgent {
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
       currentModelIds: readonly string[];
       readNativeFast?: (provider: string, model: string) => boolean;
+      controlModelRequest?: (input: { phase: 'select' | 'payload'; provider: string; model: string;
+        request?: Record<string, unknown> }) => Promise<unknown>;
       workspaceRoots: string[];
       readRoots: string[];
       writableRoots: string[];
@@ -9256,6 +9292,27 @@ export class PiAgent extends BaseAgent {
     }
 
     // Internal, read-only query over the existing stdio/SSH RPC response channel.
+    if (method === 'input' && event.title === 'cindy:model-request-control') {
+      const context = getPermissionCtx();
+      void (async () => {
+        try {
+          if (context.isPermissionContextClosed() || context.isAccountBoundaryTornDown() || !context.controlModelRequest) {
+            throw new Error('Model request control is unavailable');
+          }
+          const input = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '');
+          if (!['select', 'payload'].includes(input?.phase) || typeof input.provider !== 'string' || typeof input.model !== 'string') {
+            throw new Error('Invalid model request control input');
+          }
+          const result = await context.controlModelRequest(input);
+          if (context.isPermissionContextClosed() || context.isAccountBoundaryTornDown()) throw new Error('Model request control expired');
+          proc.send({ type: 'extension_ui_response', id, value: JSON.stringify(result) });
+        } catch {
+          proc.send({ type: 'extension_ui_response', id, value: JSON.stringify({ error: 'Model request control failed' }) });
+        }
+      })();
+      return;
+    }
+
     // Caller input selects an exact model; it can never supply or update Fast intent.
     if (method === 'input' && event.title === 'cindy:request-preferences') {
       const context = getPermissionCtx();

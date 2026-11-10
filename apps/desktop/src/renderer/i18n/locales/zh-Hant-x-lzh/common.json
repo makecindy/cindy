@@ -1,4 +1,10 @@
 {
+  "runtimePlugins": {
+    "title": "差事法器",
+    "description": "為此差事擇法器，改動自下條消息生效。",
+    "unsupported": "逐次請求前處置僅本機 Pi 可用，此差事引擎不支援。",
+    "failed": "設定未能讀取或儲存，請重開此頁再試。"
+  },
   "sharedTaskRecovery": {
     "title": "無法在原電腦上恢復任務",
     "description": "可以選擇其他電腦或供應商，透過上下文交接繼續。原訊息保留，但切換不會移轉原電腦上的完整執行狀態。",
@@ -8038,8 +8044,12 @@
         "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
         "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
         "subscribeScheduleRunDetail": "凡於「預檢」擇之之自動化，運行前必先詢之。其可見此自動化之名与指令，可令此番略過或止之，不能代君准允。",
+        "subscribeStartTurn": "可於所選差事每次回覆前擇模型",
+        "subscribeStartTurnDetail": "僅在差事選用此法器時，彼可閱本條訊息，擇已連之模型、思之深淺及 Fast。出錯依差事所設處理，不得代君批准操作。",
+        "subscribeModelRequest": "可處理所選差事之每次模型請求",
+        "subscribeModelRequestDetail": "僅在差事選用此法器時，彼可閱並調整模型請求之內容、模型及參數。現僅支援本機 Pi；出錯依差事所設處理，不含連接憑證。",
         "subscribeStartTask": "可為新差事擇模型",
-        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。唯擇一次，任務中途不易模型。"
+        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。此節唯於首條訊息發出前行一次。"
       },
       "connections": {
         "confirmTitle": "增連線位址",

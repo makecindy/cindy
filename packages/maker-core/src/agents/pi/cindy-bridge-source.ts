@@ -55,6 +55,7 @@ const SENSITIVE_CREDENTIAL_SELECTOR_GLOBS = [...new Set(
 
 export const CINDY_BRIDGE_EXTENSION_FILENAME = "cindy-bridge.ts";
 export const CINDY_PI_TEXT_ONLY_INPUT_PREFIX = '[CINDY_TEXT_ONLY_INPUT]:';
+export const CINDY_PI_MODEL_REQUEST_INPUT_PREFIX = '[CINDY_MODEL_REQUEST]:';
 export const CINDY_PI_TEXT_ONLY_READY_PREFIX = 'cindy:text-only-ready:';
 export const CINDY_PI_TEXT_ONLY_CLOSED_PREFIX = 'cindy:text-only-unavailable:';
 export const CINDY_PI_REQUEST_DIAGNOSTICS_PREFIX = 'cindy:provider-request:';
@@ -1856,22 +1857,29 @@ function commandReadsProcessEnviron(command: unknown): boolean {
 }
 
 let textOnlyTurnActive = false;
+let modelRequestControlActive = false;
 function toolsDisabledForTurn(): boolean { return textOnlyTurnActive; }
 
 function installTextOnlyTurnPolicy(pi: any): void {
   const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
   if (!token) return;
   const prefix = ${JSON.stringify(CINDY_PI_TEXT_ONLY_INPUT_PREFIX)} + token + '\n';
+  const modelPrefix = ${JSON.stringify(CINDY_PI_MODEL_REQUEST_INPUT_PREFIX)} + token + '\n';
   pi.on('input', (event: any, ctx: any) => {
     if (event.source !== 'rpc' || typeof event.text !== 'string') return;
-    if (!event.text.startsWith(prefix)) {
+    let text = event.text;
+    const controlled = text.startsWith(modelPrefix);
+    if (controlled) text = text.slice(modelPrefix.length);
+    if (ctx.isIdle() && !event.streamingBehavior) modelRequestControlActive = controlled;
+    if (controlled) modelRequestControlActive = true;
+    if (!text.startsWith(prefix)) {
       // Aborted/failed turns may omit agent_settled. Only a fresh idle RPC input
       // resets their latch; steer, follow-ups and extension continuations retain it.
       if (ctx.isIdle() && !event.streamingBehavior) textOnlyTurnActive = false;
-      return;
+      return controlled ? { action: 'transform', text, images: event.images } : undefined;
     }
     textOnlyTurnActive = true;
-    return { action: 'transform', text: event.text.slice(prefix.length), images: event.images };
+    return { action: 'transform', text: text.slice(prefix.length), images: event.images };
   });
   // agent_end is too early: native retries, compaction and follow-ups retain the policy.
   pi.on('agent_settled', (_event: any, ctx: any) => {
@@ -1883,6 +1891,66 @@ function installTextOnlyTurnPolicy(pi: any): void {
   pi.on('session_shutdown', (_event: any, ctx: any) => {
     ctx.ui.notify(${JSON.stringify(CINDY_PI_TEXT_ONLY_CLOSED_PREFIX)} + token, 'info');
   });
+}
+
+// Native virtual routing preserves the user's selected physical model while each
+// assistant message records the model actually dispatched by this request.
+function installRuntimeModelControl(pi: any): () => any {
+  const provider = 'cindy-runtime-router';
+  const id = 'selected-task';
+  let baseline: any;
+  let baselineThinking: any;
+  let dispatched: any;
+  let requestFast: boolean | undefined;
+  let registered = false;
+  pi.on('before_agent_start', async (_event: any, ctx: any) => {
+    if (ctx.model?.provider !== provider) {
+      baseline = ctx.model;
+      baselineThinking = ctx.thinkingLevel;
+    }
+    dispatched = undefined;
+    requestFast = undefined;
+    if (!modelRequestControlActive) {
+      if (ctx.model?.provider === provider && baseline) {
+        if (!(await pi.setModel(baseline))) throw new Error('Cannot restore the selected model');
+        pi.setThinkingLevel(baselineThinking);
+      }
+      return;
+    }
+    if (!registered) {
+      pi.registerVirtualModel({ provider, id, name: 'Selected task routing',
+        thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+        contextWindow: baseline?.contextWindow, maxTokens: baseline?.maxTokens,
+        route: async (request: any, routeCtx: any) => {
+          const response = await runtimeModelControl(routeCtx, {
+            phase: 'select', provider: baseline.provider, model: baseline.id,
+            thinkingLevel: baselineThinking,
+          });
+          const route = response.route;
+          const model = route ? routeCtx.modelRegistry.find(route.provider, route.model) : baseline;
+          if (!model) throw new Error('Requested model is unavailable');
+          dispatched = model;
+          requestFast = typeof route?.fastMode === 'boolean' ? route.fastMode : undefined;
+          return { model, thinkingLevel: route?.thinkingLevel ?? baselineThinking ?? request.thinkingLevel };
+        },
+      });
+      registered = true;
+    }
+    const router = ctx.modelRegistry.find(provider, id);
+    if (!router || !(await pi.setModel(router))) throw new Error('Model request routing is unavailable');
+  });
+  return () => modelRequestControlActive ? { model: dispatched ?? baseline, fast: requestFast } : undefined;
+}
+
+async function runtimeModelControl(ctx: any, input: any): Promise<any> {
+  const raw = await ctx.ui.input('cindy:model-request-control', JSON.stringify(input));
+  const result = typeof raw === 'string' ? JSON.parse(raw) : null;
+  if (result?.skip === true) {
+    ctx.abort();
+    throw new Error('Selected task plugin skipped this request');
+  }
+  if (!result || result.error) throw new Error(result?.error ?? 'Model request control is unavailable');
+  return result;
 }
 
 function currentPermissionState(): {
@@ -4316,7 +4384,7 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
-async function nativeFastPayload(payload, model, ctx) {
+async function nativeFastPayload(payload, model, ctx, requestFast?: boolean) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions', 'openai-codex-responses'].includes(model.api)) return undefined;
   let models;
@@ -4324,6 +4392,10 @@ async function nativeFastPayload(payload, model, ctx) {
   if (!Array.isArray(models) || !models.some(item => item.provider === model.provider && item.id === model.id)) return undefined;
   const out = { ...payload };
   delete out.service_tier;
+  if (requestFast !== undefined) {
+    if (requestFast) out.service_tier = 'priority';
+    return out;
+  }
   let timer;
   try {
     // No UI is shown: Cindy answers this internal query from current host memory.
@@ -4533,6 +4605,7 @@ export default async function cindyBridge(piApi: any) {
     });
   }
   installTextOnlyTurnPolicy(pi);
+  const runtimeRequestModel = installRuntimeModelControl(pi);
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
   const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
@@ -4587,8 +4660,15 @@ export default async function cindyBridge(piApi: any) {
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
   pi.on('before_provider_request', async (event, ctx) => {
     const preparationStarted = performance.now();
-    const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;
-    const next = (await nativeFastPayload(payload, ctx.model, ctx)) ?? payload;
+    const runtimeRequest = runtimeRequestModel();
+    const model = runtimeRequest?.model ?? ctx.model;
+    const payload = astraResponsesPayload(event.payload, model) ?? event.payload;
+    let next = (await nativeFastPayload(payload, model, ctx, runtimeRequest?.fast)) ?? payload;
+    if (modelRequestControlActive) {
+      const response = await runtimeModelControl(ctx, { phase: 'payload', provider: model.provider,
+        model: model.id, request: next });
+      next = response.request ?? next;
+    }
     // A one-way native notification adds no host round trip. This is the payload
     // preparation hook, not proof that HTTP was sent or accepted upstream.
     const token = process.env.CINDY_PI_TURN_TOOL_POLICY;

@@ -1,6 +1,11 @@
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
+import { createTaskRuntimePlugins } from './runtimePlugins.js';
+import { createRuntimePluginControl, RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
+import { readRuntimePluginSettings, writeRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
+import { parseRuntimePluginSettings } from '../../shared/pluginRuntime.js';
+import { ghostControlPointCandidates, resolveGhostControlPointPlugin, screenGhostControlPoint, isPluginModelRouteAvailableNow } from '../cindy-brain/index.js';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
@@ -18362,11 +18367,80 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   pluginTargetReviewReady = true;
 
+  const runtimePluginControl = createRuntimePluginControl({
+    readSettings: readRuntimePluginSettings,
+    captureOwner: () => {
+      const owner = captureDataOwnerBroadcastScope();
+      return () => isDataOwnerBroadcastScopeCurrent(owner) && !isAppSessionBoundaryPending();
+    },
+    screen: (point, data, target) => screenGhostControlPoint(point, data, target),
+  });
+  const taskRuntimePlugins = createTaskRuntimePlugins({
+    control: runtimePluginControl, readSettings: readRuntimePluginSettings,
+    requestSupported: sessionId => !maker.getSession(sessionId)?.remoteHostId,
+    readRoute: async sessionId => {
+      const profiles = await readSessionRuntimeProfiles(sessionId);
+      if (!profiles) throw new Error('Task runtime unavailable');
+      const route = profiles.pendingMutation?.profile ?? profiles.effective;
+      return { agentKind: route.agentKind === 'claude-code' ? 'cc' : route.agentKind,
+        model: route.model, providerId: route.providerId ?? 'xd',
+        ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+        ...(route.effort ? { effort: route.effort } : {}), fastMode: route.fastMode };
+    },
+    routeAvailable: route => isPluginModelRouteAvailableNow({ ...route, effort: route.effort ?? '', fastMode: route.fastMode ?? false }),
+    applyRoute: async (sessionId, route, assertCurrent) => {
+      const current = await sessionControlService.getSessionRuntime({ targetSessionId: sessionId });
+      if (!current.ok) throw new Error('Task runtime unavailable');
+      const targetAgent = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
+      const effective = current.runtime.pendingMutation?.profile ?? current.runtime.effectiveProfile;
+      const location = route.agentDeviceId ?? null;
+      const selectHarness = targetAgent !== effective.agentKind || location !== (effective.agentDeviceId ?? null);
+      const result = await sessionControlService.setSessionRuntime({ targetSessionId: sessionId,
+        expectedGeneration: current.runtime.runtimeGeneration,
+        beforeMutation: async () => assertCurrent(),
+        patch: { ...(selectHarness ? { harness: targetAgent, agentDeviceId: location } : {}),
+          model: route.model, providerId: route.providerId,
+          ...(route.effort !== undefined ? { effort: route.effort as Effort } : {}),
+          ...(route.fastMode !== undefined ? { fastMode: route.fastMode } : {}),
+        } });
+      if (!result.ok) throw new Error(result.errorCode);
+    },
+    changed: (sessionId, pluginId, phase) => log.info('runtime plugin changed model request', { sessionId, pluginId, phase }),
+  });
+
+  ipcMain.handle('maker:runtime-plugins', async (event, sessionId: unknown, value: unknown) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    const owner = captureDataOwnerBroadcastScope();
+    if (typeof sessionId !== 'string' || !sessionId || !await maker.getSessionMeta(sessionId)) {
+      throwIpcError('NOT_FOUND', 'Task not found');
+    }
+    if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+    if (value === undefined) return readRuntimePluginSettings(sessionId) ?? {};
+    await assertReviewSettingsUnlocked(sessionId);
+    const settings = parseRuntimePluginSettings(value);
+    if (!settings) throwIpcError('INVALID_PARAMS', 'Invalid runtime plugin settings');
+    for (const [point, targets] of Object.entries(settings)) {
+      for (const target of targets ?? []) resolveGhostControlPointPlugin(point as Parameters<typeof resolveGhostControlPointPlugin>[0], target.pluginId);
+    }
+    if (!isDataOwnerBroadcastScopeCurrent(owner)) throwIpcError('PRECONDITION_FAILED', 'Account changed');
+    await writeRuntimePluginSettings(sessionId, settings);
+    return readRuntimePluginSettings(sessionId) ?? {};
+  });
+
   const {
     sendToAgentAccepted: sendToAgentAcceptedUnlocked,
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
+    prepareRuntimeTurn: (sessionId, message, signal) => {
+      const prepared = taskRuntimePlugins.prepare(sessionId, message, signal);
+      return prepared?.then(options => ({ options })).catch(error => ({ failure: {
+        accepted: false as const,
+        reason: error instanceof RuntimePluginControlError && error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' as const : 'PLUGIN_TURN_BLOCKED' as const,
+        outcome: createHostSendFailure(error instanceof RuntimePluginControlError && error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED',
+          'The selected runtime plugin stopped this reply.'),
+      } }));
+    },
     prepareExternalInput: (sessionId) => takeOverLocalAgentVisibleSession(sessionId, true),
     restoreArchivedSessionForSend,
     prepareProductTurn: (sessionId) => {

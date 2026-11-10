@@ -2204,7 +2204,26 @@ export interface MainOwnedSendContext {
  */
 export const PI_CACHE_RECOVERY_EXPECTATION = Symbol('pi-cache-recovery-expectation');
 
+/** Host-owned, call-local model request interception. Never accepted from wire options. */
+export const MODEL_REQUEST_CONTROL = Symbol('cindy.model-request-control');
+export interface ModelRequestRoute {
+  model: string;
+  providerId: string;
+  effort?: string;
+  fastMode?: boolean | 'ultrafast';
+}
+export interface ModelRequestInput extends ModelRequestRoute {
+  phase: 'select' | 'payload';
+  request?: Record<string, unknown>;
+}
+export type ModelRequestControl = (input: ModelRequestInput) => Promise<{
+  skip?: true;
+  route?: ModelRequestRoute;
+  request?: Record<string, unknown>;
+}>;
+
 export interface SendOptions {
+  readonly [MODEL_REQUEST_CONTROL]?: ModelRequestControl;
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('./pi/cache-compatibility.js').PiCacheCompatibility;
   readonly [ASYNC_QUESTION_ANSWER]?: true;
   readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;

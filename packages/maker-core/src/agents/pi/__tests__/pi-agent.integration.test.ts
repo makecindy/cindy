@@ -32,7 +32,7 @@ import { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-
 import { PiRpcProcess } from '../rpc-client.js';
 import * as sessionJsonlScan from '../session-jsonl-scan.js';
 import { providerCatalogForPi, providerModelGenerationRecord, providerPresetModelRecord, BUNDLED_CATALOG } from '@cindy/model-providers';
-import { TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
+import { MODEL_REQUEST_CONTROL, TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
@@ -104,7 +104,7 @@ function sse(events: Array<{ event: string; data: unknown }>): string {
 }
 
 /** 最小合法的 Anthropic Messages SSE 流:一段 text + usage。 */
-function anthropicStreamBody(text: string): string {
+function anthropicStreamBody(text: string, model = 'pi-test-model'): string {
   return sse([
     {
       event: 'message_start',
@@ -114,7 +114,7 @@ function anthropicStreamBody(text: string): string {
           id: 'msg_test_1',
           type: 'message',
           role: 'assistant',
-          model: 'pi-test-model',
+          model,
           content: [],
           stop_reason: null,
           usage: { input_tokens: 42, output_tokens: 0 },
@@ -440,6 +440,83 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       resolvePiGatewayModelApi: () => 'anthropic-messages',
     };
   }
+
+  // Runtime control contract, integration: tool continuations must route again;
+  // payload changes reach HTTP, and a later unselected send preserves the baseline.
+  it('routes and transforms each selected model request across a real tool continuation', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-request-control-'));
+    const fixtureFile = path.join(workingDir, 'fixture.txt');
+    writeFileSync(fixtureFile, 'fixture');
+    const before = seenRequests.length;
+    let handle: AgentSessionHandle | undefined;
+    let selections = 0;
+    let payloads = 0;
+    try {
+      scriptedResponses.push(anthropicToolUseBody('read', { path: fixtureFile }), anthropicStreamBody('controlled', 'pi-test-small-model'));
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'request-control', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+      const send = async (selected: boolean) => {
+        const done = (async () => { for await (const event of handle!.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+          if (event.type === 'done') return event;
+        } })();
+        await handle!.send({ type: 'user', content: 'Read fixture.txt and reply.' }, selected ? {
+          [MODEL_REQUEST_CONTROL]: async input => {
+            if (input.phase === 'select') {
+              selections++;
+              return { route: { providerId: 'xd', model: selections === 1 ? 'pi-test-model' : 'pi-test-small-model' } };
+            }
+            payloads++;
+            return { request: { ...input.request, max_tokens: 1234,
+              messages: [...input.request!.messages as unknown[], { role: 'user', content: 'Plugin reference material' }] } };
+          },
+        } : undefined);
+        expect((await done)?.data).toMatchObject({ status: 'completed' });
+      };
+      await send(true);
+      expect(selections).toBe(2);
+      expect(payloads).toBe(2);
+      await send(false);
+      const bodies = seenRequests.slice(before).map(row => JSON.parse(row.body));
+      expect(bodies.map(body => body.model)).toEqual(['pi-test-model', 'pi-test-small-model', 'pi-test-model']);
+      expect(JSON.stringify(bodies[1].messages)).toContain('"type":"tool_result"');
+      expect(bodies.map(body => body.system)).toEqual([bodies[0].system, bodies[0].system, bodies[0].system]);
+      expect(bodies.map(body => body.tools)).toEqual([bodies[0].tools, bodies[0].tools, bodies[0].tools]);
+      expect(bodies.slice(0, 2).every(body => body.max_tokens === 1234 &&
+        body.messages.at(-1).content === 'Plugin reference material')).toBe(true);
+      expect(bodies[2].max_tokens).not.toBe(1234);
+      expect(selections).toBe(2);
+      expect(JSON.stringify(bodies)).not.toContain('CINDY_MODEL_REQUEST');
+    } finally {
+      await handle?.close();
+      scriptedResponses.length = 0;
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  // Runtime skip, integration: cancel native dispatch rather than emitting a
+  // successful answer or a retryable provider error. The gateway sees no HTTP.
+  it('settles a selected request skip as cancelled without dispatching HTTP', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-request-skip-'));
+    const before = seenRequests.length;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(buildDeps()).startSession({ sessionId: 'request-skip', workingDir,
+        model: 'pi-test-model', permissionMode: 'bypassPermissions' });
+      const events: AgentEvent[] = [];
+      const done = (async () => { for await (const event of handle!.events()) {
+        events.push(event);
+        if (event.type === 'done') return event;
+      } })();
+      await handle.send({ type: 'user', content: 'Skip this reply.' }, { [MODEL_REQUEST_CONTROL]: async () => ({ skip: true }) });
+      expect((await done)?.data).toMatchObject({ status: 'cancelled' });
+      expect(events.filter(event => event.type === 'error')).toHaveLength(0);
+      expect(seenRequests.length).toBe(before);
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
 
   // #8887, integration: the real runtime generates the retry lifecycle after
   // a completed tool request, a real HTTP 502 and successful recovery.

@@ -1812,4 +1812,54 @@ describe('control points', () => {
     verdict(2, { agentKind: 'cc', model: 'opus', providerId: 'anthropic' });
     expect(await runPoint).toEqual({ action: 'allow' });
   });
+
+  // Runtime points are opt-in per task; installing a router cannot give it other
+  // tasks. Unlike the legacy new-task selector, invalid runtime answers use the
+  // task's failure policy. Unit: real gateway, in-memory transport, fake timers.
+  it('routes only the selected runtime plugin and retains request preferences', async () => {
+    const runtimePoint = 'will-start-turn' as const;
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => ['r1', 'r2'].map(id => ({ ...ghost(id, { hooks: [runtimePoint] }), approvedControlPoints: [runtimePoint] })),
+    });
+    running.add('r1');
+    running.add('r2');
+    const route = { agentKind: 'pi' as const, model: 'm1', providerId: 'p', effort: 'high', fastMode: true };
+    const response = gw.screenControlPoint(runtimePoint, { sessionId: 'task', text: 'work', attachmentCount: 0, route }, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent).toHaveLength(1);
+    gw.handleVerdict('r2', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await response).toMatchObject({ action: 'route', ghostId: 'r1', route });
+  });
+
+  it('processes a request only at the model-request point and follows failure policy for invalid routes', async () => {
+    const requestPoint = 'will-model-request' as const;
+    const { gw, sent, running } = makeGateway({
+      listGhosts: () => [{ ...ghost('r1', { hooks: [requestPoint] }), approvedControlPoints: [requestPoint] }],
+    });
+    running.add('r1');
+    const input = { sessionId: 'task', phase: 'payload' as const, route: { agentKind: 'pi' as const, model: 'm1', providerId: 'p' }, request: { model: 'm1', max_tokens: 100 } };
+    const response = gw.screenControlPoint(requestPoint, input, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'transform', request: { model: 'm1', max_tokens: 200 } });
+    expect(await response).toMatchObject({ action: 'transform', request: { model: 'm1', max_tokens: 200 } });
+    const invalid = gw.screenControlPoint(requestPoint, { ...input, phase: 'select' }, { pluginId: 'r1', onFailure: 'skip' });
+    await vi.advanceTimersByTimeAsync(0);
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[1].payload as { hookId: string }).hookId, action: 'route', route: { agentKind: 'pi' } });
+    expect(await invalid).toMatchObject({ action: 'skip', failure: true });
+  });
+
+  it('rejects a runtime answer from an installation replaced during the ask', async () => {
+    const point = 'will-start-turn' as const;
+    const selected = { ...ghost('r1', { hooks: [point] }), approvedControlPoints: [point],
+      approval: { state: 'approved' as const, revision: '00000000-0000-4000-8000-000000000001' } };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [selected] });
+    running.add('r1');
+    const route = { agentKind: 'pi' as const, providerId: 'p', model: 'm' };
+    const response = gw.screenControlPoint(point, { sessionId: 'task', route }, { pluginId: 'r1', onFailure: 'block' });
+    await vi.advanceTimersByTimeAsync(0);
+    selected.approval.revision = '00000000-0000-4000-8000-000000000002';
+    gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
+    expect(await response).toMatchObject({ action: 'block', failure: true });
+  });
 });

@@ -13,6 +13,8 @@
 | `will-schedule-run` | 每次自动化(定时任务,含脚本模式)运行前;恢复中断的续跑不再问 | allow / skip / block | 30 秒 |
 | `will-routine-run` | 兼容保留,不再触发:伙伴例行任务已改成项目自动化(2026-11-08),声明照常安装 | allow / skip / block | 30 秒 |
 | `will-start-task` | 新任务(含 `/goal` 开的)第一条消息发出、任务建好之前;只问一次,之后的消息不再问;伙伴对话不问 | allow / route | 8 秒 |
+| `will-start-turn` | 任务中每条消息发给引擎之前；只问任务设置中选中的插件 | allow / route / skip / block | 8 秒 |
+| `will-model-request` | 本机 Pi 的每次模型请求，包含工具结果后的继续请求 | allow / route（select 阶段）/ transform（payload 阶段）/ skip / block | 每次询问 8 秒 |
 
 运行时用 `host-request` 查当前 Cindy 实际提供哪些节点,别靠版本号猜:
 
@@ -63,11 +65,11 @@ cindy.onHostMessage(async (msg) => {
 
 规则(主机强制):
 
-- **只能收紧**:`allow` 只表示不反对,不能替用户放行原本需要确认的事;插件不能改写任务内容。
+- **不能替人批准**:`allow` 只表示不反对,不能替用户放行原本需要确认的事；运行前检查不改任务内容。逐请求正文处理见下文。
 - **出错处理归用户**:超时、崩溃、连续 3 次失败(熔断),或插件被停用、卸载时,主机按用户在
   该任务里选的处理执行(照常运行 / 跳过本次 / 停止并记为失败,默认停止并记为失败,与脚本前置
   检查一致)。插件读不到也改不了这个设置。
-- 每个任务只选一个插件。`reason` 最长 200 字符。
+- 自动化／例行任务的前置检查只选一个插件；「任务插件」可选多个，按选择顺序串行处理。`reason` 最长 200 字符。
 - 只投给当前登录账号自己电脑上的流程;手机或另一台电脑触发的运行,在执行的那台电脑上询问。
 
 ### 为新任务选模型(`will-start-task`)
@@ -123,3 +125,34 @@ cindy.send({
 | `route` | 用户在模型选择器里原本选的 `{ agentKind, model, providerId, effort? }` |
 
 不包含工作目录等本机路径。数据只用于判断,不要原样转发给不需要它的服务。
+
+### 任务中的模型路由与请求处理
+
+在 v3 清单声明 `subscribe: { hooks: ["will-start-turn", "will-model-request"] }`。安装／更新
+确认分别展示权限，用户仍须在任务菜单的「任务插件」中选择；安装或启用不会替所有任务选择。
+没有选择时不唤醒插件、不读取消息或模型目录。新任务选模保持原来的“一次”语义。
+
+`will-start-turn` 数据为 `{ sessionId, route, text }`，可回 `allow` 或完整 `route`。
+路由复用插件模型的 `agentKind / providerId / model / agentDeviceId? / effort?`，本节点另接受
+`fastMode: boolean | "ultrafast"`，只能选当前已连接且可用的组合。Claude Code、Codex、Pi
+都在统一发送入口执行，切换复用任务自身的模型控制服务。
+
+`will-model-request` 分两个阶段，均带 `{ sessionId, route, phase }`：
+
+- `phase: "select"`：回 `route` 选本机 Pi 物理模型、推理强度和 Fast，或 `allow` 保留任务模型。
+  使用 Pi 原生虚拟模型路由，实际响应记实际模型，不永久改任务的模型选择。
+- `phase: "payload"`：额外带 `request`（供应商请求 JSON 正文，无连接密钥和认证头）。可回
+  `{ type: "event-verdict", hookId, action: "transform", request: { ...msg.data.request, max_tokens: 2048 } }`。
+  可以处理参数和正文，包括模型字段；宿主只校验请求结构仍合法和 1 MiB 大小上限，不按字段设业务白名单。
+  后选插件读取前一个插件处理后的正文。日志只记任务、来源插件和处理阶段，不记录正文。
+
+| 引擎 | 每条消息前路由 | 每次模型请求前路由／正文处理 |
+| --- | --- | --- |
+| Claude Code | 支持 | 不支持：无对应请求入口 |
+| Codex | 支持 | 不支持：无对应请求入口 |
+| 本机 Pi | 支持 | 支持：原生虚拟模型＋`before_provider_request` |
+| SSH／设备托管 Pi | 支持每条消息前路由 | 不支持逐请求处理 |
+
+超时、未批准、被停用、非法结果或不可用路由都走该任务为该插件设置的出错策略。`skip` 跳过
+本次回复，`block` 停止并报错；插件不能更改出错策略。逐请求阶段发生时，Pi 已接受本次输入，
+`skip` 通过 Pi 原生取消收尾，`block` 通过错误生命周期返回，不伪装成已完成的模型回复。数据只传给选中的插件。
