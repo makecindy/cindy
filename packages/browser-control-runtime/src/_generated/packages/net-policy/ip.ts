@@ -20,7 +20,7 @@ function normalizeLowercaseStringOrEmpty(value: unknown): string {
 export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
 type Ipv6Range = ReturnType<ipaddr.IPv6["range"]>;
-type BlockedIpv6Range = Ipv6Range | "discard";
+type BlockedIpv6Range = Ipv6Range | "discard" | "benchmarking" | "orchid2";
 
 const BLOCKED_IPV4_SPECIAL_USE_RANGES = new Set<Ipv4Range>([
   "unspecified",
@@ -52,6 +52,7 @@ const BLOCKED_IPV6_SPECIAL_USE_RANGES = new Set<BlockedIpv6Range>([
   "orchid2",
 ]);
 const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
+const IPV6_BENCHMARK_PREFIX: [ipaddr.IPv6, number] = [ipaddr.IPv6.parse("2001:2::"), 48];
 const CLOUD_METADATA_IP_ADDRESSES = new Set(["100.100.100.200", "fd00:ec2::254"]);
 /** Per-call exemptions for `isBlockedSpecialUseIpv4Address`. */
 export type Ipv4SpecialUseBlockOptions = {
@@ -74,6 +75,8 @@ export type Ipv6SpecialUseBlockOptions = {
    * proxy stacks need both ranges exempted to keep `web_fetch` working.
    */
   allowUniqueLocalRange?: boolean;
+  /** Permit IPv6 benchmarking addresses (2001:2::/48) used by fake-IP DNS. */
+  allowBenchmarkingRange?: boolean;
 };
 
 const EMBEDDED_IPV4_SENTINEL_RULES: Array<{
@@ -329,7 +332,13 @@ export function isBlockedSpecialUseIpv6Address(
     // `allowRfc2544BenchmarkRange` for the IPv4 side (#74351).
     return false;
   }
-  if (BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {
+  const inBenchmarkingRange = address.match(IPV6_BENCHMARK_PREFIX);
+  if (inBenchmarkingRange && options.allowBenchmarkingRange === true) {
+    // RFC 4727 reserves 2001:2::/48 for documentation/benchmarking. Some
+    // TUN fake-IP stacks use it for the IPv6 side of hostname interception.
+    return false;
+  }
+  if (inBenchmarkingRange || BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {
     return true;
   }
   // ipaddr.js does not classify deprecated site-local fec0::/10 as private.

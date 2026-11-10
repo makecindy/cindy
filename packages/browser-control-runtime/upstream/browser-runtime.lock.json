@@ -125,10 +125,18 @@
     {
       "file": "extension/src/browser/ssrf-policy-helpers.ts",
       "desc": "one-off hostname grants must also pass a strict hostnameAllowlist (else the loopback CDP endpoint is blocked by proxyAllowedHostnames and every proxied navigation fails)"
+    },
+    {
+      "file": "packages/net-policy/ip.ts",
+      "desc": "allow IPv6 benchmarking addresses for explicitly approved fake-IP proxy lookups"
+    },
+    {
+      "file": "leaf/src/infra/net/ssrf.ts",
+      "desc": "carry the IPv6 benchmarking fake-IP exemption through SSRF policy evaluation"
     }
   ],
   "fileCount": 335,
-  "contentHash": "fb0bc9516bb715e79dc6abeadd2a03792170992c4ddf7b4dec03ac47ad76a614",
+  "contentHash": "855fc359a094c78e530363bdf4ca0bf1beda45593fd8961e8706f04a2fe26b9d",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"
