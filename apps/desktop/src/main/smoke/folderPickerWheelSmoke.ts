@@ -77,6 +77,10 @@ export async function runFolderPickerWheelSmoke(window: BrowserWindow): Promise<
     await until(
       `!!window.electronAPI && !!document.querySelector('[data-testid="create-agent-mode-pill"]')`,
     );
+    // DOM coordinates below assume CSS pixels and window DIPs have the same scale.
+    window.webContents.setZoomFactor(1);
+    await settle();
+    report.zoomFactor = window.webContents.getZoomFactor();
     const windows = await call('list_windows', {
       pid: process.pid,
       session_goal: 'Verify folder picker wheel input',
@@ -97,6 +101,10 @@ export async function runFolderPickerWheelSmoke(window: BrowserWindow): Promise<
         screenshot_out_file: path.join(root, 'latest.png'),
       });
     const point = async (selector: string) => {
+      assert(
+        window.webContents.getZoomFactor() === 1,
+        'Folder picker wheel smoke requires 100% page zoom; refusing coordinate input',
+      );
       const p = await read(
         `(()=>{const e=${selector};if(!e)return null;const r=e.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return {x,y,visible:x>=0&&y>=0&&x<innerWidth&&y<innerHeight,text:e.textContent?.slice(0,100)}})()`,
       );

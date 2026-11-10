@@ -48,6 +48,10 @@ $env:XDT_CDP_PORT = '9237' # choose an unused port
 pnpm restart:desktop:remote -- --mock --isolated=folder-picker-wheel
 ```
 
+The smoke sets its isolated page to 100% zoom and checks that scale before each
+coordinate calculation. A changed page zoom aborts the run before coordinate
+input. This does not certify Windows display scaling or mixed-DPI monitors.
+
 Inspect `folder-picker-wheel-smoke/report.json` under the reported sandbox
 userData. It records trusted native events, intended/actual coordinates, delta,
 list/page displacement, cancellation, theme, viewport, receipts and screenshots.
