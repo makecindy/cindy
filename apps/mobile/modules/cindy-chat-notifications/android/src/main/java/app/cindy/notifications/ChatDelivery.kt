@@ -39,7 +39,21 @@ object ChatDelivery {
     if (prefs.getString("user", "") != user) prefs.edit().clear().putString("user", user).apply()
   }
   @Synchronized fun receive(context: Context, data: Map<String, String>) {
-    val body = try { JSONObject(data["body"] ?: "{}") } catch (_: Exception) { return }
+    var body = try { JSONObject(data["body"] ?: "{}") } catch (_: Exception) { return }
+    val display = data.toMutableMap()
+    if (body.optString("deepLink").startsWith("cindy://agent-net-notification")) {
+      // Optional native module: old installations continue their existing notification path.
+      // Reflection avoids a Gradle dependency cycle; the target class is explicitly kept by R8.
+      val decoded = try {
+        Class.forName("app.cindy.agentnet.AgentNetNotifications")
+          .getMethod("open", Context::class.java, String::class.java).invoke(null, context, body.getString("deepLink")) as? String
+      } catch (_: Exception) { null } ?: return
+      body = try { JSONObject(decoded) } catch (_: Exception) { return }
+      display["title"] = body.optString("title", "Cindy")
+      display["message"] = body.optString("body")
+      display["tag"] = body.optString("collapseId")
+      display["body"] = body.toString()
+    }
     body.optJSONObject("taskActivity")?.let { TaskBadgeDelivery.apply(context, it) }
     // Badge-only FCM is consumed natively even when JS is suspended. No empty alert.
     if (body.optString("category") == "task-badge") return
@@ -70,7 +84,6 @@ object ChatDelivery {
         next.put(id); prefs.edit().putString("ids", next.toString()).apply()
       }
     }
-    val display = data.toMutableMap()
     // The version-aware native writer owns this number. Expo must not apply an
     // older notification's numeric value after a newer badge-only message.
     if (body.has("taskActivity")) { display.remove("badge"); display.remove("notification_count") }

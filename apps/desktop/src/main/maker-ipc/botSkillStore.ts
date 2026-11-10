@@ -36,6 +36,7 @@ import { randomUUID } from 'node:crypto';
 import { createBotSkillFrontmatterReader, isFrontmatterBlock } from './botSkillFrontmatter.js';
 import { invalidateBotSkillRuntime } from './botSkillRuntimeCache.js';
 import { applySkillFolderFiles, listSkillFolderFiles, type BotSkillFile, type LocalBotSkillFile } from './botSkillFiles.js';
+import { teammateFolderName } from '@cindy/maker-shared/teammate-project';
 export { unescapeFrontmatterValue } from './botSkillFrontmatter.js';
 
 /** 一个技能在磁盘上的完整形态。 */
@@ -105,7 +106,7 @@ export class BotSkillStoreError extends Error {
 function botDirName(botId: string): string {
   const trimmed = botId.trim();
   if (!trimmed) throw new BotSkillStoreError('INVALID_ARGS', 'botId required');
-  const safe = trimmed.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^\.+/, '');
+  const safe = teammateFolderName(trimmed);
   if (!safe)
     throw new BotSkillStoreError('INVALID_ARGS', 'botId is not usable as a directory name');
   return safe;
@@ -126,9 +127,35 @@ export function botSkillRootDir(userDataDir: string, botId: string): string {
   return path.join(userDataDir, 'bots', botDirName(botId));
 }
 
-/** 技能真正躺的地方。CC plugin 规范要求这一层就叫 `skills`。 */
+/**
+ * 伙伴 V2(项目模式)的技能就是它项目里的技能(`workspace/.agents/skills`),三个引擎按项目
+ * 原生方式加载,也跟着项目的版本走。开关在档案里:botSkillService 的每个入口先按档案登记一次,
+ * 这里只是那次判断的缓存(读档案、准备项目时也会顺手登记)。
+ */
+const projectSkillDirs = new Map<string, string>();
+
+export function setBotProjectSkillsDir(userDataDir: string, botId: string, enabled: boolean): void {
+  const root = botSkillRootDir(userDataDir, botId);
+  const next = enabled ? path.join(root, 'workspace', '.agents', 'skills') : undefined;
+  if (projectSkillDirs.get(root) === next) return;
+  const previous = projectSkillDirs.get(root);
+  if (next) projectSkillDirs.set(root, next);
+  else projectSkillDirs.delete(root);
+  invalidateBotSkillCaches(root);
+  if (previous) invalidateBotSkillRuntime(path.dirname(previous));
+}
+
+/** A V2 teammate's runtime Skill cache follows its project Skills folder; refresh that one too. */
+function invalidateBotSkillCaches(root: string): void {
+  invalidateBotSkillRuntime(root);
+  const project = projectSkillDirs.get(root);
+  if (project) invalidateBotSkillRuntime(path.dirname(project));
+}
+
+/** 技能真正躺的地方。CC plugin 规范要求这一层就叫 `skills`;V2 伙伴是它项目里的技能目录。 */
 export function botSkillsDir(userDataDir: string, botId: string): string {
-  return path.join(botSkillRootDir(userDataDir, botId), 'skills');
+  const root = botSkillRootDir(userDataDir, botId);
+  return projectSkillDirs.get(root) ?? path.join(root, 'skills');
 }
 
 /**
@@ -290,7 +317,7 @@ export async function readCompatibleBotSkillSource(filePath: string, slug: strin
     body: parsed.body,
   });
   await fs.writeFile(filePath, migrated, 'utf8');
-  invalidateBotSkillRuntime(path.dirname(path.dirname(path.dirname(filePath))));
+  invalidateBotSkillCaches(path.dirname(path.dirname(path.dirname(filePath))));
   return migrated;
 }
 
@@ -484,7 +511,7 @@ export async function seedBotSkillIfMissing(
   const filePath = path.join(skillDir, 'SKILL.md');
   try {
     await fs.writeFile(filePath, renderBotSkillFile(normalized), { encoding: 'utf8', flag: 'wx' });
-    invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
+    invalidateBotSkillCaches(botSkillRootDir(userDataDir, botId));
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException)?.code !== 'EEXIST') throw cause;
     const raced = await readBotSkill(userDataDir, botId, normalized.slug);
@@ -591,7 +618,7 @@ export async function saveBotSkillSource(userDataDir: string, botId: string, slu
     }
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(path.join(skillDir, 'SKILL.md'), source, 'utf8');
-    invalidateBotSkillRuntime(key);
+    invalidateBotSkillCaches(key);
   });
   skillWrites.set(key, pending);
   try { await pending; }
@@ -617,7 +644,7 @@ export async function applyBotSkillFiles(userDataDir: string, botId: string, slu
     const previous = await readBotSkill(userDataDir, botId, slug);
     if (!previous) return [];
     const missing = await applySkillFolderFiles(resolveSkillDir(userDataDir, botId, slug, previous.enabled !== false), files, fetch, options);
-    invalidateBotSkillRuntime(key);
+    invalidateBotSkillCaches(key);
     return missing;
   });
   skillWrites.set(key, pending);
@@ -639,7 +666,7 @@ export async function setBotSkillEnabled(userDataDir: string, botId: string, slu
     const skillDir = resolveSkillDir(userDataDir, botId, slug, enabled);
     await fs.mkdir(path.dirname(skillDir), { recursive: true });
     await fs.rename(resolveSkillDir(userDataDir, botId, slug, !enabled), skillDir);
-    invalidateBotSkillRuntime(key);
+    invalidateBotSkillCaches(key);
   });
   skillWrites.set(key, pending);
   try { await pending; }
@@ -667,7 +694,7 @@ async function writeBotSkill(
     renderBotSkillFile({ slug, name, description, updatedAt, body }),
     'utf8',
   );
-  invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
+  invalidateBotSkillCaches(botSkillRootDir(userDataDir, botId));
   return {
     record: { slug, name, description, updatedAt, body, dirPath: skillDir, filePath, ...(previous?.enabled === false ? { enabled: false } : {}) },
     created,
@@ -731,7 +758,7 @@ export async function importBotSkillDirectory(userDataDir: string, botId: string
     assertOwner();
     try {
       await fs.rename(temporary, target);
-      invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
+      invalidateBotSkillCaches(botSkillRootDir(userDataDir, botId));
     }
     catch (error) {
       if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
@@ -789,7 +816,7 @@ export async function deleteBotSkill(
     try { if (!(await fs.stat(skillDir)).isDirectory()) continue; }
     catch { continue; }
     await fs.rm(skillDir, { recursive: true, force: true });
-    invalidateBotSkillRuntime(botSkillRootDir(userDataDir, botId));
+    invalidateBotSkillCaches(botSkillRootDir(userDataDir, botId));
     return true;
   }
   return false;

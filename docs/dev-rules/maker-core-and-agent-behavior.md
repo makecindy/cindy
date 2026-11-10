@@ -203,6 +203,10 @@ timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoC
 超时或其他详情的消息不走此兜底。原始错误未带此持久化原因时仍须有密文证据。
 手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
+Codex 手动压缩使用原生 `thread/compact/start`，ACK 只表示受理；等待原生 turn 终态后返回结果。
+压缩期间独占当前 handle、禁止 send/steer/重复 compact，Stop 沿原生 interrupt 收口。
+成功边界标记 `manual`，无压缩边界的成功终态为 noop；失败不重放旧请求、不触发自动恢复。
+能力通过现有 `maker:compact-session` 本机/设备互联入口暴露；SSH 未提供此调用路由时不展示入口。
 
 Cindy 保底压缩是**一套**交接重建流程。装得进当前约束就不动；字节预算破了
 （可剥的超大内联图）或 token 预算破了，都直接交接重建。Codex 索引历史归原生运行时
@@ -657,6 +661,40 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   回调必须同步决定，异步查询会从轮次中途开始观察；桌面侧与普通回传一样只在 IM 账号仍有效、渠道已连接时标记。
   该轮沿用的 generation 已记过上一轮的 `done`，唤醒轮自己的终止 error 不按「done 之后的迟到 error」过滤，
   照常按失败收口（唤醒输出之前到达的迟到 error 仍过滤）。回归见 `session.origin.test.ts`。
+
+### 后台命令：工作与服务
+
+2026-11-10 用户确认：Claude Code 把命令放到后台（`Bash` 的 `run_in_background`）后回合当场结束，
+但「跑测试、构建」这类会自己结束的命令没跑完时任务其实没做完，CLI 会在它结束后自动开新一轮。
+任务列表此前显示「已结束」，与 Codex（宿主续等同一条命令）和 Pi（命令在前台跑完）不一致。
+
+- **两种后台命令**：`work` 是会自己结束的命令；`service` 是启动后不会自己结束的命令（本地预览
+  服务、文件监听、日志跟随）。SDK 的 `task_started` 只带描述、没有种类标记，由
+  `agents/claude-code/background-command-kind.ts` 按启动它的 `Bash` 命令写法判断，随
+  `agent_task_update.backgroundCommandKind` 与 `listBackgroundTasks()` 快照下发。认不出来按
+  `work`：要修的正是工作被显示成已结束；漏认的服务最多亮到 SDK 的后台命令超时（工具说明写默认
+  30 分钟、上限 2 小时，未实测）。没见过对应 `Bash` 调用的任务不标种类，下游同样按 `work`。
+  判断规则的不变量写在 `background-command-kind.ts` 文件头，新增写法前先对照：只有命令自己的前台
+  部分永远不结束才算服务；只读懂 `;` `&&` `||` 换行连接的顺序命令和 `|` 管道；只看真正执行的程序
+  与子命令（选项取值、`install` 类子命令不是脚本名）；超出这个范围的 shell 语法——后台 `&`、
+  注释 `#`、heredoc `<<`、`if`/`while`/`for` 等控制流、命令组与子 shell——一律不猜，整条命令按
+  工作；不认识的外层命令（`nice`、`timeout`）也不让内层参数越过它决定结果。范围之外的写法
+  （含 `xargs`、别名、表外程序）启动的服务会多亮一段时间，不会把工作显示成已结束；要读懂更多
+  语法之前，先想想能不能把它划进「一律不猜」。
+- **只改展示**：回合结束而仍有 `work` 命令在跑时，Desktop 主进程广播
+  `maker:session-background-work-changed`，任务列表、折叠栏、系统角标与伙伴任务入口经
+  `useSessionDisplayRunningState` 显示为运行中；任务内状态栏写「正在后台工作」，只剩 `service`
+  时写「后台服务运行中」且不再呼吸。回合边界、完成提醒、发送与排队、停止语义都不变——
+  `local_bash` 仍不进 `WAKE_BACKGROUND_TASK_TYPES`，用户 Stop 不会杀后台命令。
+- **边界**：命令结束到自动续跑那一轮开始之间保留 5 秒，列表不会先闪成已结束；续跑没来到点熄灭，
+  关闭任务进程立即熄灭。主进程在任务表变化、回合收尾和回退提交（`maker-orchestration/rewind.ts`，
+  关闭旧 Query 时 agent 同步清表）后读 `Session.listBackgroundTasks()`，不靠事件配对（Query 换代
+  会不带事件地清表），读取入口统一在 `maker-host/claude-background-command-work-sync.ts`。只覆盖 Agent 进程在本机的 Claude Code 任务：SSH 远程
+  工作区、在其他电脑上运行 Agent 的任务、device-link 控制端的任务列表和手机任务列表尚未接入。
+- 实现与回归：`maker-host/claude-session-background-activity.ts`、
+  `maker-ipc/sessionEventDelivery.ts`（均在 `apps/desktop/src/main/`）；测试见 `rewind.test.ts`、
+  `background-command-kind.test.ts`、`abort-stops-background-tasks.test.ts`、
+  `claudeSessionBackgroundActivity.test.ts`、`sessionEventPipeline.test.ts`。
 
 ### Desktop Auto 审核的模型回退
 

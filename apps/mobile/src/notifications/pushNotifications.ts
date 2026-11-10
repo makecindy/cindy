@@ -18,6 +18,7 @@ import {
   type DevServerEnvironment,
 } from '@/config/devServerEnvironment';
 import { getActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
+import { mobileAgentNetPushSelected, mutateMobileAgentNetPush, clearMobileAgentNetPush, refreshMobileAgentNetPushPreferences } from '@/device-link/agentNetPushRegistry';
 import Notifications from './nativeNotifications';
 import { readIosPushEnvironment } from './nativePushEnvironment';
 import { clearNotificationBadge } from './notificationBadge';
@@ -227,7 +228,7 @@ function deviceLinkBaseForRealm(realm: ClientEndpointRegion): string {
 function pushTargets(realm: ClientEndpointRegion, method: 'PUT' | 'DELETE' = 'DELETE') {
   // 自建中转不转发系统推送(docs/self-hosted-relay-plan.md §5.3、§7):这时不在官方 device-link
   // 登记 token;注销仍发往官方地址(realm 缓存,不受中转覆盖),清掉以前的登记。
-  const skipDeviceLink = method === 'PUT' && getActiveSelfHostedRelay() !== null;
+  const skipDeviceLink = method === 'PUT' && (getActiveSelfHostedRelay() !== null || mobileAgentNetPushSelected());
   const targets = skipDeviceLink
     ? []
     : [{ baseUrl: deviceLinkBaseForRealm(realm), path: PUSH_TOKEN_PATH, optional: false, service: 'task' }];
@@ -238,6 +239,7 @@ function pushTargets(realm: ClientEndpointRegion, method: 'PUT' | 'DELETE' = 'DE
   return targets;
 }
 async function mutatePushTokens(apiFetch: AuthedApiFetch, realm: ClientEndpointRegion, method: 'PUT' | 'DELETE', body?: unknown, registration?: PushRegistrationStatus) {
+  await mutateMobileAgentNetPush(method, body);
   const targets = pushTargets(realm, method);
   const outcomes: NonNullable<PushRegistrationStatus['endpoints']> = [];
   const results = await Promise.allSettled(targets.map(async target => {
@@ -326,6 +328,7 @@ export function subscribePushPreferences(listener: (signedOut?: boolean) => void
 export async function readPushPreviewEnabled() { return (await AsyncStorage.getItem('cindy.push.preview')) !== '0'; }
 export async function writePushPreviewEnabled(enabled: boolean) {
   await AsyncStorage.setItem('cindy.push.preview', enabled ? '1' : '0');
+  await refreshMobileAgentNetPushPreferences();
   for (const listener of pushPreferenceListeners) listener();
 }
 export async function readPushEnabled(): Promise<boolean> {
@@ -338,6 +341,7 @@ export async function readPushEnabled(): Promise<boolean> {
 
 export async function writePushEnabled(enabled: boolean): Promise<void> {
   await AsyncStorage.setItem(PUSH_ENABLED_KEY, enabled ? '1' : '0');
+  if (!enabled) clearMobileAgentNetPush();
   if (!enabled && isPushSupported()) await clearNotificationBadge().catch(() => undefined);
   for (const listener of pushPreferenceListeners) listener();
 }
@@ -612,6 +616,7 @@ export function unregisterPushTokenBestEffort(
 ): Promise<void> {
   pushLifecycleGeneration += 1;
   if (isPushSupported()) void clearNotificationBadge().catch(() => undefined);
+  clearMobileAgentNetPush();
   eventRegistration = null;
   if (Platform.OS === 'android') setAndroidPushAvailability('unknown');
   for (const listener of pushPreferenceListeners) listener(true);

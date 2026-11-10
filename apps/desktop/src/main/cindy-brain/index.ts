@@ -116,7 +116,6 @@ import { t as authorizationText } from '../i18n.desktop.js';
 import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService.js';
 import { isResidentBrowserGhost, spawnResidentGhost } from './residentGhost.js';
 import { handleRoutineRequest } from './routineSlot.js';
-import { getRoutineEngine, disconnectRoutineSource, relocateRoutinePluginSource } from '../routines/service.js';
 import {
   app,
   BrowserWindow,
@@ -1755,7 +1754,6 @@ async function relocateIdleGhostUserData(
         await reassignGhostCards(from, to);
       },
       unread: relocateGhostUnread,
-      routines: relocateRoutinePluginSource,
       recommendations: relocateGhostRecommendations,
       recentUsage: relocateGhostRecentUsage,
     });
@@ -2274,7 +2272,6 @@ export function getGhostRuntime(): GhostRuntime {
       onStateChanged: (id, state) => {
         const storagePart = isValidPluginInstallRelId(id) ? pluginInstallStoragePart(id) : id;
         log.info('ghost runtime state', { id, state });
-        if (state !== 'running') disconnectRoutineSource(storagePart);
         if (['off', 'stopping', 'crashed', 'fused'].includes(state)) pluginDeviceSync.invalidate(storagePart);
         // 崩溃/熄灯时把该意识名下的在途工具调用收掉(结构化失败给 agent)。
         getGhostPipeDispatcher().onRuntimeState(storagePart, state);
@@ -8805,7 +8802,7 @@ export function builtinSeedYieldsToStoreVersion(id: string, storeVersion: string
 }
 
 /**
- * launch: 'resident' 或声明 routineEvents 的意识在"唤醒且在场"时保持电子脑常驻——本函数是所有
+ * launch: 'resident' 的意识在"唤醒且在场"时保持电子脑常驻——本函数是所有
  * "该在场了"时机的统一入口(应用启动扫描 / 装入即开 / 唤醒 / 更新换代后)。
  * spawn 幂等,重复调用零成本;失败走熔断记账,不抛出(fire-and-forget)。
  */
@@ -9965,9 +9962,10 @@ export function registerGhostIpc(): void {
     // 只开面板,任务由用户选模型后亲手保存才落库——本槽全程不碰 schedule storage。
     // 资格审/净化/频率钳制/限速在 scheduleSlot,落地在 renderer。
     if (type === 'routine-request') {
+      // Teammate routines were removed: validated and answered as a no-op (routineSlot.ts).
       const owner = activeOwnerScopeKey();
       const ghost = findGhostForInstanceId(id);
-      return handleRoutineRequest(ghost ?? undefined, payload, getRoutineEngine, () => {
+      return handleRoutineRequest(ghost ?? undefined, payload, () => {
         if (activeOwnerScopeKey() !== owner || !ghost) return false;
         const current = findGhostForInstanceId(id);
         return Boolean(

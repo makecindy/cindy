@@ -356,7 +356,7 @@ describe('native e2e developer workflows', () => {
 
   it.each(['safe controller', 'transcribeVoice(', 'DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL', 'device-link:voice:transcribe'])('runs the mobile scope gate against %s', (fixture) => {
     const error = vi.fn();
-    const execute = () => runInNewContext(scriptBody('scripts/mobile-scope-guard.mjs', 'const forbiddenFiles ='), {
+    const execute = () => runInNewContext(scriptBody('scripts/mobile-scope-guard.mjs', 'const contentRules ='), {
       mobileRoot: '/mobile', resolve: posix.resolve, join: posix.join, relative: posix.relative, basename: posix.basename,
       existsSync: (path: string) => ['/mobile/app', '/mobile/app/composer.tsx'].includes(path),
       statSync: (path: string) => ({ isFile: () => path.endsWith('.tsx'), isDirectory: () => path === '/mobile/app' }),
