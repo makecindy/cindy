@@ -9323,15 +9323,15 @@ export const GHOST_FETCH_FILE_NAME_MAX_CHARS = 128;
  * 分档守门 → 主机代写/代读 → 结构化 GhostPipeFsResult。
  * 三个 root:
  * - 'data'    插件自主私有数据目录(userData/ghost-fs/<ghostId>);要求 fs:true,
- *             全 op,免确认,配额封顶,卸载随包回收。
- * - 'workdir' 当前会话工作目录;仅 write,须带 callId(反查 session),当前
+ *             write/read/list/delete,免确认,配额封顶,卸载随包回收。
+ * - 'workdir' 当前任务工作目录;读写/列举/删除/监听均须带 callId(反查 session),当前
  *             Agent 调用无需 fs:true,并跟随会话 permission 模式;远程工作区拒。
  * - 'save'    主 agent 过户的 save 票据目录;仅 write,复用 saveDeposit
  *             的 TTL/次数/字节预算与文件名消毒;票据自身就是授权,无需 fs:true。
  */
 export const GHOST_FS_ROOTS = ['data', 'workdir', 'save'] as const;
 export type GhostFsRoot = (typeof GHOST_FS_ROOTS)[number];
-export const GHOST_FS_OPS = ['write', 'read', 'list', 'delete'] as const;
+export const GHOST_FS_OPS = ['write', 'read', 'list', 'delete', 'watch', 'changes', 'unwatch'] as const;
 export type GhostFsOp = (typeof GHOST_FS_OPS)[number];
 
 /** fs 相对路径总长上限(字符;分段规则同 isSafeGhostRelativePath)。 */
@@ -9350,7 +9350,7 @@ export const GHOST_FS_LIST_MAX_ENTRIES = 2000;
 /** 上行:主机文件操作请求。 */
 export interface GhostPipeFsRequest {
   type: 'fs-request';
-  /** 操作:write=创建/覆盖,read/list/delete 仅 root:'data'。 */
+  /** data 支持 write/read/list/delete；workdir 另支持 call-bound watch/changes/unwatch。 */
   op: GhostFsOp;
   /** 目的地档位(见上方注释)。 */
   root: GhostFsRoot;
@@ -9369,11 +9369,16 @@ export interface GhostPipeFsRequest {
   token?: string;
   /** 归因号(root:'workdir' 必填:主机凭它反查严格在途 Agent 调用、session 与权限;其余可选)。 */
   callId?: string;
+  /** Host-issued, call-bound watcher; changes are metadata only. */
+  watchId?: string;
+  cursor?: number;
 }
 
 /** fs 槽 list 的单条目(路径相对本意识私有目录根)。 */
 export interface GhostFsListEntry {
   path: string;
+  /** Workdir listings include directories; older private listings contain files only. */
+  type?: 'file' | 'directory';
   bytes: number;
   /** 最后修改时间(unix ms)。 */
   mtime: number;
@@ -9397,6 +9402,9 @@ export type GhostPipeFsResult =
     }
   | { ok: true; op: 'list'; entries: GhostFsListEntry[]; truncated?: boolean }
   | { ok: true; op: 'delete'; path: string; /** false = 本来就不存在(幂等)。 */ existed: boolean }
+  | { ok: true; op: 'watch'; watchId: string; cursor: number }
+  | { ok: true; op: 'changes'; watchId: string; cursor: number; events: Array<{ sequence: number; path: string; type: 'create' | 'update' | 'delete' }>; resetRequired: boolean }
+  | { ok: true; op: 'unwatch'; watchId: string }
   | { ok: false; message: string; errorCode?: 'NOT_FOUND' };
 
 /* ── library 能力:持久作品库(2026-08-20;详见 docs/dev-rules/plugin-library-storage.md)── */

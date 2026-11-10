@@ -65,6 +65,12 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 
 ## 3. Ghost manifest 与 Cindy 专属界面能力
 
+- 文件管子在原 `fs-request` 上追加 `workdir` 的 read/list/delete/watch/changes/unwatch。
+  监听请求使用可选 `watchId` / `cursor`，结果为相对路径元数据与 `resetRequired`；list 条目可选增加
+  `type`。旧私有目录、save 票据和 write 回执不变，不修改 manifest schema 或 receipt 版本。
+  老宿主会拒绝新增 op，插件须处理 `ok:false`，不能从没有事件推定未发生变化。执行仍在任务电脑，
+  控制端不解析绝对路径；此增量不增加 device-link 帧或 channel，官方与自建中转透传原页面请求即可。
+
 - `ghost.json` 的跨消费者字段、v2 兼容映射与枚举属于 Ghost manifest 协议，客户端正本位于
   `packages/plugin-protocol/src/manifest.ts`；Desktop 在
   `apps/desktop/src/shared/ghost.ts` 维护运行时 validator。除明确登记的 Desktop-only

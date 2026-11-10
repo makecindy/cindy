@@ -1,5 +1,6 @@
 import { setPluginEnabled } from './pluginEnableService.js';
 import { createGhostExecutionPipe } from './executionPipe.js';
+import { watcherHostClient } from '../watcher-host/index.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
 import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
 import { importPickedFiles } from './pickedFiles.js';
@@ -1442,6 +1443,7 @@ export async function interruptGhostCallsForAccountBoundary(): Promise<void> {
   installConsentWindowBridge.cancelAll();
   abortAllGhostInstallConsentPrompts();
   runtimeSingleton?.destroyAll();
+  fsSlotSingleton?.disposeAll();
   resetNodeRuntimeBrokerForAccountBoundary();
   // Drain in-flight staging.release (tombstone/fsync) before tearing Library
   // sessions. Owner mutation leases stay held until each call unwinds; waiting
@@ -6880,6 +6882,19 @@ export function getGhostFsSlot(): GhostFsSlot {
     fsSlotSingleton = new GhostFsSlot({
       getGhost: findGhostForInstanceId,
       dataRootDir: () => ownerScopedUserDataPath('ghost-fs'),
+      ownerKey: () => JSON.stringify(getActiveDataOwnerPushStamp()),
+      getCallSignal: (id, callId) => getGhostPipeDispatcher().getPendingCallSignal(id, callId),
+      watchDirectory: async (root, changed, failed) => {
+        if (watcherHostClient.isDegraded) throw new Error('FILE_WATCH_UNAVAILABLE');
+        const subscription = await watcherHostClient.subscribe(root, [], events => {
+          for (const event of events) {
+            const relative = path.relative(root, event.path).split(path.sep).join('/');
+            changed({ type: event.type, path: relative });
+          }
+        }, failed);
+        if (watcherHostClient.isDegraded) { await subscription.unsubscribe(); throw new Error('FILE_WATCH_UNAVAILABLE'); }
+        return () => subscription.unsubscribe();
+      },
       // callId → 归属/会话反查:与卡片供片同一本账(ghost_call 派单时
       // cardService.registerCall 登记),不信意识自报。
       callInfo: (callId) => getGhostCardService().callInfoOf(callId),

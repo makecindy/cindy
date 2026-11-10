@@ -1,9 +1,9 @@
-## 4.10 写文件(fs 能力)
+## 4.10 文件操作(fs 能力)
 
 沙箱本身没有文件系统，字节始终由主机落盘。三档目的地的声明边界不同：
 
 - `root:'workdir'`：当前 Agent tool-call 内传 `callId: msg.callId` 即可按会话
-  permission mode 写入，不需要 `"fs": true`。
+  permission mode 读写、列举、删除和监听，不需要 `"fs": true`。
 - `root:'save'`：授权是主 Agent 发放的限时、限次、绑定插件票据，不需要
   `"fs": true`。
 - `root:'data'`：这是插件脱离当前 Agent 调用仍可持久读写的私有目录，
@@ -15,14 +15,27 @@ const w = await cindy.send({ type: 'fs-request', op: 'write', root: 'data',
   path: 'reports/result.json', content: JSON.stringify(data) });
 // w = { ok:true, op:'write', path:'reports/result.json', bytes:12345 } 或 { ok:false, message:'原因' }
 
-// 读回 / 列清单 / 删除(仅限 root:'data')
+// 读回 / 列清单 / 删除自己的私有文件
 await cindy.send({ type: 'fs-request', op: 'read',   root: 'data', path: 'reports/result.json' });
 await cindy.send({ type: 'fs-request', op: 'list',   root: 'data' });          // 可带 path 列子目录
 await cindy.send({ type: 'fs-request', op: 'delete', root: 'data', path: 'reports/result.json' });
 
-// 写当前会话的工作目录(仅 write;必须带 tool-call 下发的 callId)
+// 操作当前任务的工作目录(必须带 tool-call 下发的 callId)
 await cindy.send({ type: 'fs-request', op: 'write', root: 'workdir',
   path: 'output/summary.md', content: text, callId: msg.callId });
+await cindy.fs({ op: 'read', root: 'workdir', path: 'output/summary.md', callId: msg.callId });
+await cindy.fs({ op: 'list', root: 'workdir', callId: msg.callId });
+await cindy.fs({ op: 'delete', root: 'workdir', path: 'output/summary.md', callId: msg.callId });
+
+// 同一调用内监听目录，只续读变更元数据，不自动读取文件内容
+const watch = await cindy.fs({ op: 'watch', root: 'workdir', callId: msg.callId });
+if (watch.ok) {
+  const changes = await cindy.fs({ op: 'changes', root: 'workdir', watchId: watch.watchId,
+    cursor: watch.cursor, callId: msg.callId });
+  // changes = {ok:true, op:'changes', cursor, events:[{sequence,path,type}], resetRequired}
+  // resetRequired:true 表示缓冲有缺口或 watcher 报错，应重新 list，不得当作完整变更流。
+  await cindy.fs({ op: 'unwatch', root: 'workdir', watchId: watch.watchId, callId: msg.callId });
+}
 
 // 写主 agent 过户的目录(仅 write;token 来自 ghost_call 顶层 save_dir 注入的 args.save_deposit.token)
 await cindy.send({ type: 'fs-request', op: 'write', root: 'save',
@@ -38,13 +51,19 @@ await cindy.fs({ op: 'write', root: 'data', path: 'a.txt', content: 'hi' });
   免确认,全操作(write/read/list/delete)。配额:总量 256MB、2000 个文件;
   超限写会被拒,自己删旧文件腾地方。**超大工具结果建议落这里再把路径交给
   agent 读**(交卷体量有限时的泄洪通道);
-- `root:'workdir'` **会话工作目录**:仅 write,必须带当次 tool-call 的 `callId`
-  (主机凭它定位会话,不认自报)。**是否放行跟随该会话的权限模式**——agent
+- `root:'workdir'` **任务工作目录**:支持 write/read/list/delete/watch/changes/unwatch，必须带当次 tool-call 的 `callId`
+  (主机凭它定位任务,不认自报)。read 支持 UTF-8/base64，单次上限 16MiB；list 只列当前层，
+  返回目录与普通文件的相对路径、type、bytes、mtime，不返回隐藏路径或 symlink。
+  **写入和删除是否放行跟随该任务的权限模式**——Agent
   编辑文件免批的模式直接写;逐条确认的模式会弹确认卡请用户点头(同目录本
-  会话批一次);计划/只读模式一律拒。SSH 远程工作区会话不支持(目录在远端
+  任务批一次)。删除单独裁决，不复用写入确认记忆；目录删除包含其内容。计划模式可读、列举和监听，禁止写入与删除。
+  watch 只在原调用存活时生效，交卷、Stop、账号或安装变化即失效；游标只在该 watcher 内有效，
+  最近 256 条元数据可续读，较旧游标返回 resetRequired。监听初始化失败明确报错，不能当作空事件。
+  新操作须检测结构化 ok:false 并按不支持处理，旧 Host 无需重装插件。
+  SSH 远程工作区任务不支持(目录在远端
   机器),会明确报错,请改用 root:'data'。例外:scheduler「仅运行脚本」通道
   (无会话的定时脚本直调)下发的调用,以该 schedule 配置的工作目录为写入根
-  直接放行——没有会话就没有权限模式可跟随,授权来自 schedule 配置本身;
+  直接放行 write，其他新操作不借用脚本调用授权——没有任务就没有权限模式可跟随,授权来自 schedule 配置本身;
   该通道的写入必须在当次 tool-call 处理期间完成,交卷后 callId 立即失效
   (比会话通道更严:无宽限,先写盘再交卷);
 - `root:'save'` **过户目录**:仅 write,凭主 agent 在 ghost_call 顶层传 `save_dir`

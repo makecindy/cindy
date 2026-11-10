@@ -8,7 +8,8 @@
  *       'data'    私有数据目录 userData/ghost-fs/<ghostId>——自己的储物柜,
  *                 要求插件自主 fs 声明;免确认;全 op(write/read/list/delete);
  *                 配额封顶;卸载回收。
- *       'workdir' 当前会话工作目录——仅 write;必须带 callId(主机凭
+ *       'workdir' 当前任务工作目录——write/read/list/delete/watch/changes/unwatch;
+ *                 必须带 callId(主机凭
  *                 cardService 严格反查当前 Agent 调用与 session,不信意识
  *                 自报);当前 Agent 调用无需插件自主 fs 声明;**跟随会话
  *                 permission 模式**(映射表见 workdirWriteVerdict:免批模式
@@ -16,7 +17,8 @@
  *                 每个实际落盘动作前还要重新确认同一
  *                 callId 仍严格在途并绑定该插件和会话;远程工作区
  *                 (remoteHostId 非空)明确拒——路径在远端机器,本地代写
- *                 写不到(规则 26,首期不支持不静默坏)。
+ *                 写不到(规则 26,首期不支持不静默坏)。读取/列举可用于计划模式；
+ *                 删除独立裁决，不继承写入记忆；监听复用宿主 watcher、交卷即止。
  *                 例外分支(2026-08-04):callId 属于「仅运行脚本」通道的
  *                 调用时(无会话,cardService 条目带 scriptWorkdir =
  *                 schedule.workingDir),以该目录为写入根直写——无会话就
@@ -48,7 +50,9 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { AutoReviewDecision, ReviewableAction } from '@cindy/maker-core';
+import { deleteEntry, listDir, readFileChunk } from '@cindy/file-browser-core';
 
 import {
   GHOST_FS_DATA_MAX_FILES,
@@ -83,6 +87,12 @@ export interface FsSessionSnapshot {
 
 export interface FsSlotDeps {
   getGhost(id: string): InstalledGhost | null;
+  /** Host account generation; never supplied by the plugin. */
+  ownerKey?(): string;
+  getCallSignal?(ghostId: string, callId: string): AbortSignal | null;
+  /** Adapter to the Host's existing file watcher, not a plugin-owned OS watcher. */
+  watchDirectory?(root: string, changed: (event: { path: string; type: 'create' | 'update' | 'delete' }) => void,
+    failed: () => void): Promise<() => Promise<void>>;
   /** 私有数据目录根(生产 = userData/ghost-fs;意识各占 <root>/<ghostId>)。 */
   dataRootDir(): string;
   /** callId → 归属反查(生产 = cardService.callInfoOf;不信意识自报)。
@@ -281,6 +291,11 @@ async function dirUsage(root: string): Promise<{ files: number; bytes: number; t
 const fail = (message: string): GhostPipeFsResult => ({ ok: false, message });
 
 export class GhostFsSlot {
+  private readonly watches = new Map<string, {
+    ghostId: string; callId: string; sessionId: string; path: string; current(): boolean;
+    sequence: number; events: Array<{ sequence: number; path: string; type: 'create' | 'update' | 'delete' }>;
+    resetRequired: boolean; close(): void;
+  }>();
   /**
    * workdir 写确认的会话级记忆:同 (session, ghost, 目标父目录) 批一次后
    * 本会话免弹(与 mcp-integrations/ghost.ts 的 dirGrantMemory 同哲学:
@@ -315,7 +330,7 @@ export class GhostFsSlot {
         ghostId,
         error: err instanceof Error ? err.message : String(err),
       });
-      return fail('写文件失败(主机内部错误)');
+      return fail('文件操作失败(主机内部错误)');
     } finally {
       const remaining = this.inFlightRequests.get(ghostId)! - 1;
       if (remaining > 0) this.inFlightRequests.set(ghostId, remaining);
@@ -348,10 +363,158 @@ export class GhostFsSlot {
       }
     }
 
-    if (root === 'data') return this.handleData(ghostId, op, req);
-    if (op !== 'write') return fail(`root:"${root}" 只支持 op:"write"(read/list/delete 仅限私有目录 root:"data")`);
-    if (root === 'save') return this.handleSaveWrite(ghostId, req);
+    if (root === 'data') return ['write', 'read', 'list', 'delete'].includes(op)
+      ? this.handleData(ghostId, op, req) : fail('私有目录不支持此操作');
+    if (root === 'save') return op === 'write' ? this.handleSaveWrite(ghostId, req) : fail('root:"save" 只支持 op:"write"');
+    if (op !== 'write') return this.handleWorkdirOperation(ghostId, ghost, op, req);
     return this.handleWorkdirWrite(ghostId, ghost, req);
+  }
+
+  /** The file browser, remote file service and plugins use the same filesystem core. */
+  private async handleWorkdirOperation(
+    ghostId: string, ghost: InstalledGhost, op: GhostFsOp, req: Record<string, unknown>,
+  ): Promise<GhostPipeFsResult> {
+    const callId = typeof req.callId === 'string' ? req.callId : '';
+    const info = this.deps.inFlightCallInfo(callId);
+    if (!info || info.ghostId !== ghostId || info.channel !== 'session' || !info.sessionId) {
+      return fail('工作目录操作需要当前 Agent 在途调用的 callId');
+    }
+    const owner = this.deps.ownerKey?.();
+    const installation = installedGhostMutationTargetToken(ghost, '');
+    const session = await this.sessionSnapshotResolver(info.sessionId, info.sessionInstanceId);
+    if (!session || session.remoteHostId || !session.workingDir || !path.isAbsolute(session.workingDir)) {
+      return fail('本次调用没有本机工作目录，SSH 目录不能在控制端读取');
+    }
+    const current = () => {
+      const live = this.deps.inFlightCallInfo(callId), latest = this.deps.getGhost(ghostId);
+      return session.isCurrent?.() !== false && latest?.enabled === true && latest.dir === ghost.dir
+        && installedGhostMutationTargetToken(latest, '') === installation && this.deps.ownerKey?.() === owner
+        && live?.ghostId === ghostId && live.channel === 'session' && live.sessionId === info.sessionId
+        && live.sessionInstanceId === info.sessionInstanceId;
+    };
+    if (!current()) return fail('调用或安装授权已失效');
+    if (op === 'changes' || op === 'unwatch') {
+      const watchId = typeof req.watchId === 'string' ? req.watchId : '';
+      const watcher = this.watches.get(watchId);
+      if (!watcher || watcher.ghostId !== ghostId || watcher.callId !== callId) return fail('监听不存在或不属于当前调用');
+      if (!watcher.current()) { watcher.close(); return fail('监听授权已失效'); }
+      if (op === 'unwatch') { watcher.close(); return { ok: true, op, watchId }; }
+      const cursor = req.cursor ?? 0;
+      if (!Number.isSafeInteger(cursor) || (cursor as number) < 0 || (cursor as number) > watcher.sequence) return fail('cursor 无效');
+      return { ok: true, op, watchId, cursor: watcher.sequence,
+        events: watcher.events.filter(event => event.sequence > (cursor as number)),
+        resetRequired: watcher.resetRequired || (cursor as number) < (watcher.events[0]?.sequence ?? 1) - 1 };
+    }
+    const rel = req.path === undefined && (op === 'list' || op === 'watch') ? '' : req.path;
+    if (rel !== '') {
+      const reason = validateFsRelPath(rel);
+      if (reason) return fail(reason);
+    } else if (op !== 'list' && op !== 'watch') return fail('path 必须是非空相对路径');
+    const relPath = rel as string;
+    const root = await fs.promises.realpath(session.workingDir);
+    const target = path.join(root, ...relPath.split('/'));
+    if (!isInsideDir(root, target) || (relPath !== '' && !await deepestExistingAncestorInside(root, target))) return fail('path 越界');
+    let stat: fs.Stats;
+    try { stat = await fs.promises.lstat(target); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if (op === 'delete') return current() ? { ok: true, op: 'delete', path: relPath, existed: false } : fail('调用已结束');
+      return { ok: false, errorCode: 'NOT_FOUND', message: '文件或目录不存在' };
+    }
+    if (stat.isSymbolicLink()) return fail('目标是符号链接');
+    if (!current()) return fail('调用已结束');
+
+    if (op === 'watch') {
+      const signal = this.deps.getCallSignal?.(ghostId, callId);
+      if (!stat.isDirectory() || !signal || signal.aborted || !this.deps.watchDirectory) return fail('当前调用无法建立目录监听');
+      for (const [watchId, watcher] of this.watches) {
+        if (watcher.ghostId === ghostId && watcher.callId === callId && watcher.path === relPath && watcher.current()) {
+          return { ok: true, op: 'watch', watchId, cursor: watcher.sequence };
+        }
+      }
+      const watchId = randomUUID();
+      let release: (() => Promise<void>) | undefined;
+      let closed = false;
+      const entry = {
+        ghostId, callId, sessionId: info.sessionId, path: relPath, current: () => current() && !signal.aborted,
+        sequence: 0, events: [] as Array<{ sequence: number; path: string; type: 'create' | 'update' | 'delete' }>, resetRequired: false,
+        close: () => {
+          if (closed) return;
+          closed = true;
+          this.watches.delete(watchId);
+          signal.removeEventListener('abort', entry.close);
+          if (release) void release().catch(() => this.deps.log?.warn('file watcher release failed', { ghostId }));
+        },
+      };
+      this.watches.set(watchId, entry);
+      signal.addEventListener('abort', entry.close, { once: true });
+      try {
+        release = await this.deps.watchDirectory(target, event => {
+          if (closed) return;
+          if (!entry.current()) { entry.close(); return; }
+          const relative = relPath ? `${relPath}/${event.path}` : event.path;
+          if (validateFsRelPath(relative)) return;
+          entry.events.push({ ...event, path: relative, sequence: ++entry.sequence });
+          if (entry.events.length > 256) entry.events.shift();
+        }, () => { entry.resetRequired = true; });
+        if (closed || !entry.current()) {
+          if (closed) await release(); else entry.close();
+          return fail('监听建立期间调用已结束');
+        }
+        return { ok: true, op: 'watch', watchId, cursor: 0 };
+      } catch {
+        entry.close();
+        return fail('宿主无法建立目录监听');
+      }
+    }
+
+    if (op === 'list') {
+      const entries = await listDir(root, relPath, null, { maxEntries: GHOST_FS_LIST_MAX_ENTRIES });
+      if (!current()) return fail('调用已结束');
+      return { ok: true, op: 'list', entries: entries.filter(entry => !validateFsRelPath(entry.relPath)).map(entry => ({
+        path: entry.relPath, bytes: entry.size, mtime: Math.round(entry.mtimeMs), type: entry.type,
+      })) };
+    }
+    if (op === 'read') {
+      if (!stat.isFile() || stat.size > GHOST_FS_READ_MAX_BYTES) return fail('目标不是普通文件或超过单次读取上限');
+      const chunks: Buffer[] = [];
+      let offset = 0;
+      do {
+        const chunk = await readFileChunk(root, relPath, offset, Math.min(1024 * 1024, GHOST_FS_READ_MAX_BYTES - offset));
+        if (!current()) return fail('调用已结束');
+        if (chunk.size > GHOST_FS_READ_MAX_BYTES) return fail('文件超过单次读取上限');
+        chunks.push(chunk.data);
+        offset += chunk.data.byteLength;
+        if (chunk.eof) break;
+        if (chunk.data.byteLength === 0 || offset >= GHOST_FS_READ_MAX_BYTES) return fail('文件在读取期间发生变化');
+      } while (true);
+      const bytes = Buffer.concat(chunks), encoding = req.encoding === 'base64' ? 'base64' : 'utf8';
+      return { ok: true, op: 'read', path: relPath, content: bytes.toString(encoding), encoding, bytes: bytes.byteLength };
+    }
+    if (op !== 'delete') return fail('不支持的工作目录操作');
+    // Delete always has its own decision; a previous write confirmation grants no delete authority.
+    let verdict = workdirWriteVerdict(session.permissionMode, session.planModeEnabled);
+    if (verdict === 'deny') return fail('当前会话处于计划/只读模式，不允许删除');
+    if (verdict === 'review') {
+      let decision: AutoReviewDecision;
+      try { decision = await session.reviewAction?.({ kind: 'other', description: `Delete ${relPath} from the current working directory`, requireConsent: true }) ?? { verdict: 'ask' }; }
+      catch { decision = { verdict: 'ask' }; }
+      if (!current()) return fail('调用已结束');
+      if (decision.verdict === 'block') return fail('自动审核拒绝删除');
+      verdict = decision.verdict === 'allow' ? 'allow' : 'confirm';
+    }
+    if (verdict === 'confirm') {
+      const decision = await this.deps.requestWriteConfirm(info.sessionId, {
+        ghostId, ghostName: ghost.manifest.name, lane: 'fs_delete',
+        items: [{ name: path.basename(target), absPath: target, size: stat.size, isDirectory: stat.isDirectory() }],
+      });
+      if (!decision.confirmed) return fail('本次删除未获批准');
+    }
+    // Re-resolve after confirmation; neither an installation replacement nor a new symlink inherits it.
+    if (!current() || !await deepestExistingAncestorInside(root, target)) return fail('目录或调用授权已失效');
+    const latest = await fs.promises.lstat(target);
+    if (latest.isSymbolicLink() || latest.dev !== stat.dev || latest.ino !== stat.ino || !current()) return fail('删除目标已变化');
+    await deleteEntry(root, relPath);
+    return current() ? { ok: true, op: 'delete', path: relPath, existed: true } : fail('调用已结束');
   }
 
   /* ── root:'data' 私有数据目录 ─────────────────────────────────────── */
@@ -712,9 +875,14 @@ export class GhostFsSlot {
 
   /** 会话关闭时清掉该会话的确认记忆(防 Set 无界增长)。 */
   cleanupForSession(sessionId: string): void {
+    for (const watch of this.watches.values()) if (watch.sessionId === sessionId) watch.close();
     const prefix = `${sessionId} `;
     for (const key of Array.from(this.workdirGrants)) {
       if (key.startsWith(prefix)) this.workdirGrants.delete(key);
     }
+  }
+
+  disposeAll(): void {
+    for (const watch of this.watches.values()) watch.close();
   }
 }

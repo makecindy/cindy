@@ -559,6 +559,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
 
 ## 4. 网络、凭证与资源交接
 
+- `fs-request` 的 `workdir` 读、列、删和监听复用现有文件核心与宿主 watcher，沿用严格在途 `callId`
+  及活跃 Session，不要求自主 `fs:true`，不接收插件自报的目录。读/list/watch 不扩大到工作目录外，
+  SSH 任务不能读取控制端同名目录；列表过滤隐藏路径与链接。删除按当前任务权限独立裁决，Ask
+  使用 `fs_delete` 原生确认，不复用写入记忆；计划模式禁止删除，确认后复核目录、目标与调用身份。
+  `watch/changes/unwatch` 只交换相对路径元数据，256 条有界缓冲与单 watcher 游标支持续读，缺口或错误
+  明确 `resetRequired`；原调用结束或 Stop 即释放。UI 与 Node Host 接线均须提供相同的身份与取消语义。
+  `data` 和 `save` 原行为、旧 manifest/receipt/批准保持不变。回归见 `fsSlot.test.ts`，作者用法见 §4.10。
+
 - 自主 network 只允许 manifest 白名单域名；凭证由主机保险库注入，**无明文读回**
   给沙箱。Agent 在途调用可凭严格 `callId` 访问未预声明的普通 HTTPS 地址，仍须通过
   主机 URL、SSRF、超时、体积与重定向守门。此途径不注入任何未在 manifest 中声明且
