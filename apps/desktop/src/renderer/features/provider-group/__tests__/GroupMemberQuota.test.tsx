@@ -28,6 +28,9 @@ const mocks = vi.hoisted(() => ({
   control: new Set<(snapshot: { deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }) => void>(),
   status: new Set<(snapshot: { status: string }) => void>(),
   getState: vi.fn(),
+  poolCommand: vi.fn(),
+  poolChanged: new Set<(event: { providerId: string }) => void>(),
+  remoteInvoke: vi.fn(),
   realCard: false,
   catalogState: 'ready' as 'ready' | 'loading' | 'error',
 }));
@@ -54,7 +57,9 @@ vi.mock('@/components/settings/useProviderSubscriptionCard', async (importOrigin
     return provider ? (mocks.cards[`${deviceId ?? 'local'}:${provider.id}`] ?? null) : null;
   } };
 });
-vi.mock('@/components/status/QuotaHoverCard', () => ({
+vi.mock('@/components/status/QuotaHoverCard', async () => ({
+  QUOTA_WINDOW_COLUMNS: 'grid-cols-test',
+  QuotaWindowSubgridContext: (await import('react')).createContext(false),
   QuotaHoverCard: ({ account, hideIdentity }: { account: UsageCardAccount; hideIdentity?: boolean }) => (
     <div data-testid="quota-card" data-hide-identity={String(Boolean(hideIdentity))}
       data-usage={JSON.stringify(account.windows?.map(window => window.window.utilization))}
@@ -68,6 +73,13 @@ import { GroupMemberQuota, groupMemberQuotaTarget, type GroupMemberQuotaTarget }
 
 const claude = (id: string) => ({ id, name: 'Anthropic', source: 'builtin', connected: true, auth: { method: 'oauth', native: 'claude' } });
 const apiKey = (id: string) => ({ id, name: 'OpenRouter', source: 'user', connected: true, auth: { method: 'api-key' } });
+const claudeUsage = (fiveHour: number) => ({
+  claude: { source: 'oauth-endpoint', updatedAt: Date.now(), subscriptionType: 'max', fiveHour: { utilization: fiveHour, resetsAt: null }, sevenDay: null, scoped: [] },
+});
+function poolAccount(id: string, patch: Record<string, unknown> = {}) {
+  return { id, paused: false, limit: 4, weight: 1, directory: `/${id}`, status: 'ready', running: 0, ...patch };
+}
+const pool = (accounts: unknown[], providerId = 'anthropic') => ({ providerId, configured: true, strategy: 'least', accounts });
 
 async function mountQuota(view: ReactElement) {
   const mounted = render(view);
@@ -87,7 +99,17 @@ beforeEach(() => {
   mocks.status.clear();
   mocks.control.clear();
   mocks.getState.mockReset().mockResolvedValue({ linkStatus: 'online' });
-  vi.stubGlobal('electronAPI', { deviceLink: {
+  mocks.poolChanged.clear();
+  mocks.poolCommand.mockReset().mockResolvedValue({ providerId: 'anthropic', configured: false, strategy: 'least', accounts: [poolAccount('default', { identity: 'me@example.com' })] });
+  mocks.remoteInvoke.mockReset().mockRejectedValue(new Error('unsupported'));
+  vi.stubGlobal('electronAPI', { subscriptionAccounts: {
+    command: mocks.poolCommand,
+    onChanged: (listener: (event: { providerId: string }) => void) => {
+      mocks.poolChanged.add(listener);
+      return () => mocks.poolChanged.delete(listener);
+    },
+  }, deviceLink: {
+    invoke: mocks.remoteInvoke,
     getState: mocks.getState,
     onControlTargetChanged: (listener: (snapshot: { deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }) => void) => {
       mocks.control.add(listener);
@@ -774,12 +796,103 @@ describe('GroupMemberQuota', () => {
     expect(mocks.cardReads.at(-1)).toEqual(['anthropic-1a2b', 'mini']);
   });
 
+  it('lists every account on this computer, keeping the live card on the default account', async () => {
+    mocks.poolCommand.mockResolvedValue(pool([
+      poolAccount('default', { identity: 'first@example.com', usage: claudeUsage(90) }),
+      poolAccount('work', { identity: 'second@example.com', usage: claudeUsage(25) }),
+    ]));
+    await show({ kind: 'local', providerId: 'anthropic' });
+    expect(mocks.poolCommand).toHaveBeenCalledWith({ action: 'read', providerId: 'anthropic' });
+    const rows = screen.getAllByTestId('provider-group-member-account');
+    expect(rows.map(row => row.querySelector('[title]')?.textContent)).toEqual(['first@example.com', 'second@example.com']);
+    // 默认账号沿用原卡，新增账号用自己的额度，互不借用。
+    expect(rows[0].querySelector('[data-testid="quota-card"]')?.textContent).toBe('This computer’s Claude');
+    expect(rows[1].querySelector('[data-testid="quota-card"]')?.textContent).not.toBe('This computer’s Claude');
+  });
+
+  it('reads the accounts of my other computer over device link', async () => {
+    mocks.byDevice.mini = [claude('anthropic')];
+    mocks.cards = { 'mini:anthropic': { title: 'Mini’s Claude' } };
+    mocks.remoteInvoke.mockResolvedValue(pool([
+      poolAccount('default', { identity: 'first@example.com' }),
+      poolAccount('work', { usage: claudeUsage(25) }),
+    ]));
+    await show({ kind: 'device', deviceId: 'mini', providerId: 'anthropic' });
+    expect(mocks.remoteInvoke).toHaveBeenCalledWith('mini', 'maker:subscription-accounts', [{ action: 'read', providerId: 'anthropic' }]);
+    expect(mocks.poolCommand).not.toHaveBeenCalled();
+    const rows = screen.getAllByTestId('provider-group-member-account');
+    // 读不到身份时按账号池里的序号称呼。
+    expect(rows[1].querySelector('[title]')?.textContent).toBe('providerGroup.member.accountFallback');
+  });
+
+  it('keeps the single card when the other computer cannot list its accounts', async () => {
+    mocks.byDevice.mini = [claude('anthropic')];
+    mocks.cards = { 'mini:anthropic': { title: 'Mini’s Claude' } };
+    await show({ kind: 'device', deviceId: 'mini', providerId: 'anthropic' });
+    expect(mocks.remoteInvoke).toHaveBeenCalled();
+    expect(screen.queryByTestId('provider-group-member-account')).toBeNull();
+    expect(screen.getByTestId('quota-card').textContent).toBe('Mini’s Claude');
+  });
+
+  it('adds no account name when the default account is the only one', async () => {
+    await show({ kind: 'local', providerId: 'anthropic' });
+    expect(mocks.poolCommand).toHaveBeenCalled();
+    expect(screen.queryByTestId('provider-group-member-account')).toBeNull();
+    expect(screen.getByTestId('quota-card').textContent).toBe('This computer’s Claude');
+  });
+
+  it('shows the signed-in account alone instead of an unused default slot', async () => {
+    mocks.poolCommand.mockResolvedValue(pool([
+      poolAccount('default', { status: 'signed-out' }),
+      poolAccount('work', { identity: 'second@example.com', usage: claudeUsage(25) }),
+    ]));
+    await show({ kind: 'local', providerId: 'anthropic' });
+    expect(screen.queryByTestId('provider-group-member-account')).toBeNull();
+    expect(screen.getByTestId('quota-card').textContent).not.toBe('This computer’s Claude');
+  });
+
+  it('says why an account has no bars and dims a paused one', async () => {
+    mocks.poolCommand.mockResolvedValue(pool([
+      poolAccount('default', { identity: 'first@example.com', status: 'signed-out' }),
+      poolAccount('work', { identity: 'second@example.com', paused: true, usage: claudeUsage(25) }),
+    ]));
+    mocks.cards = {};
+    await show({ kind: 'local', providerId: 'anthropic' });
+    const rows = screen.getAllByTestId('provider-group-member-account');
+    expect(rows[0].textContent).toContain('subscriptionAccounts.signedOut');
+    expect(rows[0].querySelector('[data-testid="quota-card"]')).toBeNull();
+    expect(rows[1].textContent).toContain('providerGroup.member.status.paused');
+    expect(rows[1].className).toContain('opacity-60');
+  });
+
+  it('rereads the accounts when they change on this computer', async () => {
+    await show({ kind: 'local', providerId: 'anthropic' });
+    expect(screen.queryByTestId('provider-group-member-account')).toBeNull();
+    mocks.poolCommand.mockResolvedValue(pool([
+      poolAccount('default', { identity: 'first@example.com' }),
+      poolAccount('work', { identity: 'second@example.com', usage: claudeUsage(25) }),
+    ]));
+    await act(async () => {
+      mocks.poolChanged.forEach(listener => listener({ providerId: 'anthropic' }));
+    });
+    expect(screen.getAllByTestId('provider-group-member-account')).toHaveLength(2);
+  });
+
+  it('does not list accounts for a named or API-key connection', async () => {
+    await show({ kind: 'device', deviceId: 'mini', providerId: 'anthropic-1a2b' });
+    await show({ kind: 'device', deviceId: 'pc', providerId: 'openrouter' });
+    expect(mocks.remoteInvoke).not.toHaveBeenCalled();
+    expect(mocks.poolCommand).not.toHaveBeenCalled();
+  });
+
   it('does not read a computer shared by someone else', async () => {
     await show({ kind: 'share' });
     expect(screen.getByText('providerGroup.member.quota.share')).toBeTruthy();
     expect(screen.queryByTestId('quota-card')).toBeNull();
     expect(mocks.deviceReads.every((deviceId) => deviceId === undefined)).toBe(true);
     expect(mocks.cardReads.every(([providerId]) => providerId === undefined)).toBe(true);
+    expect(mocks.poolCommand).not.toHaveBeenCalled();
+    expect(mocks.remoteInvoke).not.toHaveBeenCalled();
   });
 
   it('does not read an offline computer', async () => {
@@ -787,6 +900,7 @@ describe('GroupMemberQuota', () => {
     await show({ kind: 'device', deviceId: 'mini', providerId: 'anthropic-1a2b' }, true);
     expect(screen.getByText('providerGroup.member.quota.offline')).toBeTruthy();
     expect(mocks.deviceReads.every((deviceId) => deviceId === undefined)).toBe(true);
+    expect(mocks.remoteInvoke).not.toHaveBeenCalled();
   });
 
   it('says a provider without a subscription quota has none', async () => {
