@@ -40,6 +40,8 @@ export const appSettingsSections: AppSettingsSection[] = [{
     const defaults = { ...state.defaults };
     delete value.customWallpaperUrl;
     delete defaults.customWallpaperUrl;
+    delete value.bingWallpaper;
+    delete defaults.bingWallpaper;
     return { ...state, value, defaults };
   },
   update: async patch => { await updateAppearanceFromSettings(patch); },

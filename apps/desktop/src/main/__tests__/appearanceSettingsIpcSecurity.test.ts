@@ -2,6 +2,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   appOn: vi.fn(),
+  bingRefresh: vi.fn(),
+  bingReconcile: vi.fn(),
   ipcOn: vi.fn(),
   ipcHandle: vi.fn(),
   allWindows: [] as Array<unknown>,
@@ -75,6 +77,20 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  // #9640, unit: real IPC handlers; legacy CDN tests do not cover the mutable source.
+  // A hostile frame must not trigger refresh; user selection cannot supply local media URLs.
+  it('accepts Bing selection, rejects host-owned snapshots and guards refresh before dispatch', async () => {
+    expect(__testing.parsePatch({ wallpaperId: 'bing-daily' })).toEqual({ wallpaperId: 'bing-daily' });
+    expect(() => __testing.parsePatch({ bingWallpaper: { image: { url: 'file:///private' } } }))
+      .toThrow('INVALID_PARAMS');
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:refresh-bing-wallpaper')?.[1];
+    await handler({});
+    expect(mocks.bingRefresh).toHaveBeenCalledOnce();
+    mocks.assertTrustedAppRendererEvent.mockImplementationOnce(() => { throw new Error('untrusted'); });
+    await expect(handler({})).rejects.toThrow('untrusted');
+    expect(mocks.bingRefresh).toHaveBeenCalledOnce();
+  });
+
   it('validates literal visibility and accepts null only to reset its override', () => {
     for (const wallpaperBlur of [0, 8, 20, null]) {
       expect(__testing.parsePatch({ wallpaperBlur })).toEqual({ wallpaperBlur });
@@ -208,10 +224,12 @@ describe('appearance settings IPC authorization', () => {
     expect(() => __testing.parsePatch({ wallpaperMotion: 'auto' })).toThrow();
   });
   beforeAll(() => {
-    registerAppearanceSettingsIpc();
+    registerAppearanceSettingsIpc({ refresh: mocks.bingRefresh, reconcile: mocks.bingReconcile });
   });
 
   beforeEach(() => {
+    mocks.bingRefresh.mockReset();
+    mocks.bingReconcile.mockReset();
     mocks.owner = 'owner-a:1';
     mocks.boundaryPending = false;
     mocks.importWallpaper.mockReset();
@@ -371,9 +389,10 @@ describe('appearance settings IPC authorization', () => {
     expect(mocks.assertTrustedAppRendererEvent).toHaveBeenNthCalledWith(3, event);
   });
 
-  it('withholds private media from utility bootstrap and broadcasts, while retaining it for app content', async () => {
+  it.each(['custom', 'bing-daily'] as const)('withholds %s media from utility bootstrap and broadcasts, while retaining it for app content', async (wallpaperId) => {
     const settings = normalizeAppearanceSettings({
-      wallpaperId: 'custom',
+      wallpaperId,
+      bingWallpaper: { status: 'ready', image: null },
       customWallpaperUrl: `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`,
     });
     const utility = {
@@ -394,6 +413,7 @@ describe('appearance settings IPC authorization', () => {
     mocks.fromWebContents.mockReturnValue(utility);
     sync(event);
     expect(event.returnValue).not.toHaveProperty('customWallpaperUrl');
+    expect(event.returnValue).not.toHaveProperty('bingWallpaper');
     expect(event.returnValue).toMatchObject({ wallpaperId: 'none', uiSize: settings.uiSize });
     mocks.fromWebContents.mockReturnValue(content);
     sync(event);
@@ -407,6 +427,7 @@ describe('appearance settings IPC authorization', () => {
     )![1];
     await set({}, { uiSize: 15 });
     expect(utility.webContents.send.mock.calls[0][1]).not.toHaveProperty('customWallpaperUrl');
+    expect(utility.webContents.send.mock.calls[0][1]).not.toHaveProperty('bingWallpaper');
     expect(content.webContents.send).toHaveBeenCalledWith('appearance-settings:changed', settings);
   });
 

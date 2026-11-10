@@ -2324,7 +2324,8 @@
           "dune-sphere": "Esfera de dunas",
           "ocean-clouds": "Nubes del océano",
           "rose-quartz": "Cuarzo Rosa",
-          "custom": "Fondo de pantalla personalizado"
+          "custom": "Fondo de pantalla personalizado",
+          "bing-daily": "Fondo Diario de Bing"
         },
         "visibilityLabel": "Visibilidad del fondo de pantalla",
         "visibilityHint": "0% oculta el fondo de pantalla; El 100% lo muestra sin superposición.",
@@ -2348,7 +2349,12 @@
         "customFailed": "No se pudo guardar el fondo de pantalla. Por favor inténtalo de nuevo.",
         "downloading": "Descargando fondo de pantalla…",
         "downloadFailed": "Algunos recursos de fondo de pantalla no están disponibles. Usando el fondo disponible.",
-        "retryDownload": "Reintentar descargar"
+        "retryDownload": "Reintentar descargar",
+        "bingHint": "Se actualiza automáticamente mientras Cindy está en ejecución. Bing proporciona las imágenes.",
+        "bingLoading": "Actualizando fondo…",
+        "bingFailed": "No se puede cargar el fondo diario",
+        "bingStale": "No se puede actualizar. Se conserva la imagen en caché.",
+        "bingSource": "Acerca de Esta Imagen"
       },
       "layout": {
         "label": "Diseño de paneles",

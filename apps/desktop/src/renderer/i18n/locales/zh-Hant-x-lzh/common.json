@@ -2256,7 +2256,8 @@
           "dune-sphere": "沙丘孤石",
           "ocean-clouds": "滄海流雲",
           "rose-quartz": "薔薇晶石",
-          "custom": "自擇屏畫"
+          "custom": "自擇屏畫",
+          "bing-daily": "Bing 每日壁紙"
         },
         "visibilityLabel": "桌布顯度",
         "visibilityHint": "0% 隱桌布，100% 盡顯桌布。",
@@ -2280,7 +2281,12 @@
         "customFailed": "桌布無法儲存，請再試。",
         "downloading": "方取桌布…",
         "downloadFailed": "桌布資源未盡取下，暫用可用之背景",
-        "retryDownload": "再取"
+        "retryDownload": "再取",
+        "bingHint": "Cindy 運行之時自動更新，圖取自 Bing",
+        "bingLoading": "壁紙更新中…",
+        "bingFailed": "每日壁紙未能載入",
+        "bingStale": "暫未能更新，仍用已存之圖",
+        "bingSource": "察此圖出處"
       },
       "layout": {
         "label": "面板之陳",

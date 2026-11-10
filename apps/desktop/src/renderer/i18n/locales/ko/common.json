@@ -2256,7 +2256,8 @@
           "dune-sphere": "모래 언덕의 구체",
           "ocean-clouds": "바다 위 흐르는 구름",
           "rose-quartz": "장미 수정",
-          "custom": "사용자 지정 배경화면"
+          "custom": "사용자 지정 배경화면",
+          "bing-daily": "Bing 일일 배경 화면"
         },
         "visibilityLabel": "배경화면 표시 강도",
         "visibilityHint": "0%에서는 배경화면을 숨기고, 100%에서는 원본 그대로 표시합니다.",
@@ -2280,7 +2281,12 @@
         "customFailed": "배경화면을 저장하지 못했습니다. 다시 시도하세요.",
         "downloading": "배경화면 다운로드 중…",
         "downloadFailed": "일부 배경화면 파일을 받지 못해 사용 가능한 배경을 표시합니다.",
-        "retryDownload": "다시 다운로드"
+        "retryDownload": "다시 다운로드",
+        "bingHint": "Cindy 실행 중 자동으로 업데이트됩니다. 이미지는 Bing에서 제공합니다.",
+        "bingLoading": "배경 화면 업데이트 중…",
+        "bingFailed": "일일 배경 화면을 불러올 수 없습니다",
+        "bingStale": "업데이트할 수 없습니다. 캐시된 이미지를 계속 표시합니다.",
+        "bingSource": "이미지 정보 보기"
       },
       "layout": {
         "label": "패널 레이아웃",

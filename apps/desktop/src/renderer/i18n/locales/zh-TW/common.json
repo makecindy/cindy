@@ -2256,7 +2256,8 @@
           "dune-sphere": "沙丘圓石",
           "ocean-clouds": "滄海流雲",
           "rose-quartz": "薔薇晶礦",
-          "custom": "自訂桌布"
+          "custom": "自訂桌布",
+          "bing-daily": "Bing 每日桌布"
         },
         "visibilityLabel": "桌布可見度",
         "visibilityHint": "0% 隱藏桌布，100% 完全顯示桌布。",
@@ -2280,7 +2281,12 @@
         "customFailed": "無法儲存桌布，請重試。",
         "downloading": "正在下載桌布…",
         "downloadFailed": "部分桌布資源未下載，暫用可用背景",
-        "retryDownload": "重試下載"
+        "retryDownload": "重試下載",
+        "bingHint": "Cindy 執行期間自動更新，圖片由 Bing 提供",
+        "bingLoading": "正在更新桌布…",
+        "bingFailed": "無法載入每日桌布",
+        "bingStale": "暫時無法更新，繼續使用已快取圖片",
+        "bingSource": "查看圖片出處"
       },
       "layout": {
         "label": "面板佈局",

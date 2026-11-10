@@ -43,6 +43,61 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
+  // #9640, unit: real provider/canvas. A daily image can change URL without changing its
+  // source ID; visibility and blur must remain while the new image decodes or fails.
+  it('decodes daily changes, keeps the previous image on failure and clears it after reset', async () => {
+    const first = 'cindy-media://client-wallpaper/' + 'a'.repeat(64) + '.webp';
+    const second = 'cindy-media://client-wallpaper/' + 'b'.repeat(64) + '.webp';
+    const third = 'cindy-media://client-wallpaper/' + 'c'.repeat(64) + '.webp';
+    const decodes = new Map<string, { resolve: () => void; reject: () => void }>();
+    vi.stubGlobal('Image', class {
+      src = '';
+      decode = () => new Promise<void>((resolve, reject) => {
+        decodes.set(this.src, { resolve, reject: () => reject(new Error('decode failed')) });
+      });
+    });
+    const snapshot = (url: string) => ({ ...DEFAULT_APPEARANCE_SETTINGS,
+      wallpaperId: 'bing-daily' as const, wallpaperBlur: 9, wallpaperVisibility: 0.6,
+      bingWallpaper: { status: 'ready' as const, image: { url, imageKey: url,
+        market: 'en-US', date: '20261109', title: 'Example', copyright: 'Example', sourceUrl: '' } },
+    });
+    let changed!: (settings: ReturnType<typeof snapshot>) => void;
+    const ensureImage = vi.fn();
+    const ensureVideo = vi.fn();
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    const setPatch = vi.fn();
+    vi.stubGlobal('electronAPI', { appearanceSettings: {
+      getSync: () => snapshot(first),
+      onChanged: (callback: typeof changed) => { changed = callback; return () => {}; },
+      setPatch, refreshBingWallpaper: refresh,
+      ensureWallpaperImage: ensureImage, ensureWallpaperVideo: ensureVideo,
+    } });
+    render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
+    await act(async () => decodes.get(first)!.resolve());
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + first + '")');
+    expect(root.style.getPropertyValue('--app-wallpaper-veil')).toBe('40%');
+    expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('9px');
+    act(() => changed(snapshot(second)));
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + first + '")');
+    await act(async () => decodes.get(second)!.resolve());
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + second + '")');
+    expect(root.style.getPropertyValue('--app-wallpaper-veil')).toBe('40%');
+    expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('9px');
+    act(() => changed(snapshot(third)));
+    await act(async () => decodes.get(third)!.reject());
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + second + '")');
+    expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('9px');
+    fireEvent.click(screen.getByText('Retry'));
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(ensureImage).not.toHaveBeenCalled();
+    expect(ensureVideo).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Reset'));
+    await act(async () => {});
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('');
+    expect(setPatch).toHaveBeenCalled();
+  });
+
   // #8591: A -> B must show B's preview immediately, then its decoded original.
   // Existing coverage required retaining A instead. Minimal input: two selections
   // with out-of-order image downloads; unit tier, real provider and canvas.

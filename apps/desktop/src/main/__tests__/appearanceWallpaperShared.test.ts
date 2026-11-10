@@ -21,8 +21,10 @@ vi.mock('../device-link/crossProcessLock.js', () => ({
     action: (lease: { held: boolean }) => unknown,
   ) => action({ held: true }),
 }));
+import { bingWallpaperStore } from '../bing-wallpaper-settings';
 import { customWallpaperStore, readCustomWallpaperUrl } from '../custom-wallpaper-settings';
 import {
+  appearancePortableSettings,
   readAppearanceSettings,
   resetAppearanceSettings,
   writeAppearanceSettingsPatch,
@@ -38,6 +40,22 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(h.dir, { recursive: true, force: true }));
 
 describe('profile-wide wallpaper preference', () => {
+  // #9640, unit: real appearance/portable stores. A new computer may copy the
+  // selected source, but must never receive another profile's cached media URL.
+  it('exports only the daily source preference and rejects imported cache snapshots', async () => {
+    await bingWallpaperStore.writePatchAtomic({ current: {
+      url: urlA, imageKey: 'example', market: 'en-US', date: '20261109',
+      title: 'Example', copyright: '', sourceUrl: '',
+    } });
+    await writeAppearanceSettingsPatch({ wallpaperId: 'bing-daily', wallpaperBlur: 6 });
+    expect(readAppearanceSettings().bingWallpaper?.image?.url).toBe(urlA);
+    expect(appearancePortableSettings.readCustomized()).toEqual({ wallpaperId: 'bing-daily', wallpaperBlur: 6 });
+    await appearancePortableSettings.applyPatch(() => ({ bingWallpaper: { image: { url: urlB } } }));
+    expect(readAppearanceSettings().bingWallpaper?.image?.url).toBe(urlA);
+    expect(JSON.parse(fs.readFileSync(path.join(h.dir, 'appearance-settings.json'), 'utf8')))
+      .toEqual({ wallpaperId: 'bing-daily', wallpaperBlur: 6 });
+  });
+
   // Unit persistence regression: upgrade reads must leave the old file untouched;
   // a desktop opt-in survives reread without rewriting artwork or other settings.
   it('persists desktop visibility separately and removes only its override on reset', async () => {

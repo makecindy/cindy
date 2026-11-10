@@ -2286,7 +2286,8 @@
           "dune-sphere": "Dune Sphere",
           "ocean-clouds": "Ocean Clouds",
           "rose-quartz": "Rose Quartz",
-          "custom": "Custom wallpaper"
+          "custom": "Custom wallpaper",
+          "bing-daily": "Bing Daily Wallpaper"
         },
         "visibilityLabel": "Wallpaper Visibility",
         "visibilityHint": "0% hides the wallpaper; 100% shows it without an overlay.",
@@ -2310,7 +2311,12 @@
         "customFailed": "Could not save the wallpaper. Please try again.",
         "downloading": "Downloading wallpaper…",
         "downloadFailed": "Some wallpaper assets are unavailable. Using the available background.",
-        "retryDownload": "Retry Download"
+        "retryDownload": "Retry Download",
+        "bingHint": "Updates automatically while Cindy is running. Images are provided by Bing.",
+        "bingLoading": "Updating wallpaper…",
+        "bingFailed": "Unable to load the daily wallpaper",
+        "bingStale": "Unable to update. Keeping the cached image.",
+        "bingSource": "About This Image"
       },
       "layout": {
         "label": "Panel layout",

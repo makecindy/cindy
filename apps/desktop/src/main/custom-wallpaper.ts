@@ -1,5 +1,5 @@
 import { dialog, type BrowserWindow } from 'electron';
-import sharp from 'sharp';
+import { prepareWallpaperImage } from './wallpaper-image.js';
 
 import { readBoundedFileNoFollow } from './utils/readBoundedFile.js';
 import { throwIpcError } from './utils/ipcValidate.js';
@@ -17,24 +17,7 @@ const log = createLogger('custom-wallpaper');
 const MAX_BYTES = 20 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
-/** Decode real raster bytes, apply orientation, strip metadata and retain a static 4K preview. */
-export async function prepareWallpaperImage(bytes: Buffer): Promise<Buffer> {
-  if (!bytes.length || bytes.length > MAX_BYTES)
-    throwIpcError('INVALID_PARAMS', 'Choose a PNG, JPEG or WebP image up to 20 MB');
-  try {
-    const image = sharp(bytes, { limitInputPixels: 40_000_000 });
-    const metadata = await image.metadata();
-    if (!['png', 'jpeg', 'webp'].includes(metadata.format ?? ''))
-      throw new Error('Unsupported image');
-    return await image
-      .rotate()
-      .resize({ width: 3840, height: 3840, fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 90 })
-      .toBuffer();
-  } catch {
-    throwIpcError('INVALID_PARAMS', 'Choose a valid PNG, JPEG or WebP image up to 40 megapixels');
-  }
-}
+export { prepareWallpaperImage } from './wallpaper-image.js';
 
 /** Paths come only from this native picker, never from the renderer or remote peers. */
 export async function importCustomWallpaper(parent: BrowserWindow): Promise<boolean> {

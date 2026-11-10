@@ -1,3 +1,4 @@
+import type { BingWallpaperSnapshot } from '@/../shared/bingWallpaper';
 import {
   createContext,
   useCallback,
@@ -37,6 +38,7 @@ export interface WallpaperSettings {
   wallpaperBlur?: number | null;
   wallpaperMotion: WallpaperMotion;
   customWallpaperUrl?: string;
+  bingWallpaper?: BingWallpaperSnapshot;
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
@@ -79,6 +81,7 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
     wallpaperBlur: settings.wallpaperBlur,
     wallpaperMotion: settings.wallpaperMotion,
     customWallpaperUrl: settings.customWallpaperUrl,
+    bingWallpaper: settings.bingWallpaper,
   };
 }
 
@@ -117,20 +120,23 @@ export function WallpaperSettingsProvider({
   const downloadProgress =
     downloadBytes > 0 ? (imageAsset.loaded + videoAsset.loaded) / downloadBytes : 0;
   const retryDownload = useCallback(() => {
+    if (settings.wallpaperId === 'bing-daily') {
+      void getBridge()?.refreshBingWallpaper?.().catch(() => undefined);
+      return;
+    }
     imageAsset.retry();
     videoAsset.retry();
-  }, [imageAsset.retry, videoAsset.retry]);
+  }, [imageAsset.retry, videoAsset.retry, settings.wallpaperId]);
   const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
-  const background =
-    settings.wallpaperId === 'custom'
-      ? customUrl
-        ? isCustomWallpaperVideo(customUrl)
-          ? 'none'
-          : `url("${customUrl}")`
-        : undefined
-      : imageAsset.url
-        ? `url("${imageAsset.url}")`
-        : getBuiltinWallpaperBackground(settings.wallpaperId);
+  const bingUrl = settings.bingWallpaper?.image?.url;
+  let background: string | undefined;
+  if (settings.wallpaperId === 'bing-daily') {
+    background = bingUrl ? `url("${bingUrl}")` : undefined;
+  } else if (settings.wallpaperId === 'custom') {
+    background = customUrl ? isCustomWallpaperVideo(customUrl) ? 'none' : `url("${customUrl}")` : undefined;
+  } else {
+    background = imageAsset.url ? `url("${imageAsset.url}")` : getBuiltinWallpaperBackground(settings.wallpaperId);
+  }
   useWallpaperBackground({
     background,
     // Only macOS has an independent native sidebar material. Elsewhere 0% keeps the
@@ -141,6 +147,7 @@ export function WallpaperSettingsProvider({
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
     reducedMotion,
     decodeUrl:
+      settings.wallpaperId === 'bing-daily' ? bingUrl :
       settings.wallpaperId === 'custom' && !isCustomWallpaperVideo(customUrl)
         ? customUrl || undefined
         : undefined,
@@ -188,7 +195,9 @@ export function WallpaperSettingsProvider({
         .catch(() => undefined);
     };
     refresh();
+    window.addEventListener('online', refresh);
     return () => {
+      window.removeEventListener('online', refresh);
       disposed = true;
       unsubscribe();
     };

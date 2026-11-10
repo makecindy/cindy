@@ -1,3 +1,4 @@
+import { startBingWallpaperService, reconcileBingWallpaper, refreshBingWallpaper, stopBingWallpaperService } from './bing-wallpaper-host.js';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
 import { createPersonalBuildMonitor } from './personalBuildMonitor.js';
 import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
@@ -1176,6 +1177,7 @@ import {
   getPersistedWindowZoom,
   installWindowZoomRestoration,
   registerAppearanceSettingsIpc,
+  broadcastAppearanceSettings,
   updatePersistedWindowZoom,
 } from './appearance-settings-ipc.js';
 import { applyDockIcon } from './app-icon.js';
@@ -2823,7 +2825,7 @@ registerBrowserBackendIpc();
 // renderer 启动同步拉 overrides、设置页写路径、changed 广播。顶层注册,
 // ipcMain.handle 在 app ready 前注册也有效。
 registerAppShortcutIpc();
-registerAppearanceSettingsIpc();
+registerAppearanceSettingsIpc({ reconcile: reconcileBingWallpaper, refresh: refreshBingWallpaper });
 registerAccessibilitySupportIpc();
 registerLoginItemIpc();
 registerMenubarIpc();
@@ -3469,6 +3471,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  reconcileBingWallpaper();
   setRegionScreenshotLocale(currentApplicationMenuLocale);
   if (previousLocale !== currentApplicationMenuLocale) {
     // Identity names are localized on the source host; refresh its cached views
@@ -10623,6 +10626,15 @@ app.on('ready', async () => {
         voicePowerBroadcastLog,
       );
     },
+  });
+
+  startBingWallpaperService(broadcastAppearanceSettings);
+  app.on('browser-window-focus', reconcileBingWallpaper);
+  powerMonitor.on('resume', reconcileBingWallpaper);
+  app.once('will-quit', () => {
+    app.removeListener('browser-window-focus', reconcileBingWallpaper);
+    powerMonitor.removeListener('resume', reconcileBingWallpaper);
+    stopBingWallpaperService();
   });
 
   // ── System resume: refresh tokens after sleep/hibernate ──

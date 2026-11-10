@@ -131,7 +131,14 @@ export const appearanceSettings = defineSettings({
     tab: 'appearance',
     targetId: 'settings-search-settings-appearance-wallpaper',
     titleKey: 'settings.appearance.wallpaper.title',
-    aliases: ['背景', '背景图', '背景图片', 'background'],
+    aliases: ['背景', '背景图', '背景图片', 'background', 'Bing', '每日壁纸'],
+    keywordKeys: [
+      'settings.appearance.wallpaper.bingHint',
+      'settings.appearance.wallpaper.bingLoading',
+      'settings.appearance.wallpaper.bingStale',
+      'settings.appearance.wallpaper.bingFailed',
+      'settings.appearance.wallpaper.bingSource',
+    ],
     sectionKey: 'settings.appearance.wallpaper.title',
     descriptionKey: 'settings.appearance.wallpaper.description',
     options: SELECTABLE_WALLPAPER_IDS.map((id) => ({
