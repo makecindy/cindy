@@ -19,6 +19,7 @@ import {
   PROTOCOL_VERSION,
   type InvokeResultPayload,
   SessionMessageReuse,
+  CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1,
   CONTROLLER_CAPABILITY_TOOL_RESULT_EVENT_TEXT_OPTIONAL_V1,
   CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
 } from '@cindy/device-link';
@@ -72,6 +73,10 @@ function mkClient(
     onFrame: vi.fn(),
     sendPush: over.sendPush ?? vi.fn(),
   };
+}
+
+function readSession(payload: unknown): unknown {
+  return (payload as { sessionId?: unknown } | null)?.sessionId;
 }
 
 const tooLarge = () => new DeviceLinkError('PAYLOAD_TOO_LARGE', 'frame exceeds 2097152 bytes');
@@ -281,6 +286,66 @@ describe('history detail interest', () => {
     client.sendPush.mockClear();
     __testing.forwardPush('maker:event', payload);
     expect(client.sendPush.mock.calls.some(([peer]) => peer === 'changed')).toBe(false);
+  });
+  // Protocol contract (protocol-compatibility/device-link-history-relink-folded.md): with
+  // history-relink-folded-v1 a session that was read and folded keeps folded through a link change
+  // until it is re-read: no details in the offline backlog, boundaries plus the notice that makes it
+  // re-read on the new link.
+  // A never-read or expanded session keeps full pushes (it may render raw rows or the user chose
+  // details); without the notice the folded rows would never appear. Unit tier: production forwardPush.
+  it('keeps a declaring controller folded across a link change until it re-reads', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = mkClient();
+      __testing.setActiveClient(client as never);
+      const topics = ['session:folded', 'session:listed', 'session:failed', 'session:expanded', 'session:unread'];
+      subscriptions.subscribe('relink', topics, 'relink', [CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1]);
+      subscriptions.subscribe('legacy', topics, 'legacy', []);
+      for (const peer of ['relink', 'legacy']) {
+        for (const sessionId of ['folded', 'listed', 'failed']) subscriptions.prepareHistoryView(peer, sessionId)!.update(['work']);
+        const expanded = subscriptions.prepareHistoryView(peer, 'expanded')!;
+        expanded.update(['work']);
+        expanded.setExpanded(['work']);
+      }
+      const detail = (sessionId: string) => ({ sessionId, event: { type: 'thinking', data: { stage: 'final', blockId: 'b', text: 'detail' } } });
+      const events = (peer: string) => client.sendPush.mock.calls.filter(([to, channel]) => to === peer && channel === 'maker:event').map((call) => call[2]);
+
+      for (const peer of ['relink', 'legacy']) subscriptions.clearController(peer);
+      for (const sessionId of ['folded', 'expanded', 'unread']) __testing.forwardPush('maker:event', detail(sessionId));
+      expect(__testing.queuedPushesFor('relink').map((item) => readSession(item.payload))).toEqual(['expanded', 'unread']);
+      expect(__testing.queuedPushesFor('legacy')).toHaveLength(3);
+
+      // Real controllers re-declare their capabilities on the new link.
+      for (const peer of ['relink', 'legacy']) {
+        __testing.handleLinkOpen(client as never, peer, `${peer}-link`, undefined);
+        subscriptions.subscribe(peer, topics, peer, peer === 'relink' ? [CONTROLLER_CAPABILITY_HISTORY_RELINK_FOLDED_V1] : []);
+      }
+      client.sendPush.mockClear();
+      __testing.forwardPush('maker:event', detail('folded'));
+      expect(events('relink')).toEqual([]);
+      expect(events('legacy')).toEqual([detail('folded')]);
+      await vi.advanceTimersByTimeAsync(600);
+      expect(client.sendPush).toHaveBeenCalledWith('relink', 'maker:history-view-changed', { sessionId: 'folded' });
+
+      // A raw list read or a failed page read on the new link releases the session to full pushes.
+      registry.register('local-db:messages:list', () => []);
+      registry.register('local-db:messages:view', () => { throw new Error('[INTERNAL] read failed'); });
+      expect(await runInvoke('relink', { channel: 'local-db:messages:list', args: ['listed', {}] })).toMatchObject({ ok: true });
+      expect(await runInvoke('relink', { channel: 'local-db:messages:view', args: ['failed', {}] })).toMatchObject({ ok: false });
+      client.sendPush.mockClear();
+      for (const sessionId of ['listed', 'failed']) __testing.forwardPush('maker:event', detail(sessionId));
+      expect(events('relink')).toEqual([detail('listed'), detail('failed')]);
+
+      const reread = subscriptions.prepareHistoryView('relink', 'folded')!;
+      reread.update(['work']);
+      reread.setExpanded(['work']);
+      client.sendPush.mockClear();
+      __testing.forwardPush('maker:event', detail('folded'));
+      expect(events('relink')).toEqual([detail('folded')]);
+    } finally {
+      __testing.reset();
+      vi.useRealTimers();
+    }
   });
   it.each([false, true])('invalidates a sampled pending view even when notice precedes its result: %s', async (finishBeforeNotice) => {
     vi.useFakeTimers();

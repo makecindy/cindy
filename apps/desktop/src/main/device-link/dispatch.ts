@@ -2451,8 +2451,11 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   const thinkingLine = deferred && historySessionId !== null && thinkingDeltaUpdatesWorkLine(historySessionId, remotePayload);
   const offlineTargets = targetsFor(true)
     .filter((dst) => !liveTargets.includes(dst));
+  // Kept folded across a link change until the controller re-reads (history-relink-folded-v1).
+  const keptFolded = (dst: string) => deferred && historySessionId !== null
+    && subscriptions.keepsFoldedAcrossLink(dst, historySessionId);
   for (const dst of offlineTargets) {
-    if (deferred && historySessionId && subscriptions.hasHistoryView(dst, historySessionId)) continue;
+    if (deferred && historySessionId && (subscriptions.hasHistoryView(dst, historySessionId) || keptFolded(dst))) continue;
     const sharedMetadata = isSharedTaskPeer(dst) && sharedTaskTopic !== null;
     if (OFFLINE_QUEUEABLE_PUSH_CHANNELS.has(channel) || sharedMetadata) {
       offlinePushQueue.enqueue(dst, {
@@ -2467,9 +2470,11 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
   for (const dst of liveTargets) {
     let targetPayload = payloadFor(dst);
     // A pending read also needs notices: its sampled rows can precede this push.
-    // Filtering still requires ready in projectsHistoryDetails, so raw survives.
-    if (deferred && historySessionId && subscriptions.hasHistoryView(dst, historySessionId, true)) {
-      const folded = subscriptions.projectsHistoryDetails(dst, historySessionId);
+    // Filtering still requires ready in projectsHistoryDetails, so raw survives, except for a
+    // session kept folded across a link change (history-relink-folded-v1) until it is re-read.
+    const kept = keptFolded(dst);
+    if (deferred && historySessionId && (kept || subscriptions.hasHistoryView(dst, historySessionId, true))) {
+      const folded = kept || subscriptions.projectsHistoryDetails(dst, historySessionId);
       const event = (remotePayload as { event?: { type?: string; data?: { stage?: string } } })?.event;
       // A folded duration ticks locally. Token deltas do not change its summary.
       if (!folded || event?.type !== 'thinking' || event.data?.stage !== 'delta'
@@ -5201,6 +5206,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
 
     const historyView = (payload.channel === 'local-db:messages:view' || payload.channel === 'local-db:messages:view-intent')
       && typeof args[0] === 'string' ? subscriptions.prepareHistoryView(src, args[0]) : undefined;
+    // history-relink-folded-v1: a raw list read means the controller renders raw rows for this
+    // session, so it gets full pushes again until its next page read.
+    if (payload.channel === 'local-db:messages:list' && typeof args[0] === 'string') subscriptions.forgetFoldedAcrossLink(src, args[0]);
     if (hasRemoteBotSessionLookup()) await timing.measure('authorizeBefore', () => assertRemoteBotInvocationAllowed(args, payload.channel));
     const listingCapabilities = payload.channel === 'maker:provider:list'
       ? invokeControllerCapabilities(payload)
@@ -5269,6 +5277,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');
     return { ok: true, result: decorated };
   } catch (err) {
+    // A failed page read releases a session kept folded across a link change.
+    const failedSessionId = payload.channel === 'local-db:messages:view' ? payload.args?.[0] : undefined;
+    if (typeof failedSessionId === 'string') subscriptions.forgetFoldedAcrossLink(src, failedSessionId);
     // 被控端 handler 的 throwIpcError `[CODE] message` 原样透传,
     // 控制端 renderer 继续用 extractIpcError 解码
     const message = err instanceof Error ? err.message : String(err);

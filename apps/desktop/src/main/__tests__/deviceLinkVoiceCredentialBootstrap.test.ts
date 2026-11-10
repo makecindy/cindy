@@ -34,6 +34,7 @@ import {
   type LinkOpenPayload,
   type WsLike,
 } from '@cindy/device-link';
+import * as deviceLink from '@cindy/device-link';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
@@ -105,11 +106,16 @@ const remoteSubscribeEntry = new Script(ts.transpileModule(
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText);
 // Each simulated desktop needs its own module-level registry. Compile the actual
-// dependency-free module once, then instantiate separate exports; no resetModules.
+// module once, then instantiate separate exports; no resetModules. Its only runtime
+// import is the shared device-link package, handed to each instance as-is.
 const subscriptionRegistry = new Script(ts.transpileModule(
   readFileSync(resolve(mainRoot, 'device-link/subscriptions.ts'), 'utf8'),
   { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } },
 ).outputText);
+function subscriptionRegistryRequire(id: string): unknown {
+  if (id === '@cindy/device-link') return deviceLink;
+  throw new Error(`subscriptions.ts sandbox: unexpected runtime import ${id}`);
+}
 
 /** FIFO relay adapter only: production clients perform handshake, ACK and recovery. */
 class RecoveryRelay {
@@ -178,7 +184,7 @@ class RecoverySocket implements WsLike {
 
 function recoveryDesktop(relay: RecoveryRelay, id: string) {
   const exports = {} as typeof SubscriptionRegistry;
-  subscriptionRegistry.runInNewContext({ exports });
+  subscriptionRegistry.runInNewContext({ exports, require: subscriptionRegistryRequire });
   const registry = exports;
   const diagnostic = { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const client = new DeviceLinkClient({
