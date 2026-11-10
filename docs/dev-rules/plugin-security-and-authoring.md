@@ -858,6 +858,11 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 - 同一 owner、会话 generation、市场端点及执行策略的并发请求合并为一轮；延后维护的槽位
   保留到实际维护结束。不同账号或端点不复用在途结果。一次同步扫描只读一组市场账本，
   这组事实不跨 `await` 保存，也不作为运行时授权缓存。
+- 已装列表的发布来源展示在每次扫描内复用一组账本事实。异步扫描可在该轮内跨 `await`
+  使用展示快照，但返回前必须重读并核对全部账本事实，变化或核对失败则重试；owner、安装变更、
+  注册表与 locale 的现有复核保持。展示快照不跨扫描保存，也不用于运行时授权；授权查询仍实时读取。
+  实现见 `GhostManager.listAsync()` 与 `PluginMarketLedger.createListingLookup()`，回归见
+  `cindy-brain/__tests__/GhostManager.test.ts` 和 `plugin-market/__tests__/ledger.test.ts`。
 - `pending-but-not-listed` 是注册表中的旧实例脱离普查清单，不能只记日志后永远跳过。
   修复不得扩大冻结的普查名单，也不能用 receipt 的 namespace 字段直接确认身份。必须核对
   唯一的已安装市场记录、包指纹、namespace 和当前组织；实例已有 pluginId 时，市场记录必须

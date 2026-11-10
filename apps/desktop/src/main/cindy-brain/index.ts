@@ -2141,6 +2141,25 @@ export function getGhostManager(): GhostManager {
           publishingSource: projectPluginPublishingSource(record, receipt, lookup),
         };
       },
+      prepareListingSources: () => {
+        try {
+          const snapshot = getPluginMarketLedger().createListingLookup();
+          return {
+            project: (record, receipt) => ({
+              publishingSource: projectPluginPublishingSource(record, receipt,
+                snapshot.lookup({ ghostId: record.ghostId, namespace: record.namespace })),
+            }),
+            isCurrent: snapshot.isCurrent,
+          };
+        } catch {
+          return {
+            project: (record, receipt) => ({
+              publishingSource: projectPluginPublishingSource(record, receipt, { kind: 'invalid' }),
+            }),
+            isCurrent: () => true,
+          };
+        }
+      },
       canResumePendingResidentOffline: (ghostId) => getNamespaceMigrationHost().canResumePendingResidentOffline(ghostId),
       onResumePendingResidentOffline: (ghost) => {
         if (!isGhostAvailableForActiveSession(installedGhostStoragePart(ghost))) return;

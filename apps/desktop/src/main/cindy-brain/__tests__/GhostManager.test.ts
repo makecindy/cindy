@@ -4247,6 +4247,33 @@ describe('GhostManager · list', () => {
     }
   });
 
+  // PB97, unit: listing sources are a single batch, but an intervening ledger
+  // change must restart the scan rather than publish mixed source identities.
+  it('reuses listing source facts and retries when they change across an async yield', async () => {
+    await manager.install(await makeCindy('batch-a.cindy', goodManifest('first')));
+    await manager.install(await makeCindy('batch-b.cindy', goodManifest('second')));
+    let revision = 0;
+    const prepare = vi.fn(() => {
+      const captured = revision;
+      return {
+        project: () => {
+          if (captured === 0) revision = 1;
+          return { publishingSource: undefined };
+        },
+        isCurrent: () => revision === captured,
+      };
+    });
+    const single = vi.fn(() => ({}));
+    manager = new GhostManager({ getRootDir: () => rootDir, sourcesForInstance: single,
+      prepareListingSources: prepare });
+    expect((await manager.listAsync()).map((ghost) => ghost.manifest.id)).toEqual(['first', 'second']);
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(single).not.toHaveBeenCalled();
+    prepare.mockClear();
+    expect(manager.list()).toHaveLength(2);
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['owner', 'uninstall'] as const)('async scan does not publish stale approval after %s changes during IO', async (change) => {
     let ownerGeneration = 1;
     manager = new GhostManager({ getRootDir: () => rootDir, getOwnerContextKey: () => String(ownerGeneration) });

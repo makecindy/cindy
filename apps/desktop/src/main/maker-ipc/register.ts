@@ -8502,20 +8502,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
           }
         });
+        let descriptors: Awaited<ReturnType<typeof builtInSkillDescriptorsAsync>> | undefined;
+        let disabled: ReadonlySet<string> | undefined;
+        const readActivation = async () => {
+          descriptors = await measureTraceOperation('maker:list-agent-skills:identity',
+            () => builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData')));
+          const paths = readDisabledSkillPaths(descriptors);
+          disabled = new Set(paths);
+          return paths;
+        };
+        // The preview filter and built-in projection share this request's verified
+        // facts. Live sessions still filter using their engine startup snapshot.
         const result = await measureTraceOperation('maker:list-agent-skills:scan',
-          () => maker.listAgentSkills(kind, skillParams));
-        // Verify integrity asynchronously once per request, then reuse the snapshot
-        // when resolving activation aliases instead of rehashing every Skill.
-        const descriptors = await measureTraceOperation('maker:list-agent-skills:identity',
-          () => builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData')));
-        const disabled = new Set(readDisabledSkillPaths(descriptors));
+          () => maker.listAgentSkills(kind, skillParams, readActivation));
+        if (!descriptors) await readActivation();
         return {
           success: true,
           ...result,
           skills: activeCindyBuiltInAgentSkills(
             result.skills,
-            descriptors,
-            (source) => !disabled.has(skillActivationKey(source)),
+            descriptors!,
+            (source) => !disabled!.has(skillActivationKey(source)),
           ),
         };
       } catch (err) {

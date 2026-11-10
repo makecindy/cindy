@@ -2821,8 +2821,8 @@ export abstract class BaseAgent {
   }
 
   /** Filter only the palette projection; management discovery retains disabled sources. */
-  filterActiveSkillCommands(result: ListAgentSkillsResult, remoteHostId?: string, snapshot?: readonly string[]): ListAgentSkillsResult {
-    const disabled = remoteHostId ? [] : snapshot ?? this.deps.getDisabledSkillPaths?.() ?? [];
+  filterActiveSkillCommands(result: ListAgentSkillsResult, remoteHostId?: string, snapshot?: readonly string[], current?: readonly string[]): ListAgentSkillsResult {
+    const disabled = remoteHostId ? [] : snapshot ?? current ?? this.deps.getDisabledSkillPaths?.() ?? [];
     if (disabled.length === 0) return result;
     return { ...result, skills: result.skills.filter((skill) => !skill.path || !(snapshot
       ? disabled.includes(canonicalSkillPath(skill.path)) : isSkillDisabled(skill.path, disabled))) };
