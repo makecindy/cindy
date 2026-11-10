@@ -194,6 +194,15 @@ const AUTOMATIC_UPGRADE_RETRY_BASE_MS = 5 * 60 * 1_000;
 const AUTOMATIC_UPGRADE_RETRY_MAX_MS = 6 * 60 * 60 * 1_000;
 const LOCAL_REFRESH_CONTEXT_TTL_MS = 10 * 60 * 1_000;
 const LOCAL_REFRESH_CONTEXT_LIMIT = 8;
+/**
+ * Known performance debt: exact "not installed" counts below this limit are
+ * derived by resolving installed plugins in batches, so a search can issue up
+ * to this many extra requests.
+ * Above the limit we hide counts instead of growing the fan-out.
+ * Future work: move to catalog-level counts or a privacy-preserving aggregate;
+ * local installation state must not leave the device, and pages/searches must
+ * not resolve per installed plugin.
+ */
 const MARKET_COUNT_DEDUCTION_MAX_BATCHES = 10;
 
 function captureMarketOwner(): ActiveAppSession {
@@ -1338,8 +1347,8 @@ export class PluginMarketService {
             .map(record => ({ key: record.pluginId, pluginId: record.pluginId }));
           const targets = [...new Map(installedTargets.map(target => [target.key, target])).values()];
           if (targets.length > this.countDeductionMaxBatches * 100) {
-            // Exact installed-count deduction needs one resolve per 100 installed plugins.
-            // Hide counts instead of turning a large local installation into unbounded requests.
+            // Known limitation: bounded client-side deduction; see the budget constant above.
+            // Future optimization should remove this path instead of raising the cap.
             counts = null;
             log.warn('plugin market installed count deduction skipped', { installedTargets: targets.length });
           } else {
