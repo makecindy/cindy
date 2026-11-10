@@ -90,8 +90,6 @@ interface SessionHarness {
   session: Session;
   send: ReturnType<typeof vi.fn>;
   emit(event: AgentEvent): void;
-  /** 复刻 close 失败后的实例状态(仍登记在 activeSessions,但不可用)。 */
-  setStatus(next: 'active' | 'error' | 'closed'): void;
 }
 
 function makeSessionHarness(sessionId: string): SessionHarness {
@@ -105,18 +103,12 @@ function makeSessionHarness(sessionId: string): SessionHarness {
       return { accepted: true } as SessionSendResult;
     },
   );
-  let status: 'active' | 'error' | 'closed' = 'active';
-  let closing = false;
   const session = {
     id: sessionId,
     workDir: '/tmp/wd',
     agentKind: 'claude-code',
     instanceId: `${sessionId}-instance`,
     abort: vi.fn(async () => undefined),
-    // 回收 close 失败会让真实 Session 停在 error 且仍登记在 activeSessions;
-    // 生产代码按这两个值决定「复用 / 交给 createSession 重建」。
-    getStatus: () => status,
-    hasStartedClosing: () => closing,
     send,
     isTurnRunning: vi.fn(() => false),
     onEvent(listener: (event: AgentEvent) => void) {
@@ -133,9 +125,6 @@ function makeSessionHarness(sessionId: string): SessionHarness {
   return {
     session,
     send,
-    setStatus(next: 'active' | 'error' | 'closed') {
-      status = next;
-    },
     emit(event: AgentEvent) {
       for (const l of [...listeners]) l(event);
     },
@@ -314,6 +303,183 @@ async function runTurn(userId: string, text = 'hello'): Promise<void> {
 }
 
 describe('turnRunner: connection handed to a companion bot', () => {
+  // Durable transports settle receipts only from dispatch outcomes. Preparation
+  // must reject before provider start even when there is no TurnState to clean up.
+  it.each([
+    { failure: 'prepare', external: false },
+    { failure: 'read', external: false },
+    { failure: 'missing', external: false },
+    { failure: 'prepare', external: true },
+    { failure: 'read', external: true },
+    { failure: 'missing', external: true },
+  ])('settles cold preparation failure and clears the handed-over ack: %j', async ({ failure, external }) => {
+    companion.prepareSend.mockImplementation(async () => {
+      if (failure === 'prepare') throw new Error('MODEL_ROUTE_FAILED');
+      if (failure === 'read') vi.mocked(fakeRepo.peekSessionById).mockRejectedValueOnce(new Error('DB_READ_FAILED'));
+      else vi.mocked(fakeRepo.peekSessionById).mockResolvedValueOnce(null);
+      return null;
+    });
+    const beforeProviderStart = vi.fn(async () => undefined);
+    const onEarlyReject = vi.fn(() => true);
+    const args = {
+      botContextId: BOT_CONTEXT, userId: OWNER, requesterIsOwner: true,
+      userMessageId: 'cold-failure', text: 'hello', attachments: [],
+      ackReactionIdPromise: Promise.resolve('ack'), onEarlyReject,
+    };
+
+    if (external) {
+      await expect(runner.dispatchAgentTurn({ ...args, queueMode: 'external', beforeProviderStart }))
+        .resolves.toMatchObject({ kind: 'rejected', reason: expect.any(String) });
+      expect(onEarlyReject).not.toHaveBeenCalled();
+      expect(mocks.im.sendText).not.toHaveBeenCalled();
+    } else {
+      await expect(runner.runAgentTurn(args)).resolves.toBeUndefined();
+      expect(onEarlyReject).toHaveBeenCalledOnce();
+    }
+    expect(mocks.im.removeMessageReaction).toHaveBeenCalledWith('cold-failure', 'ack');
+    expect(beforeProviderStart).not.toHaveBeenCalled();
+    expect(createSessionArgs).toHaveLength(0);
+    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not reserve a chunked reply for rejected auth or consume it on the next turn', async () => {
+    const id = 'mimi-main';
+    const h = makeSessionHarness(id);
+    harnesses.set(id, h);
+    const beginReply = vi.fn(async () => undefined);
+    const commitFinal = vi.fn(async () => undefined);
+    runner = createTurnRunner({
+      ...fakeAdapter,
+      channel: 'wecom',
+      output: { kind: 'chunked-text', im: fakeAdapter.im, beginReply, commitFinal },
+    }, fakeRepo, fakeCards, { companion: companion as unknown as ImCompanionRouteDeps });
+    companion.prepareSend.mockImplementation(async () => {
+      botRows.set(id, rowFor(id, { model: 'unavailable', providerId: 'disconnected' }));
+      return null;
+    });
+
+    await runTurn(OWNER, 'rejected');
+    expect(h.send).not.toHaveBeenCalled();
+    expect(beginReply).not.toHaveBeenCalled();
+    expect(commitFinal).not.toHaveBeenCalled();
+    expect(mocks.im.sendText).toHaveBeenCalledWith(OWNER, expect.stringContaining('unavailable'), expect.anything());
+
+    companion.prepareSend.mockImplementation(async () => {
+      botRows.set(id, rowFor(id, { model: 'bot-model', providerId: 'xd' }));
+      return null;
+    });
+    await runTurn(OWNER, 'accepted');
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(beginReply).toHaveBeenCalledOnce();
+    expect(beginReply.mock.invocationCallOrder[0]!).toBeLessThan(h.send.mock.invocationCallOrder[0]!);
+    h.emit({ type: 'text', data: { text: 'answer', isFinal: true } } as AgentEvent);
+    h.emit({ type: 'done', data: {} } as AgentEvent);
+    await vi.waitFor(() => expect(commitFinal).toHaveBeenCalledOnce());
+    expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ userId: OWNER, text: 'answer', terminal: 'done' }));
+  });
+
+  it.each([
+    { userId: OWNER, warm: false },
+    { userId: 'g/-100123', warm: false },
+    { userId: OWNER, warm: true },
+    { userId: 'g/-100123', warm: true },
+  ])('uses the newly selected companion route after the old provider disconnects: %j', async ({ userId, warm }) => {
+    const id = userId === OWNER ? 'mimi-main' : 'lane:im:telegram:777:g:-100123';
+    const originalResolve = companion.resolveSession.getMockImplementation()!;
+    companion.resolveSession.mockImplementation(async (input) => {
+      const result = await originalResolve(input);
+      botRows.set(id, rowFor(id, { model: 'old-model', providerId: 'disconnected' }));
+      return result;
+    });
+    const oldSession = warm ? makeSessionHarness(id) : null;
+    if (oldSession) harnesses.set(id, oldSession);
+    const selected = rowFor(id, { model: 'bot-model', providerId: 'xd', sdkSessionId: null });
+    companion.prepareSend.mockImplementation(async () => {
+      botRows.set(id, selected);
+      return null;
+    });
+    const maker = mocks.getMaker();
+    const create = maker.createSession.getMockImplementation();
+    maker.createSession.mockImplementation(async (args: { id: string; model: string }) => {
+      // A cold start against the disconnected route must not be attempted.
+      // Warm createSession calls reuse Maker's existing singleton without booting.
+      if (!warm) expect(args.model).toBe('bot-model');
+      return create(args);
+    });
+    mocks.dbSelect.mockImplementation(() => ({ from: () => ({ where: () => ({
+      limit: async () => [{ ...botRows.get(id), status: 'active' }],
+    }) }) }));
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      companion: companion as unknown as ImCompanionRouteDeps,
+      acquirePendingAgentSwitch,
+    });
+
+    await runTurn(userId);
+
+    expect(companion.prepareSend).toHaveBeenCalledWith(id);
+    expect(harnesses.get(id)!.send).toHaveBeenCalledTimes(1);
+    expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.im.sendText).not.toHaveBeenCalledWith(
+      userId, expect.stringContaining('old-model'), expect.anything(),
+    );
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledWith(id, { channelOwned: false });
+  });
+
+  it('checks the landed companion route even if it changed again under the send lock', async () => {
+    const id = 'mimi-main';
+    harnesses.set(id, makeSessionHarness(id));
+    acquirePendingAgentSwitch.mockImplementation(async () => {
+      botRows.set(id, rowFor(id, { model: 'latest-unavailable', providerId: 'disconnected' }));
+      return () => undefined;
+    });
+    mocks.dbSelect.mockImplementation(() => ({ from: () => ({ where: () => ({
+      limit: async () => [{ ...botRows.get(id), status: 'active' }],
+    }) }) }));
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      companion: companion as unknown as ImCompanionRouteDeps,
+      acquirePendingAgentSwitch,
+    });
+
+    await runTurn(OWNER);
+
+    expect(harnesses.get(id)!.send).not.toHaveBeenCalled();
+    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+    expect(mocks.im.sendText).toHaveBeenCalledWith(
+      OWNER, expect.stringContaining('latest-unavailable'), expect.anything(),
+    );
+  });
+
+  it('queues input while the old companion turn runs and authenticates the new route only at dispatch', async () => {
+    const id = 'mimi-main';
+    const h = makeSessionHarness(id);
+    harnesses.set(id, h);
+    botRows.set(id, rowFor(id, { model: 'old-model', providerId: 'disconnected' }));
+    vi.mocked(h.session.isTurnRunning).mockReturnValue(true);
+    companion.prepareSend.mockImplementation(async () => {
+      botRows.set(id, rowFor(id, { model: 'bot-model', providerId: 'xd' }));
+      return null;
+    });
+    mocks.dbSelect.mockImplementation(() => ({ from: () => ({ where: () => ({
+      limit: async () => [{ ...botRows.get(id), status: 'active' }],
+    }) }) }));
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      companion: companion as unknown as ImCompanionRouteDeps,
+      acquirePendingAgentSwitch,
+    });
+
+    await runTurn(OWNER);
+    expect(h.send).not.toHaveBeenCalled();
+    expect(companion.prepareSend).not.toHaveBeenCalled();
+    expect(mocks.im.sendText).not.toHaveBeenCalled();
+
+    vi.mocked(h.session.isTurnRunning).mockReturnValue(false);
+    h.emit({ type: 'done', data: {} } as AgentEvent);
+
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    expect(companion.prepareSend).toHaveBeenCalledWith(id);
+    expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the channel’s own routing for an unbound connection', async () => {
     binding = null;
     await runTurn(OWNER, 'first');
@@ -405,6 +571,7 @@ describe('turnRunner: connection handed to a companion bot', () => {
     // the send lock's own suppression window. The runner must not forget the task.
     const listeners: Array<(event: MakerEvent) => void> = [];
     const switched = makeSessionHarness('mimi-main');
+    harnesses.set('mimi-main', makeSessionHarness('mimi-main'));
     let live: Session | undefined;
     const base = mocks.getMaker() as {
       createSession: (args: { id?: string }) => Promise<Session>;
@@ -551,7 +718,8 @@ describe('turnRunner: connection handed to a companion bot', () => {
   it('replies with a notice and does not send when the bot guard blocks the turn', async () => {
     companion.prepareSend.mockResolvedValue('Bot 当前未启用，请先恢复 Bot 后再发送消息');
     await runTurn(OWNER);
-    expect(harnesses.get('mimi-main')!.send).not.toHaveBeenCalled();
+    expect(harnesses.has('mimi-main')).toBe(false);
+    expect(createSessionArgs).toHaveLength(0);
     expect(mocks.im.sendText).toHaveBeenCalledWith(
       OWNER,
       expect.stringContaining('伙伴现在接不了消息'),
@@ -607,95 +775,5 @@ describe('turnRunner: connection handed to a companion bot', () => {
     await runTurn(OWNER);
     expect(companion.resolveSession).not.toHaveBeenCalled();
     expect(harnesses.get('desktop-sess-1')!.send).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('turnRunner: project-resource drift recycle before IM dispatch', () => {
-  it('rebuilds the runtime from the DB row and dispatches on the rebuilt instance', async () => {
-    // 回归(MagicLizi P1):IM 直发的「漂移回收 → 按 DB 行重建 → 换实例投递」分支
-    // 此前零测试覆盖,是三个 P1 修复(e39f100091/2a35bd8f31/fe45afa803)的共同落点。
-    const original = makeSessionHarness('mimi-main');
-    const rebuilt = makeSessionHarness('mimi-main-rebuilt');
-    let recycleCalledWith: string | undefined;
-    let createCalls = 0;
-    // rebuilt 只在回收窗口之后对 getSession 可见:漂移检查前的 agent-switch 复核
-    // 也读 getSession,提前暴露会让它抢先把 rebuilt 绑进 state(时序失真)。
-    let rebuiltLive = false;
-    mocks.getMaker.mockImplementation(() => ({
-      getSession: vi.fn((id: string) => (rebuiltLive && id === 'mimi-main' ? rebuilt.session : original.session)),
-      on: vi.fn(() => () => undefined),
-      createSession: vi.fn(async () => {
-        createCalls += 1;
-        return createCalls === 1 ? original.session : rebuilt.session;
-      }),
-      recyclePiRuntimeIfResourcesDrifted: vi.fn(async (id: string) => {
-        recycleCalledWith = id;
-        rebuiltLive = true;
-        return true;
-      }),
-    }));
-    // 重建按 DB 行走:refreshSessionAfterPendingAgentSwitch 读 sessions 表。
-    mocks.dbSelect.mockImplementation(() => ({
-      from: () => ({
-        where: () => ({
-          limit: async () => [{ ...botRows.get('mimi-main'), status: 'active' }],
-        }),
-      }),
-    }));
-    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
-      companion: companion as unknown as ImCompanionRouteDeps,
-      acquirePendingAgentSwitch,
-    });
-
-    await runTurn(OWNER);
-
-    // 实现传的是 session 实例(不是 id):必须是回收前的旧实例。
-    expect((recycleCalledWith as { id: string } | undefined)?.id).toBe('mimi-main');
-    // 旧实例已关闭:投递必须落在重建实例上,而不是把真实原因换成「会话已关闭」。
-    expect(original.send).not.toHaveBeenCalled();
-    expect(rebuilt.send).toHaveBeenCalledTimes(1);
-    // 换实例必须重接广播/落库链路(wireSessionToIpcExternal 按 Session 实例幂等)。
-    expect(mocks.wireSessionToIpcExternal).toHaveBeenCalledWith(rebuilt.session);
-  });
-
-  it('rebuilds when the recycle close failed and the old instance is left in error', async () => {
-    // 回归(Greptile P2):close 失败后旧实例停在 error 但仍登记在 activeSessions。
-    // 刷新路径若只认「找不到实例」就会原封不动返回它,后续 send 必挂 —— 必须把
-    // error/已开始关闭的实例交给 createSession 的既有 close 重试重建。
-    const broken = makeSessionHarness('mimi-main');
-    const rebuilt = makeSessionHarness('mimi-main-rebuilt');
-    broken.setStatus('error');
-    let createCalls = 0;
-    let rebuiltLive = false;
-    mocks.getMaker.mockImplementation(() => ({
-      getSession: vi.fn((id: string) => (rebuiltLive && id === 'mimi-main' ? rebuilt.session : broken.session)),
-      on: vi.fn(() => () => undefined),
-      createSession: vi.fn(async () => {
-        createCalls += 1;
-        return createCalls === 1 ? broken.session : rebuilt.session;
-      }),
-      // close 抛出:Session 被置为 error,recycle 返回前就抛了。
-      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => {
-        broken.setStatus('error');
-        throw new Error('close boom');
-      }),
-    }));
-    mocks.dbSelect.mockImplementation(() => ({
-      from: () => ({
-        where: () => ({
-          limit: async () => [{ ...botRows.get('mimi-main'), status: 'active' }],
-        }),
-      }),
-    }));
-    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
-      companion: companion as unknown as ImCompanionRouteDeps,
-      acquirePendingAgentSwitch,
-    });
-
-    await runTurn(OWNER);
-
-    expect(createCalls).toBe(2);
-    expect(broken.send).not.toHaveBeenCalled();
-    expect(rebuilt.send).toHaveBeenCalledTimes(1);
   });
 });

@@ -1064,6 +1064,57 @@ export function createTurnRunner(
       }
       target = created.target;
     }
+    // A cold companion task must reconcile its saved model before starting an
+    // agent. Otherwise a disconnected old provider can prevent both wiring and
+    // the later prepareSend guard from ever applying the new selection.
+    const coldCompanion = target.botOwned && !sessionStates.has(target.row.id)
+      && !wiringInFlight.has(target.row.id) && !getMaker().getSession(target.row.id);
+    if (coldCompanion && deps.companion?.prepareSend) {
+      let blocked: string | null;
+      try {
+        if (target.botOwned?.lane === 'channel') {
+          coldWiringVendorOptions.set(target.row.id, adapter.buildVendorOptions(userId, target.scopeKey));
+        }
+        blocked = await deps.companion.prepareSend(target.row.id);
+        if (!blocked) {
+          const refreshed = await repo.peekSessionById(target.row.id);
+          if (!refreshed) throw new Error(`companion session ${target.row.id} missing after route preparation`);
+          target = { ...target, row: refreshed };
+        }
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        const normalized = normalizeSendError(err);
+        log.error(`${channel} companion preparation failed before dispatch`, {
+          kind: 'session-dispatch',
+          source: 'companion.prepareSend',
+          sessionId: hashLogSessionId(target.row.id),
+          reason: normalized.reason,
+          error: normalized.error,
+        });
+        await waitForAckCleanupBounded(discardHandedOverAck(userMessageId, args.ackReactionIdPromise));
+        if (args.queueMode === 'internal') {
+          try {
+            const text = ui.agent.sendInternalError(normalized.reason);
+            const consumed = (await args.onEarlyReject?.(normalized.reason, text)) ?? false;
+            if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+          } catch {
+            /* A failed notice must still return a definite pre-dispatch rejection. */
+          }
+        }
+        return { kind: 'rejected', reason: normalized.reason };
+      } finally {
+        coldWiringVendorOptions.delete(target.row.id);
+      }
+      if (blocked) {
+        const text = ui.agent.companionUnavailable?.(blocked) ?? ui.agent.runtimeError(blocked);
+        if (args.queueMode === 'internal') {
+          const consumed = (await args.onEarlyReject?.('companion_unavailable', text)) ?? false;
+          if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+        }
+        await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
+        return { kind: 'rejected', reason: 'companion_unavailable' };
+      }
+    }
     const row = target.row;
     const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
     let followTarget: ImDefaultRoute | null | undefined = null;
@@ -1071,7 +1122,10 @@ export function createTurnRunner(
     const sharedSession =
       target.attached || target.notificationReply === true || target.botOwned?.lane === 'canonical';
     const authNoticeAttached = target.attached || target.botOwned !== undefined;
-    if (!target.authChecked) {
+    // Live companion tasks may still be running on the previous selection.
+    // Authenticate them after prepareSend + the locked switch at dispatch, not
+    // against the stale row before their input has even reached the queue.
+    if (!target.authChecked && (!target.botOwned || coldCompanion)) {
       // 渠道默认跟随: 本条消息会在 send 锁内切到新默认时, 按新路由检查授权 ——
       // 否则旧默认坏掉(如供应商断开)时, 消息会先被「缺授权」挡掉, 永远换不过去。
       followTarget =
@@ -1472,7 +1526,6 @@ export function createTurnRunner(
         await item.turn.revalidateNotificationReply?.();
         await resolveNotificationTarget(rowId, item.turn.scopeKey);
       }
-      await beginChunkedReply(item.turn);
       // 伙伴任务: 与桌面发送同源的伙伴守卫(暂停 / 归档 → 回一句提示不发送),
       // 再对齐伙伴模型链、刷新能力纪元。要在拿 send 锁之前做 —— 对齐登记的切换
       // 意图由下面的锁内应用落实。
@@ -1555,19 +1608,24 @@ export function createTurnRunner(
       // 失败被吞后这条消息会按旧路由发送 —— 按实际路由补一次授权检查, 旧供应商断开
       // 时在这里给出缺授权提示, 而不是进发送流程运行时失败(PR #5155 review P2)。
       // 冷路径在接线前已查过一次, 这里兜的是接线后切换才失败 / 热任务的切换失败。
+      // 伙伴任务始终在守卫与锁内切换完成后检查实际路由, 不复用入队时的旧选择。
       const followAuthRoute = item.turn.followAuthRoute;
-      if (followAuthRoute) {
+      if (followAuthRoute || state.botLane) {
         const landed = await repo.peekSessionById(rowId);
-        if (landed && !sameImDefaultRoute(routeOfRow(landed), followAuthRoute)) {
+        if (state.botLane && !landed) {
+          throw new Error(`companion session ${rowId} missing before route authentication`);
+        }
+        if (landed && (state.botLane || (followAuthRoute && !sameImDefaultRoute(routeOfRow(landed), followAuthRoute)))) {
           const auth = await checkImRouteAuthDetailed(landed, undefined, authCheckDeps());
           if (!auth.ok) {
+            const attached = state.attached || !!state.botLane;
             const authStatus = { ...auth, agentKind: landed.agentKind, model: landed.model };
             if (item.turn.queueMode === 'internal') {
               const text =
-                ui.agent.authMissing?.({ ...authStatus, attached: state.attached }) ??
+                ui.agent.authMissing?.({ ...authStatus, attached }) ??
                 ui.agent.apiKeyMissing;
               const consumed = (await item.onEarlyReject?.('missing_auth', text)) ?? false;
-              if (!consumed) await replyMissingAuth(userId, authStatus, item.turn.scopeKey, state.attached);
+              if (!consumed) await replyMissingAuth(userId, authStatus, item.turn.scopeKey, attached);
             }
             // 文案已在上面按缺授权发过(外部队列由调用方消费), 这里只走收口。
             await handleSendPreDispatchFailure(state, userId, {
@@ -1581,6 +1639,10 @@ export function createTurnRunner(
           }
         }
       }
+
+      // Only claim a passive reply after preparation and route authentication.
+      // Rejected input must not leave a pending chunked response for the next turn.
+      await beginChunkedReply(item.turn);
 
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),
       // 交接注入自己接——切换后首条消息若来自 IM 渠道,新引擎同样需要交接上下文
@@ -1657,18 +1719,13 @@ export function createTurnRunner(
       // 项目资源漂移(如会话中途 openspec init):空闲时经 Maker 以 runtime-refresh
       // 回收运行时,再按 DB 行自愈重建 —— 与桌面发送事务同口径,IM 直发不用旧资源。
       // 无 agent-switch 锁的装配不支持关闭后重建,保持原样投递。
-      // 两种失败分开:回收本身失败 → 旧实例仍可用,原样投递;回收成功(旧实例
-      // 已关)后的重建失败必须上抛 —— 继续用已关闭实例只会把真实原因换成误
-      // 导性的「会话已关闭」(2026-11-09 Greptile P2)。
       let driftRecycled = false;
       try {
         driftRecycled = !!(deps.acquirePendingAgentSwitch
           && await getMaker().recyclePiRuntimeIfResourcesDrifted(state.makerSession));
       } catch (err) {
-        // 两种失败必须分开:close 抛出时 Session 已停在 error(Session.performClose
-        // 不因异常回退),旧实例不可用 —— 这时继续 send 只会被 ensureActive 抛错,
-        // runner 永远绑在坏实例上、绕过 createSession 重建路径(Codex P2,
-        // 2026-11-10)。无 agent-switch 锁的装配不支持重建,保持原样投递。
+        // close 抛出时 Session 已停在 error(performClose 不回退),旧实例不可用:
+        // 只能走重建;仍 active 才原样投递(Codex P2, 2026-11-10)。
         driftRecycled = !!deps.acquirePendingAgentSwitch && state.makerSession.getStatus() !== 'active';
         log.warn('im send: resource-drift recycle failed',
           err instanceof Error ? err.message : String(err));
@@ -1677,16 +1734,13 @@ export function createTurnRunner(
         await refreshSessionAfterPendingAgentSwitch(state, state.makerSession.id, userId);
         log.info('im send: project resources drifted, recycled runtime before dispatch');
       }
-      // 回收+重建是异步窗口:/stop 可能恰好落在其中;喊停后不得再开始执行,
-      // 与上方 aborted 检查同口径收尾(此时尚未发送,无 chunked 终态章要补)。
-      // 经函数读取:上方检查已把控制流收窄到 'done'|'error',但运行时值在回收
-      // 窗口内仍可变为 'aborted',需要绕开 CFA 的新鲜读取。
+      // 回收+重建是异步窗口:/stop 可能恰好落在其中;喊停后不得再开始执行,与上方
+      // aborted 分支同口径收尾(此时尚未发送,无需补终态章)。经函数读取:上方检查
+      // 已把控制流收窄到 'done'|'error',但运行时值在回收窗口内仍可变为 'aborted'。
       const turnTerminalNow = (): 'done' | 'aborted' | 'error' => item.turn.terminalKind;
       if (turnTerminalNow() === 'aborted') {
         const index = state.queue.indexOf(item.turn);
         if (index >= 0) state.queue.splice(index, 1);
-        // beginChunkedReply 早在消息准备期已执行(企微 beginReply 已登记未结束流),
-        // 与上方停止分支同款补发停止终稿,否则回复永不结束、下一轮终稿错位。
         if (output.kind === 'chunked-text' && item.turn.chunkedReplyBegun) {
           try {
             await output.commitFinal({
@@ -2048,12 +2102,6 @@ export function createTurnRunner(
       throw new Error(`session ${sessionId} is not active after deferred agent switch`);
     }
     let current = maker.getSession(sessionId);
-    // close 失败会让实例停在 error、或已开始关闭但仍登记在 activeSessions ——
-    // 这类实例不可用,按「不存在」处理,交给 createSession 的既有 close 重试重建
-    // (Greptile P2,2026-11-10:只认 null 会让刷新原封不动返回坏实例)。
-    if (current && (current.getStatus() !== 'active' || current.hasStartedClosing())) {
-      current = undefined;
-    }
     // apply 已提交 DB 但 bootstrap 失败时,直发路径也要像 makerSendTransaction 的
     // lazy-create 一样按最新 DB 行自愈,不能退回已关闭的 previous.send()。
     if (!current) {
