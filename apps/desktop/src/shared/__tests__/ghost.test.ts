@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { validateGhostManifest as validateProtocolManifest } from '@cindy/plugin-protocol';
 
+// Host groups are separate install permissions; unknown groups never become permissions.
+it('validates and projects each host tool group independently in both manifest readers', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'host-tools', name: 'Host tools', version: '1.0.0', entry: 'main.js' };
+  const agent = { hostTools: ['history', 'scheduler', 'future-group'] };
+  for (const validate of [validateGhostManifest, validateProtocolManifest]) {
+    const result = validate({ ...base, agent });
+    expect(result).toMatchObject({ ok: true, manifest: { agent } });
+    for (const hostTools of ['history', [3], [null], {}]) expect(validate({ ...base, agent: { hostTools } }).ok).toBe(false);
+  }
+  const before = validateGhostManifest({ ...base, agent: { hostTools: ['history'] } });
+  const after = validateGhostManifest({ ...base, agent });
+  if (!before.ok || !after.ok) throw new Error('invalid fixture');
+  expect(ghostPermissionItems(after.manifest).filter(item => item.key.startsWith('agent:host-tools:')).map(item => item.key))
+    .toEqual(['agent:host-tools:history', 'agent:host-tools:scheduler']);
+  expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map(item => item.key)).toEqual(['agent:host-tools:scheduler']);
+});
+
 import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CINDY_DEPOSIT_QUOTA_BYTES,

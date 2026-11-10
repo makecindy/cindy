@@ -1,4 +1,5 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
+import { declaredGhostHostToolGroups, type GhostHostToolGroup } from '@cindy/plugin-protocol';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
@@ -213,6 +214,8 @@ export interface GhostCardNeeds {
  *   可重新提交"处理)。
  */
 export interface GhostAgentNeeds {
+  /** Each known group requires its own explicit Host receipt approval. */
+  hostTools?: string[];
   background?: boolean;
   errand?: boolean;
   tasks?: boolean;
@@ -1921,6 +1924,7 @@ export interface InstalledGhost {
   observeCapabilityApproved?: true;
   /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
   companionsCapabilityApproved?: true;
+  approvedHostToolGroups?: GhostHostToolGroup[];
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2306,6 +2310,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     }
     if (manifest.agent?.companions === true) {
       items.unshift({ key: 'agent:companions', kind: 'agent', labelKey: 'agentCompanions', detailKey: 'agentCompanionsDetail' });
+    }
+    for (const group of declaredGhostHostToolGroups(manifest)) {
+      items.push({ key: `agent:host-tools:${group}`, kind: 'agent', labelKey: `hostTools_${group}`, detailKey: `hostTools_${group}Detail` });
     }
     // 后台隐藏任务:独立 key 单列(理由同 schedule —— 并进 agent:tasks 会让更新里
     // 新增 hiddenTasks 时 added 为空,扩权复核拦不住)。排在 agent:tasks 之后。
@@ -2909,6 +2916,9 @@ export function diffInstalledGhostPermissionItems(
     const previous = {
       ...installed.manifest,
       mcpApps: installed.uiCapabilityApproved === true ? installed.manifest.mcpApps : undefined,
+      ...(installed.manifest.agent ? { agent: { ...installed.manifest.agent,
+        hostTools: declaredGhostHostToolGroups(installed.manifest).filter(group => installed.approvedHostToolGroups?.includes(group)),
+      } } : {}),
       // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
       subscribe: withoutUnapprovedControlPoints(installed),
       tools: withoutUnapprovedAutoTools(installed),
@@ -4972,6 +4982,9 @@ function validateGhostManifestInput(
       return { ok: false, reason: '声明了 agent 能力详单但 slots 未包含 "agent"' };
     }
     const agentRaw = raw.agent as Record<string, unknown>;
+    if (!preserveHistoricalTasks && agentRaw.hostTools !== undefined && (!Array.isArray(agentRaw.hostTools) || agentRaw.hostTools.some(group => typeof group !== 'string'))) {
+      return { ok: false, reason: 'agent.hostTools must be a string array' };
+    }
     if (agentRaw.background !== undefined && typeof agentRaw.background !== 'boolean') {
       return { ok: false, reason: 'agent.background 必须是布尔值' };
     }

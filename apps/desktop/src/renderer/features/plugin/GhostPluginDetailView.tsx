@@ -1,4 +1,4 @@
-import { getPluginToolUi } from '@cindy/plugin-protocol';
+import { declaredGhostHostToolGroups, getPluginToolUi } from '@cindy/plugin-protocol';
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
 import { PluginShareButton } from './PluginShareButton';
@@ -611,6 +611,21 @@ export function GhostPluginDetailView({
             {t('settings.ghosts.perm.agentCompanionsRequest')}
           </Button>
         ) : null}
+
+        {!remote && enabled && ghost ? declaredGhostHostToolGroups(ghost.manifest).filter(group => !ghost.approvedHostToolGroups?.includes(group)).map(group => (
+          <Button key={group} variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try {
+              await window.electronAPI.ghosts.requestTaskApproval(detail.id, `host-tools:${group}`);
+            } catch {
+              toast.error(t('settings.ghosts.errors.generic'));
+            } finally {
+              setTaskApprovalPending(false);
+            }
+          }}>
+            {t('settings.ghosts.perm.hostToolsRequest', { group: t(`settings.ghosts.perm.hostTools_${group}`) })}
+          </Button>
+        )) : null}
 
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
         {!remote ? (

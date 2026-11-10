@@ -397,6 +397,20 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { observeCapabilityApproved: true, revision: receipt.revision } });
   });
 
+  // §1.2/§5: older approved receipts stay enabled; unknown and removed groups cannot gain authority.
+  it('keeps old receipts usable and persists only explicitly approved, still-declared host groups', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, hostTools: ['history', 'future-group'] };
+    receipt.taskCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    expect(old).toMatchObject({ state: 'approved', receipt: { enabled: true, taskCapabilityApproved: true } });
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.approvedHostToolGroups).toBeUndefined();
+    await store.write({ ...old.receipt, approvedHostToolGroups: ['history', 'control', 'history', 'future-group'] as never });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { approvedHostToolGroups: ['history'], revision: receipt.revision } });
+  });
+
   it('round trips companions approval without inferring it from other grants', async () => {
     const receipt = createSetupReceipt();
     receipt.manifest.agent = { tasks: true, observe: true, companions: true };

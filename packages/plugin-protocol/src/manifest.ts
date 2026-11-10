@@ -234,7 +234,18 @@ export interface GhostCardNeeds {
  * 声明 `agent` 默认只允许消费宿主在真实用户点击插件卡片时签发的
  * 一次性通行票；可选加档由 Desktop 如实展示，并由 Host 在运行时守门。
  */
+export const GHOST_HOST_TOOL_GROUPS = ['history', 'control', 'handoff', 'settings', 'scheduler'] as const;
+export type GhostHostToolGroup = (typeof GHOST_HOST_TOOL_GROUPS)[number];
+
+/** Unknown groups survive normalization but never become runtime authority. */
+export function declaredGhostHostToolGroups(manifest: { agent?: { hostTools?: unknown } }): GhostHostToolGroup[] {
+  const groups = manifest.agent?.hostTools;
+  return Array.isArray(groups) ? GHOST_HOST_TOOL_GROUPS.filter(group => groups.includes(group)) : [];
+}
+
 export interface GhostAgentNeeds {
+  /** Independently approved groups of the same Host tools exposed to Agents. */
+  hostTools?: string[];
   background?: boolean;
   errand?: boolean;
   tasks?: boolean;
@@ -3124,6 +3135,9 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       };
     }
     const agentRaw = raw.agent as Record<string, unknown>;
+    if (agentRaw.hostTools !== undefined && (!Array.isArray(agentRaw.hostTools) || agentRaw.hostTools.some(group => typeof group !== 'string'))) {
+      return { ok: false, reason: 'agent.hostTools must be a string array' };
+    }
     if (agentRaw.background !== undefined && typeof agentRaw.background !== 'boolean') {
       return { ok: false, reason: 'agent.background 必须是布尔值' };
     }
