@@ -10170,6 +10170,19 @@
       "followingMark": "{{names}}在跟進這個任務"
     },
     "glance": {
+      "background": {
+        "back": "返回",
+        "title": "背景任務",
+        "filter": "依任務狀態篩選",
+        "all": "全部",
+        "failedOrStopped": "失敗或停止",
+        "waiting": "等待中",
+        "empty": "目前沒有背景任務",
+        "emptyFiltered": "沒有符合此狀態的背景任務",
+        "loadFailed": "無法載入背景任務",
+        "openFailed": "無法開啟這項背景任務",
+        "updatedAt": "更新於 {{time}}"
+      },
       "open": "{{name}}的近況",
       "dueUnseen": "有待辦到期",
       "computers": "電腦",

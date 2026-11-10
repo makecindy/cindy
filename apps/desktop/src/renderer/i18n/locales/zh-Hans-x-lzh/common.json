@@ -10170,6 +10170,19 @@
       "followingMark": "{{names}}方跟进此差事"
     },
     "glance": {
+      "background": {
+        "back": "归",
+        "title": "背景差事",
+        "filter": "依差事之状筛之",
+        "all": "悉列",
+        "failedOrStopped": "未成或已止",
+        "waiting": "尚待",
+        "empty": "尚无背景差事",
+        "emptyFiltered": "无此状之背景差事",
+        "loadFailed": "未能读取背景差事",
+        "openFailed": "未能启此背景差事",
+        "updatedAt": "更新于 {{time}}"
+      },
       "open": "{{name}}之近况",
       "dueUnseen": "有待办已届期",
       "computers": "机",

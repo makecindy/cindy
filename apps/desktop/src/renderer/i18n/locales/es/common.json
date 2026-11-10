@@ -10293,6 +10293,19 @@
       "followingMark": "{{names}} se encarga de esta tarea"
     },
     "glance": {
+      "background": {
+        "back": "Volver",
+        "title": "Tareas en segundo plano",
+        "filter": "Filtrar por estado de la tarea",
+        "all": "Todas",
+        "failedOrStopped": "Fallidas o detenidas",
+        "waiting": "En espera",
+        "empty": "Aún no hay tareas en segundo plano.",
+        "emptyFiltered": "No hay tareas en segundo plano con este estado.",
+        "loadFailed": "No se pudieron cargar las tareas en segundo plano.",
+        "openFailed": "No se pudo abrir esta tarea en segundo plano.",
+        "updatedAt": "Actualización: {{time}}"
+      },
       "open": "{{name}} de un vistazo",
       "dueUnseen": "Una tarea pendiente ha vencido",
       "computers": "Computadoras",

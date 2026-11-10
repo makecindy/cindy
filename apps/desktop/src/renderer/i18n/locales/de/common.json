@@ -10213,6 +10213,19 @@
       "followingMark": "Diese Aufgabe wird von {{names}} betreut"
     },
     "glance": {
+      "background": {
+        "back": "Zurück",
+        "title": "Hintergrundaufgaben",
+        "filter": "Nach Aufgabenstatus filtern",
+        "all": "Alle",
+        "failedOrStopped": "Fehlgeschlagen oder angehalten",
+        "waiting": "Wartet",
+        "empty": "Noch keine Hintergrundaufgaben.",
+        "emptyFiltered": "Keine Hintergrundaufgaben mit diesem Status.",
+        "loadFailed": "Hintergrundaufgaben konnten nicht geladen werden.",
+        "openFailed": "Diese Hintergrundaufgabe konnte nicht geöffnet werden.",
+        "updatedAt": "Zuletzt aktualisiert: {{time}}"
+      },
       "open": "{{name}} auf einen Blick",
       "dueUnseen": "Ein To-do ist fällig",
       "computers": "Computer",

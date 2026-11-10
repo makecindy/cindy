@@ -207,6 +207,8 @@ export interface BotDelegationView {
 
 export interface BotDelegationChangedPayload {
   delegationId: string;
+  /** Older hosts may omit the requester used to scope list refreshes. */
+  requestingBotId?: string;
   parentSessionId: string | null;
   childSessionId: string | null;
   status: BotDelegationStatus;

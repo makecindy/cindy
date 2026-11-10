@@ -4886,7 +4886,7 @@ describe('Bot Session task end-to-end runtime', () => {
     const started: StartedTurn[] = [];
     const pendingTurns: Array<{ sessionId: string; queued: boolean }> = [];
     const heldInputs = new Set<string>();
-    const changed: Array<{ delegationId: string; status: string }> = [];
+    const changed: Array<{ delegationId: string; status: string; requestingBotId?: string }> = [];
     let currentTime = options.startTime ?? 10_000;
     let seq = 0;
 
@@ -5143,7 +5143,11 @@ describe('Bot Session task end-to-end runtime', () => {
         (turn) => turn.sessionId === sessionId && turn.queued,
       ),
       onChanged: (payload) => {
-        changed.push({ delegationId: payload.delegationId, status: payload.status });
+        changed.push({
+          delegationId: payload.delegationId,
+          status: payload.status,
+          requestingBotId: payload.requestingBotId,
+        });
       },
       now: () => currentTime,
       createId: () => `delegation-${++seq}`,
@@ -7366,9 +7370,14 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(completionDispatch?.persistedContent).toBe(`${UI_ACTION_TRIGGER_PREFIX}${completionDispatch?.message}`);
       // 发起方那一侧也真的被唤醒了（否则「结果回到 A 的对话」只是写了一行数据库）。
       expect(runtime.started.some((turn) => turn.sessionId === 'session-1')).toBe(true);
+      expect(runtime.changed).toEqual(expect.arrayContaining([
+        { delegationId: delegated.ok ? delegated.delegationId : '', status: 'queued', requestingBotId: 'bot-a' },
+        { delegationId: delegated.ok ? delegated.delegationId : '', status: 'running', requestingBotId: 'bot-a' },
+      ]));
       expect(runtime.changed.at(-1)).toEqual({
         delegationId: delegated.ok ? delegated.delegationId : '',
         status: 'completed',
+        requestingBotId: 'bot-a',
       });
       expect(
         h.sqlite!.prepare('SELECT completion_delivered_at FROM bot_delegations WHERE id = ?')
@@ -10158,7 +10167,7 @@ describe('Bot Session task end-to-end runtime', () => {
 
       // 任务卡靠这条推送翻终态；没有它，卡片就永远停在「进行中」。用户看到的
       // 失败交代由卡片承载——账号没就绪时连完成指令都送不进会话,卡片就是兜底。
-      expect(runtime.changed.at(-1)).toEqual({ delegationId, status: 'failed' });
+      expect(runtime.changed.at(-1)).toEqual({ delegationId, status: 'failed', requestingBotId: 'bot-a' });
     } finally {
       runtime.dispose();
     }
@@ -10199,7 +10208,7 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(finalRow.status).toBe('failed');
       expect(finalRow.lastError).toContain('DISPATCH_UNAVAILABLE');
       expect(finalRow.lastError).toContain(`连续 ${BOT_DELEGATION_MAX_DISPATCH_ATTEMPTS} 次`);
-      expect(runtime.changed.at(-1)).toEqual({ delegationId, status: 'failed' });
+      expect(runtime.changed.at(-1)).toEqual({ delegationId, status: 'failed', requestingBotId: 'bot-a' });
     } finally {
       runtime.dispose();
       vi.useRealTimers();
