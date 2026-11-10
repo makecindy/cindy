@@ -4,7 +4,7 @@ export interface NewTaskSelectionSheetProps {
   busy: boolean;
   devices: readonly { deviceId: string; name?: string }[];
   selectedDeviceId: string;
-  workspaces: readonly { title: string; workingDir: string }[];
+  workspaces: readonly { title: string; workingDir: string; disabled?: boolean }[];
   workspaceKind: string;
   workingDir: string;
   path: string;

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isSharedTaskPeer, TASK_MIGRATION_CHANNEL, type TaskMigrationView } from '@cindy/device-link';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { useTranslation } from 'react-i18next';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
@@ -8,6 +9,7 @@ import { NewTaskSelectionSheet } from './NewTaskSelectionSheet';
 import { filterRemoteDirectoryEntries, normalizeRemoteDirectoryDrives, shouldRetryRemoteBrowseDrives } from './newSession';
 import { remoteSessionStore, resolveSessionWriteDevices } from './remoteSessionStore';
 import type { RemoteSession } from './types';
+import { workspacePathsEqual } from './workspaceSelection';
 
 export function sessionAllowsProjectMove(session?: RemoteSession | null): boolean {
   return !!session && session.status === 'active' && !session.remoteHostId
@@ -132,8 +134,11 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
       if (current() && request === readGeneration.current) setLoading(false);
     }
   };
+  const currentProject = session.workspaceKind === 'project' ? sessionProjectDirectory(session) : null;
+  const isCurrentProject = (path: string) => currentProject !== null && workspacePathsEqual(currentProject, path);
   const choose = async (workingDir: string | null) => {
     if (!devices || lock.current || loading || !current()) return;
+    if (workingDir !== null && isCurrentProject(workingDir)) return;
     if (remoteSessionStore.getSessionRunStatus(session.id).isRunning) {
       setActionError(t('session.menu.moveRunning'));
       return;
@@ -171,8 +176,9 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
   return <NewTaskSelectionSheet
     page={page} workspaceTitle={t('session.menu.moveToProject')} busy={busy} devices={[]}
     selectedDeviceId={devices?.rpcDeviceId ?? ''}
-    workspaces={projects.map(path => ({ title: path.split(/[\\/]/).filter(Boolean).at(-1) ?? path, workingDir: path }))}
-    workspaceKind={session.workspaceKind} workingDir={session.workingDir ?? ''}
+    workspaces={projects.map(path => ({ title: path.split(/[\\/]/).filter(Boolean).at(-1) ?? path,
+      workingDir: path, disabled: isCurrentProject(path) }))}
+    workspaceKind={session.workspaceKind} workingDir={currentProject ?? session.workingDir ?? ''}
     path={directory?.resolvedPath ?? ''} parent={directory?.parent ?? null}
     entries={filterRemoteDirectoryEntries((directory?.entries ?? []).filter(entry => entry.kind !== 'file'), showHidden)}
     drives={normalizeRemoteDirectoryDrives(directory?.drives)} loading={loading || busy} error={error} actionError={actionError} showHidden={showHidden}

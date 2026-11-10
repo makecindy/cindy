@@ -53,13 +53,13 @@ beforeEach(() => {
   act(() => root.render(createElement(Harness)));
 });
 afterEach(() => { act(() => root.unmount()); container.remove(); });
-async function open() {
+async function open(target = session) {
   const closeMenu = vi.fn();
-  act(() => move.open(session, closeMenu));
+  act(() => move.open(target, closeMenu));
   expect(closeMenu).toHaveBeenCalledOnce();
   expect(h.picker).toBeNull();
   await act(async () => move.parentClosed());
-  expect(h.picker?.workspaces).toEqual([{ title: 'project', workingDir: '/project' }]);
+  expect(h.picker?.workspaces.map(({ title, workingDir }) => ({ title, workingDir }))).toEqual([{ title: 'project', workingDir: '/project' }]);
 }
 
 it('opens only after dismissal, sends to the current computer, and updates the physical shard only after success', async () => {
@@ -211,4 +211,30 @@ it.each(['back', 'account'])('ignores late drive enumeration after %s and fences
     drives: [{ name: 'C:', path: 'C:/', current: true }, { name: 'D:', path: 'D:/', current: false }] }));
   expect(h.picker?.drives).toEqual([]);
   expect(h.invoke).toHaveBeenCalledTimes(3);
+});
+
+// PR #9826: explicit membership can differ from cwd; picking it must not reset cwd.
+it.each([
+  { projectDir: '/project', workingDir: '/project/subdir', same: '/project/' },
+  { projectDir: null, workingDir: '/project', same: '/project/' },
+  { projectDir: 'D:/project', workingDir: 'D:/project/subdir', same: 'd:\\PROJECT\\' },
+])('marks and guards current project membership without rewriting cwd: %j', async ({ same, ...membership }) => {
+  await open({ ...session, ...membership, workspaceKind: 'project' });
+  expect(h.picker?.workingDir).toBe(membership.projectDir ?? membership.workingDir);
+  if (membership.workingDir.startsWith('/')) expect(h.picker?.workspaces[0].disabled).toBe(true);
+  await act(async () => { h.picker!.onProject(same); h.picker!.onChoose(same); });
+  expect(h.invoke).toHaveBeenCalledTimes(1); // caps only, never a same-project write
+  expect(h.patch).not.toHaveBeenCalled();
+  expect(h.picker?.page).toBe('workspace');
+  h.invoke.mockResolvedValueOnce({ projectMove: { sessionId: 'task-a', workingDir: '/other', workspaceKind: 'project' } });
+  await act(async () => h.picker!.onProject('/other'));
+  expect(h.patch).toHaveBeenCalledOnce();
+});
+
+it('can assign a dialogue to a project even when the execution directory is already there', async () => {
+  await open({ ...session, workingDir: '/project' });
+  expect(h.picker?.workspaces[0].disabled).not.toBe(true);
+  h.invoke.mockResolvedValueOnce({ projectMove: { sessionId: 'task-a', workingDir: '/project', workspaceKind: 'project' } });
+  await act(async () => h.picker!.onProject('/project'));
+  expect(h.patch).toHaveBeenCalledOnce();
 });

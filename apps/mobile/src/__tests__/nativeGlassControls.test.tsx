@@ -560,3 +560,14 @@ it("allows an explicit folder retry while displaying a move error", () => {
   act(() => (host.querySelector('[data-testid="newSession.remoteBrowseSelectCurrent"]') as HTMLButtonElement).click());
   expect(props.onChoose).toHaveBeenCalledExactlyOnceWith("/project");
 });
+
+// PR #9826 / unit: keep current project membership selected and disabled in move mode.
+it("does not dispatch the disabled current project membership", () => {
+  const props = directoryProps({ page: "workspace", workspaces: [{ title: "Project", workingDir: "/project", disabled: true }] });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  const row = host.querySelector('[data-testid="newSession.workspaceProjectOption"]') as HTMLButtonElement;
+  expect(row.getAttribute("aria-pressed")).toBe("true");
+  expect(row.disabled).toBe(true);
+  act(() => row.click());
+  expect(props.onProject).not.toHaveBeenCalled();
+});

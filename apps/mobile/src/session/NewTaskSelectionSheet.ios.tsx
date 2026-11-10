@@ -60,7 +60,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           {p.workspaces.map(workspace => <ComposerNativeRow key={workspace.workingDir}
             title={workspace.title} subtitle={workspace.workingDir} leading={icon('folder')}
             selected={p.workspaceKind === 'project' && workspacePathsEqual(p.workingDir, workspace.workingDir)}
-            disabled={unavailable} onPress={() => p.onProject(workspace.workingDir)} testID="newSession.workspaceProjectOption" />)}
+            disabled={unavailable || workspace.disabled} onPress={() => p.onProject(workspace.workingDir)} testID="newSession.workspaceProjectOption" />)}
         </Section> : null}
         <Section>
           <ComposerNativeRow title={t('session.new.chooseOtherFolder')} leading={icon('folder.badge.plus')}

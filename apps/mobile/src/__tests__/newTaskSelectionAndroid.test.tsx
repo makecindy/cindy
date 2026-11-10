@@ -233,3 +233,13 @@ it("keeps a loaded folder selectable while displaying a move error", () => {
   click("remoteBrowseSelectCurrent");
   expect(props.onChoose).toHaveBeenCalledExactlyOnceWith("D:/project");
 });
+
+// PR #9826 / unit: project moving may mark the existing membership unavailable.
+it("shows the current project but does not dispatch its disabled selection", () => {
+  render({ page: "workspace", workspaces: [{ title: "Project", workingDir: "D:/project", disabled: true }] });
+  const row = container.querySelector('[data-testid="newSession.workspaceProjectOption"]') as HTMLButtonElement;
+  expect(row.getAttribute("aria-pressed")).toBe("true");
+  expect(row.disabled).toBe(true);
+  click("workspaceProjectOption");
+  expect(props.onProject).not.toHaveBeenCalled();
+});

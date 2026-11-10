@@ -123,7 +123,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
                   p.workspaceKind === "project" &&
                   workspacePathsEqual(p.workingDir, workspace.workingDir)
                 }
-                disabled={unavailable}
+                disabled={unavailable || workspace.disabled}
                 onPress={() => p.onProject(workspace.workingDir)}
                 testID="newSession.workspaceProjectOption"
               />
