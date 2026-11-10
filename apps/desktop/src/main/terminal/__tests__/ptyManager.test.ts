@@ -304,8 +304,8 @@ describe('PtyManager host process lifecycle', () => {
     expect(() => mgr.read('p', -1)).toThrow();
   });
 
-  it('stops input while retaining output, then disposes all resources for its owner', async () => {
-    const mgr = makeManager();
+  it('stops POSIX input while retaining output, then disposes all resources for its owner', async () => {
+    const mgr = makeManager({ platform: 'linux' });
     const owner = makeFakeWebContents() as unknown as WebContents;
     mgr.create({ id: 'p', cwd: '/tmp', owner });
     lastSpawn!.__triggerData('retained');
