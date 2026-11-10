@@ -13,8 +13,9 @@
  *              (task_started -> task_complete in a guardian_review session) that began inside the task
  *              and belongs to that task's own session (the review session's parent_thread_id), so
  *              another Codex conversation running at the same time is not counted
- *   tool       time between a tool call and its result, minus approval
- *   model      total minus the time between tool calls and their results
+ *   tool       time with at least one tool call outstanding (between a call and its result; calls that
+ *              overlap are counted once, as a union of intervals), minus approval
+ *   model      total minus that time
  *   net        total minus approval
  * The log format is Codex's internal one and may change; this was written against Codex App 26.1103.
  * The logs hold account identifiers and the full conversation, so publish only the numbers.
@@ -73,17 +74,21 @@ for (const { id: sessionId, events } of rounds) {
   const task = JSON.stringify(prompt.payload).match(new RegExp(`/([a-z]+)\\?run=${runId}`))?.[1];
   if (!task) continue;
   const start = seconds(begun.timestamp), end = seconds(done.timestamp);
-  const pending = new Map(), gaps = [];
+  const pending = new Map(), spans = [];  // spans: [call start, result] per returned tool call
   for (const event of events) {
     if (event.type !== 'response_item') continue;
     const { type, call_id: id } = event.payload ?? {};
     if (type === 'function_call' && id) pending.set(id, seconds(event.timestamp));
-    if (type === 'function_call_output' && pending.has(id)) gaps.push(seconds(event.timestamp) - pending.get(id));
+    if (type === 'function_call_output' && pending.has(id)) spans.push([pending.get(id), seconds(event.timestamp)]);
   }
   const mine = reviews.filter(([parent, from]) => parent === sessionId && from >= start && from <= end);
   const approval = mine.reduce((sum, [, from, to]) => sum + to - from, 0);
-  const gap = gaps.reduce((sum, value) => sum + value, 0);
-  result[task] = { startMs: Math.round(start * 1000), endMs: Math.round(end * 1000), total: round(end - start), calls: gaps.length,
+  // Parallel tool calls overlap: count the wall-clock union, not the sum of each call's duration.
+  let gap = 0, reach = -Infinity;
+  for (const [from, to] of spans.toSorted((a, b) => a[0] - b[0])) {
+    if (to > reach) { gap += to - Math.max(from, reach); reach = to; }
+  }
+  result[task] = { startMs: Math.round(start * 1000), endMs: Math.round(end * 1000), total: round(end - start), calls: spans.length,
     approvals: mine.length, approval: round(approval), tool: round(gap - approval), model: round(end - start - gap),
     net: round(end - start - approval), answer: String(done.payload.last_agent_message ?? '').replace(/\s+/g, ' ').slice(0, 120) };
 }
