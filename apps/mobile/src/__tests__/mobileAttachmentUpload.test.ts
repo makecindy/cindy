@@ -53,19 +53,21 @@ describe('mobileAttachmentUpload', () => {
     });
   // Production file upload must select the V2 encrypting adapter before OSS,
   // and a native failure must not send the same attachment through plaintext.
-  it.each([false, true])('keeps an encrypted upload on its selected adapter (native failure=%s)', async (fails) => {
+  it.each(['success', 'failure', 'unavailable'] as const)('keeps an encrypted upload on its selected adapter (native result=%s)', async (result) => {
     const legacy = vi.fn(), readFileChunk = vi.fn(async () => 'eHh4');
-    const off = installMobileAgentNetMedia({ available: device => device === 'paired-v2', requiresEncryption: () => true,
+    const off = installMobileAgentNetMedia({ available: device => device === 'paired-v2', requiresEncryption: () => result !== 'unavailable',
       async upload(options) {
         expect(await options.read(0, 3)).toEqual(new Uint8Array([120, 120, 120]));
-        if (fails) throw new Error('NATIVE_UPLOAD_FAILED');
+        if (result === 'failure') throw new Error('NATIVE_UPLOAD_FAILED');
+        if (result === 'unavailable') return null;
         return { key: 'agent-net-v3/unit-public-fixture', sha256: 'a'.repeat(64) };
       } });
     try {
       const work = uploadMobileAttachmentFromFile({ name: 'note.txt', size: 3, mimeType: 'text/plain' }, 'file:///unit-note', {
         token: 'unit-unused-account-token', deviceId: 'paired-v2', deps: { apiFetch: legacy, readFileChunk },
       });
-      if (fails) await expect(work).rejects.toThrow('NATIVE_UPLOAD_FAILED');
+      if (result === 'failure') await expect(work).rejects.toThrow('NATIVE_UPLOAD_FAILED');
+      else if (result === 'unavailable') await expect(work).rejects.toThrow('AGENT_NET_MEDIA_PEER_UNAVAILABLE');
       else expect(parseAttachmentOssRef((await work).path)?.ossKey).toBe('agent-net-v3/unit-public-fixture');
       expect(legacy).not.toHaveBeenCalled();
     } finally { off(); }

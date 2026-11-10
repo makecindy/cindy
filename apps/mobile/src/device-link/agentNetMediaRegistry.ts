@@ -15,6 +15,11 @@ export function assertMobileLegacyMediaAllowed(): void {
   if (backend?.requiresEncryption()) throw new Error('AGENT_NET_ENCRYPTED_MEDIA_REQUIRED');
 }
 export async function tryUploadEncryptedMobileMedia(options: MediaUpload) {
-  if (backend?.available(options.deviceId)) return backend.upload(options);
+  const selected = backend;
+  if (selected?.available(options.deviceId)) {
+    const result = await selected.upload(options);
+    if (!result) throw new Error('AGENT_NET_MEDIA_PEER_UNAVAILABLE');
+    return result;
+  }
   assertMobileLegacyMediaAllowed(); return null;
 }

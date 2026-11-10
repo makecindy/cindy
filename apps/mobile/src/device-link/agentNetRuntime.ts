@@ -46,14 +46,26 @@ export function mobileAgentNetMediaPeer(deviceId: string) {
 export function canUploadMobileAgentNetMedia(deviceId?: string): boolean {
   // A known V2 sharing route's errors must never permit plaintext fallback.
   if (deviceId && isScopedPeer(deviceId)) return !!mobileAgentNetSharingMediaTarget(deviceId);
-  return !!deviceId && isMobileAgentNetActive() && !!mobileAgentNetMediaPeer(deviceId);
+  if (!deviceId || !isMobileAgentNetActive()) return false;
+  const socket = live(), certificate = socket?.certificateFor(deviceId);
+  if (!certificate && socket?.knowsPeer(deviceId)) throw new Error('AGENT_NET_MEDIA_PEER_UNAVAILABLE');
+  return !!certificate;
 }
 installMobileAgentNetMedia({
   available: canUploadMobileAgentNetMedia,
   requiresEncryption: mobileAgentNetRequiresEncryption,
   async upload(options) {
+    const owner = getMobileAuthOwner(), route = getSelfHostedRelayRouteGeneration(), generation = getMobileAgentNetPreferences().generation;
+    const guard = () => {
+      options.assertCurrent?.();
+      if (!owner.accountKey || !isMobileAuthOwnerCurrent(owner) || route !== getSelfHostedRelayRouteGeneration()
+        || generation !== getMobileAgentNetPreferences().generation) throw new Error('AGENT_NET_OWNER_CHANGED');
+    };
+    guard();
     const { uploadMobileAgentNetMedia } = await import('./agentNetMedia');
-    return uploadMobileAgentNetMedia(options.deviceId, options.size, options.contentType, options.read, options);
+    guard();
+    const result = await uploadMobileAgentNetMedia(options.deviceId, options.size, options.contentType, options.read, { ...options, assertCurrent: guard });
+    guard(); return result;
   },
 });
 export function verifyMobileAgentNetTransportProof(peer: string, requestId: string, proof: unknown): boolean {
