@@ -336,7 +336,16 @@ export class VoiceCallContext {
           reply.complete = true;
           reply.failed = controller.signal.aborted || !validated;
           this.publish();
-        } else if (!validated && !this.stopped && !controller.signal.aborted) {
+        } else if (
+          !validated &&
+          !this.stopped &&
+          !controller.signal.aborted &&
+          // A rejected handoff already published its own terminal state on the
+          // user turn; a synthetic reply failure would duplicate that receipt.
+          !this.record.handoffs.some(
+            (item) => item.inputId === turn.id && item.state === "failed",
+          )
+        ) {
           // Nothing was spoken. Publishing the empty failed reply is what tells
           // clients the turn is over; without it the call waits in "thinking"
           // for a sentence that will never arrive.

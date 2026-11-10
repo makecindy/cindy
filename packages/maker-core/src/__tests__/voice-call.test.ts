@@ -169,6 +169,26 @@ describe("independent voice call", () => {
     });
   });
 
+  it("does not duplicate a rejected handoff as a failed reply", async () => {
+    const { call, handoff } = setup(
+      vi.fn<Deps["generate"]>(async () => '{"handoff":"Do work"}'),
+    );
+    handoff.mockResolvedValue(false);
+    expect(await call.submit("u1", "Do work")).toBe(false);
+    // The handoff receipt already marks the user turn; adding an empty failed
+    // reply would show the user two failure messages for one rejected handoff.
+    expect(
+      call.record.turns.filter((turn) => turn.failed),
+    ).toHaveLength(1);
+    expect(
+      call.record.turns.find((turn) => turn.role === "user")?.failed,
+    ).toBe(true);
+    expect(
+      call.record.turns.some((turn) => turn.role === "assistant"),
+    ).toBe(false);
+    expect(call.record.handoffs[0].state).toBe("failed");
+  });
+
   it("accepts a single pretty printed action object", async () => {
     const { call } = setup(
       vi.fn<Deps["generate"]>(async () => '{\n  "say": "Hello there."\n}'),
