@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { refreshGhostLocalizationIfChanged } from '../ghostLocalizationRefresh';
 import { GhostTaskEventIndex } from '../taskEventIndex.js';
-import type { InstalledGhost } from '../../../shared/ghost.js';
+import { hasPluginHostToolGroupApproval } from '../taskCapability.js';
+import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 
 const GHOSTS = ['plugin-a', 'plugin-b'];
@@ -17,10 +18,11 @@ const refreshCallbacks = createGhostProductionCallbacks<{
 }>({ functions: ['refreshGhostLocalization', 'broadcastGhostsChanged', 'setGhostWorkdirDisabledAndNotify'] });
 
 function routing() {
-  const ghosts = [{ manifest: { id: 'plugin-a' }, enabled: true }] as InstalledGhost[];
+  const ghosts = [{ manifest: { id: 'plugin-a', agent: { hostTools: ['computer'] } }, enabled: true,
+    approval: { state: 'approved', revision: 'fixture' }, approvedHostToolGroups: ['computer'] }] as InstalledGhost[];
   const taskEventIndex = new GhostTaskEventIndex();
   const installation = {
-    apps: vi.fn(), manifest: vi.fn(), unread: vi.fn(), browser: vi.fn(), skills: vi.fn(), index: vi.fn(),
+    apps: vi.fn(), manifest: vi.fn(), unread: vi.fn(), browser: vi.fn(), computer: vi.fn(), skills: vi.fn(), index: vi.fn(),
     taskEvents: vi.spyOn(taskEventIndex, 'replace'),
   };
   const push = vi.fn(), remote = vi.fn(), setupChanged = vi.fn(), contextChanged = vi.fn();
@@ -34,6 +36,7 @@ function routing() {
     refreshGhostLocalizationIfChanged, sendToGhostLogic: contextChanged,
     refreshPluginApps: installation.apps, getGhostSetupManifestTracker: () => ({ note: installation.manifest }),
     sweepRevokedGhostUnread: installation.unread, getGhostBrowserExtensionSlot: () => ({ reconcile: installation.browser }),
+    reconcilePluginHostTools: installation.computer, hasPluginHostToolGroupApproval, ghostInstallApprovalToken,
     scheduleGhostSkillReconcile: installation.skills,
     isGhostAvailableForActiveSession: () => true, projectGhostForRenderer: (ghost: InstalledGhost) => ghost,
     findGhostForInstanceId: () => ghosts[0], isGhostBoundaryPending: () => false,
@@ -57,6 +60,7 @@ it('projects a locale change without installation effects, while real roster cha
   r.callbacks.broadcastGhostsChanged(r.ghosts);
   expect(apps).toHaveBeenCalledTimes(2);
   for (const effect of Object.values(installation)) expect(effect).toHaveBeenCalledOnce();
+  expect(installation.computer).toHaveBeenCalledWith(new Map([['plugin-a', 'approved:fixture']]));
 });
 
 it('publishes only the changed directory policy and retains setup and remote invalidation', () => {
