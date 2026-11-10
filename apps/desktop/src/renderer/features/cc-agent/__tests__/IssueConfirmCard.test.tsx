@@ -2,7 +2,7 @@
 // Tier: unit. Actual card decisions and saved drafts; Markdown layout is covered by ui:check.
 // Dash's redesign replaces the old checkbox/form with preview -> edit -> preview -> public submit.
 // Minimal regression: Cmd+Enter while editing must return to review without publishing.
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IssueConfirmCard } from '../IssueConfirmCard';
 import { clearIssueConfirmDraftsForSession } from '@/lib/issueConfirmDraftStore';
@@ -45,6 +45,56 @@ afterEach(() => {
 });
 
 describe('feedback preview and publication', () => {
+  // PR #9764: a window listener let editing A publish preview B in split view.
+  // Existing single-card coverage missed ownership. Real cards + focused DOM key
+  // events must return only A to preview, then publish/cancel only the focused card.
+  it.each(['ctrlKey', 'metaKey'] as const)(
+    'scopes %s shortcuts to the focused split-view card',
+    (modifier) => {
+      const respondA = vi.fn();
+      const respondB = vi.fn();
+      render(
+        <>
+          <section aria-label="pane A">
+            <IssueConfirmCard sessionId="a" pending={pending} onRespond={respondA} />
+          </section>
+          <section aria-label="pane B">
+            <IssueConfirmCard
+              sessionId="b"
+              pending={{ ...pending, requestId: 'issue-b' }}
+              onRespond={respondB}
+            />
+          </section>
+          <input aria-label="other composer" />
+        </>,
+      );
+      const paneA = within(screen.getByRole('region', { name: 'pane A' }));
+      const paneB = within(screen.getByRole('region', { name: 'pane B' }));
+      fireEvent.click(paneA.getByRole('button', { name: 'issueAgent.confirm.edit' }));
+      const body = paneA.getByLabelText('issueAgent.confirm.bodyLabel');
+      body.focus();
+      fireEvent.keyDown(body, { key: 'Enter', [modifier]: true });
+      expect(respondA).not.toHaveBeenCalled();
+      expect(respondB).not.toHaveBeenCalled();
+      expect(paneA.getByRole('heading', { name: '原始标题' })).not.toBeNull();
+      fireEvent.keyDown(document.activeElement!, { key: 'Enter', [modifier]: true });
+      expect(respondA).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ confirmed: true }),
+      );
+      expect(respondB).not.toHaveBeenCalled();
+      const otherComposer = screen.getByRole('textbox', { name: 'other composer' });
+      otherComposer.focus();
+      fireEvent.keyDown(otherComposer, { key: 'Escape' });
+      fireEvent.keyDown(otherComposer, { key: 'Enter', [modifier]: true });
+      expect(respondA).toHaveBeenCalledTimes(1);
+      expect(respondB).not.toHaveBeenCalled();
+      const submitB = paneB.getByRole('button', { name: 'issueAgent.confirm.publicSubmit' });
+      submitB.focus();
+      fireEvent.keyDown(submitB, { key: 'Escape' });
+      expect(respondB).toHaveBeenCalledExactlyOnceWith({ confirmed: false });
+      expect(respondA).toHaveBeenCalledTimes(1);
+    },
+  );
   it('shows a reviewable draft and publishes only through the explicit public action', () => {
     const onRespond = vi.fn();
     render(<IssueConfirmCard sessionId="a" pending={pending} onRespond={onRespond} />);
@@ -78,12 +128,14 @@ describe('feedback preview and publication', () => {
     });
     fireEvent.click(screen.getByRole('radio', { name: 'issueAgent.confirm.typeFeature' }));
     expect(screen.queryByRole('button', { name: /publicSubmit/ })).toBeNull();
-    fireEvent.keyDown(window, { key: 'Enter', metaKey: true });
+    const body = screen.getByLabelText('issueAgent.confirm.bodyLabel');
+    body.focus();
+    fireEvent.keyDown(body, { key: 'Enter', metaKey: true });
     expect(onRespond).not.toHaveBeenCalled();
     expect(screen.getByRole('heading', { name: '已修改' })).not.toBeNull();
-    fireEvent.keyDown(window, { key: 'Enter', metaKey: true, repeat: true });
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter', metaKey: true, repeat: true });
     expect(onRespond).not.toHaveBeenCalled();
-    fireEvent.keyDown(window, { key: 'Enter', metaKey: true });
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter', metaKey: true });
     expect(onRespond).toHaveBeenCalledWith(
       expect.objectContaining({ title: '已修改', body: '新正文', type: 'feature' }),
     );
@@ -95,10 +147,12 @@ describe('feedback preview and publication', () => {
     fireEvent.change(screen.getByLabelText('issueAgent.confirm.titleLabel'), {
       target: { value: '' },
     });
-    fireEvent.keyDown(window, { key: 'Escape' });
+    const title = screen.getByLabelText('issueAgent.confirm.titleLabel');
+    title.focus();
+    fireEvent.keyDown(title, { key: 'Escape' });
     expect(onRespond).not.toHaveBeenCalled();
     expect((button('publicSubmit') as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
     expect(onRespond).toHaveBeenCalledExactlyOnceWith({ confirmed: false });
   });
   it('restores edits after remount and isolates both request and session', () => {

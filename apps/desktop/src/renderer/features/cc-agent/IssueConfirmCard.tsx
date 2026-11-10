@@ -16,7 +16,7 @@ import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
  *   Esc            → 编辑时回到预览；预览时取消
  */
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -56,6 +56,7 @@ const BODY_MAX = 4500;
 
 export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirmCardProps) {
   const { t, i18n } = useTranslation();
+  const cardRef = useRef<HTMLDivElement>(null);
   const titleInputId = useId();
   const bodyInputId = useId();
   const publicNameInputId = useId();
@@ -158,23 +159,12 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
     onRespond({ confirmed: false });
   }, [onRespond]);
 
-  // ── Keyboard shortcuts(textarea 内 Enter 正常换行,只有带修饰键才提交)──
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.repeat) return;
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        if (editing) setEditing(false);
-        else handleSubmit();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        if (editing) setEditing(false);
-        else handleCancel();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [editing, handleSubmit, handleCancel]);
+  const finishEditing = () => {
+    setEditing(false);
+    // The focused editor unmounts. Keep keyboard ownership on this card so a
+    // subsequent explicit shortcut can act on its preview, never another pane.
+    cardRef.current?.focus({ preventScroll: true });
+  };
 
   const identityButton = (identity: PendingIssueConfirm['submissionIdentity'], label: string) => {
     const selected =
@@ -198,6 +188,24 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
 
   return (
     <div
+      ref={cardRef}
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        // Scoped bubbling excludes other panes and portalled Markdown content.
+        if (e.repeat || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node))
+          return;
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (editing) finishEditing();
+          else handleSubmit();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          if (editing) finishEditing();
+          else handleCancel();
+        }
+      }}
       className={cn(
         'w-full max-w-[914px] overflow-hidden rounded-[12px] border',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
@@ -210,7 +218,8 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
         </p>
         {!editing && (
           <Button
-            variant="ghost"
+            variant="secondary"
+            tone="quiet"
             size="md"
             compact
             type="button"
@@ -440,7 +449,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
             <span>{t('issueAgent.confirm.cancel')}</span>
           </Button>
           {editing ? (
-            <Button variant="cta" size="md" compact type="button" onClick={() => setEditing(false)}>
+            <Button variant="cta" size="md" compact type="button" onClick={finishEditing}>
               {t('issueAgent.confirm.doneEditing')}
             </Button>
           ) : (
