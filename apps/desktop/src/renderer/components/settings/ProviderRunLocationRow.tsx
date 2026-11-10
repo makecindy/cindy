@@ -52,6 +52,7 @@ function ProviderRunLocationPicker({
       {standalone ? null : <span aria-hidden="true">·</span>}
       <span>{t('settings.providers.detail.runLocation.inline')}</span>
       <Select
+        data-settings-search-action="Choose which of your computers runs this provider"
         label={t('settings.providers.detail.runLocation.label')}
         value={location}
         truncateOptions
