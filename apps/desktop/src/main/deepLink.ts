@@ -722,7 +722,9 @@ function isWindowsSlashSwitch(value: string): boolean {
  * 由 bootstrap-electron 启动时调用。open-url listener 另行尽早挂载，以接住冷启动事件。
  */
 export function registerDeepLinkProtocol(): void {
-  if (!app.isPackaged) return;
+  // Packaged smoke runs use a disposable profile, but OS protocol ownership is
+  // outside that profile and must remain with the installed desktop client.
+  if (!app.isPackaged || process.argv.includes('--smoke-test')) return;
 
   for (const scheme of DEEP_LINK_SCHEMES) {
     const registered = app.setAsDefaultProtocolClient(scheme);
