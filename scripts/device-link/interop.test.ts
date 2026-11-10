@@ -128,7 +128,7 @@ it("interoperates with an explicitly provisioned isolated relay and automaticall
       if (frame.kind === "push") consentFrames.push(frame.payload);
     });
     try {
-      const request = { version: 1, kind: "request", id: "12345678-1234-1234-1234-123456789abc", purpose: "Download source", expiresAt: Date.now() + 45_000 };
+      const request = { version: 1, kind: "request", id: "12345678-1234-1234-1234-123456789abc", purpose: "Download source", ttlMs: 45_000 };
       host.client.sendPush(controller.client.getSelfDeviceId()!, "device-link:remote-control-consent", request);
       await vi.waitFor(() => expect(consentFrames).toContainEqual({ channel: "device-link:remote-control-consent", payload: request }));
       await expect(host.client.invoke(controller.client.getSelfDeviceId()!, { channel: "maker:machine:status", args: [] }))

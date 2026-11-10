@@ -3,8 +3,10 @@
 ## 请求开启远程控制（2026-11-10，未发布）
 
 新增同账号 `push` channel `device-link:remote-control-consent`，沿现有加密／签名消息通道，
-不依赖 `link-open` 或远控开关。payload 为 `{version:1,kind:"request",id,purpose,expiresAt}`
-或 `{version:1,kind:"result",id,result}`。请求 ID 为随机 UUID，目的最长 500 字符，有效期 45 秒。
+不依赖 `link-open` 或远控开关。payload 为 `{version:1,kind:"request",id,purpose,ttlMs}`
+或 `{version:1,kind:"result",id,result}`。请求 ID 为随机 UUID，目的最长 500 字符。`ttlMs` 是发送方声明的相对寿命（正数，接收端取其与 45 秒的较小值），
+接收端按本机时钟计时，不使用发送方的绝对时间戳，因此不受两台电脑时差影响；缺少数字 `ttlMs`
+的请求帧会被丢弃。
 接收端仅接受在线、非手机、非撤权、非跨账号设备；本机原生确认框明确说明开启持续有效的
 远控设置。弹窗必须挂到本机主窗口（macOS 无父窗口时不响应取消）；主窗口不可用则失败，
 不退回无父窗口弹窗。用途和设备名称移除控制／方向字符、压成单行，最多显示 200 字符。
