@@ -4,7 +4,7 @@
  * 覆盖三块:
  *   1. provider 解析(WYSIWYG):DB 显式来源优先 / 无显式则 nativeDefaultSourceId / 零已连接→null。
  *   2. buildTitleTarget:据 catalog titleModel 组装目标(模型 / 最低 effort / wire / upstream)
- *      —— 同时锁定 providers.json 里三家 titleModel 的配置(haiku / gpt-5.4-mini / gpt-5.4-mini)。
+ *      —— 同时锁定 providers.json 里三家 titleModel 的配置(haiku / gpt-6-luna / gpt-5.4-mini)。
  *   3. generateTitleViaProvider:三家 wire 各发一次 fetch,断言 URL/headers/body 形状 + 响应解析;
  *      凭证缺失 / 非 2xx → 返回 null(不抛;有标题 wire 的供应商不试别家)。
  *      无标题 wire 的会话供应商在官方 `xd` 已连接时回落官方通道。
@@ -87,11 +87,11 @@ function xdGatewayModel(
 }
 
 /** openai 是动态清单供应商(2026-07-19 统一重构):注入 codex 注册表快照模拟运行时形态。 */
-async function withDiscoveredMini<T>(fn: () => T | Promise<T>): Promise<T> {
+async function withDiscoveredLuna<T>(fn: () => T | Promise<T>): Promise<T> {
   setDiscoveredCodexModels([
     {
-      id: 'gpt-5.4-mini',
-      name: 'GPT-5.4-Mini',
+      id: 'gpt-6-luna',
+      name: 'GPT-6 Luna',
       group: 'gpt',
       sortOrder: 22,
       contextWindow: 272_000,
@@ -505,11 +505,11 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
       upstream: 'https://api.anthropic.com',
     });
   });
-  it('openai → gpt-5.4-mini / Responses,最低 effort=low(效仿运行时注入注册表快照)', async () => {
-    await withDiscoveredMini(() => {
+  it('openai → gpt-6-luna / Responses,最低 effort=low(效仿运行时注入注册表快照)', async () => {
+    await withDiscoveredLuna(() => {
       expect(buildTitleTarget('openai')).toEqual({
         providerId: 'openai',
-        model: 'gpt-5.4-mini',
+        model: 'gpt-6-luna',
         effort: 'low',
         wire: 'codex-responses',
         upstream: 'https://chatgpt.com/backend-api/codex',
@@ -521,11 +521,12 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
     // 的预期行为);本用例守的是「零能力信息也能发标题请求」的兜底语义。
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     delete catalog.modelRegistry;
+    catalog.providers.find((p) => p.id === 'openai')!.titleModel = 'chatgpt/gpt-5.4-mini';
     setActiveCatalog(catalog);
     try {
       expect(buildTitleTarget('openai')).toMatchObject({
         providerId: 'openai',
-        model: 'gpt-5.4-mini',
+        model: 'gpt-6-luna',
         effort: null,
       });
     } finally {
@@ -804,7 +805,7 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
 
   it('200 SSE → 解析 output_text;header/body 正确,带最低 effort', async () => {
     const fetchImpl = fakeFetch(() => ({ text: SSE }));
-    const title = await withDiscoveredMini(() =>
+    const title = await withDiscoveredLuna(() =>
       generateTitleViaProvider(
         { sessionId: 's2', agentKind: 'codex', prompt: '起个标题' },
         {
@@ -825,7 +826,7 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
     expect(init.headers['chatgpt-account-id']).toBe('acc-1');
     expect(init.headers.originator).toBe('codex_cli_rs');
     const body = JSON.parse(init.body);
-    expect(body.model).toBe('gpt-5.4-mini');
+    expect(body.model).toBe('gpt-6-luna');
     expect(body.stream).toBe(true);
     expect(body.store).toBe(false);
     expect(body.reasoning).toEqual({ effort: 'low' });

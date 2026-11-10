@@ -586,7 +586,7 @@ describe("claudeSubscriptionOnlyForClaudeCode", () => {
 describe("titleModel 契约(动态供应商豁免静态存在性校验)", () => {
   it("builtin providers configure titleModel for one-shot titles", () => {
     expect(provider("anthropic").titleModel).toBe("claude-haiku-4-5");
-    expect(provider("openai").titleModel).toBe("gpt-5.4-mini");
+    expect(provider("openai").titleModel).toBe("gpt-6-luna");
     expect(provider("xd").titleModel).toBe("gpt-5.4-mini");
   });
 

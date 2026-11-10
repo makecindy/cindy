@@ -1,3 +1,4 @@
+import { resolveCodexSubscriptionUtilityModel } from '@cindy/model-providers/subscription-utility';
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -114,7 +115,7 @@ export function getUtilityModelChainProfiles(): UtilityModelProfile[] {
   return selection.providerChain.map((kind) => {
     const profile = getUtilityModelProfile(kind);
     return kind === selection.provider && selection.model
-      ? { ...profile, model: selection.model }
+      ? { ...profile, model: profile.transport === 'codex-responses' ? resolveCodexSubscriptionUtilityModel(selection.model) : selection.model }
       : profile;
   });
 }

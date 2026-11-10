@@ -53,6 +53,7 @@ export type MemorySnapshot = {
 } | null;
 export type SkillSnapshot = { source: string; enabled: boolean } | null;
 export interface NightlyLearningBackupItem {
+  evidence?: { source: string; quote: string };
   kind: 'memory' | 'skill';
   before: MemorySnapshot | SkillSnapshot;
   after: MemorySnapshot | SkillSnapshot;

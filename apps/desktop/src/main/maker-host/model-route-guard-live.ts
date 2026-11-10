@@ -1,3 +1,4 @@
+import { CODEX_SUBSCRIPTION_UTILITY_MODEL } from '@cindy/model-providers/subscription-utility';
 /**
  * model-route-guard-live —— 停用轴裁决的**桌面接线壳**:现读 provider 视图后调
  * model-route-guard 的纯判定。判定逻辑本体在 model-route-guard.ts(可单测);本壳
@@ -360,13 +361,13 @@ export async function resolveRouteCopyCapabilities(
 
 /**
  * agent one-shot 不带 model 时各 agent 的内部默认模型(与 maker-core base-agent
- * OneShotOptions 文档口径一致:Claude → haiku,Codex → mini)。裁决要落到具体
+ * OneShotOptions 文档口径一致:Claude → haiku,Codex → Luna)。裁决要落到具体
  * 默认模型上:只查来源级 suspended 会漏掉「恰好停用了这一个模型」的 override
  * (PR #744 review 第十五轮)。
  */
 const DEFAULT_ONESHOT_MODEL: Record<AgentKind, string> = {
   'claude-code': 'claude-haiku-4-5',
-  codex: 'gpt-5.4-mini',
+  codex: CODEX_SUBSCRIPTION_UTILITY_MODEL,
   // pi oneShot 未实现(BaseAgent 默认抛 NotSupported);占位与 claude 同款网关小模型。
   pi: 'claude-haiku-4-5',
 };

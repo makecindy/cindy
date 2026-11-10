@@ -1,3 +1,4 @@
+import { resolveCodexSubscriptionUtilityModel } from '@cindy/model-providers/subscription-utility';
 import { isOpenAiSubscriptionProvider } from '@cindy/model-providers';
 import { isClaudeSubscriptionProviderId } from './subscription-account-auth.js';
 /**
@@ -230,7 +231,7 @@ function pickXdTitleModel(provider: Provider): CatalogModel | null {
  * 同为 oauth-passthrough 但 wire 不同),故按 id 显式分派。**新增供应商的标题支持 = 加一个 case。**
  *
  * 注意:anthropic / openai 的 titleModel 是各自订阅通道内有效的静态值(haiku /
- * gpt-5.4-mini 在 ChatGPT 后端有效);xd 是动态清单供应商,**标题模型从网关实时
+ * Luna 是 ChatGPT 订阅轻量档);xd 是动态清单供应商,**标题模型从网关实时
  * 清单选择**(pickXdTitleModel),不读静态 titleModel(网关清单即权威)。
  */
 export function buildTitleTarget(providerId: string): TitleTarget | null {
@@ -249,7 +250,7 @@ export function buildTitleTarget(providerId: string): TitleTarget | null {
     }
     case 'openai': {
       if (!provider.titleModel) return null;
-      const model = provider.titleModel;
+      const model = resolveCodexSubscriptionUtilityModel(provider.titleModel);
       const effort = lowestEffort(findTitleCatalogModel(provider, model)?.efforts ?? []);
       const routing = provider.routing['codex'];
       return routing

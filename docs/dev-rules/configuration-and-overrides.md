@@ -73,6 +73,8 @@ token）与 [`engineering-conventions.md`](engineering-conventions.md)（i18n）
 
 ### 辅助模型的直接调用
 
+ChatGPT 订阅的 Codex 轻量调用默认使用 `gpt-6-luna`。旧轻量档位 ID 继续可读，旧目录下发的 OpenAI mini 标题模型在客户端解析为 Luna。API Key 网关按自身目录选型。
+
 辅助模型的自定义 HTTP 连接按实际文本调用能力准入，不继承聊天引擎因兼容模式产生的
 默认关闭状态。候选默认可见；连接模型配置中显式保存的 `defaultEnabled` 和用户显示
 override 仍然优先。供应商／模型停用、退役、付费准入和凭证检查继续生效。

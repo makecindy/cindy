@@ -13,12 +13,14 @@ import { buildBotMemoryScopeKey, MemoryError, type AgentKind, type MemoryRecord 
 import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import type { UtilityTextRequestOptions } from '../utility-model/oneShotCandidates.js';
 import { createLogger } from '../logger.js';
 import { listInstalledSkills } from '../learn-host/skillsIndex.js';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import { isAutomaticInputOriginKind } from '../../shared/agentInputQueue.js';
 import type { NightlyLearningItem, NightlyLearningRun } from '../../shared/botNightlyLearning.js';
 import { hasLearningEvidence, learningSnapshotBudget, learningSnapshotPrefix } from './botLearningReviewPlan.js';
+import { reviewNightlyEvidence, type LearningCitation } from './botNightlyEvidence.js';
 import { nightlyLearningInstructions, nightlyLearningSchema, type NightlyLearningPlan } from './botNightlyLearningPlan.js';
 import {
   MAX_NIGHTLY_CANDIDATES,
@@ -95,6 +97,8 @@ const parseMeta = (raw: string | null) => {
 
 type TurnScan = {
   turns: Turn[];
+  /** Full owner inputs for evidence review, kept outside the planning snapshot budget. */
+  ownerTexts: Map<string, string>;
   /** 读到了 until 之前的全部回复；否则 scannedThrough 是这一批扫到的最后一条回复的时间。 */
   complete: boolean;
   scannedThrough: number;
@@ -131,6 +135,7 @@ async function readTurns(botId: string, after: number, until: number, learned: R
     [botId, after, until],
   );
   const turns: Turn[] = [];
+  const ownerTexts = new Map<string, string>();
   let holdAt = Infinity;
   for (const row of rows.slice(0, MAX_REPLIES)) {
     const meta = parseMeta(row.meta);
@@ -146,6 +151,7 @@ async function readTurns(botId: string, after: number, until: number, learned: R
     const userText = row.role === 'channel' && typeof source?.userText === 'string'
       ? source.userText : textOf(row.inputContent ?? '');
     if (!userText.trim() || isSyntheticTriggerText(userText)) continue;
+    if (userText.length <= MESSAGE_BUDGET) ownerTexts.set(row.inputId, userText);
     turns.push({
       sessionId: row.sessionId,
       createdAt: row.createdAt,
@@ -156,7 +162,7 @@ async function readTurns(botId: string, after: number, until: number, learned: R
     });
   }
   const complete = rows.length <= MAX_REPLIES;
-  return { turns, complete, scannedThrough: complete ? until : rows[MAX_REPLIES - 1]!.createdAt, holdAt };
+  return { turns, ownerTexts, complete, scannedThrough: complete ? until : rows[MAX_REPLIES - 1]!.createdAt, holdAt };
 }
 
 /** 从工具调用记录里数这个伙伴的技能被读了几次：调用技能，或读了它技能目录下的 SKILL.md。 */
@@ -320,7 +326,15 @@ async function runLocked(
   const snapshotTurns = state?.pending.turns ?? 0;
   const after = state?.throughAt ?? (state?.pending.firstAt ? state.pending.firstAt - 1 : startedAt);
   const scan = await readTurns(botId, after, startedAt, state?.learned ?? {});
-  const selected = learningSnapshotPrefix(scan.turns, MESSAGE_BUDGET);
+  const selected: Turn[] = [];
+  let ownerChars = 0;
+  for (const turn of learningSnapshotPrefix(scan.turns, MESSAGE_BUDGET)) {
+    const chars = scan.ownerTexts.get(turn.messages[0]!.id)?.length ?? Infinity;
+    if (selected.length && ownerChars + chars > MESSAGE_BUDGET) break;
+    // A single over-budget request is processed on its own without authorizing memory updates.
+    selected.push(turn);
+    ownerChars += chars;
+  }
   const messages = selected.flatMap((turn) => turn.messages);
   const allSelected = selected.length === scan.turns.length;
   const readAll = scan.complete && allSelected;
@@ -404,25 +418,22 @@ async function runLocked(
       candidates: candidates.map((c) => ({ id: c.id, title: c.title, summary: c.summary, firstSeenAt: new Date(c.firstSeenAt).toISOString() })),
       declined: state?.declined ?? [],
     });
-  const request = {
-    systemPrompt: nightlyLearningInstructions,
-    maxTokens: 8000,
-    timeoutMs: 120_000,
-    validateResponse: (text: string) => {
-      try { return nightlyLearningSchema.safeParse(JSON.parse(text)).success; } catch { return false; }
-    },
-    beforeDispatch: async () => current() && !!(await readBot(botId)),
-  };
-  let result = await requestUtilityText(getMaker(), input, request);
-  // 默认辅助模型链没有可用候选（例如没登录 Cindy、只连了自己的模型账号）时，改用这个伙伴主对话的模型路线。
-  if (!result.ok && result.reason === 'no_candidate' && bot.agentKind && bot.model && current()) {
-    result = await requestUtilityText(getMaker(), input, {
-      ...request,
-      agentKind: bot.agentKind as AgentKind,
-      model: bot.model,
+  const ask = async (input: string, options: UtilityTextRequestOptions) => {
+    const request = { ...options, timeoutMs: 120_000, beforeDispatch: async () => current() && !!(await readBot(botId)) };
+    const result = await requestUtilityText(getMaker(), input, request);
+    if (result.ok || result.reason !== 'no_candidate' || !bot.agentKind || !bot.model || !current()) return result;
+    return requestUtilityText(getMaker(), input, {
+      ...request, agentKind: bot.agentKind as AgentKind, model: bot.model,
       ...(bot.providerId ? { providerId: bot.providerId } : {}),
     });
-  }
+  };
+  const result = await ask(input, {
+    systemPrompt: nightlyLearningInstructions,
+    maxTokens: 8000,
+    validateResponse: (text) => {
+      try { return nightlyLearningSchema.safeParse(JSON.parse(text)).success; } catch { return false; }
+    },
+  });
   if (!current()) return { skipped: true, resultText: 'Owner changed' };
   if (!result.ok) {
     log.warn('nightly learning model call failed', { botId });
@@ -437,6 +448,37 @@ async function runLocked(
     return { error: 'Nightly learning returned an invalid result' };
   }
 
+  const full = new Map(memoryFull.map((m) => [m.filename, m]));
+  const memoryChanges = plan.memories.flatMap((op, id) => {
+    if (op.op !== 'update') return [];
+    const prior = full.get(op.filename);
+    if (!prior || (op.title === prior.frontmatter.title && op.description === prior.frontmatter.description && op.body === prior.body)) return [];
+    const sourceNames = new Set([op.filename]);
+    for (const other of plan.memories) {
+      if (other.op === 'delete' && other.mergedInto === op.filename) sourceNames.add(other.filename);
+    }
+    const sources = memoryFull.filter((m) => sourceNames.has(m.filename)).map((m) => ({
+      source: `memory:${m.filename}`,
+      text: [m.frontmatter.title, m.frontmatter.description, m.body].join('\n'),
+    }));
+    return [{ id, proposal: { filename: op.filename, title: op.title, description: op.description, body: op.body }, sources }];
+  });
+  const ownerSources = selected.flatMap((turn) => {
+    const id = turn.messages[0]!.id;
+    const text = scan.ownerTexts.get(id);
+    return text === undefined ? [] : [{ source: `user:${id}`, text }];
+  });
+  const memorySupport = await reviewNightlyEvidence(ask,
+    'Check each proposed replacement of a saved memory against the original record, any merge sources, and the user statements. ' +
+    'For housekeeping, all claims in the title, description and body must follow from the records, preserving conditions, exceptions and still-valid preferences. ' +
+    'A new or changed preference (including broader scope) requires an explicit user statement supporting the change; cite that statement. A reason given by the planner is not evidence.',
+    ownerChars > MESSAGE_BUDGET ? [] : memoryChanges, ownerSources,
+  );
+  if (!current()) return { skipped: true, resultText: 'Owner changed' };
+  if (!memorySupport) {
+    await recordRun({ id: runId, at: startedAt, manual: manual || undefined, outcome: 'failed', turns: selected.length, items: [], errorCode: 'MODEL_UNAVAILABLE' }, undefined, false);
+    return { error: 'Could not verify nightly memory updates' };
+  }
   const items: NightlyLearningItem[] = [];
   const backup: NightlyLearningBackup = {};
   // 改动前先登记这次运行，每改一条就把备份和记录落盘：中途退出时已做的改动仍能在记录里撤销。
@@ -444,10 +486,10 @@ async function runLocked(
     s.runs.unshift({ id: runId, at: startedAt, ...(manual ? { manual: true } : {}), outcome: 'nothing', turns: selected.length, items: [] });
     return s;
   });
-  const add = async (item: Omit<NightlyLearningItem, 'id'>, kind: 'memory' | 'skill', b: MemorySnapshot | SkillSnapshot, a: MemorySnapshot | SkillSnapshot) => {
+  const add = async (item: Omit<NightlyLearningItem, 'id'>, kind: 'memory' | 'skill', b: MemorySnapshot | SkillSnapshot, a: MemorySnapshot | SkillSnapshot, evidence?: LearningCitation) => {
     const id = `i${items.length + 1}`;
     items.push({ id, ...item });
-    backup[id] = { kind, before: b, after: a };
+    backup[id] = { kind, before: b, after: a, ...(evidence ? { evidence } : {}) };
     await writeNightlyLearningBackup(root, botId, runId, backup);
     await updateNightlyLearningState(root, botId, (s) => {
       const run = s.runs.find((r) => r.id === runId);
@@ -457,7 +499,6 @@ async function runLocked(
       return s;
     });
   };
-  const full = new Map(memoryFull.map((m) => [m.filename, m]));
   // 合并 = 更新保留的那一条 + 删除来源。保留项的更新没写成功、保留项不存在或这一轮也要删时，不删来源。
   const plannedUpdates = new Set(plan.memories.flatMap((op) => (op.op === 'update' ? [op.filename] : [])));
   const plannedDeletes = new Set(plan.memories.flatMap((op) => (op.op === 'delete' ? [op.filename] : [])));
@@ -483,10 +524,11 @@ async function runLocked(
       if (!live || live.frontmatter.updatedAt !== prior.frontmatter.updatedAt) continue;
       const beforeSnap = memorySnapshot(live);
       if (op.op === 'update') {
-        if (op.body === live.body && op.title === live.frontmatter.title && op.description === live.frontmatter.description) continue;
+        const evidence = memorySupport.get(plan.memories.indexOf(op));
+        if (!evidence) continue;
         const afterSnap = await applyMemory(store!, op.filename, { ...beforeSnap!, title: op.title, description: op.description, body: op.body }, live.frontmatter.updatedAt);
         appliedUpdates.set(op.filename, op.title);
-        await add({ kind: 'memory', action: 'updated', target: op.filename, title: op.title, reason: op.reason }, 'memory', beforeSnap, afterSnap);
+        await add({ kind: 'memory', action: 'updated', target: op.filename, title: op.title, reason: op.reason }, 'memory', beforeSnap, afterSnap, evidence);
       } else {
         const into = op.mergedInto;
         if (into && (plannedDeletes.has(into) || (plannedUpdates.has(into) && !appliedUpdates.has(into)) || !(await readMemory(store!, into)))) continue;

@@ -189,21 +189,22 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
     }
 
     const defaultProfile = getVoiceInputRefinerProfile(DEFAULT_VOICE_INPUT_REFINER_PROVIDER_KIND);
+    expect(defaultProfile.model).toBe('gpt-6-luna');
     expect(estimateVoiceInputRefinerCostUsd(defaultProfile, {
       promptTokens: 1_000_000,
       cachedTokens: 500_000,
       completionTokens: 100_000,
-    })).toBeCloseTo(0.57, 8);
+    })).toBeCloseTo(0.105, 8);
 
     const knownCatalogProfile = getVoiceInputRefinerProfile(
-      'cat:openai:codex:gpt-5.4-mini' as Parameters<typeof getVoiceInputRefinerProfile>[0],
+      'cat:openai:codex:gpt-6-luna' as Parameters<typeof getVoiceInputRefinerProfile>[0],
     );
     expect(knownCatalogProfile.pricing).toEqual(defaultProfile.pricing);
     expect(estimateVoiceInputRefinerCostUsd(knownCatalogProfile, {
       promptTokens: 1_000_000,
       cachedTokens: 500_000,
       completionTokens: 100_000,
-    })).toBeCloseTo(0.57, 8);
+    })).toBeCloseTo(0.105, 8);
 
     const unknownCatalogProfile = getVoiceInputRefinerProfile(
       'cat:xd:codex:deepseek/deepseek-v4-flash' as Parameters<typeof getVoiceInputRefinerProfile>[0],

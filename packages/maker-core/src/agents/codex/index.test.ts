@@ -1694,6 +1694,7 @@ describe('CodexAgent oneShot Goal ownership', () => {
       const transport = createdTransports[0];
       const messages = transport.lines.map(line => JSON.parse(line));
       expect(messages.find(message => message.method === Method.ThreadStart)?.params).toMatchObject({
+        model: 'gpt-6-luna',
         sandbox: 'read-only',
         config: { 'features.goals': false },
       });

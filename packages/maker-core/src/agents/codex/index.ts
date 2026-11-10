@@ -1,3 +1,4 @@
+import { CODEX_SUBSCRIPTION_UTILITY_MODEL } from '@cindy/model-providers/subscription-utility';
 /**
  * CodexAgent — 路线 A 完整版 (Phase 1+2+3+4 全打通)。
  *
@@ -3418,7 +3419,7 @@ assertRouteCurrent();
    * Phase 4: oneShot 也走 host (临时 thread, 跑完 release subscription, server 端 thread state
    * 自然 GC)。不再依赖 @openai/codex-sdk。
    *
-   * 用 gpt-5.4-mini + tmpdir + sandbox readOnly + approvalPolicy never (起标题不能弹审批)。
+   * 用订阅辅助模型 + tmpdir + sandbox readOnly + approvalPolicy never (起标题不能弹审批)。
    *
    * 失败语义: 跟 claude-code/oneShot 对齐, 抛 OneShotError (timeout/malformed),
    * 调用方按 reason 决定 catch/swallow。OneShotOptions 中 model/maxTokens 字段当前忽略
@@ -3459,7 +3460,7 @@ assertRouteCurrent();
       // 创建临时 thread (跟主 session 共享 server 但 thread state 隔离)
       const startResp = await host.request<ThreadStartResponse>(Method.ThreadStart, {
         cwd: os.tmpdir(),
-        model: opts?.model ?? 'gpt-5.4-mini',
+        model: opts?.model ?? CODEX_SUBSCRIPTION_UTILITY_MODEL,
         approvalPolicy: 'never',
         sandbox: 'read-only', // kebab-case (v2.rs SandboxMode)
         // Auxiliary title/summary calls must not start a native Goal loop either.
