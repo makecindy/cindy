@@ -19,7 +19,7 @@ vi.mock('../../cindy-media/generatedMedia.js', () => ({
   createBlobImageStorage: () => ({}),
   createBlobVideoStorage: () => ({}),
 }));
-vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: vi.fn() }));
+vi.mock('../../imageCacheStore.desktop.js', () => ({ resolveSafe: vi.fn() }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   getProviderSecretStore: () => ({ get: () => 'test-key' }),
 }));

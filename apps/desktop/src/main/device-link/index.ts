@@ -17,7 +17,7 @@ import { PluginSyncAccess } from './pluginSyncAccess.js';
 import os from 'node:os';
 import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
 import { createTaskActivityPublisher, projectHostTaskActivity } from './taskActivity.js';
-import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 import { tryPeerInvoke, stopFilePeers } from './filePeer';
 import { desktopDirectRuntime } from './directLink';
 import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';
@@ -76,7 +76,7 @@ import { markStartupMilestone } from '../startupTimeline';
 import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch';
+import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop';
 import {
   DeviceLinkOwnershipArbiter,
   createSqliteExclusiveFileLock,
@@ -96,7 +96,7 @@ import {
   rememberLastKnownDeviceName,
   updateDeviceLinkSetting,
   writeDeviceLinkSetting,
-} from './settings-store';
+} from './settings-store.desktop';
 import { keepAwakeController } from './power-blocker';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { createDnsFallbackLookup } from './dnsFallbackLookup';
@@ -118,7 +118,7 @@ import {
   clearControllerDisplayNames,
   getControllerDisplayName,
   setDispatchPresenceOfflineCheck,
-} from './dispatch';
+} from './dispatch.desktop';
 import {
   clearControllerPlatforms,
   getControllerPlatform,

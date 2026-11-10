@@ -19,6 +19,18 @@ export interface HostChannelDef {
 }
 
 export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
+  {
+    desktopChannel: 'local-db:task-tags:execute',
+    webPath: 'localDb.taskTags.execute',
+    hostPath: '/api/task-tags/execute',
+    body: ([request]) => ({ request }),
+  },
+  {
+    desktopChannel: 'local-db:conversations:search',
+    webPath: 'localDb.conversations.search',
+    hostPath: '/api/conversations/search',
+    body: ([request]) => ({ request }),
+  },
   // --- Sessions ---
   {
     desktopChannel: 'local-db:sessions:list',
@@ -86,6 +98,7 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: ([sessionId, opts]) => ({
       sessionId,
       limit: (opts as { limit?: number } | undefined)?.limit,
+      before: (opts as { before?: string | null } | undefined)?.before ?? null,
     }),
   },
   {
@@ -111,6 +124,14 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: ([sessionId]) => ({ sessionId }),
   },
 
+  // --- Durable Subagent work ---
+  ...(['list', 'detail', 'transcript'] as const).map(action => ({
+    desktopChannel: `local-db:subagent-runs:${action}`,
+    webPath: `localDb.subagentRuns.${action}`,
+    hostPath: `/api/subagent-runs/${action}`,
+    body: ([input]: unknown[]) => input ?? {},
+  })),
+
   // --- Maker & Agents ---
   {
     desktopChannel: 'maker:list-active',
@@ -131,10 +152,44 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     body: () => null,
   },
   {
+    desktopChannel: 'maker:auth:get-state',
+    webPath: 'maker.auth.getState',
+    hostPath: '/api/agents/auth-state',
+    body: ([agentKind]) => ({ agentKind }),
+  },
+  {
+    desktopChannel: 'maker:agent:status',
+    webPath: 'maker.agent.getStatus',
+    hostPath: '/api/agents/status',
+    body: ([agentKind]) => ({ agentKind }),
+  },
+  {
+    desktopChannel: 'maker:auth:trigger-login',
+    webPath: 'maker.auth.triggerLogin',
+    hostPath: '/api/agents/login',
+    body: ([agentKind, options]) => ({ agentKind, options }),
+  },
+  {
+    desktopChannel: 'maker:auth:cancel-login',
+    webPath: 'maker.auth.cancelLogin',
+    hostPath: '/api/agents/cancel-login',
+    body: ([agentKind, options]) => ({ agentKind, options }),
+  },
+  {
+    desktopChannel: 'maker:auth:logout',
+    webPath: 'maker.auth.logout',
+    hostPath: '/api/agents/logout',
+    body: ([agentKind, ownerScope]) => ({ agentKind, ownerScope }),
+  },
+  {
     desktopChannel: 'maker:get-capabilities',
     webPath: 'maker.getCapabilities',
     hostPath: '/api/capabilities',
     body: ([agentKind]) => ({ agentKind }),
+    map: (response) => {
+      const result = response as { capabilities?: Record<string, unknown> } | null;
+      return result?.capabilities ? { ...result.capabilities, ...result } : response;
+    },
   },
   {
     desktopChannel: 'maker:list-agent-commands',
@@ -158,7 +213,7 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
   },
   {
     desktopChannel: 'maker:turn-change-sets:list',
-    webPath: 'maker.turnChangeSets.list',
+    webPath: 'maker.listTurnChangeSets',
     hostPath: '/api/turn-change-sets/list',
     body: ([sessionId]) => ({ sessionId }),
   },
@@ -187,6 +242,10 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     webPath: 'maker.input.steer',
     hostPath: '/api/input/steer',
     body: ([sessionId, item]) => ({ sessionId, item }),
+    map: (response) => {
+      const result = response as { ok?: boolean; projection?: unknown } | null;
+      return result?.projection ?? (result?.ok === true);
+    },
   },
   {
     desktopChannel: 'maker:input:resume',
@@ -199,6 +258,18 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     webPath: 'maker.input.remove',
     hostPath: '/api/input/remove',
     body: ([sessionId, clientId]) => ({ sessionId, clientId }),
+  },
+  {
+    desktopChannel: 'maker:input:retry-last-error',
+    webPath: 'maker.input.retryLastError',
+    hostPath: '/api/input/retry-last-error',
+    body: ([sessionId]) => ({ sessionId }),
+  },
+  {
+    desktopChannel: 'maker:input:clear-error',
+    webPath: 'maker.input.clearError',
+    hostPath: '/api/input/clear-error',
+    body: ([sessionId]) => ({ sessionId }),
   },
 
   // --- Interactions ---
@@ -213,7 +284,7 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     webPath: 'maker.resolveInteraction',
     hostPath: '/api/interactions/respond',
     body: ([requestId, decision]) => ({ requestId, decision }),
-    map: (response) => Boolean((response as { accepted?: boolean })?.accepted),
+    map: (response) => ({ accepted: (response as { accepted?: boolean } | null)?.accepted === true }),
   },
 
   // --- Usage & Pricing ---
@@ -239,6 +310,18 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     desktopChannel: 'model-access:get-status',
     webPath: 'modelAccess.getStatus',
     hostPath: '/api/model-access',
+    body: () => null,
+  },
+  {
+    desktopChannel: 'model-access:retry',
+    webPath: 'modelAccess.retry',
+    hostPath: '/api/model-access/retry',
+    body: () => null,
+  },
+  {
+    desktopChannel: 'maker:codex-runtime-route:get',
+    webPath: 'maker.codexRuntimeRouteGet',
+    hostPath: '/api/agents/codex-runtime-route',
     body: () => null,
   },
 
@@ -308,7 +391,10 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     webPath: 'auth.refresh',
     hostPath: '/api/auth/refresh',
     body: () => ({}),
-    map: (response) => Boolean((response as { ok?: boolean; authenticated?: boolean })?.authenticated ?? (response as { ok?: boolean })?.ok),
+    map: (response) => {
+      const state = response as { isAuthenticated?: boolean; authenticated?: boolean } | null;
+      return (state?.isAuthenticated ?? state?.authenticated) === true;
+    },
   },
   {
     desktopChannel: 'auth:get-state',
@@ -330,4 +416,48 @@ export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
     hostPath: '/api/ghosts',
     body: () => null,
   },
+  {
+    desktopChannel: 'ghosts:runtime-states',
+    webPath: 'ghosts.runtimeStates',
+    hostPath: '/api/ghosts/runtime-states',
+    body: () => null,
+  },
+  {
+    desktopChannel: 'ghosts:card:get',
+    webPath: 'ghosts.getCard',
+    hostPath: '/api/ghosts/card',
+    body: ([callId]) => ({ callId }),
+  },
+  {
+    desktopChannel: 'ghosts:card:list-by-session',
+    webPath: 'ghosts.listCardsBySession',
+    hostPath: '/api/ghosts/cards',
+    body: ([sessionId]) => ({ sessionId }),
+  },
+  {
+    desktopChannel: 'ghosts:set-enabled',
+    webPath: 'ghosts.setEnabled',
+    hostPath: '/api/ghosts/set-enabled',
+    body: ([id, enabled, expectedInstalledApproval]) => ({ id, enabled, expectedInstalledApproval }),
+  },
 ];
+
+/** Transport stays with the caller: web uses its paired cookie, main its token. */
+export function createHostChannelHandlers(
+  request: (path: string, body: unknown, method: 'POST' | 'GET') => Promise<unknown>,
+): Record<string, (args?: unknown[]) => Promise<unknown>> {
+  return Object.fromEntries(HOST_CONTRACT_CHANNELS.map(def => [
+    def.webPath,
+    async (args: unknown[] = []) => {
+      const response = await request(def.hostPath, def.body?.(args) ?? null, def.method ?? 'POST');
+      return def.map ? def.map(response) : response;
+    },
+  ]));
+}
+
+/** Stable code for the browser adapter; never includes arguments or secrets. */
+export function unsupportedHostChannel(path: string): Error & { code: string } {
+  return Object.assign(new Error(`HOST_CHANNEL_UNSUPPORTED: ${path}`), {
+    code: 'HOST_CHANNEL_UNSUPPORTED',
+  });
+}

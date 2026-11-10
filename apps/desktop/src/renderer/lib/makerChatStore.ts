@@ -5187,6 +5187,7 @@ function markSessionHasUserMessage(sessionId: string): void {
 function requestInputProjection(
   sessionId: string,
   pinnedDeviceId?: string,
+  hostRecovery?: { isCurrent: () => boolean },
 ): Promise<InputProjectionRequestResult | undefined> {
   if (!sessionId) return Promise.resolve(undefined);
   const origin = pinnedDeviceId ?? getStickySessionDeviceId(sessionId);
@@ -5215,7 +5216,8 @@ function requestInputProjection(
     promise = api.input.getProjection(sessionId).then(
       (projection) => {
         request.settled = true;
-        const current = isCurrentInputProjectionRequest(sessionId, origin, epoch, dataOwner);
+        const current = isCurrentInputProjectionRequest(sessionId, origin, epoch, dataOwner)
+          && (!hostRecovery || hostRecovery.isCurrent());
         if (origin && current) {
           noteRemoteInputProjectionSuccess(
             sessionId,
@@ -5226,6 +5228,18 @@ function requestInputProjection(
           );
         }
         if (current) {
+          // Only an explicit Host recovery may settle a missed terminal event.
+          // Apply this in the same synchronous commit as the guarded projection:
+          // a newer live projection must win over a slow recovery read.
+          if (hostRecovery && projection.turnInProgress === false) {
+            flushPendingTextDelta(sessionId);
+            setState(sessionId, forceFinalizeOnSessionClosed);
+          } else if (hostRecovery && projection.turnInProgress === true) {
+            setState(sessionId, s => ({
+              ...s, isStreaming: true,
+              agentStatus: { ...s.agentStatus, isRunning: true },
+            }));
+          }
           applyInputProjection(projection, { supersedeQueries: false });
         }
         return { projection, current };
@@ -13482,18 +13496,20 @@ function runRemoteReconcile(sessionId: string, opts?: {
   force?: boolean;
   repair?: boolean;
   preserveClientIds?: ReadonlySet<string>;
+  /** Loopback Host recovery also covers a view whose first read failed. */
+  hostRecovery?: { isCurrent: () => boolean };
 }, noteHydration?: (before: readonly ChatMessage[], after: readonly ChatMessage[]) => void): Promise<boolean> {
   // 挂起交互面板重建**无条件先行**,不受下方 isStreaming 守卫约束:turn 内弹出的
   // permission / ask / plan 正是 isStreaming=true 的常见态(pendingPermission 与
   // isRunning 共存),断连重连 / 聚焦时若被守卫吞掉,交互面板不重建、用户无法回应,
   // 会话会卡死。同时它并入下方同步代的完成语义(finally 处 await):needs-interaction
   // 未读的 passive 远程回执必须等提示真实重建后才放行。
-  const interactionsSync = reconcilePendingInteractions(sessionId);
+  const interactionsSync = reconcilePendingInteractions(sessionId, opts?.hostRecovery?.isCurrent);
   const state = sessions.get(sessionId);
   // A repair without force started while streaming is deliberately additive: it may insert
   // durable rows whose push was lost, but it must never hydrate or replace the
   // live row that the stream is still producing.
-  if (!state || !state.historyLoaded || (state.isStreaming && !opts?.force && !opts?.repair)) {
+  if (!state || (!state.historyLoaded && !opts?.hostRecovery) || (state.isStreaming && !opts?.force && !opts?.repair)) {
     // 消息对账被守卫挡下,但交互重建照跑。为它单独开一代:turn 进行中的
     // needs-interaction 未读,其「内容」就是权限 / ask / plan 提示本身——提示真实
     // 重建(count>0)才算一代完成,挂起的 passive 回执随之放行,不必等 turn 结束。
@@ -13543,6 +13559,10 @@ function runRemoteReconcile(sessionId: string, opts?: {
       let reachedHistoryStart = false;
       for (let page = 0; page < MAX_PAGES; page++) {
         const rows = await listMessagesFor(sessionId, { limit: 50, before });
+        if (opts?.hostRecovery && !opts.hostRecovery.isCurrent()) {
+          windowApplied = false;
+          return;
+        }
         if (rows.length === 0) {
           reachedHistoryStart = true;
           break;
@@ -13583,7 +13603,10 @@ function runRemoteReconcile(sessionId: string, opts?: {
         windowApplied = false;
         return;
       }
-      if (collected.length === 0) return;
+      if (collected.length === 0) {
+        if (opts?.hostRecovery) setState(sessionId, s => ({ ...s, historyLoaded: true }));
+        return;
+      }
       const mapped = mapServerMessages(collected).filter(
         (message) => !opts?.preserveClientIds?.has(message.clientId),
       );
@@ -13647,8 +13670,8 @@ function runRemoteReconcile(sessionId: string, opts?: {
           : mergeAuthoritativeRemoteWindow(mapped, lateArrivals, 'newest-first');
         noteHydration?.(s.messages, messages);
         // 无缺失且无权威字段变化 → 不换引用(视同已应用)。
-        if (messages === s.messages) return s;
-        if (isContiguous) return { ...s, messages };
+        if (messages === s.messages && (s.historyLoaded || !opts?.hostRecovery)) return s;
+        if (isContiguous) return { ...s, messages, historyLoaded: s.historyLoaded || !!opts?.hostRecovery };
         invalidateMessageHistoryWindow(sessionId);
         const oldestRow = oldestMessageRow(collected, 'newest-first');
         // 保留下来的晚到行是否**可证明**与新窗口连续:
@@ -13699,6 +13722,7 @@ function runRemoteReconcile(sessionId: string, opts?: {
         return {
           ...s,
           messages,
+          historyLoaded: s.historyLoaded || !!opts?.hostRecovery,
           oldestMessageId: oldestRow?.id ?? s.oldestMessageId,
           hasMoreMessages: !reachedHistoryStart,
           // 锁归本次重置释放(与 reloadMessages / clear / trim / demote 同规矩):被作废的
@@ -13727,6 +13751,40 @@ function runRemoteReconcile(sessionId: string, opts?: {
     (err) => log.warn('reconcileRemoteMessages failed', { sessionId, err: String(err) }),
   );
   return run.then(() => windowApplied);
+}
+
+/** Repair only loaded/visible/running local slices of an explicit Host client.
+ * Reuse the normal projection, interaction and history reducers. This function
+ * never dispatches a message, clears drafts or touches Device Link sessions.
+ */
+async function reconcileHostConnection(isCurrent: () => boolean): Promise<void> {
+  const owner = getDataOwnerGeneration();
+  const current = () => isCurrent() && isDataOwnerGenerationCurrent(owner);
+  const candidates = [...sessions].filter(([id, state]) =>
+    !isRemoteSessionSticky(id) && (_activeViewSessions.has(id) || state.historyLoaded
+      || state.isStreaming || state.agentStatus.isRunning),
+  ).map(([id]) => id);
+  // Bound parallel reads, and keep the rest of the UI usable during recovery.
+  const failures: unknown[] = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, async () => {
+    while (next < candidates.length && current()) {
+      const id = candidates[next++];
+      const sessionCurrent = () => current() && sessions.has(id) && !isRemoteSessionSticky(id);
+      try {
+        const runtimeAtRead = sessions.get(id)?.agentStatus;
+        await requestInputProjection(id, undefined, {
+          isCurrent: () => sessionCurrent() && sessions.get(id)?.agentStatus === runtimeAtRead,
+        });
+        if (!sessionCurrent()) continue;
+        const applied = await runRemoteReconcile(id, {
+          force: true, repair: true, hostRecovery: { isCurrent: sessionCurrent },
+        });
+        if (!applied && sessionCurrent()) throw new Error('Host history changed during recovery');
+      } catch (error) { failures.push(error); }
+    }
+  }));
+  if (current() && failures.length) throw failures[0];
 }
 
 /**
@@ -18915,6 +18973,7 @@ export const makerChatStore = {
   selectAskUserQuestion,
   setTitleUpdateCallback,
   syncActiveTurnsFromMain,
+  reconcileHostConnection,
   /**
    * 当前 running 的 claude-code 后台任务 taskId 集合(按 taskId 归一,别名键去重)。
    * 用途:快照对账的候选集捕获 —— 必须在发起 listSessionBackgroundTasks **之前**

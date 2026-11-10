@@ -36,7 +36,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { __testing } from '../dispatch';
+import { __testing } from '../dispatch.desktop';
 
 const project = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
