@@ -756,7 +756,7 @@ describe('CreateWorkerPopover', () => {
     // 输入：读取未返回时点一下表单 → 读取返回(Codex 记的是 gpt-host) → 切到 Codex。
     it('keeps the controlled computer’s last choice for later switches when the form was touched before it arrived', async () => {
       mocks.remoteUnsupported = true;
-      const remote = installRemoteHost('memoryHost', {
+      installRemoteHost('memoryHost', {
         ...DEFAULT_WORKER_CREATION_PREFS,
         codex: { model: 'gpt-host', effort: 'high', fast: false, providerId: null },
       });
@@ -764,7 +764,7 @@ describe('CreateWorkerPopover', () => {
       mocks.modelsByAgent.codex = [model('gpt-other'), model('gpt-host')];
       let release!: () => void;
       const gate = new Promise<void>((resolve) => { release = resolve; });
-      const real = (window as unknown as { electronAPI: { deviceLink: { invoke: typeof remote.invoke } } })
+      const real = (window as unknown as { electronAPI: { deviceLink: { invoke: ReturnType<typeof installRemoteHost>['invoke'] } } })
         .electronAPI.deviceLink.invoke;
       (window as unknown as { electronAPI: { deviceLink: { invoke: unknown } } }).electronAPI.deviceLink.invoke =
         vi.fn(async (device: string, channel: string, args?: unknown[]) => {
