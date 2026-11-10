@@ -2,7 +2,7 @@
 
 ## 排队消息展示
 
-Desktop 与 Mobile 都把待发消息作为消息流气泡展示，气泡下方的「排队中」菜单提供插话、编辑、上移、下移与取消发送。输入框不再承载独立队列列表。
+Desktop 与 Mobile 都把待发消息作为消息流气泡展示，气泡下方的「排队中」菜单提供插话、编辑、上移、下移与取消发送。输入框不再承载独立队列列表。已在提问卡展示的异步回答不产生待发气泡或菜单，判据与手机共用 `isAnsweredAsyncQuestionClientId`；后台投递照常。
 
 Desktop 在工作过程分组后追加待发项（`pendingQueueItems.ts`），避免待发输入提前截断当前助手轮次。待发项与正式回流使用相同的 `msg-clientId` key，已回流的历史优先，防止队列快照迟到造成双显。`PendingQueueBubble` 复用 `UserMessage`，操作可用性使用 `maker-shared/queue` 的共享判据。编辑锁由任务页持有，不随气泡虚拟化卸载而释放；队列通知放在消息流 footer。
 
