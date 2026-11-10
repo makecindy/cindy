@@ -9,6 +9,17 @@
  * 认不出来一律按 work：把工作显示成「已结束」是这条规则要修的问题，漏认的服务最多亮到
  * SDK 的后台命令超时（默认 30 分钟、上限 2 小时）。这是经验规则，不参与回合是否结束、
  * 停止语义或完成提醒，只影响展示。
+ *
+ * 不变量（评审收敛时定下，新增判断前先对照）：
+ *  1. 只有「命令自己的前台部分永远不会结束」才是 service；其余一律 work。
+ *  2. 命令的存活时间由前台部分决定：`;` `&&` `||` 换行是顺序执行，卡在第一个不会结束的段；
+ *     `|` 管道只要有一段不结束就不结束；以单个 `&` 结尾的段是后台作业，命令不等它
+ *     （除非有 `wait`），所以 `pnpm dev & …; pnpm test; kill $!` 是 work。
+ *  3. 只看真正执行的程序名与子命令：选项和选项取值（`--include dev`、`--filter dev`）、包管理
+ *     的安装发布类子命令不是脚本名；`2>&1`、`&>` 里的 `&` 不是命令分隔符。
+ *  4. 单一判断入口：splitCommandSegments 拆段，isLongLivedCommand 汇总，isLongLivedSegment
+ *     判单段；shell -c 递归复用同一套，不另写第二份。
+ *  5. 看不懂的结构（子 shell、`$(…)`、控制流）不猜，按 work。
  */
 export type BackgroundCommandKind = 'work' | 'service';
 
@@ -97,16 +108,30 @@ export function classifyBackgroundCommand(command: string | null | undefined): B
 
 function isLongLivedCommand(command: string, depth: number): boolean {
   // 引号内的 `&&` / `;` 不是命令分隔符：`bash -c "cd app && pnpm dev"` 要整体交给 shell 分支。
-  for (const segment of splitCommandSegments(command)) {
-    if (isLongLivedSegment(tokenize(segment), depth)) return true;
+  const segments = splitCommandSegments(command);
+  // 有 `wait` 才会等后台作业；没有时，单个 `&` 结尾的段不决定命令的存活时间。
+  const waitsForJobs = segments.some((segment) => tokenize(segment.text)[0] === 'wait');
+  for (const segment of segments) {
+    if (segment.background && !waitsForJobs) continue;
+    if (isLongLivedSegment(tokenize(segment.text), depth)) return true;
   }
   return false;
 }
 
-function splitCommandSegments(command: string): string[] {
-  const segments: string[] = [];
+interface CommandSegment {
+  text: string;
+  /** 以单个 `&` 结尾：后台作业。 */
+  background: boolean;
+}
+
+function splitCommandSegments(command: string): CommandSegment[] {
+  const segments: CommandSegment[] = [];
   let current = '';
   let quote: '"' | "'" | null = null;
+  const push = (background: boolean): void => {
+    segments.push({ text: current, background });
+    current = '';
+  };
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i]!;
     if (quote) {
@@ -119,14 +144,31 @@ function splitCommandSegments(command: string): string[] {
       current += ch;
       continue;
     }
-    if (ch === '\n' || ch === ';' || ch === '|' || ch === '&') {
-      segments.push(current);
-      current = '';
+    if (ch === '&') {
+      // `2>&1`、`>&2`、`&>file` 里的 & 属于重定向，不是分隔符。
+      const prev = command[i - 1];
+      const next = command[i + 1];
+      if (prev === '>' || prev === '<' || next === '>') {
+        current += ch;
+        continue;
+      }
+      if (next === '&') {
+        // `&&`：顺序执行，两个字符一起消费。
+        i += 1;
+        push(false);
+        continue;
+      }
+      push(true);
+      continue;
+    }
+    if (ch === '\n' || ch === ';' || ch === '|') {
+      if (ch === '|' && command[i + 1] === '|') i += 1;
+      push(false);
       continue;
     }
     current += ch;
   }
-  segments.push(current);
+  push(false);
   return segments;
 }
 

@@ -25,6 +25,11 @@ describe('classifyBackgroundCommand', () => {
     ['pnpm --filter desktop test --watch=false', 'work'],
     // 选项取值和包管理子命令不是脚本名：`--include dev` 是依赖类型，`--filter dev` 是包名
     ['npm ci --include dev', 'work'],
+    // 前台部分会结束就是工作：后台作业（单个 &）不决定命令的存活时间，除非有 wait
+    ['pnpm dev & server=$!; pnpm test; kill "$server"', 'work'],
+    ['nohup pnpm dev > dev.log 2>&1 & pnpm test', 'work'],
+    ['pnpm dev &', 'work'],
+    ['timeout 60 pnpm dev', 'work'],
     ['npm install --include=dev', 'work'],
     ['pnpm --filter dev test', 'work'],
     ['pnpm vitest --watch=0 --no-watch', 'work'],
@@ -34,6 +39,11 @@ describe('classifyBackgroundCommand', () => {
     // 启动后不会自己结束：服务
     ['pnpm dev', 'service'],
     ['pnpm --filter desktop dev', 'service'],
+    // 顺序执行卡在第一个不会结束的段；管道有一段不结束就不结束；wait 会等后台作业
+    ['pnpm test && pnpm dev', 'service'],
+    ['pnpm dev | tee dev.log', 'service'],
+    ['pnpm dev > dev.log 2>&1 & wait', 'service'],
+    ['pnpm dev 2>&1', 'service'],
     ['pnpm -C apps/web dev', 'service'],
     ['npm run dev -w web', 'service'],
     ['cd apps/web && npm start', 'service'],
