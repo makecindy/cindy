@@ -483,6 +483,11 @@
     "worktreeCleanupPending": "O worktree anterior ainda aguarda limpeza. Volte a ligar o dispositivo e tente novamente."
   },
   "menu": {
+    "moveToProject": "Mover tarefa",
+    "moveFailed": "Não foi possível mover a tarefa",
+    "moveRunning": "Esta tarefa está em execução. Mova-a quando terminar.",
+    "moveWorktree": "O diretório de trabalho desta tarefa é um worktree, pelo que ainda não pode ser movida para outro projeto",
+    "moveUnsupported": "Atualize o Cindy no computador ligado para mover tarefas.",
     "details": "Detalhes da sessão",
     "chipPinned": "Fixadas",
     "chipArchived": "Arquivadas",

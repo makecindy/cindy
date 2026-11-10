@@ -470,6 +470,11 @@
     "worktreeCleanupPending": "前回の worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。"
   },
   "menu": {
+    "moveToProject": "タスクを移動",
+    "moveFailed": "タスクの移動に失敗しました",
+    "moveRunning": "このタスクは実行中です。完了後に移動してください。",
+    "moveWorktree": "このタスクの作業ディレクトリは worktree のため、他のプロジェクトへは移動できません",
+    "moveUnsupported": "タスクを移動するには、接続先のコンピューターで Cindy を更新してください。",
     "details": "セッションの詳細",
     "chipPinned": "ピン留め済み",
     "chipArchived": "アーカイブ済み",

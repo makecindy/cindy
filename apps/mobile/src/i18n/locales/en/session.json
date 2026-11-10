@@ -470,6 +470,11 @@
     "worktreeCleanupPending": "The previous worktree is still awaiting cleanup. Reconnect the device and try again."
   },
   "menu": {
+    "moveToProject": "Move task",
+    "moveFailed": "Failed to move task",
+    "moveRunning": "This task is running. Move it after it finishes.",
+    "moveWorktree": "This task's working directory is a worktree, so it can't be moved to another project yet",
+    "moveUnsupported": "Update the connected computer to move tasks.",
     "details": "Session details",
     "chipPinned": "Pinned",
     "chipArchived": "Archived",

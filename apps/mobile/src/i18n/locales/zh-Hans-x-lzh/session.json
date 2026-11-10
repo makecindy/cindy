@@ -482,6 +482,11 @@
     "worktreeCleanupPending": "前次之 worktree 尚待回收，请重连设备后再试。"
   },
   "menu": {
+    "moveToProject": "移差事",
+    "moveFailed": "移差事未成",
+    "moveRunning": "差事方行，毕后再移",
+    "moveWorktree": "此差事之工作目录乃 worktree，暂不支持移至他案",
+    "moveUnsupported": "请新所连电脑之 Cindy，乃可移差事。",
     "details": "差事详情",
     "chipPinned": "已居首",
     "chipArchived": "已封存",

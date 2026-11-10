@@ -1,5 +1,6 @@
 export interface NewTaskSelectionSheetProps {
   page: 'device' | 'workspace' | 'directory' | null;
+  workspaceTitle?: string;
   busy: boolean;
   devices: readonly { deviceId: string; name?: string }[];
   selectedDeviceId: string;
