@@ -155,10 +155,15 @@ function piParametersForEndpoint(
 /**
  * True when the caller is the host the dialect was published for. Catalog rows pin a
  * concrete path (`https://api.deepseek.com`), while a saved connection may append `/v1`.
- * Self-hosted templates bind every URL, so they never count as "the same endpoint".
+ * Account-pinned templates (Cloudflare account/gateway, Azure resource, Vertex location)
+ * still name one vendor host, so a successful binding counts; the self-hosted
+ * `{endpoint}` template binds any URL and never counts.
  */
 function sameUpstreamTemplate(template: string, endpoint: string): boolean {
-  if (template.includes('{')) return false;
+  if (template.includes('{')) {
+    if (template.includes('{endpoint}')) return false;
+    return providerEndpointBindings(template, endpoint) !== null;
+  }
   const source = normalize(template);
   const target = normalize(endpoint);
   if (source === target) return true;

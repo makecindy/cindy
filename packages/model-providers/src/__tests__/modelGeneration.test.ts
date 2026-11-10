@@ -295,6 +295,27 @@ describe('new model generation defaults', () => {
     const sameHost = providerModelGenerationRecord('DeepSeek-V4.1-Flash', 'https://api.deepseek.com/v1', 'openai-completions')!;
     expect(sameHost.execution.pi.compat?.thinkingFormat).toBe('deepseek');
   });
+
+  // #9808 review: an account-pinned template (Cloudflare account/gateway path) still names
+  // one vendor host. A new generation added through that preset must keep the dialect,
+  // while the self-hosted `{endpoint}` template must not.
+  it('keeps the dialect for an account-pinned template but not for a self-hosted one (#9808)', () => {
+    const cloudflare = providerModelGenerationRecord(
+      'workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017',
+      'https://gateway.ai.cloudflare.com/v1/account-id/gateway-id/compat',
+      'openai-completions',
+      'cloudflare-ai-gateway',
+    )!;
+    expect(cloudflare.execution.pi.compat?.thinkingFormat).toBe('deepseek');
+    expect(cloudflare.execution.pi.compat?.supportsReasoningEffort).toBe(false);
+
+    const selfHosted = providerModelGenerationRecord(
+      'deepseek-v4.1-flash',
+      'https://developer.amd.example/v1',
+      'openai-completions',
+    )!;
+    expect(selfHosted.execution.pi.compat?.thinkingFormat).toBeUndefined();
+  });
 });
 
 
