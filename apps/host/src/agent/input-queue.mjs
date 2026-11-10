@@ -1,7 +1,7 @@
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
-import { createTurnExecutor } from './turn-executor.mjs';
+import { createTurnExecutor, autoReviewAuthorizationOptions } from './turn-executor.mjs';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { randomUUID } from 'node:crypto';
@@ -155,7 +155,7 @@ export function createInputQueue(deps) {
         assertCurrent(); opts.signal?.throwIfAborted();
         const session = deps.getMaker().getSession(id);
         if (!session) throw new Error('NO_ACTIVE_TURN');
-        const result = await session.steer(message);
+        const result = await session.steer(message, autoReviewAuthorizationOptions(opts));
         if (!result || result.accepted === false) throw new Error(result?.reason || 'steer rejected');
       },
       abortSession: id => {

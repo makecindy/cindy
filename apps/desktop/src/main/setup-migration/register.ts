@@ -572,7 +572,20 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
       readRendererPrefs: () => rendererHost.read(),
       readPlugins: async () => {
         const snapshot = await market().snapshot({ discoveryOnly: true });
+        // Without the official catalog only custom-market items come back; the local
+        // install records still know which plugins came from the official market.
+        const catalogUnavailable = snapshot.unavailableReason !== null;
+        const installedServerRecords = catalogUnavailable
+          ? await market().installedServerMarketRecords().catch((error: unknown) => {
+            log.warn('setup plugin install records unavailable', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return [];
+          })
+          : [];
         return {
+          catalogUnavailable,
+          installedServerRecords,
           ghosts: listGhosts().map((ghost) => ({
             ...ghostFact(ghost),
             name: ghost.manifest.name,

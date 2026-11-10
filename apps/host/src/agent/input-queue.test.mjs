@@ -15,7 +15,7 @@ import { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-brain/g
 import { AcceptedCallbackDispatchCancelled } from '../../../desktop/src/main/maker-ipc/acceptedCallbackRunner.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
-import { AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
+import { AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_SOURCE_CONTENT } from '@cindy/maker-core';
 
 /** Minimal Maker stand-in: one live session per id, driven by the test. */
 function createFakeMaker() {
@@ -411,10 +411,10 @@ test('an MCP App message is a delegated continuation that grants nothing', async
   await waitFor(() => h.maker.getSession('app-task')?.sendOptions.length === 1);
   const options = h.maker.getSession('app-task').sendOptions[0];
   assert.equal(options[AUTO_REVIEW_DELEGATED_CONTINUATION], true);
-  const handleOpts = {};
-  const intent = await options.resolveAutoReviewUserIntent();
-  handleOpts[AUTO_REVIEW_USER_INTENT] = intent;
-  assert.doesNotMatch(JSON.stringify(handleOpts[AUTO_REVIEW_USER_INTENT] ?? {}), /delete everything/);
+  // Page text is never authorization: the source content is empty and the
+  // intent grants nothing.
+  assert.equal(options[AUTO_REVIEW_SOURCE_CONTENT], '');
+  assert.doesNotMatch(JSON.stringify(options[AUTO_REVIEW_USER_INTENT] ?? {}), /delete everything/);
   const row = h.persisted.find(message => message.clientId === 'app-1' && message.role === 'user');
   assert.deepEqual(row.agentMeta.sourcePlugin, { pluginId: 'mcp-app:server-1', name: 'App' });
   assert.deepEqual(row.agentMeta.autoReviewUserText, { kind: 'delegated-continuation' });
@@ -441,6 +441,15 @@ test('a remote input keeps its source device and tells the model', async () => {
   await h.queue.enqueue('local-note', { clientId: 'local-note-1', text: 'from here' });
   await waitFor(() => h.maker.getSession('local-note')?.sent.length === 1);
   assert.equal(h.maker.getSession('local-note').sent[0], 'from here');
+});
+
+// PR #9621 review: the user's authored text reaches the Session separately
+// from the expanded model input, so quoted content cannot authorize anything.
+test('an ordinary message sends the authored text as its auto-review source', async () => {
+  const h = createHarness();
+  await h.queue.enqueue('plain-task', { clientId: 'plain-1', text: 'summarize this' });
+  await waitFor(() => h.maker.getSession('plain-task')?.sendOptions.length === 1);
+  assert.equal(h.maker.getSession('plain-task').sendOptions[0][AUTO_REVIEW_SOURCE_CONTENT], 'summarize this');
 });
 
 test('a second message waits for the running turn instead of interleaving', async () => {
@@ -927,6 +936,19 @@ test('stop does not wait behind a pending steer before aborting the provider', a
     await Promise.allSettled([steering, stopped]);
     await h.queue.dispose();
   }
+});
+
+// A same-turn steer carries the same protected authorization inputs as a send.
+test('a steer sends the authored text as its auto-review source', async () => {
+  const h = createHarness();
+  await enqueue(h, 'steer-auth', { clientId: 'running', text: 'running' });
+  const session = h.maker.getSession('steer-auth');
+  let seen;
+  session.steer = async (_text, options) => { seen = options; return { accepted: true }; };
+  await h.queue.steer('steer-auth', { clientId: 'steer-auth-1', text: 'go on' });
+  await waitFor(() => seen !== undefined);
+  assert.equal(seen[AUTO_REVIEW_SOURCE_CONTENT], 'go on');
+  await h.queue.dispose();
 });
 
 // Shutdown used Promise.all: one failed task teardown rejected disposal while

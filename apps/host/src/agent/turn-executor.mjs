@@ -8,11 +8,29 @@ import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/messag
 import { prependNoteToWireUserMessage } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
 import { readWireSourceDevice } from '../../../desktop/src/main/maker-ipc/messageSourceNote.ts';
 import { buildClientEnvironmentNote, shouldPrependMobileClientPromptNote } from '../../../desktop/src/main/maker-ipc/mobileClientPromptNote.ts';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 
 const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
 const dbKind = kind => kind === 'claude-code' ? 'cc' : kind;
 const errorText = error => error instanceof Error ? error.message : String(error);
+
+/** Authorization inputs the coordinator derives for one send or steer, kept
+ * out of the model-facing body. Dropping them makes maker-core fall back to the
+ * expanded text, so quoted pages or plugin resources would count as the user's
+ * own words in Auto mode. Text an MCP App sends is page content: it is a
+ * delegated continuation, and since Host keeps no authored-text history to
+ * restore from, it grants nothing (fail closed). */
+export function autoReviewAuthorizationOptions(opts) {
+  const delegated = opts[AUTO_REVIEW_DELEGATED_CONTINUATION] === true
+    || typeof opts[MCP_APP_MESSAGE_GUARD] === 'function';
+  const intent = opts[AUTO_REVIEW_USER_INTENT] ?? (delegated ? restoreAutoReviewUserIntent([]) : undefined);
+  return {
+    ...(opts[AUTO_REVIEW_SOURCE_CONTENT] !== undefined ? { [AUTO_REVIEW_SOURCE_CONTENT]: opts[AUTO_REVIEW_SOURCE_CONTENT] } : {}),
+    ...(intent !== undefined ? { [AUTO_REVIEW_USER_INTENT]: intent } : {}),
+    ...(delegated ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true } : {}),
+  };
+}
 
 /**
  * Node platform adapter for one maker-core turn. Queue order, recovery and
@@ -132,12 +150,7 @@ export function createTurnExecutor(deps) {
     try {
       const session = await turn.preparing;
       check();
-      // Text an MCP App sends is page content, not the user's own words: it must
-      // never count as fresh human authorization for Auto mode. Host keeps no
-      // authored-text history to restore from, so a delegated continuation
-      // grants nothing and every sensitive action still asks (fail closed).
-      const delegated = sendOpts[AUTO_REVIEW_DELEGATED_CONTINUATION] === true
-        || typeof sendOpts[MCP_APP_MESSAGE_GUARD] === 'function';
+      const delegated = autoReviewAuthorizationOptions(sendOpts)[AUTO_REVIEW_DELEGATED_CONTINUATION] === true;
       // The host-stamped device of a remote input: shown as attribution on the
       // stored row, and told to the model once per message like the desktop does.
       const sourceDevice = readWireSourceDevice(sendOpts.sourceDevice);
@@ -145,10 +158,7 @@ export function createTurnExecutor(deps) {
         ? buildClientEnvironmentNote({ device: sourceDevice }) : null;
       const wireMessage = deviceNote ? prependNoteToWireUserMessage(message, deviceNote) : message;
       const result = await session.send(wireMessage, { messageUuid: sendOpts.messageUuid,
-        ...(delegated ? {
-          [AUTO_REVIEW_DELEGATED_CONTINUATION]: true,
-          resolveAutoReviewUserIntent: async () => restoreAutoReviewUserIntent([]),
-        } : {}),
+        ...autoReviewAuthorizationOptions(sendOpts),
         ...(sendOpts.origin ? { origin: sendOpts.origin } : {}),
         signal: sendOpts.signal, onTurnReserved: generation => {
           turn.generation = generation;
