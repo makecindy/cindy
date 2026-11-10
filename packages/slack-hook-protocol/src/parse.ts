@@ -961,6 +961,11 @@ function validateProviderBindStatus(
           || row.provider !== 'feishu' || row.state !== 'confirmed' || row.completedAttemptId !== undefined
           || row.scopeId !== entry.app.appId || validateProviderBindStatus(row, label) !== null
           || ids.has(row.bindingId as string) || principals.has(row.principalId as string)) return `${label}.applications contains an invalid binding`;
+        const info = row.appInfo;
+        const enclosingApp = entry.app;
+        if (isPlainObject(info) && ['appId', 'brand', 'appType'].some((key) => info[key] !== enclosingApp[key])) {
+          return `${label}.applications binding appInfo must match the enclosing app identity`;
+        }
         ids.add(row.bindingId as string); principals.add(row.principalId as string);
       }
       if (entry.app.appType === 'self_built' && entry.bindings.length > 1) return `${label}.applications self-built apps have one identity`;

@@ -272,7 +272,8 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 
 两仓协议增加可选 `feishu-multi-app-v1`。新服务端按已验签 Cindy 身份下发允许应用集合；
 新客户端只在双方协商后接受 `provider.bind.state.applications` 权威快照，元素为应用名称、品牌、类型、
-组织与该应用 confirmed 绑定列表。顶层仍投影一个应用，旧端忽略新增字段且继续单应用行为。
+组织与该应用 confirmed 绑定列表。存在绑定级 appInfo 时，App ID、品牌和应用类型必须与外层应用一致；
+可空的名称/组织标签仅用于展示，不参与身份判定。顶层仍投影一个应用，旧端忽略新增字段且继续单应用行为。
 新客户端与旧服务端不协商该位，继续原 UI。新 Console 以 `supportsCoexistence` 判定是否显示独立 checkbox。
 未配置组织默认官方应用；现有组织选择不变。
 
