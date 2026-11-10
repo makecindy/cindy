@@ -165,7 +165,9 @@ export function hostUiApprovalSubjects(host: GhostHostUi): { key: string; detail
     detail: JSON.stringify({ ...action(command), shortcut: command.shortcut }) });
   for (const capability of host.capabilities ?? []) if (isHostUiCapability(capability))
     result.push({ key: `capability:${capability}`, detail: capability });
-  for (const field of host.appearance?.fields ?? []) if (PLUGIN_APPEARANCE_FIELDS.includes(field as PluginAppearanceField))
+  const appearanceFields = host.appearance?.fields ??
+    (host.capabilities?.includes('appearance') ? PLUGIN_APPEARANCE_FIELDS : []);
+  for (const field of appearanceFields) if (PLUGIN_APPEARANCE_FIELDS.includes(field as PluginAppearanceField))
     result.push({ key: `appearance:${field}`, detail: field });
   for (const resource of host.appearance?.resources ?? []) result.push({ key: `appearance-resource:${resource.id}`,
     detail: JSON.stringify({ kind: resource.kind, path: resource.path }) });

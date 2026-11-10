@@ -2,6 +2,7 @@ import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { getPluginHostUi, hostUiApprovalSubjects, type GhostHostUi } from '@cindy/plugin-protocol';
+import { PLUGIN_APPEARANCE_FIELDS } from '@cindy/plugin-protocol/appearance';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
@@ -2221,9 +2222,9 @@ export function getApprovedGhostHostUi(ghost: InstalledGhost): GhostHostUi | und
     contributions: (host.contributions ?? []).filter(item => has('contribution', item.id) && (!item.view || has('view', item.view))),
     commands: (host.commands ?? []).filter(command => has('command', command.id) && (!command.view || has('view', command.view))),
     capabilities: (host.capabilities ?? []).filter(capability => has('capability', capability)),
-    ...(host.appearance ? { appearance: {
-      fields: host.appearance.fields.filter(field => has('appearance', field)),
-      resources: (host.appearance.resources ?? []).filter(resource => has('appearance-resource', resource.id)),
+    ...(host.appearance || host.capabilities?.includes('appearance') ? { appearance: {
+      fields: (host.appearance?.fields ?? PLUGIN_APPEARANCE_FIELDS).filter(field => has('appearance', field)),
+      resources: (host.appearance?.resources ?? []).filter(resource => has('appearance-resource', resource.id)),
     } } : {}),
   };
 }
