@@ -394,6 +394,8 @@ export const AssistantMessage = memo(function AssistantMessage({
       onCopy={handleAssistantCopy}
     >
       <ChatBubble
+        data-plugin-appearance-region
+        data-plugin-appearance-speaker="assistant"
         bare={!botBubble}
         {...(botBubble ? { 'data-bot-reply-bubble': '' } : {})}
         className={botBubble ? cn(CHAT_BUBBLE_COLUMN_CLASS, hasRichAnswer(content) ? 'w-full' : 'w-fit') : undefined}

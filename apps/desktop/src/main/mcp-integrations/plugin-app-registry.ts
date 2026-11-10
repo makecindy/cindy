@@ -1,4 +1,6 @@
 import { getPluginToolUi } from '@cindy/plugin-protocol';
+import { reconcilePluginUiRegions } from '../mcp-apps/visibility.js';
+import { reconcilePluginAppearanceSources } from '../mcp-apps/appearance.js';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
@@ -126,4 +128,9 @@ export function refreshPluginApps(
     }
   }
   replacePluginAppServers(configs);
+  reconcilePluginAppearanceSources(instance => hostEntries.get(instance));
+  reconcilePluginUiRegions((instance, token) => {
+    const entry = hostEntries.get(instance);
+    return !!entry && `${entry.owner}:${entry.fingerprint}` === token && entry.host.capabilities?.includes('visibility') === true;
+  });
 }

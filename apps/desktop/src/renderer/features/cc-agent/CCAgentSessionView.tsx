@@ -90,7 +90,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
-import { PluginUiSlot } from '@/cindy-brain/PluginUiContributions';
+import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
   getCindyMakeTestRecovery,
@@ -866,6 +866,7 @@ function CCAgentSessionContent({
   onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
+  const hasPluginStatusbar = usePluginUiHas('statusbar');
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const navigate = useNavigate();
@@ -5640,6 +5641,7 @@ function CCAgentSessionContent({
            refs, and ResizeObservers are fresh — guarantees per-session isolation. */}
         <div
           className="wallpaper-message-viewport relative min-h-0 flex-1"
+          data-plugin-ui-element="messages"
           style={{ '--wallpaper-composer-height': `${overlayHeight}px` } as CSSProperties}
         >
           {/* perf/session-switch 探针纯诊断:仅 DEV 用 Profiler 量 MessageStream commit,
@@ -5671,7 +5673,6 @@ function CCAgentSessionContent({
 
           {/* Solid background zone */}
           <div className="wallpaper-composer-zone pointer-events-auto flex w-full flex-col items-center bg-[hsl(var(--content-area))] pb-5">
-            <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
             {/* 单行 composer 状态层：RunningStatusBar 与中央胶囊组合叠在同一个 grid row。
               展开态由「计划 + 完整被控提示」组成真实 flex 组合共同居中,被控提示会把计划
               向左挤且不会互相覆盖；折叠态计划恢复单独居中,呼吸灯移到 token 统计左侧。 */}
@@ -5985,6 +5986,7 @@ function CCAgentSessionContent({
                   ? <RemoteBotFollowUpInvitation key={`${remoteDeviceId}:${sessionId}`} deviceId={remoteDeviceId} botId={botChatIdentity.id} />
                   : <BotFollowUpInvitation key={`follow-up-invitation:${sessionId}`} botId={botChatIdentity.id} engaged />
               )}
+              <div className="contents" data-plugin-ui-keep-visible>
               <InteractionPromptHost
                 hasInteraction={
                   !!(
@@ -6092,6 +6094,7 @@ function CCAgentSessionContent({
                   />
                 ) : null}
               </InteractionPromptHost>
+              </div>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               {!isSharedTaskPeer(remoteDeviceId ?? '') && <GoalIndicator sessionId={sessionId} />}
               {/* Only the compact bar reserves composer space; its transcript is a
@@ -6345,7 +6348,7 @@ function CCAgentSessionContent({
                 <div
                   className={cn(
                     'mt-1.5 flex w-full items-center justify-between gap-3 px-1',
-                    !session?.workingDir && !worktreeCreation && 'invisible',
+                    !session?.workingDir && !worktreeCreation && !hasPluginStatusbar && 'invisible',
                   )}
                 >
                   {/* Left: workingDir — 点击在系统文件管理器中打开;
@@ -6408,6 +6411,14 @@ function CCAgentSessionContent({
                         </button>
                       )}
                     </WorkingDirectoryTip>
+                  )}
+
+                  {hasPluginStatusbar && (
+                    <div className="min-w-0 flex-1 overflow-x-auto">
+                      <div className="w-max">
+                        <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
+                      </div>
+                    </div>
                   )}
 
                   {/* Right: Context capacity indicator */}
@@ -6476,7 +6487,9 @@ function CCAgentSessionContent({
                     />
                   </div>
                 </div>
-              ) : null}
+              ) : (
+                <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
+              )}
             </div>
           </div>
         </div>

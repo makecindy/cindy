@@ -14,6 +14,7 @@ import {
   SCALED_TAILWIND_TOKENS,
   TAILWIND_LINE_HEIGHTS,
 } from '../styles/generated/token-mappings';
+import { usePluginAppearance } from '../cindy-brain/usePluginAppearance';
 
 import {
   APPEARANCE_LIMITS,
@@ -134,6 +135,7 @@ export function applyFontSettings(settings: FontSettings): void {
 }
 
 export function FontSettingsProvider({ children }: { children: ReactNode }) {
+  usePluginAppearance(applyFontSettings);
   const [settings, setSettings] = useState<ConfigurableFontSettings>(() => {
     const initial = getInitialAppearanceSettings();
     return {

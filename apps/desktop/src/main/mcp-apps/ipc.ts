@@ -2,6 +2,7 @@ import { extractIpcError } from '../../shared/ipcError.js';
 import { pagePermissionGrants, onPagePermissionSessionChanged } from './pagePermissions.js';
 import { getDesktopMcpToolApprovalPolicy } from '../maker-host/mcp-tool-approval-policy.js';
 import { createPluginFileAccess } from './pluginFileAccess.js';
+import { configurePluginAppearanceFiles } from './appearance.js';
 import { mediaTypeForLibraryPath } from '../cindy-brain/runtime/ghostFiles.js';
 import { ipcMain, shell, BrowserWindow, dialog, webContents } from 'electron';
 import { bindPluginUiResource, finishPluginUiAction } from './hostUi.js';
@@ -92,7 +93,7 @@ export function registerMcpAppsIpc(
         saving = false;
       }
     },
-    pluginFiles: createPluginFileAccess({
+    pluginFiles: configurePluginAppearanceFiles(createPluginFileAccess({
       libraryPath: async (instance, relativePath) => {
         const { getGhostLibrarySlot } = await import('../cindy-brain/index.js');
         return getGhostLibrarySlot().resolvePanelFilePath(instance, relativePath);
@@ -102,7 +103,7 @@ export function registerMcpAppsIpc(
         const { getGhostHandoffStore } = await import('../cindy-brain/index.js');
         return getGhostHandoffStore().openForPage(instance, ref);
       },
-    }),
+    })),
     owner: currentOwner,
     config: readAppServer,
     revisionKey: getMcpAppRevisionKey,

@@ -6,6 +6,8 @@ import { ghostPermissionItems, ghostHostUiNeedsApproval } from '../../shared/gho
 import { refreshPluginApps } from '../mcp-integrations/plugin-app-registry.js';
 import { revokePluginAppServers, stopPluginAppInstance } from '../mcp-apps/runtime.js';
 import { nativePluginUi, publishPluginUiControl } from '../mcp-apps/nativeRuntime.js';
+import { releasePluginUiRegions } from '../mcp-apps/visibility.js';
+import { releasePluginAppearance } from '../mcp-apps/appearance.js';
 import { checkGhostSecret } from './runtime/ghostSecretCheck.js';
 import { PluginDeviceSync } from './deviceSyncSlot.js';
 import { deviceSyncKeyStore } from '../device-sync-keys/keyStore.js';
@@ -2296,7 +2298,11 @@ export function getGhostRuntime(): GhostRuntime {
         const storagePart = isValidPluginInstallRelId(id) ? pluginInstallStoragePart(id) : id;
         log.info('ghost runtime state', { id, state });
         if (state !== 'running') disconnectRoutineSource(storagePart);
-        if (['off', 'stopping', 'crashed', 'fused'].includes(state)) pluginDeviceSync.invalidate(storagePart);
+        if (['off', 'stopping', 'crashed', 'fused'].includes(state)) {
+          pluginDeviceSync.invalidate(storagePart);
+          releasePluginUiRegions(storagePart);
+          releasePluginAppearance(storagePart);
+        }
         // 崩溃/熄灯时把该意识名下的在途工具调用收掉(结构化失败给 agent)。
         getGhostPipeDispatcher().onRuntimeState(storagePart, state);
         if (state !== 'running') {

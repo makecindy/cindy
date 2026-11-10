@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import path from 'node:path';
-import { readCustomWallpaperUrl } from './custom-wallpaper-settings.js';
+import { readCustomWallpaperUrl, customWallpaperStore } from './custom-wallpaper-settings.js';
 
 import {
   DEFAULT_APPEARANCE_SETTINGS,
@@ -29,6 +29,8 @@ const store = createOverrideSettingsFile<AppearanceSettings>({
   label: 'appearance',
   maxBytes: 16 * 1024,
   preserveUnreadableFile: true,
+  logLoadedValue: false,
+  logReadErrorDetails: false,
 });
 
 export function readAppearanceSettings(): AppearanceSettings {
@@ -37,6 +39,7 @@ export function readAppearanceSettings(): AppearanceSettings {
   return {
     ...value,
     customWallpaperUrl,
+    ...(customWallpaperStore.read().fallbackUrl ? { customWallpaperFallbackUrl: customWallpaperStore.read().fallbackUrl } : {}),
     wallpaperId: value.wallpaperId === 'custom' && !customWallpaperUrl ? 'none' : value.wallpaperId,
   };
 }
@@ -72,7 +75,7 @@ export const __testing = {
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
 export const appearancePortableSettings = portableOverrideSettings(store, {
   // Host-owned media reference; a custom wallpaper image is not copied.
-  omitKeys: ['customWallpaperUrl'],
+  omitKeys: ['customWallpaperUrl', 'customWallpaperFallbackUrl', 'appIconResource', 'uiFontResource', 'codeFontResource', 'bodyFontResource'],
   optionalKeys: ['wallpaperBlur', 'wallpaperVisibility', 'desktopVisibility'],
   filter: (values) => {
     if (values.wallpaperId !== 'custom') return values;

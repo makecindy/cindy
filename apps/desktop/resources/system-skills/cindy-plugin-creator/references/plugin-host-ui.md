@@ -31,6 +31,12 @@
 `task` 页面只能从真实本机任务打开。已批准页面和命令可从插件详情、任务标题栏菜单进入。
 同实例、视图和任务再次打开会聚焦已有页签；更新输入不重建页面。
 
+原生按钮可额外声明 `presentation:"popover"`，在入口旁打开同一 MCP App 资源；缺省仍打开侧栏页签。
+仅适用于 `composer.toolbar/session.header/statusbar/message.actions/turn.footer` 的页面按钮；
+正文位置与更多菜单保持各自承载方式。页面在弹层打开后才加载，关闭、入口离开视口或区域隐藏即释放。
+变更为弹层会进入原批准确认，不继承旧入口的批准。例：
+`{"id":"quick","title":"快捷面板","position":"composer.toolbar","view":"board","presentation":"popover"}`。
+
 入口指定 `view` 或 `tool` 之一。`arguments` 为静态 JSON：页面收到 `hostContext.cindy.input`，
 工具收到对应参数。`kind:"select"` 还会加入用户选择的 `value`，并须声明
 `options:[{"label":"全部","value":"all"}]`。`kind:"status"` 只显示状态，不声明动作。
@@ -40,12 +46,15 @@
 | --- | --- |
 | `composer.toolbar` | 输入框工具栏 |
 | `session.header` | 任务标题栏 |
-| `statusbar` | 任务状态区 |
+| `statusbar` | 输入框下方的任务状态栏，位于目录／对话标识与用量信息之间 |
 | `message.actions` | 消息操作栏 |
 | `message.menu` | 消息「更多」菜单内部 |
 | `turn.footer` | 已结束的 AI 消息末尾 |
 | `message.body` | 消息正文的可选展示 |
 | `tool.body` | 工具详情的可选展示 |
+
+`statusbar` 等原生控件位置支持 `button`、`select` 和 `status`。需要点击打开页面或调用工具时，
+声明 `kind:"button"` 并指定 `view` 或 `tool`；示例的底部「示例已就绪」按钮会打开当前任务页。
 
 `message.menu` 声明菜单动作，`kind` 缺省或填 `button`，引用 `view` 或 `tool`；
 不在菜单内嵌选择框、状态条或任意页面。`match.roles` 可区分用户消息和 AI 消息。
@@ -65,7 +74,8 @@
 - `input`：开页输入，不需要 context 权限。
 - `capabilities`：实际已批准能力，用于探测支持情况。
 - `context`、`selection`：仅任务页面获准 context 后提供。正文页面可含 message/tool 投影；task 为开页时的标题、目录、模型快照。
-- `draft:{revision,text}`：仅获准 draft 后提供；text 为编辑器文档，不是普通字符串。
+- `draft:{revision,text,selection}`：仅获准 draft 后提供；text 为编辑器文档，不是普通字符串。
+  `selection` 为当前草稿选区的 `{from,to,text}`，无选区时为 null。
 
 草稿读取和修改均由原任务编辑器处理，独立窗口中的页面也订阅同一份草稿。
 完整任务副窗使用自身编辑器的草稿，分离侧栏和弹出页签使用主窗编辑器的草稿。
@@ -88,14 +98,58 @@ if (app.getHostContext()?.cindy?.capabilities?.includes('draft')) {
 | --- | --- |
 | 页面批准 | `cindy.ui.open({viewId,input?})`，只打开同插件已批准视图 |
 | `context` | 向标准 host context 推送获准的任务/正文投影和任务区域选中文字 |
-| `draft` | `cindy.ui.draft({mode:"append"|"replace",text,revision?})`；替换须带最新 revision，冲突拒绝，不发送消息 |
-| `appearance` | `cindy.ui.appearance({patch?})`，沿原外观设置读写，图标由独立能力控制 |
-| `visibility` | `cindy.ui.visibility({visible?})`，读取/显示/隐藏承载页面的 Cindy 窗口 |
-| `app-icon` | `cindy.ui.app-icon({icon:"default"|"cat"|"wordmark"|"mark"})`，选择现有 macOS Dock 图标 |
+| `draft` | `cindy.ui.draft({mode:"append"|"replace"|"replace-selection",text,revision?})`；替换整份草稿或选区须带最新 revision，冲突拒绝，不发送消息 |
+| `appearance` | `cindy.ui.appearance({patch?,reset?,ifRevision?})`，沿原外观设置读写，图标由独立能力控制 |
+| `visibility` | `cindy.ui.visibility({visible?,regions?})`，读取或修改窗口及 workspace/sidebar/header/messages/composer/tools/windowControls 的显隐 |
+| `app-icon` | `cindy.ui.app-icon({icon:"default"|"cat"|"wordmark"|"mark"})` 或 `{resource:"asset:icon"}`，选择内置图标或获准图片 |
 
 原工具卡片仍沿原 MCP Apps 契约。任务页面也可使用标准 `ui/message` 与 `ui/update-model-context`；
 全局页面不能自行选任务发送。任务清空/归档、批准或 owner 变化后旧操作失效。
-图标不改 Finder/Launchpad，不接任意插件图片，不增加默认启动设置图标的调用；正式包效果须单独验收。
+图标用于 macOS Dock 及 Windows/Linux 运行窗口，不改 Finder/Launchpad；默认未选择自定义图标时不增加启动换图标调用。
+正式包效果须单独验收。区域显隐是临时的窗口状态，停用、撤权或卸载后释放；权限提示保持可操作。
+
+### 外观资源与正文样式
+
+在 `mcpApps.host` 额外声明需要的字段和包内资源；每项参与批准，旧批准不会自动授予新资源：
+
+```json
+{
+  "capabilities": ["appearance", "app-icon"],
+  "appearance": {
+    "fields": ["uiFont", "bodyFont", "wallpaper", "theme", "reading", "contentStyle", "appIcon"],
+    "resources": [
+      { "id": "font", "kind": "font", "path": "assets/font.ttf" },
+      { "id": "wallpaper", "kind": "image", "path": "assets/wallpaper.png" },
+      { "id": "icon", "kind": "image", "path": "assets/icon.png" }
+    ]
+  }
+}
+```
+
+`appearance` 控制外观字段，`app-icon` 单独控制图标；同时声明 `fields` 时仅开放列出的字段。
+资源引用支持 `asset:<id>`、本插件已获准 Library 文件 `library:<relative path>`，以及本插件拥有的 `cindy-media://blobs/...`；
+不接受任意磁盘路径或远程 URL。字体支持 TTF/OTF，字体与图片按格式和大小校验，视频壁纸可带静态 fallback。
+
+```js
+const reply = await app.callServerTool({ name: 'cindy.ui.appearance', arguments: {} });
+const before = JSON.parse(reply.content.find(block => block.type === 'text').text);
+await app.callServerTool({ name: 'cindy.ui.appearance', arguments: {
+  ifRevision: before.revision,
+  patch: {
+    bodyFont: { resource: 'asset:font', size: 17 },
+    wallpaper: { resource: 'asset:wallpaper', visibility: 0.3, blur: 2 },
+    reading: { bodyLineHeight: 1.8, codeLineHeight: 1.5, maxWidth: 800 },
+    contentStyle: { messageGap: 12, messagePadding: 8, messageRadius: 16 },
+    theme: { light: { userBubble: '#f0f0f0', userText: '#202020' }, dark: { userBubble: '#303030', userText: '#eeeeee' } }
+  }
+} });
+await app.callServerTool({ name: 'cindy.ui.app-icon', arguments: { resource: 'asset:icon' } });
+await app.callServerTool({ name: 'cindy.ui.appearance', arguments: { reset: ['bodyFont', 'wallpaper', 'reading', 'contentStyle', 'theme'] } });
+```
+
+读取返回原设置及 `{revision,values}`；写入另有 `application.status`：`applied` 为实际消费端确认，
+`saved` 为已保存但尚未确认显示，`failed` 为未成功应用。主题分深浅色，正文样式只作用于消息区域；不接受任意 CSS。
+沿原设置通知更新，不随消息重复读取；相同字体资源复用已加载字体。资源来源失效后沿原设置流程清理，避免遗留不可用字体或图标。
 
 ### 原生小控件按需更新
 

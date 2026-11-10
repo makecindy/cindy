@@ -30,6 +30,9 @@ Codex 原生未必自行发送 MCP 取消；服务仍须限制长操作，并区
 原生控件沿既有插件管子和窗口 IPC 更新；窗口合并实际消费需求，先有消费者才构造、推送状态。
 `message.menu` 将已批准动作加入消息「更多」菜单；菜单关闭时不订阅这些菜单项，打开后才接状态，关闭释放。
 页面状态沿标准 host context，普通历史消息只查本地候选，不增加逐消息 SQL、IPC 或插件渲染调用。
+入口旁页面使用 `presentation:"popover"`，沿同一个 MCP App presenter，关闭或不可见即释放。
+草稿选区替换使用原编辑器与 revision；区域显隐使用原布局和面板停放机制，释放插件后恢复。
+外观资源与可写字段逐项批准，经原设置所有者应用；字体按资源缓存，默认启动不触发插件换图标。
 实现回归见 `nativeState.test.ts`、`ghostNativeUi.test.ts`、`PluginUiContributions.test.tsx`、`MessageActionBar.test.tsx` 与 `hostUi.test.ts`。
 
 首个支持版本为 `0.1.122-beta`（`PLUGIN_UI_MIN_CINDY_VERSION`）。声明交互页面的包须填写

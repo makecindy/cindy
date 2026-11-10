@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { getDraft, saveDraft, plainTextToTiptapDoc } from '@/lib/composerDraftStore';
-import { pluginUiDraftSnapshot, subscribePluginUiDraft } from './pluginUiContext';
+import { pluginUiDraftSnapshot, subscribePluginUiDraft, replacePluginUiDraftSelection } from './pluginUiContext';
 import { openPluginUiView } from '@/features/right-sidebar/lib/openPluginUiView';
 import { usePluginUiLaunchers, runPluginUiLauncher } from './PluginUiContributions';
 import { matchesPluginAppShortcut } from '@/lib/appShortcutStore';
@@ -8,11 +8,16 @@ import { isAppInteractionLocked } from '@/lib/appInteractionLock';
 import { toast } from '@/lib/toast';
 import { useTranslation } from 'react-i18next';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
+import { applyPluginUiRegions } from './pluginUiVisibility';
+import { applyPluginAppearanceInWindow } from './usePluginAppearance';
+import type { AppearanceSettings } from '../../shared/appearanceSettings';
+import { DEFAULT_PLUGIN_UI_REGIONS, type PluginUiRegions } from '../../shared/pluginUi';
 
 /** Main routes editor/layout commands here, including those from detached Views. */
 export function PluginUiHost() {
   const commands = usePluginUiLaunchers();
   const { t } = useTranslation();
+  useEffect(() => () => applyPluginUiRegions(DEFAULT_PLUGIN_UI_REGIONS), []);
   useEffect(() => {
     if (!commands.some(command => command.shortcut)) return;
     const pressed = (event: KeyboardEvent) => {
@@ -32,6 +37,10 @@ export function PluginUiHost() {
     const unlisten = window.electronAPI.maker.onPluginUiAction(input => {
       if (!input || typeof input !== 'object') return;
       const action = input as Record<string, unknown>;
+      if (action.kind === 'regions-sync') {
+        if (isDataOwnerPushStampCurrent(action.ownerStamp)) applyPluginUiRegions(action.values as PluginUiRegions);
+        return;
+      }
       if (typeof action.requestId !== 'string') return;
       const requestId = action.requestId;
       if (action.kind === 'draft-unwatch') { watches.get(requestId)?.(); return; }
@@ -40,10 +49,16 @@ export function PluginUiHost() {
         let error: string | undefined;
         try {
           if (!isDataOwnerPushStampCurrent(action.ownerStamp)) throw new Error('MCP_APP_OWNER_CHANGED');
-          if (action.kind === 'draft-watch' && typeof action.sessionId === 'string') {
+          if (action.kind === 'appearance') {
+            result = await applyPluginAppearanceInWindow(action.settings as AppearanceSettings);
+          } else if (action.kind === 'regions') {
+            applyPluginUiRegions(action.values as PluginUiRegions);
+            result = { applied: true };
+          } else if (action.kind === 'draft-watch' && typeof action.sessionId === 'string') {
             const sessionId = action.sessionId;
             let disposed = false, queued = false, forwarding = false, dirty = false;
             let lastRevision: string | undefined;
+            let lastText: ReturnType<typeof pluginUiDraftSnapshot>['text'] | undefined;
             const stop = () => { disposed = true; unsubscribe(); watches.delete(requestId); };
             const changed = () => {
               dirty = true;
@@ -61,7 +76,10 @@ export function PluginUiHost() {
                   const snapshot = pluginUiDraftSnapshot(sessionId);
                   if (snapshot.revision === lastRevision) continue;
                   lastRevision = snapshot.revision;
-                  await window.electronAPI.maker.mcpApps(null, { op: 'host-result', requestId, result: snapshot });
+                  // Main retains the full document; selection-only changes need no text transfer.
+                  const result = snapshot.text === lastText ? { revision: snapshot.revision, selection: snapshot.selection } : snapshot;
+                  lastText = snapshot.text;
+                  await window.electronAPI.maker.mcpApps(null, { op: 'host-result', requestId, result });
                 }
               } catch {
                 stop();
@@ -78,13 +96,17 @@ export function PluginUiHost() {
             result = { opened: true };
           } else if (action.kind === 'draft' && typeof action.sessionId === 'string' && typeof action.text === 'string') {
             const current = pluginUiDraftSnapshot(action.sessionId);
-            if (action.mode === 'replace' && action.revision !== current.revision) throw new Error('MCP_APP_DRAFT_CHANGED');
-            const draft = getDraft(action.sessionId);
-            const incoming = plainTextToTiptapDoc(action.text);
-            const text = action.mode === 'append' && draft?.text
-              ? { ...draft.text, content: [...(draft.text.content ?? []), ...(incoming.content ?? [])] }
-              : incoming;
-            saveDraft(action.sessionId, { ...draft, text, attachments: draft?.attachments ?? [] });
+            if (action.mode !== 'append' && action.revision !== current.revision) throw new Error('MCP_APP_DRAFT_CHANGED');
+            if (action.mode === 'replace-selection') {
+              replacePluginUiDraftSelection(action.sessionId, action.text);
+            } else {
+              const draft = getDraft(action.sessionId);
+              const incoming = plainTextToTiptapDoc(action.text);
+              const text = action.mode === 'append' && draft?.text
+                ? { ...draft.text, content: [...(draft.text.content ?? []), ...(incoming.content ?? [])] }
+                : incoming;
+              saveDraft(action.sessionId, { ...draft, text, attachments: draft?.attachments ?? [] });
+            }
             result = pluginUiDraftSnapshot(action.sessionId);
           } else throw new Error('MCP_APP_INVALID_REQUEST');
         } catch (failure) {

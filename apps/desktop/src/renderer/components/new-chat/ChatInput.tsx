@@ -132,6 +132,7 @@ import {
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
 import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
+import { registerPluginUiDraftEditor } from '@/cindy-brain/pluginUiContext';
 import type { SessionRuntimeProfileProjection, SessionRuntimePendingProjection } from '@/lib/ccAgent.types';
 import {
   ModelSelector,
@@ -3232,6 +3233,9 @@ export function ChatInput({
   // Hold a live ref to the editor for handlers that mount before Tiptap
   // exposes it through React (e.g. the blur handler above).
   const editorRef = useRef<Editor | null>(null);
+  useEffect(() => storageKey && editor
+    ? registerPluginUiDraftEditor(storageKey, editor, () => composerMutationLockedRef.current)
+    : undefined, [storageKey, editor]);
   useEffect(() => {
     editorRef.current = editor;
   }, [editor]);
@@ -10056,6 +10060,13 @@ export function ChatInput({
                 />
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
+              {hasPluginToolbar && (
+                <div className="mx-1 min-w-0 flex-1 overflow-x-auto">
+                  <div className="w-max">
+                    <PluginUiSlot position="composer.toolbar" sessionId={sessionId} />
+                  </div>
+                </div>
+              )}
               <div
                 className={cn(
                   useNarrowToolbar
@@ -10551,10 +10562,9 @@ export function ChatInput({
           showFolderPicker=false + leftOfFolderPicker 提供独立 toolbar 时，本行只渲染 toolbar（不显示 folder chip）
           delayed-create:sessionId=undefined 也要显示(NewMakerDraftRoute 走 transient 模式),
           handleFolderSelect 的 sessionService.update 内部已用 sessionId guard。 */}
-      {(showFolderPicker || leftOfFolderPicker || hasPluginToolbar) && (
+      {(showFolderPicker || leftOfFolderPicker) && (
         <div className="flex w-full items-end justify-end gap-2">
           {leftOfFolderPicker}
-          <PluginUiSlot position="composer.toolbar" sessionId={sessionId} />
           {showFolderPicker && (
             <FolderPickerPopover
               open={folderOpen}

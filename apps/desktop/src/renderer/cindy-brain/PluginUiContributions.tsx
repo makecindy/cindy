@@ -8,8 +8,11 @@ import { usePluginUiControl } from './pluginUiControls';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { Puzzle } from 'lucide-react';
+import { isPluginUiElementVisible, subscribePluginUiRegions } from './pluginUiVisibility';
 const PluginUiView = lazy(() => import('./PluginUiView').then(module => ({ default: module.PluginUiView })));
 const openPluginUiView = async (instanceId: string, viewId: string, sessionId: string | null, input?: Record<string, unknown>) =>
   (await import('@/features/right-sidebar/lib/openPluginUiView')).openPluginUiView(instanceId, viewId, sessionId, input);
@@ -20,13 +23,14 @@ type Directory = ReadonlyMap<GhostHostUiPosition, readonly PluginUiEntry[]>;
 const EMPTY: Directory = new Map();
 const NO_ENTRIES: readonly PluginUiEntry[] = [];
 const DirectoryContext = createContext<Directory>(EMPTY);
-type SlotVisibility = { intersecting: boolean; listeners: Set<(visible: boolean) => void> };
+type SlotVisibility = { element: Element; intersecting: boolean; listeners: Set<(visible: boolean) => void> };
 const observedSlots = new Map<Element, SlotVisibility>();
 let slotObserver: IntersectionObserver | undefined;
 const notifySlotVisibility = (slot: SlotVisibility) => {
-  for (const changed of slot.listeners) changed(slot.intersecting && document.visibilityState !== 'hidden');
+  for (const changed of slot.listeners) changed(slot.intersecting && document.visibilityState !== 'hidden' && isPluginUiElementVisible(slot.element));
 };
 const updateSlotVisibility = () => { for (const slot of observedSlots.values()) notifySlotVisibility(slot); };
+let stopRegionObservation: (() => void) | undefined;
 
 /** One browser observer per window; offscreen history does not hold native-state demand. */
 function observeSlotVisibility(element: Element, changed: (visible: boolean) => void): () => void {
@@ -39,9 +43,10 @@ function observeSlotVisibility(element: Element, changed: (visible: boolean) => 
       }
     }, { rootMargin: '80px 0px' });
     document.addEventListener('visibilitychange', updateSlotVisibility);
+    stopRegionObservation = subscribePluginUiRegions(updateSlotVisibility);
   }
   let slot = observedSlots.get(element);
-  if (!slot) { slot = { intersecting: false, listeners: new Set() }; observedSlots.set(element, slot); slotObserver.observe(element); }
+  if (!slot) { slot = { element, intersecting: false, listeners: new Set() }; observedSlots.set(element, slot); slotObserver.observe(element); }
   slot.listeners.add(changed); notifySlotVisibility(slot);
   return () => {
     slot.listeners.delete(changed);
@@ -49,6 +54,7 @@ function observeSlotVisibility(element: Element, changed: (visible: boolean) => 
     if (!observedSlots.size) {
       slotObserver?.disconnect(); slotObserver = undefined;
       document.removeEventListener('visibilitychange', updateSlotVisibility);
+      stopRegionObservation?.(); stopRegionObservation = undefined;
     }
   };
 }
@@ -157,10 +163,12 @@ function EntryControl({ entry, sessionId, clientId, active }: { entry: PluginUiE
   const { t } = useTranslation();
   const [pending, setPending] = useState(false);
   const [value, setValue] = useState('');
+  const [open, setOpen] = useState(false);
   const action = entry.contribution;
   const interest = useMemo(() => ({ instanceId: entry.instanceId, id: action.id, sessionId,
     ...(clientId ? { clientId } : {}) }), [entry.instanceId, action.id, sessionId, clientId]);
   const state = usePluginUiControl(interest, entry.ghost, active);
+  useEffect(() => { if (!active || state?.disabled || state?.visible === false) setOpen(false); }, [active, state?.disabled, state?.visible]);
   const run = async (next?: string) => {
     if (pending || state?.disabled) return;
     setPending(true);
@@ -173,6 +181,15 @@ function EntryControl({ entry, sessionId, clientId, active }: { entry: PluginUiE
   if (action.kind === 'status') return <span className="text-12 text-[var(--text-secondary)]" title={entry.ghost.manifest.name}>{title}</span>;
   if (action.kind === 'select') return <Select label={title} value={state?.value ?? value} options={action.options ?? []}
     disabled={pending || state?.disabled} onValueChange={next => void run(next)} className="h-7 max-w-48 text-12" />;
+  if (action.presentation === 'popover' && action.view) return <Popover open={open && active} onOpenChange={setOpen}>
+    <PopoverTrigger asChild><Button variant="secondary" tone="quiet" size="sm" disabled={state?.disabled}
+      title={entry.ghost.manifest.name}>{title}</Button></PopoverTrigger>
+    <PopoverContent align="start" side={action.position === 'composer.toolbar' || action.position === 'statusbar' ? 'top' : 'bottom'}
+      aria-label={title} className="w-[min(26rem,calc(100vw-2rem))] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-2">
+      {open && active && <Suspense fallback={<Spinner size={16} />}><PluginUiView ghost={entry.ghost} viewId={action.view}
+        sessionId={sessionId} input={action.arguments} onUnavailable={() => setOpen(false)} /></Suspense>}
+    </PopoverContent>
+  </Popover>;
   return <Button variant="secondary" tone="quiet" size="sm" disabled={pending || state?.disabled} title={entry.ghost.manifest.name}
     onClick={() => void run()}>{title}</Button>;
 }

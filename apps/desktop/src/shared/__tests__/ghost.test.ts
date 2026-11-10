@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateGhostManifest as validateProtocolManifest } from '@cindy/plugin-protocol';
+import { validateGhostManifest as validateProtocolManifest, type GhostHostUi } from '@cindy/plugin-protocol';
 
 import {
   GHOST_CARD_ACTION_ID_RE,
@@ -13,6 +13,8 @@ import {
   ghostAppContextLocale,
   ghostAppContextLanguages,
   ghostContentKeys,
+  getApprovedGhostHostUi,
+  ghostHostUiApprovalTokens,
   ghostRequiresCindyAccount,
   ghostExternalLinkUrls,
   ghostLocalePathFor,
@@ -49,7 +51,31 @@ import {
   validateNormalizedGhostManifest,
   withGhostResolvedLocale,
   type GhostManifest,
+  type InstalledGhost,
 } from '../ghost';
+
+// Real receipt projection: new resources/fields never inherit an older capability grant.
+describe('host appearance approval', () => {
+  it('requires approval for each new field and resource while preserving existing views', () => {
+    const host: GhostHostUi = { capabilities: ['appearance'], views: [{ id: 'board', title: 'Board', resourceUri: 'ui://board' }] };
+    const manifest: GhostManifest = { schemaVersion: 3, id: 'appearance-example', name: 'Appearance',
+      version: '1', kind: 'chip', entry: 'main.js', mcpApps: {
+        ui: { resources: [{ uri: 'ui://board', file: 'board.html' }], tools: {} },
+        host,
+      } };
+    const approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    host.appearance = { fields: ['bodyFont', 'future-field'],
+      resources: [{ id: 'font', kind: 'font', path: 'assets/font.woff2' }] };
+    const ghost = { manifest, approvedHostUi, approval: { state: 'approved', revision: 'one' } } as InstalledGhost;
+    expect(getApprovedGhostHostUi(ghost)).toMatchObject({ capabilities: ['appearance'],
+      views: [{ id: 'board' }], appearance: { fields: [], resources: [] } });
+    ghost.approvedHostUi = ghostHostUiApprovalTokens(manifest);
+    expect(getApprovedGhostHostUi(ghost)?.appearance).toEqual({ fields: ['bodyFont'],
+      resources: [{ id: 'font', kind: 'font', path: 'assets/font.woff2' }] });
+    host.appearance.resources![0].path = 'assets/replacement.woff2';
+    expect(getApprovedGhostHostUi(ghost)?.appearance?.resources).toEqual([]);
+  });
+});
 
 /** 一份全绿的清单基底(意识唯一形态:芯片,2026-07-12 单形态定案),单点破坏它来测各字段规则。 */
 function goodManifest(): Record<string, unknown> {

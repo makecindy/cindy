@@ -1,3 +1,5 @@
+import { isSafeGhostRelativePath } from './internal/ghostPath.js';
+import { PLUGIN_APPEARANCE_FIELDS, type PluginAppearanceField } from './appearance.js';
 /** Cindy placement and Host capabilities; page content stays in MCP Apps resources. */
 export const HOST_UI_POSITIONS = [
   'composer.toolbar', 'session.header', 'statusbar', 'message.actions', 'message.menu',
@@ -30,6 +32,7 @@ export interface GhostHostUiContribution extends GhostHostUiAction {
   title: string;
   position: string;
   kind?: 'button' | 'select' | 'status';
+  presentation?: 'sidebar' | 'popover';
   icon?: string;
   options?: { label: string; value: string }[];
   match?: GhostHostUiMatch;
@@ -46,6 +49,7 @@ export interface GhostHostUi {
   contributions?: GhostHostUiContribution[];
   commands?: GhostHostUiCommand[];
   capabilities?: string[];
+  appearance?: { fields: string[]; resources?: { id: string; kind: 'font' | 'image' | 'video'; path: string }[] };
   [key: string]: unknown;
 }
 
@@ -99,6 +103,9 @@ export function parseGhostHostUi(
       if ((item.position === 'message.body' || item.position === 'tool.body') &&
           (item.view === undefined || item.tool !== undefined || item.kind !== undefined && item.kind !== 'button')) return null;
       if (item.position === 'message.menu' && item.kind !== undefined && item.kind !== 'button') return null;
+      if (item.presentation !== undefined && (!['sidebar', 'popover'].includes(String(item.presentation)) ||
+          item.view === undefined || item.kind !== undefined && item.kind !== 'button' ||
+          ['message.body', 'tool.body', 'message.menu'].includes(item.position as string))) return null;
       if (item.kind === 'select') {
         if (!Array.isArray(item.options) || !item.options.length || item.options.some(option =>
           !object(option) || !title(option.label) || typeof option.value !== 'string' || option.value.length > 256) ||
@@ -122,6 +129,19 @@ export function parseGhostHostUi(
     }
   }
   if (raw.capabilities !== undefined && (!Array.isArray(raw.capabilities) || raw.capabilities.length > 0 && !strings(raw.capabilities))) return null;
+  if (raw.appearance !== undefined) {
+    const appearance = raw.appearance;
+    if (!object(appearance) || !strings(appearance.fields) || appearance.fields.length > 32) return null;
+    if (appearance.resources !== undefined) {
+      if (!Array.isArray(appearance.resources) || appearance.resources.length > 64) return null;
+      const ids = new Set<string>();
+      for (const resource of appearance.resources) {
+        if (!object(resource) || !id(resource.id) || ids.has(resource.id) || !['font', 'image', 'video'].includes(String(resource.kind)) ||
+            typeof resource.path !== 'string' || resource.path.length > 1024 || !isSafeGhostRelativePath(resource.path)) return null;
+        ids.add(resource.id);
+      }
+    }
+  }
   return raw as GhostHostUi;
 }
 
@@ -138,11 +158,16 @@ export function hostUiApprovalSubjects(host: GhostHostUi): { key: string; detail
       tools: item.match.tools && [...item.match.tools].sort(), plugins: item.match.plugins && [...item.match.plugins].sort() };
     result.push({ key: `contribution:${item.id}`, detail: JSON.stringify({ position: item.position,
       kind: item.kind ?? 'button', ...action(item), match,
+      ...(item.presentation === 'popover' ? { presentation: 'popover' } : {}),
       options: item.options?.map(option => option.value) }) });
   }
   for (const command of host.commands ?? []) result.push({ key: `command:${command.id}`,
     detail: JSON.stringify({ ...action(command), shortcut: command.shortcut }) });
   for (const capability of host.capabilities ?? []) if (isHostUiCapability(capability))
     result.push({ key: `capability:${capability}`, detail: capability });
+  for (const field of host.appearance?.fields ?? []) if (PLUGIN_APPEARANCE_FIELDS.includes(field as PluginAppearanceField))
+    result.push({ key: `appearance:${field}`, detail: field });
+  for (const resource of host.appearance?.resources ?? []) result.push({ key: `appearance-resource:${resource.id}`,
+    detail: JSON.stringify({ kind: resource.kind, path: resource.path }) });
   return result;
 }

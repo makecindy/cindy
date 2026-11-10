@@ -6,6 +6,7 @@ import { createMicrophonePermissionSnapshot } from './microphonePermissionSnapsh
 import { createVoiceInputDataSnapshot } from './voiceInputDataSnapshot';
 import type { VoiceInputDataSnapshot } from '../shared/voiceInputData';
 import { createWallpaperAssetsBridge } from './wallpaperAssets';
+import { createPluginFontReader } from './appearanceSnapshot';
 import type { CompanionImportApi, CompanionImportSelection } from '@cindy/maker-shared/companion-import';
 import { TASK_MIGRATION_LOCAL_CHANNEL } from '@cindy/device-link';
 import type { PluginModelSelection } from '@cindy/device-link';
@@ -1315,6 +1316,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pageZoomReset: (): Promise<{ ok: true; zoomFactor: number }> =>
     ipcRenderer.invoke('page-zoom:reset'),
   appearanceSettings: {
+    ...createPluginFontReader(),
     importWallpaper: () => ipcRenderer.invoke('appearance-settings:import-wallpaper'),
     ...createWallpaperAssetsBridge(),
     removeWallpaper: () => ipcRenderer.invoke('appearance-settings:remove-wallpaper'),

@@ -2058,6 +2058,30 @@ describe('interactive page declarations', () => {
     expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
     expect(hostUiApprovalSubjects(host)).toContainEqual(expect.objectContaining({ key: 'contribution:help-menu' }));
   });
+  it('validates appearance resource declarations and grants only known fields', () => {
+    const host = { capabilities: ['appearance'], appearance: { fields: ['bodyFont', 'future-field'],
+      resources: [{ id: 'font', kind: 'font' as const, path: 'assets/font.woff2' }] } };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toEqual([
+      'capability:appearance', 'appearance:bodyFont', 'appearance-resource:font',
+    ]);
+    for (const path of ['../font.woff2', '/font.woff2', 'assets/../../font.woff2']) {
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...host, appearance: { ...host.appearance, resources: [{ id: 'font', kind: 'font', path }] } },
+      } }).ok).toBe(false);
+    }
+  });
+  it('requires renewed approval to present a view in an entry popover', () => {
+    const entry = { id: 'open', title: 'Open', position: 'composer.toolbar', view: 'board' };
+    const host = { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://planner' }], contributions: [entry] };
+    const popup = { ...host, contributions: [{ ...entry, presentation: 'popover' as const }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: popup } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(popup)).not.toEqual(hostUiApprovalSubjects(host));
+    for (const position of ['message.menu', 'message.body', 'tool.body'])
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...popup, contributions: [{ ...popup.contributions[0], position }] },
+      } }).ok).toBe(false);
+  });
   it.each([
     { kind: 'status' },
     { kind: 'select', tool: 'help', options: [{ label: 'Help', value: 'help' }] },

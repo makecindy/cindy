@@ -1,4 +1,5 @@
 import { McpAppPermissionPrompt } from './McpAppPermissionPrompt';
+import { isPluginUiElementVisible, subscribePluginUiRegions } from '@/cindy-brain/pluginUiVisibility';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -142,16 +143,18 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
     const element = card.current;
     if (!element) return;
     let intersecting = false;
-    const update = () => setVisible(intersecting && document.visibilityState !== 'hidden');
+    const update = () => setVisible(intersecting && document.visibilityState !== 'hidden' && isPluginUiElementVisible(element));
     const observer = new IntersectionObserver(([entry]) => {
       intersecting = entry.isIntersecting;
       update();
     }, { rootMargin: '80px 0px' });
     observer.observe(element);
     document.addEventListener('visibilitychange', update);
+    const stopRegions = subscribePluginUiRegions(update);
     return () => {
       observer.disconnect();
       document.removeEventListener('visibilitychange', update);
+      stopRegions();
     };
   }, []);
 

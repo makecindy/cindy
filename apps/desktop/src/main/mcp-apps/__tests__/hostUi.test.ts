@@ -1,15 +1,20 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const boundary = vi.hoisted(() => ({ owner: 'owner', entry: null as unknown,
-  send: vi.fn(), contents: { id: 1, isDestroyed: () => false, once: vi.fn(), removeListener: vi.fn() } }));
+  send: vi.fn(), setAppearance: vi.fn(async (patch: unknown) => patch),
+  contents: { id: 1, isDestroyed: () => false, once: vi.fn(), removeListener: vi.fn() } }));
 vi.mock('electron', () => ({ webContents: { fromId: (id: number) => ({ ...boundary.contents, id }) },
   BrowserWindow: { fromWebContents: (contents: { id: number }) => ({ isDestroyed: () => false,
+    isVisible: () => true,
     webContents: { ...boundary.contents, id: contents.id, send: boundary.send } }) } }));
 vi.mock('../../deepLink.js', () => ({ getDeepLinkMainWindow: () => ({ isDestroyed: () => false,
   webContents: { ...boundary.contents, send: boundary.send } }) }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => boundary.owner }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({ getSafeDataOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }) }));
 vi.mock('../../mcp-integrations/plugin-app-registry.js', () => ({ readPluginHostUi: () => boundary.entry }));
+vi.mock('../../appearance-settings-store.js', () => ({ readAppearanceSettings: () => ({}) }));
+vi.mock('../../appearance-settings-ipc.js', () => ({ updateAppearanceFromSettings: boundary.setAppearance }));
 import { bindPluginUiResource, finishPluginUiAction } from '../hostUi';
+import { releasePluginUiRegions } from '../visibility';
 import { markRsbWindowWebContentsId } from '../../right-sidebar-window/registry';
 
 // 生产入口：Main 的资源来源绑定和真实宿主工具，观察给所属编辑器的命令与拒绝结果。
@@ -17,13 +22,52 @@ import { markRsbWindowWebContentsId } from '../../right-sidebar-window/registry'
 // 原标准工具卡测试不覆盖无卡片 Host 操作；最小输入为覆盖 sessionId 或操作前撤销。tier: unit。
 beforeEach(() => {
   boundary.owner = 'owner'; boundary.send.mockClear();
+  boundary.setAppearance.mockClear();
   markRsbWindowWebContentsId(2);
   markRsbWindowWebContentsId(3);
   boundary.entry = { host: { views: [{ id: 'task', title: 'Task', resourceUri: 'ui://task', scope: 'task' },
     { id: 'global', title: 'Global', resourceUri: 'ui://global' }], capabilities: ['draft'] },
     config: { id: 'plugin-ui', plugin: { assertCurrent: () => {} } } };
 });
-afterEach(() => vi.restoreAllMocks());
+
+it('keeps legacy appearance writes within the newly approved field list', async () => {
+  const entry = boundary.entry as { host: { capabilities: string[]; appearance?: { fields: string[] } } };
+  entry.host.capabilities = ['appearance', 'app-icon']; entry.host.appearance = { fields: ['uiFont'] };
+  const binding = bindPluginUiResource('renderer:1', 'task-a', 'plugin', 'task', () => 'rev');
+  const signal = new AbortController().signal;
+  await expect(binding.callHostTool!('cindy.ui.appearance', { patch: { codeSize: 18 } }, signal)).rejects.toThrow('FIELD_NOT_DECLARED');
+  await expect(binding.callHostTool!('cindy.ui.app-icon', { icon: 'cat' }, signal)).rejects.toThrow('FIELD_NOT_DECLARED');
+  expect(boundary.setAppearance).not.toHaveBeenCalled();
+  await binding.callHostTool!('cindy.ui.appearance', { patch: { uiSize: 18 } }, signal);
+  expect(boundary.setAppearance).toHaveBeenCalledExactlyOnceWith({ uiSize: 18 });
+});
+afterEach(() => { releasePluginUiRegions('plugin'); vi.restoreAllMocks(); });
+
+// 旧版支持单独隐藏界面区域，整窗 hide 不能替代；仅显式调用走一次所属布局桥。tier: unit。
+it('changes individual layout regions without hiding the whole application window', async () => {
+  (boundary.entry as {host: {capabilities: string[]}}).host.capabilities = ['visibility'];
+  const binding = bindPluginUiResource('renderer:1', 'task-a', 'plugin', 'task', () => 'rev');
+  const pending = binding.callHostTool!('cindy.ui.visibility', { regions: { composer: false, header: false } }, new AbortController().signal);
+  await vi.waitFor(() => expect(boundary.send).toHaveBeenCalledWith('plugin-ui:action', expect.objectContaining({
+    kind: 'regions', values: expect.objectContaining({ composer: false, header: false, messages: true }),
+  })));
+  const action = boundary.send.mock.calls.at(-1)![1];
+  finishPluginUiAction('renderer:1', action.requestId, { applied: true });
+  await expect(pending).resolves.toMatchObject({ content: [{ type: 'text', text: expect.stringContaining('"composer":false') }] });
+  releasePluginUiRegions('plugin');
+  expect(boundary.send).toHaveBeenLastCalledWith('plugin-ui:action', expect.objectContaining({ kind: 'regions-sync',
+    values: expect.objectContaining({ composer: true, header: true }) }));
+});
+
+it('reads regional visibility without a renderer request and rejects unknown region writes', async () => {
+  (boundary.entry as {host: {capabilities: string[]}}).host.capabilities = ['visibility'];
+  const binding = bindPluginUiResource('renderer:1', 'task-a', 'plugin', 'task', () => 'rev');
+  await binding.callHostTool!('cindy.ui.visibility', {}, new AbortController().signal);
+  expect(boundary.send).not.toHaveBeenCalled();
+  await expect(binding.callHostTool!('cindy.ui.visibility', { regions: { privateDOM: false } }, new AbortController().signal))
+    .rejects.toThrow('MCP_APP_INVALID_REQUEST');
+  expect(boundary.send).not.toHaveBeenCalled();
+});
 
 it('keeps the declared source scope and omits task-only tools from a global view', () => {
   expect(() => bindPluginUiResource('renderer:1', null, 'plugin', 'task', () => 'rev')).toThrow('MCP_APP_SOURCE_UNAVAILABLE');
@@ -105,8 +149,12 @@ it('takes draft context from the original composer stream and releases it with t
     finishPluginUiAction('renderer:1', action.requestId, first);
     stop = await watching;
     expect(binding.projectContext!({ cindy: { draft: { revision: 'popup-stale' } } }).draft).toEqual(first);
-    finishPluginUiAction('renderer:1', action.requestId, { ...first, revision: 'two' });
+    const selection = { from: 1, to: 3, text: 'xx' };
+    finishPluginUiAction('renderer:1', action.requestId, { revision: 'two', selection });
+    expect(binding.projectContext!({}).draft).toEqual({ ...first, revision: 'two', selection });
     expect(changed).toHaveBeenCalledTimes(2);
+    finishPluginUiAction('renderer:1', action.requestId, { revision: 'three', text: null, selection: null });
+    expect(binding.projectContext!({}).draft).toEqual({ revision: 'three', text: null, selection: null });
     stop();
     expect(boundary.send).toHaveBeenLastCalledWith('plugin-ui:action', expect.objectContaining({ kind: 'draft-unwatch', requestId: action.requestId }));
     expect(() => finishPluginUiAction('renderer:1', action.requestId, first)).toThrow('MCP_APP_ACTION_UNAVAILABLE');
@@ -129,7 +177,7 @@ it.each([
     finishPluginUiAction(`renderer:${editorId}`, watch.requestId, draft);
     stop = await watching;
     expect(binding.projectContext!({}).draft).toEqual(draft);
-    for (const mode of ['append', 'replace']) {
+    for (const mode of ['append', 'replace', 'replace-selection']) {
       const pending = binding.callHostTool!('cindy.ui.draft', { mode, text: 'Edited', revision: draft.revision }, abort.signal);
       const settled = pending.catch(() => {});
       try {

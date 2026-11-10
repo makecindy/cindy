@@ -2131,6 +2131,16 @@ html:is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(.l
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
 }
+
+/* Plugin presentation keeps layout preferences and pending permission UI intact. */
+html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-element='workspace'] { visibility: hidden; }
+html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-keep-visible] { visibility: visible; }
+html[data-plugin-ui-hidden~='sidebar'] [data-plugin-ui-element='sidebar'],
+html[data-plugin-ui-hidden~='header'] [data-plugin-ui-element='header'],
+html[data-plugin-ui-hidden~='messages'] [data-plugin-ui-element='messages'],
+html[data-plugin-ui-hidden~='composer'] [data-chat-input-root],
+html[data-plugin-ui-hidden~='tools'] [data-plugin-ui-element='tools'],
+html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowControls'] { display: none !important; }
 /* 模式2 主面板:用户勘误 2026-07-17 — 主内容区不透壁纸(macOS 标准范式),撤销 blur。
    content-area 回落 --content-area(=var(--surface-hsl) 不透明,2026-08 起 #F2F2ED/#181818),无 blur。
    surface-translucent-main token 保留注册但 CINDY override 改不透明等价值(见 cindy themes)。 */

@@ -8,6 +8,8 @@ import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';
 import { isRsbWindowWebContentsId } from '../right-sidebar-window/registry.js';
+import { readPluginUiRegions, setPluginUiRegions } from './visibility.js';
+import { configurePluginAppearanceApply, editPluginAppearance, getPluginAppearanceService } from './appearance.js';
 
 type Reply = { caller: string; finish(value: unknown, error?: string): void };
 const replies = new Map<string, Reply>();
@@ -74,6 +76,12 @@ async function rendererAction(caller: string, input: Record<string, unknown>, si
 }
 
 const result = (data: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(data) }] });
+configurePluginAppearanceApply(async settings => {
+  const window = getDeepLinkMainWindow();
+  if (!window || window.isDestroyed()) return { status: 'saved', reason: 'NO_VIEWING_WINDOW' };
+  return await rendererAction(`renderer:${window.webContents.id}`, { kind: 'appearance', settings },
+    AbortSignal.timeout(30000), () => {}) as { status: 'applied' | 'saved' | 'failed' };
+});
 const tool = (name: string, description: string, properties: Record<string, object>, required: string[] = []): Tool => ({
   name: `cindy.ui.${name}`, description, inputSchema: { type: 'object', properties, required, additionalProperties: false },
 });
@@ -97,19 +105,21 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
   assertCurrent();
   const assertOperation = async () => { assertCurrent(); await assertScope?.(); assertCurrent(); };
   const capabilities = entry.host.capabilities ?? [];
-  let draft: unknown = null;
+  let draft: Record<string, unknown> | null = null;
   const tools: Tool[] = [tool('open', 'Open another approved view of this plugin.', { viewId: { type: 'string' }, input: { type: 'object' } }, ['viewId'])];
   if (capabilities.includes('draft') && sessionId !== null) tools.push(tool('draft',
     'Edit the bound task draft. Replacing requires the revision from hostContext.cindy.draft; never sends a message.', {
-      mode: { enum: ['append', 'replace'] }, text: { type: 'string', maxLength: 128000 }, revision: { type: 'string' },
+      mode: { enum: ['append', 'replace', 'replace-selection'] }, text: { type: 'string', maxLength: 128000 }, revision: { type: 'string' },
     }, ['mode', 'text']));
   if (capabilities.includes('appearance')) tools.push(tool('appearance', 'Read or patch Cindy appearance through its settings owner.', {
-    patch: { type: 'object' },
+    patch: { type: 'object' }, reset: { type: 'array', items: { type: 'string' } }, ifRevision: { type: 'string' },
   }));
-  if (capabilities.includes('visibility')) tools.push(tool('visibility', 'Read or change the owning Cindy window visibility.', { visible: { type: 'boolean' } }));
-  if (capabilities.includes('app-icon')) tools.push(tool('app-icon', 'Choose the existing macOS Dock artwork. Does not change Finder artwork.', {
-    icon: { enum: ['default', 'cat', 'wordmark', 'mark'] },
-  }, ['icon']));
+  if (capabilities.includes('visibility')) tools.push(tool('visibility', 'Read or change the owning Cindy window or its UI regions.', {
+    visible: { type: 'boolean' }, regions: { type: 'object', additionalProperties: { type: 'boolean' } },
+  }));
+  if (capabilities.includes('app-icon')) tools.push(tool('app-icon', 'Choose builtin or approved custom runtime application artwork. Does not change Finder artwork.', {
+    icon: { enum: ['default', 'cat', 'wordmark', 'mark'] }, resource: { type: 'string' }, ifRevision: { type: 'string' },
+  }));
   return {
     id: `${instance}:${viewId}`, title: view.title, serverId: entry.config.id,
     serverRevision: revision(entry.config), resourceUri: view.resourceUri, assertCurrent, assertOperation, hostTools: tools,
@@ -121,7 +131,7 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
         if (signal.aborted) stop();
         try {
           await rendererAction(caller, { kind: 'draft-watch', sessionId }, watching.signal, assertCurrent, value => {
-            assertCurrent(); draft = value; changed();
+            assertCurrent(); draft = { ...draft, ...value as Record<string, unknown> }; changed();
           });
           return stop;
         } catch (failure) { stop(); throw failure; }
@@ -151,20 +161,40 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
             sessionId: target.scope === 'task' ? sessionId : null, input: args.input }, signal, assertOperation));
         }
         case 'cindy.ui.draft':
-          if ((args.mode !== 'append' && args.mode !== 'replace') || typeof args.text !== 'string' || args.text.length > 128000 ||
-              args.mode === 'replace' && typeof args.revision !== 'string') throw new Error('MCP_APP_INVALID_REQUEST');
+          if (!['append', 'replace', 'replace-selection'].includes(String(args.mode)) || typeof args.text !== 'string' || args.text.length > 128000 ||
+              args.mode !== 'append' && typeof args.revision !== 'string') throw new Error('MCP_APP_INVALID_REQUEST');
           return result(await rendererAction(caller, { kind: 'draft', sessionId, mode: args.mode,
             text: args.text, revision: args.revision }, signal, assertOperation));
         case 'cindy.ui.appearance': {
           const { readAppearanceSettings } = await import('../appearance-settings-store.js');
           const { updateAppearanceFromSettings } = await import('../appearance-settings-ipc.js');
           assertCurrent(); signal.throwIfAborted();
-          if (!args.patch) return result(readAppearanceSettings());
+          if (args.patch !== undefined && args.reset !== undefined) throw new Error('MCP_APP_INVALID_REQUEST');
+          if (args.reset !== undefined) return result(await editPluginAppearance(instance,
+            { kind: 'reset', fields: args.reset, ifRevision: args.ifRevision }, assertCurrent));
+          if (!args.patch) {
+            const { uiFontResource: _ui, codeFontResource: _code, bodyFontResource: _body, appIconResource: _icon, ...settings } = readAppearanceSettings();
+            return result({ ...settings, ...(await getPluginAppearanceService()).read(instance, assertCurrent) });
+          }
+          if (typeof args.patch === 'object' && !Array.isArray(args.patch) &&
+              Object.keys(args.patch).some(key => ['uiFont', 'codeFont', 'bodyFont', 'wallpaper', 'theme', 'reading', 'contentStyle'].includes(key)))
+            return result(await editPluginAppearance(instance, { kind: 'set', patch: args.patch, ifRevision: args.ifRevision }, assertCurrent));
           if (typeof args.patch !== 'object' || Array.isArray(args.patch) || 'appIcon' in args.patch) throw new Error('MCP_APP_INVALID_REQUEST');
+          if (entry.host.appearance) {
+            const fields: Record<string, string> = { uiFamily: 'uiFont', uiSize: 'uiFont', codeFamily: 'codeFont', codeSize: 'codeFont',
+              wallpaperId: 'wallpaper', wallpaperOverlay: 'wallpaper', wallpaperMotion: 'wallpaper', wallpaperVisibility: 'wallpaper',
+              desktopVisibility: 'wallpaper', wallpaperBlur: 'wallpaper' };
+            if (Object.keys(args.patch).some(key => !entry.host.appearance!.fields.includes(fields[key]))) throw new Error('FIELD_NOT_DECLARED');
+          }
           return result(await updateAppearanceFromSettings(args.patch));
         }
         case 'cindy.ui.app-icon': {
+          if (args.resource !== undefined) {
+            if (args.icon !== undefined) throw new Error('MCP_APP_INVALID_REQUEST');
+            return result(await editPluginAppearance(instance, { kind: 'set', patch: { appIcon: { resource: args.resource } }, ifRevision: args.ifRevision }, assertCurrent));
+          }
           if (!['default', 'cat', 'wordmark', 'mark'].includes(String(args.icon))) throw new Error('MCP_APP_INVALID_REQUEST');
+          if (entry.host.appearance && !entry.host.appearance.fields.includes('appIcon')) throw new Error('FIELD_NOT_DECLARED');
           const { updateAppearanceFromSettings } = await import('../appearance-settings-ipc.js');
           assertCurrent(); signal.throwIfAborted();
           return result(await updateAppearanceFromSettings({ appIcon: args.icon }));
@@ -172,9 +202,14 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
         case 'cindy.ui.visibility': {
           const window = callerWindow(caller);
           if (args.visible !== undefined && typeof args.visible !== 'boolean') throw new Error('MCP_APP_INVALID_REQUEST');
+          const layoutWindow = isRsbWindowWebContentsId(window.webContents.id) ? getDeepLinkMainWindow() : window;
+          if (!layoutWindow || layoutWindow.isDestroyed()) throw new Error('MCP_APP_ACTION_UNAVAILABLE');
+          const regions = args.regions === undefined ? readPluginUiRegions(layoutWindow)
+            : setPluginUiRegions(layoutWindow, instance, `${entry.owner}:${entry.fingerprint}`, args.regions);
+          if (args.regions !== undefined) await rendererAction(caller, { kind: 'regions', values: regions }, signal, assertOperation);
           if (args.visible === true) window.show();
           if (args.visible === false) window.hide();
-          return result({ visible: window.isVisible() });
+          return result({ visible: window.isVisible(), regions });
         }
         default: throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
       }

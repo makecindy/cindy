@@ -32,7 +32,7 @@ import {
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
 } from './appearance-settings-store.js';
-import { applyDockIcon } from './app-icon.js';
+import { applyDockIcon, applyPluginAppIconToWindow } from './app-icon.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -49,6 +49,7 @@ export function registerAppearanceSettingsIpc(): void {
   // participate; embedded webpages and utility windows keep their own zoom.
   app.on('browser-window-focus', function restoreFocusedWindowZoom(_event, win) {
     restoreWindowZoom(win);
+    applyPluginAppIconToWindow(win);
   });
 
   // Must be registered before BrowserWindow creation: preload reads this on
@@ -64,6 +65,12 @@ export function registerAppearanceSettingsIpc(): void {
     const state = readAppearanceSettingsState();
     broadcast(state.value);
     return state;
+  });
+
+  ipcMain.handle('appearance-settings:plugin-font', async (event, role: unknown) => {
+    if (!isTrustedAppearanceSettingsReadEvent(event) || typeof role !== 'string') throwIpcError('INVALID_PARAMS', 'Appearance font reader required');
+    const { readSelectedPluginFont } = await import('./mcp-apps/appearance.js');
+    return readSelectedPluginFont(role);
   });
 
   // Local Desktop appearance only: no remote allowlist and no renderer-supplied path.
@@ -191,8 +198,8 @@ function appearanceForWindow(
   win: BrowserWindow | null,
 ): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
-  const { customWallpaperUrl: _privateUrl, ...publicSettings } = settings;
-  void _privateUrl;
+  const { customWallpaperUrl: _privateUrl, customWallpaperFallbackUrl: _fallback, appIconResource: _icon, ...publicSettings } = settings;
+  void _privateUrl; void _fallback; void _icon;
   return {
     ...publicSettings,
     wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
@@ -235,8 +242,8 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
   }
   const patch: AppearanceOverrides = {};
-  if ('uiFamily' in raw) patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily');
-  if ('codeFamily' in raw) patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily');
+  if ('uiFamily' in raw) { patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily'); patch.uiFontResource = undefined; }
+  if ('codeFamily' in raw) { patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily'); patch.codeFontResource = undefined; }
   if ('terminalFamily' in raw)
     patch.terminalFamily = parseFamily(raw.terminalFamily, 'terminalFamily');
   if ('uiSize' in raw)
@@ -327,6 +334,7 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
   if ('appIcon' in raw) {
     if (!isAppIcon(raw.appIcon)) throwIpcError('INVALID_PARAMS', 'appIcon is not supported');
     patch.appIcon = raw.appIcon;
+    patch.appIconResource = undefined;
   }
   return patch;
 }
@@ -356,6 +364,13 @@ function parseNumber(
 }
 
 export const __testing = { parsePatch };
+
+/** Plugin settings use the same profile owner and existing window broadcast. */
+export function publishAppearanceFromOwner(settings: AppearanceSettings): void {
+  applyAppearanceToWindows(settings);
+  if (!settings.appIconResource) applyDockIcon(settings);
+  broadcast(settings);
+}
 
 /** UI and Agent edits share validation, persistence, live windows and broadcasts. */
 export async function updateAppearanceFromSettings(rawPatch: unknown) {

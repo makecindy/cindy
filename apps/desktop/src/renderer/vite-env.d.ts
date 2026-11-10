@@ -1214,6 +1214,7 @@ interface ElectronAPI {
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
   appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
   appearanceSettings: {
+    loadPluginFont?: (role: string) => Promise<{ family: string; base64: string }>;
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
     ensureWallpaperVideo?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
     ensureWallpaperImage?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;

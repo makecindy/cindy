@@ -1,13 +1,19 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../shared/ghost';
 import { NativePluginUiState } from '../../../main/mcp-apps/nativeState';
 import type { PluginUiStateChange } from '../../../shared/pluginUi';
 const installed = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[] }));
 const translation = vi.hoisted(() => ({ read: vi.fn(() => ({ t: (key: string) => key })) }));
+const page = vi.hoisted(() => ({ mounted: vi.fn(), released: vi.fn() }));
 vi.mock('../useInstalledGhosts', () => ({ useInstalledGhosts: () => installed.ghosts }));
 vi.mock('react-i18next', () => ({ useTranslation: translation.read }));
+// Presenter lifetime is covered separately at McpAppCard; replace only that boundary here.
+vi.mock('../PluginUiView', async () => {
+  const { useEffect } = await import('react');
+  return { PluginUiView: () => { useEffect(() => { page.mounted(); return page.released; }, []); return <div>Local page</div>; } };
+});
 import { PluginUiBody, PluginUiProvider, PluginUiSlot } from '../PluginUiContributions';
 
 // 生产入口：真实 Provider/正文/控件；只替换已装投影与 IPC，Main 订阅适配器不替换。
@@ -18,6 +24,7 @@ let host: NativePluginUiState;
 let invoke: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   translation.read.mockClear();
+  page.mounted.mockClear(); page.released.mockClear();
   installed.ghosts = [];
   const authority = {};
   host = new NativePluginUiState({ owner: () => 'owner', authority: () => authority, demand: () => {},
@@ -27,6 +34,25 @@ beforeEach(() => {
   window.electronAPI = { maker: { mcpApps: invoke, onPluginUiState: (listener: NonNullable<typeof receive>) => {
     receive = listener; return () => { receive = undefined; };
   } } } as unknown as typeof window.electronAPI;
+});
+
+it('opens a page beside its trigger only on demand and releases it on close', async () => {
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
+      kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
+        ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} },
+        host: { views: [{ id: 'view', title: 'View', resourceUri: 'ui://view', scope: 'task' }],
+          contributions: [{ id: 'open', title: 'Open here', position: 'composer.toolbar', view: 'view', presentation: 'popover' }] },
+      } } };
+  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+  render(<PluginUiProvider><PluginUiSlot position="composer.toolbar" sessionId="task-a" /></PluginUiProvider>);
+  expect(page.mounted).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Open here' }));
+  expect(await screen.findByText('Local page')).toBeTruthy();
+  expect(page.mounted).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Open here' }));
+  await waitFor(() => expect(screen.queryByText('Local page')).toBeNull());
+  expect(page.released).toHaveBeenCalledTimes(1);
 });
 afterEach(async () => { cleanup(); await Promise.resolve(); await Promise.resolve(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 

@@ -1522,6 +1522,8 @@ export function UserMessage({
             无余文时气泡只剩标注行。 */}
                 {(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay || attachmentsInBubble) && (
                   <ChatBubble
+                    data-plugin-appearance-region
+                    data-plugin-appearance-speaker="user"
                     speaker="user"
                     // 只剩插件标注行的气泡:分享图会剥掉标注,整泡一起去掉,不留空壳。
                     // 伙伴私聊里附件也在气泡内,有附件就不是空壳。
