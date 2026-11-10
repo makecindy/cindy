@@ -249,6 +249,9 @@ function removeLinkedDatabaseFilesSync(dbPath: string): void {
   }
 }
 
+/** 同名不同内容的旧分片最多尝试的后缀个数; 用尽就让这次并入失败而不是丢分片。 */
+const MAX_LEGACY_NAME_ATTEMPTS = 10_000;
+
 /**
  * 把来源目录的分片并入目标目录, 返回并入条数。同名同内容跳过 (重复执行不产生副本);
  * 同名不同内容换成 `<slug>-2`、`-3`… 并入, 两边的记忆都保留, 交给之后的整理去合并。
@@ -261,17 +264,25 @@ function mergeLegacyShardsSync(sourceDir: string, targetDir: string): number {
     const source = path.join(sourceDir, entry.name);
     if (fsSync.lstatSync(source).isSymbolicLink()) continue;
     const content = fsSync.readFileSync(source);
-    for (let n = 1; n < 100; n += 1) {
+    let settled = false;
+    for (let n = 1; n <= MAX_LEGACY_NAME_ATTEMPTS; n += 1) {
       const suffix = n === 1 ? '' : `-${n}`;
       const name = `${parsed.type}_${parsed.slug.slice(0, 64 - suffix.length)}${suffix}.md`;
       const target = path.join(targetDir, name);
       if (!fsSync.existsSync(target)) {
         fsSync.writeFileSync(target, content);
         merged += 1;
+        settled = true;
         break;
       }
-      if (fsSync.readFileSync(target).equals(content)) break;
+      if (fsSync.readFileSync(target).equals(content)) {
+        settled = true;
+        break;
+      }
     }
+    // 名字用尽时不能悄悄跳过: 调用方随后会给这个来源写回执, 没拷走的分片就再也读不到。
+    // 抛出后来源不留回执, 下次启动重试 (已拷走的同内容分片会被跳过, 不产生副本)。
+    if (!settled) throw new Error(`no free filename to preserve legacy memory shard ${entry.name}`);
   }
   return merged;
 }

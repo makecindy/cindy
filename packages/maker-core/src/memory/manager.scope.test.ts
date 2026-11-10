@@ -786,6 +786,28 @@ describe('MakerMemoryManager · 账号级与项目两份记忆', () => {
       .toEqual(['project_from-dialogue.md']);
   });
 
+  it('同名分片的后缀 -2…-99 都被占用时继续找空名, 不丢分片也不提前写回执', async () => {
+    // 旧版本在许多对话目录里各存过一份同名分片时, 并入要给每一份找到名字;
+    // 悄悄跳过并写回执, 这份记忆就既不在账号级里、也不再被列出。
+    const legacy = new MakerMemoryManager({
+      basePath: rootA, sqliteFactory: trackingSqlite().factory, agents: {}, logger: noopLogger, initialEnabled: true,
+    });
+    await (await legacy.getStore(DIALOGUE_DIR)).write(record('project', 'from-dialogue'));
+    legacy.dispose();
+    const userDir = path.join(rootA, 'user-memory');
+    await mkdir(userDir, { recursive: true });
+    for (let n = 1; n < 100; n += 1) {
+      const suffix = n === 1 ? '' : `-${n}`;
+      await writeFile(path.join(userDir, `project_from-dialogue${suffix}.md`), `occupied ${n}\n`, 'utf8');
+    }
+
+    await manager.getPromptIndex(DIALOGUE_DIR);
+
+    expect(existsSync(path.join(userDir, 'project_from-dialogue-100.md'))).toBe(true);
+    const receipt = path.join(rootA, 'maker-memory', memoryScopeDirName(DIALOGUE_DIR), '.cindy-memory-merged-v1.json');
+    expect(existsSync(receipt)).toBe(true);
+  });
+
   it('普通文件夹 (不是 Git 仓库) 里已删除的子文件夹不并入上级', async () => {
     // 普通文件夹按目录各存一份。并入的话, 在主目录开过任务的人, 所有已删除项目的
     // 记忆都会涌进主目录那一份。仓库内已删除子目录的并入见 git-integration 测试。
