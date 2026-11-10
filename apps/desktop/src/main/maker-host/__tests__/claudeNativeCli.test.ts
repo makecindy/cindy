@@ -68,7 +68,7 @@ import {
   refreshClaudeCliLoginStatus,
   resetClaudeNativeCliForTest,
   runClaudeCliLogin,
-} from '../claude-native-cli.js';
+} from '../claude-native-cli.desktop.js';
 
 type FakeChild = EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; kill: ReturnType<typeof vi.fn> };
 

@@ -10,7 +10,7 @@ import { createAutomaticContinueEligibility, type CompanionFailoverSnapshot } fr
 
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
-import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings';
+import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings.desktop';
 import type { ProviderGroupDirectory, ResolvedMemberState, ResolvedProviderGroupMember } from '../directory';
 import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../cooling';
 import { createProviderGroupGuestSwitch, PROVIDER_GROUP_SWITCH_OFFER_TTL_MS } from '../guestSwitch';
