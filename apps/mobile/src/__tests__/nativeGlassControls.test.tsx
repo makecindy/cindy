@@ -571,3 +571,16 @@ it("does not dispatch the disabled current project membership", () => {
   act(() => row.click());
   expect(props.onProject).not.toHaveBeenCalled();
 });
+
+// PR #9826: browseLoading may stay true after returning to workspace on the new-task page.
+it.each([false, true])("gates workspace selection only for its own loading (%s)", workspaceLoading => {
+  const props = directoryProps({ page: "workspace", loading: true, workspaceLoading,
+    workspaces: [{ title: "Project", workingDir: "/project" }] });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  for (const name of ["Dialogue", "Project", "Browse"]) {
+    act(() => (host.querySelector(`[data-testid="newSession.workspace${name}Option"]`) as HTMLButtonElement).click());
+  }
+  expect(props.onDialogue).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+  expect(props.onProject).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+  expect(props.onBrowse).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+});

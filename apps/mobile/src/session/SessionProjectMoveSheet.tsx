@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isSharedTaskPeer, TASK_MIGRATION_CHANNEL, type TaskMigrationView } from '@cindy/device-link';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { useTranslation } from 'react-i18next';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
@@ -86,7 +87,7 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
       { preSend: assertCurrent }).then((caps) => {
       if (!current() || readGeneration.current !== request) return;
       if (caps.supported !== true) throw new Error('MIGRATION_UNSUPPORTED');
-      setProjects([...new Set(caps.projects ?? [])]);
+      setProjects([...new Set(caps.projects ?? [])].filter(path => !isTeammateProjectPath(path)));
     }).catch((err: unknown) => {
       if (current() && readGeneration.current === request) setError(failureText(err));
     }).finally(() => {
@@ -175,7 +176,7 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
     }
   };
   return <NewTaskSelectionSheet
-    page={page} workspaceTitle={t('session.menu.moveToProject')} busy={busy} devices={[]}
+    page={page} workspaceTitle={t('session.menu.moveToProject')} workspaceLoading={loading} busy={busy} devices={[]}
     selectedDeviceId={devices?.rpcDeviceId ?? ''}
     workspaces={projects.map(path => ({ title: path.split(/[\\/]/).filter(Boolean).at(-1) ?? path,
       workingDir: path, disabled: isCurrentProject(path) }))}

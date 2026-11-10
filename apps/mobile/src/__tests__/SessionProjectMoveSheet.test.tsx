@@ -260,3 +260,24 @@ it.each(['project', 'dialogue'] as const)('clears the previous explicit membersh
   expect(reopened?.workspaces[0].disabled).toBe(false); // the old project is now available
   expect(reopened?.workingDir).toBe('/project/subdir');
 });
+
+// PR #9826: ordinary move targets follow the shared teammate-project visibility rule.
+it('filters host-managed teammate projects while preserving ordinary project paths', async () => {
+  h.invoke.mockResolvedValueOnce({ supported: true, projects: [
+    '/project', '/data/owners/owner/bots/teammate/workspace',
+    'C:/data/owners/owner/bots/teammate/workspace', '/project/bots/custom/workspace',
+  ] });
+  act(() => move.open(session, vi.fn()));
+  await act(async () => move.parentClosed());
+  expect(h.picker?.workspaces.map(project => project.workingDir)).toEqual(['/project', '/project/bots/custom/workspace']);
+});
+
+it('keeps move workspaces unavailable until host capabilities finish loading', async () => {
+  let finish!: (value: unknown) => void;
+  h.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  act(() => move.open(session, vi.fn()));
+  await act(async () => move.parentClosed());
+  expect(h.picker?.workspaceLoading).toBe(true);
+  await act(async () => finish({ supported: true, projects: ['/project'] }));
+  expect(h.picker?.workspaceLoading).toBe(false);
+});

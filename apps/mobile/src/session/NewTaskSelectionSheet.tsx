@@ -1,6 +1,8 @@
 export interface NewTaskSelectionSheetProps {
   page: 'device' | 'workspace' | 'directory' | null;
   workspaceTitle?: string;
+  /** Host capability loading for workspace choices; directory reads use loading. */
+  workspaceLoading?: boolean;
   busy: boolean;
   devices: readonly { deviceId: string; name?: string }[];
   selectedDeviceId: string;

@@ -19,6 +19,7 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
   const glassStyle = useNativeGlassButtonStyle({ prominent: true });
   const browsing = p.page === 'directory';
   const unavailable = p.busy || p.loading;
+  const workspaceUnavailable = p.busy || !!p.workspaceLoading;
   const displayError = p.error || p.actionError;
   const icon = (name: 'laptopcomputer' | 'folder' | 'bubble.left' | 'folder.badge.plus' | 'chevron.right' | 'arrow.up') =>
     <Image systemName={name} size={iconSize.lg} />;
@@ -49,22 +50,22 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           selected={device.deviceId === p.selectedDeviceId} disabled={p.busy}
           onPress={() => p.onDevice(device.deviceId)} testID="newSession.deviceOption" />)}
       </Section> : p.page === 'workspace' ? <>
-        {p.loading ? <Section><ProgressView /></Section> : null}
+        {p.workspaceLoading ? <Section><ProgressView /></Section> : null}
         {displayError ? <Section><NativeErrorNotice message={displayError} /></Section> : null}
         <Section>
           <ComposerNativeRow title={t('session.new.workspaceDialogue')} leading={icon('bubble.left')}
-            selected={p.workspaceKind === 'dialogue'} disabled={unavailable}
+            selected={p.workspaceKind === 'dialogue'} disabled={workspaceUnavailable}
             onPress={p.onDialogue} testID="newSession.workspaceDialogueOption" />
         </Section>
         {p.workspaces.length ? <Section>
           {p.workspaces.map(workspace => <ComposerNativeRow key={workspace.workingDir}
             title={workspace.title} subtitle={workspace.workingDir} leading={icon('folder')}
             selected={p.workspaceKind === 'project' && workspacePathsEqual(p.workingDir, workspace.workingDir)}
-            disabled={unavailable || workspace.disabled} onPress={() => p.onProject(workspace.workingDir)} testID="newSession.workspaceProjectOption" />)}
+            disabled={workspaceUnavailable || workspace.disabled} onPress={() => p.onProject(workspace.workingDir)} testID="newSession.workspaceProjectOption" />)}
         </Section> : null}
         <Section>
           <ComposerNativeRow title={t('session.new.chooseOtherFolder')} leading={icon('folder.badge.plus')}
-            accessory={icon('chevron.right')} disabled={unavailable} onPress={p.onBrowse} testID="newSession.workspaceBrowseOption" />
+            accessory={icon('chevron.right')} disabled={workspaceUnavailable} onPress={p.onBrowse} testID="newSession.workspaceBrowseOption" />
         </Section>
       </> : browsing ? <>
         <Section>
