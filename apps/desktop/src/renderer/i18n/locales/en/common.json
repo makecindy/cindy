@@ -11814,6 +11814,15 @@
       "unavailable": "Directory unavailable",
       "failed": "Could not update projects. Reload to check the saved state.",
       "noAvailable": "Add more projects from the project list first."
+    },
+    "automations": {
+      "title": "Automations",
+      "description": "Automations in {{name}}'s project. Turn them on or off here; edit them in Automations.",
+      "empty": "{{name}} has no automations yet.",
+      "failed": "Couldn't load automations.",
+      "toggle": "Turn on “{{name}}”",
+      "manage": "Manage in Automations",
+      "create": "Create in Automations"
     }
   },
   "common": {
@@ -15345,7 +15354,8 @@
         "openConfigAria": "Open project automation config",
         "openConfigFailed": "Failed to open file",
         "reload": "Reload",
-        "reloadAria": "Reload project automation"
+        "reloadAria": "Reload project automation",
+        "teammate": "{{name}} · Teammate"
       },
       "promote": {
         "menu": "Promote to project automation",

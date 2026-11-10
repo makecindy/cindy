@@ -11768,6 +11768,15 @@
       "unavailable": "디렉터리를 사용할 수 없습니다",
       "failed": "프로젝트를 업데이트하지 못했습니다. 다시 불러와 저장 상태를 확인하세요.",
       "noAvailable": "다른 프로젝트는 먼저 프로젝트 목록에 추가하세요."
+    },
+    "automations": {
+      "title": "자동화",
+      "description": "{{name}} 프로젝트의 자동화입니다. 여기서 켜고 끄며, 편집은 자동화 페이지에서 합니다.",
+      "empty": "{{name}}에게 아직 자동화가 없습니다.",
+      "failed": "자동화를 불러오지 못했습니다.",
+      "toggle": "“{{name}}” 켜기",
+      "manage": "자동화 페이지에서 관리",
+      "create": "자동화 페이지에서 만들기"
     }
   },
   "common": {
@@ -15279,7 +15288,8 @@
         "openConfigAria": "프로젝트 자동화 설정 열기",
         "openConfigFailed": "파일 열기 실패",
         "reload": "다시 로드",
-        "reloadAria": "프로젝트 자동화 다시 로드"
+        "reloadAria": "프로젝트 자동화 다시 로드",
+        "teammate": "{{name}} · 동료"
       },
       "promote": {
         "menu": "프로젝트 자동화로 승격",

@@ -11912,6 +11912,15 @@
       "unavailable": "Directorio no disponible",
       "failed": "No se pudieron actualizar los proyectos. Vuelve a cargar para comprobar el estado guardado.",
       "noAvailable": "Primero agrega más proyectos desde la lista de proyectos."
+    },
+    "automations": {
+      "title": "Automatizaciones",
+      "description": "Automatizaciones del proyecto de {{name}}. Actívalas o desactívalas aquí; edítalas en Automatizaciones.",
+      "empty": "{{name}} aún no tiene automatizaciones.",
+      "failed": "No se pudieron cargar las automatizaciones.",
+      "toggle": "Activar “{{name}}”",
+      "manage": "Gestionar en Automatizaciones",
+      "create": "Crear en Automatizaciones"
     }
   },
   "common": {
@@ -15491,7 +15500,8 @@
         "openConfigAria": "Abrir configuración de automatización del proyecto",
         "openConfigFailed": "No se pudo abrir el archivo",
         "reload": "Recargar",
-        "reloadAria": "Recargar automatización del proyecto"
+        "reloadAria": "Recargar automatización del proyecto",
+        "teammate": "{{name}} · Compañero"
       },
       "promote": {
         "menu": "Convertir en automatización del proyecto",

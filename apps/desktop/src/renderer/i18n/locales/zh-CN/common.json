@@ -11768,6 +11768,15 @@
       "unavailable": "目录暂不可用",
       "failed": "项目未能更新，请重新加载核对保存结果。",
       "noAvailable": "更多项目可先在项目列表中添加。"
+    },
+    "automations": {
+      "title": "自动化",
+      "description": "{{name}} 项目里的自动化。在这里开关，编辑请到自动化页面。",
+      "empty": "{{name}} 还没有自动化。",
+      "failed": "自动化读取失败。",
+      "toggle": "启用「{{name}}」",
+      "manage": "在自动化页面管理",
+      "create": "去自动化页面新建"
     }
   },
   "common": {
@@ -15279,7 +15288,8 @@
         "openConfigAria": "打开项目自动化配置文件",
         "openConfigFailed": "打开文件失败",
         "reload": "重新加载",
-        "reloadAria": "重新加载项目自动化配置"
+        "reloadAria": "重新加载项目自动化配置",
+        "teammate": "{{name}} · 伙伴"
       },
       "promote": {
         "menu": "提升为项目自动化",

@@ -11912,6 +11912,15 @@
       "unavailable": "Répertoire indisponible",
       "failed": "Impossible de mettre à jour les projets. Rechargez pour vérifier l'état enregistré.",
       "noAvailable": "Ajoutez d'abord d'autres projets depuis la liste des projets."
+    },
+    "automations": {
+      "title": "Automatisations",
+      "description": "Automatisations du projet de {{name}}. Activez-les ou désactivez-les ici ; modifiez-les dans Automatisations.",
+      "empty": "{{name}} n'a pas encore d'automatisation.",
+      "failed": "Impossible de charger les automatisations.",
+      "toggle": "Activer « {{name}} »",
+      "manage": "Gérer dans Automatisations",
+      "create": "Créer dans Automatisations"
     }
   },
   "common": {
@@ -15491,7 +15500,8 @@
         "openConfigAria": "Ouvrir la configuration des automatisations du projet",
         "openConfigFailed": "Impossible d'ouvrir le fichier",
         "reload": "Recharger",
-        "reloadAria": "Recharger les automatisations du projet"
+        "reloadAria": "Recharger les automatisations du projet",
+        "teammate": "{{name}} · Coéquipier"
       },
       "promote": {
         "menu": "Convertir en automatisation de projet",

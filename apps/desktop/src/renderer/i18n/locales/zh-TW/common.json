@@ -11768,6 +11768,15 @@
       "unavailable": "目錄暫不可用",
       "failed": "專案未能更新，請重新載入核對儲存結果。",
       "noAvailable": "更多專案可先在專案列表中新增。"
+    },
+    "automations": {
+      "title": "自動化",
+      "description": "{{name}} 專案裡的自動化。在這裡開關，編輯請到自動化頁面。",
+      "empty": "{{name}} 還沒有自動化。",
+      "failed": "自動化讀取失敗。",
+      "toggle": "啟用「{{name}}」",
+      "manage": "在自動化頁面管理",
+      "create": "去自動化頁面新建"
     }
   },
   "common": {
@@ -15279,7 +15288,8 @@
         "openConfigAria": "開啟專案自動化配置檔案",
         "openConfigFailed": "開啟檔案失敗",
         "reload": "重新載入",
-        "reloadAria": "重新載入專案自動化配置"
+        "reloadAria": "重新載入專案自動化配置",
+        "teammate": "{{name}} · 夥伴"
       },
       "promote": {
         "menu": "提升為專案自動化",

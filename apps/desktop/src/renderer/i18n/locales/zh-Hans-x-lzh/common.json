@@ -11768,6 +11768,15 @@
       "unavailable": "目录暂失",
       "failed": "案未能更新，请重载以核所存之果。",
       "noAvailable": "欲得更多案，可先于案录中增之。"
+    },
+    "automations": {
+      "title": "自运",
+      "description": "{{name}} 案中之自运。于此启闭，修改请往自运之页。",
+      "empty": "{{name}} 尚无自运。",
+      "failed": "自运读取未成。",
+      "toggle": "启「{{name}}」",
+      "manage": "于自运之页管理",
+      "create": "往自运之页新建"
     }
   },
   "common": {
@@ -15279,7 +15288,8 @@
         "openConfigAria": "启案之自运设置卷",
         "openConfigFailed": "启卷未成",
         "reload": "重载",
-        "reloadAria": "重载案之自运设置"
+        "reloadAria": "重载案之自运设置",
+        "teammate": "{{name}} · 同僚"
       },
       "promote": {
         "menu": "升为案之自运",

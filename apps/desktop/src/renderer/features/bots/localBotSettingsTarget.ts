@@ -23,7 +23,7 @@ import type { BotCapabilityEntry, BotCapabilityKind, BotSettingsTarget } from '.
 
 const api = () => window.electronAPI.localDb.bots;
 // `projects` lists folders on this computer: a remote teammate's target never offers it.
-const ALL_PAGES = ['profile', 'personality', 'memory', 'projects', 'model', 'voice', 'capabilities', 'channels', 'history', 'advanced'] as const;
+const ALL_PAGES = ['profile', 'personality', 'memory', 'projects', 'automations', 'model', 'voice', 'capabilities', 'channels', 'history', 'advanced'] as const;
 
 /** Runtime / MCP facts that change which references a teammate can use. */
 const CATALOG_PATCH_KEYS = [

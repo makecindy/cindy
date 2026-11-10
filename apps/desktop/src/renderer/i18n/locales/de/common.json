@@ -11814,6 +11814,15 @@
       "unavailable": "Verzeichnis nicht verfügbar",
       "failed": "Projekte konnten nicht aktualisiert werden. Lade neu, um den gespeicherten Stand zu prüfen.",
       "noAvailable": "Füge zuerst weitere Projekte aus der Projektliste hinzu."
+    },
+    "automations": {
+      "title": "Automatisierungen",
+      "description": "Automatisierungen im Projekt von {{name}}. Hier ein- oder ausschalten, bearbeiten unter Automatisierungen.",
+      "empty": "{{name}} hat noch keine Automatisierungen.",
+      "failed": "Automatisierungen konnten nicht geladen werden.",
+      "toggle": "„{{name}}“ einschalten",
+      "manage": "Unter Automatisierungen verwalten",
+      "create": "Unter Automatisierungen erstellen"
     }
   },
   "common": {
@@ -15345,7 +15354,8 @@
         "openConfigAria": "Konfiguration der Projektautomatisierung öffnen",
         "openConfigFailed": "Datei konnte nicht geöffnet werden",
         "reload": "Neu laden",
-        "reloadAria": "Projektautomatisierung neu laden"
+        "reloadAria": "Projektautomatisierung neu laden",
+        "teammate": "{{name}} · Teammitglied"
       },
       "promote": {
         "menu": "In Projektautomatisierung umwandeln",
