@@ -14,7 +14,7 @@ import * as schema from '../../localDb/schema.js';
 const state = vi.hoisted(() => ({ root: '' }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 import { readTeammateAvatarSource, createBotAvatarService } from '../botAvatarService.js';
-import { writeBlob, resolveSafe } from '../../cindy-media/blobStore.js';
+import { writeBlob, resolveSafe } from '../../cindy-media/blobStore.desktop.js';
 import { recordBlob, addRef } from '../../cindy-media/ledger.js';
 import { storeTeammateAvatarImage } from '../../localDb/ipc/botAvatarSelection.js';
 import { prepareTeammateAvatarImage } from '../../teammateAvatarImage.js';

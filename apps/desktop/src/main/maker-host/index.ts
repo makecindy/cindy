@@ -1,3 +1,6 @@
+import { createCodexLocalModelSink } from './codexLocalModelSink.js';
+import { createCodexSpawnConfig, createCodexRoutingSignature } from './codexSpawnConfigCore.js';
+import { refreshCodexGatewayRuntime } from './codexGatewayRefresh.js';
 import { isReplacedCindyGatewayKey } from '../model-access/gatewayKeyRejection.js';
 import { refreshInstalledPluginApps } from '../cindy-brain/index.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
@@ -28,7 +31,7 @@ import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
 import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
-import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.js';
+import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.desktop.js';
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
 import { ownerCodexThreadLocations, readCodexThreadStorageReadOnly } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
@@ -78,7 +81,7 @@ import {
 import { createOrcaWorkerBridgeMcpProvider, type OrcaBridgeMcpDeps } from '@cindy/orca-workflow';
 import { LspServerPool } from '@cindy/mcps';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
-import { listCustomMcpRuntimeGenerations } from './custom-mcp-store.js';
+import { listCustomMcpRuntimeGenerations } from './custom-mcp-store.desktop.js';
 
 import { createMessage } from '../localDb/ipc/messages.js';
 import { createCindyMakeMcpProvider } from '../cindy-make/mcpProvider.js';
@@ -143,7 +146,7 @@ import {
   releaseSessionBindingsForOwnerBoundary,
 } from '../maker-ipc/register.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
-import { readProviderGroupBinding } from '../provider-group/bindings.js';
+import { readProviderGroupBinding } from '../provider-group/bindings.desktop.js';
 import { createSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
@@ -155,7 +158,7 @@ import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } f
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import { isProviderShareCredentialConsentSkipped } from '../device-link/providerShareGuestPrefs.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { MACHINE_STATUS_CHANNEL } from '@cindy/device-link';
 import { invokeDeviceValue } from '../maker-ipc/orcaRemoteWorkers.js';
 import { createHistoryRemoteDeps } from '../mcp-integrations/historyDevices.js';
@@ -177,7 +180,7 @@ import {
   writeCodexHistoryHasProductPrompt,
 } from './session-storage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
-import { guardedOutboundFetch, outboundFetch } from './outbound-fetch.js';
+import { guardedOutboundFetch, outboundFetch } from './outbound-fetch.desktop.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { createVisionBridge } from '../vision-bridge/vision-bridge.js';
 import {
@@ -185,7 +188,7 @@ import {
   setVisionBridgeController,
 } from '../vision-bridge/vision-bridge-controller.js';
 import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
-import * as blobStore from '../cindy-media/blobStore.js';
+import * as blobStore from '../cindy-media/blobStore.desktop.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
 import { captureCodexLocalAuthPolicy, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
@@ -301,17 +304,17 @@ import {
   registerChildThread as registerCodexProxyChildThread,
   setCodexAppliedCustomProviderRoutes,
   unregister as unregisterCodexProxyPrompt,
-} from './codex-proxy-host.js';
+} from './codex-proxy-host.desktop.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
-import { getGhostRosterPrompt } from '../mcp-integrations/ghost.js';
-import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.js';
+import { getGhostRosterPrompt } from '../mcp-integrations/ghost.desktop.js';
+import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.desktop.js';
 import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
 import {
   getBuiltinMcpServerNames,
   registerCustomMcpArrays,
   refreshCustomMcpProviders,
   resetCustomMcpRegistry,
-} from '../mcp-integrations/custom-mcp-registry.js';
+} from '../mcp-integrations/custom-mcp-registry.desktop.js';
 import {
   ESSENTIAL_PLUGIN_IDS,
   resolveBotAllowedBuiltinPluginIds,
@@ -327,8 +330,8 @@ import {
   prepareCodexMcpToolCancellation,
   setCodexEnvironmentShutdownHook,
   unregisterCodexMcpThreadContext,
-} from '../mcp-integrations/codexEnvironment.js';
-import { REMOTE_ALLOWED_SERVER_NAMES, type CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.js';
+} from '../mcp-integrations/codexEnvironment.desktop.js';
+import { REMOTE_ALLOWED_SERVER_NAMES, type CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.desktop.js';
 import { setRemoteMcpBridgeTokenRotatedHook } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import type { BotToolsetContext } from '../../shared/botRemoteCapabilities.js';
 import { isBotToolsetProviderAvailable } from './botToolsetAvailability.js';
@@ -366,7 +369,7 @@ import {
   CODEX_GATEWAY_PROVIDER_ID,
   CODEX_SUMMARY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
-} from './codex-gateway-config.js';
+} from './codex-gateway-config.desktop.js';
 import {
   buildCodexCustomProviderArgs,
   deriveCodexCustomProviderRoutes,
@@ -662,25 +665,8 @@ export async function refreshCodexGatewayHost(
   const maker = _maker;
   const agent = _codexAgent;
   if (!maker || !agent) return;
-  const guard = await agent.beginLocalHostCredentialChange('Cindy AI key changed', {
-    allLocalHosts: true,
-    credentialMode: 'gateway-key',
-    targetHostKey,
-    busyError: () => new CodexCredentialModeSwitchBusyError([]),
-  });
-  try {
-    if (!await stillValid() || _maker !== maker || _codexAgent !== agent) return;
-    await prepareLocalCodexCredentialModeSwitch({
-      maker,
-      isSessionInTurn,
-      hostKeys: guard.affectedHostKeys.filter(key => agent.getLocalHostKeysForCredentialMode('gateway-key').includes(key)),
-    });
-    if (_maker !== maker || _codexAgent !== agent) return;
-    guard.assertIdle();
-    await guard.finalize();
-  } finally {
-    guard.release();
-  }
+  await refreshCodexGatewayRuntime({ maker, agent, targetHostKey, stillValid, isSessionInTurn,
+    isCurrent: () => _maker === maker && _codexAgent === agent });
 }
 
 // Process-lifetime IPC binding: its reconciler reads the dynamic Maker facade and
@@ -1788,23 +1774,6 @@ export function getMaker(): Maker {
       cindyMakeProvider,
     ];
     _mcpProviders.codex = codexMcpProviders;
-    const resolveDesiredCodexSubagentRoutingSignature = async (ctx: {
-      providerId?: string;
-      credentialMode?: 'oauth-bearer' | 'gateway-key' | 'provider-oauth';
-      hostPurpose?: 'control-plane' | 'review' | 'custom-context';
-      deviceHostedGuestProviderId?: string;
-    }): Promise<string> => {
-      const settings = readSubagentModelSettings();
-      if (!codexHostUsesSmartSubagentRouting(settings, ctx)) return 'default';
-      const providerViews: ProviderView[] =
-        await getDesktopProviderService().listProviders({ allowSideEffects: false });
-      const candidates = selectCodexSmartSubagentCandidates(providerViews, {
-        allowChatGptOAuth: ctx.credentialMode !== undefined,
-        oauthProviderId: ctx.providerId,
-      });
-      return codexSmartSubagentRoutingSignature(candidates, getActiveCatalogRevision())
-        ?? 'default';
-    };
     const codexAgent = new CodexAgent({
       resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
       getDisabledSkillPaths: readDisabledSkillPaths,
@@ -1907,27 +1876,7 @@ export function getMaker(): Maker {
       },
       isCodexAccountProvider,
       isolateCodexAccountSessions: true,
-      onCodexLocalModelsListed: async (models, providerId) => {
-        const owner = getActiveAppSession();
-        const mapped = mapCodexAppServerModelsToCatalog(models);
-        if (providerId) {
-          const previous = await getCustomProvider(providerId);
-          if (getActiveAppSession().generation !== owner.generation) return;
-          if (!previous?.runtimes.codex || previous.auth?.native !== 'codex') return;
-          const next = { ...previous, runtimes: { codex: { ...previous.runtimes.codex,
-            models: mapped.map((model) => ({ id: model.id, name: model.name,
-              supportsUltrafastMode: model.supportsUltrafastMode === true,
-              ...(model.contextWindowVerified ? { contextWindow: model.contextWindow } : {}),
-              discoveredMetadata: model.discoveredMetadata,
-            })),
-          } } };
-          const updated = await updateCustomProviderIfUnchanged(providerId, previous, next);
-          if (getActiveAppSession().generation !== owner.generation) return;
-          if (updated) await refreshCustomProvidersIntoCatalog();
-          return;
-        }
-        setDiscoveredCodexModels(mapped, { source: 'list' });
-      },
+      onCodexLocalModelsListed: createCodexLocalModelSink(refreshCustomProvidersIntoCatalog),
       // 「后端不可达」终局升级时读一次本次请求的出站路径判定,把通用猜测换成实测事实。
       // 快照的 proxy 字段在 resolver 侧已脱敏,可直接进用户可见的错误消息。
       //
@@ -1958,14 +1907,16 @@ export function getMaker(): Maker {
           toMode: ctx.toMode,
         });
       },
-      resolveCodexSubagentRoutingSignature: async (_providers, ctx) =>
-        resolveDesiredCodexSubagentRoutingSignature(ctx),
-      prepareCodexExtraSpawnConfig: async (providers, ctx) => {
-        if (ctx.remoteHostId) {
-          // The remote daemon owns its own CODEX_HOME and Chrome companion.
-          // Do not let the local Desktop platform or local companion probe
-          // disable a remote runtime that is already configured there.
-          return {
+      resolveCodexSubagentRoutingSignature: createCodexRoutingSignature(() =>
+        getDesktopProviderService().listProviders({ allowSideEffects: false })),
+      prepareCodexExtraSpawnConfig: createCodexSpawnConfig({
+        binaryPath: codexPath,
+        getCodexHome, getCodexExtraSpawnConfig, broadcastCodexRuntimeRoute, readClaudeApiKey, isReplacedCindyGatewayKey, getDesktopSelectableCatalog, resolveDesktopModelContextProviderId,
+        hasCodexOAuthLogin: () => desktopCodexAuthAdapter.hasCodexOAuthLogin(),
+        listProviders: () => getDesktopProviderService().listProviders({ allowSideEffects: false }),
+        readSubagentOAuth: getChatgptBridgeAuthForDispatch,
+        prepareRemote: async (_providers, ctx) => {
+        return {
             extraArgs: [],
             extraEnv: {},
             codexProxyActive: false,
@@ -1979,305 +1930,10 @@ export function getMaker(): Maker {
                 vendorOptions: session?.vendorOptions,
               }),
           };
-        }
-        const isControlPlane = ctx.hostPurpose === 'control-plane';
-        const isReview = ctx.hostPurpose === 'review';
-        const isCustomContext = ctx.hostPurpose === 'custom-context';
-        const needsContextScope = isCustomContext || ctx.localAuthPolicy === 'isolated';
-        const customContextHostKey = needsContextScope
-          ? (ctx.hostScopeKey ?? ctx.customContextHostKey)?.trim() ?? ''
-          : '';
-        if (needsContextScope && !customContextHostKey) {
-          const error = new Error('custom-context Codex host is missing its runtime scope key');
-          (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
-          throw error;
-        }
-        const accountProxyKey = ctx.accountHostKey;
-        const usesScopedProxy = needsContextScope || !!accountProxyKey;
-        const scopedProxyKey = accountProxyKey || customContextHostKey;
-        const usesIsolatedProxy = isControlPlane || isReview || usesScopedProxy;
-        // 供应商分享受邀者的任务：独占的 proxy 只登记分享的那个供应商的路由并过受邀者守门，
-        // 不开智能子代理调配。没有独占 proxy 就不能安全地收窄，直接失败。
-        const guestProviderId = ctx.deviceHostedGuestProviderId?.trim() || undefined;
-        const guestSessionId = ctx.deviceHostedGuestSessionId?.trim() || undefined;
-        if (ctx.deviceHostedGuestProviderId !== undefined && (!guestProviderId || !guestSessionId || !usesScopedProxy)) {
-          const error = new Error('shared-provider Codex host requires its own session-bound scoped proxy');
-          (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
-          throw error;
-        }
-        const effectiveCodexHome = ctx.codexHome ?? getCodexHome();
-        let mcpExtraArgs: string[] = [];
-        let mcpExtraEnv: Record<string, string> = {};
-        let buildSessionMcpConfig:
-          | ((sessionInstanceId: string) => Record<string, unknown>)
-          | undefined;
-        // Review hosts and native-storage-only (archive) hosts never expose Cindy MCP tools.
-        if (!isReview && !ctx.nativeStorageOnly) {
-          try {
-            const cfg = await getCodexExtraSpawnConfig({
-              mcpProviders: providers,
-              logger: desktopMakerLogger,
-            });
-            // getCodexExtraSpawnConfig may return a cached array; per-host
-            // Browser overrides must never mutate that shared snapshot.
-            mcpExtraArgs = [...cfg.extraArgs];
-            mcpExtraEnv = cfg.extraEnv;
-            buildSessionMcpConfig = cfg.buildSessionMcpConfig;
-          } catch (err) {
-            desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
-              message: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-        const browserCompanion = isControlPlane || isReview
-          ? null
-          : await prepareCodexBrowserCompanion({ codexHome: ctx.runtimeCodexHome ?? effectiveCodexHome });
-        const browserCompanionSpawnConfig =
-          resolveCodexBrowserCompanionSpawnConfig(browserCompanion);
-        mcpExtraArgs.push(...browserCompanionSpawnConfig.extraArgs);
-        if (
-          browserCompanion?.status === 'unavailable' &&
-          browserCompanion.reason !== 'platform_unsupported'
-        ) {
-          desktopMakerLogger.warn('Codex Browser companion unavailable', {
-            reason: browserCompanion.reason,
-            detail: browserCompanion.detail,
-          });
-        }
-        // API 模式: 追加 model_provider override, 让 codex app-server 走 AI Gateway
-        // 而非 OAuth 订阅后端。每次 createHost 都现读 mode, 切模式后重建即生效。
-        // 关掉 API 模式则不带这些 flag —— 天然可逆 (见 codex-gateway-config.ts)。
-        //
-        // proxy 路线: codex 始终经本地 loopback proxy 出口(不分 oauth/api 全局开关),
-        // proxy 按 model + 模式分流。spawn 鉴权优先服从本次 session 的显式来源:
-        //   gateway-key  → env_key(codex 带 gateway key,不触碰 OAuth cloud config)
-        //   oauth-bearer → requires_openai_auth(codex 带 OAuth token,普通模型走 ChatGPT)
-        //   provider-oauth → env_key 占位,proxy 用供应商 OAuth 覆盖 Authorization(如 xAI)
-        // 未显式选择来源时才保留旧 fallback:有 OAuth 用 OAuth,否则用 gateway key。
-        const credentialMode =
-          ctx.credentialMode ??
-          ((await desktopCodexAuthAdapter.hasCodexOAuthLogin()) ? 'oauth-bearer' : 'gateway-key');
-        const authInjection =
-          credentialMode === 'oauth-bearer'
-            ? 'oauth-bearer'
-            : credentialMode === 'provider-oauth'
-              ? 'provider-oauth'
-              : 'env-key';
-        const useOAuthBearer = authInjection === 'oauth-bearer';
-        if (!usesIsolatedProxy) {
-          setCodexProxyAuthInjection(authInjection);
-          await broadcastCodexRuntimeRoute();
-        }
-        setCodexProxyGatewayKeyReader(readClaudeApiKey, isReplacedCindyGatewayKey);
-        setCodexSubagentOAuthReader(getChatgptBridgeAuthForDispatch);
 
-        const customContextProviderRoutes = usesScopedProxy
-          ? restrictCodexRoutesToGuestProvider(deriveCodexCustomProviderRoutes(getActiveCatalog()), guestProviderId)
-          : [];
-
-        // 这个点在 CodexAgent.createHost() 内。返回的 codexProxyActive 会被冻到 AppServerHost 实例上,
-        // 后续 startSession 只读 host 自己的事实,不再 live 读全局 flag。
-        if (usesScopedProxy) {
-          await ensureCodexCustomContextProxyReady(
-            scopedProxyKey,
-            authInjection,
-            customContextProviderRoutes,
-            guestProviderId,
-            guestSessionId,
-          );
-          // 受邀者不走「proxy 不可用时直连网关」的退路：那条路不经受邀者守门。
-          if (guestProviderId && !isCodexCustomContextProxyHandleReady(scopedProxyKey)) {
-            await releaseCodexCustomContextProxy(scopedProxyKey);
-            const error = new Error('shared-provider Codex host requires the local proxy, but the proxy is not ready');
-            (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
-            throw error;
-          }
-        } else if (usesIsolatedProxy) {
-          await ensureCodexControlPlaneProxyReady(authInjection);
-        } else {
-          await ensureCodexProxyReady();
-        }
-        const ready = usesScopedProxy
-          ? isCodexCustomContextProxyHandleReady(scopedProxyKey)
-          : usesIsolatedProxy
-            ? isCodexControlPlaneProxyHandleReady(authInjection)
-            : isCodexProxyHandleReady();
-        if ((useOAuthBearer || authInjection === 'provider-oauth') && !ready) {
-          const error = new Error(
-            authInjection === 'provider-oauth'
-              ? 'Codex provider OAuth mode requires the local proxy, but the proxy is not ready'
-              : 'Codex OAuth mode requires the local proxy, but the proxy is not ready',
-          );
-          // fallback OAuth 也是凭据隔离要求,不能被 maker-core 当成普通 MCP 降级吞掉。
-          (error as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
-          if (usesScopedProxy) {
-            await releaseCodexCustomContextProxy(scopedProxyKey);
-          }
-          throw error;
-        }
-        // gateway-key 模式下 proxy 挂了仍可 fallback 到 gateway base_url(codex 直连 gateway, 不裸奔)。
-        const endpoint = usesScopedProxy
-          ? getCodexCustomContextProxyEndpoint(scopedProxyKey)
-          : usesIsolatedProxy
-            ? getCodexControlPlaneProxyEndpoint(authInjection)
-            : getCodexProxyEndpoint();
-        const codexCustomProviderRoutes =
-          usesScopedProxy && ready
-            ? customContextProviderRoutes
-            : !usesIsolatedProxy && ready
-              ? deriveCodexCustomProviderRoutes(getActiveCatalog())
-              : [];
-        if (!usesIsolatedProxy) {
-          // The proxy must follow the exact capability/routing snapshot frozen into
-          // this task Host, not the catalog that may already be ahead during a busy restart.
-          setCodexAppliedCustomProviderRoutes(codexCustomProviderRoutes);
-        }
-        const codexCustomProviderSpawn = buildCodexCustomProviderArgs(
-          endpoint,
-          authInjection,
-          codexCustomProviderRoutes,
-        );
-        const storedSubagentModelSettings = readSubagentModelSettings();
-        let smartSubagentConfig: CodexSmartSubagentConfig | undefined;
-        if (ready && codexHostUsesSmartSubagentRouting(storedSubagentModelSettings, ctx)) {
-          try {
-            const providerViews: ProviderView[] =
-              await getDesktopProviderService().listProviders({ allowSideEffects: false });
-            smartSubagentConfig = prepareCodexSmartSubagentConfig({
-              codexHome: effectiveCodexHome,
-              providerViews,
-              allowChatGptOAuth: true,
-              oauthProviderId: ctx.providerId,
-              catalogRevision: getActiveCatalogRevision(),
-            }) ?? undefined;
-          } catch (err) {
-            desktopMakerLogger.warn(
-              'Codex smart Subagent catalog unavailable; preserving native routing',
-              { error: err instanceof Error ? err.message : String(err) },
-            );
-          }
-        }
-        let customContextCatalogArgs: string[] = [];
-        let customContextCatalogPath: string | undefined;
-        if (isCustomContext) {
-          const modelId = ctx.customContextModel?.trim();
-          const contextWindow = ctx.customContextWindow;
-          try {
-            if (
-              !modelId ||
-              typeof contextWindow !== 'number' ||
-              !Number.isFinite(contextWindow) ||
-              contextWindow <= 0
-            ) {
-              throw new Error('custom-context Codex host is missing its model or context window');
-            }
-            const catalog = getDesktopSelectableCatalog();
-            const source = resolveDesktopModelContextProviderId(catalog, 'codex', ctx.customContextProviderId, modelId);
-            const customCatalog = await prepareCodexCustomContextCatalog({
-              binaryPath: codexPath,
-              codexHome: effectiveCodexHome,
-              modelId,
-              contextWindow,
-              modelIds: catalog.providers.find(provider => provider.id === source)?.models.codex?.map(model => model.id),
-              resolveCompactionPct: (id) => resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, id),
-              resolveContextWindow: (nativeModelId) => {
-                return (source ? readModelContextLimit('codex', source, nativeModelId) : null)
-                  ?? resolveModelDefaultContextWindow(catalog, 'codex', source, nativeModelId);
-              },
-              ...(smartSubagentConfig
-                ? { baseCatalog: smartSubagentConfig.modelCatalog }
-                : {}),
-            });
-            customContextCatalogPath = customCatalog.catalogPath;
-            if (smartSubagentConfig) {
-              smartSubagentConfig = {
-                ...smartSubagentConfig,
-                catalogPath: customCatalog.catalogPath,
-              };
-            } else {
-              customContextCatalogArgs = customCatalog.extraArgs;
-            }
-          } catch (error) {
-            await releaseCodexCustomContextProxy(scopedProxyKey);
-            const fatal = error instanceof Error ? error : new Error(String(error));
-            (fatal as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
-            throw fatal;
-          }
-        }
-        if (guestProviderId) {
-          try {
-            const guestCatalog = await prepareCodexGuestModelCatalog({
-              binaryPath: codexPath, codexHome: effectiveCodexHome,
-              modelIds: ctx.deviceHostedGuestModelIds ?? [],
-              ...(customContextCatalogPath ? { baseCatalog: JSON.parse(await fs.readFile(customContextCatalogPath, 'utf8')) } : {}),
-            });
-            customContextCatalogArgs = guestCatalog.extraArgs;
-          } catch (error) {
-            await releaseCodexCustomContextProxy(scopedProxyKey);
-            const fatal = error instanceof Error ? error : new Error(String(error));
-            (fatal as { codexSpawnConfigFatal?: boolean }).codexSpawnConfigFatal = true;
-            throw fatal;
-          }
-        }
-        const codexSubagentRoutingProfile = resolveCodexSubagentRoutingProfile(
-          storedSubagentModelSettings,
-          smartSubagentConfig,
-        );
-        const releaseScopedCapabilities = usesScopedProxy
-          ? registerCodexScopedCustomProviderRoutes(scopedProxyKey, codexCustomProviderRoutes)
-          : undefined;
-        return {
-          // 默认不碰 Codex 原生 Sol/Terra 调配。用户开启智能调配后才为这个本地
-          // app-server 冻结扩展目录与逐模型 Provider 路由。
-          extraArgs: [
-            ...mcpExtraArgs,
-            ...(!isReview && !ctx.remoteHostId
-              ? buildCodexSubagentSpawnArgs(storedSubagentModelSettings, smartSubagentConfig)
-              : []),
-            ...customContextCatalogArgs,
-            ...buildCodexProxySpawnArgs(endpoint, authInjection),
-            ...codexCustomProviderSpawn.extraArgs,
-          ],
-          extraEnv: { ...mcpExtraEnv, ...codexCustomProviderSpawn.extraEnv },
-          ...(smartSubagentConfig
-            ? { smartSubagentRoutes: smartSubagentConfig.routes }
-            : {}),
-          ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
-          codexProxyActive: ready,
-          codexDefaultModelProviderId: CODEX_GATEWAY_PROVIDER_ID,
-          codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
-          codexSubagentRoutingProfile,
-          ...(smartSubagentConfig
-            ? { codexSubagentRoutingSignature: smartSubagentConfig.routingSignature }
-            : {}),
-          ...(codexCustomProviderRoutes.length > 0
-            ? { codexCustomProviderRoutes: toCodexCustomProviderHostRoutes(codexCustomProviderRoutes) }
-            : {}),
-          codexBrowserUseAvailable: browserCompanionSpawnConfig.codexBrowserUseAvailable,
-          ...(browserCompanion?.status === 'ready'
-            ? {
-                codexBrowserUseVersion: browserCompanion.version,
-                codexBrowserUseStartupTimeoutMs: browserCompanion.startupTimeoutMs,
-              }
-            : {}),
-          ...(ready
-            ? { codexCindyRemoteCompactionProviderId: CODEX_CINDY_COMPACT_PROVIDER_ID,
-                codexLocalCompactionProviderId: CODEX_SUMMARY_COMPACT_PROVIDER_ID }
-            : {}),
-          // oauth spawn 额外定义订阅直连 identity；Cindy codex/* 使用上面的 HTTP identity。
-          ...(useOAuthBearer && ready
-            ? { codexRemoteCompactionProviderId: CODEX_OPENAI_COMPACT_PROVIDER_ID }
-            : {}),
-          ...(usesScopedProxy
-            ? {
-                onHostRetired: async () => {
-                  releaseScopedCapabilities?.();
-                  await releaseCodexCustomContextProxy(scopedProxyKey);
-                },
-              }
-            : {}),
-        };
-      },
+        },
+        proxy: { setCodexProxyAuthInjection, setCodexProxyGatewayKeyReader, setCodexSubagentOAuthReader, ensureCodexCustomContextProxyReady, isCodexCustomContextProxyHandleReady, releaseCodexCustomContextProxy, ensureCodexControlPlaneProxyReady, ensureCodexProxyReady, isCodexControlPlaneProxyHandleReady, isCodexProxyHandleReady, getCodexCustomContextProxyEndpoint, getCodexControlPlaneProxyEndpoint, getCodexProxyEndpoint, setCodexAppliedCustomProviderRoutes },
+      }),
       withCodexMcpDiscoveryContext: (ctx, run) =>
         withCodexMcpDiscoveryContext({ ...ctx, agentKind: 'codex' }, run),
       registerCodexTextOnlyPolicy,

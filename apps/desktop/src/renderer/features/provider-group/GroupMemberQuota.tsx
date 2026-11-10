@@ -16,6 +16,7 @@ import { useDeviceLinkDeviceList, useDeviceLinkDeviceListRequestState } from '@/
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { cn } from '@/lib/utils';
 
+import { GroupMemberAccountList, useGroupMemberAccounts } from './GroupMemberAccounts';
 import type { ProviderGroupMember } from '../../../shared/providerGroup';
 import type { ProviderView } from '@cindy/model-providers';
 import { isKimiCodingProviderView } from '../../../shared/kimiCodingUsage';
@@ -257,6 +258,16 @@ export function GroupMemberQuota({
     pausedStructuredQuota?.deviceId ?? remoteDeviceId,
     { live: true, active: !quotaOffline && !!provider },
   );
+  // 这台电脑上的账号：两个及以上分别列出；只有一个时不加账号名，默认账号继续用原来的卡。
+  const accounts = useGroupMemberAccounts(
+    target.kind === 'share' ? null : target.providerId,
+    remoteDeviceId,
+    // 枚举账号不要求已有登录有效，否则全部掉登录时连「需要登录」也看不到。
+    !quotaOffline && !!provider && !provider.removed && provider.auth?.method === 'oauth' &&
+      (!provider.access || provider.access.kind === 'subscription'),
+  );
+  const listedAccounts = accounts && (accounts.length > 1 ||
+    (accounts.length === 1 && accounts[0].account.id !== 'default')) ? accounts : null;
   const [waitedOut, setWaitedOut] = useState(false);
   const waitKey = target.kind === 'share' ? '' : `${remoteDeviceId ?? ''}\n${target.providerId}`;
   useEffect(() => {
@@ -268,7 +279,7 @@ export function GroupMemberQuota({
   let note: string | null = null;
   if (target.kind === 'share') note = t('providerGroup.member.quota.share');
   else if (quotaOffline) note = t('providerGroup.member.quota.offline');
-  else if (!card) {
+  else if (!card && !listedAccounts) {
     if (provider && !providerWeeklyQuotaSource({ ...provider, suspended: false })) {
       note = t('providerGroup.member.quota.none');
     } else if (waitedOut || (target.kind === 'device' && deviceCatalog.error)) {
@@ -281,7 +292,9 @@ export function GroupMemberQuota({
   return (
     // 紧贴在电脑这一行下面：行本身已说明是哪台电脑，卡片不再出「Claude · 套餐」标题行。
     <div id={id} data-testid="provider-group-member-quota" className={cn('-mt-1', inset)}>
-      {card ? (
+      {listedAccounts ? (
+        <GroupMemberAccountList accounts={listedAccounts} defaultCard={card} hideAccountNames={listedAccounts.length === 1} />
+      ) : card ? (
         <QuotaHoverCard variant="embedded" hideIdentity account={card} />
       ) : (
         <p className="px-4 pb-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">{note}</p>

@@ -1,3 +1,5 @@
+import { createXaiProviderTokenReader } from './xaiProviderToken.js';
+import { createCatalogCache } from './catalogCache.js';
 import { isModelContextLimitCustomized, readModelContextLimits } from './model-context-limit-store.js';
 import { requestCodexApiModelProbe } from './codex-api-model-capabilities.js';
 import { readModelPriceOverrideView } from '../usage/modelPriceOverrideStore.js';
@@ -24,7 +26,6 @@ import { subscriptionAccountState, isXaiSubscriptionProviderId, resetSubscriptio
  */
 
 import { app, net } from 'electron';
-import { createHash, randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
@@ -49,7 +50,7 @@ import {
 } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
-import { codexAccountState } from './codex-account-auth.js';
+import { codexAccountState } from './codex-account-auth.desktop.js';
 import { listReadyProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { speechModels } from '../voice-conversation/models.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
@@ -109,7 +110,7 @@ import {
   hasGenericOAuthLogin,
   readCachedGenericOAuthAccessToken,
   resetGenericOAuthMemoryCache,
-} from './generic-oauth.js';
+} from './generic-oauth.desktop.js';
 import {
   genericOAuthSecretIo,
   addProviderSecretsClearedListener,
@@ -122,14 +123,14 @@ import {
 } from '../secrets/providerSecretStore.js';
 import { hasClaudeNativeLogin, hasClaudeNativeLoginUnbound } from './claude-native-auth.js';
 import { readClaudeNativeLogin } from './claude-native-connection.js';
-import { readClaudeCliLoginStatus } from './claude-native-cli.js';
+import { readClaudeCliLoginStatus } from './claude-native-cli.desktop.js';
 import {
   getGrokAccessToken,
   hasGrokOAuthLogin,
   grokAccountIdentity,
   recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
-} from './grok-oauth-login.js';
+} from './grok-oauth-login.desktop.js';
 import {
   notifyOpenAiMediaCredentialChanged,
   refreshOpenAiMediaModels,
@@ -204,157 +205,7 @@ function fetchText(url: string, timeoutMs: number): Promise<string> {
   });
 }
 
-const CATALOG_LKG_VERSION = 2;
-
-interface CatalogLkgEnvelope {
-  version: typeof CATALOG_LKG_VERSION;
-  scopeHash: string;
-  catalog: string;
-}
-
-interface CatalogLkgFileIo {
-  rename(from: string, to: string): Promise<void>;
-  rm(target: string, options: { force: boolean }): Promise<void>;
-}
-
-const catalogLkgWriteTails = new Map<string, Promise<void>>();
-
-function catalogScopeHash(scope: string): string {
-  return createHash('sha256').update(scope).digest('hex');
-}
-
-function catalogLkgPath(scope: string): string {
-  return path.join(
-    app.getPath('userData'),
-    'cache',
-    'model-catalog',
-    `${catalogScopeHash(scope).slice(0, 24)}.json`,
-  );
-}
-
-function catalogLkgEnvelope(scope: string, catalog: string): CatalogLkgEnvelope {
-  return {
-    version: CATALOG_LKG_VERSION,
-    scopeHash: catalogScopeHash(scope),
-    catalog,
-  };
-}
-
-async function readCatalogLkg(scope: string): Promise<string | null> {
-  const file = catalogLkgPath(scope);
-  for (const candidate of [file, `${file}.bak`]) {
-    try {
-      const envelope = JSON.parse(
-        await fsp.readFile(candidate, 'utf8'),
-      ) as Partial<CatalogLkgEnvelope>;
-      return envelope.version === CATALOG_LKG_VERSION &&
-        envelope.scopeHash === catalogScopeHash(scope) &&
-        typeof envelope.catalog === 'string'
-        ? envelope.catalog
-        : null;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw err;
-    }
-  }
-  return null;
-}
-
-/**
- * Replace an existing LKG without depending on POSIX rename-overwrite semantics. Windows may
- * reject that operation while the destination exists, so preserve the prior snapshot until the
- * new file is in place and restore it if the second rename fails.
- */
-async function replaceCatalogLkgFile(
-  temporary: string,
-  file: string,
-  fileIo: CatalogLkgFileIo = fsp,
-): Promise<void> {
-  try {
-    await fileIo.rename(temporary, file);
-    await fileIo.rm(`${file}.bak`, { force: true }).catch(() => undefined);
-    return;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY' && code !== 'EEXIST') throw err;
-  }
-
-  const backup = `${file}.bak`;
-  await fileIo.rm(backup, { force: true }).catch(() => undefined);
-  let preservedExisting = false;
-  try {
-    await fileIo.rename(file, backup);
-    preservedExisting = true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-  }
-  try {
-    await fileIo.rename(temporary, file);
-  } catch (err) {
-    if (preservedExisting) {
-      await fileIo.rename(backup, file).catch(() => undefined);
-    }
-    throw err;
-  }
-  if (preservedExisting) {
-    await fileIo.rm(backup, { force: true }).catch(() => undefined);
-  }
-}
-
-function catalogLkgTemporaryPath(file: string, nonce = randomUUID()): string {
-  return `${file}.${process.pid}.${nonce}.tmp`;
-}
-
-/** Serialize the complete replace transaction per scope while leaving different scopes parallel. */
-async function serializeCatalogLkgWrite<T>(file: string, write: () => Promise<T>): Promise<T> {
-  const previous = catalogLkgWriteTails.get(file) ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(write);
-  const tail = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  catalogLkgWriteTails.set(file, tail);
-  try {
-    return await current;
-  } finally {
-    if (catalogLkgWriteTails.get(file) === tail) catalogLkgWriteTails.delete(file);
-  }
-}
-
-function selectCatalogLkgSnapshot(incoming: string, current: string | null): string {
-  if (current === null) return incoming;
-  try {
-    const incomingRegistry = parseCatalog(incoming).modelRegistry;
-    const currentRegistry = parseCatalog(current).modelRegistry;
-    const decision = decideModelRegistrySnapshot(incomingRegistry, currentRegistry);
-    if (decision !== 'accept-incoming') {
-      // Registry 缺失、revision 回退或同 revision 异内容都不能覆盖磁盘 LKG；否则
-      // 下一次启动已经失去可对照的 last-good，source 层的守卫也无法再救回旧快照。
-      return current;
-    }
-  } catch {
-    // An invalid current envelope payload is not an LKG; replace it with the already-validated input.
-  }
-  return incoming;
-}
-
-async function writeCatalogLkg(scope: string, catalog: string): Promise<string> {
-  const file = catalogLkgPath(scope);
-  return serializeCatalogLkgWrite(file, async () => {
-    const selected = selectCatalogLkgSnapshot(catalog, await readCatalogLkg(scope));
-    if (selected !== catalog) return selected;
-    const temporary = catalogLkgTemporaryPath(file);
-    await fsp.mkdir(path.dirname(file), { recursive: true });
-    const envelope = catalogLkgEnvelope(scope, selected);
-    await fsp.writeFile(temporary, JSON.stringify(envelope), 'utf8');
-    try {
-      await replaceCatalogLkgFile(temporary, file);
-    } finally {
-      await fsp.rm(temporary, { force: true }).catch(() => undefined);
-    }
-    return selected;
-  });
-}
+const { catalogLkgEnvelope, catalogLkgPath, catalogLkgTemporaryPath, readCatalogLkg, replaceCatalogLkgFile, selectCatalogLkgSnapshot, serializeCatalogLkgWrite, writeCatalogLkg } = createCatalogCache(() => app.getPath('userData'));
 
 /** 桌面端 CatalogIO —— net + fs + 按端点隔离的 last-known-good 快照。 */
 const io: CatalogIO = {
@@ -432,25 +283,10 @@ let endpointReloadInflight: {
   promise: Promise<Catalog>;
 } | null = null;
 
-async function readXaiProviderOAuthToken(
-  options?: ProviderOAuthTokenReadOptions,
-  providerId = 'xai',
-): Promise<string | null> {
-  if (!options?.forceRefresh) return getGrokAccessToken(providerId);
-
-  // A forced retry must stay bound to the exact bearer rejected upstream. Without that
-  // baseline we cannot safely decide which account generation to refresh.
-  const staleToken = options.staleToken;
-  if (!staleToken) return null;
-
-  const outcome = await recoverGrokAuthAfterRejection(staleToken, providerId);
-  if (outcome !== 'refreshed' && outcome !== 'superseded') return null;
-
-  // `superseded` means another request/login already replaced the rejected credential.
-  // Return that newer token, but never replay the bearer which caused the 401/403.
-  const token = await getGrokAccessToken(providerId);
-  return token !== staleToken ? token : null;
-}
+const readXaiProviderOAuthToken = createXaiProviderTokenReader({
+  getGrokAccessToken: (...args) => getGrokAccessToken(...args),
+  recoverGrokAuthAfterRejection: (...args) => recoverGrokAuthAfterRejection(...args),
+});
 
 /** Set 用稳定函数引用去重，ensureActiveCatalogLoaded 的幂等调用不会重复注册清理副作用。 */
 function handleProviderSecretsCleared(): void {

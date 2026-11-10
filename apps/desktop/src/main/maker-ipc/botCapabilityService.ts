@@ -7,7 +7,7 @@ import { botProfiles, botProfileVersions, botSessionLinks, botRuntimeSnapshots, 
 import { getDbClient, getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { createBotProfile, updateBotProfile } from '../localDb/ipc/bots.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
+import { listCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js';
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import type { AgentKind, Maker } from '@cindy/maker-core';

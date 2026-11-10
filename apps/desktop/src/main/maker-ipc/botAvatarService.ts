@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { parseBlobUrl, resolveSafe, getBlobsRoot } from '../cindy-media/blobStore.js';
+import { parseBlobUrl, resolveSafe, getBlobsRoot } from '../cindy-media/blobStore.desktop.js';
 import { sessionCanRead, type LedgerDb } from '../cindy-media/ledger.js';
 import { readBoundedFileNoFollow } from '../utils/readBoundedFile.js';
 import { BOT_AVATAR_MAX_BYTES } from '../../shared/botAvatarValue.js';

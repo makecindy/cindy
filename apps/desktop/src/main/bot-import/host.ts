@@ -1,7 +1,7 @@
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { companionImportReasonKey } from '@cindy/maker-shared/companion-import';
 import { createMessage } from '../localDb/ipc/messages.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -745,8 +745,8 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
           await importBotSkillDirectory(scope.root, botId, slug,
             directory => materializeSkillArchive(item.skillArchive!, directory, companionEnvironmentStore, contentSecrets, scope.assert, true, slug, value => { needsPrivate = value; }), scope.assert, item.view.enabled !== false);
         } else {
-          const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
-          await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false);
+        const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
+        await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false);
         }
       } else if (snapshot.nativePackage && item.role === 'identity') {
         // Native identity belongs to SOUL, never reference/user memory.
