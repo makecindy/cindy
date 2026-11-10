@@ -101,6 +101,16 @@ export function createChatHandler(deps) {
         // belong to this exact input, not the turn ahead of it in the queue.
         if (event.inputClientId && event.inputClientId !== clientId) return;
         write(event);
+        // Dispatch can fail after admission (session start, pre-send preparation).
+        // The queue then keeps this input as the recoverable head and publishes
+        // only a projection with an error: no agent terminal event will follow,
+        // so release the stream with the same receipt a reconnect would get.
+        const recovery = event.type === 'input_projection' ? event.projection?.recovery : null;
+        if (recovery?.kind === 'queue-head' && recovery.clientId === clientId) {
+          write({ type: 'input_receipt', sessionId, clientId, status: 'interrupted' });
+          end();
+          return;
+        }
         if (event.inputClientId === clientId && event.turnScope !== 'background'
           && !isTurnContinuationBoundaryEvent(event)
           && (event.type === 'done' || isTerminalTurnErrorEvent(event))) end();

@@ -15,7 +15,7 @@ import { resolveSessionDevice, canRegisterHostDevice } from './auth/device-ident
 import { AUTH_SESSION_KEY } from '../../desktop/src/main/authCredentialKeys.js';
 import { createHostDeviceLink } from './device-link.js';
 import { createHostService } from './service.mjs';
-import { readCreateSessionOpts } from '../../desktop/src/main/maker-ipc/sessionRequest.js';
+import { readHostCreateSessionOpts } from './create-session-request.js';
 import { ensureDialogueWorkspaceDir } from '../../desktop/src/main/localDb/dialogueWorkspace.js';
 import { resolveRuntimeDeviceId } from '../../desktop/src/main/deviceId.js';
 import os from 'node:os';
@@ -1469,7 +1469,7 @@ function startDeviceLink(): void {
     invoke: service, subscribe: eventHub.subscribe,
     createRuntimeSession: async input => {
       const scope = activeOwnerScopeKey();
-      const opts = readCreateSessionOpts(input, { allocateDialogueWorkspace: ensureDialogueWorkspaceDir });
+      const opts = readHostCreateSessionOpts(input, ensureDialogueWorkspaceDir);
       // These routes need separate execution services; never reinterpret a remote
       // task or Orca worker as an ordinary local task.
       if (opts.remoteHostId || opts.agentDeviceId || opts.orcaRole)

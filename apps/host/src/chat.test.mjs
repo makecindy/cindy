@@ -53,6 +53,20 @@ test('streams only its own queued turn and disconnect does not cancel execution'
   assert.equal(disconnected.events.size(), 0);
 });
 
+test('a dispatch that fails after admission releases the stream and keeps the input queued', async () => {
+  const h = harness();
+  await h.handler(request({ sessionId: 's1', clientId: 'c1', prompt: 'hello' }), h.response);
+  // Another input's recovery is not this input's outcome.
+  h.events.publish({ sessionId: 's1', type: 'input_projection',
+    projection: { recovery: { kind: 'queue-head', clientId: 'other' }, error: 'boom' } });
+  assert.equal(h.response.writableEnded, false);
+  h.events.publish({ sessionId: 's1', type: 'input_projection',
+    projection: { recovery: { kind: 'queue-head', clientId: 'c1' }, error: 'could not start' } });
+  assert.match(h.writes.join(''), /"type":"input_receipt"[^}]*"status":"interrupted"/);
+  assert.equal(h.response.writableEnded, true);
+  assert.equal(h.events.size(), 0);
+});
+
 test('invalid input never creates a task or enters the queue', async () => {
   for (const body of [{ prompt: '' }, { prompt: 'x', extra: 1 }, 'not json', { nope: true },
     { prompt: 'x', sessionId: '../other' }, { prompt: 'x', sessionId: 'a\\b' },
