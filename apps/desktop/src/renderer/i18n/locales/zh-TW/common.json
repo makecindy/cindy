@@ -14125,7 +14125,7 @@
       "taskAutoArchived": "已歸檔「{{title}}」",
       "taskAutoArchivedUndo": "撤銷",
       "taskAutoArchivePending": "離開此任務後將自動歸檔",
-      "taskAutoArchiveBlockedDirty": "「{{title}}」工作區有未提交變更，未自動封存",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作區有未提交變更，未自動歸檔",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "本次不會自動歸檔",
       "taskArchiveNow": "立即歸檔"
