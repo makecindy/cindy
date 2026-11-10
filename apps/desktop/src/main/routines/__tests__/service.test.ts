@@ -70,7 +70,8 @@ import { handleRoutineRequest } from '../../cindy-brain/routineSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { companionHomes } from '../../companion-cloud/homes.js';
 import { admitTaskAction, assertTaskActionCurrent, hasTaskActionAuthorization } from '../../maker-ipc/taskActionAuthorization.js';
-import { setMainLocale } from '../../i18n.js';
+import { setMainLocale } from '../../i18n.desktop.js';
+import { buildFollowUpRoutineInput, builtinFollowUpRoutineId } from '../../bot-autonomy/builtinRoutine.js';
 beforeEach(() => { mock.readProfiles.mockImplementation(async () => mock.profiles); });
 beforeEach(() => configureRoutineHost({
   getBot: mock.getBot, ensureRoutineSession: mock.ensureRoutineSession,
@@ -121,7 +122,31 @@ it('dispatches into the routine lane and records its task for inspection', async
   expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({ resultText: 'Reviewed PR', sessionId: `lane-${routine.id}` });
   // persistent 专线承载上下文，永不自动删（只归档）。
   expect(mock.deleteRoutineSession).not.toHaveBeenCalled();
-  expect(mock.ensureRoutineSession).toHaveBeenCalledWith(expect.objectContaining({ botId: 'bot', routineId: routine.id }));
+  expect(mock.ensureRoutineSession).toHaveBeenCalledWith(expect.objectContaining({ botId: 'bot', routineId: routine.id, title: 'Review' }));
+});
+
+// #9580: runNow must name new execution tasks using the current UI language, even
+// for an already stored built-in. Existing lane tests only covered custom names.
+// Unit tier: real routine engine/service and locale catalog, in-memory host/storage.
+it.each(['persistent', 'fresh'] as const)('localizes built-in follow-up execution names on every %s run', async (sessionMode) => {
+  const engine = await getRoutineEngine();
+  const input = { ...buildFollowUpRoutineInput('bot'), sessionMode };
+  const routine = await engine.ensureBuiltin('bot', 'follow-up', input, builtinFollowUpRoutineId('bot'));
+  if (!routine) throw new Error('Follow-up routine was not created');
+  try {
+    for (const [locale, title] of [['en', 'Follow assigned sessions (built-in)'], ['zh-CN', '跟进已接手的任务（内置）']] as const) {
+      setMainLocale(locale);
+      mock.ensureRoutineSession.mockClear();
+      mock.storage.insert.mockClear();
+      await routineTools.runNow('bot', routine.id);
+      await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
+      expect(mock.ensureRoutineSession).toHaveBeenCalledWith(expect.objectContaining({ title }));
+      expect(mock.storage.insert).toHaveBeenCalledWith(expect.objectContaining({ name: title }));
+      expect((await routineTools.list('bot'))[0]).toMatchObject({ name: input.name, prompt: input.prompt, triggers: input.triggers });
+    }
+  } finally {
+    setMainLocale('en');
+  }
 });
 
 it('rebinds a stored canonical backing schedule to its independent lane before running', async () => {

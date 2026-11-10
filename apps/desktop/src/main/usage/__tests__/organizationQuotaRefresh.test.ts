@@ -9,7 +9,7 @@ vi.mock('../../authManager', () => ({ getAuthState: () => mocks.auth }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({ tapWindowBroadcast: mocks.broadcast }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ info: vi.fn(), debug: vi.fn() }) }));
 vi.mock('../../maker-host/auth-adapters', () => ({ readClaudeApiKey: () => 'fixture-key' }));
-vi.mock('../../maker-host/outbound-fetch', () => ({ outboundFetch: mocks.outbound }));
+vi.mock('../../maker-host/outbound-fetch.desktop', () => ({ outboundFetch: mocks.outbound }));
 vi.mock('../../maker-host/runtime-configs', () => ({ claudeUpstreamEndpoint: () => mocks.endpoint }));
 vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({}) }));
 vi.mock('../modelPricing', () => ({ getGatewayAccountCurrency: async () => 'CNY' }));

@@ -5,7 +5,7 @@ import {
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { drainPersistQueue, enqueueDurableWrite } from '../messagePersistBroadcaster.js';
+import { drainPersistQueue, enqueueDurableWrite } from '../messagePersistBroadcaster.desktop.js';
 import { patchMessageAgentMetaWithResult } from '../localDb/ipc/messages.js';
 import { learningReceiptPublisher } from './botLearningFeedback.js';
 import {

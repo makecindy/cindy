@@ -280,6 +280,7 @@ export function MyDevicesPanel({
   // 短期上下线 / 心跳不再让顺序跳动,设备只在原位改在线点。本机单独置顶(下面单独渲染)。
   const others = (s.devices ?? []).filter((d) => !d.isSelf).sort(compareDevicesByName);
   const revokedControllers = new Set(s.revokedControllers);
+  const modelUseRevoked = new Set(s.modelUseRevokedControllers);
   const controlling = new Set(s.controlledBy.map((c) => c.deviceId));
 
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
@@ -605,6 +606,16 @@ export function MyDevicesPanel({
                       disabled={inbound.disabled}
                       onToggle={(v) => void onInboundChange(d.deviceId, v)}
                     />
+                    {/* 「用本机模型」跟着「控制本机」：能控制本机时默认可用，可以单独关掉。手机不借模型，不显示。 */}
+                    {canBeControlledPlatform(d.platform) && (
+                      <AccessPill
+                        label={t('settings.remoteControl.myDevices.useThisDeviceModels')}
+                        ariaLabel={t('settings.remoteControl.myDevices.allowModelUseAria', { name: d.name })}
+                        pressed={inbound.checked && !modelUseRevoked.has(d.deviceId)}
+                        disabled={inbound.disabled || !inbound.checked}
+                        onToggle={(v) => void s.setModelUse(d.deviceId, v)}
+                      />
+                    )}
                   </AccessRow>
                 </div>
               </li>

@@ -4195,7 +4195,18 @@
           "ariaLabel": "允許你的其他電腦和你分享的人呼叫此供應商",
           "writeFailed": "遠端呼叫設定未能儲存，請重試"
         },
-        "moreActionsAria": "更多操作"
+        "moreActionsAria": "更多操作",
+        "runLocation": {
+          "label": "在哪台電腦執行",
+          "optionLocal": "這台電腦",
+          "notSignedIn": "未登入",
+          "autoBorrowing": "這台電腦還沒登入，新任務在 {{device}} 上執行，不用再登入。",
+          "local": "新任務在這台電腦執行。也可以改選你另一台已登入的電腦。",
+          "pinned": "新任務在 {{device}} 上執行，使用那台電腦的登入。已在執行的任務不受影響。",
+          "inline": "執行於",
+          "signInHere": "在這台電腦登入",
+          "writeFailed": "「執行於」未能儲存，請重試"
+        }
       },
       "detect": {
         "groupLabel": "檢測到本機 CLI",
@@ -5197,6 +5208,15 @@
         "ariaLabel": "使用 {{shortcut}} 傳送訊息"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任務預設工作目錄",
+      "label": "本機預設工作目錄",
+      "hint": "建立本機任務且未選擇專案時，預先選取此目錄。明確選擇的專案、對話或遠端裝置仍優先。",
+      "unset": "未設定（不預選目錄）",
+      "choose": "選擇目錄",
+      "clear": "清除預設目錄",
+      "failed": "儲存預設工作目錄失敗，請重試"
+    },
     "linkOpen": {
       "title": "開啟連結",
       "description": "選擇訊息連結的開啟位置，右鍵可臨時更換",
@@ -6149,13 +6169,18 @@
         "allowInboundAria": "切換是否允許 {{name}} 控制本機",
         "peerControlOff": "對方未允許遠端控制",
         "masterOffHint": "需先開啟上方總開關",
-        "controllingThisMac": "已連接到 Cindy"
+        "controllingThisMac": "已連接到 Cindy",
+        "useThisDeviceModels": "用本機模型",
+        "allowModelUseAria": "允許 {{name}} 用本機的模型"
       },
       "toast": {
         "revoked": "已撤銷該裝置的訪問權限",
         "revokeFailed": "撤銷失敗",
         "restored": "已恢復該裝置的訪問權限",
-        "restoreFailed": "恢復失敗"
+        "restoreFailed": "恢復失敗",
+        "modelUseRestored": "已允許這台電腦用本機的模型",
+        "modelUseRevoked": "這台電腦不能再用本機的模型",
+        "modelUseFailed": "「用本機模型」未能儲存，請重試"
       },
       "sections": {
         "myDevices": "我的裝置",
@@ -9016,6 +9041,8 @@
       "daysWindow": "{{days}}天"
     },
     "claude": {
+      "totalWeeklyLabel": "總週",
+      "temporarilyLimited": "暫時受限",
       "waitingDetail": "Claude 訂閱餘量會在下一輪完成後更新。",
       "weeklyLabel": "週限",
       "modelWeeklyLabel": "{{model}} 週限",
@@ -19721,6 +19748,8 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "unassigned": "帳號待分配",
+    "providerManagedAuth": "Codex 目前的供應商未提供 ChatGPT 帳號資訊。請在新增供應商時選擇「$t(subscriptionAccounts.signIn.anotherAccount)」，使用獨立目錄",
     "signIn": {
       "checking": "正在偵測本機帳號…",
       "detected": "偵測到已登入帳號",
@@ -19769,5 +19798,15 @@
     "browserFallback": "前往 GitHub 為 Cindy 點 Star",
     "openGithub": "開啟 GitHub",
     "openFailed": "無法開啟 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正在連線 Cindy 後台…",
+    "restoring": "正在恢復任務狀態…",
+    "retrying": "任務狀態尚未同步，正在重試…",
+    "pairing": "需要重新授權連線",
+    "pairingHelp": "請保留此頁。在啟動 Cindy 後台的終端重新執行開啟網頁的命令，完成新頁面的配對，再回到此頁。",
+    "keepDraft": "已輸入的草稿會保留。連線恢復後將自動同步任務狀態。",
+    "retry": "重試連線",
+    "desktopAuthHelp": "請在啟動終端更新後台連線設定，然後重新開啟這個實驗客戶端。"
   }
 }

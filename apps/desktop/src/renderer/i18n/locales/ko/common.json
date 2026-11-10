@@ -4195,7 +4195,18 @@
           "ariaLabel": "내 다른 컴퓨터와 공유받은 사람이 이 제공자를 사용하도록 허용",
           "writeFailed": "원격 사용 설정을 저장하지 못했습니다. 다시 시도해 주세요."
         },
-        "moreActionsAria": "추가 작업"
+        "moreActionsAria": "추가 작업",
+        "runLocation": {
+          "label": "실행할 컴퓨터",
+          "optionLocal": "이 컴퓨터",
+          "notSignedIn": "로그인 안 됨",
+          "autoBorrowing": "이 컴퓨터는 로그인되지 않아 새 작업은 {{device}}에서 실행됩니다. 로그인할 필요가 없습니다.",
+          "local": "새 작업은 이 컴퓨터에서 실행됩니다. 로그인된 다른 컴퓨터를 골라도 됩니다.",
+          "pinned": "새 작업은 {{device}}에서 그 컴퓨터의 로그인으로 실행됩니다. 실행 중인 작업은 그대로입니다.",
+          "inline": "실행 위치",
+          "signInHere": "이 컴퓨터에서 로그인",
+          "writeFailed": "실행 위치를 저장하지 못했습니다. 다시 시도해 주세요."
+        }
       },
       "detect": {
         "groupLabel": "이 기기에서 감지됨",
@@ -5263,6 +5274,15 @@
         "ariaLabel": "{{shortcut}}로 메시지 보내기"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "새 작업의 기본 작업 디렉터리",
+      "label": "이 컴퓨터의 기본 작업 디렉터리",
+      "hint": "프로젝트를 선택하지 않은 새 로컬 작업에 이 디렉터리를 미리 선택합니다. 명시적으로 선택한 프로젝트, 대화 또는 원격 컴퓨터가 우선합니다.",
+      "unset": "설정되지 않음 (디렉터리를 미리 선택하지 않음)",
+      "choose": "디렉터리 선택",
+      "clear": "기본값 지우기",
+      "failed": "기본 작업 디렉터리를 저장하지 못했습니다. 다시 시도해 주세요."
+    },
     "linkOpen": {
       "title": "링크 열기",
       "description": "메시지의 링크를 열 위치를 선택합니다. 링크를 오른쪽 클릭하면 그 링크만 다른 위치에서 열 수 있습니다.",
@@ -6101,7 +6121,7 @@
           "switchFromHost": "이 컴퓨터의 중계가 중지되고, 참여한 기기는 연결이 끊어집니다.",
           "switchFromMember": "이 컴퓨터는 {{name}}에서 나갑니다. 다시 참여하려면 상대방이 새 참여 링크를 만들어야 합니다.",
           "switchConfirm": "전환",
-          "switchFromOfficial": "기기 간 원격 제어가 {{name}}을(를) 거쳐 중계됩니다. 내 중계를 사용하는 동안에는 휴대폰 시스템 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다."
+          "switchFromOfficial": "기기 간 원격 제어가 {{name}}을(를) 거쳐 중계됩니다. 내 중계를 사용하는 동안에는 휴대폰 푸시 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다."
         },
         "dialog": {
           "steps": {
@@ -6149,13 +6169,18 @@
         "allowInboundAria": "{{name}}이(가) 본 기기를 제어하도록 허용할지 전환",
         "peerControlOff": "상대방이 제어를 허용하지 않음",
         "masterOffHint": "먼저 위의 메인 스위치를 켜세요",
-        "controllingThisMac": "Cindy에 연결됨"
+        "controllingThisMac": "Cindy에 연결됨",
+        "useThisDeviceModels": "이 컴퓨터 모델 사용",
+        "allowModelUseAria": "{{name}}이(가) 이 컴퓨터의 모델을 쓰도록 허용"
       },
       "toast": {
         "revoked": "이 기기의 액세스 권한을 철회했습니다",
         "revokeFailed": "철회에 실패했습니다",
         "restored": "이 기기의 액세스 권한을 복원했습니다",
-        "restoreFailed": "복원에 실패했습니다"
+        "restoreFailed": "복원에 실패했습니다",
+        "modelUseRestored": "그 컴퓨터가 이 컴퓨터의 모델을 다시 쓸 수 있습니다",
+        "modelUseRevoked": "그 컴퓨터는 더 이상 이 컴퓨터의 모델을 쓸 수 없습니다",
+        "modelUseFailed": "「이 컴퓨터 모델 사용」을 저장하지 못했습니다. 다시 시도해 주세요."
       },
       "sections": {
         "myDevices": "내 기기",
@@ -9016,6 +9041,8 @@
       "daysWindow": "{{days}}일"
     },
     "claude": {
+      "totalWeeklyLabel": "주간 전체",
+      "temporarilyLimited": "일시적으로 제한됨",
       "waitingDetail": "Claude 구독 사용량은 다음 턴이 완료된 후 업데이트됩니다.",
       "weeklyLabel": "주간",
       "modelWeeklyLabel": "{{model}} 주간",
@@ -19721,6 +19748,8 @@
     "lineNumbers": "줄 번호"
   },
   "subscriptionAccounts": {
+    "unassigned": "계정 미배정",
+    "providerManagedAuth": "현재 Codex 제공자에서는 ChatGPT 계정 정보를 확인할 수 없습니다. 제공자를 추가할 때 ‘$t(subscriptionAccounts.signIn.anotherAccount)’를 선택하면 별도 폴더를 사용할 수 있습니다.",
     "signIn": {
       "checking": "로컬 계정 확인 중…",
       "detected": "로그인된 계정을 찾았습니다",
@@ -19769,5 +19798,15 @@
     "browserFallback": "GitHub를 열어 Cindy에 스타를 눌러 주세요.",
     "openGithub": "GitHub 열기",
     "openFailed": "GitHub를 열지 못했습니다."
+  },
+  "hostConnection": {
+    "connecting": "Cindy에 연결 중…",
+    "restoring": "작업 상태 복원 중…",
+    "retrying": "작업 상태를 다시 동기화하는 중…",
+    "pairing": "연결 인증이 필요합니다",
+    "pairingHelp": "이 페이지를 열어 두세요. Cindy Host를 시작한 터미널에서 웹 화면을 여는 명령을 다시 실행하고 새 페이지에서 페어링한 후 돌아오세요.",
+    "keepDraft": "작성 중인 초안은 유지됩니다. 연결이 복구되면 작업 상태가 동기화됩니다.",
+    "retry": "다시 연결",
+    "desktopAuthHelp": "시작 터미널에서 연결 설정을 업데이트한 후 이 실험용 클라이언트를 다시 여세요."
   }
 }

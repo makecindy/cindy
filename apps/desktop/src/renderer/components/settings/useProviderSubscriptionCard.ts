@@ -183,17 +183,14 @@ function useRemoteProviderSubscriptionCard(
 }
 
 /** 一个供应商连接的订阅额度卡；展开的组成员用 live 开启前台刷新，收起卸载时停止。 */
-export function useDeviceProviderSubscriptionCard(
-  provider: ProviderView | undefined,
-  deviceId: string | null,
-  options: { live?: boolean; active?: boolean } = {},
-): UsageCardAccount | null {
-  const visible = useDocumentVisible(options.live === true);
+/** Foreground gate for live quota reads: both a hidden document and the host's hide/minimize gate stop them. */
+export function useLiveQuotaForeground(live: boolean): boolean {
+  const visible = useDocumentVisible(live);
   const [nativeVisible, setNativeVisible] = useState(
     () => typeof document === 'undefined' || !document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR),
   );
   useEffect(() => {
-    if (!options.live) return;
+    if (!live) return;
     // Electron may keep visibilityState visible while an active turn disables
     // throttling. Observe the existing host hide/minimize gate as well.
     const update = () => setNativeVisible(!document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR));
@@ -201,8 +198,17 @@ export function useDeviceProviderSubscriptionCard(
     const observer = new MutationObserver(update);
     observer.observe(document.documentElement, { attributes: true, attributeFilter: [HIDDEN_ANIMATION_ATTR] });
     return () => observer.disconnect();
-  }, [options.live]);
-  const active = !options.live || (options.active !== false && visible && nativeVisible);
+  }, [live]);
+  return visible && nativeVisible;
+}
+
+export function useDeviceProviderSubscriptionCard(
+  provider: ProviderView | undefined,
+  deviceId: string | null,
+  options: { live?: boolean; active?: boolean } = {},
+): UsageCardAccount | null {
+  const foreground = useLiveQuotaForeground(options.live === true);
+  const active = !options.live || (options.active !== false && foreground);
   const activeProvider = active ? provider : undefined;
   const source = activeProvider
     ? providerWeeklyQuotaSource({ ...activeProvider, suspended: false })

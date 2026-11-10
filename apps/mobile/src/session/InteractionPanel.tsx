@@ -15,8 +15,6 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import {
   Check,
-  ShieldCheck,
-  MessageCircle,
   ChevronDown,
   ChevronUp,
   CornerDownLeft,
@@ -417,8 +415,7 @@ function cardStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayou
 }
 
 function actionsStyle(styles: InteractionStyles, touchLayout: InteractionTouchLayout, companion = false): StyleProp<ViewStyle> {
-  // Teammate cards (K5): equal-width buttons; a full-width primary takes its own row.
-  if (companion) return [styles.actions, { gap: spacing.sm, justifyContent: 'flex-start', marginTop: spacing.sm }];
+  if (companion) return [styles.actions, { gap: spacing.sm, justifyContent: 'flex-end', marginTop: spacing.sm }];
   return [
     styles.actions,
     {
@@ -451,9 +448,8 @@ function resolveButtonLayoutStyle(
   touchLayout: InteractionTouchLayout,
   variant: 'primary' | 'secondary' | 'inline',
   companion = false,
-  fullWidth = false,
 ): StyleProp<ViewStyle> {
-  if (companion) return { minHeight: COMPANION_BUTTON_HEIGHT, flexGrow: 1, flexBasis: fullWidth ? '100%' : 0 };
+  if (companion) return { minHeight: COMPANION_BUTTON_HEIGHT, flexGrow: 0, flexShrink: 1, maxWidth: '100%' };
   return {
     minHeight: touchLayout.actionButtonMinHeight,
     minWidth: variant === 'inline' ? touchLayout.inlineButtonMinWidth : touchLayout.actionButtonMinWidth,
@@ -813,7 +809,7 @@ function PermissionCard({
   );
   const companion = useContext(CompanionInteractionContext);
   const companionIdentity = useContext(CompanionIdentityContext);
-  const { colors } = useTheme();
+  const hung = useContext(CompanionHungContext);
   const suggestions = sessionScopedPermissionSuggestions(item.request.suggestions);
   const requestId = readRequestId(item);
   const [armedDecision, setArmedDecision] = useState<'allow-once' | 'always-allow' | null>(null);
@@ -870,8 +866,7 @@ function PermissionCard({
       label={t(isMcpUrl ? 'interaction.permission.mcpComplete' : 'interaction.permission.allowOnce')}
       onPress={() => requestDecision('allow-once', buildPermissionDecision('allow'))}
       requestId={requestId}
-      // K5: with three choices the primary takes its own full-width row on top.
-      touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary', companion, companion && !!alwaysButton)}
+      touchStyle={resolveButtonLayoutStyle(touchLayout, 'primary', companion)}
       testID="interaction.permission.allowOnceButton"
       variant="primary"
     />
@@ -879,13 +874,15 @@ function PermissionCard({
   return (
     <View style={cardStyle(styles, touchLayout, companion)} testID="interaction.permission.card">
       {companion ? <>
-        {/* K2 / K3: kind as the eyebrow, then what it will do; who asks is the portrait the card hangs from. */}
         <View style={styles.companionCaption} testID="interaction.permission.requester">
-          <ShieldCheck size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
-          <Text style={styles.kind}>{permissionState.title}</Text>
+          {!hung ? companionIdentity?.avatar : null}
+          <View style={styles.companionHeaderCopy}>
+            <Text style={styles.cardTitle}>{!hung && companionIdentity
+              ? t('interaction.companion.permissionRequest', { name: companionIdentity.name }) : permissionState.title}</Text>
+            {!hung && companionIdentity ? <Text style={styles.kind}>{permissionState.title}</Text> : null}
+          </View>
         </View>
-        <Text style={styles.cardTitle}>{presentation.description
-          || (companionIdentity ? t('interaction.companion.permissionRequest', { name: companionIdentity.name }) : permissionState.title)}</Text>
+        {presentation.description ? <Text style={styles.companionDescription}>{presentation.description}</Text> : null}
       </> : <View style={styles.compactCardHeader}>
         <Text style={styles.kind}>{t('interaction.permission.kind')}</Text>
         <Text numberOfLines={1} style={styles.compactCardTitle}>{permissionState.title}</Text>
@@ -903,7 +900,7 @@ function PermissionCard({
         touchLayout={touchLayout}
       />}
       <InteractionActions touchLayout={touchLayout}>
-        {companion && alwaysButton ? [allowButton, denyButton, alwaysButton] : [denyButton, alwaysButton, allowButton]}
+        {[denyButton, alwaysButton, allowButton]}
       </InteractionActions>
     </View>
   );
@@ -1299,15 +1296,15 @@ function AskUserQuestionForm({
       {/* 收起入口统一在队列头(PendingTaskHeader),卡内不再自持一份 collapsed state:
           两套状态时页面级那份被卡片 key 变化冲掉,收起会自己弹回来。 */}
       <View style={styles.compactCardHeader}>
-        {companion && <MessageCircle size={iconSize.sm} color={colors.textSecondary} />}
-        <Text style={styles.askHeaderKind}>{t(item.request.withdrawalReason ? 'interaction.panel.questionWithdrawn' : 'interaction.panel.awaitingAnswer')}</Text>
-        <View style={styles.compactHeaderActions}>
+        {companion && presentation.header && !isWithdrawn ? <View style={styles.askHeaderChip}><Text style={styles.askHeaderChipLabel}>{presentation.header}</Text></View>
+          : <Text style={styles.askHeaderKind}>{t(isWithdrawn ? 'interaction.panel.questionWithdrawn' : 'interaction.panel.awaitingAnswer')}</Text>}
+        {questions.length > 1 ? <View style={styles.compactHeaderActions}>
           <Text style={styles.pageText}>{presentation.pageLabel}</Text>
-        </View>
+        </View> : null}
       </View>
-      <Text style={styles.askQuestion} testID="interaction.ask.question"><QuestionReferenceText text={presentation.title} /></Text>
-      {!isWithdrawn && <Text style={styles.askMetaCaption}>{metaCaption}</Text>}
-      {typeof item.request.withdrawalReason === 'string' && (
+      <Text style={styles.askQuestion} accessibilityHint={isWithdrawn ? undefined : metaCaption} testID="interaction.ask.question"><QuestionReferenceText text={presentation.title} /></Text>
+      {!companion && !isWithdrawn ? <Text style={styles.askMetaCaption}>{metaCaption}</Text> : null}
+      {isWithdrawn && (
         <Text style={styles.questionWithdrawalNotice} testID="interaction.ask.withdrawn">
           {t('interaction.panel.withdrawnDraft', { reason: item.request.withdrawalReason })}
         </Text>
@@ -2173,10 +2170,11 @@ function InteractionTouchButton({
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  companionCaption: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  companionRequester: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  companionRequesterAvatar: { flexShrink: 0 },
-  companionRequesterText: { flex: 1, minWidth: 0, gap: 2 },
+  companionCaption: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  companionHeaderCopy: { flex: 1, minWidth: 0, gap: spacing.xs },
+  askHeaderChip: { alignSelf: 'flex-start', borderRadius: radius.control, backgroundColor: colors.surfaceChip, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  askHeaderChipLabel: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+  companionDescription: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionEvidence: { gap: spacing.sm },
   companionHungRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   companionHungAvatar: { flexShrink: 0, marginTop: 2 },
@@ -2186,9 +2184,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   companionMeta: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionMetaLabel: { color: colors.textTertiary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionDetailsText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  companionFact: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
-  companionFactLabel: { width: 64, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-  companionFactValue: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   companionDetailsButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, alignSelf: 'flex-start' },
   root: {
     borderBottomColor: colors.border,
@@ -2634,16 +2629,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     minHeight: 44,
     paddingHorizontal: spacing.md,
   },
-  inlineInputWide: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: colors.textPrimary,
-    fontSize: typeScale.body,
-    minHeight: 44,
-    paddingHorizontal: spacing.md,
-  },
   inlineButton: {
     backgroundColor: colors.cta,
     borderRadius: radius.pill,
@@ -2972,18 +2957,18 @@ const makeCompanionStyles = (colors: ThemeColors) => {
     compactCardHeader: { ...base.compactCardHeader, minHeight: 0, flexWrap: 'wrap' as const },
     compactCardTitleWrap: { ...base.compactCardTitleWrap, flexDirection: 'column' as const, alignItems: 'flex-start' as const },
     compactCardTitle: { ...base.compactCardTitle, flex: 0, flexShrink: 1 },
-    permissionCodeBlock: { ...base.permissionCodeBlock, backgroundColor: colors.chatCodeSurface, borderRadius: radius.control, borderWidth: 0 },
+    card: { ...base.card, padding: spacing.lg },
+    cardTitle: { ...base.cardTitle, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.semibold },
+    askQuestion: { ...base.askQuestion, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
+    permissionCodeBlock: { ...base.permissionCodeBlock, backgroundColor: colors.chatCodeSurface, borderRadius: radius.control, borderWidth: StyleSheet.hairlineWidth },
     codeText: { ...base.codeText, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
-    // K5: 38pt buttons (hitSlop to 44), 15/20 labels centered; secondary is a quiet chip fill without a border.
     primaryButton: { ...base.primaryButton, minHeight: COMPANION_BUTTON_HEIGHT, paddingHorizontal: spacing.md },
-    secondaryButton: { ...base.secondaryButton, minHeight: COMPANION_BUTTON_HEIGHT, paddingHorizontal: spacing.md, borderWidth: 0, backgroundColor: colors.surfaceChip },
+    secondaryButton: { ...base.secondaryButton, minHeight: COMPANION_BUTTON_HEIGHT, paddingHorizontal: spacing.md, borderWidth: StyleSheet.hairlineWidth, backgroundColor: 'transparent' },
     primaryText: { ...base.primaryText, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, textAlign: 'center' as const },
     secondaryText: { ...base.secondaryText, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, textAlign: 'center' as const },
     permissionRiskRow: { ...base.permissionRiskRow, borderRadius: radius.control },
-    // K8: options read as one grouped list inside the card.
     optionList: { ...base.optionList, borderRadius: radius.control },
-    inlineInput: { ...base.inlineInput, borderRadius: radius.pill },
-    inlineInputWide: { ...base.inlineInputWide, borderRadius: radius.pill },
+    inlineInput: { ...base.inlineInput, borderRadius: radius.control },
     planEditor: { ...base.planEditor, borderRadius: radius.control },
     optionCustom: { ...base.optionCustom, fontStyle: 'normal' as const },
     pluginSetupStep: { ...base.pluginSetupStep, borderWidth: 0 },

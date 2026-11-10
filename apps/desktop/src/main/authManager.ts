@@ -1,3 +1,7 @@
+import { isDefinitiveRefreshError } from './authRefreshError.js';
+import { mapMembershipToAuthUser, type User, type CurrentUser } from '../shared/authUser.js';
+export type { User } from '../shared/authUser.js';
+import { resolveRuntimeDeviceId } from './deviceId.js';
 /**
  * authManager.ts
  * ---------------------------------------------------------------------------
@@ -120,7 +124,7 @@ import {
   withStableOwnerBoundaryMutation,
 } from './authBoundaryQuarantine.js';
 import { buildFocusDeepLink } from './deepLink';
-import { getResolvedMainLocale, t } from './i18n';
+import { getResolvedMainLocale, t } from './i18n.desktop';
 import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
 import {
   activateClientEndpointRealm,
@@ -221,8 +225,6 @@ const AUTH_ACCOUNT_VAULT_LOCK_FILE = '.cindy-auth-accounts-v1.lock';
 const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;
 const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;
 
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
-const DEFAULT_EFFORT = 'medium';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -232,37 +234,6 @@ const DEFAULT_EFFORT = 'medium';
 //    落 main 进程本地标记并通过 AuthState 独立投影给 renderer,不混入 User;
 //  - feishuOpenId → 退役,飞书登录已整体下线,身份锚(identityAnchor)只写 email;
 //  - role(产品级 admin)→ 退役,唯一消费是侧栏头像角标(纯装饰),一并移除。
-export interface User {
-  id: string;
-  name: string;
-  avatar: string | null;
-  email: string | null;
-  defaultModel: string;
-  defaultEffort: string;
-  /** auth-server membership context. */
-  membershipKind: 'personal' | 'org';
-  membershipRole: 'owner' | 'admin' | 'member';
-  orgId: string | null;
-  orgName: string | null;
-  /**
-   * 组织 slug(access token 的 orgSlug claim,ctx=org 时 auth-server 注入)。
-   * 组织的稳定标识(域名派生、全局唯一,如 'xd'),与 orgId(cuid)/orgName(显示名)
-   * 不同,适合做企业功能分流的配置键。个人身份或旧 token 缺 claim 时为 null。
-   * membership 响应不含此字段,由 snapshotAuthState 出口统一从 access token 解码注入。
-   */
-  orgSlug: string | null;
-  /** 企业 logo(auth console 组织设置上传);个人身份或未设置为 null。 */
-  orgLogoUrl: string | null;
-  passportId: string;
-}
-
-/**
- * Main-process-only auth user. Keep the raw membership display name separate
- * from `User.name`, whose UI fallback may be an email address or "Cindy".
- */
-interface CurrentUser extends User {
-  membershipDisplayName: string;
-}
 
 interface StoredResourceSession {
   realm: AuthRegion;
@@ -411,7 +382,7 @@ function isOwnerChangeShellPending(): boolean {
  * desktop 实例模拟「多设备」(device-link 跨设备远程控制本地联调)。deviceId 只是
  * 同账号下区分设备的标识、非鉴权凭证(鉴权走 auth-server 签发的 JWT),覆盖无安全风险。
  */
-const deviceId = process.env.XDT_DEVICE_ID_OVERRIDE?.trim() || machineIdSync();
+const deviceId = resolveRuntimeDeviceId(machineIdSync);
 
 // The offline entry is a renderer landing page, not an auth-server flow step.
 let loginFlowState: Exclude<DesktopLoginState, { step: 'entry' }> | null = null;
@@ -1866,18 +1837,6 @@ function bindResourcePairToSavedAccount(
       };
 }
 
-function isDefinitiveRefreshError(error: unknown): boolean {
-  return (
-    error instanceof AuthApiError &&
-    [
-      'INVALID_REFRESH_TOKEN',
-      'REFRESH_TOKEN_EXPIRED',
-      'DEVICE_MISMATCH',
-      'ACCOUNT_UNAVAILABLE',
-      'MEMBERSHIP_DISABLED',
-    ].includes(error.code)
-  );
-}
 
 /**
  * Refresh a saved Resource session across shared-userData app instances.
@@ -2443,27 +2402,6 @@ function getRefreshErrorCode(result: { data: unknown }): string | undefined {
   return (result.data as AuthErrorResponse | null)?.error?.code;
 }
 
-function mapMembershipToAuthUser(membership: AuthMembership, passportId?: string): CurrentUser {
-  return {
-    id: membership.id,
-    name: membership.displayName || membership.email || 'Cindy',
-    membershipDisplayName: membership.displayName,
-    // auth-server 自助头像(PATCH /api/me/profile);null = 未设置(UI 首字母兜底)。
-    // 产品资料头像回落已随 /api/user/me 退役(2026-07)。
-    avatar: membership.avatarUrl ?? null,
-    email: membership.email,
-    defaultModel: DEFAULT_MODEL,
-    defaultEffort: DEFAULT_EFFORT,
-    membershipKind: membership.kind,
-    membershipRole: membership.role,
-    orgId: membership.orgId,
-    orgName: membership.orgName,
-    orgLogoUrl: membership.orgLogoUrl ?? null,
-    // membership 响应不带 slug;所有出口经 snapshotAuthState 时从 access token 补齐。
-    orgSlug: null,
-    passportId: passportId ?? membership.passportId ?? '',
-  };
-}
 
 function mergeMembershipWithExisting(
   membership: AuthMembership,
@@ -2716,7 +2654,10 @@ async function withAccountFreeOwnerCommit(opts: {
     const release = releaseBoundary as (() => void) | null;
     release?.();
     if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
-    if (release && notify) notifyRenderer();
+    // prepareTransition already published a pending projection. Even silent
+    // cold-start recovery must settle it: renderer auth initialization keeps a
+    // newer push over the IPC response, otherwise startup stays pending forever.
+    if (release) notifyRenderer();
   }
 
   requestStableOwnerPostCommit('owner-commit');

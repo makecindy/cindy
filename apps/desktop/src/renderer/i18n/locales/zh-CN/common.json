@@ -4195,7 +4195,18 @@
           "ariaLabel": "允许你的其他电脑和你分享的人调用此供应商",
           "writeFailed": "远程调用设置未能保存，请重试"
         },
-        "moreActionsAria": "更多操作"
+        "moreActionsAria": "更多操作",
+        "runLocation": {
+          "label": "在哪台电脑运行",
+          "optionLocal": "这台电脑",
+          "notSignedIn": "未登录",
+          "autoBorrowing": "这台电脑还没登录，新任务在 {{device}} 上运行，不用再登录。",
+          "local": "新任务在这台电脑运行。也可以改选你另一台已登录的电脑。",
+          "pinned": "新任务在 {{device}} 上运行，用那台电脑的登录。已在运行的任务不受影响。",
+          "inline": "运行于",
+          "signInHere": "在这台电脑登录",
+          "writeFailed": "「运行于」未能保存，请重试"
+        }
       },
       "detect": {
         "groupLabel": "检测到本机 CLI",
@@ -5197,6 +5208,15 @@
         "ariaLabel": "使用 {{shortcut}} 发送消息"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任务默认工作目录",
+      "label": "本机默认工作目录",
+      "hint": "新建本机任务且未选择项目时，预选此目录。明确选择的项目、对话或远程设备仍优先。",
+      "unset": "未设置（不预选目录）",
+      "choose": "选择目录",
+      "clear": "清除默认目录",
+      "failed": "保存默认工作目录失败，请重试"
+    },
     "linkOpen": {
       "title": "打开链接",
       "description": "选择消息链接的打开位置，右键可临时更换",
@@ -6149,13 +6169,18 @@
         "allowInboundAria": "切换是否允许 {{name}} 控制本机",
         "peerControlOff": "对方未允许远程控制",
         "masterOffHint": "需先开启上方总开关",
-        "controllingThisMac": "已连接到 Cindy"
+        "controllingThisMac": "已连接到 Cindy",
+        "useThisDeviceModels": "用本机模型",
+        "allowModelUseAria": "允许 {{name}} 用本机的模型"
       },
       "toast": {
         "revoked": "已撤销该设备的访问权限",
         "revokeFailed": "撤销失败",
         "restored": "已恢复该设备的访问权限",
-        "restoreFailed": "恢复失败"
+        "restoreFailed": "恢复失败",
+        "modelUseRestored": "已允许这台电脑用本机的模型",
+        "modelUseRevoked": "这台电脑不能再用本机的模型",
+        "modelUseFailed": "「用本机模型」未能保存，请重试"
       },
       "sections": {
         "myDevices": "我的设备",
@@ -9016,6 +9041,8 @@
       "daysWindow": "{{days}}天"
     },
     "claude": {
+      "totalWeeklyLabel": "总周",
+      "temporarilyLimited": "暂时受限",
       "waitingDetail": "Claude 订阅余量会在下一轮完成后更新。",
       "weeklyLabel": "周限",
       "modelWeeklyLabel": "{{model}} 周限",
@@ -19721,6 +19748,8 @@
     "lineNumbers": "行号"
   },
   "subscriptionAccounts": {
+    "unassigned": "账号待分配",
+    "providerManagedAuth": "Codex 当前供应商未提供 ChatGPT 账号信息。请在添加供应商时选择「$t(subscriptionAccounts.signIn.anotherAccount)」，使用独立目录",
     "signIn": {
       "checking": "正在检测本机账号…",
       "detected": "检测到已登录账号",
@@ -19769,5 +19798,15 @@
     "browserFallback": "前往 GitHub 为 Cindy 点 Star",
     "openGithub": "打开 GitHub",
     "openFailed": "未能打开 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正在连接 Cindy 后台…",
+    "restoring": "正在恢复任务状态…",
+    "retrying": "任务状态暂未同步，正在重试…",
+    "pairing": "需要重新连接授权",
+    "pairingHelp": "请保留此页。在启动 Cindy 后台的终端重新运行打开网页的命令，完成新页面的配对，再回到此页。",
+    "keepDraft": "已输入的草稿会保留。连接恢复后将自动同步任务状态。",
+    "retry": "重试连接",
+    "desktopAuthHelp": "请在启动终端更新后台连接设置，然后重新打开这个实验客户端。"
   }
 }

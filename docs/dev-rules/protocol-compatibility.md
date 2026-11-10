@@ -1,5 +1,37 @@
 # 跨端协议兼容
 
+## Claude 自动续跑开始标记（2026-11-11）
+
+既有 Agent `status` 事件的 data 可选增加 `providerInitiatedTurn: true`，仅在适配层确认顶层
+自动续跑开始时与 `isRunning: true` 一起发送。旧消费端忽略附加字段；新消费端缺字段时仍使用
+原正文／工具进度判据，因此旧执行端的零输出续跑失败须升级执行端才能修复。SSH SDK 消息在
+任务宿主翻译，远程 Agent 沿用既有事件 data 透传；手机使用任务宿主的错误和等待投影。
+不增加帧、channel、allowlist 或网络请求，官方与自建中转均无需改动；恢复只针对本任务，
+不重启共享连接或重放其它任务。
+
+## 实验性 Host 网页适配层（2026-11-10，未发布）
+
+网页 shim 与显式 `CINDY_HOST_API` 桌面代理共用 `hostChannelContract`；这是客户端
+参数与返回形状的统一，不新增 HTTP 路径、认证方式、Device Link 帧或 relay 要求。
+`maker.resolveInteraction` 保留 preload 的 `{ accepted: boolean }`，不把请求成功的
+`ok` 当作回答已接受；`input.steer` 返回布尔值；`authRefresh` 只认认证状态，不认一般
+`ok`。旧 Host 已提供相应字段，新客户端仍可连接；普通桌面 IPC 实现保持原行为。
+消息查询保留可选 `before`，旧调用不传时保持默认。网页新增调用已有的任务改动摘要接口，
+不再把 `maker.listTurnChangeSets` 当作空占位；后端 API 不变。
+共享脚本仅在实验 Host 中编译和提供，未实现的网页写操作明确拒绝。
+接口与恢复验收见 [Host 维护计划](../host/maintenance-plan.md)。
+
+### 实验性 Host 事件恢复
+
+Host SSE v2 由 `protocol=2` 和 `x-cindy-event-protocol: 2` 双向确认，新增 start/ready
+控制帧携带进程运行标识、序号和恢复原因。只有同一运行且游标仍在历史窗口内才补收事件；
+重启或缺口必须读权威快照。旧客户端不请求 v2 时仍收到原事件格式，新客户端连接旧 Host
+时每次重连补读快照。浏览器和显式 Host 桌面客户端共用 `hostEventStream`，不各写一套解析器。
+
+连接恢复仅重试读取：不重发输入、不重放点击、不延长配对授权。renderer 的恢复读取须同时
+受连接、账号、任务窗口代次约束，不能让旧连接结果覆盖新状态。RPC/SSE 401 保留原页面并
+等待显式重新配对，恢复不以刷新页面或清空草稿为手段。普通桌面默认启动不安装 Host 连接处理器。
+
 ## 任务汇总与 ActivityKit Push（2026-11-10，未发布）
 
 官方 Device Link 新增同账号、设备绑定 Bearer 路由：`PUT /api/device-link/task-activity`
@@ -46,6 +78,12 @@ notification 对象绕过账号过滤。角标分支独立挂载，不放进 iOS
 授权，官方和自建中转均只透传既有 payload，无需服务端或 relay 升级。
 
 ## 供应商内多订阅账号（2026-11-07，未发布）
+
+Codex 所选目录由当前供应商管理认证、无法提供 ChatGPT 账号时，管理操作使用追加的
+`SUBSCRIPTION_CODEX_PROVIDER_AUTH` 错误码。新版控制端显示独立账号指引，旧控制端仍按通用账号失败呈现；
+新版连接旧宿主仍接受旧错误。账号视图可选追加 `authIssue: 'codex-provider-managed-auth'`，让新向导
+在首次检测时显示原因和独立账号入口；旧端忽略、缺省或未知值沿用原显示。沿用原 IPC 包，无新 channel、allowlist 或 relay 行为，
+官方及自建中转无需适配。错误只含固定诊断，不带供应商配置、目录、账号或 CLI 原始响应。
 
 同账号远控新增 `maker:subscription-accounts`（查看、添加、重连、取消、移出、策略）及
 `maker:subscription-pool:quota`（只读、无账号身份的池配额）。管理请求只接受内置供应商及
@@ -109,6 +147,26 @@ Chat Server 的 `/executions` 与 `/execution-failures` 保留 `failure_code: RU
 旧客户端忽略新增字段；新客户端连接旧服务端／旧电脑时使用通用提示。
 服务端可先发布，客户端随后发布。Device Link、IPC channel、allowlist、权限、数据库 Schema
 与 Mobile 原生配置均不变。
+
+## 手机群内执行与停止范围（2026-11-06，未发布）
+
+2026-11-09：经电脑读取的未结束 `work` 安排追加可选 `canSetAutoContinue: true`，仅该电脑发起、可管理且群未归档／解散时声明。
+既有 `bot-groups` collection 增加 `plan-auto-continue` action，input 为 `{planId, autoContinue: boolean, expectedPlanRevision?}`。
+Host 每次重读安排，验证类型、未结束状态、发起电脑归属、管理权限及提供时的安排版本，再转发给 PC 同一 `updateGroup` 入口。
+偏好仍只保存在所选电脑，影响它在该群发起的分工；不向服务器增加设置或扩大执行权限。旧 Host 缺能力时手机只读原状态，
+不发新 action；旧手机忽略可选字段。直连服务器不声明该能力。沿用已有加密 invoke/result，官方／自建中转均无需新增帧、
+channel、allowlist 或部署；原生 fingerprint、数据库无变化。
+
+既有 `bot-group-chat` 业务 payload 追加可选 `supportsScopedStop: true`，只在可转发范围的服务器群宿主／直连客户端声明；
+缺失或非 `true` 值按不支持处理。手机保留既有 `canStopAll` 与 `round.othersActive`，三者同时为真才提供全部停止。
+既有 `stop` action 的 input 可选 `{scope: "all"}`；省略沿用本人范围，宿主重新核对群类型和权限后转给既有
+`stopRound(groupId, scope)`，服务器仍做最终鉴权。旧手机省略 scope，新手机不向旧宿主发送 all，避免旧宿主静默忽略。
+直连客户端复用现有 plans／executions control API 与已鉴权 actor，不增加服务端权限。停止遭 403／404／409 时复读
+同一对象；只有明确收尾状态才视为竞争完成，列表中缺失不算成功，仍拒绝时原样反馈（409 对应版本冲突）。
+
+只增加远程资源业务字段，不新增 channel、allowlist、握手、帧或协议版本；官方／自建中转均透传原有加密
+invoke／result，无需调整中转内核或部署。原生 fingerprint、数据库和服务端不变。回滚后旧手机与旧宿主继续默认停止路径。
+回归入口：`botGroupRemoteResourceProvider.test.ts`、Mobile `chatServerClient.test.ts`、`BotGroupChatScreen.test.tsx`。
 
 ## 插件详细介绍 `manifest.readme`（2026-11-06，未发布）
 
@@ -236,6 +294,40 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 这是官方 Feishu hook 的独立连接，未改 Device Link 或自建中转的帧、通道与 allowlist，无需中转升级。
 原生 Mobile 没有本次绑定设置入口，无原生配置变更。
 
+## 官方飞书 / Lark 由电脑排版（2026-11-10，未发布）
+
+官方飞书的进度卡与成功终稿原先由服务端排版，服务端那份是个人飞书 bot 卡片代码的移植，长回复仍在
+30 KB 处截断，呈现上的任何改进都要两仓各做一遍。现在与官方 Telegram 一样把内容面上收客户端：桌面端
+用个人飞书 bot 同一份排版（`@cindy/im` `feishu/streamingText.ts`）生成卡片，经 `msg.op` 交给服务端执行。
+
+两个双向能力，只在飞书连接上声明，都要求同时协商 `msg-op-v1`，各自独立生效：
+
+- `feishu-progress-ops-v1`：进度卡经 `purpose: 'turn-progress'` 的 `send` / `edit` 驱动。`turn.progress`
+  照发，只用于续期。
+- `feishu-final-ops-v1`：不带附件的成功终稿经 `purpose: 'turn-final'` 的 `send`（带 `finalPart`）发布。
+  `finalPart = 0` 由服务端落在这一轮的进度卡上（没有或改不了时新发），其余依次新发。全部确认后
+  `turn.end` 带 `clientFinal: { complete: true }`，服务端不再排版；否则服务端撤掉桌面端另发的后续卡片
+  并照旧发布完整终稿。
+
+线上不新增字段，只约定语义：这两个 purpose 下 `action.text` 是序列化后的飞书卡片 JSON（schema 2.0），
+不带 `tier` 与 `buttons`；服务端拒收含按钮、表单等回调组件或超过 30 KB 的卡片（`UNSUPPORTED_PARAMETERS`）。
+`msg.op.result` 的 `errorCode` 沿用 `MESSAGE_OP_ERROR_*`，`channelErrorCode` 透传飞书业务码。两仓现有
+解析器都不需要改：服务端协议包原样放行 `purpose` / `finalPart` / `clientFinal`，能力名在服务端以同值常量
+镜像（`feishu-hook-server/src/feishu/clientOps.ts`），客户端协议包新增 `HOOK_FEATURE_FEISHU_PROGRESS_OPS` /
+`HOOK_FEATURE_FEISHU_FINAL_OPS` 两个常量。
+
+幂等：建卡在拿到定案回执前沿用同一个 `opId`；服务端按 `opId` 去重，并把由它派生的 `uuid` 交给飞书
+（1 小时内同一 `uuid` 至多发出一条），回执未知后重发或重连到别的实例都不会多出卡片。终稿卡片回执未知时
+同 `opId` 同内容最多原样重发 2 次，仍未知就以 `complete=false` 交回；限速按 `retryAfterMs` 等待后换号重发。
+
+兼容与部署顺序：全部是可选增量，任一侧缺席时行为与此前逐字相同——旧桌面端连新服务端不声明能力，
+照旧由服务端排版；新桌面端连旧服务端收不到宣告，继续发 `turn.progress` / `turn.end`。因此两仓可以独立
+上线，没有先后要求；只有两边都上线后才切到电脑排版。没有数据库迁移、环境变量、Mobile 冷更、
+Device Link 或自建中转变化。仍由服务端排版的部分：确认卡、失败 / 取消的终稿、带附件的终稿（图片要用
+机器人凭证上传）——后者仍受单卡 30 KB 截断。实现见 `hook-control/feishuTurnCarrier.ts`、`dispatcher.ts`
+的轮次载体与服务端 `docs/feishu-hook-server.md`「出站排版」。
+
+
 ## 官方飞书 / Lark 渠道的协议增量（2026-11-04）
 
 两仓 `slack-hook-protocol` 同步追加，全部是可选新增：
@@ -259,8 +351,8 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 
 桌面选择是可选增量：本机 `confirmed` 快照的 `actions` 提供 `select_device` 时，客户端才显示按钮。客户端发 `provider.bind.select { requestId, provider, bindingId }`，服务端按已认证连接的设备核对本机绑定、应用和归属，回 `provider.bind.selection { requestId, provider, bindingId, ok }`；只有匹配的成功回执才能提示「已设为工作电脑」。请求不能创建绑定，不改变其它电脑的绑定状态；服务端从收到请求起限制处理时间，不依赖客户端时钟。断线、解绑、切账号及超时让在途请求失败，不补发。旧服务端不提供动作时隐藏按钮；客户端不缓存可能被其它设备切换而过时的「当前工作电脑」标签。
 
-客户端接线：desktop 的飞书线 hello 只声明 `provider-bind-v1`、`provider-prefs-v1` 与 `provider:feishu`
-（不声明 `msg-op-v1` 及 `telegram-*`），welcome 同样须含这三项才启用。不声明 `session-picker-v1`：飞书服务由多个组织
+客户端接线：desktop 的飞书线 hello 的基础能力是 `provider-bind-v1`、`provider-prefs-v1` 与 `provider:feishu`
+（不声明 `telegram-*`；电脑排版的可选能力见上节），welcome 同样须含这三项才启用。不声明 `session-picker-v1`：飞书服务由多个组织
 共用；会话列表查询要双方都声明才回答，服务端单方面宣告不算。飞书线的工作目录 / 模型查询必须带 `recipient`，且与
 这条连接上服务端确认过的绑定（`scopeId` / `principalId`，等到绑定快照之后）一致才回答，否则回 `ok:false`。`pending` 的
 `connectUrl` 与 `remediationUrl` 在进入设置页快照前按飞书 / Lark 精确主机白名单校验（`feishuDeepLink.ts`），且授权页 `client_id` 必须与当前宣告的 `scopeId` 一致；不一致时转为 `failed/invalid-connect-url`，清除链接与关联码，不向 Renderer 暴露或自动打开；
@@ -4166,7 +4258,7 @@ Chat Server `/me` 追加 `capabilities.groupSingleSpeaker: 1`，服务端派发�
 当普通排队消息处理，缺字段即不显示。
 停止的范围收窄与主群上下文精简都只在看到该能力时启用，旧服务器保留整轮停止与完整主群历史；收窄只在执行端实现（成员只停自己的请求与伙伴，群主或管理员——含本账号拥有的管理员伙伴——可 `all`），沿用既有 control /
 plan action 的服务端权限，IPC `bot-group:stop` 追加可选 `scope`；
-手机经电脑的远程动作不变（停止为本人范围）。发布顺序：服务端整集群先上，再发客户端。
+手机经电脑默认仍为本人范围；新版显式范围能力见本文「手机群内执行与停止范围」。发布顺序：服务端整集群先上，再发客户端。
 
 2026-10-23 回复模式恢复（客户端 #6888 / cindy-server #1030）：`groupSingleSpeaker` 只表示回答顺序，
 不代表每条普通消息必有回答；主群、线程与过期 `deferExecution` 恢复共用 `responseMode` 判断，显式继续不受影响。

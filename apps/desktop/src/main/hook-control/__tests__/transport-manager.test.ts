@@ -3362,16 +3362,22 @@ describe('官方飞书 / Lark provider lane', () => {
     expect(manager.snapshot().feishu.binding?.actions).not.toContain('select_device');
   });
 
-  it('hello 只声明 provider 基础能力; 服务端未宣告 provider:feishu 时显示不可用并拒收派发', () => {
+  it('hello 声明基础能力与电脑排版; 服务端未宣告 provider:feishu 时显示不可用并拒收派发', () => {
     const dispatcher = stubDispatcher();
     const { manager, transports } = feishuLaneHarness({ dispatcher }, { feishuEnabled: true });
     manager.sync();
     const opts = transports[0];
     if (opts === undefined) throw new Error('Feishu transport was not created');
     expect(opts.url).toBe('ws://127.0.0.1:8794');
-    // 第一里程碑由服务端排版: 不得声明 msg.op 或任何 Telegram 专属能力。
-    expect(opts.buildHello().features).toEqual([...FEISHU_FEATURES, HOOK_FEATURE_FEISHU_STORE_MULTI_BIND]);
-    expect(opts.buildHello().features).not.toContain(HOOK_FEATURE_MESSAGE_OPS);
+    // 多账号和电脑排版是独立可选能力，不得声明 Telegram 专属能力。
+    expect(opts.buildHello().features).toEqual([
+      ...FEISHU_FEATURES,
+      HOOK_FEATURE_FEISHU_STORE_MULTI_BIND,
+      HOOK_FEATURE_MESSAGE_OPS,
+      'feishu-progress-ops-v1',
+      'feishu-final-ops-v1',
+    ]);
+    expect((opts.buildHello().features ?? []).some((feature) => feature.startsWith('telegram-'))).toBe(false);
     expect(opts.buildHello().statusReactions).toBeUndefined();
 
     const dispatch = makeTaskDispatch({
