@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Push-Diagnose",
+    "read": "Push-Status lesen",
+    "busy": "Wird gelesen…",
+    "failed": "Push-Status konnte nicht gelesen werden. Bitte erneut versuchen.",
+    "copyFailed": "Token konnte nicht kopiert werden.",
+    "copied": "Token kopiert.",
+    "bundle": "App-ID",
+    "build": "Build",
+    "environment": "APNs-Umgebung",
+    "permission": "Systemberechtigung",
+    "alerts": "Banner",
+    "lockScreen": "Sperrbildschirm",
+    "notificationCenter": "Mitteilungszentrale",
+    "copy": "APNs-Token kopieren",
+    "hide": "Ergebnis ausblenden",
+    "unknown": "Unbekannt",
+    "on": "Ein",
+    "off": "Aus",
+    "hint": "Nur auf Anfrage auslesen. Das APNs-Token wird nur hier angezeigt, nicht in Diagnosen gespeichert oder von diesem Werkzeug hochgeladen. Beim Verlassen oder im Hintergrund wird es ausgeblendet. Nur für Apples Push-Konsole kopieren; kopierter Text bleibt in der Zwischenablage.",
+    "permissions": {
+      "granted": "Erlaubt",
+      "denied": "Abgelehnt",
+      "undetermined": "Nicht angefragt",
+      "provisional": "Stille Zustellung"
+    }
+  },
   "localLogs": {
     "upload": "Protokolle hochladen",
     "uploadResult": {

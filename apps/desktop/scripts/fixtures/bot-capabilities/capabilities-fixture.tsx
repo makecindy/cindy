@@ -41,7 +41,7 @@ function Page({ initial }: { initial: BotCapabilities }) {
 
 mountPage({
   host: (ctx) => {
-    const learned = ctx.case === 'empty' ? [] : LEARNED;
+    const learned = ctx.case === 'empty' || ctx.case === 'official' ? [] : LEARNED;
     return {
       localDb: {
         sessions: { get: async () => ({ id: 'session-1', agentKind: 'pi', workingDir: '/fixture' }) },
@@ -61,8 +61,12 @@ mountPage({
       maker: {
         onMcpChanged: subscription('mcp'),
         listCustomMcpServers: async () => ({ agentKind: 'pi', servers: [{ id: 'search-gateway', name: 'Search Gateway', available: true }] }),
-        listAgentSkills: async () => ({ success: true, skills: LOCAL }),
-        plugins: { list: async () => TOOLS },
+        listAgentSkills: async () => ({ success: true, skills: ctx.case === 'official' ? [
+          { name: 'pr', description: 'Follow a pull request through review and merge', enabled: true, cindyOfficial: true },
+          { name: 'cindy-skill-creator', description: 'Create a Cindy Skill', enabled: false, cindyOfficial: true },
+          { name: 'personal-notes', description: 'Organize my personal notes', enabled: true },
+        ] : LOCAL }),
+        plugins: { list: async () => ctx.case === 'official' ? [] : TOOLS },
       },
     };
   },

@@ -247,6 +247,12 @@ export function partitionDesktopDevProcesses(processes, ownRootDir, checkoutPath
   }
   return { targets, preserved };
 }
+// Personal smoke callers must refuse an occupied checkout, irrespective of userData.
+export const PERSONAL_SAFE_ISOLATED_START = 1;
+export function assertNoRestartTargets(processes, ownRootDir, checkoutPaths = []) {
+  const { targets } = partitionDesktopDevProcesses(processes, ownRootDir, checkoutPaths);
+  if (targets.length) throw new Error(`Isolated startup refuses occupied checkout (${targets.length} process(es)); no process stopped or cache cleared`);
+}
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
@@ -1669,6 +1675,7 @@ async function main() {
   }
 
   const allTargets = listDesktopDevProcesses();
+  if (argv.includes('--refuse-running')) assertNoRestartTargets(allTargets, rootDir, checkoutPaths);
   // kill 作用域 = 当前 checkout。其他 worktree / 命名沙箱的实例一律保留。
   const ownScope = partitionDesktopDevProcesses(allTargets, rootDir, checkoutPaths);
   const targets = replaceRunningRoot
