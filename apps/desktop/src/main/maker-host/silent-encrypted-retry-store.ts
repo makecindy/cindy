@@ -1,3 +1,4 @@
+/** Platform assembly for the shared service. */
 /**
  * Main-side source of truth for silent invalid_encrypted_content recovery.
  *
@@ -8,61 +9,6 @@
  * 模型会重新推理、略多花 token(有损恢复)。用户可在 设置 → 个性化 → 小技巧 关掉。
  */
 import { app } from 'electron';
-import path from 'node:path';
-
-import { desktopMakerLogger } from './logger-adapter.js';
-import {
-  createOverrideSettingsFile,
-  portableOverrideSettings,
-  type OverrideSettingsState,
-} from './override-settings-file.js';
-
-const log = desktopMakerLogger.child('silent-encrypted-retry-store');
-
-export interface SilentEncryptedRetrySettings {
-  enabled: boolean;
-}
-
-const DEFAULTS: SilentEncryptedRetrySettings = {
-  enabled: true,
-};
-
-function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'silent-encrypted-retry-settings.json');
-}
-
-function normalize(raw: unknown): SilentEncryptedRetrySettings {
-  if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
-  const r = raw as Record<string, unknown>;
-  return {
-    enabled: typeof r.enabled === 'boolean' ? r.enabled : DEFAULTS.enabled,
-  };
-}
-
-const store = createOverrideSettingsFile<SilentEncryptedRetrySettings>({
-  filePath: settingsFilePath,
-  defaults: DEFAULTS,
-  normalize,
-  log,
-  label: 'silent encrypted retry',
-});
-
-export function readSilentEncryptedRetrySettings(): SilentEncryptedRetrySettings {
-  return store.read();
-}
-
-export function readSilentEncryptedRetrySettingsState(): OverrideSettingsState<SilentEncryptedRetrySettings> {
-  return store.readState();
-}
-
-export function writeSilentEncryptedRetryEnabled(enabled: boolean): void {
-  store.writePatch({ enabled });
-  log.info('silent encrypted retry setting written', { enabled });
-}
-
-export function resetSilentEncryptedRetrySettings(): SilentEncryptedRetrySettings {
-  return store.reset();
-}
-
-/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
-export const silentEncryptedRetryPortableSettings = portableOverrideSettings(store);
+import { createSilentEncryptedRetryStore } from './silentEncryptedRetryCore.js';
+export type { SilentEncryptedRetrySettings } from './silentEncryptedRetryCore.js';
+export const { readSilentEncryptedRetrySettings, readSilentEncryptedRetrySettingsState, writeSilentEncryptedRetryEnabled, resetSilentEncryptedRetrySettings, silentEncryptedRetryPortableSettings } = createSilentEncryptedRetryStore({ getUserDataDir: () => app.getPath('userData') });

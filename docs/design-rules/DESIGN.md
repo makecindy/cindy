@@ -478,6 +478,14 @@ input/text
 
 Ordinary confirmations opt into standard buttons with `presentation="standard"` on the shared `ConfirmDialog` / provider. DS-6 selects only custom-provider and custom-MCP deletion. Standard confirmation actions keep a 36px minimum height; long labels wrap within the panel and may grow vertically instead of overflowing or truncating. Keep `confirm-btn-*` local styling, default/destructive choice, focus branches and no scrim dismissal. Unselected callers, Permission, Full Access and plugin authorization keep their existing presentation.
 
+**Interaction answer composers (user decision, 2026-11-10):** Free-text answers, custom-choice answers,
+withdrawn-question supplements and plan feedback use a full-width input frame. Text occupies its own
+full-width area; existing microphone and submit controls sit inside the frame in a trailing toolbar
+below the text, never squeeze the textarea into a narrow side column. Submission uses the main
+composer's paper-plane glyph, with the actual action retained in localized accessible names and
+Desktop tooltips. Multi-select custom input has one submit control, not a second footer submit.
+Question navigation, close/skip, validation, voice finalization and approval semantics stay unchanged.
+
 ### Typography roles and control pairing (DS-11)
 
 - Preserve the accepted hierarchy: ordinary ConfirmDialog title 18/500; provider/MCP form title 18/600; compact prompt title 15/600 where already specified. Different roles are not interchangeable merely because their font size matches.
@@ -1610,8 +1618,9 @@ and media position (`ui/media-scrubber`, seconds in/out). Native media controls 
 
 ### 伙伴私聊消息下操作（2026-10-29）
 
-伙伴私聊的工作过程区（运行中与完成后）和最终回复各显示一个当前伙伴头像，三端一致。
-复用回复头像的尺寸、间距和正文列；展开的中间文字与工具明细不重复头像，成果卡仍与正文对齐。
+伙伴私聊同一轮的工作过程区与最终回复共用一个当前伙伴头像，三端一致。
+头像在本轮开头显示，右侧依次呈现处理记录与回复正文；执行中转为完成态时保持同组，不再给回复重复头像。
+复用回复头像的尺寸、间距和正文列；展开的中间文字与工具明细不重复头像，成果卡仍与正文对齐。没有过程的回复照常显示头像，新一轮重新显示头像。
 
 常用操作固定在消息下方，复用现有群聊图标、引用预览与输入组件。桌面32px按钮、4px间隔、14px图标；手机44pt热区、不额外插空，左右消息的操作图形对齐对应正文边缘。复制/回复/更多常显，现有朗读与编辑能力保留；创建话题与分享图片放更多。已有话题沿用头像、回复数及最后回复时间/未读提示入口，不另造数字徽章。群聊操作及主对话914px宽度规则不变，手机正文直接选字不受操作栏影响。沿用语义色与原菜单开合、焦点和按压状态；各语言及明暗模式均不得溢出。
 

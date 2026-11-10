@@ -1,7 +1,7 @@
 // Unit: native bytes become managed refs, never raw base64 in message history.
 // Existing generated-media tests do not cover native tool blocks or owner invalidation.
 import { describe, expect, it, vi } from 'vitest';
-import { materializeToolProcessMedia } from '../toolProcessMedia';
+import { materializeToolProcessMedia, setToolProcessMediaRemoteReader } from '../toolProcessMedia';
 import { ingestMedia } from '../ingest';
 import type { LedgerDb } from '../ledger';
 import fs from 'node:fs/promises';
@@ -12,6 +12,7 @@ vi.mock('../ingest', () => ({
   ingestMedia: vi.fn(async () => ({ url: 'cindy-media://blobs/' + 'a'.repeat(64) + '.png' })),
 }));
 const db = {} as LedgerDb;
+setToolProcessMediaRemoteReader(materializeSshRemoteMedia);
 const png = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1kAAAAASUVORK5CYII=',
   'base64',

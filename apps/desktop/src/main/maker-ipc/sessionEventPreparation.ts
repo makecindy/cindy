@@ -20,7 +20,7 @@ import { parseAgentInputToolLoopDetails } from '../../shared/agentInputQueue.js'
 import { noteSubagentObservationTurnStarted } from '../subagentObservationRewindFence.js';
 
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import { markSessionTurnStarted } from '../localDb/sessionActiveTurn.js';
 import {
@@ -28,9 +28,9 @@ import {
   noteAgentMeta,
   noteTurnStarted,
   onStandaloneTextEvent,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 import { isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { clearPromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 import { MAKER_PUSH } from './channels.js';
 import { finalizeTurnChangeSet } from '../turn-change-set/store.js';
@@ -284,7 +284,7 @@ export function prepareSessionEvent(
   }
   const broadcastEvent = deps.redactEventForRenderer(attributedEvent);
   if (event.type === 'interaction_dismissed') {
-    const data = event.data as { requestId?: unknown; reason?: unknown };
+    const data = event.data as { requestId?: unknown; reason?: unknown; withdrawalReason?: unknown };
     if (typeof data.requestId === 'string') {
       deps.handleAgentIslandInteractionDismissed(session.id, data.requestId);
       const entry = deps.clearPendingInteraction(data.requestId);
@@ -293,13 +293,16 @@ export function prepareSessionEvent(
           entry.kind,
           typeof data.reason === 'string' ? data.reason : 'dismissed',
         );
+        const persistedDecision = data.reason === 'question_withdrawn' && entry.kind === 'ask_user_question'
+          && typeof data.withdrawalReason === 'string'
+          ? { ...decision, withdrawalReason: data.withdrawalReason } : decision;
         entry.resolve(decision);
         deps.persistInteractionDecision(
           session.id,
           entry.persistId,
           entry.kind,
           entry.request,
-          decision,
+          persistedDecision,
         );
       }
     }

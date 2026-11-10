@@ -53,6 +53,7 @@ interface BuildMobileStreamingRenderWindowInput {
     preserveSourceOrder?: boolean;
     sessionId?: string;
     sessionSource?: string | null;
+    pendingQuestionIds?: ReadonlySet<string>;
   };
   prefixCache?: MobileStreamingRenderPrefixCacheRef;
   previousPrefix?: MobileStreamingRenderPrefixCache | null;
@@ -102,7 +103,7 @@ export function buildMobileStreamingRenderWindow(
   input: BuildMobileStreamingRenderWindowInput,
 ): MobileStreamingRenderWindowResult {
   const {
-    cacheKey,
+    cacheKey: baseCacheKey,
     messages,
     messageStructureChangedIndexes,
     messageStructureToken,
@@ -111,6 +112,8 @@ export function buildMobileStreamingRenderWindow(
     previousPrefix = prefixCache?.current,
     taskUpdates,
   } = input;
+  const cacheKey = options.pendingQuestionIds === undefined ? baseCacheKey
+    : `${baseCacheKey}:questions:${JSON.stringify([...options.pendingQuestionIds].sort())}`;
   const sessionId = options.sessionId ?? messages[0]?.sessionId ?? '';
   const trustedPreviousBoundary = trustedStreamingBoundaryPrefix({
     changedIndexes: messageStructureChangedIndexes,

@@ -10,7 +10,7 @@ import type { Routine, RoutineInput } from '@cindy/maker-scheduler';
 import { companionEnvironmentKey, createCompanionEnvironmentStore } from '../environment.js';
 import { deserializeImportSnapshotAsync, serializeImportSnapshotAsync, fingerprint } from '../files.js';
 import { createMessage } from '../../localDb/ipc/messages.js';
-import { t } from '../../i18n.js';
+import { t } from '../../i18n.desktop.js';
 import { createBotProfile, getBotRemoteResourceSource } from '../../localDb/ipc/bots.js';
 import type { ImportSnapshot } from '../types.js';
 import { CompanionImportError } from '../types.js';
