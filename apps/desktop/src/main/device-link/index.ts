@@ -1056,6 +1056,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       presenceAvailableByDevice.set(change.deviceId, false);
       invalidatePluginOauth(change.deviceId);
       handleControllerOffline(change.deviceId, change);
+      remoteControlConsent.peerGone(change.deviceId);
       broadcast(DEVICE_LINK_PUSH.PEER_LINK_RESET, { deviceId: change.deviceId, offline: true });
     }
   });
@@ -1216,7 +1217,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
     broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, directOnline ? { ...snap, online: true, remoteControlEnabled: available } : snap);
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
-    if (!online) handleControllerOffline(snap.deviceId);
+    if (!online) { handleControllerOffline(snap.deviceId); remoteControlConsent.peerGone(snap.deviceId); }
     // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后该设备
     // 的首帧 presence(wasAvailable=undefined)同样是「不可用→可用」翻转——重放
     // 循环在目标离线期间被 presence 门禁终止后,这里是唯一的恢复事件。目标本就
@@ -1855,6 +1856,7 @@ export async function revokeController(deviceId: string): Promise<void> {
     forgetControllerInvokeState(deviceId);
     // 踢掉它的订阅 registry + 重算转发/横幅(复用对等下线的单设备清理路径)。
     handleControllerOffline(deviceId);
+    remoteControlConsent.peerGone(deviceId);
     purgeRevokedController(deviceId);
     // 末尾再 poll 一次(而非仅刷新基线):写锁释放到这里之间,别的实例可能已插入
     // 新授权变更,仅刷新基线会把它静默记为已生效、永不 enforce;poll 是幂等的,
@@ -1961,6 +1963,7 @@ function pollExternalSettingsChange(): void {
     }
     forgetControllerInvokeState(deviceId);
     handleControllerOffline(deviceId);
+    remoteControlConsent.peerGone(deviceId);
     purgeRevokedController(deviceId);
     log.info(`access revoked for controller ${deviceId.slice(0, 8)} (external settings change)`);
   }

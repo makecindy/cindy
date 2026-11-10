@@ -118,6 +118,13 @@ export class RemoteControlConsent {
     }
   }
 
+  /** The peer went offline: its dialog and pending request belong to a link that no longer exists,
+   * and a quick reconnect must not revive them. */
+  peerGone(peer: string): void {
+    if (this.incoming?.peer === peer) this.incoming.abort.abort();
+    for (const pending of [...this.outgoing.values()]) if (pending.peer === peer) pending.finish('unavailable');
+  }
+
   reset(): void {
     this.incoming?.abort.abort();
     this.incoming = null;

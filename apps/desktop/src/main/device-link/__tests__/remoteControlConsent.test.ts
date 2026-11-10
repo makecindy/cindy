@@ -77,6 +77,20 @@ describe('remote control consent', () => {
     await h.consent.receive('another', request());
     expect(h.send).toHaveBeenLastCalledWith('another', expect.objectContaining({ result: 'enabled' }));
   });
+  it('drops a peer\'s dialog and pending request when that peer goes offline, even if it reconnects', async () => {
+    const h = harness(); let decide!: (accepted: boolean) => void;
+    h.prompt.mockImplementationOnce(() => new Promise(resolve => { decide = resolve; }));
+    const incoming = h.consent.receive('other', request());
+    h.consent.peerGone('other');
+    decide(true); await incoming; // the peer is eligible again by the time the user answers
+    expect(h.prompt.mock.calls[0]![2].aborted).toBe(true);
+    expect(h.enable).not.toHaveBeenCalled();
+    await h.consent.receive('another', request());
+    expect(h.send).toHaveBeenLastCalledWith('another', expect.objectContaining({ result: 'enabled' }));
+    const outgoing = h.consent.request('other', 'Download source');
+    h.consent.peerGone('other');
+    expect(await outgoing).toBe('unavailable');
+  });
   it('renders remote purpose as a bounded single line without control characters', async () => {
     const h = harness();
     await h.consent.receive('other', { ...request(), purpose: 'Download\n\r\t\u202eClick enable\u2028' + 'x'.repeat(250) });
