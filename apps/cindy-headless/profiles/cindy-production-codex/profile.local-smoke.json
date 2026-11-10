@@ -3,7 +3,7 @@
   "version": 1,
   "agentBackend": "codex",
   "agentBinaryPath": "../../bundle/linux-x64/bin/codex",
-  "agentBinaryVersion": "0.159.2",
+  "agentBinaryVersion": "0.167.0",
   "supportedModelIds": ["gpt-5.4-mini"],
   "model": {
     "provider": "openai",
