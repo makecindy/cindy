@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useState, type ReactNode } from 'react';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { useRef, useState, type ReactNode } from 'react';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Popover, PopoverContent, PopoverTrigger } from '../popover';
 import {
   DropdownMenu,
@@ -120,6 +120,60 @@ describe('page transient layers', () => {
     await screen.findByRole('dialog', { name: 'Owner panel' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Readers panel' })).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Owner action' }));
+  });
+
+  // PR #9750 r4524268177/r4524368739: a caller can actively focus the old
+  // file/link, even after Radix's default return is prevented. Existing handoff
+  // tests have no custom callback. Minimal input: replace that menu with a
+  // controlled popover; the new input must stay open/focused. Unit, real roots.
+  it('skips custom return-focus on replacement but preserves it on ordinary Escape', async () => {
+    const restoreFocus = vi.fn();
+    function Handoff() {
+      const source = useRef<HTMLButtonElement>(null);
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button ref={source}>File link</button>
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger>File menu</DropdownMenuTrigger>
+            <DropdownMenuContent
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+                source.current?.focus({ preventScroll: true });
+                restoreFocus();
+              }}
+            >
+              <DropdownMenuItem>Copy file</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <button onClick={() => setOpen(true)}>Open editor</button>
+          <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger>Editor</PopoverTrigger>
+            <PopoverContent aria-label="Editor panel">
+              <input aria-label="New editor" />
+            </PopoverContent>
+          </Popover>
+        </>
+      );
+    }
+    render(<Handoff />);
+    const trigger = screen.getByRole('button', { name: 'File menu' });
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    await screen.findByRole('menu');
+    fireEvent.click(screen.getByRole('button', { name: 'Open editor' }));
+    const editor = await screen.findByRole('textbox', { name: 'New editor' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    expect(document.activeElement).toBe(editor);
+    expect(restoreFocus).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(editor, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    const menu = await screen.findByRole('menu');
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    expect(restoreFocus).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'File link' }));
   });
 
   it('keeps the parent across portals, replaces sibling children and closes only the child on Escape', async () => {

@@ -96,7 +96,8 @@ export function useTransientCloseAutoFocus(onCloseAutoFocus?: (event: Event) => 
   const layer = React.useContext(CurrentLayer);
   return (event: Event) => {
     layer?.onCloseAutoFocus(event);
-    onCloseAutoFocus?.(event);
+    // Replacement must also suppress callers that focus the old trigger themselves.
+    if (!event.defaultPrevented) onCloseAutoFocus?.(event);
   };
 }
 
