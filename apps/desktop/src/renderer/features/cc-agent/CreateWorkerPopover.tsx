@@ -1041,8 +1041,10 @@ export function CreateWorkerPopover({
   // 角色清单以存储里最新的为准，只叠加本次提交涉及的角色，不用打开时的快照覆盖别处的改动。
   const withLatestRoles = (base: WorkerCreationPrefs): WorkerCreationPrefs => {
     const { rolesByOwner } = readWorkerCreationPrefs();
-    const { rolesByOwner: _stale, ...rest } = base;
-    return rolesByOwner ? { ...rest, rolesByOwner } : rest;
+    const next = { ...base };
+    if (rolesByOwner) next.rolesByOwner = rolesByOwner;
+    else delete next.rolesByOwner;
+    return next;
   };
 
   const handleCreate = useCallback(async () => {
