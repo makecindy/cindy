@@ -1702,7 +1702,9 @@ export class Maker {
     agentKind: AgentKind,
     opts: ListAgentSkillsOptions & { sessionId?: string },
   ): Promise<ListAgentSkillsResult> {
-    const { sessionId, ...agentOpts } = opts;
+    // omitUserScopeSkills 只由 live 会话决定，调用方传入的值一律忽略。
+    const { sessionId, omitUserScopeSkills: _callerOmit, ...agentOpts } = opts;
+    void _callerOmit;
     const sessionMeta = sessionId ? await this.storage.get(sessionId) : null;
     const includeManagedPiPackages = agentKind === 'pi'
       && (!sessionId || (
@@ -1719,6 +1721,7 @@ export class Maker {
     const result = filter(await agent.listAgentSkills({
       ...agentOpts,
       includeManagedPiPackages,
+      ...(session?.agentKind === agentKind && session.omitsUserSkills ? { omitUserScopeSkills: true } : {}),
     }));
     if (agentKind !== 'pi' || !sessionId) return result;
     if (
@@ -1736,10 +1739,14 @@ export class Maker {
     agentKind: AgentKind,
     opts: ListRuntimeSkillsOptions & { sessionId?: string },
   ): Promise<ListAgentSkillsResult> {
-    const { sessionId, ...agentOpts } = opts;
+    const { sessionId, omitUserScopeSkills: _callerOmit, ...agentOpts } = opts;
+    void _callerOmit;
     const agent = this.requireAgent(agentKind);
     const session = sessionId ? this.getSession(sessionId) : undefined;
-    const result = await agent.listRuntimeSkills(agentOpts);
+    const result = await agent.listRuntimeSkills({
+      ...agentOpts,
+      ...(session?.agentKind === agentKind && session.omitsUserSkills ? { omitUserScopeSkills: true } : {}),
+    });
     return agent.filterActiveSkillCommands(
       result,
       agentOpts.remoteHostId ?? session?.remoteHostId ?? undefined,

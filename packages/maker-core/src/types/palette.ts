@@ -93,6 +93,12 @@ export interface ListAgentSkillsOptions {
   forceReload?: boolean;
   /** Host-owned Pi boundary; renderer input must never set this directly. */
   includeManagedPiPackages?: boolean;
+  /**
+   * Host-owned: the session's runtime does not load user-level agent settings
+   * (e.g. a local Claude subscription session skips `~/.claude`), so user-scope
+   * entries would be listed but not available. Renderer input must never set this.
+   */
+  omitUserScopeSkills?: boolean;
 }
 
 /** Host-only runtime discovery inputs used for security decisions about the live task. */

@@ -1172,7 +1172,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       if (!fileOps) throw new Error('Claude Code remote Skill discovery requires remote file operations');
       return scanRemoteClaudeSkills({ fileOps, workingDir: opts.workingDir });
     }
-    const raw = await scanClaudeSlashCommands(opts.workingDir);
+    const scanned = await scanClaudeSlashCommands(opts.workingDir);
+    // 会话不加载用户级设置时,~/.claude 里的命令 / skill 列出来也用不了,不展示。
+    const raw = opts.omitUserScopeSkills ? scanned.filter((item) => item.scope !== 'global') : scanned;
     return {
       skills: [...await this.managedSkillCommands(raw.map((item) => item.name)), ...raw.map((c) => ({
         kind: 'agent-skill' as const,
@@ -1201,8 +1203,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         }],
       };
     }
+    const items = opts.omitUserScopeSkills ? result.items.filter((item) => item.scope === 'project') : result.items;
     return {
-      skills: [...await this.managedSkillCommands(result.items.map((item) => item.name)), ...result.items.map((item) => ({
+      skills: [...await this.managedSkillCommands(items.map((item) => item.name)), ...items.map((item) => ({
         kind: 'agent-skill' as const,
         name: item.name,
         description: item.description,
@@ -6579,6 +6582,8 @@ export class ClaudeCodeAgent extends BaseAgent {
       get requestSessionId() { return sdkSessionId ?? '<pending>'; },
       agentKind: 'claude-code',
       get model() { return mutableModel; },
+      // 本机订阅会话不加载用户级设置(见 subscription-settings-isolation.ts),palette 据此隐藏 ~/.claude 条目。
+      omitsUserSkills: nativeCliAuth,
 
       validateSendOptions(sendOpts: SendOptions) {
         if (sendOpts.toolsDisabled && opts.remoteHostId) {

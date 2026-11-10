@@ -110,6 +110,8 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
   `--setting-sources '' --settings '{"apiKeyHelper":""}'`，模型探测用 `settingSources: []`，本机订阅
   会话只加载 `project` / `local`（maker-core `subscription-settings-isolation`）。只作用于 Cindy 拉起的
   子进程，不改用户设置文件；API 路由、SSH 远端与终端 `claude` 照旧使用用户设置，订阅判定标准不变。
+  这类会话的 `/` palette 同步不列 `~/.claude` 里的命令 / skill（运行时没加载，列出来选了也不生效），
+  项目 `.claude` 与 Cindy 托管 skill 照常列出；由 live 会话句柄 `omitsUserSkills` 决定，调用方不能覆盖。
 - 登录态读取不得阻塞与订阅无关的路径：启动只在已连接时等待，列表类读取用缓存并后台刷新，
   读失败有退避。
 - 订阅会话由 SDK 拉起同一个 CLI，自己读凭证、直连 Anthropic：不设 `ANTHROPIC_BASE_URL`、
