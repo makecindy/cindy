@@ -32,11 +32,24 @@ describe('utility window appearance bootstrap registration', () => {
     expectBefore(toastFactory, 'markAppearanceSettingsReaderWindow(window)', 'window.loadURL(');
   });
 
-  it('utility renderer 订阅运行期外观变化并直接更新 CSS 字体变量', () => {
+  // Electron security §3.1(6): all utility renderers must enter the shared
+  // appearance consumer before rendering. Presenter behavior tests cover live
+  // settings events and cleanup; this guard checks the bootstrap wiring only.
+  it('utility renderer 分流前安装公共外观消费者并保留热更新清理', () => {
     const source = readMainSource('../renderer/main-entry.tsx');
-    expect(source).toContain('isAppearanceUtilityView');
-    expect(source).toContain('appearanceSettings?.onChanged?.(applyFontSettings)');
-    expect(source).toContain('import.meta.hot?.dispose(disposeUtilityAppearanceSettingsSync)');
+    for (const view of [
+      'isComputerPermissionBackdrop',
+      'isComputerPermissionGuide',
+      'isVoiceInputDictionaryToast',
+      'isVoiceInputOverlay',
+    ]) {
+      expectBefore(
+        source,
+        'const disposeAppearancePresenter = installAppearancePresenter(applyFontSettings)',
+        `if (${view})`,
+      );
+    }
+    expect(source).toContain('import.meta.hot?.dispose(disposeAppearancePresenter)');
     expect(source.match(/<ThemeProvider syncWindowVibrancy=\{false\}>/g)).toHaveLength(4);
   });
 });

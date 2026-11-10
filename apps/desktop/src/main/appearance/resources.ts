@@ -9,7 +9,7 @@ export interface LoadedAppearanceResource {
   hash: string;
 }
 
-export const APPEARANCE_RESOURCE_MAX_BYTES = { font: 10 * 1024 * 1024, image: 20 * 1024 * 1024, video: 100 * 1024 * 1024 } as const;
+export const APPEARANCE_RESOURCE_MAX_BYTES = { font: 10_485_760, image: 20 * 1024 * 1024, video: 100 * 1024 * 1024 } as const;
 
 /** Shared byte validation; source-specific resolvers remain responsible for grants. */
 export function inspectAppearanceResource(bytes: Buffer, expected: LoadedAppearanceResource['kind'] | 'wallpaper') {
