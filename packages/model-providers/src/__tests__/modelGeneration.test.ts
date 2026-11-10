@@ -279,6 +279,22 @@ describe('new model generation defaults', () => {
     expect(inherited.execution.pi.headers).toBeUndefined();
     expect(providerModelGenerationRecord('gpt-9-sol', 'https://relay.example/v1', 'anthropic-messages')).toBeUndefined();
   });
+
+  // #9808: a strict OpenAI-compatible gateway rejects DeepSeek's top-level `thinking`
+  // object. Official rows keep the dialect; an unmatched custom endpoint must not.
+  it('does not lend a vendor thinking dialect to an unmatched custom chat endpoint (#9808)', () => {
+    const upstream = 'https://developer.amd.example/v1';
+    for (const id of ['DeepSeek-V4.1-Flash', 'deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash']) {
+      const inherited = providerModelGenerationRecord(id, upstream, 'openai-completions');
+      expect(inherited, id).toBeDefined();
+      expect(inherited!.execution.pi.compat?.thinkingFormat, id).toBeUndefined();
+      expect(inherited!.execution.pi.thinkingLevelMap, id).toBeDefined();
+    }
+    const official = providerModelRecord('deepseek-v4-flash', 'https://api.deepseek.com', 'openai-completions')!;
+    expect(official.execution.pi.compat?.thinkingFormat).toBe('deepseek');
+    const sameHost = providerModelGenerationRecord('DeepSeek-V4.1-Flash', 'https://api.deepseek.com/v1', 'openai-completions')!;
+    expect(sameHost.execution.pi.compat?.thinkingFormat).toBe('deepseek');
+  });
 });
 
 
