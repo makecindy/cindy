@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { InstalledGhost } from '../../../shared/ghost.js';
-import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../ghostVisibility.js';
+import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../ghostVisibility.desktop.js';
 
 function ghost(id: string, namespace?: string | null, enabled = true): InstalledGhost {
   return {

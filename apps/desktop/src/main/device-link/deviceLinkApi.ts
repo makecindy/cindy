@@ -6,7 +6,7 @@
  *   自建中转的 401 只表示中转凭证失效,不能把 Cindy 账号登出。
  */
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
+import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop.js';
 import {
   currentDirectoryThrottleOwner,
   directoryRetryDeadline,

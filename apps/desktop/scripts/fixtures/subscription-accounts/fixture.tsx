@@ -1,6 +1,8 @@
 import { useTranslation } from 'react-i18next';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { SubscriptionAccountsSection } from '../../../src/renderer/components/settings/SubscriptionAccountsSection';
+import { SubscriptionSignInChoices } from '../../../src/renderer/components/settings/SubscriptionSignInChoices';
+import { ToastContainer } from '../../../src/renderer/components/ui/toast';
 import { QuotaHoverCard } from '../../../src/renderer/components/status/QuotaHoverCard';
 import { buildClaudeUsageCard } from '../../../src/renderer/components/status/usageCardModel';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../src/shared/claudeSubscriptionUsage';
@@ -9,6 +11,12 @@ import type {
   SubscriptionAccountUsage,
   SubscriptionPoolView,
 } from '../../../src/shared/subscriptionAccounts';
+
+// The isolated HTTP fixture lacks secure-context UUIDs; these only correlate mock logins.
+if (!crypto.randomUUID) {
+  let sequence = 0;
+  crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
+}
 
 const now = Date.now();
 const hours = (value: number) => Math.round(now / 1000 + value * 3600);
@@ -79,7 +87,7 @@ function Section({ codexPool, signedOut }: { codexPool: boolean; signedOut: bool
 
 void mountPage({
   host: (ctx) => {
-    const isCodex = ctx.case === 'codex' || ctx.case === 'narrow-weight';
+    const isCodex = ctx.case === 'codex' || ctx.case === 'narrow-weight' || ctx.case.startsWith('provider-auth');
     let view: SubscriptionPoolView = {
       providerId: isCodex ? 'openai' : 'anthropic',
       configured: true,
@@ -147,6 +155,23 @@ void mountPage({
         onChanged: subscription('subscriptionAccounts'),
         command: async (command: SubscriptionAccountCommand) => {
           if (ctx.case === 'error') throw new Error('Fixture read failure');
+          if (ctx.case === 'provider-auth-preview' && command.action === 'preview')
+            return {
+              ...view,
+              configured: false,
+              accounts: [{
+                ...view.accounts[0],
+                identity: undefined,
+                plan: undefined,
+                usage: undefined,
+                status: 'signed-out',
+                authIssue: 'codex-provider-managed-auth',
+              }],
+            };
+          if (ctx.case === 'provider-auth' && command.action === 'add')
+            throw new Error(
+              '[SUBSCRIPTION_CODEX_PROVIDER_AUTH] The active Codex provider does not expose a ChatGPT account',
+            );
           if (command.action === 'configure')
             view = {
               ...view,
@@ -169,10 +194,20 @@ void mountPage({
       className="mx-auto w-full max-w-[680px] min-w-0"
       style={ctx.case === 'narrow' || ctx.case === 'narrow-weight' ? { maxWidth: 320 } : undefined}
     >
-      <Section
-        codexPool={ctx.case === 'codex' || ctx.case === 'narrow-weight'}
-        signedOut={ctx.case === 'empty'}
-      />
+      {ctx.case === 'provider-auth-preview' ? (
+        <SubscriptionSignInChoices
+          providerId="openai"
+          busy={false}
+          onConnect={() => undefined}
+          onCancel={() => undefined}
+        />
+      ) : (
+        <Section
+          codexPool={ctx.case === 'codex' || ctx.case === 'narrow-weight' || ctx.case === 'provider-auth'}
+          signedOut={ctx.case === 'empty'}
+        />
+      )}
+      <ToastContainer />
     </main>
   ),
 });

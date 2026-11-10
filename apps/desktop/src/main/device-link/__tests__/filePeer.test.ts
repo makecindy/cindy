@@ -40,7 +40,7 @@ vi.mock('../../appSessionState', () => ({
 }));
 vi.mock('../mediaTransfer', () => ({ removeRemote: vi.fn() }));
 vi.mock('../mediaFetch', () => ({ resolveAuthorizedMedia: mock.resolve }));
-vi.mock('../settings-store', () => ({ readDeviceLinkSettings: () => mock.settings }));
+vi.mock('../settings-store.desktop', () => ({ readDeviceLinkSettings: () => mock.settings }));
 vi.mock('../broadcast-tap', () => ({
   captureDataOwnerBroadcastScope: () => ({}),
   isDataOwnerBroadcastScopeCurrent: () => mock.current,

@@ -135,11 +135,16 @@
     "permissionDenied": "Permita notificaciones Cindy en la configuración de su sistema.",
     "unregisterQueued": "Apagado. La cancelación del registro finalizará una vez que vuelva a estar en línea.",
     "preview": "Mostrar vistas previas del chat",
-    "background": "Mantener el chat conectado en segundo plano",
-    "backgroundActive": "Recibir mensajes de chat en segundo plano",
+    "background": "Notificaciones en segundo plano",
+    "backgroundActive": "Recibiendo notificaciones en segundo plano",
     "backgroundStop": "dejar de recibir",
-    "backgroundHint": "La conexión en segundo plano funciona sin Google y muestra una notificación en curso. Puedes detenerlo desde esa notificación.",
-    "googleUnavailable": "La inserción Google no está disponible. Habilite la conexión de chat en segundo plano para recibir mensajes."
+    "backgroundHint": "Cindy mantiene la conexión automáticamente si Google Push podría no estar disponible. Durante la conexión se muestra una notificación permanente.",
+    "googleUnavailable": "Google Push no está disponible. La conexión en segundo plano seguirá tus ajustes de notificaciones.",
+    "backgroundModes": {
+      "auto": "Automático",
+      "on": "Siempre activado",
+      "off": "Desactivado"
+    }
   },
   "about": {
     "sectionTitle": "Acerca de este teléfono",

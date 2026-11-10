@@ -135,11 +135,16 @@
     "permissionDenied": "Autorisez les notifications de Cindy dans les paramètres du système.",
     "unregisterQueued": "Désactivé. La désinscription se terminera dès que vous serez de nouveau en ligne.",
     "preview": "Aperçus des conversations",
-    "background": "Rester connecté en arrière-plan",
+    "background": "Notifications en arrière-plan",
     "backgroundActive": "Réception des messages en arrière-plan",
     "backgroundStop": "Arrêter la réception",
-    "backgroundHint": "La connexion en arrière-plan fonctionne sans Google et affiche une notification permanente. Vous pouvez l'arrêter depuis cette notification.",
-    "googleUnavailable": "Les notifications push Google sont indisponibles. Activez la connexion de conversation en arrière-plan pour recevoir les messages."
+    "backgroundHint": "Cindy maintient automatiquement une connexion si les notifications Google risquent d’être indisponibles. Une notification permanente s’affiche pendant la connexion.",
+    "googleUnavailable": "Les notifications Google sont indisponibles. La connexion en arrière-plan suit vos réglages de notification.",
+    "backgroundModes": {
+      "auto": "Automatique",
+      "on": "Toujours activées",
+      "off": "Désactivées"
+    }
   },
   "about": {
     "sectionTitle": "À propos de ce téléphone",

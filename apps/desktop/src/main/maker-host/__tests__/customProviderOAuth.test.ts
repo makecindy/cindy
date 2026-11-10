@@ -13,7 +13,7 @@ import {
   mergeDiscoveredModelsIntoConfig,
   validateCustomProviderConfig,
 } from '../custom-provider-store.js';
-import { parseModelsListResponse } from '../generic-oauth.js';
+import { parseModelsListResponse } from '../generic-oauth.desktop.js';
 import { createProviderService } from '../provider-service.js';
 
 const OAUTH = {

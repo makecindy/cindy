@@ -25,7 +25,7 @@ import { isModelVisible, visibleModelUnion } from '@cindy/model-providers';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { buildOfficialBotCommandMenus } from '../im/shared/botCommands.js';
 import { stopSessionTurnExplicitly } from '../maker-ipc/register.js';
 import { onChannelTurn } from '../maker-ipc/channelTurnSignal.js';
