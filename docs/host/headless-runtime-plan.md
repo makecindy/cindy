@@ -445,3 +445,33 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 `ui:check --changed --theme all` 的 Electron 测试进程提前退出；保留失败记录。
 改用脚本支持的 Chromium 引擎定向运行 host-connection 全部四种状态，亮暗共八个
 场景通过，包括 320px 配对提示；已检查生成图。此夹具不覆盖完整桌面、登录或模型。
+
+
+### 合入后的自动隔离验收（2026-11-11）
+
+优先验证普通桌面；Host 网页缺口不借此扩大桌面改动。基于 main `6888c3fde5`
+及本次启动修复，在 macOS arm64 自动执行，没有使用正式账号或正式 profile：
+
+- 桌面远程升级提示在 EnvCheckGuard 完成后订阅与读取，去掉猜测 IPC 注册时间的
+  定时重试，保留推送对旧快照的优先级与卸载隔离。启动/协议定向测试 105 项通过，
+  Desktop、Host 类型检查通过。
+- 两组过期 UI 夹具补齐账号/设备宿主事实；群聊使用仓内媒体验证当前富媒体呈现。
+  先前失败的 32 项在同一批次和倒序批次均通过，覆盖亮/暗模式；未放宽 CSP 或沙箱。
+  此前单跑通过、整批偶发的 20 项本次未复现，根因仍未确认；不是 934 项全量重跑。
+- 版本无关桌面包构建及 ad-hoc 签名验证完成；核对包内 33 个 main/preload 入口，
+  `nodeRuntimeWorkerProcess.desktop.js` 及主进程引用正确，worker 仅依赖 Node 内置模块。
+  packaged smoke 原本在 ready 前注册系统链接，本次使既有 `--smoke-test` 跳过注册，
+  普通 packaged 启动保持原行为。
+- 打包运行仍未验收通过：全新数据目录的 smoke 进程阻塞在 macOS Keychain 访问；
+  采样确认 `SecItemCopyMatching` / `SecKeychainItemCopyContent` / SecurityServer decrypt。
+  数据目录隔离不等于系统钥匙串隔离。停止并清理测试实例，没有绕过授权或禁用沙箱，
+  不把静态入口检查当作 utilityProcess 在打包运行时通过。
+- 源码目录外独立 Host 使用自带 Node 在临时工作目录通过启动、网页适配脚本读取、
+  重复实例拒绝、受认证停止、信号退出和重启。Host 185 项通过，包含 HTTP/SSE 补收、
+  一次权限回答、停止和 SQLite 队列恢复；Agent 为替身，不是真实模型验收。
+- 使用产物 Chromium、Node worker 和 page bridge 的插件沙箱集成通过；另外验证已安装
+  插件的 MCP 通道、加密状态、权限拒绝和重启恢复，以及共享 scheduler 的真实脚本进程、
+  SQLite 历史与停止/重启不重放。未验收真实账号、手机和 Windows。
+
+证据保存在本机 `artifacts/desktop-isolated-20261111/report.md` 及其日志目录；
+各结果绑定上述源码版本，后续主线变化须以新增验证记录为准。
