@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
+        os: [windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -32,4 +32,14 @@ jobs:
           cache: pnpm
       - run: rustup toolchain install stable --profile minimal
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test:agent-net-native
+      - run: pnpm --filter @cindy/agent-net prepare-core
+      - name: Reproduce large-result deadline with transport diagnostics
+        shell: pwsh
+        run: |
+          $hadFailure = $false
+          for ($trial = 1; $trial -le 8; $trial++) {
+            Write-Output ("diagnostic trial " + $trial)
+            pnpm --filter @cindy/agent-net exec vitest run src/__tests__/socket.integration.test.ts -t "runs existing RPC" --pool=forks --maxWorkers=1
+            if ($LASTEXITCODE -ne 0) { $hadFailure = $true }
+          }
+          if ($hadFailure) { exit 1 }

@@ -4,7 +4,7 @@
  * 最小失败输入：无预建 peer 时 link-open；流式大结果；伪造 src；中转断开但 UDP 仍通。
  * tier：integration，真实回环 HTTP/WS/UDP 和临时磁盘；临时测试密钥只存在内存，不读用户凭据。
  */
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi, onTestFailed } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -34,7 +34,7 @@ import WebSocket from 'ws';
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
 async function network(udp: boolean, ingress?: 'gateway', isolated = false, scoped = false,
-  sharing?: import('@cindy/agent-net-relay').RelayOptions['sharing']) {
+  sharing?: import('@cindy/agent-net-relay').RelayOptions['sharing'], phase?: (value: string) => void) {
   const directory = await mkdtemp(path.join(tmpdir(), 'cindy-agent-net-socket-'));
   cleanup.push(async () => {
     if (!path.resolve(directory).startsWith(path.join(tmpdir(), 'cindy-agent-net-socket-'))) throw new Error('UNSAFE_TEST_DIRECTORY');
@@ -47,6 +47,7 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
   const relay = await startAgentNetRelay({ dataDir: directory, bootstrap, udpPort: 0,
     ...(sharing ? { sharing } : {}),
     ...(isolated ? { notify: async (value: { ciphertext: string }) => { notifications.push(value); } } : {}) });
+  phase?.('relay-started');
   cleanup.push(() => relay.close());
   let base = relay.url, legacyClient: DeviceLinkClient | undefined;
   if (ingress) {
@@ -81,6 +82,7 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
   await submitJoin(base, join);
   const certificate = approveJoin(root, join, 'test-only-pairing-secret', bootstrap.ownerCertificate.subject);
   await a.request('POST', '/join-requests/' + join.requestId + '/approve', { certificate });
+  phase?.('member-approved');
   const b = new AgentNetClient(base, member, certificate, bootstrap.rootPublicKey);
   const httpCalls: string[] = [], directories = new Map<string, DeviceView[]>();
   for (const api of [a, b]) api.transport.fetch = async (input, init) => {
@@ -88,6 +90,7 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
     return fetch(input, init);
   };
   const module = await WebAssembly.compile(await readFile(new URL('../../../agent-net-core/dist/core.wasm', import.meta.url)));
+  phase?.('wasm-compiled');
   const captured: Buffer[] = [];
   const sockets: AgentNetAppSocket[] = [];
   const make = (api: AgentNetClient, remoteControlEnabled: boolean) => {
@@ -117,6 +120,7 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
   };
   const host = make(a, true), controller = make(b, false);
   await Promise.all([host.waitUntilOnline(3000), controller.waitUntilOnline(3000)]);
+  phase?.('both-online');
   return { relay, host, controller, sockets, captured, legacyClient, a, b, bootstrap, root, module, make, httpCalls, notifications, directories };
 }
 const openPayload = { controllerName: 'test', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' };
@@ -137,22 +141,41 @@ it.each(['gateway'] as const)('serves real V1 and encrypted V2 clients on one or
   expect(f.legacyClient?.getStatus()).toBe('online');
 });
 it.each([false, true])('runs existing RPC and multi-megabyte results through certified V2 peers (UDP=%s)', async (udp) => {
-  const f = await network(udp); serve(f.host);
+  const began = performance.now(), marks: unknown[] = [], samples: unknown[] = [];
+  let phase = 'network', f: Awaited<ReturnType<typeof network>> | undefined;
+  const step = (value: string) => { phase = value; marks.push({ phase, at: Math.round(performance.now() - began) }); };
+  const snapshot = () => ({ at: Math.round(performance.now() - began), phase, sockets: f?.sockets.map(socket => ({
+    device: socket.deviceId, pending: socket.bufferedAmount,
+    peers: [...((socket as any).peers?.values() ?? [])].map((peer: any) => ({ device: peer.deviceId, stats: peer.channel.stats?.() })),
+  })) });
+  const timer = setInterval(() => { samples.push(snapshot()); if (samples.length > 12) samples.shift(); }, 500);
+  timer.unref();
+  onTestFailed(() => { clearInterval(timer); console.error('[large-test-failed]', JSON.stringify({ udp, marks, samples, final: snapshot() })); });
+  try {
+  f = await network(udp, undefined, false, false, undefined, step); serve(f.host);
+  step('link-open');
   await f.controller.openLink('a-host', openPayload);
+  step('echo');
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['private-business-value-0123456789'] })).toMatchObject({ ok: true, result: 'private-business-value-0123456789' });
   // This checks intact multi-megabyte delivery, not a 4-second throughput SLA.
   // Use the production SDK deadline for the large transfer; ordinary RPCs keep
   // the fixture's short deadline. Slow hosted macOS/Windows CPUs must still
   // deliver every byte and satisfy the encryption assertions below.
+  step('large-result');
   const large = await f.controller.invoke('a-host', { channel: 'test:large', args: [] }, 30_000);
+  step('encryption-assertions');
   expect(large.ok && String(large.result).length).toBe('confidential-result-'.length * 160000);
   expect(f.captured.length).toBeGreaterThan(100);
   expect(f.captured.some((bytes) => bytes.includes(Buffer.from('private-business-value-0123456789')) || bytes.includes(Buffer.from('confidential-result-')))).toBe(false);
   if (udp) {
+    step('direct-path');
     await vi.waitFor(() => expect(f.sockets.some((s) => s.pathTo('a-host') === 'direct')).toBe(true));
     await f.relay.close();
     expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['after-relay-loss'] })).toMatchObject({ ok: true, result: 'after-relay-loss' });
   }
+  step('complete');
+  console.log('[large-test-complete]', JSON.stringify({ udp, marks, samples, final: snapshot() }));
+  } finally { clearInterval(timer); }
 });
 
 // Main must not perform network frame parsing, Noise or retransmission work. Real worker + proxy broker,
