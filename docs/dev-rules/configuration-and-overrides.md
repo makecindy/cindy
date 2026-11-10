@@ -41,6 +41,21 @@ token）与 [`engineering-conventions.md`](engineering-conventions.md)（i18n）
   自定义标记，**不把完整默认配置复制进用户配置**。
 - 未自定义的用户随版本获得新默认值，已自定义的用户保留自己的选择。
 
+### 完整主题与外观设置
+
+Desktop 的 `main/appearance/service.ts` 是唯一外观覆盖所有者；
+`appearance-settings.json` 只保存明确覆盖与主题选择。有效值依次为内置默认、
+已选主题的可重建默认、用户或已批准固定能力的明确覆盖。主题包不把默认值复制成覆盖，
+也不直接写 DOM；`renderer/appearance/AppearancePresenter.ts` 和原壁纸消费者统一投影。
+插件不提供／注册主题；固定字体、壁纸、阅读样式等操作保留原调用、声明、批准和资源校验，
+其最终写入复用相同的定义转换与原子设置存储。
+
+主题模式／家族从旧 renderer localStorage 一次性迁入宿主；有宿主选择就不再读取旧值，
+迁移失败保留旧字节和当前选择。暂时缺失的主题仅在画面回退，不把回退写成新选择。
+升级不操作时保留原主题与字体、壁纸。恢复默认删除相应覆盖并跟随当前主题；字号恢复
+不清字体家族，壁纸恢复不清字体。密度／动效默认 1，不添加可见设置项；动效服从系统
+减少动效。主题格式与素材限制见内置 `cindy-theme-creator` 的 package-format.md。
+
 模型资料的系统层再区分公共默认、供应商默认、供应商实报与服务端明确修正；用户覆盖始终最高。
 发现快照和用户字段分开持久化，详见 [模型资料优先级](../product-rules/model-metadata-precedence.md)。
 

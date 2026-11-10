@@ -38,6 +38,7 @@ vi.mock('@/hooks/useTheme', () => ({
 
 vi.mock('@/hooks/useWallpaperSettings', () => ({
   useWallpaperSettings: () => ({
+    customizedKeys: window.electronAPI?.appearanceSettings?.getSync?.()?.customizedKeys,
     wallpaperId: 'none',
     wallpaperOverlay: 0.2,
     wallpaperMotion: 'static',
@@ -93,6 +94,23 @@ function renderSettings() {
 }
 
 describe('AppearanceSection terminal fonts', () => {
+  // Theme priority regression, unit with real settings rows: explicit built-in
+  // values can mask a theme. Value comparisons hid their only reset controls.
+  it('offers reset for explicit built-in font values that mask a theme', () => {
+    vi.stubGlobal('electronAPI', { appearanceSettings: {
+      getSync: () => ({ uiFamily: '', uiSize: 14, terminalFamily: '', terminalSize: 13,
+        customizedKeys: ['uiFamily', 'uiSize', 'terminalFamily', 'terminalSize', 'wallpaperId'] }),
+      onChanged: () => () => {},
+    } });
+    renderSettings();
+    const ui = screen.getByRole('button', { name: '选择界面字体' });
+    expect(within(ui.parentElement!).getByRole('button', { name: '恢复默认' }).hasAttribute('disabled')).toBe(false);
+    const terminal = screen.getByRole('button', { name: '选择终端字体' });
+    expect(within(terminal.parentElement!).getByRole('button', { name: '恢复默认' }).hasAttribute('disabled')).toBe(false);
+    const size = screen.getByRole('spinbutton', { name: '终端字号' });
+    expect(within(size.parentElement!.parentElement!.parentElement!).getByRole('button', { name: '恢复默认' }).hasAttribute('disabled')).toBe(false);
+    expect(within(screen.getByRole('region', { name: '壁纸' })).getByRole('button', { name: '恢复默认' }).hasAttribute('disabled')).toBe(false);
+  });
   // Replaces the catalog's JSX-text anchor scan (engineering-conventions §3.2):
   // a source match cannot prove a search result has a rendered destination.
   // Unit: each font search result must resolve to its real row.

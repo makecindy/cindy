@@ -44,7 +44,7 @@ describe('terminal appearance overrides', () => {
     const file = path.join(fixture.userData, 'appearance-settings.json');
     fs.writeFileSync(file, JSON.stringify(oldOverrides));
     const state = readAppearanceSettingsState();
-    expect(state.value).toEqual({ ...DEFAULT_APPEARANCE_SETTINGS, ...oldOverrides });
+    expect(state.value).toEqual({ ...DEFAULT_APPEARANCE_SETTINGS, ...oldOverrides, customizedKeys: Object.keys(oldOverrides) });
     expect(state.customizedKeys).not.toContain('terminalFamily');
     expect(state.customizedKeys).not.toContain('terminalSize');
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(oldOverrides);
@@ -66,7 +66,7 @@ describe('terminal appearance overrides', () => {
 
     await writeAppearanceSettingsPatch({ terminalSize: 13 });
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(otherOverrides);
-    expect(readAppearanceSettingsState().value).toEqual({ ...DEFAULT_APPEARANCE_SETTINGS, ...otherOverrides });
+    expect(readAppearanceSettingsState().value).toEqual({ ...DEFAULT_APPEARANCE_SETTINGS, ...otherOverrides, customizedKeys: Object.keys(otherOverrides) });
   });
 
   it('does not persist a defaults snapshot when restoring the only terminal override', async () => {
@@ -130,6 +130,11 @@ describe('terminal appearance overrides', () => {
     expect(appearanceService.read()).toMatchObject({ uiFamily: 'Helvetica', uiSize: 17, reading: { bodyLineHeight: 1.6, maxWidth: 800 } });
     await writeAppearanceSettingsPatch(appearanceResetPatch(['uiFont', 'reading', 'wallpaper']));
     expect(appearanceService.read()).toMatchObject({ uiSize: 20, terminalFamily: 'Menlo', reading: { bodyLineHeight: 1.6, maxWidth: 700 } });
+    await writeAppearanceSettingsPatch({ uiFamily: '', uiSize: 14, wallpaperId: 'none' });
+    expect(appearanceService.read().customizedKeys).toEqual(expect.arrayContaining(['uiFamily', 'uiSize', 'wallpaperId']));
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).customizedKeys).toBeUndefined();
+    await writeAppearanceSettingsPatch(appearanceResetPatch(['uiFamily', 'uiSize', 'wallpaperId']));
+    expect(appearanceService.read()).toMatchObject({ uiFamily: 'Helvetica', uiSize: 20, wallpaperId: 'custom' });
     const snapshot = appearanceService.snapshot();
     expect(Object.isFrozen(snapshot.settings.reading)).toBe(true);
     const wallpaperUrl = snapshot.settings.customWallpaperUrl!;

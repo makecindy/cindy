@@ -40,7 +40,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { DockIconPicker } from './DockIconPicker';
 import { SettingsTextInput } from './SettingsTextInput';
-import { FontFamilyPicker, FontFamilyResetButton } from './FontFamilyPicker';
+import { FontFamilyPicker } from './FontFamilyPicker';
 import { LayoutResetControl } from './LayoutResetControl';
 import { SETTINGS_PAGE_TITLE_CLASS, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { WallpaperSection } from './WallpaperSection';
@@ -331,6 +331,7 @@ export function AppearanceSection() {
   const navigate = useNavigate();
   const { theme, setTheme, familyId, setFamily } = useTheme();
   const {
+    customizedKeys,
     uiFamily,
     codeFamily,
     uiSize,
@@ -350,6 +351,7 @@ export function AppearanceSection() {
     resetTerminalFamily,
     resetTerminalSize,
   } = useFontSettings();
+  const customized = (key: string, legacy: boolean) => customizedKeys ? customizedKeys.includes(key) : legacy;
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
   const { mode: sidebarMainViewMode, setMode: setSidebarMainViewMode } = useSidebarMainViewMode();
   const { t } = useTranslation();
@@ -716,7 +718,7 @@ export function AppearanceSection() {
               id={appearanceSettings.fontUiFamilyLabel.targetId}
               title={t(appearanceSettings.fontUiFamilyLabel.titleKey)}
               hint={t(appearanceSettings.fontUiFamilyLabel.descriptionKey)}
-              action={<FontFamilyResetButton value={uiFamily} onReset={resetUiFamily} />}
+              action={<DefaultOverrideControls isCustomized={customized('uiFamily', Boolean(uiFamily.trim()))} onReset={resetUiFamily} />}
             >
               <FontFamilyPicker data-setting-id={appearanceSettings.fontUiFamilyLabel.id}
                 ariaLabel={t('settings.appearance.font.uiFamily.aria')}
@@ -731,7 +733,7 @@ export function AppearanceSection() {
             <SettingsField
               title={<span id={appearanceSettings.fontUiSizeLabel.targetId}>{t(appearanceSettings.fontUiSizeLabel.titleKey)}</span>}
               hint={t(appearanceSettings.fontUiSizeLabel.descriptionKey)}
-              action={<DefaultOverrideControls isCustomized={uiSize !== DEFAULT_UI_FONT_SIZE} onReset={resetUiSize} />}
+              action={<DefaultOverrideControls isCustomized={customized('uiSize', uiSize !== DEFAULT_UI_FONT_SIZE)} onReset={resetUiSize} />}
             >
               <div className="flex items-center gap-3">
                 <Slider data-setting-id={appearanceSettings.fontUiSizeLabel.id}
@@ -771,7 +773,7 @@ export function AppearanceSection() {
               id={appearanceSettings.fontCodeFamilyLabel.targetId}
               title={t(appearanceSettings.fontCodeFamilyLabel.titleKey)}
               hint={t(appearanceSettings.fontCodeFamilyLabel.descriptionKey)}
-              action={<FontFamilyResetButton value={codeFamily} onReset={resetCodeFamily} />}
+              action={<DefaultOverrideControls isCustomized={customized('codeFamily', Boolean(codeFamily.trim()))} onReset={resetCodeFamily} />}
             >
               <FontFamilyPicker data-setting-id={appearanceSettings.fontCodeFamilyLabel.id}
                 ariaLabel={t('settings.appearance.font.codeFamily.aria')}
@@ -787,7 +789,7 @@ export function AppearanceSection() {
             <SettingsField
               title={<span id={appearanceSettings.fontCodeSizeLabel.targetId}>{t(appearanceSettings.fontCodeSizeLabel.titleKey)}</span>}
               hint={t(appearanceSettings.fontCodeSizeLabel.descriptionKey)}
-              action={<DefaultOverrideControls isCustomized={codeSize !== DEFAULT_CODE_FONT_SIZE} onReset={resetCodeSize} />}
+              action={<DefaultOverrideControls isCustomized={customized('codeSize', codeSize !== DEFAULT_CODE_FONT_SIZE)} onReset={resetCodeSize} />}
             >
               <div className="flex items-center gap-3">
                 <Slider data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
@@ -827,7 +829,7 @@ export function AppearanceSection() {
               id={appearanceSettings.fontTerminalFamilyLabel.targetId}
               title={t(appearanceSettings.fontTerminalFamilyLabel.titleKey)}
               hint={t(appearanceSettings.fontTerminalFamilyLabel.descriptionKey)}
-              action={<FontFamilyResetButton value={terminalFamily} onReset={resetTerminalFamily} />}
+              action={<DefaultOverrideControls isCustomized={customized('terminalFamily', Boolean(terminalFamily.trim()))} onReset={resetTerminalFamily} />}
             >
               <FontFamilyPicker data-setting-id={appearanceSettings.fontTerminalFamilyLabel.id}
                 ariaLabel={t('settings.appearance.font.terminalFamily.aria')}
@@ -842,7 +844,7 @@ export function AppearanceSection() {
             <SettingsField
               title={<span id={appearanceSettings.fontTerminalSizeLabel.targetId}>{t(appearanceSettings.fontTerminalSizeLabel.titleKey)}</span>}
               hint={t(appearanceSettings.fontTerminalSizeLabel.descriptionKey)}
-              action={<DefaultOverrideControls isCustomized={terminalSize !== DEFAULT_TERMINAL_FONT_SIZE} onReset={resetTerminalSize} />}
+              action={<DefaultOverrideControls isCustomized={customized('terminalSize', terminalSize !== DEFAULT_TERMINAL_FONT_SIZE)} onReset={resetTerminalSize} />}
             >
               <div className="flex items-center gap-3">
                 <Slider data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}

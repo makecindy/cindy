@@ -1,7 +1,7 @@
 # Portable theme packages
 
-Use a ZIP archive with the `.cindy` suffix. File type comes from the contents,
-not from a different suffix. A data-only theme package contains no plugin code:
+Use a ZIP archive with the `.cindy` suffix. Contents determine its type. A theme
+package is data and assets, with no `ghost.json`, JavaScript or plugin declarations.
 
 ```text
 cindy.json
@@ -9,128 +9,161 @@ themes/light.json
 themes/dark.json
 assets/icon.png
 assets/logo.png
+assets/body.ttf
+assets/background.webp
 ```
 
-`cindy.json` is the file-level manifest:
+## V2 manifest and appearance
 
 ```json
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "type": "theme",
-  "themes": ["themes/light.json", "themes/dark.json"]
+  "themes": ["themes/light.json", "themes/dark.json"],
+  "resources": [
+    { "id": "body", "kind": "font", "path": "assets/body.ttf" },
+    { "id": "background", "kind": "image", "path": "assets/background.webp" }
+  ]
 }
 ```
 
-Each theme uses the JSON schema in [capabilities](capabilities.md). Its optional
-`brand.icon` and `brand.logo` must be relative to the **package root**, for example
-`"brand": { "icon": "assets/icon.png", "logo": "assets/logo.png" }`.
-Use different IDs and one shared `family` for light/dark. IDs must be unique;
-each family can contain at most one variant of each type. No arbitrary CSS,
-JavaScript, remote asset URLs, absolute host paths or directory traversal.
-Keep paths portable across macOS/Windows: `/` separators, no links, reserved
-device names, case-only aliases, trailing dots/spaces or special filename characters.
-Do not include `ghost.json`: it identifies a legacy plugin and takes precedence.
+Each document has the identity/colors schema in [capabilities](capabilities.md),
+optional `"brand": { "icon": "assets/icon.png", "logo": "assets/logo.png" }`,
+and optional appearance defaults. For example:
 
-Generate identifiers once when creating an independent theme. For example, this
-uses Python's standard library to generate three independent 128-bit random IDs:
+```json
+{
+  "uiFont": { "family": "Inter", "size": 15 },
+  "codeFont": { "family": "JetBrains Mono", "size": 14 },
+  "bodyFont": { "resource": "asset:body", "size": 16, "weight": 400 },
+  "terminalFont": { "family": "Menlo", "size": 14 },
+  "wallpaper": { "resource": "asset:background", "visibility": 0.4, "blur": 8, "motion": "static" },
+  "reading": { "bodyLineHeight": 1.8, "codeLineHeight": 1.5, "maxWidth": 760 },
+  "contentStyle": { "messageGap": 12, "messagePadding": 8, "messageRadius": 12 },
+  "density": 0.9,
+  "motion": 0.5
+}
+```
+
+Put this object under `appearance`, beside `colors`, not inside it. Each variant
+can carry its own defaults. Omitted values inherit normal Host defaults; no
+separate persisted palette or plugin theme registration is created.
+
+| Field | Allowed values |
+| --- | --- |
+| Font `family` / `resource` | Choose one: a family up to 256 characters, or `asset:<declared font id>`. No raw paths, URLs, Library or another plugin's resources. |
+| Font `size` | UI 12–24px; code/terminal 10–24px; body 12–28px. |
+| Font `weight`, `style` | UI/code/body: integer 100–900; `normal` or `italic`. Terminal accepts neither. |
+| Wallpaper `resource` | Declared `image` or `video`; `fallbackResource`, if supplied, is a declared image and requires `resource`. |
+| Wallpaper `visibility`, `blur`, `motion` | 0–1, 0–20px, `static` or `dynamic`. Visibility is artwork visibility, not veil opacity. |
+| `reading` | `bodyLineHeight` 1.2–2.4; `codeLineHeight` 1.1–2.4; `maxWidth` 320–1400px. |
+| `contentStyle` | `messageGap` 0–48px; `messagePadding` / `messageRadius` 0–32px. |
+| `density`, `motion` | 0.75–1.25 and 0–2. Neutral 1; motion 0 requests reduced motion. System reduced motion remains authoritative. |
+
+Objects contain only these fields. A font/reading/contentStyle/wallpaper object
+must contain at least one field. Resource IDs are unique, 1–64 letters, digits,
+`_` or `-`; `kind` is `font`, `image` or `video`. Declare at most 256 resources.
+Brand paths and resource paths are relative to the **package root**. Resources
+can be shared across variants; the declared kind must match each use.
+
+Paths use `/`, no links, absolute paths, traversal, Windows device names,
+case-only aliases, trailing dots/spaces or special filename characters.
+Do not include `ghost.json`: legacy plugin identification takes precedence.
+No remote asset URLs, arbitrary CSS, executable code or system-prompt changes.
+
+## Identity, validation and build
+
+Generate identifiers once for an independent theme, for example:
 
 ```bash
 python3 -c "import json, secrets; print(json.dumps({key: secrets.token_hex(16) for key in ('family', 'light', 'dark')}, indent=2))"
 ```
 
-Use `light` and `dark` as the respective theme IDs and `family` for both. Keep
-these values in the editable sources across revisions; do not regenerate them
-when packaging. They are stable identities, separate from the archive's content
-hash, which changes with colors or assets. Existing string IDs remain supported;
-the loader does not require hexadecimal IDs.
+Light and dark use their respective IDs and shared family. Revisions retain
+these values; independent copies get new ones. Existing string IDs are valid;
+hex-only IDs are not required. Content hashes change independently of theme IDs.
 
-From the Skill directory, validate and build using Python 3 (Windows: `py -3`):
+From the Skill directory (Windows: `py -3`):
 
 ```bash
 python3 scripts/validate_theme.py --package-root /task/mist /task/mist/themes/light.json /task/mist/themes/dark.json
 python3 scripts/package_theme.py /task/mist /task/mist.cindy
 ```
 
-The packager validates sources and includes only `cindy.json`, declared themes
-and referenced brand assets. It creates a new file without overwriting an old
-one. Limits: 256 KiB manifest, 1 MiB per theme JSON, 20 MiB per asset,
-256 MiB total output bytes before compression, 128 MiB archive, 256 variants and
-2048 archive entries. Keep original sources beside the deliverable for later edits.
+The checker validates the manifest, theme schema, references, resource kinds,
+font table bounds and media signatures, plus literal hex contrast. It lists
+full media/browser decoding and rendering as unchecked. The Host performs the
+final canonical decoding and validation during import/application.
 
-## Share and install
+The packager includes only the manifest, named documents, referenced brand assets
+and declared resources, and creates a new file without overwriting one. Limits:
+256 KiB manifest; 1 MiB per document; 20 MiB per brand image; 10 MiB font;
+20 MiB wallpaper image / 40 megapixels; 100 MiB MP4; 256 MiB total uncompressed;
+128 MiB archive; 256 variants; 2048 entries. Keep originals beside the deliverable.
 
-Send the `.cindy` file itself. Recipients double-click it or drag it into Cindy;
-the existing file picker also recognizes it. Cindy installs the theme and opens
-Appearance settings; the recipient chooses it from the normal theme list. It
-does not silently select the theme or overwrite wallpaper/font preferences.
-Brand paths are resolved on the recipient's computer. No source-machine paths
-or manual client changes are needed.
+## Share, install and select
 
-When the user asks the Agent to install it, discover the **running host** with
-`cindy_helper.list_tools({"query":"导入主题"})` and follow the returned operation
-schema. Supporting clients expose `import_theme_package` through `call_tool`:
+Send the `.cindy` file. Recipients double-click, drag it into Cindy, or use the
+existing file picker. Import adds it to Appearance's normal theme list and does
+not silently select it. Resource paths resolve on the receiving computer.
+
+When the Agent is asked to install, discover the **running host** through
+`cindy_helper.list_tools({"query":"导入主题"})` and follow the returned schema.
+Supporting clients expose:
 
 ```json
 {"name":"import_theme_package","args":{"filePath":"/task/mist.cindy"}}
 ```
 
-Relative paths resolve against this task's working directory; files outside it
-use the existing task file authorization. The importer accepts theme packages
-only and uses the same validation/installation as a native file drop. Inspect
-`status: "installed"` and `refreshed`: a false refresh means the file is installed
-but the current window did not confirm its list update. Do not re-import merely
-to retry that confirmation. `themes` describes available local variants and their
-selectable `themeFamily` IDs; `names` identifies the imported display names.
+Relative paths use this task's working directory; outside paths use existing file
+authorization. The importer accepts only themes and uses the native installer.
+`status: "installed"` confirms installation; `refreshed` reports whether the
+current window confirmed the list refresh. If false, do not reimport just to retry
+that confirmation. `themes` includes selectable `themeFamily` IDs.
 
-Importing does not select a theme. When application is requested, read
-`get_app_settings` with `section: "preferences"` before changing it. Select the
-returned family through `update_app_settings` with that section and a patch
-containing `themeFamily`; include `theme` (`light`, `dark` or `system`) only if
-the user requested a mode change. Read back the same section and inspect the real
-appearance. Retain the previous selection for restoration. Use the schemas
-returned by discovery, rather than assuming a tool exists on an older host.
+To apply when requested, read `get_app_settings` with `section: "preferences"`.
+Use the discovered `update_app_settings` schema to set `themeFamily`; set `theme`
+(`light` / `dark` / `system`) only when wanted. Read back and inspect the rendered
+appearance. Retain the previous selection. If the host lacks the importer, deliver
+the package and explain manual import; do not use shell `open`, a fixed installed
+application path, plugin installers or a replacement app as a workaround.
 
-If the target host lacks this importer, deliver the package and explain the
-manual drop/picker path. Do not run shell `open`, target `/Applications/Cindy.app`
-or install a replacement app to guess the right instance. Do not send a theme
-package to plugin tools or turn it into a plugin to bypass a missing importer.
+## Settings priority and restoration
 
-Installed packages live beneath the existing themes folder in
-`.packages/<archive SHA-256>/`. Original JSON and assets remain canonical;
-the installation record references the active document for each authored theme
-ID, without copying its palette. **Importing the same ID updates that theme's
-colors and referenced assets by default.** Runtime IDs and the authored family
-stay stable, so a selected theme continues using its updated version. Keep IDs
-stable when making a revision; use new IDs (and a distinct family for a separate
-theme) when making a copy. Display names and archive filenames do not decide updates.
+Selection contributes defaults through the same Host AppearanceService used by
+settings and approved plugin fixed writes. Explicit overrides win over the theme.
+Selecting/importing never silently erases existing custom fonts or wallpaper.
+The owner persists only overrides and selection, not copies of theme defaults.
 
-The same archive reuses its stored bytes. A changed archive can update matching
-IDs and add new ones in one operation; IDs absent from it remain installed.
-Different themes can reference images with identical filenames because each
-archive owns its files. All referenced content is validated before the active
-references change together. A failed update preserves the previous active
-colors/assets. This does not introduce a publisher/update service.
+If a theme field is masked, show which setting overrides it. Its existing
+**Restore default** removes that override and follows the active theme. Restoring
+one font size does not reset its family or other fonts. Do not clear all settings
+to apply one theme. Switching back restores inherited defaults, while explicit
+custom values remain; returning to a previous custom value needs that recorded
+value rather than reset.
 
-Old loose JSON files still load unchanged. If an imported package has a matching
-ID, its content becomes the effective local theme while the loose source file is
-left intact. Built-in themes retain their existing identities; local themes keep
-the existing runtime `-local` suffix.
+Installed content is immutable beneath `.packages/<archive SHA-256>/`. An atomic
+installation record selects the current document per authored ID. **Same ID
+updates by default**, keeping runtime IDs/family stable; different IDs coexist.
+Same archive reuses its bytes; IDs absent from an update remain installed. Equal
+asset filenames across archives cannot collide. All referenced content is
+validated before activation; failed updates preserve the old references/assets.
 
-After installation, verify selection, both requested modes, actual brand images
-and restart loading using [verification](verification.md). For an update, keep
-the previous package if the user needs to restore that revision by re-importing
-it; selecting the same theme does not undo a content update. Switch back to the
-previous theme to restore its colors and brand artwork. This data-only package
-does not carry wallpaper, fonts, runtime app icons or other appearance-plugin
-overrides. For those capabilities, produce an appearance **plugin** through the
-existing `cindy-plugin-creator` workflow and explain the difference to the user.
+Keep the previous package to undo a content update by reimporting it. Reselecting
+the same ID does not revert an update. Loose source files remain unchanged even
+when an installed package with matching ID becomes effective.
 
 ## Compatibility
 
-The generic loader in supporting clients checks `formatVersion` and `type`
-before reading type-specific payloads. Unknown types or newer versions show
-“This version does not support this file”; corrupt files have a separate error.
-Clients predating this loader may treat a theme as an invalid plugin. Do not
-promise that those existing binaries can display the new unsupported-file message.
-Legacy plugin packages with `ghost.json` keep their existing approval, install,
-update and credential behavior; they do not need a `cindy.json` manifest.
+V1 (`formatVersion: 1`, `type: "theme"`, `themes`) remains supported for colors,
+mode pairing and brand images. V1 cannot carry `appearance` or `resources`; build
+v2 for those. New clients preserve old theme selection and explicit settings on
+upgrade; renderer localStorage selection is adopted once, with old bytes retained
+if saving fails. Runtime rendering does not keep writing a second selection.
+
+Unknown file types or newer versions show “This version does not support this
+file”; malformed known packages have a separate invalid-file result. Older v1
+clients recognize v2 as unsupported. Clients predating generic file recognition
+may call it an invalid plugin; do not promise a new message in those binaries.
+Legacy `ghost.json` packages retain their original approval/install/update and
+credential behavior. Themes contain no plugin and require no plugin installation.

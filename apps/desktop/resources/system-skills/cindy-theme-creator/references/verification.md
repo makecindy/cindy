@@ -1,80 +1,57 @@
-# Verify the delivered appearance
+# Verify the delivered theme
 
-Choose checks for the parts actually requested. Keep one short verification record
-with the target Cindy build/computer, output paths, previous selection, and each
-check marked **passed**, **failed** or **not verified**. An unavailable check stays
-explicit; it does not become a reason to claim success or modify the host.
+Keep a short record: target Cindy build/computer, output paths, previous
+selection/settings, and each check marked **passed**, **failed** or **not verified**.
+An unavailable check stays explicit; it is not a reason to modify the Host.
 
 ## Before applying
 
-1. Keep generated JSON and source media together in the task output folder. Run
-   `python3 scripts/validate_theme.py <theme files...>` from this Skill directory.
-   It prints JSON and returns nonzero for invalid structure, duplicate IDs/variants
-   or missing referenced brand files. Warnings and unchecked CSS/image properties
-   need review; the script never installs or changes settings.
-   For a portable package, pass `--package-root`, build it with `package_theme.py`
-   and verify the exact `.cindy` file on the receiving client. A loose JSON check
-   does not prove that the archive contains its referenced assets.
-2. Before making a companion plugin, confirm the target host exposes the matching
-   appearance API and current authoring reference. If either is absent, leave
-   those capabilities explicitly unavailable. Then use the plugin validator/build
-   workflow from `cindy-plugin-creator` to check declared fields, resources and
-   packaging. Manifest validation alone does not prove a field is implemented.
-3. Capture the prior theme family/mode and the settings this result will change.
-   Preserve the original files. Test on the target computer and existing allowed
-   profile; do not copy credentials or create an unrelated replacement account.
-4. Produce a preview using the real palette and real assets. Include body and
-   secondary text, input/focus, a tool result, code, a table, user/assistant messages,
-   and warning/error/success states where affected. Avoid previewing only swatches.
+1. Keep editable JSON and source assets in the task folder. Run the read-only
+   validator with `--package-root`, then the packager. Review warnings and the
+   `unchecked` list. No Python check proves that the archive actually rendered.
+2. Confirm the target client supports v2 before promising complete appearance.
+   Use v1 only for its supported colors/brand subset; do not generate an appearance
+   plugin to fill a theme's missing parts.
+3. Capture prior family/mode and relevant explicit overrides. Use the existing
+   target profile and tools; do not copy credentials or replace the running app.
+4. Preview real palette/assets with body/secondary text, inputs/focus, a tool
+   result, code, a table, messages and affected status states.
 
 ## Acceptance matrix
 
 | Part | Evidence required to call it verified |
 | --- | --- |
-| Global colors | Actual Cindy selection and representative views; no missing CSS values, unreadable controls or semantic status confusion. |
-| Mode pairing | Switch each requested variant and system-follow mode; verify selected family and actual colors. Inspect each variant separately. |
-| Update by ID | Import a revision with the same IDs and changed colors/assets. The theme list does not grow, the selected identity remains valid, both changes render, and unrelated themes remain available. A rejected update preserves the old appearance. Keep the previous package for rollback. |
-| Brand images | New-task page and preview show the intended icon/logo at actual display size, without clipped detail, unwanted background or stale images after refresh. |
-| Wallpaper | Real app background, legible foreground, requested blur/visibility; motion and static alternative where provided. A media file alone is not application evidence. |
-| Fonts | Actual body/code/UI sample with Latin, Chinese, digits, punctuation and requested weights; check missing glyphs and size. Check terminal separately if changed. |
-| Reading/message style | Real message width, line height, gap, padding and radius; long content stays usable in a narrower window. |
-| Application icon | Native mutation receipt plus observation of the macOS Dock or supported running window. A brand preview or Finder icon is not this check. |
-| Visibility/custom view | Intended window/regions change; a reachable action restores them. Confirm unrelated windows and permission UI remain usable. |
-| Restore | The previous selection/custom values or explicitly named defaults return for changed fields, without resetting unrelated preferences. |
+| Colors | Actual Cindy selection and representative views; readable controls, resolved CSS and distinct semantic statuses. |
+| Modes | Comparable Light/Dark screenshots; switch requested variants and system-follow mode, verify actual colors/family. |
+| Update by ID | A revised package changes colors/assets/defaults without growing the list or changing selected identity. Unrelated themes remain; a rejected update preserves the active version. |
+| Brand images | New-task page shows actual icon/logo crop at display size, no stale image or unwanted background. This does not verify Dock icons. |
+| Wallpaper | Real Cindy canvas, expected visibility/blur, readable foreground; image fallback and MP4 playback/static mode when provided. Check visibility 0 and reduced motion. |
+| Fonts | Actual UI/body/code/terminal samples with Latin, Chinese, digits and punctuation; resources decode, missing-glyph fallback works. Terminal fits after font load without restarting the shell. |
+| Reading/styles | Real line height, width, gap, padding and radius; long content fits a narrow window. |
+| Density/motion | Requested spacing/duration changes, restoring neutral 1 does not compound scale. Theme motion 0 and OS Reduce motion both suppress animation; theme settings never override OS reduction. |
+| Priority | A pre-existing custom font/wallpaper remains after theme selection. Clear only its named override when desired, and verify it then follows the theme across mode changes. |
+| Restore | Prior selection or recorded custom values return without resetting unrelated settings. One font-size reset preserves family and other fonts. |
+| Persistence | When in scope, reopen the same profile and verify selection, resources and overrides before interacting. Upgrade without changes preserves current choices. |
 
-For a paired theme, collect comparable light/dark screenshots of the same sample.
-Inspect the screenshots; file existence or a screenshot-tool exit code alone does
-not prove the appearance is correct. Test hover, keyboard focus and disabled
-controls where relevant. Record any code/editor/terminal or Mobile exclusions.
+Inspect the screenshots, including focus/disabled/hover states where affected.
+File existence or a tool exit code alone is not visual verification. Code/editor
+palettes, native icons, OS wallpaper and Mobile behavior retain their stated
+boundaries.
 
-## Mutation and persistence receipts
+## Receipts and readback
 
-Use the existing host/plugin call and read back the effective values. Distinguish:
+- Import `status: "installed"` is not selection; `refreshed: true` confirms the
+  current window updated its list. Read back `preferences.themeFamily` and the
+  effective appearance after selecting. A real data-theme import does not ask to
+  install a plugin.
+- Saved settings are not proof of visible application. Inspect the actual view,
+  loaded font and displayed media; record saved-only and failed states accurately.
+- Explicit overrides can mask theme defaults. Report them instead of silently
+  deleting preferences. Reset follows the current theme, while restoring previous
+  custom values needs the actual recorded values. Do not overwrite later edits.
+- Same-ID content rollback requires the prior package; switching selection alone
+  cannot undo a package update. Do not promise cross-device synchronization.
 
-- Theme import `status: "installed"` confirms installation, not selection.
-  `refreshed: true` confirms the current window's theme list was refreshed.
-  Apply and read back `preferences.themeFamily` separately when requested; a
-  real theme import does not ask to install an executable plugin. If the output
-  also includes an appearance plugin, identify and verify that companion separately.
-- `application.status: "applied"`: the host confirmed application. Still inspect
-  the rendered/native result before describing it as visually verified.
-- `"saved"`: preferences were saved without current application confirmation,
-  including superseded changes. State that result; do not label it applied.
-- `"failed"`: report the actual failure and inspect current state before changing
-  anything again. Do not silently retry or edit application files.
-
-Use the API's revision option when making or restoring asynchronous changes. An
-old preview must not overwrite the user's later choice. Reset only fields changed
-by this theme. Show whether an action restores defaults or recorded prior custom
-values; these are different outcomes.
-
-If restart persistence is requested, reopen with the same theme files or an active,
-approved plugin and verify the result. Runtime icons are rebuilt from valid plugin
-resources at startup; stopping/uninstalling the provider may release them. Do not
-promise persistent installation icons or cross-device synchronization.
-
-## Delivery record
-
-Keep the handoff compact: theme/plugin and asset paths; preview and screenshot
-paths; how to select/apply; how to restore; passed checks; and specific unverified
-parts. Do not claim that the user's app changed when only a preview was produced.
+Deliver the `.cindy`, editable sources/assets, preview and screenshot paths,
+selection/restore instructions, and passed/failed/unverified checks. Never claim
+that the user's real app changed when only a preview was produced.

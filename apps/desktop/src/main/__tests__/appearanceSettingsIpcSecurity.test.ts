@@ -517,7 +517,7 @@ describe('appearance settings IPC authorization', () => {
   it.each([
     { terminalFamily: 1 }, { terminalFamily: 'x'.repeat(257) },
     { terminalSize: '13' }, { terminalSize: NaN }, { terminalSize: Infinity },
-    { terminalTheme: 'dark' }, null, [],
+    { terminalTheme: 'dark' }, { customizedKeys: ['terminalFamily'] }, null, [],
   ])('rejects malformed or unapproved terminal appearance patch %j before writing', async (patch) => {
     await expect(getSetHandler()({}, patch)).rejects.toThrow('[INVALID_PARAMS]');
     expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();

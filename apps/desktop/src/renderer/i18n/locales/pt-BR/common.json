@@ -2196,7 +2196,7 @@
       "createTheme": {
         "label": "Criar tema",
         "hint": "Descreva um estilo ou adicione uma imagem de referência para personalizar a aparência do Cindy.",
-        "prompt": "Ajude-me a criar um tema do Cindy. O estilo que quero é:",
+        "prompt": "Ajude-me a criar um pacote de tema do Cindy para compartilhar, com prévia e verificação. O estilo que quero é:",
         "unavailable": "A Skill de criação de temas não está disponível. Verifique nas Skills se ela está ativada.",
         "startFailed": "Não foi possível abrir a tarefa de criação de tema"
       },

@@ -2158,7 +2158,7 @@
       "createTheme": {
         "label": "Design erstellen",
         "hint": "Beschreibe einen Stil oder füge ein Referenzbild hinzu, um Cindys Erscheinungsbild zu gestalten.",
-        "prompt": "Hilf mir, ein Cindy-Design zu erstellen. Mein gewünschter Stil:",
+        "prompt": "Hilf mir, ein teilbares Cindy-Themenpaket mit Vorschau und Prüfung zu erstellen. Mein gewünschter Stil:",
         "unavailable": "Der Skill zum Erstellen von Designs ist nicht verfügbar. Prüfe unter Skills, ob er aktiviert ist.",
         "startFailed": "Die Aufgabe zum Erstellen eines Designs konnte nicht geöffnet werden"
       },

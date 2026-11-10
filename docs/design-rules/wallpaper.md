@@ -33,6 +33,14 @@ Composer scroll masking must align with the same wallpaper instead of introducin
 Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
 Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
 
+Data-only v2 theme packages may supply wallpaper defaults through the same
+AppearanceService and media ingestion/decoding used by settings and approved
+fixed plugin operations. Explicit wallpaper overrides win; clearing the named
+override follows the selected theme. No second canvas, media protocol or per-theme
+glass styles are introduced. The shared renderer canvas lives in
+`renderer/appearance/WallpaperPresenter.ts`; the original hook is a thin export.
+Theme motion 0 also reduces transitions/playback, and OS Reduce motion always wins.
+
 The built-in picker lists 13 artworks (user curation, 2026-10-17): the Cindy group —
 Whisper, Night Glance, Scarlet Stroll, Neon Silhouette, Prism Shards — followed by
 Night Launch, Silent Orbits, Dune Dawn, Planet Dawn, Indigo Folds, Dune Sphere,
@@ -276,4 +284,3 @@ up the entire frame to shorten a blink, which also accelerates curtains, hair an
 shadows (user correction, 2026-10-02). Avoid mid-blink reopening, alternating-frame
 holds and doubled eyelid outlines. Decoder frame counts alone do not establish natural
 motion; inspect the complete action and loop boundary before accepting an asset.
-

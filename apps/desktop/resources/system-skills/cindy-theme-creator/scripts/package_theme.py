@@ -8,7 +8,8 @@ from pathlib import Path
 import sys
 import zipfile
 
-from validate_theme import is_package_path, package_file, validate_themes
+sys.dont_write_bytecode = True
+from validate_theme import RESOURCE_LIMITS, package_file, validate_manifest, validate_resource_bytes, validate_themes
 
 
 def build_package(root: Path) -> bytes:
@@ -31,16 +32,14 @@ def build_package(root: Path) -> bytes:
         files[relative] = content
         return content
 
-    manifest = json.loads(read("cindy.json", 256 * 1024))
-    if not isinstance(manifest, dict) or type(manifest.get("formatVersion")) is not int or manifest["formatVersion"] != 1 or manifest.get("type") != "theme":
-        raise ValueError("Expected cindy.json with formatVersion: 1 and type: theme.")
-    names = manifest.get("themes")
-    if not isinstance(names, list) or not 1 <= len(names) <= 256 or not all(is_package_path(name) for name in names) or len(set(names)) != len(names):
-        raise ValueError("themes must list 1–256 unique portable JSON paths.")
+    manifest = validate_manifest(json.loads(read("cindy.json", 256 * 1024)))
+    names = manifest["themes"]
     documents = [json.loads(read(name, 1024 * 1024)) for name in names]
     report = validate_themes([package_file(root, name) for name in names], root)
     if not report["ok"]:
         raise ValueError("\n".join(report["errors"]))
+    if package_file(root, "cindy.json").read_bytes() != files["cindy.json"]:
+        raise ValueError("Manifest changed during validation.")
     for name, document in zip(names, documents):
         # Validation reads source files too; do not package a concurrently edited document.
         if package_file(root, name).read_bytes() != files[name]:
@@ -51,6 +50,8 @@ def build_package(root: Path) -> bytes:
                 asset = brand.get(role)
                 if isinstance(asset, str) and asset.strip():
                     read(asset.strip(), 20 * 1024 * 1024)
+    for resource in manifest.get("resources", []):
+        validate_resource_bytes(read(resource["path"], RESOURCE_LIMITS[resource["kind"]]), resource["kind"])
     if len(files) > 2048 or "ghost.json" in files or len({name.lower() for name in files}) != len(files):
         raise ValueError("Theme files conflict with each other or the plugin manifest.")
     for name in files:

@@ -48,6 +48,7 @@ export class AppearanceService {
     if (value.wallpaperId === 'custom' && !value.customWallpaperUrl) value.wallpaperId = 'none';
     const customizedKeys = raw.customizedKeys.filter(key => key !== 'themeSelection' ||
       JSON.stringify(raw.value.themeSelection) !== JSON.stringify(DEFAULT_THEME_SELECTION));
+    value.customizedKeys = customizedKeys;
     return { defaults, value, customizedKeys, isCustomized: customizedKeys.length > 0 };
   }
   readState() { return this.compose(this.raw()); }
