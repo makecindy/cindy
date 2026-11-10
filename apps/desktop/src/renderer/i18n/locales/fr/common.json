@@ -6855,6 +6855,7 @@
         "renameFailed": "Échec du renommage",
         "deleted": "Appareil supprimé",
         "deleteOnline": "Ce serveur ne permet pas encore de retirer des appareils en ligne. Réessayez après la mise à niveau du service.",
+        "deleteRejectedWhileOffline": "Impossible de supprimer l'appareil : le serveur l'indique encore en ligne, alors qu'il apparaît hors ligne ici.",
         "deleteFailed": "Échec de la suppression",
         "disconnected": "Toutes les connexions à distance ont été coupées",
         "disconnectFailed": "Échec de la déconnexion à distance",

@@ -221,7 +221,7 @@ describe('Pi runtime capability lifecycle', () => {
   // Existing lifecycle cases only dispatched unpinned messages during discovery.
   it.each([
     { status: 'failed', error: 'discovery rejected' },
-    { status: 'unknown', error: 'unsupported command' },
+    { status: 'unknown', error: 'Unknown command: get_commands' },
   ])('waits for pinned Skill provenance after a $status discovery attempt', async ({ status, error }) => {
     vi.useFakeTimers();
     captured.runtimeFailures.add('s1');

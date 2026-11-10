@@ -6745,6 +6745,7 @@
         "renameFailed": "易名未成",
         "deleted": "裝置已刪",
         "deleteOnline": "今伺服器尚不支援移除在線裝置，請俟服務升級後再試。",
+        "deleteRejectedWhileOffline": "裝置未能刪除：伺服器仍記其在線，與清單所示失聯不合",
         "deleteFailed": "刪除未成",
         "disconnected": "諸遠端連線已斷",
         "disconnectFailed": "斷開遠端連線未成",
