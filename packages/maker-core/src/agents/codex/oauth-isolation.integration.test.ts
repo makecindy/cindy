@@ -79,7 +79,10 @@ describe.skipIf(!binaryPath)('CodexAgent disk OAuth isolation with real app-serv
     });
     try {
       if (revoked) {
-        await expect(agent.startSession({ sessionId: 'official-revoked', providerId: 'openai', model: 'fixture-model', workingDir })).rejects.toThrow(/refresh|revoked|logged out/i);
+        // Codex words this failure differently across releases (0.166 reports the cloud config
+        // bundle instead of the refresh); the contract is that the official route fails after a
+        // refresh attempt while the custom route below stays usable.
+        await expect(agent.startSession({ sessionId: 'official-revoked', providerId: 'openai', model: 'fixture-model', workingDir })).rejects.toThrow(/Failed to start Codex thread/);
         expect(calls.some((call) => call.includes('/oauth/token'))).toBe(true);
       }
       const cloudCallsBeforeCustom = calls.filter((call) => call.includes('/oauth/token') || call.includes('/config/bundle'));
