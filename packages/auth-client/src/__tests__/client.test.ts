@@ -203,7 +203,16 @@ describe("CindyAuthClient", () => {
   // #9356: RATE_LIMITED stays the client category. The server's own code and a
   // correlation id must survive so a failed send can be matched later; a missing
   // or unsafe id is recorded as absent instead of guessed.
-  it.each([
+  type RateLimitDiagnosticRow = {
+    label: string;
+    body: unknown;
+    headers: Record<string, string | undefined>;
+    serverCode: string | undefined;
+    requestId: string | undefined;
+    hasRetryAt: boolean;
+  };
+
+  it.each<RateLimitDiagnosticRow>([
     {
       label: "keeps a daily-quota code beside the category",
       body: { error: { code: "SMS_DAILY_LIMIT", message: "daily limit" } },
@@ -277,10 +286,7 @@ describe("CindyAuthClient", () => {
     try {
       const fetch: AuthFetch = async () => ({
         ...response(429, row.body),
-        headers: {
-          get: (name) =>
-            (row.headers as Record<string, string | undefined>)[name.toLowerCase()] ?? null,
-        },
+        headers: { get: (name) => row.headers[name.toLowerCase()] ?? null },
       });
       await expect(
         client(fetch).requestCode("phone", "13800138000"),
