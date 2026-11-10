@@ -253,10 +253,14 @@ describe('bootstrap directory-grant wiring', () => {
     const bootstrapEnd = registerSource.indexOf('\n  // switchFocus', bootstrapStart);
     const bootstrap = registerSource.slice(bootstrapStart, bootstrapEnd);
 
-    expect(bootstrap.indexOf('await prepareDirectoryGrantsForBootstrap')).toBeGreaterThanOrEqual(0);
-    expect(bootstrap.indexOf('await prepareDirectoryGrantsForBootstrap')).toBeLessThan(
-      bootstrap.indexOf('await maker.createSession(o, creationSignal)'),
-    );
+    // Cross-file permission invariant: private bootstrap must persist narrowed
+    // grants before creation. Prompt assembly may change the options variable;
+    // neither that name nor a missing creation call can satisfy this contract.
+    const prepareGrants = bootstrap.indexOf('await prepareDirectoryGrantsForBootstrap(');
+    const createRuntime = bootstrap.indexOf('await maker.createSession(');
+    expect(prepareGrants).toBeGreaterThanOrEqual(0);
+    expect(createRuntime).toBeGreaterThanOrEqual(0);
+    expect(prepareGrants).toBeLessThan(createRuntime);
     expect(bootstrap).toContain('if (existing) await persistSessionFields(sessionId, patch);');
     expect(bootstrap).toContain('readPersistedWritableDirs: readSessionWritableDirsFromDb');
   });
