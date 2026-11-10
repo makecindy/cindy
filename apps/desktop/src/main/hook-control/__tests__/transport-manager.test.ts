@@ -5209,6 +5209,35 @@ describe('coexisting Feishu bot manager', () => {
   const app = { appId: 'cli_app', brand: 'feishu' as const, appType: 'store' as const, botName: 'Cindy', organization: 'example' };
   const other = { ...app, appId: 'cli_org', appType: 'self_built' as const, botName: 'Org Cindy' };
   const applications = [{ app, bindings: [FEISHU_CONFIRMED] }, { app: other, bindings: [org] }];
+  // Review regression / unit: app display ordering is not the legacy account
+  // projection. Prior tests used the projected app first and hid this distinction.
+  it('keeps the projected app canonical when application ordering differs', async () => {
+    const notifyProviderPrefs = vi.fn();
+    const { manager, transports, sent, store } = feishuLaneHarness({ notifyProviderPrefs }, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'coexist', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, applications: [applications[1]!, applications[0]!] }), () => true);
+    expect(manager.snapshot().feishu.applications).toEqual([other, app]);
+    expect(manager.snapshot().feishu.binding?.bindingId).toBe(FEISHU_CONFIRMED.bindingId);
+    expect(store.get().feishuBindingCache?.bindingId).toBe(FEISHU_CONFIRMED.bindingId);
+    const reading = manager.getProviderWorkspacePrefs('feishu');
+    const request = sent.findLast((frame) => frame.type === 'provider.prefs.get')!;
+    if (request.type !== 'provider.prefs.get') throw new Error('prefs request missing');
+    expect(request.payload.bindingId).toBe(FEISHU_CONFIRMED.bindingId);
+    opts.onMessage(makeProviderPrefsState({ provider: 'feishu', bindingId: request.payload.bindingId, scopeId: null,
+      replyTo: request.payload.requestId, bound: true, prefs: [] }), () => true);
+    await reading;
+    opts.onMessage(makeProviderBindState({ ...org, applications }), () => true);
+    expect(manager.snapshot().feishu.binding?.bindingId).toBe(org.bindingId);
+    expect(store.get().feishuBindingCache?.bindingId).toBe(org.bindingId);
+    opts.onMessage(makeProviderPrefsState({ provider: 'feishu', bindingId: FEISHU_CONFIRMED.bindingId!, scopeId: null,
+      replyTo: null, bound: true, prefs: [] }), () => true);
+    expect(notifyProviderPrefs).not.toHaveBeenCalled();
+    opts.onMessage(makeProviderPrefsState({ provider: 'feishu', bindingId: org.bindingId!, scopeId: null,
+      replyTo: null, bound: true, prefs: [] }), () => true);
+    expect(notifyProviderPrefs).toHaveBeenCalledOnce();
+  });
+
   // Review regression / unit: later snapshots must revoke removed authorities
   // without reconnect, while retaining an authorization for an app still allowed.
   it('applies later app snapshots, preserves a live attempt and rejects removed app traffic', async () => {

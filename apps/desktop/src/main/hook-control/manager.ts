@@ -1893,6 +1893,13 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
             else lane.revokedBindingIds.add(id);
           }
           lane.snapshotChanges.clear();
+          if (multiAppReady(lane)) {
+            // UI application order is independent of the server's legacy projection.
+            lane.confirmedBindings = [
+              ...lane.confirmedBindings.filter((row) => row.scopeId === payload.scopeId),
+              ...lane.confirmedBindings.filter((row) => row.scopeId !== payload.scopeId),
+            ];
+          }
         } else if (view.state === 'confirmed' && view.bindingId) {
           lane.revokedBindingIds.delete(view.bindingId);
           const index = lane.confirmedBindings.findIndex((row) => row.bindingId === view.bindingId);
