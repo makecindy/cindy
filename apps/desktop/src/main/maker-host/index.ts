@@ -132,6 +132,7 @@ import {
   dispatchInterAgentMessage,
   captureRemoteWorkerReportSettlement,
   captureLocalWorkerReport,
+  getOrcaWorkerReportQueue,
   getSessionActiveInputClientIds,
   getSessionInputProvenance,
   isActiveInputOwnerAuthored,
@@ -382,6 +383,7 @@ import {
   codexSmartSubagentRoutingSignature,
   prepareCodexSmartSubagentConfig,
   selectCodexSmartSubagentCandidates,
+  withParentReasoningEffort,
 } from './codex-smart-subagent-routing.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import {
@@ -1351,6 +1353,13 @@ export function getMaker(): Maker {
       },
       dispatchInterAgentMessage,
       captureLocalWorkerReport,
+      // 宿主队列服务在 IPC 注册时创建(晚于本 deps 构造, 早于任何 bridge 回调), 调用时再取。
+      workerReportQueue: {
+        list: (identity) => getOrcaWorkerReportQueue().list(identity),
+        update: (params) => getOrcaWorkerReportQueue().update(params),
+        cancel: (params) => getOrcaWorkerReportQueue().cancel(params),
+        merge: (params) => getOrcaWorkerReportQueue().merge(params),
+      },
     } satisfies OrcaBridgeMcpDeps;
     const orcaWorkerBridgeProvider = createOrcaWorkerBridgeMcpProvider(orcaBridgeDeps);
     remoteWorkerBridge = createOrcaRemoteWorkerBridge({
@@ -2341,10 +2350,25 @@ export function getMaker(): Maker {
         text,
         subagentRoute,
         smartSubagentRoutes,
+        reasoningEffort,
       }) =>
         registerCodexProxyComposed(sessionId, threadId, text, {
           ...(subagentRoute ? { subagentRoute } : {}),
-          ...(smartSubagentRoutes ? { smartSubagentRoutes } : {}),
+          // 共享的 app-server 目录不带档位。只给这条线程的智能路由盖上父任务当前档位，
+          // 避免恢复后子代理掉回目录默认 low。优先用登记时带上的活档位：冷恢复
+          // 这一刻 session store 还没从数据库 hydrate。
+          // 空字符串是「不用推理」的显式哨兵，不能再去 store 里找一个默认档。
+          // 字段缺席是「这一轮没有已选档位」（agent 不把目录默认 high 登记过来），
+          // 同样不盖章：store 在任务从没存过档位时也会被填成目录默认，读它
+          // 会把子代理自己选的 low 盖掉。
+          ...(smartSubagentRoutes
+            ? {
+                smartSubagentRoutes: withParentReasoningEffort(
+                  smartSubagentRoutes,
+                  reasoningEffort !== undefined ? reasoningEffort : null,
+                ),
+              }
+            : {}),
         }),
       getCodexSubagentIdentity: ({ childThreadId }) =>
         getObservedCodexSubagentIdentity(childThreadId),
@@ -2569,7 +2593,7 @@ export function getMaker(): Maker {
     _mcpProviders.pi = piMcpProviders;
     // 用户自定义 MCP:三个 agent 都必须注册其实际持有的数组引用，再统一做初始 refresh。
     // localDb onReady 可能在 Maker 构造前就已触发（此时 registry 无数组，refresh 空跑）；
-    // 在此补一次 refresh，若 DB 尚未就绪则 refreshCustomMcpProviders 内部 catch 后静默跳过。
+    // 在此补一次 refresh；DB 尚未就绪时显式延后，由 onReady 的账号路由屏障补齐。
     // 此后每次 CRUD（mcpHandlers.afterChange）也会原地刷新三份数组；运行中会话保持启动快照。
     registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders, piMcpProviders);
     _initialCustomMcpRefresh = refreshCustomMcpProviders().then(() => { refreshInstalledPluginApps(); });

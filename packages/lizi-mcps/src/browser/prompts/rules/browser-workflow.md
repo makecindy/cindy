@@ -95,7 +95,7 @@
   - 仅此模式支持:`act:saveResource`(托管下载)、以及 `query` 语义元素查询(role / name / text / label / placeholder / testId / css)。在外置模式下用这两个会被 schema 或运行时门控直接拒掉,别当通用能力使。
 - **`data.backend === "external"` = 独立外置浏览器**:一个专属持久自动化浏览器窗口(profile 显示为 "Cindy")。`act:saveResource` 与语义 `query` 在此模式不可用,元素定位改用 snapshot 的 `ref` 或 `selector`。旧宿主可能省略该字段,不要把缺少模式信息当成已使用内置浏览器。
   - 此模式的 `status.data.proxy` 报告当前启动路由:`direct`、`proxied`(带脱敏 `server`)或无法确认继承进程路由时的 `unknown`。需要指定代理时必须重新调用 `start` 并检查结果,不要从已有 tab 猜测出口。代理模式下只有 `proxyAllowedHostnames` 列出的公网域名可导航,内网地址不在其中。
-- **`data.backend === "user-browser"` = 用户正在使用的浏览器(经 Cindy 扩展)**:页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 不启停它。`open` 的新页面开在 Cindy 自己的后台窗口里,不抢焦点,登录态与用户共用;默认用 `open` 开自己的页面,不在用户自己的标签页(`tabs` 里 `owner:"user"`)上操作,也不要关闭、重排或切换它们。
+- **`data.backend === "user-browser"` = 用户正在使用的浏览器(经 Cindy 扩展)**:页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 在实际使用时会按需启动浏览器并等待扩展连接，不关闭它；status / doctor 只读状态，不启动浏览器。`open` 的新页面开在 Cindy 自己的后台窗口里,不抢焦点,登录态与用户共用;默认用 `open` 开自己的页面,不在用户自己的标签页(`tabs` 里 `owner:"user"`)上操作,也不要关闭、重排或切换它们。
     - 不改变用户眼前的东西:不切换用户窗口里的标签页(`focus` 对用户窗口会被拒绝),也不把任何窗口带到前台。需要用户亲手操作(登录、验证码)时对 Cindy 窗口里的那一页 `focus`:它在 Cindy 窗口内切到这一页并让浏览器图标闪动提醒,然后告诉用户切到 Chrome 的 Cindy 窗口去完成。截图(只限可视区域)、`evaluate`、`requests` / `responseBody`、上传、原生弹窗、`focus` / `close`、坐标点击、拖拽、`resize` 可用,但有这些差别:
     - 这些动作要 Chrome 的调试接口,而 Chrome 不允许扩展按需申请,所以这里做不了:`pdf`、读 Cookie 或抓网络请求的配方;整页 / 元素截图退回可视区域并在 `note` 里说明,用户窗口里的后台标签页不能截图。不要让用户去找开启入口;需要时告诉用户可以改用 Cindy 专用浏览器,由用户决定。大文件上传不受影响,最大 1 GB。`resize` 只作用于 Cindy 自己的窗口。
     - 快照已包含所有 iframe 和开放 Shadow DOM 里的内容,主内容区与对话框排在最前,ref 可直接操作,不需要 `frame` 参数(`evaluate`、`extract` 与 selector 定位的动作仍只作用于顶层页面)。`truncated:true` 表示后面还有内容:加大 `limit` / `maxChars` 或用 `selector` 限定(如 `[role=main]`),不要据此判断页面上没有或工具做不到。
@@ -103,7 +103,7 @@
     - 控制台从第一次 `console` 调用开始捕获;`requests` 来自页面资源计时(无方法与请求头);`responseBody` 以页面身份重新请求该地址;`dialog` 预先应答页面下一个 alert / confirm / prompt,已经弹出的原生弹窗需要用户自己处理。
     - 不支持:`saveResource` 与语义 `query`。`status.data.updateNote` 出现时说明扩展是旧版,只有基础读取与交互,请用户更新 Cindy 扩展。遇到不支持的操作先告诉用户,由用户决定是否改用专用浏览器,**不要自行 setBackend 切换**。
   - `profile` 是浏览器连接 id(一个浏览器用户配置一条),多条连接时必须指定,不要猜账号。
-  - 页面跳转后旧 ref 失效(报 `STALE_REF`),先 `snapshot` 再继续;旧版扩展按 URL 寻址,跳转会报 `PAGE_CHANGED`,`navigate` 也可能落在另一个标签页并返回新的 targetId。`status.data.connected === false` 时请用户在自己的浏览器里安装并启用 Cindy 扩展,不要反复重试。
+  - 页面跳转后旧 ref 失效(报 `STALE_REF`),先 `snapshot` 再继续;旧版扩展按 URL 寻址,跳转会报 `PAGE_CHANGED`,`navigate` 也可能落在另一个标签页并返回新的 targetId。`status.data.connected === false` 时先调用一次 `start`，宿主会尝试启动浏览器并等待扩展连接；恢复后继续任务。只有自动启动与等待后仍未连接，才根据返回原因请用户检查扩展启用或配对状态，不反复重试，也不把断线等同于未安装。
 
 `setBackend` 与设置页修改同一个**全局、持久**选择,会影响其他正在使用浏览器的任务,旧模式的操作可能中断。仅按用户明确的模式要求切换,无需重复确认;不要因页面报错自行换模式。切换后重新 `tabs` / `snapshot`,不沿用旧模式的 targetId、ref 或登录态。宿主不支持切换或返回失败时如实说明,不能声称切换成功。
 
@@ -115,8 +115,8 @@
 - **公开内容的免登录配方**：公开页面要求登录才能放大图片或继续阅读时，先检查返回的配方建议或该站 `siteguide` 是否提供免登录的公开只读路径；有则先用配方读取公开内容，媒体 URL 仍需继续实际读图。只有该路径不存在或实际失败后，才转入下面的登录交接。私密、已删除或明确受权限限制的内容仍遵守其访问限制，不尝试绕过授权。
 - 操作需要登录态的站点前,导航后先 `action: "snapshot"`(必要时配 `screenshot` 视觉确认)判断是否已登录。**不要**用 `profiles` 判断登录态——它不携带按站点的登录信号。
 - **撞到登录墙 / "请重新登录" 时**,先 `action: "focus"`(带该 tab 的 `targetId`)把该 tab 切成活动 tab,再按环境处理:
-  1. **外置浏览器与我的浏览器(user-browser)**:调用 `ask_owner`(`kind:"fill"`,`target` 传浏览器应用名和该页标题 `window_title`)后结束本轮。宿主会把窗口恢复并带到前面,主人直接在窗口里登录(手机或其它电脑走实时画面),完成后你会收到续接,或者主人直接发来消息。**不要**再解释窗口在哪,也不要催。
-  2. **侧边栏(rsb-webview)**:页面在 Cindy 里,不是系统窗口,`ask_owner` 用不了。请用户**直接在 Cindy 侧边栏那个 tab 里登录**(若开成了独立窗口就是那个窗口);`focus` 只切活动 tab,不抢系统前台。登录态会长期保留,完成后你再继续。
+  1. **外置浏览器与我的浏览器(user-browser)**:调用 `request_input_handoff`(`purpose` 说明登录用途,`target` 传浏览器应用名和该页标题 `window_title`)后结束本轮。宿主会把窗口恢复并带到前面,主人直接在窗口里登录(手机或其它电脑走实时画面),完成后你会收到续接,或者主人直接发来消息。**不要**再解释窗口在哪,也不要催。
+  2. **侧边栏(rsb-webview)**:页面在 Cindy 里,不是系统窗口,不能把 Cindy 作为 `request_input_handoff` 的窗口目标。若是登录二维码,可截取新截图并用 `image` 交给主人扫码；否则请用户**直接在 Cindy 侧边栏那个 tab 里登录**(若开成了独立窗口就是那个窗口);`focus` 只切活动 tab,不抢系统前台。登录态会长期保留,完成后你再继续。
   3. 若用户表示"我只在自己浏览器里登录过 / 不想再登一次",不要硬试:把 URL 给用户,请他在**系统浏览器**里自行打开查看。
   **不要**自己硬试或假装能绕过,也不要在两条路之外把用户支去无关页面。
 - **OAuth 弹窗登录的坑(侧边栏模式)**:站点用 `window.open` 小窗做第三方授权时,弹窗会被转成新 tab,授权完成后**登录结果可能传不回原页面**(原页面停在"等待授权")。遇到这种站点:优先选站点的**整页跳转**登录方式;只有弹窗式可选时,请用户在弹出的 tab 里完成授权,**回到原 tab 刷新一次**再判断登录态。

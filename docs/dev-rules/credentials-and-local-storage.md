@@ -66,6 +66,28 @@
 请求头；应前滚修复，不把密文转回明文来恢复兼容。实现与回归：`maker-host/custom-mcp-store.ts`
 及同名测试。Bearer token 继续走现有独立安全存储。
 
+## Codex 共享凭证与 Windows 独立登录
+
+Codex 共享登录使用文件软链接，不创建硬链接。Windows 无文件软链接权限时，
+显式连接进入现有的 Cindy 独立 OAuth 登录流程，凭证由 Codex 写在该实例的
+`codex-home/auth.json`；后台对账不复制 token，不按时间戳双向同步。
+独立 OAuth 回退仍受普通 Dev 禁止发起登录的写入门禁约束。启动 OAuth 前须确认
+本实例 auth 路径缺失或为单链接普通文件；旧别名清理失败、仍有共享链接或无法
+确认文件类型时拒绝启动，不把系统凭证交给声称独立的登录流程。
+
+升级只迁移当前实例的旧硬链接：可创建软链接则替换本实例的别名；不可创建时，
+仅移除仍与系统文件同 inode 的本实例硬链接，系统文件的字节和 inode 保持不变。
+已有独立文件保留。其它 profile 的别名由对应 profile 升级时迁移，不通过重写
+系统文件一次性拆链。早期开发实现遗留的 `.swapbak` / `.copytmp` 保留原样，
+不自动恢复或删除，避免撤销原生 Codex 登出或干扰仍在运行的旧实例。
+既有只读 Dev 消费 Release 凭证的一次性快照例外保持不变。
+目录 junction 或软链接可能让两个不同路径实际指向同一 `auth.json` 目录项。
+判断时展开父目录别名，不能仅比较路径字符串，也不能将不同名字的硬链接视为
+同一目录项；同一目录项直接复用，不执行迁移、快照覆盖或失效时的文件删除。
+
+实现与回归见 `maker-host/codex-auth-link.ts`、`auth-adapters.ts`、
+`codexAuthLink.test.ts` 和 `codexAuthInvalidation.test.ts`。
+
 ## Claude 订阅只经 Claude Code 自己的登录
 
 Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；第三方应用不得提供
@@ -375,6 +397,17 @@ relay 原有 60 秒主动续期节流保持不变。
 定向测试。
 
 ## Cindy 托管的预装技能
+
+随包技能字节改变时必须递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。运行
+`pnpm check:built-in-skills`，对照完整 Git 历史核验工作区实际字节（含未跟踪文件），
+同版本不同内容或版本倒退会阻断；不会改 index、已安装技能或用户配置。检查在 CI 与
+个人版 `check` 安装依赖前执行，不给普通 Forge 打包增加 Git 历史要求（源码压缩包与
+浅克隆仍可打包，但不能声称通过此检查）。合成构建核验所有父分支，不能只和
+merge-base 比较：两个来源各自用了同一个新版本号，合成结果仍须再递增。可重复传
+`--base-ref <ref>` 纳入额外基准（例如不在当前祖先链中的上一次个人构建）。需要完整
+Git checkout；浅克隆先 `git fetch --unshallow`，不在缺失历史时假定核验通过。
+`.gitattributes` 固定整个资源目录的原始字节，避免 Windows 换行转换复用同一个版本号。
+该检查不改变运行时保留冲突版本、用户同名技能与用户修改的保护，也不打开跨 Harness 同步。
 
 `cindy-plugin-creator` 从内置 bundle 13 起提供。核验旧 bundle 时只对这个尚未引入的技能
 容许缺席；已记录的指纹以及 bundle 13 起的完整性要求不放宽。升级失败时保留旧 bundle
