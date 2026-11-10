@@ -40,6 +40,41 @@ describe('sidebar window expansion', () => {
     expect(a.win.getBounds()).toEqual({ x: -1600, y: 40, width: 900, height: 800 });
     expect(b.win.setBounds).not.toHaveBeenCalled();
   });
+  // Unit regression: #9661 restored standalone geometry but reopening used the
+  // newly saved sidebar width as new native growth. A 1300px combined window
+  // must stay 1300px after the divider changes the request from 400px to 600px.
+  it('restores the last expanded width independently of the divider and standalone bounds', () => {
+    const { win, native, area } = fixture();
+    const controller = new SidebarWindowExpansion();
+    controller.update(native, 400, area);
+    controller.update(native, 0, area);
+    expect(win.getBounds().width).toBe(900);
+    controller.update(native, 600, area);
+    expect(win.getBounds().width).toBe(1300);
+    // Native resizing while open updates the separate expanded state.
+    win.setBounds({ ...win.getBounds(), width: 1400 });
+    controller.update(native, 0, area);
+    expect(win.getBounds().width).toBe(900);
+    // A standalone edit remains the new close target, not the expanded target.
+    win.setBounds({ ...win.getBounds(), width: 1500 });
+    controller.update(native, 500, area);
+    expect(win.getBounds().width).toBe(1400);
+    controller.update(native, 0, area);
+    expect(win.getBounds().width).toBe(1500);
+  });
+  it('keeps remembered expanded width per window and respects the current display edge', () => {
+    const a = fixture(); const b = fixture();
+    const controller = new SidebarWindowExpansion();
+    controller.update(a.native, 600, a.area);
+    controller.update(a.native, 0, a.area);
+    controller.update(b.native, 200, b.area);
+    expect(b.win.getBounds().width).toBe(1100);
+    a.win.setBounds({ x: -1200, y: 40, width: 900, height: 800 });
+    controller.update(a.native, 200, a.area);
+    expect(a.win.getBounds().width).toBe(1200);
+    controller.update(a.native, 0, a.area);
+    expect(a.win.getBounds()).toEqual({ x: -1200, y: 40, width: 900, height: 800 });
+  });
   it('leaves maximized/fullscreen windows alone', () => {
     const { win, native, area } = fixture();
     const controller = new SidebarWindowExpansion();

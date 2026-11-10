@@ -60,6 +60,7 @@ vi.mock('@/session/WorkingStatusText', () => ({ WorkingStatusText: ({ text }: an
 
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: () => null }));
+vi.mock('@/session/BotGroupMenu', () => ({ BotGroupMenu: ({ children }: any) => children(() => {}) }));
 vi.mock('@/session/ThinkingDots', () => ({ ThinkingDots: () => null }));
 import { BotGroupSpeakerRow } from '@/session/BotGroupSpeakerRow';
 import { BotGroupWorkArea } from '@/session/BotGroupWorkArea';
@@ -117,7 +118,7 @@ it('shows the teammate’s pending prompt inline instead of the working line', a
 it('says it is waiting when the host reports a prompt the phone cannot show yet', async () => {
   h.live.s1 = { sessionId: 's1', phase: 'needs-interaction', compactDetail: '' };
   await render({});
-  expect(node.querySelector('[data-testid="botGroup.speaking.waiting"]')?.textContent).toBe(i18n.t('groupChat.waitingConfirm', { name: '' }));
+  expect(node.querySelector('[data-testid="status"]')?.textContent).toContain(i18n.t('groupChat.waitingConfirm', { name: '' }));
   expect(h.panel).toBeNull();
 });
 
@@ -128,12 +129,16 @@ it('does not subscribe without a lane or while the computer is offline', async (
   expect(h.invoke).not.toHaveBeenCalled();
 });
 
-// Regression: a group lane must open its original task on the correct computer.
-it('opens the ordinary task with no companion wrapper or new execution', async () => {
-  await render({ sessionId: 'group-lane', deviceId: 'studio', online: false });
+// Product decision: hide the whole-task shortcut; keep the execution's stop footer usable.
+it('hides original-task navigation while keeping the group stop action available', async () => {
+  const stop = vi.fn();
+  await render({ sessionId: 'group-lane', deviceId: 'studio', online: false,
+    footer: el('button', { onClick: stop }, 'Stop') });
   h.invoke.mockClear();
+  expect(node.querySelectorAll('button')).toHaveLength(1);
   await act(async () => node.querySelector('button')!.click());
-  expect(h.push).toHaveBeenCalledWith({ pathname: '/sessions/[sessionId]', params: { sessionId: 'group-lane', deviceId: 'studio' } });
+  expect(stop).toHaveBeenCalledOnce();
+  expect(h.push).not.toHaveBeenCalled();
   expect(h.invoke).not.toHaveBeenCalled();
 });
 
@@ -157,7 +162,7 @@ it.each([
 ])('localizes queued work with the real %s catalog', async (locale, expected) => {
   await i18n.changeLanguage(locale);
   await render({ executionStatus: 'queued' });
-  expect(node.querySelector('[data-testid="status"]')?.textContent).toBe(expected);
+  expect(node.querySelector('[data-testid="status"]')?.textContent).toContain(expected);
 });
 
 // 测试价值：真实 BotGroupWorkArea + BotGroupSpeakerRow 的收起、展开与交互到达。
@@ -176,75 +181,44 @@ function workGroup(): BotGroupRemoteChatData {
 async function renderWork(group: BotGroupRemoteChatData, online = true, controls: { onStop?: () => Promise<void>; stopping?: boolean } = {}) {
   await act(async () => root.render(el(BotGroupWorkArea, { group, deviceId: 'mac', online, identityFor: (botId, name) => ({ botId, name }), onError: vi.fn(), ...controls })));
 }
-const toggle = () => node.querySelector<HTMLButtonElement>('[data-testid="botGroup.work.toggle"]')!;
-
-it('collapses queued and running work into one disclosure, including offline work', async () => {
+// 测试价值：生产工作区必须逐 execution 连续可读（群聊 §5）；旧覆盖只验证按 Bot 收起。
+// 最小失败输入：同一 Bot 排队 + 运行、另一位等待；两个自有 lane 的确认不在过程折叠内。
+// tier: unit，沿用本文件内存远端与真实工作区入口。
+it('shows every execution directly, including two executions for the same teammate offline', async () => {
   const group = workGroup();
-  // Two executions for one teammate must not inflate the teammate count.
-  group.round.speakers.push({ ...group.round.speakers[1], executionId: 'e3', executionStatus: 'queued' });
+  group.round.speakers.push({ ...group.round.speakers[0], executionId: 'e3', sessionId: 's3', executionStatus: 'running' });
   await renderWork(group, false);
-  expect(toggle().textContent).toBe('排队 1 · 进行中 1');
-  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(0);
-  await act(async () => toggle().click());
-  expect(toggle().getAttribute('aria-expanded')).toBe('true');
-  expect(node.textContent).toContain('阿布');
-  expect(node.textContent).toContain('其他伙伴');
+  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(3);
+  expect(node.querySelector('[data-testid="botGroup.work.toggle"]')).toBeNull();
   expect(node.textContent).toContain('排队中');
-  await act(async () => toggle().click());
-  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(0);
+  expect(node.textContent).toContain('其他伙伴');
 });
 
-it('keeps collapsed lanes subscribed and reveals only owned prompts as they arrive', async () => {
+it('keeps both owned confirmations outside process folds and never reads another owner’s lane', async () => {
   h.invoke.mockResolvedValue([]);
   const group = workGroup();
-  group.round.speakers[1].executionStatus = 'needs_input';
-  await renderWork(group);
-  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(0);
-  expect(h.subscribe).toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s1']);
-  h.pending.s1 = [{ request: { requestId: 'permission', kind: 'permission' } }];
-  await renderWork(group);
-  expect(node.querySelector('[data-testid="panel"]')).not.toBeNull();
-  expect(node.textContent).toContain('阿布');
-  expect(node.textContent).not.toContain('其他伙伴');
-  expect(toggle().getAttribute('aria-expanded')).toBe('false');
-  h.pending.s1 = [];
-  await renderWork(group);
-  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(0);
+  group.round.speakers.push({ ...group.round.speakers[0], executionId: 'e3', sessionId: 's3', executionStatus: 'needs_input' });
   group.round.speakers[0].executionStatus = 'needs_input';
-  await renderWork(group, false);
-  expect(node.querySelector('[data-testid="status"]')?.textContent).toBe(i18n.t('groupChat.waitingConfirm', { name: identity.name }));
+  group.round.speakers[1].executionStatus = 'needs_input';
+  h.pending.s1 = [{ request: { requestId: 'permission', kind: 'permission' } }];
+  h.pending.s3 = [{ request: { requestId: 'question', kind: 'ask_user' } }];
+  h.pending.s2 = [{ request: { requestId: 'foreign', kind: 'permission' } }];
+  await renderWork(group);
+  const panels = node.querySelectorAll('[data-testid="panel"]');
+  expect(panels).toHaveLength(2);
+  for (const panel of panels) expect(panel.closest('section')).toBeNull();
+  expect(h.subscribe).toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s1']);
+  expect(h.subscribe).not.toHaveBeenCalledWith(expect.any(String), 'mac', ['session:s2']);
+  expect(node.textContent).toContain('其他伙伴');
+  expect(node.textContent).not.toContain('其他伙伴在等你确认');
 });
 
-it('clears expanded details when the round finishes and when switching groups', async () => {
+it('removes live process entries when the round finishes', async () => {
   const group = workGroup();
   await renderWork(group);
-  await act(async () => toggle().click());
-  await renderWork({ ...group, id: 'another-group' });
-  expect(toggle().getAttribute('aria-expanded')).toBe('false');
-  await act(async () => toggle().click());
-  await renderWork({ ...group, id: 'another-group', round: { ...group.round, status: 'idle', speakers: [] } });
+  expect(node.querySelectorAll('[data-testid="botGroup.speaking"]')).toHaveLength(2);
+  await renderWork({ ...group, round: { ...group.round, status: 'idle', speakers: [] } });
   expect(node.textContent).toBe('');
-  await renderWork({ ...group, id: 'another-group' });
-  expect(toggle().getAttribute('aria-expanded')).toBe('false');
-});
-
-// PR #7806 unit: real row actions and timestamp; existing cases only cover task navigation.
-// Minimal input: one active execution with a known start, followed by a pending stop.
-it('shows real elapsed time and disables the group stop action while pending', async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(20_000);
-  const stop = vi.fn(async () => undefined);
-  await render({ startedAt: 15_000, onStop: stop });
-  expect(node.textContent).toContain('已工作 5 秒');
-  await act(async () => vi.advanceTimersByTime(1000));
-  expect(node.textContent).toContain('已工作 6 秒');
-  await act(async () => (node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement).click());
-  expect(stop).toHaveBeenCalledTimes(1);
-  await render({ startedAt: 15_000, onStop: stop, stopPending: true });
-  const button = node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement;
-  expect(button.disabled).toBe(true);
-  expect(button.textContent).toBe(i18n.t('groupChat.speaking.stopping'));
-  vi.useRealTimers();
 });
 
 // Unit regression: real store refuses new text after task-detail blur unless
@@ -265,8 +239,6 @@ it('keeps new stage text visible after returning from the task and releases it o
   }, 'continued'));
   expect(remoteSessionStore.getMessages('s1').some(message => message.content === 'New stage after return')).toBe(true);
   expect(node.textContent).toContain('New stage after return');
-  await act(async () => (node.querySelector('[data-testid="botGroup.work.stop"]') as HTMLButtonElement).click());
-  expect(stop).toHaveBeenCalledTimes(1);
   h.focused = false;
   await render(props);
   await act(async () => remoteSessionStore.applyMakerEvent('s1', {
@@ -289,10 +261,38 @@ it('preserves exactly one group stop across disclosure and pending snapshots', a
   expect(onStop).toHaveBeenCalledTimes(1);
   await renderWork(group, true, { onStop, stopping: true });
   expect(stopButton().disabled).toBe(true);
-  await act(async () => toggle().click());
   expect(node.querySelectorAll('[data-testid="botGroup.work.stop"]')).toHaveLength(1);
   expect(stopButton().disabled).toBe(true);
   expect(node.textContent).toContain('其他伙伴');
   await renderWork(group, false, { onStop });
   expect(node.querySelector('[data-testid="botGroup.work.stop"]')).toBeNull();
+});
+
+// Native acceptance found a waiting row still ending in a running placeholder.
+// Unit: the real process projection must settle its pending stage outside the waiting card.
+it('does not claim it is still thinking or processing while a confirmation is pending', async () => {
+  h.invoke.mockResolvedValue([]);
+  h.pending.s1 = [{ request: { requestId: 'permission', kind: 'permission' } }];
+  await render({ groupId: 'g', executionId: 'e', startedAt: 1 });
+  expect(node.textContent).toContain(i18n.t('groupChat.waitingConfirm', { name: '' }));
+  expect(node.textContent).not.toContain(i18n.t('chat.teammateProcess.processing'));
+  expect(node.textContent).not.toContain(i18n.t('chat.teammateProcess.thinking'));
+});
+
+// Unit: same-bot executions must not borrow the current step's task text (§8.2).
+it.each([true, false])('labels only an unambiguous current step execution (identity supplied: %s)', async identified => {
+  const group = workGroup();
+  group.plans = [{ id: 'p', kind: 'work', status: 'running', currentStep: 0, steps: [
+    { position: 0, status: 'running', botId: 'abu', task: 'Only the current execution', ...(identified ? { executionId: 'current' } : {}) },
+  ] }] as any;
+  group.round.speakers = [
+    { botId: 'abu', activity: 'step', executionId: 'old', executionStatus: 'running', sessionId: null },
+    { botId: 'abu', activity: 'step', executionId: 'current', executionStatus: 'running', sessionId: null },
+    { botId: 'abu', activity: 'step', executionId: 'queued', executionStatus: 'queued', sessionId: null },
+  ];
+  await renderWork(group);
+  const rows = node.querySelectorAll('section');
+  expect(rows[0].textContent).not.toContain('Only the current execution');
+  expect(rows[1].textContent?.includes('Only the current execution')).toBe(identified);
+  expect(rows[2].textContent).not.toContain('Only the current execution');
 });

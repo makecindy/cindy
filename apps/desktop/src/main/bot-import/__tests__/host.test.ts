@@ -1473,14 +1473,19 @@ it.each(['hermes', 'openclaw'] as const)('restores disabled %s skill metadata an
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');
   const selection = { requestId: 'fixture-repair-manifest', previewId: preview.id, name: 'Ada', entryIds: [entryId, 'role'], takeover: false, deferSetup: true };
-  await startCompanionImport(selection, 'fixture');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('needs-attention'));
+  // PR #9671 Windows CI: admission can return before the transfer finishes.
+  // Join its existing write lock instead of racing real filesystem work against
+  // a polling deadline (and then removing the fixture while writes are active).
+  const accepted = await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([accepted.botId], async () => {});
   const first = (await getCompanionImportResult(selection.requestId))!;
+  expect(first.status).toBe('needs-attention');
   await fs.writeFile(manifest, `---\nname: report\ndescription: Recovered report ${secret}\nmetadata:\n  openclaw:\n    skillKey: report-auth\n    primaryEnv: REPORT_TOKEN\n---\n# Report\nPrivate value ${secret}`);
   h.importDocument.mockResolvedValue(undefined);
   await startCompanionImport(selection, 'reconnected');
-  await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
+  await withBotProfileLocks([first.botId], async () => {});
   const result = (await getCompanionImportResult(selection.requestId))!;
+  expect(result.status).toBe('complete');
   expect(result).toMatchObject({ botId: first.botId, savedEntryIds: [entryId, 'role'] });
   expect(h.importDocument.mock.lastCall?.[3]).toMatch(/^Private value \[[^\]]+\]$/);
   expect(h.profile.userContextSource).toMatch(/^Private value \[[^\]]+\]$/);

@@ -251,6 +251,12 @@ export function getDesktopMcpToolApprovalPolicy(
     // Uploading hands a local file to a website. Files are not filtered by name (2026-10-30), so each
     // upload goes through the task's approval: Ask confirms, Auto reviews, Full Access proceeds.
     if (name === 'browser' && args?.action === 'upload') return 'prompt-each-time';
+    // The tool refuses these inside a batch. Review such a call anyway, so the actions above can never
+    // ride past approval inside one if that refusal is ever loosened.
+    if (name === 'browser' && args?.action === 'batch' && (!Array.isArray(args.steps) || args.steps.some((step) => {
+      const action = (step as { action?: unknown } | null)?.action;
+      return typeof action !== 'string' || ['recipe', 'upload', 'setBackend', 'batch'].includes(action);
+    }))) return 'prompt-each-time';
   }
   if (serverName === 'cindy' && toolName === 'ghost_market_install') return 'prompt-each-time';
   // This bridge multiplexes independent imported connections and commands with
