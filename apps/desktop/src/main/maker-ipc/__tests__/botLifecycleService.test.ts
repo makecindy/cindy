@@ -40,7 +40,8 @@ function createDatabase(): Database.Database {
       working_dir TEXT,
       project_dir TEXT
     );
-    CREATE TABLE recent_workdirs (path TEXT PRIMARY KEY);
+    -- Same columns as the real table: the Windows removal reads last_used_at.
+    CREATE TABLE recent_workdirs (path TEXT PRIMARY KEY, last_used_at INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE bot_profiles (
       id TEXT PRIMARY KEY,
       display_name TEXT NOT NULL,
