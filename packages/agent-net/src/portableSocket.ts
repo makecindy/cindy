@@ -9,7 +9,7 @@ import {
 import type { WsLike } from '@cindy/device-link';
 import { CERT_LIFETIME_MS, delegationEndpointCertificate, delegationVisibleTo, type Delegation, type DeviceView } from '@cindy/agent-net-protocol';
 import { frameMatchesDelegation, scopedFrame, delegatedPeerTarget, type ScopedPeerTarget } from './scopedRoutes.js';
-import type { PeerChannel, RosterEntry, Transport } from './types.js';
+import { MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RosterEntry, type Transport } from './types.js';
 
 interface Peer { deviceId: string; key: string; channel: PeerChannel; outbound: boolean; info?: PresenceSnapshot; }
 
@@ -120,7 +120,11 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
       return socket;
     } catch (error) { socket.close(); throw error; }
   }
-  get bufferedAmount(): number { return this.pendingBytes; }
+  get bufferedAmount(): number {
+    let bytes = this.pendingBytes;
+    for (const peer of this.peers.values()) bytes += peer.channel.bufferedAmount ?? 0;
+    return bytes;
+  }
   get deviceId(): string { return this.options.client.identity.deviceId; }
   /** A REST response cannot overwrite a newer WebSocket directory event. */
   async refreshDirectory(): Promise<void> {
@@ -175,7 +179,17 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     if (!key || !this.authorized(deviceId)) throw new Error('UNAUTHORIZED_PEER');
     const lan = this.lanCandidates.get(deviceId);
     const entry: RosterEntry = { id: keyHex(key), dial: { relayId: deviceId, ...(lan ? { udp: lan, preferUdp: true } : {}) } };
-    const dialing = this.transport.connect(entry).then((channel) => this.adopt(channel, true));
+    const connect = async () => {
+      try { return await this.transport.connect(entry); }
+      catch (error) {
+        if (!lan || !this.uplink || !this.authorized(deviceId) || keyHex(this.transportKey(deviceId)!) !== entry.id) throw error;
+        // A remembered LAN address may belong to the previous network. Retire
+        // only that candidate and retry this peer through its authenticated relay.
+        if (this.lanCandidates.get(deviceId) === lan) this.lanCandidates.delete(deviceId);
+        return this.transport.connect({ id: entry.id, dial: { relayId: deviceId } });
+      }
+    };
+    const dialing = connect().then((channel) => this.adopt(channel, true));
     this.dialing.set(deviceId, dialing);
     try { await dialing; } finally { if (this.dialing.get(deviceId) === dialing) this.dialing.delete(deviceId); }
   }
@@ -365,7 +379,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     const peer = this.peers.get(id); if (peer) { this.write(peer, frame); return; }
     const bytes = utf8(JSON.stringify(frame)).length;
     const queue = this.pending.get(id) ?? [];
-    if (queue.length >= 64 || this.pendingBytes + bytes > 8 * 1024 * 1024) { this.reject(frame, 'BACKPRESSURE'); return; }
+    if (queue.length >= 64 || this.bufferedAmount + bytes > MAX_CHANNEL_PENDING_BYTES) { this.reject(frame, 'BACKPRESSURE'); return; }
     queue.push({ frame, bytes }); this.pending.set(id, queue); this.pendingBytes += bytes;
     void this.dial(id).catch(() => {
       for (const item of this.pending.get(id) ?? []) { this.pendingBytes -= item.bytes; this.reject(item.frame, 'DEVICE_OFFLINE'); }
@@ -373,6 +387,7 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     });
   }
   private reject(frame: Envelope, code: string): void {
+    if (frame.id && ['invoke', 'link-open'].includes(frame.kind)) this.sentRequests.delete(frame.id);
     this.deliver({ v: PROTOCOL_VERSION, kind: 'relay-error', ...(frame.id ? { id: frame.id } : {}),
       ...(frame.sharedTask ? { sharedTask: frame.sharedTask } : {}), ...(frame.providerShare ? { providerShare: frame.providerShare } : {}),
       payload: { code, message: code, ...(frame.dst ? { dst: frame.dst } : {}) } } as Envelope);
@@ -409,8 +424,17 @@ export class AgentNetSocket extends SocketEvents implements WsLike {
     }
     const body = utf8(JSON.stringify(frame));
     if (body.length > MAX_FRAME_BYTES) { this.reject(frame, 'PAYLOAD_TOO_LARGE'); return; }
+    if (this.bufferedAmount + body.length + 4 > MAX_CHANNEL_PENDING_BYTES) {
+      if (frame.id) this.sentRequests.delete(frame.id);
+      this.reject(frame, 'BACKPRESSURE'); return;
+    }
     const prefix = new Uint8Array(4); new DataView(prefix.buffer).setUint32(0, body.length, false);
-    peer.channel.send(concatBytes([prefix, body]));
+    try { peer.channel.send(concatBytes([prefix, body])); }
+    catch (error) {
+      if (!(error instanceof Error) || !error.message.includes('BACKPRESSURE')) throw error;
+      if (frame.id) this.sentRequests.delete(frame.id);
+      this.reject(frame, 'BACKPRESSURE');
+    }
   }
   private info(): PresenceSnapshot {
     return { ...this.localHello, deviceId: this.deviceId, deviceName: this.localHello?.deviceName ?? '',

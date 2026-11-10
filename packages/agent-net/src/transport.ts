@@ -21,7 +21,7 @@ import {
 } from '@cindy/agent-net-core/node';
 import os from 'node:os';
 import { StunClient } from './stun.js';
-import { ChannelEvents, type PeerChannel, type RosterEntry, type Transport, type TransportOptions } from './types.js';
+import { ChannelEvents, MAX_CHANNEL_PENDING_BYTES, type PeerChannel, type RosterEntry, type Transport, type TransportOptions } from './types.js';
 
 const PROLOGUE = 'cindy/agent-net/device-link/2';
 /** 握手要在这么久内完成，否则放弃这次连接（名册外的节点收不到任何回复）。 */
@@ -142,8 +142,12 @@ class CoreChannel implements PeerChannel {
   }
 
   send(bytes: Uint8Array): void {
-    if (!this.events.closed) this.outbound.write(bytes);
+    if (this.events.closed) return;
+    if (this.bufferedAmount + bytes.length > MAX_CHANNEL_PENDING_BYTES) throw new Error('AGENT_NET_TRANSPORT_BACKPRESSURE');
+    this.outbound.write(bytes);
   }
+
+  get bufferedAmount(): number { return this.outbound.pendingBytes + this.control.pendingBytes; }
 
   onData(handler: (bytes: Uint8Array) => void): void {
     this.events.onData(handler);

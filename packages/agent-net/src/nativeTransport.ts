@@ -176,6 +176,7 @@ class NativeChannel implements PeerChannel {
   private dataStream = 0;
   private streams = new Map<number, { kind: number | null; text: string }>();
   private queue: { bytes: Uint8Array; offset: number }[] = [];
+  private queuedBytes = 0;
   private state: NativeState | null = null;
   private candidates: Address[] = [];
   private candidateCursor = 0;
@@ -195,7 +196,9 @@ class NativeChannel implements PeerChannel {
     if (this.events.closed) throw new Error('NATIVE_CONNECTION_CLOSED');
     this.owner.reserve(bytes.length);
     this.queue.push({ bytes: bytes.slice(), offset: 0 });
+    this.queuedBytes += bytes.length;
   }
+  get bufferedAmount(): number { return this.queuedBytes; }
   async flush(): Promise<void> {
     if (this.disposed) return;
     if (this.closeDeadline && now() >= this.closeDeadline) { this.dispose(); return; }
@@ -204,7 +207,7 @@ class NativeChannel implements PeerChannel {
       const written = await this.owner.call<number>({ op: 'write', id: this.id, stream: this.dataStream, data: toBase64Url(part) });
       if (!Number.isInteger(written) || written < 0 || written > part.length) throw new Error('INVALID_NATIVE_WRITE');
       if (!written) break;
-      item.offset += written; this.owner.release(written);
+      item.offset += written; this.queuedBytes -= written; this.owner.release(written);
       if (item.offset === item.bytes.length) this.queue.shift();
     }
     if (this.closeDeadline && !this.queue.length) {
@@ -273,6 +276,6 @@ class NativeChannel implements PeerChannel {
     if (this.disposed) return;
     this.disposed = true;
     for (const item of this.queue) this.owner.release(item.bytes.length - item.offset);
-    this.queue = []; this.streams.clear(); this.events.close(); this.owner.detach(this.id);
+    this.queue = []; this.queuedBytes = 0; this.streams.clear(); this.events.close(); this.owner.detach(this.id);
   }
 }

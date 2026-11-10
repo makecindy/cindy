@@ -3,6 +3,8 @@ import type { AgentNetUplink } from '@cindy/agent-net-relay/client';
 export interface RosterEntry { id: string; dial: unknown; }
 export interface PeerChannel {
   readonly remoteId: string;
+  /** Bytes waiting for admission to the bounded core send buffer. */
+  readonly bufferedAmount?: number;
   send(bytes: Uint8Array): void;
   onData(handler: (bytes: Uint8Array) => void): void;
   onClose(handler: () => void): void;
@@ -11,6 +13,7 @@ export interface PeerChannel {
   stats?(): Record<string, number> | null;
   addressKind?(): 'relay' | 'loopback' | 'private' | 'public' | null;
 }
+export const MAX_CHANNEL_PENDING_BYTES = 8 * 1024 * 1024;
 export interface Transport {
   readonly id: string;
   readonly dial: unknown;

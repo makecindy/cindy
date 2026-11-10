@@ -140,7 +140,11 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
   const f = await network(udp); serve(f.host);
   await f.controller.openLink('a-host', openPayload);
   expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['private-business-value-0123456789'] })).toMatchObject({ ok: true, result: 'private-business-value-0123456789' });
-  const large = await f.controller.invoke('a-host', { channel: 'test:large', args: [] });
+  // This checks intact multi-megabyte delivery, not a 4-second throughput SLA.
+  // Use the production SDK deadline for the large transfer; ordinary RPCs keep
+  // the fixture's short deadline. Slow hosted macOS/Windows CPUs must still
+  // deliver every byte and satisfy the encryption assertions below.
+  const large = await f.controller.invoke('a-host', { channel: 'test:large', args: [] }, 30_000);
   expect(large.ok && String(large.result).length).toBe('confidential-result-'.length * 160000);
   expect(f.captured.length).toBeGreaterThan(100);
   expect(f.captured.some((bytes) => bytes.includes(Buffer.from('private-business-value-0123456789')) || bytes.includes(Buffer.from('confidential-result-')))).toBe(false);
@@ -173,6 +177,30 @@ it('runs encrypted RPC in isolated workers while the host retains its outbound n
   expect(f.notifications[0].ciphertext).not.toContain('private-body');
   await f.a.request('DELETE', '/devices/b-controller');
   await vi.waitFor(() => expect(f.controller.getStatus()).not.toBe('online'));
+});
+
+// Regression: connected streams used to disappear from bufferedAmount while
+// SendStream kept appending indefinitely. A synchronous burst on a real Rust
+// stream cannot drain between sends; overflow must be rejected without closing
+// the shared socket. Integration tier, real encrypted loopback transport.
+it('bounds connected stream queues and reports backpressure without disconnecting other traffic', async () => {
+  const f = await network(false); serve(f.host);
+  await f.controller.openLink('a-host', openPayload);
+  const socket = f.sockets.find(value => value.deviceId === 'b-controller')!;
+  const rejected: Envelope[] = [];
+  socket.on('message', raw => {
+    const frame = JSON.parse(raw.toString()) as Envelope;
+    if (frame.kind === 'relay-error' && (frame.payload as { code?: string }).code === 'BACKPRESSURE') rejected.push(frame);
+  });
+  const frame = JSON.stringify({ v: PROTOCOL_VERSION, kind: 'push', dst: 'a-host', payload: { channel: 'test:slow', args: ['x'.repeat(1024 * 1024)] } });
+  for (let index = 0; index < 10; index++) socket.send(frame);
+  expect(socket.bufferedAmount).toBeGreaterThan(0);
+  expect(socket.bufferedAmount).toBeLessThanOrEqual(8 * 1024 * 1024);
+  expect(rejected.length).toBeGreaterThan(0);
+  expect(f.controller.getStatus()).toBe('online');
+  await vi.waitFor(() => expect(socket.bufferedAmount).toBe(0), { timeout: 4000 });
+  expect(await f.controller.invoke('a-host', { channel: 'test:echo', args: ['after pressure'] }))
+    .toMatchObject({ ok: true, result: 'after pressure' });
 });
 it('binds inbound src and enforces target remote-control preference without trusting the relay', async () => {
   const f = await network(false); serve(f.host);

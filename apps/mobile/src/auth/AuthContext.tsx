@@ -3322,6 +3322,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       opts.assertCurrent?.();
       // 自建中转:中转凭证由 apiFetchRaw 按目标地址附上;账号 token 不取、不发,中转的 401
       // 只说明中转凭证失效,不刷新也不退出账号(docs/self-hosted-relay-plan.md §5.3)。
+      const readLegacy = async (): Promise<T> => {
+        if (isSelfHostedRelayBaseUrl(opts.baseUrl)) {
+          return apiFetchRaw<T>(path, { ...opts, token: null });
+        }
+        const token = await getAccessToken();
+        nativeGuard();
+        if (!token) throw new Error('UNAUTHENTICATED');
+        try {
+          return await apiFetchRaw<T>(path, { ...opts, token });
+        } catch (error) {
+          nativeGuard();
+          if (!(error instanceof ApiError) || error.status !== 401) throw error;
+          if (error.code === 'ACCOUNT_UNAVAILABLE') {
+            if (userRef.current) {
+              await terminateSession('ACCOUNT_UNAVAILABLE');
+            }
+            throw error;
+          }
+          if (!isRefreshableUnauthorizedCode(error.code)) throw error;
+
+          const fresh = await refresh();
+          nativeGuard();
+          if (!fresh) {
+            if (userRef.current) await terminateSession();
+            throw error;
+          }
+          try {
+            return await apiFetchRaw<T>(path, { ...opts, token: fresh });
+          } catch (retryError) {
+            nativeGuard();
+            if (
+              retryError instanceof ApiError &&
+              retryError.status === 401 &&
+              (retryError.code === 'ACCOUNT_UNAVAILABLE' ||
+                isRefreshableUnauthorizedCode(retryError.code))
+            ) {
+              if (userRef.current) {
+                await terminateSession(
+                  retryError.code === 'ACCOUNT_UNAVAILABLE'
+                    ? 'ACCOUNT_UNAVAILABLE'
+                    : undefined,
+                );
+              }
+            }
+            throw retryError;
+          }
+        }
+      };
       const nativeOwner = getMobileAuthOwner(), nativeRoute = getSelfHostedRelayRouteGeneration(), nativeDevice = deviceIdRef.current;
       const nativeGuard = () => {
         opts.assertCurrent?.();
@@ -3342,55 +3390,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { mobileAgentNetDeviceRequest } = await import('@/device-link/agentNetDeviceApi');
         nativeGuard();
         const result = await mobileAgentNetDeviceRequest<T>(path, { ...opts, assertCurrent: nativeGuard }, { deviceId: nativeDevice,
-          deviceName: nativeDevice, getAccessToken });
+          deviceName: nativeDevice, getAccessToken }, readLegacy);
         if (result.handled) return result.value;
       }
-      if (isSelfHostedRelayBaseUrl(opts.baseUrl)) {
-        return apiFetchRaw<T>(path, { ...opts, token: null });
-      }
-      const token = await getAccessToken();
-      opts.assertCurrent?.();
-      if (!token) throw new Error('UNAUTHENTICATED');
-      try {
-        return await apiFetchRaw<T>(path, { ...opts, token });
-      } catch (error) {
-        opts.assertCurrent?.();
-        if (!(error instanceof ApiError) || error.status !== 401) throw error;
-        if (error.code === 'ACCOUNT_UNAVAILABLE') {
-          if (userRef.current) {
-            await terminateSession('ACCOUNT_UNAVAILABLE');
-          }
-          throw error;
-        }
-        if (!isRefreshableUnauthorizedCode(error.code)) throw error;
-
-        const fresh = await refresh();
-        opts.assertCurrent?.();
-        if (!fresh) {
-          if (userRef.current) await terminateSession();
-          throw error;
-        }
-        try {
-          return await apiFetchRaw<T>(path, { ...opts, token: fresh });
-        } catch (retryError) {
-          opts.assertCurrent?.();
-          if (
-            retryError instanceof ApiError &&
-            retryError.status === 401 &&
-            (retryError.code === 'ACCOUNT_UNAVAILABLE' ||
-              isRefreshableUnauthorizedCode(retryError.code))
-          ) {
-            if (userRef.current) {
-              await terminateSession(
-                retryError.code === 'ACCOUNT_UNAVAILABLE'
-                  ? 'ACCOUNT_UNAVAILABLE'
-                  : undefined,
-              );
-            }
-          }
-          throw retryError;
-        }
-      }
+      return readLegacy();
     },
     [getAccessToken, refresh, terminateSession],
   );
