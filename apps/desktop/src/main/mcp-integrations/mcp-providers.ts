@@ -1161,11 +1161,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
           try {
-            const project = await resolveSessionProject({ callerSessionId: params.callerSessionId, projectDir: params.projectDir });
+            const project = await resolveSessionProject({ callerSessionId: params.callerSessionId,
+              projectDir: params.projectDir, workingDir: params.workingDir });
             if (!project.ok) return project;
             const result = await svc.startSessionTask({ ...params, projectDir: project.projectDir,
               workingDir: params.workingDir ?? project.projectDir ?? undefined });
-            return result.ok ? { ...result, projectDir: project.projectDir } : result;
+            return result.ok ? { ...result, projectDir: project.projectDir,
+              ...('projectFromWorkingDir' in project ? { projectFromWorkingDir: true } : {}) } : result;
           } catch (err) {
             return {
               ok: false,

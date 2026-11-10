@@ -858,7 +858,9 @@ Renderer → Main 输入附带可选 `projectDir`，旧输入缺字段时回落�
 
 本机 Agent 工具的新建模式中，省略 `project_path` 继承来源归属，字符串选择已有项目，
 显式 `null` 创建不绑项目的任务；适配层必须保留缺省与 null 的区别。
-无法确定来源归属时明确失败，不以新执行目录猜测或登记项目。
+无法确定来源归属时明确失败，不以新执行目录登记项目。来源不绑项目且省略 `project_path` 时，
+宿主按请求的 `working_dir` 向上匹配最近的已登记可见项目（`resolveSessionProject`），匹配不到
+仍不绑项目；创建回执新增可选 `project_note`，旧调用方忽略即可。
 不绑项目且未传 `working_dir` 时复用既有托管目录创建流程；传目录或使用 worktree 也不改变归属。
 创建回执返回 `project_path`、实际 `working_dir` 与 `workspace_kind`；
 `list_projects` / `create_project` 保留 `working_dir` 并新增 `project_path` 回执。
