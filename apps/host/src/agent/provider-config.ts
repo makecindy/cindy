@@ -12,6 +12,7 @@ import { getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/cl
 import { dataOwnerStorageKey } from '../../../desktop/src/main/dataOwnerPath.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { buildPiNativeProvidersFromConfigs } from '../../../desktop/src/main/maker-host/pi-native-catalog.js';
+import { withResolvedPiImageInput } from './pi-image-input.js';
 import { createProviderService } from '../../../desktop/src/main/maker-host/provider-service.js';
 import { hasCustomProviderCredential } from '../../../desktop/src/main/maker-host/provider-connection-state.js';
 import { withoutProviderHeaderCredentials } from '../../../desktop/src/main/maker-host/provider-public-view.js';
@@ -177,7 +178,9 @@ export function createHostProviderConfig(options: { profileDir: string; ownerId:
       const configs = await list();
       // Protocol, endpoint, header isolation and model limits use the exact same
       // projection as Desktop. Unknown capacities are never replaced with guesses.
-      return buildPiNativeProvidersFromConfigs(configs, readKey);
+      // list() has already applied model-catalog-overrides.json to the active
+      // catalog. Copy that resolved image flag down; see withResolvedPiImageInput.
+      return buildPiNativeProvidersFromConfigs(withResolvedPiImageInput(configs, getActiveCatalog()), readKey);
     },
   };
   setCustomProviderKeyReader(readKey);
