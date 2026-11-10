@@ -107,6 +107,7 @@ vi.mock('../providerShareReshare.js', async (importOriginal) => ({
 }));
 vi.mock('../providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(), stopProviderShareHost: vi.fn(),
+  getProviderShareHostLoadedSnapshot: () => null, onProviderShareHostChanged: () => () => {},
   refreshProviderShareHost: host.refresh, getProviderShareHostSnapshot: host.snapshot,
   clearProviderShareRequestQuiet: vi.fn(),
   providerShareAccessRevision: vi.fn(), providerShareGuestAccess: vi.fn(), ownedProviderShareGuestAccess: vi.fn(),

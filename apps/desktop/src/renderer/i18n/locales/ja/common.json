@@ -4195,7 +4195,18 @@
           "ariaLabel": "他のパソコンと共有相手にこのプロバイダーの利用を許可",
           "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。"
         },
-        "moreActionsAria": "その他の操作"
+        "moreActionsAria": "その他の操作",
+        "runLocation": {
+          "label": "実行するコンピュータ",
+          "optionLocal": "このコンピュータ",
+          "notSignedIn": "未ログイン",
+          "autoBorrowing": "このコンピュータは未ログインのため、新しいタスクは {{device}} で実行します。ログインは不要です。",
+          "local": "新しいタスクはこのコンピュータで実行します。ログイン済みの別のコンピュータも選べます。",
+          "pinned": "新しいタスクは {{device}} で、そのコンピュータのログインを使って実行します。実行中のタスクはそのままです。",
+          "inline": "実行先",
+          "signInHere": "このコンピュータでログイン",
+          "writeFailed": "実行先を保存できませんでした。もう一度お試しください。"
+        }
       },
       "detect": {
         "groupLabel": "このデバイスで検出",
@@ -6158,13 +6169,18 @@
         "allowInboundAria": "{{name}} に本機の操作を許可するか切り替え",
         "peerControlOff": "相手側が操作を許可していません",
         "masterOffHint": "先に上のメインスイッチをオンにしてください",
-        "controllingThisMac": "Cindy に接続中"
+        "controllingThisMac": "Cindy に接続中",
+        "useThisDeviceModels": "このPCのモデルを使う",
+        "allowModelUseAria": "{{name}} にこのコンピュータのモデルの使用を許可"
       },
       "toast": {
         "revoked": "このデバイスのアクセス権を撤回しました",
         "revokeFailed": "撤回に失敗しました",
         "restored": "このデバイスのアクセス権を復元しました",
-        "restoreFailed": "復元に失敗しました"
+        "restoreFailed": "復元に失敗しました",
+        "modelUseRestored": "このコンピュータのモデルを再び使えるようにしました",
+        "modelUseRevoked": "このコンピュータのモデルを使えないようにしました",
+        "modelUseFailed": "「このPCのモデルを使う」を保存できませんでした。もう一度お試しください。"
       },
       "sections": {
         "myDevices": "マイデバイス",
@@ -9023,6 +9039,8 @@
       "daysWindow": "{{days}}日"
     },
     "claude": {
+      "totalWeeklyLabel": "週間合計",
+      "temporarilyLimited": "一時的に制限中",
       "waitingDetail": "Claude サブスクリプションの使用量は次回のターン完了後に更新されます。",
       "weeklyLabel": "週間",
       "modelWeeklyLabel": "{{model}} 週間",
@@ -19730,6 +19748,7 @@
     "lineNumbers": "行番号"
   },
   "subscriptionAccounts": {
+    "unassigned": "アカウント未割り当て",
     "providerManagedAuth": "現在の Codex プロバイダーでは ChatGPT アカウント情報を取得できません。プロバイダーの追加時に「$t(subscriptionAccounts.signIn.anotherAccount)」を選ぶと、別のフォルダーを使用できます。",
     "signIn": {
       "checking": "ローカルアカウントを確認中…",
