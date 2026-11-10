@@ -200,7 +200,10 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const chat = useBotGroupChat(host, groupId, threadRootId);
   const identity = useBotGroupIdentities(deviceId);
   const resolveMedia = useBotGroupRemoteMedia(deviceId);
-  const stopOwner = useMemo(() => ({ accountGeneration, deviceId, groupId, threadRootId }), [accountGeneration, deviceId, groupId, threadRootId]);
+  const focused = useIsFocused();
+  // Direct stops are cancelled on blur; the computer bridge keeps its request in flight.
+  const stopFocused = !!deviceId || focused;
+  const stopOwner = useMemo(() => ({ accountGeneration, deviceId, groupId, threadRootId }), [accountGeneration, deviceId, groupId, threadRootId, stopFocused]);
   const stopOwnerRef = useRef<typeof stopOwner | null>(stopOwner); stopOwnerRef.current = stopOwner;
   const stopPendingRef = useRef<{ owner: typeof stopOwner } | null>(null);
   const [stopAttempt, setStopAttempt] = useState<{ owner: typeof stopOwner } | null>(null);
@@ -252,7 +255,6 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const pauseReadUntilInteraction = useRef(false);
   const group = chat.state.kind === 'ready' ? chat.state.group : null;
   const mask = useGroupPersonalMask(groupId, deviceId, !!group?.serverBacked && group.conversationKind !== 'direct' && (!deviceId || group.supportsPersonalMask === true), chat.act, group);
-  const focused = useIsFocused();
   const [foreground, setForeground] = useState(() => AppState.currentState === 'active');
   const previewVisibility = useScrollViewMessageVisibility(
     `${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? ''}`,

@@ -2682,6 +2682,58 @@ it('keeps active status and reports a failed stop so the user can retry', async 
   expect(node.textContent).toContain('groupChat.list.running');
 });
 
+// PR #9672 / unit: the real screen's stop handler must ignore a direct transport's
+// blur cancellation, even after returning. Existing stop tests only settle on the
+// same focused page; one deferred rejection after blur is the minimal regression.
+it.each(['background', 'refocused'])('ignores an old direct stop while %s without clearing a new attempt', async page => {
+  const active = group({ round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's-abu', activity: 'reply' },
+  ] } });
+  h.chat.server = true;
+  let reject!: (error: Error) => void;
+  let finish!: () => void;
+  h.chat.act.mockImplementationOnce(() => new Promise((_, no) => { reject = no; }))
+    .mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  await render(active, 'ready', undefined, '');
+  await click('botGroup.work.stop');
+  h.focused = false; await render(active, 'ready', undefined, '');
+  if (page === 'refocused') {
+    h.focused = true; await render(active, 'ready', undefined, '');
+    expect(byId('botGroup.work.stop')!.disabled).toBe(false);
+    await click('botGroup.work.stop');
+  }
+  await act(async () => reject(new Error('OWNER_CHANGED')));
+  expect(h.alert).not.toHaveBeenCalled();
+  if (page === 'background') {
+    h.focused = true; await render(active, 'ready', undefined, '');
+    expect(byId('botGroup.work.stop')!.disabled).toBe(false);
+    await click('botGroup.work.stop');
+  }
+  expect(byId('botGroup.work.stop')!.disabled).toBe(true);
+  expect(byId('botGroup.composer.stop')!.disabled).toBe(true);
+  await click('botGroup.composer.stop');
+  expect(h.chat.act).toHaveBeenCalledTimes(2);
+  await act(async () => finish());
+  expect(byId('botGroup.work.stop')!.disabled).toBe(false);
+});
+
+it('retains the bridge stop lock across blur until its request settles', async () => {
+  const active = group({ round: { status: 'running', canContinue: false, speakers: [
+    { botId: 'abu', sessionId: 's-abu', activity: 'reply' },
+  ] } });
+  let finish!: () => void;
+  h.chat.act.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  await render(active);
+  await click('botGroup.work.stop');
+  h.focused = false; await render(active);
+  h.focused = true; await render(active);
+  expect(byId('botGroup.work.stop')!.disabled).toBe(true);
+  await click('botGroup.composer.stop');
+  expect(h.chat.act).toHaveBeenCalledTimes(1);
+  await act(async () => finish());
+  expect(byId('botGroup.work.stop')!.disabled).toBe(false);
+});
+
 
 // Unit: the actual main/thread timeline must retain owner-only historical progress.
 // The remote resource parser and the disclosure state have separate regression coverage.
