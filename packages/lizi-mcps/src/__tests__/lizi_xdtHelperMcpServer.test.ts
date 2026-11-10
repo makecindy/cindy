@@ -41,6 +41,21 @@ it('validates attachment reads against the same history scope before host I/O', 
   await server.close();
 });
 
+// Unit via real registry: parity #15 adds exact message boundaries; old task controls
+// cannot invoke fork/rewind. Plugins must name a target and never inherit a session.
+it.each(['fork_session', 'rewind_session'] as const)('routes %s to the existing Host history operation', async tool => {
+  const sessionHistory = vi.fn(async () => ({ ok: true as const, sessionId: 'result-task' }));
+  const server = createXdtHelperMcpServer({ sessionHistory } as Parameters<typeof createXdtHelperMcpServer>[0], {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  expect(parsePayload(await server.hostTools.call(tool, { session_id: 'target', message_client_id: 'boundary' })))
+    .toMatchObject({ ok: true, session_id: 'result-task' });
+  expect(sessionHistory).toHaveBeenCalledWith(expect.objectContaining({ kind: tool === 'fork_session' ? 'fork' : 'rewind', sessionId: 'target', messageClientId: 'boundary', callerSessionId: undefined }));
+  expect(parsePayload(await server.hostTools.call(tool, { message_client_id: 'boundary' })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  await server.close();
+});
+
 // Unit, real shared handler: ordinary tasks and plugins need the account directory,
 // including paused/hidden companions and stored relationships, without a bot identity.
 it('discovers the complete teammate directory through history for task and plugin callers', async () => {

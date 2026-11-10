@@ -42,6 +42,7 @@ import type { HostToolMcpServer, HostToolRuntime } from './host-tool-runtime.js'
 import { registerListTeammatesTool } from './xdt-helper/list_teammates.js';
 import { registerReadSessionAttachmentTool } from './xdt-helper/read_session_attachment.js';
 import { registerDeleteSessionTool, type DeleteSessionCallback } from './xdt-helper/delete_session.js';
+import { registerSessionHistoryTools, type SessionHistoryCallback } from './xdt-helper/session_history_control.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
@@ -568,6 +569,7 @@ export interface XdtHelperMcpDeps {
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
   deleteSession?: DeleteSessionCallback;
+  sessionHistory?: SessionHistoryCallback;
   setRemoteSessionsStatus?: ArchiveSessionsDeps['setRemoteSessionsStatus'];
   /**
    * 任务导入（与设置 → 任务导入同一实现）。host 注入后, control 类工具
@@ -707,6 +709,9 @@ export function createXdtHelperMcpServer(
   }
   if (deps.deleteSession) registerDeleteSessionTool(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), deleteSession: deps.deleteSession,
+  });
+  if (deps.sessionHistory) registerSessionHistoryTools(registry, {
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), call: deps.sessionHistory,
   });
   if (deps.sessionImport) {
     registerSessionImportTools(registry, {

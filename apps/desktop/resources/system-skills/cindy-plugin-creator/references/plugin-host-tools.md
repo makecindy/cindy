@@ -41,11 +41,18 @@ const archived = await cindy.host.call('cindy_helper', 'archive_sessions', {
 
 底层管子消息为 `{type:'host-tool-request',server,tool,args}`。身份由宿主从逻辑页或 Node 私有通道核验，不接受参数中的 `pluginId`、`sessionId` 或账号作为调用方身份。旧宿主和未提供此能力的执行宿主应按不支持处理。
 
-## 任务删除
+## 删除、分叉与检查点
 
 `control` 组的 `delete_session({session_id})` 使用宿主已有删除路径，风险规则固定为 `prompt-each-time`。
 跨电脑传 `deviceId::sessionId`，复用同账号远程控制；返回 `REMOTE_RESULT_UNKNOWN` 时先查询，不能自动重发。
 删除后的任务不能用 `unarchive_sessions` 恢复。插件没有当前任务；任务中的 Agent 不能删除调用任务自身。
+
+`fork_session({session_id,message_client_id})` 使用历史消息的 `clientId`，返回新任务的 `session_id`，不自动发送消息。
+user 锚点复制它之前的历史；assistant 锚点复制至下一条 user 之前，沿用界面已有的原生历史语义与限制。
+`rewind_session({session_id,message_client_id,stop_if_running:false,restore_files:true})` 恢复指定 user 消息之前的历史与检查点，
+风险固定为 `prompt-each-time`。只有明确要停止当前执行时才传 `stop_if_running:true`；`restore_files:false` 只回退对话。
+两项支持 `deviceId::sessionId`，复用同账号远程控制。没有原生历史或检查点时返回宿主既有错误；不创建替代任务、不自动重试。
+跨电脑回执未知时先查看目标状态与历史，分叉尤其不能盲目重复，否则会生成多个任务。
 
 ## 完整历史与附件
 

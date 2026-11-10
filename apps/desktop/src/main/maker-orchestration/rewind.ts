@@ -27,6 +27,7 @@ import { and, asc, desc, eq, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../localDb/client/current';
+import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
 import { listMessagesForAgentHandoff, type MessageDeletedPayload } from '../localDb/ipc/messages.js';
@@ -846,8 +847,11 @@ export async function commitRewindAtMessage(
   clientId: string,
   opts?: RewindCommitOptions,
 ): Promise<Session> {
+  await assertTaskActionCurrent();
+  const dbClient = getDbClient();
   const ownerScope = opts?.ownerScope ?? captureDataOwnerBroadcastScope();
   const ctx = await loadRewindContext(sessionId, clientId, opts);
+  await assertTaskActionCurrent();
 
   // makerSession 必有 (loadRewindContext 已 guard); 这里只为类型收紧。
   const makerSession = getMaker().getSession(sessionId);
@@ -883,8 +887,10 @@ export async function commitRewindAtMessage(
     // /clear 可能在读完时间线之后、SDK 换空线程之前落库。副作用前再核一次代次,
     // 最终 rewind.commit 事务再 CAS 同一值(#4994 review P1)。
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
-    const commitThreadRollback = () =>
-      makerSession.commitRewindFiles('', '', { tailTurnsToDrop: ctx.tailTurnsToDrop, ...nativeBoundary });
+    const commitThreadRollback = async () => {
+      await assertTaskActionCurrent();
+      return makerSession.commitRewindFiles('', '', { tailTurnsToDrop: ctx.tailTurnsToDrop, ...nativeBoundary });
+    };
     const logCompensationError = (compErr: unknown, rollbackCommit: string | null) => {
       log.error(`[rewind commit] ${ctx.agentKind} file rewind compensation failed`, {
         sessionId,
@@ -899,6 +905,7 @@ export async function commitRewindAtMessage(
     } else {
       const filePlan = await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession);
       // shadow 保存点走文件恢复执行器,legacy 保存点走原 revert 执行器;
+      await assertTaskActionCurrent();
       // conversation-only 计划两个执行器都会直接透传 thread rollback。
       const result =
         filePlan.mode === 'file-restore'
@@ -933,13 +940,15 @@ export async function commitRewindAtMessage(
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
     if (!ctx.assistantUuid) nativeContextReset = await buildNativeContextReset(sessionId, ctx.targetClientId);
     const priorAssistantUuid = ctx.assistantUuid;
-    const commitConversationRewind = priorAssistantUuid
-      ? () => makerSession.commitRewindFiles('', priorAssistantUuid)
-      : () => closeSessionForNativeRestart(sessionId);
+    const commitConversationRewind = async () => {
+      await assertTaskActionCurrent();
+      return priorAssistantUuid ? makerSession.commitRewindFiles('', priorAssistantUuid) : closeSessionForNativeRestart(sessionId);
+    };
     if (opts?.allowFileRestore === false) {
       rewindResult = await commitConversationRewind();
     } else {
       const filePlan = await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession);
+      await assertTaskActionCurrent();
       const onCompensationError = (compErr: unknown, execution: { rollbackCommit: string | null }) => {
         log.error('[rewind commit] claude-code (other computer) file rewind compensation failed', {
           sessionId,
@@ -965,6 +974,7 @@ export async function commitRewindAtMessage(
     expectedClearedAt = await rereadSessionClearedAt(sessionId);
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
     nativeContextReset = await buildNativeContextReset(sessionId, ctx.targetClientId);
+    await assertTaskActionCurrent();
     if (ctx.userUuid && opts?.allowFileRestore !== false) {
       await makerSession.commitRewindFiles(ctx.userUuid, '', { rewindsToNativeThreadStart: true });
     }
@@ -972,6 +982,7 @@ export async function commitRewindAtMessage(
   } else {
     expectedClearedAt = await rereadSessionClearedAt(sessionId);
     await assertClearGenerationUnchanged(sessionId, expectedClearedAt, ctx.targetCreatedAt);
+    await assertTaskActionCurrent();
     if (ctx.userUuid && opts?.allowFileRestore !== false) {
       rewindResult = await makerSession.commitRewindFiles(ctx.userUuid, ctx.assistantUuid!);
     } else {
@@ -1001,7 +1012,8 @@ export async function commitRewindAtMessage(
   const now = Date.now();
   let rewoundClientIds: string[];
   try {
-    rewoundClientIds = await getDbClient().tx('rewind.commit', {
+    await assertTaskActionCurrent();
+    rewoundClientIds = await dbClient.tx('rewind.commit', {
       sessionId,
       targetCreatedAt: ctx.targetCreatedAt,
       targetMessageId: ctx.targetMessageId,

@@ -141,7 +141,9 @@ import {
 import { botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
-import { createRemoteSessionsStatusSetter } from './sessionStatusRemote.js';
+import { createRemoteSessionsStatusSetter, remoteSessionMutationFailure } from './sessionStatusRemote.js';
+import { DeviceLinkError } from '@cindy/device-link';
+import { MAKER_INVOKE } from '../maker-ipc/channels.js';
 import { isCindyLearnSkillEnabled } from '../skillhub/activationPreferences.js';
 import { botLearningTracker } from '../maker-ipc/botLearningTracker.js';
 import { getLearnController } from '../learn-host/index.js';
@@ -994,6 +996,42 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: true as const, sessionId, status: 'deleted' as const };
         } catch (error) {
           return { ok: false as const, errorCode: isIpcError(error) ? error.code : 'INTERNAL', message: error instanceof Error ? error.message : 'Task deletion failed.' };
+        }
+      }),
+      sessionHistory: params => withAccountDataAccess(params.callerSessionId, async assertCurrent => {
+        await assertTaskActionCurrent();
+        await assertCurrent();
+        const split = params.sessionId.indexOf('::');
+        const remote = split > 0;
+        try {
+          let result: { id: string };
+          if (remote) {
+            if (!deps.historyRemote) return { ok: false as const, errorCode: 'REMOTE_UNSUPPORTED', message: 'Remote task control is unavailable.' };
+            const access = deps.historyRemote.captureAccess();
+            const action = captureTaskActionSyncGuard();
+            const response = await deps.invokeRemote(params.sessionId.slice(0, split),
+              params.kind === 'fork' ? MAKER_INVOKE.FORK : MAKER_INVOKE.REWIND_COMMIT,
+              [params.sessionId.slice(split + 2), params.messageClientId, ...(params.kind === 'rewind'
+                ? [{ stopIfRunning: params.stopIfRunning, allowFileRestore: params.allowFileRestore }] : [])],
+              { preSend: () => { access(); action?.(); } });
+            await assertCurrent();
+            if (!response.ok) return { ok: false as const, ...remoteSessionMutationFailure(response.error.code, response.error.message) };
+            const row = response.result as { id?: unknown } | null;
+            if (!row || typeof row.id !== 'string' || (params.kind === 'rewind' && row.id !== params.sessionId.slice(split + 2)))
+              return { ok: false as const, ...remoteSessionMutationFailure('UNKNOWN', '') };
+            result = { id: `${params.sessionId.slice(0, split)}::${row.id}` };
+          } else {
+            result = params.kind === 'fork'
+              ? await (await import('../maker-ipc/fork.js')).forkTaskAtMessage(params.sessionId, params.messageClientId)
+              : await (await import('../maker-ipc/rewind.js')).commitTaskRewind(params.sessionId, params.messageClientId,
+                { stopIfRunning: params.stopIfRunning, allowFileRestore: params.allowFileRestore });
+          }
+          return { ok: true as const, sessionId: result.id };
+        } catch (error) {
+          if (remote) return { ok: false as const, ...remoteSessionMutationFailure(error instanceof DeviceLinkError ? error.code : 'IPC_ERROR',
+            error instanceof Error ? error.message : '', error instanceof DeviceLinkError && !error.inFlight) };
+          const code = (error as { code?: unknown }).code;
+          return { ok: false as const, errorCode: typeof code === 'string' ? code : 'INTERNAL', message: error instanceof Error ? error.message : 'Task history operation failed.' };
         }
       }),
       setSessionsStatus: async ({ sessionIds, status }) => {

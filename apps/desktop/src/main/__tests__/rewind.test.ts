@@ -22,6 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { admitTaskAction } from '../maker-ipc/taskActionAuthorization.js';
 
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
 import { setBroadcastTapListener } from '../device-link/broadcast-tap.js';
@@ -373,6 +374,20 @@ async function writeClaudeJsonl(
 // ── tests ──────────────────────────────────────────────────────────────────
 
 describe('commitRewindAtMessage', () => {
+  // Unit: native completion can race owner/install revocation. Existing clear-generation
+  // cases do not fence tool approval; an expired scope must leave persisted history intact.
+  it('keeps messages intact when caller approval expires during native rewind', async () => {
+    selectQueue.push([makeUserMessageRow()], [], [makeAssistantMessageRow()]);
+    let current = true;
+    const decision = await admitTaskAction({ server: 'cindy_helper', tool: 'rewind_session', sessionId: 'caller', args: {} },
+      { key: 'approved', ownerInput: true, delegated: false, assertCurrent: async () => { if (!current) throw new Error('PERMISSION_DENIED'); } });
+    if (!decision.ok || !decision.run) throw new Error('expected admission');
+    commitRewindFilesMock.mockImplementationOnce(async () => { current = false; });
+    await expect(decision.run(() => commitRewindAtMessage('sess-1', 'client-id'))).rejects.toThrow('PERMISSION_DENIED');
+    expect(txCalls).toEqual([]);
+    expect(remotePush).not.toHaveBeenCalled();
+  });
+
   it('happy path: calls maker session.commitRewindFiles(userUuid, priorAsstUuid) + soft-delete + reset', async () => {
     selectQueue.push([makeUserMessageRow()]);                  // target user msg
     selectQueue.push([]); // agent_switch 边界守卫:无边界

@@ -95,7 +95,8 @@ Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `sta
 | 任务     | 给当前任务新建 Cindy 托管 worktree（默认最新远端默认分支，可指定基线分支 `base_ref`；绑定当前任务，随归档回收；不搬任务、不重启） | 有（`create_task_worktree`，2026-10-31；基线分支 2026-11-10） | 无 |
 | 任务     | 看输入队列；编辑 / 撤回 / 调序自己发的排队消息；插话；停止 | 有   | 无               |
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
-| 任务     | 删除、Fork、Rewind、切换权限档、代用户确认权限或回答提问   | 无   | 无               |
+| 任务     | `fork_session` 按指定消息分叉；`rewind_session` 恢复指定 user 消息前的历史与检查点 | 有（control，回退逐次确认；共用界面入口的屏障、锁与清理） | 有（既有 fork / rewind 通道，不自动重试） |
+| 任务     | 切换权限档、代用户确认权限或回答提问   | 无   | 无               |
 | 协同 / Worker | 单个 / 批量创建、指定已有目录、查询实际目录与自有 worktree | 有 | 有（运行设备；新建 worktree 仅本机） |
 | 协同 / Worker | Lead 使用远程供应商时派发跨设备 Worker；独立选择工作电脑与模型电脑 | 有 | 有（`execution_device_id` + `agent_device_id`；目录查询支持同一工作电脑范围） |
 | 协同 / Worker | 为 Worker 新建 worktree、指定源分支、归档时回收 | 有 | 无 |

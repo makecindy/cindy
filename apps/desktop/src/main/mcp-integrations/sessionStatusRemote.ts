@@ -3,6 +3,7 @@ import type { ArchiveSessionsDeps, SessionStatusChangeItem } from '@cindy/mcps';
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from '../maker-ipc/taskActionAuthorization.js';
 
 type Failure = { errorCode: string; message: string };
+export { failure as remoteSessionMutationFailure };
 const unknownOutcome = (): Failure => ({
   errorCode: 'REMOTE_RESULT_UNKNOWN',
   message: '未收到可信回执，失败项可能已生效；请先查询目标任务状态再决定是否重试。后续项未执行。',

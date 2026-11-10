@@ -101,6 +101,8 @@ export interface HistorySession {
 
 export interface HistoryMessage {
   id: string;
+  /** Stable UI/native history anchor; older hosts may omit it. */
+  clientId?: string;
   sessionId: string;
   sessionWorkingDir: string | null;
   sessionAgentKind: string;
