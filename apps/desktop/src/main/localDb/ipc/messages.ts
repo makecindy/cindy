@@ -81,6 +81,8 @@ import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botR
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
 import { createHistoryViewReader, MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from './historyViewReader';
 import { setHistoryWorkPageReader } from '../../device-link/historyViewPush';
+import { encodeHistoryViewDelta } from '../../device-link/historyViewDelta';
+import { isScopedPeer, parseHistoryViewDeltaOptions } from '@cindy/device-link';
 
 const log = createLogger('localDb/messages');
 
@@ -475,10 +477,14 @@ export function registerMessageIpc(
     // Work lines and their patches serve same-account remote controllers only; a shared
     // guest keeps the existing projection and authorization path unchanged.
     const workLines = (opts as { workLines?: unknown } | null)?.workLines === true && !!context?.historyView && !context.sharedTask;
+    // Same-account remote readers may name the page they already hold (history-view-delta-v1).
+    const historyDelta = context && !context.sharedTask && !isScopedPeer(context.controllerDeviceId)
+      ? parseHistoryViewDeltaOptions(opts) : null;
+    const lazyDetails = (opts as { lazyDetails?: unknown } | null)?.lazyDetails === true;
     let shape: HistoryPageShape | undefined;
     const page = await historyView.page(sid, before == null ? undefined : requireString(before, 'before'),
-      (opts as { lazyDetails?: unknown } | null)?.lazyDetails === true,
-      workLines ? { workLines, onShape: (value) => { shape = value; } } : {}).catch((error) => {
+      lazyDetails,
+      workLines || historyDelta ? { workLines, onShape: (value) => { shape = value; } } : {}).catch((error) => {
       if (isHistoryViewUnavailable(error)) context?.historyView?.disable();
       throw error;
     });
@@ -487,7 +493,8 @@ export function registerMessageIpc(
         .filter((item) => item.type === 'work' && item.summary.isStreaming).map((item) => item.key);
       context?.historyView?.update(liveKeys, { workLines, shape });
     }
-    return page;
+    return historyDelta && context
+      ? encodeHistoryViewDelta(context.controllerDeviceId, sid, `${lazyDetails}:${workLines}`, historyDelta, page, shape) : page;
   });
   setHistoryWorkPageReader((sid, onShape) => historyView.page(sid, undefined, true, { workLines: true, onShape }));
   ipcMain.handle('local-db:messages:view-intent', (event, sessionId: unknown, refs: unknown) => {

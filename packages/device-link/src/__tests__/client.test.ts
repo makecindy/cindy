@@ -8730,6 +8730,68 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     controller.stop();
   }, 10_000);
 
+  // history-view-delta-v1: callers (both controllers' history views) must only ever see complete
+  // pages; a base the client cannot restore must fall back to one full read, never to an error.
+  it('历史页增量:调用方总拿到完整页,有基页时不上传已知正文,无法还原时自动整页重读', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const controller = makeRelayClient(relay, 'ios');
+    const page = (items: unknown[], historyDelta?: unknown) => ({ version: 1, items, hasMore: false, nextCursor: null,
+      ...(historyDelta ? { historyDelta } : {}) });
+    const userItem = { type: 'messages', key: 'c1', messages: [{ id: 'm1', clientId: 'c1', role: 'user', content: 'hello', createdAt: '2026-11-11T00:00:00.000Z' }] };
+    const work = (revision: string, isStreaming = false) => ({ type: 'work', key: isStreaming ? 'work-c4' : 'work-c2', summary: {
+      key: isStreaming ? 'work-c4' : 'work-c2', firstMessageId: 'm2', lastMessageId: 'm3', startedAtMs: 1, endedAtMs: 2,
+      isStreaming, messageCount: 2, toolCount: 1, revision } });
+    const responses = [
+      page([userItem, work('m3:2:9:epoch:1')], { version: 1, token: 't1', revisionSuffix: ':epoch:1' }),
+      page([{ type: 'same', from: 0, count: 2 }, work('m5:1:7:epoch:2', true)],
+        { version: 1, token: 't2', base: 't1', revisionSuffix: ':epoch:2' }),
+      // Names a page this client no longer holds as its base.
+      page([{ type: 'same', from: 0, count: 1 }], { version: 1, token: 't3', base: 't1', revisionSuffix: ':epoch:3' }),
+      page([userItem], { version: 1, token: 't4' }),
+    ];
+    const handled: InvokePayload[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) {
+        host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      }
+      if (env.kind === 'invoke' && env.src && env.id) {
+        handled.push(env.payload as InvokePayload);
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: responses[handled.length - 1] });
+      }
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+    await Promise.all([
+      controller.openLink('desktop', { controllerName: 'iPhone', protocolVersion: 1, appVersion: '1' }, 500),
+      relay.settle(),
+    ]);
+    const read = async () => {
+      const pending = controller.invoke('desktop', { channel: 'local-db:messages:view', args: ['s1', { lazyDetails: true, workLines: true }] }, 1_000);
+      await relay.settle();
+      return pending;
+    };
+
+    await expect(read()).resolves.toEqual({ ok: true, result: page([userItem, work('m3:2:9:epoch:1')]) });
+    expect(handled[0].args[1]).toMatchObject({ historyDelta: { version: 1 }, messageBodies: { version: 1 } });
+    expect(handled[0].args[1]).not.toHaveProperty('historyDelta.base');
+
+    await expect(read()).resolves.toEqual({ ok: true,
+      result: page([userItem, work('m3:2:9:epoch:2'), work('m5:1:7:epoch:2', true)]) });
+    expect(handled[1].args[1]).toMatchObject({ lazyDetails: true, workLines: true, historyDelta: { version: 1, base: 't1' } });
+    expect(handled[1].args[1]).not.toHaveProperty('messageBodies');
+
+    await expect(read()).resolves.toEqual({ ok: true, result: page([userItem]) });
+    expect(handled).toHaveLength(4);
+    expect(handled[3].args[1]).toMatchObject({ historyDelta: { version: 1 }, messageBodies: { version: 1 } });
+    expect(handled[3].args[1]).not.toHaveProperty('historyDelta.base');
+
+    offHost();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
   it('新确认阶段:首个 link-accept 丢失时不提前发可靠帧,同 stream 重开确认后恢复小帧', async () => {
     const relay = new MemoryRelay();
     const host = makeRelayClient(relay, 'desktop');

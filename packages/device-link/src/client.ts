@@ -2,6 +2,7 @@ import { isPeerResetRetryableInvoke, bypassInvokeScheduling, resolveInvokePriori
 import { InvokeScheduler } from './invokeScheduler.js';
 import { StallDiagnostics, diagnosticChannel, diagnosticOperation, diagnosticRef } from './stallDiagnostics.js';
 import { SessionMessageReuse } from './sessionMessageReuse.js';
+import { HistoryViewDeltaCache, isHistoryViewDeltaMiss } from './historyViewDelta.js';
 import {
   InboundInvokeTransferOptions,
   InvokeResultCache,
@@ -1289,6 +1290,7 @@ export class DeviceLinkClient {
   /** 只停这一条连接:中转移除本设备只影响它自己的线路,host 的 stop 才结束整个 client。 */
   protected stopConnection(): void {
     this.messageReuse.clear();
+    this.historyViewDelta.clear();
     this.invokeResultCache.clear();
     this.inboundInvokeTransfer.clear();
     this.inboundInvokeChannels.clear();
@@ -1992,28 +1994,37 @@ export class DeviceLinkClient {
       }
       // Prepare at dispatch, not when joining the admission queue. Earlier
       // reads may have filled the existing cache while this one was waiting.
-      const reuse = this.messageReuse.prepare(dst, payload);
-      const tagged = requestSessionTagCatalog(reuse.payload);
-      const transfer = isScopedPeer(dst) ? null : this.invokeResultCache.prepare(dst, tagged);
-      const env = await this.request(
-        { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: transfer?.payload ?? tagged },
-        'invoke-result',
-        timeoutMs, true, { id: requestId, admissionMs, source: options?.diagnosticSource ?? 'client', operation: diagnosticOperation(payload) },
-      );
-      this.reportInvokeMetric(payload, env.payload as InvokeResultPayload);
-      const decodeStarted = this.monotonicNow();
-      const result = transfer
-        ? await transfer.decode(env.payload as InvokeResultPayload, (timing) => this.reportInvokeDecode(payload, timing))
-        : env.payload as InvokeResultPayload;
-      const decoded = result.ok
-        ? {
-            ...result,
-            result: reuse.decode(decodeModelSpeedPayload(payload.channel, decodeSessionTagCatalog(payload.channel, result.result))),
-          }
-        : result;
-      const decodeMs = Math.round(this.monotonicNow() - decodeStarted);
-      if (decodeMs >= 250) this.stallDiagnostics.record('decode', { request: diagnosticRef(requestId), channel: diagnosticChannel(payload.channel), decodeMs });
-      return decoded;
+      const attempt = async (id: string, fullHistory: boolean): Promise<InvokeResultPayload> => {
+        const reuse = this.messageReuse.prepare(dst, payload);
+        const delta = isScopedPeer(dst) ? null : this.historyViewDelta.prepare(dst, reuse.payload, fullHistory);
+        const tagged = requestSessionTagCatalog(delta?.payload ?? reuse.payload);
+        const transfer = isScopedPeer(dst) ? null : this.invokeResultCache.prepare(dst, tagged);
+        const env = await this.request(
+          { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: transfer?.payload ?? tagged },
+          'invoke-result',
+          timeoutMs, true, { id, admissionMs, source: options?.diagnosticSource ?? 'client', operation: diagnosticOperation(payload) },
+        );
+        this.reportInvokeMetric(payload, env.payload as InvokeResultPayload);
+        const decodeStarted = this.monotonicNow();
+        const result = transfer
+          ? await transfer.decode(env.payload as InvokeResultPayload, (timing) => this.reportInvokeDecode(payload, timing))
+          : env.payload as InvokeResultPayload;
+        const restored = result.ok
+          ? reuse.decode(decodeModelSpeedPayload(payload.channel, decodeSessionTagCatalog(payload.channel, result.result)))
+          : undefined;
+        const decoded = result.ok ? { ...result, result: delta ? delta.decode(restored) : restored } : result;
+        const decodeMs = Math.round(this.monotonicNow() - decodeStarted);
+        if (decodeMs >= 250) this.stallDiagnostics.record('decode', { request: diagnosticRef(id), channel: diagnosticChannel(payload.channel), decodeMs });
+        return decoded;
+      };
+      try {
+        return await attempt(requestId, false);
+      } catch (error) {
+        // The Host answered relative to a page this client cannot restore: read it whole.
+        if (!isHistoryViewDeltaMiss(error)) throw error;
+        this.log.debug(`device-link history delta miss dst=${dst.slice(0, 8)}: ${error.message}`);
+        return attempt(createRequestId(), true);
+      }
     };
     return (bypassInvokeScheduling(payload) ? send() : this.invokeScheduler.run(
       dst, resolveInvokePriority(payload.channel, options?.background),
@@ -3703,6 +3714,7 @@ export class DeviceLinkClient {
   }
 
   private readonly messageReuse = new SessionMessageReuse();
+  private readonly historyViewDelta = new HistoryViewDeltaCache();
   private readonly invokeResultCache: InvokeResultCache;
   private readonly inboundInvokeTransfer = new InboundInvokeTransferOptions();
   /** Channel of each recent inbound invoke, so a queued reply can be labelled. Diagnostics only. */
@@ -3748,6 +3760,7 @@ export class DeviceLinkClient {
       const decoded = decodeModelSpeedPayload(push.channel, push.payload);
       if (decoded !== push.payload) env = { ...env, payload: { ...push, payload: decoded } };
       this.messageReuse.receive(env.src!, push.channel, decoded);
+      this.historyViewDelta.receive(env.src!, push.channel, decoded);
     }
     let ok = true;
     let chain: Promise<void> | null = null;

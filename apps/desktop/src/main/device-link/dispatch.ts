@@ -129,6 +129,7 @@ import type { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { isDeferredHistoryPush, deferredToolBoundary, buildHistoryWorkPatch, thinkingDeltaUpdatesWorkLine } from './historyViewPush';
+import { withoutHistoryViewDeltaToken } from './historyViewDelta';
 import { HISTORY_WORK_PATCH_CHANNEL } from '@cindy/maker-shared/message-window';
 import { mapHistoryViewMessages, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
 import { createLogger } from '../logger';
@@ -4078,7 +4079,7 @@ function compactInvokeResultForDeviceLink(
   }
   if (result.ok && (channel === 'local-db:messages:view' || channel === 'local-db:messages:work-details')
     && result.result && typeof result.result === 'object') {
-    const page = result.result as Record<string, unknown>;
+    const page = withoutHistoryViewDeltaToken(result.result as Record<string, unknown>);
     const mapPage = (map: (row: unknown) => unknown): InvokeResultPayload => ({ ok: true, result: {
       ...page,
       ...(Array.isArray(page.messages) ? { messages: page.messages.map(map) } : {}),
