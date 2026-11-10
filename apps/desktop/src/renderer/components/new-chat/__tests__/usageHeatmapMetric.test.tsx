@@ -157,6 +157,27 @@ describe('UsageHeatmap metric', () => {
     expect(titles.some((title) => title.startsWith('2026-09-01'))).toBe(false);
   });
 
+  it('半年连续日期布局保留完整窗口且点击返回对应日期', () => {
+    const onDayClick = vi.fn();
+    const { container, getByRole } = render(
+      <UsageHeatmap
+        days={[{ day: '2026-06-01', money: money(0), tokens: 1 }]}
+        todayKey="2026-11-12"
+        windowDays="auto"
+        fillWidth
+        metric="tokens"
+        onDayClick={onDayClick}
+      />,
+    );
+    const dates = cellTitles(container).map((title) => title.split(' · ')[0]);
+    expect(dates).toHaveLength(185);
+    expect(new Set(dates).size).toBe(185);
+    expect(dates[0]).toBe('2026-05-12');
+    expect(dates.at(-1)).toBe('2026-11-12');
+    fireEvent.click(getByRole('button', { name: /May 12, 2026/ }));
+    expect(onDayClick).toHaveBeenCalledWith('2026-05-12');
+  });
+
   it('历史数据或日期锚点变化时自动重新选择半年或全年', () => {
     const records = [{ day: '2026-03-01', money: money(0), tokens: 1 }];
     const view = (history: typeof records, todayKey: string) => (

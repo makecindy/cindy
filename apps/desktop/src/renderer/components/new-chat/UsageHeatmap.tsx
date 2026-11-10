@@ -7,7 +7,7 @@
  * 强度口径由 `metric` 决定: 'money' (默认, 首页仪表盘) 或 'tokens' (设置 → 用量历史,
  * 那个页面不出现任何金额, 见 issue #2785)。两种口径共用同一套分位分桶与色阶。
  *
- * 视觉: 7 行 (周日起) × 至少 20 列周网格, 单色阶 — 非零值按 4 分位分桶,
+ * 视觉: 首页/全年为 7 行周网格，半年为 4 行连续日期；单色阶 — 非零值按 4 分位分桶,
  * 用 color-mix 做强度阶梯：用量历史使用登记蓝色，其余入口沿用 --accent-emphasis。
  * 格子用原生 title 做 tooltip (Radix per-cell 实例太重)。
  */
@@ -166,7 +166,7 @@ export function UsageHeatmap({
   windowDays: number | 'auto';
   /** 格子深浅按哪一维分桶。'tokens' 下 tooltip 也只显示 token, 不出现金额。 */
   metric?: 'money' | 'tokens';
-  /** Fill the plot width, keeping row height consistent across history windows. */
+  /** Fill the plot width with equal square cells; shorter auto windows use fewer rows. */
   fillWidth?: boolean;
   selectedDay?: string | null;
   onDayClick?: (day: string) => void;
@@ -215,6 +215,7 @@ export function UsageHeatmap({
         metric,
         cellSize,
       });
+  const rowCount = fillWidth && windowDays === 'auto' && historyWindowDays < 365 ? 4 : 7;
 
   useLayoutEffect(() => {
     onVisibleWeeksChange?.(visibleWeeks);
@@ -227,7 +228,13 @@ export function UsageHeatmap({
       metric === 'tokens' ? (row.tokens ?? 0) : row.money.amount;
     const today = parseDayKey(todayKey);
     const start = startOfWeek(today);
-    start.setDate(start.getDate() - (visibleWeeks - 1) * 7);
+    if (rowCount === 4) {
+      start.setTime(today.getTime());
+      start.setHours(12, 0, 0, 0);
+      start.setDate(start.getDate() - historyWindowDays + 1);
+    } else {
+      start.setDate(start.getDate() - (visibleWeeks - 1) * 7);
+    }
     const startKey = toDayKey(start);
 
     // 分桶只反映当前屏幕可见的日期。全量历史中较早的极端值不应改变
@@ -243,7 +250,9 @@ export function UsageHeatmap({
 
     const cells: HeatCell[] = [];
     const cursor = new Date(start);
-    for (let index = 0; index < visibleWeeks * 7; index += 1) {
+    const cellCount =
+      rowCount === 4 ? Math.ceil(historyWindowDays / rowCount) * rowCount : visibleWeeks * rowCount;
+    for (let index = 0; index < cellCount; index += 1) {
       const key = toDayKey(cursor);
       // `cursor` stays at noon so DST transitions cannot skip a calendar day;
       // compare the rendered day keys instead of Date instants so today's cell
@@ -266,7 +275,7 @@ export function UsageHeatmap({
     }
 
     const cols: HeatCell[][] = [];
-    for (let i = 0; i < cells.length; i += 7) cols.push(cells.slice(i, i + 7));
+    for (let i = 0; i < cells.length; i += rowCount) cols.push(cells.slice(i, i + rowCount));
 
     // 月份标签: 列内包含 1 号时标记该列; 与上一个标签隔 <2 列时跳过防重叠
     const fmt = new Intl.DateTimeFormat(i18n.language, { month: 'short' });
@@ -279,24 +288,25 @@ export function UsageHeatmap({
     });
 
     return { columns: cols, monthLabels: labels };
-  }, [days, todayKey, visibleWeeks, i18n.language, metric]);
+  }, [days, todayKey, visibleWeeks, i18n.language, metric, rowCount, historyWindowDays]);
 
-  // Keep the history window intact on narrow screens; only surplus space stretches.
+  // Both windows keep the annual view's square size. Extra width goes between columns,
+  // so the half-year view becomes shorter by removing rows, not by distorting cells.
+  const sizeColumns = fillWidth
+    ? Math.max(columns.length, heatmapWeeksForWindow(todayKey, 365))
+    : columns.length;
   const cellWidth = fillWidth
-    ? Math.max(cellSize, (availableWidth - GAP_PX * 2 - (visibleWeeks - 1) * GAP_PX) / visibleWeeks)
+    ? Math.max(cellSize, (availableWidth - GAP_PX * 2 - (sizeColumns - 1) * GAP_PX) / sizeColumns)
     : cellSize;
-  // Shorter windows use wider cells, but keep the same row height as the annual view.
-  const annualWeeks = heatmapWeeksForWindow(todayKey, 365);
-  const cellHeight = fillWidth
-    ? Math.min(
-        cellWidth,
-        Math.max(cellSize, (availableWidth - GAP_PX * 2 - (annualWeeks - 1) * GAP_PX) / annualWeeks),
-      )
-    : cellSize;
-  const colPitch = cellWidth + GAP_PX;
+  const cellHeight = cellWidth;
+  const columnGap =
+    fillWidth && columns.length > 1
+      ? Math.max(GAP_PX, (availableWidth - GAP_PX * 2 - columns.length * cellWidth) / (columns.length - 1))
+      : GAP_PX;
+  const colPitch = cellWidth + columnGap;
 
   useLayoutEffect(() => {
-    // A narrow annual timeline opens at the most recent dates, not the empty past.
+    // A narrow history timeline opens at the most recent dates.
     if (fillWidth && plotRef.current) {
       plotRef.current.scrollLeft = plotRef.current.scrollWidth;
     }
@@ -315,7 +325,7 @@ export function UsageHeatmap({
           {/* 月份标签行。nowrap 防止最右侧月份被挤成上下两行。 */}
           <div
             className="usage-heatmap-months relative h-[14px]"
-            style={{ width: columns.length * colPitch - GAP_PX }}
+            style={{ width: columns.length * colPitch - columnGap }}
           >
             {monthLabels.map((m) => (
               <span
@@ -331,7 +341,7 @@ export function UsageHeatmap({
             ))}
           </div>
           {/* 网格 */}
-          <div className="flex" style={{ gap: GAP_PX }}>
+          <div className="flex" style={{ gap: columnGap }}>
             {columns.map((col, ci) => (
               <div key={ci} className="flex flex-col" style={{ gap: GAP_PX }}>
                 {col.map((cell, ri) => {
