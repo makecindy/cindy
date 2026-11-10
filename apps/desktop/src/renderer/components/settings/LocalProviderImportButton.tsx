@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from '@/lib/toast';
+import { providersSettings } from './ProvidersSection.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import type {
   LocalProviderImportEdit,
   LocalProviderImportItem,
@@ -28,6 +30,7 @@ const WIRES = [
 /** Only source selection and non-secret edits. Review/commit reuse the existing batch dialog. */
 export function LocalProviderImportButton({ onImported }: { onImported: (ids: string[]) => void }) {
   const { t } = useTranslation();
+  const localImportSetting = useSettingDefinition(providersSettings.localImport);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [scan, setScan] = useState<LocalProviderImportScan | null>(null);
@@ -156,6 +159,8 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
   return (
     <>
       <Button
+        {...localImportSetting.anchorProps}
+        {...localImportSetting.controlProps}
         type="button"
         variant="secondary"
         size="lg"
@@ -164,7 +169,7 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
         onClick={() => void start()}
       >
         <Monitor size={15} />
-        {t('settings.providers.import.local.title')}
+        {localImportSetting.title}
       </Button>
       <ConfirmDialog
         presentation="standard"
@@ -173,8 +178,8 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
         onOpenChange={(value) => {
           if (!value) close();
         }}
-        title={t('settings.providers.import.local.title')}
-        description={t('settings.providers.import.local.note')}
+        title={localImportSetting.title}
+        description={localImportSetting.description}
         descriptionClassName="text-13 font-normal leading-relaxed"
         confirmText={t('settings.providers.import.local.review', { count: selected.size })}
         confirmDisabled={busy || !selected.size || !!editing}
@@ -186,7 +191,7 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
           <div className="space-y-3 text-13 text-[var(--text-primary)]">
             {busy && !scan && <p role="status">{t('settings.providers.import.local.scanning')}</p>}
             {!busy && (
-              <Button type="button" variant="secondary" size="md" onClick={() => void start()}>
+              <Button data-settings-search-action="Rescan saved API configurations for this pending import" type="button" variant="secondary" size="md" onClick={() => void start()}>
                 {t('settings.providers.import.local.rescan')}
               </Button>
             )}
@@ -207,6 +212,7 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <label className="flex min-h-9 min-w-0 items-center gap-2 font-medium">
                           <input
+                            data-settings-search-action="Select a temporary local-import candidate for review"
                             type="checkbox"
                             className="size-4 shrink-0 accent-[var(--text-primary)]"
                             checked={selected.has(item.importId)}
@@ -225,6 +231,7 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
                         {item.endpoints.length > 0 &&
                           !['unsupported', 'changed'].includes(item.issue ?? '') && (
                             <Button
+                              data-settings-search-action="Edit a scanned API configuration before import review"
                               variant="secondary"
                               size="md"
                               disabled={busy}
@@ -271,7 +278,7 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
         description={t('settings.providers.import.local.editNote')}
         descriptionClassName="text-13 font-normal leading-relaxed"
         onOpenChange={(value) => {
-          if (!value && !busy) {
+          if (!value && !running.current) {
             setEditing(null);
             setEndpoints([]);
           }
@@ -291,13 +298,14 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
           <div className="space-y-3 text-13 text-[var(--text-primary)]">
             <label className="flex flex-col gap-2">
               {t('settings.providers.import.local.name')}
-              <Input value={name} maxLength={60} disabled={busy} onChange={setName} />
+              <Input data-settings-search-action="Edit the display name of a temporary import candidate" value={name} maxLength={60} disabled={busy} onChange={setName} />
             </label>
             {endpoints.map((ep, i) => (
               <div key={i} className="space-y-3">
                 <label className="flex flex-col gap-2">
                   {t('settings.providers.import.local.baseUrl')}
                   <Input
+                    data-settings-search-action="Edit the API address of a temporary import candidate"
                     value={ep.baseUrl}
                     disabled={busy}
                     onChange={(value) =>
@@ -308,6 +316,7 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
                 <label className="flex flex-col gap-2">
                   {t('settings.providers.import.local.protocol')}
                   <select
+                    data-settings-search-action="Choose the wire protocol of a temporary import candidate"
                     className="h-9 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3"
                     value={ep.protocol}
                     disabled={busy}
@@ -328,6 +337,7 @@ export function LocalProviderImportButton({ onImported }: { onImported: (ids: st
                 <label className="flex flex-col gap-2">
                   {t('settings.providers.import.local.apiKey')}
                   <Input
+                    data-settings-search-action="Replace the credential of a temporary import candidate before confirmation"
                     type="password"
                     autoComplete="off"
                     value={ep.apiKey}

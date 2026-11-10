@@ -51,6 +51,7 @@ const maker = {
 beforeEach(() => {
   vi.clearAllMocks();
   maker.scanLocalProviderImports.mockImplementation(async () => fixture());
+  maker.editLocalProviderImport.mockImplementation(async () => fixture().items[0]);
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker } });
 });
 afterEach(cleanup);
@@ -129,6 +130,42 @@ describe('local configuration import selection', () => {
         ],
       }),
     );
+  });
+  it('keeps edited values after a failed save and closes only after a successful retry', async () => {
+    let rejectEdit!: (error: Error) => void;
+    maker.editLocalProviderImport.mockImplementationOnce(
+      () => new Promise<LocalProviderImportScan['items'][number]>((_, reject) => {
+        rejectEdit = reject;
+      }),
+    );
+    render(<LocalProviderImportButton onImported={vi.fn()} />);
+    clickOpen();
+    await screen.findByText('Incomplete');
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.providers.import.local.edit' })[1]);
+    const values = {
+      name: 'Edited relay',
+      baseUrl: 'https://edited.test/v1',
+      protocol: 'openai-chat',
+      apiKey: 'FAKE-RETRY-KEY',
+    };
+    for (const [field, value] of Object.entries(values)) {
+      fireEvent.change(screen.getByLabelText(`settings.providers.import.local.${field}`), {
+        target: { value },
+      });
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await act(async () => rejectEdit(new Error('save failed')));
+    expect(mocks.toast.error).toHaveBeenCalledWith('settings.providers.import.local.editFailed');
+    for (const [field, value] of Object.entries(values)) {
+      expect((screen.getByLabelText(`settings.providers.import.local.${field}`) as HTMLInputElement).value).toBe(value);
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(maker.editLocalProviderImport).toHaveBeenCalledTimes(2));
+    expect(maker.editLocalProviderImport).toHaveBeenLastCalledWith('incomplete', {
+      name: values.name,
+      endpoints: [{ baseUrl: values.baseUrl, protocol: values.protocol, apiKey: values.apiKey }],
+    });
+    await waitFor(() => expect(screen.queryByLabelText('settings.providers.import.local.apiKey')).toBeNull());
   });
   it('rescanning releases previous drafts and unmount releases the new scan', async () => {
     const view = render(<LocalProviderImportButton onImported={vi.fn()} />);
