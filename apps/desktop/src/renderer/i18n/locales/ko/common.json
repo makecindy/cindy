@@ -19740,6 +19740,11 @@
       "useCodex": "Codex로 로그인"
     },
     "title": "구독 계정",
+    "singleAvailable": "할당 가능한 계정 1개",
+    "multipleAvailable": "할당 가능한 계정 여러 개",
+    "allPaused": "모든 계정이 일시 중지됨",
+    "noneAvailable": "할당 가능한 계정 없음",
+    "checkingPool": "계정 설정 확인 중…",
     "strategy": "부하 분산",
     "add": "계정 추가",
     "default": "기본 폴더",

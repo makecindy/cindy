@@ -22,6 +22,7 @@ import type {
   SubscriptionAccountCommand,
   SubscriptionAccountUsage,
   SubscriptionProvider,
+  SubscriptionPoolConfigView,
   SubscriptionPoolView,
 } from '../../shared/subscriptionAccounts.js';
 import {
@@ -493,6 +494,18 @@ export async function readSubscriptionPool(
   };
 }
 
+/** Picker attribution metadata only; never resolve account auth or usage snapshots. */
+export function readSubscriptionPoolConfig(provider: SubscriptionProvider): SubscriptionPoolConfigView {
+  const pool = readPool(provider);
+  const config = pool ?? defaultPool();
+  return {
+    providerId: provider,
+    configured: pool !== null,
+    disconnected: config.disconnected === true,
+    accounts: config.accounts.map(({ id, paused }) => ({ id, paused })),
+  };
+}
+
 export interface SubscriptionAccountLease {
   account: NativeSubscriptionAccount;
   bind(keys: string[]): Promise<void>;
@@ -641,12 +654,22 @@ export async function acquireSubscriptionAccount(
   };
 }
 
+export function runSubscriptionAccountCommand(
+  command: Extract<SubscriptionAccountCommand, { action: 'read-config' }>,
+): Promise<SubscriptionPoolConfigView>;
+export function runSubscriptionAccountCommand(
+  command: Exclude<SubscriptionAccountCommand, { action: 'read-config' }>,
+): Promise<SubscriptionPoolView>;
+export function runSubscriptionAccountCommand(
+  command: SubscriptionAccountCommand,
+): Promise<SubscriptionPoolView | SubscriptionPoolConfigView>;
 export async function runSubscriptionAccountCommand(
   command: SubscriptionAccountCommand,
-): Promise<SubscriptionPoolView> {
+): Promise<SubscriptionPoolView | SubscriptionPoolConfigView> {
   const state = currentRuntime();
   assertOwner(state);
   const provider = command.providerId;
+  if (command.action === 'read-config') return readSubscriptionPoolConfig(provider);
   if (command.action === 'read') return readSubscriptionPool(provider);
   if (command.action === 'preview') return readSubscriptionPool(provider, true);
   if (command.action === 'cancel') {

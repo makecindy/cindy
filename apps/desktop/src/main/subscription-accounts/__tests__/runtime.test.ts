@@ -193,6 +193,29 @@ describe('native account assignment on the executing computer', () => {
     expect(next.accounts.at(-1)?.status).toBe('ready');
   });
 
+  // Test value (#9711, unit): runSubscriptionAccountCommand must return picker metadata without
+  // resolving auth or quota. Existing quota tests exercise full snapshots; two configured accounts
+  // are the minimal input that needs pool attribution while proving neither native reader runs.
+  it('reads pool attribution metadata without resolving account auth or usage', async () => {
+    h.pools.anthropic = {
+      strategy: 'least',
+      disconnected: false,
+      accounts: [account('default'), { ...account('max'), paused: false }],
+    };
+
+    await expect(runSubscriptionAccountCommand({ action: 'read-config', providerId: 'anthropic' })).resolves.toEqual({
+      providerId: 'anthropic',
+      configured: true,
+      disconnected: false,
+      accounts: [
+        { id: 'default', paused: false },
+        { id: 'max', paused: false },
+      ],
+    });
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.usage).not.toHaveBeenCalled();
+  });
+
   // Unit, #9295 review: reset lookups refresh the pinned profile rather than
   // taking a different ready account; prior tests only covered pool availability.
   it.each([

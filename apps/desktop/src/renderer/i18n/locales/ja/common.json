@@ -19740,6 +19740,11 @@
       "useCodex": "Codex でログイン"
     },
     "title": "サブスクリプションアカウント",
+    "singleAvailable": "割り当て可能なアカウントが 1 つあります",
+    "multipleAvailable": "割り当て可能なアカウントが複数あります",
+    "allPaused": "すべてのアカウントが一時停止中です",
+    "noneAvailable": "割り当て可能なアカウントがありません",
+    "checkingPool": "アカウント設定を確認中…",
     "strategy": "負荷分散",
     "add": "アカウントを追加",
     "default": "既定フォルダー",

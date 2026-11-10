@@ -19812,6 +19812,11 @@
       "useCodex": "Mit Codex anmelden"
     },
     "title": "Abonnementkonten",
+    "singleAvailable": "Ein Konto verfügbar",
+    "multipleAvailable": "Mehrere Konten verfügbar",
+    "allPaused": "Alle Konten pausiert",
+    "noneAvailable": "Kein Konto verfügbar",
+    "checkingPool": "Kontoeinstellungen werden geprüft…",
     "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
     "default": "Standardordner",

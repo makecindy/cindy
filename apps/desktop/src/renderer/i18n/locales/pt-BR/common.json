@@ -19999,6 +19999,11 @@
       "useCodex": "Entrar com o Codex"
     },
     "title": "Contas de assinatura",
+    "singleAvailable": "Uma conta disponível",
+    "multipleAvailable": "Várias contas disponíveis",
+    "allPaused": "Todas as contas pausadas",
+    "noneAvailable": "Nenhuma conta disponível",
+    "checkingPool": "Verificando as configurações das contas…",
     "strategy": "Balanceamento de carga",
     "add": "Adicionar conta",
     "default": "Pasta padrão",

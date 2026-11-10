@@ -19999,6 +19999,11 @@
       "useCodex": "Iniciar sessão com o Codex"
     },
     "title": "Contas de subscrição",
+    "singleAvailable": "Uma conta disponível",
+    "multipleAvailable": "Várias contas disponíveis",
+    "allPaused": "Todas as contas em pausa",
+    "noneAvailable": "Nenhuma conta disponível",
+    "checkingPool": "A verificar as definições das contas…",
     "strategy": "Distribuição de carga",
     "add": "Adicionar conta",
     "default": "Pasta predefinida",

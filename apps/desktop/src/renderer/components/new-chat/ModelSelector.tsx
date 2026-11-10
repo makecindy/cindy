@@ -1452,6 +1452,85 @@ function ModelSelectorContentView({
   // SSH 目录里 Codex 来自远端主机：本机账号用量、本机供应商组都不能代表它。
   const sshCodexActive = sshCodex !== undefined;
   const mixedCatalog = !!providersOverride || sshCodexActive;
+  const poolAttributionEnabled =
+    !taskStarted && !deviceId && !mixedCatalog && providers.some((provider) => provider.id === 'anthropic');
+  const poolAttributionScope = poolAttributionEnabled
+    ? `local-new:${providers.map((provider) => provider.id).join(',')}`
+    : 'legacy';
+  const [anthropicPoolAttributionState, setAnthropicPoolAttributionState] = useState<{
+    scope: string;
+    value: 'legacy' | 'single' | 'pool' | 'paused' | 'unavailable' | 'pending' | 'unknown';
+  }>({ scope: '', value: 'pending' });
+  useEffect(() => {
+    if (!poolAttributionEnabled) {
+      setAnthropicPoolAttributionState({ scope: poolAttributionScope, value: 'legacy' });
+      return;
+    }
+    const api = window.electronAPI?.subscriptionAccounts;
+    if (!api) {
+      setAnthropicPoolAttributionState({ scope: poolAttributionScope, value: 'unknown' });
+      return;
+    }
+    let active = true;
+    let epoch = 0;
+    const refresh = async () => {
+      const current = ++epoch;
+      setAnthropicPoolAttributionState({ scope: poolAttributionScope, value: 'pending' });
+      try {
+        const pool = await api.command({ action: 'read-config', providerId: 'anthropic' });
+        if (!active || current !== epoch) return;
+        const activeAccounts = pool.accounts.filter((account) => !account.paused);
+        if (pool.disconnected) {
+          setAnthropicPoolAttributionState({ scope: poolAttributionScope, value: 'unavailable' });
+        } else if (!pool.configured || (activeAccounts.length === 1 && activeAccounts[0]?.id === 'default')) {
+          setAnthropicPoolAttributionState({ scope: poolAttributionScope, value: 'legacy' });
+        } else if (activeAccounts.length === 0) {
+          setAnthropicPoolAttributionState({
+            scope: poolAttributionScope,
+            value: pool.accounts.length > 0 ? 'paused' : 'unavailable',
+          });
+        } else if (activeAccounts.length === 1) {
+          setAnthropicPoolAttributionState({ scope: poolAttributionScope, value: 'single' });
+        } else {
+          setAnthropicPoolAttributionState({ scope: poolAttributionScope, value: 'pool' });
+        }
+      } catch {
+        if (active && current === epoch)
+          setAnthropicPoolAttributionState({ scope: poolAttributionScope, value: 'unknown' });
+      }
+    };
+    void refresh();
+    const unsubscribe = api.onChanged((event) => {
+      if (event.providerId === 'anthropic') {
+        setAnthropicPoolAttributionState({ scope: poolAttributionScope, value: 'pending' });
+        void refresh();
+      }
+    });
+    return () => {
+      active = false;
+      epoch += 1;
+      unsubscribe();
+    };
+  }, [poolAttributionEnabled, poolAttributionScope, taskStarted, deviceId, mixedCatalog, providers]);
+  const anthropicPoolAttribution =
+    anthropicPoolAttributionState.scope === poolAttributionScope
+      ? anthropicPoolAttributionState.value
+      : poolAttributionEnabled
+        ? 'pending'
+        : 'legacy';
+  const suppressAnthropicAccountAttribution = anthropicPoolAttribution !== 'legacy';
+  const anthropicPoolStatusLabel = (providerId: string): string | undefined => {
+    if (providerId !== 'anthropic') return undefined;
+    const keyByStatus: Partial<Record<typeof anthropicPoolAttribution, string>> = {
+      single: 'subscriptionAccounts.singleAvailable',
+      pool: 'subscriptionAccounts.multipleAvailable',
+      paused: 'subscriptionAccounts.allPaused',
+      unavailable: 'subscriptionAccounts.noneAvailable',
+      pending: 'subscriptionAccounts.checkingPool',
+    };
+    const key = keyByStatus[anthropicPoolAttribution];
+    return key ? t(key) : undefined;
+  };
   // 订阅用量跟随目录归属:本机目录读本机账号,远程目录读被控端镜像(与会话用量 chip 共用缓存);
   // 外部注入的目录(providersOverride)与 SSH 混合目录归属不明,不显示任何账号用量。
   const providerUsageScope = useMemo<ProviderUsageScope | null>(
@@ -3644,6 +3723,10 @@ function ModelSelectorContentView({
             deviceId={deviceId}
             providerUsage={providerUsageScope}
             providerGroupUsage={providerGroupUsage}
+            suppressProviderAccountAttribution={(providerId) =>
+              providerId === 'anthropic' && suppressAnthropicAccountAttribution
+            }
+            providerAccountStatusLabel={anthropicPoolStatusLabel}
             providers={providers}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}
             {...(unifiedAgents ? { agents: unifiedAgents } : {})}

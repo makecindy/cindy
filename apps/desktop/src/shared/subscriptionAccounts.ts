@@ -58,8 +58,17 @@ export interface SubscriptionPoolView {
   strategy: ProviderGroupStrategy;
   accounts: SubscriptionAccountView[];
 }
+export interface SubscriptionPoolConfigView {
+  providerId: SubscriptionProvider;
+  configured: boolean;
+  disconnected: boolean;
+  accounts: Array<Pick<SubscriptionAccountConfig, 'id' | 'paused'>>;
+}
+export type SubscriptionAccountCommandResult<C extends SubscriptionAccountCommand> =
+  C extends { action: 'read-config' } ? SubscriptionPoolConfigView : SubscriptionPoolView;
 export type SubscriptionAccountCommand =
   | { action: 'read'; providerId: SubscriptionProvider }
+  | { action: 'read-config'; providerId: SubscriptionProvider }
   /** Advisory login presentation only; never binds detected system credentials. */
   | { action: 'preview'; providerId: SubscriptionProvider }
   | { action: 'add'; providerId: SubscriptionProvider; loginKey: string }

@@ -67,6 +67,13 @@ describe('subscription management boundary', () => {
     const error = await invoke({ action: 'connect', target: 'default', providerId: 'openai', loginKey: 'login' }).catch(error => error);
     expect(mapIpcErrorToI18nKey(error)).toBe('ipcError.SUBSCRIPTION_CODEX_PROVIDER_AUTH');
   });
+  // #9711 unit: the real owner IPC parser must admit the selector's metadata read;
+  // existing parser cases cover full reads and login actions, not this new action.
+  it('accepts the selector pool-config read through the trusted owner IPC parser', async () => {
+    const command = { action: 'read-config', providerId: 'anthropic' };
+    await expect(invoke(command)).resolves.toEqual({ accounts: [] });
+    expect(h.execute).toHaveBeenCalledExactlyOnceWith(command);
+  });
   it('admits the trusted owner and paired owner remote context, never an untrusted frame or shared-task guest', async () => {
     const command = { action: 'read', providerId: 'anthropic' };
     await invoke(command);

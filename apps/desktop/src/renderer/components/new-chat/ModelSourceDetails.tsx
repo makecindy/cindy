@@ -63,6 +63,7 @@ export function ModelSourceUsageProvider({
   providers,
   scope,
   groupUsageOf,
+  suppressProviderUsage,
   isolated = false,
   children,
 }: {
@@ -71,6 +72,8 @@ export function ModelSourceUsageProvider({
   scope: ProviderUsageScope | null;
   /** 目录里的供应商组读谁的账号(provider-groups.md §10);缺省 = 都按目录归属读。 */
   groupUsageOf?: (providerId: string) => ProviderGroupUsage | null;
+  /** Account-scoped usage is unknown until a new task's subscription account is bound. */
+  suppressProviderUsage?: (providerId: string) => boolean;
   /**
    * 不继承外层目录的用量:嵌在另一份目录里的行(收藏区里另一台电脑的收藏)与外层可能有同 id 的
    * 供应商,继承会把外层账号的余量显示在这一行上。
@@ -90,6 +93,7 @@ export function ModelSourceUsageProvider({
   // never this desktop's accounts, even for matching IDs.
   const content = enabled
     ? providers.reduce<ReactNode>((content, row) => {
+        if (suppressProviderUsage?.(row.id)) return content;
         // 供应商组：任务正经组在某台运行时读那台的账号，还没分到电脑时不显示某一台的配额。
         const group = groupUsageOf?.(row.id);
         if (group && (group.kind !== 'running' || !group.usage)) return content;
@@ -205,10 +209,12 @@ export function ModelSourceDetails({
   providerId,
   label,
   modelId,
+  statusLabel,
 }: {
   providerId: string;
   label: string;
   modelId: string;
+  statusLabel?: string;
 }) {
   const { t } = useTranslation();
   const usages = useContext(UsageContext);
@@ -250,7 +256,7 @@ export function ModelSourceDetails({
     (best, part) => (!best || part.used >= best.used ? part : best),
     undefined,
   );
-  const source = [label, plan].filter(Boolean).join(' · ');
+  const source = [label, plan, statusLabel].filter(Boolean).join(' · ');
   return (
     <div
       data-model-source-details

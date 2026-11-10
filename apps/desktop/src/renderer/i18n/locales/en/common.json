@@ -19812,6 +19812,11 @@
       "useCodex": "Sign in with Codex"
     },
     "title": "Subscription accounts",
+    "singleAvailable": "One account available",
+    "multipleAvailable": "Multiple accounts available",
+    "allPaused": "All accounts paused",
+    "noneAvailable": "No account available",
+    "checkingPool": "Checking account setup…",
     "strategy": "Load balancing",
     "add": "Add account",
     "default": "Default folder",

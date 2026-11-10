@@ -46,6 +46,8 @@ export function UnifiedModelRail({
   interactionDisabled = false,
   providerUsage = null,
   providerGroupUsage,
+  suppressProviderAccountAttribution,
+  providerAccountStatusLabel,
   remoteSources,
 }: {
   items: readonly UnifiedRailItem[];
@@ -58,6 +60,8 @@ export function UnifiedModelRail({
   providerUsage?: ProviderUsageScope | null;
   /** 供应商组那一格的用量读谁(provider-groups.md §10);缺省 = 都按格所在目录读。 */
   providerGroupUsage?: ProviderGroupUsageOf;
+  suppressProviderAccountAttribution?: (providerId: string) => boolean;
+  providerAccountStatusLabel?: (providerId: string) => string | undefined;
   /**
    * 可选远程 Agent 的供应商格。localProviders 属于任务所在电脑，远控时未必是控制端本机；
    * 图标 / 名字 / 用量都跟随该电脑，不随面板正在浏览的目录切换。
@@ -120,11 +124,19 @@ export function UnifiedModelRail({
                 item.providerId,
               ) ?? null)
             : null;
+        const suppressAttribution =
+          !!provider &&
+          (suppressProviderAccountAttribution?.(provider.id) ?? false) &&
+          !groupUsage;
+        const accountStatusNote =
+          provider && !groupUsage ? providerAccountStatusLabel?.(provider.id) : undefined;
         const usageProvider = groupUsage
           ? groupUsage.kind === 'running'
             ? groupUsage.usage?.provider
             : undefined
-          : provider;
+          : suppressAttribution
+            ? undefined
+            : provider;
         const accountIdentity =
           usageProvider?.openAiAccount?.identity?.trim() ||
           usageProvider?.subscriptionAccount?.identity?.trim();
@@ -136,7 +148,7 @@ export function UnifiedModelRail({
               : t('newChat.modelSelector.unified.providerGroupRunningOn', {
                   device: groupUsage.deviceName,
                 })
-          : undefined;
+          : accountStatusNote;
         const label =
           item.kind === 'recent'
             ? t('newChat.modelSelector.unified.railRecent')
@@ -173,7 +185,7 @@ export function UnifiedModelRail({
               itemKey={key}
               onClick={() => onSelect(item)}
               disabled={interactionDisabled}
-              provider={providerUsage ? usageProvider : undefined}
+              provider={providerUsage && !suppressAttribution ? usageProvider : undefined}
               usageDeviceId={
                 groupUsage?.kind === 'running' && groupUsage.usage
                   ? groupUsage.usage.scope.deviceId

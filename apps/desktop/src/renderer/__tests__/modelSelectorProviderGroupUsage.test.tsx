@@ -81,6 +81,7 @@ const catalogs = vi.hoisted(() => {
     key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false,
   });
   return {
+    createProvider: provider,
     selfDeviceId: 'desk',
     local: [provider('a-local', 'A Local', 'me@desk')] as unknown[],
     localGroups: {
@@ -220,7 +221,204 @@ afterEach(() => {
   catalogs.selfDeviceId = 'desk';
 });
 
+function localAnthropicTask(taskStarted: boolean) {
+  return (
+    <ModelSelectorContent
+      modelId="opus"
+      effort="high"
+      onModelChange={vi.fn()}
+      onEffortChange={vi.fn()}
+      currentProviderId="anthropic"
+      onProviderChange={vi.fn()}
+      actualRoute
+      taskStarted={taskStarted}
+      vendorKey="cc"
+      localOnlyReason="one-shot-local-request"
+    />
+  );
+}
+
+function renderLocalAnthropicTask(taskStarted: boolean) {
+  return render(localAnthropicTask(taskStarted));
+}
+
+function setAnthropicPoolConfigRead(
+  read: { configured: boolean; disconnected?: boolean; accounts: Array<{ id: string; paused: boolean }> } | (() => Promise<{ configured: boolean; disconnected?: boolean; accounts: Array<{ id: string; paused: boolean }> }>),
+) {
+  const previous = window.electronAPI;
+  const listeners = new Set<(event: { providerId: string }) => void>();
+  const command = vi.fn(async () => {
+    const pool = typeof read === 'function' ? await read() : read;
+    return { providerId: 'anthropic', strategy: 'least', disconnected: false, ...pool };
+  });
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: {
+      ...previous,
+      subscriptionAccounts: {
+        command,
+        onChanged: (listener: (event: { providerId: string }) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    },
+  });
+  return {
+    command,
+    emitChanged: () => { for (const listener of listeners) listener({ providerId: 'anthropic' }); },
+    restore: () => Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }),
+  };
+}
+
 describe('模型列表里供应商组那一项的用量', () => {
+  // Test value (#9711, unit): ModelSelectorContent must omit the provider's displayed identity and
+  // quota when the paused default is not assignable. Existing cases cover provider-group attribution,
+  // not account pools; the minimal failing input is a paused default and one active secondary account.
+  it('唯一可分配 secondary 账号时不冒用默认账号身份或配额', async () => {
+    catalogs.local.push(catalogs.createProvider('anthropic', 'Anthropic', 'pro@example.test'));
+    const restoreApi = setAnthropicPoolConfigRead({
+      configured: true,
+      accounts: [{ id: 'default', paused: true }, { id: 'secondary', paused: false }],
+    });
+    try {
+      renderLocalAnthropicTask(false);
+      await act(async () => {});
+      const source = screen.getByRole('button', { name: /^Anthropic/ });
+      expect(remaining(source)).toBeNull();
+      expect(source.getAttribute('aria-label')).not.toContain('pro@example.test');
+      const list = screen.getByRole('listbox');
+      expect(list.textContent).not.toContain('pro@example.test');
+      expect(list.textContent).not.toContain('剩余 70%');
+      expect(list.textContent).toContain('subscriptionAccounts.singleAvailable');
+      expect(window.electronAPI.subscriptionAccounts.command).toHaveBeenCalledWith({ action: 'read-config', providerId: 'anthropic' });
+    } finally {
+      catalogs.local.pop();
+      restoreApi.restore();
+    }
+  });
+
+  it('新任务显示多账号池状态而不冒用默认账号信息', async () => {
+    catalogs.local.push(catalogs.createProvider('anthropic', 'Anthropic', 'pro@example.test'));
+    const api = setAnthropicPoolConfigRead({
+      configured: true,
+      accounts: [{ id: 'default', paused: false }, { id: 'secondary', paused: false }],
+    });
+    try {
+      renderLocalAnthropicTask(false);
+      await act(async () => {});
+      expect(screen.getByRole('listbox').textContent).toContain('subscriptionAccounts.multipleAvailable');
+      expect(screen.getByRole('listbox').textContent).not.toContain('pro@example.test');
+    } finally {
+      catalogs.local.pop();
+      api.restore();
+    }
+  });
+
+  it('新任务明确显示账号全部暂停', async () => {
+    catalogs.local.push(catalogs.createProvider('anthropic', 'Anthropic', 'pro@example.test'));
+    const api = setAnthropicPoolConfigRead({
+      configured: true,
+      accounts: [{ id: 'default', paused: true }, { id: 'secondary', paused: true }],
+    });
+    try {
+      renderLocalAnthropicTask(false);
+      await act(async () => {});
+      expect(screen.getByRole('listbox').textContent).toContain('subscriptionAccounts.allPaused');
+      expect(screen.getByRole('listbox').textContent).not.toContain('pro@example.test');
+    } finally {
+      catalogs.local.pop();
+      api.restore();
+    }
+  });
+
+  it('配置刷新期间立即隐藏旧默认账号归属', async () => {
+    catalogs.local.push(catalogs.createProvider('anthropic', 'Anthropic', 'pro@example.test'));
+    let finishRefresh!: (value: { configured: boolean; accounts: Array<{ id: string; paused: boolean }> }) => void;
+    let reads = 0;
+    const api = setAnthropicPoolConfigRead(() => {
+      reads += 1;
+      if (reads === 1) return Promise.resolve({ configured: false, accounts: [{ id: 'default', paused: false }] });
+      return new Promise((resolve) => { finishRefresh = resolve; });
+    });
+    try {
+      renderLocalAnthropicTask(false);
+      await act(async () => {});
+      expect(railButton('Anthropic · pro@example.test')).toBeTruthy();
+      act(() => api.emitChanged());
+      expect(screen.getByRole('listbox').textContent).toContain('subscriptionAccounts.checkingPool');
+      expect(screen.getByRole('listbox').textContent).not.toContain('pro@example.test');
+      expect(screen.getByRole('listbox').textContent).not.toContain('剩余 70%');
+      await act(async () => {
+        finishRefresh({ configured: true, accounts: [{ id: 'secondary', paused: false }] });
+      });
+      expect(screen.getByRole('listbox').textContent).toContain('subscriptionAccounts.singleAvailable');
+    } finally {
+      catalogs.local.pop();
+      api.restore();
+    }
+  });
+
+  it('单账号默认配置保留原身份和用量展示', async () => {
+    catalogs.local.push(catalogs.createProvider('anthropic', 'Anthropic', 'pro@example.test'));
+    const restoreApi = setAnthropicPoolConfigRead({
+      configured: false,
+      accounts: [{ id: 'default', paused: false }],
+    });
+    try {
+      renderLocalAnthropicTask(false);
+      await act(async () => {});
+      const source = railButton('Anthropic · pro@example.test');
+      expect(remaining(source)).toBe('70');
+    } finally {
+      catalogs.local.pop();
+      restoreApi.restore();
+    }
+  });
+
+  it('已开始任务继续使用现有账号身份和用量路径', async () => {
+    catalogs.local.push(catalogs.createProvider('anthropic', 'Anthropic', 'pro@example.test'));
+    const restoreApi = setAnthropicPoolConfigRead({
+      configured: true,
+      accounts: [{ id: 'default', paused: true }, { id: 'secondary', paused: false }],
+    });
+    try {
+      renderLocalAnthropicTask(true);
+      await act(async () => {});
+      const source = railButton('Anthropic · pro@example.test');
+      expect(remaining(source)).toBe('70');
+    } finally {
+      catalogs.local.pop();
+      restoreApi.restore();
+    }
+  });
+
+  it('同一选择器从已开始任务切换到新任务时先隐藏旧账号归属', async () => {
+    catalogs.local.push(catalogs.createProvider('anthropic', 'Anthropic', 'pro@example.test'));
+    let finishRefresh!: (value: { configured: boolean; accounts: Array<{ id: string; paused: boolean }> }) => void;
+    const api = setAnthropicPoolConfigRead(
+      () => new Promise((resolve) => {
+        finishRefresh = resolve;
+      }),
+    );
+    try {
+      const view = renderLocalAnthropicTask(true);
+      await act(async () => {});
+      expect(railButton('Anthropic · pro@example.test')).toBeTruthy();
+      view.rerender(localAnthropicTask(false));
+      expect(screen.getByRole('listbox').textContent).toContain('subscriptionAccounts.checkingPool');
+      expect(screen.getByRole('listbox').textContent).not.toContain('pro@example.test');
+      expect(screen.getByRole('listbox').textContent).not.toContain('剩余 70%');
+      await act(async () => {
+        finishRefresh({ configured: true, accounts: [{ id: 'secondary', paused: false }] });
+      });
+      expect(screen.getByRole('listbox').textContent).toContain('subscriptionAccounts.singleAvailable');
+    } finally {
+      catalogs.local.pop();
+      api.restore();
+    }
+  });
+
   // #8010 review / component: a real routed picker must read controller-owned
   // quota locally. Earlier fixtures never made a remote source equal to self.
   it('经 B 读取 A 的目录时，A 自身来源的用量仍取本机账号', async () => {

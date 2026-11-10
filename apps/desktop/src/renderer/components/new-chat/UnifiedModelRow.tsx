@@ -77,6 +77,8 @@ export function UnifiedModelRow({
   onPaymentRequired,
   sourceLabel,
   measurementOnly = false,
+  hideProviderAccountIdentity = false,
+  providerAccountStatusLabel,
 }: {
   /** Hidden intrinsic-width probe: share row typography, omit interaction and fixed-size artwork. */
   measurementOnly?: boolean;
@@ -85,6 +87,8 @@ export function UnifiedModelRow({
    * The panel omits it only for this catalog's own Cindy AI (see UnifiedModelPanel aggregateSourceLabel).
    */
   sourceLabel?: string;
+  hideProviderAccountIdentity?: boolean;
+  providerAccountStatusLabel?: string;
   entry: UnifiedModelEntry;
   anchor: UnifiedAnchor;
   config: UnifiedRowConfig;
@@ -358,9 +362,12 @@ export function UnifiedModelRow({
             providerId={entry.providerId}
             label={providerAccountLabel(
               sourceDisplayLabel ?? sourceLabel,
-              provider?.openAiAccount?.identity?.trim() ||
-                provider?.subscriptionAccount?.identity?.trim(),
+              hideProviderAccountIdentity
+                ? undefined
+                : provider?.openAiAccount?.identity?.trim() ||
+                  provider?.subscriptionAccount?.identity?.trim(),
             )}
+            statusLabel={providerAccountStatusLabel}
             modelId={config.wireModelId ?? entry.modelId}
           />
         )

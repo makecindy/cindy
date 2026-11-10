@@ -19999,6 +19999,11 @@
       "useCodex": "Se connecter avec Codex"
     },
     "title": "Comptes d’abonnement",
+    "singleAvailable": "Un compte disponible",
+    "multipleAvailable": "Plusieurs comptes disponibles",
+    "allPaused": "Tous les comptes sont en pause",
+    "noneAvailable": "Aucun compte disponible",
+    "checkingPool": "Vérification des paramètres des comptes…",
     "strategy": "Répartition de charge",
     "add": "Ajouter un compte",
     "default": "Dossier par défaut",

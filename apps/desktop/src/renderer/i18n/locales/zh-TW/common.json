@@ -19740,6 +19740,11 @@
       "useCodex": "使用 Codex 登入"
     },
     "title": "訂閱帳號",
+    "singleAvailable": "有 1 個帳號可分配",
+    "multipleAvailable": "有多個帳號可分配",
+    "allPaused": "所有帳號都已暫停",
+    "noneAvailable": "沒有可分配帳號",
+    "checkingPool": "正在檢查帳號設定…",
     "strategy": "負載平衡",
     "add": "新增帳號",
     "default": "預設目錄",

@@ -19740,6 +19740,11 @@
       "useCodex": "使用 Codex 登录"
     },
     "title": "订阅账号",
+    "singleAvailable": "有 1 个账号可分配",
+    "multipleAvailable": "有多个账号可分配",
+    "allPaused": "所有账号都已暂停",
+    "noneAvailable": "没有可分配账号",
+    "checkingPool": "正在检查账号设置…",
     "strategy": "负载均衡",
     "add": "添加账号",
     "default": "默认目录",

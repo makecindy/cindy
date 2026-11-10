@@ -182,6 +182,10 @@ export interface UnifiedModelPanelProps {
    * 不显示某一台的配额。缺省 = 都按目录归属读。
    */
   providerGroupUsage?: ProviderGroupUsageOf;
+  /** Hide account-level identity and quota for a new task whose subscription account is not selected yet. */
+  suppressProviderAccountAttribution?: (providerId: string) => boolean;
+  /** Account-pool state for a new task whose subscription account is not selected yet. */
+  providerAccountStatusLabel?: (providerId: string) => string | undefined;
   /** 保留付费模型为锁定展示行，并把点击交给统一付费提示。 */
   includePaymentRequired?: boolean;
   paymentRequiredLabel?: string;
@@ -409,6 +413,8 @@ export function UnifiedModelPanel({
   interactionDisabled = false,
   providerUsage = null,
   providerGroupUsage,
+  suppressProviderAccountAttribution,
+  providerAccountStatusLabel,
   includePaymentRequired = false,
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
@@ -1378,6 +1384,8 @@ export function UnifiedModelPanel({
       <UnifiedModelRail
         providerUsage={providerUsage}
         {...(providerGroupUsage ? { providerGroupUsage } : {})}
+        {...(suppressProviderAccountAttribution ? { suppressProviderAccountAttribution } : {})}
+        {...(providerAccountStatusLabel ? { providerAccountStatusLabel } : {})}
         items={railItems}
         active={effectiveRail}
         onSelect={handleRailSelect}
@@ -1596,6 +1604,8 @@ export function UnifiedModelPanel({
                       {...(onPaymentRequired ? { onPaymentRequired } : {})}
                       effortLabelOf={effortLabelOf}
                       providers={providers}
+                      hideProviderAccountIdentity={suppressProviderAccountAttribution?.(row.entry.providerId) ?? false}
+                      providerAccountStatusLabel={providerAccountStatusLabel?.(row.entry.providerId)}
                       onReveal={recentRow ? noop : revealFlyout}
                       onRevealForKeyboard={recentRow ? noop : revealFlyoutForKeyboard}
                       onSelect={() =>
@@ -1761,6 +1771,7 @@ export function UnifiedModelPanel({
     <ModelSourceUsageProvider
       providers={providers}
       scope={providerUsage}
+      {...(suppressProviderAccountAttribution ? { suppressProviderUsage: suppressProviderAccountAttribution } : {})}
       {...(providerGroupUsage
         ? {
             groupUsageOf: (providerId: string) =>

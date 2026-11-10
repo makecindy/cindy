@@ -19999,6 +19999,11 @@
       "useCodex": "Iniciar sesión con Codex"
     },
     "title": "Cuentas de suscripción",
+    "singleAvailable": "Hay una cuenta disponible",
+    "multipleAvailable": "Hay varias cuentas disponibles",
+    "allPaused": "Todas las cuentas están pausadas",
+    "noneAvailable": "No hay cuentas disponibles",
+    "checkingPool": "Comprobando la configuración de las cuentas…",
     "strategy": "Equilibrio de carga",
     "add": "Añadir cuenta",
     "default": "Carpeta predeterminada",

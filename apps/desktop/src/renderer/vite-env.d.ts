@@ -4216,7 +4216,7 @@ interface ElectronAPI {
   };
   subscriptionAccounts: {
     onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider }) => void): () => void;
-    command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
+    command<C extends import('../shared/subscriptionAccounts').SubscriptionAccountCommand>(command: C): Promise<import('../shared/subscriptionAccounts').SubscriptionAccountCommandResult<C>>;
   };
   providerGroup: {
     command<C extends import('../shared/providerGroup').ProviderGroupCommand>(
