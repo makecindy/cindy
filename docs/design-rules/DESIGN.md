@@ -554,8 +554,8 @@ Pill-shaped tab selectors (e.g. the Claude | Codex agent switch on the new-sessi
 
 ### Usage data graphics
 
-- `UsageHeatmap` and `UsageTokenBars` encode dates and quantities, including when clicking a mark filters by date. **Clickable data marks keep their data geometry; they are not ordinary pill buttons.** Their corner treatment is the registered data-mark members `usage-heatmap-day` and `usage-token-bar` (§5) — **the registration covers the coloured mark itself, not its hit region, legend, container or tooltip** — and is limited to these usage charts. For the heatmap, the transparent date hit target overlays the cell and shares its 12×12 footprint. For the token bars, the hit target may extend beyond a low or zero bar — the implementation gives it at least 24px of height — while the bar itself keeps its data height. In both charts the hit target's corner treatment is an implementation choice (currently the mark's 2px) and is not fixed by the registration; focus and selection indicators are independent of the registration and follow §5's interaction rules.
-- Heatmap: 12×12px square cells, 2px radius and 3px gaps in both read-only and clickable views. Reserve a 3px outer gutter so edge cells retain their focus/selected outlines. Preserve month alignment, the complete requested history window and the existing four-level blue intensity scale (§2).
+- `UsageHeatmap` and `UsageTokenBars` encode dates and quantities, including when clicking a mark filters by date. **Clickable data marks keep their data geometry; they are not ordinary pill buttons.** Their corner treatment is the registered data-mark members `usage-heatmap-day` and `usage-token-bar` (§5) — **the registration covers the coloured mark itself, not its hit region, legend, container or tooltip** — and is limited to these usage charts. For the heatmap, the transparent date hit target overlays the cell and shares its resting footprint. For the token bars, the hit target may extend beyond a low or zero bar — the implementation gives it at least 24px of height — while the bar itself keeps its data height. In both charts the hit target's corner treatment is an implementation choice (currently the mark's 2px) and is not fixed by the registration; focus and selection indicators are independent of the registration and follow §5's interaction rules.
+- Heatmap: the home dashboard keeps 12×12px cells; Usage History and provider usage automatically use a four-row compact view for histories younger than six months (including empty history), otherwise a trailing 365-day view; only nonzero usage in the current device/party scope counts (see usage-history-charts.md), filling the plot width with equal square cells sized from the annual-view geometry (minimum 12px). Both views use the same column count. The compact view fills four rows with continuous dates ending today (about 212 days), rather than enforcing exactly six months; the annual view keeps seven weekday rows. Narrow plots scroll to the latest dates. Both read-only and clickable views use 2px radius and fixed 3px gaps in both directions. Reserve a 3px outer gutter so edge cells retain their focus/selected outlines. Preserve month alignment, the complete requested history window and the existing four-level blue intensity scale (§2).
 - Token bars: 30 equal-width slim columns fitted to the plot, 3px gaps, 2px outer radius, shared baseline and proportional stacked segments. Do not enforce a 24px minimum column width or clip the latest days behind horizontal scrolling. A low/zero bar may have a taller transparent hit target without inflating its data height.
 - Preserve date/value tooltips (the heatmap keeps the native title; the daily token bars use the shared `UsageBarsTooltip` overlay registered in `usage-history-charts.md`, 2026-09-26), accessible date/value labels, keyboard activation and visible focus/selected outlines. Charts stay on the semantic gray palette except for the owner-approved Usage History chart colors registered in §2 (2026-09-08); this remains a geometry exception, not permission to introduce further category colors or apply chart radii to other buttons.
 
@@ -653,6 +653,20 @@ Decision: [#6796, maintainer confirmation](https://github.com/makecindy/cindy/is
 - Full-window three-region structure: sidebar + content area (+ optional right panel), separated by 1px Board dividers on a single flat Surface — never by background shifts (see §2 layer rule).
 - Centered-card layouts (login, empty states) follow the Surface + Card two-layer rule in §2.
 - Reading-width content (settings forms, document previews) is centered with a comfortable max width; full-bleed content (chat stream, file tree) fills its region.
+
+### Desktop task sidebar identity
+
+Individually pinned tasks stay out of the ordinary list. Automatic task groups use two presentation modes:
+while expanded, history includes the task represented by the group header, whether read or unread;
+while collapsed, omit that task from the visible attention rows so it only appears in the header.
+Deduplicate collapsed rows by task ID, not title. The header keeps its existing click target (latest run,
+or the failing run when a collapsed group reports an error). Expanded preview limits, frozen layouts
+and “Show all” continue to include the header task.
+Non-silent unread runs and pending errors/replies remain visible while collapsed, without a five-row cap;
+a task already represented by the header satisfies this visibility rule. Silent successful runs and
+read history stay hidden unless the group is expanded.
+Implementation: `AutomationSessionGroupItem.tsx` and `automationSidebarGrouping.ts`; regression:
+`automationGroupCollapsedAlerts.test.tsx` and the `automation-unread` UI fixture.
 
 ### Desktop teammate sidebar
 

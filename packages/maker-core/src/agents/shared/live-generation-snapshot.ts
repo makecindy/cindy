@@ -2,7 +2,7 @@ import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import type { UsageSnapshot } from '../../types/events.js';
 
 export interface LiveGenerationTiming {
-  /** Pi-extension speed measurement; independent of the usage-paired timing below. */
+  /** The agent's own speed measurement; independent of the usage-paired timing below. */
   tokenSpeed?: TokenSpeedSnapshot;
   /** Turn-cumulative output tokens, including reasoning. */
   outputTokens: number;
