@@ -12,6 +12,7 @@ import { Slider } from '@/components/ui/slider';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
+import { supportsDesktopBackdrop } from '@/../shared/windowBackdrop';
 import { getBuiltinWallpaperPreview, isCdnWallpaper, isSceneWallpaper } from '@/lib/wallpaper';
 import {
   APPEARANCE_LIMITS,
@@ -80,6 +81,13 @@ export function WallpaperSection() {
   useEffect(() => {
     if (visibility === 0) previewBlur(null);
   }, [visibility, previewBlur]);
+  // With None selected the sliders control the desktop behind the window. Systems
+  // without a native desktop material keep the opaque canvas, so there is nothing to
+  // adjust; Windows uses whole-window Acrylic, whose strength is fixed by the system.
+  const desktopSource = wallpaperId === 'none';
+  const desktopUnsupported = desktopSource &&
+    !supportsDesktopBackdrop(window.electronAPI?.platform, window.electronAPI?.osRelease);
+  const desktopBlurFixed = desktopSource && window.electronAPI?.platform !== 'darwin';
   const customVideo = isCustomWallpaperVideo(customWallpaperUrl);
   const downloading = isCdnWallpaper(wallpaperId) && downloadPending;
   const retryable = isCdnWallpaper(wallpaperId) && downloadFailed && !downloadPending;
@@ -376,6 +384,7 @@ export function WallpaperSection() {
         )}
 
         {/* 滑块的名称和数值在同一行，不是设置行 */}
+        {!desktopUnsupported && (
         <SettingsBlock className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
             <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
@@ -413,7 +422,7 @@ export function WallpaperSection() {
               max={APPEARANCE_LIMITS.wallpaperBlur.max}
               step={APPEARANCE_LIMITS.wallpaperBlur.step}
               value={[wallpaperBlur ?? 0]}
-              disabled={visibility === 0}
+              disabled={visibility === 0 || desktopBlurFixed}
               onValueChange={([value]) => {
                 if (typeof value === 'number') previewBlur(value);
               }}
@@ -430,9 +439,12 @@ export function WallpaperSection() {
             </span>
           </div>
           <p id="wallpaper-blur-hint" className={SETTINGS_HINT}>
-            {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurHint' : 'settings.appearance.wallpaper.blurHint')}
+            {t(desktopBlurFixed
+              ? 'settings.appearance.wallpaper.desktopBlurSystemHint'
+              : wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurHint' : 'settings.appearance.wallpaper.blurHint')}
           </p>
         </SettingsBlock>
+        )}
       </SettingsCard>
     </SettingsSection>
   );

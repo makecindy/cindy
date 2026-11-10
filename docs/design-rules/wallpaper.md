@@ -99,8 +99,16 @@ would change the containing block of its fixed menus. In desktop mode, the share
 veil starts after the sidebar's visible edge; otherwise 0% transparency hides the
 native material beneath an opaque body. The sidebar retains its original tint.
 With artwork, compensate for the existing canvas veil rather than stacking two full coats.
-Windows/Linux retain the readable tint; native regional desktop sampling has only
-been implemented on macOS. Existing Windows whole-window Acrylic fallback remains.
+Native regional desktop sampling has only been implemented on macOS. Windows must
+still match macOS: the sidebar is never a clear, unblurred view of the desktop
+(user decision, 2026-11-10). On Windows 11 22H2+ (build 22621, where Electron applies
+system backdrops), desktop transparency always uses whole-window Acrylic; the sidebar
+keeps its tint over it and the veil tints the main area. The system fixes Acrylic's
+strength, so the desktop blur slider is disabled there with a hint saying so.
+Systems without a native desktop material (Windows 10, earlier Windows 11, Linux)
+never reveal the desktop: they keep the theme backdrop and hide the desktop sliders.
+Only macOS creates transparent BrowserWindows; on Windows a transparent window
+loses its thick frame, and Acrylic composes without it.
 Without that native sidebar material (Windows/Linux), 0% desktop transparency does not
 enter desktop-background mode: the window keeps its original backdrop (Windows 11
 Acrylic, otherwise opaque) until transparency is raised (#9424).
@@ -111,8 +119,7 @@ Positive blur must preserve AppKit's native rounded window mask: a completely
 clear NSWindow background needs a visually negligible alpha (0.001), restored
 when blur is cleared without overwriting the next theme's background.
 The private API is resolved at runtime; a missing addon or failed call falls back
-to the system material. Windows 11 continues to use Acrylic for nonzero values;
-systems without a native material retain clear transparency. The hint describes
+to the system material. Windows uses Acrylic as described above. The hint describes
 system-default fallback where adjustable blur is unavailable. A successful native
 call alone is not visual acceptance; keep the research document's validation limits.
 Selecting artwork restores the image/video controls. Reset removes these overrides.

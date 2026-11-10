@@ -10,6 +10,7 @@ import { createLogger } from './logger.js';
 import {
   CINDY_ACRYLIC_WINDOW_BACKING,
   isWindowsBackdropMaterial,
+  supportsDesktopBackdrop,
   type WindowsBackdropMaterial,
 } from '../shared/windowBackdrop.js';
 
@@ -103,17 +104,21 @@ export function resolveVibrancyConfig(
   platform: string,
   options?: ResolveVibrancyConfigOptions,
 ): VibrancyConfig {
-  if (!options?.wallpaperCovered && typeof options?.desktopBlur === 'number') {
+  if (
+    !options?.wallpaperCovered &&
+    typeof options?.desktopBlur === 'number' &&
+    supportsDesktopBackdrop(platform, platform === 'win32' ? readWindowsSystemVersion(options) : null)
+  ) {
     return {
       vibrancy: platform === 'darwin' && options.desktopBlur ? 'under-window' : null,
       backgroundColor: '#00000000',
       ...(platform === 'darwin' ? { desktopBlurRadius: options.desktopBlur } : {}),
       ...(platform === 'darwin' && familyId === 'cindy'
         ? { sidebarMaterial: isDark ? 'dark' as const : 'light' as const } : {}),
-      ...(platform === 'win32' ? {
-        backgroundMaterial: options.desktopBlur && (parseWindowsBuild(readWindowsSystemVersion(options)) ?? 0) >= 22621
-          ? 'acrylic' : 'none',
-      } : {}),
+      // Windows cannot give the sidebar its own desktop sampling. Whole-window
+      // Acrylic keeps it frosted like macOS at every blur value; the system
+      // material's strength is fixed, so the blur slider does not apply here.
+      ...(platform === 'win32' ? { backgroundMaterial: 'acrylic' as const } : {}),
     };
   }
   const isCindy = familyId === 'cindy' && !options?.wallpaperCovered;

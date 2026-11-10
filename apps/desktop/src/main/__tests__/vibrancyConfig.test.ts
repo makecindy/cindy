@@ -261,6 +261,17 @@ it('keeps desktop blur per window and restores it after removing artwork', () =>
   expect(resolveWindowVibrancyConfig(win, 'default', false, 'win32', {
     getSystemVersion: () => '10.0.22631',
   }).backgroundMaterial).toBe('acrylic');
+  // 2026-11-10 Windows report: blur 0 cleared Acrylic and left the sidebar showing the
+  // unblurred desktop. Windows keeps whole-window Acrylic at every blur value, and a
+  // system without it never becomes a clear window.
+  setWindowDesktopBlur(win, 0);
+  expect(resolveWindowVibrancyConfig(win, 'cindy', false, 'win32', {
+    getSystemVersion: () => '10.0.22631',
+  })).toMatchObject({ backgroundMaterial: 'acrylic', backgroundColor: '#00000000' });
+  expect(resolveWindowVibrancyConfig(win, 'cindy', false, 'win32', {
+    getSystemVersion: () => '10.0.19045',
+  })).toMatchObject({ backgroundMaterial: 'none', backgroundColor: '#f8f8f6' });
+  expect(resolveWindowVibrancyConfig(win, 'cindy', false, 'linux').backgroundColor).toBe('#f8f8f6');
   setWindowDesktopBlur(win, null);
   expect(resolveWindowVibrancyConfig(win, 'default', true, 'darwin').backgroundColor).toBe('#1f1f1e');
 });

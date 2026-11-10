@@ -2260,6 +2260,7 @@
         "desktopVisibilityHint": "Cindy の背後にあるデスクトップやウィンドウを透かします。文字や操作部分は鮮明に保たれます。",
         "desktopBlurLabel": "デスクトップのぼかし",
         "desktopBlurHint": "背後のデスクトップをぼかします。0 でオフ、値が大きいほど強くなります。強さを調整できない OS では標準の効果を使います。",
+        "desktopBlurSystemHint": "Windows ではシステムのすりガラス効果を使い、強さは固定です。サイドバーは常にすりガラスのままです。",
         "blurLabel": "壁紙のぼかし",
         "blurHint": "壁紙だけをぼかします。0でオフになります。動く壁紙のぼかしはGPU負荷を増やします。",
         "motionLabel": "表示方法",

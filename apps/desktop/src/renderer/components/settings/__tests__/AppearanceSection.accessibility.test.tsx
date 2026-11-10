@@ -2,7 +2,7 @@
 
 import { render, screen, within } from '@testing-library/react';
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { AppearanceSection } from '../AppearanceSection';
 
@@ -105,6 +105,9 @@ vi.mock('../LayoutResetControl', () => ({ LayoutResetControl: () => null }));
 
 describe('AppearanceSection accessibility', () => {
   it('labels the UI, code and terminal font-size number inputs', () => {
+    // Desktop sliders exist only where a native desktop material can be revealed.
+    vi.stubGlobal('electronAPI', { platform: 'darwin' });
+    onTestFinished(() => { vi.unstubAllGlobals(); });
     render(<AppearanceSection />);
     const visibility = screen.getByRole('slider', {
       name: 'settings.appearance.wallpaper.desktopVisibilityLabel',

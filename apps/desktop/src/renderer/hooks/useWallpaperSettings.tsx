@@ -21,6 +21,7 @@ import {
   isCustomWallpaperVideo,
   getBackgroundVisibility,
 } from '@/../shared/appearanceSettings';
+import { supportsDesktopBackdrop } from '@/../shared/windowBackdrop';
 
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
@@ -135,7 +136,10 @@ export function WallpaperSettingsProvider({
     background,
     // Only macOS has an independent native sidebar material. Elsewhere 0% keeps the
     // original window backdrop (Windows 11 Acrylic, otherwise opaque) until opt-in.
+    // Systems without a native desktop material never reveal the desktop: it would
+    // sit unblurred behind the sidebar text.
     desktopBackground: desktopBackground && settings.wallpaperId === 'none' &&
+      supportsDesktopBackdrop(window.electronAPI?.platform, window.electronAPI?.osRelease) &&
       (visibility > 0 || window.electronAPI?.platform === 'darwin'),
     visibility,
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
