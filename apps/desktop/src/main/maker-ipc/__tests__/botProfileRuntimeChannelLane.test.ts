@@ -197,6 +197,7 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(main.makerMemoryScopeKey).toBeUndefined();
     // Project memory, switched by the teammate's own memory setting, not the global one.
     expect(main.makerMemoryEnabled).toBe(true);
+    expect(main.makerMemorySwitchOwned).toBe(true);
     expect(deps.readMemoryIndex).not.toHaveBeenCalled();
     expect(snapshot?.disabledToolsets).toEqual([]);
     expect(main.extraDirs).toEqual(['/code/app']);

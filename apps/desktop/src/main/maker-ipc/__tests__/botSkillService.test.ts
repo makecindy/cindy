@@ -199,6 +199,27 @@ describe('设置页与会话挂载读的是同一份磁盘事实', () => {
     expect((await collectBotOwnSkillMounts('bot-1', { userDataDir })).skills).toEqual([]);
   });
 
+  it('mounts a V2 teammate\'s project Skills, never its old copies, and follows later project edits', async () => {
+    // The V1 copy stays in the teammate's old folder after the upgrade.
+    await saveBotSkillForSession({ ...SAVE, body: 'OLD COPY' }, { ...depsFor('bot-2'), readProjectMode: async () => false });
+    const v2 = { ...depsFor('bot-2'), readProjectMode: async () => true };
+    const projectSkills = path.join(userDataDir, 'bots', 'bot-2', 'workspace', '.agents', 'skills');
+    await saveBotSkillForSession(SAVE, v2);
+
+    const mounts = await collectBotOwnSkillMounts('bot-2', v2);
+    // A Claude Code plugin root of the old folder would load `skills/` (the V1 copies).
+    expect(mounts.pluginRoot).not.toBe(path.join(userDataDir, 'bots', 'bot-2'));
+    const catalog = await fs.readFile(path.join(mounts.pluginRoot, 'catalog.jsonl'), 'utf8');
+    expect(catalog).toContain(JSON.stringify(path.join(projectSkills, 'weekly-report', 'SKILL.md')).slice(1, -1));
+    expect(catalog).not.toContain(JSON.stringify(path.join(userDataDir, 'bots', 'bot-2', 'skills')).slice(1, -1));
+
+    // The teammate edits its own project directly, without the save tool.
+    await fs.mkdir(path.join(projectSkills, 'standup'));
+    await fs.writeFile(path.join(projectSkills, 'standup', 'SKILL.md'), '---\nname: standup\ndescription: Daily standup notes\n---\nSteps');
+    const later = await fs.readFile(path.join((await collectBotOwnSkillMounts('bot-2', v2)).pluginRoot, 'catalog.jsonl'), 'utf8');
+    expect(later).toContain(JSON.stringify(path.join(projectSkills, 'standup', 'SKILL.md')).slice(1, -1));
+  });
+
   it('returns nothing to mount for a Bot that never learned anything', async () => {
     const mounts = await collectBotOwnSkillMounts('bot-fresh', { userDataDir });
     expect(mounts.skills).toEqual([]);

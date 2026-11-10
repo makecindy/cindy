@@ -631,6 +631,8 @@ export async function hydrateBotProfileRuntime(
   }
   const memoryEngineEnabled = !projectMode && config.memory !== false;
   opts.makerMemoryEnabled = projectMode ? config.memory !== false : memoryEngineEnabled;
+  // The teammate's memory switch decides, as before the upgrade, not an engine's own memory setting.
+  if (projectMode) opts.makerMemorySwitchOwned = true;
   const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);
   if (memoryEngineEnabled) opts.makerMemoryScopeKey = botMemoryScopeKey;
   else if (projectMode && !projectContext && opts.makerMemoryEnabled) {

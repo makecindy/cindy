@@ -2074,6 +2074,11 @@ export interface StartSessionOptions {
    */
   makerMemoryScopeKey?: string;
   /**
+   * The host decided `makerMemoryEnabled` from the session owner's own switch (a teammate's memory
+   * setting), so an agent-level memory switch does not turn it off. Implied by a `bot:` scope.
+   */
+  makerMemorySwitchOwned?: boolean;
+  /**
    * Exact host-frozen memory bytes for this runtime start. When present the
    * harness must inject these bytes instead of re-reading MEMORY.md later in
    * startup, otherwise the persisted runtime snapshot and the actual prompt

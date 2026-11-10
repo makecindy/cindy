@@ -7,6 +7,7 @@
  * 「不是 Bot 任务 / 已归档 / 只读历史任务」三种拒绝口径不该有两套。
  */
 
+import path from 'node:path';
 import { app } from 'electron';
 import { collectTeammateGuideMount } from './teammateGuideStore.js';
 import { botSkillRuntimeSummary, projectBotSkillMounts } from './botSkillRuntimeProjection.js';
@@ -21,6 +22,7 @@ import { readTeammateProjectMode } from './botWorkspaceRuntime.js';
 import {
   BotSkillStoreError,
   botSkillRootDir,
+  botSkillsDir,
   setBotProjectSkillsDir,
   deleteBotSkill,
   listBotSkills,
@@ -396,8 +398,12 @@ export async function collectBotOwnSkillMounts(
   const userDataDir = await skillHomeOf(deps, botId, boundary);
   const baseline = await collectTeammateGuideMount(userDataDir);
   const root = botSkillRootDir(userDataDir, botId);
-  const projected = await cachedBotSkillRuntime(root, async () =>
-    projectBotSkillMounts(root, iterateBotSkillRuntimeSummaries(userDataDir, botId)));
+  // A V2 teammate's Skills are in its project, not in `root/skills` (its V1 copies): no native
+  // mount of root, and the cache follows the project's Skills folder instead.
+  const skillsDir = botSkillsDir(userDataDir, botId);
+  const native = skillsDir === path.join(root, 'skills');
+  const projected = await cachedBotSkillRuntime(native ? root : path.dirname(skillsDir), async () =>
+    projectBotSkillMounts(root, iterateBotSkillRuntimeSummaries(userDataDir, botId), { native }));
   assertOwnerBoundary(deps, boundary);
   return { ...projected, baseline };
 }
