@@ -86,6 +86,11 @@ it('keeps concrete import failures through IPC wrappers without displaying priva
   expect(companionImportReasonKey(companionImportErrorCode(error))).toBe('databaseDriver');
   expect(companionImportReasonKey('PRIVATE_UNKNOWN')).toBe('itemFailed');
   expect(companionImportErrorCode(new Error('private source contents'))).toBeUndefined();
+  // Size failures previously collapsed into one misleading file-size message.
+  // Unit: the shared Desktop/Mobile decoder must retain the actual limit kind.
+  for (const [code, key] of [['SOURCE_FILE_TOO_LARGE', 'sourceFileTooLarge'], ['SOURCE_SNAPSHOT_TOO_LARGE', 'snapshotTooLarge'], ['SOURCE_ITEM_TOO_LARGE', 'itemTooLarge']]) {
+    expect(companionImportReasonKey(companionImportErrorCode({ code: 'INVALID_PARAMS', message: `[INVALID_PARAMS] ${code} private path` }))).toBe(key);
+  }
 });
 
 it('reads a multi-megabyte preview without losing escaped names, descriptions or selection indexes', async () => {

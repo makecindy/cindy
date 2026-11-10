@@ -1,3 +1,4 @@
+import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { composerRowChrome } from '@/session/composerGeometry';
 import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
 import { useComposerDragOpen } from '@/session/useComposerDragOpen';
@@ -11632,6 +11633,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   </RouteActionButton>
                 </View>
               ) : null}
+              <TaskArchiveUndoSlot active={liveScreensFocused} />
               <SessionResourceCards state={sessionResourceCards} />
               {!sessionResourceCards.blocked ? (
                           <SessionComposerInput

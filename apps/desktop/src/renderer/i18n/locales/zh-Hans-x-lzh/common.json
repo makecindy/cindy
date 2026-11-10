@@ -873,6 +873,7 @@
         "pausedLocal": "已暂停接外来之新差事",
         "cooling": "方歇",
         "coolingUntil": "冷却中 · 约 {{time}} 复",
+        "quotaExhausted": "限额已尽",
         "offline": "失联",
         "unreachableHere": "自此机连不上",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "为均用各名籍之限额，宜将此讯易至 {{label}} 遣之（{{quota}}）。易后携近数轮言谈与摘要，更早之细节或记不全。",
       "quota": "尚余 {{left}}%",
       "quotaReset": "尚余 {{left}}%，{{reset}}",
-      "confirm": "易之",
-      "cancel": "罢",
-      "remember": "此后自动易之，不复询问（仅此差事）"
+      "confirm": "惟此次换之",
+      "cancel": "暂不换",
+      "remember": "此后自动切换，不复问",
+      "disable": "勿自动切换，亦不复问",
+      "disableFailed": "未能确认此选择已存。请查连线，并确认任务所在电脑之 Cindy 已更新，再试。此讯仍照常送出。",
+      "choiceLabel": "切换之法（仅此任务）",
+      "send": "续发此讯"
     },
     "deleteConfirm": {
       "title": "删 {{provider}} 之供方组乎？",
@@ -7371,6 +7376,11 @@
         "installedExpand": "展全部已纳法器 {{count}} 件",
         "installedCollapse": "收余下已纳法器",
         "recommendedSection": "所荐",
+        "todayRecommendations": "今日所荐",
+        "marketSection": "法器市集",
+        "browseMarket": "览法器市集",
+        "searching": "检索中…",
+        "allLoaded": "诸法器已尽示，共 {{count}} 件",
         "updatesAvailable": "法器 {{count}} 件可更新",
         "updateAll": "尽更新",
         "ignoreRound": "此轮略之",
@@ -7400,7 +7410,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官设"
+          "official": "官设",
+          "community": "社区"
+        },
+        "publisherDescription": {
+          "official": "Cindy 官方所制，发布维护",
+          "community": "社区开发者所制，发布维护",
+          "team": "本组织共享于获准成员",
+          "custom": "取自所添 Git 或本机目录市场",
+          "local": "由本机文件安装，或于本机开发"
         },
         "scopeAria": "筛法器之来源",
         "scope": {
@@ -10726,6 +10744,9 @@
         "stepFailed": "{{name}}此步生谬，未竟",
         "stepTimeout": "{{name}}久未竟，此步暂止",
         "stepUnavailable": "{{name}}今不可用，此步无从行",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}逾候未始处理，此请已终。\n请伙伴之主查其电脑之 Cindy 运行与网络连接。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}不能回复：同僚所在设备所留之远程差事数已达上限。\n请同僚之主封存暂不用之差事，或请远方之机之主于「远程与分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}不能回复：远方之机所留差事总数已达上限。\n请彼机之主释暂不用之差事，或于「远程与分享」中提高上限。",
@@ -11371,6 +11392,9 @@
       "databaseDriver": "数据库驱动程序不能载，请更新或修复 Cindy 后再试。",
       "databaseUnavailable": "来源数据库不可读，原数据未动。修复后可再试。",
       "fileTooLarge": "卷或此次数据逾读取上限，未截而纳。",
+      "sourceFileTooLarge": "单卷逾读取上限，此项未全纳。",
+      "snapshotTooLarge": "此次所读资料累计逾限，未能全纳。",
+      "itemTooLarge": "此项诸卷合计逾 128 MiB，未全纳。",
       "memoryMetadata": "记忆摘要或标题不合存储之要。",
       "memoryWrite": "记忆写入或完整性检查未成，可再试。",
       "memoryChanged": "已存之记忆有变，未覆写。",
@@ -12486,6 +12510,12 @@
       "missingDir": "目录不存"
     },
     "pendingQueue": {
+      "stopping": "方止",
+      "queued": "方候",
+      "editingInComposer": "方于下方输入框修之…",
+      "moveUp": "前移一位",
+      "moveDown": "后移一位",
+      "cancelSend": "罢遣",
       "regionAria": "待遣之讯队列",
       "listAria": "队列之讯",
       "pausedFooter": "差事已止，队列暂停",
@@ -14086,6 +14116,7 @@
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
       "taskAutoArchivePending": "离此任务后自封存",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作区尚有未提交之改，未自封存",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "此番不自封存",
       "taskArchiveNow": "即封存"
@@ -19698,10 +19729,10 @@
       "useCodex": "以 Codex 登录"
     },
     "title": "订阅账号",
-    "note": "首号沿用 CLI 默认目录，增号各自登录。新务依策分派，旧务仍用原号。",
     "strategy": "负载均衡",
     "add": "添加账号",
     "default": "默认目录",
+    "defaultTag": "默认",
     "ready": "已连接",
     "signedOut": "须登录",
     "unavailable": "状态暂不可得",
@@ -19710,7 +19741,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
-    "directory": "账号目录",
+    "openDirectory": "启账号目录",
+    "openDirectoryFailed": "账号目录未能启，或已移或已删。",
     "loginAgain": "重登",
     "login": "登录"
   },
@@ -19722,5 +19754,17 @@
     "logExcerpt": "相关日志（节录，或有未全）",
     "logsUnavailable": "未得相关日志，其因未明。",
     "failed": "诊断资料未备，请重试。"
+  },
+  "githubStar": {
+    "title": "喜用 Cindy 乎？",
+    "description": "愿于 GitHub 点 Star，以助 Cindy",
+    "dismiss": "毋再提醒",
+    "action": "为 Cindy 喝彩",
+    "starring": "点亮此星…",
+    "thanks": "承蒙赐 Star！",
+    "thanksDescription": "得君相助，Cindy 日进",
+    "browserFallback": "请至 GitHub 为 Cindy 点 Star",
+    "openGithub": "开启 GitHub",
+    "openFailed": "未能开启 GitHub"
   }
 }

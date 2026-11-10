@@ -873,6 +873,7 @@
         "pausedLocal": "已暂停接收外部新任务",
         "cooling": "冷却中",
         "coolingUntil": "冷却中 · 约 {{time}} 恢复",
+        "quotaExhausted": "配额已用完",
         "offline": "不在线",
         "unreachableHere": "从这台电脑连不上",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几轮对话和摘要，更早的细节可能记不全。",
       "quota": "还剩 {{left}}%",
       "quotaReset": "还剩 {{left}}%，{{reset}}",
-      "confirm": "换过去",
-      "cancel": "取消",
-      "remember": "以后自动换，不再询问（仅本任务）"
+      "confirm": "仅这次换过去",
+      "cancel": "暂不切换",
+      "remember": "以后自动切换，不再询问",
+      "disable": "不自动切换，不再询问",
+      "disableFailed": "未能确认选择是否已保存。请检查连接，并确认任务所在电脑上的 Cindy 已更新后重试。这条消息仍照常发送。",
+      "choiceLabel": "切换方式（仅本任务）",
+      "send": "继续发送"
     },
     "deleteConfirm": {
       "title": "删除 {{provider}} 的供应商组？",
@@ -7371,6 +7376,11 @@
         "installedExpand": "展开全部 {{count}} 个已安装插件",
         "installedCollapse": "收起更多已安装插件",
         "recommendedSection": "推荐",
+        "todayRecommendations": "今日推荐",
+        "marketSection": "插件市场",
+        "browseMarket": "浏览插件市场",
+        "searching": "正在搜索…",
+        "allLoaded": "已显示全部 {{count}} 个插件",
         "updatesAvailable": "{{count}} 个插件有可用更新",
         "updateAll": "全部更新",
         "ignoreRound": "忽略本轮",
@@ -7400,7 +7410,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官方"
+          "official": "官方",
+          "community": "社区"
+        },
+        "publisherDescription": {
+          "official": "由 Cindy 官方发布和维护",
+          "community": "由社区开发者发布和维护",
+          "team": "由当前组织共享给有权限的成员",
+          "custom": "来自你添加的 Git 或本地文件夹市场",
+          "local": "从本机文件安装，或在本机开发"
         },
         "scopeAria": "筛选插件来源",
         "scope": {
@@ -10726,6 +10744,9 @@
         "stepFailed": "{{name}}这一步出错了，没做完",
         "stepTimeout": "{{name}}太久没做完，这一步先停下",
         "stepUnavailable": "{{name}}现在不可用，这一步没法做",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}未能在等待期限内开始处理，本次请求已结束。\n请伙伴的主人检查所属电脑上的 Cindy 是否正常运行、网络是否连接。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}无法回复：伙伴所在设备保留的远程任务数已达上限。\n请伙伴的主人归档暂时不用的任务，或请远程电脑的主人在“远程与分享”中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}无法回复：远程电脑保留的任务总数已达上限。\n请那台电脑的主人释放暂时不用的任务，或在“远程与分享”中提高上限。",
@@ -11371,6 +11392,9 @@
       "databaseDriver": "数据库驱动无法加载，请更新或修复 Cindy 后重试。",
       "databaseUnavailable": "无法读取来源数据库，原数据未改动。修复后可重试。",
       "fileTooLarge": "文件或本次资料超过读取上限，未截断导入。",
+      "sourceFileTooLarge": "单个文件超过读取上限，此项未完整导入。",
+      "snapshotTooLarge": "本次读取的资料累计超过上限，未能完整导入。",
+      "itemTooLarge": "此项文件的总大小超过 128 MiB，未完整导入。",
       "memoryMetadata": "记忆摘要或标题不符合存储要求。",
       "memoryWrite": "记忆写入或完整性检查失败，可重试。",
       "memoryChanged": "已保存的记忆发生变化，未覆盖。",
@@ -12486,6 +12510,12 @@
       "missingDir": "目录不存在"
     },
     "pendingQueue": {
+      "stopping": "停止处理中",
+      "queued": "排队中",
+      "editingInComposer": "正在下方输入框编辑…",
+      "moveUp": "提前一位",
+      "moveDown": "延后一位",
+      "cancelSend": "取消发送",
       "regionAria": "待发送消息队列",
       "listAria": "队列消息",
       "pausedFooter": "任务已停止，队列暂停",
@@ -14095,6 +14125,7 @@
       "taskAutoArchived": "已归档「{{title}}」",
       "taskAutoArchivedUndo": "撤销",
       "taskAutoArchivePending": "离开此任务后将自动归档",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作区有未提交改动，未自动归档",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "本次不会自动归档",
       "taskArchiveNow": "立即归档"
@@ -19698,10 +19729,10 @@
       "useCodex": "使用 Codex 登录"
     },
     "title": "订阅账号",
-    "note": "首个账号沿用 CLI 默认目录，新增账号独立登录。新任务按策略分配，已有任务保留原账号。",
     "strategy": "负载均衡",
     "add": "添加账号",
     "default": "默认目录",
+    "defaultTag": "默认",
     "ready": "已连接",
     "signedOut": "需要登录",
     "unavailable": "暂时读不到状态",
@@ -19710,7 +19741,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
-    "directory": "账号目录",
+    "openDirectory": "打开账号目录",
+    "openDirectoryFailed": "无法打开账号目录，它可能已被移动或删除。",
     "loginAgain": "重新登录",
     "login": "登录"
   },
@@ -19722,5 +19754,17 @@
     "logExcerpt": "相关日志（节选，可能不完整）",
     "logsUnavailable": "没有可用的相关日志，暂时无法确定原因。",
     "failed": "诊断材料准备失败，请重试。"
+  },
+  "githubStar": {
+    "title": "喜欢 Cindy 吗？",
+    "description": "在 GitHub 点个 Star，支持 Cindy",
+    "dismiss": "不再提醒",
+    "action": "给 Cindy 点赞",
+    "starring": "点亮星星…",
+    "thanks": "感谢你的 Star！",
+    "thanksDescription": "你的支持让 Cindy 继续成长",
+    "browserFallback": "前往 GitHub 为 Cindy 点 Star",
+    "openGithub": "打开 GitHub",
+    "openFailed": "未能打开 GitHub"
   }
 }

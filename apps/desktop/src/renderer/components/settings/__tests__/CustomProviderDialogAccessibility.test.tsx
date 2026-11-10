@@ -2218,6 +2218,26 @@ it('main provider form contains Tab and blocks dismissal only during the actual 
 describe('new-connection identification', () => {
   afterEach(() => { cleanup(); vi.useRealTimers(); });
   const preset = { id: 'deepseek', name: 'DeepSeek', runtimes: { pi: { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' as const, models: [] } } };
+  it('lets a new connection with an image model opt into the Images API before saving', async () => {
+    render(<ProviderConnectionDialog onDetected={vi.fn()} onClose={vi.fn()} onSaved={vi.fn()} draft={{
+      preset, agent: 'pi', apiKey: 'fake-key', keys: { pi: 'fake-key' },
+      config: { id: 'image-relay', name: 'Image relay', runtimes: { pi: {
+        baseUrl: 'https://images.example.test/v1',
+        models: [{ id: 'private-image', name: 'Private image', mode: 'image_generation' }],
+      } } },
+    }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.advanced.label' }));
+    const images = screen.getByLabelText('settings.providers.custom.fields.openaiImages');
+    expect((images as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(images);
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.saveProvider' }));
+    await waitFor(() => expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce());
+    const saved = customProviderMocks.createCustomProvider.mock.calls[0]?.[0] as CustomProviderConfig;
+    expect(saved.runtimes.pi?.imageApi).toBe('openai-images');
+    expect(buildUserProvider(saved).imageModels).toEqual([
+      expect.objectContaining({ id: 'private-image', sourceAgent: 'pi' }),
+    ]);
+  });
   async function openIdentification(available: ProviderPreset = preset, url = 'https://api.deepseek.com', apiKey = 'fake-key', selectModels = true) {
     vi.useFakeTimers();
     const fetchProviderModels = vi.fn(async () => ({ ok: true, models: [{ id: 'private-model', name: 'Model' }] }));

@@ -24,13 +24,13 @@ import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertTriangle, Check, ChevronDown, CircleHelp, Minus, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, CircleHelp, Minus, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { providerViewToCustomProviderConfig, updateCustomProvider } from '@/lib/customProviders';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
+import { Select, type SelectOption } from '@/components/ui/select';
 import { MODEL_HARNESS_COLOR } from '@/lib/modelHarnessPresentation';
 import { ModelCompatibilityNotice } from '@/components/new-chat/ModelCompatibilityNotice';
 import { MODEL_PROTOCOL_LABEL, MODEL_PROTOCOL_OPTIONS } from '@/lib/modelProtocolLabel';
@@ -116,6 +116,15 @@ function approxTokens(tokens: number): string {
   }
   if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`;
   return String(tokens);
+}
+
+/** Select only shows a value through a matching option. A current state that is not one of
+ *  the choices (varies by engine, undeclared, an unlisted protocol) stays visible as one
+ *  disabled row, like other settings that keep an unavailable saved value. */
+function withCurrentOption(value: string | null | undefined, options: SelectOption[], currentLabel: string) {
+  if (value && options.some((option) => option.value === value)) return { value, options };
+  const current = value || '__current';
+  return { value: current, options: [{ value: current, label: currentLabel, disabled: true }, ...options] };
 }
 
 /** 定义列表的一行:左标签右值 + 细分隔线。 */
@@ -701,23 +710,23 @@ export function ModelAdvancedDrawer({
           >
             <header className="flex shrink-0 items-start gap-3 border-b border-[var(--settings-theme-card-border)] px-5 pb-3 pt-4">
               <div className="min-w-0 flex-1">
-                {groupRow?.aliasRows && <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button type="button" disabled={ctx.loading || protocolSaving} aria-label={t('settings.providers.models.advanced.modelId')}
-                      className="mb-2 flex max-w-full items-center gap-1 rounded-full px-2 py-1 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-chip)]">
-                      <span className="truncate">{row.id}</span><ChevronDown size={12} />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="z-[10003]" align="start">
-                    <DropdownMenuRadioGroup value={row.id} onValueChange={(id) => {
+                {groupRow?.aliasRows && (
+                  <Select data-settings-search-action="Choose which member model of this alias group the drawer shows"
+                    label={t('settings.providers.models.advanced.modelId')}
+                    size="compact"
+                    width="sm"
+                    className="mb-2"
+                    truncateOptions
+                    value={row.id}
+                    disabled={ctx.loading || protocolSaving}
+                    onValueChange={(id) => {
                       if (ctx.loading || ctxDirtyRef.current || protocolSaving || pricePendingRef.current) return;
                       const member = memberRows.find((candidate) => candidate.id === id);
                       if (member) onSelectMember?.(member);
-                    }}>
-                      {memberRows.map((member) => <DropdownMenuRadioItem key={member.id} value={member.id}>{member.id}</DropdownMenuRadioItem>)}
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>}
+                    }}
+                    options={memberRows.map((member) => ({ value: member.id, label: member.id }))}
+                  />
+                )}
                 <Dialog.Title
                   ref={titleRef}
                   tabIndex={-1}
@@ -819,24 +828,32 @@ export function ModelAdvancedDrawer({
                                       ones, keeps its way back to automatic. */}
                                   {canEditProtocol && supported && (!model?.catalogPresetId || model.userModelConfig?.interfaceId ||
                                     model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route?.wireProtocol) ? (
-                                    <DropdownMenu>
-                                      <DropdownMenuTrigger asChild>
-                                        <button type="button" disabled={protocolSaving}
-                                          aria-label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
-                                          className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
-                                          {protocolLabel(protocol.outbound)} <ChevronDown size={12} className="inline" aria-hidden />
-                                        </button>
-                                      </DropdownMenuTrigger>
-                                      <DropdownMenuContent className="z-[10003]" align="start">
-                                        <DropdownMenuRadioGroup value={model?.availableInterfaces?.length ? model.userModelConfig?.interfaceId ?? ((model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route) ? model.selectedInterface?.profileId : 'auto') : protocol.outbound ?? ''}
-                                          onValueChange={value => void setModelApi(agent, value)}>
-                                          {model?.availableInterfaces?.length ? <>
-                                            <DropdownMenuRadioItem value="auto">{t('settings.providers.models.advanced.protocol.automatic')}</DropdownMenuRadioItem>
-                                            {model.availableInterfaces.map(item => <DropdownMenuRadioItem key={item.profileId} value={item.profileId}>{protocolLabel(item.api)}</DropdownMenuRadioItem>)}
-                                          </> : MODEL_PROTOCOL_OPTIONS.map(([api, label]) => <DropdownMenuRadioItem key={api} value={api}>{label}</DropdownMenuRadioItem>)}
-                                        </DropdownMenuRadioGroup>
-                                      </DropdownMenuContent>
-                                    </DropdownMenu>
+                                    (() => {
+                                      const field = withCurrentOption(
+                                        model?.availableInterfaces?.length ? model.userModelConfig?.interfaceId ?? ((model.userModelConfig?.api || model.userModelConfig?.piApi || model.userModelConfig?.route) ? model.selectedInterface?.profileId : 'auto') : protocol.outbound,
+                                        model?.availableInterfaces?.length ? [
+                                          { value: 'auto', label: t('settings.providers.models.advanced.protocol.automatic') },
+                                          ...model.availableInterfaces.map(item => ({ value: item.profileId, label: protocolLabel(item.api) ?? item.api })),
+                                        ] : MODEL_PROTOCOL_OPTIONS.map(([api, label]) => ({ value: api, label })),
+                                        protocolLabel(protocol.outbound) ?? protocol.outbound ?? '',
+                                      );
+                                      return (
+                                        <Select data-settings-search-action="Choose the wire protocol this engine uses for the model"
+                                          label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
+                                          size="compact"
+                                          width="sm"
+                                          className="mt-1"
+                                          value={field.value}
+                                          options={field.options}
+                                          disabled={protocolSaving}
+                                          // Automatic keeps showing the protocol it resolves to.
+                                          triggerAdornment={field.value === 'auto' ? (
+                                            <span className="shrink-0 text-[var(--text-tertiary)]">{protocolLabel(protocol.outbound)}</span>
+                                          ) : undefined}
+                                          onValueChange={value => void setModelApi(agent, value)}
+                                        />
+                                      );
+                                    })()
                                   ) : protocolLabel(protocol.outbound)}
                                   {/* Only Cindy's local conversion is called out; phone widths put it on its own line. */}
                                   {compatibility && <>
@@ -1042,14 +1059,18 @@ export function ModelAdvancedDrawer({
                               })}
                             </span>
                             {ctx.isCustomized && (
-                              <button
+                              <Button data-settings-search-action="Restore the default context limit for this model"
+                                variant="secondary"
+                                size="sm"
+                                tone="quiet"
+                                compact
                                 type="button"
                                 onClick={resetCtx}
                                 disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
-                                className="shrink-0 text-11 text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-primary)]"
+                                className="shrink-0"
                               >
                                 {t('settings.providers.models.advanced.restoreDefault')}
-                              </button>
+                              </Button>
                             )}
                           </div>
                           {(ctxInvalid || ctx.error || ctx.mixed) && (
@@ -1108,22 +1129,17 @@ export function ModelAdvancedDrawer({
                     {imageModel && (
                       <>
                         <Row label={t('settings.providers.models.advanced.imageCapability.label')}>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button type="button" disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
-                                aria-label={t('settings.providers.models.advanced.imageCapability.label')}
-                                className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
-                                {t(`settings.providers.models.advanced.imageCapability.${imageCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent className="z-[10003]" align="start">
-                              <DropdownMenuRadioGroup value={imageCapability} onValueChange={value => void setImageCapability(value)}>
-                                {(['default', 'generate', 'edit'] as const).map(value => (
-                                  <DropdownMenuRadioItem key={value} value={value}>{t(`settings.providers.models.advanced.imageCapability.${value}`)}</DropdownMenuRadioItem>
-                                ))}
-                              </DropdownMenuRadioGroup>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                          <Select data-settings-search-action="Declare the image capability of the Images connection model"
+                            label={t('settings.providers.models.advanced.imageCapability.label')}
+                            size="compact"
+                            width="sm"
+                            value={imageCapability}
+                            disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                            onValueChange={value => void setImageCapability(value)}
+                            options={(['default', 'generate', 'edit'] as const).map(value => ({
+                              value, label: t(`settings.providers.models.advanced.imageCapability.${value}`),
+                            }))}
+                          />
                         </Row>
                         <p className="text-12 leading-5 text-[var(--text-tertiary)]">
                           {t('settings.providers.models.advanced.imageCapability.hint', { agent: AGENT_LABEL[imageAgent!] })}
@@ -1133,22 +1149,17 @@ export function ModelAdvancedDrawer({
                     {videoModel && (
                       <>
                         <Row label={t('settings.providers.models.advanced.videoCapability.label')}>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button type="button" disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
-                                aria-label={t('settings.providers.models.advanced.videoCapability.label')}
-                                className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
-                                {t(`settings.providers.models.advanced.videoCapability.${videoCapability}`)} <ChevronDown size={12} className="inline" aria-hidden />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent className="z-[10003]" align="start">
-                              <DropdownMenuRadioGroup value={videoCapability} onValueChange={value => void setImageCapability(value, 'video')}>
-                                {(['default', 'generate', 'edit'] as const).map(value => (
-                                  <DropdownMenuRadioItem key={value} value={value}>{t(`settings.providers.models.advanced.videoCapability.${value}`)}</DropdownMenuRadioItem>
-                                ))}
-                              </DropdownMenuRadioGroup>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                          <Select data-settings-search-action="Declare the video capability of the video connection model"
+                            label={t('settings.providers.models.advanced.videoCapability.label')}
+                            size="compact"
+                            width="sm"
+                            value={videoCapability}
+                            disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
+                            onValueChange={value => void setImageCapability(value, 'video')}
+                            options={(['default', 'generate', 'edit'] as const).map(value => ({
+                              value, label: t(`settings.providers.models.advanced.videoCapability.${value}`),
+                            }))}
+                          />
                         </Row>
                         <p className="text-12 leading-5 text-[var(--text-tertiary)]">
                           {t('settings.providers.models.advanced.videoCapability.hint', { agent: AGENT_LABEL[videoAgent!] })}
@@ -1157,35 +1168,44 @@ export function ModelAdvancedDrawer({
                     )}
                     <Row label={t('settings.providers.models.advanced.imageInput')}>
                       {conversational && !isOrganizationManagedProvider(provider) ? (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button type="button" disabled={imageInputOverride.loading || localConfigurationBlocked}
-                              aria-label={t('settings.providers.models.advanced.imageInput')}
-                              className="inline-flex min-h-8 items-center gap-1.5 rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">
-                              {imageInputMixed
-                                ? t('settings.providers.models.advanced.imageInputMixed')
-                                : imageInputValue === null
-                                  ? t('settings.providers.models.advanced.undeclared')
-                                  : t(`settings.providers.models.advanced.${imageInputValue ? 'supported' : 'unsupported'}`)}
-                              <ChevronDown size={12} aria-hidden />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent className="z-[10003]" align="end">
-                            <DropdownMenuRadioGroup
-                              value={imageInputMixed || imageInputValue === null ? '' : String(imageInputValue)}
+                        (() => {
+                          // 'default' clears the override; 'true' / 'false' save an explicit choice.
+                          // States that are not one of these choices — an older explicit override
+                          // equal to the default, or overrides that differ by engine even when their
+                          // values agree — show as the current row, so every choice stays selectable.
+                          const choiceValue = (supported: boolean) => imageDefaultsMatch(supported) ? 'default' : String(supported);
+                          const staleOverride = imageInputOverride.value !== null && imageDefaultsMatch(imageInputOverride.value);
+                          const field = withCurrentOption(
+                            imageInputMixed || imageInputOverride.mixed || imageInputValue === null || staleOverride
+                              ? null : choiceValue(imageInputValue),
+                            [true, false].map((supported) => {
+                              const label = t(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+                              return {
+                                value: choiceValue(supported),
+                                label: imageDefaultsMatch(supported)
+                                  ? t('settings.providers.models.advanced.imageInputDefault', { value: label }) : label,
+                              };
+                            }),
+                            imageInputMixed
+                              ? t('settings.providers.models.advanced.imageInputMixed')
+                              : imageInputValue === null
+                                ? t('settings.providers.models.advanced.undeclared')
+                                : t(`settings.providers.models.advanced.${imageInputValue ? 'supported' : 'unsupported'}`),
+                          );
+                          return (
+                            <Select data-settings-search-action="Override whether this model accepts image input"
+                              label={t('settings.providers.models.advanced.imageInput')}
+                              size="compact"
+                              width="sm"
+                              value={field.value}
+                              options={field.options}
+                              disabled={imageInputOverride.loading || localConfigurationBlocked}
                               onValueChange={(value) => void imageInputOverride.setValue(
-                                imageDefaultsMatch(value === 'true') ? null : value === 'true',
-                              )}>
-                              {[true, false].map((supported) => {
-                                const label = t(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
-                                return <DropdownMenuRadioItem key={String(supported)} value={String(supported)}>
-                                  {imageDefaultsMatch(supported)
-                                    ? t('settings.providers.models.advanced.imageInputDefault', { value: label }) : label}
-                                </DropdownMenuRadioItem>;
-                              })}
-                            </DropdownMenuRadioGroup>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                                value === 'default' ? null : value === 'true',
+                              )}
+                            />
+                          );
+                        })()
                       ) : <span
                         title={
                           capabilityModel.modalities || capabilityModel.supportsImageInput !== undefined

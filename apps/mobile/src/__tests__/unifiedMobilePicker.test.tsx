@@ -258,6 +258,33 @@ it('removes a favorite copy without applying a fallback and keeps its details op
   expect(test.view.options.isFavorite).toBe(false);
 });
 
+// X report (2026-11-09), unit: the real sheet must remove the opened copy,
+// including seeded defaults / capability fallbacks. Existing cases only stored
+// fully supported configurations, so display normalization never changed identity.
+it.each([false, true])('removes a seeded favorite by identity after resolving its default effort (remote=%s)', async remote => {
+  const saved = {uid:'seed',providerId:remote ? studioSource : 'account',modelId:'model',agent:'codex',effort:'',fast:false};
+  test.prefs.favorites=[saved];
+  const {onSelect}=remote ? await mountRemote(null) : await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  expect(test.view.options.row.config.effort).toBe('medium');
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async()=>test.view.options.onFavorite());
+  expect(test.prefs.favorites).toEqual([]);
+  expect(test.view.options.isFavorite).toBe(false);
+  expect(test.view.groups.some((group:any)=>group.key==='favorites')).toBe(false);
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+it('removes the opened stale copy rather than another favorite matching its fallback', async () => {
+  const other = {uid:'other',providerId:'account',modelId:'model',agent:'codex',effort:'medium',fast:false};
+  const saved = {...other,uid:'stale',effort:'retired'};
+  test.prefs.favorites=[other,saved];
+  await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[1]));
+  await act(async()=>test.view.options.onFavorite());
+  expect(test.prefs.favorites).toEqual([other]);
+});
+
 it('adjusts model preferences from favorite details without overwriting the original copy', async () => {
   const saved = {uid:'original',providerId:'account',modelId:'model',agent:'codex',effort:'high',fast:true};
   test.prefs.favorites=[saved];

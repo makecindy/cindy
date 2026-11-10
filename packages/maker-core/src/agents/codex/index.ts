@@ -401,6 +401,33 @@ function clampEffortForCodex(model: string, e: Effort): CodexEffort | undefined 
   return e;
 }
 
+/**
+ * A resumed thread can echo an empty effort (`null` / `''` / `'none'`) from
+ * thread/settings. That is "not carried on this snapshot", not a user choice
+ * to drop the level already stored on the task. An explicit level still wins,
+ * including a later setEffort on this turn.
+ */
+function isStoredCodexEffort(value: unknown): value is Effort {
+  return value === 'minimal'
+    || value === 'low'
+    || value === 'medium'
+    || value === 'high'
+    || value === 'xhigh'
+    || value === 'max'
+    || value === 'ultra';
+}
+
+function reconcileMutableEffortFromThreadSettings(
+  current: Effort,
+  reported: unknown,
+): Effort {
+  // null / '' / 'none' / anything outside the stored levels: keep the task's level.
+  if (!isStoredCodexEffort(reported)) return current;
+  // A persisted no-effort choice stays empty; a server default must not fill it.
+  if (!current) return current;
+  return reported;
+}
+
 function normalizeTailTurnsToDrop(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) return 0;
   return Math.max(0, Math.floor(value));
@@ -3668,6 +3695,10 @@ assertRouteCurrent();
       : opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
     const makerMemory = this.deps.makerMemory;
     const makerMemoryEnabled = makerMemoryFlag === true && !!makerMemory;
+    // A memory override is only meaningful when this host actually bridged the
+    // cindy_memory server; a bare entry makes Codex reject the thread.
+    const memoryBridgeAvailable = (this.deps.mcpProviders ?? [])
+      .some((provider) => provider.name === 'cindy_memory');
     // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key;
     // 本地会话额外做 git worktree 归一化 (#2379)。已注入的 makerMemoryScopeKey
     // (含 bot:) 原样透传。Maker Memory 关闭时跳过 git 探测 (Codex #2399 P1):
@@ -4920,6 +4951,16 @@ assertRouteCurrent();
      * server 的 wire 规范化只动 mutableModel。
      */
     let mutableCatalogModel: string | undefined = opts.model;
+    // Only a task that never stored an effort may fall through to the catalog
+    // default (`high`). Restoring a task passes the persisted level in
+    // opts.effort, including the empty no-effort sentinel; a missing field is
+    // the one case that still means "never chosen".
+    // hasSelectedEffort is that distinction: the catalog default still fills
+    // mutableEffort so the parent turn keeps its old behavior, but it must not
+    // be registered as the parent's reasoning level. The host stamps whatever
+    // is registered onto this thread's smart subagent routes, which would
+    // override a subagent's own low and make "never stored" look chosen.
+    let hasSelectedEffort = opts.effort !== undefined;
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode =
       reviewMode ? 'ask' : opts.permissionMode ?? 'ask';
@@ -6606,8 +6647,11 @@ assertRouteCurrent();
         // Its host omits Cindy's MCP bridge, so a bare memory override would
         // create an invalid transport even though the entry is disabled.
         // 设备托管：只停用本机确实配置了的 cindy_memory(没有传输配置的空条目会让 Codex 拒绝配置)。
+        // A bare `enabled` override for a server the host never bridged makes Codex
+        // reject the whole thread ("invalid transport in mcp_servers.cindy_memory").
+        // Hosts without the memory bridge (for example cindy-host) must omit it.
         ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT] && !makerMemoryEnabled && !opts.botRuntimeProfile
-          && (!hosted || hostedLocalMcpNames.includes('cindy_memory'))
+          && (hostedLocalMcpNames.includes('cindy_memory') || memoryBridgeAvailable)
           ? { 'mcp_servers.cindy_memory.enabled': false }
           : {}),
         // Local custom-context hosts carry per-model budgets in their catalog.
@@ -6916,6 +6960,7 @@ assertRouteCurrent();
       && typeof this.deps.registerCodexSystemPromptForThread === 'function';
 
     let registeredDeveloperInstructions = '';
+    let codexProxyPromptRegistered = false;
     const registerCodexDeveloperInstructions = (threadId: string, text: string): void => {
       registeredDeveloperInstructions = text;
       const register = this.deps.registerCodexSystemPromptForThread;
@@ -6927,8 +6972,17 @@ assertRouteCurrent();
         threadId,
         text,
         ...(subagentRoute ? { subagentRoute } : {}),
-        ...(smartSubagentRoutes ? { smartSubagentRoutes } : {}),
+        // 共享的 app-server 目录不带档位。只有存档或当轮显式选过的档位
+        // 才交给宿主：宿主会用它给本线程的智能路由盖章。目录默认 high
+        // 不算已选，留空后宿主不盖章，子代理保留自己选的档位。
+        ...(smartSubagentRoutes
+          ? {
+              smartSubagentRoutes,
+              ...(hasSelectedEffort ? { reasoningEffort: mutableEffort } : {}),
+            }
+          : {}),
       });
+      codexProxyPromptRegistered = true;
     };
     const refreshCodexAutoReviewerRoute = (targetThreadId: string): void => {
       const routeCredentialMode = this.deps.isCodexAccountProvider?.(mutableProviderId) ? 'oauth-bearer' : resolveAgentCredentialMode({
@@ -12832,9 +12886,22 @@ assertRouteCurrent();
         if (mutableModel !== beforeModel) {
           refreshCodexAutoReviewerRoute(params.threadId);
         }
-        // ReasoningEffort 的 'none' 不属于 Effort; 排除后其余值都是合法 Effort, 无需 cast。
-        // A server default must not replace an explicit no-effort session choice.
-        if (mutableEffort && s.effort && s.effort !== 'none') mutableEffort = s.effort;
+        // ReasoningEffort 的 'none' 不属于 Effort。恢复后的快照经常把 effort 留空
+        // (null / '' / 'none')——那只表示这条通知没带档位，不能把任务已存的档位
+        // 清掉，否则下一轮子代理会掉回目录默认 low。显式档位(含本轮 setEffort)
+        // 仍然覆盖；空字符串是「这个模型不用推理」的持久哨兵，server 默认值不得填上。
+        const nextEffort = reconcileMutableEffortFromThreadSettings(mutableEffort, s.effort);
+        const effortChanged = nextEffort !== mutableEffort;
+        mutableEffort = nextEffort;
+        // 快照里的真实档位是这条线程实际在用的档，算已选。空快照
+        // （null / '' / 'none'）不会改 mutableEffort，也不能把「从未存过」
+        // 提升成已选，否则目录默认 high 又会被登记给宿主。
+        if (effortChanged && isStoredCodexEffort(s.effort)) hasSelectedEffort = true;
+        // 快照真的改了档位时，已经登记过的智能路由要跟上。还没登记过就别写：
+        // 空的 prompt 会先占位，随后的 thread/start 会用对齐后的档位正式登记。
+        if (effortChanged && codexProxyPromptRegistered) {
+          registerCodexDeveloperInstructions(params.threadId, registeredDeveloperInstructions);
+        }
         if (before !== (serviceTierState.value ?? null)) {
           log.debug('thread/settings/updated reconciled serviceTier', {
             threadId: params.threadId,
@@ -14522,13 +14589,25 @@ assertRouteCurrent();
 
       async setEffort(newEffort: Effort) {
         if (reviewMode) return;
-        if (newEffort === mutableEffort) return; // 去重: 值没变不重推
+        // 启动没传 effort 时 mutableEffort 被填成目录默认 high，但 hasSelectedEffort
+        // 仍是 false。当轮显式选同一个 high 也是「未选 → 已选」，不能在这里返回：
+        // 否则标记永远立不起来，当轮拉起的跨供应商子代理不会继承这个档位。
+        const becameSelected = !hasSelectedEffort;
+        if (newEffort === mutableEffort && !becameSelected) return; // 去重: 值没变且已选过，不重推
         const clamped = clampEffortForCodex(mutableModel, newEffort);
         log.debug('setEffort', { from: mutableEffort, to: newEffort, clamped });
         mutableEffort = newEffort;
+        // 当轮显式改档（含改成「不用推理」的空字符串，以及首次选中与默认相同的 high）
+        // 算已选，后面的重登才会把这个档位交给宿主。
+        hasSelectedEffort = true;
         // thread 已启动 → 立即经 thread/settings/update 生效; 未启动由首个 turn/start
         // 携带 (TurnStartParams.effort, v2.rs:5800)。发 clamp 后的值, 与 turn/start 一致。
         if (clamped !== undefined) await pushThreadSettings({ effort: clamped });
+        // 回执经常不带档位，对不齐 mutableEffort，上面的重登不会跑。当轮显式
+        // 改档要在这里把新档位写进已经登记的智能路由，后面拉起的子代理才跟父任务一致。
+        if (threadId && hostUsesCodexProxy) {
+          registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
+        }
       },
 
       getEffort() {

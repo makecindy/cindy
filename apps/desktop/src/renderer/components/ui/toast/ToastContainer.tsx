@@ -105,6 +105,7 @@ export function ToastContainer() {
   });
 
   return (
+    <>
     <div
       ref={containerRef}
       aria-label={t('commonUi.toastContainer.ariaLabel')}
@@ -112,11 +113,21 @@ export function ToastContainer() {
       className="pointer-events-none fixed inset-x-0 top-5 z-[10100] flex flex-col items-center gap-[10px]"
     >
       <DownloadToast items={transfers} />
-      {items.map((item) => (
+      {items.filter(item => item.placement !== 'top-right').map((item) => (
         <ToastFadeWrapper key={item.id} item={item} toastId={item.id}>
           <Toast item={item} />
         </ToastFadeWrapper>
       ))}
     </div>
+    {/* Anchored invitations keep their corner through loading and success updates.
+        They do not participate in the top-center stack's FLIP animation. */}
+    <div className="pointer-events-none fixed right-6 top-16 z-[10100] flex w-96 max-w-[calc(100vw_-_48px)] flex-col items-end gap-[10px] [&>div]:max-w-full">
+      {items.filter(item => item.placement === 'top-right').map(item => (
+        <ToastFadeWrapper key={item.id} item={item} toastId={item.id}>
+          <Toast item={item} />
+        </ToastFadeWrapper>
+      ))}
+    </div>
+    </>
   );
 }

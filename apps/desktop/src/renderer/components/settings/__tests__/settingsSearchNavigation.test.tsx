@@ -17,7 +17,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 const scrollTo = vi.fn();
 let targetTop = 100;
 let resized: ResizeObserverCallback;
-function Page({ ready = false, active = true }: { ready?: boolean; active?: boolean }) {
+function Page({ ready = false, active = true, hidden = false }: { ready?: boolean; active?: boolean; hidden?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const setting = useSettingDefinition(additionalSettings.browserTarget);
   useSettingsSectionTarget(active ? setting.anchorProps.id : null, ref, String(active), 'fallback');
@@ -25,7 +25,7 @@ function Page({ ready = false, active = true }: { ready?: boolean; active?: bool
     <div ref={ref}>
       <div id="fallback">Fallback</div>
       {ready && (
-        <div {...setting.anchorProps}>
+        <div {...setting.anchorProps} hidden={hidden}>
           <label>{setting.title}</label>
           <select {...setting.controlProps}>
             {setting.options.map((option) => (
@@ -58,6 +58,12 @@ beforeEach(() => {
     this: HTMLElement,
   ) {
     return { top: this.id === 'settings-browser-target' ? targetTop : 0 } as DOMRect;
+  });
+  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    const rects = this.closest('[hidden]') ? [] : [{} as DOMRect];
+    return Object.assign(rects, { item: (index: number) => rects[index] ?? null }) as DOMRectList;
   });
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo });
 });
@@ -129,6 +135,31 @@ describe('settings definition and navigation', () => {
         .getElementById('settings-browser-target')
         ?.classList.contains('settings-search-target-highlight'),
     ).toBe(false);
+  });
+
+  // 生产入口：useSettingsSectionTarget；规则：隐藏控件不能接收搜索定位/高亮。
+  // 视觉桥关闭后明细仍挂载但 hidden；旧逻辑只按 id 存在选择目标，旧用例只覆盖未挂载→挂载。
+  // 最小失败输入：exact 已挂载但 hidden，fallback 可见；tier：unit（真实 hook + fake timers/DOM）。
+  it('uses the visible fallback while the exact target is hidden and follows it when revealed', async () => {
+    const view = render(<Page ready hidden />);
+    act(() => { vi.advanceTimersByTime(0); });
+    expect(
+      document.getElementById('fallback')?.classList.contains('settings-search-target-highlight'),
+    ).toBe(true);
+    expect(
+      document.getElementById('settings-browser-target')?.classList.contains('settings-search-target-highlight'),
+    ).toBe(false);
+    await act(async () => {
+      view.rerender(<Page ready />);
+    });
+    act(() => { resized([], {} as ResizeObserver); });
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 92, behavior: 'auto' });
+    expect(
+      document.getElementById('fallback')?.classList.contains('settings-search-target-highlight'),
+    ).toBe(false);
+    expect(
+      document.getElementById('settings-browser-target')?.classList.contains('settings-search-target-highlight'),
+    ).toBe(true);
   });
 
   it.each(['navigate', 'expire'] as const)(

@@ -891,6 +891,7 @@
         "pausedLocal": "N'accepte pas de nouvelles tâches provenant d'autres ordinateurs",
         "cooling": "En refroidissement",
         "coolingUntil": "En refroidissement · de retour vers {{time}}",
+        "quotaExhausted": "Quota épuisé",
         "offline": "Hors ligne",
         "unreachableHere": "Injoignable depuis cet ordinateur",
         "unavailable": {
@@ -937,9 +938,13 @@
       "description": "Pour consommer le quota de chaque compte de façon équilibrée, envoyez ce message depuis {{label}} ({{quota}}). Les derniers messages et un résumé sont repris ; des détails plus anciens peuvent être perdus.",
       "quota": "{{left}} % restant",
       "quotaReset": "{{left}} % restant · {{reset}}",
-      "confirm": "Changer",
-      "cancel": "Annuler",
-      "remember": "Changer automatiquement à l'avenir (pour cette tâche uniquement)"
+      "confirm": "Changer cette fois uniquement",
+      "cancel": "Pas maintenant",
+      "remember": "Changer automatiquement sans redemander",
+      "disable": "Ne pas changer automatiquement ni redemander",
+      "disableFailed": "Impossible de confirmer si votre choix a été enregistré. Vérifiez la connexion et que Cindy est à jour sur l’ordinateur où se trouve la tâche, puis réessayez. Ce message sera envoyé normalement.",
+      "choiceLabel": "Changement d’ordinateur (cette tâche uniquement)",
+      "send": "Envoyer le message"
     },
     "deleteConfirm": {
       "title": "Supprimer le groupe de fournisseurs {{provider}} ?",
@@ -7479,6 +7484,11 @@
         "installedExpand": "Afficher les {{count}} plugins installés",
         "installedCollapse": "Masquer les autres plugins installés",
         "recommendedSection": "Recommandés",
+        "todayRecommendations": "La sélection du jour",
+        "marketSection": "Marché des plugins",
+        "browseMarket": "Parcourir le marché des plugins",
+        "searching": "Recherche…",
+        "allLoaded": "Les {{count}} plugins sont affichés",
         "updatesAvailable": "Mises à jour de plugins disponibles : {{count}}",
         "updateAll": "Tout mettre à jour",
         "ignoreRound": "Ignorer cette fois",
@@ -7508,7 +7518,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Officiel"
+          "official": "Officiel",
+          "community": "Communauté"
+        },
+        "publisherDescription": {
+          "official": "Publié et maintenu par Cindy",
+          "community": "Publié et maintenu par des développeurs de la communauté",
+          "team": "Partagé par votre organisation avec les membres autorisés",
+          "custom": "Provenant d’un marché Git ou d’un dossier local que vous avez ajouté",
+          "local": "Installé depuis un fichier local ou développé sur cet ordinateur"
         },
         "scopeAria": "Filtrer les sources de plugins",
         "scope": {
@@ -10858,6 +10876,9 @@
         "stepFailed": "{{name}} a rencontré un problème et n'a pas terminé cette étape",
         "stepTimeout": "{{name}} a mis trop de temps ; cette étape a donc été arrêtée",
         "stepUnavailable": "{{name}} est indisponible et ne peut pas réaliser cette étape",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}} n’a pas commencé le traitement dans le délai d’attente. Cette demande est terminée.\nDemandez au propriétaire du partenaire de vérifier que Cindy fonctionne et que son ordinateur est connecté au réseau."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} ne peut pas répondre : l'appareil du coéquipier a atteint sa limite de sessions distantes.\nDemandez au propriétaire du coéquipier d'archiver les sessions inutilisées, ou au propriétaire de l'ordinateur distant d'augmenter la limite dans Accès distant et partage.",
           "REMOTE_TOTAL_LIMIT": "{{name}} ne peut pas répondre : l'ordinateur distant a atteint sa limite totale de sessions distantes.\nDemandez au propriétaire de cet ordinateur de libérer les sessions inutilisées ou d'augmenter la limite dans Accès distant et partage.",
@@ -11513,6 +11534,9 @@
       "databaseDriver": "Impossible de charger le pilote de base de données. Mettez à jour ou réparez Cindy, puis réessayez.",
       "databaseUnavailable": "Impossible de lire la base de données source. Les données d'origine sont inchangées ; réessayez après réparation.",
       "fileTooLarge": "Un fichier ou cet import dépasse la limite de lecture. Le contenu n'a pas été tronqué.",
+      "sourceFileTooLarge": "Un fichier dépasse la limite de lecture. Cet élément n'a pas été entièrement importé.",
+      "snapshotTooLarge": "Le volume total des données à lire dépasse la limite. L'import est incomplet.",
+      "itemTooLarge": "Les fichiers de cet élément dépassent 128 MiB au total. Cet élément n'a pas été entièrement importé.",
       "memoryMetadata": "Le résumé ou le titre de la mémoire dépasse les limites de stockage.",
       "memoryWrite": "Échec de l'écriture de la mémoire ou de la vérification de son intégrité. Vous pouvez réessayer.",
       "memoryChanged": "La mémoire enregistrée a été modifiée et n'a pas été écrasée.",
@@ -12630,6 +12654,12 @@
       "missingDir": "Dossier introuvable"
     },
     "pendingQueue": {
+      "stopping": "Arrêt en cours",
+      "queued": "En file d'attente",
+      "editingInComposer": "Modification dans la zone de saisie ci-dessous…",
+      "moveUp": "Avancer",
+      "moveDown": "Reculer",
+      "cancelSend": "Annuler l'envoi",
       "regionAria": "File d'attente des messages",
       "listAria": "Messages en file d'attente",
       "pausedFooter": "Tâche arrêtée, file d'attente en pause",
@@ -14255,6 +14285,7 @@
       "taskAutoArchived": "« {{title}} » archivée",
       "taskAutoArchivedUndo": "Annuler",
       "taskAutoArchivePending": "Archivage automatique en quittant cette tâche",
+      "taskAutoArchiveBlockedDirty": "« {{title}} » n’a pas été archivée automatiquement : son espace de travail contient des modifications non validées",
       "taskAutoArchiveCancel": "Annuler",
       "taskAutoArchiveCancelled": "Pas d’archivage automatique cette fois",
       "taskArchiveNow": "Archiver maintenant"
@@ -19957,10 +19988,10 @@
       "useCodex": "Se connecter avec Codex"
     },
     "title": "Comptes d’abonnement",
-    "note": "Le premier compte utilise le dossier par défaut de la CLI. Les comptes ajoutés se connectent séparément. Les nouvelles tâches sont réparties ; les tâches existantes conservent leur compte.",
     "strategy": "Répartition de charge",
     "add": "Ajouter un compte",
     "default": "Dossier par défaut",
+    "defaultTag": "Par défaut",
     "ready": "Connecté",
     "signedOut": "Connexion requise",
     "unavailable": "État indisponible",
@@ -19969,7 +20000,8 @@
     "removeTitle": "Retirer {{name}} ?",
     "removeDescription": "Cindy n’attribuera plus de tâches à ce compte. La connexion CLI et l’historique des conversations restent sur cet ordinateur.",
     "failed": "Impossible de lire ou de mettre à jour le compte. Vérifiez la connexion CLI et le réseau, puis réessayez.",
-    "directory": "Dossier du compte",
+    "openDirectory": "Ouvrir le dossier du compte",
+    "openDirectoryFailed": "Impossible d’ouvrir le dossier du compte. Il a peut-être été déplacé ou supprimé.",
     "loginAgain": "Se reconnecter",
     "login": "Se connecter"
   },
@@ -19981,5 +20013,17 @@
     "logExcerpt": "Journaux pertinents (extrait potentiellement incomplet)",
     "logsUnavailable": "Aucun journal pertinent disponible. La cause reste inconnue.",
     "failed": "Impossible de préparer le diagnostic. Veuillez réessayer."
+  },
+  "githubStar": {
+    "title": "Vous aimez Cindy ?",
+    "description": "Ajoutez une étoile sur GitHub pour soutenir Cindy.",
+    "dismiss": "Ne plus afficher",
+    "action": "Encourager Cindy",
+    "starring": "Une étoile s’allume…",
+    "thanks": "Merci pour l’étoile !",
+    "thanksDescription": "Votre soutien aide Cindy à grandir.",
+    "browserFallback": "Ouvrez GitHub pour ajouter une étoile à Cindy.",
+    "openGithub": "Ouvrir GitHub",
+    "openFailed": "Impossible d’ouvrir GitHub."
   }
 }

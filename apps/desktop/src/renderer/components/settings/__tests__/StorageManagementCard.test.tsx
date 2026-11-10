@@ -406,8 +406,9 @@ describe('StorageManagementCard fixed cache directories', () => {
       thresholdGiB: 12, disabled: false, isCustomized: false, defaultThresholdGiB: 12,
     });
     render(<StorageManagementCard />);
-    const reset = screen.getByRole('button', { name: 'settings.defaults.restore' });
-    await waitFor(() => expect((reset as HTMLButtonElement).disabled).toBe(false));
+    // Per-setting reset only appears once the saved settings are customized (CONTROLS decision 3).
+    const reset = await screen.findByRole('button', { name: 'settings.defaults.restore' });
+    expect((reset as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(reset);
 
     await waitFor(() => {
@@ -416,7 +417,7 @@ describe('StorageManagementCard fixed cache directories', () => {
       expect(screen.getByRole('switch', {
         name: 'settings.about.storage.dbSizeWarningDisableLabel',
       }).getAttribute('aria-checked')).toBe('false');
-      expect((reset as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.queryByRole('button', { name: 'settings.defaults.restore' })).toBeNull();
     });
     expect(api.setSettings).not.toHaveBeenCalled();
   });
@@ -428,13 +429,15 @@ describe('StorageManagementCard fixed cache directories', () => {
     });
     vi.mocked(api.resetSettings).mockRejectedValue(new Error('[INTERNAL] failed to reset settings'));
     render(<StorageManagementCard />);
-    const reset = screen.getByRole('button', { name: 'settings.defaults.restore' });
-    await waitFor(() => expect((reset as HTMLButtonElement).disabled).toBe(false));
+    const reset = await screen.findByRole('button', { name: 'settings.defaults.restore' });
+    expect((reset as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(reset);
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('ipcError.INTERNAL'));
     expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('25');
-    expect((reset as HTMLButtonElement).disabled).toBe(false);
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'settings.defaults.restore' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
   });
 
   it('subscribes to setting changes without recalculating storage and unsubscribes on unmount', async () => {
@@ -450,8 +453,8 @@ describe('StorageManagementCard fixed cache directories', () => {
     const disabledSwitch = screen.getByRole('switch', {
       name: 'settings.about.storage.dbSizeWarningDisableLabel',
     });
-    const reset = screen.getByRole('button', { name: 'settings.defaults.restore' }) as HTMLButtonElement;
     await waitFor(() => expect(api.getSettings).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('button', { name: 'settings.defaults.restore' })).toBeNull();
 
     vi.mocked(api.getSettings).mockResolvedValue({
       thresholdGiB: 25, disabled: true, isCustomized: true, defaultThresholdGiB: 10,
@@ -460,7 +463,9 @@ describe('StorageManagementCard fixed cache directories', () => {
     await waitFor(() => {
       expect(input.value).toBe('25');
       expect(disabledSwitch.getAttribute('aria-checked')).toBe('true');
-      expect(reset.disabled).toBe(false);
+      expect(
+        (screen.getByRole('button', { name: 'settings.defaults.restore' }) as HTMLButtonElement).disabled,
+      ).toBe(false);
     });
 
     vi.mocked(api.getSettings).mockResolvedValue({
@@ -470,7 +475,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     await waitFor(() => {
       expect(input.value).toBe('10');
       expect(disabledSwitch.getAttribute('aria-checked')).toBe('false');
-      expect(reset.disabled).toBe(true);
+      expect(screen.queryByRole('button', { name: 'settings.defaults.restore' })).toBeNull();
     });
     expect(api.measure).toHaveBeenCalledOnce();
     expect(window.electronAPI.cindyMediaStorage.stats).toHaveBeenCalledOnce();
