@@ -9,7 +9,13 @@ const evidence = z.object({
   messageId: z.string().min(1),
   quote: z.string().trim().min(8).max(1000),
 });
-const reason = z.string().trim().min(1).max(120);
+const MAX_REASON_LENGTH = 120;
+/** 理由只用于在记录里展示：写长了就截断，不能让一句说明拖垮整份结果。截断时不留半个代理对。 */
+function clipReason(text: string): string {
+  if (text.length <= MAX_REASON_LENGTH) return text;
+  return `${text.slice(0, MAX_REASON_LENGTH - 1).replace(/[\uD800-\uDBFF]$/, '').trimEnd()}…`;
+}
+const reason = z.string().trim().min(1).transform(clipReason);
 const memoryType = z.enum(['user', 'feedback', 'project', 'reference']);
 const skillSlug = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/);
 
