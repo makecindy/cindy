@@ -10,7 +10,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 
 // Account generations are driven explicitly below; no full auth host is needed.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => 'self-a' }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => 'self-a', useOptionalDataOwnerGeneration: () => 0 }));
 
 const sharing = vi.hoisted(() => ({ received: [] as ProviderShareReceived[] }));
 vi.mock('@/features/provider-share/providerShareStore', () => ({
@@ -114,7 +114,10 @@ describe('provider weekly quota identity and windows', () => {
     expect(button.querySelector('[data-weekly-remaining="100"]')).not.toBeNull();
     expect(view.container.textContent).toContain('b@example.test · Max');
     expect(view.container.textContent).not.toContain('a@example.test');
-    expect(command).toHaveBeenCalledTimes(1);
+    expect(command.mock.calls).toEqual([
+      [{ action: 'preview', providerId: 'anthropic' }],
+      [{ action: 'read', providerId: 'anthropic' }],
+    ]);
   });
 
   // #8010 merge regression / unit: main added Kimi after self-source normalization.

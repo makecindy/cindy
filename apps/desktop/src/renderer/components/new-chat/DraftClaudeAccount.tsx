@@ -1,5 +1,9 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { useOptionalAuthDeviceId, useOptionalAuthUser } from '@/contexts/AuthContext';
+import {
+  useOptionalAuthDeviceId,
+  useOptionalAuthUser,
+  useOptionalDataOwnerGeneration,
+} from '@/contexts/AuthContext';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -34,6 +38,7 @@ export function DraftClaudeAccountProvider({
 
 function LocalDraftClaudeAccount({ children }: { children: ReactNode }) {
   const user = useOptionalAuthUser();
+  const ownerGeneration = useOptionalDataOwnerGeneration();
   const [result, setResult] = useState<{
     owner: DataOwnerGeneration;
     preview: DraftClaudeAccount | null;
@@ -45,6 +50,20 @@ function LocalDraftClaudeAccount({ children }: { children: ReactNode }) {
       const owner = getDataOwnerGeneration();
       setResult(null);
       try {
+        // The existing preview probes the default login without fetching quota.
+        // An unconfigured pool must not delay the legacy reader on a CLI usage call.
+        const preview = await window.electronAPI.subscriptionAccounts.command({
+          action: 'preview',
+          providerId: 'anthropic',
+        });
+        if (current !== epoch || !isDataOwnerGenerationCurrent(owner)) return;
+        if (preview.providerId !== 'anthropic') return;
+        if (!preview.configured) {
+          setResult({ owner, preview: null });
+          return;
+        }
+        // Preview can detect an unbound default login; only the authorized read
+        // may supply the assignable account's identity, plan and usage.
         const pool = await window.electronAPI.subscriptionAccounts.command({
           action: 'read',
           providerId: 'anthropic',
@@ -85,7 +104,7 @@ function LocalDraftClaudeAccount({ children }: { children: ReactNode }) {
       unsubscribe?.();
       window.removeEventListener('focus', focus);
     };
-  }, [user?.id]);
+  }, [user?.id, ownerGeneration]);
   const preview =
     result && isDataOwnerGenerationCurrent(result.owner) ? result.preview : UNASSIGNED;
   return <Context.Provider value={preview}>{children}</Context.Provider>;
