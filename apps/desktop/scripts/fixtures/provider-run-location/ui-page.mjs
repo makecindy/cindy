@@ -16,6 +16,7 @@ export default {
     default: { about: 'This computer is signed in; Automatic keeps tasks here' },
     borrowing: { about: 'This computer is not signed in; new tasks run on MBP-M5 and the page reads as usable' },
     pinned: { about: 'Signed in here, but the user chose to run this provider on MBP-M5' },
+    'never-signed-in': { about: 'Anthropic was never signed in here; it is still listed and runs on MBP-M5' },
     'single-computer': { about: 'No other computer offers the provider: the row is hidden' },
   },
   async ready(page) {
@@ -23,6 +24,14 @@ export default {
   },
   async check(page, ui) {
     const row = page.getByTestId('provider-run-location');
+    if (ui.case === 'never-signed-in') {
+      // Review #9740: a built-in provider only another computer offers must not vanish from the list.
+      await page.getByRole('button', { name: /^Anthropic/ }).first().click();
+      await row.waitFor();
+      assert.match(await row.textContent() ?? '', /MBP-M5/);
+      await ui.capture('row');
+      return;
+    }
     if (ui.case === 'single-computer') {
       assert.equal(await row.count(), 0);
       return;

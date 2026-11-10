@@ -7,7 +7,7 @@
  *   3. 还没运行过的任务：不显示某一台的配额，悬停说明开始后由组选电脑；
  *   4. 本机建的组：任务在本机运行时读本机账号。
  */
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -177,7 +177,8 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
-import { __resetForTest as resetFavorites } from '@/state/modelFavorites';
+import { __resetForTest as resetFavorites, addModelFavorite, setModelFavoritesOwner } from '@/state/modelFavorites';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 const devices = [
   { deviceId: 'device-c', name: 'Studio' },
@@ -398,5 +399,20 @@ describe('同一个供应商在几台自己的电脑上只列一项', () => {
       expect(railNames().filter((name) => name.startsWith('B Shared')).length).toBe(1);
       expect(railNames().some((name) => name.startsWith('B Shared · Laptop'))).toBe(true);
     });
+  });
+
+  // PR #9740 review：收起本机那一项时，本机已有的收藏不能跟着消失。
+  it('pinned to the laptop: a favorite saved on this computer stays in favorites', async () => {
+    setDataOwnerGeneration('me', 1);
+    setModelFavoritesOwner('me');
+    addModelFavorite({ providerId: 'b-shared', modelId: 'opus', agent: 'cc' });
+    await withShared({ runLocation: 'device-d' }, () => {
+      const favorites = within(screen.getByRole('listbox')).getByRole('group', { name: 'newChat.modelSelector.unified.favoritesGroup' });
+      expect(within(favorites).getAllByText('Opus')).toHaveLength(1);
+      // 模型分组里仍只有一处，不把本机那一项带回来。
+      const groups = within(screen.getByRole('listbox')).getAllByRole('group').map((group) => group.getAttribute('aria-label') ?? '');
+      expect(groups).not.toContain('B Shared');
+    });
+    setDataOwnerGeneration(null, 0);
   });
 });
