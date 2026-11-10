@@ -11363,7 +11363,8 @@
       "toolSettings": "Tool settings",
       "notTurnedOn": "Not turned on for this computer",
       "turnOn": "Enable",
-      "permissions": "Permissions"
+      "permissions": "Permissions",
+      "officialInherited": "Cindy official · Follows this computer’s settings"
     },
     "systemSkills": {
       "followOffHint": "{{name}}’s Workbench and follow-up system skill is off. Switch it back on in Capabilities to use this.",
