@@ -156,8 +156,17 @@ rebase、fetch（包括 Cindy 自己的快照提交与 worktree 池 fetch）都�
 
 - 公开版本不包含内建插件种子；插件通过 SkillHub 或手动安装。不要把任何访问令牌写入
   仓库、Git 配置或脚本。
-- Desktop runtime 二进制（claude／codex／ripgrep／pi）的版本由仓库维护者统一判断与升级；贡献者和
-  Agent 不要修改 `tools/<kind>/latest.json` 的版本 pin，也不要主动升级二进制。
+- Desktop runtime（Claude Code、Claude Agent SDK、Codex、Pi、ripgrep）在**有版本打包时自动升到上游最新**：
+  `package-desktop.mjs` 在 forge 之前调用 `scripts/vendor-update.mjs`，下载时按上游校验和验证
+  （Claude 官方发布清单、GitHub asset digest、ripgrep 官方 `.sha256`），SDK 取与 Claude Code 同步构建的
+  版本；随后用真实二进制跑 `scripts/smoke-claude-sdk.mjs` 与 maker-core 的 `integration` tier，任一失败即
+  恢复原 pin、中止打包。实际带上的版本与各平台 URL／SHA-256 写入 `build-info.json` 的 `vendors`，发布侧据此
+  把同一组版本推到 CDN；同一次发版的其它平台用 `--vendors <build-info.json>` 复用这组版本，上游坏版本时用
+  `--vendors pinned` 只测不升。`latest` 只取发布满 24 小时的版本（同 mise 缺省的 `minimum_release_age`），
+  且不会把 pin 降级。`tools/<kind>/latest.json` 是最近一次通过测试的版本：打包升级后自动推到
+  `chore/vendor-pins` 分支并开／更新 PR；`.github/workflows/vendor-update.yml` 每天跑同一流程并更新同一 PR。
+  贡献者和 Agent 不在普通改动里改这些 pin。`pnpm vendors:status` 只读列出差距，`pnpm update:vendors`
+  手动走同一流程（`--open-pr` 同样开 PR，`--min-age-hours=0` 不等 24 小时），`pnpm vendors:gate` 只对当前 pin 跑测试。
 - 依赖和命令的事实源是当前 checkout 的 `package.json` 与脚本。文档和脚本冲突时，
   先核对代码并修正文档，不要继续执行已失效命令。
 - 不要把其他 checkout 的 `node_modules`、用户数据、授权文件或数据库复制进当前工作区。

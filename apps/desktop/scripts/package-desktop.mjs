@@ -27,6 +27,15 @@
 //              仅存的 CDN 依赖,显式 x.y.z 则不再碰 CDN manifest。
 //              (agent 侧车二进制走缓存优先的 ensureBinary:已就位且版本
 //              匹配 pin 时跳过下载;首次打包仍需网络拉一次,之后可离线。)
+//   --vendors  latest|pinned|<build-info.json>
+//              Agent 运行时(Claude Code / Agent SDK / Codex / Pi / ripgrep)的版本来源。
+//              有版本打包缺省 latest:打包前把它们升到上游最新(下载时校验上游
+//              SHA-256),再用真实二进制跑冒烟 + maker-core 集成测试,任一失败即恢复
+//              原 pin 并中止打包。pinned = 不升级,只对仓库 pin 跑同一套测试(上游坏版本
+//              时的退路)。<build-info.json> = 复用另一平台本次发版已测过的同一组版本。
+//              latest 只取发布满 24 小时的版本(同 mise 缺省的 minimum_release_age),不会降级。
+//              版本无关包缺省不处理(行为同前)。结果写入 build-info.json 的 vendors;
+//              升级了 pin 时打包结束后自动推 chore/vendor-pins 分支并开/更新 PR。
 //   --skip-smoke                    跳过 packaged smoke test(调试用)
 //   --allow-unsigned                有版本打包放行无签名(win 缺 CINDY_WIN_SIGN_CMD /
 //                                   mac 缺 APPLE_APP_PASSWORD 时降级 ad-hoc)
@@ -47,6 +56,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensureBinary } from '../../../scripts/ensure-agent-binaries.mjs';
+import { openPinPullRequest, updateVendors } from '../../../scripts/vendor-update.mjs';
 import { desktopClientBuildEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
 import { desktopLogUploadBuildEnv } from '../../../scripts/shared/log-upload-build-env.mjs';
 import {
@@ -545,6 +555,20 @@ async function main() {
   console.log(`    version:  ${versionless ? `(版本无关,占位 ${version},不参与热更新)` : version}`);
   console.log('='.repeat(60));
 
+  // Agent 运行时在 forge 之前定版:SDK 会被打进 bundle,Linux 回退下载读的 pin 也在构建时内联。
+  // 测试门失败时 updateVendors 已恢复原 pin,这里直接中止,不产出带未验证组件的包。
+  const vendorsMode = args.vendors;
+  let vendors = null;
+  if (vendorsMode) {
+    const target = vendorsMode === 'latest' || vendorsMode === 'pinned'
+      ? vendorsMode
+      : JSON.parse(fs.readFileSync(path.resolve(vendorsMode), 'utf8')).vendors?.components;
+    if (!target) throw new Error(`--vendors ${vendorsMode}: build-info.json 里没有 vendors.components`);
+    console.log(`==> Agent runtimes: ${typeof target === 'string' ? target : `versions from ${vendorsMode}`} + smoke/integration gate`);
+    const { changes, steps, components } = await updateVendors({ target });
+    vendors = { mode: typeof target === 'string' ? target : 'from-build-info', changes, gate: steps, components };
+  }
+
   // Linux 只校验 sqlite-vec 等原生运行资产。Claude/Codex/Pi 各平台都不进安装包
   // (forge extraResource 不含它们),由 packaged runtime 首启时复用系统 CLI 或
   // 从 CDN 安装到 userData(仅 Linux 的 Claude/Codex 另有系统 CLI / 官方下载
@@ -674,6 +698,7 @@ async function main() {
         files,
         signing,
         mcpAppsManual,
+        vendors,
       });
       buildInfoPath = path.join(artifactDir, 'build-info.json');
       fs.writeFileSync(buildInfoPath, JSON.stringify(buildInfo, null, 2) + '\n');
@@ -696,6 +721,15 @@ async function main() {
   }
   if (versionless) {
     console.log('注意: 版本无关包(0.0.0)不参与热更新,仅供本地/社区使用,不能作为发布产物。');
+  }
+  // 升级后的 pin 自动提交回仓库:推到 chore/vendor-pins 并开/更新 PR(与每日任务共用分支)。
+  // 安装包已产出,这一步失败只告警,不推翻本次打包。
+  if (vendors?.changes.length) {
+    try {
+      openPinPullRequest({ changes: vendors.changes, steps: vendors.gate });
+    } catch (err) {
+      console.warn(`WARN: 升级后的 pin 未能自动提交(${err.message});请提交 tools/*/latest.json、SDK package.json 与 pnpm-lock.yaml。`);
+    }
   }
 }
 

@@ -140,6 +140,27 @@ test('parsePackageArgs: 版本化打包必须显式指定 region', () => {
   );
 });
 
+// 发版必须带上上游最新的 Agent 运行时(Claude Code / SDK / Codex / Pi / ripgrep):有版本打包
+// 缺省浮动到 latest,只有显式 --vendors pinned 或复用另一平台的 build-info 才不升级;
+// 版本无关的社区包不联网升级。build-info 记下实际带上的组件,发布侧据此推 CDN。
+test('有版本打包缺省把 Agent 运行时升到 latest,并写进 build-info', () => {
+  const host = { platform: 'linux', arch: 'x64' };
+  assert.equal(parsePackageArgs(['--version', '1.2.3', '--region', 'global'], host).vendors, 'latest');
+  assert.equal(parsePackageArgs([], host).vendors, null);
+  assert.equal(parsePackageArgs(['--version', 'patch', '--region', 'cn', '--vendors', 'pinned'], host).vendors, 'pinned');
+  assert.equal(parsePackageArgs(['--vendors', 'latest'], host).vendors, 'latest');
+  assert.equal(
+    parsePackageArgs(['--version', '1.2.3', '--region', 'global', '--vendors', 'out/build-info.json'], host).vendors,
+    'out/build-info.json',
+  );
+  assert.throws(() => parsePackageArgs(['--vendors'], host), /--vendors 需要一个值/);
+
+  const base = { version: '1.2.3', versionless: false, region: 'global', platform: 'linux', arch: 'x64', files: [], signing: {} };
+  const vendors = { mode: 'latest', changes: [], gate: [], components: { claude: { version: '2.1.321' } } };
+  assert.deepEqual(buildBuildInfo({ ...base, vendors }).vendors, vendors);
+  assert.equal(buildBuildInfo(base).vendors, null);
+});
+
 test('parsePackageArgs: linux 显式 --arch 指向宿主架构时放行', () => {
   // defaults 注入宿主身份,让断言不依赖跑测试的机器。
   for (const arch of ['x64', 'arm64']) {
