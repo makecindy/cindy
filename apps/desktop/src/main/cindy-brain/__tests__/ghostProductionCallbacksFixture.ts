@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import ts from 'typescript';
-import { confirmedAutoTools } from '../ghostInstallConsent.js';
+import { confirmedAutoTools, confirmedWallpaperCapability } from '../ghostInstallConsent.js';
 import { ghostInstallTargetContext, resolveForgeInstallTarget } from '../ghostInstallTarget.js';
 import {
   parsePluginStoragePart,
@@ -21,6 +21,7 @@ const productionIdentityDeps = {
   LOCAL_PLUGIN_NAMESPACE,
   isOrganizationPluginNamespace,
   confirmedAutoTools,
+  confirmedWallpaperCapability,
   ghostInstallTargetContext,
   resolveForgeInstallTarget,
   installedGhostPhysicalRelId,

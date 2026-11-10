@@ -7892,6 +7892,8 @@
         "confirmDetail": "Antes de actuar puede abrir un cuadro de diálogo parecido al propio de Cindy para preguntarte. La pregunta proviene del complemento y el cuadro de diálogo está etiquetado con su nombre; Sólo usted puede hacer clic en confirmar o cancelar; el complemento no puede. Como máximo, un diálogo a la vez y se bloquea preguntar con demasiada frecuencia.",
         "fsWrite": "Puede escribir archivos (crear/modificar)",
         "fsWriteDetail": "Siempre se puede escribir en su propia carpeta de datos privados. Las escrituras en el directorio de trabajo de la sesión actual siguen el modo de permiso de la sesión (los modos de aprobación automática escriben directamente; los modos por acción le preguntan primero). Cualquier otra carpeta siempre requiere su confirmación. Los archivos siempre los escribe el host: el complemento en sí nunca toca su sistema de archivos.",
+        "wallpaper": "Cambiar el fondo de Cindy",
+        "wallpaperDetail": "Puede reemplazar y activar el fondo de este perfil de escritorio de Cindy para todas sus cuentas. No cambia el fondo del sistema. Se validan las imágenes y se conservan la visibilidad y el desenfoque.",
         "deviceSync": "Sincronizar datos del complemento entre tus computadoras",
         "deviceSyncDetail": "Intercambia los datos de este complemento con el mismo complemento en tus otras computadoras en línea donde hayas iniciado sesión con la misma cuenta de Cindy. Las transferencias están cifradas. El complemento controla la combinación y la eliminación de datos; no se comparten credenciales ni datos de otros complementos.",
         "libraryPersist": "Puede utilizar una biblioteca duradera (archivos y bases de datos grandes)",

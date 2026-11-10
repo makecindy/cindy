@@ -7822,6 +7822,8 @@
         "confirmDetail": "Kann vor einer Aktion einen Dialog öffnen, der wie ein eigener Dialog von Cindy aussieht. Die Frage stammt vom Plugin und der Dialog ist mit dessen Namen gekennzeichnet. Nur du kannst bestätigen oder abbrechen – das Plugin kann es nicht. Es ist höchstens ein Dialog gleichzeitig möglich; zu häufige Anfragen werden blockiert.",
         "fsWrite": "Kann Dateien schreiben (erstellen / ändern)",
         "fsWriteDetail": "Der eigene private Datenordner ist immer beschreibbar. Schreibzugriffe auf das Arbeitsverzeichnis der aktuellen Sitzung folgen dem Berechtigungsmodus der Sitzung (Modi mit automatischer Genehmigung schreiben direkt; Modi mit Einzelgenehmigung fragen dich zuerst). Jeder andere Ordner erfordert immer deine Bestätigung. Dateien werden stets vom Host geschrieben – das Plugin selbst greift nie auf dein Dateisystem zu.",
+        "wallpaper": "Cindy-Hintergrundbild ändern",
+        "wallpaperDetail": "Kann das Hintergrundbild dieses Cindy-Desktopprofils für alle darin verwendeten Konten ersetzen und aktivieren. Das System-Hintergrundbild bleibt unverändert. Bilder werden geprüft; Sichtbarkeit und Unschärfe bleiben erhalten.",
         "deviceSync": "Plugin-Daten zwischen deinen Computern synchronisieren",
         "deviceSyncDetail": "Tauscht die Daten dieses Plugins mit demselben Plugin auf deinen anderen Online-Computern aus, die mit demselben Cindy-Konto angemeldet sind. Übertragungen sind verschlüsselt. Das Plugin steuert das Zusammenführen und Löschen; Zugangsdaten oder Daten anderer Plugins werden nicht geteilt.",
         "libraryPersist": "Kann eine dauerhafte Bibliothek nutzen (große Dateien und Datenbanken)",

@@ -1,3 +1,5 @@
+import { MAX_WALLPAPER_IMAGE_BYTES } from '../../shared/appearanceSettings.js';
+import { PluginWallpaperSlot } from './wallpaperSlot.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
 import { importPickedFiles } from './pickedFiles.js';
 import { mediaTypeForLibraryPath } from './runtime/ghostFiles.js';
@@ -544,6 +546,7 @@ import {
   abortAllGhostInstallConsentPrompts,
   assertGhostInstallConsent,
   confirmedTaskCapability,
+  confirmedWallpaperCapability,
   confirmedAutoTools,
   confirmedControlPoints,
   confirmedUiCapability,
@@ -2291,6 +2294,30 @@ export function getGhostRuntime(): GhostRuntime {
   }
   return runtimeSingleton;
 }
+
+const pluginWallpaper = new PluginWallpaperSlot({
+  getGhost: (id) => isGhostBoundaryPending() ? null : findGhostForInstanceId(id),
+  scope: () => isGhostBoundaryPending() ? 'boundary-pending' : activeOwnerScopeKey(),
+  readImage: async (id, url, assertCurrent) => {
+    const parsed = blobStore.parseBlobUrl(url);
+    if (!parsed) return null;
+    const db = getDbClient().drizzle;
+    const canRead = await ledger.ghostCanRead(parsed.hash, id, db);
+    assertCurrent();
+    if (!canRead) return null;
+    const info = await ledger.getBlobInfo(parsed.hash, db);
+    assertCurrent();
+    if (!info || info.ext !== parsed.ext || info.bytes > MAX_WALLPAPER_IMAGE_BYTES) return null;
+    const { readBoundedFileNoFollow } = await import('../utils/readBoundedFile.js');
+    return readBoundedFileNoFollow(blobStore.resolveSafe(url).absPath, MAX_WALLPAPER_IMAGE_BYTES, { nonBlocking: true });
+  },
+  setImage: async (bytes, assertCurrent) => {
+    const { setCustomWallpaperImage } = await import('../custom-wallpaper.js');
+    await setCustomWallpaperImage(bytes, assertCurrent);
+    const { broadcastAppearanceSettings } = await import('../appearance-settings-ipc.js');
+    broadcastAppearanceSettings();
+  },
+});
 
 export const pluginDeviceSync = new PluginDeviceSync({
   scope: activeOwnerScopeKey,
@@ -7787,6 +7814,7 @@ async function installAndDockLocked(
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
+    wallpaperCapabilityApproved: confirmedWallpaperCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
     initiallyEnabled: opts.enable ?? false,
     expectedPackageSha256: opts.expectedPackageSha256,
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
@@ -7986,6 +8014,7 @@ async function updateLocalGhostPackageLocked(
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
+          wallpaperCapabilityApproved: confirmedWallpaperCapability(consent, previousGhost, inspected.manifest),
           expectedPackageSha256,
           expectedInstalledApproval,
           installOrigin: installOrigin ?? 'manual',
@@ -8570,6 +8599,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
+          wallpaperCapabilityApproved: confirmedWallpaperCapability(expected.consent, installed, inspected.manifest),
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
           ...(previousRelId ? { simulatorPreviousRelId: previousRelId } : {}),
@@ -9825,6 +9855,7 @@ export function registerGhostIpc(): void {
     }
     // library-request = library 持久作品库(资格审/binding 根解析/owner scope
     // 复核/SQL 语句门在 librarySlot;结果结构化 errorCode,永不 reject)。
+    if (type === 'wallpaper-request') return pluginWallpaper.handle(id, payload);
     if (type === 'device-sync-request') return pluginDeviceSync.handle(id, payload);
     if (type === 'library-request') {
       return getGhostLibrarySlot().handleLibraryRequest(id, payload);

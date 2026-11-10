@@ -398,3 +398,31 @@ const r = await cindy.send({
 
 页面用 SDK onprogress 接收工具进度；文件选择、上传、下载会自动报告自身进度。
 进度值保持递增，成功、失败、取消都应结束等待。完整写法见[§4.23](plugin-interactive-pages.md)。
+
+## 插件设置全局壁纸（未发布）
+
+在 manifest 中声明 `"wallpaper": true`。此权限在安装／更新时单独展示，
+只有用户确认该权限后才生效；旧 Host 保留的同名未知字段不会自动取得授权。
+逻辑页先通过已有网络权限下载图片，再应用媒体引用：
+
+```js
+const r = await cindy.fetch({ url: 'https://your-image-service.example/daily', as: 'media' });
+if (r.ok && r.status >= 200 && r.status < 300 && r.media) {
+  const result = await cindy.wallpaper({ mediaUrl: r.media.url });
+  if (!result.ok) { /* 根据 result.errorCode 显示失败，不要当作已应用 */ }
+}
+```
+
+`mediaUrl` 只接受 `cindy-media://blobs/<hash>.png|jpg|jpeg|webp`，Host 按当前账号账本
+核验它已属于或已授权给当前插件；同一账号其他插件的图片、客户端壁纸引用、URL 和本机路径均不能直接使用。
+最多 20 MiB、40 百万像素；Host 解码、去除元数据、缩放至 4K 范围，并复制到现有客户端壁纸媒体作用域。
+成功返回 `{ok:true}`，替换并选中执行电脑的自定义壁纸，保留可见度、模糊和其他外观偏好，
+使用现有外观通知刷新窗口。作用范围是该 Cindy 桌面客户端的所有账号，不是 OS 桌面，
+也不会修改手机或控制端电脑的壁纸。
+
+失败返回 `{ok:false,errorCode}`：未声明／未批准／停用／更新或账号切换导致权限失效，
+以及无权读取该图片时为 `PERMISSION_DENIED`；参数或图片无效为 `INVALID_PARAMS`，
+其他壁纸请求正在进行为 `BUSY`，存储失败为 `INTERNAL`。解码与等待客户端锁后再次核验授权。
+下载失败不要调用本接口；应用失败尽力恢复原图片，沿用已有媒体回收机制。
+插件负责每日图片来源和检查时机，不需要调用模型。未升级到支持此接口的 Host 应提示不支持，
+不要通过修改配置文件或调用应用内部 IPC 绕过。

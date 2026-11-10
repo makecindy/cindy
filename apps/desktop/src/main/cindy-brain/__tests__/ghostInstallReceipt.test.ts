@@ -397,6 +397,28 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { observeCapabilityApproved: true, revision: receipt.revision } });
   });
 
+  // Unit: old Hosts retained unknown wallpaper fields. Upgrade must keep the
+  // receipt enabled without granting the new capability; other grants do not imply it.
+  it.each([undefined, true, false, 'legacy-value'])('loads historical wallpaper declaration %j without granting it', async wallpaper => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.schemaVersion = 3;
+    receipt.manifest.minCindyVersion = '0.1.61';
+    await store.write(receipt);
+    const file = path.join(stateRoot, 'hello.json');
+    const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    if (wallpaper !== undefined) raw.manifest.wallpaper = wallpaper;
+    await fs.promises.writeFile(file, JSON.stringify(raw));
+    const loaded = store.readForRecovery('hello');
+    expect(loaded.state).toBe('approved');
+    if (loaded.state !== 'approved') throw new Error('Legacy installation must remain usable');
+    expect(loaded.receipt.enabled).toBe(receipt.enabled);
+    expect(loaded.receipt.wallpaperCapabilityApproved).toBeUndefined();
+    if (wallpaper === true) {
+      await store.write({ ...loaded.receipt, wallpaperCapabilityApproved: true });
+      expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { wallpaperCapabilityApproved: true, revision: receipt.revision } });
+    }
+  });
+
   it('round trips companions approval without inferring it from other grants', async () => {
     const receipt = createSetupReceipt();
     receipt.manifest.agent = { tasks: true, observe: true, companions: true };

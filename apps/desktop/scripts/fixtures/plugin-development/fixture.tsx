@@ -60,7 +60,7 @@ mountPage({
       onViewLocal={noop} onSubmitUpdate={async instanceId => { document.documentElement.dataset.submittedInstance = instanceId; return false; }} />
     : ctx.case === 'permissions'
     ? <main className="mx-auto max-w-xl p-6"><GhostInstallConsentContent facts={{ kind: 'install', ghostId: ghost.manifest.id,
-      name: ghost.manifest.name, version: ghost.manifest.version, permissions: ghostPermissionItems(ghost.manifest) }} /></main>
+      name: ghost.manifest.name, version: ghost.manifest.version, permissions: ghostPermissionItems({ ...ghost.manifest, wallpaper: true }) }} /></main>
     : <GhostPluginDetailView ghost={ctx.case === 'market' ? marketGhost : ghost}
       detail={toGhostPluginDetail(ctx.case === 'market' ? marketGhost : ghost)} panelStatus={null}
       onBack={noop} onToggle={noop} onUse={noop} onUpdate={noop} onUpdateFromFile={noop} onUninstall={noop} toggleDisabled={false} />,

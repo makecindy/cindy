@@ -38,6 +38,7 @@ import {
   importCustomWallpaper,
   removeCustomWallpaper,
   prepareWallpaperImage,
+  setCustomWallpaperImage,
 } from '../custom-wallpaper';
 import {
   customWallpaperStore,
@@ -50,6 +51,8 @@ import {
   readClientWallpaperFile,
   listBlobFiles,
 } from '../cindy-media/blobStore';
+import { readAppearanceSettings, writeAppearanceSettingsPatch } from '../appearance-settings-store';
+import * as appearanceStore from '../appearance-settings-store';
 import * as recycler from '../cindy-media/recycler';
 
 beforeEach(() => {
@@ -346,4 +349,44 @@ describe('client-owned custom wallpaper lifecycle', () => {
     await expect(prepareWallpaperImage(Buffer.from('<svg/>'))).rejects.toThrow('INVALID_PARAMS');
     await expect(prepareWallpaperImage(Buffer.alloc(0))).rejects.toThrow('INVALID_PARAMS');
   });
+});
+
+// Plugin image API must activate the stored image without resetting effects, or preserve the old output on failure.
+it('applies validated plugin bytes through client media storage and preserves appearance effects', async () => {
+  await writeAppearanceSettingsPatch({ wallpaperId: 'none', wallpaperBlur: 12, wallpaperVisibility: 0.4 });
+  const bytes = await selectImage();
+  await setCustomWallpaperImage(bytes, () => {});
+  const settings = readAppearanceSettings();
+  expect(settings).toMatchObject({ wallpaperId: 'custom', wallpaperBlur: 12, wallpaperVisibility: 0.4 });
+  expect((await sharp((await readClientWallpaperFile(settings.customWallpaperUrl!)).buffer).metadata()).format).toBe('webp');
+  const old = readCustomWallpaperUrl();
+  await expect(setCustomWallpaperImage(Buffer.from('not an image'), () => {})).rejects.toThrow('INVALID_PARAMS');
+  expect(readCustomWallpaperUrl()).toBe(old);
+});
+
+it('keeps the previous image and selection if plugin activation fails', async () => {
+  await selectImage(); await importCustomWallpaper(parent);
+  await writeAppearanceSettingsPatch({ wallpaperId: 'none' });
+  const previous = readCustomWallpaperUrl();
+  const bytes = await selectImage('red');
+  vi.spyOn(appearanceStore, 'writeAppearanceSettingsPatch').mockRejectedValueOnce(new Error('disk full'));
+  await expect(setCustomWallpaperImage(bytes, () => {})).rejects.toThrow('disk full');
+  expect(readCustomWallpaperUrl()).toBe(previous);
+  expect(readAppearanceSettings().wallpaperId).toBe('none');
+  await expect(readClientWallpaperFile(previous)).resolves.toBeDefined();
+});
+
+// Unit: revocation after an awaited publication must compensate before broadcasting or recycling the old image.
+it.each([2, 3, 4])('restores the previous wallpaper when permission changes at publication checkpoint %s', async checkpoint => {
+  await selectImage(); await importCustomWallpaper(parent);
+  await writeAppearanceSettingsPatch({ wallpaperId: 'none' });
+  const previous = readCustomWallpaperUrl();
+  const bytes = await selectImage('red');
+  let checks = 0;
+  await expect(setCustomWallpaperImage(bytes, () => {
+    if (++checks === checkpoint) throw new Error('permission revoked');
+  })).rejects.toThrow('permission revoked');
+  expect(readCustomWallpaperUrl()).toBe(previous);
+  expect(readAppearanceSettings().wallpaperId).toBe('none');
+  await expect(readClientWallpaperFile(previous)).resolves.toBeDefined();
 });

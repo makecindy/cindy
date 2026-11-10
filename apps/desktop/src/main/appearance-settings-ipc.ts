@@ -199,6 +199,11 @@ function appearanceForWindow(
   };
 }
 
+/** Publish an already persisted local appearance change through the existing window filter. */
+export function broadcastAppearanceSettings(): void {
+  broadcast(readAppearanceSettings());
+}
+
 function broadcast(settings: AppearanceSettings): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!isTrustedAppearanceSettingsReadWindow(win)) continue;

@@ -2161,3 +2161,14 @@ describe('readme declarations', () => {
     ).toMatchObject({ ok: false, reason: expect.stringContaining('readme.en') });
   });
 });
+
+// Unit: the new wallpaper declaration must survive protocol validation; malformed new packages are rejected.
+it('validates the optional wallpaper capability without changing existing manifests', () => {
+  const { slots: _slots, ...rest } = validManifest;
+  const base = { ...rest, schemaVersion: 3, minCindyVersion: '0.1.129' };
+  expect(validateGhostManifest({ ...base, wallpaper: true })).toMatchObject({ ok: true, manifest: { wallpaper: true } });
+  const old = validateGhostManifest(base);
+  expect(old.ok && old.manifest).not.toHaveProperty('wallpaper');
+  for (const wallpaper of [false, 'true', {}, null])
+    expect(validateGhostManifest({ ...base, wallpaper }).ok).toBe(false);
+});

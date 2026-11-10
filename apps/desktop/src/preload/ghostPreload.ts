@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { GhostPipeWallpaperRequest } from '../shared/ghost.js';
 import type { PluginModelPickerOptions, PluginModelPickerResult } from '../shared/pluginModelPicker';
 
 /**
@@ -69,6 +70,8 @@ contextBridge.exposeInMainWorld('cindy', {
   },
   fs: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'fs-request' }),
+  wallpaper: (req: Omit<GhostPipeWallpaperRequest, 'type'>): Promise<unknown> =>
+    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'wallpaper-request' }),
   deviceSync: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'device-sync-request' }),
   library: (req: Record<string, unknown>): Promise<unknown> =>

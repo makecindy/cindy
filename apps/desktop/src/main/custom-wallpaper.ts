@@ -1,5 +1,6 @@
 import { dialog, type BrowserWindow } from 'electron';
 import sharp from 'sharp';
+import { MAX_WALLPAPER_IMAGE_BYTES as MAX_BYTES } from '../shared/appearanceSettings.js';
 
 import { readBoundedFileNoFollow } from './utils/readBoundedFile.js';
 import { throwIpcError } from './utils/ipcValidate.js';
@@ -12,9 +13,9 @@ import {
 } from './custom-wallpaper-settings.js';
 import { sniffMediaMime } from './cindy-media/sniffMediaMime.js';
 import { createLogger } from './logger.js';
+import { readAppearanceSettings, writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
 const log = createLogger('custom-wallpaper');
-const MAX_BYTES = 20 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
 /** Decode real raster bytes, apply orientation, strip metadata and retain a static 4K preview. */
@@ -62,14 +63,49 @@ export async function importCustomWallpaper(parent: BrowserWindow): Promise<bool
   }
   const isVideo = sniffMediaMime(bytes) === 'video/mp4';
   const buffer = isVideo ? bytes : await prepareWallpaperImage(bytes);
+  return saveWallpaper(buffer, isVideo ? 'video/mp4' : 'image/webp');
+}
+
+/** Plugin bytes follow the native decoder/storage path; authorization is rechecked at commit. */
+export async function setCustomWallpaperImage(
+  bytes: Buffer,
+  assertCurrent: () => void,
+): Promise<void> {
+  const buffer = await prepareWallpaperImage(bytes);
+  await saveWallpaper(buffer, 'image/webp', assertCurrent);
+}
+
+async function saveWallpaper(
+  buffer: Buffer,
+  mimeType: 'image/webp' | 'video/mp4',
+  assertCurrent?: () => void,
+): Promise<boolean> {
   return withClientWallpaperLock(async () => {
-    const media = await ingestClientWallpaper({
-      buffer,
-      mimeType: isVideo ? 'video/mp4' : 'image/webp',
-    });
+    assertCurrent?.();
+    const previous = assertCurrent ? readAppearanceSettings() : undefined;
+    const media = await ingestClientWallpaper({ buffer, mimeType });
     try {
+      assertCurrent?.();
       await customWallpaperStore.writePatchAtomic({ url: media.url });
+      assertCurrent?.();
+      if (previous && previous.wallpaperId !== 'custom') {
+        assertCurrent?.();
+        await writeAppearanceSettingsPatch({ wallpaperId: 'custom' });
+        assertCurrent?.();
+      }
     } catch (error) {
+      // The previous blob has not been recycled yet. Restore its reference on
+      // failed plugin activation (including revocation while waiting for IO).
+      if (previous) {
+        try {
+          await customWallpaperStore.writePatchAtomic({ url: previous.customWallpaperUrl ?? '' });
+          if (previous.wallpaperId !== 'custom' && readAppearanceSettings().wallpaperId === 'custom')
+            await writeAppearanceSettingsPatch({ wallpaperId: previous.wallpaperId });
+        } catch {
+          // Keep both blobs if compensation fails; do not risk deleting the old image.
+          throw error;
+        }
+      }
       // A reported failure may follow publication: re-read durable references.
       // Unreadable references defer cleanup rather than risking the current media.
       await recycleUnusedWallpapers();
