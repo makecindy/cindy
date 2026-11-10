@@ -12,24 +12,21 @@ import {
 import {
   ArrowLeft,
   BatteryCharging,
-  Check,
-  ChevronDown,
   ChevronRight,
-  ChevronUp,
   Keyboard,
   RotateCcw,
   Usb,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { SelectParts as Select } from '@/components/ui/select';
+import { Select, type SelectProps } from '@/components/ui/select';
+import { Tip } from '@/components/ui/tooltip';
 import { SETTINGS_ROW_LABEL_CLASS, SettingsCard, SettingsPageHeader, SettingsPageScope, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useCodexMicroGuard } from '@/hooks/useCodexMicroGuard';
 import { useWorkLouderCodex } from '@/hooks/useWorkLouderCodex';
 import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
 import { SegmentedControl } from '@/components/ui/segmented-control';
-import { cn } from '@/lib/utils';
 import {
   WorkLouderCodexKeyboardLayout,
   WorkLouderCodexKeycapPicker,
@@ -662,11 +659,12 @@ export function WorkLouderCodexSettings({
                   `settings.shortcuts.workLouderCodex.agentKeys.source.descriptions.${settings.agentSource}`,
                 )}
                 trailing={
-                  <SelectControl
+                  <Select data-settings-search-action="Choose how device task keys are assigned"
+                    width="sm"
                     value={settings.agentSource}
                     disabled={!state || saving}
-                    ariaLabel={t('settings.shortcuts.workLouderCodex.agentKeys.source.label')}
-                    onChange={(value) =>
+                    label={t('settings.shortcuts.workLouderCodex.agentKeys.source.label')}
+                    onValueChange={(value) =>
                       void setSettings({ agentSource: value as WorkLouderCodexAgentSource })
                     }
                     options={WORKLOUDER_CODEX_AGENT_SOURCES.map((source) => ({
@@ -906,11 +904,12 @@ export function WorkLouderCodexSettings({
                 title={t('settings.shortcuts.workLouderCodex.encoder.mode.label')}
                 hint={t('settings.shortcuts.workLouderCodex.encoder.mode.description')}
                 trailing={
-                  <SelectControl
+                  <Select data-settings-search-action="Choose the device encoder mode"
+                    width="sm"
                     value={settings.layout.encoderMode}
                     disabled={!state || saving}
-                    ariaLabel={t('settings.shortcuts.workLouderCodex.encoder.mode.label')}
-                    onChange={(value) =>
+                    label={t('settings.shortcuts.workLouderCodex.encoder.mode.label')}
+                    onValueChange={(value) =>
                       patchLayout((layout) => {
                         layout.encoderMode = value as WorkLouderCodexLayout['encoderMode'];
                       })
@@ -1017,11 +1016,12 @@ export function WorkLouderCodexSettings({
                 title={t('settings.shortcuts.workLouderCodex.lighting.autoDim.label')}
                 hint={t('settings.shortcuts.workLouderCodex.lighting.autoDim.description')}
                 trailing={
-                  <SelectControl
+                  <Select data-settings-search-action="Choose when device lighting dims automatically"
+                    width="sm"
                     value={settings.lightingAutoDim}
                     disabled={!state || saving}
-                    ariaLabel={t('settings.shortcuts.workLouderCodex.lighting.autoDim.aria')}
-                    onChange={(value) =>
+                    label={t('settings.shortcuts.workLouderCodex.lighting.autoDim.aria')}
+                    onValueChange={(value) =>
                       void setSettings({ lightingAutoDim: value as WorkLouderCodexAutoDim })
                     }
                     options={WORKLOUDER_CODEX_AUTO_DIM_OPTIONS.map((option) => ({
@@ -1181,7 +1181,7 @@ function ActionSelect({
   className?: string;
 }) {
   const { t } = useTranslation();
-  const groups: SelectOptionGroup[] = [
+  const groups: NonNullable<SelectProps['groups']>[number][] = [
     {
       options: [
         { value: 'none', label: emptyLabel },
@@ -1229,117 +1229,16 @@ function ActionSelect({
     });
   }
   return (
-    <SelectControl
+    <Select
+      data-settings-search-action="Choose the action bound to this device input"
+      label={t('settings.shortcuts.workLouderCodex.actions.choose')}
       value={actionValue(action)}
       disabled={disabled}
-      ariaLabel={t('settings.shortcuts.workLouderCodex.actions.choose')}
-      onChange={(value) => onChange(parseActionValue(value, state, skills))}
-      className={cn('min-w-[190px]', className)}
+      onValueChange={(value) => onChange(parseActionValue(value, state, skills))}
+      width="sm"
+      className={className}
       groups={groups}
     />
-  );
-}
-
-interface SelectOption {
-  value: string;
-  label: string;
-  disabled?: boolean;
-}
-
-interface SelectOptionGroup {
-  label?: string;
-  options: SelectOption[];
-}
-
-function SelectControl({
-  value,
-  disabled,
-  ariaLabel,
-  onChange,
-  options,
-  groups,
-  className,
-}: {
-  value: string;
-  disabled: boolean;
-  ariaLabel: string;
-  onChange(value: string): void;
-  options?: SelectOption[];
-  groups?: SelectOptionGroup[];
-  className?: string;
-}) {
-  const resolvedGroups = groups ?? [{ options: options ?? [] }];
-  return (
-    <Select.Root value={value} onValueChange={onChange} disabled={disabled}>
-      <Select.Trigger
-        aria-label={ariaLabel}
-        className={cn(
-          'flex h-9 min-w-[150px] items-center justify-between gap-2 rounded-full border px-3 text-12',
-          'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-          'outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-          'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50',
-          className,
-        )}
-      >
-        <span className="min-w-0 truncate text-left">
-          <Select.Value />
-        </span>
-        <Select.Icon asChild>
-          <ChevronDown size={14} className="shrink-0 opacity-70" />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content
-          position="popper"
-          side="bottom"
-          align="end"
-          sideOffset={4}
-          className={cn(
-            'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
-            'max-h-[min(15rem,var(--radix-select-content-available-height))]',
-            'border-[var(--border-default)] bg-[var(--surface-elevated)]',
-          )}
-        >
-          <Select.ScrollUpButton className="flex h-5 items-center justify-center text-[var(--text-tertiary)]">
-            <ChevronUp size={14} />
-          </Select.ScrollUpButton>
-          <Select.Viewport>
-            {resolvedGroups.map((group, groupIndex) => (
-              <Select.Group key={group.label ?? `group-${groupIndex}`}>
-                {group.label && (
-                  <Select.Label className="px-2.5 py-1 text-11 text-[var(--text-tertiary)]">
-                    {group.label}
-                  </Select.Label>
-                )}
-                {group.options.map((option) => (
-                  <Select.Item
-                    key={option.value}
-                    value={option.value}
-                    disabled={option.disabled}
-                    className={cn(
-                      'flex w-full cursor-pointer select-none items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-12 outline-none',
-                      'text-[var(--text-primary)]',
-                      'data-[state=checked]:font-medium',
-                      'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50',
-                    )}
-                  >
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                      <Select.ItemIndicator>
-                        <Check size={14} strokeWidth={2.25} />
-                      </Select.ItemIndicator>
-                    </span>
-                    <Select.ItemText>{option.label}</Select.ItemText>
-                  </Select.Item>
-                ))}
-              </Select.Group>
-            ))}
-          </Select.Viewport>
-          <Select.ScrollDownButton className="flex h-5 items-center justify-center text-[var(--text-tertiary)]">
-            <ChevronDown size={14} />
-          </Select.ScrollDownButton>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
   );
 }
 
@@ -1359,19 +1258,21 @@ function SettingsResetButton({
   disabled?: boolean;
   onClick: () => void;
 }) {
+  // Page/section reset (CONTROLS decision 3): sm secondary Button, icon + text; extra context in a Tip.
   return (
-    <Button
-      variant="secondary"
-      size="md"
-      compact
-      type="button"
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      <RotateCcw size={13} aria-hidden />
-      {label}
-    </Button>
+    <Tip text={title}>
+      <Button data-settings-search-action="Restore the device page or layout defaults"
+        variant="secondary"
+        size="sm"
+        compact
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+      >
+        <RotateCcw size={14} aria-hidden />
+        {label}
+      </Button>
+    </Tip>
   );
 }
 

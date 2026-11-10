@@ -176,7 +176,8 @@ describe("DS-8 production source", () => {
       ts.forEachChild(node, visit);
     };
     visit(source);
-    expect(new Set(ids).size).toBe(576);
+    // The approved provenance marks add eight roles; all prior IDs remain governed.
+    expect(new Set(ids).size).toBe(584);
     expect(
       [
         ...Object.keys(bindings.defaults),

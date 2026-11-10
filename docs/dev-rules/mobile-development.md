@@ -127,6 +127,59 @@ Metro，那里没有 Metro 响应时才退回 `8081`。`8081` 属于其他任务
 
 ## 分层验证
 
+### iPhone 任务灵动岛
+
+`AgentActivityBridge` 注册独立的 ActivityKit start/update token；成功后由官方 Device Link
+服务按执行电脑上报的完整快照汇总并发送 APNs，手机挂起时也可以接收系统更新。
+旧服务端返回 404/405、旧原生包或自建中转时，保留 Home 与 host live-activity 的本地同步。
+`cindy-agent-activity` 用 ActivityKit 维护一个聚合活动；等待操作的任务优先，其次未读完成／错误
+结果，最后是运行中；标题、角色状态与点击目标使用同一优先级。排除缓存种子、未确认新建、归档
+和离线电脑的任务，结果已读后移除。
+内容只包含截断标题、本地化状态、任务数和带电脑 ID 的任务深链，不放工具参数或消息正文；
+锁屏标题使用系统 `privacySensitive()`。退出账号／切换账号会结束旧活动。
+
+WidgetKit 的收起、最小、展开与锁屏视图在 `plugins/usage-widgets/CindyAgentActivityWidget.swift`，
+复用已有扩展；ActivityAttributes 从原生模块复制到扩展编译，避免两份 schema 漂移。
+美术直接复用桌面角色目录中的 Cindy（手机版选定角色）：`node apps/mobile/scripts/export-agent-activity-artwork.mjs`
+调用桌面 helper 的 `--export-mascots`，导出含眼睛和姿态的三张静帧，并从桌面实时活动导出
+运行中橙／待处理青／完成绿的颜色目录；手机计数使用「待关注 · 运行中」，待关注包含等待操作和
+未读完成／错误结果。有等待操作时左侧为青色，否则为完成绿；例如一个未读结果和五个运行中
+显示绿色 `1` 与橙色 `5`，只有未读结果时也显示数量。左侧数量由既有总数减运行数得到，兼容旧活动数据。
+生成物随原生 Asset Catalog 编译，不另画手机角色。桌面角色或颜色更新后重跑导出并提交生成物；加 `--check`
+可在任意平台核验角色选择、源文件与生成物的哈希。手机固定使用 Cindy，不同步电脑的个性化皮肤选择。
+Android 与没有此模块的旧安装包不调用 ActivityKit。
+
+推送权限与实时活动权限分开：ActivityKit 读取系统 `areActivitiesEnabled`，不读取普通通知
+偏好，也不要求普通 APNs device token。iOS 17.2+ 注册 push-to-start token，iOS 18+ 声明
+`supportsInputPushToken`；较早系统须先前台创建活动，再注册该活动的 update token。
+没有新增 App 内开关，用户仍通过 iOS 的实时活动设置控制。关闭普通通知不会注销实时活动。
+APNs 环境复用普通推送的原生签名环境读取：development 对应 sandbox、production 对应 prod，
+不以 JavaScript 的 `__DEV__` 判断；环境未知时保留本地同步，关闭／注销不依赖环境读取成功。
+
+Desktop 仅在官方连接在线时上传本机完整活动摘要，排除远程镜像与群聊，不受 Home 分页或岛面
+显示 TTL 限制；一秒合并变化，相同摘要在一分钟心跳之前不重复发送，最多一条请求在途。
+服务端保存每台电脑的一份摘要和账号单调版本；角标只接受全部电脑在线且快照新鲜的完整汇总。
+灵动岛可展示在线电脑的任务；部分离线且在线任务为空时不发送结束，保留旧内容。
+服务端 APNs 内容的 `staleDate` 为发送时间加 150 秒；没有后续更新时，沿用最后一次内容的过期时间。
+账号切换／退出先清本地活动，再等待已发注册收尾并注销旧注册；原生用「端点＋账号」scope
+拒绝迟到的旧账号活动。离线注销不能撤回已被 APNs 接受的消息，新账号 token 注册会转移旧归属。
+用户手动移除活动后，本地与服务端均抑制重新创建，直到任务清空或重新登录；更新与结束不发提醒。
+原生将已观察到的移除账号 scope 保存在现有 UserDefaults 偏好中，进程重启后恢复；不保存 token。
+任务清空、账号清理或切换时同时清除该标记，旧账号迟到的移除事件不改写当前账号偏好。
+后台启动由系统决定，APNs 可能延迟、限频或丢失，不能承诺强杀后持续实时更新。
+本地降级模式的 `staleDate` 为更新时加 120 秒，前台每分钟续期，检测到连接中断则立即标记过期；
+账号清理与无任务结束不等待一秒合并。
+
+接口与发布顺序见[协议兼容的任务汇总与实时活动](protocol-compatibility.md#任务汇总与-activitykit-push2026-11-10未发布)。
+定向验证覆盖 token 轮换、旧服务端、自建中转跳过、账号切换与在途注册后注销；服务端另有真实
+PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成测试。原生编译不是系统
+推送验收：后台／冷启动、跨端已读与真实 APNs 仍需在部署后的签名安装包上核验。
+新增原生模块与扩展源码需要新 iOS 安装包，不能只发 OTA。共享 config plugin 的变更也会
+改变 Android 指纹（虽然没有新增 Android 功能），应随计划内双端原生发版交付；两端存量
+安装均需升级对应原生包才能继续接收新指纹的 OTA，PR 须按冷更边界写明原因、影响与发版节奏。
+原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台过期和关闭实时活动。
+TypeScript 测试不能替代这些原生验收。
+
 Release 构建必须使用 `NODE_ENV=production BABEL_ENV=production`，包括手动调用
 `xcodebuild`、Gradle 或 `expo export:embed --dev false`。Expo 会保留父进程的环境变量，
 因此 `__DEV__=false` 或 Xcode 的 Release 配置本身不能证明 Worklets 已按生产模式编译。
@@ -220,7 +273,7 @@ iOS 的系统选图器在确认后立即把选中项交给现有附件队列。�
 `useMobileLocalAttachments.ts`；回归：`deferredPhotoLibrary.test.ts`、
 `useMobileLocalAttachmentsAbandon.test.tsx`。新增原生模块需要冷更，不能作为旧安装包的 OTA
 独立交付；旧原生包缺模块时继续使用 Expo 选图入口。首次发布应随下一次 iOS 原生包交付，
-指纹与存量装机影响仍须按下文冷更门确认。Android 保持系统选图器和既有附件队列。
+指纹与存量装机影响仍须按下文冷更边界在 PR 中写明。Android 保持系统选图器和既有附件队列。
 
 ### 相册照片与视频附件
 
@@ -234,7 +287,7 @@ iOS 的 `CindyPhotoPicker.pickMedia` 在选择后立即把图片占位与视频�
 此回退在选择器内等原件就绪；新原生包保留延迟读取体验。原有 `pick` 方法继续提供照片选择合同，
 拍照仍仅拍照片，「文件」继续接收视频，不新增录像或专用视频编辑器。
 扩展原生模块会改变 iOS fingerprint，需随原生包发布，不能作为旧安装包的独立 OTA 交付；
-合并前遵守冷更确认门。Android 使用现有 Expo 系统混合选择器，无原生改动。
+PR 须按冷更边界写明原因、影响与发版节奏。Android 使用现有 Expo 系统混合选择器，无原生改动。
 
 实现：`modules/cindy-photo-picker/`、`deferredPhotoLibrary.ts`、`useMobileLocalAttachments.ts`；
 回归：`deferredPhotoLibrary.test.ts`、`useMobileLocalAttachmentsAbandon.test.tsx`。
@@ -567,12 +620,10 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
 - 确实必须冷更时(升原生依赖、改 config plugin / 原生模块、动 production 段 `app.json` /
   `eas.json`),PR Description 必须写明三件事:为什么冷更不可避免、存量装机影响范围、发版
   节奏建议。
-- **审查标准:会触发冷更的 PR 与技术框架变动同级,必须由仓库指定的把关人针对冷更明确
-  确认后才能合并。** 不看改动大小,也不看谁提的——提交者是不是维护者、有没有拿到普通
-  Approve、有没有被标回 Ready 都不构成例外;把关人自己提的 PR 同样要留下一条显式的冷更
-  确认。冷更 PR 可以保持 Ready 并正常进入自动审查,不因冷更要求新建讨论 issue 或转为
-  draft;冷更确认可直接留在 PR 中。未确认前不得合并(包括自动合并),把关人名单与确认
-  判定细则属维护者内部 gate。若同时命中其他独立的讨论或草稿门禁,仍按对应规则处理。
+- **审查标准:会触发冷更的 PR 按普通流程审查与合并,不需要指定把关人另外确认。** 审查时
+  逐条核对:是否确实必须冷更(同样效果能用不动指纹的写法达成时,要求改写),PR Description
+  是否写全上面三件事。冷更 PR 可以保持 Ready 并正常进入自动审查,不因冷更要求新建讨论
+  issue 或转为 draft。若同时命中其他独立的讨论、草稿或确认门禁,仍按对应规则处理。
 - 提交前自查:在改动前后各跑一次
   `node apps/mobile/scripts/ci-fingerprint.mjs compute --output <file>` 并比对 hash。PR 上
   出现 fingerprint guard 的 sticky comment 时,以它给出的 base(main) vs 合并结果对比为准。
@@ -585,7 +636,7 @@ Mobile 用 `runtimeVersion.policy: "fingerprint"`:OTA 热更只在**指纹一致
   `fingerprintConfig.test.ts` 校验排除文件的完整 macOS 编译保护，并使用 Expo 哈希器
   验证两端的排除项与保留项。移除平台保护或让手机依赖这些文件前，必须同步移除排除项。
   **首次采用此边界仍改变旧指纹**，须随计划内原生发版迁移；它只避免迁移后桌面专用
-  修改反复触发手机冷更，不为旧安装包伪造兼容 runtime，也不豁免上面的冷更确认门。
+  修改反复触发手机冷更，不为旧安装包伪造兼容 runtime，也不豁免上面的冷更说明要求。
 - 改 `app.json` / `app.config.js` 前先判断是否会动指纹。被哈希的是**解析后的
   ExpoConfig**(app.config.js 的输出),不是源文件本身:凡进入 resolved config 的字段,
   改了值就会变指纹;只有被 app.config.js **覆写 / 剥离、传不到 resolved config** 的值才指纹
@@ -690,9 +741,9 @@ Android 后台连接默认「自动」：中国大陆账号、设备地区 CN、
 发行到 Play 前须完成对应前台服务用途申报。Doze、厂商电池策略和强行停止可能中断连接；FCM 也需要 Google
 服务及有效项目配置，不能承诺所有设备强杀后送达。
 
-本次 Swift 扩展、Android 原生模块和头像资源都需要新原生包，不能只发 OTA；按冷更门由指定把关人明确
-批准。上线顺序为服务端兼容接口／通道配置、各端原生包，再验证 token 注册、前后台、拒绝权限、预览关闭、
-停止后台连接、断网重连、通知点击定位及人／伙伴头像。旧服务端没有 chat push API 时手机保留已有任务通知。
+本次 Swift 扩展、Android 原生模块和头像资源都需要新原生包，不能只发 OTA；PR 须按冷更边界写明原因、
+存量装机影响与发版节奏。上线顺序为服务端兼容接口／通道配置、各端原生包，
+再验证 token 注册、前后台、拒绝权限、预览关闭、停止后台连接、断网重连、通知点击定位及人／伙伴头像。旧服务端没有 chat push API 时手机保留已有任务通知。
 
 普通任务直连新增 Android 原生接收器，必须随新 APK 冷更；旧包通过可选 native 方法检测继续使用原聊天接口，不能靠 OTA 获得任务直连。
 配套服务端先部署 SSE 和通知 ID，再发布 Android 新包。旧服务端 404 时后台退避一分钟并保留 FCM，不能把该状态记成直连可用。

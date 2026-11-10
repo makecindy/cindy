@@ -73,6 +73,7 @@ vi.mock('../../maker-host/shared-global-skills.js', () => ({
   prepareSharedGlobalSkillLinks: vi.fn(async () => ({ warnings: [] })),
   prepareSharedProjectSkillLinks: vi.fn(async () => ({ warnings: [] })),
   projectWorkingDirFromSkillPath: vi.fn(() => null),
+  shouldProjectToClaudeSkills: vi.fn(async () => true),
 }));
 
 function installEntry(version: string, overrides: Partial<StoredInstall> = {}): StoredInstall {

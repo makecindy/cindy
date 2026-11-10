@@ -246,7 +246,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       <SettingsSection title={t(key('replies'))}>
         <SettingsCard>
           <SettingsRow wrap title={t(shared('replyMode'))} hint={t(replyMode === 'all' ? shared('replyModeNote') : key('replyModeMentionedNote'))}
-            trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} className="h-8 max-w-[220px]"
+            trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} size="compact" className="max-w-[220px]"
               options={(['mentioned', 'all'] as const).map(value => ({ value, label: t(REPLY_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ replyMode: value as typeof replyMode })} />} />
           {group.supportsMentionAudiences && owner && <SettingsRow wrap title={t(shared('allowMentionAllBots'))} hint={t(shared('allowMentionAllBotsHint'))}
@@ -257,7 +257,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
           {/* Single-speaker servers always answer one teammate at a time, so there is no speaking mode. */}
           {!group.singleSpeaker && <SettingsRow wrap title={t(shared('speakingMode'))}
             hint={t(shared(speakingMode === 'auto' ? 'speakingModeAutoNote' : 'speakingModeSequentialNote'))}
-            trailing={<Select label={t(shared('speakingMode'))} value={speakingMode} disabled={busy} className="h-8 max-w-[220px]"
+            trailing={<Select label={t(shared('speakingMode'))} value={speakingMode} disabled={busy} size="compact" className="max-w-[220px]"
               options={(['auto', 'sequential'] as const).map(value => ({ value, label: t(SPEAKING_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ speakingMode: value as typeof speakingMode })} />} />}
         </SettingsCard>
@@ -266,7 +266,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       <SettingsSection title={t(key('work'))} caption={t(key('workCaption'))}>
         <SettingsCard>
           {companions.length > 0 && <SettingsRow wrap title={t('bots.groupChat.organizer')} hint={t(key('organizerHint'))}
-            trailing={<Select label={t('bots.groupChat.organizer')} value={group.organizerBotId ?? ''} disabled={busy} className="h-8 max-w-[220px]" truncateOptions
+            trailing={<Select label={t('bots.groupChat.organizer')} value={group.organizerBotId ?? ''} disabled={busy} size="compact" className="max-w-[220px]" truncateOptions
               options={activeCompanions.map(member => ({ value: member.botId, label: member.name }))}
               onValueChange={organizerBotId => void updateWorkSettings({ organizerBotId })} />} />}
           <SettingsRow wrap title={t(shared('projectDir'))} hint={t(key('projectDirHint'))}
@@ -449,7 +449,7 @@ function About({ topic, description, canEdit, onEdit }: { topic: string; descrip
       {topic && <p className="text-14 font-medium leading-[1.43] text-[var(--text-primary)] [overflow-wrap:anywhere]">{topic}</p>}
       {description && <p ref={text} className={cn('whitespace-pre-wrap text-13 leading-[1.54] text-[var(--text-secondary)] [overflow-wrap:anywhere]', topic && 'mt-1', !expanded && 'line-clamp-4')}>{description}</p>}
       {description && (overflows || expanded) && <button type="button" onClick={() => setExpanded(value => !value)}
-        className="mt-1.5 rounded text-13 font-medium leading-[1.38] text-[var(--text-primary)] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
+        className="mt-1.5 rounded-lg text-13 font-medium leading-[1.38] text-[var(--text-primary)] outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
         {t(key(expanded ? 'showLess' : 'showMore'))}</button>}
     </SettingsCard>
   </SettingsSection>;

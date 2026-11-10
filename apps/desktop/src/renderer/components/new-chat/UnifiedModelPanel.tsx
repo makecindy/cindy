@@ -1716,7 +1716,9 @@ export function UnifiedModelPanel({
                 : 'recommended';
             return (
               <ModelConfigFlyout
+                overlayContentClassName={overlayClassName}
                 entry={target.entry}
+                deviceId={deviceId}
                 config={config}
                 state={state}
                 sourceLabel={providerLabel(target.entry.providerId)}

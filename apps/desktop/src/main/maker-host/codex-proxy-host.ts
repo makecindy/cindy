@@ -27,7 +27,7 @@ import {
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody } from '@cindy/model-compat';
-import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
+import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { peekGrokAccessToken } from './grok-oauth-login.js';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -655,6 +655,24 @@ function reconcileResponsesReasoningEffort(
   return effort === body.reasoning.effort ? body : applyReasoningEffortOverride(body, effort ?? null);
 }
 
+/**
+ * 父任务存的是原生档位，出站前要先换成目标模型真正会发出的 HTTP 档。
+ * 收敛口径与 createProviderModelRewriteTransform 用的 reconcileOutboundReasoningEffort 相同：
+ * 目录声明了能力就按能力收敛（xhigh 落到只支持 low/high 的模型上是 high，
+ * ultra 不在声明里就落到最高兼容档）。目录没声明能力时原样保留，不猜。
+ */
+function httpEffortForRoute(
+  route: CodexSubagentRouteSnapshot,
+): CodexSubagentRouteSnapshot['reasoningEffort'] | undefined {
+  if (route.reasoningEffort === undefined) return undefined;
+  const model = getActiveCatalog().providers.find(provider => provider.id === route.providerId)
+    ?.models.codex?.find(candidate => candidate.id === route.catalogModel);
+  const efforts = model?.efforts ?? [];
+  if (efforts.length === 0) return route.reasoningEffort;
+  const resolved = reconcileOutboundReasoningEffort(route.reasoningEffort, efforts);
+  return resolved ?? null;
+}
+
 function observedReasoningEffort(body: Record<string, unknown>): string | undefined {
   if (!isPlainObject(body.reasoning) || typeof body.reasoning.effort !== 'string') {
     return undefined;
@@ -676,6 +694,23 @@ function recordObservedSubagentIdentity(
   });
 }
 
+/**
+ * 观察点必须落在整条出站链之后。前面的强制路由会先盖上父任务存档档位
+ * （例如 xhigh），createProviderModelRewriteTransform 才按目标模型能力
+ * 收敛成真正发出去的档。卡片读的是这份观察值，记早了就会展示模型没跑过的档。
+ */
+function createObservedSubagentIdentityTransform(): RequestTransform {
+  return (body, ctx) => {
+    if (!isPlainObject(body) || typeof body.model !== 'string') return null;
+    recordObservedSubagentIdentity(
+      ctx.headers,
+      body.model,
+      observedReasoningEffort(body),
+    );
+    return null;
+  };
+}
+
 export function getObservedCodexSubagentIdentity(
   childThreadId: string,
 ): CodexObservedSubagentIdentity | undefined {
@@ -683,9 +718,9 @@ export function getObservedCodexSubagentIdentity(
 }
 
 /**
- * Codex Subagent 请求的统一观察/路由入口。旧固定路由按冻结快照替换模型；智能
- * 调配按 Codex 在 spawn_agent 中实际选出的 model 查 Provider。没有 Cindy 路由时
- * 也记录原生 Sol/Terra 的真实请求身份，供卡片展示。必须放在 Provider 兼容层之前。
+ * Codex Subagent 请求的统一路由入口。旧固定路由按冻结快照替换模型；智能调配按
+ * Codex 在 spawn_agent 中实际选出的 model 查 Provider。必须放在 Provider 兼容层之前，
+ * 身份记录则等整条出站链收敛后再做（createObservedSubagentIdentityTransform）。
  */
 function createForcedSubagentRequestTransform(): RequestTransform {
   return (body, ctx) => {
@@ -695,25 +730,15 @@ function createForcedSubagentRequestTransform(): RequestTransform {
     const requestedModel = typeof body.model === 'string' ? body.model : '';
     const route = subagentRouteFromHeaders(ctx.headers)
       ?? smartSubagentRouteFromHeaders(ctx.headers, requestedModel);
-    if (!route) {
-      recordObservedSubagentIdentity(
-        ctx.headers,
-        requestedModel,
-        observedReasoningEffort(body),
-      );
-      return null;
-    }
+    if (!route) return null;
     const next: Record<string, unknown> = {
       ...body,
       model: route.catalogModel,
     };
-    const routed = applyReasoningEffortOverride(next, route.reasoningEffort);
-    recordObservedSubagentIdentity(
-      ctx.headers,
-      route.catalogModel,
-      observedReasoningEffort(routed),
-    );
-    return routed;
+    // 父档位先按目标模型能力收敛成真正会发出的 HTTP 档，再盖到子请求上。
+    // 同供应商也要盖：spawn_agent 选的 low 不是父任务存的 high。
+    // ultra 在这里已经变成最高兼容档，不会再被字面写回。
+    return applyReasoningEffortOverride(next, httpEffortForRoute(route));
   };
 }
 
@@ -1284,6 +1309,7 @@ function createChatBridgeDecision(
         bridge: 'chat',
         providerId,
         upstreamBase: route.routing.upstream,
+        headers: ctx?.headers,
       });
       // 只把入站头快照交给 bridge 解析稳定会话 ID(→ x-opencode-session,#4073);bridge 不透传
       // 这些头,凭证与 Codex 账号头仍由 buildLocalHandlerHeaders 的隔离边界管。
@@ -1330,6 +1356,7 @@ interface PrepareLocalBridgeBodyOptions {
   bridge: 'chat' | 'anthropic';
   providerId: string;
   upstreamBase: string;
+  headers?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -1361,6 +1388,14 @@ function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
     if (isPlainObject(body) && typeof body.model === 'string') {
       body = reconcileProviderReasoningEffort(body, opts.providerId, body.model);
     }
+  }
+  // 本地桥不走共享 transform 链，档位收敛完就在这里记。卡片读到的是桥真正发出去的档。
+  if (isPlainObject(body) && typeof body.model === 'string' && opts.headers) {
+    recordObservedSubagentIdentity(
+      opts.headers,
+      body.model,
+      observedReasoningEffort(body),
+    );
   }
   if (opts.instructions && isPlainObject(body)) {
     const existing = body.instructions;
@@ -1606,6 +1641,7 @@ function createAnthropicBridgeDecision(
         bridge: 'anthropic',
         providerId,
         upstreamBase,
+        headers: ctx?.headers,
       });
       return handler.handle({ parsedBody: body, ctx, res });
     },
@@ -1838,6 +1874,67 @@ function createStrictGatewayHistoryCompatTransform(): RequestTransform {
     if (!isPlainObject(body) || typeof body.model !== 'string') return null;
     const routingModel = providerContextForRequest(ctx.headers, body.model).catalogModel;
     return normalizeStrictGatewayHistory(body, routingModel);
+  };
+}
+
+const DEEPSEEK_V41_GATEWAY_MODEL = 'deepseek/deepseek-v4.1-flash';
+
+/** Only the verified XD Responses route may change the order of this history. */
+function isDeepSeekV41GatewayReplay(
+  body: Record<string, unknown>,
+  ctx: RequestTransformCtx,
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): boolean {
+  if (
+    ctx.method !== 'POST' || ctx.url.split('?', 1)[0]?.replace(/\/+$/, '') !== '/responses' ||
+    body.model !== DEEPSEEK_V41_GATEWAY_MODEL
+  ) return false;
+  const { providerId, routing, catalogModel } = responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
+  if (catalogModel !== DEEPSEEK_V41_GATEWAY_MODEL || providerId !== 'xd' || !routing
+    || (routing.wireProtocol ?? 'openai-responses') !== 'openai-responses') return false;
+  const endpoint = claudeUpstreamEndpoint().trim();
+  if (!endpoint) return false;
+  try {
+    const expected = new URL(buildCodexGatewayBaseUrl(endpoint));
+    if (expected.protocol !== 'https:' && expected.protocol !== 'http:') return false;
+    // Routing preflight runs before the final upstream is selected. Once it is
+    // known, only the exact dynamic XD endpoint is eligible for the rewrite.
+    if (!ctx.upstreamBase) return true;
+    const actual = new URL(ctx.upstreamBase);
+    return actual.origin === expected.origin &&
+      actual.pathname.replace(/\/+$/, '') === expected.pathname.replace(/\/+$/, '') &&
+      actual.search === expected.search;
+  } catch {
+    return false;
+  }
+}
+
+function createDeepSeekV41ReplayTransform(frozenAuthInjection?: CodexProxyAuthInjection): RequestTransform {
+  const transform: RequestTransform = (body, ctx) => {
+    if (!isPlainObject(body) || !ctx.upstreamBase || !isDeepSeekV41GatewayReplay(body, ctx, frozenAuthInjection)) return null;
+    const result = normalizeDeepSeekV41ToolHistory(body);
+    // The routing preflight normally returns a local 400 first. Fail closed if
+    // another earlier transform changes a safe request into an ambiguous batch.
+    if (result.kind === 'invalid') throw new Error('deepseek_tool_output_order_invalid');
+    return result.kind === 'normalized' ? result.body : null;
+  };
+  transform.errorMode = 'reject-request';
+  return transform;
+}
+
+function rejectAmbiguousDeepSeekReplay(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      if (res.headersSent || res.destroyed) return;
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        error: {
+          type: 'invalid_request_error',
+          code: 'deepseek_tool_output_order_invalid',
+          message: 'Tool results in the conversation history are incomplete or ambiguous.',
+        },
+      }));
+    },
   };
 }
 
@@ -3028,7 +3125,6 @@ export function createModelRoutingTransform(
     if (customProviderRoute !== undefined) return customProviderRoute;
     // body 可能为 undefined —— 无 body 的 GET(典型: codex models-manager 的 `GET /models` 轮询,
     // 引擎现在也会对它跑路由)。不再因 body 非对象就短路;会话解析只依赖 headers,model 字段可选。
-    const gatewayKey = _readGatewayKey();
     const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
     const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
     const reportedModel =
@@ -3058,6 +3154,14 @@ export function createModelRoutingTransform(
       ? resolvePendingSessionRouteDecision(sessionId, model || undefined)
       : null;
     if (pendingRoute) return pendingRoute;
+    // Route and authorize the actual model first. A child or Guardian can be
+    // sent with its parent's model and rewritten before leaving the proxy.
+    if (model === DEEPSEEK_V41_GATEWAY_MODEL && isPlainObject(body)
+      && isDeepSeekV41GatewayReplay({ ...body, model }, ctx, authInjection)
+      && normalizeDeepSeekV41ToolHistory(body).kind === 'invalid') {
+      return rejectAmbiguousDeepSeekReplay();
+    }
+    const gatewayKey = _readGatewayKey();
     const selectedRouting = subagentRoute
       ? getProviderRoutingDescriptor(
           subagentRoute.providerId,
@@ -3317,6 +3421,7 @@ function createTransformRequestChain(
     // Providers that explicitly lack Responses custom tools still accept ordinary
     // functions. Adapt before provider sanitizers, then restore custom_tool_call
     // events on the matching response stream.
+    createDeepSeekV41ReplayTransform(frozenAuthInjection),
     execFunctionAdapterTransform,
     createStrictGatewayHistoryCompatTransform(),
     // Gateway / LiteLLM / 自定义 grok 不走 xAI 订阅 transform，但仍必须在
@@ -3352,6 +3457,9 @@ function createTransformRequestChain(
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
     transforms.push(createDumpTransform());
   }
+  // 档位与模型改写都在上面收敛。卡片读的观察身份必须是这份最终会发出去的值。
+  // 放在调试转储之后：转储只是旁路，不能盖掉它记下的出站身份。
+  transforms.push(createObservedSubagentIdentityTransform());
   return transforms;
 }
 
@@ -3536,7 +3644,21 @@ async function createCodexProxyHandle(
         scoped.onRequestSettled = transform.onRequestSettled;
         return scoped;
       },
-    ).concat((body, ctx) => crossProviderRequests.has(ctx.headers) ? null : frozenReasoning(body, ctx)),
+    ).concat((body, ctx) => {
+      // 同连接的命名空间路由不跑普通改写链，档位只在这条专用 transform 里收敛。
+      // 观察点必须排在它后面，卡片才读到真正发出去的档，而不是父任务存档档位。
+      if (crossProviderRequests.has(ctx.headers)) return null;
+      const reconciled = frozenReasoning(body, ctx);
+      const outgoing = isPlainObject(reconciled) ? reconciled : body;
+      if (isPlainObject(outgoing) && typeof outgoing.model === 'string') {
+        recordObservedSubagentIdentity(
+          ctx.headers,
+          outgoing.model,
+          observedReasoningEffort(outgoing),
+        );
+      }
+      return reconciled;
+    }),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);

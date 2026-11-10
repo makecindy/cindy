@@ -829,7 +829,10 @@
     "quotaReset": "尚餘 {{left}}%，{{reset}}後重置",
     "confirm": "改之",
     "remember": "改之，此後自動改（僅此差事）",
-    "cancel": "罷"
+    "cancel": "罷",
+    "disable": "此任務勿自動切換",
+    "disableFailed": "未能確認此選擇已存。請查連線，並確認任務所在電腦之 Cindy 已更新，再試。此訊仍照常送出。",
+    "moreOptions": "更多選項"
   },
   "messageEdit": {
     "editing": "方修此訊",
