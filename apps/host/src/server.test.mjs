@@ -253,6 +253,24 @@ test('unknown routes and internal failures stay JSON', async (t) => {
   const failed = await request('/sessions', { headers: { authorization: `Bearer ${TOKEN}` } });
   assert.equal(failed.status, 500);
   assert.equal(failed.body.error, 'internal_error');
+  assert.equal(failed.body.message, 'storage offline');
+});
+
+// Only an Error's message is part of the client contract. Any other thrown value
+// may stringify to a stack or an internal path, so no error body may echo it.
+test('thrown values that are not errors are never serialised to the client', async (t) => {
+  const raw = { toString: () => 'boom\n    at internal (/private/host/internal.js:1:1)' };
+  const request = await withServer(t, {
+    listSessions: () => { throw raw; },
+    capabilities: () => { throw raw; },
+  });
+  const headers = { authorization: `Bearer ${TOKEN}` };
+  const failed = await request('/sessions', { headers });
+  assert.equal(failed.status, 500);
+  assert.deepEqual(failed.body, { error: 'internal_error', message: 'Unexpected error' });
+  const capabilities = await request('/api/capabilities', { method: 'POST', headers, body: JSON.stringify({ agentKind: 'codex' }) });
+  assert.equal(capabilities.status, 404);
+  assert.deepEqual(capabilities.body, { error: 'agent_not_registered', message: 'Unexpected error' });
 });
 
 test('cross-engine switch returns a deferred intent and exposes it for the renderer', async (t) => {

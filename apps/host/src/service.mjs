@@ -1,3 +1,5 @@
+import { clientErrorMessage } from './client-error.mjs';
+
 /** Owner business operations shared by HTTP and authenticated Device Link.
  * Transport admission and owner leases belong to the caller. No synthetic HTTP
  * request, loopback bearer or renderer sender is created for remote clients.
@@ -253,7 +255,7 @@ export function createHostService(deps) {
         }
         catch (error) {
             const agentKind = String(body.agentKind ?? '');
-            const message = error instanceof Error ? error.message : String(error);
+            const message = clientErrorMessage(error);
             return { status: 404, body: { error: 'agent_not_registered', message: agentKind === 'pi' ? "Agent 'pi' is not registered" : message } };
         }
     }

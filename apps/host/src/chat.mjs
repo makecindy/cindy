@@ -11,6 +11,7 @@ import path from 'node:path';
 import { isSafeSessionPathSegment } from '../../desktop/src/main/sessionIds.ts';
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { isTerminalTurnErrorEvent } from '../../desktop/src/main/maker-ipc/sessionTurnActivityTracker.ts';
+import { clientErrorMessage } from './client-error.mjs';
 
 const MAX_PROMPT_CHARS = 100_000;
 
@@ -119,7 +120,7 @@ export function createChatHandler(deps) {
     } catch (error) {
       cleanup();
       if (!response.headersSent) response.writeHead(500, { 'content-type': 'text/event-stream; charset=utf-8' });
-      write({ type: 'error', reason: 'chat_failed', message: error instanceof Error ? error.message : String(error) });
+      write({ type: 'error', reason: 'chat_failed', message: clientErrorMessage(error) });
       end();
     }
   };

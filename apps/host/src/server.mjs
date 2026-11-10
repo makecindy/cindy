@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { isAuthorized } from './api-token.mjs';
+import { clientErrorMessage } from './client-error.mjs';
 import { createWebAuth, isLoopbackRequest, CONNECT_PAGE, CONNECT_SCRIPT } from './web-auth.mjs';
 import { buildWebShim } from './web-client-build.mjs';
 
@@ -316,7 +317,7 @@ export function createHostServer(input) {
         response.end();
         return;
       }
-      send(response, 500, { error: 'internal_error', message: error instanceof Error ? error.message : String(error) });
+      send(response, 500, { error: 'internal_error', message: clientErrorMessage(error) });
     } finally {
       finishOwnerRequest?.();
       activeRequests--;

@@ -90,3 +90,12 @@ test('a rejected durable enqueue closes the stream and leaves no subscription', 
   assert.equal(h.events.size(), 0);
   assert.equal(h.response.writableEnded, true);
 });
+
+test('a rejection that is not an error is reported without echoing the thrown value', async () => {
+  const h = harness({ enqueue: async () => { throw { toString: () => 'at internal (/private/host/internal.js:1:1)' }; } });
+  await h.handler(request({ sessionId: 's1', prompt: 'hello' }), h.response);
+  const stream = h.writes.join('');
+  assert.match(stream, /"reason":"chat_failed"/);
+  assert.match(stream, /"message":"Unexpected error"/);
+  assert.doesNotMatch(stream, /internal\.js/);
+});
