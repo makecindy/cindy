@@ -59,8 +59,9 @@ function dayMonies(rows: readonly SpendRow[]): RegionalMoney[] {
  * 一天可能有多个币种行(换号 / 跨租户 / 上游漏发币种)。展示侧仍是单币种，按账本币种
  * 挑那一行；账本币种缺席时 addCompatibleRegionalMoney 会挑真实计费里的第一种。
  *
- * 不做跨币种求和 —— 汇率是估算，混加会把两笔精确账单变成一个谁也对不上的数。挑不中的
- * 行留在库里，账本币种切回去时自然重新可见。
+ * 此函数也用于 incrementDailySpend 的写入回执，保留原币种选择，不引入汇率估算。
+ * 图表读取 getAllSpendDays 的原始币种行，在 usageHistory 中通过 toLedgerCurrency
+ * 按既有固定汇率换算：永久切换结算源后，不能假设切回旧币种才显示历史。
  *
  * **币种参数必须由调用方显式传入**：折叠是一个依赖账本币种的决定，而账本币种在冷启动
  * 期间要等报价快照恢复才确定。此前这里直接读 currentLedgerCurrency()，于是
