@@ -1,6 +1,6 @@
 import { usePreviewFocusReturn } from './PreviewChrome';
 import { ActivePreviewCollection } from './AttachmentCollectionContext';
-import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { useTranslation } from 'react-i18next';
@@ -11,9 +11,11 @@ import { FileBodyView } from '@/features/cc-agent/workdir-browse/FileBodyView';
 import { useFileContent } from '@/features/cc-agent/workdir-browse/hooks/useFileContent';
 import { isImagePath } from '@/features/cc-agent/workdir-browse/lib/imageExt';
 import { isPdfPath } from '@/features/cc-agent/workdir-browse/lib/pdfExt';
+import { isManagedFileUrl } from '@/lib/markdownTarget';
+import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { toLocalFileUrl } from '@/lib/localPathResolver';
 import { fetchChatFileToCache } from '@/lib/remoteFileOpen';
-import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
+import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { toast } from '@/lib/toast';
 import {
   isSafetyDowngradedAttachment,
@@ -30,7 +32,15 @@ import {
 } from './PreviewChrome';
 import { ImageLightbox } from './ImageLightbox';
 import { VideoLightbox } from './VideoLightbox';
-import { ModelLightbox } from './ModelLightbox';
+
+const ModelLoadFailed = () => {
+  const { t } = useTranslation();
+  return <div role="alert" className="flex h-full items-center justify-center">{t('chat.media.modelLoadFailed')}</div>;
+};
+// A failed chunk load must not escape Suspense into the route error page.
+const ModelPreview = lazy(() =>
+  import('./ModelPreview').then(module => ({ default: module.ModelPreview })).catch(() => ({ default: ModelLoadFailed })),
+);
 
 /** Binary files use the same origin resolver as text, then existing read-only renderers. */
 export function FileLightbox({
@@ -49,7 +59,12 @@ export function FileLightbox({
   const collection = useContext(ActivePreviewCollection);
   const ctx = useChatSessionFile();
   const remote = isRemoteFileOrigin(ctx.origin) ? ctx.origin : null;
-  const [local, setLocal] = useState<string | null>(remote ? null : filePath);
+  const managed = isManagedFileUrl(filePath);
+  const managedUrl = managed
+    ? rewriteToRemoteMediaOrigin(filePath, toRemoteMediaOrigin(ctx.origin, ctx.workingDir))
+    : null;
+  const sourceUrl = managedUrl && (!remote || managedUrl !== filePath) ? managedUrl : null;
+  const [local, setLocal] = useState<string | null>(remote || managed ? null : filePath);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
   const overlay = useRef<HTMLDivElement>(null);
@@ -57,6 +72,11 @@ export function FileLightbox({
   const kind = attachmentPreviewKind(filePath);
   const downloadOnly = isSafetyDowngradedAttachment({ name, path: filePath });
   useEffect(() => {
+    if (managed) {
+      setLocal(null);
+      setFailed(!sourceUrl);
+      return;
+    }
     if (!remote) {
       setLocal(filePath);
       return;
@@ -77,7 +97,8 @@ export function FileLightbox({
     return () => {
       cancelled = true;
     };
-  }, [remote, ctx.workingDir, filePath, retry]);
+  }, [remote, ctx.workingDir, filePath, retry, managed, sourceUrl]);
+  const url = sourceUrl ?? (local ? toLocalFileUrl(local) : null);
   const close = useCallback(() => {
     onClose();
     triggerRef?.current?.focus({ preventScroll: true });
@@ -95,44 +116,54 @@ export function FileLightbox({
       }
     };
     // Media viewers own their own keyboard scope.
-    if (local && ['image', 'video', 'audio', 'model'].includes(kind)) return;
+    if (url && ['image', 'video', 'audio'].includes(kind)) return;
     document.addEventListener('keydown', key);
     return () => document.removeEventListener('keydown', key);
-  }, [close, kind, local]);
+  }, [close, kind, url]);
   // 媒体走各自查看器,不读内容;其余文件在这里读一次,同时决定预览窗大小。
   const fileLocation =
     local && !['image', 'video', 'audio', 'model'].includes(kind) ? splitLocalPath(local) : null;
   const { content } = useFileContent(fileLocation?.workdir ?? '', fileLocation?.relPath ?? '');
+  // Unsupported formats keep file actions even when their bytes happen to be text.
+  const previewContent =
+    kind === 'file' && content.kind === 'text'
+      ? {
+          kind: 'binary' as const,
+          stat: {
+            relPath: content.relPath,
+            type: 'file' as const,
+            size: content.size,
+            mtimeMs: content.mtimeMs,
+          },
+        }
+      : content;
   // 打不开的文件(压缩包、可执行文件等)只有文件信息和打开方式,用小窗,不占大半个窗口。
   const unrenderable =
-    content.kind === 'binary' &&
-    !isImagePath(content.stat.relPath) &&
-    !isPdfPath(content.stat.relPath);
-  if (local && kind === 'image')
+    (managed && !['image', 'video', 'audio', 'model'].includes(kind)) ||
+    (kind !== 'model' && previewContent.kind === 'binary' &&
+      !isImagePath(previewContent.stat.relPath) &&
+      !isPdfPath(previewContent.stat.relPath));
+  if (url && kind === 'image')
     return (
       <ImageLightbox
-        src={toLocalFileUrl(local)}
+        src={url}
         filename={name}
         onClose={close}
         sessionId={ctx.sessionId}
       />
     );
-  if (local && (kind === 'video' || kind === 'audio'))
+  if (url && (kind === 'video' || kind === 'audio'))
     return (
       <VideoLightbox
         src={
           kind === 'audio'
-            ? toLocalFileUrl(local).replace('xdt-file:', 'xdt-audio:')
-            : toLocalFileUrl(local)
+            ? url.replace('xdt-file:', 'xdt-audio:')
+            : url
         }
         filename={name}
         kind={kind}
         onClose={close}
       />
-    );
-  if (local && kind === 'model')
-    return (
-      <ModelLightbox filename={name} source={{ kind: 'local', absPath: local }} onClose={close} />
     );
   return createPortal(
     <>
@@ -156,12 +187,18 @@ export function FileLightbox({
         className={`z-[9999] text-[var(--text-primary)] outline-none ${PREVIEW_PANEL_CLASS}`}
         style={unrenderable ? previewCompactPanelStyle(collection ? 64 : 0) : PREVIEW_PANEL_STYLE}
       >
-        <div className={`absolute inset-0 pt-16 ${collection && kind !== 'pdf' ? 'pb-16' : ''}`}>
-          {fileLocation ? (
+        <div className={`absolute inset-0 pt-16 ${collection && kind !== 'pdf' && kind !== 'model' ? 'pb-16' : ''}`}>
+          {url && kind === 'model' ? (
+            <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+              <ModelPreview url={url} path={sourceUrl ? undefined : (local ?? undefined)} filename={name} />
+            </Suspense>
+          ) : managed && sourceUrl ? (
+            <div className="flex h-full items-center justify-center text-[var(--text-secondary)]">{name}</div>
+          ) : fileLocation ? (
             <FileBodyView
               workdir={fileLocation.workdir}
               relPath={fileLocation.relPath}
-              content={content}
+              content={previewContent}
               sessionId={ctx.sessionId}
               allowEdit={false}
             />
@@ -180,19 +217,19 @@ export function FileLightbox({
             </div>
           )}
         </div>
-        {kind !== 'pdf' ? <PreviewFooter collectionOnly /> : null}
+        {kind !== 'pdf' && kind !== 'model' ? <PreviewFooter collectionOnly /> : null}
         <PreviewHeader
           name={name}
           onClose={close}
           onSave={
-            local
+            url
               ? () => {
                   if (downloadOnly) {
                     void saveChatAttachmentWithToasts(ctx, { name, path: filePath });
                     return;
                   }
                   void window.electronAPI
-                    .saveMediaAs({ url: toLocalFileUrl(local) })
+                    .saveMediaAs({ url })
                     .catch(() => toast.error(t('chat.userMessage.attachmentSaveFailed')));
                 }
               : undefined
@@ -200,17 +237,21 @@ export function FileLightbox({
           menu={
             <>
               <DropdownMenuItem
-                disabled={!local || downloadOnly}
+                disabled={(!local && !(managed && !remote)) || downloadOnly}
                 onClick={() => {
-                  if (local) void window.electronAPI.openPath(local);
+                  if (managed && !remote) {
+                    void window.electronAPI.openMediaWithDefaultApp({ url: filePath })
+                      .catch(() => toast.error(t('logic.errors.openFileFailed')));
+                  } else if (local) void window.electronAPI.openPath(local);
                 }}
               >
                 {t('attachmentPreview.open')}
               </DropdownMenuItem>
               <DropdownMenuItem
-                disabled={!local || downloadOnly}
+                disabled={(!local && !(managed && !remote)) || downloadOnly}
                 onClick={() => {
-                  if (local) void window.electronAPI.showItemInFolder({ filePath: local });
+                  if (managed && !remote) void window.electronAPI.showItemInFolder({ url: filePath });
+                  else if (local) void window.electronAPI.showItemInFolder({ filePath: local });
                 }}
               >
                 {t('chat.lightbox.openInExplorer')}

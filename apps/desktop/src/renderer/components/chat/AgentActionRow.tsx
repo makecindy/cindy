@@ -154,21 +154,10 @@ const FILE_PATH_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'Read', 'edit', '
  */
 export type ToolMediaKind = 'image' | 'video' | 'audio';
 
-/**
- * 3D 模型文件元数据 (来自 poll_3d_result 的 _xdt_model_files)。
- *
- * 携带在对应预览图 ToolMediaItem 上 — ChatImageView 看到 modelFile 时
- * 点击路由到 ModelLightbox(3D 查看器),右键菜单从"复制图片 / 打开图片
- * 所在目录"换成"打开模型 / 打开模型所在目录" — 操作的是模型文件本体,
- * 不是预览图。与预览图按位配对(每任务 1 预览 + 1 模型)。
- *
- * 来源:意识链路(provider 'cindy'),GLB 已由意识落进媒体总仓,url 直接加载。
- * (老 lizi_mivo MCP 的 mivo provider 已随 MCP 退役下线,2026-07-13:历史
- * 消息里的 mivo 3D 预览降级为普通图片,不再懒下载模型文件。)
- */
+/** Historical tool metadata retained for callers; model posters use ordinary image actions. */
 export interface ToolMediaModelFileCindy {
   provider: 'cindy';
-  /** cindy-media://blobs/<指纹>.glb — <model-viewer> 可直接 fetch 的总仓地址。 */
+  /** Historical cindy-media://blobs/<指纹>.glb reference. */
   url: string;
   /** 模型格式(意识链路当前总是 'GLB')。 */
   format: string;
@@ -212,7 +201,7 @@ export interface ToolAudioTrack {
 export interface ToolMediaItem {
   kind: ToolMediaKind;
   url: string;
-  /** Optional 3D 模型文件引用 — image 类型且来自 mivo 3D 任务时存在。 */
+  /** Legacy metadata; ignored by the image viewer. */
   modelFile?: ToolMediaModelFile;
   /** Audio-only: full Suno track metadata for ChatAudioCard rendering. */
   audioTrack?: ToolAudioTrack;
@@ -226,27 +215,6 @@ export interface ToolMediaItem {
    *  对应图片地址才压基座渲染;验证不过照常渲染,图片永不消失。 */
   imageInCard?: boolean;
 }
-
-function parseModelFiles(raw: unknown): ToolMediaModelFile[] {
-  if (!Array.isArray(raw)) return [];
-  const out: ToolMediaModelFile[] = [];
-  for (const m of raw) {
-    if (typeof m !== 'object' || m === null) continue;
-    const mo = m as Record<string, unknown>;
-    if (mo.provider === 'cindy') {
-      // 意识链路:模型已在媒体总仓。只认 cindy-media 的 .glb 地址 —
-      // model-viewer 仅原生支持 glTF 系,且总仓扩展名白名单当前只收 .glb
-      // (.gltf 不在白名单,协议取件必失败,放行只会产出坏查看器)。
-      const url = typeof mo.url === 'string' ? mo.url : null;
-      if (!url?.startsWith('cindy-media://')) continue;
-      if (!url.toLowerCase().endsWith('.glb')) continue;
-      const format = typeof mo.format === 'string' && mo.format ? mo.format : 'GLB';
-      out.push({ provider: 'cindy', url, format });
-    }
-  }
-  return out;
-}
-
 /**
  * Parse the renderer-only `_xdt_audio_tracks` array from the tool result JSON
  * (emitted by mivo Suno poll_result). Coerces shapes and drops malformed
@@ -400,37 +368,24 @@ function extractParsedToolResultMedia(toolResult: string, parsed: Record<string,
   }
   try {
     if (parsed._xdt_render_image === false) return [];
-    const modelFiles = parseModelFiles(parsed._xdt_model_files);
-    // Track which image index we're at across xdt_image_url + xdt_image_urls
-    // so positional pairing with modelFiles works for both shapes.
-    let imageIdx = 0;
-    const nextModelFile = (): ToolMediaModelFile | undefined => {
-      const m = modelFiles[imageIdx];
-      imageIdx += 1;
-      return m;
-    };
     const items: ToolMediaItem[] = [];
     // 图片入卡令牌(xdt_images_in_card):与音频令牌同款「待验证声明」——
     // 提取层只打标不裁决,压不压基座由 MessageStream 验证锚卡真含对应图片
     // 后决定(验证不过照常渲染,图片永不消失)。手机端提取器不认该令牌。
     const imagesInCard = parsed.xdt_images_in_card === true;
     if (typeof parsed.xdt_image_url === 'string' && isToolImageUrl(parsed.xdt_image_url)) {
-      const modelFile = nextModelFile();
       items.push({
         kind: 'image',
         url: parsed.xdt_image_url,
-        ...(modelFile ? { modelFile } : {}),
         ...(imagesInCard ? { imageInCard: true } : {}),
       });
     }
     if (Array.isArray(parsed.xdt_image_urls)) {
       for (const u of parsed.xdt_image_urls) {
         if (typeof u === 'string' && isToolImageUrl(u)) {
-          const modelFile = nextModelFile();
           items.push({
             kind: 'image',
             url: u,
-            ...(modelFile ? { modelFile } : {}),
             ...(imagesInCard ? { imageInCard: true } : {}),
           });
         }

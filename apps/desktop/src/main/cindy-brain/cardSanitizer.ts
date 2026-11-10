@@ -58,8 +58,8 @@ const DROP_WITH_CONTENT = new Set([
 const IMG_SRC_RE = /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.(?:png|jpe?g|gif|webp)$/;
 
 /** img 的 data-ghost-model 唯一放行形态:媒体总仓 GLB 地址(整串精确匹配,
- *  与 img src 同一信任边界——内容寻址、只读协议)。声明后宿主点击桥把该
- *  预览图路由到应用内 3D 查看器(ModelLightbox)而非图片 lightbox。 */
+ *  与 img src 同一信任边界——内容寻址、只读协议)。仅保留历史卡片兼容；
+ *  图片点击不再解释该属性，模型改由普通文件链接打开。 */
 const IMG_MODEL_RE = /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.glb$/;
 
 /** div 的 data-ghost-audio 唯一放行形态:媒体总仓音频地址(扩展名对齐

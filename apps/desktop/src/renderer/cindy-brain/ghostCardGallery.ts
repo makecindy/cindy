@@ -19,7 +19,7 @@ export type GhostCardSpawnIndex = ReadonlyMap<string, readonly SpawnCard[]>;
 
 /**
  * Returns only images whose click route opens ImageLightbox. Action/link images
- * remain card controls, while model posters continue to open ModelLightbox.
+ * remain card controls; model posters are ordinary gallery images.
  */
 export function extractGhostCardGallerySrcs(html: string): string[] {
   const cardDocument = new DOMParser().parseFromString(html, 'text/html');
@@ -28,8 +28,7 @@ export function extractGhostCardGallerySrcs(html: string): string[] {
       const src = img.getAttribute('src')?.trim() ?? '';
       return (
         CINDY_MEDIA_IMAGE_RE.test(src) &&
-        !img.closest('[data-ghost-action], [data-ghost-link]') &&
-        !img.dataset.ghostModel
+        !img.closest('[data-ghost-action], [data-ghost-link]')
       );
     })
     .map((img) => img.getAttribute('src')!.trim());

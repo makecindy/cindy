@@ -11,6 +11,7 @@ import { afterAll, describe, it, expect, vi } from 'vitest';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
 import { createMcpAppsManualResolver } from '../mcpAppsManualHeaders';
+import * as ghostLimits from '../../../shared/ghost';
 import {
   GHOST_FETCH_DIR_UPLOAD_MAX_BYTES_PER_FILE,
   GHOST_FETCH_DIR_UPLOAD_MAX_TOTAL_BYTES,
@@ -140,6 +141,58 @@ function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
 }
 
 const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
+
+describe('model media downloads', () => {
+  it('accepts a model exactly at the byte cap and rejects one additional byte', async () => {
+    const limit = 16 * 1024;
+    const cap = vi.spyOn(ghostLimits, 'GHOST_FETCH_MEDIA_MAX_BYTES', 'get').mockReturnValue(limit);
+    try {
+      for (const extra of [0, 1]) {
+        const bytes = new Uint8Array(limit + extra);
+        bytes.set(new TextEncoder().encode('glTF'));
+        new DataView(bytes.buffer).setUint32(4, 2, true);
+        new DataView(bytes.buffer).setUint32(8, limit, true);
+        const { slot, saveGhostMedia } = makeSlot({
+          isSupportedMediaMime: mime => mime === 'model/gltf-binary',
+          fetchImpl: async () => new Response(new ReadableStream({ start(controller) {
+            controller.enqueue(bytes); controller.close();
+          } }), { headers: { 'content-type': 'model/gltf-binary' } }),
+        });
+        const result = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+        expect(result.ok && 'media' in result).toBe(extra === 0);
+        expect(saveGhostMedia).toHaveBeenCalledTimes(extra === 0 ? 1 : 0);
+      }
+    } finally { cap.mockRestore(); }
+  });
+
+  it.each([[true, true], [true, false], [false, true], [false, false]])('recognizes glTF with asset after the prefix (stream=%s, filename=%s)', async (stream, filename) => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ extras: 'x'.repeat(12000), asset: { version: '2.0' }, scenes: [{}] }));
+    const { slot, saveGhostMedia } = makeSlot({
+      isSupportedMediaMime: mime => mime === 'model/gltf+json',
+      fetchImpl: async () => stream
+        ? new Response(bytes, { headers: { 'content-type': 'application/octet-stream' } })
+        : fakeResponse({ headers: { 'content-type': 'application/octet-stream' }, body: toArrayBuffer(bytes) }),
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: filename ? 'https://api.search.brave.com/model.gltf' : BRAVE_URL, as: 'media' });
+    expect(result.ok && 'media' in result).toBe(true);
+    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({ mimeType: 'model/gltf+json', buffer: bytes }));
+  });
+
+  // Regression: a valid JSON model exceeding the prefix must not become truncated text.
+  it.each(['application/octet-stream', 'application/json', 'model/gltf+json'])('stores the complete streamed glTF with %s', async contentType => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ asset: { version: '2.0' }, extras: 'x'.repeat(12000), scenes: [{}] }));
+    const { slot, saveGhostMedia } = makeSlot({
+      isSupportedMediaMime: mime => mime === 'model/gltf+json',
+      fetchImpl: async () => new Response(new ReadableStream({ start(controller) {
+        for (let i = 0; i < bytes.length; i += 1024) controller.enqueue(bytes.slice(i, i + 1024));
+        controller.close();
+      } }), { headers: { 'content-type': contentType } }),
+    });
+    const result = await slot.handleFetchRequest('web-search', { url: BRAVE_URL, as: 'media' });
+    expect(result.ok && 'media' in result).toBe(true);
+    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({ mimeType: 'model/gltf+json', buffer: bytes }));
+  });
+});
 
 describe('network request installation binding', () => {
   it.each(['redirect-credential', '401-response'] as const)('does not dispatch or invalidate after replacement during %s', async (phase) => {

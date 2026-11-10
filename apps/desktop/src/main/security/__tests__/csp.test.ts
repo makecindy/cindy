@@ -113,6 +113,7 @@ describe('buildContentSecurityPolicy — shared invariants', () => {
       // governed by connect-src. Dropping this silently renders textured
       // GLBs as white models (texture failures are swallowed upstream).
       expect(d['connect-src']).toContain('blob:');
+      expect(d['connect-src']).toContain('data:');
     });
 
     it(`[${label}] allows WebAssembly (wasm-unsafe-eval) for 3D model decoders`, () => {

@@ -396,14 +396,8 @@ describe('ChatImageView', () => {
     expect(image.getAttribute('src')).toBe('cindy-remote-media://m/device/shot');
   });
 
-  // 点击路由:GLB/GLTF(model-viewer 可原生渲染)→ ModelLightbox;其它格式
-  // (FBX/OBJ 等)退回 2D ImageLightbox——FBX 应用内预览已被有意移除。
-  it.each([
-    ['GLB', true],
-    ['GLTF', true],
-    ['FBX', false],
-    ['OBJ', false],
-  ])('modelFile format %s → %s', (format, opensModel) => {
+  // Model thumbnails now follow ordinary image preview, including historical metadata.
+  it.each(['GLB', 'GLTF', 'FBX', 'OBJ'])('previews model thumbnail format %s as an image', (format) => {
     render(
       React.createElement(ChatImageView, {
         src: 'xdt-image://control/preview.png',
@@ -415,11 +409,12 @@ describe('ChatImageView', () => {
     );
     fireEvent.load(screen.getByAltText('preview.png'));
     fireEvent.click(screen.getByRole('button', { name: 'preview.png' }));
-    expect(screen.queryByTestId('model-lightbox') !== null).toBe(opensModel);
+    expect(screen.queryByTestId('model-lightbox')).toBeNull();
+    expect(screen.getByTestId('image-lightbox')).toBeTruthy();
   });
 
-  // cindy 来源(意识 3D 链路):GLB 已在媒体总仓,点击同样进 ModelLightbox。
-  it('cindy modelFile → 点击预览图打开 ModelLightbox', () => {
+  // Historical managed-model metadata does not change image preview behavior.
+  it('cindy modelFile → 点击预览图打开普通图片预览', () => {
     render(
       React.createElement(ChatImageView, {
         src: 'cindy-media://blobs/' + 'e'.repeat(64) + '.png',
@@ -435,7 +430,8 @@ describe('ChatImageView', () => {
     );
     fireEvent.load(screen.getByAltText('preview.png'));
     fireEvent.click(screen.getByRole('button', { name: 'preview.png' }));
-    expect(screen.queryByTestId('model-lightbox')).not.toBeNull();
+    expect(screen.queryByTestId('model-lightbox')).toBeNull();
+    expect(screen.getByTestId('image-lightbox')).toBeTruthy();
   });
   it.each(['Enter', ' '])('键盘 %s 可打开图片、保持 gallery 定位并在关闭后恢复焦点', (key) => {
     render(React.createElement(ChatImageView, {

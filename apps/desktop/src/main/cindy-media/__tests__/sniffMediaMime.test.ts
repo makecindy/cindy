@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import JSZip from 'jszip';
 
 import { sniffMediaMime } from '../sniffMediaMime';
 
@@ -100,6 +101,49 @@ function glb(version = 2, length = 12): Uint8Array {
 }
 
 describe('sniffMediaMime', () => {
+  // Admission boundary: model bytes must be recognized without trusting a suffix or MIME.
+  it('recognizes model structures and rejects ordinary JSON, XML and ZIP', async () => {
+    const stl = new Uint8Array(134);
+    new DataView(stl.buffer).setUint32(80, 1, true);
+    const fbx = new Uint8Array(32);
+    fbx.set(ascii('Kaydara FBX Binary  '));
+    fbx[21] = 0x1a;
+    const studio = new Uint8Array(12);
+    studio.set([0x4d, 0x4d]);
+    new DataView(studio.buffer).setUint32(2, 12, true);
+    new DataView(studio.buffer).setUint32(8, 6, true);
+    const models: Array<[Uint8Array, string]> = [
+      [ascii('{"asset":{"version":"2.0"},"scenes":[{}]}'), 'model/gltf+json'],
+      [ascii('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'), 'model/obj'],
+      [fbx, 'model/fbx'],
+      [stl, 'model/stl'],
+      [ascii('solid sample\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid sample\n'), 'model/stl'],
+      [ascii('ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n0 0 0\n'), 'model/ply'],
+      [ascii('<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema"><library_geometries/></COLLADA>'), 'model/vnd.collada+xml'],
+      [studio, 'model/3ds'],
+    ];
+    for (const [bytes, mime] of models) expect(sniffMediaMime(bytes)).toBe(mime);
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', '<Types><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>');
+    zip.file('3D/3dmodel.model', '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"/>');
+    expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))).toBe('model/3mf');
+    zip.file('3D/3dmodel.model', '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' + ' '.repeat(1_300_000) + '</model>');
+    expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))).toBe('model/3mf');
+    zip.file('3D/3dmodel.model', '<!--' + 'x'.repeat(5000) + '-->' + '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"/>');
+    expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array', compression: 'STORE' }))).toBe('model/3mf');
+    zip.file('3D/3dmodel.model', 'hello');
+    expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))).toBeNull();
+    zip.file('3D/3dmodel.model', '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"/>');
+    zip.remove('3D/3dmodel.model');
+    expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array' }))).toBeNull();
+    expect(sniffMediaMime(ascii('{"asset":{"version":"2.0"},"status":"processing"}'))).toBeNull();
+    for (const invalid of [{ nodes: [null] }, { nodes: [1] }, { scenes: [{ nodes: ['bad'] }] }, { buffers: [{}] }, { meshes: [{}] }]) {
+      expect(sniffMediaMime(ascii(JSON.stringify({ asset: { version: '2.0' }, ...invalid })))).toBeNull();
+    }
+    expect(sniffMediaMime(ascii('<html><COLLADA/></html>'))).toBeNull();
+    expect(sniffMediaMime(stl.subarray(0, 100))).toBeNull();
+    expect(sniffMediaMime(ascii('solid fake\nfacet normal junk outer loop vertex junk endloop endfacet\nendsolid fake\n'))).toBeNull();
+  });
   it('recognizes the cindy-media image formats', () => {
     expect(sniffMediaMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe('image/png');
     expect(sniffMediaMime(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg');

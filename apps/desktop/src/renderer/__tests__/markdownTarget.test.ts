@@ -10,6 +10,16 @@ import {
 } from '../lib/markdownTarget';
 
 describe('splitLocalLineSuffix', () => {
+  // User-requested generic managed-file entry; previously every blob link was inert (unit).
+  it('classifies managed blob links and inline references without treating them as filesystem paths', () => {
+    const href = 'cindy-media://blobs/' + 'a'.repeat(64) + '.glb';
+    expect(classifyMarkdownLinkTarget(href)).toEqual({ kind: 'media-file-url', href });
+    expect(classifyInlineCodeTarget(href)).toEqual({ kind: 'media-file-url', href });
+    for (const invalid of [href + '/other.glb', href.replace('blobs/', 'blobs/../'), 'cindy-media://blobs/short.glb']) {
+      expect(classifyMarkdownLinkTarget(invalid).kind).toBe('plain-text');
+    }
+  });
+
   it('parses path:line and path:line:column for local references', () => {
     expect(splitLocalLineSuffix('apps/desktop/src/App.tsx:42')).toEqual({
       href: 'apps/desktop/src/App.tsx',
@@ -168,25 +178,24 @@ describe('classifyMarkdownLinkTarget', () => {
     });
   });
 
-  it("classifies 3D model files as localKind 'model' (link + inline code)", () => {
+  it("uses the ordinary file target for model links and inline code", () => {
     expect(classifyMarkdownLinkTarget('~/Downloads/character.fbx')).toEqual({
       kind: 'local-candidate',
       href: '~/Downloads/character.fbx',
       originalHref: '~/Downloads/character.fbx',
-      localKind: 'model',
+      localKind: 'text',
     });
-    // .gltf 是 JSON 文本;model 判定必须先于 text fallback,否则会拿到 'text'。
     expect(classifyMarkdownLinkTarget('assets/scene.gltf')).toEqual({
       kind: 'local-candidate',
       href: 'assets/scene.gltf',
       originalHref: 'assets/scene.gltf',
-      localKind: 'model',
+      localKind: 'text',
     });
     expect(classifyInlineCodeTarget('/abs/models/char.glb')).toEqual({
       kind: 'local-candidate',
       href: '/abs/models/char.glb',
       originalHref: '/abs/models/char.glb',
-      localKind: 'model',
+      localKind: 'text',
     });
   });
 

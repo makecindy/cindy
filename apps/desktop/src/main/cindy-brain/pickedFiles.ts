@@ -6,6 +6,7 @@ import { acquireGhostDepositLock } from './ghostDepositQuota.js';
 import { GHOST_CINDY_DEPOSIT_MAX_BYTES, GHOST_CINDY_DEPOSIT_QUOTA_BYTES, type GhostPipePickResult } from '../../shared/ghost.js';
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
 import { supportedMime } from '../cindy-media/blobStore.desktop.js';
+import { isModelMediaCandidate } from '../cindy-media/modelMediaMime.js';
 import { validateLibraryRelPath, DEFAULT_LIBRARY_LIMITS } from './libraryVault.js';
 
 type Failure = Extract<GhostPipePickResult, { ok: false }>;
@@ -60,6 +61,17 @@ export async function importPickedFiles(deps: PickedFilesDeps, ghostId: string, 
           prefix = Buffer.alloc(mp3ProbeBytes);
           await source.read(prefix, 0, prefix.length, 0);
         }
+        // glTF JSON member order is arbitrary; the full read below is already bounded by `limit`.
+        if (input.into === 'media' && (isModelMediaCandidate(prefix) || /^\s*\{/.test(prefix.toString('utf8', 0, 4096)))) {
+          prefix = Buffer.alloc(stat.size);
+          let offset = 0;
+          while (offset < prefix.length) {
+            input.assertCurrent();
+            const chunk = await source.read(prefix, offset, prefix.length - offset, offset);
+            if (!chunk.bytesRead) throw new Error('FILE_CHANGED');
+            offset += chunk.bytesRead;
+          }
+        }
         const mediaMime = sniffMediaMime(prefix);
         const mimeType = mediaMime ?? (prefix.subarray(0, 5).toString() === '%PDF-' ? 'application/pdf' : 'application/octet-stream');
         const name = path.basename(sourcePath);
@@ -82,7 +94,7 @@ export async function importPickedFiles(deps: PickedFilesDeps, ghostId: string, 
           if (!saved.ok) return failure({ ok: false, errorCode: 'INTERNAL', message: saved.message });
           files.push({ name, size: stat.size, mimeType, ref: saved.ref, sha256: saved.sha256 });
         } else {
-          if (!mediaMime || !supportedMime(mediaMime)) return failure({ ok: false, errorCode: 'UNSUPPORTED', message: '媒体库只收按字节识别的图片、视频、音频或 glb' });
+          if (!mediaMime || !supportedMime(mediaMime)) return failure({ ok: false, errorCode: 'UNSUPPORTED', message: '媒体库只收按字节识别的图片、视频、音频或 3D 模型' });
           const release = await acquireGhostDepositLock(ghostId);
           try {
             input.assertCurrent();

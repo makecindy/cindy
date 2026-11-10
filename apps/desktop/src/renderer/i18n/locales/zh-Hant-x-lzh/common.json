@@ -13399,6 +13399,7 @@
       "openModelFailed": "模型未能開",
       "modelLoading": "方載 3D 模型…",
       "modelLoadFailed": "3D 模型載入未成",
+      "modelTooLarge": "此卷逾 {{maxSize}}，不可於應用內先覽。",
       "videoCopied": "影已錄",
       "copyVideo": "錄影",
       "revealVideo": "開影所在目錄",

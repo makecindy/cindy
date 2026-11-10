@@ -30,13 +30,14 @@ const ABSOLUTE_PATH_SHAPE_RE = /^(?:file:\/\/|\/|[A-Za-z]:[\\/])/i;
 const POSITIVE_LINE_NUMBER_RE = /^[1-9]\d{0,6}$/;
 const LINE_RANGE_SUFFIX_RE = /^([1-9]\d{0,6})-([1-9]\d{0,6})$/;
 
-export type MarkdownLocalKind = 'image' | 'model' | 'text' | 'directory';
+export type MarkdownLocalKind = 'image' | 'text' | 'directory';
 
 export type MarkdownTarget =
   | { kind: 'external'; href: string }
   | { kind: 'anchor'; id: string; href: string }
   | { kind: 'audio'; href: string }
   | { kind: 'local-image-url'; href: string }
+  | { kind: 'media-file-url'; href: string }
   | {
       kind: 'resolved-local';
       href: string;
@@ -63,6 +64,11 @@ export type MarkdownTarget =
       href: string;
       reason: 'empty' | 'unsupported-scheme' | 'not-a-target';
     };
+
+/** Managed blob identity only; filesystem access stays with the existing media host. */
+export function isManagedFileUrl(value: string): boolean {
+  return /^cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-z0-9]+$/.test(value);
+}
 
 export interface ParsedLineSuffix {
   href: string;
@@ -149,7 +155,6 @@ function decodeAnchorId(value: string): string {
 
 function toMarkdownLocalKind(kind: LocalHrefKind): MarkdownLocalKind | null {
   if (kind === 'image-local') return 'image';
-  if (kind === 'model-local') return 'model';
   if (kind === 'text-local') return 'text';
   return null;
 }
@@ -293,6 +298,7 @@ export function classifyMarkdownLinkTarget(
   }
   if (!raw) return { kind: 'plain-text', href: raw, reason: 'empty' };
 
+  if (isManagedFileUrl(raw)) return { kind: 'media-file-url', href: raw };
   if (raw.startsWith('#')) return { kind: 'anchor', id: decodeAnchorId(raw.slice(1)), href: raw };
   if (raw.startsWith('xdt-audio://')) return { kind: 'audio', href: raw };
   if (raw.startsWith('xdt-image://') || raw.startsWith('xdt-file://')) {
@@ -333,6 +339,7 @@ export function classifyMarkdownLinkTarget(
 export function classifyInlineCodeTarget(text: string): MarkdownTarget | null {
   const raw = text.trim();
   if (!raw || raw !== text || raw.includes('\n')) return null;
+  if (isManagedFileUrl(raw)) return { kind: 'media-file-url', href: raw };
   if (hasUnsupportedScheme(raw)) return null;
 
   const lineInfo = splitLocalLineSuffix(raw);

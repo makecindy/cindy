@@ -106,7 +106,15 @@ const remarkLocalPathLinks: Plugin<[], Root> = () => {
       // 快速短路:不含任何路径分隔符的文本一定不是带分隔符路径,直接跳过。
       if (!node.value || (!node.value.includes('/') && !node.value.includes('\\'))) return;
 
-      const matches = findPathMatches(node.value).filter((match) => looksLikeFilePath(splitLocalLineSuffix(match.value).href));
+      const managed = Array.from(node.value.matchAll(/(?<![a-zA-Z0-9:/._-])cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-z0-9]+(?![a-zA-Z0-9./?#])/g), (match) => ({
+        start: match.index!, end: match.index! + match[0].length, value: match[0],
+      }));
+      const matches = [
+        ...managed,
+        ...findPathMatches(node.value).filter((match) =>
+          looksLikeFilePath(splitLocalLineSuffix(match.value).href) &&
+          !managed.some((url) => match.start < url.end && match.end > url.start)),
+      ].sort((a, b) => a.start - b.start);
       if (matches.length === 0) return;
 
       const replacement = splitTextNode(node, matches);

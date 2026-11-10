@@ -5,17 +5,22 @@ import {
   remoteFilePreviewKind,
 } from "./filePreview.js";
 
+/** Supported read-only 3D file formats, shared by preview routing and renderers. */
+export const MODEL_FILE_EXTENSIONS: readonly string[] = [
+  ".glb", ".gltf", ".obj", ".fbx", ".stl", ".ply", ".dae", ".3mf", ".3ds",
+];
+
 /** Presentation only. A source is an opaque reference resolved by its existing host. */
 export type PreviewKind =
   | "image"
   | "video"
   | "audio"
+  | "model"
   | "pdf"
   | "text"
   | "markdown"
   | "html"
   | "diagram"
-  | "model"
   | "file";
 export interface PreviewItem {
   id: string;
@@ -70,8 +75,8 @@ export function attachmentPreviewKind(
     )
   )
     return "audio";
+  if (MODEL_FILE_EXTENSIONS.includes(ext)) return "model";
   if (ext === ".pdf") return "pdf";
-  if (ext === ".glb" || ext === ".gltf") return "model";
   if (isHtmlFilePreviewCandidate(name)) return "html";
   if (ext === ".md" || ext === ".markdown") return "markdown";
   if (remoteFilePreviewKind(name) === "text") return "text";

@@ -152,10 +152,8 @@ describe('extractToolResultMedia', () => {
     expect(extractToolResultMedia(r)[0].modelFile).toBeUndefined();
   });
 
-  it('attaches cindy-provider modelFile (意识 3D 链路:GLB 已在媒体总仓)', () => {
-    // Mirrors xd-mivo ghost poll_3d_result output: preview via cindy-media
-    // image + model paired via cindy-media GLB url. Renderer routes the
-    // preview click to ModelLightbox (blob source) instead of ImageLightbox.
+  it('keeps cindy-provider model posters as ordinary images', () => {
+    // Historical model metadata no longer changes the image click route.
     const hash = 'f'.repeat(64);
     const r = JSON.stringify({
       ok: true,
@@ -166,11 +164,7 @@ describe('extractToolResultMedia', () => {
     });
     const items = extractToolResultMedia(r);
     expect(items).toHaveLength(1);
-    expect(items[0].modelFile).toEqual({
-      provider: 'cindy',
-      url: `cindy-media://blobs/${hash}.glb`,
-      format: 'GLB',
-    });
+    expect(items[0]).toEqual({ kind: 'image', url: JSON.parse(r).xdt_image_urls[0] });
   });
 
   it('extracts ghost-world audio tracks (xdt_audio_tracks, cindy-media 协议)', () => {

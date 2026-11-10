@@ -14,7 +14,7 @@
  * 输入字符串只当查找键,不参与任何路径拼接语义;解析结果再做仓内前缀双保险。
  */
 
-
+import { MODEL_MIME_BY_EXT } from './modelMediaMime';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants as fsConstants, type Stats } from 'node:fs';
 import path from 'node:path';
@@ -92,7 +92,7 @@ export function createBlobStore(ports: BlobStorePaths) {
     '.wav': 'audio/wav',
     '.m4a': 'audio/mp4',
     '.ogg': 'audio/ogg',
-    '.glb': 'model/gltf-binary',
+    ...MODEL_MIME_BY_EXT,
   };
 
   const EXT_BY_MIME: Record<string, string> = {
@@ -107,7 +107,7 @@ export function createBlobStore(ports: BlobStorePaths) {
     'audio/wav': '.wav',
     'audio/mp4': '.m4a',
     'audio/ogg': '.ogg',
-    'model/gltf-binary': '.glb',
+    ...Object.fromEntries(Object.entries(MODEL_MIME_BY_EXT).map(([ext, mime]) => [mime, ext])),
   };
 
   function getBlobsRoot(scope: BlobScope = 'blobs'): string {

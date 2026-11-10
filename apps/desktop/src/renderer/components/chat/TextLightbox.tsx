@@ -37,6 +37,7 @@ import { cn, basename } from '@/lib/utils';
 import { formatBytes } from './formatBytes';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
+import { isManagedFileUrl } from '@/lib/markdownTarget';
 import { detectRenderable } from '@/lib/textPreview';
 import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { observeFileTransferProgressText } from '@/lib/fileTransferProgress';
@@ -119,10 +120,10 @@ export function TextLightbox(props: TextLightboxProps) {
       />
     );
   const kind = attachmentPreviewKind(props.filePath);
-  return kind === 'text' ||
+  return !isManagedFileUrl(props.filePath) && (kind === 'text' ||
     kind === 'markdown' ||
     kind === 'html' ||
-    /\.(mmd|mermaid)$/i.test(props.filePath) ? (
+    /\.(mmd|mermaid)$/i.test(props.filePath)) ? (
     <TextDocumentLightbox {...props} />
   ) : (
     <Suspense

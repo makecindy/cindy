@@ -36,7 +36,7 @@ describe('ghost card conversation gallery projection', () => {
         <img src="${modelPoster}" data-ghost-model="${media('8', 'glb')}">
         <img src="https://example.com/not-managed.png">
       `),
-    ).toEqual([normal]);
+    ).toEqual([normal, modelPoster]);
   });
 
   it('matches root and spawned card render order with stable duplicate identities', () => {

@@ -24,6 +24,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { isModelMediaCandidate, MODEL_MIME_BY_EXT } from '../cindy-media/modelMediaMime.js';
 
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
 import { classifyFetchNetworkFailure, fetchTimeoutFailure } from './fetchFailure.js';
@@ -352,11 +353,14 @@ function normalizeMime(ct: string): string {
 /**
  * These response types are frequently omitted or misconfigured by object stores/CDNs.
  * Only this narrow set is eligible for byte-signature recovery in as:'media' mode;
- * specific unsupported types such as application/zip remain rejected without sniffing.
+ * ZIP has a separate narrow exception: only a verified 3MF package is accepted.
  */
 const SNIFFABLE_GENERIC_MEDIA_MIMES = new Set([
   '',
   'text/plain',
+  'application/json',
+  'application/xml',
+  'text/xml',
   'application/octet-stream',
   'binary/octet-stream',
 ]);
@@ -491,6 +495,7 @@ function inferredMediaMime(
   declaredMime: string,
 ): string | null {
   const sniffed = sniffMediaMime(bytes, declaredMime);
+  if (declaredMime === 'application/zip' && sniffed !== 'model/3mf') return null;
   return sniffed && isSupportedMediaMime(sniffed) ? sniffed : null;
 }
 
@@ -511,6 +516,7 @@ async function readSniffableBody(
   allowTextFallback: boolean,
   isSupportedMediaMime: (mime: string) => boolean,
   expectedMedia = false,
+  modelFileHint = false,
 ): Promise<SniffableBodyResult> {
   const body = (response as { body?: ReadableStream<Uint8Array> | null }).body;
   if (!body) {
@@ -527,7 +533,9 @@ async function readSniffableBody(
         0,
         Math.min(raw.byteLength, mp3BytesNeeded ?? MEDIA_SNIFF_PROBE_BYTES),
       );
-      const mime = inferredMediaMime(probe, isSupportedMediaMime, declaredMime);
+      const modelCandidate = modelFileHint || isModelMediaCandidate(probe, declaredMime);
+      if (modelCandidate && raw.byteLength > GHOST_FETCH_MEDIA_MAX_BYTES) return { kind: 'mediaTooLarge' };
+      const mime = inferredMediaMime(modelCandidate ? raw : probe, isSupportedMediaMime, declaredMime);
       if (mime) {
         retainGate = true;
         return {
@@ -545,6 +553,13 @@ async function readSniffableBody(
       }
       const textBytes = raw.subarray(0, GHOST_FETCH_RESPONSE_MAX_BYTES);
       if (!isProbablyUtf8Text(textBytes, true)) return { kind: 'unsupported' };
+      if (raw.byteLength <= GHOST_FETCH_RESPONSE_MAX_BYTES) {
+        const modelMime = inferredMediaMime(raw, isSupportedMediaMime, declaredMime);
+        if (modelMime?.startsWith('model/')) {
+          retainGate = true;
+          return { kind: 'media', bytes: raw, mime: modelMime, overLimit: false };
+        }
+      }
       return {
         kind: 'text',
         bytes: textBytes,
@@ -573,7 +588,7 @@ async function readSniffableBody(
   };
 
   let undecidedCap = MEDIA_SNIFF_PROBE_BYTES;
-  let pendingMp3 = false;
+  let pendingProbe = false;
   const acquireGate = (): boolean => {
     if (gateAcquired) return true;
     if (!tryAcquireGate()) return false;
@@ -586,6 +601,11 @@ async function readSniffableBody(
   }
   const classify = async (complete: boolean): Promise<'ok' | 'unsupported' | 'pending' | 'gateBusy'> => {
     const joined = joinChunks(chunks, retainedTotal);
+    if (!complete && retainedTotal < GHOST_FETCH_MEDIA_MAX_BYTES && (modelFileHint || isModelMediaCandidate(joined, declaredMime))) {
+      undecidedCap = GHOST_FETCH_MEDIA_MAX_BYTES;
+      pendingProbe = true; // Reuse the capped additional-probe path and global media gate.
+      return 'pending';
+    }
     const sniffed = inferredMediaMime(joined, isSupportedMediaMime, declaredMime);
     if (sniffed) {
       if (!acquireGate()) return 'gateBusy';
@@ -597,7 +617,7 @@ async function readSniffableBody(
     if (!complete && mp3BytesNeeded !== null && mp3BytesNeeded > retainedTotal) {
       if (mp3BytesNeeded > GHOST_FETCH_MEDIA_MAX_BYTES) return 'unsupported';
       undecidedCap = mp3BytesNeeded;
-      pendingMp3 = true;
+      pendingProbe = true;
       return 'pending';
     }
     const textProbe = joined.subarray(0, MEDIA_SNIFF_PROBE_BYTES);
@@ -651,8 +671,8 @@ async function readSniffableBody(
             await cancelReader();
             return { kind: 'gateBusy' };
           }
-          // A valid ID3 tag may put the first MPEG frame after the initial
-          // probe. Keep reading until that frame can be inspected.
+          // A model structure or ID3 tag may need more than the initial prefix.
+          // Continue only within the existing media cap and global gate.
           if (keptFromValue < value.byteLength && retainedTotal < undecidedCap) {
             const keepRemainder = Math.min(value.byteLength - keptFromValue, undecidedCap - retainedTotal);
             if (keepRemainder > 0) {
@@ -703,7 +723,7 @@ async function readSniffableBody(
         ? GHOST_FETCH_MEDIA_MAX_BYTES
         : kind === 'text'
           ? GHOST_FETCH_RESPONSE_MAX_BYTES
-          : pendingMp3
+          : pendingProbe
             ? undecidedCap
             : GHOST_FETCH_RESPONSE_MAX_BYTES;
       if (kind !== null && total > maxBytes) {
@@ -721,9 +741,19 @@ async function readSniffableBody(
   const bytes = joined.subarray(0, maxBytes);
   if (kind === 'media') {
     if (truncated || total > maxBytes) return { kind: 'mediaTooLarge' };
+    if (mediaMime.startsWith('model/') && inferredMediaMime(bytes, isSupportedMediaMime, declaredMime) !== mediaMime) return { kind: 'unsupported' };
     return { kind: 'media', bytes, mime: mediaMime, overLimit: false };
   }
   if (!isProbablyUtf8Text(bytes, true)) return { kind: 'unsupported' };
+  // JSON member order is arbitrary. Recognize a complete model even when its
+  // identifying fields were beyond the prefix, without enlarging the text cap.
+  if (!truncated && total <= maxBytes) {
+    const modelMime = inferredMediaMime(bytes, isSupportedMediaMime, declaredMime);
+    if (modelMime?.startsWith('model/')) {
+      if (!acquireGate()) return { kind: 'gateBusy' };
+      return { kind: 'media', bytes, mime: modelMime, overLimit: false };
+    }
+  }
   return { kind: 'text', bytes, truncated: truncated || total > maxBytes };
 }
 
@@ -1539,7 +1569,7 @@ export class GhostNetworkSlot {
       if (asMode === 'media' && response.status >= 200 && response.status < 300) {
         const declaredMime = normalizeMime(contentType);
         const sniffGeneric = shouldSniffMediaMime(declaredMime);
-        if (this.deps.isSupportedMediaMime(declaredMime) || sniffGeneric) {
+        if (this.deps.isSupportedMediaMime(declaredMime) || sniffGeneric || declaredMime === 'application/zip') {
           // 诚实服务器的超大文件在读之前就拒掉,不白读 256MB;撒谎/缺头的
           // 由下面的流式硬顶兜底。
           const declaredLength = Number(response.headers.get('content-length') ?? Number.NaN);
@@ -1567,6 +1597,7 @@ export class GhostNetworkSlot {
             sniffGeneric,
             this.deps.isSupportedMediaMime,
             !sniffGeneric,
+            Object.keys(MODEL_MIME_BY_EXT).some(ext => url.pathname.toLowerCase().endsWith(ext)),
           );
           if (sniffed.kind === 'gateBusy') {
             return { ok: false, message: '媒体/大响应通道正忙(全局同时只处理一单),请稍后重试' };

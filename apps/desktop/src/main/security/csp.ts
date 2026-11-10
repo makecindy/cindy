@@ -145,7 +145,11 @@ export function buildContentSecurityPolicy(ctx: CspContext): string {
   // the texture failure (`.catch(() => null)`), and every textured GLB renders
   // as an untextured white model. blob: URLs can only reference objects the
   // renderer itself created, so this grants no new network egress.
-  const connectSrc = ["'self'", 'blob:', 'xdt-model:', 'cindy-media:'];
+  //
+  // data:: GLTFLoader/DRACOLoader read embedded glTF buffers and the bundled
+  // Draco WASM decoder through fetch(); data: URLs carry their own bytes, so
+  // this also grants no new network egress.
+  const connectSrc = ["'self'", 'blob:', 'data:', 'xdt-model:', 'cindy-media:'];
   if (isDev) {
     // Dev is not the attack surface (remote-debugging-port is already open in
     // dev); be permissive so HMR / dev tooling never breaks.
