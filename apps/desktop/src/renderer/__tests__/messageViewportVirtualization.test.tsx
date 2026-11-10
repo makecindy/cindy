@@ -18,6 +18,7 @@ let parentRenders: number;
 let notifyResize: () => void;
 let syncViewport: () => void;
 let reconcileViewport: () => void;
+let getViewportTopRow: () => HTMLElement | null;
 let setFollowing: (value: boolean) => void;
 const entries = Array.from({ length: 80 }, (_, index) => ({ key: String(index), retain: index === 79 }));
 const rectangle = (top: number, height: number) => ({ top, bottom: top + height, height, width: 800,
@@ -43,6 +44,7 @@ function Fixture({ disabled = false, restore = false, restoreOffset, onProgramma
     }}>{viewport => {
       syncViewport = () => apiRef.current!.syncViewport();
       reconcileViewport = () => apiRef.current!.reconcileViewport();
+      getViewportTopRow = () => apiRef.current!.getViewportTopRow();
       return <div ref={itemsRef}>{entries.map(entry => viewport.shouldMount(entry)
       ? <div key={entry.key} data-render-item-key={entry.key}><button>Row {entry.key}</button>{fade && <ul><StreamFadeListItem
           wordFadeState={fadeState.current} data-stream-marker
@@ -106,6 +108,32 @@ afterEach(async () => {
   host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 describe('message viewport content virtualization', () => {
+  // Regression: reading-position snapshots scanned the entire expanded history
+  // on every wheel frame despite virtualization already owning a geometry index.
+  // Unit layout fixture checks both the actual anchor and the DOM-read budget;
+  // browser scrolling/performance is covered by the transcript-scroll UI page.
+  it('finds the reading anchor without measuring preceding history on each scroll', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    await flushFrames();
+    rowMeasurements = 0;
+    for (let index = 0; index < 10; index++) {
+      scroller().scrollTop = 40 * 180 + index;
+      expect(getViewportTopRow()).toBe(row(40));
+    }
+    expect(rowMeasurements).toBe(0);
+  });
+
+  it('refreshes an anchor after a synchronous row resize before observer delivery', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    await flushFrames();
+    const previous = row(39);
+    previous.style.height = '540px';
+    // takeRecords must see the pending mutation in this same task. The reading
+    // position now intersects row 39, even before ResizeObserver has fired.
+    expect(getViewportTopRow()).toBe(previous);
+    await flushFrames();
+  });
+
   it.each(['observer', 'synchronous scroll'] as const)('does not remeasure rows for completed fades via %s', async delivery => {
     await act(async () => root.render(<Fixture restore fade />));
     await flushFrames();

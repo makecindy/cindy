@@ -139,6 +139,7 @@ export class MessageViewportGeometry {
     let anchorIndex = findViewportRange(this.tops, this.bottoms, relative, relative + height).start;
     while (anchorIndex < this.rows.length && (this.bottoms[anchorIndex] <= relative || this.sizes[anchorIndex] === 0)) anchorIndex++;
     return { keys: this.keys.slice(start, end).filter(Boolean), lower, upper,
+      anchorElement: this.rows[anchorIndex] ?? null,
       anchor: anchorIndex < this.keys.length ? { key: this.keys[anchorIndex], offset: this.origin + this.tops[anchorIndex] - position } : null };
   }
 }

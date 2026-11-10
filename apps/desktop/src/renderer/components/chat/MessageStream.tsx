@@ -3523,7 +3523,10 @@ export function MessageStream({
     const items = itemsRef.current;
     if (!container || !items) return null;
     const cTop = container.getBoundingClientRect().top;
-    const children = items.children;
+    const indexedRow = messageViewportRef.current?.getViewportTopRow();
+    // The viewport connects during mount; retain the DOM fallback until its
+    // index is available. Normal scrolling reads only the indexed visible row.
+    const children = indexedRow ? [indexedRow] : items.children;
     for (let i = 0; i < children.length; i++) {
       const itemElement = children[i] as HTMLElement;
       const rect = itemElement.getBoundingClientRect();
