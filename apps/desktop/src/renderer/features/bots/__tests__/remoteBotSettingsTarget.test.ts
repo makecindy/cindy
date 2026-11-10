@@ -56,6 +56,85 @@ it('applies the host profile after an autosave and sends only what changed', asy
   expect(profiles.get()?.description).toBe('Designer');
 });
 
+it('accepts a same-model choice once through a host that declares the operation', async () => {
+  const { target, profiles } = create([...ALL_OPS, 'profile.acceptModelSelection']);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+  await profiles.load();
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  await target.profile.update('bot-1', { acceptModelSelection: true });
+  expect(sent(1).input).toEqual({ v: 1, op: 'profile.acceptModelSelection', args: { patch: {}, expectedVersion: 1 } });
+  expect(profiles.get()).not.toHaveProperty('acceptModelSelection');
+});
+
+it('rereads a version conflict even when a concurrent refresh was discarded during the first save', async () => {
+  const { target, profiles } = create([...ALL_OPS, 'profile.acceptModelSelection']);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+  await profiles.load();
+  let finish!: (result: unknown) => void;
+  host.invoke.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  const saving = target.profile.update('bot-1', { acceptModelSelection: true });
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  await profiles.refresh();
+  expect(profiles.get()?.currentVersion).toBe(1);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  finish(refused('PRECONDITION_FAILED', 'Profile changed'));
+  await expect(saving).rejects.toSatisfy(error => extractIpcError(error)?.code === 'PRECONDITION_FAILED');
+  expect(profiles.get()?.currentVersion).toBe(2);
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 3 }) }));
+  await target.profile.update('bot-1', { acceptModelSelection: true });
+  expect(sent(4).input).toMatchObject({ op: 'profile.acceptModelSelection', args: { expectedVersion: 2 } });
+});
+
+it('keeps actual model changes usable on older hosts but refuses unsupported same-model acceptance', async () => {
+  const { target, profiles } = create();
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));
+  await profiles.load();
+  await expect(target.profile.update('bot-1', { acceptModelSelection: true }))
+    .rejects.toSatisfy(error => extractIpcError(error)?.code === 'UNSUPPORTED_CAPABILITY');
+  expect(host.invoke).toHaveBeenCalledTimes(1);
+  const chain = [{ harness: 'pi' as const, model: 'changed', providerId: null, effort: '', fastMode: false }];
+  host.invoke.mockResolvedValueOnce(ok({ profile: profile({ currentVersion: 2 }) }));
+  await target.profile.update('bot-1', { acceptModelSelection: true, capabilities: { modelChain: chain, modelChainOverride: chain } });
+  expect(sent(1).input.op).toBe('profile.update');
+  expect(sent(1).input.args?.patch).not.toHaveProperty('acceptModelSelection');
+});
+
+// Unit regression: hosts can declare model selection without accepting its newer
+// top-level location mirror. Exercise the production transport against that old
+// field boundary, keeping the chain's execution locations in the saved readback.
+it.each([false, true])('saves model locations and restores defaults on old hosts (accept selection: %s)', async (acceptsSelection) => {
+  const { target, profiles } = create(acceptsSelection ? [...ALL_OPS, 'profile.acceptModelSelection'] : ALL_OPS);
+  const local = { harness: 'pi' as const, model: 'm', providerId: null, effort: '', fastMode: false };
+  const remote = { ...local, agentDeviceId: 'share:one' };
+  let saved = profile({ capabilities: { ...local, modelChain: [remote], modelChainOverride: [remote] } });
+  host.invoke.mockImplementation(async (_device, _channel, requests) => {
+    const { op, args } = requests[0].input;
+    if (op === 'profile.get') return ok({ profile: saved });
+    const capabilities = args.patch.capabilities;
+    if ('agentDeviceId' in capabilities) return refused('INVALID_PARAMS', 'capabilities has an unsupported field');
+    saved = profile({ currentVersion: saved.currentVersion + 1, capabilities });
+    return ok({ profile: saved });
+  });
+  await profiles.load();
+  for (const [chain, override, location] of [
+    [[local], null, null],
+    [[remote], [remote], 'share:one'],
+    [[local, remote], [local, remote], null],
+  ] as const) {
+    await target.profile.update('bot-1', { acceptModelSelection: true, capabilities: {
+      ...local, agentDeviceId: location, modelChain: [...chain],
+      modelChainOverride: override === null ? null : [...override], modelOverride: null,
+    } });
+    const request = sent(host.invoke.mock.calls.length - 1).input;
+    expect(request.op).toBe(acceptsSelection ? 'profile.acceptModelSelection' : 'profile.update');
+    expect(request.args?.patch).toMatchObject({ capabilities: { modelChain: chain, modelChainOverride: override } });
+    expect((request.args?.patch as { capabilities: object }).capabilities).not.toHaveProperty('agentDeviceId');
+    await profiles.refresh();
+    expect(profiles.get()?.capabilities.modelChain).toEqual(chain);
+    expect(profiles.get()?.capabilities.modelChainOverride).toEqual(override);
+  }
+});
+
 it('rolls an optimistic write back and rejects with the host error when the host refuses it', async () => {
   const { target, profiles } = create();
   host.invoke.mockResolvedValueOnce(ok({ profile: profile() }));

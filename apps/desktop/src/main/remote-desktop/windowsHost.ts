@@ -72,6 +72,7 @@ async function resolveArtifacts(
       'src/win.rs',
     ].map((file) => path.join('windows-host', file));
     sourceFiles.push(
+      path.join('.cargo', 'config.toml'),
       ...[
         'Cargo.toml',
         'Cargo.lock',
@@ -146,6 +147,8 @@ async function resolveArtifacts(
           '--locked',
           '--target',
           cargoTarget,
+          '--config',
+          path.join(nativeRoot, '.cargo', 'config.toml'),
           '--manifest-path',
           path.join(root, 'Cargo.toml'),
           '--target-dir',

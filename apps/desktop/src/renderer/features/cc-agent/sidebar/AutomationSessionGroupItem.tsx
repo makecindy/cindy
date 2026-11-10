@@ -53,6 +53,7 @@ import {
 } from './projectCollapsedAttention';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SessionCard } from './SessionCard';
+import { sessionRowKey } from './sessionRowKey';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from './sessionMoveTarget';
 
@@ -155,10 +156,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       toggleStoredCollapsed();
     }, [collapsed, onCollapsedChange, toggleStoredCollapsed]);
     // 轴 2:运行列表内部的「前 5 条 / 显示全部」临时态,离开自动收回。
-    // 收起告警列表和展开历史列表共用这一份状态,所以切折叠必须复位 —— 否则
-    // 收起态点过「显示全部」再展开会一次摊开整组历史(Codex #3184),对称地,
-    // 展开态点过「显示全部」再收起也会把整组历史带进告警列表。复位挂在
-    // collapsed 变化上,覆盖 chevron 与父层「收起所有分组」,不只一条点击路径。
+    // 切换组折叠状态时复位历史上限，覆盖单组开关与父层「收起所有分组」。
     const [showAll, setShowAll] = useState(false);
     useLayoutEffect(() => {
       setShowAll(false);
@@ -206,22 +204,22 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
         runningSessionIds,
       ],
     );
-    // 收起组还需露出等待回复的旧运行,承接上层展开后下放的提示;组头仍代理最新运行。
-    const alertSessionIds = useMemo(() => {
+    // 非静默未读、错误和待回复运行在收起时仍可见。静默成功已由上游排除未读。
+    // 远程活动仍是权威来源，不能让本地残留未读盖过远程 running。
+    const collapsedAttentionSessionIds = useMemo(() => {
       const ids = new Set(collapsedAttention.errorSessionIds);
       for (const session of group.sessions) {
         const remotePhase = groupRemotePhases.get(session.id);
         if (
           remotePhase === 'needs-interaction' ||
-          (!remotePhase &&
-            notifications.has(session.id) &&
-            groupAttentionKinds.get(session.id) === 'awaiting')
+          remotePhase === 'completed' ||
+          (!remotePhase && notifications.has(session.id))
         ) {
           ids.add(session.id);
         }
       }
       return ids;
-    }, [collapsedAttention, group.sessions, groupRemotePhases, notifications, groupAttentionKinds]);
+    }, [collapsedAttention, group.sessions, groupRemotePhases, notifications]);
     // 与组头红/绿未读点同源:没有未读就不提供「标为已读」,避免空操作占菜单。
     const canMarkRead = collapsedAttention.tone != null;
     // 远程分组只提供在对方电脑上执行的操作（运行、暂停 / 恢复、标为已读）；编辑页与删除
@@ -234,6 +232,12 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     const hasMoreMenuItems = teammateRoutine
       ? canMarkRead
       : !isRemoteGroup || canMarkRead || group.scheduleStatus !== 'expired';
+    // 点击目标和收起态子行去重共用同一 ID；折叠红点可能代表旧的失败运行而非最新运行。
+    const headerSessionId = resolveCollapsedGroupHeaderSessionId({
+      collapsed,
+      latestSessionId,
+      attention: collapsedAttention,
+    });
     // childView 的 24h 豁免依赖实时 now,必须每次渲染直接算,不能进 useMemo —— 否则依赖项
     // 不变时时间窗口会被冻结,跨过 24h 阈值的运行不会及时移出豁免。与普通对话列表
     // SessionEntryList 一致(它也是 render 内直接算 getSessionListCollapseView、不 memo);
@@ -247,11 +251,12 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       // 实时 now:启用「最近 24h 内有活动不折叠」豁免,和普通对话列表一致。
       nowMs: Date.now(),
       collapsed,
-      alertSessionIds,
+      collapsedAttentionSessionIds,
+      headerSessionId,
       foldExemptSessionIds,
     });
-    // 轴 1 收起时只留组头 + 被提上来的告警行;展开时交给轴 2 的「前 5 / 显示全部」。
-    // 两种形态都由 getAutomationGroupChildView 一处决定(见该函数的 ⚠️)。
+    // 轴 1 收起时只留组头 + 未读及待处理行;展开时交给轴 2 的「前 5 / 显示全部」。
+    // 两种形态都由 getAutomationGroupChildView 一处决定(见该函数说明)。
     const visibleSessions = childView.visibleSessions;
     // 组头右侧状态图标的**基线**来源(全端统一 5 档色表:error 红 > awaiting TapTap 蓝 >
     // running spinner > 完成未读绿 > time),两路信号都只看「最新一条」运行:
@@ -276,8 +281,16 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       ? latestRemoteActivity
       : latestLocalActivity;
     const scheduleId = group.scheduleId;
+    // Deleting an automation leaves its past runs grouped under a fallback key, so the group
+    // has no scheduleId any more. Those sessions are still real and still archivable: the
+    // generic group archive works off group.sessions, not off the schedule. Teammate-routine
+    // lanes are excluded because their lifecycle belongs to the bot and main rejects a
+    // generic archive for them.
+    const canArchiveGroupSessions = !isRemoteGroup && !teammateRoutine;
+    const hasArchivableSessions =
+      canArchiveGroupSessions && group.sessions.some((session) => session.status === 'active');
     // 组头右侧悬停操作槽：schedule 分组恒有（运行 + 更多），例行任务分组仅在有菜单项时有。
-    const hasHoverActions = !!scheduleId || (!!teammateRoutine && hasMoreMenuItems);
+    const hasHoverActions = !!scheduleId || (!!teammateRoutine && hasMoreMenuItems) || hasArchivableSessions;
     // 「已停止」= paused(用户主动暂停)+ expired(计划到期不再触发);两者对用户体验
     // 而言都是「不会再自动跑」,视觉上都在 Timer chip 上叠 Pause 徽标,并在 tooltip
     // 里显示「已停止」文案,避免用户误判为普通空闲态。
@@ -470,13 +483,9 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     // 点击空白行区域 = 点击标题。展开态打开最新一条;收起且整组是红时打开
     // 贡献红点的那条。行内控件各自 stopPropagation,不会误触发。
     const openLatestSession = () => {
-      const targetId = resolveCollapsedGroupHeaderSessionId({
-        collapsed,
-        latestSessionId,
-        attention: collapsedAttention,
-      });
+      const targetId = headerSessionId;
       if (!targetId) return;
-      // 仅在展开 + 前 5 条态下冻结当前布局;收起态无子项可冻结。
+      // 仅在展开 + 前 5 条态下冻结当前布局;收起态未读子行随已读状态收回。
       if (!collapsed && !showAll) freezeCurrentLayout(targetId);
       onSessionClick(targetId);
     };
@@ -484,7 +493,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     return (
       <div className="flex w-full flex-col gap-0.5">
         {/* 行 hover 浮层视觉与 SessionTooltip(PR 引用)对齐:右侧 align=start 弹出、
-          浅色 surface(--surface-elevated + --border-default + shadow-sm)、立即出现,
+          浅色 surface(--surface-elevated + --border-default + --shadow-menu)、立即出现,
           和侧栏其它 hover 卡片在同一套调色板下(规则 16)。行内动作有自己的 Tip,
           进入这些按钮时由受控 open 关闭行级浮层，避免两层提示重叠。 */}
         <Tip
@@ -492,9 +501,10 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
           side="right"
           delay={0}
           controlledOpen={rowTooltipOpen}
+          onOpenChange={setRowTooltipOpen}
           contentClassName={cn(
             'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
-            'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
+            'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-[shadow:var(--shadow-menu)]',
           )}
         >
           {/* 行 onClick 只承担鼠标点击空白 = 点击标题的转发;不加 role="button" / tabIndex /
@@ -846,32 +856,30 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                                         : t('ccAgent.sidebar.automationGroup.menu.pause')}
                                     </DropdownMenuItem>
                                   )}
-                                  {scheduleId && !isRemoteGroup && (
+                                  {canArchiveGroupSessions && (
                                     <>
                                       <DropdownMenuSeparator />
                                       <DropdownMenuItem
                                         onSelect={() => onScheduleAction(group, 'archive-all')}
-                                        disabled={
-                                          !group.sessions.some(
-                                            (session) => session.status === 'active',
-                                          )
-                                        }
+                                        disabled={!hasArchivableSessions}
                                         className={MENU_ITEM_CLASS}
                                       >
                                         {t('ccAgent.sidebar.projectAction.archivedAll')}
                                       </DropdownMenuItem>
-                                      <DropdownMenuItem
-                                        onSelect={() => onScheduleAction(group, 'delete')}
-                                        disabled={
-                                          group.scheduleSource === 'project' &&
-                                          (!group.workingDir || !group.projectConfigId)
-                                        }
-                                        variant="danger"
-                                        className={MENU_ITEM_CLASS}
-                                      >
-                                        {t('ccAgent.sidebar.automationGroup.menu.delete')}
-                                      </DropdownMenuItem>
                                     </>
+                                  )}
+                                  {scheduleId && !isRemoteGroup && (
+                                    <DropdownMenuItem
+                                      onSelect={() => onScheduleAction(group, 'delete')}
+                                      disabled={
+                                        group.scheduleSource === 'project' &&
+                                        (!group.workingDir || !group.projectConfigId)
+                                      }
+                                      variant="danger"
+                                      className={MENU_ITEM_CLASS}
+                                    >
+                                      {t('ccAgent.sidebar.automationGroup.menu.delete')}
+                                    </DropdownMenuItem>
                                   )}
                                 </>
                               )}
@@ -914,14 +922,14 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
 
               return sessionVariant === 'list' ? (
                 <SessionCard
-                  key={session.id}
+                  key={sessionRowKey(session)}
                   {...commonProps}
                   variant="list"
                   isFirst={index === 0}
                   hideBottomDivider={nextHighlighted}
                 />
               ) : (
-                <SessionItem key={session.id} {...commonProps} insideAutomationGroup />
+                <SessionItem key={sessionRowKey(session)} {...commonProps} insideAutomationGroup />
               );
             })}
             {!showAll && childView.isOverflowing && (

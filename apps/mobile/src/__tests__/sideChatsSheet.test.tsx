@@ -83,8 +83,7 @@ const toolbar = Object.assign(native, { View: native });
 const headerBindings = {
   ...bindings, summarizeSessionOverview, projectMobileSessionActions, Platform: headerPlatform,
   Pressable: native,
-  useWindowDimensions: () => ({ width: 400, height: 800 }),
-  useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+  useAdaptiveWindow: () => ({ width: 400, height: 800, insets: { top: 0, bottom: 0, left: 0, right: 0 } }),
   Stack: { Screen: () => null, Toolbar: toolbar },
   compactSessionHeaderNotice: () => null, useDoubleTap: () => undefined,
   useSystemNavigationBack: () => false, ScreenBackButton: () => null,

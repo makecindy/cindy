@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as botStore from '../botStore';
+import * as owner from '@/contexts/dataOwnerGeneration';
+import { writeStoredLocale } from '@/lib/localePreference';
 
 vi.mock('@/state/newMakerDraft', () => ({
   getDraft: () => ({ lastByVendor: { cc: {}, codex: {}, pi: {} } }),
@@ -38,12 +41,19 @@ function apiFixture() {
   return api;
 }
 async function hydratedStore(api: ReturnType<typeof apiFixture>) {
-  const store = await import('../botStore');
-  await vi.waitFor(() => expect(api.list).toHaveBeenCalledOnce());
-  return store;
+  await botStore.ensureBotProfilesLoaded();
+  expect(api.list).toHaveBeenCalledOnce();
+  return botStore;
 }
 
-beforeEach(() => { vi.resetModules(); window.localStorage.clear(); });
+let generation = 0;
+let unsubscribeModel: (() => void) | undefined;
+beforeEach(() => {
+  window.localStorage.clear();
+  writeStoredLocale('system');
+  owner.setDataOwnerGeneration(`model-settings-${++generation}`);
+});
+afterEach(() => { unsubscribeModel?.(); unsubscribeModel = undefined; });
 
 describe('invitation locale before provider mount', () => {
   it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])(
@@ -74,7 +84,6 @@ describe('invitation locale before provider mount', () => {
     window.localStorage.setItem('language', 'en');
     const storageWrite = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
     try {
-      const { writeStoredLocale } = await import('@/lib/localePreference');
       writeStoredLocale('ja');
       await hydratedStore(api);
       expect(api.list).toHaveBeenCalledWith(expect.objectContaining({ locale: 'ja' }));
@@ -107,7 +116,7 @@ describe('global teammate model restore', () => {
     const store = await hydratedStore(api);
     window.localStorage.setItem(legacyKey, JSON.stringify(saved.modelChain));
     const listener = vi.fn();
-    store.subscribeBotGlobalModel(listener);
+    unsubscribeModel = store.subscribeBotGlobalModel(listener);
     await store.resetBotGlobalModelChain();
     expect(store.getEffectiveBotModelChain()).toEqual(defaults.modelChain);
     expect(store.isBotGlobalModelChainCustomized()).toBe(false);
@@ -155,11 +164,12 @@ describe('global teammate model restore', () => {
     const read = deferred<typeof defaults>();
     api.getModelChainSettings.mockReturnValueOnce(read.promise);
     window.localStorage.setItem(legacyKey, JSON.stringify([route('legacy')]));
-    const store = await import('../botStore');
+    const store = botStore;
+    const hydrating = store.ensureBotProfilesLoaded();
     await vi.waitFor(() => expect(api.getModelChainSettings).toHaveBeenCalledOnce());
     const reset = store.resetBotGlobalModelChain();
     read.resolve(defaults);
-    await reset;
+    await Promise.all([hydrating, reset]);
     expect(api.setModelChainSettings).toHaveBeenCalledWith({ modelChain: [route('legacy')] });
     expect(api.setModelChainSettings.mock.invocationCallOrder[0]).toBeLessThan(api.resetModelChainSettings.mock.invocationCallOrder[0]!);
     expect(store.getEffectiveBotModelChain()).toEqual(defaults.modelChain);
@@ -170,7 +180,6 @@ describe('global teammate model restore', () => {
   it('rejects old-owner responses and queued writes before they reach the new account', async () => {
     const api = apiFixture();
     const store = await hydratedStore(api);
-    const owner = await import('@/contexts/dataOwnerGeneration');
     const pending = deferred<typeof defaults>();
     api.resetModelChainSettings.mockReturnValueOnce(pending.promise);
     const reset = store.resetBotGlobalModelChain();
@@ -212,4 +221,17 @@ describe('global teammate model restore', () => {
     expect(store.getEffectiveBotModelChain()).toEqual(defaults.modelChain);
   });
 
+});
+
+// Static imports prepare the graph once; this explicit restart still checks automatic startup.
+it('automatically hydrates the saved locale before a provider or explicit load', async () => {
+  const api = apiFixture();
+  Object.assign(window.electronAPI, { preferredSystemLocale: 'en', setApplicationMenuLocale: vi.fn() });
+  window.localStorage.setItem('language', 'ja');
+  // reset-modules: simulate one fresh renderer startup to retain the automatic-hydration contract.
+  vi.resetModules();
+  await import('../botStore');
+  await vi.waitFor(() => expect(api.list).toHaveBeenCalledOnce());
+  expect(api.list).toHaveBeenCalledWith(expect.objectContaining({ locale: 'ja' }));
+  expect(window.electronAPI.setApplicationMenuLocale).not.toHaveBeenCalled();
 });

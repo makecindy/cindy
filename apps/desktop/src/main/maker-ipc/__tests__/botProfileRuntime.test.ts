@@ -87,6 +87,12 @@ describe('Bot Profile runtime prompt', () => {
     expect(TEAMMATE_CORE_TOPICS.tasks.body).toContain('the user explicitly requests an independent task');
     expect(TEAMMATE_CORE_TOPICS.teammates.body).toContain('It is not a task and has no progress or cancellation');
     expect(TEAMMATE_CORE_TOPICS.teammates.body).toContain('offer either a message or a tracked Session task');
+    // MCP (Chris 2026-11-01): config files are not a connection and a new task is never the fix;
+    // registering uses Cindy's own form and an already-joined server is left alone.
+    expect(prompt).toContain('writing config files such as `.mcp.json` connects nothing');
+    expect(prompt).toContain('never tell the owner to start a new task');
+    expect(TEAMMATE_CORE_TOPICS.mcp.body).toContain('`request_mcp_setup`');
+    expect(TEAMMATE_CORE_TOPICS.mcp.body).toContain('If it is already joined, change nothing');
     // System Skills are listed by name only.
     expect(prompt).not.toContain('list_teammate_todos');
     expect(prompt).not.toContain('schedule_set_pre_run_hook');

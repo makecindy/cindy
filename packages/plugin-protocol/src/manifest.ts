@@ -4,6 +4,7 @@ import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
 import { GHOST_LOCALES, type GhostLocale } from './locales.js';
+import { validateGhostReadmeDeclaration } from './readme.js';
 export { GHOST_LOCALES, type GhostLocale } from './locales.js';
 
 /** `.cindy` 包根目录中的 manifest 文件名。 */
@@ -115,6 +116,7 @@ export const LEGACY_GHOST_SLOTS = [
   'skill',
   'workspace',
   'ios-simulator',
+  'live-screen',
 ] as const;
 type LegacyGhostSlot = string;
 
@@ -213,6 +215,8 @@ export interface GhostToolDecl {
   description: string;
   /** JSON Schema(object)形态的参数声明;可省略(无参工具)。 */
   parameters?: Record<string, unknown>;
+  /** Host approval policy. `auto` requires explicit installation consent. */
+  approval?: 'auto' | 'each-call';
 }
 
 /**
@@ -243,6 +247,8 @@ export interface GhostAgentNeeds {
   schedule?: boolean;
   /** 只读查看项目任务的列表与状态并打开任务;不含任务内容,需独立批准。 */
   observe?: boolean;
+  /** 只读查看伙伴(含主人其他电脑上的)名单、实时状态、待处理请求摘要与最新回复,并在主窗口打开;需独立批准。 */
+  companions?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -935,6 +941,12 @@ export interface GhostManifest {
    */
   whenToUse?: string;
   /**
+   * 详细介绍(仅展示用):语言到包内 Markdown 文件的映射,必须提供 en。插件详情页
+   * 在简短的 description 之下展示;图片只能引用包内文件,不进模型上下文。
+   * 解析与读取规则见 readme.ts。
+   */
+  readme?: GhostManifestLocales;
+  /**
    * 图标图片(包内相对路径,装入后位于安装目录)。仅允许白名单扩展名
    * (见 ghostIconMimeType);由 main 读盘转 data URL 随清单下发,
    * renderer 直接 <img> 渲染——cindy-ghost:// 协议只挂沙箱分区,主窗口不走它。
@@ -1042,6 +1054,12 @@ export interface GhostManifest {
   workspace?: true;
   /** @deprecated Retirement detection only. No runtime capability is granted. */
   iosSimulator?: true;
+  /**
+   * Device screens the plugin's Node worker serves for viewing on the owner's
+   * phone over remote desktop. Requires `node`; Cindy calls only the fixed
+   * `liveScreen.*` worker methods.
+   */
+  liveScreen?: true;
   /**
    * 随包渐进披露手册。它不是能力 slot 或授权项；Host 只把索引投影给模型，
    * 正文经 ghost_manual 按需读取。旧客户端忽略这一可选顶层字段。
@@ -1207,6 +1225,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'locales',
   'description',
   'whenToUse',
+  'readme',
   'icon',
   'kind',
   'entry',
@@ -1244,6 +1263,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'pick',
   'workspace',
   'iosSimulator',
+  'liveScreen',
 ]);
 
 const V3_BOOLEAN_CAPABILITY_FIELDS = [
@@ -1257,6 +1277,7 @@ const V3_BOOLEAN_CAPABILITY_FIELDS = [
   'pick',
   'workspace',
   'iosSimulator',
+  'liveScreen',
 ] as const;
 
 const V3_DECLARATION_TO_LEGACY_SLOT = [
@@ -1285,6 +1306,7 @@ const V3_BOOLEAN_TO_LEGACY_SLOT: Record<(typeof V3_BOOLEAN_CAPABILITY_FIELDS)[nu
   pick: 'pick',
   workspace: 'workspace',
   iosSimulator: 'ios-simulator',
+  liveScreen: 'live-screen',
 };
 
 type PreparedGhostManifest = {
@@ -1386,10 +1408,14 @@ function dropEmptyLegacyCapabilitySlots(
 /** Historical persisted data only; new packages must use validateGhostManifest. */
 export function validateStoredGhostManifest(value: unknown):
   { ok: true; manifest: GhostManifest } | { ok: false; reason: string } {
-  return validateWithStoredMcpApps(value, validateGhostManifest);
+  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true));
 }
 
 export function validateGhostManifest(value: unknown): ManifestValidation {
+  return validateGhostManifestInput(value, false);
+}
+
+function validateGhostManifestInput(value: unknown, preserveHistoricalParameterSize: boolean): ManifestValidation {
   const preparation = prepareGhostManifestForValidation(value);
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
@@ -1555,6 +1581,23 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...normalized,
       en: normalized.en!,
     };
+  }
+  let readme: GhostManifest['readme'];
+  if (raw.readme !== undefined) {
+    const localeFolds = Object.values(locales ?? {}).map((path) => path.toLowerCase());
+    const contentDirFolds = [raw.skill, raw.manual]
+      .flatMap((decl) => (isPlainObject(decl) && Array.isArray(decl.items) ? decl.items : []))
+      .map((item) => (isPlainObject(item) ? item.dir : undefined))
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.toLowerCase());
+    const result = validateGhostReadmeDeclaration(
+      raw.readme,
+      (fold) =>
+        [...declaredFilePathFolds, ...localeFolds].some((path) => pathsConflict(path, fold)) ||
+        contentDirFolds.some((dir) => pathsConflict(dir, fold)),
+    );
+    if (!result.ok) return result;
+    readme = result.readme;
   }
   if (
     raw.description !== undefined &&
@@ -1892,16 +1935,25 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
             reason: 'tools[].parameters 必须是对象(JSON Schema)',
           };
         try {
-          if (JSON.stringify(t.parameters).length > 16_384) {
+          const serialized = JSON.stringify(t.parameters);
+          // Published releases keep the historical UTF-16 bound; new packages use UTF-8 bytes.
+          const size = preserveHistoricalParameterSize
+            ? serialized.length
+            : new TextEncoder().encode(serialized).length;
+          if (size > 16_384) {
             return { ok: false, reason: 'tools[].parameters 过大(上限 16KB)' };
           }
         } catch {
           return { ok: false, reason: 'tools[].parameters 必须可序列化' };
         }
       }
+      if (t.approval !== undefined && t.approval !== 'auto' && t.approval !== 'each-call') {
+        return { ok: false, reason: 'tools[].approval 必须是 auto 或 each-call' };
+      }
       tools.push({
         name: t.name,
         description: t.description,
+        ...(t.approval !== undefined ? { approval: t.approval as 'auto' | 'each-call' } : {}),
         ...(t.parameters !== undefined
           ? { parameters: t.parameters as Record<string, unknown> }
           : {}),
@@ -3105,15 +3157,16 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     if (agentRaw.observe !== undefined && typeof agentRaw.observe !== 'boolean') {
       return { ok: false, reason: 'agent.observe must be boolean' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe'])).length === 0) {
+    if (agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true 五项加档;仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true 六项加档;仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -3122,6 +3175,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
       ...(agentRaw.observe === true ? { observe: true } : {}),
+      ...(agentRaw.companions === true ? { companions: true } : {}),
     };
   }
 
@@ -3414,6 +3468,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ok: false,
       reason: 'slots 声明了 "node" 但缺少 node 工作进程详单',
     };
+  }
+  if (slots.includes('live-screen') && node === undefined) {
+    return { ok: false, reason: 'liveScreen: true 需要同时声明 node 工作进程' };
   }
   if (node?.secretBindings) {
     for (const binding of node.secretBindings) {
@@ -3900,6 +3957,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(locales !== undefined ? { locales } : {}),
       ...(raw.description !== undefined ? { description: raw.description as string } : {}),
       ...(raw.whenToUse !== undefined ? { whenToUse: raw.whenToUse as string } : {}),
+      ...(readme !== undefined ? { readme } : {}),
       ...(raw.icon !== undefined ? { icon: raw.icon as string } : {}),
       entry: raw.entry,
       ...(raw.launch !== undefined ? { launch: raw.launch as GhostLaunchMode } : {}),
@@ -3951,6 +4009,9 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         : {}),
       ...(prepared.schemaVersion === 3 && slots.includes('ios-simulator')
         ? { iosSimulator: true as const }
+        : {}),
+      ...(prepared.schemaVersion === 3 && slots.includes('live-screen')
+        ? { liveScreen: true as const }
         : {}),
       ...(manual !== undefined ? { manual } : {}),
       ...(setup !== undefined ? { setup } : {}),

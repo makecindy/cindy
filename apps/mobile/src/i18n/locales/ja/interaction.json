@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "完了",
+    "mcpCancel": "キャンセル",
     "mode": {
       "default": "デフォルト権限",
       "acceptEdits": "編集を許可",
@@ -98,7 +100,14 @@
     "planFeedbackPlaceholder": "Claude にどうすべきか伝える",
     "planFeedbackRequired": "送信前にフィードバックを入力してください。",
     "planFeedbackSubmit": "プランのフィードバックを送信",
-    "planFeedbackAccessibility": "プランを変更するフィードバック"
+    "planFeedbackAccessibility": "プランを変更するフィードバック",
+    "validation": {
+      "required": "この必須項目を入力してください。",
+      "choice": "一覧の選択肢から選んでください。",
+      "tooShort": "{{count}}文字以上で入力してください。",
+      "tooLong": "{{count}}文字以内で入力してください。"
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -299,6 +308,8 @@
       "picture": "画面を見る",
       "backToForm": "フォームに戻る",
       "liveView": "ライブ表示",
+      "openRemoteDesktop": "リモートデスクトップを開く",
+      "useForm": "フォームで入力する",
       "fill": "入力",
       "skip": "スキップ",
       "continue": "続ける",
@@ -306,6 +317,9 @@
       "showPassword": "パスワードを表示",
       "hidePassword": "パスワードを隠す",
       "scan": "スキャン"
+    },
+    "directSignIn": {
+      "hint": "ウィンドウで直接ログインしてください。完了すると自動で続行します。"
     },
     "remoteUnavailable": "このコンピュータはリモートから入力を受け取れません。ホストのコンピュータでこのステップを完了してから Agent に戻してください。",
     "unnamedField": "入力欄",
@@ -380,6 +394,8 @@
       "submitting": "送信中"
     },
     "permission": {
+      "titleStdin": "端末への入力を許可しますか？",
+      "titleMcpUrl": "{{server}} のリクエストを完了",
       "highRiskTitle": "高リスクの権限は再確認が必要です",
       "highRiskDetail": "コマンドを確認し、もう一度許可を確定してください。不明な場合は拒否してください。",
       "sessionAllowTitle": "今回だけ許可するか、このタスクで常に許可できます",

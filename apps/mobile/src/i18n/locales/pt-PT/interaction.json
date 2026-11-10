@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Concluído",
+    "mcpCancel": "Cancelar",
     "mode": {
       "default": "Permissões predefinidas",
       "acceptEdits": "Permitir edições",
@@ -98,7 +100,14 @@
     "planFeedbackPlaceholder": "Dizer ao Claude o que fazer",
     "planFeedbackRequired": "Introduza comentários antes de submeter.",
     "planFeedbackSubmit": "Submeter comentários ao plano",
-    "planFeedbackAccessibility": "Dar comentários para alterar o plano"
+    "planFeedbackAccessibility": "Dar comentários para alterar o plano",
+    "validation": {
+      "required": "Preencha este campo obrigatório.",
+      "choice": "Escolha uma das opções apresentadas.",
+      "tooShort": "Introduza pelo menos {{count}} caracteres.",
+      "tooLong": "Introduza no máximo {{count}} caracteres."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -299,6 +308,8 @@
       "picture": "Mostrar ecrã",
       "backToForm": "Voltar ao formulário",
       "liveView": "Vista em direto",
+      "openRemoteDesktop": "Abrir ambiente de trabalho remoto",
+      "useForm": "Usar o formulário",
       "fill": "Preencher",
       "skip": "Ignorar",
       "continue": "Continuar",
@@ -306,6 +317,9 @@
       "showPassword": "Mostrar palavra-passe",
       "hidePassword": "Ocultar palavra-passe",
       "scan": "Ler código"
+    },
+    "directSignIn": {
+      "hint": "Inicie sessão diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber dados remotamente. Conclua este passo no computador anfitrião e depois devolva o controlo ao Agent.",
     "unnamedField": "Campo",
@@ -384,6 +398,8 @@
       "submitting": "A enviar"
     },
     "permission": {
+      "titleStdin": "Permitir entrada neste terminal?",
+      "titleMcpUrl": "Concluir o pedido de {{server}}",
       "highRiskTitle": "Uma permissão de alto risco requer confirmação",
       "highRiskDetail": "Reveja o comando e confirme novamente para o permitir. Recuse se tiver dúvidas.",
       "sessionAllowTitle": "Permitir uma vez ou permitir sempre para esta tarefa",

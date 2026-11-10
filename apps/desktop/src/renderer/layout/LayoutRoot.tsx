@@ -19,6 +19,8 @@ import {
   type LayoutNode,
   type PaneNode,
 } from '../../shared/layoutTree';
+import { SidebarPresentationContext, useSidebarPresentation } from './sidebarPresentation';
+import { sidebarExpansionWidth } from './sidebarExpansion';
 import { installGhostDevTools } from '../cindy-brain/ghostDevTools';
 import { ensureGhostPanelsRegistered, useGhostPanelsSync } from '../cindy-brain/ghostPanels';
 import { registerBuiltinPanels } from '../panels/builtinPanels';
@@ -295,7 +297,9 @@ interface RootWidthState {
   splitWidths: Record<string, string>;
 }
 
-function computeRootWidths(layout: Layout, live: Record<string, number> | null): RootWidthState {
+function computeRootWidths(
+  layout: Layout, live: Record<string, number> | null, anchoredWidth?: number,
+): RootWidthState {
   const panelWidths: Record<string, string> = {};
   const splitWidths: Record<string, string> = {};
   if (layout.content.type !== 'split' || layout.content.direction !== 'row') {
@@ -310,7 +314,15 @@ function computeRootWidths(layout: Layout, live: Record<string, number> | null):
     // would be relative to each consumer's immediate parent, so GhostPanel's inner section would
     // accidentally apply the root share a second time. cqw keeps the shell and content aligned
     // without restoring a ResizeObserver → React state round-trip during live window resizing.
-    const width = `clamp(${min}px, ${share * 100}cqw, calc(100cqw - ${CHAT_MIN_PX}px))`;
+    const savedPixels = !live && node.type === 'pane' ? node.preferredWidth : undefined;
+    const anchoredPixels = anchoredWidth === undefined ? null :
+      Math.max(min, Math.min(savedPixels ?? share * anchoredWidth, anchoredWidth - CHAT_MIN_PX));
+    const preferred = anchoredPixels === null
+      ? savedPixels === undefined ? `${share * 100}cqw` : `${savedPixels}px`
+      : node.type === 'pane' && node.panelKind === 'right-tabs'
+        ? `calc(100cqw - ${anchoredWidth! - anchoredPixels}px)`
+        : `${anchoredPixels}px`;
+    const width = `clamp(${min}px, ${preferred}, calc(100cqw - ${CHAT_MIN_PX}px))`;
     if (node.type === 'pane') panelWidths[node.panelKind] = width;
     else splitWidths[node.id] = width;
   }
@@ -498,6 +510,7 @@ interface RootDividerProps extends RootDividerPropsExtra {
   onLive: (live: Record<string, number> | null) => void;
   /** 提交后的乐观本地树更新(广播随后回声同一棵树)。 */
   onCommitted: (layout: Layout) => void;
+  preserveChatWidth?: boolean;
 }
 
 /** 压缩 chat 提交的接力计划(见 RootDivider.chatShrinkPlan)。 */
@@ -530,6 +543,30 @@ function rawPanePx(node: LayoutNode): number | null {
   return typeof width === 'number' && width >= 0 ? width : null;
 }
 
+/** Rebase a divider gesture on the widths left by native window resizing. */
+function alignExpandedPaneFractions(layout: Layout, available: number): Layout | null {
+  if (layout.content.type !== 'split' || layout.content.direction !== 'row' || available <= 0) return null;
+  const ledger = activeSplitLedger(layout.content.children);
+  const chat = ledger.entries.find((entry) => containsChat(entry.node));
+  if (!chat) return null;
+  const widths = ledger.entries.filter((entry) => entry !== chat).map((entry) => ({
+    entry, width: measuredPanePx(entry.node),
+  }));
+  if (widths.some(({ width }) => width === null)) return null;
+  const next = structuredClone(layout);
+  if (next.content.type !== 'split') return null;
+  let used = 0;
+  for (const { entry, width } of widths) {
+    const fraction = Math.max(MIN_SPLIT_CHILD_FRACTION, width! / available * ledger.scale);
+    next.content.children[entry.treeIndex].fraction = fraction;
+    used += fraction;
+  }
+  const remaining = ledger.scale - used;
+  if (remaining < MIN_SPLIT_CHILD_FRACTION) return null;
+  next.content.children[chat.treeIndex].fraction = remaining;
+  return next;
+}
+
 /**
  * 根分割的交互式分割线:1px 缝 + 7px 隐形抓握区。拖动在缝两侧邻居之间转移
  * 在场份额(三重余量夹取,见 sideRoomShare),拖动中只更新瞬时覆盖(不写 IPC),
@@ -546,6 +583,7 @@ function RootDivider({
   shareScale,
   onLive,
   onCommitted,
+  preserveChatWidth = false,
 }: RootDividerProps): ReactNode {
   const [hover, setHover] = useState(false);
   const draggingRef = useRef(false);
@@ -572,6 +610,16 @@ function RootDivider({
           ? transferSplitFraction(current, splitId, right.treeIndex, left.treeIndex, treeAmount)
           : transferSplitFraction(current, splitId, left.treeIndex, right.treeIndex, -treeAmount);
       if (!op.applied) return;
+      if (op.layout.content.type === 'split' && op.layout.content.direction === 'row' &&
+          [left, right].some((entry) => entry.node.type === 'pane' && entry.node.panelKind === 'right-tabs')) {
+        const available = availableWidthRootRef.current?.getBoundingClientRect().width || availableWidthHint || 0;
+        const entry = activeSplitLedger(op.layout.content.children).entries.find(
+          (item) => item.node.type === 'pane' && item.node.panelKind === 'right-tabs');
+        if (entry?.node.type === 'pane' && available > 0) {
+          entry.node.preferredWidth = Math.round(Math.max(NON_CHAT_FLOOR_PX,
+            Math.min(entry.share * available, available - CHAT_MIN_PX, 16000)));
+        }
+      }
       onCommitted(op.layout);
       void window.electronAPI.layout.set(op.layout).catch(() => undefined);
     } catch {
@@ -626,6 +674,7 @@ function RootDivider({
     chatEntry: SplitChildEntry,
     otherSide: SplitChildEntry,
     available: number,
+    siblings: SplitChildEntry[] = visibleSiblings,
   ): { room: number; relay: RelayPlan } | null => {
     if (!(available > 0)) return null;
     const measured = rawPanePx(chatEntry.node);
@@ -634,7 +683,7 @@ function RootDivider({
       shareScale > 0 ? Math.max(0, (entry.fraction - MIN_SPLIT_CHILD_FRACTION) / shareScale) : 0;
     let sourcesRoom = floorRoom(chatEntry);
     const idleSources: number[] = [];
-    for (const sibling of visibleSiblings) {
+    for (const sibling of siblings) {
       if (sibling === chatEntry || sibling === otherSide) continue;
       const width = rawPanePx(sibling.node);
       if (width !== null && width < 1) {
@@ -664,7 +713,8 @@ function RootDivider({
     // The settle-time self-heal can still be pending when the user grabs the divider immediately
     // after a window resize. Align this gesture's baseline synchronously so a pane held up by the
     // CSS floor responds from the first pixel; persist only if the gesture actually moves.
-    const alignedLayout = normalizeSubMinFractions(layout, available, isPanelKindVisible);
+    const alignedLayout = (preserveChatWidth ? alignExpandedPaneFractions(layout, available) : null)
+      ?? normalizeSubMinFractions(layout, available, isPanelKindVisible);
     const alignedLedger =
       alignedLayout?.content.type === 'split' && alignedLayout.content.direction === 'row'
         ? activeSplitLedger(alignedLayout.content.children)
@@ -675,14 +725,18 @@ function RootDivider({
     const startL = alignedLeft?.share ?? left.share;
     const startR = alignedRight?.share ?? right.share;
     // 起拖只量一次(拖动期间界面静止,没有失效场景);chat 量不到时回落账本估值。
-    const chatEntry = containsChat(left.node) ? left : containsChat(right.node) ? right : null;
+    // 行程余量与起拖基准同口径:原生缩放吸收后,树上的旧份额已不是画面上的份额。
+    const dragLeft = alignedLeft && alignedRight ? alignedLeft : left;
+    const dragRight = alignedLeft && alignedRight ? alignedRight : right;
+    const dragSiblings = alignedLeft && alignedRight && alignedLedger ? alignedLedger.entries : visibleSiblings;
+    const chatEntry = containsChat(dragLeft.node) ? dragLeft : containsChat(dragRight.node) ? dragRight : null;
     const shrinkPlan = chatEntry
-      ? chatShrinkPlan(chatEntry, chatEntry === left ? right : left, available)
+      ? chatShrinkPlan(chatEntry, chatEntry === dragLeft ? dragRight : dragLeft, available, dragSiblings)
       : null;
-    let dMin = -sideRoomShare(left, available, null);
-    let dMax = sideRoomShare(right, available, null);
-    if (shrinkPlan && chatEntry === left) dMin = -shrinkPlan.room;
-    if (shrinkPlan && chatEntry === right) dMax = shrinkPlan.room;
+    let dMin = -sideRoomShare(dragLeft, available, null);
+    let dMax = sideRoomShare(dragRight, available, null);
+    if (shrinkPlan && chatEntry === dragLeft) dMin = -shrinkPlan.room;
+    if (shrinkPlan && chatEntry === dragRight) dMax = shrinkPlan.room;
     const relay: RelayPlan | null = shrinkPlan?.relay ?? null;
     let lastD = 0;
 
@@ -695,7 +749,12 @@ function RootDivider({
     const onMove = (me: PointerEvent) => {
       const d = Math.min(dMax, Math.max(dMin, (me.clientX - startX) / available));
       lastD = d;
-      onLive({ [left.node.id]: startL + d, [right.node.id]: startR - d });
+      onLive({
+        ...(preserveChatWidth && alignedLedger ? Object.fromEntries(
+          alignedLedger.entries.map((entry) => [entry.node.id, entry.share]),
+        ) : {}),
+        [left.node.id]: startL + d, [right.node.id]: startR - d,
+      });
     };
     const finish = (commitIt: boolean) => {
       draggingRef.current = false;
@@ -719,7 +778,6 @@ function RootDivider({
   // 在两块布局下的语义等价推广。在场份额口径:均分的是**画面上**这两块的宽度。
   // 压缩 chat 的方向同样走接力(计划即时按当前实测现算),且不得越过 chat 400px 下限。
   const onDoubleClick = () => {
-    const total = left.share + right.share;
     const measuredAvailable = availableWidthRootRef.current?.getBoundingClientRect().width ?? 0;
     const available =
       availableWidthHint && availableWidthHint > 0
@@ -731,7 +789,12 @@ function RootDivider({
     const plan = chatEntry
       ? chatShrinkPlan(chatEntry, chatEntry === left ? right : left, available)
       : null;
-    let d = total / 2 - left.share;
+    const aligned = preserveChatWidth ? alignExpandedPaneFractions(layout, available) : null;
+    const alignedEntries = aligned?.content.type === 'split'
+      ? activeSplitLedger(aligned.content.children).entries : [];
+    const leftShare = alignedEntries.find((entry) => entry.treeIndex === left.treeIndex)?.share ?? left.share;
+    const rightShare = alignedEntries.find((entry) => entry.treeIndex === right.treeIndex)?.share ?? right.share;
+    let d = (leftShare + rightShare) / 2 - leftShare;
     if (plan) {
       // 均分 delta 压缩 chat 侧时,夹取到接力计划的可压余量,防止越过 400px 下限。
       const compressingChat = chatEntry === left ? d < 0 : d > 0;
@@ -739,7 +802,7 @@ function RootDivider({
         d = chatEntry === left ? Math.max(d, -plan.room) : Math.min(d, plan.room);
       }
     }
-    commit(d, plan?.relay ?? null);
+    commit(d, plan?.relay ?? null, aligned ?? undefined);
   };
 
   return (
@@ -895,11 +958,14 @@ interface LayoutRootProps {
   suppressNonChatPanels?: boolean;
   /** right-tabs 可保留挂载但不占宽度；窗口左边缘应归其后第一个实际在场的面板。 */
   rightTabsCollapsed?: boolean;
+  /** Wait for the initial route/session restoration before observing open transitions. */
+  sidebarExpansionReady?: boolean;
 }
 
 export function LayoutRoot({
   suppressNonChatPanels = false,
   rightTabsCollapsed = false,
+  sidebarExpansionReady = true,
 }: LayoutRootProps = {}): ReactNode {
   // 幂等注册内置面板 —— 放组件体而非模块副作用:HMR / 测试 reset 后再渲染也能自愈。
   registerBuiltinPanels();
@@ -924,12 +990,65 @@ export function LayoutRoot({
   useEffect(() => window.electronAPI.layout.onChanged(({ layout: next }) => setLayout(next)), []);
   const layoutRootRef = useRef<HTMLDivElement>(null);
 
+  const expansionEntries = layout.content.type === 'split' && layout.content.direction === 'row'
+    ? activeSplitLedger(layout.content.children).entries : [];
+  const lastExpansionEntry = expansionEntries.at(-1);
+  const expandsRight = lastExpansionEntry?.node.type === 'pane' &&
+    lastExpansionEntry.node.panelKind === 'right-tabs';
+  const sidebarPresentation = useSidebarPresentation(
+    layoutRootRef,
+    rightTabsCollapsed || suppressNonChatPanels,
+    sidebarExpansionReady && expandsRight,
+    () => sidebarExpansionWidth(layoutRootRef.current?.getBoundingClientRect().width ?? 0,
+      expansionEntries.filter((entry) => !containsChat(entry.node)).map((entry) => ({
+        share: entry.share, min: paneMinPx(entry.node),
+        sidebar: entry.node.type === 'pane' && entry.node.panelKind === 'right-tabs',
+        preferredWidth: entry.node.type === 'pane' ? entry.node.preferredWidth : undefined,
+      }))),
+    () => {
+      const pane = layoutRootRef.current?.querySelector<HTMLElement>('[data-panel-drag-root="right-tabs"]');
+      return pane?.getBoundingClientRect().width ?? 0;
+    },
+  );
+  const rememberSidebarWidth = useRef<() => void>(() => undefined);
+  rememberSidebarWidth.current = () => {
+    if (!sidebarExpansionReady || !expandsRight || rightTabsCollapsed || suppressNonChatPanels ||
+        sidebarPresentation.frozenWidth !== undefined) return;
+    const root = layoutRootRef.current;
+    const width = root?.querySelector<HTMLElement>('[data-panel-drag-root="right-tabs"]')?.getBoundingClientRect().width ?? 0;
+    const chat = root?.querySelector<HTMLElement>('[data-panel-drag-root="chat-main"]');
+    if (!root || !chat || chat.getBoundingClientRect().width < CHAT_MIN_PX ||
+        width < NON_CHAT_FLOOR_PX || width > 16000) return;
+    const latest = window.electronAPI.layout.getStateSync().layout;
+    const next = alignExpandedPaneFractions(latest, root.getBoundingClientRect().width) ?? structuredClone(latest);
+    if (next.content.type !== 'split') return;
+    const pane = next.content.children.find((entry) => entry.node.type === 'pane' && entry.node.panelKind === 'right-tabs')?.node;
+    if (pane?.type !== 'pane' || pane.preferredWidth === Math.round(width)) return;
+    pane.preferredWidth = Math.round(width);
+    setLayout(next);
+    void window.electronAPI.layout.set(next).catch(() => undefined);
+  };
+  useEffect(() => {
+    let frame: number | null = null;
+    const unsubscribe = window.electronAPI.onSidebarWindowUserResize?.(() => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => { frame = null; rememberSidebarWidth.current(); });
+    });
+    return () => { unsubscribe?.(); if (frame !== null) cancelAnimationFrame(frame); };
+  }, []);
+  const rootStyle: CSSProperties = {
+    containerType: 'inline-size',
+    ...(sidebarPresentation.frozenWidth === undefined ? {} : {
+      flex: 'none', width: sidebarPresentation.frozenWidth,
+    }),
+  };
+
   // CSS clamp 负责 live resize 的即时画面；这里不发布连续宽度 state，只在内容区
   // 停稳后检查一次份额账本。确实有非 chat 面板被 120px floor 托起时才写 React/IPC，
   // 让下一次分割线起拖从眼前宽度开始，不出现“空拖一段再跳大”。
   useEffect(() => {
     const root = layoutRootRef.current;
-    if (!root || suppressNonChatPanels) return;
+    if (!root || suppressNonChatPanels || sidebarPresentation.expandedWidth !== undefined) return;
     let timer: number | null = null;
     const heal = () => {
       timer = null;
@@ -958,7 +1077,7 @@ export function LayoutRoot({
       if (observer === null) window.removeEventListener('resize', schedule);
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [ghostSyncVersion, layout, suppressNonChatPanels]);
+  }, [ghostSyncVersion, layout, suppressNonChatPanels, sidebarPresentation.expandedWidth]);
 
   // 撑满态(panelMaximize.tsx):会话级视图态,树账本不动。同 kind 再点还原。
   const [maximizedKind, setMaximizedKind] = useState<string | null>(null);
@@ -976,9 +1095,20 @@ export function LayoutRoot({
   const availableWidthHint = useContentAvailableWidth();
   // eslint 会说 ghostSyncVersion 没被直接读——它是 computeRootWidths 里
   // isPanelKindVisible 的隐式数据源(模块级注册表),必须进 deps 才能感知装卸。
+  const widthAnchor = useRef<{ layout: Layout; expansion: number; width: number } | null>(null);
+  const expandedWidth = sidebarPresentation.expandedWidth;
+  if (expandedWidth === undefined) widthAnchor.current = null;
+  else if (widthAnchor.current?.expansion !== expandedWidth) {
+    widthAnchor.current = { layout, expansion: expandedWidth, width: expandedWidth };
+  } else if (widthAnchor.current.layout !== layout) {
+    widthAnchor.current = { layout, expansion: expandedWidth,
+      width: layoutRootRef.current?.getBoundingClientRect().width || expandedWidth };
+  }
+  const anchoredWidth = widthAnchor.current?.width;
   const rootWidths = useMemo(
-    () => computeRootWidths(layout, liveFractions),
-    [layout, liveFractions, ghostSyncVersion],
+    () => computeRootWidths(layout, liveFractions,
+      liveFractions ? undefined : anchoredWidth),
+    [layout, liveFractions, ghostSyncVersion, anchoredWidth],
   );
 
   // 撑满目标失效自动还原:面板被卸下/停用(kind 注销)、抽离进独立窗口或
@@ -1048,9 +1178,11 @@ export function LayoutRoot({
               ref={layoutRootRef}
               data-testid="layout-root-content"
               className="flex min-w-0 flex-1 overflow-hidden"
-              style={{ containerType: 'inline-size' }}
+              style={rootStyle}
             >
-              {body}
+              <SidebarPresentationContext.Provider value={expandsRight ? sidebarPresentation : null}>
+                {body}
+              </SidebarPresentationContext.Provider>
             </div>
           </PaneWidthProvider>
         </PanelMaximizeContext.Provider>
@@ -1097,6 +1229,9 @@ export function LayoutRoot({
               availableWidthHint={availableWidthHint}
               availableWidthRootRef={layoutRootRef}
               shareScale={ledger.scale}
+              preserveChatWidth={anchoredWidth !== undefined || expansionEntries.some(
+                ({ node }) => node.type === 'pane' && node.preferredWidth !== undefined,
+              )}
               onLive={setLiveFractions}
               onCommitted={setLayout}
             />,
@@ -1187,9 +1322,11 @@ export function LayoutRoot({
           ref={layoutRootRef}
           data-testid="layout-root-content"
           className="flex min-w-0 flex-1 overflow-hidden"
-          style={{ containerType: 'inline-size' }}
+          style={rootStyle}
         >
-          {body}
+          <SidebarPresentationContext.Provider value={expandsRight ? sidebarPresentation : null}>
+            {body}
+          </SidebarPresentationContext.Provider>
         </div>
       </PaneWidthProvider>
     </PanelMaximizeContext.Provider>

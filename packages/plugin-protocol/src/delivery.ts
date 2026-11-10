@@ -14,6 +14,8 @@ import {
   string,
 } from './internal/parse.js';
 import { isValidPluginResourceId } from './internal/pluginResourceId.js';
+import { isSafeGhostRelativePath } from './internal/ghostPath.js';
+import { GHOST_README_MAX_BYTES, GHOST_README_MAX_IMAGES } from './readme.js';
 import { isValidPluginNamespace, parseOptionalNamespace } from './internal/namespace.js';
 
 export {
@@ -70,6 +72,23 @@ export interface PluginIconMetadata {
   url: string;
   /** 图标地址过期时间，格式为带毫秒的 UTC ISO 8601。 */
   expiresAt: string;
+}
+
+/** 详细介绍引用的一张包内图片；`path` 为包内规范路径，URL 为短期授权地址。 */
+export interface PluginReadmeImageMetadata extends PluginIconMetadata {
+  path: string;
+}
+
+/**
+ * 详情响应可选携带的详细介绍：服务端按请求的 `readmeLocale` 选好 manifest.readme 的
+ * 一种语言（缺少时回退英文），正文原样下发，图片单独存储并签发短期地址。
+ * 旧服务端不提供；格式不合法时客户端丢弃它，不影响详情其余部分。
+ */
+export interface PluginReadmeDelivery {
+  /** 实际选用的 Markdown 文件，必须是 manifest.readme 声明的路径之一。 */
+  path: string;
+  markdown: string;
+  images: PluginReadmeImageMetadata[];
 }
 
 /** 列表和详情共用的客户端兼容 Release 摘要。 */
@@ -191,6 +210,8 @@ export interface VisiblePluginDetail {
   defaultInstall: boolean;
   /** 服务端为该客户端选择的 Release，包含完整 manifest。 */
   currentRelease: PluginReleaseDetail;
+  /** 当前 Release 的详细介绍；旧服务端缺省，未声明 readme 时为 null。 */
+  readme?: PluginReadmeDelivery | null;
   usageStatistics?: PluginUsageStatistics;
   downloadStatistics?: PluginDownloadStatistics;
 }
@@ -299,6 +320,39 @@ function parseIconMetadata(value: unknown, path: string, options?: PluginObjectU
     url: parsePluginObjectUrl(raw.url, `${path}.url`, options),
     expiresAt: isoDate(raw.expiresAt, `${path}.expiresAt`),
   };
+}
+
+/** 详细介绍只用于展示：任何不合法都整体丢弃（返回 undefined），不让详情失败。 */
+function parseReadmeDelivery(
+  value: unknown,
+  manifest: GhostManifest,
+  options?: PluginObjectUrlOptions,
+): PluginReadmeDelivery | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  try {
+    const raw = object(value, 'readme');
+    const declared = Object.values(manifest.readme ?? {});
+    if (typeof raw.path !== 'string' || !declared.includes(raw.path)) return undefined;
+    if (
+      typeof raw.markdown !== 'string' ||
+      new TextEncoder().encode(raw.markdown).length > GHOST_README_MAX_BYTES
+    ) {
+      return undefined;
+    }
+    if (!Array.isArray(raw.images) || raw.images.length > GHOST_README_MAX_IMAGES) return undefined;
+    const images = raw.images.map((image, index) => {
+      const metadata = parseIconMetadata(image, `readme.images[${index}]`, options);
+      const imagePath = object(image, `readme.images[${index}]`).path;
+      if (!metadata || typeof imagePath !== 'string' || !isSafeGhostRelativePath(imagePath)) {
+        throw new PluginProtocolError(`readme.images[${index}].path 不合法`);
+      }
+      return { ...metadata, path: imagePath };
+    });
+    return { path: raw.path, markdown: raw.markdown, images };
+  } catch {
+    return undefined;
+  }
 }
 
 function parseReleaseSummary(value: unknown, path: string, options?: PluginObjectUrlOptions): PluginReleaseSummary {
@@ -466,11 +520,13 @@ function parseVisiblePluginDetail(value: unknown, path: string, options?: Plugin
   if (parsed.author !== manifestAuthor) {
     throw new PluginProtocolError(`${path}.author 与 currentRelease.manifest.author 不一致`);
   }
+  const readme = parseReadmeDelivery(raw.readme, currentRelease.manifest, options);
   return {
     ...parsed,
     ...(parsePluginUsageStatistics(raw.usageStatistics) ? { usageStatistics: parsePluginUsageStatistics(raw.usageStatistics) } : {}),
     ...(downloadStatistics ? { downloadStatistics } : {}),
     currentRelease,
+    ...(readme !== undefined ? { readme } : {}),
   };
 }
 

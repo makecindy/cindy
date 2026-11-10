@@ -366,7 +366,7 @@ export type CindyMediaToolRequest =
   | { action: 'poll'; invocationId: string };
 
 /** Host-owned connections: Grok login, or a messaging platform a teammate connects to itself. */
-export type CindyHostConnectionId = 'grok' | 'im-telegram' | 'im-feishu' | 'im-wecom' | 'im-dingtalk' | 'im-discord';
+export type CindyHostConnectionId = 'grok' | 'im-telegram' | 'im-feishu' | 'im-wecom' | 'im-dingtalk' | 'im-discord' | 'im-imessage';
 
 /** host 注入的依赖:总机的全部真实能力都在这几个回调里。 */
 export interface CindyGhostsMcpDeps {
@@ -470,6 +470,11 @@ export interface CindyGhostsMcpDeps {
   getRosterItems?(): Array<Pick<CindyGhostInfo, 'id' | 'name' | 'command' | 'recall' | 'namespace'>>;
   /** 意识编写手册(markdown,随主机版本走;agent 写意识前先读)。 */
   forgeGuide(): Promise<string>;
+  /**
+   * MCP Apps 页面生成手册(markdown,随主机版本走):ghost_forge_guide 传
+   * section "pages" 时整份返回。缺省 = 不提供,"pages" 按普通章节查找。
+   */
+  forgePageManual?(): Promise<string>;
   /**
    * 在新的目标目录创建一份安全起步骨架。目标已存在时必须拒绝，绝不覆盖
    * 用户文件；Node 模板只生成随包源码，不安装依赖。

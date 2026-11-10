@@ -3,6 +3,7 @@ import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
+  | 'usage.recordPiUsage'
   | 'chatCache.execute'
   | 'usage.recordMediaSpend'
   | 'authorization.readProjection'
@@ -38,6 +39,7 @@ export type DbTxName =
   | 'message.updateContent'
   | 'message.leaseMutate'
   | 'message.rewindUserAfterClear'
+  | 'message.purgeRewoundSchedulerPrompts'
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
@@ -445,6 +447,20 @@ export interface MessageRewindUserAfterClearArgs {
   sessionId: string;
   clientId: string;
   rewoundAt: number;
+  discard?: boolean;
+}
+
+export interface MessagePurgeRewoundSchedulerPromptsArgs {
+  limit: number;
+  /** 上一批返回的 cursor（窗口末尾 rewind_at）；省略从头扫。 */
+  cursor?: number;
+}
+
+export interface MessagePurgeRewoundSchedulerPromptsResult {
+  deleted: number;
+  sessionIds: string[];
+  /** 下一批的起点；null 表示所有隐藏行已扫完。 */
+  cursor: number | null;
 }
 
 /**
@@ -1371,6 +1387,7 @@ export interface MediaSpendArgs {
 
 export type DbTxArgsByName = {
   'usage.recordMediaSpend': MediaSpendArgs;
+  'usage.recordPiUsage': import('../../worker/opHandlers/piUsageTx.js').PiUsageWrite[];
   'authorization.readProjection': { sessionId: string; leadId: string };
   'rewind.commit': RewindCommitArgs;
   'session.treeRehydrate': SessionTreeRehydrateArgs;
@@ -1405,6 +1422,7 @@ export type DbTxArgsByName = {
   'message.updateContent': MessageUpdateContentArgs;
   'message.leaseMutate': MessageLeaseMutateArgs;
   'message.rewindUserAfterClear': MessageRewindUserAfterClearArgs;
+  'message.purgeRewoundSchedulerPrompts': MessagePurgeRewoundSchedulerPromptsArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
@@ -1462,6 +1480,7 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
+  'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {
     legacyUsd: number;
     amount: number;
@@ -1469,7 +1488,7 @@ export type DbTxResultByName = {
     approximate: number;
   } | null;
   'authorization.readProjection': import('../../autoReviewProjection.js').StoredAutoReviewProjection;
-  'rewind.commit': undefined;
+  'rewind.commit': string[];
   'session.treeRehydrate': { messageCount: number; hiddenClientIds: string[] };
   'fork.session': { messageCount: number };
   'embedding.markDone': undefined;
@@ -1506,6 +1525,7 @@ export type DbTxResultByName = {
   'message.updateContent': { changes: number };
   'message.leaseMutate': { changes: number };
   'message.rewindUserAfterClear': { changes: number };
+  'message.purgeRewoundSchedulerPrompts': MessagePurgeRewoundSchedulerPromptsResult;
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;

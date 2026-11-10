@@ -30,7 +30,10 @@ struct TubeView: View {
       }
       VStack(spacing: 0) {
         Spacer(minLength: 0)
-        Rectangle()
+        // The surface's corners are softly rounded rather than a hard flat edge; the well's
+        // rounded bottom still shapes low levels.
+        let surface = min(4, liquid / 2)
+        UnevenRoundedRectangle(topLeadingRadius: surface, topTrailingRadius: surface, style: .circular)
           .fill(accented ? WidgetPalette.liquid : (tint ?? WidgetPalette.plenty))
           .frame(height: liquid)
           .widgetAccentable()
@@ -68,7 +71,7 @@ struct HatchPattern: Shape {
   }
 }
 
-/// Number above the tube: Barlow digits with a smaller % on the same baseline. It keeps its
+/// Number above the tube: Credits stack below the digits; % stays on the baseline. It keeps its
 /// ink at every level; the liquid alone carries the quota color.
 struct SourceValue: View {
   let source: WidgetSource
@@ -77,10 +80,20 @@ struct SourceValue: View {
 
   var body: some View {
     if let value = source.value {
-      HStack(alignment: .firstTextBaseline, spacing: 1) {
-        Text(value).font(WidgetNumFont.font(source.kind == "balance" ? size - 2 : size))
-        if let unit = source.unit {
-          Text(unit).font(WidgetNumFont.font(unitSize)).foregroundStyle(WidgetPalette.ink3)
+      Group {
+        if source.reserve, let unit = source.unit {
+          VStack(spacing: 1) {
+            Text(value).font(WidgetNumFont.font(size)).frame(height: size + 2)
+            Text(unit).font(.system(size: unitSize)).foregroundStyle(WidgetPalette.ink3)
+              .frame(height: unitSize + 2)
+          }
+        } else {
+          HStack(alignment: .firstTextBaseline, spacing: 1) {
+            Text(value).font(WidgetNumFont.font(source.kind == "balance" ? size - 2 : size))
+            if let unit = source.unit {
+              Text(unit).font(WidgetNumFont.font(unitSize)).foregroundStyle(WidgetPalette.ink3)
+            }
+          }
         }
       }
       .lineLimit(1)
@@ -133,12 +146,14 @@ struct SourceColumn: View {
   /// Logo above the name (Mac layout) instead of beside it.
   var stacked = false
   var coarseWhen = false
+  // Shared by the row so reserve and percentage tubes keep the same top edge.
+  var creditHeader = false
 
   var body: some View {
     VStack(spacing: 0) {
       SourceValue(source: source, size: valueSize, unitSize: unitSize)
-        .frame(height: valueSize + 2, alignment: .bottom)
-      TubeView(source: source, width: tubeWidth, height: tubeHeight)
+        .frame(height: valueSize + 2 + (creditHeader ? unitSize + 3 : 0), alignment: creditHeader ? .top : .bottom)
+      TubeView(source: source, width: tubeWidth, height: tubeHeight - (creditHeader ? unitSize + 3 : 0))
         .padding(.top, stacked ? 6 : 4)
       Group {
         if stacked {
@@ -194,6 +209,8 @@ struct EmptyStateView: View {
 struct QuotaWidgetView: View {
   let state: WidgetState
   let now: Date
+  /// Leading sources the edit sheet placed first; the small size keeps them as placed.
+  var pinnedCount = 0
   @Environment(\.widgetFamily) private var family
 
   var body: some View {
@@ -223,9 +240,10 @@ struct QuotaWidgetView: View {
   private func content(_ sources: [WidgetSource], format: WidgetFormat) -> some View {
     switch family {
     case .systemSmall:
-      // Subscriptions first; the Cindy balance is not a subscription.
-      let subscriptions = sources.filter { $0.kind == "subscription" }
-      let list = Array((subscriptions.isEmpty ? sources : subscriptions).prefix(4))
+      // Accounts placed first, then subscriptions; the Cindy balance is not a subscription.
+      let rest = Array(sources.dropFirst(pinnedCount))
+      let subscriptions = rest.filter { $0.kind == "subscription" }
+      let list = Array((sources.prefix(pinnedCount) + (subscriptions.isEmpty ? rest : subscriptions)).prefix(4))
       let stale = format.staleLabel(minimumHours: 6)
       VStack(spacing: 0) {
         if let stale { StaleLine(text: stale).padding(.bottom, 4) }
@@ -233,7 +251,7 @@ struct QuotaWidgetView: View {
         HStack(alignment: .top, spacing: 0) {
           ForEach(list) { source in
             SourceColumn(source: source, format: format, tubeWidth: 22, tubeHeight: stale == nil ? 62 : 44,
-                         valueSize: 16, unitSize: 9.5, nameSize: 10, whenSize: 10, stacked: true, coarseWhen: true)
+                         valueSize: 16, unitSize: 9.5, nameSize: 10, whenSize: 10, stacked: true, coarseWhen: true, creditHeader: list.contains { $0.reserve && $0.value != nil && $0.unit != nil })
           }
         }
       }
@@ -249,7 +267,7 @@ struct QuotaWidgetView: View {
         HStack(alignment: .top, spacing: list.count > 6 ? 2 : 4) {
           ForEach(list) { source in
             SourceColumn(source: source, format: format, tubeWidth: 38, tubeHeight: 140,
-                         valueSize: 20, unitSize: 12, nameSize: 10.5, whenSize: 10.5, stacked: true)
+                         valueSize: 20, unitSize: 12, nameSize: 10.5, whenSize: 10.5, stacked: true, creditHeader: list.contains { $0.reserve && $0.value != nil && $0.unit != nil })
           }
         }
         .padding(.top, 10)
@@ -266,7 +284,7 @@ struct QuotaWidgetView: View {
         HStack(alignment: .top, spacing: 0) {
           ForEach(list) { source in
             SourceColumn(source: source, format: format, tubeWidth: 28, tubeHeight: stale == nil ? 72 : 54,
-                         valueSize: 18, unitSize: 11)
+                         valueSize: 18, unitSize: 11, creditHeader: list.contains { $0.reserve && $0.value != nil && $0.unit != nil })
           }
         }
       }

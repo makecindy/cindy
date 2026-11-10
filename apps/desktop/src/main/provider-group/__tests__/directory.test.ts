@@ -138,7 +138,7 @@ describe('resolveMembers', () => {
   // Unit/privacy: OpenAI quota reads are confined to usable same-account subscriptions.
   // The Claude-only fixture cannot detect querying API connections or a borrowed OpenAI share.
   it('reads OpenAI quota only for usable local/same-account subscriptions, never shares or API connections', async () => {
-    const readCodexUsage = vi.fn(async (_member: ProviderGroupMember) => providerGroupCodexUsageSnapshot({ updatedAt: 1_000, primary: { usedPercent: 25 } }));
+    const readCodexUsage = vi.fn<NonNullable<ProviderGroupDirectoryDeps['readCodexUsage']>>(async () => providerGroupCodexUsageSnapshot({ updatedAt: 1_000, primary: { usedPercent: 25 } }));
     const providers = [view('openai', 'OpenAI', { auth: { method: 'oauth', native: 'codex' } }),
       view('openai-api', 'OpenAI API', { auth: { method: 'apiKey' } }),
       view('openai-disabled', 'OpenAI', { suspended: true, auth: { method: 'oauth', native: 'codex' } })];
@@ -311,6 +311,88 @@ describe('resolveMembers', () => {
     directory.invalidate('mini');
     await directory.resolveMembers('anthropic', config);
     expect(d.readDeviceProviders).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports fresh vs cached reads and a stale reply separately', async () => {
+    const readDeviceProviderCatalog = vi.fn(async () => ({ views: [view('anthropic-1a2b3c4d', 'Claude')], stale: true }));
+    const directory = createProviderGroupDirectory(deps({ readDeviceProviderCatalog }));
+    await expect(directory.readDeviceCatalogState!('mini')).resolves.toMatchObject({ freshRead: true, stale: true });
+    await expect(directory.readDeviceCatalogState!('mini')).resolves.toMatchObject({ freshRead: false, stale: true });
+    expect(readDeviceProviderCatalog).toHaveBeenCalledTimes(1);
+    directory.invalidate('mini');
+    await expect(directory.readDeviceCatalogState!('mini')).resolves.toMatchObject({ freshRead: true, stale: true });
+    expect(readDeviceProviderCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it('deducts elapsed time from a cached source budget and expires on either clock', async () => {
+    let wall = 1_000, mono = 5_000, reads = 0;
+    const readDeviceProviderCatalog = vi.fn(async () => {
+      reads += 1;
+      return { views: [view('anthropic-1a2b3c4d', 'Claude')], stale: true, remainingMs: 60_000 };
+    });
+    const directory = createProviderGroupDirectory(deps({ readDeviceProviderCatalog, now: () => wall, mono: () => mono }));
+    await expect(directory.readDeviceCatalogState!('mini')).resolves.toMatchObject({
+      freshRead: true, stale: true, remainingMs: 60_000,
+    });
+    wall += 10_000; mono += 10_000;
+    await expect(directory.readDeviceCatalogState!('mini')).resolves.toMatchObject({
+      freshRead: false, stale: true, remainingMs: 50_000,
+    });
+    expect(reads).toBe(1);
+    mono += 50_001;
+    await expect(directory.readDeviceCatalogState!('mini')).resolves.toMatchObject({
+      freshRead: false, stale: true, remainingMs: 0,
+    });
+    expect(reads).toBe(1);
+  });
+
+  it('shares one in-flight read without resetting the budget for the joining caller', async () => {
+    let wall = 0, mono = 0, reads = 0, release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const readDeviceProviderCatalog = async () => {
+      reads += 1;
+      await gate;
+      return { views: [view('anthropic-1a2b3c4d', 'Claude')], stale: false, remainingMs: 30_000 };
+    };
+    const directory = createProviderGroupDirectory(deps({ readDeviceProviderCatalog, now: () => wall, mono: () => mono }));
+    const first = directory.readDeviceCatalogState!('mini');
+    const second = directory.readDeviceCatalogState!('mini');
+    wall = 5_000; mono = 5_000;
+    release();
+    await expect(first).resolves.toMatchObject({ freshRead: true, stale: false, remainingMs: 25_000 });
+    await expect(second).resolves.toMatchObject({ freshRead: false, stale: false, remainingMs: 25_000 });
+    expect(reads).toBe(1);
+  });
+
+  it('latches an observed expiry so a wall-clock rollback cannot revive the cached source', async () => {
+    let wall = 0, reads = 0;
+    const mono = 0;
+    const readDeviceProviderCatalog = vi.fn(async (id: string) => {
+      reads += 1;
+      return { views: [view(id === 'mini' ? 'anthropic-1a2b3c4d' : 'deepseek', 'Provider')],
+        stale: false, remainingMs: 1_000 };
+    });
+    const directory = createProviderGroupDirectory(deps({ readDeviceProviderCatalog, now: () => wall, mono: () => mono }));
+    await expect(directory.readDeviceCatalogState!('mini')).resolves.toMatchObject({
+      freshRead: true, stale: false, remainingMs: 1_000,
+    });
+    wall = 1_001;
+    await expect(directory.readDeviceCatalogState!('mini')).resolves.toMatchObject({
+      freshRead: false, stale: true, remainingMs: 0,
+    });
+    wall = 0;
+    await expect(directory.readDeviceCatalogState!('mini')).resolves.toMatchObject({
+      freshRead: false, stale: true, remainingMs: 0,
+    });
+    expect(reads).toBe(1);
+    await expect(directory.readDeviceCatalogState!('other')).resolves.toMatchObject({
+      freshRead: true, stale: false, remainingMs: 1_000,
+    });
+    directory.invalidate('mini');
+    await expect(directory.readDeviceCatalogState!('mini')).resolves.toMatchObject({
+      freshRead: true, stale: false, remainingMs: 1_000,
+    });
+    expect(reads).toBe(3);
   });
 });
 

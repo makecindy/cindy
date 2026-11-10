@@ -1,16 +1,19 @@
 /**
  * unsupportedTextPreview.test.ts
  * ---------------------------------------------------------------------------
- * Regression tests for file chips that route to TextLightbox. PDF and other
- * non-text formats must fall back to the OS default app instead of mounting
- * the text previewer.
+ * Regression tests for file chips that route to TextLightbox. Non-text formats
+ * use the unified type dispatcher instead of being decoded as text or silently
+ * opened outside Cindy.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { isTextPreviewSupported } from '../lib/textPreview';
+import { shouldOpenTextLightbox, shouldOpenTextLightboxForOrigin } from '../lib/filePreview';
+
+afterEach(() => vi.unstubAllGlobals());
 
 const source = (relative: string) =>
   readFileSync(resolve(__dirname, '..', ...relative.split('/')), 'utf8');
@@ -29,11 +32,15 @@ describe('unsupported text preview guard', () => {
     expect(isTextPreviewSupported('archive.zip')).toBe(false);
   });
 
-  it('fallback helper opens unsupported formats through the system app', () => {
-    const src = source('lib/filePreview.ts');
-    expect(src).toContain('isTextPreviewSupported(filePath)');
-    expect(src).toContain('window.electronAPI.openPath(filePath)');
-    expect(src).toContain('toast.error');
+  it('routes non-text files through the in-app viewer without opening the system app', async () => {
+    const openPath = vi.fn();
+    vi.stubGlobal('window', { electronAPI: { openPath } });
+    for (const filePath of ['spec.pdf', 'photo.png', 'archive.zip']) {
+      expect(await shouldOpenTextLightbox(filePath)).toBe(true);
+      expect(await shouldOpenTextLightboxForOrigin({ origin: { kind: 'local' }, workingDir: '/task' }, filePath)).toBe(true);
+    }
+    expect(await shouldOpenTextLightbox('')).toBe(false);
+    expect(openPath).not.toHaveBeenCalled();
   });
 
   it('guards all TextLightbox entry points that can receive file chips', () => {

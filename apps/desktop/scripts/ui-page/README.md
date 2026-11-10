@@ -5,6 +5,11 @@ Vite、main、登录、数据库、模型或插件，也不碰正式 Cindy 的�
 自检，以及人工快速看一个页面。何时用它、何时必须回到完整 Desktop，见
 [`desktop-development.md`「按改动选择验证方式」](../../../../docs/dev-rules/desktop-development.md)。
 
+构建保留 `?worker` 的真实 Worker 和 `?url` 的原始资源。设置搜索目录使用的
+`import.meta.glob('./**/*.settings-search.ts', { eager: true, import: 'default' })`
+会展开为真实静态导入，参与受影响页面扫描与指纹计算；`--compare` 按各自 Git 版本的
+文件集合展开，不能把当前新增定义混进旧版。其它 glob 形式会明确报错，不静默漏项。
+
 ```sh
 pnpm ui:check --changed --theme all                      # 本分支改动涉及的页面，全部场景
 pnpm ui:check --page device-picker --locale all          # 五种语言
@@ -31,8 +36,9 @@ FAIL group-chat.no-sidebar.dark.zh-CN.1280x800
 
 - 每个变体 id 是 `页面.场景.主题.语言.宽x高`。退出码：0 通过，1 有变体失败，2 参数错误。
 - **先看 `overview.png`**：截图按变体排列，每张最多 6 个变体，更多的写到 `overview-2.png`
-  等并在首行列出；`--compare` 时同一步骤的改前／改后并排。命令通过只代表断言和通用检查
-  通过，视觉是否合理仍要看图。
+  等并在首行列出；`--compare` 时同一步骤的改前／改后并排，换行时成对移动。命令通过只代表
+  断言和通用检查通过，视觉是否合理仍要看图。overview 是自检用的全量视图，不直接贴进 PR，
+  PR 用的截图见「发 PR 时带图」。
 - 改动集中在一个元素（间距、截断、对齐）时加 `--focus <CSS 选择器>`：每次截图另存该元素
   周围的 2 倍放大图（`*.focus.png`），overview 只放这些放大图，报告逐行给出元素尺寸、
   padding、gap、字号／行高／字重和被裁切的子元素数；与 `--compare` 一起用时改前数值同时
@@ -78,12 +84,23 @@ FAIL group-chat.no-sidebar.dark.zh-CN.1280x800
 通过情况、每个页面的场景与未覆盖行为、被替换的模块、改前／改后对照、`--focus` 实测数值
 （改前 → 改后）、未通过的场景和 `--changed` 没覆盖到的文件。
 
-发 PR 前运行 `pnpm ui:check:publish`（默认取最近一次运行，也可以传运行目录）：
+发 PR 前运行 `pnpm ui:check:publish`（默认取最近一次运行，也可以传运行目录）。PR 正文只放
+评审需要看清的几张图，全量 overview 只给链接：
 
-- 把该次运行的 `overview*.png` 作为一个提交推到作者 fork 的 `pr-assets/<当前分支>`。提交只含
-  截图、不与产品历史相连；同一分支多次发布时依次追加，旧链接继续有效。不改工作区、索引和
-  当前分支，截图不会进入上游仓库；目标远端就是 PR 的目标仓库时直接拒绝。
-- 输出 `pr.published.md`：`pr.md` 加上按提交 SHA 固定的图片链接，原样写进 PR 正文「UI 变化」。
+- **正文截图**每组一张表格并排，不限组数：
+  - 带 `--compare` 的运行：只放改前／改后逐像素不同的截图，左列改前、右列改后，按场景和步骤
+    顺序排列。改动影响几处就有几组；没有任何差异时写明“逐像素一致”。
+  - 没有 `--compare` 的运行：每个场景放最后一张截图，左列 Light、右列 Dark。
+  - 有 `--focus` 时用放大图代替整页截图。改动集中在一个元素时优先加 `--focus`，整页截图在
+    PR 里会被缩小。
+  - 用 `--case <场景,…>` 只发指定场景，修 bug 时选能复现问题的那个；没有 `--compare` 时每个
+    场景都会放一组，场景多时先选出能说明改动的。
+- **完整总览** `overview*.png` 一起上传，在正文末尾只给链接。
+- 截图和总览作为一个提交推到作者 fork 的 `pr-assets/<当前分支>`。提交只含截图、不与产品
+  历史相连；同一分支多次发布时依次追加，旧链接继续有效。不改工作区、索引和当前分支，截图
+  不会进入上游仓库；目标远端就是 PR 的目标仓库时直接拒绝。
+- 输出 `pr.published.md`：`pr.md` 加上按提交 SHA 固定的截图与总览链接，原样写进 PR 正文
+  「UI 变化」。
 - 默认推到第一个不是上游仓库的 GitHub 远端（通常是 `origin`），可用 `--remote`／`--branch`
   指定；`--dry-run` 只生成内容不推送。
 
@@ -158,8 +175,18 @@ mountPage({
 
    被替换的模块会列在报告的 `replaced` 里，不算被验证。
 
+场景里只为测试存在的按钮、开关、说明栏（完成、重新挂载、模拟离线……）加上
+`data-ui-page-control`：截图时它们被隐藏（`visibility: hidden`，布局不动），`check` 里照常
+点击。不要把产品界面本身的元素标成控件。
+
 `AppFrame` 复刻主界面的侧栏（默认 260px）与内容区结构，并挂载真实的 `ContentHeaderSlot`，
 让页面在真实宽度和标题栏里排版；不需要外框时直接渲染组件。
+
+构建器支持 Vite 的 `?url` 资源导入（含包路径与相对路径），按原字节生成独立资源 URL；
+PDF worker 的 `.mjs` 在 Electron 与 Chromium 宿主均按 JavaScript 提供。`?worker` 则编译为
+真实模块 worker。两类输入都纳入 `--changed`、`--compare` 与预览刷新，不应为绕过构建错误
+替换整个 PDF 组件。回归由 `runner.selftest.mjs` 验证真实 PDF worker 解析与资源变更追踪；
+这不代表单页工具会自动加载项目的其它 Vite 插件或其提供的静态目录。
 
 `check(page, ui)` 里的 `page` 是 Playwright Page。`ui` 包含当前变体
 （`case`、`theme`、`locale`、`viewport`、`data`）以及：
@@ -195,6 +222,9 @@ Tailwind 配置由 Tailwind 直接从磁盘加载，两侧都用当前版本；�
 
 ## 运行方式
 
+- 构建器支持 Vite 的 `?worker` 与 `?url` 导入：前者构建真实 worker，后者把文件原样
+  输出为资源 URL（包括 PDF.js 的预构建 `.mjs` worker）。两者的源文件都参与改动扫描与
+  对照指纹；`.mjs` 在 Electron 和 Chromium 检查模式中按 JavaScript 提供，不以替身绕过加载。
 - 默认 `--engine electron`：仓库里的 Electron，与 Cindy 同一个 Chromium。每次运行使用新的
   临时 profile、拒绝权限与下载、只允许访问测试源，运行完删除临时数据；后台检查不显示窗口、
   不占 Dock。

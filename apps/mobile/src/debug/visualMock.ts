@@ -1,9 +1,12 @@
+import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
+import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
 import { groupSettingsVisualFixture } from './groupSettingsVisualFixture';
+import { groupMentionVisualFixture } from './groupMentionVisualFixture';
 import { sessionImportVisualFixture } from './sessionImportVisualFixture';
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
-import { buildUiMockRows, UI_MOCK_SHOWCASE_PROJECTS, type UiMockSessionRow } from '@cindy/maker-shared/ui-mock';
+import { buildUiMockRows, UI_MOCK_PI_CONTEXT_USAGE, UI_MOCK_SHOWCASE_PROJECTS, type UiMockSessionRow } from '@cindy/maker-shared/ui-mock';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
 import { TASK_TAG_COLORS, type TaskTagRequest, type TaskTagResult } from '@cindy/maker-shared';
 import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
@@ -26,6 +29,7 @@ import type {
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
+import { prCardVisualFixture } from '@/debug/prCardVisualFixture';
 import { mailDraftCardFixture, mailVisualFixture, VISUAL_MAIL_DRAFT_CALL_ID, VISUAL_MAIL_DRAFT_SESSION_ID } from '@/debug/mailVisualFixture';
 import { teammateVisualFixture, teammateVisualReplyAt, VISUAL_TEAMMATE_SESSION_ID, VISUAL_TEAMMATE_THREAD_ROOT_ID, visualTeammateThreads } from '@/debug/teammateVisualFixture';
 import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
@@ -54,11 +58,54 @@ interface VisualRealDataSnapshot {
   projectionsBySession?: Record<string, InputProjection>;
 }
 
+// Explicit DEV mock replay: empty history first, then a delayed first row.
+// Changing the suffix varies delivery around the native transition/reveal window.
+const entryReplayCounts = new Map<string, number>();
+function entryReplayMessages(sessionId: string): RemoteMessage[] {
+  if (!entryReplayCounts.has(sessionId)) {
+    entryReplayCounts.set(sessionId, 0);
+    const index = Number(sessionId.split('-').at(-1)) || 0;
+    const delay = index >= 60 ? 10_000 : [0, 16, 100, 299, 301, 1200][index % 6];
+    for (const [count, at] of [[1, delay], [2, delay + 400], [3, delay + 800]] as const) {
+      setTimeout(() => {
+        entryReplayCounts.set(sessionId, count);
+        findRemoteHistoryView(VISUAL_MOCK_DEVICE_ID, sessionId)?.invalidate();
+      }, at);
+    }
+    if (index >= 20) setTimeout(() => {
+      // Explicit test-only CPU stall overlaps initial reveal. Never runs for regular mock tasks.
+      const until = performance.now() + 900;
+      while (performance.now() < until) { /* simulate a busy JS thread */ }
+    }, delay + 550);
+    return [];
+  }
+  return [
+    message(sessionId, 'replay-user', 'user', 'First message after an empty task', -3000),
+    message(sessionId, 'replay-progress', 'assistant', 'The task is running.', -2000),
+    message(sessionId, 'replay-result', 'assistant', `Completed replay ${sessionId.split('-').at(-1)}. This result must be visible.`, -1000),
+  ].slice(0, entryReplayCounts.get(sessionId));
+}
+// Synthetic Codex interaction replay for the native mobile acceptance loop.
+// Uses real cards/stores; only the remote host receipt is supplied by this fixture.
+const codexQuestionSession = 'visual-codex-questions';
+const codexUrlSession = 'visual-codex-url';
+const codexFormSession = 'visual-codex-form';
+let codexFormAnswers: Record<string, string> | null = null;
+const codexFormQuestions = () => [
+  { id: 'name', question: 'Name', answerConstraints: { required: true, minLength: 3, maxLength: 5 } },
+  { id: 'kind', question: 'Kind', options: [{ label: 'Personal' }, { label: 'Other' }],
+    answerConstraints: { required: true, choices: ['Personal', 'Other'] } },
+];
+const codexQuestionIds = [0, 1].map((i) => JSON.stringify(['request_user_input_async', 'visual-codex', i]));
+let codexQuestionAnswers: Record<string, string> | null = null;
+let codexUrlCompleted = false;
+const codexQuestions = () => codexQuestionIds.map((id) => ({ id, question: '验收结果？', options: [{ label: 'A' }, { label: 'B' }] }));
 const NOW = Date.parse('2026-07-18T08:00:00.000Z');
 const ISO_NOW = new Date(NOW).toISOString();
 // Built on first use: this module is imported by production code, and only the dev mock reads it.
 let uiMockRows: ReturnType<typeof buildUiMockRows> | null = null;
-const getUiMockRows = () => uiMockRows ??= buildUiMockRows({ now: NOW, projectRoot: '/Users/demo/Projects' });
+const getUiMockRows = () =>
+  (uiMockRows ??= buildUiMockRows({ now: NOW, projectRoot: '/Users/demo/Projects' }));
 const IMAGE_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAABaAgMAAABCqLXBAAAADFBMVEX9/f2BgoIgISTY2NXfCK5xAAAACXBIWXMAAAsTAAALEwEAmpwYAAACCklEQVR42uWXsU7DMBBAk1rqgKyy9xM6nVSJoQv9BJaKlbVh4QcQfEIXWMsQiSZFav8Ao0hMGVhY+IRMmTogVebslsah1Hd0QYKrYrXOq+98Pp99QcAW+bUDPrtF9U5gt8q7kGfmgRwlAwGmxW7zLjdvu931v5lqxYCSU2VY6KWkPNgBIxpMFI7ZSknVg3SOIzZjei7tETa9OQ22jJGdPg2GE2wKjh+n+Aw54PAPguFmUWM/6MSP8oKdCrz2gk6gjbygE3l3vwzWN8doJxjWN0y8E2zUwcmeYFIueKrR5IIzmQS/HXHcE2O+CjngSAaZUUmCNmoKBtjPJECbAdqfBzSYyACEbNLgNMiEyYAM0ORpBmjWM8gaDFBIUEGDqVpybASQ1WRe3fx9UXcPHmKgntdgLdGf1B0uXIf7wD5OZrOEHtXmIJEmtdBhBqvI5gSueuIELnsrmC0UscCbarv6wUtmkkp0wQPv9bvhbklwrJfWABLUWkfGgLOtJcS7hxtmCL6l6Uy/bAUFigPOEET3POrSC0ZIoFgDvKo7htC6mK7B3Ufc1IKLMTbKe2jOLLi8wqb0HsPHuhIvqJmgcEHlAQ9dsPSAronf616Dej9QccHyn1y5aDn/ydWVfRlmX6/ZF3ZWCYDHuWQVFXZcVpmCKV7Rhc/AFj6C48esqtrIoktIQYuE1XhAfgL4ANer/BnN/IZTAAAAAElFTkSuQmCC';
 
@@ -154,8 +201,9 @@ export function seedVisualMockStore(): void {
     remoteSessionStore.setPendingInteractions(session.id, visualMockPendingInteractions(session.id));
   }
   remoteSessionStore.setActiveSessionSnapshots(VISUAL_MOCK_DEVICE_ID, [
-    { sessionId: 'visual-running', isTurnRunning: true },
-    { sessionId: 'visual-automation-running', isTurnRunning: true },
+    { sessionId: 'visual-running', isTurnRunning: true, activityPhase: 'running', activityAttention: false },
+    { sessionId: 'visual-automation-running', isTurnRunning: true, activityPhase: 'running', activityAttention: false },
+    { sessionId: 'visual-pending', isTurnRunning: true, activityPhase: 'needs-interaction', activityAttention: true },
   ]);
   void loadVisualRealDataSnapshot().then((snapshot) => {
     seedRealDataStore(snapshot);
@@ -187,6 +235,7 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
     connectionIssue: null,
     presenceVersion: 1,
     connectionEpoch: 1,
+    rosterVersion: 0,
     getSubscriptionIdentity: () => 1,
     lastPresenceSnapshot: {
       deviceId,
@@ -198,9 +247,8 @@ export function createVisualMockDeviceLinkContext(): DeviceLinkContextValue {
       busy: false,
       lastSeenAt: NOW,
     },
-    getPresenceAvailability: (candidateDeviceId: string) => (
-      candidateDeviceId === deviceId ? true : null
-    ),
+    getPresenceAvailability: (candidateDeviceId: string) =>
+      candidateDeviceId === deviceId ? true : null,
     openLink: async (): Promise<LinkAcceptPayload> => ({
       appVersion: '0.0.0-visual-mock',
       allowlistHash: 'visual-mock',
@@ -223,12 +271,29 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  if (channel === 'local-db:messages:around-client-id' && typeof args[0] === 'string' && args[0].startsWith('qa-process-')) {
+    if (args[0] === 'qa-process-unavailable') throw new Error('Process unavailable');
+    return [
+      { clientId: 'qa-source', role: 'user', content: 'Weather request' },
+      ...(args[0] === 'qa-process-tools' ? [
+        { clientId: 'qa-note', role: 'assistant', content: '我先查询天气。', agentMeta: { assistantPhase: 'commentary' } },
+        { clientId: 'qa-tool', role: 'tool_use', content: { toolName: 'Weather', toolUseId: 'qa-tool', input: { city: 'Shanghai' } } },
+        { clientId: 'qa-result', role: 'tool_result', toolUseId: 'qa-tool', content: 'Sunny, 20°C' },
+      ] : []),
+      { clientId: 'qa-final', role: 'assistant', content: 'Final answer', agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } },
+    ] as T;
+  }
+  // Keep the real remote viewer in its initial waiting state for UI screenshots.
+  // Only the __DEV__ mock provider reaches this; no computer is contacted.
+  if (channel === 'device-link:remote-desktop:v1') return new Promise<T>(() => {});
   const github = githubPrVisualFixture(channel, args[0]);
   if (github !== undefined) return github as T;
   const mask = groupMaskVisualFixture(channel, args[0]);
   if (mask !== undefined) return mask as T;
   const groupSettings = groupSettingsVisualFixture(channel, args[0]);
   if (groupSettings !== undefined) return groupSettings as T;
+  const groupMention = groupMentionVisualFixture(channel, args[0]);
+  if (groupMention !== undefined) return groupMention as T;
   const sessionImport = sessionImportVisualFixture(channel, args[0]);
   if (sessionImport !== undefined) return sessionImport as T;
   // #6713 native regression: open /companions/groups/table-qa?deviceId=cindy-visual-mock-mac.
@@ -260,11 +325,30 @@ async function visualMockInvoke<T = unknown>(
       } }],
     } as T;
   }
+  if (channel === "device-link:media:fetch") {
+    const fixture = attachmentPreviewFixture(
+      String((args[0] as { url?: string })?.url ?? ""),
+    );
+    if (fixture) return fixture as T;
+  }
+  if (channel === 'maker:resolve-interaction' && ['visual-codex-question-request', 'visual-codex-url-request', 'visual-codex-form-request'].includes(String(args[0]))) {
+    const decision = args[1] as { kind?: string; answers?: Record<string, string>; behavior?: string; inProgress?: boolean };
+    if (decision.inProgress) return { accepted: true } as T;
+    const id = args[0] === 'visual-codex-form-request' ? codexFormSession : args[0] === 'visual-codex-question-request' ? codexQuestionSession : codexUrlSession;
+    if (id === codexFormSession) codexFormAnswers = decision.answers ?? {};
+    else if (id === codexQuestionSession) codexQuestionAnswers = decision.answers ?? {};
+    else codexUrlCompleted = true;
+    remoteSessionStore.setPendingInteractions(id, []);
+    findRemoteHistoryView(VISUAL_MOCK_DEVICE_ID, id)?.invalidate();
+    return { accepted: true } as T;
+  }
   const realData = await loadVisualRealDataSnapshot();
-  const mailResult = realData ? undefined : mailVisualFixture(channel, args) ?? mailDraftCardFixture(channel, args);
+  const mailResult = realData ? undefined : (mailVisualFixture(channel, args) ?? mailDraftCardFixture(channel, args));
   if (mailResult !== undefined) return mailResult as T;
   const pluginResult = realData ? undefined : pluginVisualFixture(channel, args);
   if (pluginResult !== undefined) return pluginResult as T;
+  const prCardResult = realData ? undefined : prCardVisualFixture(channel, args);
+  if (prCardResult !== undefined) return prCardResult as T;
   const teammateResult = realData ? undefined : teammateVisualFixture(channel, args);
   if (teammateResult !== undefined) return teammateResult as T;
   if (channel === 'local-db:task-tags:execute') {
@@ -306,6 +390,8 @@ async function visualMockInvoke<T = unknown>(
     }
   }
   switch (channel) {
+    case 'maker:get-context-usage':
+      return UI_MOCK_PI_CONTEXT_USAGE as T;
     case 'maker:regenerate-title':
       return { title: 'Visual rename draft' } as T;
     case 'maker:predict-prompt':
@@ -314,7 +400,8 @@ async function visualMockInvoke<T = unknown>(
     case 'local-db:sessions:list':
       return visualMockSessions((typeof args[0] === 'string' ? args[0] : args[1]) as string | undefined) as T;
     case 'local-db:history:query':
-      return { ok: true, sessions: visualMockSessions('all').filter(row => row.source === 'bot'), hasMore: false } as T;
+      return { ok: true, sessions: visualMockSessions('all').filter(
+          (row) => row.source === 'bot'), hasMore: false } as T;
     case 'local-db:sessions:get-many':
       return (args[0] as string[]).map(visualMockSession) as T;
     case 'local-db:sessions:get':
@@ -322,14 +409,14 @@ async function visualMockInvoke<T = unknown>(
     case 'local-db:messages:work-details': {
       const rows = visualMockMessages(String(args[0]));
       const ref = args[1] as { firstMessageId: string; lastMessageId: string };
-      const first = rows.findIndex(row => row.id === ref.firstMessageId);
-      const last = rows.findIndex(row => row.id === ref.lastMessageId);
+      const first = rows.findIndex((row) => row.id === ref.firstMessageId);
+      const last = rows.findIndex((row) => row.id === ref.lastMessageId);
       return { version: 1, messages: first >= 0 && last >= first ? rows.slice(first, last + 1) : [], hasMore: false, nextCursor: null } as T;
     }
     case 'local-db:messages:view-intent': return undefined as T;
     case 'local-db:messages:around-client-id': {
       const rows = visualMockMessages(String(args[0]));
-      const index = rows.findIndex(row => row.clientId === args[1]);
+      const index = rows.findIndex((row) => row.clientId === args[1]);
       const radius = Math.max(0, Number((args[2] as { radius?: number } | undefined)?.radius ?? 0));
       return (index < 0 ? [] : rows.slice(Math.max(0, index - radius), index + radius + 1)) as T;
     }
@@ -367,6 +454,9 @@ async function visualMockInvoke<T = unknown>(
           { label: 'weekly', used: 180, limit: 500 },
         ],
       } as T;
+    case 'maker:usage:codex-rate-limits':
+      return { account: {}, rateLimits: {}, rateLimitsByLimitId: null,
+        rateLimitResetCredits: null, resetOffer: null } as T;
     case 'maker:schedule:list':
       return visualMockSchedules() as T;
     case 'maker:schedule:get':
@@ -381,8 +471,19 @@ async function visualMockInvoke<T = unknown>(
       return visualMockDirectory() as T;
     case 'fs:stat-path':
       return { kind: 'dir', resolvedPath: '/repo/xdt-maker' } satisfies RemotePathStatResult as T;
-    case 'text-file:read-preview':
+    case 'text-file:read-preview': {
+      const path = String((args[0] as { filePath?: string })?.filePath ?? "");
+      const fixture = attachmentPreviewFixture(
+        `xdt-file://open?path=${encodeURIComponent(path)}`,
+      );
+      if (fixture && /\.(mmd|mermaid|md|json)$/.test(path))
+        return {
+          success: true,
+          data: globalThis.atob(fixture.inlineBase64),
+          size: fixture.size,
+        } as T;
       return visualMockTextPreview() as T;
+    }
     case 'maker:list-agent-commands':
       return { success: true, commands: [{ kind: 'agent-builtin', name: 'status', description: 'Show status' }] } as T;
     case 'maker:list-agent-skills':
@@ -509,23 +610,28 @@ function realDataSessions(snapshot: VisualRealDataSnapshot, statusFilter?: strin
 }
 
 function realDataSession(snapshot: VisualRealDataSnapshot, sessionId: string): RemoteSession {
-  return snapshot.sessions.find((session) => session.id === sessionId)
+  return (
+    snapshot.sessions.find((session) => session.id === sessionId)
     ?? snapshot.sessions.find((session) => session.id === snapshot.selectedSessionId)
-    ?? snapshot.sessions[0];
+    ?? snapshot.sessions[0]
+  );
 }
 
 function realDataProjection(snapshot: VisualRealDataSnapshot, sessionId: string): InputProjection {
-  return snapshot.projectionsBySession?.[sessionId] ?? {
+  return (
+    snapshot.projectionsBySession?.[sessionId] ?? {
     ...visualMockProjection(sessionId),
     pendingQueue: [],
     queueExpanded: false,
-  };
+  }
+  );
 }
 
 function visualMockSessions(statusFilter?: string): RemoteSession[] {
   const catalog = getUiMockRows().sessions.map(catalogSession);
   if (statusFilter === 'archived') return catalog.filter((session) => session.status === 'archived');
   const sessions = [
+    { ...catalog.find(session => session.id === 'ui-mock-rich-answer')!, id: 'visual-teammate-process', source: 'bot' as const, title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' as const } },
     ...catalog.filter((session) => statusFilter === 'all' || session.status === 'active'),
     sessionFromShared(SHARED_REMOTE_CONTROL_FIXTURE.sessions.primary, {
       preview: '请检查手机版远程控制的 shared core 迁移。',
@@ -572,15 +678,21 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
 }
 
 function visualMockSession(id: string): RemoteSession {
+  if (id === codexQuestionSession || id === codexUrlSession || id === codexFormSession) return { ...visualMockSession('ui-mock-rich-answer'), id,
+    title: id === codexFormSession ? 'Codex 表单验收' : id === codexQuestionSession ? 'Codex 提问验收' : 'Codex 链接确认验收', agentKind: 'codex', _count: { messages: 3 } };
+  if (id.startsWith('visual-entry-replay-')) return { ...visualMockSession('ui-mock-rich-answer'), id, title: id, _count: { messages: 0 } };
   if (id === 'visual-teammate-b2b') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 内部通讯',
     companion: { id: 'visual-bot-b2b', role: 'canonical' } };
-  if (id === 'visual-teammate-process') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy' };
+  if (id === 'visual-teammate-process') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy', companion: { id: 'cindy-default', role: 'canonical' } };
   if (id === VISUAL_MAIL_DRAFT_SESSION_ID) return { ...visualMockSession('ui-mock-rich-answer'), id, title: '回复试玩反馈' };
   if (id === VISUAL_TEAMMATE_SESSION_ID || id.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)
-    || [...visualTeammateThreads.values()].some(thread => thread.sessionId === id)) return {
+    || [...visualTeammateThreads.values()].some(
+      (thread) => thread.sessionId === id)) return {
     ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 演示群任务',
   };
-  return visualMockSessions('all').find((session) => session.id === id) ?? visualMockSessions()[0];
+  return (
+    visualMockSessions('all').find((session) => session.id === id) ?? visualMockSessions()[0]
+  );
 }
 
 function sessionFromShared(
@@ -601,6 +713,19 @@ function sessionFromShared(
 }
 
 function visualMockMessages(sessionId: string): RemoteMessage[] {
+  if (sessionId === codexFormSession) return [
+    message(sessionId, 'codex-form-context', 'assistant', 'MCP 表单验收：必填、长度限制和精确枚举。', -3000),
+    ...(codexFormAnswers === null ? [] : [message(sessionId, 'codex-form-result', 'assistant', JSON.stringify(codexFormAnswers), -1000)]),
+  ];
+  if (sessionId === codexQuestionSession) return [
+    message(sessionId, 'codex-user', 'user', '请分别核对文字与文件的结果。', -3000),
+    message(sessionId, 'codex-context', 'assistant', '文字与文件需要分别确认。两道题的标题相同，请第一题选 A，第二题选 B。你可以先收起回答区，继续阅读或输入消息。', -2000),
+    message(sessionId, 'codex-ask', 'ask_user', { requestId: 'visual-codex-question-request', questions: codexQuestions(),
+      status: codexQuestionAnswers === null ? 'pending' : 'answered', answers: codexQuestionAnswers }, -1000),
+  ];
+  if (sessionId === codexUrlSession) return [message(sessionId, 'codex-url-context', 'assistant',
+    codexUrlCompleted ? '链接请求已回传。' : '服务请求你打开链接，完成后再确认。', -1000)];
+  if (sessionId.startsWith('visual-entry-replay-')) return entryReplayMessages(sessionId);
   if (sessionId === 'visual-teammate-b2b') {
     const trace = (direction: 'received' | 'sent', sequence: number) => ({ botDirectMessage: {
       v: 1, threadId: 'visual-b2b-thread', viewerBotId: 'visual-bot-b2b', peerBotId: 'visual-bot-lizi',
@@ -637,7 +762,8 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
     message(sessionId, 'fixture-note3', 'assistant', '任务与 PR 的信息已核对，正在整理摘要。', -40000, { agentMeta: { assistantPhase: 'commentary' } }),
     message(sessionId, 'fixture-result', 'assistant', '任务与 PR 的进展已整理，需要跟进的两项工作已列出。', -30000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
   ];
-  const topic = [...visualTeammateThreads.values()].find(thread => thread.sessionId === sessionId);
+  const topic = [...visualTeammateThreads.values()].find(
+    (thread) => thread.sessionId === sessionId);
   if (topic) return topic.replyCount ? [
     message(sessionId, 'visual-topic-user', 'user', '把移动端和群聊的话题入口统一起来。', -180_000),
     message(sessionId, 'visual-topic-reply', 'assistant', '两处都会使用堆叠头像，回复数和时间保持同一字号。', -120_000),
@@ -656,8 +782,36 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
       ...message,
       sessionId,
       role: message.role === 'tool_use' ? 'tool_use' : message.role,
-    } as RemoteMessage));
+    }) as RemoteMessage,
+    );
   }
+  if (sessionId === "ui-mock-showcase-feedback-zh")
+    return [
+      message(
+        sessionId,
+        "attachment-preview-mixed",
+        "user",
+        {
+          text: "附件预览验收：图片、视频、PDF、文本使用同一条消息的集合。",
+          images: [
+            {
+              name: "sample.webp",
+              url: "xdt-file://open?path=%2Fattachment-preview%2Fsample.webp",
+              mimeType: "image/webp",
+            },
+          ],
+          files: [
+            "sample.mp4",
+            "sample.pdf",
+            "code.json",
+            "large.json",
+            "cube.gltf",
+            "flow.mmd",
+          ].map((name) => ({ name, path: `/attachment-preview/${name}` })),
+        },
+        0,
+      ),
+    ];
   const running = sessionId.includes('running');
   const catalog = getUiMockRows().messages.filter((row) => row.sessionId === sessionId);
   if (catalog.length > 0) {
@@ -671,7 +825,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
         role: row.role,
         content: streaming ? { text: row.content, isStreaming: true } : row.content,
         toolUseId: row.toolUseId,
-        agentMeta: streaming ? { isStreaming: true } : row.agentMeta ?? null,
+        agentMeta: streaming ? { isStreaming: true } : (row.agentMeta ?? null),
         createdAt: new Date(row.createdAt).toISOString(),
       } as RemoteMessage;
     });
@@ -705,6 +859,16 @@ function message(
 }
 
 function visualMockPendingInteractions(sessionId: string): PendingInteraction[] {
+  if (sessionId === codexFormSession) return codexFormAnswers === null ? [{ request: {
+    kind: 'ask_user_question', requestId: 'visual-codex-form-request', questions: codexFormQuestions(),
+  } }] : [];
+  if (sessionId === codexQuestionSession) return codexQuestionAnswers === null ? [{ persistId: 'codex-ask', request: {
+    kind: 'ask_user_question', requestId: 'visual-codex-question-request', delivery: 'async', questions: codexQuestions(),
+  } }] : [];
+  if (sessionId === codexUrlSession) return codexUrlCompleted ? [] : [{ request: {
+    kind: 'permission', requestId: 'visual-codex-url-request', toolName: 'mcp_url',
+    description: '在网页完成操作后返回并确认。', input: { url: 'https://example.com/connect', serverName: 'Example' },
+  } }];
   if (sessionId !== 'visual-pending') return [];
   return [
     {
@@ -910,7 +1074,8 @@ function sharedUiMockFiles(input: unknown): unknown {
   if (!input || typeof input !== 'object') return undefined;
   const request = input as Record<string, unknown>;
   const workdir = String(request.workdir ?? '').replace(/\\/g, '/').replace(/\/$/, '');
-  const project = UI_MOCK_SHOWCASE_PROJECTS.find(item => workdir === `/Users/demo/Projects/${item.name}`);
+  const project = UI_MOCK_SHOWCASE_PROJECTS.find(
+    (item) => workdir === `/Users/demo/Projects/${item.name}`);
   if (!project) return undefined; // Keep the existing media/Markdown regression fixtures.
   const relPath = String(request.relPath ?? '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
   const paths = Object.keys(project.files).sort();
@@ -921,7 +1086,8 @@ function sharedUiMockFiles(input: unknown): unknown {
   }
   if (request.op === 'listDir') {
     const prefix = relPath ? `${relPath}/` : '';
-    const entries = new Map<string, { type: 'file' | 'directory'; name: string; relPath: string; size: number; mtimeMs: number }>();
+    const entries = new Map<string, { type: 'file' | 'directory'; name: string; relPath: string; size: number; mtimeMs: number;
+      }>();
     for (const path of paths) {
       if (!path.startsWith(prefix)) continue;
       const remainder = path.slice(prefix.length);
@@ -939,12 +1105,12 @@ function sharedUiMockFiles(input: unknown): unknown {
   if (request.op === 'searchCollect') {
     const normalize = (value: string) => request.caseSensitive === true ? value : value.toLowerCase();
     const query = normalize(String(request.query ?? ''));
-    const found = query ? paths.flatMap(path => project.files[path].split('\n').flatMap((line, index) =>
+    const found = query ? paths.flatMap((path) => project.files[path].split('\n').flatMap((line, index) =>
       normalize(line).includes(query) ? [{ relPath: path, lineNumber: index + 1, lineText: line }] : [],
     )) : [];
     const cap = typeof request.maxMatches === 'number' && request.maxMatches > 0 ? Math.min(500, request.maxMatches) : 500;
     const matches = found.slice(0, cap);
-    return { matches, truncated: found.length > cap, totalMatches: matches.length, totalFiles: new Set(matches.map(item => item.relPath)).size } satisfies FileBrowserSearchCollectResult;
+    return { matches, truncated: found.length > cap, totalMatches: matches.length, totalFiles: new Set(matches.map((item) => item.relPath)).size } satisfies FileBrowserSearchCollectResult;
   }
   if (request.op === 'thumbnail') return { ok: false, code: 'THUMB_UNSUPPORTED' } satisfies FileBrowserThumbnailResult;
   return { ok: false, message: 'Unsupported demo file operation.' };

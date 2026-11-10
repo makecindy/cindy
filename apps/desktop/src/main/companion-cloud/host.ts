@@ -3,11 +3,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app } from 'electron';
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import { getDbClient } from '../localDb/client/current.js';
+import { flushAssistantSamplingMetadata, getAssistantSamplingRuntimeId } from '../messagePersistBroadcaster.js';
 import { createBotProfile, getBotMemoryService, setBotProfileAvatar, updateBotProfile } from '../localDb/ipc/bots.js';
 import { decodeBotAvatarImage } from '../localDb/ipc/botAvatarSelection.js';
 import { restoreCloudAvatar } from './avatarRestore.js';
@@ -25,15 +26,16 @@ import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
 import { resolveAvailableTaskModels } from '../maker-ipc/appDefaultModelControl.js';
 import { botProfileDir, botProfileMemoryDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
-import { deleteBotSkillForBot, listBotSkillSourcesForBot, readBotSkillSourceForBot, saveBotSkillSourceForBot } from '../maker-ipc/botSkillService.js';
+import { applyBotSkillFilesForBot, deleteBotSkillForBot, listBotSkillFilesForBot, listBotSkillSourcesForBot, readBotSkillFilesForBot, readBotSkillSourceForBot, saveBotSkillSourceForBot } from '../maker-ipc/botSkillService.js';
 import { companionTodoStore } from '../maker-ipc/botTodoAccess.js';
 import { mergeCompanionWorkbench, readCompanionWorkbench } from '../maker-ipc/botWorkbenchService.js';
 import { importCompanionRoutines, listCompanionRoutines, type CompanionRoutineValue } from '../routines/service.js';
 import type { TeammateTodo } from '@cindy/maker-shared/teammate-todo';
 import { portableTodo, travellingTodos } from './travel.js';
-import type { CompanionMaterializeHost } from './materialize.js';
+import { assertCompanionIdentity, type CompanionMaterializeHost } from './materialize.js';
 import { companionHomes } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
+import { companionHasLocalData } from './localData.js';
 import { companionCapabilitiesPatch, portableCompanionCapabilities, type CompanionArrivalNotice } from './capabilities.js';
 import { MIRROR_ATTACHMENT_MAX_BYTES, type CompanionMirrorCursor, type CompanionMirrorRow } from './mirror.js';
 import { replyArtifactAttachments, replyTextWithFiles } from './replyArtifacts.js';
@@ -47,6 +49,7 @@ import {
   COMPANION_PROFILE_KEY,
   COMPANION_ROUTINE_PREFIX,
   COMPANION_SKILL_PREFIX,
+  COMPANION_SKILL_FILES_PREFIX,
   COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY,
   type CompanionPreferenceValue,
@@ -61,6 +64,17 @@ function profileTemplateId(capabilitiesJson: string | null, identitySource: stri
     if (typeof value === 'string' && value) return value;
   } catch { /* fall back to the identity */ }
   return inferBotTemplatePresetId(identitySource);
+}
+
+/** Same singleton predicate as the profile transaction, excluding only the exact cloud id. */
+async function findConflictingCindy(botId: string): Promise<string | null> {
+  const rows = await getDbClient().drizzle
+    .select({ id: botProfiles.id, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource })
+    .from(botProfiles).innerJoin(botProfileVersions,
+      and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion)))
+    .where(and(ne(botProfiles.id, botId), ne(botProfiles.status, 'archived')));
+  return rows.find(row => JSON.parse(row.config).templateId === 'cindy'
+    || inferBotTemplatePresetId(row.identity) === 'cindy')?.id ?? null;
 }
 
 const readMcpServerNames = createMcpServerNamesReader(listCustomMcpServers, activeOwnerScopeKey);
@@ -109,6 +123,8 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     values.push({ key: `${COMPANION_SKILL_PREFIX}${skill.slug}`, value: {
       slug: skill.slug, content: skill.source, ...(skill.enabled ? {} : { enabled: false }),
     } });
+    const files = await listBotSkillFilesForBot(botId, skill.slug, skill.enabled);
+    if (files.length) values.push({ key: `${COMPANION_SKILL_FILES_PREFIX}${skill.slug}`, value: null, localFiles: files });
   }
   // Todos, routines and the workbench move with the companion too (cloud-companions.md §2). A read
   // failure aborts the cycle like the files above, so nothing is tombstoned by mistake.
@@ -170,15 +186,27 @@ function createMaterializer(input: {
         .from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
       return row ?? null;
     },
+    findConflictingCindy,
     // Normal creation path: no invitation, no generated persona, the new home's default model.
     createProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
+      await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
       const restored = await restoreCloudAvatar(avatar, fence.signal);
       fence.assertCurrent();
-      await createBotProfile({ id, name: name.slice(0, 200), description, identitySource, userContextSource,
-        ...('portable' in restored ? { avatar: restored.portable } : { avatarImageBase64: restored.imageBase64 }) },
-      { templateId, allowSameName: true, avatarFallback: 'fallback' in restored && restored.fallback === true });
+      try {
+        await createBotProfile({ id, name: name.slice(0, 200), description, identitySource, userContextSource,
+          ...('portable' in restored ? { avatar: restored.portable } : { avatarImageBase64: restored.imageBase64 }) },
+        { templateId, allowSameName: true, avatarFallback: 'fallback' in restored && restored.fallback === true });
+      } catch (error) {
+        // A Cindy may have been created while the avatar was downloading. The transaction
+        // still rejects it atomically; translate that conflict without weakening its guard.
+        if ((error as { code?: unknown })?.code === 'ALREADY_EXISTS') {
+          await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
+        }
+        throw error;
+      }
     },
     updateProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
+      await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
       const restored = await restoreCloudAvatar(avatar, fence.signal);
       fence.assertCurrent();
       await updateBotProfile({ id, name: name.slice(0, 200), enabled: true,
@@ -254,6 +282,8 @@ function createMaterializer(input: {
     readSkill: readSkillContent,
     saveSkill: async (botId, slug, content, enabled) => { await saveBotSkillSourceForBot(botId, slug, content, { enabled }); },
     removeSkill: async (botId, slug) => { await deleteBotSkillForBot(botId, slug); },
+    readSkillFiles: (botId, slug) => readBotSkillFilesForBot(botId, slug),
+    applySkillFiles: (botId, slug, files, fetch, options) => applyBotSkillFilesForBot(botId, slug, files, fetch, options),
     ensureCanonicalSession: botId => input.ensureCanonicalSession(botId),
     // Rewound and deleted rows are included (`removed`): removed here means never re-imported.
     localMessageTimes: async (sessionId, fromMs) => (await getDbClient().drizzle
@@ -307,6 +337,14 @@ export async function readMirrorRowsAfter(sessionId: string, cursor: CompanionMi
     .where(and(visibleRows(sessionId), or(gt(messages.createdAt, cursor.createdAt),
       and(eq(messages.createdAt, cursor.createdAt), gt(messages.id, cursor.id)))))
     .orderBy(asc(messages.createdAt), asc(messages.id)).limit(limit);
+}
+
+/** Rows older than `cursor`, newest first: walking a conversation back a page at a time. */
+export async function readMirrorRowsBefore(sessionId: string, cursor: CompanionMirrorCursor, limit: number): Promise<CompanionMirrorRow[]> {
+  return getDbClient().drizzle.select(mirrorColumns).from(messages)
+    .where(and(visibleRows(sessionId), or(lt(messages.createdAt, cursor.createdAt),
+      and(eq(messages.createdAt, cursor.createdAt), lt(messages.id, cursor.id)))))
+    .orderBy(desc(messages.createdAt), desc(messages.id)).limit(limit);
 }
 
 export async function readLatestMirrorRows(sessionId: string, limit: number,
@@ -370,6 +408,13 @@ export function createCompanionCloudHost(input: {
   // Every reader (send guards, routines, lists) sees only the active owner's homes, and that
   // owner's persisted demotion, even before its Chat Server instance has started.
   companionHomes.bindOwner(activeOwnerScopeKey, () => companionShadowStore().read());
+  const samplingRows = async (sessionId: string, read: () => Promise<CompanionMirrorRow[]>) => {
+    if (!await flushAssistantSamplingMetadata(sessionId)) throw new Error('COMPANION_STILL_CHANGING');
+    const samplingRuntimeId = getAssistantSamplingRuntimeId(sessionId);
+    const rows = await read();
+    if (getAssistantSamplingRuntimeId(sessionId) !== samplingRuntimeId) throw new Error('COMPANION_STILL_CHANGING');
+    return rows.map(row => ({ ...row, samplingRuntimeId }));
+  };
   return {
     homes: companionHomes,
     openState: (endpoint, humanActorId, current) => createCompanionCloudState({
@@ -378,6 +423,18 @@ export function createCompanionCloudHost(input: {
       current, log: input.log,
     }),
     readValues: botId => readCompanionValues(botId, input.selfDeviceId?.() ?? null),
+    hasLocalData: async botId => {
+      const db = getDbClient().drizzle;
+      return companionHasLocalData({
+        hasProfile: async () => (await db.select({ id: botProfiles.id }).from(botProfiles)
+          .where(eq(botProfiles.id, botId)).limit(1)).length > 0,
+        // No status filter: archived links count.
+        hasTaskLink: async () => (await db.select({ id: botSessionLinks.id }).from(botSessionLinks)
+          .where(eq(botSessionLinks.botId, botId)).limit(1)).length > 0,
+        directory: botProfileDir(ownerScopedUserDataPath(), botId),
+        owner: activeOwnerScopeKey,
+      });
+    },
     // No main task yet is nothing to sync; conflicting ones are not: syncing, a hand-over and a merge
     // must stop rather than count this computer's history as sent.
     canonicalSession: async botId => {
@@ -385,8 +442,8 @@ export function createCompanionCloudHost(input: {
       if (resolved.status === 'conflict') throw new Error('COMPANION_TASK_CONFLICT');
       return resolved.status === 'resolved' ? resolved.sessionId : null;
     },
-    rowsAfter: readMirrorRowsAfter,
-    latestRows: readLatestMirrorRows,
+    rowsAfter: (sessionId, cursor, limit) => samplingRows(sessionId, () => readMirrorRowsAfter(sessionId, cursor, limit)),
+    latestRows: (sessionId, limit, options) => samplingRows(sessionId, () => readLatestMirrorRows(sessionId, limit, options)),
     replyAttachments: (_botId, sessionId, row, text) => replyArtifactAttachments(row, text, sessionId, {
       roots: readTaskFileRoots,
       blob: readReplyBlob,

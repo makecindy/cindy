@@ -51,6 +51,11 @@ export const SHARE_SOURCE_ATTR = 'data-share-source';
  * 克隆时恢复显示,不能因为流里还在转圈就让图从产物里消失。
  */
 export const SHARE_PENDING_IMAGE_ATTR = 'data-share-image-pending';
+/**
+ * 远程任务里还没滚到附近、尚未开始取的图片(ChatLoadingImage 按需加载):`<img>` 暂不带
+ * src,地址放在这个属性上。克隆时还原成 src,分享产物不因用户没滚到而缺图。
+ */
+export const SHARE_DEFERRED_IMAGE_SRC_ATTR = 'data-share-image-src';
 
 /**
  * 克隆体里必须清掉的锚点属性:离屏容器挂在 document 内,这些 data 属性会让
@@ -137,6 +142,11 @@ export function revealPendingImages(root: HTMLElement): void {
   root.querySelectorAll<HTMLElement>(`[${SHARE_PENDING_IMAGE_ATTR}]`).forEach((el) => {
     el.removeAttribute(SHARE_PENDING_IMAGE_ATTR);
     el.style.removeProperty('display');
+    const deferredSrc = el.getAttribute(SHARE_DEFERRED_IMAGE_SRC_ATTR);
+    if (deferredSrc) {
+      el.removeAttribute(SHARE_DEFERRED_IMAGE_SRC_ATTR);
+      el.setAttribute('src', deferredSrc);
+    }
   });
 }
 

@@ -148,6 +148,18 @@ describe('buildTurnUsageTooltipLines — 建议行 (只在真正有价值时出�
     expect(out[0]).toContain('usageDetails.suggestion.lowCache');
   });
 
+  it('任务第一轮没有可复用的缓存 → 不提示 lowCache', () => {
+    // 新任务说「hi」: 108k 上下文全部首次写入缓存, 命中 0% 是必然。
+    const details = buildTurnUsageDetails({
+      inputTokens: 1_400,
+      outputTokens: 501,
+      cacheCreateTokens: 106_846,
+      firstUserRound: true,
+    })!;
+    const out = buildTurnUsageTooltipLines({ details, t, costUsd: 1 });
+    expect(out.some((l) => l.startsWith('usageDetails.suggestionLine'))).toBe(false);
+  });
+
   it('缓存未命中但输入量不足 50k → 无建议 (小额浪费不打扰)', () => {
     const out = suggestionLines({ inputTokens: 20_000, cacheReadTokens: 1_000 });
     expect(out).toEqual([]);
@@ -245,6 +257,18 @@ describe('buildTurnUsageTooltipLines — 输出速度', () => {
     })!;
     const out = buildTurnUsageTooltipLines({ details, t });
     expect(out).toContain('usageDetails.performanceLine|{"rate":"50","duration":"12.3秒"}');
+  });
+
+  it('caps the TPS denominator at the wall-clock shown beside it', () => {
+    // 并行请求让累计 API 时长 (6.4s) 超过整轮耗时 (5.17s): 速率不能低于 501/5.17。
+    const details = buildTurnUsageDetails({
+      outputTokens: 501,
+      durationMs: 6_423,
+      turnDurationMs: 5_170,
+    })!;
+    expect(buildTurnUsageTooltipLines({ details, t })).toContain(
+      'usageDetails.performanceLine|{"rate":"96.9","duration":"5.17秒"}',
+    );
   });
 
   it('shows wall-clock alone without a fake missing-speed placeholder', () => {
