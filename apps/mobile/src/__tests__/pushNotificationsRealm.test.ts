@@ -124,6 +124,17 @@ describe('push notification realm routing', () => {
     await Promise.all(events.splice(0));
     expect(requests.slice(4)).toEqual(['PUT','PUT']);
   });
+  // Codex review r4525360529: a failed first registration leaves no lease, which used to make
+  // every later valid token event a silent no-op until restart or re-login.
+  it('lets a later token event recover after the first registration failed', async () => {
+    const offline = vi.fn(async () => { throw new Error('offline'); });
+    await expect(syncPushRegistration({ enabled: true, apiFetch: offline as any })).rejects.toThrow();
+    const online = vi.fn().mockResolvedValue({ registered: true });
+    const token = { type: 'ios' as const, data: 'apns-device-token' };
+    await expect(syncPushRegistration({ enabled: true, apiFetch: online, deviceToken: token })).resolves.toBe('registered');
+    expect(online).toHaveBeenCalled();
+    await expect(syncPushRegistration({ enabled: true, apiFetch: online, deviceToken: token })).resolves.toBe('skipped');
+  });
   it('retains per-service registration failure without leaking tokens or errors', async () => {
     const apiFetch = vi.fn(async (path: string) => {
       if (path === '/v1/push-token') throw Object.assign(new Error('secret-token-in-error'), { status: 503 });

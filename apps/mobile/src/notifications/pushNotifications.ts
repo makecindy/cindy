@@ -382,8 +382,12 @@ async function syncPushRegistrationInternal(
   if (!registrationCurrent()) return 'skipped';
   const realm = stateScope.legacyRealm;
   if (opts.enabled && opts.deviceToken) {
-    if (!eventRegistration || eventRegistration.generation !== lifecycleGeneration ||
-        !isMobileAuthOwnerCurrent(eventRegistration.owner) || eventRegistration.token === opts.deviceToken.data) return 'skipped';
+    // Only a token this lifecycle already registered is a duplicate. After a failed first
+    // registration there is no lease, so a later valid token event must be able to recover it;
+    // logout and account switches are fenced by registrationCurrent() instead.
+    const registered = eventRegistration?.generation === lifecycleGeneration
+      && isMobileAuthOwnerCurrent(eventRegistration.owner) && eventRegistration.token === opts.deviceToken.data;
+    if (registered) return 'skipped';
   }
   if (!opts.enabled) eventRegistration = null;
 
