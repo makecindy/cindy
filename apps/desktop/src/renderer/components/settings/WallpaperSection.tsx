@@ -127,7 +127,7 @@ export function WallpaperSection() {
       action={
         <Button data-setting-id={appearanceSettings.wallpaperTitle.id}
           variant="secondary"
-          size="md"
+          size="sm"
           compact
           className="shrink-0"
           type="button"
@@ -141,7 +141,7 @@ export function WallpaperSection() {
               wallpaperMotion === DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion)
           }
         >
-          <RotateCcw size={14} />
+          <RotateCcw size={14} aria-hidden />
           <span>{t('settings.appearance.wallpaper.reset')}</span>
         </Button>
       }
@@ -340,6 +340,7 @@ export function WallpaperSection() {
             {customWallpaperUrl && (
               <Button data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
                 variant="secondary"
+                tone="danger"
                 type="button"
                 disabled={busy}
                 onClick={() => void removeWallpaper()}

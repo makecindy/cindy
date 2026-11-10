@@ -1603,6 +1603,7 @@ import {
   withGhostUserHookModel,
 } from '../cindy-brain/subscriptionGateway.js';
 import { createSessionExecutionResolver, resolveSessionExecutionSelection } from './sessionExecutionSelection.js';
+import { createGhostAgentTurnRunner } from './ghostAgentTurnRunner.js';
 import { createGhostErrandRunner } from './ghostErrandRunner.js';
 import {
   createPluginTaskSession,
@@ -14619,122 +14620,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       scheduleSessionAutoTitle({ sessionId: taskId, text, placeholderText, agentKind: meta.agentKind, isUserText: true });
     }).catch(() => log.warn('Plugin task automatic naming could not be scheduled'));
   };
-  setGhostAgentTurnRunner(async (request) => {
-    const dispositionForWakeKind = (
-      wakeKind: Extract<SendToSessionInternalResult, { ok: true }>['wakeKind'],
-    ): 'created' | 'resumed' | 'active' | 'queued' => {
-      switch (wakeKind) {
-        case 'created':
-          return 'created';
-        case 'resumed':
-          return 'resumed';
-        case 'already-active':
-          return 'active';
-        case 'queued':
-          return 'queued';
-      }
-    };
-
-    // This surface acts on the user's task, so keep its own route/permissions.
-    // Admission is shared with plugin-owned tasks; their defaults must not replace it.
-    try {
-      // A remote task's model is owned by its execution host, not this device's catalog.
-      const source = await maker.getSessionMeta(request.sourceSessionId);
-      if (!source?.remoteHostId) await resolveSessionExecution({}, request.sourceSessionId);
-    }
-    catch (error) { return { ok: false, errorCode: 'MODEL_UNAVAILABLE',
-      message: error instanceof Error ? error.message : '任务模型不可用，请在任务中重新选择' }; }
-
-    // agent.run 的真正发送方是插件(来源任务只是它运行的地方):三种模式都盖插件来源。
-    const agentRunPluginName = sanitizeSourceName(getInstalledGhostName(request.ghostId));
-    const agentRunSourcePlugin = {
-      pluginId: request.ghostId,
-      ...(agentRunPluginName ? { name: agentRunPluginName } : {}),
-    };
-
-    if (request.mode === 'new') {
-      const result = await sendToSessionInternal({
-        sourcePlugin: agentRunSourcePlugin,
-        dispatcherSessionId: request.sourceSessionId,
-        message: request.prompt,
-        persistedContent: request.persistedContent,
-        inheritSourcePermissionMode: true,
-        ...(request.title ? { title: request.title } : {}),
-      });
-      if (!result.ok) return result;
-      return {
-        ok: true,
-        sessionId: result.targetSessionId,
-        disposition: dispositionForWakeKind(result.wakeKind),
-      };
-    }
-
-    if (request.mode === 'continue') {
-      const result = await sendToSessionInternal({
-        sourcePlugin: agentRunSourcePlugin,
-        targetSessionId: request.sourceSessionId,
-        message: request.prompt,
-        persistedContent: request.persistedContent,
-      });
-      if (!result.ok) return result;
-      return {
-        ok: true,
-        sessionId: result.targetSessionId,
-        disposition: dispositionForWakeKind(result.wakeKind),
-      };
-    }
-
-    // fork 必须基于一条已经完成的 assistant 回复。这里固定选择当前有效历史里
-    // 最新一条回复，让插件只能表达“从现在这里分叉”，不能偷偷挑更早的消息。
-    const [latestAssistant] = await getDbClient()
-      .drizzle.select({ clientId: messages.clientId })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.sessionId, request.sourceSessionId),
-          eq(messages.role, 'assistant'),
-          isNull(messages.rewindAt),
-        ),
-      )
-      .orderBy(desc(messages.createdAt), desc(messages.id))
-      .limit(1);
-    if (!latestAssistant?.clientId) {
-      return {
-        ok: false,
-        errorCode: 'NO_PRIOR_ASSISTANT',
-        message: '原任务还没有可用于分叉的 Agent 回复',
-      };
-    }
-
-    let forkedSessionId: string;
-    try {
-      const forked = await forkSessionAtMessage(request.sourceSessionId, latestAssistant.clientId);
-      forkedSessionId = forked.id;
-      broadcastSessionCreated(forked.id);
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      const message = err instanceof Error ? err.message : String(err);
-      if (code === 'SOURCE_NOT_FOUND' || code === 'MESSAGE_NOT_FOUND') {
-        return { ok: false, errorCode: 'NOT_FOUND', message };
-      }
-      if (code === 'SOURCE_NEVER_RAN' || code === 'NO_PRIOR_ASSISTANT') {
-        return { ok: false, errorCode: code, message };
-      }
-      if (code === 'UNSUPPORTED_HISTORY') {
-        return { ok: false, errorCode: 'FORK_UNSUPPORTED_HISTORY', message };
-      }
-      return { ok: false, errorCode: `FORK_${code ?? 'FAILED'}`, message };
-    }
-
-    const sent = await sendToSessionInternal({
-      sourcePlugin: agentRunSourcePlugin,
-      targetSessionId: forkedSessionId,
-      message: request.prompt,
-      persistedContent: request.persistedContent,
-    });
-    if (!sent.ok) return sent;
-    return { ok: true, sessionId: forkedSessionId, disposition: 'forked' };
-  });
+  setGhostAgentTurnRunner(createGhostAgentTurnRunner({
+    readSessionMeta: sessionId => maker.getSessionMeta(sessionId),
+    admitLocalSession: sessionId => resolveSessionExecution({}, sessionId),
+    readPluginName: getInstalledGhostName,
+    send: sendToSessionInternal,
+    readLatestAssistant: async sessionId => {
+      const [latestAssistant] = await getDbClient()
+        .drizzle.select({ clientId: messages.clientId })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.sessionId, sessionId),
+            eq(messages.role, 'assistant'),
+            isNull(messages.rewindAt),
+          ),
+        )
+        .orderBy(desc(messages.createdAt), desc(messages.id))
+        .limit(1);
+      return latestAssistant;
+    },
+    forkSessionAtMessage,
+    broadcastSessionCreated,
+  }));
   setGhostSessionRevealer((sessionId) => openMainWindowSession(sessionId));
 
   // One receipt service per account/database epoch. No mutable current-DB lookup
@@ -16000,6 +15908,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     withSendToSessionLock,
     prepareUnhealthySession: (sessionId) =>
       contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? Promise.resolve(false),
+    hydrateOrcaSessionIfNeeded: async (sessionId, meta) => {
+      // 目标必是 Orca Lead/Worker；已装载时不读库、不建 createOpts。
+      if (isOrcaMcpHydrated(sessionId) || !maker.getSession(sessionId)) return;
+      const createOpts = await buildCreateOptsForQueuedSession(sessionId, meta);
+      await hydrateActiveOrcaSession(sessionId, createOpts as CreateOpts);
+    },
     buildCreateOptsForQueuedSession,
     enqueueQueuedMessage: (sessionId, item) => {
       // 先 await 恢复再 enqueue:确保恢复的排队 prompt 在新消息之前,且恢复后
@@ -18869,6 +18783,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const {
     sendToAgentAccepted: sendToAgentAcceptedUnlocked,
     prewarmSession: prewarmSessionRuntime,
+    hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
     prepareExternalInput: (sessionId) => takeOverLocalAgentVisibleSession(sessionId, true),
     restoreArchivedSessionForSend,
