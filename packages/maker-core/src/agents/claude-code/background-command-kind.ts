@@ -163,7 +163,7 @@ function isLongLivedSegment(rawTokens: string[], depth: number): boolean {
       while (rest[0]?.startsWith('-')) rest = rest.slice(1);
       return isLongLivedSegment(rest, depth + 1);
     }
-    return positional.some((arg) => arg.split(':').some((part) => LONG_LIVED_SCRIPT_WORDS.has(part)));
+    return positional.some(isLongLivedScriptName);
   }
 
   if (SERVICE_HEADS.has(head)) return true;
@@ -186,16 +186,22 @@ function isLongLivedSegment(rawTokens: string[], depth: number): boolean {
     case 'firebase':
       return positional[0] === 'serve' || positional[0] === 'emulators:start';
     case 'deno':
-      return (
-        positional[0] === 'task' &&
-        positional.slice(1).some((arg) => arg.split(':').some((part) => LONG_LIVED_SCRIPT_WORDS.has(part)))
-      );
+      return positional[0] === 'task' && positional.slice(1).some(isLongLivedScriptName);
     case 'python':
     case 'python3':
       return isLongLivedPython(args, positional);
     default:
       return false;
   }
+}
+
+/**
+ * 脚本名按 `:` 分段：首段是长驻词（`dev`、`start:prod`、`serve:docs`）或任一段是 `watch`
+ * （`build:watch`）才算服务。只看首段是为了让 `build:preview` 这类会结束的构建仍按工作显示。
+ */
+function isLongLivedScriptName(name: string): boolean {
+  const parts = name.split(':');
+  return LONG_LIVED_SCRIPT_WORDS.has(parts[0]!) || parts.includes('watch');
 }
 
 function programName(token: string): string {
