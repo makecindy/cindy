@@ -214,29 +214,32 @@ export function projectPlugins(
   hasUserSecrets: (instanceKey: string) => boolean = () => false,
 ): SetupSnapshotPlugin[] {
   const installedMarket = facts.market.filter((item) => item.installed);
-  if (facts.catalogUnavailable) {
-    // The catalog missed them, not the computer: the install record still says official market.
-    for (const record of facts.installedServerRecords ?? []) {
-      if (installedMarket.some((item) => item.pluginId === record.pluginId)) continue;
-      installedMarket.push({
+  // The catalog missed them, not the computer: the install record still says official market.
+  const recorded: SourceMarketFact[] = facts.catalogUnavailable
+    ? (facts.installedServerRecords ?? [])
+      .filter((record) => !installedMarket.some((item) => item.pluginId === record.pluginId))
+      .map((record) => ({
         pluginId: record.pluginId,
         ghostId: record.ghostId,
         ...(record.namespace !== undefined ? { namespace: record.namespace } : {}),
         installed: true,
-        sourceType: 'server',
+        sourceType: 'server' as const,
         sourceMarketName: null,
         defaultInstall: false,
-      });
-    }
-  }
+      }))
+    : [];
+  const matchMarket = (candidates: SourceMarketFact[], ghostId: string, namespace: string | null) => {
+    const sameId = candidates.filter((item) => item.ghostId === ghostId);
+    return sameId.find((item) => item.namespace !== undefined && (item.namespace ?? null) === namespace) ??
+      (sameId.length === 1 && sameId[0].namespace === undefined ? sameId[0] : undefined);
+  };
   const out: SetupSnapshotPlugin[] = [];
   for (const ghost of facts.ghosts) {
     if (out.length >= SETUP_SNAPSHOT_LIMITS.plugins) break;
     const namespace = ghost.namespace ?? null;
-    const sameId = installedMarket.filter((item) => item.ghostId === ghost.ghostId);
-    const market =
-      sameId.find((item) => item.namespace !== undefined && (item.namespace ?? null) === namespace) ??
-      (sameId.length === 1 && sameId[0].namespace === undefined ? sameId[0] : undefined);
+    // Install records never vouch for a local development copy.
+    const market = matchMarket(installedMarket, ghost.ghostId, namespace) ??
+      (namespace === 'local' ? undefined : matchMarket(recorded, ghost.ghostId, namespace));
     let ready: boolean | null = null;
     try {
       ready = setupReady(ghost.instanceKey);

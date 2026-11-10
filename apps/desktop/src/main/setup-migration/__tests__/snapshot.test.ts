@@ -219,17 +219,21 @@ describe('plugins when the official catalog was not read', () => {
     const result = await collectSetupSnapshot(
       deps({
         readPlugins: async () => ({
-          ghosts: [ghost('google-gmail'), ghost('hand-made')],
+          // A same-id `local` development copy sits beside the official install.
+          ghosts: [ghost('google-gmail'), { ...ghost('google-gmail'), namespace: 'local', instanceKey: 'local__google-gmail' },
+            ghost('hand-made')],
           market: [],
           catalogUnavailable: true,
-          installedServerRecords: [{ pluginId: 'plg_gmail', ghostId: 'google-gmail', namespace: null }],
+          // A pre-namespace install record carries no namespace.
+          installedServerRecords: [{ pluginId: 'plg_gmail', ghostId: 'google-gmail' }],
         }),
       }),
     );
     expect(result.unavailable).toEqual(['plugins']);
-    expect(result.plugins.map((p) => [p.ghostId, p.source, p.pluginId])).toEqual([
-      ['google-gmail', 'market', 'plg_gmail'],
-      ['hand-made', 'manual', null],
+    expect(result.plugins.map((p) => [p.ghostId, p.namespace, p.source, p.pluginId])).toEqual([
+      ['google-gmail', null, 'market', 'plg_gmail'],
+      ['google-gmail', 'local', 'manual', null],
+      ['hand-made', null, 'manual', null],
     ]);
     const plan = buildSetupPlan(planInputs({
       snapshot: result,
@@ -237,6 +241,7 @@ describe('plugins when the official catalog was not read', () => {
     }));
     expect(plan.plugins.map((item) => [item.ghostId, item.state, item.reason ?? null])).toEqual([
       ['google-gmail', 'ready', null],
+      ['google-gmail', 'unavailable', 'local-only'],
       ['hand-made', 'unavailable', 'local-only'],
     ]);
     expect(plan.unavailable).toEqual(['plugins']);

@@ -1404,12 +1404,15 @@ export class PluginMarketService {
     return Object.values(local.installations).flatMap((record) => {
       if (!record.installed || (record.source !== 'market' && record.source !== 'legacy-adopted')
         || !isValidPluginResourceId(record.pluginId)) return [];
-      const present = (local.ghostsById.get(record.ghostId) ?? []).some((ghost) =>
+      // Report the instance that actually passed verification, so a same-id copy
+      // (for example a `local` development install) never inherits this record.
+      const verified = (local.ghostsById.get(record.ghostId) ?? []).find((ghost) =>
         ghost.namespace !== 'local'
         && (record.namespace === undefined || ghost.namespace === undefined || ghost.namespace === record.namespace)
         && serverRecordMatchesInstalledGhost(record.pluginId, ghost, record, snapshotManifestIdentity(local, ghost)));
-      return present ? [{ pluginId: record.pluginId, ghostId: record.ghostId,
-        ...(record.namespace !== undefined ? { namespace: record.namespace } : {}) }] : [];
+      if (!verified) return [];
+      const namespace = verified.namespace !== undefined ? verified.namespace : record.namespace;
+      return [{ pluginId: record.pluginId, ghostId: record.ghostId, ...(namespace !== undefined ? { namespace } : {}) }];
     });
   }
 
