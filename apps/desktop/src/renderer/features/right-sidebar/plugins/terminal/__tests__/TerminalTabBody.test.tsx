@@ -35,10 +35,13 @@ vi.mock('../lib/xtermPool', () => ({
   detachXterm: vi.fn(),
   getXtermExit: vi.fn(() => null),
   setXtermExit: vi.fn(),
+  needsXtermAttach: () => !entry.ptyAttached,
+  restartXterm: (id: string) => window.electronAPI.terminal.restart(id),
+  attachXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.create(params),
 }));
 
 import { TerminalTabBody } from '../TerminalTabBody';
-import { detachXterm } from '../lib/xtermPool';
+import { detachXterm, getXtermExit } from '../lib/xtermPool';
 
 class TestResizeObserver {
   static callback: ResizeObserverCallback | null = null;
@@ -66,6 +69,7 @@ function makeContext(overrides: Partial<TabKindHostContext> = {}): TabKindHostCo
 
 beforeEach(() => {
   vi.mocked(detachXterm).mockClear();
+  vi.mocked(getXtermExit).mockReturnValue(null);
   entry.ptyAttached = true;
   fit.mockClear();
   resize.mockClear();
@@ -104,6 +108,30 @@ afterEach(() => {
 });
 
 describe('TerminalTabBody sidebar visibility', () => {
+  // Unit: #9815 discussion_r4528102364. A returned window can have an old
+  // exit even though another window restarted the PTY; native attach is authoritative.
+  it('reconciles an old exit after a window handoff before accepting input', async () => {
+    const oldExit = { code: 0, signal: null };
+    vi.mocked(getXtermExit).mockReturnValue(oldExit);
+    entry.ptyAttached = false;
+    render(<TerminalTabBody state={{ created: false, exited: null, title: '', shellId: '', shellDisplayName: '' }} ctx={makeContext()} active />);
+    await waitFor(() => expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByText('rightSidebar.terminal.restart')).toBeNull());
+    expect(entry.ptyAttached).toBe(true);
+    expect(window.electronAPI.terminal.restart).not.toHaveBeenCalled();
+  });
+
+  it('retains the restart action when handoff confirms the PTY is still exited', async () => {
+    vi.mocked(getXtermExit).mockReturnValue({ code: 0, signal: null });
+    entry.ptyAttached = false;
+    vi.mocked(window.electronAPI.terminal.create).mockRejectedValueOnce(new Error('terminal session already exists (exited): terminal-1'));
+    render(<TerminalTabBody state={{ created: false, exited: null, title: '', shellId: '', shellDisplayName: '' }} ctx={makeContext()} active />);
+    await waitFor(() => expect(entry.ptyAttached).toBe(true));
+    expect(screen.getByText('rightSidebar.terminal.restart')).toBeTruthy();
+    expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce();
+    expect(screen.queryByText('rightSidebar.terminal.spawnFailed')).toBeNull();
+  });
+
   it('does not fit or resize the PTY while the sidebar is collapsed, then refits when visible', () => {
     const ctx = makeContext();
     const view = render(

@@ -31,7 +31,7 @@ import {
   DEFAULT_TERMINAL_FONT_FAMILY,
 } from '@/../shared/appearanceSettings';
 
-import type { TerminalExitInfo, TerminalDataEvent, TerminalExitEvent } from '@/../shared/terminal-bridge';
+import type { TerminalCreateParams, TerminalCreateResult, TerminalExitInfo, TerminalDataEvent, TerminalExitEvent } from '@/../shared/terminal-bridge';
 import { xtermEntries as pool, xtermSnapshots as snapshots, type XtermEntry } from './xtermEntries';
 
 export type { XtermEntry } from './xtermEntries';
@@ -113,6 +113,40 @@ export function getXtermExit(tabId: string): TerminalExitInfo | null {
 export function setXtermExit(tabId: string, exit: TerminalExitInfo | null): void {
   if (exit) exits.set(tabId, exit);
   else exits.delete(tabId);
+}
+
+/** A different window may have restarted the PTY since this renderer owned it. */
+export function needsXtermAttach(tabId: string): boolean {
+  return !(pool.get(tabId)?.ptyAttached ?? snapshots.get(tabId)?.ptyAttached ?? false);
+}
+
+/** Clear the old exit before IPC so an unmount keeps receiving the new shell's events. */
+export function restartXterm(tabId: string): Promise<TerminalCreateResult> {
+  return transitionXterm(tabId, () => window.electronAPI.terminal.restart(tabId));
+}
+
+export function attachXterm(params: TerminalCreateParams): Promise<TerminalCreateResult> {
+  return transitionXterm(params.id, () => window.electronAPI.terminal.create(params));
+}
+
+async function transitionXterm(tabId: string, invoke: () => Promise<TerminalCreateResult>): Promise<TerminalCreateResult> {
+  const entry = pool.get(tabId);
+  const previousExit = getXtermExit(tabId);
+  pendingSuspensions.get(tabId)?.cancel();
+  setXtermExit(tabId, null);
+  try {
+    const result = await invoke();
+    if (entry && pool.get(tabId) === entry) entry.ptyAttached = true;
+    return result;
+  } catch (error) {
+    // Closing the tab or a newer native exit must win over this stale request.
+    if (entry && pool.get(tabId) === entry && !getXtermExit(tabId)) {
+      setXtermExit(tabId, previousExit);
+      if (previousExit && /terminal session already exists \(exited\)/.test(String(error))) entry.ptyAttached = true;
+      if (previousExit && detachedStreams.has(tabId)) detachXterm(tabId);
+    }
+    throw error;
+  }
 }
 
 /** Keep receiving output while a running tab's body is unmounted. */

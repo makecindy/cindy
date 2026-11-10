@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
 import type { TabKindHostContext } from '../../types';
-import { getOrCreateXterm, detachXterm, getXtermExit, setXtermExit, type XtermEntry } from './lib/xtermPool';
+import { getOrCreateXterm, detachXterm, getXtermExit, setXtermExit, needsXtermAttach, attachXterm, restartXterm, type XtermEntry } from './lib/xtermPool';
 import { createTerminalFontController } from './lib/terminalFont';
 import { useTerminalFontSettings } from './lib/useTerminalFontSettings';
 import type {
@@ -89,12 +89,12 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
   const aliveRef = useRef(true);
   const shellVisibleRef = useRef(shellVisible);
   shellVisibleRef.current = shellVisible;
-  const [runtimeExit, setRuntimeExit] = useState(() => getXtermExit(tabId));
-  const exited = runtimeExit ?? state.exited;
+  const [exited, setRuntimeExit] = useState(() => getXtermExit(tabId) ?? state.exited);
+  const [attachmentPending, setAttachmentPending] = useState(() => needsXtermAttach(tabId));
 
   const [runtimeError, setRuntimeError] = useState<RuntimeError | null>(null);
   const [restarting, setRestarting] = useState(false);
-  const suspended = exited !== null && !restarting && (active === false || !shellVisible);
+  const suspended = exited !== null && !restarting && !attachmentPending && (active === false || !shellVisible);
 
   // ─── 1. xterm DOM 挂载 + IPC data/exit 订阅 ───
   // 用 useLayoutEffect 确保 paint 前 DOM 已经 attach,避免首帧空白
@@ -179,16 +179,16 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
   //      ptyManager.create 是幂等 attach、可换 owner —— 再调一次把 sink 切到本窗口,
   //      输入输出即恢复(xterm scrollback 是 per-renderer 的,迁移后丢失可接受)。
   useEffect(() => {
-    if (restarting || exited || suspended) return;
+    if (restarting || suspended) return;
     const entry = entryRef.current;
     if (!entry) return;
     if (entry.ptyAttached) return;
     const isReattach = state.created;
+    const previousExit = getXtermExit(tabId);
     let cancelled = false;
     const { cols, rows } = entry.lastSize;
     const fallbackCwd = workdir || (typeof process !== 'undefined' && process.env?.HOME) || '/';
-    void window.electronAPI.terminal
-      .create({
+    void attachXterm({
         id: tabId,
         cwd: fallbackCwd,
         cols,
@@ -198,6 +198,16 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
       .then((result) => {
         if (cancelled || !aliveRef.current) return;
         entry.ptyAttached = true;
+        // Native create-or-attach confirmed a live PTY. A local exit from before
+        // a window handoff is stale; preserve only an exit received during attach.
+        const currentExit = getXtermExit(tabId);
+        if (currentExit === previousExit) {
+          setXtermExit(tabId, null);
+          setRuntimeExit(null);
+        } else {
+          setRuntimeExit(currentExit);
+        }
+        setAttachmentPending(false);
         // A font can finish loading while create is in flight. Ensure the PTY
         // receives the final dimensions even if the earlier resize arrived too soon.
         if (entry.lastSize.cols !== cols || entry.lastSize.rows !== rows) {
@@ -218,7 +228,15 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
       })
       .catch((err: unknown) => {
         if (cancelled || !aliveRef.current) return;
-        setRuntimeError(parseError(err));
+        // The existing create contract rejects an exited PTY. Its failure still
+        // confirms that a remembered exit was not superseded by a live restart.
+        if (previousExit && /terminal session already exists \(exited\)/.test(String(err))) {
+          entry.ptyAttached = true;
+          setRuntimeError(null);
+        } else {
+          setRuntimeError(parseError(err));
+        }
+        setAttachmentPending(false);
       });
     return () => {
       cancelled = true;
@@ -260,14 +278,9 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
     setRestarting(true);
     setRuntimeError(null);
     try {
-      const previousExit = getXtermExit(tabId);
-      const result = await window.electronAPI.terminal.restart(tabId);
-      // A short-lived restarted shell can exit before the IPC reply arrives.
-      if (getXtermExit(tabId) === previousExit) {
-        setXtermExit(tabId, null);
-        if (aliveRef.current) setRuntimeExit(null);
-      }
+      const result = await restartXterm(tabId);
       if (!aliveRef.current) return;
+      setRuntimeExit(getXtermExit(tabId));
       // The exited PTY ignored font-driven resizes. Restart uses its old grid,
       // so resend the latest usable size even when the renderer has not changed.
       // Do not measure a hidden or collapsed panel just to synchronize restart.

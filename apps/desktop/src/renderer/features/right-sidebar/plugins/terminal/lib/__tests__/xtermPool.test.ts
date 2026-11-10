@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { openTerminalExternalLink, getXtermExit, detachXterm, getOrCreateXterm, suspendExitedXterm, disposeXterm, __resetPoolForTesting } from '../xtermPool';
+import { openTerminalExternalLink, getXtermExit, setXtermExit, restartXterm, attachXterm, detachXterm, getOrCreateXterm, suspendExitedXterm, disposeXterm, __resetPoolForTesting } from '../xtermPool';
 
 const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -16,6 +16,47 @@ describe('openTerminalExternalLink', () => {
   afterEach(() => {
     __resetPoolForTesting();
     vi.clearAllMocks();
+  });
+
+  // Unit: #9815 discussion_r4528102349. The old exit must not release a
+  // restarted shell whose IPC reply is still pending after the tab unmounts.
+  it.each([
+    ['restart', 'success'], ['restart', 'failure'],
+    ['attach', 'success'], ['attach', 'failure'],
+  ] as const)('retains detached events while %s is pending (%s)', async (operation, outcome) => {
+    let data!: (event: unknown) => void;
+    let exit!: (event: unknown) => void;
+    let resolve!: (value: { shellId: 'zsh'; shellDisplayName: string; pid: number }) => void;
+    let reject!: (reason: Error) => void;
+    const pending = new Promise<{ shellId: 'zsh'; shellDisplayName: string; pid: number }>((yes, no) => { resolve = yes; reject = no; });
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { terminal: {
+      restart: vi.fn(() => pending),
+      create: vi.fn(() => pending),
+      onData: (listener: typeof data) => { data = listener; return vi.fn(); },
+      onExit: (listener: typeof exit) => { exit = listener; return vi.fn(); },
+    } } });
+    const entry = getOrCreateXterm('restarting');
+    const disposed = vi.spyOn(entry.terminal, 'dispose');
+    const oldExit = { code: 0, signal: null };
+    setXtermExit('restarting', oldExit);
+    const restarted = operation === 'restart' ? restartXterm('restarting') : attachXterm({ id: 'restarting', cwd: '/workspace' });
+    detachXterm('restarting');
+    expect(disposed).not.toHaveBeenCalled();
+    if (outcome === 'success') {
+      data({ id: 'restarting', chunk: 'output before restart reply 中文\r\n' });
+      exit({ id: 'restarting', exit: { code: 7, signal: null } });
+      resolve({ shellId: 'zsh', shellDisplayName: 'zsh', pid: 42 });
+      await restarted;
+      expect(getXtermExit('restarting')).toEqual({ code: 7, signal: null });
+    } else {
+      reject(new Error('spawn failed'));
+      await expect(restarted).rejects.toThrow('spawn failed');
+      expect(getXtermExit('restarting')).toEqual(oldExit);
+    }
+    await vi.waitFor(() => expect(disposed).toHaveBeenCalledOnce());
+    const restored = getOrCreateXterm('restarting');
+    await new Promise<void>(done => restored.terminal.write('', done));
+    if (outcome === 'success') expect(restored.terminal.buffer.active.getLine(0)?.translateToString(true)).toBe('output before restart reply 中文');
   });
 
   // Unit: exited tabs previously retained the full xterm buffer. Exercise the
