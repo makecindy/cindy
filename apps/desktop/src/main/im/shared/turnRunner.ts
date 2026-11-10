@@ -247,10 +247,11 @@ interface TurnState {
   streamingHandlePromise: Promise<StreamingTextHandle | null> | null;
   /**
    * 初始流式输出面创建失败(#2164)。置位后本轮不再重试 startStreamingText
-   * (密集 delta 会造成 API 风暴 / 多张孤儿卡),已生成正文由 turn 收口一次性
-   * 降级为普通文本发送,不再静默丢失。
+   * (密集 delta 会造成 API 风暴 / 多张孤儿卡)。普通失败由收口降级发送，
+   * 出站身份失效则丢弃本轮输出。
    */
   streamingStartFailed: boolean;
+  streamingOutputInvalidated: boolean;
   /**
    * 呈现大脑(正文累积 / 过程区合成), 与官方 bot 共用 im/shared/turnPresenter。
    * buffer-replace 策略: 保留个人 IM 渠道现有行为 —— isFinal 用该条全文整体替换
@@ -1162,6 +1163,7 @@ export function createTurnRunner(
       streamingHandle: null,
       streamingHandlePromise: null,
       streamingStartFailed: false,
+      streamingOutputInvalidated: false,
       presenter: createTurnPresenter({ mode: 'buffer-replace', channel }),
       mediaAbsPaths: [],
       allowedFileRoots,
@@ -3662,7 +3664,7 @@ export function createTurnRunner(
   function ensureStreamingHandle(turn: TurnState): Promise<StreamingTextHandle | null> {
     if (turn.streamingHandle) return Promise.resolve(turn.streamingHandle);
     // 初始创建已失败:resolve null(#2164)。不复用 rejected promise 也不再重试 ——
-    // 密集 delta 下重试会造成 API 风暴 / 多张孤儿卡;正文由 turn 收口统一降级。
+    // 密集 delta 下重试会造成 API 风暴 / 多张孤儿卡;收口时区分降级发送与身份失效。
     if (turn.streamingStartFailed) return Promise.resolve(null);
     if (turn.streamingHandlePromise) return turn.streamingHandlePromise;
     // Singleton: subsequent concurrent callers await the same promise rather
@@ -3670,7 +3672,7 @@ export function createTurnRunner(
     // call and produce a flood of orphan messages).
     // 创建失败集中在此捕获并 resolve null(#2164):调用点全部是 fire-and-forget
     // 的 .then(...),各自补 rejection handler 必然遗漏;失败留下脱敏日志与
-    // streamingStartFailed 标记,已生成正文由收口分支一次性降级发送。
+    // streamingStartFailed 标记,由收口分支决定降级发送或丢弃。
     turn.streamingHandlePromise = (async () => {
       try {
         const handle =
@@ -3685,6 +3687,9 @@ export function createTurnRunner(
         return handle;
       } catch (err) {
         turn.streamingStartFailed = true;
+        turn.streamingOutputInvalidated =
+          typeof err === 'object' && err !== null &&
+          'code' in err && err.code === 'IM_OUTPUT_INVALIDATED';
         // 只记渠道 / 阶段 / 错误摘要,不记 token、消息正文与完整用户标识。
         log.warn(
           `[${channel}/turn] initial streaming output start failed (phase=initial_stream_start): ${
@@ -3805,6 +3810,8 @@ export function createTurnRunner(
     const finalView = composeStreamingView(turn);
     if (turn.streamingHandle) {
       await finalizeTurnStream(turn, finalView.trim() ? finalView : '');
+    } else if (turn.streamingOutputInvalidated) {
+      // 原出站身份已失效：只完成收口，不能使用当前身份重发正文或附件。
     } else if (!finalView.trim() && turn.mediaAbsPaths.length === 0) {
       try {
         if (output.kind === 'chunked-text') {

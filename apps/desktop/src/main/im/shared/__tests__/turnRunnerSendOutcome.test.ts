@@ -4646,6 +4646,32 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   });
 
 describe('初始流式输出面创建失败的收口降级(#2164)', () => {
+  it('settles an invalidated output without retrying text or media under a new identity', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValue(
+      Object.assign(new Error('discord owner changed'), { code: 'IM_OUTPUT_INVALIDATED' }),
+    );
+    mocks.resolveXdtImageUrl.mockReturnValue({ absPath: '/media/generated.png' });
+    const h = setupSession(async () => ({ accepted: true }));
+    const onTurnComplete = vi.fn();
+    const result = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'old-identity',
+      text: 'request', attachments: [], queueMode: 'external',
+      beforeProviderStart: async () => {}, onTurnComplete,
+    });
+    expect(result.kind).toBe('accepted');
+    mocks.feishuIm.sendText.mockClear();
+    mocks.feishuIm.sendFile.mockClear();
+    h.emit({ type: 'tool_result_full', data: { fullText: '{"xdt_image_url":"xdt-image://generated.png"}' } });
+    h.emit({ type: 'text', data: { text: 'old identity answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    if (result.kind === 'accepted') await result.terminal;
+
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledOnce();
+    expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+    expect(onTurnComplete).toHaveBeenCalledOnce();
+  });
+
   // Unit: real turn events; missing stream must not drop generated media.
   it.each(['', 'image ready'])('keeps generated media when stream creation fails (body=%s)', async (body) => {
     mocks.feishuIm.startStreamingText.mockRejectedValue(new Error('card create denied'));

@@ -88,6 +88,11 @@ interface DiscordFilePayload {
   name: string;
 }
 
+/** 调用方必须丢弃原轮次的出站内容，不能改用新身份重发。 */
+class DiscordOutputInvalidatedError extends Error {
+  readonly code = 'IM_OUTPUT_INVALIDATED';
+}
+
 export interface DiscordIMOptions {
   /** 凭证键名前缀(伙伴自有连接各一个, 缺省空 = 设置页那份)。 */
   secretKeyPrefix?: string;
@@ -1224,8 +1229,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     if (!lane) return this.requireDmChannel(userId);
     const assertCurrent = this.captureLaneGuard(lane);
     assertCurrent();
-    const first = await this.fetchLaneChannel(lane);
-    assertCurrent();
+    const first = await this.fetchLaneChannel(lane).finally(assertCurrent);
     return {
       id: first.id,
       assertCurrent,
@@ -1265,9 +1269,9 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const owner = this.ownerUserId;
     return () => {
       if (this.disposing || !appId || this.gateway.appId !== appId) {
-        throw new Error('discord connection changed');
+        throw new DiscordOutputInvalidatedError('discord connection changed');
       }
-      if (this.ownerUserId !== owner) throw new Error('discord owner changed');
+      if (this.ownerUserId !== owner) throw new DiscordOutputInvalidatedError('discord owner changed');
     };
   }
 

@@ -454,6 +454,32 @@ describe('DiscordIM guild channel outbound', () => {
 });
 
 describe('DiscordIM guild channel outbound after the allowlist or bot identity changes', () => {
+  it.each([
+    ['bot', false], ['owner', false], ['bot', true], ['owner', true],
+  ])('marks stream setup invalidated when %s changes during channel lookup (lookup rejects=%s)', async (identity, rejects) => {
+    const h = await harness();
+    const channel = h.channels.get(CHANNEL)!;
+    const client = (h.im as unknown as { gateway: { client: { channels: { fetch: ReturnType<typeof vi.fn> } } } }).gateway.client;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    client.channels.fetch.mockImplementationOnce(async () => {
+      await gate;
+      if (rejects) throw new Error('channel lookup failed');
+      return channel;
+    });
+
+    const pending = h.im.startStreamingText(LANE, 'thinking');
+    if (identity === 'bot') h.setAppId('app-2');
+    else (h.im as unknown as { ownerUserId: string }).ownerUserId = '999999999999999999';
+    release();
+
+    await expect(pending).rejects.toMatchObject({
+      code: 'IM_OUTPUT_INVALIDATED',
+      message: expect.stringContaining(identity === 'bot' ? 'connection changed' : 'owner changed'),
+    });
+    expect(channel.send).not.toHaveBeenCalled();
+  });
+
   it('stops a live stream when the channel is removed: no final edit and no fallback send', async () => {
     const h = await harness();
     const channel = h.channels.get(CHANNEL)!;
