@@ -539,6 +539,41 @@ describe('stale device directory', () => {
     expect(listDevices.mock.calls.length).toBe(initial);
   });
 
+  // main 侧 `rethrowServerError` 把终态 4xx 映射成 IPC 码(404→NOT_FOUND、409→ALREADY_EXISTS、
+  // 400→INVALID_PARAMS)。这种失败重问不会变好:与作废推送同一档收口,不再按 5–60 秒追问。
+  // 测试价值
+  // - 生产入口与可观察结果:useDeviceLinkRemoteProjects 的 reseed(listDevices) catch 分支 ——
+  //   断言带终态 IPC 码的拒绝之后不再定时重读,relay 重连时仍会再读一轮。
+  // - Bug/规则依据:Codex review #9360「Stop retrying terminal directory responses」:400/404
+  //   没有作废推送(main 只对 401/403 广播),目录退避会对着它一直追问到进程结束。
+  // - 现有覆盖缺口:既有用例只覆盖「作废推送」收口与**无码**瞬时失败继续退避,没覆盖按 IPC
+  //   码可判的终态失败。
+  // - 最小失败输入:listDevices 以 `[NOT_FOUND]` 拒绝、relay 在线、无作废推送,推进 120 秒。
+  // - tier:unit(electronAPI 为进程内 fake,假计时器)。
+  it('stops re-reading the directory when listDevices fails with a terminal IPC error', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockRejectedValue(
+      new Error("Error invoking remote method 'deviceLink:listDevices': Error: [NOT_FOUND] directory gone"),
+    );
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    expect(initial).toBeGreaterThan(0);
+
+    // relay 在线、也没有作废推送:仍然不再按 5–60 秒追问。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+
+    // 收口只对当前这次连接有效:relay 重连(relay 侧动过了)必须再读一轮 ——
+    // 还是终态失败就再停,不是把目录永久摁死到重启。
+    act(() => listeners.onStatusChanged({ status: 'connecting', directDataDeviceIds: [] }));
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+    expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+  });
+
   // 跳过旧快照的 offline 行不能把冷缓存设备永远留在「检测中」:缓存种入时标 connecting,
   // 而宽限计时器只在 relay 不在线时才降级 —— relay 在线时没人收口,它会一直「检测中」。
   // 旧快照的 offline 至少能证明此刻连不上,收成离线(与跳过之前的呈现一致)。

@@ -68,6 +68,15 @@ export interface ApiFetchOptions {
    * 读取端点，不能把新区域 token 发到首次请求的旧区域。
    */
   baseUrl: string | (() => string);
+  /**
+   * 每一跳物理请求发出前调用,入参是**这一跳**解析出的 base URL。与 `bodyFactory` 一样,
+   * 401 刷新后的重试会再跑一次:刷新可能把请求换到另一个端点(区域切换 / 中转切换),
+   * 调用方的每跳门禁(如设备目录的限流退避)必须按这一跳真正要用的端点复查 —— 只在
+   * 调用前查一次时,新端点上已记的期限拦不住那次物理重试,会把它的限流窗口越推越远
+   * (Codex review #9360「Recheck cooldown after refresh changes endpoints」)。
+   * 抛出即中止这一跳:异常原样抛给调用方,不会被归一成 status 0 的网络失败。
+   */
+  beforeHop?: (resolvedBaseUrl: string) => void;
   /** Abort the request after this many milliseconds; 0 disables the deadline. */
   timeoutMs?: number;
   /** Caller lifetime/deadline, including waiting for shared login refresh and retry. */
@@ -128,6 +137,10 @@ function attachAbortMetadata(
 async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawResponse<T>> {
   opts.signal?.throwIfAborted();
   const baseUrl = typeof opts.baseUrl === 'function' ? opts.baseUrl() : opts.baseUrl;
+  // 每跳门禁在解析完这一跳的端点之后、发请求之前跑。必须放在下面的 try 之外:
+  // 门禁抛出的是调用方自己的错误(如限流退避的 429),进 catch 会被归一成 status 0,
+  // 调用方就分不出「服务端让我等」和「网络挂了」。
+  opts.beforeHop?.(baseUrl);
   const url = baseUrl + apiPath;
   const method = opts.method ?? 'GET';
   const headers: Record<string, string> = {

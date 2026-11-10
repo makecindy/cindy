@@ -495,6 +495,21 @@ export function useDeviceLinkRemoteProjects(
      * 再读一轮。
      */
     let directoryInvalidated = false;
+    /**
+     * main 侧 `rethrowServerError`(device-link/ipc.ts)把设备目录的**终态** 4xx 映射成这几个码:
+     * 404→NOT_FOUND、409→ALREADY_EXISTS、400→INVALID_PARAMS。终态失败重问不会变好 —— 与
+     * main 广播的 401/403 作废(`onDeviceDirectoryInvalidated`)同一档:停掉目录重读,等真正的
+     * 状态变化(relay 重连 / 重新登录)再读一轮,不再自己按 5–60 秒的节奏一直追问
+     * (Codex review #9360「Stop retrying terminal directory responses」)。
+     *
+     * 暂时性失败一律照旧退避:503/0→DEVICE_LINK_UNAVAILABLE,429、超时、断网与 401/403 的
+     * 迟到错误落 INTERNAL —— 429 还要让过 retryAtMs,401/403 由作废推送收口。
+     */
+    const TERMINAL_DIRECTORY_IPC_CODES: ReadonlySet<string> = new Set([
+      'NOT_FOUND', 'ALREADY_EXISTS', 'INVALID_PARAMS',
+    ]);
+    const isTerminalDirectoryFailure = (err: unknown): boolean =>
+      TERMINAL_DIRECTORY_IPC_CODES.has(extractIpcError(err)?.code ?? '');
     /** relay 在线时才跑 anti-entropy；初始状态未知时保守暂停，避免离线失败重试。 */
     let linkOnline: boolean | null = null;
     let directDataDevices = new Set<string>();
@@ -942,6 +957,14 @@ export function useDeviceLinkRemoteProjects(
           // 目录被权威作废后不再追问(main 侧会广播 onDeviceDirectoryInvalidated):
           // 每次追问都会被再拒一次、再广播一次,读永远拿不到结果。
           if (directoryInvalidated) return;
+          // 终态失败(400/404/409 → INVALID_PARAMS / NOT_FOUND / ALREADY_EXISTS)与作废同一档:
+          // 重问不会变好,按 5–60 秒追问只是把请求放大,relay 却一直「在线」。等状态变化再读。
+          if (isTerminalDirectoryFailure(err)) {
+            directoryInvalidated = true;
+            stopDirectoryRetry();
+            directoryRetryDeadlineMs = 0;
+            return;
+          }
           scheduleDirectoryRetry();
         });
     };

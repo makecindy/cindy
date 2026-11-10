@@ -37,7 +37,7 @@ vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ disabl
 vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDeviceProviderViews: vi.fn(async () => []) }));
 
 import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi';
-import { __resetDirectoryThrottleForTests } from '../directoryThrottle';
+import { __resetDirectoryThrottleForTests, recordDirectoryRetryDeadline } from '../directoryThrottle';
 import { setSelfHostedRelaySource } from '../selfHostedRelayRouting';
 import { remoteLocalAgentModels } from '../../local-agent/remoteCatalog.js';
 
@@ -157,6 +157,41 @@ describe('deviceLinkApiFetch', () => {
     ]);
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
     expect(mocks.invalidateSession).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:`deviceLinkApiFetch('/api/device-link/devices')` 经真实 `serverApiFetch`
+  //   的 401 刷新重试 —— 断言换端点后的那一跳**没有**发出物理请求、以带期限的 429 拒绝。
+  // - Bug/规则依据:Codex review #9360「Recheck cooldown after refresh changes endpoints」:
+  //   外层只查了进请求时的桶,刷新把请求换到已在限流窗口里的新端点时,那次物理重试照发,
+  //   会把新端点的限流窗口越推越远。
+  // - 现有覆盖缺口:上面的换端点用例只验证了重试**发到**新端点;账本命中新端点桶的场景从未被测。
+  // - 最小失败输入:新端点的桶已记期限 + 官方 `/devices` 首跳 401 TOKEN_EXPIRED、刷新把
+  //   `getClientEndpoint` 切到该端点。
+  // - tier:unit(electron net 与 authManager 为进程内 fake)。
+  it("rechecks the refreshed endpoint's directory cooldown before the retry hop", async () => {
+    try {
+      // 新端点的桶已在限流窗口里;进请求时的旧端点没有 —— 外层检查放行,拦得住的只有每跳复查。
+      recordDirectoryRetryDeadline('', 'https://device-link.new-region.invalid', Date.now() + 60_000);
+      mocks.netFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { code: 'TOKEN_EXPIRED' } }), { status: 401 }),
+      );
+      mocks.refresh.mockImplementationOnce(async () => {
+        mocks.officialBase = 'https://device-link.new-region.invalid';
+        return true;
+      });
+
+      await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 429 });
+
+      // 第二跳(新端点)被账本拦下:整个过程只发过一次物理读。
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      expect(mocks.refresh).toHaveBeenCalledTimes(1);
+      // 401 已被刷新接走、没拿到第二次权威 401:限流拦下不能算作会话失效。
+      expect(mocks.invalidateSession).not.toHaveBeenCalled();
+    } finally {
+      // 账本是模块级共享状态:留给下一个用例就等于替它限流。
+      __resetDirectoryThrottleForTests();
+    }
   });
 
   it('keeps the official relay on the account token', async () => {

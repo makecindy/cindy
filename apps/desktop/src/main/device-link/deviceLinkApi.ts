@@ -16,7 +16,8 @@ import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 
 /**
  * 设备目录端点。它的限流(429)期限由 `directoryThrottle` 统一记账,`deviceLinkApiFetch`
- * 在发请求前先看账本:限流窗口内**不发物理读**,直接回一个带期限的 429。
+ * 在发请求前先看账本:限流窗口内**不发物理读**,直接回一个带期限的 429;并且**每一跳**
+ * (含 401 刷新把请求换到另一个端点之后的重试)都按那一跳自己的桶再查一次。
  *
  * 这条路径要覆盖所有读 `/devices` 的调用方 —— `handleListDevices`(IPC)、
  * `runControllerDisplayNamesFromDirectory`(relay 上线补展示名)与
@@ -55,23 +56,40 @@ export function deviceLinkApiFetch<T>(
   // 桶的身份 = 请求要发往的地址,与 ipc 侧 `directoryRelayScope()` 同源。
   const baseUrl = relay ? relay.baseUrl : officialDeviceLinkApiBase();
   const owner = currentDirectoryThrottleOwner();
-  if (apiPath === DEVICE_DIRECTORY_PATH) {
-    // 限流窗口内不发物理读:每次追问都会让服务端把窗口重新推后,越问越久。
-    const throttledUntil = directoryRetryDeadline(owner, baseUrl);
-    if (throttledUntil > Date.now()) {
-      return Promise.reject(new ServerApiError('UNAVAILABLE', 429, '设备目录限流退避中', throttledUntil, baseUrl));
-    }
+  const isDirectory = apiPath === DEVICE_DIRECTORY_PATH;
+  /** 某个端点正在限流窗口里就给出该拒的那一次;账号已换则不拦(旧桶不代表这次读)。 */
+  const directoryThrottleError = (hopBaseUrl: string): ServerApiError | null => {
+    if (currentDirectoryThrottleOwner() !== owner) return null;
+    const throttledUntil = directoryRetryDeadline(owner, hopBaseUrl);
+    if (throttledUntil <= Date.now()) return null;
+    return new ServerApiError('UNAVAILABLE', 429, '设备目录限流退避中', throttledUntil, hopBaseUrl);
+  };
+  if (isDirectory) {
+    // 外层先查一次:限流窗口内不发物理读,连请求都不启(每次追问都会让服务端把窗口
+    // 重新推后,越问越久)。下面的 beforeHop 再按**每一跳真正解析出的**端点各查一次 ——
+    // 401 之后的共享刷新可能把官方请求换到另一个区域端点,那一跳的桶可能已在限流窗口里,
+    // 只查发起时的桶拦不住它(Codex review #9360「Recheck cooldown after refresh
+    // changes endpoints」)。
+    const early = directoryThrottleError(baseUrl);
+    if (early) return Promise.reject(early);
   }
+  const perHop = isDirectory
+    ? { beforeHop: (hopBaseUrl: string): void => {
+      const throttled = directoryThrottleError(hopBaseUrl);
+      if (throttled) throw throttled;
+    } }
+    : {};
   const pending = relay
     ? serverApiFetch<T>(apiPath, {
       ...opts,
+      ...perHop,
       baseUrl: relay.baseUrl,
       authorization: `CindyRelay ${relay.credential}`,
       skipAutoRefresh: true,
       skipSessionInvalidation: true,
     })
-    : officialDeviceLinkApiFetch<T>(apiPath, opts);
-  if (apiPath !== DEVICE_DIRECTORY_PATH) return pending;
+    : officialDeviceLinkApiFetch<T>(apiPath, { ...opts, ...perHop });
+  if (!isDirectory) return pending;
   return pending.catch((error: unknown) => {
     // 429 的 Retry-After 记进共享账本:谁收到都算数,否则这条路径收到的限流无人记账,
     // 下一次读(可能来自另一个调用方)直接撞进同一个窗口。
