@@ -16,6 +16,11 @@ const disabledLane = {
 };
 
 function view(kind: string): SlackHookView {
+  if (kind === 'empty-apps') {
+    const base = view('coexist');
+    base.feishu = { ...base.feishu, applications: [], bindings: [], binding: null, available: false };
+    return base;
+  }
   if (kind === 'working-long-name') {
     const base = view('coexist');
     base.feishu.bindings![1]!.workingDevice = { name: 'Design-Team-Office-Workstation-With-A-Very-Long-Computer-Name', isCurrent: false };

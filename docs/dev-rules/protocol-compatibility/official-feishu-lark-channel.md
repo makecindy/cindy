@@ -100,3 +100,7 @@ Feishu confirmed 状态及 `provider.bind.selection` 成功帧可选追加 `work
 服务端正式 migration 与兼容说明见其 `docs/feishu-hook-server.md`；无新增环境变量。
 这是官方 Feishu hook 的独立连接，未改 Device Link 或自建中转的帧、通道与 allowlist，无需中转升级。
 原生 Mobile 没有本次绑定设置入口，无原生配置变更。
+
+应用集合允许权威空快照：`applications: []` 必须伴随 `state: none`、null scope/身份、空 actions（提供 bindings 时也必须为空），
+不能带 appInfo。客户端立即清空所有绑定及在途授权，拒绝原身份任务/查询，保留显式空应用集合并隐藏关联入口；后续快照可恢复。
+这不新增服务端请求；当前服务器配置变更仍可沿既有关闭/重连路径收敛。两仓 parser 同时接受该可选表达。

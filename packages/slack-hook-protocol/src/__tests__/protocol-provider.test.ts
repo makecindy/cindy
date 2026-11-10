@@ -600,3 +600,13 @@ describe('Feishu working computer metadata', () => {
     expectReject({ ...makeProviderBindSelection({ requestId: 'select', provider: 'feishu', bindingId: 'b', ok: false }), payload: { requestId: 'select', provider: 'feishu', bindingId: 'b', ok: false, workingDevice: row.workingDevice } }, 'workingDevice');
   });
 });
+
+// An empty authoritative app set revokes all prior identities, not a stale snapshot.
+it('accepts an empty Feishu application set only with an empty legacy projection', () => {
+  const empty: ProviderBindStatusPayload = { ...CONFIRMED, provider: 'feishu', state: 'none', bindingId: null,
+    principalId: null, principalName: null, scopeId: null, scopeName: null, remediationUrl: null, actions: [], applications: [], bindings: [] };
+  roundTrip(makeProviderBindState(empty));
+  expectReject(makeProviderBindState({ ...empty, scopeId: 'stale-app' }), 'applications');
+  expectReject(makeProviderBindState({ ...empty, actions: ['open_provider'] }), 'applications');
+  expectReject(makeProviderBindState({ ...empty, bindings: [{ ...CONFIRMED, provider: 'feishu' }] }), 'applications');
+});

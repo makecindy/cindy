@@ -1447,9 +1447,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           : enabled
             ? lane.lastError
             : null,
-      available: laneCapabilityReady(lane),
+      available: laneCapabilityReady(lane) && !(multiAppReady(lane) && !lane.awaitingStateSnapshot && lane.applications.length === 0),
       ...(lane.config.provider === 'feishu' ? {
-        ...(lane.applications.length ? { applications: lane.applications.map((app) => ({ ...app })) } : {}),
+        ...((lane.applications.length || (multiAppReady(lane) && !lane.awaitingStateSnapshot)) ? { applications: lane.applications.map((app) => ({ ...app })) } : {}),
         bindings: lane.confirmedBindings.map((row) => ({ ...row, actions: row.actions.filter(
           (action) => action !== 'select_device' || selectionReady) })),
         multiBindAvailable: storeMultiBindReady(lane),

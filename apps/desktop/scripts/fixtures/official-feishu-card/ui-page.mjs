@@ -19,6 +19,7 @@ export default {
     `,
   },
   cases: {
+    'empty-apps': { about: 'No permitted bot: no stale account or linking action survives', data: { kind: 'empty-apps' } },
     'working-long-name': { about: 'Current computer hides selection; long remote computer name wraps at 360px', viewport: { width: 360, height: 1100 }, data: { kind: 'working-long-name' } },
     'org-only': { about: 'Store release gate closed: only the configured enterprise bot appears', data: { kind: 'org-only' } },
     'choose-bot': { about: 'No linked account: choose a named bot before authorization', data: { kind: 'choose-bot' } },
@@ -53,6 +54,11 @@ export default {
   },
   async check(page, ui) {
     const card = page.locator('#cindy-im-feishu-panel');
+    if (ui.data.kind === 'empty-apps') {
+      assert.equal(await card.getByText('Alice', { exact: true }).count(), 0);
+      assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.openBot'), exact: true }).count(), 0);
+      assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.connectBot'), exact: true }).count(), 0);
+    }
     if (ui.data.kind === 'org-only') {
       assert.equal(await card.getByText('Cindy', { exact: true }).count(), 0);
       assert.equal(await card.getByRole('group', { name: '团队 Cindy', exact: true }).count(), 1);

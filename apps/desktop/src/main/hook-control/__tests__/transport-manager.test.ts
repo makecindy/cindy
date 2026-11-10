@@ -5235,6 +5235,29 @@ describe('coexisting Feishu bot manager', () => {
   const app = { appId: 'cli_app', brand: 'feishu' as const, appType: 'store' as const, botName: 'Cindy', organization: 'example' };
   const other = { ...app, appId: 'cli_org', appType: 'self_built' as const, botName: 'Org Cindy' };
   const applications = [{ app, bindings: [FEISHU_CONFIRMED] }, { app: other, bindings: [org] }];
+  // Review / unit: the final app can be withdrawn without a reconnect. Empty
+  // authority clears all execution identities and never starts a replacement bind.
+  it('withdraws every identity on an empty authoritative application snapshot', async () => {
+    const dispatcher = stubDispatcher();
+    const { manager, transports, sent } = feishuLaneHarness({ dispatcher }, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'coexist', features }); opts.onStatus('connected', null);
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, applications }), () => true);
+    const count = sent.length;
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, state: 'none', bindingId: null, principalId: null, principalName: null,
+      scopeId: null, scopeName: null, remediationUrl: null, actions: [], applications: [], bindings: [] }), () => true);
+    expect(manager.snapshot().feishu).toMatchObject({ available: false, applications: [], bindings: [], binding: { state: 'none' } });
+    expect(manager.providerBindStart('feishu')).toBe(false); expect(sent).toHaveLength(count);
+    const replies: HookMessage[] = [];
+    opts.onMessage(makeQueryRequest({ queryId: 'empty-apps', kind: 'workspaces', recipient: { scopeId: 'cli_app', principalId: 'ou_user' } }), (frame) => { replies.push(frame); return true; });
+    await vi.waitFor(() => expect(replies).toHaveLength(1), { interval: 1 });
+    expect(replies[0]).toMatchObject({ type: 'query.response', payload: { ok: false } });
+    opts.onMessage(makeTaskDispatch({ requestId: 'empty-app-work', externalKey: 'feishu:dm:cli_app:ou_user:g1', prompt: 'reject', workspace: 'chat', source: { im: 'feishu' } }), (frame) => { replies.push(frame); return true; });
+    expect(dispatcher.handleDispatch).not.toHaveBeenCalled();
+    opts.onMessage(makeProviderBindState({ ...FEISHU_CONFIRMED, applications }), () => true);
+    expect(manager.snapshot().feishu).toMatchObject({ available: true, bindings: [{ bindingId: FEISHU_CONFIRMED.bindingId }, { bindingId: org.bindingId }] });
+  });
+
   // Review regression / unit: app display ordering is not the legacy account
   // projection. Prior tests used the projected app first and hid this distinction.
   it('keeps the projected app canonical when application ordering differs', async () => {

@@ -1535,8 +1535,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   const renderFeishuApplications = (view: ProviderHookView) => {
     const busy = view.binding?.state === 'pending' || view.binding?.state === 'awaiting_confirmation';
     return <div id={imBotSettings.cindyFeishuWorkingDevice.targetId} className="flex flex-col gap-3">
-      {!view.enabled ? <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.disabledHint')}</p> : null}
-      {view.enabled && view.available && view.status === 'connected' && !busy && (view.bindings?.length ?? 0) === 0
+      {!view.enabled || view.applications!.length === 0 ? <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.disabledHint')}</p> : null}
+      {view.applications!.length > 0 && view.enabled && view.available && view.status === 'connected' && !busy && (view.bindings?.length ?? 0) === 0
         ? <p className="text-11 leading-relaxed text-[var(--text-secondary)]">{t('settings.remoteControl.hook.feishu.chooseBot')}</p> : null}
       {view.applications!.map((app: FeishuAppView) => {
         const accounts = (view.bindings ?? []).filter((row) => row.scopeId === app.appId);
@@ -1586,7 +1586,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           {accounts.map((account) => renderFeishuAccount(account, view))}
         </SettingsCard>;
       })}
-      <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.sharedSettings')}</p>
+      {view.applications!.length > 0 ? <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.sharedSettings')}</p> : null}
     </div>;
   };
 
@@ -1637,7 +1637,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
             <span className="text-11 leading-relaxed text-[var(--error-fg)]">{cs.errorText}</span>
           ) : null}
 
-          {provider === 'feishu' && view.applications?.length ? renderFeishuApplications(view) : <>
+          {provider === 'feishu' && view.applications !== undefined ? renderFeishuApplications(view) : <>
           {!view.enabled ? (
             <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
               {t(`settings.remoteControl.hook.${provider}.disabledHint`)}
