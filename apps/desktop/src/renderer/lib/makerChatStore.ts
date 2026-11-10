@@ -19563,6 +19563,9 @@ function readInputHandoffEndRecord(m: Message) {
 
 function isSyntheticTriggerRow(m: Message): boolean {
   if (m.role !== 'user') return false;
+  // The question card already shows this answer: the row keeps its place in the timeline
+  // without a bubble, so it is no visible anchor for history paging either.
+  if (isAnsweredAsyncQuestionClientId(m.clientId)) return true;
   const c = m.content;
   if (typeof c === 'string') return c.startsWith(UI_ACTION_TRIGGER_PREFIX);
   if (c && typeof c === 'object') {
@@ -20086,11 +20089,6 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
             ...(m.agentMeta.autoResumeOutcome ? { outcome: m.agentMeta.autoResumeOutcome } : {}),
           },
         };
-      }
-      // The question card already shows this answer: the row keeps its place in the
-      // timeline (like the hidden instruction rows above) without a second copy as a bubble.
-      if (isAnsweredAsyncQuestionClientId(m.clientId)) {
-        return { clientId: m.clientId, role: m.role, content: '', isStreaming: false, isSyntheticTrigger: true };
       }
       const parsed = parseUserContent(m.content);
       // Replies saved before the readable copy existed hold the text sent to the model.
