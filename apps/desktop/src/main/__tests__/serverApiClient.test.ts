@@ -228,6 +228,68 @@ describe('serverApiFetch', () => {
     expect((error as { retryAt: number }).retryAt).toBeGreaterThanOrEqual(now + 120_000);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果:`serverApiFetch` 读响应体时调用方总期限到点,抛给调用方的
+  //   中止原因上带出的 `httpStatus`。
+  // - Bug/规则依据:Codex review #9360「Preserve terminal status across response-body
+  //   timeouts」—— 响应头已到、服务端已表态(401/403/404/429),只是正文卡住。状态被丢掉
+  //   后调用方只能把它归一成「连不上」:设备目录那一路的失效广播不触发、终态也不停重读,
+  //   渲染侧退避带着旧快照每 5–60 秒重试那个端点。
+  // - 现有覆盖缺口:上面两个「正文卡住」用例只断言 retryAt(429)与身份不变,没有一个
+  //   覆盖「非 OK 状态要被带出去」;也没有覆盖反例(200 + 卡住的正文不该带状态)。
+  // - 最小失败输入:响应 ok:false/status:401 + json() 永不 settle + 调用方 abort。
+  // - tier:unit(electron net 为进程内 fake)。
+  it('carries the already-known non-OK status on the abort reason when the body stalls', async () => {
+    mocks.netFetch.mockImplementationOnce((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: false,
+      status: 401,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    const controller = new AbortController();
+    const expired = Object.assign(new Error('device directory read deadline'), { name: 'TimeoutError' });
+    const pending = serverApiFetch('/api/device-link/devices', {
+      baseUrl: 'https://api.example.invalid', signal: controller.signal,
+    }).then(() => { throw new Error('the aborted request must not succeed'); }, (error: unknown) => error);
+    await vi.waitFor(() => expect(mocks.netFetch).toHaveBeenCalledTimes(1));
+    controller.abort(expired);
+    const error = await pending;
+    // 身份不变(仍是调用方给的中止原因),只是上面补了已知的响应状态。
+    expect(error).toBe(expired);
+    expect(error).toHaveProperty('httpStatus', 401);
+  });
+
+  // 反例:200 + 卡住的正文是**暂时性**失败。带了状态上去,调用方会把一次超时当成权威
+  // 响应处理,把有界旧快照一起丢掉(Codex review #9360 同一处)。
+  it('does not attach a status when a 200 response body stalls', async () => {
+    mocks.netFetch.mockImplementationOnce((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    const controller = new AbortController();
+    const expired = Object.assign(new Error('device directory read deadline'), { name: 'TimeoutError' });
+    const pending = serverApiFetch('/api/device-link/devices', {
+      baseUrl: 'https://api.example.invalid', signal: controller.signal,
+    }).then(() => { throw new Error('the aborted request must not succeed'); }, (error: unknown) => error);
+    await vi.waitFor(() => expect(mocks.netFetch).toHaveBeenCalledTimes(1));
+    controller.abort(expired);
+    const error = await pending;
+    expect(error).toBe(expired);
+    expect(error).not.toHaveProperty('httpStatus');
+  });
+
   // Unit: exercise the real quota reader through the HTTP client. Previously its
   // mocked client hid recurring warnings for a successful legacy fallback.
   it.each([

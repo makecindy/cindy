@@ -558,7 +558,16 @@ export function handleListDevices(
         }
         // 读取超时是**暂时性**失败:让 continuity reader 沿用有界旧快照,而不是把快照一起
         // 丢掉(丢掉的话渲染进程连旧设备都看不到)。statusCode 0 = 连不上,不是权威拒绝。
+        // 但响应头已经到了、服务端已经表态(401/403/404/429...)时,正文卡住**不代表**
+        // 服务端没拒绝:fetch 层把已知的非 OK 状态贴在中止原因上,这里要把它带出去 ——
+        // 否则拒绝被归一成「连不上」,目录失效广播不触发、终态也不停重读,渲染侧的退避
+        // 会带着旧快照每 5–60 秒重试那个端点(Codex review #9360「Preserve terminal
+        // status across response-body timeouts」)。200 + 卡住的正文仍然是暂时性失败。
         if (isAbortError(error)) {
+          const knownStatus = (error as { httpStatus?: unknown } | null | undefined)?.httpStatus;
+          if (typeof knownStatus === 'number' && knownStatus >= 400) {
+            throw Object.assign(error as object, { statusCode: knownStatus });
+          }
           throw Object.assign(new Error('设备目录读取超时'), { statusCode: 0 });
         }
         throw error;

@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 import { createProviderGroupDirectory } from '../provider-group/directory';
+import { onProviderDirectoryDenied } from '../device-link/providerMetadataContinuity.js';
 
 const capabilities = vi.hoisted(() => ({ canUseDeviceLink: true }));
 const metadataOwner = vi.hoisted(() => ({ key: 'directory-owner-a' }));
@@ -668,6 +669,74 @@ describe('device-link IPC handlers', () => {
       // 超时是**暂时性**失败:statusCode 0 = 连不上,不是权威拒绝(旧快照仍可用)。
       await expect(pending).rejects.toThrow(/设备目录读取超时/);
     } finally {
+      vi.useRealTimers();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:`handleListDevices` 在「响应头已到、正文卡到总期限」时,
+  //   已知的非 OK 状态必须原样进到目录失效广播(`onProviderDirectoryDenied`)——
+  //   401 必须触发,200 卡住只按暂时性失败走、不触发。
+  // - Bug/规则依据:Codex review #9360「Preserve terminal status across response-body
+  //   timeouts」—— 状态被归一成 0 后 `MetadataContinuityReader.onDenied` 看不到 401/403,
+  //   缓存目录不失效,渲染侧新加的退避带着旧快照每 5–60 秒重试那个端点。
+  // - 现有覆盖缺口:上面的超时用例的 apiFetch 直接 reject,从未走到「fetch 已 resolve 出
+  //   响应、只有 json() 挂着」这条中止路径,所以没有任何用例覆盖状态保留。
+  // - 最小失败输入:apiFetch 在调用方期限到点时 reject 一个带着 httpStatus:401 的中止原因。
+  // - tier:unit(fake timers + 进程内假响应)。
+  it('listDevices:响应头已表态但正文卡到总期限,已知的 401 状态不丢', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    const denials: number[] = [];
+    const off = onProviderDirectoryDenied(() => { denials.push(Date.now()); });
+    try {
+      // 模拟 fetch 层的行为:响应头到了(401)、正文挂着,调用方期限到点时它重新抛出
+      // 中止原因,并把已知的非 OK 状态贴上去(由 serverApiClient 的测试覆盖这里怎么贴)。
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => {
+          no(Object.assign(opts.signal?.reason, { httpStatus: 401 }));
+        }, { once: true });
+      }));
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
+      const pending = handleListDevices(deps);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(9_000);
+      // 拒绝本身照旧:IPC 层把非 ServerApiError 的错误统一映射成 INTERNAL,状态码不外泄。
+      await expect(pending).rejects.toThrow();
+      // 真正的可观察结果:401 是权威拒绝,目录失效广播必须触发,渲染侧才会清掉旧快照
+      // 重读,而不是带着旧快照一直重试那个被拒的端点。
+      expect(denials).toHaveLength(1);
+    } finally {
+      off();
+      vi.useRealTimers();
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 反例:200 + 卡住的正文仍旧是暂时性失败。带了状态上去会把一次超时当成权威响应,
+  // 有界旧快照会被一起丢掉(Codex review #9360 同一处)。
+  it('listDevices:200 响应正文卡到总期限,仍按暂时性失败收口', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    const denials: number[] = [];
+    const off = onProviderDirectoryDenied(() => { denials.push(Date.now()); });
+    try {
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => {
+          // 200 不贴状态:fetch 层只带非 OK 的响应状态。
+          no(opts.signal?.reason);
+        }, { once: true });
+      }));
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
+      const pending = handleListDevices(deps);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(9_000);
+      await expect(pending).rejects.toThrow();
+      // 暂时性失败不广播失效:旧快照仍可用,不必清掉重来。
+      expect(denials).toHaveLength(0);
+    } finally {
+      off();
       vi.useRealTimers();
       __resetDeviceListCoalescingForTests();
     }
