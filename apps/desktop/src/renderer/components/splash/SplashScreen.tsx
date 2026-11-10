@@ -294,9 +294,9 @@ export function SplashScreen() {
   // fixture 冻结走查没有真实下载遥测,给进度行一组演示数据看排版
   // (dev-only:readSplashPhaseFixture 在 PROD 恒 null,本分支不可达)。
   const statsProgress = fixture && !realIsDownloading ? 31 : downloadProgress;
-  // Keep raw download precision in the bar, but show a finite whole percentage.
+  // Keep raw precision in the bar; only completed transfers show 100% in the label.
   const statsPercent = Number.isFinite(statsProgress)
-    ? Math.round(Math.min(100, Math.max(0, statsProgress)))
+    ? Math.min(statsProgress >= 100 ? 100 : 99, Math.max(0, Math.round(statsProgress)))
     : 0;
   const statsInfo =
     fixture && !realIsDownloading

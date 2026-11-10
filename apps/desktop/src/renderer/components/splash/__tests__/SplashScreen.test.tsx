@@ -273,6 +273,30 @@ describe('SplashScreen wave4 统一面板', () => {
     expect(screen.getByTestId('splash-progress-stats').textContent).toBe(label);
   });
 
+  // PR #9566: rounding 99.5 must not announce completion before the transfer does.
+  it.each(['splash_downloading', 'splash_updating'])(
+    '%s: reserves 100 percent for completed progress',
+    (phase) => {
+      mocks.splash.downloadProgress = 99.5;
+      const { rerender } = renderSplash(phase);
+
+      for (const [progress, label] of [
+        [99.5, '99%'],
+        [99.999, '99%'],
+        [100, '100%'],
+      ] as const) {
+        mocks.splash.downloadProgress = progress;
+        rerender(<SplashScreen />);
+
+        expect(screen.getByTestId('splash-progress-stats').textContent).toBe(label);
+        expect(parseFloat(screen.getByTestId('splash-progress-fill').style.width)).toBeCloseTo(
+          progress,
+          4,
+        );
+      }
+    },
+  );
+
   it('update_done:统一面板 + 现网 updateDone 文案 + spinner(379:607 样式)', () => {
     renderSplash('splash_update_done');
     expectUnifiedPanel();
