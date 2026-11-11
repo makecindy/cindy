@@ -45,9 +45,19 @@ const terminalEntry = vi.hoisted(() => ({
     write: vi.fn(), focus: vi.fn(),
   },
   fitAddon: { fit: vi.fn() }, lastSize: { cols: 80, rows: 24 }, ptyAttached: false,
-  closing: false, closeCancelledListeners: new Set<() => void>(),
+  closing: false, closeCancelledListeners: new Set<() => void>(), pendingTransitions: 0,
 }));
-vi.mock('../plugins/terminal/lib/xtermPool', () => ({ getOrCreateXterm: () => terminalEntry }));
+vi.mock('../plugins/terminal/lib/xtermPool', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../plugins/terminal/lib/xtermPool')>()),
+  // Keep the production attachment/exit bookkeeping; only the xterm DOM is fake.
+  detachXterm: vi.fn(),
+  getOrCreateXterm: (tabId: string) => {
+    xtermEntries.set(tabId, terminalEntry as unknown as XtermEntry);
+    return terminalEntry;
+  },
+}));
+import { xtermEntries, type XtermEntry } from '../plugins/terminal/lib/xtermEntries';
+import { __resetPoolForTesting } from '../plugins/terminal/lib/xtermPool';
 
 const installedGhostsMock = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
@@ -306,6 +316,8 @@ describe('RightSidebarShell empty state', () => {
   let terminalPlugin: ReturnType<typeof getTabKind>;
 
   beforeEach(() => {
+    __resetPoolForTesting();
+    terminalEntry.pendingTransitions = 0;
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
       configurable: true,
       value: vi.fn(),

@@ -162,12 +162,7 @@
   },
   "taskActionConfirmation": {
     "title": "Confirm session action",
-    "once": "Review the target, action and full content below. Allow applies to this action once.",
-    "remove": "This will release the automation’s receiving address. Check the target; approval applies only to this action.",
-    "permission": "This answers a permission request in another task on your behalf. Review the action; approval applies only once.",
-    "resume": "This resumes paused execution. Review the target; approval applies only once.",
-    "command": "This saves or runs a command on your computer outside the agent’s tool approval. Review the command and working folder; approval applies only once.",
-    "authority": "This creates or changes automation instructions that future runs will treat as standing authorization. Review the complete instructions; approval applies to this save."
+    "once": "Review the target, action and full content below. Allow applies to this action once."
   },
   "logSupport": {
     "title": "Logs and Feedback",
@@ -270,7 +265,7 @@
     "estimateTooManyFiles": "The project has more than {{limit, number}} files and cannot be copied. Copy a project with fewer files instead."
   },
   "sharedTask": {
-    "officialRelayNote": "You're using your own relay. Shared task content still goes through the Cindy relay.",
+    "officialRelayNote": "Agent-Net shares use the relay specified in the invitation; legacy shares still use the Cindy relay.",
     "selfJoin": "You started this shared task, so you don’t need to join. Open it from “Shared by Me”.",
     "manageSharing": "Manage Sharing",
     "manageMembers": "Manage Members…",
@@ -372,7 +367,7 @@
     "closeAllDescription": "Guests will lose access. Task history is kept."
   },
   "providerShare": {
-    "officialRelayNote": "You're using your own relay. Provider sharing content still goes through the Cindy relay.",
+    "officialRelayNote": "Agent-Net shares use the relay specified in the invitation; legacy shares still use the Cindy relay.",
     "owned": {
       "title": "Providers I Share"
     },
@@ -865,8 +860,8 @@
       "runningCount_one": "{{count}} task running",
       "runningCount_other": "{{count}} tasks running",
       "limitAria": "Task limit for {{name}}",
-      "limitOption_one": "Max {{count}}",
-      "limitOption_other": "Max {{count}}",
+      "limitOption_one": "{{count}} task",
+      "limitOption_other": "{{count}} tasks",
       "weightAria": "Weight for {{name}}",
       "weightOption": "Weight {{weight}}",
       "assignAria": "Assign tasks to {{name}}",
@@ -881,6 +876,7 @@
         "pausedLocal": "Not accepting new tasks from other computers",
         "cooling": "Cooling down",
         "coolingUntil": "Cooling down · back around {{time}}",
+        "quotaExhausted": "Quota exhausted",
         "offline": "Offline",
         "unreachableHere": "Can’t reach it from this computer",
         "unavailable": {
@@ -922,9 +918,13 @@
       "description": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). The last few messages and a summary carry over; older details may be lost.",
       "quota": "{{left}}% left",
       "quotaReset": "{{left}}% left · {{reset}}",
-      "confirm": "Switch",
-      "cancel": "Cancel",
-      "remember": "Switch automatically from now on (this task only)"
+      "confirm": "Switch this time only",
+      "cancel": "Not now",
+      "remember": "Switch automatically from now on",
+      "disable": "Do not switch automatically",
+      "disableFailed": "Couldn't confirm whether your choice was saved. Check the connection and make sure Cindy on the task’s computer is up to date, then try again. This message will still be sent as usual.",
+      "choiceLabel": "Switching preference (this task only)",
+      "send": "Send message"
     },
     "deleteConfirm": {
       "title": "Delete the {{provider}} provider group?",
@@ -1364,6 +1364,7 @@
     "REMOTE_AGENT_SHARE_PAUSED": "Model not changed: the owner has paused this share for you. Pick another model.",
     "REMOTE_AGENT_SHARE_REMOVED": "Model not changed: this share is no longer available (the owner removed it or you left). Pick another model.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Model not changed: the shared provider is temporarily unavailable (the owner's computer is offline or sharing is turned off for now). Try again later or pick another model.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Model not changed: this is a legacy share and can't be used while \"Use Only Agent-Net\" is on. Turn that switch off or pick another model.",
     "SSH_HOST_KEY_MISMATCH": "SSH Host Key Changed",
     "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again."
   },
@@ -2421,12 +2422,12 @@
         "previewStarting": "Take your hands off the mouse and keyboard. The screen is covered in 3 seconds; press any key to lock it, then unlock.",
         "previewUnavailable": "Couldn't cover the screen. Restart Cindy and try again.",
         "delay": {
-          "label": "Cover the screen after",
-          "hint": "How long the keyboard and mouse stay untouched before the cover goes up. By default, the same as your display sleep time.",
           "30": "30 sec",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Cover the screen after",
+          "hint": "How long the keyboard and mouse stay untouched before the cover goes up. By default, the same as your display sleep time.",
           "system": "System"
         }
       }
@@ -2455,7 +2456,7 @@
       "skinLabel": "Character",
       "skinHint": "The character shown in Agent Notch and the Dynamic Island.",
       "soundLabel": "Event sounds",
-      "soundHint": "Choose an 8-bit sound for each alert, shared by Agent Notch and the Dynamic Island. The tap sound plays only when you tap Agent Notch.",
+      "soundHint": "When an event sound is set, only that sound plays. Unset or disabled event sounds follow system notification settings.",
       "soundAria": "Toggle Agent Notch sounds",
       "soundSelectAria": "Sound for {{event}}",
       "soundPreviewAria": "Preview {{event}} sound",
@@ -2510,7 +2511,7 @@
         "select": "Click action"
       },
       "soundOptions": {
-        "none": "None",
+        "none": "Follow system",
         "startup-chime": "Startup chime",
         "ring-chime": "Ring chime",
         "item-found": "Item found",
@@ -4233,7 +4234,18 @@
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
           "writeFailed": "Couldn't save the remote access setting. Please try again."
         },
-        "moreActionsAria": "More Actions"
+        "moreActionsAria": "More Actions",
+        "runLocation": {
+          "label": "Run on",
+          "optionLocal": "This computer",
+          "notSignedIn": "Not signed in",
+          "autoBorrowing": "This computer isn't signed in, so new tasks run on {{device}}. No sign-in needed.",
+          "local": "New tasks run on this computer. You can pick another of your signed-in computers instead.",
+          "pinned": "New tasks run on {{device}} with its sign-in. Running tasks stay where they are.",
+          "inline": "Runs on",
+          "signInHere": "Sign in on this computer",
+          "writeFailed": "Couldn't save where this provider runs. Please try again."
+        }
       },
       "detect": {
         "groupLabel": "Detected on this device",
@@ -4737,7 +4749,7 @@
     },
     "discordBot": {
       "title": "Discord Bot",
-      "description": "Connect your own Discord bot so {{appName}} can work from Discord DMs.",
+      "description": "Connect your own Discord bot so {{appName}} can work from Discord DMs and the server channels you choose.",
       "statusAria": "Discord bot status: {{status}}",
       "status": {
         "needsConfig": "Needs configuration",
@@ -4781,6 +4793,64 @@
         "cellLabel": "Message Notifications",
         "hint": "Have the Discord Bot send a message when this device goes online or offline"
       },
+      "channels": {
+        "title": "Server channels",
+        "summary": {
+          "unknown": "Checking…",
+          "off": "Off",
+          "on": "Servers on: {{count}}"
+        },
+        "hint": "Off by default. Turn on a server, then @mention the bot in its text channels to call it. Each channel and each thread keeps its own separate context, and the bot only receives messages that @mention it.",
+        "ownerOnly": "For now only you can call it.",
+        "offline": "The bot is not connected. Connect it to choose channels; channels already enabled stay enabled.",
+        "members": {
+          "label": "Allow channel members",
+          "notice": "Channel members are off by default. When you allow them, members who @mention the bot use the tools {{name}} already has and share {{name}}'s memory. Permissions follow {{name}}'s permission setting, and commands stay owner-only.",
+          "aria": "Allow members of #{{channel}}",
+          "guildAria": "Allow members of {{guild}}"
+        },
+        "loading": "Reading the servers your bot is in…",
+        "refresh": "Refresh",
+        "empty": "The bot isn't in any server yet. Invite it from the Discord Developer Portal, then refresh.",
+        "noTextChannels": "No text channels",
+        "toggleAria": "Enable {{guild}} #{{channel}}",
+        "error": {
+          "load": "Couldn't load your servers.",
+          "save": "Couldn't save that change. Showing what is currently saved.",
+          "unsupported": "This computer runs an older version of Cindy that can't manage server channels from here. Update Cindy on that computer first."
+        },
+        "permission": {
+          "cannotSend": "The bot can't view or send messages in this channel",
+          "limited": "Missing permissions: {{list}}",
+          "separator": ", ",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "Unavailable servers or channels",
+          "hint": "These were deleted, or the bot is no longer in the server. You can remove them from the list.",
+          "remove": "Remove"
+        },
+        "ownerOnlyCardNotice": "Only this bot's owner can use this button.",
+        "guild": {
+          "summary": {
+            "off": "Off",
+            "all": "All channels",
+            "selected": "{{count}} channels selected",
+            "none": "No channels selected"
+          },
+          "toggleAria": "Turn on {{guild}}",
+          "more": "More",
+          "modeAria": "Channels covered in {{guild}}",
+          "mode": {
+            "all": "All channels",
+            "selected": "Selected channels"
+          },
+          "allHint": "Includes text channels added later. The bot only responds in channels where it can view and send messages."
+        }
+      },
       "ownerNotice": {
         "linked": "✅ All linked. Just send a message when you're ready.",
         "disconnected": "🔌 Unlinked. Link again whenever you need me.",
@@ -4797,11 +4867,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "P1 DMs do not require any Privileged Intent."
+          "body": "No Privileged Intent is needed (keep Message Content off). In servers, the bot only receives messages that @mention it."
         },
         "step3": {
           "title": "Invite the bot",
-          "body": "In OAuth2 URL Generator, select the bot scope and grant Send Messages, Read Message History, and Attach Files. Invite the bot to any server you are in; DMs require you and the bot to share a server."
+          "body": "In OAuth2 URL Generator, select the bot scope and grant View Channels, Send Messages, Send Messages in Threads, Embed Links, Attach Files, Read Message History and Add Reactions. Invite the bot to any server you are in; DMs require you and the bot to share a server."
         },
         "step4": {
           "title": "Copy your user ID",
@@ -5300,6 +5370,15 @@
         "hint": "When enabled, {{shortcut}} sends messages. When disabled, Enter sends messages and Shift+Enter inserts a new line.",
         "ariaLabel": "Use {{shortcut}} to send messages"
       }
+    },
+    "defaultNewTaskWorkingDir": {
+      "title": "Default working directory for new tasks",
+      "label": "Default directory on this computer",
+      "hint": "Preselect this directory for new local tasks with no project chosen. An explicitly selected project, dialogue, or remote computer takes priority.",
+      "unset": "Not set (no directory preselected)",
+      "choose": "Choose directory",
+      "clear": "Clear default",
+      "failed": "Could not save the default working directory. Try again."
     },
     "linkOpen": {
       "title": "Open Links",
@@ -5923,7 +6002,7 @@
         "current": "In use",
         "ownerName": "This computer",
         "unavailable": "To use your own relay, sign in to Cindy and make sure the system keychain is available.",
-        "limits": "While you use your own relay, phone push notifications are unavailable, and provider sharing and shared tasks still go through the Cindy relay.",
+        "limits": "Agent-Net shares use the relay specified in the invitation. System notifications require a push provider on that relay. Legacy shares still use the Cindy relay.",
         "actions": {
           "join": "Join another relay",
           "useOfficial": "Switch back to Cindy relay",
@@ -5941,37 +6020,83 @@
           "scopeAllHint": "Devices on your local network can connect directly. The connection is not encrypted, so use it only on trusted networks. Phones need an https address.",
           "externalUrl": "Address other devices use",
           "externalUrlPlaceholder": "e.g. https://relay.example.com",
-          "externalUrlHintAll": "Included in join links. If empty, this computer's local network address is used.",
-          "externalUrlHintLocal": "Included in join links. Enter the public address of your proxy or tunnel.",
+          "externalUrlHintAll": "Included in share links. If empty, this computer's local network address is used.",
+          "externalUrlHintLocal": "Included in share links. Enter the public address of your proxy or tunnel.",
           "suggested": "This computer's addresses:",
           "start": "Start",
           "save": "Save and restart relay",
           "cancel": "Cancel",
           "running": "Relay is running. Other devices connect to {{address}}"
         },
-        "add": {
-          "intro": "Create a join link so a phone or another computer can join this relay.",
-          "create": "Add device",
-          "hint": "Scan it with your phone's camera, or send the link to another computer and paste it under Join another relay. The link works once and expires in 10 minutes.",
-          "qrAlt": "QR code to join the relay",
-          "copy": "Copy link",
-          "copied": "Join link copied",
-          "newLink": "New link",
-          "waiting": "Waiting for a device to ask…"
+        "share": {
+          "action": "Share this relay",
+          "title": "Share link for “{{name}}” created",
+          "description": "Send the link to the other person. Once you approve their request, the computers and phones on their account can use this relay to connect their own devices.",
+          "descriptionOwn": "Send the link to another computer of yours, or scan it with your phone’s camera. Once you approve, that device joins this relay.",
+          "fieldLabel": "Share link",
+          "copy": "Copy Link",
+          "copied": "Copied",
+          "copyFailed": "Couldn’t copy the link. Select it and copy it manually.",
+          "oneTime": "Works once",
+          "expiresIn": "Expires in {{time}}",
+          "expired": "Expired",
+          "regenerateHint": "You can create a new one after it expires",
+          "generating": "Creating link…",
+          "scanHint": "If they scan it on a phone, they’ll be asked to open it on their computer first. Once their computer joins, their phones see this relay automatically.",
+          "scanHintOwn": "Your phone can join by scanning the code with its camera.",
+          "ownAccountOnly": "Right now this relay works only for your own devices. To share it with other accounts, turn on Agent-Net (Beta) under Remote connections first; a relay on your server also needs the latest version.",
+          "qrAlt": "QR code to share the relay",
+          "calloutIsolation": "They can only reach their own devices and can’t see yours. To let them use your agents or models, share those separately.",
+          "calloutPrivacy": "Connections are end-to-end encrypted, so you can’t see the content. As the relay owner, you can see when their devices communicate and how much data they use.",
+          "calloutOwnDevices": "Your own devices don’t need this link: once signed in to the same account, they see this relay in their route list.",
+          "calloutOwnFallback": "Devices signed in to your account usually see this relay in the list without a link. Use this link when the Cindy account service can’t be reached.",
+          "done": "Done",
+          "regenerate": "Create New Link",
+          "regenerated": "New link created"
         },
         "requests": {
-          "item": "{{name}} wants to join",
-          "verify": "Pairing code",
-          "verifyHint": "Approve only if it matches the code on that device.",
+          "title_one": "{{count}} request waiting",
+          "title_other": "{{count}} requests waiting",
+          "waiting": "Wants to join · Waiting for you",
+          "waitingAccount": "Another account · {{device}}, waiting for you",
+          "open": "Review"
+        },
+        "tenants": {
+          "title": "Shared with",
+          "devices_one": "{{count}} device",
+          "devices_other": "{{count}} devices",
+          "online": "Online",
+          "offline": "Offline",
+          "revoke": "Stop sharing",
+          "revokeTitle": "Stop sharing with {{account}}?",
+          "revokeDescription": "The line {{account}} has on this relay is deleted and their devices disconnect immediately. To let them use it again, share it again."
+        },
+        "approve": {
+          "title": "{{device}} wants to join “{{relay}}”",
+          "requestedAt": "Requested {{time}} with your share link",
+          "requestedViaLink": "Requested with your share link",
+          "pairingHint": "Approve only if it matches the pairing code on that device.",
+          "unverified": "This request can't be verified: it doesn't match a share link from this computer and may have been tampered with, so it can only be declined. If it's your device, create a new share link and try again.",
+          "callout": "Once approved, this device joins “{{relay}}” and connects to your other devices through it.",
           "replaces": "This device joined before. Approving revokes its old credential.",
+          "calloutUnknown": "If you don’t recognize this device, decline. Declining voids this link.",
           "approve": "Approve",
-          "reject": "Decline",
-          "unverified": "This request can't be verified: it doesn't match a join link from this computer and may have been tampered with, so it can only be declined. If it's your device, create a new join link and try again."
+          "reject": "Decline Request",
+          "later": "Decide Later",
+          "toastApproved": "{{device}} can now join “{{relay}}”",
+          "toastRejected": "Declined the request from {{device}}",
+          "titleAccount": "{{account}} wants to use “{{relay}}”",
+          "otherAccountDevice": "Another account · {{device}}",
+          "calloutAccount": "If you approve, their account gets its own separate line on “{{relay}}”: it reaches only their own devices and can’t see you or your devices. Their other devices then join directly without asking again.",
+          "calloutAccountRevoke": "You can stop sharing at any time on the relay page; their devices disconnect immediately.",
+          "calloutUnknownAccount": "If you don’t recognize this account, reject it. Rejecting invalidates this link.",
+          "toastApprovedAccount": "{{account}} can now use “{{relay}}”",
+          "toastRejectedAccount": "Rejected the request from {{account}}"
         },
         "join": {
           "title": "Join another relay",
-          "hint": "Paste the join link from Add device on the relay's computer. Cindy switches over once it's approved.",
-          "placeholder": "Paste the join link",
+          "hint": "Paste the share link you were sent. Cindy switches over once it’s approved.",
+          "placeholder": "Paste the share link",
           "submit": "Join",
           "connecting": "Connecting to the relay…",
           "waiting": "Request sent. On {{name}}, check that these digits match and approve:",
@@ -5986,17 +6111,19 @@
           "ownerTitle": "Stop the relay on this computer?",
           "ownerDescription": "Devices that joined will disconnect and be told the relay was stopped. This computer switches back to the Cindy relay.",
           "memberTitle": "Switch back to the Cindy relay?",
-          "memberDescription": "This computer leaves \"{{name}}\" and uses the Cindy relay. To join again, ask for a new join link.",
+          "memberDescription": "This computer leaves \"{{name}}\" and uses the Cindy relay. To join again, ask for a new share link.",
+          "sharedOwnerTitle": "Switch back to the Cindy relay?",
+          "sharedOwnerDescription": "This computer leaves “{{name}}” and uses the Cindy relay; your devices that joined through it disconnect too. To use it again, ask for a new share.",
           "serverTitle": "Switch back to the Cindy relay?",
           "serverDescription": "The relay \"{{name}}\" keeps running on your server, and devices that joined can still reach each other through it. You can switch this computer back at any time."
         },
         "errors": {
-          "INVALID_LINK": "The join link or address is not valid.",
+          "INVALID_LINK": "The share link or address is not valid.",
           "UNREACHABLE": "Can't reach this relay. Make sure this computer can open the address in the link.",
           "NOT_A_RELAY": "This address is not a Cindy relay.",
           "INCOMPATIBLE": "This relay's version isn't compatible. Update Cindy on both computers.",
           "ACCOUNT_MISMATCH": "This relay belongs to another Cindy account.",
-          "CODE_INVALID": "This join link has expired or was already used. Ask for a new one.",
+          "CODE_INVALID": "This share link has expired or was already used. Ask for a new one.",
           "RATE_LIMITED": "Too many attempts. Try again in a few minutes.",
           "REJECTED": "The request was declined.",
           "EXPIRED": "Timed out waiting for approval. Join again.",
@@ -6019,15 +6146,21 @@
           "RELAY_MISMATCH": "The relay on this server wasn't deployed from this computer, so Cindy leaves it alone.",
           "CERTIFICATE_FAILED": "Couldn't get an HTTPS certificate. Usually port 80 isn't allowed in the cloud security group, or the domain doesn't point to this server yet. Fix that, then retry.",
           "CA_UNREACHABLE": "The server couldn't reach the certificate authority Let's Encrypt, even after retrying for a few minutes. Check that the server can reach the internet, then try again later.",
-          "NOT_REACHABLE": "The relay is running on the server, but this computer can't reach it. Allow port 443 in the cloud security group.",
+          "NOT_REACHABLE": "Could not verify the relay connection from this computer. Check the HTTPS address, certificate and access to port 443.",
+          "AGENT_NET_START_FAILED": "Agent-Net did not become ready on the server. Check its service logs and whether ports 3348/TCP and 3479/UDP are in use.",
+          "AGENT_NET_VERIFY_FAILED": "HTTPS is reachable, but the Agent-Net identity and directory could not be verified. Check the V2 service, reverse proxy path and pairing information.",
           "BUNDLE_MISSING": "This version of Cindy doesn't include the relay. Update Cindy.",
           "DEPLOY_FAILED": "Deployment didn't complete.",
-          "PAIR_PROOF_INVALID": "This device's request can't be verified, so it can't be approved. Create a new join link.",
+          "PAIR_PROOF_INVALID": "This device's request can't be verified, so it can't be approved. Create a new share link.",
           "NOT_OWNER": "Only the computer that deployed or started this relay can manage it.",
           "BUSY": "A deployment is in progress. Please wait.",
           "INVALID_ADDRESS": "Enter a public IP or domain, without http:// or a port.",
           "NO_DEPLOYMENT": "Nothing has been deployed to a server yet.",
-          "OWNER_MISMATCH": "The relay returned a certificate that the owner in the join link didn't issue. You may be connected to a fake relay, so joining stopped."
+          "OWNER_MISMATCH": "The relay returned a certificate that the owner in the share link didn't issue. You may be connected to a fake relay, so joining stopped.",
+          "OWNER_UNAVAILABLE": "“{{device}}” didn’t respond. Make sure Cindy is open and online there, or ask for a share link.",
+          "RELAY_UNAVAILABLE": "“{{device}}” is no longer using this relay.",
+          "ACCOUNT_DIRECTORY_UNAVAILABLE": "Can’t reach the Cindy account service right now, so your account’s relays can’t be loaded. You can ask for a share link instead.",
+          "SHARE_UNSUPPORTED": "This relay belongs to another account and can’t be shared with other accounts yet. Ask them to turn on Agent-Net (Beta) (a relay on their server also needs the latest version) and share it again."
         },
         "deploy": {
           "title": "Deploy to my server",
@@ -6070,7 +6203,7 @@
             "uninstall": "Removing the relay from your server…"
           },
           "done": {
-            "deploy": "Deployed. Switch to it under Connection Route, then you can add devices.",
+            "deploy": "Deployed. Switch to it under Connection Route, and your other devices can see and join it.",
             "upgrade": "The relay on your server is now version {{version}}.",
             "uninstall": "Relay removed from your server"
           },
@@ -6113,13 +6246,15 @@
           "removeDescription": "The relay and its device records are deleted from the server, and devices using it disconnect. If you deploy again, every device needs to join again.",
           "forget": "Remove from this computer only",
           "forgetTitle": "Remove from this computer only?",
-          "forgetDescription": "The relay keeps running on the server, but this computer stops managing it and can't add devices to it anymore. Do this only if you no longer use that server."
+          "forgetDescription": "The relay keeps running on the server, but this computer stops managing it and can’t share it anymore. Do this only if you no longer use that server."
         },
         "route": {
           "title": "Connection Route",
           "hint": "Remote control between your devices goes through this route",
           "kindServer": "My server",
           "kindJoined": "Joined",
+          "kindComputer": "My computer",
+          "kindShared": "Shared with you",
           "hostTitle": "This computer as relay",
           "hostHint": "Other devices must be able to reach this computer directly. They disconnect when it sleeps or Cindy quits",
           "officialHint": "No setup needed. Every feature works",
@@ -6137,9 +6272,18 @@
           "statusOffline": "Unreachable",
           "switchTitle": "Switch to {{name}}?",
           "switchFromHost": "The relay on this computer stops, and devices that joined it disconnect.",
-          "switchFromMember": "This computer leaves {{name}}. To join again later, its owner needs to create a new join link.",
+          "switchFromMember": "This computer leaves {{name}}. To join again later, its owner needs to create a new share link.",
+          "switchFromShared": "This computer leaves “{{name}}”, and your devices that joined through it disconnect too. To use it again, ask for a new share.",
           "switchConfirm": "Switch",
-          "switchFromOfficial": "Remote control between your devices will go through {{name}}. Phone push notifications aren't available while you use your own relay, and provider sharing and shared tasks still go through the Cindy relay."
+          "switchFromOfficial": "Remote control between devices will use “{{name}}”. Agent-Net shares use their invitation’s relay; legacy shares still use the Cindy relay.",
+          "switchToAccount": "This relay belongs to your account. “{{device}}” lets this computer in automatically, so no share link is needed.",
+          "accountJoining": "Joining, waiting for “{{device}}” to let this computer in…",
+          "accountManagedOn": "Managed on “{{device}}”",
+          "accountJoinedOn": "Joined on “{{device}}”",
+          "sharedBy": "Shared by {{name}}",
+          "sharedByOther": "Shared by another account",
+          "ownDevicesHint": "Your other computers and phones see this relay once signed in to the same account and can switch to it without a link. To let another account use it, click Share next to the relay.",
+          "sharedOwnDevicesHint": "Your other computers and phones see this relay once signed in to the same account and can switch to it. They reach only your own devices."
         },
         "dialog": {
           "steps": {
@@ -6172,7 +6316,13 @@
           "certificateSite": "Uses the site's certificate",
           "version": "Relay version",
           "latest": "Up to date",
-          "remove": "Remove This Relay"
+          "remove": "Remove This Relay",
+          "protocolsBoth": "Supports Device Link and Agent-Net",
+          "protocolsLegacy": "Supports Device Link only",
+          "upgradeForSharing": "Upgrade to share with other accounts",
+          "connection": "This computer’s connection",
+          "connectionEncrypted": "End-to-end encrypted when the other side also uses Agent-Net",
+          "connectionLegacy": "Not end-to-end encrypted"
         }
       },
       "title": "Remote Connection",
@@ -6187,13 +6337,18 @@
         "allowInboundAria": "Toggle whether {{name}} can control this device",
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
-        "controllingThisMac": "Connected to Cindy"
+        "controllingThisMac": "Connected to Cindy",
+        "useThisDeviceModels": "Use this device's models",
+        "allowModelUseAria": "Let {{name}} use this computer's models"
       },
       "toast": {
         "revoked": "Access revoked for this device",
         "revokeFailed": "Failed to revoke access",
         "restored": "Access restored for this device",
-        "restoreFailed": "Failed to restore access"
+        "restoreFailed": "Failed to restore access",
+        "modelUseRestored": "That computer can use this computer's models again",
+        "modelUseRevoked": "That computer can no longer use this computer's models",
+        "modelUseFailed": "Couldn't save \"Use this device's models\". Please try again."
       },
       "sections": {
         "myDevices": "My devices",
@@ -6474,6 +6629,82 @@
         "title": "Revoke access?",
         "description": "Once revoked, this device is disconnected immediately and can no longer control this machine remotely. You will need to restore its access under Settings → Remote Connection before it can reconnect.",
         "confirm": "Revoke access"
+      },
+      "v2": {
+        "switch": {
+          "title": "Agent-Net (Beta)",
+          "hint": "Shows the connection topology and recent activity. Connections are encrypted when both devices enable Agent-Net and have paired through Agent-Net. Other devices use the existing connection. Applies only to this computer."
+        },
+        "empty": "No other devices yet. Sign in to the same account on another computer or phone and it will appear here.",
+        "stats": {
+          "online": "{{online}} / {{total}} online",
+          "direct": "{{count}} direct",
+          "relay": "{{count}} via relay",
+          "unlinked": "{{count}} not linked",
+          "attention": "{{count}} need attention",
+          "offline": "{{count}} offline"
+        },
+        "node": {
+          "thisComputer": "This computer"
+        },
+        "path": {
+          "direct": "Direct",
+          "relay": "Via {{name}}",
+          "unlinked": "Online, not linked",
+          "offline": "Offline"
+        },
+        "attention": {
+          "unresponsive": "Not responding, retrying"
+        },
+        "relay": {
+          "official": "Cindy relay"
+        },
+        "ms": "{{value}} ms",
+        "flow": {
+          "out": "Sending",
+          "in": "Receiving",
+          "both": "Sending and receiving"
+        },
+        "offlineFold": "{{count}} offline",
+        "offlineShow": "Show offline devices",
+        "offlineHide": "Hide offline devices",
+        "group": {
+          "direct": "Direct",
+          "relay": "Via relay",
+          "unlinked": "Not linked",
+          "attention": "Needs attention",
+          "offline": "Offline"
+        },
+        "recent": {
+          "title": "Recent activity",
+          "online": "{{name}} came online",
+          "offline": "{{name}} went offline",
+          "empty": "No device has come or gone since this page opened"
+        },
+        "popover": {
+          "status": "Status",
+          "path": "Path",
+          "activity": "Messages",
+          "latency": "Latency",
+          "lastSeen": "Last seen",
+          "controlling": "Controlling this computer",
+          "rttNote": "last measured",
+          "manage": "Manage device…",
+          "linkStatus": "To {{name}}",
+          "version": "Cindy {{version}}",
+          "remoteDesktopFailed": "Could not open Remote Desktop",
+          "encryption": "Encryption",
+          "encrypted": "End-to-end encrypted",
+          "legacyConnection": "Older connection",
+          "encryptionUnknown": "Not confirmed",
+          "legacyEncryptionHint": "The relay path on the older connection is not end-to-end encrypted."
+        },
+        "protocol": {
+          "agentNet": "Agent-Net",
+          "deviceLink": "Device Link"
+        },
+        "onlyEncrypted": "Use Only Agent-Net",
+        "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default."
       }
     },
     "tina": {
@@ -6557,6 +6788,7 @@
         "renameFailed": "Rename failed",
         "deleted": "Device deleted",
         "deleteOnline": "This server does not yet support removing online devices. Retry after the service is upgraded.",
+        "deleteRejectedWhileOffline": "Couldn’t delete the device: the server still lists it as online, although it shows as offline here.",
         "deleteFailed": "Delete failed",
         "disconnected": "Disconnected all remote connections",
         "disconnectFailed": "Failed to disconnect remote connection",
@@ -7410,6 +7642,11 @@
         "installedExpand": "Show all {{count}} installed plugins",
         "installedCollapse": "Hide additional installed plugins",
         "recommendedSection": "Recommended",
+        "todayRecommendations": "Today's picks",
+        "marketSection": "Plugin marketplace",
+        "browseMarket": "Browse plugin marketplace",
+        "searching": "Searching…",
+        "allLoaded": "All {{count}} plugins shown",
         "updatesAvailable": "{{count}} plugin updates available",
         "updateAll": "Update all",
         "ignoreRound": "Ignore this round",
@@ -7439,7 +7676,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Official"
+          "official": "Official",
+          "community": "Community"
+        },
+        "publisherDescription": {
+          "official": "Published and maintained by Cindy",
+          "community": "Published and maintained by community developers",
+          "team": "Shared by your organization with authorized members",
+          "custom": "From a Git or local folder marketplace you added",
+          "local": "Installed from a local file or developed on this computer"
         },
         "scopeAria": "Filter plugin sources",
         "scope": {
@@ -9039,6 +9284,8 @@
       "daysWindow": "{{days}}d"
     },
     "claude": {
+      "totalWeeklyLabel": "Total Week",
+      "temporarilyLimited": "Temporarily Limited",
       "waitingDetail": "Claude subscription usage will update after the next turn completes.",
       "weeklyLabel": "Weekly",
       "modelWeeklyLabel": "{{model}} weekly",
@@ -10201,7 +10448,6 @@
     },
     "glance": {
       "open": "{{name}} at a glance",
-      "dueUnseen": "A todo is due",
       "computers": "Computers",
       "runningHere": "Running here",
       "online": "Online",
@@ -10209,64 +10455,15 @@
       "current": "Current",
       "offlineCount_one": "{{count}} offline",
       "offlineCount_other": "{{count}} offline",
-      "todos": "Todos",
       "showMore": "Show more",
       "showLess": "Show less",
       "doneCount_one": "{{count}} done",
       "doneCount_other": "{{count}} done",
-      "delete": "Delete",
-      "deleted": "Deleted. It won't be added again.",
-      "undo": "Undo",
-      "undoFailed": "Couldn't undo. Try again.",
-      "deleteFailed": "Couldn't delete. Try again.",
-      "check": "Check for me",
-      "checkMeta": "Look for new todos in connected mail and chats",
-      "checkPrompt": "Check my connected sources, like mail and messages, for anything new I need to handle, and add it to my todos.",
-      "checkFailed": "Couldn't send. Try again.",
-      "dailyCheck": "Check every day",
-      "dailyCheckMeta": "Weekdays at 9:00, quiet when nothing is new",
       "recentTasks": "Recent tasks",
       "unread": "Unread result",
-      "stopDailyCheck": "Stop daily checking",
-      "loadFailed": "Couldn’t load to-dos. Try again.",
-      "dailyCheckFailed": "Couldn't save. Try again.",
       "outputs": "Outputs",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "Couldn't open the file",
-      "source": {
-        "conversation": "You asked",
-        "mail": "From email",
-        "feishu": "From Feishu",
-        "github": "From GitHub",
-        "community": "From the community",
-        "task": "From a task"
-      }
-    },
-    "autonomy": {
-      "title": "Follow Up on My Sessions",
-      "descriptionOn": "{{name}} checks summaries when sessions change and keeps you informed.",
-      "movedFrom": "Moved here from {{name}}",
-      "heldBy": "{{name}} handles this now. Switch it on to move it here.",
-      "routineScopeHint": "Include sessions you create yourself. The built-in follow-up below responds to changes in assigned sessions.",
-      "heldByNobody": "Not enabled",
-      "restoreDefault": "Restore Default ({{name}})",
-      "saveFailed": "Couldn't save. Try again.",
-      "turnOff": {
-        "title": "Stop following up on all sessions?",
-        "description": "Once this is off, no teammate follows up on all sessions.",
-        "confirm": "Switch Off",
-        "cancel": "Cancel"
-      },
-      "allowSchedulerFollow": {
-        "title": "Let {{name}} follow up on sessions it starts",
-        "description": "By default, {{scheduler}} only watches. When this is on and a session {{name}} started isn't finished, {{scheduler}} follows up on it too."
-      },
-      "consent": "Once enabled, I’ll read summaries of sessions you create on this computer, assess progress, and let you know about important changes. This uses your model allowance. You can disable it anytime.",
-      "invitation": {
-        "title": "Would you like me to follow up on your sessions?",
-        "start": "Start Following Up",
-        "notNow": "Not Now"
-      }
+      "openFailed": "Couldn't open the file"
     },
     "remoteSettings": {
       "empty": "Nothing here yet.",
@@ -10288,9 +10485,6 @@
     },
     "creationName": "Name",
     "settingsBack": "Back to Settings",
-    "sidebar": {
-      "newTaskWith": "Start a task with {{name}}"
-    },
     "title": "Teammates",
     "add": "Add teammate",
     "createWizard": {
@@ -10301,7 +10495,22 @@
       "description": "The teammate maintains its own memory and reusable ways of working. Open its folder only when something needs correcting.",
       "contents": "Contains SOUL.md, USER.md, system_prompt.md, skills/, and memories/. Models, permissions, and connections remain managed by Cindy.",
       "open": "Open folder",
-      "openFailed": "The teammate folder could not be opened."
+      "openFailed": "The teammate folder could not be opened.",
+      "projectMode": {
+        "memoryReviewName": "{{name}} · Review memory",
+        "carryover": {
+          "title": "Carried over from before the upgrade",
+          "intro": "Things still open when this teammate was upgraded. Keep working on what still matters and delete the rest. The full old records stay in the v1-archive folder in the teammate's folder.",
+          "todos": "Open todos",
+          "work": "Workbench items",
+          "threads": "In progress",
+          "commitments": "Promised",
+          "waiting": "Waiting on",
+          "corrections": "Corrections you made",
+          "routines": "Routines to check",
+          "upgrade": "Not carried over automatically"
+        }
+      }
     },
     "profile": {
       "title": "Profile",
@@ -10360,9 +10569,6 @@
     "model": {
       "description": "Choose the models this teammate uses.",
       "primary": "Primary Model",
-      "task": "Task Model",
-      "inheritPrimary": "Inherit Primary Model",
-      "inheritingPrimary": "Inherits the primary model for new background tasks",
       "restoreDefault": "Restore default model"
     },
     "modelChain": {
@@ -10490,11 +10696,10 @@
       "showReplyTargetHint": "Above a teammate’s reply, show which of your messages it answers. Older replies don’t show this."
     },
     "session": {
-      "ownedByBot": "{{name}}'s background task",
+      "ownedByBot": "Opened by {{name}}",
       "backToBot": "Back to {{name}}"
     },
     "collab": {
-      "deliveryFailed": "The result could not be delivered to the original chat. It is saved in this session.",
       "backgroundTask": "Background task",
       "trackedTask": "Runs independently and returns its result",
       "stopTask": "Stop task",
@@ -10511,8 +10716,6 @@
       "actionFailed": "That didn't go through. Try again.",
       "retrying": "Hasn't started yet — retrying…",
       "status": {
-        "queued": "Getting started",
-        "waiting": "Waiting for input",
         "running": "Working on it",
         "completed": "Done",
         "failed": "Failed",
@@ -10528,13 +10731,6 @@
       },
       "viewResult": "View Result",
       "noWrittenResult": "No written result.",
-      "addNote": "Add a note",
-      "addNotePlaceholder": "Tell the background task… press Enter to send",
-      "addNoteSent": "Sent to the background task",
-      "stop": "Stop",
-      "lookAt": "Take a look",
-      "awaitingConfirm": "Waiting for you: {{summary}}",
-      "awaitingConfirmGeneric": "Waiting for you",
       "elapsed": "{{duration}} so far",
       "tookTime": "Took {{duration}}",
       "expandResult": "Show result",
@@ -10781,6 +10977,9 @@
         "stepFailed": "{{name}} ran into a problem and didn’t finish this step",
         "stepTimeout": "{{name}} took too long, so this step was stopped",
         "stepUnavailable": "{{name}} is unavailable and can’t do this step",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}} did not start processing within the waiting period. This request has ended.\nAsk the teammate’s owner to check that Cindy is running and the network is connected on its computer."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} can’t reply: the teammate’s device has reached its remote session limit.\nAsk the teammate’s owner to archive unused sessions, or ask the remote computer’s owner to raise the limit in Remote & sharing.",
           "REMOTE_TOTAL_LIMIT": "{{name}} can’t reply: the remote computer has reached its total remote session limit.\nAsk that computer’s owner to release unused sessions or raise the limit in Remote & sharing.",
@@ -10915,7 +11114,6 @@
         "planning": "Splitting the work…"
       },
       "task": {
-        "label": "Task",
         "state": {
           "started": "In progress",
           "waiting": "Waiting for your confirmation",
@@ -11271,30 +11469,6 @@
           }
         }
       },
-      "system": {
-        "group": "System skills",
-        "meta": "{{on}} of {{total}} on",
-        "pageMeta": "System skill · Updated with Cindy",
-        "use": "Enable for this teammate",
-        "whenOff": "When off",
-        "items": {
-          "todo": {
-            "name": "Todos",
-            "hint": "Keeps what you ask for and what it notices, and reminds you when due.",
-            "off": "It stops recording, tidying and reminding you of todos. Existing todos are kept and resume when you switch this back on."
-          },
-          "routine": {
-            "name": "Routines",
-            "hint": "Sets up and maintains routines that run on a schedule.",
-            "off": "It stops creating or changing routines. Existing routines keep running and stay manageable on the Routines page."
-          },
-          "follow": {
-            "name": "Workbench and follow-up",
-            "hint": "Watches how all your tasks are going and follows up on the ones you hand to it.",
-            "off": "It stops checking and following up on your tasks on its own. You can still ask it in chat."
-          }
-        }
-      },
       "learned": {
         "group": "Learned skills",
         "empty": "No learned skills yet. Nightly learning saves approaches that keep coming up as skills, or you can ask it to remember one in chat.",
@@ -11329,11 +11503,8 @@
       "toolSettings": "Tool settings",
       "notTurnedOn": "Not turned on for this computer",
       "turnOn": "Enable",
-      "permissions": "Permissions"
-    },
-    "systemSkills": {
-      "followOffHint": "{{name}}’s Workbench and follow-up system skill is off. Switch it back on in Capabilities to use this.",
-      "offHint": "The {{skill}} system skill is off. It runs again once you switch it back on in Capabilities."
+      "permissions": "Permissions",
+      "officialInherited": "Cindy official · Follows this computer’s settings"
     },
     "guided": {
       "title": "Create a teammate",
@@ -11426,6 +11597,9 @@
       "databaseDriver": "The database driver could not load. Update or repair Cindy, then retry.",
       "databaseUnavailable": "The source database could not be read. Original data is unchanged; retry after repair.",
       "fileTooLarge": "A file or this import exceeds the read limit. Content was not truncated.",
+      "sourceFileTooLarge": "One file exceeds the read limit. This item was not fully imported.",
+      "snapshotTooLarge": "The total data for this read exceeds the limit. The import is incomplete.",
+      "itemTooLarge": "The files in this item exceed 128 MiB in total. This item was not fully imported.",
       "memoryMetadata": "The memory summary or title exceeds storage requirements.",
       "memoryWrite": "Memory writing or integrity verification failed. You can retry.",
       "memoryChanged": "The saved memory was changed and has not been overwritten.",
@@ -11477,6 +11651,10 @@
       "resumeToMove": "Resume {{name}} before moving it to another computer",
       "transferBusy": "{{name}} is still working on a reply. Move it after the reply finishes",
       "targetUnavailable": "“{{device}}” isn’t available. It must be online with remote control turned on",
+      "targetOutdated": "“{{device}}” runs an older Cindy that can’t run {{name}} yet. Update Cindy there first",
+      "targetOutdatedItem": "Move to “{{device}}” · older Cindy",
+      "targetOutdatedMeta": "Older Cindy",
+      "olderTargetNote": "“{{device}}” runs an older Cindy, so {{name}} works the older way there: the chat history still syncs, but project rules and automations don’t apply there.",
       "shadowTitle": "This teammate now runs on “{{device}}”",
       "shadowHint": "The conversation here is read only.",
       "openOnHome": "Open on “{{device}}”",
@@ -11504,7 +11682,7 @@
       "mergeLabel": "Merge Duplicate Cindys",
       "mergeHint": "You have {{count}} Cindys: {{devices}}",
       "mergeTitle": "Merge {{count}} Cindys into one?",
-      "mergeDescription": "Only one Cindy remains. The others’ chat history, memories, skills, todos and routines come along; a memory or skill with the same name but different content is kept as a second copy, never overwritten. The other Cindys are turned off; their data stays in the cloud and on their computers.",
+      "mergeDescription": "Only one Cindy remains. The others’ chat history, memories, skills and routines come along; a memory or skill with the same name but different content is kept as a second copy, never overwritten. The other Cindys are turned off; their data stays in the cloud and on their computers.",
       "mergeKeep": "Keep the name, personality and settings of",
       "mergeAction": "Merge",
       "merged": "{{count}} Cindys merged into one, with {{messages}} messages brought along",
@@ -11569,7 +11747,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "Connected",
@@ -11701,6 +11880,22 @@
           "existing": "Use the bot already set up in Cindy",
           "manual": "Enter new credentials",
           "moveNote": "The bot moves out of Settings → IM bots, which will be left empty. Its chats continue with {{name}}."
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles server",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API password",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "Your iMessage address",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "Chat GUIDs (comma separated)",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "Local listening address",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "Local listening port",
+          "listenPortPlaceholder": "18747",
+          "hint": "Connect to your BlueBubbles server on the local network. Only selected chats are handled. Stop any other automatic responder for these chats before connecting.",
+          "uncertain": "{{count}} deliveries need checking. Review the chat history before retrying to avoid duplicates."
         }
       },
       "removeConfirm": {
@@ -11872,6 +12067,15 @@
       "unavailable": "Directory unavailable",
       "failed": "Could not update projects. Reload to check the saved state.",
       "noAvailable": "Add more projects from the project list first."
+    },
+    "automations": {
+      "title": "Automations",
+      "description": "Automations in {{name}}'s project. Turn them on or off here; edit them in Automations.",
+      "empty": "{{name}} has no automations yet.",
+      "failed": "Couldn't load automations.",
+      "toggle": "Turn on “{{name}}”",
+      "manage": "Manage in Automations",
+      "create": "Create in Automations"
     }
   },
   "common": {
@@ -12525,6 +12729,12 @@
       "missingDir": "Folder not found"
     },
     "pendingQueue": {
+      "stopping": "Stopping",
+      "queued": "Queued",
+      "editingInComposer": "Editing in the input box below…",
+      "moveUp": "Move earlier",
+      "moveDown": "Move later",
+      "cancelSend": "Cancel send",
       "regionAria": "Pending message queue",
       "listAria": "Queued messages",
       "pausedFooter": "Task stopped, queue paused",
@@ -13030,6 +13240,10 @@
     "prevMessageJump": "Jump to previous prompt: {{preview}}",
     "sessionLoading": "Loading task",
     "askUserQuestion": {
+      "unanswered": "Unanswered",
+      "withdrawn": "No longer needs an answer",
+      "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
+      "sendSupplement": "Send additional information",
       "voice": {
         "hint": "Say an option number or name. For multiple choices, then say “confirm selection”.",
         "freeTextHint": "Say your answer, review it, then say “confirm selection” to submit.",
@@ -13297,8 +13511,10 @@
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
-      "bashStatus_one": "{{count}} background task running…",
-      "bashStatus_other": "{{count}} background tasks running…",
+      "bashWorkStatus_one": "Working in the background ({{count}} command)…",
+      "bashServiceStatus_one": "{{count}} background service running",
+      "bashWorkStatus_other": "Working in the background ({{count}} commands)…",
+      "bashServiceStatus_other": "{{count}} background services running",
       "stopAll": "Stop all",
       "stopAllTitle": "Shut down this session's background process and stop all background subtasks (the session stays usable)",
       "stopBashTitle": "Stop the background tasks still running in this session (keeps the session process)",
@@ -14013,6 +14229,7 @@
       "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue.",
+      "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "This is a legacy share, and it can't be used while \"Use Only Agent-Net\" is on. Turn that switch off to continue, or switch to another model.",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "The available accounts for this model have reached their usage limit. Switch models or continue when the quota resets.",
       "REMOTE_AGENT_GROUP_UNAVAILABLE": "No computer in the provider group can run this task right now. They may be offline, paused, cooling down, or missing this model. Check the group on this provider’s Remote & Sharing page.",
       "REMOTE_AGENT_DEVICE_LIMIT": "This device has reached its remote session limit. Archive unused sessions or ask the provider owner to raise the limit in Remote & sharing.",
@@ -14154,6 +14371,7 @@
       "taskAutoArchived": "Archived \"{{title}}\"",
       "taskAutoArchivedUndo": "Undo",
       "taskAutoArchivePending": "Will archive when you leave this task",
+      "taskAutoArchiveBlockedDirty": "“{{title}}” was not auto-archived: its workspace has uncommitted changes",
       "taskAutoArchiveCancel": "Cancel",
       "taskAutoArchiveCancelled": "Will not auto-archive this time",
       "taskArchiveNow": "Archive now"
@@ -14198,6 +14416,19 @@
       "closeDescription": "This follow-up will stop and its history will be deleted. The main task keeps running.",
       "closeConfirm": "Close and delete",
       "closeFailed": "Could not close the side chat. Please try again."
+    },
+    "botStartedTasks": {
+      "started": "Tasks started",
+      "handedTo": "Tasks handed to",
+      "open": "Open task “{{title}}”",
+      "untitled": "Untitled task",
+      "startedOne": "Started",
+      "handedToOne": "Handed to"
+    },
+    "botTaskLetter": {
+      "replied": "replied",
+      "toggle": "Show or hide the reply from “{{title}}”",
+      "openTask": "Open task"
     }
   },
   "ccAgent": {
@@ -14800,6 +15031,7 @@
         "compactSuccess": "Context compacted",
         "compactSuccessWithTokens": "Context compacted: {{before}}k → {{after}}k tokens",
         "compactFailed": "Compaction failed",
+        "compactResumeFirst": "Send a message to resume this task before compacting its context.",
         "compactNothing": "Nothing to compact yet",
         "sessionBranches": "Session branches",
         "copySessionLink": "Copy session link"
@@ -15396,7 +15628,8 @@
         "openConfigAria": "Open project automation config",
         "openConfigFailed": "Failed to open file",
         "reload": "Reload",
-        "reloadAria": "Reload project automation"
+        "reloadAria": "Reload project automation",
+        "teammate": "{{name}} · Teammate"
       },
       "promote": {
         "menu": "Promote to project automation",
@@ -16299,7 +16532,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "Submit Feedback",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "previewLabel": "GitHub · Public feedback",
+      "edit": "Edit",
+      "doneEditing": "Done editing",
+      "publicSubmit": "Submit publicly",
+      "publicationNotice": "Your feedback and attribution will be public on GitHub.",
+      "attribution": "By {{name}}",
+      "environment": "Environment included",
+      "identitySettings": "Name and account"
     },
     "redirect": {
       "descriptionBefore": "Type ",
@@ -17351,15 +17592,37 @@
       "customRolePlaceholder": "+ custom role name (optional)",
       "customRolePredefinedError": "Custom role name cannot use a predefined role name",
       "agentLabel": "Agent",
-      "modelLabel": "Model",
       "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
       "effortLabel": "Reasoning Effort",
       "initialTaskLabel": "Initial Task",
-      "optional": "(optional)",
-      "initialTaskPlaceholder": "Optional first task for this worker",
+      "initialTaskPlaceholder": "Write the first thing to hand it, or leave blank and let the Lead assign work",
       "enableCollabTitle": "Start Collaboration",
       "enableCollabSubmit": "Start Collaboration",
+      "enableCollabDescription": "This task becomes the Lead: it assigns work and checks the results. The Worker is a separate Agent that does the work and reports back.",
+      "templateLabel": "What the Worker Does",
+      "templates": {
+        "developer": {
+          "name": "Develop"
+        },
+        "reviewer": {
+          "name": "Review",
+          "task": "Take a look at the Lead’s work and give some suggestions."
+        },
+        "tester": {
+          "name": "Test",
+          "task": "Test the Lead’s work so far and report what failed, with steps to reproduce."
+        }
+      },
+      "removePreset": "Remove {{role}}",
+      "removePresetConfirm": {
+        "title": "Remove “{{role}}”?",
+        "description": "You can add it back anytime with Add Role.",
+        "confirm": "Remove Role",
+        "cancel": "Cancel"
+      },
+      "addRole": "Add Role",
+      "moreSettings": "More Settings",
       "executionDeviceLabel": "Run on",
       "thisComputer": "Local",
       "deviceOnline": "Online",
@@ -18115,168 +18378,10 @@
     "compression": "For condensing lengthy content."
   },
   "routines": {
-    "deliveryLabel": "Final delivery",
-    "deliveryDirect": "Show directly in companion chat",
-    "deliveryProcess": "Ask companion to process and reply",
-    "deliveryIm": "Send through a messaging bot",
-    "deliveryNone": "Keep in the execution task only",
-    "deliveryHint": "Direct delivery uses no extra model call. Quiet checks still suppress idle results.",
-    "deliveryRecipient": "Recipient",
-    "deliveryUnavailable": "Destination unavailable",
-    "deliveryNoRecipients": "Connect a messaging bot and chat with it, then reopen these settings.",
-    "deliveryFailed": "Completed, delivery failed",
-    "deliveryFailedHint": "The result is saved. Check the delivery settings; do not rerun the work just to resend it.",
-    "deliveryDelivered": "Result delivered",
-    "onEvent": "Event: {{source}} · {{event}}",
-    "triggerDetails": "View triggers ({{count}}; any can start a run)",
-    "noTriggers": "No triggers set",
-    "unsavedTitle": "Unsaved Changes",
-    "unsavedDescription": "Leaving will discard these changes to the routine.",
-    "discard": "Discard Changes",
-    "continueEditing": "Keep Editing",
-    "title": "Routines",
-    "add": "Add Routine",
-    "back": "Back to Routines",
-    "error": "Could not update routines. Check the settings and try again.",
-    "empty": "Add a routine to tell this teammate what to do and when.",
-    "enabled": "Enabled",
-    "paused": "Paused",
-    "runNow": "Run Now",
-    "running": "Running…",
-    "name": "Name",
-    "instructions": "Instructions",
-    "when": "When to Run",
-    "addTrigger": "Add Trigger",
-    "removeTrigger": "Remove Trigger",
-    "schedule": "Schedule",
     "hourly": "Hourly",
-    "daily": "Daily",
-    "weekdays": "Weekdays",
-    "weekly": "Weekly",
-    "monthly": "Monthly",
-    "interval": "Interval",
-    "advanced": "Advanced…",
     "everyMinutes": "Every {{count}} Minutes",
-    "minutes": "Minutes",
-    "expression": "Cron Expression",
-    "timezone": "Time Zone",
-    "delete": "Delete Routine",
-    "save": "Save Routine",
-    "saved": "Routine saved",
-    "deleteConfirm": "Delete this routine and cancel its pending runs?",
-    "keep": "Keep Routine",
-    "openTask": "Open Session",
-    "history": "Run History",
-    "noRuns": "This routine has not run yet.",
-    "field": "Field",
-    "operator": "Condition",
-    "value": "Value",
-    "addFilter": "Add Condition",
-    "removeFilter": "Remove Condition",
     "pluginCapability": "Publishes declared events to your routines. Only routines you configure can run.",
-    "time": "Time",
-    "day": "Day",
-    "weekday": "Weekday",
-    "status": {
-      "queued": "Queued",
-      "running": "Running",
-      "success": "Completed",
-      "failed": "Failed",
-      "interrupted": "Interrupted",
-      "cancelled": "Cancelled",
-      "skipped": "Checked · model skipped"
-    },
-    "sourceStatus": {
-      "listening": "Listening",
-      "disconnected": "Not Listening",
-      "error": "Source Needs Attention"
-    },
-    "operators": {
-      "equals": "Equals",
-      "contains": "Contains",
-      "not-equals": "Does Not Equal"
-    },
-    "quiet": "Stay quiet when checks find nothing",
-    "sessionMode": "Run session",
-    "sessionModePersistent": "Persistent session (keep context)",
-    "sessionModeFresh": "New session each trigger (isolate context)",
-    "sessionModeHint": "Persistent keeps one routine conversation. New session creates and closes an isolated conversation for each trigger.",
-    "quietHint": "Report changes or problems only. Turn off for reminders and scheduled messages.",
-    "checkSource": "Check with",
-    "checkCommand": "Pre-run check command",
-    "checkHint": "Optional. Checks on the computer before each run: exit 2 skips the run, exit 0 continues, errors stay visible. Clear to remove.",
-    "timeoutMs": "Check timeout (ms, blank for no limit)",
-    "advancedSettings": "Advanced settings",
-    "builtinFollowUp": {
-      "name": "Follow assigned sessions (built-in)",
-      "hint": "Follow assigned sessions when they stall, need you, fail, reach a usage limit or finish."
-    },
-    "todoCheck": {
-      "name": "Daily todo check"
-    },
-    "builtinNightlyLearning": {
-      "name": "Nightly learning (built-in)",
-      "title": "Nightly learning",
-      "hint": "Every night at 3:30, reviews your conversations: tidies memories and saves approaches that keep coming up as skills. Skipped without calling a model when there’s nothing new.",
-      "hintWeekly": "Mondays at 3:30, reviews the week’s conversations: tidies memories and saves approaches that keep coming up as skills. Skipped without calling a model when there’s nothing new."
-    },
-    "nightly": {
-      "switchLabel": "Review on schedule",
-      "paused": "Paused. Conversations are still counted; reviews resume on schedule once you switch it back on.",
-      "running": "Reviewing…",
-      "memoryOff": "Memory is off, so only skills are reviewed.",
-      "pending": "To review",
-      "pendingTurns_one": "{{count}} exchange",
-      "pendingTurns_other": "{{count}} exchanges",
-      "pendingNone": "Nothing new; the next run will be skipped",
-      "last": "Last run",
-      "lastNever": "Not run yet",
-      "lastFailed": "Didn’t finish; it will try again next time",
-      "lastLearned_one": "{{count}} change",
-      "lastLearned_other": "{{count}} changes",
-      "nothing": "Nothing to change",
-      "viewHistory": "View history",
-      "notHere": "Nightly learning runs only on the teammate’s main computer.",
-      "switchHint": "Skipped without calling a model when there’s nothing new",
-      "frequency": "Frequency",
-      "daily": "Daily",
-      "weekly": "Weekly",
-      "dailyHint": "Every day at 3:30",
-      "weeklyHint": "Mondays at 3:30",
-      "runNow": "Review now",
-      "history": "History",
-      "empty": "Nothing reviewed yet. Once there are new conversations, the first review runs on schedule.",
-      "manual": "Run by you",
-      "readTurns_one": "Read {{count}} exchange",
-      "readTurns_other": "Read {{count}} exchanges",
-      "undone": "Undone",
-      "undo": "Undo",
-      "redo": "Restore",
-      "watching": "Approaches being watched",
-      "watchingHint": "Approaches seen only once wait here and aren’t loaded. They become skills only if something similar comes up again.",
-      "promote": "Make it a skill",
-      "decline": "Don’t learn",
-      "changedSince": "This item was changed afterwards, so it can’t be undone",
-      "failed": "Couldn’t finish. Try again.",
-      "item": {
-        "memoryCreated": "Remembered “{{title}}”",
-        "memoryUpdated": "Tidied memory “{{title}}”",
-        "memoryDeleted": "Deleted memory “{{title}}”",
-        "memoryMerged": "Merged memory “{{title}}” into “{{into}}”",
-        "skillCreated": "Learned skill “{{title}}”",
-        "skillUpdated": "Updated skill “{{title}}”",
-        "skillDisabled": "Disabled skill “{{title}}”",
-        "skillMerged": "Merged skill “{{title}}” into “{{into}}” and disabled it"
-      }
-    },
-    "remote": {
-      "pause": "Pause Routine",
-      "resume": "Resume Routine",
-      "addSchedule": "Add Schedule",
-      "addInterval": "Add Interval",
-      "addEvent": "Add Event Trigger",
-      "filterField": "Filter Field"
-    }
+    "advancedSettings": "Advanced settings"
   },
   "cindyMakeDoctor": {
     "description": "Check the local environment for building Cindy. Usage: /cindy-make-doctor",
@@ -19623,10 +19728,7 @@
     "sourcePresent": "[Source] The host preserved the user’s original words as request background, without changes. The current request is in the Agent supplement.",
     "sourceMissing": "[Source] No verifiable original user text was found.",
     "userPrefix": "User’s original words:",
-    "agentPrefix": "Agent supplement:",
-    "taskSource": "[Task source] A companion started this task.",
-    "taskId": "Task ID:",
-    "contextReferences": "Context references:"
+    "agentPrefix": "Agent supplement:"
   },
   "sharing": {
     "loginRequired": "Sign In to Share",
@@ -19752,6 +19854,8 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "unassigned": "Account not assigned",
+    "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",
       "detected": "Signed-in account found",
@@ -19763,10 +19867,10 @@
       "useCodex": "Sign in with Codex"
     },
     "title": "Subscription accounts",
-    "note": "The first account uses the CLI’s default folder. Additional accounts sign in separately. New tasks are balanced across accounts; existing tasks keep their account.",
     "strategy": "Load balancing",
     "add": "Add account",
     "default": "Default folder",
+    "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",
     "unavailable": "Status unavailable",
@@ -19775,9 +19879,14 @@
     "removeTitle": "Remove {{name}}?",
     "removeDescription": "Cindy will stop assigning tasks to this account. Its CLI login and conversation history remain on this computer.",
     "failed": "Could not read or update this account. Check the CLI login and connection, then try again.",
-    "directory": "Account folder",
+    "openDirectory": "Open account folder",
+    "openDirectoryFailed": "Couldn’t open the account folder. It may have been moved or deleted.",
     "loginAgain": "Sign in again",
     "login": "Sign in"
+  },
+  "sessionNotify": {
+    "finished": "This task finished its turn. Its final answer:",
+    "ended": "This task's turn did not finish normally. Its last output:"
   },
   "crashDiagnosis": {
     "title": "Cindy exited unexpectedly",
@@ -19787,5 +19896,33 @@
     "logExcerpt": "Relevant logs (excerpt; may be incomplete)",
     "logsUnavailable": "No relevant logs are available. The cause is not yet known.",
     "failed": "Could not prepare the diagnosis. Please try again."
+  },
+  "githubStar": {
+    "title": "Enjoying Cindy?",
+    "description": "Give Cindy a star on GitHub to support the project.",
+    "dismiss": "Dismiss",
+    "action": "Cheer on Cindy",
+    "starring": "Lighting a star…",
+    "thanks": "Thanks for the Star!",
+    "thanksDescription": "Your support helps Cindy grow.",
+    "browserFallback": "Open GitHub to star Cindy.",
+    "openGithub": "Open GitHub",
+    "openFailed": "Could not open GitHub."
+  },
+  "hostConnection": {
+    "connecting": "Connecting to Cindy…",
+    "restoring": "Restoring task state…",
+    "retrying": "Task state is not yet synced. Retrying…",
+    "pairing": "Connect authorization required",
+    "pairingHelp": "Keep this page open. In the terminal used to start Cindy Host, run the command to open the web client again. Pair the new page, then return here.",
+    "keepDraft": "Your draft stays here. Task state will sync when the connection recovers.",
+    "retry": "Retry connection",
+    "desktopAuthHelp": "Update the Host connection settings in your launch terminal, then reopen this experimental client."
+  },
+  "remoteControlConsent": {
+    "title": "Allow remote control of this computer?",
+    "detail": "Request from {{device}}\nPurpose: {{purpose}}\n\nEnabling this setting lets devices on your account control this computer, including running tasks and accessing files. It stays enabled until you turn it off in Settings.",
+    "decline": "Not now",
+    "enable": "Enable remote control"
   }
 }

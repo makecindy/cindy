@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
  *   3. PTY 输出 → main 推 terminal:data event → 自己按 id filter → terminal.write(chunk)
  *   4. PTY 退出 → state.exited 填上 → 渲染 overlay (退出码 + Restart 按钮)
  *      点 Restart → IPC.terminal.restart(id) → 清 state.exited
- *   5. unmount(切走 / 整个 RSB 关）：仅离开 DOM，xterm 实例和 PTY 都保活
+ *   5. 隐藏 / unmount：运行中的 PTY 继续接收输出；已退出的 xterm 转为快照
  *   6. 真正销毁(关 tab 触发 plugin.onBeforeClose)：disposeXterm + IPC.terminal.dispose
  *
  * resize：ResizeObserver 监听 slot 尺寸 → fitAddon.fit() → 拿 cols/rows → IPC.terminal.resize
@@ -27,7 +27,7 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 import { extractIpcError } from '@/utils/ipcError';
 import { RemoteTerminalSetup } from './RemoteTerminalSetup';
 import type { TabKindHostContext } from '../../types';
-import { getOrCreateXterm, getXterm, type XtermEntry } from './lib/xtermPool';
+import { getOrCreateXterm, getXterm, detachXterm, getXtermExit, setXtermExit, onXtermExit, needsXtermAttach, attachXterm, restartXterm, releaseXtermConnection, type XtermEntry } from './lib/xtermPool';
 import { createTerminalFontController } from './lib/terminalFont';
 import { useTerminalFontSettings } from './lib/useTerminalFontSettings';
 import type {
@@ -106,17 +106,25 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
   const aliveRef = useRef(true);
   const shellVisibleRef = useRef(shellVisible);
   shellVisibleRef.current = shellVisible;
+  const [exited, setRuntimeExit] = useState(() => getXtermExit(tabId) ?? state.exited);
+  const [attachmentPending, setAttachmentPending] = useState(() => needsXtermAttach(tabId));
 
   const [runtimeError, setRuntimeError] = useState<RuntimeError | null>(null);
   const [restarting, setRestarting] = useState(false);
   const [creating, setCreating] = useState(false);
+  // SSH setup owns the entry while mounted; unmount still snapshots exited SSH tabs.
+  const suspended = !isRemote && exited !== null && !restarting && !attachmentPending && (active === false || !shellVisible);
+
+  // The initiating view can unmount before restart fails. The pool's rollback
+  // must reach whichever view now owns the tab, even if its DOM is suspended.
+  useLayoutEffect(() => onXtermExit(tabId, setRuntimeExit), [tabId]);
 
   // ─── 1. xterm DOM 挂载 + IPC data/exit 订阅 ───
   // 用 useLayoutEffect 确保 paint 前 DOM 已经 attach,避免首帧空白
   useLayoutEffect(() => {
     aliveRef.current = true;
     const slot = slotRef.current;
-    if (!slot) return;
+    if (!slot || suspended) return;
 
     const entry = getOrCreateXterm(tabId);
     entryRef.current = entry;
@@ -149,16 +157,17 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
     });
     const offExit = window.electronAPI.terminal.onExit((evt: unknown) => {
       const ex = evt as TerminalExitEvent;
-      if (subscribed && aliveRef.current && ex.id === tabId) {
-        exitRevisionRef.current += 1;
-        patchState({
-          rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID,
-          // Persistence rollback does not undo this body's completed attach.
-          // Leave created to an in-flight create so its effect is not cancelled.
-          ...(entry.ptyAttached && attachedEntryRef.current === entry ? { created: true } : {}),
-          exited: ex.exit,
-        });
-      }
+      if (!subscribed || !aliveRef.current || ex.id !== tabId) return;
+      exitRevisionRef.current += 1;
+      setXtermExit(tabId, ex.exit);
+      setRuntimeExit(ex.exit);
+      patchState({
+        rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID,
+        // Persistence rollback does not undo this body's completed attach.
+        // An exit during create must not cancel the pending create effect.
+        ...(entry.ptyAttached && attachedEntryRef.current === entry ? { created: true } : {}),
+        exited: ex.exit,
+      });
     });
 
     fontControllerRef.current = createTerminalFontController(
@@ -169,6 +178,11 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
 
     // 折叠侧栏或隐藏页签时保留最后可用尺寸，恢复可见后再测量。
     if (activeRef.current !== false && shellVisibleRef.current) fitNow(entry, slot);
+    void entry.restored?.then(() => {
+      if (subscribed && aliveRef.current && entryRef.current === entry && activeRef.current !== false && shellVisibleRef.current) {
+        fitAndPushSize(entry, tabId, slot, isRemote);
+      }
+    });
 
     return () => {
       subscribed = false;
@@ -179,14 +193,16 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
       onDataDisposerRef.current = null;
       offData();
       offExit();
-      // xterm 实例和 PTY 都保活,这里仅 detach DOM 不 dispose
+      entryRef.current = null;
+      detachXterm(tabId);
+      // A running PTY retains its view; an exited one keeps a compact ANSI snapshot.
     };
-  }, [tabId, patchState, isRemote]);
+  }, [tabId, patchState, isRemote, suspended]);
 
   // Font changes are independent from the DOM/PTY lifecycle and never focus the terminal.
   useEffect(() => {
     fontControllerRef.current?.update({ terminalFamily, terminalSize });
-  }, [terminalFamily, terminalSize, tabId, patchState]);
+  }, [terminalFamily, terminalSize, tabId, patchState, suspended]);
 
   // ─── 2. PTY 创建 / 跨窗口 re-attach ───
   // 本 body 尚未 attach，或 pool 已失去 attachment 时创建 / re-attach:
@@ -196,6 +212,7 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
   //      ptyManager.create 是幂等 attach、可换 owner —— 再调一次把 sink 切到本窗口,
   //      输入输出即恢复(xterm scrollback 是 per-renderer 的,迁移后丢失可接受)。
   useEffect(() => {
+    if (restarting || suspended) return;
     const entry = entryRef.current;
     if (!entry) return;
     let cancelled = false;
@@ -204,11 +221,14 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
     const attach = () => {
       if (cancelled || entry.closing || pending || !needsAttach) return;
       if (entry.ptyAttached && attachedEntryRef.current === entry) {
+        setAttachmentPending(false);
         if (isRemote) setCreating(false);
         return;
       }
       const isReattach = state.created;
       pending = true;
+      setAttachmentPending(true);
+      const previousExit = getXtermExit(tabId);
       // A result skipped during close is not a completed attachment, even when
       // this body attached the same pooled entry before an earlier invalidation.
       attachedEntryRef.current = null;
@@ -224,7 +244,7 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
       // index may disappear before close; never retain a short-lived ticket here.
       if (remote) entry.remoteContext = { sessionId: remote.sessionId, deviceId: remote.deviceId ?? null };
       // Layout subscriptions above are installed before this ownership handoff.
-      const request = window.electronAPI.terminal.create({
+      const request = attachXterm({
         id: tabId, cwd: fallbackCwd, cols, rows,
         ...(remote ? { remote } : {}),
       });
@@ -235,6 +255,12 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
         if (isRemote) setCreating(false);
         entry.ptyAttached = true;
         attachedEntryRef.current = entry;
+        setAttachmentPending(false);
+        const clearStaleExit = exitRevisionRef.current === exitRevision;
+        if (clearStaleExit) {
+          setXtermExit(tabId, null);
+          setRuntimeExit(null);
+        }
         if (remote && entry.remoteDraft?.submitted && entry.remoteDraft.contextKey === JSON.stringify([ctx.sessionId, ctx.deviceLinkDeviceId, ctx.remoteHostId])) {
           entry.remoteDraft = undefined;
         }
@@ -246,16 +272,15 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
         } else if (entry.lastSize.cols !== cols || entry.lastSize.rows !== rows) {
           void window.electronAPI.terminal.resize(tabId, entry.lastSize.cols, entry.lastSize.rows).catch(() => undefined);
         }
-        const clearStaleExit = isRemote && exitRevisionRef.current === exitRevision;
         if (!isReattach) {
           patchState({
             rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID,
             created: true,
             shellId: result.shellId,
             shellDisplayName: result.shellDisplayName,
-            ...(!isRemote || clearStaleExit ? { exited: null } : {}),
+            ...(clearStaleExit ? { exited: null } : {}),
           });
-        } else if (clearStaleExit) {
+        } else if (isRemote && clearStaleExit) {
           patchState({ exited: null });
         }
         setRuntimeError(null);
@@ -263,8 +288,13 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
         pending = false;
         if (cancelled || !aliveRef.current || entry.closing) return;
         needsAttach = false;
+        setAttachmentPending(false);
         if (isRemote) setCreating(false);
-        if (isRemote && extractIpcError(err)?.code === 'PRECONDITION_FAILED') {
+        if (previousExit && /terminal session already exists \(exited\)/.test(String(err))) {
+          entry.ptyAttached = true;
+          attachedEntryRef.current = entry;
+          setRuntimeError(null);
+        } else if (isRemote && extractIpcError(err)?.code === 'PRECONDITION_FAILED') {
           entry.ptyAttached = false;
           if (state.created) patchState({ created: false, exited: null });
           onPrepare?.();
@@ -281,7 +311,7 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
       cancelled = true;
       entry.closeCancelledListeners.delete(attach);
     };
-  }, [state.created, tabId, workdir, patchState, remote, isRemote, onPrepare]);
+  }, [state.created, suspended, tabId, workdir, patchState, remote, isRemote, onPrepare]);
 
   // ─── 3. ResizeObserver → fit → IPC resize ───
   useEffect(() => {
@@ -322,19 +352,14 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
     setRestarting(true);
     setRuntimeError(null);
     try {
-      const result = await window.electronAPI.terminal.restart(tabId).catch((err: unknown) => {
-        // A failed first spawn has no registered PTY. Try restart first because
-        // hydrated state.created can also be false for an existing exited PTY.
-        if (remote || extractIpcError(err)?.code !== 'TERMINAL_NOT_FOUND') throw err;
-        // Close can finish while restart is pending; never recreate its disposed PTY.
-        if (!aliveRef.current || !entry || entry.closing || entryRef.current !== entry) throw err;
-        return window.electronAPI.terminal.create({
-          id: tabId,
-          cwd: workdir || (typeof process !== 'undefined' && process.env?.HOME) || '/',
-          ...(entry?.lastSize ?? { cols: 80, rows: 24 }),
-        });
-      });
-      if (!aliveRef.current) return;
+      const result = await restartXterm({
+        id: tabId,
+        cwd: workdir || (typeof process !== 'undefined' && process.env?.HOME) || '/',
+        ...entry?.lastSize,
+        ...(remote ? { remote } : {}),
+      }, () => aliveRef.current && entryRef.current === entry);
+      if (!aliveRef.current || !entry || entry.closing || entryRef.current !== entry) return;
+      setRuntimeExit(getXtermExit(tabId));
       // The exited PTY ignored font-driven resizes. Restart uses its old grid,
       // so resend the latest usable size even when the renderer has not changed.
       // Do not measure a hidden or collapsed panel just to synchronize restart.
@@ -370,19 +395,15 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
 
   const editConnection = useCallback(async () => {
     if (!onEditConnection || restarting) return;
+    const entry = entryRef.current;
+    if (!entry || entry.closing) return;
     setRestarting(true);
     try {
       // Even an exited PTY remains registered in main until explicitly disposed.
-      const entry = entryRef.current;
-      if (!entry || entry.closing) return;
-      await window.electronAPI.terminal.dispose(tabId);
-      if (getXterm(tabId) !== entry) return;
-      entry.ptyAttached = false;
-      if (entry.closing) return;
-      // Commit pooled edit intent only after release succeeds, including when
-      // switching tasks unmounted this body while disposal was pending.
-      onConnectionDisposed?.();
-      if (!aliveRef.current) return;
+      // The pool commits intent on the original nonclosing entry, even if this
+      // body unmounts; rejected release retains the old connection and exit.
+      await releaseXtermConnection(tabId, () => onConnectionDisposed?.());
+      if (!aliveRef.current || getXterm(tabId) !== entry || entry.closing) return;
       onEditConnection();
       patchState({ created: false, exited: null });
     } catch (err) {
@@ -404,9 +425,9 @@ export function TerminalSessionBody({ state, ctx, active, shellVisible = true, r
           </div>
         </div>
       )}
-      {state.exited != null && !runtimeError && (
+      {exited != null && !runtimeError && (
         <ExitedOverlay
-          exit={state.exited}
+          exit={exited}
           restarting={restarting}
           onRestart={onRestart}
           onEditConnection={onEditConnection ? editConnection : undefined}
@@ -433,7 +454,7 @@ function hasSize(slot: HTMLElement): boolean {
 }
 
 function fitNow(entry: XtermEntry, slot: HTMLElement): boolean {
-  if (!hasSize(slot)) return false;
+  if (entry.restored || !hasSize(slot)) return false;
   try {
     const proposed = entry.fitAddon.proposeDimensions();
     if (!proposed || proposed.cols < 1 || proposed.rows < 1) return false;
@@ -452,6 +473,7 @@ function fitAndPushSize(entry: XtermEntry, tabId: string, slot: HTMLElement, for
   if (!fitNow(entry, slot)) return;
   const { cols, rows } = entry.lastSize;
   if (cols === previous.cols && rows === previous.rows && !force) return;
+
   // create/reattach will reconcile these dimensions once it has an owner.
   if (!entry.ptyAttached) return;
   void window.electronAPI.terminal.resize(tabId, cols, rows).catch(() => {

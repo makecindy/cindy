@@ -1,3 +1,4 @@
+import { appendPendingQueueItems } from './pendingQueueItems';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
@@ -5,7 +6,7 @@ import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { botProcessItems } from '@/features/bots/botConversationPresentation';
+import { botProcessItems, botTurnContinuations, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
@@ -61,6 +62,7 @@ import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { createPortal, flushSync } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
+import { copyChatSelection } from './chatSelectionClipboard';
 import {
   groupWorkRuns,
   isCompletedAssistantMessage,
@@ -330,6 +332,8 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
+import { attachBotStartedTasks, BotStartedTasks, collectBotStartedTasks } from './BotStartedTasks';
+import { BotMessageTimelineHeader } from './BotMessageTimelineHeader';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorMessageCard } from './ErrorMessageCard';
@@ -426,7 +430,6 @@ const NO_UNREAD_KEYS: ReadonlySet<string> = new Set();
 import {
   collectBotMessageTimeGroups,
   findFirstUnreadBotReplyClientId,
-  formatBotMessageGroupTime,
 } from '@/features/bots/botConversationTimeline';
 import { NAVIGATION_KEYS, useNavigationKeyListener } from './useNavigationKeyListener';
 export function isScrollNavigationKey(key: string): boolean {
@@ -439,6 +442,8 @@ import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
+  pendingMessages?: readonly ChatMessage[];
+  renderPendingMessage?: (message: ChatMessage) => ReactNode;
   /** Content before history, sharing its scrolling and measured content height. */
   header?: ReactNode;
   /** Host forms share the measured scroll area, outside message virtualization. */
@@ -1889,6 +1894,12 @@ export function buildRenderItems(
     }
 
     const slice = originalTurnSlice(lo, hi);
+    if (opts?.botSessionId) {
+      const startedTasks = collectBotStartedTasks(slice);
+      if (startedTasks.length > 0) {
+        items.push({ type: 'bot_started_tasks', key: `started-tasks-${messages[lo].clientId}`, tasks: startedTasks });
+      }
+    }
     const generatedByPath = new Map<string, GeneratedFileRef>();
     if (opts?.botSessionId) {
       for (const changeSet of changeSets) {
@@ -1976,11 +1987,9 @@ export function buildRenderItems(
       turnStartIdx = i;
     }
 
-    // ask_user: pending lives in the bottom input overlay; expired/unanswered
-    // questions have no user selection to show. Only the answered state surfaces
-    // in the stream — rendered by AskUserQuestionBubble so the choice the user
-    // made stays visible after the agent moves on.
-    if (msg.role === 'ask_user' && msg.askUserStatus !== 'answered') {
+    // Pending questions live in the input overlay. Settled questions preserve
+    // their prompt and answer, withdrawal reason, or unanswered status in history.
+    if (msg.role === 'ask_user' && msg.askUserStatus !== 'answered' && msg.askUserStatus !== 'expired') {
       i++;
       continue;
     }
@@ -2876,7 +2885,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   item: Extract<RenderItem, { type: 'work_group' }>;
   context: WorkGroupRenderContext;
   compact: boolean;
-  /** 伙伴聊天：过程区与最终回复各显示一个头像，正文保持同列。 */
+  /** 伙伴聊天：同一轮开头显示头像，后续行仅保留正文列缩进。 */
   companionAvatar?: ReactNode;
 }) {
   // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
@@ -2951,6 +2960,8 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
 export function MessageStream({
   header,
   footer,
+  pendingMessages,
+  renderPendingMessage,
   onAskInSideChat,
   historyVisibleAfter,
   sessionId,
@@ -3346,6 +3357,12 @@ export function MessageStream({
   // isSessionStreaming 翻转(每 turn 一次)与 items 变化时重算,O(n) 单扫描。
   const { visibleGeneratedFileKeys, onGeneratedFilesVisibilityChange } =
     useBotGeneratedFileDeliveries(ungroupedRenderItems, sessionFileValue);
+  // 「哪些未封口正文是收尾回复」看消息层,不只看看得到的渲染项:展示层会整条删掉
+  // AskUserQuestion / ExitPlanMode 与单步计划工具,同一轮还会按历史空洞切成多个窗口。
+  const botTailReplyIds = useMemo(
+    () => (simplifiedBotConversation ? tailReplyClientIds(displayMessages) : undefined),
+    [displayMessages, simplifiedBotConversation],
+  );
   const allRenderItems = useMemo(() => {
     const grouped = insertForkOriginItem(
       workGroupProjection(
@@ -3355,9 +3372,13 @@ export function MessageStream({
       ),
       forkOrigin,
     );
-    return simplifiedBotConversation
-      ? botProcessItems(grouped, isSessionStreaming)
-      : grouped;
+    return appendPendingQueueItems(
+      simplifiedBotConversation
+        ? attachBotStartedTasks(botProcessItems(grouped, isSessionStreaming, botTailReplyIds))
+        : grouped,
+      pendingMessages ?? [],
+      messages,
+    );
   }, [
     ungroupedRenderItems,
     isSessionStreaming,
@@ -3366,8 +3387,15 @@ export function MessageStream({
     historySnapshot?.ready,
     visibleGeneratedFileKeys,
     workGroupProjection,
+    pendingMessages,
+    messages,
+    botTailReplyIds,
   ]);
   const renderMetadataItems = renderMetadataProjection(allRenderItems);
+  const botContinuationKeys = useMemo(
+    () => simplifiedBotConversation ? botTurnContinuations(allRenderItems) : new Set<string>(),
+    [allRenderItems, simplifiedBotConversation],
+  );
   const botMessageTimeGroups = useMemo(() => {
     if (!simplifiedBotConversation) return new Map<string, number>();
     return collectBotMessageTimeGroups(
@@ -3502,7 +3530,10 @@ export function MessageStream({
     const items = itemsRef.current;
     if (!container || !items) return null;
     const cTop = container.getBoundingClientRect().top;
-    const children = items.children;
+    const indexedRow = messageViewportRef.current?.getViewportTopRow();
+    // The viewport connects during mount; retain the DOM fallback until its
+    // index is available. Normal scrolling reads only the indexed visible row.
+    const children = indexedRow ? [indexedRow] : items.children;
     for (let i = 0; i < children.length; i++) {
       const itemElement = children[i] as HTMLElement;
       const rect = itemElement.getBoundingClientRect();
@@ -4589,15 +4620,13 @@ export function MessageStream({
   const unreadCount = unreadKeys.size;
   // Only the rendered tail of a canonical Bot chat acknowledges replies. History
   // navigation, background windows and streaming work never move its read position.
+  // Folded work-group content is not mounted while collapsed, so only visible
+  // top-level prose counts (see latestSettledAssistantMs).
   useEffect(() => {
     if (!onBotReadThrough || !historyLoaded || !isNearBottom || isSessionStreaming) return;
     const acknowledge = () => {
       if (restoringRef.current || document.visibilityState !== 'visible' || !document.hasFocus() || !isNearBottomRef.current) return;
-      const at = allRenderItems.reduce((latest, item) => {
-        if (item.type !== 'message' || item.message.role !== 'assistant' || item.message.isStreaming) return latest;
-        const stamp = new Date(item.message.createdAt ?? '').getTime();
-        return Number.isFinite(stamp) ? Math.max(latest, stamp) : latest;
-      }, 0);
+      const at = latestSettledAssistantMs(allRenderItems);
       if (at > 0) onBotReadThrough(at);
     };
     const frame = requestAnimationFrame(acknowledge);
@@ -6308,13 +6337,11 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // 成果与回复正文同列，只占头像宽度；过程区单独显示伙伴头像。
+  // 后续正文及成果沿用头像列宽，不再挂载一个隐藏头像。
   const botReplyColumnSpacer = useMemo(
     () =>
       simplifiedBotConversation && assistantAvatar ? (
-        <span aria-hidden="true" className="invisible">
-          {assistantAvatar}
-        </span>
+        <span aria-hidden="true" className="block w-7" />
       ) : undefined,
     [assistantAvatar, simplifiedBotConversation],
   );
@@ -6468,6 +6495,7 @@ export function MessageStream({
             <div
               ref={scrollRef}
               data-scroll-container=""
+              onCopy={copyChatSelection}
               className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
               onScroll={handleScroll}
               onPointerDownCapture={() => refreshViewportAnchor()}
@@ -6584,6 +6612,13 @@ export function MessageStream({
                       );
                     }
 
+                    if (item.type === 'bot_started_tasks') {
+                      const tasks = <BotStartedTasks tasks={item.tasks} hostSessionId={sessionId} />;
+                      return botReplyColumnSpacer
+                        ? withAssistantAvatar(botReplyColumnSpacer, tasks, item.key)
+                        : <div key={item.key} data-render-item-key={item.key}>{tasks}</div>;
+                    }
+
                     if (item.type === 'generated_files') {
                       return (
                         <GeneratedFilesCard
@@ -6645,7 +6680,9 @@ export function MessageStream({
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
                           // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
-                          companionAvatar={simplifiedBotConversation ? assistantAvatar : undefined}
+                          companionAvatar={simplifiedBotConversation
+                            ? botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar
+                            : undefined}
                         />
                       );
                     }
@@ -6660,10 +6697,12 @@ export function MessageStream({
                       if (readGhostCardSupersededBy(entry.html)) return null;
                       // 常态包一层 div(结构稳定,回锚媒体到达时卡片 iframe 不重挂);
                       // 回锚媒体(如 mivo 视频)挂卡正下方,与 tool_media 同款间距。
-                      return (
+                      const card = (
                         <div
                           key={item.key}
-                          data-render-item-key={item.key}
+                          // 伙伴会话里这层会被头像行包住，渲染项标识必须落在最外层，
+                          // 否则 measureViewportTop / findRenderItemElement 找不到这一行。
+                          {...(botReplyColumnSpacer ? {} : { 'data-render-item-key': item.key })}
                           className="flex flex-col gap-2"
                         >
                           <GhostToolCard
@@ -6687,6 +6726,12 @@ export function MessageStream({
                           ) : null}
                         </div>
                       );
+                      // Plugin result cards are part of the assistant reply column too.
+                      // Keep the invisible avatar spacer used by prose and work groups
+                      // so companion conversations do not let the card start at x=0.
+                      return botReplyColumnSpacer
+                        ? withAssistantAvatar(botReplyColumnSpacer, card, item.key)
+                        : card;
                     }
 
                     if (item.type === 'tool_media') {
@@ -6728,9 +6773,9 @@ export function MessageStream({
                     // 分享选择:复选框与光栅化定位属性都挂在这个**既有** wrapper 上,
                     // 不新增 DOM 层级 —— 多包一层会让 AssistantMessage 子树在进出
                     // 选择模式时 remount(mermaid 重渲、GhostToolCard iframe 重载)。
-                    const shareable =
-                      Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
-                    const messageNode = (
+                    const pending = item.pending === true;
+                    const shareable = !pending && Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
+                    const messageNode = pending && renderPendingMessage ? renderPendingMessage(msg) : (
                       <MessageItem
                         message={msg}
                         toolResult={singleResultMap.get(msg.clientId)}
@@ -6757,7 +6802,7 @@ export function MessageStream({
                         isLastMessage={msg.clientId === lastMessageClientId}
                         isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
                         localFileRefs={localFileRefs}
-                        assistantAvatar={assistantAvatar}
+                        assistantAvatar={botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar}
                         simplifiedBotConversation={simplifiedBotConversation}
                         starterOptionsLocked={Boolean(lastUserMessageClientId)}
                         sessionSource={sessionSource}
@@ -6788,29 +6833,8 @@ export function MessageStream({
                           data-message-client-id={msg.clientId}
                           className={cn('scroll-mt-20 rounded-xl transition-[background-color,box-shadow]', highlightClass)}
                         >
-                          {startsUnread ? (
-                            <div
-                              className="mb-3 flex items-center gap-3"
-                              role="separator"
-                              aria-label={t('bots.chat.newMessagesBoundary')}
-                            >
-                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
-                              <span className="shrink-0 text-11 font-medium tracking-[0.08em] text-[var(--bot-unread-bg)]">
-                                {t('bots.chat.newMessagesBoundary')}
-                              </span>
-                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
-                            </div>
-                          ) : null}
-                          {groupTimestamp !== undefined ? (
-                            <time
-                              dateTime={new Date(groupTimestamp).toISOString()}
-                              className="mb-3 block text-center text-11 text-[var(--text-tertiary)]"
-                            >
-                              {formatBotMessageGroupTime(
-                                groupTimestamp,
-                                i18n.resolvedLanguage ?? i18n.language,
-                              )}
-                            </time>
+                          {startsUnread || groupTimestamp !== undefined ? (
+                            <BotMessageTimelineHeader startsUnread={startsUnread} groupTimestamp={groupTimestamp} />
                           ) : null}
                           <div {...shareAttributes} className={cn(shareable && 'relative')}>
                             {shareable && shareSelectionActive ? (
@@ -6926,10 +6950,18 @@ export function MessageStream({
  * bit-for-bit what they were. With one (a Bot conversation) the row becomes the
  * IM shape everyone already knows: avatar, then what they said.
  */
-function withAssistantAvatar(avatar: ReactNode | undefined, bubble: ReactNode): ReactNode {
+export function withAssistantAvatar(
+  avatar: ReactNode | undefined,
+  bubble: ReactNode,
+  renderItemKey?: string,
+): ReactNode {
   if (!avatar) return bubble;
   return (
-    <div className="flex items-start gap-2.5">
+    <div
+      className="flex items-start gap-2.5"
+      // 传了 renderItemKey 时必须挂在最外层：视口补偿只扫消息列的直接子元素。
+      {...(renderItemKey ? { 'data-render-item-key': renderItemKey } : {})}
+    >
       <span className="mt-0.5 shrink-0">{avatar}</span>
       <div className="min-w-0 flex-1">{bubble}</div>
     </div>
@@ -7157,6 +7189,7 @@ const MessageItem = memo(function MessageItem({
             botStarterOptions={message.botStarterOptions}
             starterOptionsLocked={starterOptionsLocked}
             botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}
+            botStartedTasks={message.botStartedTasks}
           />
         </>,
       );

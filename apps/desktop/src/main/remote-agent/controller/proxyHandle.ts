@@ -10,7 +10,7 @@
  * 调用先连回同一个会话；只改设置的调用(换模型、权限档、计划模式、目录等)只记在本机，连回来时带上。
  */
 import fsp from 'node:fs/promises';
-import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
+import { isTerminalAgentErrorEvent, MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type { RemoteAgentMethod, RemoteAgentReply, RemoteAgentReverseRequest, RemoteAgentTeardownReason } from '@cindy/device-link';
 import type {
@@ -50,6 +50,8 @@ export interface RemoteStartedInfo {
   extraDirs?: string[];
   writableDirs?: string[];
   virtualWorkspace?: boolean;
+  /** Execution host can decode iMessage permission and Main-owned origins. */
+  imessageSendContext?: boolean;
   methods: string[];
   state: Record<string, unknown>;
   requestSessionId?: string;
@@ -70,6 +72,7 @@ export function parseStartedInfo(value: Record<string, unknown>, kind: AgentKind
     model: str(value.model) ?? '',
     shadowDir: str(value.shadowDir) ?? '',
     virtualWorkspace: value.virtualWorkspace === true,
+    imessageSendContext: value.imessageSendContext === true,
     ...(str(value.mirrorRoot) ? { mirrorRoot: str(value.mirrorRoot) } : {}),
     previousMirrorRoots: Array.isArray(value.previousMirrorRoots) ? value.previousMirrorRoots.filter((item): item is string => typeof item === 'string') : [],
     extraDirs: Array.isArray(value.extraDirs) ? value.extraDirs.filter((item): item is string => typeof item === 'string') : [],
@@ -272,6 +275,7 @@ export interface RemoteAgentHandleController {
 
 export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHandleController {
   const { started } = deps;
+  let imessageSendContext = started.imessageSendContext === true;
   const link = deps.link ?? fixedRemoteAgentLink(deps.client!);
   const queue = new EventQueue();
   const projection = new RemoteEventProjection(deps.workspace);
@@ -311,12 +315,15 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   const teardown = async (mode: 'close' | 'detach', opts?: AgentSessionTeardownOptions) => {
     deps.cancelPendingConfirmations?.();
     const reason = opts?.reason ?? 'navigation';
+    // 远端会话无项目资源启动快照,永不漂移,不存在资源回收关闭;资源刷新关闭由
+    // Maker 侧以 'runtime-refresh' 原因走 closeSessionIfCurrent,不进远端 wire。
+    const wireReason: RemoteAgentTeardownReason = reason;
     if (reason === 'account-boundary') {
       // The Agent uses the other computer's credentials. A failed notification
       // is not evidence of a surviving local Pi process (#6921). Release local
       // resources independently, even while the remote request is still pending.
       const [remote, local] = await Promise.allSettled([
-        Promise.resolve().then(() => link.close(mode, reason)),
+        Promise.resolve().then(() => link.close(mode, wireReason)),
         dispose(),
       ]);
       if (remote.status === 'rejected') {
@@ -328,7 +335,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       return;
     }
     try {
-      await link.close(mode, reason);
+      await link.close(mode, wireReason);
     } catch (error) {
       // A remote notification failure cannot keep an already disposed local
       // Session running. The next explicit send will reopen its native history.
@@ -374,6 +381,16 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         return block;
       });
     };
+    const client = await link.ensure();
+    // Check the actual executor after reconnect, before either send or steer.
+    // Older hosts silently drop this origin and would execute without its policy.
+    const origins = [opts?.turnPermissionPolicy?.origin, opts?.[MAIN_OWNED_SEND_CONTEXT]?.origin];
+    if (!imessageSendContext && origins.some(origin => origin?.kind === 'im' && origin.channel === 'imessage')) {
+      throw new RemoteAgentRemoteError({
+        code: 'REMOTE_AGENT_PEER_TOO_OLD',
+        message: '[REMOTE_AGENT_PEER_TOO_OLD] Update Cindy on the computer providing this supplier to preserve iMessage permissions.',
+      });
+    }
     const callId = deps.newId();
     if (encoded.onTranscriptUserEntry || encoded.onInteractionStateChange) {
       sendCallbacks.set(callId, {
@@ -384,7 +401,6 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
         sendCallbacks.delete(sendCallbacks.keys().next().value as string);
       }
     }
-    const client = await link.ensure();
     // 连回成功后才取供应商组的「新一轮」标记：连不回时消息没发出，标记要留给重试。
     if (method === 'send' && deps.takeGroupNewRound?.()) encoded.wire.groupNewRound = true;
     // 连回之后才转换路径：让出期间改过的目录要等连回补发后才有虚拟路径。
@@ -609,6 +625,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       && !(Array.isArray(state.backgroundTasks) && state.backgroundTasks.length > 0)
       && !(typeof state.pendingWake === 'number' && state.pendingWake > 0),
     onReconnected(next) {
+      imessageSendContext = next.imessageSendContext === true;
       const previousUsage = state.usage;
       state = { ...state, ...next.state };
       if (!isEmptyUsage(previousUsage) && isEmptyUsage(state.usage) && state.turnRunning !== true) {

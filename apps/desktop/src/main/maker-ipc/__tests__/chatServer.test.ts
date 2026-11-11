@@ -9,13 +9,6 @@ vi.mock('../chatServerReplyFiles.js', () => ({ prepareChatReplyFiles: replyFiles
 vi.mock('../chatServerMedia.js', () => ({ createChatMedia: () => ({ upload: fixture.upload, download: fixture.download }) }));
 const replyImages = vi.hoisted(() => vi.fn(async (text: string): Promise<{ text: string; attachments: import('../chatServerMedia.js').ChatUploadAttachment[] }> => ({ text, attachments: [] })));
 vi.mock('../chatServerReplyImages.js', () => ({ prepareChatReplyImages: replyImages }));
-// Persists across adapter recreation; the SQLite implementation has its own persistence tests.
-const taskPosts = vi.hoisted(() => new Map<string, unknown>());
-vi.mock('../botGroupTaskPostSnapshot.js', () => ({ prepareBotGroupTaskPost: async (taskId: string, scope: unknown, prepare: () => Promise<unknown>) => {
-  const key = JSON.stringify([taskId, scope]);
-  if (!taskPosts.has(key)) taskPosts.set(key, JSON.parse(JSON.stringify(await prepare())));
-  return JSON.parse(JSON.stringify(taskPosts.get(key)));
-} }));
 // This computer's group settings; each test starts with none.
 const workspaceSettings = vi.hoisted(() => new Map<string, unknown>());
 vi.mock('../chatServerWorkspaces.js', () => ({ chatServerWorkspaces: () => ({
@@ -93,8 +86,8 @@ vi.mock('ws', async () => {
   } };
 });
 import { ChatResponseError, REACTION_REVISION_MESSAGE_LIMIT, splitChatMessageText, withChatServer } from '../chatServer.js';
-import { t } from '../../i18n.js';
-import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
+import { t } from '../../i18n.desktop.js';
+import { signalBotProfilesChanged } from '../botProfilesChangedSignal.js';
 import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
@@ -195,7 +188,6 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.token = 'isolated-test-token';
     fixture.refresh.mockReset().mockResolvedValue(true);
     migration.read.mockReset().mockReturnValue(null);
-    taskPosts.clear();
     fixture.upload.mockReset().mockResolvedValue([]);
     replyImages.mockReset().mockImplementation(async text => ({ text, attachments: [] }));
     replyFiles.prepare.mockReset().mockImplementation(async text => ({ text, attachments: [] }));
@@ -1896,326 +1888,14 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deliveries()).toEqual([]);
   });
 
-  describe('independent tasks started from the group (bot-group-chat.md §10)', () => {
+
+  describe('task cards already in a group (bot-group-chat.md §10)', () => {
     const taskMeta = { v: 1, role: 'delegation-request', delegationId: 'task-1', fromBotId: 'local-bot', fromBotName: 'Bot', toBotId: null,
       toBotName: 'Cindy', parentSessionId: 'lane', childSessionId: 'child-1', objective: 'Write the launch post' } as const;
     const taskLabels = { task: 'Task', untitled: 'Background task', states: { started: 'In progress', waiting: 'Waiting', completed: 'Done', failed: 'Failed', cancelled: 'Cancelled', 'timed-out': 'Timed out' } };
     const taskCard = buildBotGroupTaskCard({ meta: taskMeta, state: 'started', title: 'Launch post' }, taskLabels);
     const joined = (id: string, kind: 'bot' | 'human') => ({ id, kind, name: kind === 'bot' ? 'Bot' : 'Me', state: 'joined', role: 'member',
       ownerActorId: selfId, ownerName: '', nickname: null, displayName: kind === 'bot' ? 'Bot' : 'Me', guestAccess: 'none', accessRevision: 1 });
-    // Delivery files are read from disk before upload: a real directory, cleaned up after each test.
-    let deliveryDir = '';
-    const deliveryFiles = async (count: number): Promise<Array<{ absolutePath: string }>> => {
-      const fs = await import('node:fs/promises');
-      const os = await import('node:os');
-      const nodePath = await import('node:path');
-      deliveryDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'cindy-task-files-'));
-      return Promise.all(Array.from({ length: count }, async (_, index) => {
-        const absolutePath = nodePath.join(deliveryDir, `file-${String(index + 1).padStart(2, '0')}.md`);
-        await fs.writeFile(absolutePath, `file ${index + 1}`);
-        return { absolutePath };
-      }));
-    };
-    afterEach(async () => {
-      if (deliveryDir) await (await import('node:fs/promises')).rm(deliveryDir, { recursive: true, force: true });
-      deliveryDir = '';
-      // Per-file upload stand-ins must not outlive their test: later tests expect the default empty upload.
-      fixture.upload.mockReset();
-      fixture.upload.mockImplementation(async () => []);
-    });
-    const mediaBlock = (name: string) => ({ type: 'media', mediaId: `60000000-0000-4000-8000-${name.replace(/\D/g, '').padStart(12, '0')}`, caption: name });
-    const uploadEach = (refuse?: { name: string; error: Error }) => fixture.upload.mockImplementation(async (...args: unknown[]) =>
-      (args[2] as Array<{ name: string }>).map(attachment => { if (attachment.name === refuse?.name) throw refuse.error; return mediaBlock(attachment.name); }));
-
-    it.each(['started', 'completed'] as const)('replays the frozen %s payload after a lost response and adapter restart', async state => {
-      const posted: unknown[] = [];
-      const accepted = new Map<string, unknown>();
-      const loseAt = state === 'completed' ? 2 : 1;
-      fixture.handle.mockImplementation((route, method, body) => {
-        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot')], messages: [], cursor: '1' } };
-        if (route === `/conversations/${roomId}/messages` && method === 'POST') {
-          posted.push(structuredClone(body));
-          const operationId = (body as { operationId: string }).operationId;
-          if (!accepted.has(operationId)) accepted.set(operationId, structuredClone(body));
-          if (posted.length === loseAt) throw new Error('ECONNRESET'); // Committed; ACK lost.
-          return JSON.stringify(body) === JSON.stringify(accepted.get(operationId))
-            ? { body: { id: 'original-message' } }
-            : { status: 409, body: { error: { code: 'OPERATION_CONFLICT' } } };
-        }
-        return response(route);
-      });
-      const files = await deliveryFiles(1);
-      fixture.upload.mockResolvedValue([mediaBlock('1')]);
-      const input = { groupId: roomId, botId: 'local-bot', clientId: `task-snapshot:${state}`, text: state === 'completed' ? 'x'.repeat(8_001) : 'Original result',
-        card: buildBotGroupTaskCard({ meta: taskMeta, state, title: 'Original title' }, taskLabels), files };
-      expect(await service.postCompanionTaskMessage(input)).toMatchObject({ ok: false, retryable: true });
-      service.dispose();
-      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
-      await (await import('node:fs/promises')).unlink(files[0]!.absolutePath);
-      const edited = { ...input, text: 'Edited result', card: buildBotGroupTaskCard({ meta: { ...taskMeta, fromBotName: 'Renamed bot' }, state, title: 'Renamed task' },
-        { ...taskLabels, task: '任务' }) };
-      expect(await service.postCompanionTaskMessage(edited)).toEqual({ ok: true, messageId: 'original-message' });
-      expect(posted).toHaveLength(loseAt * 2);
-      expect(posted.slice(loseAt)).toEqual(posted.slice(0, loseAt));
-      expect(fixture.upload).toHaveBeenCalledTimes(1);
-    });
-
-    it('posts the task card as the teammate itself, outside any execution, with its files', async () => {
-      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-      fixture.upload.mockResolvedValueOnce([{ type: 'media', mediaId: '60000000-0000-4000-8000-000000000001', caption: 'post.md' }]);
-      fixture.handle.mockImplementation((route, method) => {
-        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot'), joined(selfId, 'human')], messages: [], cursor: '1' } };
-        if (route.endsWith('/messages') && method === 'POST') return { body: { id: '70000000-0000-4000-8000-000000000001' } };
-        return response(route);
-      });
-      const [file] = await deliveryFiles(1);
-      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result',
-        text: 'Done: the post is drafted.', card: { ...taskCard, data: { ...taskCard.data, state: 'completed' } }, files: [file!, { absolutePath: '/no/such/file.md' }] });
-      expect(posted).toEqual({ ok: true, messageId: '70000000-0000-4000-8000-000000000001' });
-      const post = fixture.handle.mock.calls.find(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST')!;
-      expect(post[2]).toEqual({ operationId: 'bot-delegation-task:task-1:1:result', mentions: [],
-        content: [{ type: 'text', text: 'Done: the post is drafted.' }, expect.objectContaining({ namespace: 'cindy.task', data: expect.objectContaining({ state: 'completed' }) }),
-          { type: 'media', mediaId: '60000000-0000-4000-8000-000000000001', caption: 'post.md' }] });
-      // Never as the owner: the teammate's actor signs the message.
-      expect(fixture.requests.findLast(request => request.url.endsWith(`/conversations/${roomId}/messages`))?.actor).toBe(botId);
-      // A delivery file that no longer exists is simply not uploaded; the existing one goes up under the message identity.
-      expect(fixture.upload).toHaveBeenCalledExactlyOnceWith(roomId, 'bot-delegation-task:task-1:1:result',
-        [expect.objectContaining({ path: file!.absolutePath, name: 'file-01.md', size: 6 })], botId);
-      // The group refreshes at the end of the coalescing window, like any other change.
-      await vi.advanceTimersByTimeAsync(150);
-      expect(deps.onChanged).toHaveBeenCalledWith(expect.objectContaining({ groupId: roomId, change: 'messages' }), undefined);
-    });
-
-    it('puts every part of a task message started in a Thread into that Thread', async () => {
-      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-      const rootId = '90000000-0000-4000-8000-0000000000aa';
-      fixture.handle.mockImplementation((route, method) => {
-        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot'), joined(selfId, 'human')], messages: [], cursor: '1' } };
-        if (route.endsWith('/messages') && method === 'POST') return { body: { id: '70000000-0000-4000-8000-000000000002' } };
-        return response(route);
-      });
-      // A long result continues in a follow-up message: it must stay in the Thread too.
-      expect(await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result',
-        text: 'x'.repeat(8_001), card: taskCard, threadRootId: rootId })).toMatchObject({ ok: true });
-      const posts = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST');
-      expect(posts).toHaveLength(2);
-      expect(posts.every(([, , body]) => (body as { threadRootId?: string }).threadRootId === rootId)).toBe(true);
-    });
-
-    // Unit: the generic creation entry has no delegation card; its outbox still freezes
-    // every wire part and receives the authenticated destination used for the actual POST.
-    it('posts a generic task result into its original Thread through its own durable outbox', async () => {
-      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-      const rootId = '90000000-0000-4000-8000-0000000000aa';
-      fixture.handle.mockImplementation((route, method) => {
-        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot'), joined(selfId, 'human')], messages: [], cursor: '1' } };
-        if (route.endsWith('/messages') && method === 'POST') return { body: { id: '70000000-0000-4000-8000-000000000002' } };
-        return response(route);
-      });
-      const preparePost = vi.fn(async (prepare: () => Promise<import('../botGroupTaskPostSnapshot').BotGroupTaskPostSnapshot>) => prepare());
-      expect(await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'generic-result',
-        text: 'Finished', threadRootId: rootId, preparePost })).toMatchObject({ ok: true });
-      expect(preparePost).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ roomId, selfId, clientId: 'generic-result' }));
-      const posts = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST');
-      expect(posts).toHaveLength(1);
-      expect(posts[0]?.[2]).toMatchObject({ threadRootId: rootId, content: [{ type: 'text', text: 'Finished' }] });
-    });
-
-    it('leaves out one file this computer cannot send and still posts the result with the others', async () => {
-      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-      const files = await deliveryFiles(3);
-      uploadEach({ name: 'file-02.md', error: new Error('ATTACHMENT_UNAVAILABLE') });
-      const warn = vi.fn();
-      deps.log = { warn };
-      fixture.handle.mockImplementation((route, method) => {
-        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot')], messages: [], cursor: '1' } };
-        if (route.endsWith('/messages') && method === 'POST') return { body: { id: '70000000-0000-4000-8000-000000000001' } };
-        return response(route);
-      });
-      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result',
-        text: 'Done.', card: taskCard, files });
-      expect(posted).toEqual({ ok: true, messageId: '70000000-0000-4000-8000-000000000001' });
-      const sent = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST');
-      expect(sent).toHaveLength(1);
-      expect(sent[0][2].content).toEqual([{ type: 'text', text: 'Done.' }, taskCard, mediaBlock('file-01.md'), mediaBlock('file-03.md')]);
-      expect(warn).toHaveBeenCalledWith('Chat task delivery file refused', expect.objectContaining({ groupId: roomId }));
-    });
-
-    it('continues more than 20 delivery files in follow-up messages under stable operation ids', async () => {
-      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-      const files = await deliveryFiles(23);
-      uploadEach();
-      let posts = 0;
-      fixture.handle.mockImplementation((route, method) => {
-        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot')], messages: [], cursor: '1' } };
-        if (route.endsWith('/messages') && method === 'POST') return { body: { id: `7000000${++posts}-0000-4000-8000-000000000001` } };
-        return response(route);
-      });
-      const text = `${'a'.repeat(7990)}\n${'b'.repeat(20)}`;
-      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result', text, card: taskCard, files });
-      expect(posted).toEqual({ ok: true, messageId: '70000001-0000-4000-8000-000000000001' });
-      const bodies = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST').map(([, , body]) => body);
-      expect(bodies.map(body => body.operationId)).toEqual(['bot-delegation-task:task-1:1:result', 'bot-delegation-task:task-1:1:result:2', 'bot-delegation-task:task-1:1:result:files:2']);
-      expect(bodies[0].content).toEqual([{ type: 'text', text: 'a'.repeat(7990) }, taskCard, ...files.slice(0, 20).map((_, index) => mediaBlock(`file-${String(index + 1).padStart(2, '0')}.md`))]);
-      expect(bodies[1].content).toEqual([{ type: 'text', text: 'b'.repeat(20) }]);
-      expect(bodies[2].content).toEqual([mediaBlock('file-21.md'), mediaBlock('file-22.md'), mediaBlock('file-23.md')]);
-      expect(bodies.every(body => body.content.filter((block: { type: string }) => block.type === 'media').length <= 20)).toBe(true);
-    });
-
-    it.each([
-      ['bot left the group', 403, false],
-      ['server unavailable', 503, true],
-    ])('reports a refused post as not retryable and a transport failure as retryable (%s)', async (_label, status, retryable) => {
-      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-      fixture.handle.mockImplementation((route, method) => {
-        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot')], messages: [], cursor: '1' } };
-        if (route.endsWith('/messages') && method === 'POST') return { status, body: { error: { code: 'REFUSED' } } };
-        return response(route);
-      });
-      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:started', text: '', card: taskCard });
-      expect(posted).toMatchObject({ ok: false, retryable });
-    });
-
-    it('continues a long result in follow-up messages instead of cutting it', async () => {
-      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-      let posts = 0;
-      fixture.handle.mockImplementation((route, method) => {
-        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot')], messages: [], cursor: '1' } };
-        if (route.endsWith('/messages') && method === 'POST') return { body: { id: `7000000${++posts}-0000-4000-8000-000000000001` } };
-        return response(route);
-      });
-      const text = `${'a'.repeat(7990)}\n${'b'.repeat(20)}\n${'c'.repeat(8000)}${'d'.repeat(10)}`;
-      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result', text, card: taskCard });
-      expect(posted).toEqual({ ok: true, messageId: '70000001-0000-4000-8000-000000000001' });
-      const bodies = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST').map(([, , body]) => body);
-      expect(bodies.map(body => body.operationId)).toEqual(['bot-delegation-task:task-1:1:result', 'bot-delegation-task:task-1:1:result:2', 'bot-delegation-task:task-1:1:result:3']);
-      // The first piece breaks at the line before the limit and carries the card; nothing is lost.
-      expect(bodies[0].content).toEqual([{ type: 'text', text: 'a'.repeat(7990) }, taskCard]);
-      expect(bodies[1].content).toEqual([{ type: 'text', text: `${'b'.repeat(20)}\n${'c'.repeat(7979)}` }]);
-      expect(bodies[2].content).toEqual([{ type: 'text', text: `${'c'.repeat(21)}${'d'.repeat(10)}` }]);
-      expect(bodies.every(body => body.content.every((block: { text?: string }) => (block.text ?? '').length <= 8000))).toBe(true);
-    });
-
-    it.each([
-      ['a transient upload failure is retried with the message', new Error('ECONNRESET'), { ok: false, retryable: true }, 0],
-      ['a file the server refuses is left out, the result still posts', new ChatResponseError('PAYLOAD_TOO_LARGE', 413), { ok: true }, 1],
-      ['a file too large to ever send is left out, the result still posts', new Error('ATTACHMENT_TOO_LARGE'), { ok: true }, 1],
-      ['a file this computer cannot read is left out, the result still posts',
-        Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES', syscall: 'open', errno: -13 }), { ok: true }, 1],
-      ['a file read that may succeed shortly is retried with the message',
-        Object.assign(new Error('EBUSY: resource busy or locked, open'), { code: 'EBUSY', syscall: 'open', errno: -16 }), { ok: false, retryable: true }, 0],
-    ])('%s', async (_label, failure, expected, posts) => {
-      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-      fixture.upload.mockRejectedValueOnce(failure);
-      fixture.handle.mockImplementation((route, method) => {
-        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot')], messages: [], cursor: '1' } };
-        if (route.endsWith('/messages') && method === 'POST') return { body: { id: '70000000-0000-4000-8000-000000000001' } };
-        return response(route);
-      });
-      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result',
-        text: 'Done.', card: taskCard, files: await deliveryFiles(1) });
-      expect(posted).toMatchObject(expected);
-      const sent = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST');
-      expect(sent).toHaveLength(posts);
-      if (posts) expect(sent[0][2].content).toEqual([{ type: 'text', text: 'Done.' }, taskCard]);
-    });
-
-    it('retries the whole message when a delivery file cannot be checked for now, rather than dropping it', async () => {
-      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-      fixture.handle.mockImplementation((route, method) => {
-        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot')], messages: [], cursor: '1' } };
-        if (route.endsWith('/messages') && method === 'POST') return { body: { id: '70000000-0000-4000-8000-000000000001' } };
-        return response(route);
-      });
-      const files = await deliveryFiles(1);
-      fsFault.lstat = Object.assign(new Error('EBUSY: resource busy or locked, lstat'), { code: 'EBUSY', syscall: 'lstat', errno: -16 });
-      try {
-        const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result',
-          text: 'Done.', card: taskCard, files });
-        expect(posted).toMatchObject({ ok: false, retryable: true });
-        expect(fixture.handle.mock.calls.some(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST')).toBe(false);
-      } finally { fsFault.lstat = null; }
-    });
-
-    it('hands an old local-only group (a UUID too) to the local service, which refuses for good', async () => {
-      const localPost = vi.fn(async () => ({ ok: false as const, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: false }));
-      // The local history lists this group and nothing upgraded it: it is not a server room.
-      const legacy = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [{ id: roomId }] })), postCompanionTaskMessage: localPost,
-        settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
-      try {
-        const input = { groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:started', text: '', card: taskCard };
-        expect(await legacy.postCompanionTaskMessage(input)).toEqual({ ok: false, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: false });
-        expect(localPost).toHaveBeenCalledExactlyOnceWith(input);
-        expect(migration.read).toHaveBeenCalledWith(roomId);
-        expect(fixture.handle.mock.calls.some(([route, method]) => route.endsWith('/messages') && method === 'POST')).toBe(false);
-      } finally { legacy.dispose(); }
-    });
-
-    it.each(['started', 'completed'] as const)('restores an upgraded local task route before the first migration poll (%s)', async state => {
-      const target = '10000000-0000-4000-8000-000000000099';
-      migration.read.mockReturnValue({ roomId: target, sequence: 12, version: 2 });
-      const localPost = vi.fn(async () => ({ ok: false as const, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: false }));
-      const legacy = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [{ id: roomId }] })), postCompanionTaskMessage: localPost,
-        settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
-      fixture.handle.mockImplementation((route, method) => {
-        if (route === `/conversations/${target}/snapshot`) return { body: { room: room(target), members: [joined(botId, 'bot'), joined(selfId, 'human')], messages: [], cursor: '1' } };
-        if (route === `/conversations/${target}/messages` && method === 'POST') return { body: { id: 'posted-task' } };
-        return response(route);
-      });
-      try {
-        // A fresh service has an empty in-memory map; no timer/list read has started its migration.
-        {
-          expect(await legacy.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: `task-restart:${state}`,
-            text: '', card: { ...taskCard, data: { ...taskCard.data, state } } })).toEqual({ ok: true, messageId: 'posted-task' });
-          expect(fixture.requests.findLast(request => request.url.endsWith(`/conversations/${target}/messages`))?.actor).toBe(botId);
-        }
-        expect(migration.read).toHaveBeenCalledWith(roomId);
-        expect(localPost).not.toHaveBeenCalled();
-        expect(fixture.handle.mock.calls.some(([route, method]) => route === '/conversations' && method === 'POST')).toBe(false);
-      } finally { legacy.dispose(); }
-    });
-
-    it.each(['identity', 'receipt'] as const)('keeps task delivery retryable when the migration %s cannot be read on restart', async failure => {
-      const localPost = vi.fn(async () => ({ ok: false as const, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: false }));
-      const legacy = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [{ id: roomId }] })), postCompanionTaskMessage: localPost,
-        settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
-      if (failure === 'identity') fixture.token = '';
-      else migration.read.mockImplementation(() => { throw new Error('RECEIPT_READ_FAILED'); });
-      try {
-        expect(await legacy.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'task-restart:completed', text: '', card: taskCard }))
-          .toMatchObject({ ok: false, retryable: true });
-        expect(localPost).not.toHaveBeenCalled();
-      } finally { legacy.dispose(); }
-    });
-
-    it('refuses for good when the teammate is no longer a member', async () => {
-      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-      fixture.handle.mockImplementation(route => route.endsWith('/snapshot')
-        ? { body: { room: room(roomId), members: [joined(selfId, 'human')], messages: [], cursor: '1' } } : response(route));
-      expect(await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:started', text: '', card: taskCard }))
-        .toEqual({ ok: false, errorCode: 'MEMBER_UNAVAILABLE', retryable: false });
-      expect(fixture.handle.mock.calls.some(([route, method]) => route.endsWith('/messages') && method === 'POST')).toBe(false);
-    });
-
-    it.each(['started', 'waiting'] as const)('keeps a %s card-only message readable in previews and posted quotes', async state => {
-      const card = buildBotGroupTaskCard({ meta: taskMeta, state, title: 'Launch post' }, taskLabels);
-      const original = { id: '90000000-0000-4000-8000-000000000003', seq: '3', authorId: botId, author: { kind: 'bot', name: 'Bot' }, origin: 'bot',
-        deleted: false, threadRootId: null, createdAt: '2026-10-03T00:00:00Z', content: [card] };
-      fixture.handle.mockImplementation((route, method) => route.endsWith(`/messages/${original.id}`) ? { body: original }
-        : route.endsWith('/members') ? { body: [joined(botId, 'bot'), joined(selfId, 'human')] }
-        : route.endsWith('/messages') && method === 'POST' ? { body: { id: 'quoted-task' } }
-        : route.includes('/messages?') ? { body: [original] }
-        : route.endsWith('/snapshot') ? { body: { room: room(roomId), members: [joined(botId, 'bot'), joined(selfId, 'human')], messages: [original], cursor: '3' } }
-        : response(route));
-      const result = await service.getGroup(roomId);
-      if (!result.ok) throw new Error('Expected group');
-      expect(result.group.messages[0]).toMatchObject({ content: '', task: { state, title: 'Launch post' } });
-      expect(result.group.lastMessage?.preview).toBe('Launch post');
-      expect(await service.sendMessage({ groupId: roomId, text: 'Follow up', clientId: `quote-task-${state}`, mentions: { all: false, botIds: [] },
-        quote: { messageId: original.id } })).toMatchObject({ ok: true });
-      const posted = fixture.handle.mock.calls.find(([route, method]) => route.endsWith('/messages') && method === 'POST')![2];
-      expect(posted.content[0]).toMatchObject({ namespace: 'cindy.quote', data: { excerpt: 'Launch post' } });
-    });
 
     it('projects the card as the message\'s task, not as body text, and only on the teammate\'s own message', async () => {
       fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
@@ -2302,13 +1982,13 @@ describe('Chat Server result delivery and refresh', () => {
     expect(result.ok && result.group.round.speakers).toHaveLength(2);
   });
 
-  it.each(['IMAGE_INPUT_UNSUPPORTED', 'private token and path'])('projects a failed execution from its visible source with a safe code %s', async code => {
+  it.each(['IMAGE_INPUT_UNSUPPORTED', 'RUNTIME_TIMEOUT', 'private token and path'])('projects a failed execution from its visible source with a safe code %s', async code => {
     const source = { id: execution.source_message_id, seq: '7', authorId: selfId, author: { kind: 'human', name: 'Owner' },
       content: [{ type: 'text', text: 'Question' }], origin: 'user', deleted: false, threadRootId: null, createdAt: '2026-10-03T00:00:00Z' };
     fixture.handle.mockImplementation((route, method, body) => {
       if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [], messages: [source], cursor: '7' } };
       if (route.includes('/messages?')) return { body: [source] };
-      if (route.endsWith('/executions') || route.includes('/execution-failures?')) return { body: [{ ...execution, status: 'failed', failure_code: code }] };
+      if (route.endsWith('/executions') || route.includes('/execution-failures?')) return { body: [{ ...execution, status: 'failed', failure_code: code, failure_reason: 'unclaimed_timeout' }] };
       return response(route);
     });
     const result = await service.getGroup(roomId);
@@ -2316,7 +1996,8 @@ describe('Chat Server result delivery and refresh', () => {
     if (!result.ok) throw new Error('group missing');
     expect(result.group.messages).toHaveLength(1);
     const notice = projectBotGroupExecutionFailures(result.group.messages, result.group.executionFailures)[1];
-    expect(notice).toMatchObject({ sequence: 7, authorName: 'Bot', runtimeFailureCode: code === 'IMAGE_INPUT_UNSUPPORTED' ? code : 'RUNTIME_ERROR' });
+    expect(notice).toMatchObject({ sequence: 7, authorName: 'Bot', runtimeFailureCode: code === 'private token and path' ? 'RUNTIME_ERROR' : code });
+    expect(notice.runtimeFailureReason).toBe(code === 'RUNTIME_TIMEOUT' ? 'unclaimed_timeout' : undefined);
     expect(JSON.stringify(notice)).not.toContain('private token and path');
   });
 
@@ -4398,7 +4079,7 @@ describe('Chat Server result delivery and refresh', () => {
         if (route === '/executions/claim') return { body: { execution: null } };
         return response(route);
       });
-      signalBotAutonomyBotsChanged();
+      signalBotProfilesChanged();
       await vi.advanceTimersByTimeAsync(2000);
       expect(fixture.handle.mock.calls.filter(([route, method]) => route === '/actors' && method === 'POST')).toHaveLength(0);
       fail = false;
@@ -4641,7 +4322,7 @@ describe('Chat Server result delivery and refresh', () => {
         return base(route, method, body);
       });
       await service.chatServer!.ownedBots();
-      expired = true; signalBotAutonomyBotsChanged();
+      expired = true; signalBotProfilesChanged();
       const refreshing = service.chatServer!.refreshProfile();
       await vi.advanceTimersByTimeAsync(0);
       try {
@@ -5467,7 +5148,6 @@ describe('Chat authentication recovery and polling backoff', () => {
     fixture.token = 'isolated-test-token';
     fixture.refresh.mockReset().mockResolvedValue(true);
     migration.read.mockReset().mockReturnValue(null);
-    taskPosts.clear();
     replyFiles.prepare.mockReset().mockImplementation(async text => ({ text, attachments: [] }));
     fixture.handle.mockReset().mockImplementation(healthy);
     service = withChatServer({ dispose: vi.fn(), listGroups: async () => ({ ok: true, groups: [] }) } as unknown as BotGroupChatService, {} as BotGroupChatServiceDeps);
@@ -5478,7 +5158,6 @@ describe('Chat authentication recovery and polling backoff', () => {
     fixture.token = 'isolated-test-token';
     fixture.refresh.mockReset().mockResolvedValue(true);
     migration.read.mockReset().mockReturnValue(null);
-    taskPosts.clear();
     replyFiles.prepare.mockReset().mockImplementation(async text => ({ text, attachments: [] }));
     vi.useRealTimers();
   });

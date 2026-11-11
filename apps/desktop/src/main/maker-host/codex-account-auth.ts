@@ -1,4 +1,5 @@
-import { app } from 'electron';
+import { parseCodexAccountIdentity, type AccountIdentity } from './codex-auth-identity.js';
+export { parseCodexAccountIdentity } from './codex-auth-identity.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
@@ -6,36 +7,42 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { AgentDeps, AuthState } from '@cindy/maker-core';
 import { getActiveAppSession } from '../appSessionState.js';
-import { getCachedBinaryStatus, isVettedAgentBinaryPath } from '../agent-binaries/index.js';
 import { getActiveCatalog } from './active-catalog.js';
-import { terminateCodexLoginProcess } from './codex-auth-state.js';
+import { terminateCodexLoginProcess, codexLoginArgs, type CodexLoginMode } from './codex-auth-state.js';
 import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
-import {
-  broadcastCodexAccountAuthReady,
-  broadcastCodexAccountAuthStarted,
-} from '../usageBroadcaster.js';
 
+/** Shared native CLI account lifecycle. The launcher supplies its vetted binary,
+ * profile and notifications; credential staging and owner checks stay identical. */
+export function createCodexAccountAuth(ports: {
+  getUserDataDir(): string;
+  getCodexBinary(): string | null;
+  broadcastCodexAccountAuthReady(providerId: string): void;
+  broadcastCodexAccountAuthStarted(providerId: string): void;
+  isProvider?(providerId: string): boolean;
+  accountHome?(providerId: string): string | undefined;
+}) {
+const { broadcastCodexAccountAuthReady, broadcastCodexAccountAuthStarted } = ports;
 /** Native account homes never participate in system Codex credential reconciliation. */
-export function isCodexAccountProvider(providerId?: string | null): boolean {
+function isCodexAccountProvider(providerId?: string | null): boolean {
   return (
     !!providerId &&
-    getActiveCatalog().providers.some(
+    (ports.isProvider ? ports.isProvider(providerId) : getActiveCatalog().providers.some(
       (provider) =>
         provider.id === providerId &&
         provider.source === 'user' &&
         provider.auth.native === 'codex',
-    )
+    ))
   );
 }
 
-export function isOpenAiSubscriptionProviderId(providerId?: string | null): boolean {
+function isOpenAiSubscriptionProviderId(providerId?: string | null): boolean {
   return providerId === 'openai' || isCodexAccountProvider(providerId);
 }
 
-export async function invalidateCodexAccount(providerId: string, reason: string, failedAccessToken: string): Promise<void> {
+async function invalidateCodexAccount(providerId: string, reason: string, failedAccessToken: string): Promise<void> {
   if (!isCodexAccountProvider(providerId)) throw new Error('OpenAI account is unavailable');
   // Compare and commit without an await: a late failure must not invalidate a newer login.
   const home = codexAccountHome(providerId);
@@ -46,25 +53,22 @@ export async function invalidateCodexAccount(providerId: string, reason: string,
 }
 
 /** 当前账号在 `codex-accounts/` 下的目录名(owner id 的 sha256);没有登录的账号时为 null。 */
-export function codexAccountOwnerDir(): string | null {
+function codexAccountOwnerDir(): string | null {
   const ownerId = getActiveAppSession().dataOwnerId;
   return ownerId ? createHash('sha256').update(ownerId).digest('hex') : null;
 }
 
-export function codexAccountHome(providerId: string): string {
+function codexAccountHome(providerId: string): string {
   if (!/^[a-z0-9_-]{1,40}$/.test(providerId)) throw new Error('Invalid Codex provider id');
   const owner = codexAccountOwnerDir();
   if (!owner) throw new Error('An active owner is required');
-  return path.join(app.getPath('userData'), 'codex-accounts', owner, providerId);
-}
-
-interface AccountIdentity {
-  principal: string;
-  label: string;
+  const home = ports.accountHome?.(providerId) ?? path.join(ports.getUserDataDir(), 'codex-accounts', owner, providerId);
+  if (!path.isAbsolute(home)) throw new Error('Codex account home must be absolute');
+  return home;
 }
 
 /** Legacy names have no customization flag; recognize only the generated shape. */
-export function codexAccountLoginName(
+function codexAccountLoginName(
   name: string,
   previousIdentity: string | undefined,
   identity: string,
@@ -83,32 +87,7 @@ export function codexAccountLoginName(
   return next;
 }
 
-/** Pure parser: never return tokens through account status or IPC. */
-export function parseCodexAccountIdentity(raw: string): AccountIdentity | null {
-  try {
-    const value = JSON.parse(raw);
-    if (typeof value.tokens?.access_token !== 'string' || !value.tokens.access_token) return null;
-    const jwt = value.tokens.id_token ?? value.tokens.access_token;
-    const claims = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
-    const account =
-      value.tokens.account_id ?? claims['https://api.openai.com/auth']?.chatgpt_account_id;
-    const subject = claims.sub;
-    if (typeof account !== 'string' || typeof subject !== 'string') return null;
-    return {
-      principal: createHash('sha256').update(`${subject}\0${account}`).digest('hex'),
-      label:
-        typeof claims.email === 'string'
-          ? claims.email
-          : typeof claims.name === 'string'
-            ? claims.name
-            : 'ChatGPT',
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function codexAccountState(providerId: string): AuthState {
+function codexAccountState(providerId: string): AuthState {
   if (!isCodexAccountProvider(providerId))
     return { authenticated: false, errorReason: 'provider_unavailable' };
   try {
@@ -129,7 +108,7 @@ export function codexAccountState(providerId: string): AuthState {
   }
 }
 
-export async function prepareCodexAccountHome(providerId: string, managedRoots: readonly string[], managedSkills: Awaited<ReturnType<NonNullable<AgentDeps['getManagedSkills']>>>): Promise<string> {
+async function prepareCodexAccountHome(providerId: string, managedRoots: readonly string[], managedSkills: Awaited<ReturnType<NonNullable<AgentDeps['getManagedSkills']>>>): Promise<string> {
   if (!codexAccountState(providerId).authenticated) throw new Error('Codex account requires login');
   const home = codexAccountHome(providerId);
   await Promise.all([prepareCodexGlobalSkillsLinks(home, { managedRoots, managedSkills }), prepareCodexGlobalRulesCopy(home)]);
@@ -143,17 +122,18 @@ export async function prepareCodexAccountHome(providerId: string, managedRoots: 
 const logins = new Map<string, { cancel: () => void; done: Promise<void> }>();
 const disconnecting = new Set<string>();
 let retireAccount: (providerId: string) => Promise<void> = async () => {};
-export function setCodexAccountRetirement(handler: (providerId: string) => Promise<void>): void {
+function setCodexAccountRetirement(handler: (providerId: string) => Promise<void>): void {
   retireAccount = handler;
 }
-export function cancelCodexAccountLogin(providerId: string): void {
+function cancelCodexAccountLogin(providerId: string): void {
   logins.get(codexAccountHome(providerId))?.cancel();
 }
 
-export async function loginCodexAccount(
+async function loginCodexAccount(
   providerId: string,
   isCurrent: () => boolean,
   onBrowserUrl?: (url: string | null) => void,
+  options?: { mode?: CodexLoginMode; onProgress?(text: string): void },
 ): Promise<{
   ok: boolean;
   reason?: string;
@@ -167,8 +147,8 @@ export async function loginCodexAccount(
   const home = codexAccountHome(providerId);
   if (logins.has(home) || disconnecting.has(home))
     return { ok: false, reason: 'login_in_progress' };
-  const binary = getCachedBinaryStatus('codex');
-  if (!binary.binaryPath || !isVettedAgentBinaryPath('codex', binary.binaryPath))
+  const binary = { binaryPath: ports.getCodexBinary() };
+  if (!binary.binaryPath)
     return { ok: false, reason: 'codex_binary_missing' };
   let cancelled = false;
   let proc: ChildProcess | undefined;
@@ -198,7 +178,7 @@ export async function loginCodexAccount(
     );
     if (!current()) return { ok: false, reason: 'login_cancelled' };
     const exitCode = await new Promise<number | null>((resolve, reject) => {
-      proc = spawn(binary.binaryPath!, ['login'], {
+      proc = spawn(binary.binaryPath!, codexLoginArgs(options?.mode), {
         env: { ...process.env, CODEX_HOME: staging },
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -209,11 +189,12 @@ export async function loginCodexAccount(
       // Keep one validated URL for an explicit user action, never a second auto-open.
       let published = false;
       let outputActive = true;
-      for (const stream of [proc.stdout, proc.stderr]) {
+      for (const [streamName, stream] of [['stdout', proc.stdout], ['stderr', proc.stderr]] as const) {
         let pending = '';
         let oversized = false;
         stream?.setEncoding('utf8');
         stream?.on('data', (chunk: string) => {
+          if (outputActive && current()) options?.onProgress?.(`${streamName}:${chunk}`);
           for (const part of chunk.split(/(?<=\n)/)) {
             if (pending.length + part.length > 16_384) oversized = true;
             if (!oversized) pending += part;
@@ -323,7 +304,7 @@ export async function loginCodexAccount(
   }
 }
 
-export async function logoutCodexAccount(providerId: string): Promise<void> {
+async function logoutCodexAccount(providerId: string): Promise<void> {
   const owner = getActiveAppSession();
   const home = codexAccountHome(providerId);
   if (disconnecting.has(home)) throw new Error('Codex account disconnect is already in progress');
@@ -341,7 +322,7 @@ export async function logoutCodexAccount(providerId: string): Promise<void> {
   }
 }
 
-export async function retireCodexAccount(providerId: string): Promise<void> {
+async function retireCodexAccount(providerId: string): Promise<void> {
   const owner = getActiveAppSession();
   const login = logins.get(codexAccountHome(providerId));
   login?.cancel();
@@ -351,7 +332,7 @@ export async function retireCodexAccount(providerId: string): Promise<void> {
   await retireAccount(providerId);
 }
 
-export function removeCodexAccountCredentialsReversibly(providerId: string): () => boolean {
+function removeCodexAccountCredentialsReversibly(providerId: string): () => boolean {
   const home = codexAccountHome(providerId);
   const authPath = path.join(home, 'auth.json');
   let previous: Buffer | undefined;
@@ -370,4 +351,12 @@ export function removeCodexAccountCredentialsReversibly(providerId: string): () 
       return false;
     }
   };
+}
+
+async function close(): Promise<void> {
+  const active = [...logins.values()];
+  for (const login of active) login.cancel();
+  await Promise.allSettled(active.map(login => login.done));
+}
+return { isCodexAccountProvider, isOpenAiSubscriptionProviderId, invalidateCodexAccount, codexAccountOwnerDir, codexAccountHome, codexAccountLoginName, codexAccountState, prepareCodexAccountHome, setCodexAccountRetirement, cancelCodexAccountLogin, loginCodexAccount, logoutCodexAccount, retireCodexAccount, removeCodexAccountCredentialsReversibly, close };
 }

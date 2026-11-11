@@ -8,14 +8,19 @@ import type { TabKindHostContext } from '../../../types';
 import type { TerminalState } from '../index';
 import type { XtermEntry } from '../lib/xtermPool';
 
-const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn(), markClosing: vi.fn(), disposeXterm: vi.fn() }));
-vi.mock('../lib/xtermPool', () => poolMocks);
+const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn(), getXterm: vi.fn(), disposeXterm: vi.fn(), detachXterm: vi.fn(), getXtermExit: vi.fn(() => null), setXtermExit: vi.fn(), onXtermExit: vi.fn(() => () => undefined), needsXtermAttach: vi.fn(() => false), restartXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.restart(params.id), attachXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.create(params) }));
+vi.mock('../lib/xtermPool', async importOriginal => {
+  const original = await importOriginal<typeof import('../lib/xtermPool')>();
+  return { ...original, ...poolMocks, restartXterm: original.restartXterm, attachXterm: original.attachXterm };
+});
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
 import { TerminalTabBody } from '../TerminalTabBody';
+import { xtermEntries } from '../lib/xtermEntries';
+import { __resetPoolForTesting } from '../lib/xtermPool';
 
 // Keep the pre-feature defaults literal: deriving these expectations from the
 // production constant would fail to catch an accidental change to old terminals.
@@ -132,6 +137,8 @@ function makeEntry() {
     terminal, fitAddon, fitSamples, inputListeners, output,
     lastSize: { cols: 80, rows: 24 },
     ptyAttached: true,
+    closing: false,
+    pendingTransitions: 0,
     closeCancelledListeners: new Set<() => void>(),
   };
 }
@@ -176,6 +183,7 @@ async function notifyResize() {
 }
 
 beforeEach(() => {
+  __resetPoolForTesting();
   vi.clearAllMocks();
   width = 800;
   height = 480;
@@ -215,6 +223,7 @@ beforeEach(() => {
       entry = makeEntry();
       entries.set(tabId, entry);
     }
+    xtermEntries.set(tabId, entry as unknown as XtermEntry);
     return entry as unknown as XtermEntry;
   });
   api = installBridge();
@@ -281,6 +290,7 @@ describe('TerminalTabBody local PTY recovery', () => {
 describe('TerminalTabBody terminal font preferences', () => {
   it('keeps the existing defaults and starts the PTY once without a settings provider', async () => {
     const ctx = context();
+    entries.set(ctx.tabId, { ...makeEntry(), ptyAttached: false });
     render(<TerminalTabBody state={{ ...runningState, created: false }} ctx={ctx} active />);
     await flushWork();
 
@@ -605,6 +615,9 @@ describe('TerminalTabBody terminal font preferences', () => {
       const state = { ...runningState, exited: { code: 0, signal: null } };
       const view = render(<TerminalTabBody state={state} ctx={ctx} active />);
       await flushWork();
+      act(() => {
+        for (const listener of exitListeners) listener({ id: ctx.tabId, exit: state.exited });
+      });
       await broadcast({ terminalSize: 20 });
       const entry = entries.get(ctx.tabId)!;
       expect(entry.lastSize).toEqual({ cols: 66, rows: 20 });
@@ -645,6 +658,9 @@ describe('TerminalTabBody terminal font preferences', () => {
       const state = { ...runningState, exited: { code: 0, signal: null } };
       const view = render(<TerminalTabBody state={state} ctx={ctx} active />);
       await flushWork();
+      act(() => {
+        for (const listener of exitListeners) listener({ id: ctx.tabId, exit: state.exited });
+      });
       await broadcast({ terminalSize: 20 });
       const restart = deferred<{ shellId: string; shellDisplayName: string }>();
       api.terminal.restart.mockReturnValueOnce(restart.promise);

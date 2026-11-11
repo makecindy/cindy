@@ -32,8 +32,8 @@ vi.mock('../broadcast-tap', () => ({
 
 import * as schema from '../../localDb/schema';
 import { listAllBlobRecords, listCacheBlobsByLru } from '../../cindy-media/ledger';
-import { resolveHashRef } from '../../cindy-media/blobStore';
-import * as blobStore from '../../cindy-media/blobStore';
+import { resolveHashRef } from '../../cindy-media/blobStore.desktop';
+import * as blobStore from '../../cindy-media/blobStore.desktop';
 import { evictCacheBlobs, scanCache } from '../../cindy-media/recycler';
 import { createStorageIpcHandlers } from '../../cindy-media/storageIpc';
 import {

@@ -17,8 +17,9 @@ import type { GeneratedFileRef } from '@/lib/generatedFiles';
 import type { TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 import type { TodoItem } from './TodoListCard';
 import type { ToolMediaItem } from './AgentActionRow';
+import type { BotStartedTask } from './BotStartedTasks';
 
-export type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage };
+export type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage; pending?: true };
 type AgentPlanRenderItem = {
   type: 'agent_plan';
   key: string;
@@ -116,6 +117,12 @@ export type RenderItem =
   | ForkOriginRenderItem
   | TurnChangesRenderItem
   | GeneratedFilesRenderItem
+  | {
+      /** Teammate chat: the tasks a reply started or sent work to (BotStartedTasks). */
+      type: 'bot_started_tasks';
+      key: string;
+      tasks: BotStartedTask[];
+    }
   | {
       /** tool-result-media: 把 tool_result 里的 xdt_image_url(s) / xdt_video_urls
        *  提取出来作为独立视觉消息渲染,跳出 tool_segment 折叠卡片。统一容器,

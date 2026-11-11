@@ -2,9 +2,9 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { disposeXterm, getOrCreateXterm, openTerminalExternalLink } from '../xtermPool';
 import { finishClosing, markClosing } from '../../../../lib/tabClosingSignal';
 import { markAllPtyDetached, markPtyDetached } from '../xtermEntries';
+import { openTerminalExternalLink, getXterm, getXtermExit, setXtermExit, onXtermExit, restartXterm, attachXterm, releaseXtermConnection, detachXterm, getOrCreateXterm, suspendExitedXterm, disposeXterm, __resetPoolForTesting } from '../xtermPool';
 
 const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -80,7 +80,243 @@ it('detaches the canonical pooled entries while retaining close and SSH state', 
 
 describe('openTerminalExternalLink', () => {
   afterEach(() => {
+    __resetPoolForTesting();
     vi.clearAllMocks();
+  });
+
+  // PR8881 merge / unit: real snapshot eviction was absent from SSH component
+  // mocks. Preserve close identity/drafts, reject old entry listeners, then restore
+  // a failed transition's exit before closing a tab that has only a snapshot.
+  it('retains SSH metadata across snapshot restore and failed restart without reviving old close listeners', async () => {
+    const id = 'ssh-snapshot';
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { terminal: {
+      restart: vi.fn().mockRejectedValue(new Error('restart failed')),
+    } } });
+    const original = getOrCreateXterm(id);
+    original.remoteContext = { sessionId: 'remote-session', deviceId: 'remote-device' };
+    original.remoteDraft = { contextKey: 'draft-key', connection: { host: 'old-host' }, submitted: false };
+    original.ptyAttached = true;
+    const oldResume = vi.fn();
+    original.closeCancelledListeners.add(oldResume);
+    const exit = { code: 255, signal: null };
+    setXtermExit(id, exit);
+    expect(await suspendExitedXterm(id)).toBe(true);
+    expect(getXterm(id)?.remoteContext).toEqual(original.remoteContext);
+    expect(getXterm(id)?.remoteDraft).toEqual(original.remoteDraft);
+    markClosing(id);
+    const restored = getOrCreateXterm(id);
+    await restored.restored;
+    expect(restored).not.toBe(original);
+    expect(restored.closing).toBe(true);
+    const resume = vi.fn();
+    restored.closeCancelledListeners.add(resume);
+    finishClosing(id);
+    expect(resume).toHaveBeenCalledOnce();
+    expect(oldResume).not.toHaveBeenCalled();
+    expect(restored.remoteContext).toEqual(original.remoteContext);
+    expect(restored.remoteDraft).toEqual(original.remoteDraft);
+    await expect(restartXterm({ id, cwd: '/', remote: restored.remoteContext })).rejects.toThrow('restart failed');
+    expect(restored.pendingTransitions).toBe(0);
+    expect(getXtermExit(id)).toEqual(exit);
+    expect(await suspendExitedXterm(id)).toBe(true);
+    markClosing(id);
+    disposeXterm(id);
+    finishClosing(id);
+    expect(getXterm(id)).toBeUndefined();
+    expect(getOrCreateXterm(id).remoteDraft).toBeUndefined();
+    expect(getXterm(id)?.remoteContext).toBeUndefined();
+  });
+
+  // PR8881 merge / unit: an exit during pending edit must not evict its original
+  // entry before success commits intent or failure restores the old connection.
+  // Both outcomes use the real pool and drain xterm output before serialization.
+  it.each(['success', 'failure'] as const)('settles an unmounted SSH edit before snapshotting (%s)', async outcome => {
+    const id = 'ssh-edit';
+    let exit!: (event: { id: string; exit: { code: number; signal: null } }) => void;
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { terminal: {
+      dispose: () => new Promise<void>((yes, no) => { resolve = yes; reject = no; }),
+      onData: () => vi.fn(),
+      onExit: (listener: typeof exit) => { exit = listener; return vi.fn(); },
+    } } });
+    const entry = getOrCreateXterm(id);
+    entry.remoteContext = { sessionId: 'remote-session' };
+    entry.remoteDraft = { contextKey: 'key', connection: { host: 'old-host' }, submitted: true };
+    const committed = vi.fn(() => { entry.remoteDraft = { contextKey: 'key', submitted: false }; });
+    setXtermExit(id, { code: 0, signal: null });
+    const pending = releaseXtermConnection(id, committed);
+    detachXterm(id);
+    const queuedOldExit = exit;
+    exit({ id, exit: { code: 255, signal: null } });
+    expect(entry.pendingTransitions).toBe(1);
+    expect(await suspendExitedXterm(id)).toBe(false);
+    expect(getXterm(id)).toBe(entry);
+    if (outcome === 'success') { resolve(); await pending; }
+    else { reject(new Error('release failed')); await expect(pending).rejects.toThrow('release failed'); }
+    expect(entry.pendingTransitions).toBe(0);
+    await vi.waitFor(() => expect(getXterm(id)).not.toBe(entry));
+    expect(committed).toHaveBeenCalledTimes(outcome === 'success' ? 1 : 0);
+    expect(getXterm(id)?.remoteDraft).toEqual(outcome === 'success'
+      ? { contextKey: 'key', submitted: false }
+      : { contextKey: 'key', connection: { host: 'old-host' }, submitted: true });
+    const restored = getOrCreateXterm(id);
+    await restored.restored;
+    queuedOldExit({ id, exit: { code: 9, signal: null } });
+    expect(getXtermExit(id)).toEqual({ code: 255, signal: null });
+  });
+
+  // Unit: #9815 discussion_r4528556652. Native restart removes the old PTY
+  // before spawning; a failed spawn must permit a later explicit retry to create it.
+  it('recreates a missing PTY on retry after destructive restart failure, retaining output', async () => {
+    const params = { id: 'missing', cwd: '/workspace', cols: 100, rows: 30 };
+    const result = { shellId: 'zsh' as const, shellDisplayName: 'zsh', pid: 42 };
+    const restart = vi.fn()
+      .mockRejectedValueOnce(new Error('[TERMINAL_SPAWN_FAILED] restart failed: unavailable cwd'))
+      .mockRejectedValueOnce(new Error('[TERMINAL_NOT_FOUND] pty session not found: missing'));
+    const create = vi.fn().mockResolvedValue(result);
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { terminal: { restart, create } } });
+    const entry = getOrCreateXterm(params.id);
+    entry.ptyAttached = true;
+    entry.terminal.write('retained before failed restart 中文');
+    setXtermExit(params.id, { code: 0, signal: null });
+    await expect(restartXterm(params)).rejects.toThrow('TERMINAL_SPAWN_FAILED');
+    expect(entry.ptyAttached).toBe(false);
+    expect(create).not.toHaveBeenCalled();
+    expect(await restartXterm(params)).toEqual(result);
+    expect(create).toHaveBeenCalledExactlyOnceWith(params);
+    expect(entry.ptyAttached).toBe(true);
+    expect(getXtermExit(params.id)).toBeNull();
+    await new Promise<void>(done => entry.terminal.write('', done));
+    expect(entry.terminal.buffer.active.getLine(0)?.translateToString(true)).toBe('retained before failed restart 中文');
+  });
+
+  it('does not recreate a missing PTY after its tab was closed during restart', async () => {
+    const params = { id: 'closed-restart', cwd: '/workspace' };
+    let reject!: (error: Error) => void;
+    const create = vi.fn();
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { terminal: {
+      restart: () => new Promise((_yes, no) => { reject = no; }), create,
+    } } });
+    getOrCreateXterm(params.id);
+    const pending = restartXterm(params);
+    disposeXterm(params.id);
+    reject(new Error('[TERMINAL_NOT_FOUND] pty session not found: closed-restart'));
+    await expect(pending).rejects.toThrow('TERMINAL_NOT_FOUND');
+    expect(create).not.toHaveBeenCalled();
+    expect(getXtermExit(params.id)).toBeNull();
+  });
+
+  // Unit: #9815 discussion_r4528102349. The old exit must not release a
+  // restarted shell whose IPC reply is still pending after the tab unmounts.
+  it.each([
+    ['restart', 'success'], ['restart', 'failure'],
+    ['attach', 'success'], ['attach', 'failure'],
+  ] as const)('retains detached events while %s is pending (%s)', async (operation, outcome) => {
+    let data!: (event: unknown) => void;
+    let exit!: (event: unknown) => void;
+    let resolve!: (value: { shellId: 'zsh'; shellDisplayName: string; pid: number }) => void;
+    let reject!: (reason: Error) => void;
+    const pending = new Promise<{ shellId: 'zsh'; shellDisplayName: string; pid: number }>((yes, no) => { resolve = yes; reject = no; });
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { terminal: {
+      restart: vi.fn(() => pending),
+      create: vi.fn(() => pending),
+      onData: (listener: typeof data) => { data = listener; return vi.fn(); },
+      onExit: (listener: typeof exit) => { exit = listener; return vi.fn(); },
+    } } });
+    const entry = getOrCreateXterm('restarting');
+    const disposed = vi.spyOn(entry.terminal, 'dispose');
+    const oldExit = { code: 0, signal: null };
+    setXtermExit('restarting', oldExit);
+    const restarted = operation === 'restart' ? restartXterm({ id: 'restarting', cwd: '/workspace' }) : attachXterm({ id: 'restarting', cwd: '/workspace' });
+    detachXterm('restarting');
+    expect(disposed).not.toHaveBeenCalled();
+    // A replacement body subscribes while the old native request is pending.
+    const notifyReplacement = vi.fn();
+    const offReplacement = onXtermExit('restarting', notifyReplacement);
+    if (outcome === 'success') {
+      data({ id: 'restarting', chunk: 'output before restart reply 中文\r\n' });
+      exit({ id: 'restarting', exit: { code: 7, signal: null } });
+      resolve({ shellId: 'zsh', shellDisplayName: 'zsh', pid: 42 });
+      await restarted;
+      expect(getXtermExit('restarting')).toEqual({ code: 7, signal: null });
+      expect(notifyReplacement).toHaveBeenCalledWith({ code: 7, signal: null });
+    } else {
+      reject(new Error('spawn failed'));
+      await expect(restarted).rejects.toThrow('spawn failed');
+      expect(getXtermExit('restarting')).toEqual(oldExit);
+      expect(notifyReplacement).toHaveBeenCalledWith(oldExit);
+    }
+    offReplacement();
+    await vi.waitFor(() => expect(disposed).toHaveBeenCalledOnce());
+    const restored = getOrCreateXterm('restarting');
+    await new Promise<void>(done => restored.terminal.write('', done));
+    if (outcome === 'success') expect(restored.terminal.buffer.active.getLine(0)?.translateToString(true)).toBe('output before restart reply 中文');
+  });
+
+  // Unit: exited tabs previously retained the full xterm buffer. Exercise the
+  // real parser and serializer, including pending writes and ANSI restoration.
+  it('releases an exited view after draining output and restores its colored history', async () => {
+    const before = getOrCreateXterm('history');
+    before.terminal.resize(80, 24);
+    before.ptyAttached = true;
+    before.terminal.write('\u001b[32mRetained output 中文😀\u001b[0m\r\nlast line');
+    expect(await suspendExitedXterm('history')).toBe(true);
+    const restored = getOrCreateXterm('history');
+    await new Promise<void>(resolve => restored.terminal.write('', resolve));
+    expect(restored.terminal).not.toBe(before.terminal);
+    expect(restored.ptyAttached).toBe(true);
+    expect(restored.terminal.buffer.active.getLine(0)?.translateToString(true)).toBe('Retained output 中文😀');
+    expect(restored.terminal.buffer.active.getLine(0)?.getCell(0)?.getFgColor()).toBe(2);
+    expect(restored.terminal.buffer.active.getLine(1)?.translateToString(true)).toBe('last line');
+    await suspendExitedXterm('history');
+    disposeXterm('history');
+    const cleared = getOrCreateXterm('history');
+    expect(cleared.terminal.buffer.active.getLine(0)?.translateToString(true)).not.toContain('Retained');
+  });
+
+  it('cancels pending suspension when the tab is opened again', async () => {
+    const entry = getOrCreateXterm('race');
+    const pending = suspendExitedXterm('race');
+    expect(getOrCreateXterm('race')).toBe(entry);
+    expect(await pending).toBe(false);
+    expect(getOrCreateXterm('race')).toBe(entry);
+  });
+
+  // Unit: switching tasks unmounts TabBody; the old component-only subscriptions
+  // lost final output/exit. Send the smallest native data + exit after detaching.
+  it('captures output and exit while unmounted, releases the view, then restores history', async () => {
+    let data!: (event: unknown) => void;
+    let exit!: (event: unknown) => void;
+    const offData = vi.fn();
+    const offExit = vi.fn();
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { terminal: {
+      onData: (listener: typeof data) => { data = listener; return offData; },
+      onExit: (listener: typeof exit) => { exit = listener; return offExit; },
+    } } });
+    const entry = getOrCreateXterm('background');
+    const disposed = vi.spyOn(entry.terminal, 'dispose');
+    detachXterm('background');
+    data({ id: 'background', chunk: 'last background output 中文\r\n' });
+    exit({ id: 'background', exit: { code: 7, signal: null } });
+    await vi.waitFor(() => expect(disposed).toHaveBeenCalledOnce());
+    const restored = getOrCreateXterm('background');
+    await new Promise<void>(resolve => restored.terminal.write('', resolve));
+    expect(restored).not.toBe(entry);
+    expect(restored.terminal.buffer.active.getLine(0)?.translateToString(true)).toBe('last background output 中文');
+    expect(getXtermExit('background')).toEqual({ code: 7, signal: null });
+    expect(offData).toHaveBeenCalledOnce();
+    expect(offExit).toHaveBeenCalledOnce();
+    disposeXterm('background');
+    expect(getXtermExit('background')).toBeNull();
+  });
+
+  it('settles a pending suspension when a tab is closed', async () => {
+    getOrCreateXterm('closing');
+    const pending = suspendExitedXterm('closing');
+    disposeXterm('closing');
+    expect(await pending).toBe(false);
+    expect(getOrCreateXterm('closing').terminal.buffer.active.getLine(0)?.translateToString(true)).toBe('');
   });
 
   it('routes detected URLs through the host external-link bridge', async () => {

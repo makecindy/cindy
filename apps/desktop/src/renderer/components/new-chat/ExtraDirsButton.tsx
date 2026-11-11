@@ -26,6 +26,8 @@ export interface ExtraDirsButtonProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   panel: ReactNode;
+  /** 传给 MorphPopover 的内容高度上限。新建任务页用它挡住 logo 和 worktree chips。 */
+  maxContentHeight?: number;
   disabled?: boolean;
   dense?: boolean;
   visualVariant?: 'default' | 'create-agent';
@@ -41,6 +43,7 @@ export function ExtraDirsButton({
   open,
   onOpenChange,
   panel,
+  maxContentHeight,
   disabled,
   dense = false,
   visualVariant = 'default',
@@ -54,6 +57,7 @@ export function ExtraDirsButton({
       open={open}
       onOpenChange={onOpenChange}
       panelWidth={480}
+      maxContentHeight={maxContentHeight}
       panelClassName="p-0"
       panelAriaLabel={t('extraDirs.menuAria')}
       wrapperClassName="shrink-0"

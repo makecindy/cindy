@@ -6,7 +6,7 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron';
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
 vi.mock('../fastPolicyRuntime.js', () => ({ groupFastPolicyPending: vi.fn(() => false), syncGroupFastPolicy: vi.fn(async () => {}) }));
-vi.mock('../../device-link/dispatch.js', () => ({ notifyProviderShareCatalogChanged: vi.fn() }));
+vi.mock('../../device-link/dispatch.desktop.js', () => ({ notifyProviderShareCatalogChanged: vi.fn() }));
 vi.mock('../runtime.js', () => ({
   getProviderGroupDirectory: vi.fn(),
   getProviderGroupRouter: vi.fn(),
@@ -14,9 +14,10 @@ vi.mock('../runtime.js', () => ({
   readProviderGroupOfSession: vi.fn(),
   readProviderGroupRebalanceSuggestion: vi.fn(),
   recordProviderGroupRebalanceDecision: vi.fn(),
+  setProviderGroupRebalancePreference: vi.fn(),
 }));
 vi.mock('../store.js', () => ({ readProviderGroup: vi.fn(), writeProviderGroup: vi.fn(), listProviderGroups: vi.fn() }));
-vi.mock('../bindings.js', () => ({ pruneProviderGroupBindings: vi.fn() }));
+vi.mock('../bindings.desktop.js', () => ({ pruneProviderGroupBindings: vi.fn() }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: vi.fn(() => 'owner-a'),
   isAppSessionBoundaryPending: vi.fn(() => false),
@@ -50,7 +51,7 @@ import { executeProviderShareManagementCommand, parseProviderShareCommand } from
 import { getProviderGroupDirectory, getProviderGroupRouter } from '../runtime';
 import { invokeProviderManagement } from '../managementClient';
 import { captureProviderShareGroupRecovery } from '../../device-link/providerShareGuest';
-import { pruneProviderGroupBindings } from '../bindings';
+import { pruneProviderGroupBindings } from '../bindings.desktop';
 import { readProviderGroup, writeProviderGroup } from '../store';
 import { broadcast } from '../../device-link/index';
 
@@ -96,6 +97,18 @@ function deps(candidates: ProviderGroupCandidate[], existing: ProviderGroupConfi
 }
 
 describe('parseProviderGroupCommand', () => {
+  // Unit/protocol, §6.2：独立偏好动作不能走一次换号决定，坏布尔值不得触发写入。
+  it('validates and saves an explicit per-task balancing preference', async () => {
+    const d = deps([]);
+    d.rebalancePreference = vi.fn(async () => true);
+    const request = { action: 'rebalance-preference', sessionId: 's1', enabled: false };
+    const command = parseProviderGroupCommand(request);
+    if (command.action !== 'rebalance-preference') throw new Error('Expected the rebalance preference command');
+    expect(await executeProviderGroupCommand(d, command)).toEqual({ ok: true });
+    expect(d.rebalancePreference).toHaveBeenCalledWith('s1', false);
+    expect(() => parseProviderGroupCommand({ ...request, enabled: 'false' })).toThrow('enabled must be boolean');
+    expect(() => parseProviderGroupCommand({ ...request, sessionId: '../s1' })).toThrow();
+  });
   // Unit: the real command boundary must preserve the confirmed message ID instead of a session-wide decision.
   it('passes a confirmed message id through parsing and execution', async () => {
     const d = deps([]);

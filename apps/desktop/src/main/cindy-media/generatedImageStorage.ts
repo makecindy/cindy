@@ -11,7 +11,7 @@ import {
   ownerScopedUserDataPath,
 } from '../appSessionState';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current';
-import { captureMediaRefCompensationScope } from './refCompensationJournal';
+import { captureMediaRefCompensationScope } from './refCompensationJournal.desktop';
 import {
   createGeneratedImageJournal,
   generatedImageId,
@@ -20,7 +20,7 @@ import {
   type GeneratedImageUpstream,
 } from './generatedImageJournal';
 import { generatedImageBytes, readGeneratedImageFile } from './generatedMedia';
-import { blobUrl, extForMime, parseBlobUrl, resolveSafe } from './blobStore';
+import { blobUrl, extForMime, parseBlobUrl, resolveSafe } from './blobStore.desktop';
 import { ingestMedia } from './ingest';
 import {
   hasRef,

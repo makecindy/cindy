@@ -433,13 +433,13 @@ describe('direct Chat Server client', () => {
     const blankText = { ...onlyMedia, content: [{ type: 'text', text: ' \n' }, ...onlyMedia.content] };
     expect(chatRoomRow(room(), { ...snapshot(), messages: [blankText] }, id(11)).item.display.preview).toBe('a.png, b.pdf');
   });
-  it.each(['AUTH_REQUIRED', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
+  it.each(['AUTH_REQUIRED', 'RUNTIME_TIMEOUT', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
     const source = message(20);
     let status = 'failed';
     const request = vi.fn();
     request.mockImplementation(async (path: string) => path.endsWith('/snapshot') ? snapshot()
       : path.endsWith('/plans') ? []
-      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code }]
+      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code, failure_reason: 'unclaimed_timeout' }]
       : [source]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
@@ -448,7 +448,8 @@ describe('direct Chat Server client', () => {
     expect(view.messages).toHaveLength(2);
     expect(view.messages[0]).toMatchObject({ id: source.id, kind: 'message' });
     expect(view.messages[1]).toMatchObject({ id: `execution-failure:${id(30)}:1`, sequence: view.messages[0].sequence,
-      kind: 'notice', runtimeFailureCode: failure_code === 'AUTH_REQUIRED' ? failure_code : 'RUNTIME_ERROR' });
+      kind: 'notice', runtimeFailureCode: failure_code === 'AUTH_REQUIRED' || failure_code === 'RUNTIME_TIMEOUT' ? failure_code : 'RUNTIME_ERROR' });
+    expect(view.messages[1].runtimeFailureReason).toBe(failure_code === 'RUNTIME_TIMEOUT' ? 'unclaimed_timeout' : undefined);
     expect(view.lastMessage?.preview).toBe('20');
     expect(JSON.stringify(view.messages)).not.toContain('private diagnostic');
     status = 'queued';
@@ -715,7 +716,7 @@ it('stops my requests and companions without stopping another member’s work', 
   await createChatServerClient(request as any).stop(id(1), 'stop-operation');
   const writes = request.mock.calls.filter(([, method]) => method === 'POST');
   expect(writes).toEqual([
-    [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }],
+    [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }, undefined],
     [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `stop-operation:execution:${id(30)}`, action: 'stop' }, id(12)],
     [`/conversations/${id(1)}/executions/${id(31)}/control`, 'POST', { operationId: `stop-operation:execution:${id(31)}`, action: 'stop' }, undefined],
   ]);
@@ -1017,4 +1018,72 @@ it.each(['bot', 'human'] as const)('projects a capability notice only from its c
   expect(view.messages[0].kind).toBe(kind === 'bot' ? 'notice' : 'message');
   expect(view.messages[0].capabilityNoticeCode).toBe(kind === 'bot' ? 'ATTACHMENTS_UNAVAILABLE' : undefined);
   expect(view.messages[0].content).toBe('Some attachments were not delivered');
+});
+
+// 测试价值：群聊 §4.0 的默认本人范围和显式 all，以及真实拒绝/收尾竞态。
+// 旧测试只覆盖一次本人 happy path；最小输入是一条他人的执行或一条被拒的本人执行。
+// tier: unit，生产 ChatServerClient 通过内存 request，不连接服务器。
+it.each(['owner', 'admin', 'member'] as const)('authorizes explicit all with a fresh %s role', async role => {
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' }, capabilities: { groupSingleSpeaker: 1 } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), members: snapshot().members.map(member => ({ ...member, role })) };
+    if (path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), requester_id: id(99), status: 'running' }];
+    if (method === 'POST') return {};
+    throw new Error(path);
+  });
+  const client = createChatServerClient(request as any);
+  if (role === 'member') {
+    await expect(client.stop(id(1), 'all-op', 'all')).rejects.toThrow('ROLE_REQUIRED');
+    expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+  } else {
+    await client.stop(id(1), 'all-op', 'all');
+    expect(request.mock.calls.some(([path, method]) => method === 'POST' && path.includes(id(30)))).toBe(true);
+  }
+});
+it.each(['running', 'stopping', 'cancelled', 'missing'] as const)('preserves a refused stop unless reread explicitly settles it (%s)', async latest => {
+  let reads = 0;
+  const rejection = Object.assign(new Error('FORBIDDEN'), { status: 403 });
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') throw rejection;
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return snapshot();
+    if (path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) {
+      reads++;
+      return reads > 1 && latest === 'missing' ? [] : [{ id: id(30), bot_id: id(12), requester_id: id(10), status: reads === 1 ? 'running' : latest }];
+    }
+    throw new Error(path);
+  });
+  const action = createChatServerClient(request as any).stop(id(1), 'stop-op');
+  if (latest === 'stopping' || latest === 'cancelled') await expect(action).resolves.toBeUndefined();
+  else await expect(action).rejects.toBe(rejection);
+});
+it('does not send a later stop after its group action owner changes', async () => {
+  let current = true;
+  const request = vi.fn(async (path: string) => {
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+    current = false;
+    return snapshot();
+  });
+  await expect(createChatServerClient(request as any).stop(id(1), 'stale-op', undefined, () => current)).rejects.toThrow('OWNER_CHANGED');
+  expect(request.mock.calls.map(([path]) => path)).toHaveLength(2);
+});
+
+it('uses my admin companion actor for an explicit all, preserving server plan revision', async () => {
+  const manager = { ...snapshot().members[0], id: id(12), kind: 'bot', ownerActorId: id(10), role: 'admin' };
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') return {};
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' }, capabilities: { groupSingleSpeaker: 1 } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), members: [...snapshot().members, manager] };
+    if (path.endsWith('/plans')) return [{ id: id(40), creator_id: id(99), status: 'running', revision: 7 }];
+    if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(13), requester_id: id(99), status: 'running' }];
+    throw new Error(path);
+  });
+  await createChatServerClient(request as any).stop(id(1), 'all-op', 'all');
+  const writes = request.mock.calls.filter(([, method]) => method === 'POST');
+  expect(writes).toEqual([
+    [`/conversations/${id(1)}/plans/${id(40)}`, 'POST', { operationId: `all-op:plan:${id(40)}`, expectedRevision: 7, action: 'stop' }, id(12)],
+    [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `all-op:execution:${id(30)}`, action: 'stop' }, id(12)],
+  ]);
 });

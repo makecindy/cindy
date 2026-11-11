@@ -1,7 +1,10 @@
 import type { FireContext, FireResult, PreRunPluginConfig, Schedule } from '@cindy/maker-scheduler';
 import type { GhostControlPointResult, GhostScheduleRunPointData } from '../../shared/ghost.js';
 
-/** 伙伴例行任务的承载任务按例行任务自己的设置在更早处询问，这里不重复问。 */
+/**
+ * Backing schedule of a removed V1 teammate routine. Old rows may linger in the store; they were
+ * screened by the routine's own setting, never by this gate, so keep skipping them.
+ */
 function isRoutineBackingSchedule(schedule: Schedule): boolean {
   return schedule.source === 'bot' && schedule.id.startsWith('routine-');
 }

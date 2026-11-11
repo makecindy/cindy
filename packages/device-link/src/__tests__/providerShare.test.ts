@@ -161,6 +161,24 @@ describe('provider share received catalogs', () => {
     expect(parsed).toEqual([{ ...entry, owner: { displayName: 'Magi', avatarUrl: null } }]);
     expect(parseProviderShareReceivedCatalogs(null)).toEqual([]);
   });
+
+  it('keeps a matching favorite identity and drops a mismatched one without dropping the catalog', async () => {
+    const { parseProviderShareReceivedCatalogs } = await import('../providerShareCatalog.js');
+    const entry = {
+      agentDeviceId: 'share:s1', shareId: 's1', providerId: 'anthropic', providerLabel: 'Anthropic', deviceName: 'Mac',
+      owner: { displayName: 'Magi', avatarUrl: null }, status: 'active', hostOnline: true, catalog: { providers: [] },
+    };
+    const favoriteSource = { shareId: 's1', memberId: 'member-1', providerId: 'anthropic', owner: { region: 'global' } };
+    const [matched, mismatched, malformed] = parseProviderShareReceivedCatalogs({ shares: [
+      { ...entry, favoriteSource },
+      { ...entry, favoriteSource: { ...favoriteSource, memberId: 'other', shareId: 'other' } },
+      { ...entry, favoriteSource: { shareId: 's1', memberId: '', providerId: 'anthropic', owner: { region: 'global' } } },
+    ] });
+    expect(matched?.favoriteSource).toEqual(favoriteSource);
+    expect(mismatched?.favoriteSource).toBeUndefined();
+    expect(malformed?.favoriteSource).toBeUndefined();
+    expect(mismatched?.providerId).toBe('anthropic');
+  });
 });
 
 describe('provider share identity scrubbing', () => {

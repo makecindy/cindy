@@ -224,6 +224,26 @@ it('filters single and multiple creators, including archived tasks, independentl
   expect(matching([local, remote])).toEqual([tasks[1], tasks[3]]);
 });
 
+// User decision (2026-11-08): a teammate's project is not a project choice; its tasks follow the teammate filter.
+it('counts every task in a teammate project as that teammate, on this computer and on another', async () => {
+  followScopes.mockResolvedValueOnce([]);
+  h.remote = [{ ...bot('bot-1', 'Remote Dash'), deviceId: 'laptop' }];
+  const { result } = renderHook(useTaskCreatorIndex);
+  await act(async () => {});
+  const home = (id: string) => `/Users/me/Library/Application Support/Cindy/owners/ab12/bots/${id}/workspace`;
+  const tasks = [
+    session({ id: 'in-project', projectDir: home('bot-1') }),
+    session({ id: 'remote-project', projectDir: 'C:\\Users\\me\\AppData\\Cindy\\owners\\ab12\\bots\\bot-1\\workspace', deviceLinkDeviceId: 'laptop' }),
+    session({ id: 'other-teammate', projectDir: home('bot-2') }),
+    session({ id: 'mine' }),
+  ];
+  const matching = (selection: 'none' | string[]) => tasks.filter(task => matchesTaskCreators(task, selection, result.current));
+  expect(matching([taskBotKey({ id: 'bot-1' })])).toEqual([tasks[0]]);
+  expect(matching([taskBotKey({ id: 'bot-1', deviceId: 'laptop' })])).toEqual([tasks[1]]);
+  expect(matching([taskBotKey({ id: 'bot-2' })])).toEqual([tasks[2]]);
+  expect(matching('none')).toEqual([tasks[3]]);
+});
+
 // User regression: one built-in Cindy must filter local and remote creations together.
 it('offers one Cindy across computers without merging a custom namesake or unrelated same-ID bots', async () => {
   h.profiles = [bot('cindy-default', 'Cindy'), bot('custom', 'Cindy')];

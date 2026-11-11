@@ -41,6 +41,19 @@ Cindy Make 保留旧导出和安装目录，旧 `current.json` 不需迁移。Gi
 `userData/managed-tools`。新工具应复用这里；发行版选择、登录和产品入口不进入下载器。
 Ollama 本次共用下载层，仍保留其现有 runtime 解压和启动布局。
 
+## Agent 版本探测与运行目录
+
+启动安装的版本比较、Linux 回退安装验证与「关于」页共用
+`main/agent-binaries/binary-version-probe.ts`；Linux 保留原有 15 秒验证超时及取消语义。
+Codex 即使只执行 `--version` 也会写入辅助程序，因此版本探测显式使用唯一临时
+`CODEX_HOME`，不继承用户或任务的运行目录；成功、失败或取消后均尝试清理。
+
+装配 Maker 时只协调已有 Codex 登录，不提前准备 Skills、规则和插件。运行资源由
+显式登录或 `getAuthEnv()` 按需准备，保留原有权限检查；已有本机登录的凭证协调仍可
+建立 Cindy 私有的登录目录。这不改变二进制安装策略，也不删除已有用户目录。
+回归见 `binary-version-probe.test.ts`、`linuxRuntimeMigration.test.ts`、
+`binaryVersionIpc.test.ts` 和 `authAssetPreparation.test.ts`。
+
 ## GitHub 连接
 
 本机 PR 徽标缺少 gh／登录态时，点击打开 `GithubSetupDialog`。主进程统一发现

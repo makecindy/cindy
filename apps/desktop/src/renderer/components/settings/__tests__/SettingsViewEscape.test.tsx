@@ -170,6 +170,7 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
   vi.stubGlobal('ResizeObserver', class {
     observe() {}
+    unobserve() {}
     disconnect() {}
   });
   vi.stubGlobal('electronAPI', { platform: 'darwin', osRelease: '23.0.0', appVersion: '1.0.0',
@@ -210,7 +211,8 @@ describe('SettingsView Escape', () => {
     await act(async () => { renderSettings('/settings?tab=voice-input'); });
     const missingCredential = 'settings.voiceInput.serviceSource.credentialError.gatewayMissing';
     const cannotRefine = 'settings.voiceInput.serviceSource.refiner.cannotRefine';
-    expect(await screen.findByText(missingCredential)).toBeTruthy();
+    // 语音页是懒加载分区，第一次等待包含它整棵依赖的冷加载；Windows CI 上会超过默认 1 秒。
+    expect(await screen.findByText(missingCredential, {}, { timeout: 5000 })).toBeTruthy();
     expect(screen.getByText(cannotRefine)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.manageProviders' }));

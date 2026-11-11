@@ -27,6 +27,8 @@ beforeEach(() => {
     width: 100,
   } as DOMRect);
   vi.stubGlobal('electronAPI', {
+    // Zero-transparency desktop mode exists only with macOS's native sidebar material (#9424).
+    platform: 'darwin',
     appearanceSettings: {
       getSync: () => saved,
       onChanged: (listener: typeof changed) => {

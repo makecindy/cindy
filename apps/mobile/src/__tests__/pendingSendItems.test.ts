@@ -282,6 +282,18 @@ describe('reply before user echo', () => {
 });
 
 describe('buildPendingSendItems', () => {
+  // PR #9727: history can be absent while an answer is queued or settling.
+  // Existing dedup tests did not cover card-only replies. Tier: unit.
+  it.each(['queued', 'settling', 'outbox'] as const)('keeps card answers out of %s bubbles and menus', (phase) => {
+    const answerId = 'question-reply:answered:request-1';
+    const supplementId = 'question-reply:request-2';
+    const ids = [answerId, 'ordinary', supplementId];
+    const input = phase === 'outbox'
+      ? { outbox: ids.map(id => outboxItem(id)) }
+      : { [phase === 'queued' ? 'queue' : 'settling']: ids.map(id => queued(id)) };
+    expect(build(input).map(item => item.clientId)).toEqual(['ordinary', supplementId]);
+  });
+
   it('shares the message item key so the bubble and the real message land in one place', () => {
     const [item] = build({ queue: [queued('abc')] });
     expect(item.key).toBe(pendingSendItemKey('abc'));

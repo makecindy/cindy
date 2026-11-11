@@ -1,12 +1,10 @@
 {
   "progress": {
-    "stop": "Stoppen"
-  },
-  "work": {
-    "queued": "In Warteschlange {{count}}",
-    "active": "In Bearbeitung {{count}}",
-    "expand": "Aktivität der Teammitglieder ausklappen",
-    "collapse": "Aktivität der Teammitglieder einklappen"
+    "stop": "Stoppen",
+    "stopMine": "Meine stoppen",
+    "stopAll": "Alle stoppen",
+    "stopAllHint": "Schließt Anfragen anderer Personen ein",
+    "step": "Schritt {{step}}/{{total}}"
   },
   "title": "Gruppenchats",
   "memberSeparator": ", ",
@@ -85,7 +83,8 @@
     "planDone_one": "{{count}} Schritt ist erledigt",
     "planDone_other": "Alle {{count}} Schritte sind erledigt",
     "planDoneGeneric": "Arbeitsaufteilung abgeschlossen",
-    "olderOnComputer": "Frühere Nachrichten sind auf deinem Computer"
+    "olderOnComputer": "Frühere Nachrichten sind auf deinem Computer",
+    "endTalk": "Beenden"
   },
   "quote": {
     "label": "Zitat von {{name}}: {{summary}}",
@@ -104,6 +103,13 @@
     "stepFailed": "{{name}} ist auf ein Problem gestoßen und hat diesen Schritt nicht abgeschlossen",
     "stepTimeout": "{{name}} hat zu lange gebraucht, daher wurde dieser Schritt gestoppt",
     "stepUnavailable": "{{name}} ist nicht verfügbar und kann diesen Schritt nicht ausführen",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}} hat die Verarbeitung nicht innerhalb der Wartezeit begonnen. Diese Anfrage ist beendet.",
+        "advice": "Bitte den Besitzer des Partners zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht.",
+        "details": "Sobald Cindy und das Netzwerk wieder funktionieren, sende die Nachricht erneut."
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}} kann nicht antworten: Das Gerät des Teammitglieds hat sein Limit für Remote-Sitzungen erreicht.",
@@ -175,6 +181,8 @@
     "start": "Plan starten",
     "dismiss": "Plan überspringen",
     "editHint": "Sag einfach, wenn du die Aufgabenverteilung ändern möchtest",
+    "autoContinue": "Nächsten Schritt automatisch starten",
+    "autoContinueSaveFailed": "Die Schrittübergabe konnte nicht gespeichert werden. Versuch es erneut.",
     "autoNote": "Jeder abgeschlossene Schritt startet automatisch den nächsten.",
     "pauseNote": "Nach jedem Schritt pausiert die Arbeit, bis du auf „Nächsten Schritt starten“ klickst.",
     "superseded": "Aktualisiert",
@@ -324,7 +332,9 @@
     "groupDissolved": "Diese Gruppe wurde aufgelöst. Du kannst den verfügbaren Verlauf weiterhin lesen.",
     "lastOwner": "Übertrage die Inhaberschaft oder löse diese Gruppe auf, bevor du sie verlässt.",
     "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Teammitglieder noch nicht aktiviert.",
-    "turnAlreadyStarted": "Dieser Teamkollege hat bereits begonnen und kann nicht übersprungen werden"
+    "turnAlreadyStarted": "Dieser Teamkollege hat bereits begonnen und kann nicht übersprungen werden",
+    "stopOwnershipUnknown": "Ein Teil der Arbeit konnte nicht gestoppt werden, da nicht überprüft werden konnte, wer sie angefordert hat.",
+    "nothingToStop": "Es gibt keine laufende Arbeit zum Stoppen."
   },
   "followUp": {
     "next": "Plan · Nächster Schritt",
@@ -623,5 +633,6 @@
       "uncertain": "Beitrittsergebnis nicht bestätigt"
     },
     "externalFormatError": "Öffne den vollständigen Link aus der ursprünglichen Nachricht erneut."
-  }
+  },
+  "waitingForOwner": "Wartet auf Bestätigung"
 }

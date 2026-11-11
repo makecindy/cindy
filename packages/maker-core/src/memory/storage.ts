@@ -19,7 +19,7 @@
  *  不宣称保护外部编辑器或其它进程直接修改文件。
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import matter from 'gray-matter';
@@ -45,6 +45,22 @@ const SLUG_REGEX = /^[a-z0-9_-]+$/;
 
 // Multiple store instances for the same directory must share the mutation queue.
 const mutationQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * Writes `content` to `target` without following a link there: a fresh temp file (never an
+ * existing path) is renamed over it. A memory folder can sit inside a project its tasks edit
+ * (a teammate's project), so a link planted in it must not redirect the host's writes.
+ */
+async function writeFileNoFollow(target: string, content: string): Promise<void> {
+  const tmp = `${target}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  await fs.writeFile(tmp, content, { encoding: 'utf8', flag: 'wx' });
+  try {
+    await fs.rename(tmp, target);
+  } catch (error) {
+    await fs.unlink(tmp).catch(() => {});
+    throw error;
+  }
+}
 
 /**
  * 把 workdir 绝对路径转成 sanitize 后的目录名 (Claude Code 风格)。
@@ -243,7 +259,7 @@ export class MemoryStorage {
         createdAt: new Date().toISOString(),
         lastUsedAt: new Date().toISOString(),
       };
-      await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+      await writeFileNoFollow(metaPath, JSON.stringify(meta, null, 2));
     }
   }
 
@@ -399,7 +415,7 @@ export class MemoryStorage {
     // tryReadRaw 的 await 窗口后、真正写盘前复核 owner scope (review #2388
     // Codex 8th P1): 边界不得把 shard 写入旧 owner 根。
     this.beforeFileWrite?.();
-    await fs.writeFile(fullPath, fileText, 'utf8');
+    await writeFileNoFollow(fullPath, fileText);
     // shard write 后、索引重建前复核 (review #2388 Codex 12th P1): writeFile
     // await 期间边界可能发生, 不得继续在旧 owner 下 rebuildIndex / 返回成功。
     // not-ready 时文件已落盘但 MEMORY.md 未更新 → 标记派生索引 dirty (Codex 23rd)。
@@ -548,7 +564,7 @@ export class MemoryStorage {
     // 索引写盘前复核 (review #2388 Codex 13th P1): rebuildIndex 自身有多次
     // awaited shard reads, 边界不得在旧 owner 下重写 MEMORY.md。
     this.beforeFileWrite?.();
-    await fs.writeFile(path.join(this.dir, INDEX_FILENAME), content, 'utf8');
+    await writeFileNoFollow(path.join(this.dir, INDEX_FILENAME), content);
     this.indexCache = content;
   }
 
@@ -617,6 +633,8 @@ export class MemoryStorage {
 
   private async tryReadRaw(fullPath: string): Promise<string | null> {
     try {
+      // A link is not a memory: reading through it would bring in a file from elsewhere.
+      if ((await fs.lstat(fullPath)).isSymbolicLink()) return null;
       return await fs.readFile(fullPath, 'utf8');
     } catch (e) {
       if (isENOENT(e)) return null;

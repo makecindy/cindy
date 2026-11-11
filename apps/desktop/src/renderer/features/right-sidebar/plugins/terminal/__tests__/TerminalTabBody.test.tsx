@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TabKindHostContext } from '../../../types';
+import type { TerminalExitEvent } from '@/../shared/terminal-bridge';
 
 const fit = vi.fn();
 const proposeDimensions = vi.fn((): { cols: number; rows: number } | undefined => ({ cols: entry.terminal.cols, rows: entry.terminal.rows }));
@@ -26,6 +27,7 @@ const entry = {
   lastSize: { cols: 80, rows: 24 },
   ptyAttached: true,
   closing: false,
+  pendingTransitions: 0,
   closeCancelledListeners: new Set<() => void>(),
   remoteContext: undefined as import('../../../../../../shared/terminal-bridge').RemoteTerminalContext | undefined,
   remoteDraft: undefined as { contextKey: string; connection?: import('../../../../../../shared/terminal-bridge').RemoteTerminalConnection; submitted: boolean } | undefined,
@@ -47,7 +49,11 @@ vi.mock('@/components/ui/select', () => ({
 }));
 vi.mock('../lib/xtermPool', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/xtermPool')>()),
+  detachXterm: vi.fn(),
+  getXtermExit: vi.fn(() => null),
+  onXtermExit: vi.fn(() => () => undefined),
   getOrCreateXterm: () => {
+    xtermEntries.set('terminal-1', entry as unknown as XtermEntry);
     registerClosing('terminal-1', (closing) => {
       const wasClosing = entry.closing;
       entry.closing = closing;
@@ -60,12 +66,14 @@ vi.mock('../lib/xtermPool', async (importOriginal) => ({
 }));
 
 import { TerminalTabBody } from '../TerminalTabBody';
-import { getXterm } from '../lib/xtermPool';
+import { getXterm, detachXterm, getXtermExit, onXtermExit, __resetPoolForTesting, type XtermEntry } from '../lib/xtermPool';
+import { xtermEntries } from '../lib/xtermEntries';
 import { TERMINAL_RENDERER_INSTANCE_ID } from '../index';
 import { toast } from '@/lib/toast';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from '../../../registry';
 import { finishClosing, registerClosing, unregisterClosing } from '../../../lib/tabClosingSignal';
+
 
 class TestResizeObserver {
   static callback: ResizeObserverCallback | null = null;
@@ -92,8 +100,15 @@ function makeContext(overrides: Partial<TabKindHostContext> = {}): TabKindHostCo
 }
 
 beforeEach(() => {
+  __resetPoolForTesting();
+  xtermEntries.set('terminal-1', entry as unknown as XtermEntry);
   vi.mocked(getSessionDeviceId).mockReset();
   vi.mocked(getXterm).mockReset().mockReturnValue(entry as unknown as NonNullable<ReturnType<typeof getXterm>>);
+  vi.mocked(detachXterm).mockClear();
+  vi.mocked(getXtermExit).mockReturnValue(null);
+  vi.mocked(onXtermExit).mockReset();
+  vi.mocked(onXtermExit).mockReturnValue(() => undefined);
+  entry.ptyAttached = true;
   fit.mockClear();
   proposeDimensions.mockClear();
   resize.mockClear();
@@ -104,6 +119,7 @@ beforeEach(() => {
   entry.lastSize = { cols: 80, rows: 24 };
   entry.ptyAttached = true;
   entry.closing = false;
+  entry.pendingTransitions = 0;
   entry.closeCancelledListeners.clear();
   entry.remoteDraft = undefined;
   entry.remoteContext = undefined;
@@ -144,6 +160,59 @@ afterEach(() => {
 });
 
 describe('TerminalTabBody sidebar visibility', () => {
+  // Unit: #9815 discussion_r4528361916. A failed pending restart must restore
+  // the action in the replacement view, not just the now-unmounted initiator.
+  it('shows the restored exit when restart rejects after the view remounts', async () => {
+    const oldExit = { code: 0, signal: null };
+    const listeners = new Set<(exit: TerminalExitEvent['exit']) => void>();
+    vi.mocked(onXtermExit).mockImplementation((_id, listener) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    });
+    let reject!: (error: Error) => void;
+    vi.mocked(window.electronAPI.terminal.restart).mockReturnValue(new Promise((_yes, no) => { reject = no; }));
+    const ctx = makeContext();
+    const state = { created: true, exited: null, title: '', shellId: '', shellDisplayName: '' };
+    const original = render(<TerminalTabBody state={{ ...state, exited: oldExit }} ctx={ctx} active />);
+    fireEvent.click(screen.getByText('rightSidebar.terminal.restart'));
+    original.unmount();
+    const replacement = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    await act(async () => {});
+    expect(screen.queryByText('rightSidebar.terminal.restart')).toBeNull();
+    await act(async () => {
+      for (const listener of listeners) listener(oldExit);
+      reject(new Error('spawn failed'));
+    });
+    expect(screen.getByText('rightSidebar.terminal.restart')).toBeTruthy();
+    expect(window.electronAPI.terminal.create).toHaveBeenCalledTimes(2); // each body reconciles ownership
+    replacement.unmount();
+    expect(listeners.size).toBe(0);
+  });
+
+  // Unit: #9815 discussion_r4528102364. A returned window can have an old
+  // exit even though another window restarted the PTY; native attach is authoritative.
+  it('reconciles an old exit after a window handoff before accepting input', async () => {
+    const oldExit = { code: 0, signal: null };
+    vi.mocked(getXtermExit).mockReturnValue(oldExit);
+    entry.ptyAttached = false;
+    render(<TerminalTabBody state={{ created: false, exited: null, title: '', shellId: '', shellDisplayName: '' }} ctx={makeContext()} active />);
+    await waitFor(() => expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByText('rightSidebar.terminal.restart')).toBeNull());
+    expect(entry.ptyAttached).toBe(true);
+    expect(window.electronAPI.terminal.restart).not.toHaveBeenCalled();
+  });
+
+  it('retains the restart action when handoff confirms the PTY is still exited', async () => {
+    vi.mocked(getXtermExit).mockReturnValue({ code: 0, signal: null });
+    entry.ptyAttached = false;
+    vi.mocked(window.electronAPI.terminal.create).mockRejectedValueOnce(new Error('terminal session already exists (exited): terminal-1'));
+    render(<TerminalTabBody state={{ created: false, exited: null, title: '', shellId: '', shellDisplayName: '' }} ctx={makeContext()} active />);
+    await waitFor(() => expect(entry.ptyAttached).toBe(true));
+    expect(screen.getByText('rightSidebar.terminal.restart')).toBeTruthy();
+    expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce();
+    expect(screen.queryByText('rightSidebar.terminal.spawnFailed')).toBeNull();
+  });
+
   it('does not fit or resize the PTY while the sidebar is collapsed, then refits when visible', () => {
     const ctx = makeContext();
     const view = render(
@@ -171,6 +240,36 @@ describe('TerminalTabBody sidebar visibility', () => {
 
     expect(fit).toHaveBeenCalled();
     expect(resize).toHaveBeenCalledWith('terminal-1', 100, 24);
+  });
+
+  it('releases an exited hidden view and restores it without creating a new PTY', async () => {
+    const ctx = makeContext();
+    const state = { created: true, exited: { code: 0, signal: null }, title: '', shellId: '', shellDisplayName: '' };
+    const view = render(<TerminalTabBody state={state} ctx={ctx} active shellVisible />);
+    await act(async () => {});
+    act(() => vi.mocked(window.electronAPI.terminal.onExit).mock.calls.at(-1)![0]({ id: ctx.tabId, exit: state.exited }));
+    view.rerender(<TerminalTabBody state={state} ctx={ctx} active shellVisible={false} />);
+    expect(detachXterm).toHaveBeenCalledWith('terminal-1');
+    view.rerender(<TerminalTabBody state={state} ctx={ctx} active shellVisible />);
+    expect(entry.terminal.open).toHaveBeenCalledTimes(2);
+    expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce();
+  });
+
+  // Unit: hydrateState clears persisted exit flags on each sidebar render.
+  // Native exit must remain visible and must not attempt create on an exited PTY.
+  it('keeps the runtime exit when the parent hydrates away its exit patch', () => {
+    let onExit!: (event: TerminalExitEvent) => void;
+    vi.mocked(window.electronAPI.terminal.onExit).mockImplementation(listener => {
+      onExit = listener;
+      return vi.fn();
+    });
+    const state = { created: false, exited: null, title: '', shellId: '', shellDisplayName: '' };
+    const ctx = makeContext();
+    const view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    act(() => onExit({ id: ctx.tabId, exit: { code: 0, signal: null } }));
+    view.rerender(<TerminalTabBody state={{ ...state }} ctx={ctx} active />);
+    expect(screen.getByText('rightSidebar.terminal.restart')).toBeTruthy();
+    expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce();
   });
 
   it('drops an already queued fit when the sidebar collapses before its animation frame', () => {
@@ -202,6 +301,27 @@ describe('TerminalTabBody sidebar visibility', () => {
 
     expect(resize).not.toHaveBeenCalled();
   });
+});
+
+// PR8881 merge / unit: a native exit during rejected close remains observable.
+// Existing close rollback cases did not deliver an exit while disposal was pending.
+it('retains a native exit through close rollback without requiring another attach', async () => {
+  const ctx = makeContext({ deviceLinkDeviceId: 'device-1' });
+  const state = { created: true, exited: null, title: '', shellId: '', shellDisplayName: '' };
+  vi.mocked(window.electronAPI.terminal.create).mockResolvedValue({ shellId: 'sh', shellDisplayName: 'SSH', pid: 1 });
+  let rejectDispose!: (error: Error) => void;
+  vi.mocked(window.electronAPI.terminal.dispose).mockImplementationOnce(() => new Promise((_, reject) => { rejectDispose = reject; }));
+  render(<TerminalTabBody state={state} ctx={ctx} active />);
+  await act(async () => {});
+  const closing = getTabKind('terminal')!.onBeforeClose!(state, { tabId: ctx.tabId, sessionId: ctx.sessionId });
+  await act(async () => {});
+  expect(entry.closing).toBe(true);
+  act(() => vi.mocked(window.electronAPI.terminal.onExit).mock.calls.at(-1)![0]({ id: ctx.tabId, exit: { code: 255, signal: null } }));
+  await act(async () => { rejectDispose(new Error('close failed')); expect(await closing).toBe(false); });
+  expect(entry.closing).toBe(false);
+  expect(screen.getByText('rightSidebar.terminal.processExited')).toBeTruthy();
+  expect(ctx.patchState).toHaveBeenCalledWith({ rendererInstanceId: TERMINAL_RENDERER_INSTANCE_ID, created: true, exited: { code: 255, signal: null } });
+  expect(window.electronAPI.terminal.create).toHaveBeenCalledOnce();
 });
 
 describe('TerminalTabBody local restart fallback', () => {
@@ -462,6 +582,7 @@ describe('TerminalTabBody remote ownership', () => {
   });
 
   it('continues to create a PTY for a confirmed local session', async () => {
+    entry.ptyAttached = false;
     render(
       <TerminalTabBody
         state={{ created: false, exited: null, title: '', shellId: '', shellDisplayName: '' }}
@@ -476,6 +597,7 @@ describe('TerminalTabBody remote ownership', () => {
   });
 
   it('creates the local PTY after device-link ownership resolves from unknown to local', async () => {
+    entry.ptyAttached = false;
     const unresolvedContext = makeContext({ deviceLinkDeviceId: undefined });
     const state = { created: false, exited: null, title: '', shellId: '', shellDisplayName: '' };
     const view = render(<TerminalTabBody state={state} ctx={unresolvedContext} active />);
@@ -988,7 +1110,10 @@ describe('TerminalTabBody remote ownership', () => {
 
   it.each(['unmounted', 'remounted', 'closing', 'disposed', 'replaced'] as const)('handles confirmed edit disposal after becoming %s', async (timing) => {
     const api = window.electronAPI.terminal;
-    vi.mocked(api.create).mockResolvedValue({ shellId: 'sh', shellDisplayName: 'SSH', pid: 1 });
+    vi.mocked(api.create).mockImplementation(async () => {
+      vi.mocked(api.onExit).mock.calls.at(-1)![0]({ id: 'terminal-1', exit: { code: 255, signal: null } });
+      return { shellId: 'sh', shellDisplayName: 'SSH', pid: 1 };
+    });
     let finishDispose!: () => void;
     vi.mocked(api.dispose).mockImplementationOnce(() => new Promise(resolve => { finishDispose = resolve; }));
     const ctx = makeContext({ deviceLinkDeviceId: 'device-1' });
@@ -998,8 +1123,15 @@ describe('TerminalTabBody remote ownership', () => {
     fireEvent.click(screen.getByText('rightSidebar.terminal.remote.editConnection'));
     view.unmount();
     if (timing === 'closing') entry.closing = true;
-    if (timing === 'disposed') vi.mocked(getXterm).mockReturnValue(undefined);
-    if (timing === 'replaced') vi.mocked(getXterm).mockReturnValue({ ...entry } as unknown as NonNullable<ReturnType<typeof getXterm>>);
+    if (timing === 'disposed') {
+      xtermEntries.delete(ctx.tabId);
+      vi.mocked(getXterm).mockReturnValue(undefined);
+    }
+    if (timing === 'replaced') {
+      const replacement = { ...entry } as unknown as XtermEntry;
+      xtermEntries.set(ctx.tabId, replacement);
+      vi.mocked(getXterm).mockReturnValue(replacement);
+    }
     const remounted = timing === 'remounted' ? render(<TerminalTabBody state={state} ctx={ctx} active />) : undefined;
     await act(async () => {});
     expect(screen.queryByLabelText('rightSidebar.terminal.remote.host')).toBeNull();
@@ -1019,7 +1151,10 @@ describe('TerminalTabBody remote ownership', () => {
 
   it('recovers on close rollback after edit disposal successfully releases the retained PTY', async () => {
     const api = window.electronAPI.terminal;
-    vi.mocked(api.create).mockResolvedValueOnce({ shellId: 'sh', shellDisplayName: 'SSH', pid: 1 });
+    vi.mocked(api.create).mockImplementationOnce(async () => {
+      vi.mocked(api.onExit).mock.calls.at(-1)![0]({ id: 'terminal-1', exit: { code: 255, signal: null } });
+      return { shellId: 'sh', shellDisplayName: 'SSH', pid: 1 };
+    });
     let finishEdit!: () => void;
     let rejectClose!: (error: Error) => void;
     vi.mocked(api.dispose)

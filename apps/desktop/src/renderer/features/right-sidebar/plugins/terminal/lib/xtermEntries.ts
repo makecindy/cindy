@@ -31,10 +31,22 @@ export interface XtermEntry {
   remoteContext?: RemoteTerminalContext;
   /** SSH form values and submission intent live only as long as this pooled tab. */
   remoteDraft?: { contextKey: string; connection?: RemoteTerminalConnection; submitted: boolean };
+  /** Keep entry identity until in-flight attach/restart/edit IPC has settled. */
+  pendingTransitions?: number;
+  /** Finish ANSI replay at its original grid before fitting to a new pane size. */
+  restored?: Promise<void>;
 }
 
 /** tabId → xterm 实例。只由 xtermPool 增删。 */
 export const xtermEntries = new Map<string, XtermEntry>();
+
+/** Compact output for an exited hidden tab; no xterm runtime import here. */
+export const xtermSnapshots = new Map<string, Pick<XtermEntry, 'remoteContext' | 'remoteDraft' | 'closing' | 'closeCancelledListeners'> & {
+  data: Uint8Array;
+  lastSize: XtermEntry['lastSize'];
+  ptyAttached: boolean;
+  viewportY: number;
+}>();
 
 /**
  * 侧边栏宿主在"内嵌 ↔ 独立子窗口"间迁移时调用(MainLayout detach/attach 转换清理,
@@ -46,6 +58,7 @@ export const xtermEntries = new Map<string, XtermEntry>();
  */
 export function markAllPtyDetached(): void {
   for (const entry of xtermEntries.values()) entry.ptyAttached = false;
+  for (const snapshot of xtermSnapshots.values()) snapshot.ptyAttached = false;
 }
 
 /**
@@ -55,4 +68,6 @@ export function markAllPtyDetached(): void {
 export function markPtyDetached(tabId: string): void {
   const entry = xtermEntries.get(tabId);
   if (entry) entry.ptyAttached = false;
+  const snapshot = xtermSnapshots.get(tabId);
+  if (snapshot) snapshot.ptyAttached = false;
 }

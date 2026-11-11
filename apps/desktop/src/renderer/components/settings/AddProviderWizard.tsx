@@ -762,8 +762,13 @@ export function AddProviderWizard({
       toast.success(t('settings.providers.wizard.authorizedToast', { name: sel?.kind === 'oauth' ? sel.provider.name : providerId }));
       onDone(providerId);
     } catch (error) {
-      if (localLoginRef.current === login && !String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED'))
-        toast.error(t('subscriptionAccounts.failed'));
+      const code = extractIpcError(error)?.code;
+      if (localLoginRef.current === login && code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
+        toast.error(t(
+          code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
+            ? 'subscriptionAccounts.providerManagedAuth'
+            : 'subscriptionAccounts.failed',
+        ));
     } finally {
       if (localLoginRef.current === login) {
         localLoginRef.current = null;

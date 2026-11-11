@@ -100,7 +100,7 @@ vi.mock('@/components/ui/slider', () => ({
   },
 }));
 
-vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null }));
+vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null, FontFamilyResetButton: () => null }));
 vi.mock('../LayoutResetControl', () => ({ LayoutResetControl: () => null }));
 
 describe('AppearanceSection accessibility', () => {

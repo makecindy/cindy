@@ -105,13 +105,22 @@ export function BotMarketDialog({ onClose, initialPackageId, api = window.electr
     if (!bridge?.pluginMarket || !bridge.ghosts) return;
     // Read existing installation/catalog projections for display names only; no install, enable or OAuth here.
     const installed = bridge.ghosts.listSync().ghosts as InstalledGhost[];
-    void bridge.pluginMarket.snapshot().then(snapshot => {
-      if (!active || !isDataOwnerGenerationCurrent(generation)) return;
+    const ids = [...new Set(entries.flatMap(entry => entry.tools.map(tool => tool.id)))];
+    void (async () => {
+      const items = [] as Awaited<ReturnType<typeof bridge.pluginMarket.lookup>>['items'];
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const snapshot = await bridge.pluginMarket.lookup(ids.slice(offset, offset + 100));
+        if (!active || !isDataOwnerGenerationCurrent(generation)) return;
+        items.push(...snapshot.items);
+      }
+      return items;
+    })().then(items => {
+      if (!items || !active || !isDataOwnerGenerationCurrent(generation)) return;
       const projected: Record<string, BotMarketPluginInfo> = {};
       for (const id of new Set(entries.flatMap(entry => entry.tools.map(tool => tool.id)))) {
         const localMatches = installed.filter(ghost => ghost.manifest.id === id);
         const local = localMatches.find(ghost => ghost.namespace === null) ?? (localMatches.length === 1 ? localMatches[0] : undefined);
-        const marketMatches = snapshot.items.filter(item => item.ghostId === id);
+        const marketMatches = items.filter(item => item.ghostId === id);
         const market = marketMatches.find(item => item.namespace === null) ?? (marketMatches.length === 1 ? marketMatches[0] : undefined);
         const name = local?.manifest.name ?? market?.name;
         const isInstalled = !!local || market?.installState === 'installed' || market?.installState === 'update-available';

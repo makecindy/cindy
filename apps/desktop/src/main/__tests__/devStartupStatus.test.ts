@@ -12,6 +12,7 @@ import {
   recordDesktopDevAuthStartupResult,
   recordDesktopDevLocalDbStartupResult,
   observeDesktopStartupResult,
+  enableDesktopDevQuitRequests,
 } from '../devStartupStatus.js';
 import { withLocalProfileMigrationStartupBarrier } from '../localProfileDataMigration.js';
 
@@ -35,6 +36,46 @@ describe('devStartupStatus', () => {
     cleanup?.();
     delete process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE;
     fs.rmSync(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  // Unit: a Windows restart used to kill main before it could record a clean exit.
+  // Exercise the real request consumer; stale generations and expired requests must not quit.
+  it('consumes only a live quit request for this instance, once, and cleans up its watcher', async () => {
+    cleanup = await beginDesktopDevInstance({ userDataDir: tempDir, dbFilePrefix: 'cindy',
+      rootDir: tempDir, passive: false, isolated: true, pid: 4242 });
+    const recordPath = path.join(tempDir, '.dev-instances', '4242.json');
+    const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+    expect(record.quitRequestProtocol).toBeUndefined();
+    let changed!: () => void;
+    vi.spyOn(fs, 'watchFile').mockImplementation(((_file: unknown, _options: unknown, listener: () => void) => {
+      changed = listener;
+    }) as typeof fs.watchFile);
+    const unwatch = vi.spyOn(fs, 'unwatchFile').mockImplementation(() => {});
+    const quit = vi.fn();
+    const stop = enableDesktopDevQuitRequests(quit);
+    const requestPath = path.join(tempDir, '.dev-instances', `${record.pid}-${record.instanceId}.quit`);
+    try {
+      markDesktopDevWindowReady();
+      markDesktopDevReady();
+      expect(JSON.parse(fs.readFileSync(recordPath, 'utf8')).quitRequestProtocol).toBe(1);
+      const request = { action: 'quit', pid: record.pid, instanceId: record.instanceId, expiresAt: Date.now() + 20_000 };
+      for (const invalid of [
+        { ...request, instanceId: 'old-instance' }, { ...request, pid: 999 },
+        { ...request, expiresAt: Date.now() - 1 }, { ...request, expiresAt: Date.now() + 60_000 },
+        { ...request, action: 'other' },
+      ]) {
+        fs.writeFileSync(requestPath, JSON.stringify(invalid));
+        changed();
+      }
+      expect(quit).not.toHaveBeenCalled();
+      fs.writeFileSync(requestPath, JSON.stringify(request));
+      changed();
+      changed();
+      expect(quit).toHaveBeenCalledTimes(1);
+    } finally { stop(); }
+    expect(unwatch).toHaveBeenCalledWith(requestPath, changed);
+    expect(fs.existsSync(requestPath)).toBe(false);
   });
 
   it('marks startup ready only after both the window and application are ready', async () => {

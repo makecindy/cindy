@@ -95,7 +95,7 @@ vi.mock('../mediaRequestLog.js', async (importOriginal) => {
     },
   };
 });
-vi.mock('../../maker-host/outbound-fetch.js', () => ({
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({
   outboundFetch: mocks.outboundFetch,
   guardedOutboundFetch: mocks.guardedOutboundFetch,
 }));
@@ -130,7 +130,7 @@ vi.mock('../providerMediaRuntime.js', () => ({
   resolveProviderVideoConnection: mocks.videoConnection,
 }));
 vi.mock('../ingest.js', () => ({ ingestMedia: mocks.ingestMedia }));
-vi.mock('../blobStore.js', () => ({
+vi.mock('../blobStore.desktop.js', () => ({
   readFile: mocks.readBlob,
   parseBlobUrl: (url: string) => {
     const match = /^cindy-media:\/\/blobs\/([0-9a-f]{64})(\.[a-z0-9]+)$/.exec(url);
@@ -140,12 +140,12 @@ vi.mock('../blobStore.js', () => ({
   supportedMime: (mime: string) =>
     ['image/png', 'video/mp4', 'audio/mpeg'].includes(mime),
 }));
-vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: mocks.resolveLegacyImage }));
+vi.mock('../../imageCacheStore.desktop.js', () => ({ resolveSafe: mocks.resolveLegacyImage }));
 vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: mocks.resolveLegacyVideo }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../serverApiClient.js', () => ({
+vi.mock('../../serverApiClient.desktop.js', () => ({
   ServerApiError: class ServerApiError extends Error {
     constructor(readonly code: string) {
       super(code);

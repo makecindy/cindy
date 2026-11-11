@@ -1,9 +1,9 @@
 import { dialog } from 'electron';
 import type { Schedule } from '@cindy/maker-scheduler';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { getRemovalPreview } from '../worktree/WorktreeManager.js';
-import { getScheduleStorageIfInitialized } from '../scheduler-host/index.js';
+import { getScheduleStorageIfInitialized } from '../scheduler-host/index.desktop.js';
 
 /** Match desktop archive preflights, with the confirmation on the initiating computer. */
 export async function confirmIslandArchive(sessionId: string, deviceId: string | null): Promise<boolean> {
