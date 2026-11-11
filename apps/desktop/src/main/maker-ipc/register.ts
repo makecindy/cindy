@@ -275,7 +275,8 @@ import {
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
-import { resolveSessionProject } from '../mcp-integrations/projectManagement.js';
+import { createRemoteSessionOpener, createRemoteSessionExecutionResolver } from './remoteSessionCreation.js';
+import { resolveSessionProject, listProjects } from '../mcp-integrations/projectManagement.js';
 import { isRetainableProjectSession } from '../../shared/sessionSource.js';
 import { initializePluginOauthCards } from '../plugin-oauth/cards.js';
 import { currentOauthIdentityScope, loadOauthSigningKey } from '../plugin-oauth/desktopIdentity.js';
@@ -13538,6 +13539,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // 同账号另一台电脑上的任务发来的消息（Agent 的 send_to_session 传 deviceId::sessionId）。
   registerSessionHandoffIpc({
+    listProjects: options => listProjects({ ...options, callerSessionId: undefined }),
+    create: createRemoteSessionOpener({
+      openSession,
+      captureOwner: () => captureSessionOwner(),
+      withSessionLock: withSendToSessionLock,
+      sessionExists: async id => Boolean((await getDbClient().drizzle.select({ id: sessions.id }).from(sessions).where(eq(sessions.id, id)).limit(1))[0]),
+      resolveProject: input => resolveSessionProject({ ...input, callerSessionId: undefined }),
+      validateDirectory: validateHandoffWorkingDir,
+      resolveExecution: createRemoteSessionExecutionResolver({
+        isSelfDeviceId: id => id === getSelfDeviceId(),
+        resolveLocal: input => resolveSessionExecution({ agentKind: input.agentKind, model: input.model, effort: input.effort, fastMode: input.fast }),
+        readDefault: () => {
+          const route = getSelectedNewMakerRoute(activeOwnerScopeKey());
+          return route ? { agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
+            model: route.model, effort: (route.effort || undefined) as Effort | undefined, fastMode: route.fastMode } : undefined;
+        },
+        readRemoteRouting: async (id, agent) => deviceWorkerRoutingContext(await readDeviceProviderViews(remoteBackgroundInvoke, id), agent),
+      }),
+      prepareWorktree: async (id, directory) => {
+        const prepared = await prepareHandoffWorktree({
+          getForSession: worktreeManager.getForSession, listAll: worktreeManager.listAll,
+          detectCwd: worktreeManager.detectCwd, suggestName: worktreeManager.suggestName,
+          listBranches: worktreeManager.listBranches, resolveCommit: worktreeManager.revParseCommit,
+          createWorktree: worktreeManager.createWorktree, createId: () => id,
+          resolveFreshSource: resolveFreshSourceBranch,
+        }, undefined, directory);
+        return prepared.ok ? { ok: true, path: prepared.meta.path }
+          : { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prepared.message };
+      },
+      discardWorktree: id => worktreeManager.removeWorktreeForSession(id),
+      openSessionCommit: async (row, assertCurrent) => {
+        const db = getDbClient(); assertCurrent();
+        await db.drizzle.insert(sessions).values(row).run();
+      },
+      broadcastCreated: broadcastSessionCreated,
+    }),
     send: (params) => sendToSessionInternal(params),
     validate: async (deviceId, input) => {
       const response = await invokeBotPeer(deviceId, 'maker:session:handoff', [{ action: 'validate-task-action', ...input }]);
@@ -18202,6 +18239,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     listAvailableModels: async ({ agent, callerSessionId, executionDeviceId, agentDeviceId: requestedAgentDeviceId }) => {
       try {
+        if (executionDeviceId === 'local' || executionDeviceId === getSelfDeviceId()) {
+          executionDeviceId = undefined;
+          requestedAgentDeviceId ??= null;
+        }
         if (executionDeviceId) {
           if (!orcaRemoteWorkersForHost) throw new Error('[HOST_NOT_READY] Worker service is not ready');
           const result = await orcaRemoteWorkersForHost.readModels(executionDeviceId, {
