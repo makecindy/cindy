@@ -11,6 +11,7 @@ import { HomeRosterStoreProvider } from '@/session/HomeRosterContext';
 import { PluginPromptReadsProvider } from '@/plugins/PluginPromptReadsContext';
 import { AndroidUpdateSheet } from '@/update/AndroidUpdateSheet';
 import { PeerFileTransport } from '@/device-link/peerFileTransport';
+import { noteRootCommitted } from '@/debug/jsErrorGuard';
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import { MobileOutboxBridge } from '@/session/MobileOutboxBridge';
 import { RemoteHistoryPrefetchBridge } from '@/session/RemoteHistoryPrefetchBridge';
@@ -31,6 +32,7 @@ import { useTranslation } from 'react-i18next';
 import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import { ConnectionNoticeProvider } from '@/components/ConnectionNoticeOverlay';
+import { RootErrorBoundary } from '@/components/RootErrorBoundary';
 import { fontWeight, lineHeight, radius, spacing, typeScale, useThemedStyles, type ThemeColors } from '@/theme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AdaptiveWindowProvider } from '@/platform/AdaptiveWindow';
@@ -446,6 +448,11 @@ function RootAfterEndpoints() {
 
 function RootLayout() {
   useEffect(() => startLocalDiagnostics(), []);
+  // JS 报错兜底的启动窗口从根布局首次提交起算(见 jsErrorGuard):窗口内报错照旧致命,
+  // 留给热更新的错误恢复回滚;窗口之后才显示错误页 / 继续运行。
+  useEffect(() => {
+    noteRootCommitted();
+  }, []);
   // Dev-only:注册开发者菜单的"清缓存 + reload"项(内部 __DEV__ gate,生产为 no-op)。
   useEffect(() => {
     registerDevCacheMenu();
@@ -521,6 +528,9 @@ function RootLayout() {
           <LocaleProvider>
             {/* handoff Provider 常驻 root(PR4b):闸门屏切换不重置衔接状态机 */}
             <MobileLoginHandoffProvider>
+              {/* 渲染兜底:启动稳定后,闸门与业务树里任何一处渲染报错都落到这里,显示可重试的
+                  错误页而不是让 App 退出。外层只留错误页自己要用的主题 / 语言 / 窗口 Provider。 */}
+              <RootErrorBoundary fallback={renderErrorFallback}>
               <EndpointHandoffBridge status={endpointGate.status} />
               {/* 启动闸门全程共用这一个 splash 实例;需要用户交互的闸门屏
                   (端点错误 / 强更阻断)才隐藏它 */}
@@ -530,6 +540,7 @@ function RootLayout() {
                 <ConnectionNoticeProvider>{body}</ConnectionNoticeProvider>
                 <AndroidUpdateSheet />
               </StartupSplashOverlay>
+              </RootErrorBoundary>
             </MobileLoginHandoffProvider>
           </LocaleProvider>
         </ThemeProvider>
@@ -537,6 +548,23 @@ function RootLayout() {
       </SafeAreaProvider>
       </OutsideTapProvider>
     </GestureHandlerRootView>
+  );
+}
+
+/**
+ * 渲染兜底页:与启动闸门同一套阻断内容层(标题 / 说明 / 唯一动作),唯一动作是重新加载——
+ * 丢弃出错的子树并重新挂载闸门与业务树。
+ */
+function renderErrorFallback(retry: () => void): ReactElement {
+  return (
+    <MobileLoginHandoffStage staticBrand>
+      <StartupGateBlockedContent
+        title={loginText('renderErrorTitle')}
+        subtitle={loginText('renderErrorSubtitle')}
+        actionLabel={loginText('renderErrorAction')}
+        onAction={retry}
+      />
+    </MobileLoginHandoffStage>
   );
 }
 
