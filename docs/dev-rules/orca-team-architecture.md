@@ -422,6 +422,19 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    `renderOrcaLeadSystemPrompt`，以及 `packages/lizi-mcps/src/xdt-helper/create_workers.ts`
    的批量结果契约。
 
+4. **协同期间后续任务消息转派回 Worker（状态：不变量，prompt 级）**<br>
+   active team 内某 Worker 有在跑任务时，用户发给 Lead 的后续消息凡涉及该任务（追加要求、
+   修正、催办、相关反馈），Lead 必须经 `send_to_worker` 转发给该 Worker，不得在 Lead
+   会话内自行分析或执行该任务。Worker 运行中时 Lead 可显式选择 `delivery=steer`
+   同轮插话（既有 steer 边界不变，见 1b），空闲时照常直发或排队。转发必须保留用户原话，
+   可附路由性背景，不得改写成 Lead 自己的任务计划或附带 Lead 自己的实现指令；转发后按
+   rule 5 收口本轮。归属无法唯一确定时必须先询问用户，不得静默自执行或擅自改派；
+   与在跑任务无关的问答、汇总仍由 Lead 直接回答。Worker 侧配套一句：Lead 转发的用户
+   原文等同用户直接指示。程序级按 Thread 归属的直通路由（宿主改道、不经 Lead turn）
+   属独立变更 `orca-followup-direct-routing`，不在本契约内。实现指针：
+   `packages/orca-workflow/src/orca-bridge-prompt.ts` 的 `renderOrcaLeadSystemPrompt`
+   （rule 2a）与 `renderOrcaWorkerSystemPrompt`（转发原文句）。
+
 #### 消息派发与 auto-bridge
 
 1. **忙碌目标不丢消息（状态：不变量）**<br>
