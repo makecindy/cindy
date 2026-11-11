@@ -22,6 +22,7 @@ import {
   withReplaySourceNotes,
 } from '../contextOverflowRollover';
 import { buildHandoffText } from '../agentHandoff';
+import { createLocalImSource } from '../../../shared/imMessageSource';
 
 function msg(
   role: string,
@@ -1801,6 +1802,159 @@ describe('createContextOverflowRollover', () => {
     const rollover = createContextOverflowRollover(deps);
     await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
     expect(deps.commitRebuild).toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    '413 Failed to buffer the request body: length limit exceeded',
+    '413 Request Entity Too Large',
+    '413 Content Too Large',
+    'PI_REQUEST_BODY_RECOVERY_EXHAUSTED: pi compact failed: upstream connection closed',
+  ])('recovers a Pi byte-limit failure on the failed turn without resending old images: %s', async message => {
+    const imageMessage = JSON.stringify({ text: '查看图片', images: [{ data: 'data:image/png;base64,AAAA' }], files: [] });
+    const deps = makeDeps([
+      msg('user', imageMessage, 'u1', 1),
+      msg('assistant', '图片中有一只猫', 'a1', 2),
+      msg('user', '接着做', 'u2', 3),
+    ]);
+    const commitRebuild = vi.fn<ContextOverflowRolloverDeps['commitRebuild']>(async () => undefined);
+    const rollover = createContextOverflowRollover({ ...deps, commitRebuild });
+    expect(rollover.claim('s1')).toBe('claimed');
+    await expect(rollover.tryRecover('s1', { message })).resolves.toBe(true);
+    expect(deps.closeSession).toHaveBeenCalledWith('s1');
+    expect(commitRebuild).toHaveBeenCalledOnce();
+    const [, handoff, rebuildMeta] = commitRebuild.mock.calls[0]!;
+    expect(handoff).toContain('图片中有一只猫');
+    expect(handoff).not.toContain('data:image/png;base64');
+    expect(handoff).not.toContain('接着做');
+    const fallback = rebuildMeta.followUpHandoff;
+    expect(fallback).toContain('接着做');
+    expect(fallback).not.toContain('data:image/png;base64');
+    expect(deps.setPendingHandoff.mock.calls[0]?.[1]).not.toContain('接着做');
+    expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', '接着做', undefined, { signal: expect.any(AbortSignal) });
+    expect(deps.onRebuilt).toHaveBeenCalledOnce();
+  });
+
+  it('does not take over an externally owned Pi 413 turn', async () => {
+    const deps = makeDeps([msg('user', 'IM message', 'u1')]);
+    const rollover = createContextOverflowRollover({ ...deps, hasExternalRecoveryOwner: () => true });
+    await expect(rollover.tryRecover('s1', { message: '413 Request Entity Too Large' })).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a queued Pi 413 so the next send can detect the bad history', async () => {
+    const deps = makeDeps([msg('user', 'image turn', 'u1')]);
+    const rollover = createContextOverflowRollover({
+      ...deps,
+      // The input coordinator cancels replay when a newer message is queued.
+      getRecoveryAbortSignal: () => AbortSignal.abort(),
+    });
+    rollover.claim('s1');
+    await expect(rollover.tryRecover('s1', { message: '413 Request Entity Too Large' })).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('preserves a Pi 413 before releasing the send lock when a follow-up queues during recovery', async () => {
+    const original = msg('user', 'Generate the expense report', 'u1');
+    const failure = { message: '413 Request Entity Too Large' };
+    const deps = makeDeps([original]);
+    const surfaceFailure = vi.fn(() => deps.listMessages.mockResolvedValue([original, msg('error', failure, 'e1')]));
+    const rollover = createContextOverflowRollover({
+      ...deps,
+      withSessionLock: async (_id, run) => {
+        const recovered = await run();
+        expect(surfaceFailure).toHaveBeenCalledOnce();
+        return recovered;
+      },
+    });
+    deps.drainPersistQueue.mockImplementationOnce(async () => { rollover.cancelRecovery('s1', 'queued-input'); });
+    rollover.claim('s1');
+    await expect(rollover.tryRecover('s1', failure, undefined, surfaceFailure)).resolves.toBe(false);
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    await expect(rollover.prepareUnhealthySession('s1', 'follow-up')).resolves.toBe(true);
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', expect.stringContaining('Generate the expense report'), 3);
+  });
+
+  it.each(['commit', 'replay'])('keeps the original Pi request for a follow-up that queues during %s', async (stage) => {
+    const original = 'Generate the expense report';
+    const deps = makeDeps([msg('user', original, 'u1')]);
+    const rollover = createContextOverflowRollover(deps);
+    const enqueue = () => rollover.cancelRecovery('s1', 'queued-input');
+    if (stage === 'commit') deps.commitRebuild.mockImplementationOnce(async () => { enqueue(); });
+    else deps.replayUserMessage.mockImplementationOnce(async () => { enqueue(); return { accepted: false }; });
+    rollover.claim('s1');
+    await expect(rollover.tryRecover('s1', { message: '413 Request Entity Too Large' })).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.not.stringContaining(original),
+      expect.objectContaining({ followUpHandoff: expect.stringContaining(original) }), expect.any(AbortSignal));
+    expect(deps.setPendingHandoff).toHaveBeenLastCalledWith('s1', expect.stringContaining(original), 3);
+    expect(deps.replayUserMessage).toHaveBeenCalledTimes(stage === 'replay' ? 1 : 0);
+  });
+
+  it.each([false, true])('keeps the failed Pi 413 request for a follow-up (already persisted=%s)', async persisted => {
+    const deps = makeDeps([
+      msg('user', '生成报销报告', 'u1'),
+      msg('error', { message: '413 Request Entity Too Large' }, 'e1'),
+      ...(persisted ? [msg('user', '再附上票据', 'u-follow-up')] : []),
+    ]);
+    const rollover = createContextOverflowRollover(deps);
+
+    await expect(rollover.prepareUnhealthySession('s1', 'u-follow-up')).resolves.toBe(true);
+    const handoff = String(deps.setPendingHandoff.mock.calls[0]?.[1] ?? '');
+    expect(handoff).toContain('生成报销报告');
+    expect(handoff).not.toContain('再附上票据');
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('leaves a native IM Pi 413 turn to its channel when no desktop binding exists', async () => {
+    const sourceUser = {
+      ...msg('user', 'IM message', 'u-im'),
+      agentMeta: { imSource: createLocalImSource('telegram', 'IM message') },
+    };
+    const deps = makeDeps([sourceUser]);
+    // A native IM lane has no desktop binding or headless recovery marker.
+    const rollover = createContextOverflowRollover({ ...deps, hasExternalRecoveryOwner: () => false });
+    expect(planContextOverflowRollover([sourceUser])).toMatchObject({
+      action: 'rebuild', skipGenericReplay: true,
+    });
+    await expect(rollover.tryRecover('s1', { message: '413 Request Entity Too Large' })).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(['413 Failed to buffer the request body: length limit exceeded', '413 Request Entity Too Large', '413 Content Too Large'])('rebuilds before send after Pi byte-limit failure: %s', async message => {
+    const error = { message };
+    const imageMessage = JSON.stringify({ text: '之前的内容', images: [{ data: 'data:image/png;base64,AAAA' }], files: [] });
+    const source = [msg('user', imageMessage, 'u1'), msg('assistant', '已完成', 'a1'),
+      msg('user', '继续', 'u2'), msg('error', JSON.stringify(error), 'e1')];
+    expect(findLatestRebuildableError(source, true)).toEqual(error);
+    expect(findLatestRebuildableError(source, false)).toBeNull();
+    expect(shouldRebuildPiNativeSession(error)).toBe(true);
+    expect(shouldRebuildPiNativeSession({ sdkError: '413 length limit exceeded' })).toBe(true);
+    expect(shouldRebuildPiNativeSession({ message: '413 invalid authentication' })).toBe(false);
+
+    const deps = makeDeps(source);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active', agentKind: 'pi', remoteHostId: null, clearedAt: null,
+      sdkSessionId: '/tmp/pi-session', contextTokens: 10_000, contextWindow: 1_000_000,
+      model: 'test-model', providerId: 'local-test',
+    });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1', 'u2')).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalledOnce();
+    expect(deps.commitRebuild).toHaveBeenCalledWith(
+      's1', expect.stringContaining('已完成'),
+      expect.objectContaining({ sourceUserClientId: 'u2' }), expect.anything(),
+    );
+    const handoff = (deps.commitRebuild.mock.calls as unknown as Array<[string, string]>)[0]?.[1] ?? '';
+    expect(handoff).not.toContain('继续');
+    expect(handoff).not.toContain('data:image/png;base64');
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 

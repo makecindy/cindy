@@ -1203,6 +1203,7 @@ export async function commitContextRebuild(
     sourceAgentKind?: 'cc' | 'codex' | 'pi';
     sourceModel?: string | null;
     sourceProviderId?: string | null;
+    followUpHandoff?: string;
     expectedClearedAt?: number | null;
     replacementRoute?: ContextRebuildArgs['replacementRoute'];
   },
@@ -1214,6 +1215,7 @@ export async function commitContextRebuild(
     markerClientId: `context-rebuild:${createId()}`,
     markerContent: JSON.stringify({
       handoff,
+      ...(meta.followUpHandoff !== undefined ? { followUpHandoff: meta.followUpHandoff } : {}),
       consumed: false,
       reason: meta.reason,
       sourceUserClientId: meta.sourceUserClientId,
@@ -2364,8 +2366,12 @@ function isHiddenContinuationUserMessage(agentMeta: string | null, content: stri
  * 两类取晚于 /clear 的最新一条，以 content.consumed 为真源。只有缺 consumed
  * 字段的 v1 agent_switch 老行才回落“边界后是否已有 user 行”的启发式。
  * 同毫秒并列用 rowid 决序(与 messages list 的 tie-break 口径一致)。
+ * Pi 413 换窗可另外保留跟发用的交接。精确重试查询仅匹配仍待消费的同一输入。
  */
-export async function findPendingAgentHandoff(sessionId: string): Promise<string | null> {
+export async function findPendingAgentHandoff(
+  sessionId: string,
+  exactRetryUserClientId?: string,
+): Promise<string | null> {
   const db = getDbClient().drizzle;
   const [sessRow] = await db
     .select({ clearedAt: sessions.clearedAt })
@@ -2395,15 +2401,25 @@ export async function findPendingAgentHandoff(sessionId: string): Promise<string
     .orderBy(desc(messages.createdAt), desc(messageRowid))
     .limit(1);
   if (!boundary) return null;
-  let parsed: { handoff?: unknown; consumed?: unknown };
+  let parsed: Record<string, unknown>;
   try {
-    parsed = JSON.parse(boundary.content) as typeof parsed;
+    const value: unknown = JSON.parse(boundary.content);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    parsed = value as Record<string, unknown>;
   } catch {
     return null;
   }
   const handoff =
     typeof parsed.handoff === 'string' && parsed.handoff.length > 0 ? parsed.handoff : null;
   if (!handoff || parsed.consumed === true) return null;
+  const followUpHandoff =
+    boundary.role === 'context_rebuild' && parsed.sourceAgentKind === 'pi' &&
+    parsed.consumed === false && typeof parsed.followUpHandoff === 'string' && parsed.followUpHandoff.length > 0
+      ? parsed.followUpHandoff : null;
+  if (exactRetryUserClientId !== undefined) {
+    return followUpHandoff !== null && parsed.sourceUserClientId === exactRetryUserClientId ? handoff : null;
+  }
+  if (followUpHandoff !== null) return followUpHandoff;
   // v2 边界以持久消费位为真源:失败首发可能已先落 user 行；只要 vendor 尚未
   // accepted,重启后仍必须恢复交接。缺字段的 v1 老行才走 user-row 启发式。
   if (parsed.consumed === false) return handoff;

@@ -727,7 +727,7 @@ export interface ImTurnRunnerDeps {
    * 体检重建时会以 'runtime-refresh' 关掉当前 live handle,新 handle 由
    * `refreshSessionAfterPendingAgentSwitch` 按最新 DB 行重建。
    */
-  prepareUnhealthySession?: (sessionId: string) => Promise<void>;
+  prepareUnhealthySession?: (sessionId: string, outboundUserClientId?: string) => Promise<void>;
 }
 
 export function createTurnRunner(
@@ -1581,7 +1581,10 @@ export function createTurnRunner(
       // 由下面的 refreshSessionAfterPendingAgentSwitch 按最新 DB 行(sdkSessionId 已清空)
       // 重建并换绑。体检失败按直发同一口径让这条消息失败, 不带着过期的 resume 选项发送。
       if (deps.prepareUnhealthySession) {
-        await deps.prepareUnhealthySession(rowId);
+        const outboundUserClientId = item.prePersistedUserMessage?.sessionId === rowId
+          ? item.prePersistedUserMessage.clientId
+          : undefined;
+        await deps.prepareUnhealthySession(rowId, outboundUserClientId);
         if (sessionStates.get(rowId) !== state) {
           throw new Error(`session ${rowId} closed while checking its context before send`);
         }

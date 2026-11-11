@@ -659,9 +659,17 @@ describe('turnRunner: connection handed to a companion bot', () => {
       prepareUnhealthySession,
     });
 
-    await runTurn(OWNER);
+    await runner.runAgentTurn({
+      botContextId: BOT_CONTEXT,
+      userId: OWNER,
+      userMessageId: 'early-message',
+      text: 'hello',
+      attachments: [],
+      requesterIsOwner: true,
+      prePersistedUserMessage: { sessionId: 'mimi-main', clientId: 'early-user' },
+    });
 
-    expect(prepareUnhealthySession).toHaveBeenCalledWith('mimi-main');
+    expect(prepareUnhealthySession).toHaveBeenCalledWith('mimi-main', 'early-user');
     expect(companion.prepareSend.mock.invocationCallOrder[0]!)
       .toBeLessThan(prepareUnhealthySession.mock.invocationCallOrder[0]!);
     expect(prepareUnhealthySession.mock.invocationCallOrder[0]!)

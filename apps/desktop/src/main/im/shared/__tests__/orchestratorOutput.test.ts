@@ -24,6 +24,7 @@ vi.mock('../../binding', () => ({ bindingStore: { findByTarget: mocks.binding } 
 vi.mock('../../../maker-ipc/register', () => ({
   acquirePendingAgentSwitchForDirectSend: vi.fn(),
   acquirePendingAgentSwitchForImSend: vi.fn(),
+  prepareUnhealthySessionForSend: vi.fn(async () => undefined),
   registerSwitchedSessionVendorOptionsResolver: vi.fn(),
 }));
 vi.mock('../channelDefaultRouteSync', () => ({ createImChannelDefaultRouteSync: () => ({}) }));

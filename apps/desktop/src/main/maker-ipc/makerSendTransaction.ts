@@ -414,7 +414,7 @@ export interface MakerSendTransactionDeps {
    * 发送前换窗:必须在 getSession 之前。prepare 会关掉不健康的 live handle,
    * 随后本事务按空 session 走 lazy-create,避免 peek 之后对已关闭对象 send。
    */
-  prepareUnhealthySession?(sessionId: string): Promise<boolean | void>;
+  prepareUnhealthySession?(sessionId: string, outboundUserClientId?: string): Promise<boolean | void>;
   /** Retire external ownership before selecting a runtime or applying a route. */
   prepareExternalInput?(sessionId: string): Promise<void>;
   /** Restore durable task status before route changes or native session resume. */
@@ -425,7 +425,7 @@ export interface MakerSendTransactionDeps {
    * dispatch 跨过不可逆边界(accepted)后 consume;未 accepted / 抛错保留 pending。
    * 原生命令不附带交接，也不消费；留到下一条可注入上下文的消息。
    */
-  peekPendingHandoff?(sessionId: string): Promise<string | null>;
+  peekPendingHandoff?(sessionId: string, retryUserClientId?: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
   peekWorkingDirectoryRecoveryNote?(sessionId: string, workingDir: string): string | null;
   readWorkingDirectoryRecoveryCreateOpts(sessionId: string): Promise<CreateOpts>;
@@ -1100,7 +1100,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ),
         );
       }
-      await deps.prepareUnhealthySession?.(sessionId);
+      const outboundUserClientId = requestedSendOpts.retryUserClientId ?? clientId;
+      await deps.prepareUnhealthySession?.(sessionId, outboundUserClientId);
       let sess = deps.getSession(sessionId);
       // Maker keeps a failed Session registered until its real handle cleanup
       // succeeds. It is not a reusable send target: route it through the
@@ -1371,7 +1372,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // Native commands must lead the provider input. Defer the handoff rather
       // than discarding it or consuming it when only the command is accepted.
       const pendingHandoff = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        ? (await deps.peekPendingHandoff?.(sessionId)) ?? null
+        ? (await deps.peekPendingHandoff?.(sessionId, requestedSendOpts.retryUserClientId)) ?? null
         : null;
       const withHandoff = pendingHandoff
         ? prependHandoffToUserMessage(withRecoveryNote as HandoffWireMessage, pendingHandoff)
