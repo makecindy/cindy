@@ -33,6 +33,7 @@ beforeEach(() => {
       onInteractionRequest: (callback: typeof receive) => { receive = callback; return () => {}; },
       onInteractionDismissed: (callback: typeof dismiss) => { dismiss = callback; return () => {}; },
     }, safeStorageStore: store, safeStorageRemove: vi.fn(async () => true),
+      safeStorageRead: vi.fn(async () => 'stored-token'),
   } });
 });
 afterEach(() => { cleanup(); Object.defineProperty(window, 'electronAPI', { configurable: true, value: previousApi }); });
@@ -60,6 +61,8 @@ it('updates the existing entry with the same endpoint instead of creating a dupl
   render(<McpSetupPrompt request={request} />);
   expect(await screen.findByText('settings.mcp.dialog.editTitle')).toBeTruthy();
   const token = screen.getByLabelText('settings.mcp.fields.token');
+  // Repair mode preloads the saved entry, including its stored token.
+  await waitFor(() => expect((token as HTMLInputElement).value).toBe('stored-token'));
   fireEvent.change(token, { target: { value: 'test-invalid-token' } });
   fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.save' }));
   await waitFor(() => expect(api.resolveInteraction).toHaveBeenCalledWith('form-1', {
@@ -77,6 +80,8 @@ it('creates a second entry when the owner explicitly asks instead of repairing',
   render(<McpSetupPrompt request={request} />);
   fireEvent.click(await screen.findByRole('button', { name: 'settings.mcp.dialog.createInstead' }));
   expect(await screen.findByText('settings.mcp.dialog.createTitle')).toBeTruthy();
+  // The stored token belongs to the entry being repaired, so the new form must not inherit it.
+  expect((screen.getByLabelText('settings.mcp.fields.token') as HTMLInputElement).value).toBe('');
   fireEvent.click(screen.getByRole('button', { name: 'settings.mcp.save' }));
   await waitFor(() => expect(api.createCustomMcpServer).toHaveBeenCalledWith(
     expect.objectContaining({ id: 'custom_example' })));

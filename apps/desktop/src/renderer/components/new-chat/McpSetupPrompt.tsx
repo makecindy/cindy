@@ -128,7 +128,9 @@ export function McpSetupPrompt({ request, teammate }: { request: McpSetupRequest
         {t('settings.mcp.dialog.createInstead')}
       </Button>
     </p>}
-    <McpServerDialog embedded teammate={teammate} proposal={request.proposal}
+    {/* Remount per target: the dialog seeds its fields (name, url, headers, stored token)
+        once on mount, so switching from repair to create must not carry the old entry over. */}
+    <McpServerDialog key={reusable ? reusable.id : 'create'} embedded teammate={teammate} proposal={request.proposal}
       initial={reusable ?? undefined}
       existingIds={servers.map(server => server.id)}
       onSaved={serverId => { void finish(serverId); }} onClose={() => { void finish(); }} />
