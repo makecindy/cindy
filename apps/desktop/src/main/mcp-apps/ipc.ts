@@ -9,6 +9,7 @@ import { ipcMain, shell, BrowserWindow, dialog, webContents } from 'electron';
 import { bindPluginUiResource, finishPluginUiAction } from './hostUi.js';
 import { readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
 import { nativePluginUi, parsePluginUiInterests } from './nativeRuntime.js';
+import { manageAppSettings } from '../app-settings/sections.js';
 import { t } from '../i18n.desktop.js';
 import { saveAppDownload } from './downloadFile.js';
 import { randomUUID } from 'node:crypto';
@@ -63,6 +64,7 @@ export function registerMcpAppsIpc(
   allowPendingPage?: (sessionId: string, requestId: string) => void,
 ): void {
   let saving = false;
+  const providerCalls = new Map<string, Map<string, AbortController>>();
   const currentOwner = () => getCurrentDbClientSnapshot() ?? undefined;
   const { host, assertSession } = createMcpAppsService({
     currentOwner, readAppServer, getMcpAppRevisionKey, send, request, review, allowPendingPage,
@@ -138,6 +140,8 @@ export function registerMcpAppsIpc(
     openLink: (url) => shell.openExternal(url),
   });
   setMcpAppCallerCleanup(async (caller) => {
+    for (const call of providerCalls.get(caller)?.values() ?? []) call.abort();
+    providerCalls.delete(caller);
     nativePluginUi.release(caller);
     await Promise.allSettled([host.releaseCaller(caller), remoteViews.releaseCaller(caller)]);
   });
@@ -149,13 +153,31 @@ export function registerMcpAppsIpc(
     if (typeof sessionId !== 'string' && (sessionId !== null || remote)) throwIpcError('INVALID_PARAMS', 'MCP_APP_INVALID_REQUEST');
     const caller = remote ? `device:${remote.controllerDeviceId}` : `renderer:${event.sender.id}`;
     try {
+      if (!remote && raw && typeof raw === 'object' && 'op' in raw && raw.op === 'plugin-action-cancel') {
+        const requestId = 'requestId' in raw && raw.requestId;
+        if (typeof requestId !== 'string') throw new Error('MCP_APP_INVALID_REQUEST');
+        providerCalls.get(caller)?.get(requestId)?.abort();
+        return {};
+      }
+      if (!remote && raw && typeof raw === 'object' && 'op' in raw && raw.op === 'plugin-settings') {
+        const input = raw as { instanceId?: unknown; operation?: unknown; patch?: unknown };
+        if (typeof input.instanceId !== 'string' || !['get', 'update', 'reset'].includes(String(input.operation))) throw new Error('MCP_APP_INVALID_REQUEST');
+        const entry = readPluginHostUi(input.instanceId);
+        if (!entry?.host.settings?.length) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+        const assertCurrent = async () => {
+          entry.config.plugin!.assertCurrent();
+          if (readPluginHostUi(input.instanceId as string) !== entry || event.sender.isDestroyed()) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
+        };
+        return await manageAppSettings({ operation: input.operation as 'get' | 'update' | 'reset',
+          section: `plugins.${input.instanceId}`, patch: input.patch as Record<string, unknown> | undefined }, assertCurrent);
+      }
       if (!remote && raw && typeof raw === 'object' && 'op' in raw && raw.op === 'native-interest') {
         const subscription = raw as { epoch?: unknown; entries?: unknown };
         if (typeof subscription.epoch !== 'string' || subscription.epoch.length > 128) throw new Error('MCP_APP_INVALID_REQUEST');
         return { updates: nativePluginUi.subscribe(caller, subscription.epoch, parsePluginUiInterests(subscription.entries)) };
       }
       if (!remote && raw && typeof raw === 'object' && 'op' in raw && raw.op === 'plugin-action') {
-        const action = raw as { instanceId?: unknown; id?: unknown; kind?: unknown; value?: unknown };
+        const action = raw as { instanceId?: unknown; id?: unknown; kind?: unknown; value?: unknown; input?: unknown; requestId?: unknown };
         if (typeof action.instanceId !== 'string' || typeof action.id !== 'string') throw new Error('MCP_APP_INVALID_REQUEST');
         const entry = readPluginHostUi(action.instanceId);
         const declaration = action.kind === 'command' ? entry?.host.commands?.find(command => command.id === action.id)
@@ -180,9 +202,30 @@ export function registerMcpAppsIpc(
               !declaration.options.some(option => option.value === action.value)) throw new Error('MCP_APP_INVALID_REQUEST');
           value = action.value;
         }
-        return await host.callPluginAction(caller, sessionId, { id: action.id, serverId: entry.config.id,
-          title: declaration.title, assertCurrent }, declaration.tool,
-          { ...declaration.arguments, ...(value === undefined ? {} : { value }) }, AbortSignal.timeout(30 * 60_000));
+        const args: Record<string, unknown> = { ...declaration.arguments, ...(value === undefined ? {} : { value }) };
+        const position = 'position' in declaration ? declaration.position : undefined;
+        let controller: AbortController | undefined;
+        if (position === 'session.menu') args.cindy_ui = { sessionId };
+        if (position === 'composer.completion') {
+          const input = action.input as { trigger?: unknown; query?: unknown } | undefined;
+          if (!input || input.trigger !== declaration.trigger || typeof input.query !== 'string' || input.query.length > 32768 ||
+              typeof action.requestId !== 'string' || !action.requestId || action.requestId.length > 128) throw new Error('MCP_APP_INVALID_REQUEST');
+          args.trigger = input.trigger; args.query = input.query;
+          let calls = providerCalls.get(caller);
+          if (!calls) { calls = new Map(); providerCalls.set(caller, calls); }
+          if (calls.has(action.requestId)) throw new Error('MCP_APP_INVALID_REQUEST');
+          controller = new AbortController(); calls.set(action.requestId, controller);
+        } else if (action.input !== undefined || action.requestId !== undefined) throw new Error('MCP_APP_INVALID_REQUEST');
+        try {
+          return await host.callPluginAction(caller, sessionId, { id: action.id, serverId: entry.config.id,
+            title: declaration.title, assertCurrent }, declaration.tool, args,
+            controller ? AbortSignal.any([controller.signal, AbortSignal.timeout(2000)]) : AbortSignal.timeout(30 * 60_000));
+        } finally {
+          if (controller) {
+            const calls = providerCalls.get(caller); calls?.delete(action.requestId as string);
+            if (!calls?.size) providerCalls.delete(caller);
+          }
+        }
       }
       if (!remote && raw && typeof raw === 'object' && 'op' in raw && raw.op === 'host-result') {
         const reply = raw as { requestId?: unknown; result?: unknown; error?: unknown };

@@ -19387,6 +19387,10 @@
     }
   },
   "pluginUi": {
+    "settings": "法器設定",
+    "save": "存定",
+    "settingsFailed": "法器設定未能讀取或存定，請重開此頁。",
+    "invalidSetting": "請核所標之值，勿逾允限。",
     "display": "示法",
     "original": "原文",
     "menu": "法器頁面與指令",

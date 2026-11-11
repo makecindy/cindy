@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { isHostUiPosition, type GhostHostUiContribution, type GhostHostUiPosition } from '@cindy/plugin-protocol';
 import { getApprovedGhostHostUi, type InstalledGhost } from '../../shared/ghost';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity';
-import { useInstalledGhosts } from './useInstalledGhosts';
+import { useInstalledGhosts, readInstalledGhostsSnapshot } from './useInstalledGhosts';
 import { usePluginUiControl } from './pluginUiControls';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { Button } from '@/components/ui/button';
@@ -12,11 +12,13 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { Puzzle } from 'lucide-react';
+import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
+import { MAIN_VIEW_ICONS } from './mainViewIcons';
 import { isPluginUiElementVisible, subscribePluginUiRegions } from './pluginUiVisibility';
 const PluginUiView = lazy(() => import('./PluginUiView').then(module => ({ default: module.PluginUiView })));
 const openPluginUiView = async (instanceId: string, viewId: string, sessionId: string | null, input?: Record<string, unknown>) =>
   (await import('@/features/right-sidebar/lib/openPluginUiView')).openPluginUiView(instanceId, viewId, sessionId, input);
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
 export type PluginUiEntry = { ghost: InstalledGhost; instanceId: string; contribution: GhostHostUiContribution };
 type Directory = ReadonlyMap<GhostHostUiPosition, readonly PluginUiEntry[]>;
@@ -103,16 +105,18 @@ export function usePluginUiMessageCandidates(sessionId?: string | null): PluginU
   }, [messageBody, toolBody, messageActions, turnFooter, menu, disabled]);
 }
 
-/** One window subscription, compiled only when the original installed projection changes. */
-export function PluginUiProvider({ children, host: hostNode, enabled = true }: { children: ReactNode; host?: ReactNode; enabled?: boolean }) {
-  const ghosts = useInstalledGhosts(enabled);
-  const directory = useMemo(() => {
+const compiledDirectories = new WeakMap<readonly InstalledGhost[], ReturnType<typeof compileDirectory>>();
+function compileDirectory(ghosts: readonly InstalledGhost[]) {
     const entries = new Map<GhostHostUiPosition, PluginUiEntry[]>();
     const launchers: PluginUiLauncher[] = [];
+    const settings: InstalledGhost[] = [];
     let active = false;
     for (const ghost of ghosts) {
-      if (!ghost.enabled || ghost.uiCapabilityApproved !== true) continue;
+      if (!ghost.enabled) continue;
       const host = getApprovedGhostHostUi(ghost);
+      if (host?.settings?.length || ghost.uiCapabilityApproved === true &&
+          host?.contributions?.some(item => item.position === 'settings.section')) settings.push(ghost);
+      if (ghost.uiCapabilityApproved !== true) continue;
       if (host) active = true;
       const instanceId = installedGhostStoragePart(ghost);
       for (const view of host?.views ?? []) launchers.push({ ghost, instanceId, id: view.id, title: view.title,
@@ -127,8 +131,25 @@ export function PluginUiProvider({ children, host: hostNode, enabled = true }: {
         values.push({ ghost, instanceId: installedGhostStoragePart(ghost), contribution });
       }
     }
-    return { entries: entries.size ? entries : EMPTY, launchers, active };
-  }, [ghosts]);
+    return { entries: entries.size ? entries : EMPTY, launchers, settings, active };
+}
+function compiledDirectory(ghosts: readonly InstalledGhost[]) {
+  let value = compiledDirectories.get(ghosts);
+  if (!value) { value = compileDirectory(ghosts); compiledDirectories.set(ghosts, value); }
+  return value;
+}
+/** Read the existing owner projection; never subscribe once more at a placement. */
+export const readPluginUiEntries = (position: GhostHostUiPosition) => compiledDirectory(readInstalledGhostsSnapshot()).entries.get(position) ?? NO_ENTRIES;
+export const readPluginUiSettings = () => compiledDirectory(readInstalledGhostsSnapshot()).settings;
+export function usePluginUiComposerCandidates() {
+  const directory = useContext(DirectoryContext);
+  return { toolbar: !!directory.get('composer.toolbar')?.length, completion: directory.get('composer.completion') ?? NO_ENTRIES };
+}
+
+/** One window subscription, compiled only when the original installed projection changes. */
+export function PluginUiProvider({ children, host: hostNode, enabled = true }: { children: ReactNode; host?: ReactNode; enabled?: boolean }) {
+  const ghosts = useInstalledGhosts(enabled);
+  const directory = compiledDirectory(ghosts);
   return <DirectoryContext.Provider value={directory.entries}><LauncherContext.Provider value={directory.launchers}>{directory.active && hostNode}{children}</LauncherContext.Provider></DirectoryContext.Provider>;
 }
 
@@ -197,7 +218,18 @@ export function PluginUiMenu({ sessionId, ghostId }: { sessionId?: string | null
     </DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>;
 }
 
-function EntryControl({ entry, sessionId, clientId, active }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string; active: boolean }) {
+/** Only an open menu with actual candidates mounts this live directory consumer. */
+export function PluginUiSessionMenuItems({ sessionId, disabled, className }: { sessionId: string; disabled: boolean; className?: string }) {
+  const entries = useEntries('session.menu', { sessionId });
+  const { t } = useTranslation();
+  if (!entries.length) return null;
+  return <><DropdownMenuSeparator />{entries.map(entry => <PluginUiMessageMenuItem
+    key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry} sessionId={sessionId}
+    disabled={disabled} className={className} onSelect={() => void runPluginUiEntry(entry, sessionId)
+      .catch(() => toast.error(t('pluginUi.actionFailed')))} />)}</>;
+}
+
+function EntryControl({ entry, sessionId, clientId, active, appearance }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string; active: boolean; appearance?: 'navigation' | 'rail' }) {
   const { t } = useTranslation();
   const [pending, setPending] = useState(false);
   const [value, setValue] = useState('');
@@ -216,6 +248,14 @@ function EntryControl({ entry, sessionId, clientId, active }: { entry: PluginUiE
   };
   if (state?.visible === false) return null;
   const title = state?.title ?? action.title;
+  const Icon = MAIN_VIEW_ICONS[action.icon as keyof typeof MAIN_VIEW_ICONS] ?? Puzzle;
+  if (appearance === 'rail') return <SidebarIconButton icon={Icon} label={`${title} · ${entry.ghost.manifest.name}`}
+    disabled={pending || state?.disabled} onClick={() => void run()} />;
+  if (appearance === 'navigation') return <button type="button" disabled={pending || state?.disabled} onClick={() => void run()}
+    aria-label={`${title} · ${entry.ghost.manifest.name}`} title={entry.ghost.manifest.name}
+    className="flex h-8 w-full items-center gap-2.5 rounded-full px-3 text-sm font-normal text-[var(--sidebar-nav-text)] transition-colors hover:bg-sidebar-item-hover disabled:opacity-40">
+    <Icon size={15} strokeWidth={1.8} className="shrink-0" /><span className="truncate">{title}</span>
+  </button>;
   if (action.kind === 'status') return <span className="text-12 text-[var(--text-secondary)]" title={entry.ghost.manifest.name}>{title}</span>;
   if (action.kind === 'select') return <Select label={title} value={state?.value ?? value} options={action.options ?? []}
     disabled={pending || state?.disabled} onValueChange={next => void run(next)} className="h-7 max-w-48 text-12" />;
@@ -239,8 +279,8 @@ export function PluginUiSlot({ position, ...target }: Target & { position: Ghost
   return <PluginUiSlotControls entries={entries} sessionId={target.sessionId ?? null} clientId={target.clientId} />;
 }
 
-function PluginUiSlotControls({ entries, sessionId, clientId }: {
-  entries: readonly PluginUiEntry[]; sessionId: string | null; clientId?: string;
+export function PluginUiSlotControls({ entries, sessionId = null, clientId, appearance }: {
+  entries: readonly PluginUiEntry[]; sessionId?: string | null; clientId?: string; appearance?: 'navigation' | 'rail';
 }) {
   const root = useRef<HTMLSpanElement>(null);
   const [active, setActive] = useState(false);
@@ -249,9 +289,11 @@ function PluginUiSlotControls({ entries, sessionId, clientId }: {
     // Observe the original message row, whose size is independent of a plugin hiding its control.
     if (element) return observeSlotVisibility(element.closest('[data-message-client-id]') ?? element.parentElement ?? element, setActive);
   }, []);
-  return <span ref={root} className="inline-flex min-w-0 flex-wrap items-center gap-1 [-webkit-app-region:no-drag]">
+  return <span ref={root} className={appearance === 'navigation'
+    ? 'flex min-w-0 flex-col gap-0.5 [-webkit-app-region:no-drag]'
+    : 'inline-flex min-w-0 flex-wrap items-center gap-1 [-webkit-app-region:no-drag]'}>
     {entries.map(entry => <EntryControl key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry}
-      sessionId={sessionId} clientId={clientId} active={active} />)}
+      sessionId={sessionId} clientId={clientId} active={active} appearance={appearance} />)}
   </span>;
 }
 

@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import type { SQL } from 'drizzle-orm';
 import type { McpAppsHostDeps } from '../host.js';
+import type { AppServerConfig } from '../connection.js';
+import type { GhostHostUi } from '@cindy/plugin-protocol';
+import { configurePluginSettings } from '../../app-settings/plugins.js';
 const state = vi.hoisted(() => ({
   owner: null as object | null,
   deps: undefined as McpAppsHostDeps | undefined,
@@ -23,6 +26,8 @@ const state = vi.hoisted(() => ({
   invoke: vi.fn(),
   open: vi.fn(),
   dispatch: vi.fn(),
+  action: vi.fn(),
+  plugin: undefined as { host: GhostHostUi; config: AppServerConfig } | undefined,
   revisionKey: vi.fn(() => 'a'.repeat(64)),
   remote: undefined as { controllerDeviceId: string; sharedTask?: object } | undefined,
   handle: undefined as
@@ -42,11 +47,13 @@ vi.mock('../host.js', () => ({
   McpAppsHost: class {
     open = state.open;
     dispatch = state.dispatch;
+    callPluginAction = state.action;
     constructor(deps: McpAppsHostDeps) {
       state.deps = deps;
     }
   },
 }));
+vi.mock('../../mcp-integrations/plugin-app-registry.js', () => ({ readPluginHostUi: () => state.plugin }));
 vi.mock('../runtime.js', () => ({ setMcpAppsHost: vi.fn(), readAppServer: vi.fn(), replacePluginAppServers: vi.fn() }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ getMcpAppRevisionKey: state.revisionKey }));
 vi.mock('../sandboxProtocol.js', () => ({
@@ -98,6 +105,8 @@ beforeEach(() => {
   pagePermissionGrants.clearServers();
   vi.mocked(readAppServer).mockReturnValue({ id: 'example', url: 'https://example.com/mcp', transport: 'http' });
   state.remote = undefined;
+  state.plugin = undefined;
+  state.action.mockReset();
   state.predicates = [];
   state.duringUpdate = () => {};
   state.beforePublish = () => {};
@@ -153,6 +162,50 @@ beforeEach(() => {
   registerMcpAppsIpc(async () => {}, request);
 });
 describe('MCP App persistence and IPC wiring', () => {
+  // New provider contract, unit: production Main handler must bind trigger/query,
+  // cancellation to the renderer and all settings writes to the physical instance.
+  // Existing card persistence/policy tests do not exercise native provider requests.
+  it('validates completion input and scopes cancellation to the requesting renderer', async () => {
+    state.plugin = { host: { contributions: [{ id: 'lookup', title: 'Lookup', position: 'composer.completion',
+      trigger: '@', tool: 'lookup', arguments: { scope: 'declared' } }] },
+      config: { id: 'plugin-source', url: '', transport: 'in-process', plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const action = { op: 'plugin-action', instanceId: 'local__demo', id: 'lookup', requestId: 'one', input: { trigger: '@', query: 'issue' } };
+    await expect(state.handle!(event, null, { ...action, input: { trigger: '/', query: 'issue' } })).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+    expect(state.action).not.toHaveBeenCalled();
+    let signal: AbortSignal | undefined;
+    state.action.mockImplementation(async (_caller, _session, _source, _tool, _args, nextSignal: AbortSignal) => {
+      signal = nextSignal;
+      return new Promise((_resolve, reject) => nextSignal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+    });
+    const pending = state.handle!(event, null, action);
+    // IPC intentionally hides arbitrary plugin errors behind its public code.
+    const rejected = expect(pending).rejects.toThrow('MCP_APP_REQUEST_FAILED');
+    await vi.waitFor(() => expect(state.action).toHaveBeenCalledOnce());
+    expect(state.action.mock.calls[0].slice(0, 5)).toEqual(['renderer:1', null,
+      expect.objectContaining({ id: 'lookup', serverId: 'plugin-source' }), 'lookup', { scope: 'declared', trigger: '@', query: 'issue' }]);
+    await state.handle!({ sender: { id: 2 } }, null, { op: 'plugin-action-cancel', requestId: 'one' });
+    expect(signal!.aborted).toBe(false);
+    await state.handle!(event, null, { op: 'plugin-action-cancel', requestId: 'one' });
+    await rejected;
+    expect(signal!.aborted).toBe(true);
+  });
+  it('routes registered settings through the original service and refuses a revoked source', async () => {
+    const settings = [{ id: 'enabled', title: 'Enabled', type: 'boolean' as const, default: true }];
+    state.plugin = { host: { settings }, config: { id: 'plugin-source', url: '', transport: 'in-process',
+      plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    let stored: Record<string, unknown> = { private: 'keep' };
+    configurePluginSettings({ entries: () => [{ instance: 'local__demo', title: 'Demo', settings, assertCurrent() {
+      if (!state.plugin) throw new Error('revoked');
+    } }], read: () => stored, write: (_instance, value) => { stored = value; } });
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const input = { op: 'plugin-settings', instanceId: 'local__demo', operation: 'update', patch: { enabled: false } };
+    expect(await state.handle!(event, null, input)).toMatchObject({ section: 'plugins.local__demo', state: { value: { enabled: false } } });
+    expect(stored).toEqual({ private: 'keep', enabled: false });
+    state.plugin = undefined;
+    await expect(state.handle!(event, null, input)).rejects.toThrow('MCP_APP_SOURCE_UNAVAILABLE');
+    expect(stored).toEqual({ private: 'keep', enabled: false });
+  });
   it('injects the persistent vault key lazily instead of using a transient Host key', () => {
     expect(state.revisionKey).not.toHaveBeenCalled();
     expect(state.deps!.revisionKey!()).toBe('a'.repeat(64));

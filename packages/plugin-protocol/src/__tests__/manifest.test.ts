@@ -2078,6 +2078,41 @@ describe('interactive page declarations', () => {
     expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
     expect(hostUiApprovalSubjects(host)).toContainEqual(expect.objectContaining({ key: 'contribution:help-menu' }));
   });
+  // UI opening: old unknown positions confer no authority; newly understood
+  // placements and provider input must be separately approved. Tier: unit.
+  it.each(['sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion'])(
+    'approves the understood %s placement without changing an existing entry token', position => {
+      const old = { id: 'legacy', title: 'Open', position: 'composer.toolbar', tool: 'help' };
+      const entry = { id: 'extension', title: 'Extension', position,
+        ...(position === 'settings.section' ? { view: 'settings' } : { tool: 'help' }),
+        ...(position === 'composer.completion' ? { trigger: '@' as const } : {}) };
+      const host = { views: [{ id: 'settings', title: 'Settings', resourceUri: 'ui://planner' }], contributions: [old, entry] };
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+      expect(hostUiApprovalSubjects(host).find(subject => subject.key === 'contribution:extension')).toBeDefined();
+      expect(hostUiApprovalSubjects(host).find(subject => subject.key === 'contribution:legacy')).toEqual({
+        key: 'contribution:legacy', detail: '{"position":"composer.toolbar","kind":"button","tool":"help"}',
+      });
+    },
+  );
+  it('validates registered settings and approves their schema independently of translated labels/defaults', () => {
+    const field = { id: 'enabled', title: 'Enabled', type: 'boolean' as const, default: false };
+    const host = { settings: [field] };
+    const validate = (settings: unknown) => validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: { settings } } });
+    expect(validate([field]).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host)).toContainEqual(expect.objectContaining({ key: 'setting:enabled' }));
+    expect(hostUiApprovalSubjects(host)).toEqual(hostUiApprovalSubjects({ settings: [{ ...field, title: 'Changed', default: true }] }));
+    for (const settings of [[{ ...field, default: 'false' }], [field, field], [{ ...field, id: '__proto__' }],
+      [{ id: 'count', title: 'Count', type: 'number', default: 10, min: 20 }]]) expect(validate(settings).ok).toBe(false);
+  });
+  it('rejects a completion view, missing trigger and a task-scoped settings page', () => {
+    for (const host of [
+      { contributions: [{ id: 'complete', title: 'Complete', position: 'composer.completion', tool: 'help' }] },
+      { views: [{ id: 'page', title: 'Page', resourceUri: 'ui://planner' }],
+        contributions: [{ id: 'complete', title: 'Complete', position: 'composer.completion', view: 'page', trigger: '@' }] },
+      { views: [{ id: 'page', title: 'Page', resourceUri: 'ui://planner', scope: 'task' }],
+        contributions: [{ id: 'settings', title: 'Settings', position: 'settings.section', view: 'page' }] },
+    ]) expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
   it('validates appearance resource declarations and grants only known fields', () => {
     const host = { capabilities: ['appearance', 'app-icon'], appearance: { fields: ['bodyFont', 'appIcon', 'future-field'],
       resources: [{ id: 'font', kind: 'font' as const, path: 'assets/font.woff2' }] } };

@@ -52,6 +52,10 @@
 | `turn.footer` | 已结束的 AI 消息末尾 |
 | `message.body` | 消息正文的可选展示 |
 | `tool.body` | 工具详情的可选展示 |
+| `sidebar.navigation` | 全局导航行，收窄侧栏时显示图标 |
+| `session.menu` | 任务列表右键菜单及任务标题的同一操作菜单 |
+| `settings.section` | Cindy 设置页中的插件配置页面 |
+| `composer.completion` | 输入 `/` 或 `@` 后的文本补全提供者 |
 
 `statusbar` 等原生控件位置支持 `button`、`select` 和 `status`。需要点击打开页面或调用工具时，
 声明 `kind:"button"` 并指定 `view` 或 `tool`；示例的底部「示例已就绪」按钮会打开当前任务页。
@@ -65,6 +69,58 @@
 不可用时回原文。需要正文内容时声明任务页面及 `context`；内容来自已有展示投影，不另查消息数据库。
 `commands` 声明 `{id,title,view|tool,arguments?,shortcut?}`，共用同一执行路径。
 快捷键采用 `Mod/Meta/Ctrl/Alt/Shift+键`，服从 Cindy 原快捷键和编辑按键，冲突时不抢占。
+
+新增导航和菜单只支持按钮形态。导航适合全局工作台；任务菜单带真实任务身份，工具参数中的
+`cindy_ui.sessionId` 由 Host 填写，插件不能用静态 arguments 改写。菜单只在打开时订阅小状态。
+`settings.section` 必须引用全局 view，页面使用原 AppBridge、CSP 和生命周期。
+这几个位置不支持 `presentation:"popover"`。未批准新位置不会继承原工具栏的批准。
+
+任务列表的每行内容、内置分组和任意布局面板不开放贡献位：前者处于长列表性能路径，后者由宿主布局树管理。
+插件可用全局 MCP App 和侧栏入口呈现自己的任务视图及分组，不向宿主列表逐行挂载组件。
+
+### 输入补全
+
+```json
+{"id":"reference","title":"业务引用","position":"composer.completion","tool":"lookup","trigger":"@"}
+```
+
+`trigger` 只接受 `/` 或 `@`，提供者必须是 app-visible 工具，不接收完整草稿。
+Host 在现有输入触发状态出现后等待 200ms，传入 `{trigger,query}`，与静态 arguments 合并；
+提供者调用沿原工具审批，最长 2 秒。纯本地、无副作用的查询可按原工具契约声明 `approval:"auto"`，
+仍需用户批准。没有贡献时不安装监听或发送 IPC，普通打字不等待插件。
+面板关闭、切换任务、查询或授权变化后取消/丢弃旧结果；内置命令和资源仍按原方式使用。
+
+工具返回标准 MCP `structuredContent`，或内容为 JSON 的 text block：
+
+```json
+{"items":[{"id":"issue-1","label":"任务记录","insertText":"业务记录 #1","description":"插入引用文本"}]}
+```
+
+每个提供者最多展示前 8 项，id 在该次结果中唯一且不超过 64 字符；label 不超过 200 字符，
+insertText 不超过 32768 字符，description 可选且不超过 2000 字符。
+用户选择后只在原查询选区插入纯文本，不解释 HTML、不调用命令、不发送消息。
+
+### 统一插件设置
+
+```json
+{"settings":[
+  {"id":"enabled","title":"启用摘要","type":"boolean","default":true},
+  {"id":"limit","title":"显示条数","type":"number","default":8,"min":1,"max":20},
+  {"id":"style","title":"风格","type":"string","default":"brief","options":[{"label":"简洁","value":"brief"},{"label":"详细","value":"full"}]}
+]}
+```
+
+把这个片段放在 `mcpApps.host`。支持 boolean/string/number、number 的 min/max、string 的 maxLength
+（默认及上限为 32768），以及同类型的有限 options。字段和约束独立参与原批准；标签或默认值更新不要求重批。
+只登记普通偏好，凭证继续走 secrets / OAuth。简单字段不要求声明 MCP 页面或 UI 权限。
+复杂配置用 `settings.section` 全局 view；同一 view 可被多个带不同 arguments 的配置入口复用。
+
+Cindy 设置页展示原生字段，搜索可按插件名、字段及选项定位。Agent 使用原 app-settings 的
+`plugins.<物理实例>` section 进行 list/get/update/reset。同名 root/local/企业实例分开，不能用裸插件 id 合并。
+MCP App 页面可调用 `cindy.ui.settings({operation:"get"|"update"|"reset",patch?})`，Host 固定到该页面的实例。
+读取返回 `state:{value,defaults,customizedKeys}`；只保存用户覆盖，恢复默认删除已登记键。
+值仍为原插件 `/kv` 的同名键，不做第二份配置；未登记私有键不进入统一设置，也不会被恢复默认删除。
+`/kv` 整体写入仍保留原语义，已登记字段须满足相同约束；插件读取缺失键时也应应用声明 default。
 
 ### 标准 SDK 与宿主能力
 
@@ -101,6 +157,7 @@ if (app.getHostContext()?.cindy?.capabilities?.includes('draft')) {
 | 能力 | 具名页面可用的工具 |
 | --- | --- |
 | 页面批准 | `cindy.ui.open({viewId,input?})`，只打开同插件已批准视图 |
+| 已批准 `settings[]` | `cindy.ui.settings({operation:"get"|"update"|"reset",patch?})`，只操作当前实例登记字段 |
 | `context` | 向标准 host context 推送获准的任务/正文投影和任务区域选中文字 |
 | `draft` | `cindy.ui.draft({mode:"read",revision?,offset?})` 按需完整读取；`{mode:"append"|"replace"|"replace-selection",text,revision?}` 编辑，替换整份草稿或选区须带最新 revision，冲突拒绝，不发送消息 |
 | `appearance` | `cindy.ui.appearance({patch?,reset?,ifRevision?})`，沿原外观设置读写 |
@@ -175,7 +232,7 @@ await publish();
 
 ### 完整示例
 
-[host-ui 示例](examples/interactive-pages/host-ui/) 包含真实清单、后台和官方 SDK 页面，演示八个位置、
+[host-ui 示例](examples/interactive-pages/host-ui/) 包含真实清单、后台和官方 SDK 页面，演示原生入口、输入补全、统一设置、
 全局/任务视图、命令、草稿和宿主操作。示例的历史 MCP Apps 版本下限只用于源码自测；发布前按实际新版本修改，
 并让用户提供图标或明确同意生成图标，不能生成占位色块。
 用包含本章实现的宿主执行 `ghost_forge_pack`；安装另需用户指示。验收应覆盖新能力明确批准、旧插件无感兼容、

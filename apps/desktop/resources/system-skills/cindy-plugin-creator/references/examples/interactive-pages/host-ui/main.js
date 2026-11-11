@@ -5,7 +5,15 @@ function publish() {
 }
 cindy.onHostMessage(message => {
   if (message.type === 'ui-consumers') { void publish(); return; }
-  if (message.type !== 'tool-call' || message.tool !== 'refresh') return;
+  if (message.type !== 'tool-call') return;
+  if (message.tool === 'complete') {
+    const query = typeof message.args?.query === 'string' ? message.args.query : '';
+    void cindy.send({ type: 'tool-result', callId: message.callId, ok: true, result: {
+      content: [{ type: 'text', text: JSON.stringify({ items: [{ id: 'reference', label: query ? `示例引用：${query}` : '示例引用', insertText: `示例引用 ${query || '#1'}` }] }) }],
+    } });
+    return;
+  }
+  if (message.tool !== 'refresh') return;
   refreshed++;
   void publish();
   void cindy.send({ type: 'tool-result', callId: message.callId, ok: true,

@@ -1,6 +1,7 @@
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { readPluginUiSettings } from '@/cindy-brain/PluginUiContributions';
 import { installedGhostStoragePart, resolvePluginInstanceQuery } from '../../../shared/pluginIdentity';
 import { drainPendingDeepLinks } from '@/lib/pendingDeepLinks';
 import { ChatInviteHost, reportMalformedChatInvite, requestChatInvite } from '@/features/bots/ChatInviteHost';
@@ -1695,8 +1696,10 @@ export function MainLayout() {
 
   // Session/tool-pane declarations update Shell state during navigation. Keep
   // unrelated updates from invalidating the entire routed conversation again.
+  const pluginSettings = readPluginUiSettings();
   const outletContext = useMemo(() => ({
     sidebarWidth,
+    pluginSettings,
     rightSidebarCollapsed: rsbDetached || isRightSidebarCollapsed,
     onToggleRightSidebar: handleOpenRightSidebar,
     rightSidebarSide,
@@ -1704,7 +1707,7 @@ export function MainLayout() {
     setRightSidebarSessionId: declareRightSidebarSessionId,
     setRightSidebarWorkdir,
   }), [
-    sidebarWidth, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
+    sidebarWidth, pluginSettings, rsbDetached, isRightSidebarCollapsed, handleOpenRightSidebar,
     rightSidebarSide, declareRightSidebarSessionId, setRightSidebarWorkdir,
   ]);
 

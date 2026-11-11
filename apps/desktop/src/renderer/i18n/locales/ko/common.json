@@ -19387,6 +19387,10 @@
     }
   },
   "pluginUi": {
+    "settings": "플러그인 설정",
+    "save": "저장",
+    "settingsFailed": "플러그인 설정을 불러오거나 저장하지 못했습니다. 이 페이지를 다시 열어 주세요.",
+    "invalidSetting": "표시된 값이 허용 범위 안에 있는지 확인해 주세요.",
     "display": "표시 방식",
     "original": "원본",
     "menu": "플러그인 보기 및 명령",

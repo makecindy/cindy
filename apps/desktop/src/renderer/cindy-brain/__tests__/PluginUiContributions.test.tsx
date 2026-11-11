@@ -7,7 +7,8 @@ import type { PluginUiStateChange } from '../../../shared/pluginUi';
 const installed = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[] }));
 const translation = vi.hoisted(() => ({ read: vi.fn(() => ({ t: (key: string) => key })) }));
 const page = vi.hoisted(() => ({ mounted: vi.fn(), released: vi.fn() }));
-vi.mock('../useInstalledGhosts', () => ({ useInstalledGhosts: (enabled = true) => enabled ? installed.ghosts : [] }));
+vi.mock('../useInstalledGhosts', () => ({ useInstalledGhosts: (enabled = true) => enabled ? installed.ghosts : [],
+  readInstalledGhostsSnapshot: () => installed.ghosts }));
 vi.mock('react-i18next', () => ({ useTranslation: translation.read }));
 // Presenter lifetime is covered separately at McpAppCard; replace only that boundary here.
 vi.mock('../PluginUiView', async () => {
