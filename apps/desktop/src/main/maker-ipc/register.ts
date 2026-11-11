@@ -1,7 +1,7 @@
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
-import { appendRuntimePluginContext, createTaskRuntimePlugins } from './runtimePlugins.js';
+import { appendRuntimePluginContext, createTaskRuntimePlugins, runtimePluginInputText } from './runtimePlugins.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
 import { readRuntimePluginSettings, writeRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
 import { parseRuntimePluginSettings } from '../../shared/pluginRuntime.js';
@@ -19414,7 +19414,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     try {
       const runtimeContext = steerAllowsEnvironmentNotes
         ? composeGhostRuntimeContext(sessionId,
-            () => extractPlainText(typeof normalized === 'string' ? normalized : normalized.content), so.signal)
+            () => runtimePluginInputText(so[AUTO_REVIEW_SOURCE_CONTENT] ?? so[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message), so.signal)
         : undefined;
       if (runtimeContext) {
         const material = await runtimeContext;

@@ -16,8 +16,8 @@ import { createPluginTargetReviewLoader } from '../../cindy-brain/pluginTargetRe
 import { createPluginTaskReviewResolver } from '../pluginTaskReviewContext.js';
 import { createRuntimePluginControl } from '../../cindy-brain/runtimeControl.js';
 import { createRuntimeContextProviders } from '../../cindy-brain/runtimeContext.js';
-import { appendRuntimePluginContext } from '../runtimePlugins.js';
-import { extractPlainText, prependNoteToWireUserMessage } from '../agentHandoff.js';
+import { appendRuntimePluginContext, runtimePluginInputText } from '../runtimePlugins.js';
+import { prependNoteToWireUserMessage } from '../agentHandoff.js';
 import { shouldPrependMobileClientPromptNote } from '../mobileClientPromptNote.js';
 
 const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
@@ -41,7 +41,7 @@ function runtimeSteerHarness(agentKind = 'codex') {
   const control = createRuntimePluginControl({ readSettings: settings, captureOwner: () => () => true, screen });
   const providers = createRuntimeContextProviders(control);
   const compose = vi.fn(providers.compose);
-  const extract = vi.fn(extractPlainText);
+  const extract = vi.fn(runtimePluginInputText);
   const delivered = vi.fn(async (_message: unknown, opts: SessionSendOptions) => { await opts.beforeProviderStart?.(); });
   const intervention = vi.fn();
   const appContext = { text: 'PRIVATE_APP_CONTEXT', assertCurrent: vi.fn(), consume: vi.fn() };
@@ -65,7 +65,7 @@ function runtimeSteerHarness(agentKind = 'codex') {
     wireNoteMemory: { plan: () => ({ notes: {}, commit: vi.fn() }) },
     isOwnerOwnMessage: () => true, inputHandoffSteerNote: () => 'PRIVATE_HANDOFF', inputHandoffNoteDelivered: vi.fn(),
     mcpAppModelContext: async () => appContext,
-    composeGhostRuntimeContext: compose, appendRuntimePluginContext, extractPlainText: extract, prependNoteToWireUserMessage,
+    composeGhostRuntimeContext: compose, appendRuntimePluginContext, runtimePluginInputText: extract, prependNoteToWireUserMessage,
     isDeviceLinkInvoke: () => false, assertRemoteInputClearNotInFlight: () => {},
     readRemoteInputClearBoundaryPrecondition: () => ({ present: false }),
     readExpectedInputGeneration: () => undefined, assertCurrentInputGeneration: () => {},
@@ -152,6 +152,30 @@ it('leaves Pi native slash steer unchanged without calling providers', async () 
   expect(f.delivered.mock.calls[0][0]).toBe('/fixture-command');
   expect(f.compose).not.toHaveBeenCalled();
   expect(f.screen).not.toHaveBeenCalled();
+});
+
+// INPUT_STEER's real coordinator enriches the model message before the common
+// host closure. A plain steer fixture cannot detect disclosure of other tasks.
+it('keeps referenced task history out of providers through the real INPUT_STEER coordinator', async () => {
+  const f = runtimeSteerHarness(); f.select(true);
+  const raw = 'Compare cindy://session/referenced-task';
+  const coordinator = new AgentInputCoordinator({
+    sendToAgent: vi.fn(), steerToAgent: (id, message, opts) => f.steer(id, message, opts),
+    abortSession: vi.fn(), isTurnRunning: () => f.live.running,
+    getTurnGeneration: () => f.live.generation, hasPendingInteraction: () => false,
+    getAgentKind: () => 'codex', getSdkSessionId: async () => 'sdk', emitProjection: vi.fn(),
+    resolveSessionReferences: async () => [{ sessionId: 'referenced-task', source: 'local',
+      messages: [{ role: 'user', content: 'PRIVATE_TASK_HISTORY' }], range: 'recent', messageCount: 1, truncated: false }],
+  });
+  const item: AgentInputQueuedMessage = { clientId: 'runtime-reference', text: raw, persistedContent: JSON.stringify({ text: raw }),
+    model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/synthetic', autoReviewUserText: raw,
+    sessionRefs: [{ sessionId: 'referenced-task' }],
+    chatMessage: { clientId: 'runtime-reference', role: 'user', content: raw, isStreaming: false, createdAt: '2026-11-11T00:00:00Z' },
+    createOpts: { agentKind: 'codex', model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/synthetic', userPrompt: '', makerMemoryEnabled: true } };
+  expect(await coordinator.steer('task', item)).toBe(true);
+  expect(f.delivered).toHaveBeenCalledOnce();
+  expect(JSON.stringify(f.delivered.mock.calls[0][0])).toContain('PRIVATE_TASK_HISTORY');
+  expect(f.screen.mock.calls[0][1]).toMatchObject({ text: raw });
 });
 
 // PR #7824 merge regression (guard): run the production target send adapter,

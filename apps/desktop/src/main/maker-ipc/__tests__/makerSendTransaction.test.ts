@@ -112,6 +112,29 @@ describe('local application task takeover', () => {
     expect(appendAutoReviewUserIntent('', 'wire reference', options)).toBe('Read only');
   });
 
+  // The queue decorates both turn and steer messages with referenced history.
+  // Unit: both current-message points must consume the separately captured input,
+  // while the real send transaction keeps all reference blocks for the model.
+  it('uses original input for context and turn routing when the model message includes referenced history', async () => {
+    const { deps, session } = createDeps();
+    const settings = { 'will-start-turn': [{ pluginId: 'provider', onFailure: 'block' as const }],
+      'will-compose-context': [{ pluginId: 'provider', onFailure: 'block' as const }] };
+    const screen = vi.fn(async (_point: string, _data: unknown) => ({ action: 'allow' as const }));
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true, screen });
+    const providers = createRuntimeContextProviders(control);
+    const service = createTaskRuntimePlugins({ control, readSettings: () => settings,
+      readRoute: async () => ({ agentKind: 'codex', providerId: 'p', model: 'm' }),
+      routeAvailable: vi.fn(), applyRoute: vi.fn(), changed: vi.fn() });
+    deps.prepareRuntimeTurn = (id, message, signal) => service.prepare(id, message, signal)?.then(options => ({ options }));
+    deps.composeRuntimeContext = (id, readText, signal) => providers.compose(id, readText, signal);
+    const message = { type: 'user', content: [{ type: 'text', text: 'Current text' }, { type: 'text', text: 'PRIVATE_TASK_HISTORY' }] };
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', message, undefined,
+      { [AUTO_REVIEW_SOURCE_CONTENT]: 'Current text' });
+    expect(screen.mock.calls).toHaveLength(2);
+    for (const call of screen.mock.calls) expect(call[1]).toMatchObject({ text: 'Current text' });
+    expect(JSON.stringify(vi.mocked(session.send).mock.calls[0][0])).toContain('PRIVATE_TASK_HISTORY');
+  });
+
   // Runtime plugin contract, unit: the route is applied before bootstrap and
   // the host-only callback survives the normal send transaction unchanged.
   it('prepares runtime plugins before pending route application and forwards the request callback', async () => {

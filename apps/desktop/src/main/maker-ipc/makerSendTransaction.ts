@@ -45,7 +45,7 @@ import {
 } from './agentHandoff.js';
 import type { MessageSourceDevice, MessageSourceHostDevice } from '@cindy/maker-shared/message-source';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
-import { appendRuntimePluginContext } from './runtimePlugins.js';
+import { appendRuntimePluginContext, runtimePluginInputText } from './runtimePlugins.js';
 import {
   buildClientEnvironmentNote,
   shouldPrependMobileClientPromptNote,
@@ -1083,7 +1083,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (!requestedSendOpts.signal?.aborted) {
         await deps.restoreArchivedSessionForSend?.(sessionId);
       }
-      const runtimePreparation = deps.prepareRuntimeTurn?.(sessionId, message, requestedSendOpts.signal);
+      const runtimePreparation = deps.prepareRuntimeTurn?.(sessionId,
+        requestedSendOpts[AUTO_REVIEW_SOURCE_CONTENT] ?? requestedSendOpts[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message,
+        requestedSendOpts.signal);
       if (runtimePreparation) {
         const runtime = await runtimePreparation;
         if (runtime.failure && !requestedSendOpts.signal?.aborted) return runtime.failure;
@@ -1584,7 +1586,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       }
       if (allowsEnvironmentNotes) {
         try {
-          const pending = deps.composeRuntimeContext?.(sessionId, () => extractIpcUserMessageText(normalized), so.signal);
+          const pending = deps.composeRuntimeContext?.(sessionId,
+            () => runtimePluginInputText(so[AUTO_REVIEW_SOURCE_CONTENT] ?? so[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message), so.signal);
           const context = pending ? await pending : undefined;
           if (context) outgoing = appendRuntimePluginContext(outgoing as HandoffWireMessage, context);
         } catch (error) {

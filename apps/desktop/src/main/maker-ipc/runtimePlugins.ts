@@ -5,6 +5,14 @@ import { createRuntimePluginControl, RuntimePluginControlError } from '../cindy-
 import { prependNoteToWireUserMessage, type HandoffWireMessage } from './agentHandoff.js';
 import { pluginMessageText } from '../../shared/pluginMessage.js';
 
+/** Read only the separately captured input; do not parse authored JSON as an envelope. */
+export function runtimePluginInputText(message: unknown): string {
+  if (typeof message === 'string') return message;
+  const content = Array.isArray(message) ? message : (message as { content?: unknown } | null)?.content;
+  return typeof content === 'string' ? content : Array.isArray(content)
+    ? content.filter(item => item?.type === 'text' && typeof item.text === 'string').map(item => item.text).join('\n') : '';
+}
+
 /** Ordinary reference material, shared by Desktop, personal IM and hook sends. */
 export function appendRuntimePluginContext(message: HandoffWireMessage, context: string): HandoffWireMessage {
   return context ? prependNoteToWireUserMessage(message, pluginMessageText('', context).trimStart()) : message;
@@ -33,9 +41,7 @@ export function createTaskRuntimePlugins(deps: {
       deps.control.beginTurn(sessionId);
       if (!settings['will-start-turn']?.length && !settings['will-model-request']?.length) return Promise.resolve({});
       return (async () => {
-        const content = typeof message === 'string' ? message : (message as { content?: unknown } | null)?.content;
-        const text = typeof content === 'string' ? content : Array.isArray(content)
-          ? content.filter(item => item?.type === 'text' && typeof item.text === 'string').map(item => item.text).join('\n') : '';
+        const text = runtimePluginInputText(message);
         const turn = deps.control.run<GhostRuntimePointData>('will-start-turn', sessionId, async () => ({ sessionId,
           route: await deps.readRoute(sessionId), text,
         }), async (result, data, assertCurrent) => {
