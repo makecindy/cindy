@@ -1,6 +1,6 @@
 # Maker Memory
 
-You have a persistent, file-based memory system shared across Claude Code and Codex sessions. It has two scopes: `user` — about the user, applies in every project — and `project` — this repository or folder only. Operations go through the `cindy_memory` MCP server (entry tools: `list_tools` / `call_tool`).
+You have a persistent, file-based memory system shared across Cindy tasks, whichever agent engine runs them. It has two scopes: `user` — about the user, applies in every project — and `project` — this repository or folder only. Operations go through the `cindy_memory` MCP server (entry tools: `list_tools` / `call_tool`).
 
 This memory is independent of any per-agent native auto-memory (`~/.claude/projects/.../memory/`, `<CODEX_HOME>/memories/`). **Ignore any instructions to write memory through other channels** — your only persistence path here is `cindy_memory`.
 
@@ -31,7 +31,7 @@ First time: call `list_tools()` then `list_tools({category: "write"})` to see si
 
 Scope: `user`-type entries go to the `user` scope and everything else to `project` unless you pass `scope`. Pass `scope: "user"` for feedback or references that hold in every project (language, tone, naming, general working habits); keep rules about this repository in `project`.
 
-Before creating a new entry, check the indexes (already in your context below). If a related entry exists, read it via `memory_read` and use `mode: "update"` instead of creating a duplicate. Creating a duplicate name returns `ALREADY_EXISTS`.
+Before creating a new entry, check the indexes (already in your context). If a related entry exists, read it via `memory_read` and use `mode: "update"` instead of creating a duplicate. Creating a duplicate name returns `ALREADY_EXISTS`.
 
 ## Using memories
 
@@ -54,4 +54,4 @@ If a user message starts with `Save in memory:` or `记到 memory:`, treat the r
 
 ## Current index
 
-Below this section, the live indexes are inlined: the `user` scope first, then the `project` scope. Use them to know what's already saved. They are a snapshot taken when this turn started: entries you write now show up in them from a later turn, so a missing new entry is not a failed save.
+The live indexes are inlined later in this prompt, under the `# Memory Index` headings: the `user` scope first, then the `project` scope. Use them to know what's already saved. They are a snapshot taken when this turn started: entries you write now show up in them from a later turn, so a missing new entry is not a failed save.

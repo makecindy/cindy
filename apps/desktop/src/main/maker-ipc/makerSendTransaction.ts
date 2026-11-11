@@ -53,7 +53,8 @@ import {
 import { buildWireMessageSourceNote, readWireSourceDevice, readWireSourcePlugin } from './messageSourceNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
 import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
-import { getMainClassicalStyle, getResolvedMainLocale } from '../i18n.desktop.js';
+import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import type { SupportedLocale } from '../../shared/locale.js';
 import {
   buildUiLanguageErrorNote,
   turnClassicalStyleFromSendOpts,
@@ -72,7 +73,7 @@ import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import { channelTurnSourceFor, withChannelTurnSource } from './channelTurnSignal.js';
 import type { CindyLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from './autoReviewUserIntent.js';
-import { mcpAppModelContext } from '../mcp-apps/runtime.js';
+import type { McpAppModelContext } from '../mcp-apps/host.js';
 import { MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from '../mcp-apps/message.js';
 
 type CreateOpts = MakerSessionCreateOpts;
@@ -274,6 +275,12 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  /** Read launcher preferences at dispatch time, not at module initialization. */
+  /** Null when the launcher has no interface-language preference. */
+  getResolvedMainLocale(): SupportedLocale | null;
+  getMainClassicalStyle(): ClassicalReplyStyleId;
+  /** Use the launcher's existing App registry; never create a parallel registry. */
+  readMcpAppModelContext(sessionId: string): Promise<McpAppModelContext>;
   prepareRuntimePrompt?(sessionId: string): Promise<void> | undefined;
   composeRuntimeContext?(sessionId: string, readText: () => string, signal?: AbortSignal): Promise<string> | undefined;
   prepareRuntimeTurn?(sessionId: string, message: unknown, signal?: AbortSignal): Promise<{
@@ -392,6 +399,10 @@ export interface MakerSendTransactionDeps {
   prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
   assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
+  /** Launcher-owned durable startup fence. A failed write must prevent provider
+   * startup so an uncertain turn cannot be replayed after a Host restart.
+   * Desktop omits this port and retains its existing event-driven lifecycle. */
+  beforeProviderStart?: (sessionId: string, sendOpts: unknown) => Promise<void>;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;
   ackInterruptedTurnDispatched?: (sessionId: string, endedAt: number) => void | Promise<void>;
   previewUserPrompt?(
@@ -1532,9 +1543,11 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         allowsEnvironmentNotes
           ? buildCindyMakeTaskNote()
           : null;
-      const uiLanguageNote = allowsEnvironmentNotes
-        ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()), {
-            classicalStyle: turnClassicalStyleFromSendOpts(so, getMainClassicalStyle()),
+      const uiLanguage = allowsEnvironmentNotes
+        ? turnUiLanguageFromSendOpts(so, deps.getResolvedMainLocale()) : null;
+      const uiLanguageNote = allowsEnvironmentNotes && uiLanguage
+        ? buildUiLanguageErrorNote(uiLanguage, {
+            classicalStyle: turnClassicalStyleFromSendOpts(so, deps.getMainClassicalStyle()),
           })
         : null;
       // 这三段是"环境说明":同一原生上下文里内容没变就不重复发(wireNoteMemory)。交接首条
@@ -1579,7 +1592,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, inputHandoffOwnerNote);
       }
       const appContext = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-        ? await mcpAppModelContext(sessionId)
+        ? await deps.readMcpAppModelContext(sessionId)
         : undefined;
       if (appContext?.text) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, appContext.text);
@@ -1802,15 +1815,25 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         // another Cindy row. Keep later manual Retry attached to the active entry.
         const transcriptUserClientId = persistUserMessage?.clientId
           ?? (so[PI_CACHE_RECOVERY_EXPECTATION] ? so.retryUserClientId : undefined);
+        const beforeProviderStart = deps.beforeProviderStart
+          ? async () => {
+              so.signal?.throwIfAborted();
+              await assertAppCurrent?.();
+              await deps.beforeProviderStart!(sessionId, finalFenceSendOpts);
+              so.signal?.throwIfAborted();
+              // The launcher's durable write can yield while an App is revoked.
+              await assertAppCurrent?.();
+            }
+          : assertAppCurrent;
         // Other-task mail is the only non-scheduler turn whose reply IM relays (channelTurnSignal).
         const sendResult = await withChannelTurnSource(sess.id, channelTurnSourceFor(
           persistUserMessage?.origin,
           persistUserMessage?.botTaskCoordination !== undefined,
         ), () => sess.send(outgoing as never, {
           ...(retryTranscriptUserEntryId ? { retryTranscriptUserEntryId } : {}),
+          ...(beforeProviderStart ? { beforeProviderStart } : {}),
           ...(assertAppCurrent
             ? {
-                beforeProviderStart: assertAppCurrent,
                 resolveAutoReviewUserIntent: async () => {
                   const intent = resolveScheduledIntent
                     ? await resolveScheduledIntent()

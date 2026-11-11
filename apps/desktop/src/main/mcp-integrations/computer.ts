@@ -3,7 +3,7 @@ import { agentDesktopInputRevision, desktopInputRevision, hasRemoteDesktopInput,
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync } from 'node:fs';
 import type { Stream } from 'node:stream';
 import { app, powerMonitor } from 'electron';
 import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
@@ -29,7 +29,7 @@ import {
   selectAdvertisedComputerDriverArgs,
   type ComputerDriverToolSchema,
 } from './computer-contract.js';
-import { computerResultOutcome, getComputerTool, isUnavailableWindowObservation } from '@cindy/mcps/computer';
+import { computerResultOutcome, computerPointerTargetError, getComputerTool, isDesktopComputerTarget, isUnavailableDesktopObservation, isUnavailableWindowObservation } from '@cindy/mcps/computer';
 import { callComputerToolWithOutputValidation } from './computer-output.js';
 
 const logger = createLogger('mcp/cindy_computer');
@@ -89,8 +89,9 @@ const CUA_DRIVER_SESSION_PROCESS_NONCE = randomUUID().replace(/-/g, '').slice(0,
 // 0.12.2 changed `permissions status` into a strictly read-only daemon query.
 // Older builds may touch ScreenCaptureKit while checking capturability.
 const PASSIVE_PERMISSION_STATUS_MIN_VERSION = '0.12.2';
-const SCREENSHOT_OUTPUT_TOOL_NAMES = new Set<ComputerMcpToolName>(['get_window_state']);
+const SCREENSHOT_OUTPUT_TOOL_NAMES = new Set<ComputerMcpToolName>(['get_window_state', 'get_desktop_state']);
 const DRIVER_SESSION_ARG_TOOL_NAMES = new Set<ComputerMcpToolName>([
+  'get_desktop_state',
   'list_windows',
   'get_window_state',
   'verify_state',
@@ -108,6 +109,7 @@ const DRIVER_SESSION_ARG_TOOL_NAMES = new Set<ComputerMcpToolName>([
   'start_recording',
 ]);
 const CURSOR_STYLED_TOOL_NAMES = new Set<ComputerMcpToolName>([
+  'get_desktop_state',
   'get_window_state',
   'click',
   'double_click',
@@ -1942,6 +1944,64 @@ function normalizeToolArgsForDriver(
   };
 }
 
+type DesktopScreenshot = { directory: string; pending: boolean; current: boolean };
+const desktopScreenshots = new Map<string, Set<DesktopScreenshot>>();
+
+function removeDesktopScreenshot(sessionId: string, screenshot: DesktopScreenshot): void {
+  try {
+    // Only directories created by this host call are owned here. Never trust
+    // a returned driver path or an explicit screenshot_out_file for deletion.
+    rmSync(screenshot.directory, { recursive: true, force: true });
+    const owned = desktopScreenshots.get(sessionId);
+    owned?.delete(screenshot);
+    if (owned?.size === 0) desktopScreenshots.delete(sessionId);
+  } catch (err) {
+    // Keep ownership so the next observation or session cleanup can retry.
+    logger.warn('Desktop screenshot cleanup failed', { sessionId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+function retireDesktopScreenshots(sessionId: string): void {
+  for (const screenshot of desktopScreenshots.get(sessionId) ?? []) {
+    screenshot.current = false;
+    // An in-flight driver may still write its file. Its finally owns cleanup;
+    // it must not delete a later read's directory, even if the session reopened.
+    if (!screenshot.pending) removeDesktopScreenshot(sessionId, screenshot);
+  }
+}
+
+async function readDesktopState(args: Record<string, unknown>, context?: ComputerMcpCallContext): Promise<unknown> {
+  const sessionId = readSessionIdFromContext(context);
+  if (!sessionId) return callComputerDriverToolImpl('get_desktop_state', args, context);
+  retireDesktopScreenshots(sessionId);
+  if (typeof args.screenshot_out_file === 'string') {
+    return callComputerDriverToolImpl('get_desktop_state', args, context);
+  }
+  const screenshot: DesktopScreenshot = {
+    directory: mkdtempSync(path.join(app.getPath('temp'), 'xdt-maker-cua-desktop-')),
+    pending: true,
+    current: true,
+  };
+  let owned = desktopScreenshots.get(sessionId);
+  if (!owned) {
+    owned = new Set();
+    desktopScreenshots.set(sessionId, owned);
+  }
+  owned.add(screenshot);
+  let usable = false;
+  try {
+    const result = await callComputerDriverToolImpl('get_desktop_state', {
+      ...args,
+      screenshot_out_file: path.join(screenshot.directory, 'get_desktop_state.png'),
+    }, context);
+    usable = !context?.signal?.aborted && !isUnavailableDesktopObservation(result);
+    return result;
+  } finally {
+    screenshot.pending = false;
+    if (!usable || !screenshot.current) removeDesktopScreenshot(sessionId, screenshot);
+  }
+}
+
 function readSessionIdFromContext(
   context: ComputerMcpCallContext | undefined,
 ): string | null {
@@ -2277,7 +2337,11 @@ async function callCuaMcpTool(
     // Older drivers may not accept delivery_mode; adapt only advertised capabilities.
     args = { ...args, delivery_mode: 'background' };
   }
-  const driverArgs = adaptComputerDriverArgs(name, args, entry.toolSchemas);
+  const driverArgs = adaptComputerDriverArgs(name, args, entry.toolSchemas, {
+    // The input queue's assertCurrent has already checked this session's
+    // latest capture immediately before dispatching desktop pointer input.
+    desktopCaptureValidated: name === 'drag' && isDesktopComputerTarget(args),
+  });
   const result = await withTimeout(
     callComputerToolWithOutputValidation(
       entry.client,
@@ -3589,7 +3653,11 @@ export async function grantComputerDriverPermissions(
 
 // Human input and other tasks invalidate observed targets after ownership ends.
 // Own sequential primitives retain their observations; overlapping reads do not.
-const inputObservations = new Map<string, { windows: Map<string, number | symbol>; requiresObservation: boolean }>();
+const inputObservations = new Map<string, {
+  windows: Map<string, number | symbol>;
+  requiresObservation: boolean;
+  desktopCapture?: { id: string; startedAt: number };
+}>();
 
 /**
  * Foreground delivery shares the keyboard and mouse with whoever is at this
@@ -3732,7 +3800,7 @@ export function setPhysicalInputShielded(isShielded: () => boolean): void {
 
 /** Refuse foreground delivery while a person is using this computer. */
 export function assertNoRecentUserInput(name: ComputerMcpToolName, args: Record<string, unknown>): void {
-  if (getComputerTool(name)?.readOnly === true || args.delivery_mode !== 'foreground') return;
+  if (getComputerTool(name)?.readOnly === true || (args.delivery_mode !== 'foreground' && !isDesktopComputerTarget(args))) return;
   if (physicalInputShielded()) return;
   const since = msSinceForeignDesktopInput();
   if (since === null || since >= USER_INPUT_ACTIVE_WINDOW_MS) return;
@@ -3742,11 +3810,29 @@ export function assertNoRecentUserInput(name: ComputerMcpToolName, args: Record<
   );
 }
 
+/** A quiet user is not proof that an earlier desktop picture is still current. */
+function hasNoInputSinceDesktopCapture(startedAt: number): boolean {
+  try {
+    const idleSeconds = powerMonitor.getSystemIdleTime();
+    const now = Date.now();
+    // Unlike the busy guard, do not attribute HID events to our previous action:
+    // even its late events can invalidate a picture taken in the meantime.
+    // Subtracting floored idle seconds gives the latest possible input instant.
+    // When it overlaps capture, require another observation, not a grace period.
+    return Number.isFinite(idleSeconds) && idleSeconds >= 0 && now >= startedAt
+      && now - idleSeconds * 1000 < startedAt;
+  } catch {
+    return false;
+  }
+}
+
 export async function callComputerDriverTool(
   name: ComputerMcpToolName,
   args: Record<string, unknown>,
   context?: ComputerMcpCallContext,
 ): Promise<unknown> {
+  const targetError = computerPointerTargetError(name, args);
+  if (targetError) throw new ComputerDriverError(targetError, 'INVALID_ARGS');
   const sessionId = readSessionIdFromContext(context);
   const revision = desktopInputRevision();
   let observations = sessionId ? inputObservations.get(sessionId) : undefined;
@@ -3754,29 +3840,40 @@ export async function callComputerDriverTool(
     observations = { windows: new Map(), requiresObservation: agentDesktopInputRevision() > 0 };
     inputObservations.set(sessionId, observations);
   }
-  const window = `${args.pid}:${args.window_id}`;
+  const desktop = name === 'get_desktop_state' || isDesktopComputerTarget(args);
+  const window = desktop ? 'desktop:primary' : `${args.pid}:${args.window_id}`;
   if (getComputerTool(name)?.readOnly === true) {
+    const observationStartedAt = Date.now();
     const agentRevision = agentDesktopInputRevision();
     const startedIdle = !isHumanDesktopInputActive() && !isAgentDesktopInputActive();
-    const explicitObservation = name === 'get_window_state' && context?.observationPurpose !== 'recovery';
+    const explicitObservation = (name === 'get_window_state' || name === 'get_desktop_state') && context?.observationPurpose !== 'recovery';
     const observation = Symbol('pending observation');
     const app = `${args.pid}:undefined`;
     if (explicitObservation) {
       if (observations) observations.requiresObservation = true;
+      if (desktop && observations) observations.desktopCapture = undefined;
       // Revoke old permission and prevent an older concurrent read from
       // restoring it after this read fails or is cancelled.
       observations?.windows.set(window, observation);
-      observations?.windows.set(app, observation);
+      if (!desktop) observations?.windows.set(app, observation);
     }
-    const result = await callComputerDriverToolImpl(name, args, context);
+    const result = name === 'get_desktop_state'
+      ? await readDesktopState(args, context)
+      : await callComputerDriverToolImpl(name, args, context);
     if (explicitObservation && startedIdle && !context?.signal?.aborted
-      && !isUnavailableWindowObservation(result, args) && computerResultOutcome(name, result).ok
+      && !(desktop ? isUnavailableDesktopObservation(result) : isUnavailableWindowObservation(result, args)) && computerResultOutcome(name, result).ok
       && revision === desktopInputRevision() && !isHumanDesktopInputActive()
       && agentRevision === agentDesktopInputRevision() && !isAgentDesktopInputActive()) {
-      if (observations?.windows.get(window) === observation) observations.windows.set(window, revision);
+      if (observations?.windows.get(window) === observation) {
+        observations.windows.set(window, revision);
+        if (desktop) observations.desktopCapture = {
+          id: (result as { capture_id: string }).capture_id,
+          startedAt: observationStartedAt,
+        };
+      }
       // App-scoped actions may omit window_id; a successful observation of
       // that app also refreshes its focus, without refreshing other windows.
-      if (observations?.windows.get(app) === observation) observations.windows.set(app, revision);
+      if (!desktop && observations?.windows.get(app) === observation) observations.windows.set(app, revision);
     }
     return result;
   }
@@ -3790,9 +3887,21 @@ export async function callComputerDriverTool(
     if (isHumanDesktopInputActive()) {
       throw new ComputerDriverError('Remote desktop input is active. Yield briefly, then get fresh window state before retrying; the remote connection can stay open.', 'DESKTOP_INPUT_BUSY');
     }
-    if (args.pid !== undefined && observations && (revision > 0 || observations.requiresObservation)
+    if ((desktop || args.pid !== undefined) && observations && (desktop || revision > 0 || observations.requiresObservation)
       && observations.windows.get(window) !== revision) {
-      throw new ComputerDriverError('Desktop input or a newer observation invalidated this target. Get fresh state for this window before acting again.', 'STALE_SNAPSHOT');
+      throw new ComputerDriverError(desktop
+        ? 'Desktop input or a newer observation invalidated this target. Call get_desktop_state before acting again.'
+        : 'Desktop input or a newer observation invalidated this target. Get fresh state for this window before acting again.', 'STALE_SNAPSHOT');
+    }
+    if (desktop) {
+      const capture = observations?.desktopCapture;
+      if (!observations || !capture || args.capture_id !== capture.id) {
+        throw new ComputerDriverError('Desktop capture is stale or already used. Call get_desktop_state again before pointer input.', 'STALE_SNAPSHOT');
+      }
+      if (!hasNoInputSinceDesktopCapture(capture.startedAt)) {
+        observations.desktopCapture = undefined;
+        throw new ComputerDriverError('System input may have occurred since this desktop capture. Call get_desktop_state again after input settles; no pointer input was sent.', 'STALE_SNAPSHOT');
+      }
     }
   };
   assertCurrent();
@@ -3842,7 +3951,7 @@ async function callComputerDriverToolImpl(
     const invoke = () => callCuaMcpToolWithTypeTextChunks(entry, name, driverArgs, timeoutMs, signal, assertActive,
       () => cleanupCuaMcpSessionAfterError(sessionId, entry), () => { inputDispatched = true; });
     const result = getComputerTool(name)?.readOnly === true ? await invoke()
-      : await withAgentDesktopInput(() => {
+      : await withAgentDesktopInput(async () => {
         for (const [otherSessionId, observation] of inputObservations) {
           if (otherSessionId === sessionId) continue;
           observation.requiresObservation = true;
@@ -3850,7 +3959,14 @@ async function callComputerDriverToolImpl(
         }
         // Only HID-synthesizing input moves the system idle clock; neither a read nor
         // an AX write may mask a person's input.
-        return trackAgentInputDispatch(name, invoke);
+        try {
+          return await trackAgentInputDispatch(name, invoke);
+        } finally {
+          // CUA 0.47.6 can retain earlier captures. Any input (including own
+          // window input) may change the desktop; require a new picture next.
+          const observation = inputObservations.get(sessionId);
+          if (observation) observation.desktopCapture = undefined;
+        }
       }, { signal, assertCurrent: assertActive });
     return name === 'list_windows' ? enrichAndFilterListWindowsResult(result, rawArgs) : result;
   } catch (err) {
@@ -3946,6 +4062,7 @@ async function cleanupComputerDriverSessionEntry(sessionId: string, entry: CuaMc
 }
 
 export function cleanupComputerDriverSession(sessionId: string): Promise<void> {
+  retireDesktopScreenshots(sessionId);
   inputObservations.delete(sessionId);
   cuaMcpSessionCursorCapabilities.delete(sessionId);
   markCuaMcpSessionClosed(sessionId);
@@ -3981,7 +4098,7 @@ function cleanupComputerDriverSessionInternal(
 }
 
 async function cleanupActiveComputerDriverSessions(): Promise<void> {
-  const sessionIds = Array.from(cuaMcpSessions.keys());
+  const sessionIds = [...new Set([...cuaMcpSessions.keys(), ...desktopScreenshots.keys()])];
   await Promise.allSettled(sessionIds.map((sessionId) => cleanupComputerDriverSession(sessionId)));
   await Promise.allSettled(Array.from(cuaMcpSessionCleanups.values()));
 }
