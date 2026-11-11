@@ -213,12 +213,15 @@ export class MakerMemoryStore {
   }
 
   /** 整理里的一次「已被覆盖」的删除 (见 MemoryStorage.applyTidyCoveredDelete)。 */
-  async applyTidyCoveredDelete(input: Parameters<MemoryStorage['applyTidyCoveredDelete']>[0]): Promise<void> {
+  async applyTidyCoveredDelete(
+    input: Parameters<MemoryStorage['applyTidyCoveredDelete']>[0],
+  ): Promise<Awaited<ReturnType<MemoryStorage['applyTidyCoveredDelete']>>> {
     this.assertScopeOk();
     await this.init();
-    await this.storage.applyTidyCoveredDelete(input);
-    this.assertScopeOk();
+    const result = await this.storage.applyTidyCoveredDelete(input);
+    // 分片已经删掉 (即使之后重建索引失败): 全文索引里的这条也要摘掉。
     this.syncDelete(input.target.filename);
+    return result;
   }
 
   /** 撤销整理时恢复一条记忆 (见 MemoryStorage.restoreSnapshot)。 */

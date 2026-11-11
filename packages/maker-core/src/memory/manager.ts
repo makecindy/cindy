@@ -1459,12 +1459,14 @@ export class MakerMemoryManager {
           // 自己或覆盖它的那一条在本轮已经不在了 (被并入后删掉): 覆盖关系无从核对, 不删。
           if (target === undefined || covering === undefined) continue;
           try {
-            await store.applyTidyCoveredDelete({
+            const applied = await store.applyTidyCoveredDelete({
               target: { filename: record.filename, updatedAt: target },
               coveredBy: { filename: del.supersededBy, updatedAt: covering },
             });
+            // 返回就说明分片已经删掉; 即使随后重建索引失败 (applied.failure) 也要先记下, 才能撤销。
             live.delete(record.filename);
             changes.push({ kind: 'deleted', filename: record.filename, before: tidySnapshot(record), reason: del.reason });
+            if (applied.failure) throw applied.failure;
           } catch (e) {
             if (!isSkippableTidyError(e)) throw e;
           }

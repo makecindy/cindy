@@ -19,7 +19,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MakerMemoryManager } from './manager.js';
-import { buildBotMemoryScopeKey, memoryScopeDirName } from './storage.js';
+import { buildBotMemoryScopeKey, memoryScopeDirName, MemoryStorage } from './storage.js';
 import { EMPTY_TIDY_STATE, isTidyDue, parseTidyPlan, validateTidyPlan, type TidyPlan } from './tidy.js';
 import { DEFAULT_MEMORY_CONFIG, type MemoryRecord, type MemoryType } from './types.js';
 import type { Logger } from '../interfaces/logger.js';
@@ -370,6 +370,50 @@ describe('MakerMemoryManager.tidy', () => {
     await expect(manager.tidyIfDue(WORKDIR)).rejects.toThrow(/not-ready|memory/);
     expect(tidy).toHaveBeenCalledTimes(1);
     manager.dispose();
+  });
+
+  // 评审 (Codex P1): 分片已删、之后重建派生索引才失败时, 删除已经提交, 必须记进整理记录并可撤销。
+  describe.each([
+    ['合并的来源', JSON.stringify({
+      merges: [{ sources: ['feedback_zh.md', 'feedback_zh2.md'], title: 'z', description: 'z', body: 'z', reason: '同一件事' }],
+      deletes: [],
+    })],
+    ['已被覆盖而删除的条目', JSON.stringify({
+      merges: [],
+      deletes: [{ filename: 'feedback_zh.md', supersededBy: 'feedback_zh2.md', reason: '被覆盖' }],
+    })],
+  ])('删除成功但索引重建失败: %s', (_label, plan) => {
+    it('删掉的分片仍在整理记录里, 撤销能完整恢复', async () => {
+      const { manager } = managerWith(() => plan);
+      await write(manager, 'zh', '只存在于这一条里的内容');
+      await write(manager, 'zh2', '始终用中文回复');
+      await write(manager, 'other', '称用户不称主人');
+
+      // 第一次重建属于保留条目的改写 (合并) 或不存在 (覆盖删除); 之后第一次删除触发的重建失败。
+      const real = (MemoryStorage.prototype as unknown as { rebuildIndex: () => Promise<void> }).rebuildIndex;
+      let afterFirstUnlink = false;
+      const spy = vi
+        .spyOn(MemoryStorage.prototype as unknown as { rebuildIndex: () => Promise<void> }, 'rebuildIndex')
+        .mockImplementation(async function (this: unknown) {
+          const dir = path.join(root, 'maker-memory', memoryScopeDirName(WORKDIR));
+          const gone = !(await import('node:fs')).existsSync(path.join(dir, 'feedback_zh.md'));
+          if (gone && !afterFirstUnlink) {
+            afterFirstUnlink = true;
+            throw new Error('simulated rebuildIndex io failure');
+          }
+          return real.call(this);
+        });
+
+      await expect(manager.tidy(WORKDIR, 'manual')).rejects.toThrow(/simulated rebuildIndex/);
+      spy.mockRestore();
+
+      const [run] = await manager.listTidyRuns(WORKDIR);
+      expect(run?.changes.map((c) => `${c.kind}:${c.filename}`)).toContain('deleted:feedback_zh.md');
+      expect(await manager.undoTidy(WORKDIR, run!.id)).toMatchObject({ skipped: 0 });
+      const store = await manager.getStore(WORKDIR);
+      expect((await store.list()).find((r) => r.filename === 'feedback_zh.md')?.body).toBe('只存在于这一条里的内容');
+      manager.dispose();
+    });
   });
 
   it('伙伴的记忆不参与整理', async () => {

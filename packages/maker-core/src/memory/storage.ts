@@ -385,6 +385,9 @@ export class MemoryStorage {
           deleted.push(source.filename);
         } catch (e) {
           if (e instanceof MemoryError && e.code === 'not-found') continue;
+          // 分片已经删掉、之后重建派生索引才失败: 删除已经提交, 必须记进结果, 否则这条
+          // 记忆只存在于被漏记的来源里, 撤销时恢复不回来。
+          if (await this.shardGone(source.filename)) deleted.push(source.filename);
           failure = e;
           break;
         }
@@ -400,12 +403,29 @@ export class MemoryStorage {
   async applyTidyCoveredDelete(input: {
     target: { filename: string; updatedAt: string };
     coveredBy: { filename: string; updatedAt: string };
-  }): Promise<void> {
+  }): Promise<{ failure?: unknown }> {
     return this.mutate(async () => {
       await this.checkVersion(input.target.filename, input.target.updatedAt);
       await this.checkVersion(input.coveredBy.filename, input.coveredBy.updatedAt);
-      await this.deleteFile(input.target.filename);
+      try {
+        await this.deleteFile(input.target.filename);
+      } catch (e) {
+        // 与合并同一判定: 分片已删、只是后面重建索引失败时, 删除算已提交, 交给调用方记录并撤销。
+        if (await this.shardGone(input.target.filename)) return { failure: e };
+        throw e;
+      }
+      return {};
     });
+  }
+
+  /** 分片文件此刻是否已不在存储目录里 (删除是否已经提交, 与派生索引是否重建成功无关)。 */
+  private async shardGone(filename: string): Promise<boolean> {
+    try {
+      await fs.stat(path.join(this.dir, filename));
+      return false;
+    } catch (e) {
+      return isENOENT(e);
+    }
   }
 
   /**
