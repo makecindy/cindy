@@ -170,15 +170,17 @@ describe('CustomMcpProvider', () => {
     expect(Object.keys(dash)[0]).not.toBe(Object.keys(under)[0]);
   });
 
-  it('configSignature identifies the endpoint, not the provider object or its token', () => {
+  it('configSignature tracks the effective request identity, not the provider object', () => {
     const version = (config: Partial<CustomMcpConfig>, token: string | null = null) =>
       make(config, token).configSignature();
-    // The registry rebuilds provider objects on every save, so equal signatures must survive it.
+    // The registry rebuilds provider objects on every save, so equal configs must match.
     expect(version({})).toBe(version({}));
     expect(version({ headers: { a: '1', b: '2' } })).toBe(version({ headers: { b: '2', a: '1' } }));
     expect(version({ url: 'https://other.example/mcp' })).not.toBe(version({}));
     expect(version({ transport: 'sse' })).not.toBe(version({}));
-    // Rotating the token is a credential change, not a different server.
-    expect(version({}, 'token-a')).toBe(version({}, 'token-b'));
+    // The facade's revision covers real headers, so a rotated token must start a new session.
+    expect(version({}, 'token-a')).not.toBe(version({}, 'token-b'));
+    // The digest keeps the signature from carrying a credential in clear text.
+    expect(version({}, 'token-a')).not.toContain('token-a');
   });
 });

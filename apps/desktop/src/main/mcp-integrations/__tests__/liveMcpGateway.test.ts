@@ -92,6 +92,15 @@ describe('stable live MCP entry', () => {
     // Registry refreshes hand back a new provider object each call; that is not a new server.
     expect(f.resolveCalls()).toBe(2);
   });
+  it('shares one handshake when the same task calls a server concurrently', async () => {
+    const f = statefulFixture();
+    const call = () => f.gateway(context, { action: 'call', server: 'custom_example', tool: 'increment', arguments: {} });
+    // Two first calls race before either handshake finishes; the losers must not leak.
+    await Promise.all([call(), call(), call()]);
+    expect(f.created()).toBe(1);
+    expect(await call()).toMatchObject({ content: [{ type: 'text', text: '4' }] });
+    expect(f.created()).toBe(1);
+  });
   it("starts a new upstream session when this server's configuration changes", async () => {
     const f = statefulFixture();
     const call = () => f.gateway(context, { action: 'call', server: 'custom_example', tool: 'increment', arguments: {} });

@@ -36,6 +36,9 @@ export function createLiveMcpGateway(deps: {
   idleMs?: number;
 }): Invoke {
   const connections = new Map<string, LiveConnection>();
+  /** Handshakes in flight, so concurrent first calls share one upstream session instead of
+   *  creating several and leaking the losers (the App host has a fixed connection budget). */
+  const connecting = new Map<string, Promise<LiveConnection | null>>();
 
   const closeConnection = (connection: LiveConnection) => {
     void connection.client.close().catch(() => {});
@@ -83,17 +86,31 @@ export function createLiveMcpGateway(deps: {
     try {
       let connection = connections.get(key);
       if (!connection) {
+        let handshake = connecting.get(key);
+        if (!handshake) {
+          handshake = (async (): Promise<LiveConnection | null> => {
+            const config = entry.create({ ...context, agentKind: context.agentKind as McpProviderContext['agentKind'],
+            getSessionContext: () => { assertCurrent(); return context as McpProviderContext; } }) as
+              { type?: string; instance?: McpServer } | null;
+            if (config?.type !== 'sdk' || !config.instance) return null;
+            const client = new Client({ name: 'cindy-task-mcp', version: '1' });
+            const [ct, st] = InMemoryTransport.createLinkedPair();
+            try {
+              await Promise.all([config.instance.connect(st), client.connect(ct, { signal, timeout: 15_000 })]);
+            } catch (error) {
+              void client.close().catch(() => {});
+              void config.instance.close().catch(() => {});
+              throw error;
+            }
+            const opened: LiveConnection = { signature, server: config.instance, client, lastUsed: Date.now() };
+            connections.set(key, opened);
+            return opened;
+          })().finally(() => { connecting.delete(key); });
+          connecting.set(key, handshake);
+        }
+        connection = await handshake ?? undefined;
+        if (!connection) return failure('MCP_GATEWAY_UNAVAILABLE');
         assertCurrent();
-        const config = entry.create({ ...context, agentKind: context.agentKind as McpProviderContext['agentKind'],
-        getSessionContext: () => { assertCurrent(); return context as McpProviderContext; } }) as
-          { type?: string; instance?: McpServer } | null;
-        if (config?.type !== 'sdk' || !config.instance) return failure('MCP_GATEWAY_UNAVAILABLE');
-        const client = new Client({ name: 'cindy-task-mcp', version: '1' });
-        const [ct, st] = InMemoryTransport.createLinkedPair();
-        await Promise.all([config.instance.connect(st), client.connect(ct, { signal, timeout: 15_000 })]);
-        assertCurrent();
-        connection = { signature, server: config.instance, client, lastUsed: Date.now() };
-        connections.set(key, connection);
       }
       connection.lastUsed = Date.now();
       if (request.action === 'list') {

@@ -30,6 +30,7 @@ import type {
 
 import type { CustomMcpConfig } from '../maker-host/custom-mcp-store.desktop.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createHash } from 'node:crypto';
 import type { AppServerConfig } from '../mcp-apps/connection.js';
 
 /**
@@ -101,20 +102,24 @@ export class CustomMcpProvider implements McpProvider {
   }
 
   /**
-   * Stable identity of this connection's configuration.
+   * Stable identity of this connection's effective configuration.
    *
    * The registry rebuilds every provider object on any custom-MCP save, so callers that
    * need "did *this* server change?" must compare this signature instead of object
-   * identity — otherwise saving an unrelated server cancels in-flight calls. A token
-   * rotation is deliberately excluded: it is a credential change, not a new endpoint.
+   * identity — otherwise saving an unrelated server cancels in-flight calls. The live
+   * facade's own revision covers the real request headers (including a rotated bearer
+   * token), so credentials are folded in as a digest to keep the signature secret-free.
    */
   configSignature(): string {
+    const headers = Object.entries(this.buildHeaders() ?? {}).sort(([a], [b]) => a.localeCompare(b));
+    const auth = createHash('sha256').update(JSON.stringify(headers)).digest('hex');
     return JSON.stringify([
       this.config.id,
       this.config.name,
       this.config.transport,
       this.config.url,
-      Object.entries(this.config.headers ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+      this.config.headers ? Object.keys(this.config.headers).sort() : [],
+      auth,
     ]);
   }
 
