@@ -1529,6 +1529,60 @@ describe('Chat Server result delivery and refresh', () => {
     expect(edits).toHaveLength(1);
   });
 
+  // bot-group-chat.md §10 (2026-11-11 owner decision): the task stopped and nobody in the group could
+  // tell why. The reply of the turn the task was created with comes back to the group once, as the
+  // teammate, where the card is, and the card names where it stopped. The owner's own later turn in
+  // the task stays there, also when the owner typed into it before that first turn ended (2 requests).
+  // A failed post is retried as the same operation, never posted twice.
+  it.each([1, 2])('posts the reply of the turn a card task was created with once, and none of the owner\'s own turns (requests: %i)', async (firstRequests) => {
+    const cardId = '70000000-0000-4000-8000-000000000001';
+    const replies: unknown[] = [];
+    const cards: Array<Record<string, unknown> | undefined> = [];
+    let replyUnavailable = true;
+    let requests = firstRequests;
+    deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Fix login', state: 'idle' as const }));
+    deps.countTaskRequests = vi.fn(async () => requests);
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/executions/claim') { const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' }; claimed = true; return { body: { execution: next } }; }
+      if (route === `/conversations/${roomId}/messages` && method === 'POST') {
+        if (!String(body.operationId).startsWith('task-reply:')) return { body: { id: cardId, revision: 1 } };
+        if (replyUnavailable) { replyUnavailable = false; return { status: 503, body: { code: 'UNAVAILABLE' } }; }
+        replies.push(body);
+        return { body: { id: '70000000-0000-4000-8000-000000000002', revision: 1 } };
+      }
+      if (method === 'PATCH' && route.includes('/messages/')) { cards.push(body.content[0].data); return { body: { revision: cards.length + 1 } }; }
+      return response(route);
+    });
+    await start();
+    reportGroupTaskCreated('lane', { taskId: 'task-1', deviceId: null, title: 'Fix login' });
+    await vi.advanceTimersByTimeAsync(0);
+    const reply = '## Preflight **failed**\n\nThe lint step failed, see [the log](https://example.com/log).';
+    const ended = { ...terminal, sessionId: 'task-1', activeInputClientId: 'created-with' };
+    await service.settleLaneTurn({ ...ended, resultText: reply });
+    await vi.advanceTimersByTimeAsync(0);
+    if (firstRequests === 2) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(replies).toHaveLength(0);
+      expect(cards.at(-1)).toMatchObject({ state: 'idle' });
+      expect(cards.at(-1)).not.toHaveProperty('summary');
+      return;
+    }
+    expect(cards.at(-1)).toMatchObject({ state: 'idle', summary: 'Preflight failed' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(replies).toEqual([{ operationId: `task-reply:${cardId}`, content: [{ type: 'text', text: reply }], mentions: [] }]);
+    // The same turn end again (a retry, a restart) and later sync passes do not post it again.
+    await service.settleLaneTurn({ ...ended, resultText: reply });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(replies).toHaveLength(1);
+    // The owner then talks to the task directly: the card stops naming the group turn, nothing is posted.
+    requests = 2;
+    await service.settleLaneTurn({ ...ended, activeInputClientId: 'owner-typed', resultText: 'Private answer' });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(replies).toHaveLength(1);
+    expect(cards.at(-1)).toMatchObject({ state: 'idle' });
+    expect(cards.at(-1)).not.toHaveProperty('summary');
+  });
+
   // bot-group-chat.md §10 (2026-11-11 owner decision): words in the Thread under a task card go
   // into the card's task as one message from that member, and the task's reply is the Thread reply.
   // Only the owner's own words speak for the owner; chat-only access or a gone task keep the lane.

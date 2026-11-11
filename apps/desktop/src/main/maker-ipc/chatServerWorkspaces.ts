@@ -33,6 +33,14 @@ const liveTaskCard = z.object({
   taskId: z.string(), deviceId: z.string().nullable(), title: z.string(), requesterName: z.string(), botName: z.string(),
   // Early builds of this card recorded `finished` for the same state.
   state: z.preprocess(value => value === 'finished' ? 'idle' : value, z.enum(['running', 'waiting', 'idle', 'failed'])), prUrl: z.string().optional(),
+  /** The line the card shows after its state, and the one it shows once the task is not running. */
+  summary: z.string().optional(), lastLine: z.string().optional(),
+  /**
+   * The reply of the turn the task was created with, posted to the group once: `text` until the
+   * group has it, then `messageId`; neither when it could not be posted.
+   */
+  reply: z.object({ text: z.string().optional(), messageId: z.string().optional(),
+    attempts: z.number().int().nonnegative().optional(), retryAt: z.number().optional() }).optional(),
   /** The posted message's server revision; the next edit expects it. */
   revision: z.number().int().positive(), createdAt: z.number(),
 });

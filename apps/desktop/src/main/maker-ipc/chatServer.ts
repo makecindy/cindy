@@ -53,7 +53,7 @@ import {
   type BotGroupThreadShareView, type BotGroupThreadSummary, type BotGroupThreadUnread,
   type BotGroupDetail, type BotGroupMessageReaders, type BotGroupSpeaker, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi,
   botGroupQuoteAttachmentName, botGroupQuoteExcerpt, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupQuote, readBotGroupQuoteCard, type BotGroupQuoteView,
-  readBotGroupTaskCard, readBotGroupLiveTaskCard, buildBotGroupLiveTaskCard, type BotGroupLiveTaskView, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
+  readBotGroupTaskCard, readBotGroupLiveTaskCard, buildBotGroupLiveTaskCard, botGroupLiveTaskReplyLine, type BotGroupLiveTaskView, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
   readBotGroupCapabilityNotice, buildBotGroupCapabilityNotice, type BotGroupCapabilityNoticeCode,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments } from './botGroupChatService.js';
@@ -2213,42 +2213,108 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   /** Cards follow their task for a week; after that a card keeps what it last said. */
   const TASK_CARD_FOLLOW_MS = 7 * 24 * 60 * 60_000;
+  /** A task's reply that could not reach the group is retried with backoff, then dropped. */
+  const TASK_REPLY_ATTEMPTS = 8;
+  /** Read-modify-write of one card record against the current file, never a stale copy. */
+  function updateTaskCard(messageId: string, change: (card: ChatLiveTaskCardRecord) => ChatLiveTaskCardRecord | null) {
+    if (!current()) return;
+    const cards = taskCards().read();
+    const card = cards[messageId];
+    if (!card) return;
+    const next = change(card);
+    if (next) cards[messageId] = next; else delete cards[messageId];
+    taskCards().save(cards);
+  }
+  /**
+   * A card task's turn ended on this computer (bot-group-chat.md §10, 2026-11-11). The turn the
+   * task was created with — the task still holds only that request — gets its reply posted to the
+   * group once, where the card is; a turn from the card's Thread already answered there. Either
+   * gives the card its line. A turn the owner started in the task stays in the task: it only
+   * moves the card's state, and the card shows no line from it.
+   */
+  async function noteCardTaskTurn(terminal: BotGroupLaneTerminal, fromThread: boolean) {
+    if (!current() || !terminal.sessionId) return;
+    const mine = Object.entries(taskCards().read()).filter(([, card]) => card.taskId === terminal.sessionId
+      && !(card.deviceId && selfDeviceId && card.deviceId !== selfDeviceId));
+    if (!mine.length) return;
+    let text = terminal.resultText;
+    if (terminal.outcome === 'done' && !text.trim() && terminal.resultMessageClientId)
+      text = (await readPersistedReplyText(terminal.sessionId, terminal.resultMessageClientId).catch(() => null)) ?? '';
+    text = isBotGroupNoReplyText(text) ? '' : text.trim();
+    const created = !fromThread && mine.some(([, card]) => !card.reply)
+      && (await deps.countTaskRequests?.(terminal.sessionId).catch(() => 0)) === 1;
+    const line = fromThread || created ? botGroupLiveTaskReplyLine(text) : '';
+    for (const [messageId] of mine) updateTaskCard(messageId, card => {
+      const next: ChatLiveTaskCardRecord = { ...card, lastLine: line || undefined };
+      if (created && text && !card.reply) next.reply = { text: text.slice(0, 16000) };
+      return next;
+    });
+    void syncTaskCards(true);
+  }
+  /** Posts a card task's reply as the teammate where the card is; the operation makes a retry the same message. */
+  async function postTaskReply(messageId: string, card: ChatLiveTaskCardRecord) {
+    const reply = card.reply;
+    if (!reply?.text || reply.messageId || Date.now() < (reply.retryAt ?? 0)) return;
+    try {
+      const posted = await api<{ id: string }>(`/conversations/${card.roomId}/messages`, 'POST', {
+        operationId: `task-reply:${messageId}`, content: [{ type: 'text', text: reply.text }], mentions: [],
+        ...(card.threadRootId ? { threadRootId: card.threadRootId } : {}),
+      }, card.botId);
+      updateTaskCard(messageId, fresh => ({ ...fresh, reply: typeof posted?.id === 'string' ? { messageId: posted.id } : {} }));
+      changed(card.roomId);
+    } catch (error) {
+      const attempts = (reply.attempts ?? 0) + 1;
+      const giveUp = attempts >= TASK_REPLY_ATTEMPTS || error instanceof ChatResponseError && !retryableResponse(error);
+      if (giveUp) deps.log?.warn('Group task reply could not be posted', chatErrorDiagnostic(error));
+      updateTaskCard(messageId, fresh => ({ ...fresh, reply: giveUp ? {}
+        : { text: reply.text, attempts, retryAt: Date.now() + 15_000 * 2 ** (attempts - 1) } }));
+    }
+  }
   let syncingTaskCards = false;
-  async function syncTaskCards() {
-    if (syncingTaskCards || !current() || !deps.readGroupTaskStatus) return;
+  let syncTaskCardsAgain = false;
+  /** `soon`: a turn just ended; if a pass is under way, run another right after it. */
+  async function syncTaskCards(soon = false) {
+    if (syncingTaskCards) { if (soon) syncTaskCardsAgain = true; return; }
+    if (!current() || !deps.readGroupTaskStatus) return;
     syncingTaskCards = true;
     try {
-      const cards = taskCards().read();
-      let dirty = false;
-      for (const [messageId, card] of Object.entries(cards)) {
+      for (const [messageId, card] of Object.entries(taskCards().read())) {
         if (!current()) return;
-        if (Date.now() - card.createdAt > TASK_CARD_FOLLOW_MS) { delete cards[messageId]; dirty = true; continue; }
+        if (Date.now() - card.createdAt > TASK_CARD_FOLLOW_MS) { updateTaskCard(messageId, () => null); continue; }
         // Only the computer running the task reads it; another of my computers keeps its own cards.
         if (card.deviceId && selfDeviceId && card.deviceId !== selfDeviceId) continue;
+        await postTaskReply(messageId, card);
         const status = await deps.readGroupTaskStatus(card.taskId).catch(() => undefined);
         if (status === undefined) continue;
-        if (status === null) { delete cards[messageId]; dirty = true; continue; }
+        if (status === null) { updateTaskCard(messageId, () => null); continue; }
+        const latest = taskCards().read()[messageId];
+        if (!latest) continue;
         // A task with no recorded turn end (e.g. after a restart) is idle once it has had time to start.
-        const state = status.state ?? (card.state === 'running' && Date.now() - card.createdAt > 120_000 ? 'idle' : card.state);
-        const next: BotGroupLiveTaskView = { taskId: card.taskId, deviceId: card.deviceId, title: status.title || card.title, state,
-          requesterName: card.requesterName, botName: card.botName, ...(status.prUrl ?? card.prUrl ? { prUrl: status.prUrl ?? card.prUrl } : {}) };
-        if (next.title === card.title && next.state === card.state && next.prUrl === card.prUrl) continue;
+        const state = status.state ?? (latest.state === 'running' && Date.now() - latest.createdAt > 120_000 ? 'idle' : latest.state);
+        const next: BotGroupLiveTaskView = { taskId: latest.taskId, deviceId: latest.deviceId, title: status.title || latest.title, state,
+          requesterName: latest.requesterName, botName: latest.botName, ...(status.prUrl ?? latest.prUrl ? { prUrl: status.prUrl ?? latest.prUrl } : {}),
+          // Where it stopped comes with a turn's end. `running` and `waiting` are inside a turn, which
+          // has no reply yet, so they show no line.
+          ...((state === 'idle' || state === 'failed') && latest.lastLine ? { summary: latest.lastLine } : {}) };
+        if (next.title === latest.title && next.state === latest.state && next.prUrl === latest.prUrl && next.summary === latest.summary) continue;
         try {
-          const edited = await api<{ revision?: number }>(`/conversations/${card.roomId}/messages/${id.parse(messageId)}`, 'PATCH', {
-            operationId: `task-card:${messageId}:${card.revision}`, expectedRevision: card.revision, content: [liveTaskCard(next)],
-          }, card.botId);
-          cards[messageId] = { ...card, ...next, revision: edited?.revision ?? card.revision + 1 };
-          dirty = true;
-          changed(card.roomId);
+          const edited = await api<{ revision?: number }>(`/conversations/${latest.roomId}/messages/${id.parse(messageId)}`, 'PATCH', {
+            operationId: `task-card:${messageId}:${latest.revision}`, expectedRevision: latest.revision, content: [liveTaskCard(next)],
+          }, latest.botId);
+          updateTaskCard(messageId, fresh => ({ ...fresh, title: next.title, state: next.state, prUrl: next.prUrl,
+            summary: next.summary, revision: edited?.revision ?? latest.revision + 1 }));
+          changed(latest.roomId);
         } catch (error) {
           // A deleted card, a teammate that left or a card edited elsewhere is no longer ours to keep.
-          if (error instanceof ChatResponseError && [403, 404, 409, 410].includes(error.status)) { delete cards[messageId]; dirty = true; }
+          if (error instanceof ChatResponseError && [403, 404, 409, 410].includes(error.status)) updateTaskCard(messageId, () => null);
         }
       }
-      if (dirty && current()) taskCards().save(cards);
     } catch (error) {
       deps.log?.warn('Group task cards could not be refreshed', chatErrorDiagnostic(error));
-    } finally { syncingTaskCards = false; }
+    } finally {
+      syncingTaskCards = false;
+      if (syncTaskCardsAgain) { syncTaskCardsAgain = false; void syncTaskCards(); }
+    }
   }
   async function validateExecutionAuthority(run: Running): Promise<void> {
     const execution = run.execution;
@@ -4060,6 +4126,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // A task card's task also runs its owner's own turns: only this turn's input ends it.
       const run = [...running.values()].find(r => r.sessionId === terminal.sessionId
         && (!r.inTask || r.clientId === terminal.activeInputClientId));
+      void noteCardTaskTurn(terminal, run?.inTask === true)
+        .catch(error => deps.log?.warn('Group task card turn could not be noted', chatErrorDiagnostic(error)));
       if (!run) return local.settleLaneTurn(terminal);
       if (terminal.activeInputClientId ? terminal.activeInputClientId !== run.clientId : !run.accepted) return false;
       await settleExecution(run, terminal, terminal.undispatched);

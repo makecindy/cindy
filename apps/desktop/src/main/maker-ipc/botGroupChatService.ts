@@ -194,6 +194,11 @@ export interface BotGroupChatServiceDeps {
    * when the task is gone (bot-group-chat.md §10).
    */
   readGroupTaskStatus?: (taskId: string) => Promise<{ title: string; state?: 'running' | 'waiting' | 'idle' | 'failed'; prUrl?: string } | null>;
+  /**
+   * How many messages people (or the companion that created it) have sent into this task, read up
+   * to 2: 1 means the task still holds only the request it was created with.
+   */
+  countTaskRequests?: (taskId: string) => Promise<number>;
   /** Registered project folders on this computer whose git `origin` is this GitHub repository. */
   findProjectDirsForRepo?: (repo: string) => Promise<string[]>;
   /**

@@ -141,6 +141,8 @@ export interface BotGroupLiveTaskView {
   botName: string;
   /** The task's pull request, when it has recorded one. */
   prUrl?: string;
+  /** Where the task stopped: one plain line of its last reply the group may read; absent while running. */
+  summary?: string;
 }
 
 export interface BotGroupLiveTaskCardLabels {
@@ -151,17 +153,36 @@ export interface BotGroupLiveTaskCardLabels {
 
 const PR_URL = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/;
 const NAME_MAX = 80;
+const LINE_MAX = 80;
+
+/**
+ * The card's one line for a task reply: its first non-empty line as plain text (Markdown markers
+ * dropped, a link reads as its words), clipped. Empty when the reply has no text.
+ */
+export function botGroupLiveTaskReplyLine(reply: string): string {
+  for (const raw of reply.split(/\r?\n/)) {
+    const line = raw
+      .replace(/^\s*(?:```.*|#{1,6}\s+|>\s*|[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+[.)]\s+)+/, '')
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/(\*\*|__|~~|`)/g, '')
+      .replace(/(^|[\s(])[*_]([^*_\s][^*_]*)[*_](?=$|[\s.,;:!?)])/g, '$1$2');
+    const text = clip(line, LINE_MAX);
+    if (text) return text;
+  }
+  return '';
+}
 
 export function buildBotGroupLiveTaskCard(view: BotGroupLiveTaskView, labels: BotGroupLiveTaskCardLabels) {
   const title = clip(view.title, TITLE_MAX) || clip(labels.untitled, TITLE_MAX);
+  const summary = view.summary ? clip(view.summary, LINE_MAX) : '';
   return {
     type: 'card' as const,
     namespace: BOT_GROUP_TASK_NAMESPACE,
     schemaRevision: BOT_GROUP_LIVE_TASK_SCHEMA_REVISION,
-    fallback: `[${labels.task}] ${title} · ${labels.states[view.state]}${view.prUrl ? ` · ${view.prUrl}` : ''}`,
+    fallback: `[${labels.task}] ${title} · ${labels.states[view.state]}${summary ? ` · ${summary}` : ''}${view.prUrl ? ` · ${view.prUrl}` : ''}`,
     data: { taskId: view.taskId, deviceId: view.deviceId, title, state: view.state,
       requesterName: clip(view.requesterName, NAME_MAX), botName: clip(view.botName, NAME_MAX),
-      ...(view.prUrl && PR_URL.test(view.prUrl) ? { prUrl: view.prUrl } : {}) },
+      ...(view.prUrl && PR_URL.test(view.prUrl) ? { prUrl: view.prUrl } : {}), ...(summary ? { summary } : {}) },
   };
 }
 
@@ -185,7 +206,10 @@ export function parseBotGroupLiveTaskView(value: unknown): BotGroupLiveTaskView 
   if (typeof state !== 'string' || !LIVE_STATES.includes(state as BotGroupLiveTaskState)) return null;
   if (typeof data.title !== 'string' || typeof data.requesterName !== 'string' || typeof data.botName !== 'string') return null;
   if (data.prUrl !== undefined && (typeof data.prUrl !== 'string' || !PR_URL.test(data.prUrl))) return null;
+  // Optional since 2026-11-11; cards posted before then have none.
+  if (data.summary !== undefined && typeof data.summary !== 'string') return null;
+  const summary = typeof data.summary === 'string' ? clip(data.summary, LINE_MAX) : '';
   return { taskId: data.taskId, deviceId: data.deviceId as string | null, title: clip(data.title, TITLE_MAX),
     state: state as BotGroupLiveTaskState, requesterName: clip(data.requesterName, NAME_MAX), botName: clip(data.botName, NAME_MAX),
-    ...(data.prUrl ? { prUrl: data.prUrl as string } : {}) };
+    ...(data.prUrl ? { prUrl: data.prUrl as string } : {}), ...(summary ? { summary } : {}) };
 }

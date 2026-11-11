@@ -103,4 +103,10 @@ describe('BotGroupLiveTaskCard', () => {
     if (here) expect(nav.pin).not.toHaveBeenCalled();
     else expect(nav.pin).toHaveBeenCalledWith('other-mac', 'task-1');
   });
+
+  // 2026-11-11 owner decision: where the task stopped follows its state on the same line.
+  it('shows where the task stopped after its state', () => {
+    render(<BotGroupLiveTaskCard task={{ ...live, state: 'idle', summary: 'Preflight failed' }} />);
+    expect(screen.getByTitle('bots.groupChat.task.askedBy · bots.groupChat.task.live.idle · Preflight failed')).toBeTruthy();
+  });
 });

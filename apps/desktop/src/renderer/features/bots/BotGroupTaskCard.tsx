@@ -48,7 +48,7 @@ export function BotGroupTaskCard({ task, owned, botId }: { task: BotGroupTaskCar
 
 /**
  * An ordinary task a teammate opened from this group (bot-group-chat.md §10, card revision 2): title,
- * who asked and the task's state as the teammate's owner's computer last posted it. That owner opens
+ * who asked, the task's state and where it stopped, as the teammate's owner's computer last posted it. That owner opens
  * the task itself (here, or on the computer that runs it); other members see the card only.
  */
 export function BotGroupLiveTaskCard({ task }: { task: NonNullable<BotGroupMessageView['liveTask']> }) {
@@ -56,6 +56,8 @@ export function BotGroupLiveTaskCard({ task }: { task: NonNullable<BotGroupMessa
   const navigate = useNavigate();
   const state = t(`bots.groupChat.task.live.${task.state}`);
   const asked = task.requesterName ? t('bots.groupChat.task.askedBy', { requester: task.requesterName }) : '';
+  // Where the task stopped follows its state on the same line, cut at the card's edge.
+  const status = [asked, state, task.summary].filter(Boolean).join(' · ');
   const open = () => {
     if (!task.here && task.deviceId) remoteProjectsStore.pinSessionOrigin(task.deviceId, task.taskId);
     void resolveSessionRoute(task.taskId, undefined, task.here ? undefined : { remote: true }).then(route => navigate(route));
@@ -64,7 +66,7 @@ export function BotGroupLiveTaskCard({ task }: { task: NonNullable<BotGroupMessa
     <ListTodo size={14} aria-hidden className="mt-[5px] shrink-0 text-[var(--text-tertiary)]" />
     <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
       <span className="truncate text-13 font-medium leading-6 text-[var(--text-primary)]">{task.title || t('bots.groupChat.task.untitled')}</span>
-      <span className="min-w-0 break-words text-12 leading-5 text-[var(--text-tertiary)]">{asked ? `${asked} · ${state}` : state}</span>
+      <span title={status} className="min-w-0 truncate text-12 leading-5 text-[var(--text-tertiary)]">{status}</span>
     </span>
   </>;
   const pr = task.prUrl ? <button type="button" onClick={() => void window.electronAPI.openExternal(task.prUrl!)}
