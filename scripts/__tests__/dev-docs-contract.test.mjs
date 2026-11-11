@@ -387,10 +387,17 @@ test("client CI keeps the complete sharded unit gate on Windows", () => {
 	}
 	assert.doesNotMatch(events, /paths(?:-ignore)?:/);
 
+	// Main pushes test every commit, but Windows jobs from an older commit are
+	// superseded by the newest one; PRs and the merge queue get no job-level group.
+	assert.match(shards, /^    concurrency:\n      group: \$\{\{ github\.event_name == 'push' && format\('client-ci-main-windows-unit-\{0\}', matrix\.shard\) \|\| format\('client-ci-windows-unit-\{0\}-\{1\}', matrix\.shard, github\.run_id\) \}\}\n      cancel-in-progress: true$/m);
+	assert.match(runnerChecks, /^    concurrency:\n      group: \$\{\{ github\.event_name == 'push' && 'client-ci-main-windows-runner-checks' \|\| format\('client-ci-windows-runner-checks-\{0\}', github\.run_id\) \}\}\n      cancel-in-progress: true$/m);
+
 	const gate = workflowJob(workflow, "windows-unit");
 	assert.ok(gate, "client CI must preserve the stable Windows unit check");
 	assert.match(gate, /^    name: Windows unit tests$/m);
-	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
+	// Only a superseded main push may skip the gate; a skipped required check
+	// counts as passing on PRs and in the merge queue.
+	assert.match(gate, /^    if: \$\{\{ always\(\) && !\(github\.event_name == 'push' && contains\(needs\.\*\.result, 'cancelled'\) && !contains\(needs\.\*\.result, 'failure'\)\) \}\}$/m);
 	assert.match(gate, /^      - windows-unit-shards$/m);
 	assert.match(gate, /^      - windows-runner-checks$/m);
 	assert.match(gate, /^          WINDOWS_UNIT_SHARDS_RESULT: \$\{\{ needs\.windows-unit-shards\.result \}\}$/m);
@@ -401,6 +408,12 @@ test("client CI keeps the complete sharded unit gate on Windows", () => {
 
 test("client CI runs Linux checks and complete unit shards in parallel behind stable verify", () => {
 	const workflow = readText(".github/workflows/ci.yml");
+	// The SHA keeps every main commit in its own group: without it, even
+	// cancel-in-progress: false keeps one running and one pending run per group.
+	assert.match(workflow, /^concurrency:\n  group: client-ci-\$\{\{ github\.event\.pull_request\.number \|\| \(github\.event_name == 'push' && format\('main-\{0\}', github\.sha\)\) \|\| github\.ref \}\}\n  cancel-in-progress: true$/m);
+	for (const job of ["verify-checks", "linux-unit-shards", "host-changes", "host-regressions", "verify"]) {
+		assert.doesNotMatch(workflowJob(workflow, job), /^    concurrency:/m, `${job} must finish for every main commit`);
+	}
 	const checks = workflowJob(workflow, "verify-checks");
 	assert.ok(checks, "client CI must define independent Linux verification checks");
 	assert.doesNotMatch(checks, /^    needs:/m);

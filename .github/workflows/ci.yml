@@ -13,8 +13,12 @@ on:
 permissions:
   contents: read
 
+# PR 与 merge queue 的新 run 取消同组旧 run。main push 每个 commit 独占一组，
+# typecheck 与 Linux 单测逐 commit 跑完，main 变红时可二分定位；只关
+# cancel-in-progress 不够：一组仍只容一个运行、一个等待，旧的等待 run 会被替换。
+# Windows job 在 main 上另用 job 级组互相取消，见 windows-unit-shards 的注释。
 concurrency:
-  group: client-ci-${{ github.event.pull_request.number || github.ref }}
+  group: client-ci-${{ github.event.pull_request.number || (github.event_name == 'push' && format('main-{0}', github.sha)) || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -306,6 +310,12 @@ jobs:
     name: Windows unit tests (${{ matrix.shard }}/4)
     runs-on: windows-latest
     timeout-minutes: 40
+    # main push：同一分片的新 commit 取消旧 commit 的分片，只保证最新 commit 跑完，
+    # 不让每个 commit 各占 4 台 Windows runner、挤占 PR 的 Windows 分片。其它事件按
+    # run 独占一组，等于不设 job 级限制，取消仍只由 workflow 级 group 决定。
+    concurrency:
+      group: ${{ github.event_name == 'push' && format('client-ci-main-windows-unit-{0}', matrix.shard) || format('client-ci-windows-unit-{0}-{1}', matrix.shard, github.run_id) }}
+      cancel-in-progress: true
     strategy:
       fail-fast: false
       matrix:
@@ -360,6 +370,10 @@ jobs:
     name: Windows runner and database checks
     runs-on: windows-latest
     timeout-minutes: 25
+    # 与 Windows 分片相同：main push 上只保证最新 commit 跑完。
+    concurrency:
+      group: ${{ github.event_name == 'push' && 'client-ci-main-windows-runner-checks' || format('client-ci-windows-runner-checks-{0}', github.run_id) }}
+      cancel-in-progress: true
 
     steps:
       - name: Checkout client
@@ -420,9 +434,12 @@ jobs:
         run: node scripts/ci-database-tests.mjs run
 
   # 保留稳定的必需检查名，并确保任一分片或一次性检查失败、取消都会阻断汇总门禁。
+  # 唯一例外是 main push：Windows job 被更新的 commit 取消（且没有失败）时跳过汇总，
+  # 不把“被取代”报成失败。job 级取消不会让 cancelled() 为真，必须看 needs 结果。
+  # PR 与 merge queue 不能跳过：skipped 的必需检查会被当作通过。
   windows-unit:
     name: Windows unit tests
-    if: ${{ always() }}
+    if: ${{ always() && !(github.event_name == 'push' && contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'failure')) }}
     needs:
       - windows-unit-shards
       - windows-runner-checks
