@@ -4,6 +4,7 @@ import {
   canOfferCodexHistoryRecovery,
   extractNonSecretErrorSignals,
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
+  isAccountUsageLimitReachedText,
   isCindyGatewayProxyTokenInvalidError,
   isGatewayProxyTokenInvalidError,
   isResponsesLiteParallelToolCallsError,
@@ -74,6 +75,35 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     'exceeded retry limit, last status: 429 Too Many Requests',
   ])('does not treat transient or retry exhaustion as usage exhaustion: %s', (message) => {
     expect(matchesDeterministicUsageExhaustionText(message)).toBe(false);
+  });
+});
+
+// Desktop and Mobile showed only "reply failed" for a subscription usage limit, so the cause
+// was hidden behind the details toggle. Entry: the shared predicate both summaries call.
+// Balance, budget and transient rate limits have a different next step and must stay out.
+describe('isAccountUsageLimitReachedText', () => {
+  it.each([
+    "You've hit your session limit · resets 1:20am (Asia/Shanghai)",
+    "You've hit your limit · resets 11pm (UTC)",
+    'You’ve hit your usage limit. Try again at 11:30 PM.',
+    'You have hit your ChatGPT usage limit (plus plan). Try again in ~12 min.',
+    'Usage limit reached. Try again in 1h.',
+    '{"error":{"type":"usage_limit_reached","resets_at":1790000000}}',
+    'usageLimitExceeded',
+  ])('recognizes an account usage limit: %s', (message) => {
+    expect(isAccountUsageLimitReachedText(message)).toBe(true);
+  });
+
+  it.each([
+    '',
+    'HTTP 429 Too Many Requests',
+    'Rate limit reached for gpt-5.5',
+    "You've hit your session limit: budget_exceeded",
+    'insufficient_quota: usage limit reached',
+    'You hit your spend cap set by the owner of your workspace.',
+    'Shared task limit reached',
+  ])('leaves other failures to their own guidance: %s', (message) => {
+    expect(isAccountUsageLimitReachedText(message)).toBe(false);
   });
 });
 

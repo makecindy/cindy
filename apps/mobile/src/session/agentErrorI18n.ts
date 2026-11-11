@@ -1,5 +1,5 @@
 import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy/maker-shared';
-import { isResponsesLiteParallelToolCallsError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
+import { isAccountUsageLimitReachedText, isResponsesLiteParallelToolCallsError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
 import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
@@ -112,8 +112,10 @@ export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: u
     : parsed?.code;
   const key = code ? `session.remoteError.${code}` : null;
   if (key && i18n.exists(key)) return key;
-  return isResponsesLiteParallelToolCallsError(message)
-    ? 'session.tail.requestFormatError'
+  if (isResponsesLiteParallelToolCallsError(message)) return 'session.tail.requestFormatError';
+  // The account ran out of its periodic allowance: say so instead of "reply failed".
+  return isAccountUsageLimitReachedText(message)
+    ? 'session.tail.usageLimitReached'
     : 'session.tail.replyFailed';
 }
 
