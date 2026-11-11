@@ -26,6 +26,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PanelRight } from 'lucide-react';
+import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { CHROME_ACTIONS_GEOMETRY } from './chromeActionsGeometry';
 
 import { RightSidebarShell } from '@/features/right-sidebar/RightSidebarShell';
 import { ToastContainer } from '@/components/ui/toast';
@@ -81,7 +83,7 @@ export function SidebarTabWindowLayout() {
     // 必须只由主 renderer 执行。
     makerChatStore.initGlobalListeners({ ownsRemoteAuthRetry: false, ownsRemoteListCache: false });
   }, []);
-  const isMac = window.electronAPI?.platform === 'darwin';
+  const { isMac, isFullscreen, trafficLightInset = CHROME_ACTIONS_GEOMETRY.macTrafficLightLeft } = useMacFullscreen();
   const api = window.electronAPI?.sidebarTabWindow;
   const [assignment, setAssignment] = useState<SidebarTabWindowAssignmentPayload | null>(null);
   const [windowVisible, setWindowVisible] = useState(false);
@@ -328,7 +330,14 @@ export function SidebarTabWindowLayout() {
   );
 
   const context = assignment?.context;
-  const topbarLeading = <div className={isMac ? 'w-[72px] shrink-0' : 'w-1 shrink-0'} />;
+  // Shell 已有 8px 左 padding；总留白与其它原生子窗口一致，为 inset + 2。
+  const topbarLeading = (
+    <div
+      data-testid="sidebar-tab-window-title-spacer"
+      className="shrink-0"
+      style={{ width: isMac && !isFullscreen ? Math.max(0, trafficLightInset - 6) : 4 }}
+    />
+  );
   const topbarTrailing = (
     <>
       {activeTabId && (

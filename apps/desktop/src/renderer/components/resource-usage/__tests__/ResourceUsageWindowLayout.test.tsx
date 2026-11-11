@@ -7,7 +7,7 @@ let resourceBodyProps: {
   shellVisible?: boolean;
   onFirstSample?: () => void;
 } | null = null;
-const fullscreenState = vi.hoisted(() => ({ isMac: false, isFullscreen: false }));
+const fullscreenState = vi.hoisted(() => ({ isMac: false, isFullscreen: false, trafficLightInset: 78 }));
 
 vi.mock('@/features/right-sidebar/plugins/resource-usage/ResourceUsageBody', () => ({
   ResourceUsageBody: (props: typeof resourceBodyProps) => {
@@ -64,6 +64,7 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     resourceClose.mockClear();
     fullscreenState.isMac = false;
     fullscreenState.isFullscreen = false;
+    fullscreenState.trafficLightInset = 78;
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -89,6 +90,19 @@ describe('ResourceUsageWindowRoot prewarm lifecycle', () => {
     render(<ResourceUsageWindowRoot />);
 
     expect(screen.getByText('titleBar.menuItems.resourceUsage')).toBeTruthy();
+  });
+
+  it('scales the resource title safe area with the native-button inset', () => {
+    fullscreenState.isMac = true;
+    fullscreenState.trafficLightInset = 156;
+    const { rerender } = render(<ResourceUsageWindowRoot />);
+    expect(screen.getByTestId('resource-window-title-spacer').style.width).toBe('158px');
+    fullscreenState.trafficLightInset = 130;
+    rerender(<ResourceUsageWindowRoot />);
+    expect(screen.getByTestId('resource-window-title-spacer').style.width).toBe('132px');
+    fullscreenState.trafficLightInset = 78;
+    rerender(<ResourceUsageWindowRoot />);
+    expect(screen.getByTestId('resource-window-title-spacer').style.width).toBe('80px');
   });
 
   // The window has no native backdrop bridge, so with no wallpaper it must stay opaque.

@@ -1278,6 +1278,7 @@ export function MainLayout() {
       onDetachTab: isSecondaryWindow() ? undefined : handleDetachRightSidebarTab,
       // 左栏完全收起 / rail 态时,窗口左上的红绿灯 / ChromeActions 会压到最左面板顶栏。
       sidebarCollapsed: isSidebarCollapsed,
+      sidebarWidth,
       hasRailChromeActions,
     }),
     [
@@ -1285,6 +1286,7 @@ export function MainLayout() {
       hasRailChromeActions,
       isMac,
       isSidebarCollapsed,
+      sidebarWidth,
       rightSidebarSessionId,
       rightSidebarSubagentsAvailable,
       rightSidebarWorkdirInfo,

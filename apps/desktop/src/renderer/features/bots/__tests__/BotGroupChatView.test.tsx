@@ -2372,14 +2372,18 @@ describe('BotGroupChatView', () => {
 
     it('keeps the local image on screen while the server copy of a confirmed message is still loading', async () => {
       const send = pendingSend();
+      const user = userEvent.setup();
       renderView();
       await screen.findByRole('textbox');
       pickFiles([diskFile('photo.png', 'image/png')]);
       await screen.findByAltText('photo.png');
-      fireEvent.click(screen.getByRole('button', { name: 'bots.send' }));
+      // Complete the click/React handoff before advancing the server fixture.
+      await user.click(screen.getByRole('button', { name: 'bots.send' }));
       // Out of the tray and into the pending bubble at once.
       expect(within(outboxItems()[0]!).getByAltText('photo.png')).toBeTruthy();
       await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1));
+      // Send-start is not a DOM commit: the tray must release its own copy first.
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Preview photo.png' })).toBeNull());
 
       const image = { id: 's1', name: 'photo.png', category: 'image' as const, mimeType: 'image/png', size: 7 };
       mocks.getBotGroup.mockResolvedValue({
@@ -2394,7 +2398,15 @@ describe('BotGroupChatView', () => {
         expect(outboxItems()).toHaveLength(0);
         expect(screen.getAllByAltText('photo.png')).toHaveLength(1);
         expect(screen.getByAltText('photo.png').getAttribute('src')).toContain('photo.png');
-      });
+      }, { onTimeout: (error) => {
+        // Keep a slow-runner failure actionable without weakening the count assertion.
+        error.message += '\nPhoto origins: ' + JSON.stringify(screen.queryAllByAltText('photo.png').map(image => ({
+          src: image.getAttribute('src'),
+          inTimeline: Boolean(image.closest('[data-testid="bot-group-timeline"]')),
+          message: image.closest('[data-bot-group-message-id]')?.getAttribute('data-bot-group-message-id'),
+        })));
+        return error;
+      } });
 
       mocks.getBotGroup.mockResolvedValue({
         ok: true,
