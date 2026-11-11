@@ -19,7 +19,9 @@ import {
 import {
   DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+  DEVICE_LINK_CAPABILITY_TRANSPORT_ACK_V2,
   DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+  TRANSPORT_DELAYED_ACK_MS,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
   MAX_TRANSPORT_PENDING_MESSAGES,
   MAX_TRANSPORT_REASSEMBLIES,
@@ -9160,8 +9162,9 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
         parseTransportAck(env)?.linkRequestId !== undefined
       ));
       expect(confirmationAcks).toHaveLength(3);
+      // 普通累计 ACK 上兜底附带的确认 id 在 transport-ack-v2 下只带前缀（显式确认帧仍是全长）。
       expect(confirmationAcks.every((env) => (
-        parseTransportAck(env)?.linkRequestId === linkRequestId
+        linkRequestId!.startsWith(parseTransportAck(env)?.linkRequestId ?? '\u0000')
       ))).toBe(true);
     } finally {
       offHost();
@@ -12801,8 +12804,9 @@ describe('推送传输编码（push-deflate-v1）', () => {
       parts[parsed.meta.segment?.index ?? 0] = parsed.data;
       bySeq.set(parsed.meta.seq, parts);
     }
+    // skip 占位（被换掉的积压推送）没有 channel，不算一条业务推送。
     return [...bySeq.values()].map((parts) => JSON.parse(parts.join('')) as Record<string, unknown>)
-      .filter((push) => push.channel !== DEVICE_LINK_TRANSPORT_ACK_CHANNEL);
+      .filter((push) => typeof push.channel === 'string' && push.channel !== DEVICE_LINK_TRANSPORT_ACK_CHANNEL);
   };
   const isCompressed = (push: Record<string, unknown>) => push.payload === null
     && typeof (push.transfer as { deflateBase64?: unknown } | undefined)?.deflateBase64 === 'string';
@@ -12973,5 +12977,97 @@ describe('推送传输编码（push-deflate-v1）', () => {
     expect(deliveredPushes(relay, 'peer', before).map(isCompressed)).toEqual([false]);
     desktop.stop();
     restarted.stop();
+  });
+});
+
+/**
+ * 可靠层 ACK 编码（transport-ack-v2，见 transport.ts 与
+ * protocol-compatibility/device-link-transport-ack-v2.md）。生产入口：DeviceLinkClient 的可靠收发。
+ * 协议契约：只对在握手里声明了能力的对端发紧凑与延后 ACK；旧对端（不声明）的 wire 与 ACK 时机
+ * 逐字节不变；新新互通时内容、顺序与确认都不丢。
+ */
+describe('可靠层 ACK 编码（ack-v2）', () => {
+  it.each([false, true])('只对声明了能力的对端发紧凑且延后的 ACK（declared=%s）', async (declared) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    const settle = () => vi.advanceTimersByTimeAsync(1);
+    try {
+      h.client.start(); await settle(); h.current().ack();
+      const streamId = 'remote-stream-0123456789';
+      const linked = establishInboundReliableLink(h, streamId, 1, 'dev-b', [
+        DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+        DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+        ...(declared ? [DEVICE_LINK_CAPABILITY_TRANSPORT_ACK_V2] : []),
+      ]);
+      await settle(); await linked;
+      const received: unknown[] = [];
+      h.client.onFrame((env) => { if (env.kind === 'push') received.push(env.payload); });
+      const acks = () => h.current().sent.map(parseTransportAck).filter((ack) => ack && !ack.linkRequestId);
+      for (let seq = 1; seq <= 3; seq++) {
+        encodeReliableFrames({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+          payload: { channel: 'maker:event:batch', payload: { seq } } }, streamId, seq).forEach((frame) => h.current().push(frame));
+        await settle();
+      }
+      expect(received).toEqual([1, 2, 3].map((seq) => ({ channel: 'maker:event:batch', payload: { seq } })));
+      if (declared) {
+        // 每条推送各自一次 drain：按 stream 累计到 2 条即立即确认，第 3 条的零头延后到窗口末尾。
+        // 两条都覆盖过等窗口的消息，带 delayed 标记：发送端不拿它们估 RTT 与交付速度。
+        const prefix = streamId.slice(0, 12);
+        expect(acks()).toEqual([{ streamId: prefix, ackSeq: 2, streamPrefix: true, delayed: true }]);
+        await vi.advanceTimersByTimeAsync(TRANSPORT_DELAYED_ACK_MS);
+        expect(acks()).toEqual([2, 3].map((ackSeq) => ({ streamId: prefix, ackSeq, streamPrefix: true, delayed: true })));
+      } else {
+        // 旧对端：照旧原格式、每次交付后立即确认（第 3 条也立即）。
+        expect(acks()).toEqual([1, 2, 3].map((ackSeq) => ({ streamId, ackSeq })));
+      }
+
+      const reliableFrames = () => h.current().sent.filter((env) => env.kind === 'push' && parseTransportPayload(env.payload));
+      h.client.sendPush('dev-b', 'maker:status-changed', { sessionId: 's', status: 'idle' });
+      const small = reliableFrames().at(-1)!.payload as Record<string, unknown>;
+      // 紧凑 ACK 只认声明过能力的对端：旧对端不会发它，伪造的也不能确认本端的消息。
+      const hostStream = (h.current().sent.find((env) => env.kind === 'link-accept')!.payload as { transportStreamId: string }).transportStreamId;
+      const depth = h.client.getReliableSendQueueDepth('dev-b');
+      const pushSeq = parseTransportPayload(small)!.meta.seq;
+      h.current().push({ v: PROTOCOL_VERSION, kind: 'push', src: 'dev-b',
+        payload: { channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL, payload: { s: hostStream.slice(0, 12), a: pushSeq } } });
+      await settle();
+      expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(declared ? depth - 1 : depth);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('新版之间：紧凑 ACK 往返后内容完整，延后窗口到点后发送队列清空', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop');
+    const phone = makeRelayClient(relay, 'ios');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    try {
+      host.onFrame((env) => {
+        if (env.kind === 'link-open' && env.src && env.id) host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+        if (env.kind === 'invoke' && env.src && env.id) host.sendInvokeResult(env.src, env.id, { ok: true, result: { echo: env.payload } });
+      });
+      const pushes: unknown[] = [];
+      phone.onFrame((env) => { if (env.kind === 'push') pushes.push(env.payload); });
+      host.start();
+      phone.start();
+      await pump();
+      const opening = phone.openLink('desktop', { controllerName: 'iPhone', protocolVersion: 1, appVersion: '1' }, 500);
+      await pump();
+      await opening;
+      const call = phone.invoke('desktop', { channel: 'local-db:sessions:get', args: ['引号 "与" 反斜杠 \\'] }, 1_000);
+      for (let i = 0; i < 3; i++) host.sendPush('ios', 'maker:status-changed', { sessionId: 's', status: `第 ${i} 次 "quoted"` });
+      await pump();
+      await expect(call).resolves.toEqual({ ok: true, result: { echo: { channel: 'local-db:sessions:get', args: ['引号 "与" 反斜杠 \\'] } } });
+      expect(pushes).toEqual([0, 1, 2].map((i) => ({ channel: 'maker:status-changed', payload: { sessionId: 's', status: `第 ${i} 次 "quoted"` } })));
+      // 推送的 ACK 在窗口末尾合并发出；按前缀匹配后被控端的发送队列清空。
+      await vi.advanceTimersByTimeAsync(TRANSPORT_DELAYED_ACK_MS);
+      await pump();
+      expect(host.getReliableSendQueueDepth('ios')).toBe(0);
+      expect(phone.getReliableSendQueueDepth('desktop')).toBe(0);
+    } finally {
+      host.stop();
+      phone.stop();
+      vi.useRealTimers();
+    }
   });
 });

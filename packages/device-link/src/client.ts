@@ -74,6 +74,10 @@ import {
   TRANSPORT_RETRY_INTERVAL_MS,
   TRANSPORT_RETRY_PASS_BUDGET,
   decodeTransportJson,
+  DEVICE_LINK_CAPABILITY_TRANSPORT_ACK_V2,
+  TRANSPORT_DELAYED_ACK_BYTES,
+  TRANSPORT_DELAYED_ACK_MESSAGES,
+  TRANSPORT_DELAYED_ACK_MS,
   encodeReliableFrames,
   isTransportSkipPayload,
   makeTransportAck,
@@ -757,6 +761,8 @@ interface PeerTransportState {
    * 与 supportsTransportTimeoutClose 同理只跟随入站声明,互控时出站 accept 不覆盖。
    */
   acceptsPushDeflate?: boolean;
+  /** 对端在最近一次握手声明能解析紧凑 ACK、容忍延后 ACK（transport-ack-v2）。 */
+  acceptsAckV2?: boolean;
   /** 显式关闭后收到的 allowlisted legacy invoke；只放行与 requestId 配对的一次回程。 */
   unlinkedLegacyResponseIds: Set<string>;
   pending: Map<number, PendingReliableMessage>;
@@ -835,6 +841,12 @@ interface ReceiveStreamState {
   drain: Promise<void> | null;
   /** drain 已在途时又有新帧入队；当前轮结束前必须再检查一次队头。 */
   drainRequested: boolean;
+  /** transport-ack-v2：已排期、尚未发出的延后累计 ACK。 */
+  delayedAckTimer?: ReturnType<typeof setTimeout> | null;
+  /** transport-ack-v2：自上次发出 ACK 以来已交付、尚未确认的条数 / 字节，以及其中是否有非推送。 */
+  unackedMessages?: number;
+  unackedBytes?: number;
+  unackedNonPush?: boolean;
 }
 
 // ─── 客户端实现 ───────────────────────────────────────────────────────────────
@@ -1301,6 +1313,16 @@ export class DeviceLinkClient {
 
   /** 只停这一条连接:中转移除本设备只影响它自己的线路,host 的 stop 才结束整个 client。 */
   protected stopConnection(): void {
+    for (const [timer, stream] of this.delayedAckTimers) {
+      clearTimeout(timer);
+      if (stream.delayedAckTimer !== timer) continue;
+      stream.delayedAckTimer = null;
+      // 未确认的交付由重连后的链路确认 ACK 覆盖；计数随窗口一起复位，不带旧状态进新连接。
+      stream.unackedMessages = 0;
+      stream.unackedBytes = 0;
+      stream.unackedNonPush = false;
+    }
+    this.delayedAckTimers.clear();
     this.messageReuse.clear();
     this.historyViewDelta.clear();
     this.invokeResultCache.clear();
@@ -2166,6 +2188,7 @@ export class DeviceLinkClient {
                 ...(peerSupportsLinkConfirm
                   ? [DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM]
                   : []),
+                ...(!isScopedPeer(dst) ? this.transportEncodingCapabilities() : []),
               ]),
               transportStreamId: peer.streamId,
               transportBaseSeq: this.getTransportBaseSeq(peer),
@@ -3044,7 +3067,7 @@ export class DeviceLinkClient {
     const ack = parseTransportAck(env);
     if (ack) {
       if (env.src) {
-        this.handleTransportAck(env.src, ack.streamId, ack.ackSeq, ack.linkRequestId);
+        this.handleTransportAck(env.src, ack.streamId, ack.ackSeq, ack.linkRequestId, ack.streamPrefix, ack.delayed);
       }
       return;
     }
@@ -3697,6 +3720,11 @@ export class DeviceLinkClient {
       stream.drainRequested = true;
       return stream.drain;
     }
+    // transport-ack-v2：对端容忍延后时，自上次 ACK 以来只交付了推送的，攒到
+    // TRANSPORT_DELAYED_ACK_MESSAGES 条或 32 KiB 才立即确认，其余在短窗口后合并成一条（流式推送
+    // 每 120 ms 一批，原来几乎一批一个 ACK）。请求与结果照旧立即确认：对端的请求窗口、恢复期
+    // 探测与链路确认都按 ACK 推进，那边的往返延迟不该多出一个窗口。
+    const delayAck = this.peerTransport.get(src)?.acceptsAckV2 === true;
     const drain = async (): Promise<void> => {
       let deliveredSinceAck = 0;
       let deliveredBytesSinceAck = 0;
@@ -3751,9 +3779,15 @@ export class DeviceLinkClient {
           this.applyReceiveStreamBase(stream);
           deliveredSinceAck += 1;
           deliveredBytesSinceAck += deliveredBytes;
+          // 延后模式按 stream 累计到真正发出 ACK 为止（每帧通常各自一次 drain，局部计数到不了阈值）。
+          stream.unackedMessages = (stream.unackedMessages ?? 0) + 1;
+          stream.unackedBytes = (stream.unackedBytes ?? 0) + deliveredBytes;
+          if (logical.kind !== 'push') stream.unackedNonPush = true;
+          const delayThisAck = delayAck && !stream.unackedNonPush;
           if (
-            (deliveredSinceAck >= RELIABLE_ACK_BATCH_MESSAGES
-              || deliveredBytesSinceAck >= RELIABLE_ACK_BATCH_BYTES)
+            (delayThisAck
+              ? stream.unackedMessages >= TRANSPORT_DELAYED_ACK_MESSAGES || stream.unackedBytes >= TRANSPORT_DELAYED_ACK_BYTES
+              : deliveredSinceAck >= RELIABLE_ACK_BATCH_MESSAGES || deliveredBytesSinceAck >= RELIABLE_ACK_BATCH_BYTES)
             && this.isReceiveStreamActive(src, streamId, stream)
           ) {
             if (this.sendTransportAck(src, streamId, stream.lastDeliveredSeq)) {
@@ -3769,7 +3803,13 @@ export class DeviceLinkClient {
         this.isReceiveStreamActive(src, streamId, stream)
         && (!sentAck || stream.lastDeliveredSeq !== lastAckSentSeq)
       ) {
-        this.sendTransportAck(src, streamId, stream.lastDeliveredSeq);
+        // 本轮还有没确认的交付，或没有新交付（缺口、handler 失败）要重申当前位置：自上次 ACK
+        // 以来只交付过推送的并入延后窗口（最多 200 ms 后一起发），否则立即发。
+        if (delayAck && !stream.unackedNonPush && (stream.unackedMessages ?? 0) > 0) {
+          this.scheduleDelayedAck(src, streamId, stream);
+        } else {
+          this.sendTransportAck(src, streamId, stream.lastDeliveredSeq);
+        }
       }
     };
     // 先把 drain Promise 登记到 stream，再进微任务执行。否则空队列的 drain
@@ -3792,6 +3832,8 @@ export class DeviceLinkClient {
   private readonly inboundInvokeChannels = new Map<string, string>();
   private readonly backlogWarnings = new BacklogWarnLimiter();
   private readonly pushDecodeWarnings = new BacklogWarnLimiter();
+  /** transport-ack-v2 的延后 ACK 定时器及其 stream；连接停止时一并清掉，stream 也复位。 */
+  private readonly delayedAckTimers = new Map<ReturnType<typeof setTimeout>, ReceiveStreamState>();
   /** 本进程内解不开过压缩推送的对端:之后的 link-open 不再向它声明 push-deflate。 */
   private readonly pushDeflateRejectedPeers = new Map<string, number>();
 
@@ -4448,7 +4490,7 @@ export class DeviceLinkClient {
     const ack = parseTransportAck(env);
     if (ack) {
       // 链路确认 ACK 属于控制面，只认 relay；直连上的确认只按普通累计 ACK 处理。
-      this.handleTransportAck(deviceId, ack.streamId, ack.ackSeq);
+      this.handleTransportAck(deviceId, ack.streamId, ack.ackSeq, undefined, ack.streamPrefix, ack.delayed);
       return;
     }
     // The relay enforces this direction for provider shares. A direct channel
@@ -5136,6 +5178,10 @@ export class DeviceLinkClient {
     const nextRemoteStreamId = reliable && typeof remoteStreamId === 'string' && remoteStreamId
       ? remoteStreamId
       : null;
+    // 描述对端作为接收方的解析能力，入站 link-open 与出站 accept 都带，按最近一次握手刷新。
+    // ACK 形式在每次发出时按当前值决定，所以对端降级后不会再收到新形式。
+    peer.acceptsAckV2 = reliable && !isScopedPeer(dst)
+      && capabilities!.includes(DEVICE_LINK_CAPABILITY_TRANSPORT_ACK_V2);
     // push-deflate 只认入站 link-open 的声明。出站 accept 不带控制端能力:对端换了 stream
     // (重启,可能已降级)时先当作不支持,等它下次以控制端身份 link-open 再按声明恢复。
     if (source === 'inbound-open') {
@@ -5190,6 +5236,7 @@ export class DeviceLinkClient {
         // 推送必须按序同步交给业务,所以只看同步解码器;跨账号 peer 不用这套编码。
         ...(this.opts.transferCodec?.inflateRawBase64 && !isScopedPeer(dst) && !this.pushDeflateRejectedPeers.has(dst)
           ? [DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1] : []),
+        ...(!isScopedPeer(dst) ? this.transportEncodingCapabilities() : []),
       ]),
       transportStreamId: typeof payload.transportStreamId === 'string'
         ? payload.transportStreamId
@@ -5216,11 +5263,36 @@ export class DeviceLinkClient {
     return result;
   }
 
+  /** 紧凑 ACK 只带链路确认 id 的前缀；全长 id 照旧精确比对。 */
+  private static sameLinkRequest(expected: string, received: string | undefined, prefix?: boolean): boolean {
+    return received !== undefined && (received === expected || (prefix === true && received.length >= 8 && expected.startsWith(received)));
+  }
+
+  /** 本端作为数据发送端能解析的可靠层 ACK 编码（紧凑 / 延后 ACK），同账号握手两个方向都声明。 */
+  private transportEncodingCapabilities(): string[] {
+    return [DEVICE_LINK_CAPABILITY_TRANSPORT_ACK_V2];
+  }
+
+  /** 窗口到点时确认该 stream 当时已交付的最新 seq；期间发出的任何覆盖它的 ACK 会取消本次。 */
+  private scheduleDelayedAck(src: string, streamId: string, stream: ReceiveStreamState): void {
+    if (stream.delayedAckTimer) return;
+    const timer = setTimeout(() => {
+      this.delayedAckTimers.delete(timer);
+      if (stream.delayedAckTimer !== timer) return;
+      stream.delayedAckTimer = null;
+      if (this.stopped || !this.isReceiveStreamActive(src, streamId, stream)) return;
+      this.sendTransportAck(src, streamId, stream.lastDeliveredSeq, undefined, true);
+    }, TRANSPORT_DELAYED_ACK_MS);
+    stream.delayedAckTimer = timer;
+    this.delayedAckTimers.set(timer, stream);
+  }
+
   private sendTransportAck(
     dst: string,
     streamId: string,
     ackSeq: number,
     linkRequestId?: string,
+    fromDelayTimer = false,
   ): boolean {
     if (this.opts.transportAllowed?.() === false) return false;
     const peer = this.peerTransport.get(dst);
@@ -5236,12 +5308,31 @@ export class DeviceLinkClient {
         ? pendingConfirmation.requestId
         : undefined
     );
-    const ack = makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId);
+    // 发出成功且覆盖了已交付的最新 seq，才结清该 stream 的延后状态（发送失败时窗口照旧兜底）。
+    const settleDelayed = (): void => {
+      const stream = peer?.receive.get(streamId);
+      if (!stream || ackSeq < stream.lastDeliveredSeq) return;
+      if (stream.delayedAckTimer) {
+        clearTimeout(stream.delayedAckTimer);
+        this.delayedAckTimers.delete(stream.delayedAckTimer);
+        stream.delayedAckTimer = null;
+      }
+      stream.unackedMessages = 0;
+      stream.unackedBytes = 0;
+      stream.unackedNonPush = false;
+    };
+    // 显式的链路确认 ACK（握手里的那一帧及其有界重试）保持原格式；紧凑只用于普通累计 ACK，
+    // 包括其上兜底附带的确认 id（按前缀核对）。
+    // 还挂着延后窗口说明这条 ACK 覆盖了等过窗口的消息（只有 ack-v2 对端会有这种窗口）。
+    const coversDelayed = !!peer?.receive.get(streamId)?.delayedAckTimer || fromDelayTimer;
+    const ack = makeTransportAck(dst, streamId, ackSeq, effectiveLinkRequestId,
+      !linkRequestId && peer?.acceptsAckV2 === true, coversDelayed);
     // 累计 ACK 原路返回；链路确认 ACK 属于控制面，始终走 relay。
     if (direct) {
       try {
         direct.send(JSON.stringify(ack));
         this.logRecoveryStage(dst, 'ack-sent', ` receiveStream=${streamId.slice(0, 8)} ack=${ackSeq}`, false);
+        settleDelayed();
         return true;
       } catch (err) {
         this.log.debug(`reliable transport direct ACK send failed dst=${dst.slice(0, 8)}`, err);
@@ -5251,6 +5342,7 @@ export class DeviceLinkClient {
     try {
       this.sendBestEffortRoutedEnvelope(ack);
       this.logRecoveryStage(dst, 'ack-sent', ` receiveStream=${streamId.slice(0, 8)} ack=${ackSeq}`, false);
+      settleDelayed();
       return true;
     } catch (err) {
       this.log.debug(
@@ -5319,14 +5411,20 @@ export class DeviceLinkClient {
     streamId: string,
     ackSeq: number,
     linkRequestId?: string,
+    streamPrefix?: boolean,
+    delayed?: boolean,
   ): void {
     const peer = this.peerTransport.get(src);
-    if (!peer || !peer.reliable || peer.streamId !== streamId) return;
+    if (!peer || !peer.reliable) return;
+    // 紧凑 ACK 只认在握手里声明过 transport-ack-v2 的对端，且前缀对得上本端当前 stream；
+    // 旧代 stream 的迟到 ACK 照旧忽略。
+    if (streamPrefix && !peer.acceptsAckV2) return;
+    if (peer.streamId !== streamId && !(streamPrefix && peer.streamId.startsWith(streamId))) return;
     const confirmation = peer.pendingLinkConfirmation;
     if (
       peer.sendPhase === 'awaiting-confirm'
       && confirmation
-      && linkRequestId === confirmation.requestId
+      && DeviceLinkClient.sameLinkRequest(confirmation.requestId, linkRequestId, streamPrefix)
       && ackSeq >= confirmation.minimumAckSeq
       && ackSeq <= peer.nextSeq - 1
     ) {
@@ -5345,7 +5443,7 @@ export class DeviceLinkClient {
       this.commitReliableSendResume(src, peer, confirmation.resume);
     }
     if (!this.isPeerSendReady(peer)) return;
-    this.repairConfirmedReceiveGap(src, peer, ackSeq, linkRequestId);
+    this.repairConfirmedReceiveGap(src, peer, ackSeq, linkRequestId, streamPrefix);
     // 迟到/陈旧 ACK 幂等无害（含指向已被驱逐 seq 的 ACK）：驱逐后该 seq 已不在
     // map 里，累计删除循环遇到更高的队头 live seq 直接 break，不会误删、不抛错、
     // 不错误推进状态；高于 nextSeq-1 的未知 ACK 与倒退的 ACK 直接忽略。
@@ -5366,7 +5464,8 @@ export class DeviceLinkClient {
       // slow link still yields samples after its frames were retried; the latest
       // message in the ACK gives the tightest one. Large messages measure
       // transfer time, which byte pacing already covers.
-      if (pending.firstSentAt !== undefined && pending.bytes <= RELIABLE_RETRY_BYTES_PER_INTERVAL) {
+      // 对端标了 delayed 的 ACK 覆盖过被有意延后的消息，时长不代表链路往返，不拿它估 RTT。
+      if (!delayed && pending.firstSentAt !== undefined && pending.bytes <= RELIABLE_RETRY_BYTES_PER_INTERVAL) {
         rttSample = this.monotonicNow() - pending.firstSentAt;
       }
       if (pending.firstSentAt !== undefined && pending.attempts === 1) {
@@ -5387,7 +5486,7 @@ export class DeviceLinkClient {
     // A cumulative ACK measures the whole acknowledged burst. Sampling its
     // tail separately counts time spent delivering preceding messages as slowness.
     // Retransmitted batches have ambiguous timing and cannot teach delivery pace.
-    if (deliverySampleValid) {
+    if (deliverySampleValid && !delayed) {
       updateDeliveryEstimate(peer.rtt, deliveryBytes, acknowledgedAt - deliveryStartedAt);
     }
     if (rttSample !== null) updateRetransmitEstimate(peer.rtt, rttSample);
@@ -5431,9 +5530,10 @@ export class DeviceLinkClient {
     peer: PeerTransportState,
     ackSeq: number,
     linkRequestId?: string,
+    prefix?: boolean,
   ): void {
     const repair = peer.duplicateOpenRepair;
-    if (!repair || repair.requestId !== linkRequestId) return;
+    if (!repair || !DeviceLinkClient.sameLinkRequest(repair.requestId, linkRequestId, prefix)) return;
     peer.duplicateOpenRepair = null;
     if (peer.confirmedGapRepair) return; // Repeated opens cannot extend the snapshot.
     const head = peer.pending.values().next().value;
