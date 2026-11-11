@@ -24,6 +24,7 @@ import { MAX_STATE_JSON_BYTES } from '../../../shared/rightSidebarTabState';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from './registry';
 import { finishClosing } from './lib/tabClosingSignal';
+import { exportTerminalDraft, importTerminalDraft } from './plugins/terminal/lib/xtermEntries';
 import { browserWebviewPool } from './lib/browserWebviewPool';
 import { unmarkPopupSpawnedTab } from './lib/popupTabs';
 import { closeNativePopupForTab } from './lib/nativePopupTabs';
@@ -498,21 +499,28 @@ export function getBucket(sessionId: string | null | undefined): TabBucket {
   return cache.get(sessionId) ?? EMPTY_BUCKET;
 }
 
-/** Export the current renderer-owned tab bucket for a merge-back handoff. */
+function snapshotTab({ id, kind, state }: TabState, persistable: boolean) {
+  return { id, kind, state: persistable ? null : state, ...(kind === 'terminal' ? { terminalDraft: exportTerminalDraft(id) } : {}) };
+}
+
+/** Export memory-only tab state and ephemeral terminal drafts for either kind of session. */
 export function getTabSnapshot(sessionId: string | null | undefined): RsbWindowTabSnapshot | null {
   if (!sessionId) return null;
   const bucket = cache.get(sessionId);
-  if (!bucket?.hydrated || shouldPersist(sessionId)) return null;
+  if (!bucket?.hydrated) return null;
+  const persistable = shouldPersist(sessionId);
+  const tabs = bucket.tabs.filter(tab => !persistable || tab.kind === 'terminal').map(tab => snapshotTab(tab, persistable));
+  if (persistable && tabs.length === 0) return null;
   return {
     sessionId,
-    tabs: bucket.tabs.map(({ id, kind, state }) => ({ id, kind, state })),
-    activeTabId: bucket.activeTabId,
-    persistable: false,
+    tabs,
+    activeTabId: persistable ? null : bucket.activeTabId,
+    persistable,
   };
 }
 
 /**
- * Import a non-persistable tab bucket received before the previous host is destroyed.
+ * Restore runtime drafts before mounting; import tab buckets only for memory-only sessions.
  *
  * `onlyTabIds`:页签独立窗口收到**后续**指派(搬入新页签)时,只把这些页签的数据并进现有桶,
  * 其它页签保持本窗口当前的内存态——整桶替换会把窗口里刚改的 URL / 刚新建的页签抹掉。
@@ -521,12 +529,18 @@ export function importTabSnapshot(
   snapshot: RsbWindowTabSnapshot,
   opts: { onlyTabIds?: ReadonlySet<string> } = {},
 ): void {
-  if (snapshot.persistable || !snapshot.sessionId) return;
+  if (!snapshot.sessionId) return;
+  for (const tab of snapshot.tabs) {
+    if (tab.id && tab.kind === 'terminal' && 'terminalDraft' in tab && (!opts.onlyTabIds || opts.onlyTabIds.has(tab.id))) {
+      importTerminalDraft(tab.id, tab.terminalDraft);
+    }
+  }
+  if (snapshot.persistable) return;
   if (opts.onlyTabIds) {
     const existing = cache.get(snapshot.sessionId);
     const incoming = snapshot.tabs
       .filter((tab) => tab.id && tab.kind && opts.onlyTabIds!.has(tab.id))
-      .map((tab) => ({ ...tab, kind: tab.kind as TabKindId }));
+      .map(({ id, kind, state }) => ({ id, kind: kind as TabKindId, state }));
     if (incoming.length === 0) return;
     memoryOnlySessions.add(snapshot.sessionId);
     const byId = new Map((existing?.tabs ?? []).map((tab) => [tab.id, tab]));
@@ -545,7 +559,7 @@ export function importTabSnapshot(
       seen.add(tab.id);
       return true;
     })
-    .map((tab) => ({ ...tab, kind: tab.kind as TabKindId }));
+    .map(({ id, kind, state }) => ({ id, kind: kind as TabKindId, state }));
   const activeTabId =
     snapshot.activeTabId && seen.has(snapshot.activeTabId) ? snapshot.activeTabId : null;
   const bucket: TabBucket = { hydrated: true, tabs, activeTabId };
@@ -573,17 +587,18 @@ export function removeTabLocally(sessionId: string, tabId: string): void {
   forgetClosedTab(sessionId, tabId, tab.kind);
 }
 
-/** 弹出窗口合并回侧边栏时交回的单页签内存态(仅不可持久化会话;其余返回 null)。 */
+/** 弹出窗口交回的单页签快照：持久化页签仅携带运行期终端草稿。 */
 export function getSingleTabSnapshot(
   sessionId: string | null | undefined,
   tabId: string,
 ): SidebarTabReturnSnapshot | null {
   if (!sessionId) return null;
   const bucket = cache.get(sessionId);
-  if (!bucket?.hydrated || shouldPersist(sessionId)) return null;
+  if (!bucket?.hydrated) return null;
+  const persistable = shouldPersist(sessionId);
   const tab = bucket.tabs.find((t) => t.id === tabId);
-  if (!tab) return null;
-  return { sessionId, tab: { id: tab.id, kind: tab.kind, state: tab.state } };
+  if (!tab || (persistable && tab.kind !== 'terminal')) return null;
+  return { sessionId, tab: snapshotTab(tab, persistable), ...(persistable ? { persistable: true } : {}) };
 }
 
 /**
@@ -592,6 +607,10 @@ export function getSingleTabSnapshot(
  * 所以只做替换;桶未加载时无处可放,记日志丢弃(重开会话即重建)。
  */
 export function importReturnedTabState(snapshot: SidebarTabReturnSnapshot): void {
+  if (snapshot.tab.kind === 'terminal' && 'terminalDraft' in snapshot.tab) {
+    importTerminalDraft(snapshot.tab.id, snapshot.tab.terminalDraft);
+  }
+  if (snapshot.persistable) return;
   const bucket = cache.get(snapshot.sessionId);
   if (!bucket?.hydrated) {
     log.warn('returned tab state dropped: session bucket not hydrated here', {

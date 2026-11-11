@@ -936,7 +936,7 @@ export class RsbWindowController {
     const currentSessionId = this.lastContext?.available ? this.lastContext.sessionId : null;
     const snapshots = handoff.snapshots.filter(
       (snapshot) =>
-        !snapshot.persistable &&
+        (!snapshot.persistable || (snapshot.tabs.length > 0 && snapshot.tabs.every(tab => tab.kind === 'terminal' && tab.state === null && 'terminalDraft' in tab))) &&
         (allowStaleSession || (currentSessionId !== null && snapshot.sessionId === currentSessionId)),
     );
     return snapshots.length > 0 ? { snapshots } : null;

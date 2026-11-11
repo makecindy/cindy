@@ -22,6 +22,7 @@ import {
   MAX_STATE_JSON_BYTES,
 } from '../../shared/rightSidebarTabState.js';
 import {
+  copyRemoteTerminalDraft,
   RSB_WINDOW_PRESENTATION_READY_CHANNEL,
   RSB_WINDOW_REFRESH_CONTEXT_CHANNEL,
   RSB_WINDOW_RENDERER_READY_CHANNEL,
@@ -336,11 +337,14 @@ function parseTabHandoff(raw: unknown): RsbWindowTabHandoff | undefined {
     ) {
       throwIpcError('INVALID_PARAMS', 'tab handoff sessionId is invalid');
     }
-    if (snapshot.persistable !== false) {
-      throwIpcError('INVALID_PARAMS', 'tab handoff snapshot must be non-persistable');
+    if (typeof snapshot.persistable !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'tab handoff persistable must be boolean');
     }
     if (!Array.isArray(snapshot.tabs) || snapshot.tabs.length > MAX_HANDOFF_TABS) {
       throwIpcError('INVALID_PARAMS', 'tab handoff tabs must be an array');
+    }
+    if (snapshot.persistable && snapshot.tabs.length === 0) {
+      throwIpcError('INVALID_PARAMS', 'tab handoff must be non-persistable or contain terminal runtime metadata');
     }
     const activeTabId = snapshot.activeTabId;
     if (activeTabId !== null && (typeof activeTabId !== 'string' || activeTabId.length > MAX_HANDOFF_STRING_LENGTH)) {
@@ -367,9 +371,12 @@ function parseTabHandoff(raw: unknown): RsbWindowTabHandoff | undefined {
       if (typeof stateJson !== 'string' || Buffer.byteLength(stateJson, 'utf8') > MAX_STATE_JSON_BYTES) {
         throwIpcError('RIGHT_SIDEBAR_STATE_TOO_LARGE', 'tab handoff tab state is too large');
       }
-      return { id: tab.id, kind: tab.kind, state: tab.state };
+      if (snapshot.persistable && (tab.kind !== 'terminal' || tab.state !== null || !('terminalDraft' in tab))) {
+        throwIpcError('INVALID_PARAMS', 'persistable handoff must contain only terminal runtime metadata');
+      }
+      return { id: tab.id, kind: tab.kind, state: tab.state, ...(tab.kind === 'terminal' && 'terminalDraft' in tab ? { terminalDraft: copyRemoteTerminalDraft(tab.terminalDraft) } : {}) };
     });
-    return { sessionId, tabs, activeTabId, persistable: false };
+    return { sessionId, tabs, activeTabId, persistable: snapshot.persistable };
   });
   return { snapshots };
 }

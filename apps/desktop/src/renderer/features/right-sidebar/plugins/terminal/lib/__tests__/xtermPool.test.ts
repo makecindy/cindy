@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { _resetStore, ensureHydrated, patchTabState, importTabSnapshot, getTabSnapshot, getSingleTabSnapshot, importReturnedTabState, getBucket } from '../../../../store';
 import { finishClosing, markClosing } from '../../../../lib/tabClosingSignal';
 import { markAllPtyDetached, markPtyDetached } from '../xtermEntries';
 import { openTerminalExternalLink, getXterm, getXtermExit, setXtermExit, onXtermExit, restartXterm, attachXterm, releaseXtermConnection, detachXterm, getOrCreateXterm, suspendExitedXterm, disposeXterm, __resetPoolForTesting } from '../xtermPool';
@@ -81,7 +82,56 @@ it('detaches the canonical pooled entries while retaining close and SSH state', 
 describe('openTerminalExternalLink', () => {
   afterEach(() => {
     __resetPoolForTesting();
+    _resetStore();
     vi.clearAllMocks();
+  });
+
+  // PR8881 PRRT_kwDOTgdRUs62ATV_ / unit: production window handoff and pool
+  // restoration, missing from same-renderer detach tests. A disposed connection
+  // with an unsubmitted draft must remain editable after popup/whole-host moves.
+  it.each([{ submitted: false, persistable: false }, { submitted: true, persistable: false }, { submitted: false, persistable: true }])('hands SSH editing intent across windows ($submitted, persisted=$persistable)', async ({ submitted, persistable }) => {
+    const id = 'ssh-handoff';
+    const sessionId = 'handoff-session';
+    const state = { created: true, title: 'SSH' };
+    const upsert = vi.fn().mockResolvedValue({ ok: true });
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { localDb: { rightSidebarTabs: {
+      list: vi.fn().mockResolvedValue({ tabs: [{ id, kind: 'terminal', state }], activeTabId: id, persistable }), upsert,
+    } } } });
+    await ensureHydrated(sessionId);
+    const origin = getOrCreateXterm(id);
+    const draft = { contextKey: 'context', connection: { host: 'new-host', user: 'alice', port: 2222, hostRef: 'opaque-reference' }, submitted };
+    origin.remoteDraft = draft;
+    const handoff = structuredClone(getTabSnapshot(sessionId)!);
+    // A fresh renderer has no pooled entry; importing must restore it before mount.
+    __resetPoolForTesting();
+    _resetStore();
+    importTabSnapshot(handoff);
+    await ensureHydrated(sessionId);
+    const destination = getOrCreateXterm(id);
+    await destination.restored;
+    expect(destination.remoteDraft).toEqual(draft);
+    expect(getBucket(sessionId).tabs[0].state).toEqual(state);
+    expect(handoff.persistable).toBe(persistable);
+    await patchTabState(sessionId, id, () => state);
+    expect(upsert).toHaveBeenCalledTimes(persistable ? 1 : 0);
+    if (persistable) expect(JSON.stringify(upsert.mock.calls)).not.toContain('terminalDraft');
+    destination.remoteDraft = { ...draft, submitted: false, connection: { host: 'edited-in-popup' } };
+    const returned = structuredClone(getSingleTabSnapshot(sessionId, id)!);
+    // A return must replace the retained origin draft, not prefer that stale pool.
+    destination.remoteDraft = draft;
+    importReturnedTabState(returned);
+    expect(destination.remoteDraft?.connection?.host).toBe('edited-in-popup');
+    // Later assignments carry an old whole bucket but only own their incoming IDs.
+    importTabSnapshot(handoff, { onlyTabIds: new Set(['another-tab']) });
+    expect(destination.remoteDraft?.connection?.host).toBe('edited-in-popup');
+    destination.remoteDraft = undefined;
+    const completed = structuredClone(getTabSnapshot(sessionId)!);
+    destination.remoteDraft = draft;
+    importTabSnapshot(completed);
+    expect(destination.remoteDraft).toBeUndefined();
+    importReturnedTabState(returned);
+    disposeXterm(id);
+    expect(getOrCreateXterm(id).remoteDraft).toBeUndefined();
   });
 
   // PR8881 merge / unit: real snapshot eviction was absent from SSH component

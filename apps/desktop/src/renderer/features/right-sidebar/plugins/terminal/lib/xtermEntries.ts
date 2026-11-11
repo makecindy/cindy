@@ -6,6 +6,7 @@
  * 终端页签的懒加载就失效了。实例的创建与销毁仍在 xtermPool。
  */
 
+import { copyRemoteTerminalDraft } from '../../../../../../shared/rightSidebarWindow';
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { RemoteTerminalConnection, RemoteTerminalContext } from '../../../../../../shared/terminal-bridge';
@@ -47,6 +48,27 @@ export const xtermSnapshots = new Map<string, Pick<XtermEntry, 'remoteContext' |
   ptyAttached: boolean;
   viewportY: number;
 }>();
+
+/** Add only non-secret form data to the existing memory-only window handoff. */
+export function exportTerminalDraft(tabId: string) {
+  const entry = xtermEntries.get(tabId) ?? xtermSnapshots.get(tabId);
+  return copyRemoteTerminalDraft(entry?.remoteDraft);
+}
+
+/** Consume handoff-only data before tab state can be reused or persisted. */
+export function importTerminalDraft(tabId: string, raw: unknown): void {
+  const remoteDraft = copyRemoteTerminalDraft(raw) ?? undefined;
+  const entry = xtermEntries.get(tabId) ?? xtermSnapshots.get(tabId);
+  if (entry) {
+    // The returning host owns the latest intent, including a cleared draft.
+    entry.remoteDraft = remoteDraft;
+  } else if (remoteDraft) {
+    xtermSnapshots.set(tabId, {
+      remoteDraft, data: new Uint8Array(), lastSize: { cols: 80, rows: 24 },
+      ptyAttached: false, viewportY: 0, closing: false, closeCancelledListeners: new Set(),
+    });
+  }
+}
 
 /**
  * 侧边栏宿主在"内嵌 ↔ 独立子窗口"间迁移时调用(MainLayout detach/attach 转换清理,

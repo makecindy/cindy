@@ -531,16 +531,20 @@ describe('setDetached', () => {
     expect(state).toEqual({ detached: true, lastOpen: true, open: true });
   });
 
-  it('true: queues a memory-only tab snapshot until the detached renderer is ready', () => {
+  // PR8881 / unit: the existing handoff channel also carries runtime-only SSH
+  // metadata for SQLite tasks, without forwarding persisted tab state.
+  it.each([false, true])('true: queues tab handoff until detached renderer ready (persisted=%s)', persistable => {
     const h = makeHarness();
     h.controller.setContext(ctx);
     const handoff = {
       snapshots: [
         {
           sessionId: 's1',
-          tabs: [{ id: 't1', kind: 'web-browser', state: { url: 'about:blank' } }],
+          tabs: persistable
+            ? [{ id: 't1', kind: 'terminal', state: null, terminalDraft: { contextKey: 'context', submitted: false } }]
+            : [{ id: 't1', kind: 'web-browser', state: { url: 'about:blank' } }],
           activeTabId: 't1',
-          persistable: false as const,
+          persistable,
         },
       ],
     };

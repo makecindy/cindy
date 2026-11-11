@@ -65,7 +65,8 @@ vi.mock('../lib/xtermPool', async (importOriginal) => ({
   disposeXterm: () => { entry.remoteDraft = undefined; },
 }));
 
-import { TerminalTabBody } from '../TerminalTabBody';
+import { TerminalTabBody, TerminalSessionBody } from '../TerminalTabBody';
+import { _resetStore, ensureHydrated, getTabSnapshot, importTabSnapshot } from '../../../store';
 import { getXterm, detachXterm, getXtermExit, onXtermExit, __resetPoolForTesting, type XtermEntry } from '../lib/xtermPool';
 import { xtermEntries } from '../lib/xtermEntries';
 import { TERMINAL_RENDERER_INSTANCE_ID } from '../index';
@@ -153,6 +154,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  _resetStore();
   finishClosing('terminal-1');
   unregisterClosing('terminal-1');
   vi.restoreAllMocks();
@@ -687,6 +689,45 @@ describe('TerminalTabBody remote ownership', () => {
     await waitFor(() => expect(window.electronAPI.terminal.create).toHaveBeenCalledWith(expect.objectContaining({
       remote: { sessionId: 'session-1', ticket: 'prepared-ticket' },
     })));
+  });
+
+  // PR8881 / unit: a ticket revoked by another window requires explicit recovery;
+  // the existing PRECONDITION_FAILED test instead covers a missing initial ticket.
+  it('keeps a revoked supplied ticket in recovery until the user retries', async () => {
+    const onPrepare = vi.fn();
+    vi.mocked(window.electronAPI.terminal.create).mockRejectedValue(new Error('[PERMISSION_DENIED] ticket revoked'));
+    vi.mocked(window.electronAPI.terminal.restart).mockRejectedValue(new Error('[TERMINAL_NOT_FOUND] missing'));
+    render(<TerminalSessionBody state={{ created: true, exited: null, title: '', shellId: '', shellDisplayName: '' }} ctx={makeContext()} active remote={{ sessionId: 'session-1', ticket: 'revoked-ticket' }} onPrepare={onPrepare} />);
+    const retry = await screen.findByText('rightSidebar.terminal.restart');
+    expect(window.electronAPI.terminal.create).toHaveBeenCalledWith(expect.objectContaining({ remote: { sessionId: 'session-1', ticket: 'revoked-ticket' } }));
+    expect(onPrepare).not.toHaveBeenCalled();
+    expect(window.electronAPI.terminal.describeRemote).not.toHaveBeenCalled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(onPrepare).toHaveBeenCalledOnce());
+  });
+
+  // PR8881 PRRT_kwDOTgdRUs62ATV_ / unit: real form + store handoff must keep
+  // unsubmitted edits, even when describe returns a usable old-host ticket.
+  it('keeps an edited saved SSH connection unsubmitted after a persisted-window handoff', async () => {
+    const ctx = makeContext({ remoteHostId: 'ssh-host' });
+    const state = { created: false, exited: null, title: '', shellId: '', shellDisplayName: '' };
+    Object.assign(window.electronAPI, { localDb: { rightSidebarTabs: { list: vi.fn().mockResolvedValue({ tabs: [{ id: ctx.tabId, kind: 'terminal', state }], activeTabId: ctx.tabId }) } } });
+    await ensureHydrated(ctx.sessionId);
+    vi.mocked(window.electronAPI.terminal.create).mockRejectedValue(new Error('offline'));
+    vi.mocked(window.electronAPI.terminal.describeRemote).mockResolvedValue({ context: { sessionId: ctx.sessionId }, target: { key: 'target', label: 'Host', cwd: '/remote' }, connection: { host: 'saved-host' }, candidates: [], ticket: 'old-host-ticket' });
+    const origin = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    fireEvent.click(await screen.findByText('rightSidebar.terminal.remote.editConnection'));
+    fireEvent.change(await screen.findByLabelText('rightSidebar.terminal.remote.host'), { target: { value: 'new-host' } });
+    const snapshot = structuredClone(getTabSnapshot(ctx.sessionId)!);
+    origin.unmount();
+    entry.remoteDraft = undefined;
+    importTabSnapshot(snapshot);
+    vi.mocked(window.electronAPI.terminal.create).mockClear();
+    render(<TerminalTabBody state={state} ctx={ctx} active />);
+    expect((await screen.findByLabelText('rightSidebar.terminal.remote.host') as HTMLInputElement).value).toBe('new-host');
+    expect(window.electronAPI.terminal.create).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('rightSidebar.terminal.remote.connect'));
+    await waitFor(() => expect(window.electronAPI.terminal.describeRemote).toHaveBeenCalledWith(expect.objectContaining({ connection: { host: 'new-host', user: undefined } })));
   });
 
   it('prepares a fresh ticket after a failed spawn instead of reusing the consumed ticket', async () => {

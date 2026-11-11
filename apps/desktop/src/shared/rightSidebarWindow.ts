@@ -2,11 +2,12 @@
  * 右侧栏独立子窗口(RSB window)的跨进程共享类型。
  *
  * 三方共用:main(controller / IPC handler)、preload(桥接签名)、renderer
- * (主窗镜像 store + 子窗口根组件)。只放纯类型,不放运行时代码。
+ * (主窗镜像 store + 子窗口根组件)。只放类型、常量与纯数据校验。
  */
 
 import type { SubagentProvider } from '@cindy/maker-shared/subagent-workspace';
 
+import type { RemoteTerminalConnection } from './terminal-bridge.js';
 import type { ConversationSearchJump } from './conversationSearchJump.js';
 
 /** 子窗口全局状态：均仅在当前进程有效；重启后 detached / lastOpen 重置。 */
@@ -131,12 +132,34 @@ export type RsbWindowCommandRouteResult =
 /**
  * 主 renderer 与分离侧栏 renderer 切换宿主时双向交接的内存态 tab 快照。
  *
- * 只用于 persistable=false 的 session。普通本地 session 的权威来源仍是
- * SQLite，避免用子窗口里可能过期的 renderer 快照覆盖持久化真相。
+ * persistable=false 携带页签 state。persistable=true 只携带 terminalDraft，
+ * state 必须为 null；普通本地 session 的页签权威来源始终为 SQLite。
  */
+/** Window-lifetime form values, never a launch ticket or persisted terminal state. */
+export interface RemoteTerminalDraft {
+  contextKey: string;
+  connection?: RemoteTerminalConnection;
+  submitted: boolean;
+}
+
+/** Whitelist form fields at both IPC and renderer handoff boundaries. */
+export function copyRemoteTerminalDraft(raw: unknown): RemoteTerminalDraft | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const draft = raw as Record<string, unknown>;
+  if (typeof draft.contextKey !== 'string' || draft.contextKey.length > 4096 || typeof draft.submitted !== 'boolean') return null;
+  const value = draft.connection as Record<string, unknown> | undefined;
+  const connection = value && typeof value.host === 'string' && value.host.length <= 4096 ? {
+    host: value.host,
+    ...(typeof value.user === 'string' && value.user.length <= 4096 ? { user: value.user } : {}),
+    ...(typeof value.port === 'number' && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535 ? { port: value.port } : {}),
+    ...(typeof value.hostRef === 'string' && value.hostRef.length <= 4096 ? { hostRef: value.hostRef } : {}),
+  } : undefined;
+  return { contextKey: draft.contextKey, submitted: draft.submitted, ...(connection ? { connection } : {}) };
+}
+
 export interface RsbWindowTabSnapshot {
   sessionId: string;
-  tabs: Array<{ id: string; kind: string; state: unknown }>;
+  tabs: Array<{ id: string; kind: string; state: unknown; terminalDraft?: RemoteTerminalDraft | null }>;
   activeTabId: string | null;
   persistable: boolean;
 }

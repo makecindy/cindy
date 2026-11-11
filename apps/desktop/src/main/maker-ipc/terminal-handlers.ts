@@ -61,7 +61,7 @@ export interface TerminalHandlersOptions {
 
 const REMOTE_TICKET_TTL_MS = 30_000;
 
-/** A short-lived, single-use launch bound to the issuing window, tab and account generation. */
+/** A preparation, then single-use launch, bound to its window, tab and account generation. */
 interface RemoteTicket {
   id: string;
   owner: WebContents;
@@ -69,7 +69,7 @@ interface RemoteTicket {
   epoch: number;
   context: string;
   expiresAt: number;
-  launch: Pick<CreateOptions, 'launch' | 'cwd'>;
+  launch?: Pick<CreateOptions, 'launch' | 'cwd'>;
 }
 
 /**
@@ -115,31 +115,38 @@ export function registerTerminalHandlers(options?: TerminalHandlersOptions): Pty
     const connection = params.connection === undefined ? undefined : parseRemoteConnection(params.connection);
     const account = remoteScope();
     const epoch = accountEpoch;
+    const ticket = randomUUID();
+    const request: RemoteTicket = { id, owner: event.sender, scope: account, epoch, context: remoteContextKey(context), expiresAt: Infinity };
+    // Register before the first await so closing from any authorized window also
+    // fences metadata, preparation and a binding write waiting for its lock.
+    tickets.set(ticket, request);
     const assertCurrent = () => {
-      if (event.sender.isDestroyed() || accountEpoch !== epoch || remoteScope() !== account) {
+      if (tickets.get(ticket) !== request || event.sender.isDestroyed() || accountEpoch !== epoch || remoteScope() !== account) {
         throwIpcError('PERMISSION_DENIED', 'Terminal preparation is no longer valid');
       }
       assertTrustedAppRendererEvent(event);
     };
-    const description = await remote.describe(context);
-    assertCurrent();
-    const selected = connection ?? description.connection;
-    if (!selected) return description;
-    const launch = await remote.prepare(selected, description.target.cwd, description.target.key, account, assertCurrent);
-    assertCurrent();
-    // Explicit connection is a submission. Tab closure may discard this result, but does
-    // not undo the binding save; only create can spawn a PTY.
-    if (connection) {
-      await remote.save(description.target.key, connection, account, assertCurrent);
+    try {
+      const description = await remote.describe(context);
       assertCurrent();
+      const selected = connection ?? description.connection;
+      if (!selected) return description;
+      const launch = await remote.prepare(selected, description.target.cwd, description.target.key, account, assertCurrent);
+      assertCurrent();
+      if (connection) {
+        await remote.save(description.target.key, connection, account, assertCurrent);
+        assertCurrent();
+      }
+      for (const [key, entry] of tickets) {
+        if (entry.expiresAt <= Date.now() || entry.owner.isDestroyed()) tickets.delete(key);
+      }
+      request.launch = launch;
+      request.expiresAt = Date.now() + REMOTE_TICKET_TTL_MS;
+      setTimeout(() => tickets.delete(ticket), REMOTE_TICKET_TTL_MS).unref();
+      return { ...description, connection: selected, ticket };
+    } finally {
+      if (!request.launch) tickets.delete(ticket);
     }
-    for (const [key, entry] of tickets) {
-      if (entry.expiresAt <= Date.now() || entry.owner.isDestroyed()) tickets.delete(key);
-    }
-    const ticket = randomUUID();
-    tickets.set(ticket, { id, owner: event.sender, scope: account, epoch, context: remoteContextKey(context), launch, expiresAt: Date.now() + REMOTE_TICKET_TTL_MS });
-    setTimeout(() => tickets.delete(ticket), REMOTE_TICKET_TTL_MS).unref();
-    return { ...description, connection: selected, ticket };
   });
 
   ipcMain.handle(TERMINAL_INVOKE.CREATE, (event: IpcMainInvokeEvent, params: unknown) => {
@@ -176,12 +183,14 @@ export function registerTerminalHandlers(options?: TerminalHandlersOptions): Pty
     if (ticket === undefined) return throwIpcError('PRECONDITION_FAILED', 'Remote terminal preparation is required');
     if (typeof ticket !== 'string' || !ticket.length) return throwIpcError('INVALID_PARAMS', 'Invalid terminal ticket');
     const request = tickets.get(ticket);
-    if (!request) return throwIpcError('PRECONDITION_FAILED', 'Remote terminal ticket is unavailable');
+    // A supplied ticket that lost authority requires explicit recovery. Returning
+    // PRECONDITION_FAILED would automatically prepare again after a cross-window close.
+    if (!request?.launch) return throwIpcError('PERMISSION_DENIED', 'Remote terminal ticket is unavailable');
     if (request.id !== opts.id || request.owner !== event.sender || request.epoch !== accountEpoch || request.scope !== account || request.context !== remoteContextKey(context)) {
       return throwIpcError('PERMISSION_DENIED', 'Terminal ticket context mismatch');
     }
     tickets.delete(ticket);
-    if (request.expiresAt <= Date.now()) return throwIpcError('PRECONDITION_FAILED', 'Remote terminal ticket expired');
+    if (request.expiresAt <= Date.now()) return throwIpcError('PERMISSION_DENIED', 'Remote terminal ticket expired');
     // Consume before spawn, including failures; create performs no asynchronous work.
     return spawn({
       ...resolvedOpts, ...request.launch,
@@ -240,8 +249,25 @@ export function registerTerminalHandlers(options?: TerminalHandlersOptions): Pty
   ipcMain.handle(TERMINAL_INVOKE.DISPOSE, (event, idArg: unknown, contextArg?: unknown) => {
     const id = requireString(idArg, 'id');
     assertRemoteOwner(event, id, contextArg);
-    for (const [ticket, entry] of tickets) {
-      if (entry.id === id && entry.owner === event.sender) tickets.delete(ticket);
+    const preparations = [...tickets.entries()].filter(([, entry]) => entry.id === id);
+    // A colliding local PTY retains the existing local close semantics; it does
+    // not grant authority over another window's remote preparation.
+    if (preparations.length && (!manager.has(id) || manager.isRemote(id))) {
+      assertTrustedAppRendererEvent(event);
+      const account = remoteScope();
+      const identity = manager.remoteIdentity(id);
+      const context = identity?.context ?? (contextArg === undefined ? undefined : remoteContextKey(parseRemoteContext(contextArg)));
+      const authorized = preparations.filter(([, entry]) => entry.scope === account && entry.epoch === accountEpoch
+        && (entry.owner === event.sender || entry.context === context));
+      if (event.sender.isDestroyed() || (!identity && !authorized.length)) {
+        return throwIpcError('PERMISSION_DENIED', 'Terminal owner is no longer valid');
+      }
+      // An owner closing by id also cancels the same tab/context's preparations
+      // in other windows. Do not widen that authority to unrelated contexts.
+      const contexts = new Set(authorized.map(([, entry]) => entry.context));
+      for (const [ticket, entry] of preparations) {
+        if (entry.scope === account && entry.epoch === accountEpoch && contexts.has(entry.context)) tickets.delete(ticket);
+      }
     }
     manager.dispose(id);
   });

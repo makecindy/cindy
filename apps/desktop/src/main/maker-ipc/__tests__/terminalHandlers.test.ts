@@ -208,7 +208,7 @@ describe('remote ticket IPC', () => {
     vi.mocked(remote.ownerKey).mockImplementationOnce(() => { throw new Error('[PERMISSION_DENIED] Account boundary'); });
     expect(() => invoke(TERMINAL_INVOKE.WRITE, source, params.id, 'blocked')).toThrow(/PERMISSION_DENIED/);
     vi.mocked(remote.scope).mockReturnValue('account:1:repaired-generation');
-    expect(() => create(source, pending, { id: 'pending' })).toThrow(/PRECONDITION_FAILED/);
+    expect(() => create(source, pending, { id: 'pending' })).toThrow(/PERMISSION_DENIED/);
     expect(create()).toEqual({ pid: 123, shellId: 'sh', shellDisplayName: 'SSH · my-alias' });
     invoke(TERMINAL_INVOKE.WRITE, source, params.id, 'resumed');
     await Promise.resolve();
@@ -340,22 +340,25 @@ describe('remote ticket IPC', () => {
     expect(mocks.spawn.mock.calls[0][1]).toContain('submitted');
   });
 
-  it('rejects missing, expired and reused tickets without another describe or spawn', async () => {
+  // PR #8881: only absent tickets request automatic preparation. Supplied stale
+  // tickets must stop until explicit recovery, or a close can recreate an orphan.
+  // Existing rejection coverage missed this observable IPC error-code distinction.
+  it('requests preparation only for absent tickets and denies stale launch authority', async () => {
     vi.useFakeTimers();
     expect(() => create()).toThrow(/PRECONDITION_FAILED/);
     const expired = (await prepare()).ticket;
     vi.advanceTimersByTime(30_000);
-    expect(() => create(source, expired)).toThrow(/PRECONDITION_FAILED/);
+    expect(() => create(source, expired)).toThrow(/PERMISSION_DENIED/);
     const expiredBeforeTimer = (await prepare()).ticket;
     vi.setSystemTime(Date.now() + 30_000);
-    expect(() => create(source, expiredBeforeTimer)).toThrow(/expired/);
+    expect(() => create(source, expiredBeforeTimer)).toThrow('[PERMISSION_DENIED] Remote terminal ticket expired');
     const cancelled = (await prepare()).ticket;
     invoke(TERMINAL_INVOKE.DISPOSE, source, params.id);
-    expect(() => create(source, cancelled)).toThrow(/PRECONDITION_FAILED/);
+    expect(() => create(source, cancelled)).toThrow(/PERMISSION_DENIED/);
     const ticket = (await prepare()).ticket;
     create(source, ticket);
     invoke(TERMINAL_INVOKE.DISPOSE, source, params.id);
-    expect(() => create(source, ticket)).toThrow(/PRECONDITION_FAILED/);
+    expect(() => create(source, ticket)).toThrow(/PERMISSION_DENIED/);
     expect(mocks.spawn).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
@@ -376,7 +379,7 @@ describe('remote ticket IPC', () => {
     const ticket = (await prepare()).ticket;
     mocks.spawn.mockImplementation(() => { throw new Error('ENOENT private path'); });
     expect(() => create(source, ticket)).toThrow('[TERMINAL_SHELL_NOT_FOUND] Shell or SSH binary is unavailable');
-    expect(() => create(source, ticket)).toThrow(/PRECONDITION_FAILED/);
+    expect(() => create(source, ticket)).toThrow(/PERMISSION_DENIED/);
   });
 
   it('clears signed tickets and disposes only remote PTYs on account invalidation', async () => {
@@ -397,8 +400,8 @@ describe('remote ticket IPC', () => {
     expect(() => invoke(TERMINAL_INVOKE.RESTART, source, params.id)).toThrow(/TERMINAL_NOT_FOUND/);
     account = 'account:1';
     invalidate();
-    expect(() => create(source, unused, { id: 'pending' })).toThrow(/PRECONDITION_FAILED/);
-    expect(() => create(source, ticket)).toThrow(/PRECONDITION_FAILED/);
+    expect(() => create(source, unused, { id: 'pending' })).toThrow(/PERMISSION_DENIED/);
+    expect(() => create(source, ticket)).toThrow(/PERMISSION_DENIED/);
   });
 
   it.each(['destroyed', 'untrusted', 'account', 'aba'] as const)('rejects stale prepare after %s', async reason => {
@@ -415,17 +418,85 @@ describe('remote ticket IPC', () => {
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
-  it('does not spawn when a tab closes during describe; the caller can discard the late ticket', async () => {
+  // PR #8881: closing from another window must fence pending metadata, SSH
+  // preparation and settings writes, as well as issued tickets. Existing tests
+  // only checked that describe itself did not spawn. Unit tier, memory-only IPC.
+  it.each(['describe', 'prepare', 'save'] as const)('cancels popup %s on task-window close and permits a fresh retry', async stage => {
+    const popup = event();
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const wait = async () => { entered.resolve(); await release.promise; };
+    if (stage === 'describe') {
+      vi.mocked(remote.describe).mockImplementation(async () => { await wait(); return description; });
+    } else if (stage === 'prepare') {
+      vi.mocked(remote.prepare).mockImplementation(async (connection, cwd, _key, _scope, assertCurrent) => {
+        await wait(); assertCurrent(); return remoteLaunch(connection, cwd);
+      });
+    } else {
+      vi.mocked(remote.save).mockImplementation(async (_key, _connection, _scope, assertCurrent) => {
+        await wait(); assertCurrent();
+      });
+    }
+    const result = prepare(popup, { connection: { host: 'submitted' } });
+    await entered.promise;
+    invoke(TERMINAL_INVOKE.DISPOSE, source, params.id, context);
+    release.resolve();
+    await expect(result).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    create(popup, (await prepare(popup)).ticket);
+    expect(mocks.spawn).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('revokes popup tickets only after validating close authority (PTY exists: %s)', async live => {
+    const popup = event();
+    const ticket = (await prepare(popup)).ticket;
+    for (const [caller, closingContext] of [
+      [source, undefined],
+      [source, { ...context, sessionId: 'other' }],
+      [event(source.sender, false), context],
+    ] as const) {
+      expect(() => invoke(TERMINAL_INVOKE.DISPOSE, caller, params.id, closingContext)).toThrow(/PERMISSION_DENIED/);
+    }
+    account = 'account:2';
+    expect(() => invoke(TERMINAL_INVOKE.DISPOSE, source, params.id, context)).toThrow(/PERMISSION_DENIED/);
+    account = 'account:1';
+    // Rejected closes must not consume the ticket; a live PTY exercises both
+    // authorization paths, while the other case closes before the first spawn.
+    if (live) create(popup, ticket);
+    const unused = live ? (await prepare(popup)).ticket : ticket;
+    invoke(TERMINAL_INVOKE.DISPOSE, source, params.id, context);
+    expect(manager.has(params.id)).toBe(false);
+    expect(() => create(popup, unused)).toThrow(/PERMISSION_DENIED/);
+    expect(mocks.spawn).toHaveBeenCalledTimes(live ? 1 : 0);
+    // Explicit recovery obtains new authority; the revoked ticket never triggers it.
+    create(popup, (await prepare(popup)).ticket);
+    expect(manager.has(params.id)).toBe(true);
+    expect(mocks.spawn).toHaveBeenCalledTimes(live ? 2 : 1);
+  });
+
+  it('closes an authorized PTY without revoking a colliding preparation for another context', async () => {
+    create(source, (await prepare()).ticket);
+    const other = event();
+    const otherContext = { ...context, sessionId: 'other-task' };
+    const { ticket } = await prepare(other, otherContext);
+    invoke(TERMINAL_INVOKE.DISPOSE, source, params.id, context);
+    expect(manager.has(params.id)).toBe(false);
+    invoke(TERMINAL_INVOKE.CREATE, other, { ...params, remote: { ...otherContext, ticket } });
+    expect(manager.has(params.id)).toBe(true);
+    expect(mocks.spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects pending metadata when its own window closes the tab', async () => {
     const metadata = deferred<RemoteTerminalDescription>();
     vi.mocked(remote.describe).mockReturnValue(metadata.promise);
     const result = prepare();
     invoke(TERMINAL_INVOKE.DISPOSE, source, params.id);
     metadata.resolve(description);
-    expect((await result).ticket).toEqual(expect.any(String));
+    await expect(result).rejects.toThrow(/PERMISSION_DENIED/);
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
-  it('keeps an explicit submission when the tab closes during the settings write', async () => {
+  it('cancels an explicit submission when the tab closes before the settings write', async () => {
     const lock = deferred<void>();
     const persisted: string[] = [];
     vi.mocked(remote.save).mockImplementation(async (_key, connection, _scope, assertCurrent) => {
@@ -437,8 +508,8 @@ describe('remote ticket IPC', () => {
     await Promise.resolve();
     invoke(TERMINAL_INVOKE.DISPOSE, source, params.id);
     lock.resolve();
-    expect((await result).ticket).toEqual(expect.any(String));
-    expect(persisted).toEqual(['submitted']);
+    await expect(result).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(persisted).toEqual([]);
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
