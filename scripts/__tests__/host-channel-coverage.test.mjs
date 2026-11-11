@@ -1,54 +1,66 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { classify, clientBehavior, moduleGroup, owningFile, rankUsage, summarize } from '../host-channel-coverage.mjs';
+import {
+  classify, clientBehavior, isHostWork, isWindowClass, moduleGroup, owningFile, rankUsage, summarize,
+} from '../host-channel-coverage.mjs';
 
 const main = (file) => `apps/desktop/src/main/${file}`;
 const contract = new Set(['local-db:sessions:list']);
-const owner = (registration) => classify(registration, contract).category;
+const owner = (registration) => {
+  const { category, sub } = classify(registration, contract);
+  return sub ? `${category}:${sub}` : category;
+};
 
 test('classifies contract and client-mode channels before ownership', () => {
   assert.equal(owner({ channel: 'local-db:sessions:list', file: main('localDb/ipc/sessions.ts') }), 'contract');
   assert.equal(owner({ channel: 'host-client:retry', file: main('bootstrap-electron.ts'), enclosing: 'installHostClientMode' }), 'client');
 });
 
-test('ownership: B and C rules are final, A rules can turn into C through window API use', () => {
+test('B rules are final; A rules turn into two-phase C when the handler uses a window API', () => {
   assert.equal(owner({ channel: 'clipboard:copy-text', file: main('bootstrap-electron.ts'), gui: ['clipboard'] }), 'B');
   assert.equal(owner({ channel: 'anything', file: main('voice-input/index.ts') }), 'B');
   assert.equal(owner({ channel: 'ghost-page:pick-model', file: main('cindy-brain/x.ts'), perWebContents: true }), 'B');
-  assert.equal(owner({ channel: 'terminal:create', file: main('maker-ipc/register.ts') }), 'C');
-  assert.equal(owner({ channel: 'projects-root:choose', file: main('bootstrap-electron.ts') }), 'C');
-
   const plain = classify({ channel: 'maker:schedule:list', file: main('maker-ipc/register.ts'), gui: [] }, contract);
   assert.deepEqual([plain.category, plain.basis, plain.reason], ['A', 'rule', '自动化']);
   const both = classify({ channel: 'maker:schedule:export', file: main('maker-ipc/register.ts'), gui: ['dialog'] }, contract);
-  assert.deepEqual([both.category, both.basis], ['C', 'dependency']);
+  assert.deepEqual([both.category, both.sub, both.basis], ['C', 'two-phase', 'dependency']);
   assert.match(both.reason, /自动化.*dialog/);
-
-  assert.deepEqual(Object.values(pick(classify({ channel: 'billing:get-balance', file: main('billing/index.ts'), gui: [] }, contract))), ['A', 'default']);
-  assert.deepEqual(Object.values(pick(classify({ channel: 'odd:thing', file: main('odd.ts'), gui: ['shell'] }, contract))), ['C', 'dependency']);
+  assert.equal(owner({ channel: 'billing:get-balance', file: main('billing/index.ts'), gui: [] }), 'A');
+  assert.equal(owner({ channel: 'odd:thing', file: main('odd.ts'), gui: ['shell'] }), 'C:two-phase');
 });
 
-test('sync channels are window-local for settings and account hints, but still Host work for other backend state', () => {
-  assert.equal(owner({ channel: 'layout:get', kind: 'event', file: main('layout/ipc.ts'), sync: true }), 'W');
-  assert.equal(owner({ channel: 'auth:has-persisted-session-hint-sync', kind: 'event', file: main('bootstrap-electron.ts'), sync: true }), 'W');
-  assert.equal(owner({ channel: 'sidebar-settings:get-project-order', file: main('projectOrderStore.ts') }), 'W');
-  const plugin = classify({ channel: 'ghosts:unread', kind: 'event', file: main('cindy-brain/index.ts'), sync: true, gui: [] }, contract);
-  assert.equal(plugin.category, 'A');
-  assert.match(plugin.reason, /预取/);
+test('C buckets: backend, window-local, two-phase and special design', () => {
+  assert.equal(owner({ channel: 'terminal:create', file: main('maker-ipc/register.ts') }), 'C:backend');
+  assert.equal(owner({ channel: 'maker:file-browser:read-file', file: main('file-browser/ipc.ts') }), 'C:backend');
+  assert.equal(owner({ channel: 'read-file-for-attachment', file: main('bootstrap-electron.ts') }), 'C:window');
+  assert.equal(owner({ channel: 'process-monitor:subscribe', file: main('process-monitor/ipc.ts'), gui: ['BrowserWindow.fromWebContents'] }), 'C:window');
+  assert.equal(owner({ channel: 'projects-root:choose', file: main('bootstrap-electron.ts') }), 'C:two-phase');
+  assert.equal(owner({ channel: 'worktree:reveal', file: main('worktree/index.ts') }), 'C:two-phase');
+  assert.equal(owner({ channel: 'input-handoff:submit', file: main('maker-ipc/x.ts') }), 'C:special');
+  assert.equal(owner({ channel: 'device-link:invoke', file: main('device-link/ipc.ts'), gui: ['dialog'] }), 'C:special');
+});
+
+test('sync channels form their own class: local settings or Host data behind a window mirror', () => {
+  const sync = (channel, file) => owner({ channel, kind: 'event', file: main(file), sync: true, gui: [] });
+  assert.equal(sync('layout:get', 'layout/ipc.ts'), 'S:local');
+  assert.equal(sync('sidebar-settings:load-snapshot-sync', 'sidebarSettingsStore.ts'), 'S:local');
+  assert.equal(sync('client-endpoints:get-sync', 'clientEndpointsService.ts'), 'S:local');
+  assert.equal(sync('ghosts:unread', 'cindy-brain/index.ts'), 'S:mirror');
+  assert.equal(sync('auth:has-persisted-session-hint-sync', 'bootstrap-electron.ts'), 'S:mirror');
   // A window-only sync read stays B.
-  assert.equal(owner({ channel: 'voice-input:history:get', kind: 'event', file: main('voice-input/index.ts'), sync: true }), 'B');
+  assert.equal(sync('voice-input:history:get', 'voice-input/index.ts'), 'B');
+  assert.equal(owner({ channel: 'sidebar-settings:get-project-order', file: main('projectOrderStore.ts') }), 'W');
 });
 
-test('relaunch blocking checks are Host-owned runtime state, the updater itself stays in the window', () => {
-  assert.equal(owner({ channel: 'update-relaunch:blocking-summary', file: main('relaunchBusyActivityIpc.ts'), gui: [] }), 'A');
+test('receipt channels and the relaunch checks are labelled, not mixed into window work', () => {
+  assert.equal(owner({ channel: 'model-favorites:host-reply', kind: 'event', file: main('maker-ipc/x.ts') }), 'R');
+  assert.equal(owner({ channel: 'app-preferences:reply', kind: 'event', file: main('app-settings.ts') }), 'R');
+  const relaunch = classify({ channel: 'update-relaunch:blocking-summary', file: main('relaunchBusyActivityIpc.ts'), gui: [] }, contract);
+  assert.equal(relaunch.category, 'A');
+  assert.match(relaunch.reason, /升级与交接/);
   assert.equal(owner({ channel: 'update-relaunch', file: main('updateService.ts') }), 'B');
-  assert.equal(owner({ channel: 'update-check-now', file: main('updateService.ts') }), 'B');
 });
-
-function pick({ category, basis }) {
-  return { category, basis };
-}
 
 test('attributes package-defined channels to the desktop adapter that registers them', () => {
   const registration = { channel: 'feishuBot:status', file: 'packages/lizi-im/src/feishu/ipc.ts', registeredAt: `${main('im/host.ts')}:172` };
@@ -57,35 +69,38 @@ test('attributes package-defined channels to the desktop adapter that registers 
   assert.equal(owner(registration), 'A');
 });
 
-test('ranks A by every call in an embedded run and by unserved calls in a client run', () => {
+test('Host work is A plus backend and two-phase C, ranked by real calls', () => {
   const inventory = {
     registrations: [
       { channel: 'local-db:sessions:list', kind: 'invoke', file: main('localDb/a.ts'), line: 1, gui: [] },
       { channel: 'maker:schedule:list', kind: 'invoke', file: main('maker-ipc/register.ts'), line: 2, gui: [] },
-      { channel: 'git-context:get-for-session', kind: 'invoke', file: main('git-context/ipc.ts'), line: 3, gui: [] },
-      { channel: 'clipboard:copy-text', kind: 'invoke', file: main('bootstrap-electron.ts'), line: 4, gui: [] },
+      { channel: 'terminal:write', kind: 'invoke', file: main('maker-ipc/register.ts'), line: 3, gui: [] },
+      { channel: 'read-file-bytes', kind: 'invoke', file: main('bootstrap-electron.ts'), line: 4, gui: [] },
+      { channel: 'layout:get', kind: 'event', file: main('layout/ipc.ts'), line: 5, gui: [], sync: true },
     ],
     unresolved: [],
     contract,
   };
   const entry = (count, missing = 0, unsupported = 0) => ({ kind: 'invoke', count, handled: count - missing - unsupported, missing, unsupported });
   const channels = {
-    'local-db:sessions:list': entry(9),
-    'clipboard:copy-text': entry(8),
-    'maker:schedule:list': entry(2, 0, 2),
-    'git-context:get-for-session': entry(5),
+    'local-db:sessions:list': entry(9), 'read-file-bytes': entry(8), 'layout:get': entry(6),
+    'maker:schedule:list': entry(2, 0, 2), 'terminal:write': entry(5),
   };
   const embedded = summarize(inventory, { mode: 'embedded', channels });
-  assert.deepEqual(embedded.ranking.map((row) => [row.channel, row.count]), [['git-context:get-for-session', 5], ['maker:schedule:list', 2]]);
-  assert.equal(embedded.usedTotals.A, 2);
-  assert.equal(embedded.usedTotals.B, 1);
-  assert.equal(embedded.usedTotals.aCalls, 7);
+  assert.deepEqual(embedded.ranking.map((row) => [row.channel, row.count]), [['terminal:write', 5], ['maker:schedule:list', 2]]);
+  assert.deepEqual(
+    { total: embedded.hostWork.total, A: embedded.hostWork.A, used: embedded.hostWork.used, calls: embedded.hostWork.calls },
+    { total: 2, A: 1, used: 2, calls: 7 },
+  );
+  assert.equal(embedded.totals.S, 1);
+  assert.ok(embedded.rows.filter(isWindowClass).some((row) => row.channel === 'read-file-bytes'));
+  assert.ok(!embedded.rows.filter(isHostWork).some((row) => row.channel === 'layout:get'));
 
   const client = rankUsage(embedded.rows, { mode: 'client', channels });
   assert.deepEqual(client.map((row) => [row.channel, row.count]), [['maker:schedule:list', 2]]);
 });
 
-test('reports what a B channel does in client mode from the two handler snapshots', () => {
+test('reports what a window-class channel does in client mode from the two handler snapshots', () => {
   const snapshot = (invoke, event = []) => ({ registered: { invoke, event } });
   const embedded = snapshot(['maker:computer:status', 'update-relaunch:blocking-summary', 'clipboard:copy-text'], ['maker:computer:drag']);
   const client = snapshot(['clipboard:copy-text']);

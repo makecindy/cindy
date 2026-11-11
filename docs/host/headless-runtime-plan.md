@@ -1142,58 +1142,58 @@ CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指
   `node scripts/host-channel-coverage.mjs` 生成。用 TypeScript 类型检查器解析桌面主进程
   每个 `ipcMain.handle/on` 及包装函数的通道名（字面量、常量对象、模板字符串、
   `as const` 循环、`Object.entries` 处理器表、透传参数的包装函数），0 处未解析。
-  主进程共 **1454** 个通道：已在合同里 61、客户端模式自有 2，其余按归属分四类：
-  **A 必须由后台处理 930**、**B 永久留在窗口 361**、**W 窗口本地设置（含同步通道）14**、
-  **C 待定 86**。
-- **归属规则**（清单里有完整规则表，正本是脚本的 `OWNERSHIP_RULES`）：按通道名或注册模块
-  先中先得。B 规则：窗口外壳与多窗口、原生对话框／剪贴板／系统外壳与通知、本机截屏录屏与
-  远程桌面、由窗口执行的图形能力（电脑控制、浏览器）、本机输入设备与语音、安装包自身的更新
-  与诊断。W 规则：侧栏设置与项目顺序；另外处理函数给 `event.returnValue` 赋值的同步通道
-  不能走异步 HTTP——属于设置、账号提示或未登记前缀的判 W（窗口本地读同一份 profile），属于
-  其它后台领域的（6 个 `ghosts:*` 同步读取）仍判 A，注明需 Host 预取、窗口本地回放（同
-  `ghosts:list`）。C 规则：终端 PTY、本机文件读取、弹出系统选择框后写后台数据、在访达或
-  系统浏览器里打开后台内容、安全输入交接。A 规则只标领域（任务与消息、自动化、Orca、
-  伙伴与 IM、账号与凭据、供应商、插件、设备互联、git、记忆、附件、设置、Cindy Make、
-  重启会打断哪些任务）。再加一条
-  **依赖判定**：处理函数及其调用的两层桌面源码函数若用到窗口 API（对话框、系统外壳、
-  剪贴板、`BrowserWindow.fromWebContents` 等），A 领域改判 C；未登记前缀的通道用到窗口
-  API 判 C，否则判 A。发送方校验（`src/main/security/`）与发给某个窗口的推送不算窗口 API。
-  A 类 819 条按规则、111 条按默认；W 类 8 条按规则、6 条按同步判定；C 类 68 条按规则、
-  18 条按依赖。规则是可审的判断，改规则就重新生成。清单只写文件不写行号（行号在 `--json`
-  输出里），避免一合并就过期；也不加“清单必须最新”的 CI，这个仓每天有大量 PR 动 IPC。
-- **真实使用排行**：`--mock` 界面夹具（隔离沙箱 `host-usage`，免登录本地数据）里用
+  清单只写文件不写行号（行号在 `--json` 输出里），避免一合并就过期；也不加“清单必须
+  最新”的 CI，这个仓每天有大量 PR 动 IPC。
+- **真实使用**：`--mock` 界面夹具（隔离沙箱 `host-usage`，免登录本地数据）里用
   `apps/desktop/scripts/host-client-usage-tour.mjs` 走一遍 25 个夹具任务、20 个设置页、
   10 个主页面并新建任务发送一次，主进程按 `CINDY_IPC_USAGE_FILE` 计数（仅源码运行）。
   报告存为 [`evidence/channel-usage-mock-tour.json`](evidence/channel-usage-mock-tour.json)，
-  清单脚本默认读它排序。这一轮共调用 **253** 个通道（1862 次）：合同 30、客户端 1、
-  **A 136（733 次）**、B 73、W 9、C 4。
+  清单脚本默认读它排序。这一轮共调用 253 个通道（1862 次）。
 
-**三个数**（后续各批的范围与“还差多少”以 A 类为准）：
+**归属**（主进程共 1454 个通道；规则表见清单「归属规则」，正本是脚本的 `OWNERSHIP_RULES`）：
 
-- 窗口类（B + W）且客户端模式下已注册：**361**
-- 窗口类但客户端模式下未注册：**12**——`maker:computer:*` 10 个与 `maker:browser:*` 2 个，
-  只在客户端模式跳过的 `registerMakerIpcsAfterSplash` → `registerMakerIpc` 里注册，今天返回
-  `UNSUPPORTED_CAPABILITY`（拖拽开始是事件，无人监听）。**未实现**；#9991 不接，归本任务
-  第 1a 批：#9991 合并后，把这 12 个注册从 `registerMakerIpc` 拆成客户端模式也会调用的函数。
-  另 2 个插件页面通道注册在 `webContents.ipc` 上，快照不覆盖。
-- 真正要 Host 接的（A）：**930**；夹具巡检实际调用到的 A 类 **136 个**（733 次），这是“还差
-  多少”的下限，巡检没有覆盖真实模型回合、附件、新建自动化、Orca、伙伴与 IM、远程执行。
-  C 类 86 个逐项定归属后再计入。
+| 分类 | 含义 | 通道数 |
+| --- | --- | ---: |
+| 已代理 | 合同 61、客户端模式自有 2 | 63 |
+| A | 必须由后台处理：读写后台持有的数据或运行状态 | 918 |
+| B | 永久留在窗口：窗口外壳、对话框／剪贴板／系统外壳／通知、截屏录屏与远程桌面、电脑控制与浏览器、输入设备与语音、安装包更新与诊断 | 361 |
+| W | 窗口本地设置：侧栏设置与项目顺序，窗口直接读写同一份 profile | 6 |
+| S | 同步通道（处理函数给 `event.returnValue` 赋值，AST 自动识别）：S·本地 7（界面设置，窗口本地读 profile）；S·镜像 7（6 个 `ghosts:*` 与登录提示，数据归 Host） | 14 |
+| R | 回执通道：主进程向界面要数据、界面回执（`model-favorites:host-*`、`setup-migration:host-*`、`app-preferences:reply`） | 6 |
+| C | C-后台 32（终端、任务范围文件操作）、C-两段式 39（选择框／访达／确认框后写后台）、C-窗口本地 11（本窗口选择的本机文件、进程监视）、C-专项设计 4（`input-handoff:*`、`device-link:invoke`） | 86 |
 
-判定方法：调用计数报告附带写入时的主进程处理者快照，对照客户端模式登录页
+依赖判定：A 领域的处理函数及其调用的两层桌面源码函数（不含被调函数里的嵌套回调）若用到
+窗口 API（对话框、系统外壳、剪贴板、`BrowserWindow.fromWebContents` 等），改判 C-两段式；
+未登记前缀同理，否则判 A。发送方校验（`src/main/security/`）与发给某个窗口的推送不算窗口 API。
+
+**总口径：真正要 Host 做的 = A + C-后台 + C-两段式 = 918 + 32 + 39 = 989**；夹具巡检实际调用到
+其中 **133 个（722 次）**，这是“还差多少”的下限，巡检没有覆盖真实模型回合、附件、新建自动化、
+Orca、伙伴与 IM、远程执行。S 与 R 已从 A 中单列，C-窗口本地与 C-专项设计不计入。后续各批的
+范围与“还差多少”以此为准。
+
+**窗口类在客户端模式下**（窗口类 = B + W + S·本地 + C-窗口本地，共 385；对照客户端模式登录页
 [`evidence/channel-usage-client-login.json`](evidence/channel-usage-client-login.json) 与普通模式
-巡检后两份；清单的「窗口类但客户端模式下未注册」列出全部，本批只记录、不改。
+巡检后两份主进程处理者快照）：已注册 **371**；未注册 **12**——`maker:computer:*` 10 个与
+`maker:browser:*` 2 个，只在客户端模式跳过的 `registerMakerIpcsAfterSplash` → `registerMakerIpc`
+里注册，今天返回 `UNSUPPORTED_CAPABILITY`（拖拽开始是事件，无人监听）。**未实现**；#9991 不接，
+归本任务第 1a 批：#9991 合并后，把这 12 个注册拆成客户端模式也会调用的函数。另 2 个插件页面通道
+注册在 `webContents.ipc` 上，快照不覆盖。
 
 **剩余项（本批记录，不在本批处理）**：
 
 - `update-relaunch:blocking-activity` / `blocking-summary`（“现在重启会打断哪些任务”）是 Host
-  持有的运行状态，注册在客户端模式跳过的 `registerMakerIpcsAfterSplash` 里，今天返回
-  `No handler registered`。客户端模式下的答案取决于交接合同，**归“个人版”任务的升级与交接
-  流程**，不归本计划的各批。
+  持有的运行状态，归 A 的“升级与交接”领域；它注册在客户端模式跳过的
+  `registerMakerIpcsAfterSplash` 里，今天返回 `No handler registered`。客户端模式下的答案取决于
+  交接合同，**归交接任务留在原工作区的升级流程**，不归本计划的各批。
 - **Host 没有免账号本地模式**：桌面有 `auth:enter-local`，Host 只有云端账号一种登录态，所以
   隔离 profile 里客户端模式窗口停在登录页，无法在不碰真实凭证的情况下做完整客户端验收。
-- 6 个 `ghosts:*` 同步读取（recommendations、unread、recent-usage、builtin-status、
-  errand-prefs、workdir-prefs）要接 Host 时需走“启动预取 + 事件刷新 + 本地回放”，不能直接转发。
+- **S·镜像 7 个**（`ghosts:recommendations`、`unread`、`recent-usage`、`builtin-status`、
+  `errand-prefs`、`workdir-prefs` 与 `auth:has-persisted-session-hint-sync`）需要“窗口缓存镜像”
+  （Host 经事件流推送，窗口同步回答缓存）或把界面改成异步，是一个单独的小设计，放进插件那一
+  小批，不混进 1a。S·本地 7 个由窗口本地读同一份 profile。
+- **R 回执通道 6 个**：数据在界面本地存储，Host 要用需经窗口往返一次，先标出来，不排期。
+- **C-专项设计 4 个**涉及“主人填写的值只交给宿主执行”和远程控制派发的安全边界，先读
+  `docs/product-rules/input-handoff.md`，方案出来前不动。
 - 启动时同步被丢（见下文“巡检顺带发现”）是既有问题，另开小修复。
 
 **为什么排行用普通模式而不是客户端模式**：Host 只有云端账号一种登录态，没有桌面的
