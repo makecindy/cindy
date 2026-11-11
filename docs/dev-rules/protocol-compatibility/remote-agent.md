@@ -164,7 +164,11 @@ Codex 原生图片恢复（#6412）在既有 `maker:remote-agent:v1` 上追加�
 - **幂等**：`poll` 按游标幂等，只有它在 peer reset 后自动重读(`isPeerResetRetryableInvoke`)；
   `open` 按 runId、`call` 按 callId、`reply` 按 requestId、`push` 按 seq 去重，不自动重放；
   该 channel 的结果不进全局去重缓存。
-- **大小**：内联载荷 1MB，更大的 gzip 后按 512KB 分段 `upload`(单个载荷 64MB)；单次 `poll`
+- **大小**：接收端仍接受最多 1Mi 字符的内联载荷、每块最多 512KiB 的 `upload`、最多 128 块和单个 gzip 载荷 64MiB。
+  控制端发送偏好（2026-11-10）为内联 JSON 最多 64KiB UTF-8，更大的先 gzip、优先按 64KiB 分块；
+  大载荷按压缩后大小增大分块以保持不超过原 128 块上限，不缩小既有容量。偏好只在发送端生效，
+  旧控制端的大块仍正常接收，新控制端的小块也符合旧接收端的原协议；不新增字段、能力位或重试。
+  官方与自建中转继续转发原有 invoke，无需服务端或中转升级。单次 `poll`
   每个任务最多 512KB、合计 1.5MB(B 轮流决定从哪个任务开始取，积压多的任务不会一直挤占额度)；`push` 单帧 1MB、单次合计 3MB，超长 WebSocket 消息拆段(`more: true`)。
 - **前向兼容**：A 解析事件流时忽略不认识的行类型；B 对不认识的 op / 方法回 `REMOTE_AGENT_INVALID`
   / `REMOTE_AGENT_UNSUPPORTED`。旧版 B 回 `CHANNEL_NOT_ALLOWED`，A 提示对方版本过旧，不回退到本机运行。

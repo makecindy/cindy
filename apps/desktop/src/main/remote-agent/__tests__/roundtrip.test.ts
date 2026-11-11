@@ -2341,7 +2341,7 @@ describe('shared startup lease budget upload cancellation', () => {
       onEvent() {}, onState() {}, onWs() {}, onClosed() {},
       onRequest: async () => ({ type: 'error', error: { code: 'UNUSED', message: 'fixture' } }),
     }, randomUUID);
-    // Just crosses the inline threshold; gzip is a bounded two-chunk fixture above.
+    // Large payload; gzip completion and its bounded output are controlled above.
     const payload = { sessionId: 'upload-task', text: 'x'.repeat(1024 * 1024) };
     return { client, payload, requests, reply, hold: () => { hold = true; } };
   }
@@ -2367,13 +2367,15 @@ describe('shared startup lease budget upload cancellation', () => {
     expect(f.requests).toEqual([]);
   });
 
-  it('completes both chunks when not cancelled and rejects an already-closed payload before compression', async () => {
+  it('completes the upload when not cancelled and rejects an already-closed payload before compression', async () => {
     const f = fixture();
-    await expect(f.client.payload(f.payload)).resolves.toMatchObject({ chunks: 2, bytes: 512 * 1024 + 1 });
-    expect(f.requests.map(request => request.index)).toEqual([0, 1]);
+    const payload = await f.client.payload(f.payload);
+    expect(payload).toMatchObject({ bytes: 512 * 1024 + 1 });
+    if ('json' in payload) throw new Error('Expected an uploaded payload');
+    expect(f.requests.map(request => request.index)).toEqual(Array.from({ length: payload.chunks }, (_, index) => index));
     f.client.abandon('closed');
     await expect(f.client.payload(f.payload)).rejects.toThrow('REMOTE_AGENT_EXPIRED');
     expect(payloadCompression.calls).toBe(1);
-    expect(f.requests).toHaveLength(2);
+    expect(f.requests).toHaveLength(payload.chunks);
   });
 });
