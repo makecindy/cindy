@@ -1,7 +1,7 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`edfa5aff6a`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`542a420b18`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
 及其包装函数注册的通道；同名通道按 invoke / event 各计一次。
@@ -19,8 +19,8 @@
 | **B** | 永久留在窗口：只能在 Electron／图形界面里做 | 361（巡检调用 73） |
 | **W** | 窗口本地设置：窗口直接读写同一份 profile，不经 Host | 6（巡检调用 1） |
 | **S** | 同步通道（给 `event.returnValue` 赋值）：不能转发给 Host | 14（巡检调用 11） |
-| 　S·本地 | 同步·界面设置（窗口本地读 profile） | 7（巡检调用 7） |
-| 　S·镜像 | 同步·数据归 Host（需窗口缓存镜像） | 7（巡检调用 4） |
+| 　S·本地 | 同步·本地（窗口读 profile：界面设置与首帧提示） | 8（巡检调用 8） |
+| 　S·镜像 | 同步·数据归 Host（需窗口缓存镜像） | 6（巡检调用 3） |
 | **R** | 回执通道：主进程向界面要数据，界面回执；先不排期 | 6（巡检调用 2） |
 | **C** | 跨两边，按处理方式分四种 | 87（巡检调用 4） |
 | 　C-后台 | | 32（巡检调用 2） |
@@ -30,7 +30,7 @@
 | 合计 | | 1455 |
 
 **窗口类**（B + W + S·本地 + C-窗口本地）在客户端模式下：
-已注册 **371**、未注册 **12**（今天被拒或无人监听，见下文）、快照无法判断 2。
+已注册 **372**、未注册 **12**（今天被拒或无人监听，见下文）、快照无法判断 2。
 
 判定依据：A:default 109、A:rule 809、B:rule 361、C:dependency 17、C:rule 70、R:rule 6、S:dependency 14、W:rule 6（rule = 规则表，dependency = 窗口 API 或同步返回值判定，default = 未登记前缀且没用窗口 API）。
 
@@ -45,7 +45,7 @@
 
 按顺序匹配，先中先得；通道名或注册模块（`apps/desktop/src/main` 下的路径）命中即算。
 1. B 规则直接定类。
-2. 处理函数给 `event.returnValue` 赋值的同步通道判 S：命中 W 规则、领域为设置与偏好或未登记前缀的为 S·本地，其余为 S·镜像。
+2. 处理函数给 `event.returnValue` 赋值的同步通道判 S：命中 W 规则、领域为设置与偏好、账号与凭据或未登记前缀的为 S·本地，其余为 S·镜像。
 3. W、R、C 规则直接定类（C 规则带细分）。
 4. A 规则只标领域；处理函数及其调用的两层桌面源码函数（不含被调函数里的嵌套回调）若用到下面的窗口 API，改判 C-两段式。
 5. 没有命中任何规则：用到窗口 API 判 C-两段式，否则判 A（默认）。
@@ -225,20 +225,20 @@
 
 ## 同步通道 S（14）
 
-S·本地：界面设置，由窗口本地读同一份 profile 文件，客户端模式下照常注册。S·镜像：数据归 Host（插件状态、登录提示），需要“窗口缓存镜像”（Host 经事件流推送、窗口同步回答缓存）或把界面改成异步，单独设计，放进对应的小批（插件那批），不混进 1a。
+S·本地：界面设置与登录首帧提示，由窗口本地读同一份 profile 文件，客户端模式下照常注册（登录状态本身仍以 Host 为准）。S·镜像：数据归 Host（插件状态），需要“窗口缓存镜像”（Host 经事件流推送、窗口同步回答缓存）或把界面改成异步，单独设计，放进对应的小批（插件那批），不混进 1a。
 
 | 通道 | 类型 | 归属 | 原因 | 调用次数 | 注册文件 |
 |---|---|---|---|---:|---|
-| `sidebar-settings:load-snapshot-sync` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 21 | `sidebarSettingsStore.ts` |
+| `sidebar-settings:load-snapshot-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 21 | `sidebarSettingsStore.ts` |
 | `ghosts:recommendations` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 8 | `cindy-brain/index.ts` |
-| `sidebar-settings:claim-renderer-legacy-owner-sync` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 8 | `sidebarSettingsStore.ts` |
-| `auth:has-persisted-session-hint-sync` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·账号与凭据：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 4 | `bootstrap-electron.ts` |
-| `appearance-settings:get-sync` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 3 | `appearance-settings-ipc.ts` |
-| `layout:get` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 3 | `layout/index.ts` |
-| `local-themes:list-sync` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 3 | `local-themes/register.ts` |
+| `sidebar-settings:claim-renderer-legacy-owner-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 8 | `sidebarSettingsStore.ts` |
+| `auth:has-persisted-session-hint-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·账号提示：只读 profile 里的首帧提示（事件流连上之前就要回答），登录状态仍以 Host 为准 | 4 | `bootstrap-electron.ts` |
+| `appearance-settings:get-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 3 | `appearance-settings-ipc.ts` |
+| `layout:get` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 3 | `layout/index.ts` |
+| `local-themes:list-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 3 | `local-themes/register.ts` |
 | `ghosts:recent-usage` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 2 | `cindy-brain/index.ts` |
-| `app-shortcuts:get` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 1 | `app-shortcuts/index.ts` |
-| `client-endpoints:get-sync` | event | 同步·界面设置（窗口本地读 profile） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 1 | `clientEndpointsService.ts` |
+| `app-shortcuts:get` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 1 | `app-shortcuts/index.ts` |
+| `client-endpoints:get-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示） | 同步通道·界面设置：窗口本地读同一份 profile 文件 | 1 | `clientEndpointsService.ts` |
 | `ghosts:unread` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 1 | `cindy-brain/index.ts` |
 | `ghosts:builtin-status` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 0 | `cindy-brain/index.ts` |
 | `ghosts:errand-prefs` | event | 同步·数据归 Host（需窗口缓存镜像） | 同步通道·插件、技能与 MCP：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计 | 0 | `cindy-brain/index.ts` |
@@ -359,7 +359,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 
 | 行为 | 通道数 |
 |---|---:|
-| 窗口本地照常处理 | 371 |
+| 窗口本地照常处理 | 372 |
 | 被拒：UNSUPPORTED_CAPABILITY | 11 |
 | 消息无人监听（被丢弃） | 1 |
 | 注册在插件页面的 webContents.ipc 上，主进程快照不覆盖 | 2 |
@@ -506,7 +506,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
 | `app-shortcuts:clear-override` | invoke | A（设置与偏好） | 0 | `app-shortcuts/index.ts` |
-| `app-shortcuts:get` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 1 | `app-shortcuts/index.ts` |
+| `app-shortcuts:get` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 1 | `app-shortcuts/index.ts` |
 | `app-shortcuts:reset-all` | invoke | A（设置与偏好） | 0 | `app-shortcuts/index.ts` |
 | `app-shortcuts:set-override` | invoke | A（设置与偏好） | 0 | `app-shortcuts/index.ts` |
 | `app-shortcuts:set-recording` | event | B（本机输入设备与语音） | 0 | `app-shortcuts/index.ts` |
@@ -526,7 +526,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `appearance-settings:ensure-wallpaper-image` | invoke | A（设置与偏好） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:ensure-wallpaper-video` | invoke | A（设置与偏好） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:get` | invoke | A（设置与偏好） | 1 | `appearance-settings-ipc.ts` |
-| `appearance-settings:get-sync` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 3 | `appearance-settings-ipc.ts` |
+| `appearance-settings:get-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 3 | `appearance-settings-ipc.ts` |
 | `appearance-settings:import-wallpaper` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:plugin-font` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents；窗口做界面动作，数据那一半调 Host） | 0 | `appearance-settings-ipc.ts` |
 | `appearance-settings:remove-wallpaper` | invoke | A（设置与偏好） | 0 | `appearance-settings-ipc.ts` |
@@ -608,7 +608,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 | `auth:exit-local` | invoke | A（账号与凭据） | 0 | `bootstrap-electron.ts` |
 | `auth:get-captcha-challenge-url` | invoke | A（账号与凭据） | 0 | `bootstrap-electron.ts` |
 | `auth:get-login-state` | invoke | A（账号与凭据） | 0 | `bootstrap-electron.ts` |
-| `auth:has-persisted-session-hint-sync` | event | 同步·数据归 Host（需窗口缓存镜像）（同步通道·账号与凭据：数据归 Host，需窗口缓存镜像（Host 经事件流推送，窗口同步回答缓存）或改界面为异步，放进对应小批单独设计） | 4 | `bootstrap-electron.ts` |
+| `auth:has-persisted-session-hint-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·账号提示：只读 profile 里的首帧提示（事件流连上之前就要回答），登录状态仍以 Host 为准） | 4 | `bootstrap-electron.ts` |
 | `auth:initialize` | invoke | A（账号与凭据） | 2 | `bootstrap-electron.ts` |
 | `auth:logout` | invoke | contract | 0 | `bootstrap-electron.ts` |
 | `auth:refresh` | invoke | contract | 0 | `bootstrap-electron.ts` |
@@ -861,7 +861,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `client-endpoints:get-sync` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 1 | `clientEndpointsService.ts` |
+| `client-endpoints:get-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 1 | `clientEndpointsService.ts` |
 
 ### commands
 
@@ -1135,7 +1135,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `layout:get` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 3 | `layout/index.ts` |
+| `layout:get` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 3 | `layout/index.ts` |
 | `layout:reset` | invoke | contract | 0 | `layout/index.ts` |
 | `layout:set` | invoke | contract | 0 | `layout/index.ts` |
 
@@ -1193,7 +1193,7 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 |---|---|---|---:|---|
 | `local-themes:import` | invoke | C-两段式（窗口做界面动作，数据调 Host）（设置与偏好，但处理函数用到窗口 API：BrowserWindow.fromWebContents、dialog；窗口做界面动作，数据那一半调 Host） | 0 | `local-themes/register.ts` |
 | `local-themes:list` | invoke | A（设置与偏好） | 1 | `local-themes/register.ts` |
-| `local-themes:list-sync` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 3 | `local-themes/register.ts` |
+| `local-themes:list-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 3 | `local-themes/register.ts` |
 | `local-themes:open-dir` | invoke | C-两段式（窗口做界面动作，数据调 Host）（在访达／资源管理器或系统浏览器里打开后台持有的内容） | 0 | `local-themes/register.ts` |
 | `local-themes:write` | invoke | A（设置与偏好） | 0 | `local-themes/register.ts` |
 
@@ -2025,8 +2025,8 @@ C-后台：换窗口时不能断、网页和手机也要用，计入要 Host 做
 
 | 通道 | 类型 | 归属 | 调用次数 | 注册文件 |
 |---|---|---|---:|---|
-| `sidebar-settings:claim-renderer-legacy-owner-sync` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 8 | `sidebarSettingsStore.ts` |
-| `sidebar-settings:load-snapshot-sync` | event | 同步·界面设置（窗口本地读 profile）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 21 | `sidebarSettingsStore.ts` |
+| `sidebar-settings:claim-renderer-legacy-owner-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 8 | `sidebarSettingsStore.ts` |
+| `sidebar-settings:load-snapshot-sync` | event | 同步·本地（窗口读 profile：界面设置与首帧提示）（同步通道·界面设置：窗口本地读同一份 profile 文件） | 21 | `sidebarSettingsStore.ts` |
 | `sidebar-settings:save-pinned-order` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.ts` |
 | `sidebar-settings:set-main-view-hidden` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.ts` |
 | `sidebar-settings:set-project-hidden` | invoke | W（窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host） | 0 | `sidebarSettingsStore.ts` |
