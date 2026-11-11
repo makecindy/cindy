@@ -206,6 +206,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   调用方显式为插件实例与请求时 owner 快照，不绑定任务；组批准与共享风险规则的原生逐次确认替代任务权限档，执行前及返回前复核账号和安装版本，现有写入钩子同样复核。
   每次批准查询均重新读取和验证 receipt，不使用授权缓存或同步段去重。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
+  外部 AI 工具历史的 `scan_importable_sessions`、`get_session_import_status`、`import_sessions` 在共享 handler 中对插件返回 `UNSUPPORTED_CAPABILITY`，不进入扫描、状态或导入回调；前两者会触发既有中断导入恢复，不能作为纯读取开放。Agent 和设置页不变。
+  持有任务 admission 的调用任务修改自身 `permission_mode`（含混合运行设置请求）在任何写入前返回 `UNSUPPORTED_CAPABILITY`，不改写权限快照或放宽守卫；插件、修改其他任务、无 admission 及仅改模型保持原行为。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
 - `subscribe.topics` 的 `message` / `task-state` 独立展示和批准，receipt 可选 `approvedEventTopics` 只记录显式事实，不从旧未知声明推断。
   消息仅在持久化后通知，结构化附件使用不透明位置引用；附件读取只覆盖已有宿主授权的本机媒体和 grant / deposit / handoff 引用，复用既有账本和交接。历史 JSON 的 `files.path`、绝对路径、旧文件直读 URL 及跨电脑附件返回 `UNSUPPORTED_CAPABILITY`，不以消息形状授予文件读取权限，不新增可信来源表或确认流程。

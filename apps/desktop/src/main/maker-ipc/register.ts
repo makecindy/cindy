@@ -2806,6 +2806,7 @@ interface OrcaCollabService {
           | 'CONFLICT'
           | 'INVALID_ARGS'
           | 'ROUTE_UNAVAILABLE'
+          | 'UNSUPPORTED_CAPABILITY'
           | 'HOST_NOT_READY'
           | 'INTERNAL';
         message: string;
