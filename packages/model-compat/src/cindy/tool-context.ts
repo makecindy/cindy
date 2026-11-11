@@ -406,10 +406,12 @@ export class ChatBridgeToolContext {
     const boundary = indexOfCurrentTurnInlineTools(input);
     for (let index = 0; index < input.length; index += 1) {
       const item = input[index];
-      if (!isPlainObject(item) || !Array.isArray(item.tools)) continue;
+      if (!isPlainObject(item)) continue;
       if (item.type !== 'tool_search_output' && item.type !== 'tool_search_call_output') continue;
+      const loaded = item.tools;
+      if (!Array.isArray(loaded)) continue;
       if (boundary >= 0 && index < boundary) continue;
-      for (const tool of item.tools) this.recordLoadedToolIdentity(tool);
+      for (const tool of loaded) this.recordLoadedToolIdentity(tool);
     }
   }
 
