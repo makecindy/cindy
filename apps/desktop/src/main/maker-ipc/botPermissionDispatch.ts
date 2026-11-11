@@ -67,8 +67,10 @@ export async function retryBotWelcomePermissionDispatch<T>(
       JOIN sessions s ON s.id = l.session_id JOIN bot_profiles p ON p.id = l.bot_id
       JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
       WHERE l.session_id = ? AND l.bot_id = ? AND l.archived_at IS NULL
+      AND l.role IN ('canonical', 'channel', 'group', 'thread', 'routine')
       AND s.source = 'bot' AND s.status = 'active' AND p.status = 'active'`, [sessionId, receipt.botId]);
-    if (!active || signal.aborted || receipt.owner !== getCurrentDbClientSnapshot() || !canRetry()) throw error;
+    if (!active || signal.aborted || receipt.state.failures !== receipt.failures
+      || receipt.owner !== getCurrentDbClientSnapshot() || !canRetry()) throw error;
     // Re-enter the ordinary send entry (including permission reconciliation and
     // a fresh final guard), retaining the same queue item, UUID and tool policy.
     // Deliberately outside the catch: a second race is not retried indefinitely.

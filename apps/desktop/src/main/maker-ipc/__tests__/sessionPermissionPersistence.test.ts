@@ -210,7 +210,7 @@ describe('permission persistence without a live runtime', () => {
   // #10021, unit: the existing guard tests proved rejection only. Exercise real
   // Session.send with a paused permission writer and the same welcome input:
   // the provider must see zero stale sends, then exactly one tools-disabled send.
-  it.each(['before-preparation', 'after-preparation', 'completed-change'] as const)(
+  it.each(['before-preparation', 'after-preparation', 'completed-change', 'runtime-mode-changed'] as const)(
     'recovers a welcome after %s without waiting inside the send fence', async phase => {
       const { session, send } = welcomeRuntime();
       const prepared = deferred();
@@ -223,15 +223,20 @@ describe('permission persistence without a live runtime', () => {
       let attempts = 0;
       let persisted = 0;
       const rows = new Set<string>();
-      const beginChange = () => withBotPermissionChangeForBot('bot-1', async () => {
+      const writePermission = async () => {
         writerEntered.resolve();
         await releaseWriter.promise;
         const persist = async () => {
           runWorkerTx(sqlite, { name: 'bots.persistSessionPermission', args: { sessionId: 'chat', mode: 'auto' } });
         };
-        if (phase === 'completed-change') await persist();
+        if (phase === 'completed-change' || phase === 'runtime-mode-changed') await persist();
         else await withSendToSessionLock('chat', persist);
-      });
+        if (phase === 'runtime-mode-changed') await session.setPermissionMode('auto');
+      };
+      // Automatic reconciliation changes the stable mode without an explicit
+      // edit revision; this is the creation-time race reported in #10021.
+      const beginChange = () => phase === 'runtime-mode-changed'
+        ? writePermission() : withBotPermissionChangeForBot('bot-1', writePermission);
       session.setTurnLifecycleObserver({
         beforeProviderStart: async () => {
           guard = await prepareBotPermissionDispatch(session);
@@ -263,7 +268,7 @@ describe('permission persistence without a live runtime', () => {
           await prepared.promise;
           change = beginChange();
           await writerEntered.promise;
-          if (phase === 'completed-change') {
+          if (phase === 'completed-change' || phase === 'runtime-mode-changed') {
             // A completed edit can also invalidate the already prepared revision.
             // It needs no restart in this variant, so finish outside the held fence.
             releaseWriter.resolve();
