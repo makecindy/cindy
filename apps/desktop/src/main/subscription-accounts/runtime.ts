@@ -1,3 +1,4 @@
+import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { randomUUID } from 'node:crypto';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { getCodexHome } from '../maker-host/codex-home-path.js';
@@ -694,7 +695,6 @@ export async function needsSubscriptionAccountHandoff(sessionId: string, row: {
   if (row.agentDeviceId) {
     if (!row.sdkSessionId) return false;
     const state = currentRuntime();
-    const { remoteBackgroundInvoke } = await import('../device-link/index.js');
     const preSend = () => assertOwner(state);
     const reply = await remoteBackgroundInvoke(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL,
       [{ action: 'session', providerId: provider, nativeSessionId: row.sdkSessionId }], { preSend });
@@ -702,18 +702,15 @@ export async function needsSubscriptionAccountHandoff(sessionId: string, row: {
     const view = reply.ok ? parseSubscriptionSessionAccountView(reply.result, provider) : null;
     // Older hosts lack the query. Do not guess another computer's account from local state.
     if (view?.state !== 'bound' || !view.account.paused) return false;
-    const poolReply = await remoteBackgroundInvoke(row.agentDeviceId, SUBSCRIPTION_ACCOUNTS_CHANNEL,
-      [{ action: 'read', providerId: provider }], { preSend });
+    // The executing host owns both model quota and new-route permissions.
+    // A missing/old/failed reply cannot authorize retiring the native context.
+    if (!row.model) throw new Error('No subscription account is available');
+    const availableReply = await remoteBackgroundInvoke(row.agentDeviceId, 'maker:subscription-pool:quota',
+      [provider, row.model], { preSend });
     assertOwner(state);
-    const remotePool = poolReply.ok ? poolReply.result as SubscriptionPoolView | null : null;
-    if (remotePool?.providerId !== provider || !Array.isArray(remotePool.accounts) ||
-        !remotePool.accounts.some(account => !account.paused &&
-          (account.status === 'ready' || account.status === 'limited') &&
-          !providerGroupMemberUsageState({
-            claudeUsage: account.usage?.claude,
-            codexUsage: account.usage?.codex ? { appServerBuckets: account.usage.codex.buckets, webSnapshot: null } : undefined,
-          }, provider === 'openai' ? row.model?.replace(/^chatgpt\//, '') : row.model ?? undefined,
-          Date.now(), provider === 'openai' ? 'codex' : 'claude-code').limited))
+    const available = availableReply.ok
+      ? availableReply.result as { providerId?: unknown; model?: unknown; available?: unknown } | null : null;
+    if (available?.providerId !== provider || available.model !== row.model || available.available !== true)
       throw new Error('No subscription account is available');
     return true;
   }

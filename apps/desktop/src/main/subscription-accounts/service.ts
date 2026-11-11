@@ -1,3 +1,4 @@
+import { getProviderGroupDirectory } from '../provider-group/runtime.js';
 import type { SubscriptionAccountCommand } from '../../shared/subscriptionAccounts.js';
 import { runSubscriptionAccountCommand } from './runtime.js';
 import {
@@ -49,7 +50,6 @@ export async function executeSubscriptionAccountCommand(command: SubscriptionAcc
         .catch(() => {});
   }
   if (command.action !== 'read' && command.action !== 'preview' && command.action !== 'cancel') {
-    const { getProviderGroupDirectory } = await import('../provider-group/runtime.js');
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
       throw new Error('Subscription accounts changed');
     getProviderGroupDirectory().invalidate();

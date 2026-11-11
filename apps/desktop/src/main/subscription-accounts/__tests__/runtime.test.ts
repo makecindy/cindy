@@ -159,8 +159,8 @@ describe('paused account next-turn handoff', () => {
   it('checks the executing computer for a paused remote task and leaves shared providers alone', async () => {
     h.remote.mockResolvedValueOnce({ ok: true, result: { providerId: 'anthropic', state: 'bound',
       account: { isDefault: false, number: 2, paused: true, status: 'ready' } } })
-      .mockResolvedValueOnce({ ok: true, result: { providerId: 'anthropic', accounts: [{ paused: false, status: 'ready' }] } });
-    const row = { providerId: 'anthropic', agentKind: 'cc', sdkSessionId: 'remote-native', agentDeviceId: 'my-other-computer' };
+      .mockResolvedValueOnce({ ok: true, result: { providerId: 'anthropic', model: 'claude-sonnet', available: true } });
+    const row = { providerId: 'anthropic', model: 'claude-sonnet', agentKind: 'cc', sdkSessionId: 'remote-native', agentDeviceId: 'my-other-computer' };
     expect(await needsSubscriptionAccountHandoff('task', row)).toBe(true);
     expect(h.remote.mock.calls[0][2]).toEqual([{ action: 'session', providerId: 'anthropic', nativeSessionId: 'remote-native' }]);
     expect(h.bindings.size).toBe(0);
@@ -181,13 +181,36 @@ describe('paused account next-turn handoff', () => {
     next!.release();
   });
 
-  it.each([false, true])('checks the requested remote model bucket (spark limited=%s)', async limited => {
+  // Standard: old controller-side status checks missed remote new-route grants.
+  // Exercise the existing executor availability predicate, including quota buckets.
+  it.each([
+    { limited: false, allowed: true },
+    { limited: true, allowed: true },
+    { limited: false, allowed: false },
+  ])('uses executor quota and permissions before handoff (%j)', async ({ limited, allowed }) => {
+    const model = 'gpt-5.3-codex-spark';
     const bucket = (usedPercent: number, limitName: string) => ({ limitName, updatedAt: Date.now(), primary: { usedPercent, windowMinutes: 300, resetsAt: Date.now() / 1000 + 3600 }, secondary: null });
+    h.pools.openai = { strategy: 'order', accounts: [{ ...account('default'), paused: true }, account('imported')], legacyCodexAccounts: { 'old-imported': 'imported' } };
+    h.usage.mockResolvedValue({ codexUsage: { appServerBuckets: { codex: bucket(limited ? 5 : 100, 'Codex'), spark: bucket(limited ? 100 : 5, 'GPT-5.3-Codex-Spark') }, webSnapshot: null } });
+    h.accountAllowed.mockReturnValue(allowed);
     h.remote.mockResolvedValueOnce({ ok: true, result: { providerId: 'openai', state: 'bound', account: { isDefault: false, number: 1, paused: true, status: 'ready' } } })
-      .mockResolvedValueOnce({ ok: true, result: { providerId: 'openai', accounts: [{ paused: false, status: limited ? 'ready' : 'limited', usage: { codex: { buckets: { codex: bucket(limited ? 5 : 100, 'Codex'), spark: bucket(limited ? 100 : 5, 'GPT-5.3-Codex-Spark') } } } }] } });
-    const result = needsSubscriptionAccountHandoff('task', { providerId: 'openai', agentKind: 'codex', model: 'gpt-5.3-codex-spark', sdkSessionId: 'native', agentDeviceId: 'mini' });
-    if (limited) await expect(result).rejects.toThrow('No subscription account');
+      .mockImplementationOnce(async () => ({ ok: true, result: { providerId: 'openai', model, available: await readSubscriptionPoolModelAvailability('openai', model, { remote: true }) } }));
+    const result = needsSubscriptionAccountHandoff('task', { providerId: 'openai', agentKind: 'codex', model, sdkSessionId: 'native', agentDeviceId: 'mini' });
+    if (limited || !allowed) await expect(result).rejects.toThrow('No subscription account');
     else expect(await result).toBe(true);
+    expect(h.remote.mock.calls[1].slice(0, 3)).toEqual(['mini', 'maker:subscription-pool:quota', ['openai', model]]);
+    expect(h.accountAllowed).toHaveBeenCalledWith('old-imported', model, { remote: true, newRoute: true });
+    expect(h.bindings.size).toBe(0);
+  });
+
+  it.each([
+    { ok: false },
+    { ok: true, result: { providerId: 'openai', pooled: true, usage: {} } },
+    { ok: true, result: { providerId: 'openai', model: 'other', available: true } },
+  ])('keeps the native recovery path when executor confirmation is absent (%j)', async reply => {
+    h.remote.mockResolvedValueOnce({ ok: true, result: { providerId: 'openai', state: 'bound', account: { isDefault: false, number: 1, paused: true, status: 'ready' } } }).mockResolvedValueOnce(reply);
+    await expect(needsSubscriptionAccountHandoff('task', { providerId: 'openai', agentKind: 'codex', model: 'gpt-6', sdkSessionId: 'native', agentDeviceId: 'mini' })).rejects.toThrow('No subscription account');
+    expect(h.bindings.size).toBe(0);
   });
 
   it('starts a new task on an enabled account even when its draft already has a paused binding', async () => {

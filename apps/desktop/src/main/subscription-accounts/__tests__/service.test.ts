@@ -5,6 +5,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   owner: 'owner-a',
+  invalidate: vi.fn(),
   run: vi.fn(),
   meta: vi.fn(),
   provider: vi.fn(),
@@ -25,10 +26,12 @@ vi.mock('../../maker-host/session-provider-store.js', () => ({ getSessionProvide
 vi.mock('../../maker-host/model-discovery/anthropic.js', () => ({
   requestAnthropicModelProbe: vi.fn(),
 }));
+vi.mock('../../provider-group/runtime.js', () => ({ getProviderGroupDirectory: () => ({ invalidate: h.invalidate }) }));
 import { executeSubscriptionAccountCommand } from '../service.js';
 
 beforeEach(() => {
   h.owner = 'owner-a';
+  h.invalidate.mockClear();
   h.run
     .mockReset()
     .mockImplementation(async () => ({ configured: true, boundAccountId: null, accounts: [] }));
@@ -68,4 +71,13 @@ it('rejects an owner switch during the metadata lookup', async () => {
   });
   await expect(read()).rejects.toThrow('Subscription accounts changed');
   expect(h.binding).not.toHaveBeenCalled();
+});
+
+// Standard: the command owns cache invalidation; dependency loading must not be
+// deferred until the first mutation. Reads do not clear the directory.
+it('invalidates the provider directory after changing an account', async () => {
+  await read();
+  expect(h.invalidate).not.toHaveBeenCalled();
+  await executeSubscriptionAccountCommand({ action: 'configure', providerId: 'anthropic', accountId: 'default', paused: true });
+  expect(h.invalidate).toHaveBeenCalledOnce();
 });
