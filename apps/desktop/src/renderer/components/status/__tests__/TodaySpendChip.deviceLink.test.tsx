@@ -32,6 +32,9 @@ const mocks = vi.hoisted(() => ({
   deviceProviders: [] as TestProvider[],
   remoteProviderIds: [] as Array<string | undefined>,
   localClaudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
+  localClaudeReadEnabled: [] as boolean[],
+  localCodexReadKinds: [] as Array<string | undefined>,
+  localCodexLimitsEnabled: [] as boolean[],
   remoteClaudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   remoteHookDeviceIds: [] as Array<string | null>,
   requestRemoteRefresh: vi.fn(),
@@ -110,7 +113,10 @@ vi.mock('@/hooks/useAccountUsage', async (importOriginal) => {
     // 选槽 / 选桶纯函数用真实实现(selectRemoteCodexAccountUsage 依赖同一口径)。
     ...actual,
     requestCodexAccountRefresh: vi.fn(),
-    useAccountUsage: () => null,
+    useAccountUsage: (_sessionId?: string, kind?: string) => {
+      mocks.localCodexReadKinds.push(kind);
+      return null;
+    },
   };
 });
 vi.mock('@/hooks/useProviderAccountUsage', () => ({
@@ -130,7 +136,10 @@ vi.mock('@/hooks/useClaudeAccountUsage', () => ({ useClaudeAccountUsage: () => n
 vi.mock('@/hooks/useModelAccessCreditUsage', () => ({ useModelAccessCreditUsage: () => null }));
 vi.mock('@/hooks/useClaudeSubscriptionUsage', () => ({
   requestClaudeSubscriptionRefresh: vi.fn(),
-  useClaudeSubscriptionUsage: () => mocks.localClaudeSnapshot,
+  useClaudeSubscriptionUsage: (enabled: boolean) => {
+    mocks.localClaudeReadEnabled.push(enabled);
+    return enabled ? mocks.localClaudeSnapshot : null;
+  },
 }));
 vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
   requestRemoteClaudeSubscriptionRefresh: mocks.requestRemoteRefresh,
@@ -170,7 +179,10 @@ vi.mock('@/hooks/useCodexRuntimeRoute', () => ({
   useCodexRuntimeRoute: () => ({ authInjection: null }),
 }));
 vi.mock('@/hooks/useCodexRateLimits', () => ({
-  useCodexRateLimits: () => ({ snapshot: null, refresh: vi.fn() }),
+  useCodexRateLimits: (enabled: boolean) => {
+    mocks.localCodexLimitsEnabled.push(enabled);
+    return { snapshot: null, refresh: vi.fn() };
+  },
 }));
 vi.mock('@/hooks/useXaiRateLimit', () => ({ useXaiRateLimit: () => null }));
 vi.mock('@/components/chat/ChatDisplaySnapshotContext', () => ({
@@ -204,6 +216,9 @@ beforeEach(() => {
   mocks.deviceProviders = [];
   mocks.remoteProviderIds = [];
   mocks.localClaudeSnapshot = null;
+  mocks.localClaudeReadEnabled = [];
+  mocks.localCodexReadKinds = [];
+  mocks.localCodexLimitsEnabled = [];
   mocks.remoteClaudeSnapshot = null;
   mocks.remoteHookDeviceIds = [];
   mocks.remoteRoute = null;
@@ -249,6 +264,10 @@ describe('TodaySpendChip device-link remote sessions', () => {
     expect(container.textContent).toContain('Fable 周限 剩余 66%');
     // 远程订阅会话读的是被控端镜像 hook(deviceId 透传),不读本机快照。
     expect(mocks.remoteHookDeviceIds).toContain('device-abc');
+    // Account-ownership regression (unit): replaces the old source-string
+    // gate assertion with an actual remote render and its local reader input.
+    expect(mocks.localClaudeReadEnabled.length).toBeGreaterThan(0);
+    expect(mocks.localClaudeReadEnabled.every(enabled => !enabled)).toBe(true);
   });
 
   it('renders remote OpenCode Go rolling, weekly, and monthly meters independently', () => {
@@ -421,6 +440,11 @@ describe('TodaySpendChip device-link remote sessions', () => {
     expect(container.textContent).toContain('5h 剩余 88%');
     expect(container.textContent).toContain('7天 剩余 66%');
     expect(mocks.remoteCodexDeviceIds).toContain('device-abc');
+    // Neither native quota path may read the controller's own Codex account.
+    expect(mocks.localCodexReadKinds.length).toBeGreaterThan(0);
+    expect(mocks.localCodexReadKinds).not.toContain('codex');
+    expect(mocks.localCodexLimitsEnabled.length).toBeGreaterThan(0);
+    expect(mocks.localCodexLimitsEnabled.every(enabled => !enabled)).toBe(true);
     fireEvent.mouseEnter(screen.getByRole('button'));
     act(() => vi.advanceTimersByTime(300));
     expect(screen.getByText('remote@example.com')).toBeTruthy();
