@@ -1486,7 +1486,7 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', description: 'Writes the code', avatar: null, status: 'active' }];
     await vi.advanceTimersByTimeAsync(2000);
     const prompt = vi.mocked(deps.dispatch).mock.calls[0][0].message;
-    expect(prompt).not.toContain('Do not call another participant');
+    expect(prompt.includes('Do not call another participant just to reply.')).toBe(!supported);
     expect(prompt.includes('write @ and its name')).toBe(supported);
     const data = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1])).find(block => block.participants);
     expect(data.participants).toContainEqual({ name: 'Bot (Owner)', kind: 'bot', you: true, owner: 'Owner', description: 'Writes the code' });
