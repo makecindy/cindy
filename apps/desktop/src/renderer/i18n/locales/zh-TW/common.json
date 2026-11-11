@@ -14466,7 +14466,7 @@
       "reconnecting": "與遠端裝置的連線中斷，正在重連…",
       "hostOffline": "遠端裝置已離線，暫時無法同步",
       "degraded": "與遠端裝置的連線不穩定，正在自動重試…",
-      "proxyHint": "本機跨裝置通道正經 Proxy（{{proxy}}）轉發，可能是連線不穩定的原因；請檢查本機 Proxy 或網路設定",
+      "proxyHint": "本機跨裝置通道正在經 Proxy（{{proxy}}）轉發，可能是連線不穩定的原因；請檢查本機 Proxy 或網路設定",
       "actionsUnavailable": "遠端裝置暫不可用，恢復連線後才能修改該任務",
       "resync": "重新同步",
       "loading": "正在讀取任務…",
