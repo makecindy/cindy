@@ -91,6 +91,10 @@ import { Spinner } from '@/components/ui/spinner';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
+import {
+  SessionSubscriptionAccountProvider,
+  sessionSubscriptionPoolProvider,
+} from '@/components/new-chat/SessionSubscriptionAccount';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
   getCindyMakeTestRecovery,
@@ -2380,6 +2384,22 @@ function CCAgentSessionContent({
       session?.remoteHostId,
     ],
   );
+  // 账号池：任务固定在执行电脑上的某个账号，模型列表与底部用量都按它显示，读的是与用量 chip
+  // 同一台电脑(读不到那份账号时不读)。
+  const taskAccountProviderId =
+    usageAccount.kind === 'unreadable'
+      ? null
+      : sessionSubscriptionPoolProvider(
+          normalizeDbAgentKind(displayAgentKind),
+          usageChipProviderId,
+          session?.remoteHostId,
+        );
+  const taskAccountDeviceId =
+    usageAccount.kind === 'device'
+      ? usageAccount.deviceId
+      : usageAccount.kind === 'task'
+        ? (remoteDeviceId ?? null)
+        : null;
   const catalogDeviceId = modelCatalogKey(
     controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId, controlledModelRoute.catalogHostDeviceId,
   );
@@ -6535,7 +6555,16 @@ function CCAgentSessionContent({
         }
       >
         <ChatDisplaySnapshotProvider value={chatDisplaySnapshot}>
-          <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
+          {/* 模型列表与底部用量共用：任务实际在用的订阅账号。 */}
+          <SessionSubscriptionAccountProvider
+            providerId={taskAccountProviderId}
+            deviceId={taskAccountDeviceId}
+            sessionId={sessionId}
+            nativeSessionId={session?.sdkSessionId}
+            refreshKey={agentStatus.isRunning}
+          >
+            <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
+          </SessionSubscriptionAccountProvider>
         </ChatDisplaySnapshotProvider>
       </SessionNavigationModeProvider>
       <CreateWorkerPopover

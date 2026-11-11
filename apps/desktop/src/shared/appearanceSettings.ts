@@ -1,5 +1,4 @@
 import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
-import { CINDY_ACRYLIC_WINDOW_BACKING } from './windowBackdrop';
 
 /**
  * Desktop appearance preferences shared by main, preload and renderer.
@@ -183,40 +182,18 @@ export function getBackgroundVisibility(
     : getWallpaperVisibility(settings, isDark);
 }
 
-/** Alpha of the CINDY sidebar tint (`--surface-translucent-sidebar`). */
-const SIDEBAR_TINT_ALPHA = (() => {
-  const match = /rgba\([^)]*,\s*([\d.]+)\s*\)$/.exec(CINDY_ACRYLIC_WINDOW_BACKING.light);
-  return match ? Number(match[1]) : 0.85;
-})();
-
 /**
- * Effective sidebar transparency (0 = opaque chrome, 1 = fully see-through),
- * the same value the slider shows.
- *
- * Mirrors the CSS fallback in `globals.css`:
- * `background: rgb(from var(--surface-translucent-sidebar) r g b /
- * clamp(0, 1 - (1 - alpha) / max(0.001, var(--background-visibility, 1)), 1))`.
- * Keep the two in sync; the explicit value wins over that fallback.
+ * Effective sidebar transparency the slider shows (0 = opaque chrome, 1 = fully
+ * see-through). Unset (`null`) means the docked sidebar shares the canvas veil,
+ * i.e. it is already fully see-through, so the control starts at 100% and only
+ * an explicit value paints the tinted surface back (see `globals.css`).
  */
 export function getSidebarTransparency(
-  settings: Pick<
-    AppearanceSettings,
-    | 'sidebarVisibility'
-    | 'wallpaperId'
-    | 'wallpaperOverlay'
-    | 'wallpaperVisibility'
-    | 'desktopVisibility'
-  >,
-  isDark: boolean,
+  settings: Pick<AppearanceSettings, 'sidebarVisibility'>,
 ): number {
-  if (settings.sidebarVisibility != null)
-    return clampAppearanceWallpaperVisibility(settings.sidebarVisibility);
-  const background = getBackgroundVisibility(settings, isDark);
-  const surfaceAlpha = Math.min(
-    1,
-    Math.max(0, 1 - (1 - SIDEBAR_TINT_ALPHA) / Math.max(0.001, background)),
-  );
-  return clampAppearanceWallpaperVisibility(1 - surfaceAlpha);
+  return settings.sidebarVisibility == null
+    ? 1
+    : clampAppearanceWallpaperVisibility(settings.sidebarVisibility);
 }
 
 export function clampAppearanceWallpaperOverlay(

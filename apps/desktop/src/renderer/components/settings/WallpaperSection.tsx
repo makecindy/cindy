@@ -9,6 +9,7 @@ import { downloadPercent } from './DownloadMeter';
 import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Slider } from '@/components/ui/slider';
+import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
@@ -37,6 +38,7 @@ export function WallpaperSection() {
     wallpaperOverlay,
     wallpaperVisibility,
     wallpaperBlur,
+    lastBlur,
     visibility,
     wallpaperMotion,
     customWallpaperUrl,
@@ -94,6 +96,10 @@ export function WallpaperSection() {
   useEffect(() => {
     if (visibility === 0) previewBlur(null);
   }, [visibility, previewBlur]);
+  // Windows has a single system Acrylic strength, so desktop blur is on/off there.
+  // Artwork blur stays graded; both share wallpaperBlur, so re-enabling restores
+  // the last nonzero strength (kept in the provider, which outlives this section).
+  const desktopBlurSwitch = wallpaperId === 'none' && window.electronAPI?.platform === 'win32';
   const customVideo = isCustomWallpaperVideo(customWallpaperUrl);
   const downloading = isCdnWallpaper(wallpaperId) && downloadPending;
   const retryable = isCdnWallpaper(wallpaperId) && downloadFailed && !downloadPending;
@@ -419,37 +425,40 @@ export function WallpaperSection() {
           <p id="wallpaper-visibility-hint" className={SETTINGS_HINT}>
             {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopVisibilityHint' : 'settings.appearance.wallpaper.visibilityHint')}
           </p>
-          <div className="flex items-center gap-3">
-            <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
-              {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurLabel' : 'settings.appearance.wallpaper.blurLabel')}
-            </span>
-            <Slider data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
-              min={APPEARANCE_LIMITS.wallpaperBlur.min}
-              max={APPEARANCE_LIMITS.wallpaperBlur.max}
-              step={APPEARANCE_LIMITS.wallpaperBlur.step}
-              value={[wallpaperBlur ?? 0]}
-              disabled={visibility === 0}
-              onValueChange={([value]) => {
-                if (typeof value === 'number') previewBlur(value);
-              }}
-              onValueCommit={([value]) => {
-                if (typeof value === 'number') setBlur(value);
-              }}
-              onPointerCancel={cancelBlurPreview}
-              onLostPointerCapture={cancelBlurPreview}
-              aria-label={t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurLabel' : 'settings.appearance.wallpaper.blurLabel')}
-              aria-describedby="wallpaper-blur-hint"
-            />
-            <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
-              {wallpaperBlur ?? 0}
-            </span>
-          </div>
-          <p id="wallpaper-blur-hint" className={SETTINGS_HINT}>
-            {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurHint' : 'settings.appearance.wallpaper.blurHint')}
-          </p>
-
-          {/* 独立左侧栏透明度控制：显示当前生效值（未设置时为带染色的默认透明度），
-              否则默认态显示 100% 会与实际外观不符，且滑块顶到右端后无法提交显式 100%。 */}
+          {!desktopBlurSwitch && (
+            <>
+              <div className="flex items-center gap-3">
+                <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
+                  {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurLabel' : 'settings.appearance.wallpaper.blurLabel')}
+                </span>
+                <Slider data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
+                  min={APPEARANCE_LIMITS.wallpaperBlur.min}
+                  max={APPEARANCE_LIMITS.wallpaperBlur.max}
+                  step={APPEARANCE_LIMITS.wallpaperBlur.step}
+                  value={[wallpaperBlur ?? 0]}
+                  disabled={visibility === 0}
+                  onValueChange={([value]) => {
+                    if (typeof value === 'number') previewBlur(value);
+                  }}
+                  onValueCommit={([value]) => {
+                    if (typeof value === 'number') setBlur(value);
+                  }}
+                  onPointerCancel={cancelBlurPreview}
+                  onLostPointerCapture={cancelBlurPreview}
+                  aria-label={t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurLabel' : 'settings.appearance.wallpaper.blurLabel')}
+                  aria-describedby="wallpaper-blur-hint"
+                />
+                <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
+                  {wallpaperBlur ?? 0}
+                </span>
+              </div>
+              <p id="wallpaper-blur-hint" className={SETTINGS_HINT}>
+                {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurHint' : 'settings.appearance.wallpaper.blurHint')}
+              </p>
+            </>
+          )}
+          {/* 独立左侧栏透明度控制：默认（未设置）就是主内容区那层共享 veil，侧栏全透；
+              显式值把带染色的面重新铺回来，0% 即完全不透明。 */}
           {sidebarTransparencyAvailable && (
             <>
               <div className="flex items-center gap-3">
@@ -482,6 +491,20 @@ export function WallpaperSection() {
             </>
           )}
         </SettingsBlock>
+        {desktopBlurSwitch && (
+          <SettingsRow
+            title={t('settings.appearance.wallpaper.desktopBlurLabel')}
+            hint={t('settings.appearance.wallpaper.desktopBlurSwitchHint')}
+            trailing={
+              <Switch data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
+                checked={visibility > 0 && Boolean(wallpaperBlur)}
+                disabled={visibility === 0}
+                onCheckedChange={(checked) => setBlur(checked ? lastBlur : 0)}
+                aria-label={t('settings.appearance.wallpaper.desktopBlurLabel')}
+              />
+            }
+          />
+        )}
       </SettingsCard>
     </SettingsSection>
   );

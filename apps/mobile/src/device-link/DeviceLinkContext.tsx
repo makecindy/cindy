@@ -320,6 +320,11 @@ export function subscribeRemoteTaskTagsChanged(
     remoteTaskTagsChangedListeners.delete(listener);
   };
 }
+const remoteSubscriptionAccountsChangedListeners = new Set<(deviceId: string) => void>();
+export function subscribeRemoteSubscriptionAccountsChanged(listener: (deviceId: string) => void): () => void {
+  remoteSubscriptionAccountsChangedListeners.add(listener);
+  return () => { remoteSubscriptionAccountsChangedListeners.delete(listener); };
+}
 const remoteFavoritesChangedListeners = new Set<(deviceId: string) => void>();
 const remoteProjectAliasesChangedListeners = new Set<(deviceId: string) => void>();
 export function subscribeRemoteProjectAliasesChanged(listener: (deviceId: string) => void): () => void {
@@ -2213,6 +2218,10 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
     );
     for (const listener of remoteTaskTagsChangedListeners)
       listener(env.src, (push.payload as { tags?: unknown })?.tags);
+  }
+  if (push.channel === 'subscription-accounts:changed') {
+    for (const listener of remoteSubscriptionAccountsChangedListeners) listener(env.src);
+    return;
   }
   if (push.channel === 'maker:model-favorites:changed') {
     for (const listener of remoteFavoritesChangedListeners) listener(env.src);

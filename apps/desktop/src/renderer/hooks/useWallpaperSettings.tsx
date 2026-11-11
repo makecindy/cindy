@@ -48,7 +48,9 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   downloadProgress: number;
   retryDownload: () => void;
   visibility: number;
-  /** Sidebar transparency actually in effect (falls back to the tinted default). */
+  /** Last nonzero saved blur; survives settings-section remounts (default 10). */
+  lastBlur: number;
+  /** Sidebar transparency actually in effect (unset means see-through chrome). */
   sidebarTransparency: number;
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
@@ -103,6 +105,8 @@ export function WallpaperSettingsProvider({
   const [visibilityPreview, setVisibilityPreview] = useState<number | null>(null);
   const [sidebarPreview, setSidebarPreview] = useState<number | null>(null);
   const [failedUrl, setFailedUrl] = useState('');
+  const lastBlurRef = useRef(10);
+  if (settings.wallpaperBlur) lastBlurRef.current = settings.wallpaperBlur;
   const onPlaybackFailure = useCallback(
     () => setFailedUrl(settings.customWallpaperUrl ?? ''),
     [settings.customWallpaperUrl],
@@ -113,7 +117,7 @@ export function WallpaperSettingsProvider({
   isDarkRef.current = isDark;
   const visibility = visibilityPreview ?? getBackgroundVisibility(settings, isDark);
   const sidebarTransparency =
-    sidebarPreview ?? getSidebarTransparency(settings, isDark);
+    sidebarPreview ?? getSidebarTransparency(settings);
   const reducedMotion = useReducedMotion();
   const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
   const videoAsset = useWallpaperAsset(
@@ -143,10 +147,9 @@ export function WallpaperSettingsProvider({
         : getBuiltinWallpaperBackground(settings.wallpaperId);
   useWallpaperBackground({
     background,
-    // Only macOS has an independent native sidebar material. Elsewhere 0% keeps the
-    // original window backdrop (Windows 11 Acrylic, otherwise opaque) until opt-in.
-    desktopBackground: desktopBackground && settings.wallpaperId === 'none' &&
-      (visibility > 0 || window.electronAPI?.platform === 'darwin'),
+    // 0% keeps the original window backdrop (frosted sidebar over the theme material)
+    // until opt-in; above it, the sidebar tint follows the same transparency.
+    desktopBackground: desktopBackground && settings.wallpaperId === 'none' && visibility > 0,
     visibility,
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
     reducedMotion,
@@ -254,7 +257,7 @@ export function WallpaperSettingsProvider({
     // change, so compare against the optimistic committed value and drop the preview
     // when it agrees — otherwise a failed save keeps showing the unsaved value.
     setSidebarPreview(
-      next === getSidebarTransparency(settingsRef.current, isDarkRef.current) ? null : next,
+      next === getSidebarTransparency(settingsRef.current) ? null : next,
     );
   }, []);
   const setSidebarVisibility = useCallback(
@@ -305,6 +308,7 @@ export function WallpaperSettingsProvider({
       ...settings,
       wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
+      lastBlur: lastBlurRef.current,
       sidebarTransparency,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
       downloadPending,
@@ -332,6 +336,7 @@ export function WallpaperSettingsProvider({
       blurPreview,
       setWallpaper,
       settings,
+      settings.wallpaperBlur,
       failedUrl,
       visibility,
       sidebarTransparency,

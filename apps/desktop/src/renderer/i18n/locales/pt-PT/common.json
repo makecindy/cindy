@@ -878,6 +878,7 @@
       "assignLocalAria": "Permitir que {{name}} aceite novas tarefas de outros computadores",
       "moreAria": "Mais ações para {{name}}",
       "remove": "Remover do grupo",
+      "removeLocalBlocked": "O computador que aloja o grupo não pode ser removido",
       "status": {
         "checking": "A verificar…",
         "idle": "Inativo",
@@ -2330,6 +2331,7 @@
         "sidebarVisibilityHint": "0% mantém a barra lateral opaca; 100% torna-a totalmente transparente.",
         "desktopBlurLabel": "Desfoque do ambiente de trabalho",
         "desktopBlurHint": "Desfoca o ambiente de trabalho atrás da janela. 0 desativa; valores maiores aumentam o desfoque. Sistemas sem ajuste de intensidade usam o efeito predefinido.",
+        "desktopBlurSwitchHint": "Desfoca o ambiente de trabalho atrás da janela com o efeito de sistema do Windows. Requer o Windows 11 versão 22H2 ou posterior.",
         "blurLabel": "Desfoque da imagem de fundo",
         "blurHint": "Desfocar apenas a imagem de fundo. Defina como 0 para desativar. Desfocar fundos animados aumenta a utilização da GPU.",
         "motionLabel": "Apresentação",
@@ -3678,6 +3680,36 @@
           "invalid": "Pré-visualização indisponível; verifique a configuração ou selecione novamente o ficheiro",
           "skipped": "Ignorado; selecione novamente o ficheiro para importar esta entrada",
           "authorizationPending": "Ligação adicionada; conclua a autorização nas definições do fornecedor"
+        },
+        "local": {
+          "title": "Importar de aplicações locais",
+          "note": "Lê as configurações de API guardadas neste computador sem alterar as aplicações de origem. Claude Code: apenas settings.json do utilizador, incluindo CLAUDE_CONFIG_DIR. Não lê variáveis da shell nem configurações de projeto ou geridas.",
+          "review": "Rever e importar ({{count}})",
+          "scanning": "A ler configurações guardadas…",
+          "empty": "Não foram encontradas configurações de API guardadas.",
+          "failed": "Não foi possível concluir a leitura. Tente novamente.",
+          "edit": "Editar",
+          "editFailed": "Verifique o URL, o protocolo e a chave e tente novamente.",
+          "editNote": "Deixe a chave em branco para manter a credencial lida. Alterar o URL ou o protocolo requer uma nova chave.",
+          "name": "Nome de apresentação",
+          "baseUrl": "URL base",
+          "protocol": "Protocolo da API",
+          "chooseProtocol": "Escolher um protocolo",
+          "apiKey": "Chave da API",
+          "keepKey": "Deixe em branco para manter a chave lida",
+          "missingUrl": "URL obrigatório",
+          "status": {
+            "missing": "Configuração não encontrada",
+            "readFailed": "Não foi possível ler; verifique as permissões ou tente novamente",
+            "invalid": "Formato desconhecido; verifique ou edite a configuração",
+            "limit": "Limite atingido; esta origem não foi lida na íntegra",
+            "unsupported": "Esta configuração não pode ser importada automaticamente. Os comandos e apiKeyHelper não são executados; adicione a configuração de API manualmente.",
+            "needsInput": "É necessário completar a configuração",
+            "changed": "A origem mudou; volte a procurar",
+            "duplicate": "Já existe uma ligação idêntica"
+          },
+          "rescan": "Procurar novamente",
+          "sourceDisabled": "Desativado na aplicação de origem"
         }
       },
       "order": {
@@ -12720,47 +12752,47 @@
         "claude-code": {
           "ask": {
             "label": "Permissões predefinidas",
-            "description": "Permite acesso de leitura/escrita no espaço de trabalho e pede confirmação antes de usar permissões superiores, acesso à rede ou caminhos fora do espaço de trabalho."
+            "description": "Aprova as ações quando necessário."
           },
           "acceptEdits": {
             "label": "Aceitar edições automaticamente",
-            "description": "Aceita automaticamente pedidos de edição de ficheiros para reduzir confirmações repetidas. Os comandos ou permissões de maior risco continuam a seguir a política de permissões subjacente."
+            "description": "As edições de ficheiros são permitidas diretamente; aprova as outras ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Permite acesso de leitura/escrita no espaço de trabalho e revê automaticamente os pedidos de elevação de permissões; as ações de alto risco podem continuar a ser recusadas ou a exigir confirmação. Isto reduz as interrupções, mas pode cometer erros."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer ficheiro e executar comandos com acesso à rede sem nova confirmação. Risco máximo; utilizar apenas para tarefas de confiança."
+            "description": "As ações habituais são permitidas diretamente, incluindo ficheiros fora do espaço de trabalho e comandos de rede."
           }
         },
         "codex": {
           "ask": {
             "label": "Permissões predefinidas",
-            "description": "Permite acesso de leitura/escrita no espaço de trabalho e pede confirmação antes de usar permissões superiores, acesso à rede ou caminhos fora do espaço de trabalho."
+            "description": "Aprova as ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Executa comandos automaticamente no ambiente isolado protegido do espaço de trabalho. As ações que ultrapassam os limites desse ambiente são encaminhadas para um revisor automático; as ações de alto risco podem ainda ser recusadas ou exigir confirmação."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer ficheiro e executar comandos com acesso à rede sem nova confirmação. Risco máximo; utilizar apenas para tarefas de confiança."
+            "description": "As ações habituais são permitidas diretamente, incluindo ficheiros fora do espaço de trabalho e comandos de rede."
           }
         },
         "pi": {
           "ask": {
             "label": "Permissões predefinidas",
-            "description": "As ferramentas só de leitura são executadas diretamente; escrever ficheiros, executar comandos e utilizar ferramentas MCP exige confirmação de cada vez."
+            "description": "Aprova as ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "As escritas no espaço de trabalho e os comandos seguros são executados automaticamente; as escritas fora do espaço de trabalho, os comandos arriscados e as ferramentas MCP continuam a exigir confirmação."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer ficheiro e executar comandos com acesso à rede sem nova confirmação. Risco máximo; utilizar apenas para tarefas de confiança."
+            "description": "As ações habituais são permitidas diretamente, incluindo ficheiros fora do espaço de trabalho e comandos de rede."
           }
         }
       }
@@ -13631,8 +13663,8 @@
       "dismissTitle": "Dispensar aviso de falha anterior"
     },
     "worktreeRestoreBanner": {
-      "text": "O worktree desta sessão foi limpo (diretório em falta).",
-      "textPendingSnapshot": "Esta sessão tem um instantâneo de alterações por aplicar.",
+      "text": "O worktree «{{name}}» desta sessão foi limpo (diretório em falta).",
+      "textPendingSnapshot": "O worktree «{{name}}» desta sessão tem um instantâneo de alterações por aplicar.",
       "restoreAction": "Restaurar worktree",
       "applySnapshotAction": "Aplicar alterações",
       "restoring": "A restaurar…",
@@ -14226,7 +14258,7 @@
       "errors": {
         "noPriorAssistantPreview": "Recue a partir de uma pergunta que se siga a uma resposta da IA (esta não tem uma resposta anterior do assistente)",
         "sessionRunning": "A tarefa não parou a tempo — tente recuar novamente",
-        "noLiveQuery": "A sessão está inativa — envie primeiro uma mensagem (mesmo apenas \"ok\") para ativar o SDK antes de recuar",
+        "noLiveQuery": "Não foi possível restaurar o ambiente de execução da tarefa. O recuo não foi concluído.",
         "noPriorAssistantCommit": "Recue a partir de uma pergunta que se siga a uma resposta da IA",
         "commitGeneric": "Não foi possível recuar; tente novamente",
         "remoteNotSupported": "As sessões remotas do Claude Code ainda não permitem recuar"
@@ -20030,6 +20062,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Conta por atribuir",
+    "boundUnavailable": "Conta indisponível",
     "providerManagedAuth": "O fornecedor atual do Codex não disponibiliza informações da conta ChatGPT. Ao adicionar o fornecedor, selecione «$t(subscriptionAccounts.signIn.anotherAccount)» para usar uma pasta separada.",
     "signIn": {
       "checking": "A verificar a conta local…",
@@ -20057,7 +20090,12 @@
     "openDirectory": "Abrir pasta da conta",
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Pode ter sido movida ou eliminada.",
     "loginAgain": "Iniciar sessão novamente",
-    "login": "Iniciar sessão"
+    "login": "Iniciar sessão",
+    "quotaAverage": "Média restante {{percent}}%",
+    "quotaUpdating": "Quota a aguardar atualização",
+    "quotaResetSoon": "Reposição em breve",
+    "quotaAverageHint": "Quota semanal · Peso igual por conta",
+    "quotaResetHint": "Ao ritmo atual, pode restar quota na reposição: amarelo até 24 horas, vermelho até 6 horas."
   },
   "sessionNotify": {
     "finished": "Esta tarefa concluiu a ronda. Resposta final:",

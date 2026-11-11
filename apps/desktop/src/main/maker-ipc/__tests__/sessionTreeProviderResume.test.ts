@@ -44,30 +44,17 @@ describe('Pi session-tree lazy resume provider route', () => {
     ).toBeLessThan(listCustomizations.indexOf('maker.listCustomizations(opts)'));
   });
 
-  it('preserves the persisted providerId null/undefined distinction', () => {
+  // Cross-file routing guard: the factory controls eligibility, while register
+  // must carry persisted provider/host authority into the native bootstrap.
+  it('preserves route identity and requires native history for cold actions', () => {
     const lazyResume = sourceBetween(
-      'async function getOrResumeSessionTreeSession',
+      'const getOrResumeSessionForHistory = createSessionActionRuntime',
       'ipcMain.handle(MAKER_INVOKE.GET_SESSION_TREE',
     );
-
     expect(lazyResume).toContain('providerId: row.providerId,');
-    expect(lazyResume).not.toContain('providerId: row.providerId ?? undefined');
-  });
-
-  it('guards non-active (archived/deleted) sessions against lazy resume (round 40-w3 MEDIUM)', () => {
-    const lazyResume = sourceBetween(
-      'async function getOrResumeSessionTreeSession',
-      'ipcMain.handle(MAKER_INVOKE.GET_SESSION_TREE',
-    );
-
-    // lazy resume 的 DB 查询必须带出 status, 且在 bootstrap 前拒绝非 active。
-    expect(lazyResume).toContain('status: sessions.status,');
-    expect(lazyResume).toContain("row.status !== 'active'");
-    // 拒绝分支发生在任何 bootstrapSession / ensureRemoteReadyForSessionStart 之前。
-    const statusGuardIdx = lazyResume.indexOf("row.status !== 'active'");
-    const bootstrapIdx = lazyResume.indexOf('bootstrapSession(');
-    expect(statusGuardIdx).toBeGreaterThan(-1);
-    expect(bootstrapIdx).toBeGreaterThan(statusGuardIdx);
+    expect(lazyResume).toContain('remoteHostId: row.remoteHostId ?? undefined,');
+    expect(lazyResume).toContain('agentDeviceId: row.agentDeviceId ?? undefined,');
+    expect(lazyResume).toContain('bootstrapSession(createOpts, assertCurrent, true)');
   });
 
   it('keeps the same three-state route contract across every persisted-session bootstrap', () => {

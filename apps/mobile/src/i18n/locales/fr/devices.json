@@ -992,5 +992,8 @@
     "sumFailed_many": "{{count}} échecs",
     "found_many": "{{count}} sessions trouvées sur {{device}}",
     "confirmBody_many": "{{count}} sessions seront importées, utilisant jusqu’à {{size}} d’espace disque. L’importation s’effectue en arrière-plan sur l’ordinateur ; vous pouvez l’arrêter à tout moment. Touchez à nouveau pour commencer."
+  },
+  "liveActivity": {
+    "waitingForUpdate": "En attente de mise à jour"
   }
 }

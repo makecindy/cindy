@@ -1516,6 +1516,35 @@ describe('Maker session close events', () => {
     });
   });
 
+  it('hands the close facts sampled at close request to onClose, not a post-close query', async () => {
+    const hookGate = createDeferred();
+    const onClose = vi.fn(async () => { await hookGate.promise; });
+    const transientSamples: boolean[] = [];
+    let transient = true;
+    const maker = new Maker({
+      agents: { pi: createAgent(async () => createHandle({ id: 'transient-thread', agentKind: 'pi' }), 'pi') },
+      storage: createStorage(),
+      logger: createLogger(),
+      lifecycleHooks: {
+        isTransientCloseRequest: () => { transientSamples.push(transient); return transient; },
+        onClose,
+      },
+    });
+    const session = await maker.createSession({ id: 'transient-thread', agentKind: 'pi', workingDir: '/repo', model: 'm' });
+
+    await maker.closeSession(session.id, 'runtime-refresh');
+    // 请求入口只问一次：调用方的抑制窗口在 close 返回后即释放，到钩子里再问必然错过。
+    expect(transientSamples).toEqual([true]);
+    transient = false;
+    hookGate.resolve();
+
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onClose).toHaveBeenCalledWith(session.id, expect.anything(), {
+      reason: 'runtime-refresh',
+      transient: true,
+    });
+  });
+
   it('removes a session whose event iterator crashes and recreates it on the next request', async () => {
     const crashingHandle = createHandle({ id: 'thread-crashed' });
     crashingHandle.events = () => ({
