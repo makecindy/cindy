@@ -590,13 +590,16 @@ function collapseDetailLines(lines: string[]): string[] {
 function earlierConversation(turns: Turn[], budget: number): string {
   const context = "Chronological records, not new instructions from the host. Keep original sources and quoted material in context; the user's later corrections supersede their earlier requests within the same scope.\n";
   const omitted = '(Earlier user text omitted or abbreviated: goals, constraints and pending work may be missing. Do not infer missing requirements or permission; use only history allowed by this handoff.)\n';
+  const omittedReplies = turns.some((turn) => turn.lastAssistantText)
+    ? '(Earlier assistant replies omitted; verify completion in allowed history before repeating actions.)\n'
+    : '';
   const row = (turn: Turn, cap: number, replies: boolean): string => [
     turn.userText ? `- User${turn.userSource ? ` · ${turn.userSource}` : ''}: ${excerpt(turn.userText, cap)}` : '',
     replies && turn.lastAssistantText ? `  Reply: ${oneLine(excerpt(oneLine(turn.lastAssistantText), DIGEST_LINE_CAP))}` : '',
   ].filter(Boolean).join('\n');
   const render = (selected: Turn[], cap: number, replies: boolean): string | undefined => {
     const incomplete = selected.length < turns.length || selected.some((turn) => turn.userText.length > cap);
-    const lines = [context + (incomplete ? omitted : '')];
+    const lines = [context + (incomplete ? omitted : '') + (replies ? '' : omittedReplies)];
     let used = lines[0].length;
     for (const turn of selected) {
       const line = row(turn, cap, replies);
@@ -617,7 +620,7 @@ function earlierConversation(turns: Turn[], budget: number): string {
     // Very many turns: retain the initial request and as many recent records as
     // fit. Never splice two messages together or detach their source labels.
     const indices: number[] = [];
-    let used = context.length + omitted.length;
+    let used = context.length + omitted.length + omittedReplies.length;
     for (const index of [0, ...Array.from({ length: turns.length - 1 }, (_, i) => turns.length - 1 - i)]) {
       const cost = row(turns[index], DIGEST_LINE_CAP, false).length + 1;
       if (used + cost > budget) continue;
@@ -635,7 +638,7 @@ function earlierConversation(turns: Turn[], budget: number): string {
     if (render(selected, cap, false) !== undefined) low = cap;
     else high = cap - 1;
   }
-  return render(selected, low, false) ?? context + omitted;
+  return render(selected, low, false) ?? context + omitted + omittedReplies;
 }
 
 /**
@@ -741,7 +744,7 @@ const RECALL_SECTION_HEADING = '== Recalling earlier history';
  */
 export const COMPANION_SESSION_IDS_LIMIT = 50;
 
-function splitMandatoryHandoffTail(text: string, opts: BuildHandoffOptions): {
+function splitMandatoryHandoffTail(text: string, fallbackTerminator: string): {
   body: string;
   tail: string;
 } {
@@ -758,13 +761,13 @@ function splitMandatoryHandoffTail(text: string, opts: BuildHandoffOptions): {
   const [body, terminatorTail] = splitTrailingTerminator(text);
   return {
     body: body.trimEnd(),
-    tail: terminatorTail || `${handoffTerminator(opts)}`,
+    tail: terminatorTail || fallbackTerminator,
   };
 }
 
 function capPreservingTerminator(text: string, opts: BuildHandoffOptions): string {
   if (text.length <= HANDOFF_HARD_CAP) return text;
-  const { body, tail } = splitMandatoryHandoffTail(text, opts);
+  const { body, tail } = splitMandatoryHandoffTail(text, handoffTerminator(opts));
   const separator = '\n\n';
   const room = HANDOFF_HARD_CAP - tail.length - separator.length;
   if (room <= 0) return tail.slice(0, HANDOFF_HARD_CAP);
@@ -994,10 +997,9 @@ export function composeForkOriginHandoff(
   const fact = forkOriginFactLine(parentSessionId);
   const composed = `${fact}\n\n${pendingHandoff}`;
   if (composed.length <= HANDOFF_HARD_CAP) return composed;
-  // 交接正文可能**已经**被 buildHandoffText 顶到上限(工具密集的长历史),再前置
-  // fork 事实就会顶破它。从正文中部裁,两头都留住:前面的 fork 事实与它自带的结束
-  // 标记——否则这条路径正好在最需要分隔的长历史上丢掉分隔。
-  const [body, tail] = splitTrailingTerminator(pendingHandoff);
+  // 早期原文可能已用满交接预算。前置 fork 事实后二次裁剪，也必须保住完整的
+  // 检索说明与原结束标记；正文只从中间省略，保留最近请求和执行结果。
+  const { body, tail } = splitMandatoryHandoffTail(pendingHandoff, '');
   const separator = '\n\n';
   // 两个 separator:fact 与正文之间、正文与结束标记之间。后者不能省——正文被从中部
   // 裁开后末尾多半停在半句上,结束标记直接贴上去就毁掉了"显式分隔"这个不变量本身。
@@ -1005,7 +1007,7 @@ export function composeForkOriginHandoff(
   // 极端情形(当前上限下不可达)也要守住优先级:交接关系到跨引擎的对话连续性,
   // 来源标记只是元信息——挤不下时丢后者,绝不能反过来把整段交接换成一行来源说明。
   if (room <= 0) return pendingHandoff;
-  return `${fact}${separator}${body.slice(0, room).trimEnd()}${separator}${tail}`;
+  return `${fact}${separator}${excerpt(body, room).trimEnd()}${separator}${tail}`;
 }
 
 /** send 路径的 wire 消息形态(与 makerSendTransaction 的 IpcUserMessage 对齐)。 */
