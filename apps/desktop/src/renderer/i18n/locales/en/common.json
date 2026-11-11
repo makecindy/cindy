@@ -2306,7 +2306,9 @@
         "customFailed": "Could not save the wallpaper. Please try again.",
         "downloading": "Downloading wallpaper…",
         "downloadFailed": "Some wallpaper assets are unavailable. Using the available background.",
-        "retryDownload": "Retry Download"
+        "retryDownload": "Retry Download",
+        "sidebarVisibilityLabel": "Sidebar Transparency",
+        "sidebarVisibilityHint": "0% makes the sidebar opaque; 100% makes it fully transparent."
       },
       "layout": {
         "label": "Panel layout",

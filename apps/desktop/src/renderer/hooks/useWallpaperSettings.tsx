@@ -37,6 +37,7 @@ export interface WallpaperSettings {
   wallpaperBlur?: number | null;
   wallpaperMotion: WallpaperMotion;
   customWallpaperUrl?: string;
+  sidebarVisibility?: number | null;
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
@@ -52,6 +53,8 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   setBlur: (value: number) => void;
   previewBlur: (value: number | null) => void;
   setMotion: (value: WallpaperMotion) => void;
+  setSidebarVisibility: (value: number) => void;
+  previewSidebarVisibility: (value: number | null) => void;
   resetWallpaper: () => void;
 }
 
@@ -79,6 +82,7 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
     wallpaperBlur: settings.wallpaperBlur,
     wallpaperMotion: settings.wallpaperMotion,
     customWallpaperUrl: settings.customWallpaperUrl,
+    sidebarVisibility: settings.sidebarVisibility,
   };
 }
 
@@ -94,6 +98,7 @@ export function WallpaperSettingsProvider({
   const [settings, setSettings] = useState<WallpaperSettings>(getInitialWallpaperSettings);
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
   const [visibilityPreview, setVisibilityPreview] = useState<number | null>(null);
+  const [sidebarPreview, setSidebarPreview] = useState<number | null>(null);
   const [failedUrl, setFailedUrl] = useState('');
   const onPlaybackFailure = useCallback(
     () => setFailedUrl(settings.customWallpaperUrl ?? ''),
@@ -144,6 +149,7 @@ export function WallpaperSettingsProvider({
       settings.wallpaperId === 'custom' && !isCustomWallpaperVideo(customUrl)
         ? customUrl || undefined
         : undefined,
+    sidebarVisibility: sidebarPreview ?? settings.sidebarVisibility,
   });
   const settingsRef = useRef(settings);
   const confirmedRef = useRef(settings);
@@ -235,10 +241,19 @@ export function WallpaperSettingsProvider({
   );
   const previewVisibility = useCallback((value: number | null) => {
     const next = value === null ? null : clampAppearanceWallpaperVisibility(value);
-    // Keyboard commit precedes change in Radix. Read the optimistic committed
-    // value synchronously so a failed save cannot leave a stale preview behind.
     setVisibilityPreview(next === getBackgroundVisibility(settingsRef.current, isDarkRef.current) ? null : next);
   }, []);
+  const previewSidebarVisibility = useCallback((value: number | null) => {
+    const next = value === null ? null : clampAppearanceWallpaperVisibility(value);
+    setSidebarPreview(next === null ? null : next);
+  }, []);
+  const setSidebarVisibility = useCallback(
+    (value: number) => {
+      setSidebarPreview(null);
+      patch({ sidebarVisibility: clampAppearanceWallpaperVisibility(value) });
+    },
+    [patch],
+  );
   const setMotion = useCallback(
     (value: WallpaperMotion) => patch({ wallpaperMotion: value }),
     [patch],
@@ -263,6 +278,7 @@ export function WallpaperSettingsProvider({
   const resetWallpaper = useCallback(() => {
     setBlurPreview(null);
     setVisibilityPreview(null);
+    setSidebarPreview(null);
     patch({
       wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
       wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
@@ -270,6 +286,7 @@ export function WallpaperSettingsProvider({
       desktopVisibility: null,
       wallpaperBlur: null,
       wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
+      sidebarVisibility: null,
     });
   }, [patch]);
 
@@ -289,6 +306,9 @@ export function WallpaperSettingsProvider({
       setBlur,
       previewBlur,
       setMotion,
+      sidebarVisibility: sidebarPreview ?? settings.sidebarVisibility,
+      setSidebarVisibility,
+      previewSidebarVisibility,
       resetWallpaper,
     }),
     [
@@ -307,6 +327,9 @@ export function WallpaperSettingsProvider({
       downloadFailed,
       downloadProgress,
       retryDownload,
+      sidebarPreview,
+      setSidebarVisibility,
+      previewSidebarVisibility,
     ],
   );
 

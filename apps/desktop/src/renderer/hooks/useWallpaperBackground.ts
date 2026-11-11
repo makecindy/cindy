@@ -12,6 +12,7 @@ export function useWallpaperBackground({
   blur,
   reducedMotion,
   decodeUrl,
+  sidebarVisibility = null,
 }: {
   background: string | undefined;
   desktopBackground?: boolean;
@@ -19,6 +20,7 @@ export function useWallpaperBackground({
   blur: number;
   reducedMotion: boolean;
   decodeUrl?: string;
+  sidebarVisibility?: number | null;
 }) {
   const transitionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const decoded = useRef(new Set<string>());
@@ -48,6 +50,12 @@ export function useWallpaperBackground({
   useLayoutEffect(() => {
     const root = document.documentElement;
     root.style.setProperty('--background-visibility', String(visibility));
+    // Set sidebar visibility if explicitly controlled
+    if (sidebarVisibility !== null) {
+      root.style.setProperty('--sidebar-visibility', String(sidebarVisibility));
+    } else {
+      root.style.removeProperty('--sidebar-visibility');
+    }
     const stopTransition = () => {
       clearTimeout(transitionTimer.current);
       delete root.dataset.wallpaperTransition;

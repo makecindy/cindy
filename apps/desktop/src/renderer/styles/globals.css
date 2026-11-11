@@ -2480,10 +2480,13 @@ html[data-desktop-background='true'] .wallpaper-message-viewport [data-scroll-co
    by the macOS material beneath Chromium; CSS samples only in-app artwork/UI. */
 html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true']
   aside.bg-sidebar > .sidebar-frost {
-  /* Add only the tint missing from the background veil, keeping the original
-     sidebar opacity floor instead of stacking two full-strength coats. */
+  /* If --sidebar-visibility is set by user, use that directly; otherwise maintain
+     the original background-visibility linkage. */
   background: rgb(from var(--surface-translucent-sidebar) r g b /
-    clamp(0, calc(1 - (1 - alpha) / max(0.001, var(--background-visibility, 1))), 1));
+    var(--sidebar-visibility,
+      clamp(0, calc(1 - (1 - alpha) / max(0.001, var(--background-visibility, 1))), 1)
+    )
+  );
 }
 html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true']
   aside.bg-sidebar > .sidebar-frost {

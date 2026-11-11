@@ -2276,7 +2276,9 @@
         "customFailed": "未能保存壁纸，请重试。",
         "downloading": "正在下载壁纸…",
         "downloadFailed": "部分壁纸资源未下载，暂用可用背景",
-        "retryDownload": "重试下载"
+        "retryDownload": "重试下载",
+        "sidebarVisibilityLabel": "左侧栏透明度",
+        "sidebarVisibilityHint": "0% 使侧栏完全不透明；100% 使侧栏完全透明"
       },
       "layout": {
         "label": "面板布局",

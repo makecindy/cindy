@@ -49,6 +49,9 @@ export function WallpaperSection() {
     setBlur,
     previewBlur,
     setMotion,
+    sidebarVisibility,
+    setSidebarVisibility,
+    previewSidebarVisibility,
     resetWallpaper,
   } = useWallpaperSettings();
   // A retired wallpaper stays visible (and selected) only while it is in use.
@@ -65,18 +68,23 @@ export function WallpaperSection() {
   const cancelVisibilityPreview = useCallback(() => {
     queueMicrotask(() => previewVisibility(null));
   }, [previewVisibility]);
+  const cancelSidebarVisibilityPreview = useCallback(() => {
+    queueMicrotask(() => previewSidebarVisibility(null));
+  }, [previewSidebarVisibility]);
   useEffect(() => {
     const cancelPreviews = () => {
       cancelBlurPreview();
       cancelVisibilityPreview();
+      cancelSidebarVisibilityPreview();
     };
     window.addEventListener('blur', cancelPreviews);
     return () => {
       window.removeEventListener('blur', cancelPreviews);
       previewBlur(null);
       previewVisibility(null);
+      previewSidebarVisibility(null);
     };
-  }, [cancelBlurPreview, cancelVisibilityPreview, previewBlur, previewVisibility]);
+  }, [cancelBlurPreview, cancelVisibilityPreview, cancelSidebarVisibilityPreview, previewBlur, previewVisibility, previewSidebarVisibility]);
   useEffect(() => {
     if (visibility === 0) previewBlur(null);
   }, [visibility, previewBlur]);
@@ -431,6 +439,35 @@ export function WallpaperSection() {
           </div>
           <p id="wallpaper-blur-hint" className={SETTINGS_HINT}>
             {t(wallpaperId === 'none' ? 'settings.appearance.wallpaper.desktopBlurHint' : 'settings.appearance.wallpaper.blurHint')}
+          </p>
+
+          {/* 独立左侧栏透明度控制 */}
+          <div className="flex items-center gap-3">
+            <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
+              {t('settings.appearance.sidebarVisibilityLabel')}
+            </span>
+            <Slider data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
+              min={APPEARANCE_LIMITS.sidebarVisibility.min}
+              max={APPEARANCE_LIMITS.sidebarVisibility.max}
+              step={APPEARANCE_LIMITS.sidebarVisibility.step}
+              value={[sidebarVisibility ?? 1]}
+              onValueChange={([value]) => {
+                if (typeof value === 'number') previewSidebarVisibility(value);
+              }}
+              onValueCommit={([value]) => {
+                if (typeof value === 'number') setSidebarVisibility(value);
+              }}
+              onPointerCancel={cancelSidebarVisibilityPreview}
+              onLostPointerCapture={cancelSidebarVisibilityPreview}
+              aria-label={t('settings.appearance.sidebarVisibilityLabel')}
+              aria-describedby="sidebar-visibility-hint"
+            />
+            <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
+              {Math.round((sidebarVisibility ?? 1) * 100)}%
+            </span>
+          </div>
+          <p id="sidebar-visibility-hint" className={SETTINGS_HINT}>
+            {t('settings.appearance.sidebarVisibilityHint')}
           </p>
         </SettingsBlock>
       </SettingsCard>

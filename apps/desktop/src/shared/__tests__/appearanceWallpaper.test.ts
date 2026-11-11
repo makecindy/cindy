@@ -119,6 +119,7 @@ describe('wallpaper catalog compatibility', () => {
         uiSize: 18,
         codeSize: 16,
         windowZoom: 1.2,
+        sidebarVisibility: null,
       });
     },
   );
