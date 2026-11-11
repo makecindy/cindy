@@ -29,7 +29,7 @@ function Navigation() {
     <>
       <output data-testid="location">{location.pathname + location.search + location.hash}</output>
       <button onClick={() => navigateToView('cc-agent')}>Tasks</button>
-      <button onClick={() => navigateToView('bots')}>Teammates</button>
+      <button onClick={() => navigateToView('bots')}>Buddies</button>
       {['/bots', '/bots/roster', '/bots/roster/?step=avatar#picker', '/bots/remote/host/one', '/bots/missing'].map((path) => (
         <button key={path} onClick={() => navigate(path)}>
           {path}
