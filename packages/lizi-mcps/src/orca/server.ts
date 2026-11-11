@@ -64,6 +64,7 @@ import {
   type QueuedMessageControlErrorCode,
   type QueuedMessageSteerReason,
   type SteerFallbackReason,
+  type SupersededFailureNotice,
   type WorkerQueuedMessageEntry,
   type WorkerSummary,
 } from '../xdt-helper/index.js';
@@ -150,6 +151,8 @@ export interface OrcaMcpDeps {
         queuedMessageId?: string;
         /** 请求 steer 但消息进了队列时的原因。 */
         steerFallbackReason?: SteerFallbackReason;
+        /** 这次派发取代并撤下的、Lead 还没读到的该 worker 异常终止回报。 */
+        supersededFailureNotices?: SupersededFailureNotice[];
       },
       'NOT_FOUND' | 'ARCHIVED' | 'DELETED' | 'BUSY' | 'AGENT_NOT_READY' | 'INVALID_ARGS'
     >
@@ -170,6 +173,7 @@ export interface OrcaMcpDeps {
         | 'unconfirmed'
         | 'unsupported';
       queuePaused: boolean;
+      supersededFailureNotices?: SupersededFailureNotice[];
     }>
   >;
   /** 列出 worker 输入队列中排队的消息;省略 workerRef 时列出调用方自身输入队列。 */
@@ -264,7 +268,7 @@ export interface OrcaMcpDeps {
   endTeam: (params: { leadSessionId: string }) => Promise<ControlResult>;
   /** 归档单个 worker。 */
   archiveWorker: (params: { callerLeadSessionId: string; workerId: string }) => Promise<
-    ControlResult<{ workerId: string }, 'WORKER_NOT_FOUND'>
+    ControlResult<{ workerId: string; withdrawnFailureNotices?: number }, 'WORKER_NOT_FOUND'>
   >;
   /** 修改已创建 worker 的角色名 / 标识。 */
   updateWorker: (params: {

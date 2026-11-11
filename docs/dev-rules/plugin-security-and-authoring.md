@@ -324,6 +324,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   调用 `ghost_market_install` 安装选定的缺失插件，用户在「迁移助理」中选择并确认的
   市场插件（[新电脑设置](../product-rules/new-device-setup-migration.md)），或服务端为当前
   owner 下发 `defaultInstall`。安装成功默认启用。
+- **后台更新不降级**：市场按客户端兼容性筛选出的 `currentRelease` 可能比已装版本旧，
+  release ID 不同不代表版本更高。普通市场更新、自定义来源更新、默认下发接管和种子交还
+  商店时，按实际已装 manifest 的 SemVer 比较；候选更旧则保留当前安装与账本，不下载覆盖。
+  同版本修复和显式安装沿用既有流程；非 SemVer 历史版本保留原有判法，不猜测大小。
+  实现与回归见 `main/plugin-market/service.ts`、`__tests__/service.test.ts` 与
+  `__tests__/service-custom-sources.test.ts`（均在 `apps/desktop/src/` 下）。
 - **安装／更新确认**（`shared/ghostInstallConsent.ts` 判据，`main/cindy-brain/ghostInstallConsent.ts`
   两段式实现）：
   - 判据：「权限」与插件详情页权限区同口径，即 `ghostPermissionItems` 中除 Agent 工具外的
@@ -861,6 +867,11 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 - 同一 owner、会话 generation、市场端点及执行策略的并发请求合并为一轮；延后维护的槽位
   保留到实际维护结束。不同账号或端点不复用在途结果。一次同步扫描只读一组市场账本，
   这组事实不跨 `await` 保存，也不作为运行时授权缓存。
+- 已装列表的发布来源展示在每次扫描内复用一组账本事实。异步扫描可在该轮内跨 `await`
+  使用展示快照，但返回前必须重读并核对全部账本事实，变化或核对失败则重试；owner、安装变更、
+  注册表与 locale 的现有复核保持。展示快照不跨扫描保存，也不用于运行时授权；授权查询仍实时读取。
+  实现见 `GhostManager.listAsync()` 与 `PluginMarketLedger.createListingLookup()`，回归见
+  `cindy-brain/__tests__/GhostManager.test.ts` 和 `plugin-market/__tests__/ledger.test.ts`。
 - `pending-but-not-listed` 是注册表中的旧实例脱离普查清单，不能只记日志后永远跳过。
   修复不得扩大冻结的普查名单，也不能用 receipt 的 namespace 字段直接确认身份。必须核对
   唯一的已安装市场记录、包指纹、namespace 和当前组织；实例已有 pluginId 时，市场记录必须

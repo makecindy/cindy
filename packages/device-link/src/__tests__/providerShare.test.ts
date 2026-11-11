@@ -208,6 +208,8 @@ describe('provider share identity scrubbing', () => {
     expect(scrubProviderShareLabel('My Gateway')).toBe('My Gateway');
     const provider = {
       id: 'openai-2', name: 'OpenAI · alice@corp.com', connected: true,
+      // The guest still uses this original shared connection, not the owner's whole account pool.
+      subscriptionPoolAlias: true,
       subscriptionAccount: { source: 'local', identity: 'alice@corp.com' },
       openAiAccount: { source: 'oauth', identity: 'alice@corp.com' },
     };

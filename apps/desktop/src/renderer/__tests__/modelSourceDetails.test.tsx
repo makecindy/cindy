@@ -157,7 +157,7 @@ describe('model source second line', () => {
       command, onChanged: (callback: typeof changed) => { changed = callback; return unsubscribe; },
     } } });
     const view = render(
-      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null, previewSubscriptionPool: true }}>
+      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null }}>
         <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
       </ModelSourceUsageProvider>,
     );
@@ -179,22 +179,28 @@ describe('model source second line', () => {
   });
 
   it.each(['multiple', 'signed-out', 'unavailable', 'limited', 'busy', 'unknown-identity'] as const)(
-    'keeps an unassigned draft pool honest when %s', async (state) => {
+    'retains known pool quotas without claiming an allocation when %s', async (state) => {
       reads.claudeSnapshot = { subscriptionType: 'pro', sevenDay: { utilization: 93 } };
       const account = { id: 'b', identity: state === 'unknown-identity' ? '' : 'b@example.test', plan: 'max', paused: false,
         status: state === 'signed-out' || state === 'unavailable' || state === 'limited' ? state : 'ready',
         running: state === 'busy' ? 4 : 0, limit: 4, weight: 1, directory: '',
-        usage: { claude: { sevenDay: { utilization: 0 } } } };
+        usage: { claude: { sevenDay: { utilization: 66 } } } };
       const command = vi.fn().mockResolvedValue({ providerId: 'anthropic', configured: true,
         accounts: state === 'multiple' ? [account, { ...account, id: 'c', identity: 'c@example.test' }] : [account] });
       Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
       const view = render(
-        <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null, previewSubscriptionPool: true }}>
+        <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null }}>
           <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
         </ModelSourceUsageProvider>,
       );
       await act(async () => {});
-      expect(view.container.textContent).toBe('Claude · subscriptionAccounts.unassigned');
+      if (state === 'signed-out' || state === 'unavailable')
+        expect(view.container.textContent).toBe('Claude · subscriptionAccounts.unassigned');
+      else {
+        expect(view.container.textContent).toBe('Claude');
+        expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('34');
+        expect(view.container.textContent).not.toContain('a@example.test');
+      }
       expect(reads.claude).not.toHaveBeenCalledWith(true, 'anthropic');
     },
   );
@@ -208,7 +214,7 @@ describe('model source second line', () => {
       command, onChanged: (callback: typeof changed) => { changed = callback; return () => {}; },
     } } });
     const view = render(
-      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null, previewSubscriptionPool: true }}>
+      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null }}>
         <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
       </ModelSourceUsageProvider>,
     );
@@ -218,35 +224,61 @@ describe('model source second line', () => {
     expect(command).toHaveBeenCalledTimes(2);
   });
 
-  it('preserves existing task and remote readers and falls back only for an unconfigured local pool', async () => {
+  it('uses the same candidate rules locally and remotely; legacy fallback requires an explicit unconfigured pool', async () => {
     reads.claudeSnapshot = { subscriptionType: 'pro', sevenDay: { utilization: 93 } };
-    reads.remoteClaude.mockReturnValue({ subscriptionType: 'max', sevenDay: { utilization: 40 } });
-    // #9739 review: a full read can wait on CLI quota before reporting that no
-    // pool exists. The production menu must render legacy cached details without
-    // waiting for it; preview is the existing auth-only default-account probe.
-    const command = vi.fn(({ action }: { action: string }) => action === 'preview'
-      ? Promise.resolve({ providerId: 'anthropic', configured: false, accounts: [] })
-      : new Promise(() => {}));
-    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
-    const menu = (deviceId: string | null, previewSubscriptionPool: boolean) => (
-      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId, previewSubscriptionPool }}>
+    const command = vi.fn().mockResolvedValue({ providerId: 'anthropic', configured: false, accounts: [] });
+    const invoke = vi.fn().mockResolvedValue({ providerId: 'anthropic', configured: true, accounts: [
+      { identity: 'remote@example.test', plan: 'max', paused: false, status: 'ready', running: 0, limit: 4,
+        usage: { claude: { sevenDay: { utilization: 40 } } } },
+    ] });
+    Object.assign(window, { electronAPI: {
+      subscriptionAccounts: { command, onChanged: () => () => {} },
+      deviceLink: { invoke, onRemotePush: () => () => {} },
+    } });
+    const menu = (deviceId: string | null) => (
+      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId }}>
         <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
       </ModelSourceUsageProvider>
     );
-    const view = render(menu(null, false));
-    expect(view.container.textContent).toContain('a@example.test · Pro');
-    expect(view.container.textContent).toContain('7%');
-    expect(command).not.toHaveBeenCalled();
-    view.rerender(menu('other-device', true));
-    expect(view.container.textContent).toContain('Max');
-    expect(view.container.textContent).toContain('60%');
-    expect(command).not.toHaveBeenCalled();
-    view.rerender(menu(null, true));
+    const view = render(menu(null));
     expect(view.container.textContent).not.toContain('a@example.test');
     await act(async () => {});
     expect(view.container.textContent).toContain('a@example.test · Pro');
     expect(view.container.textContent).toContain('7%');
     expect(command).toHaveBeenCalledExactlyOnceWith({ action: 'preview', providerId: 'anthropic' });
+    view.rerender(menu('other-device'));
+    expect(view.container.textContent).not.toContain('a@example.test');
+    await act(async () => {});
+    expect(view.container.textContent).toContain('remote@example.test · Max');
+    expect(view.container.textContent).toContain('60%');
+    expect(invoke).toHaveBeenCalledWith('other-device', 'maker:subscription-accounts', [{ action: 'read', providerId: 'anthropic' }]);
+    expect(command).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit: all menus use one resolver; a recorded task binding must not be
+  // replaced by the only account eligible for a new task. Old peers may ignore taskId.
+  it('honors a paused task binding and never guesses when the host cannot resolve it', async () => {
+    const accounts = [
+      { id: 'a', identity: 'bound@example.test', plan: 'pro', paused: true, status: 'ready', running: 1, limit: 1, usage: { claude: { sevenDay: { utilization: 66 } } } },
+      { id: 'b', identity: 'candidate@example.test', plan: 'max', paused: false, status: 'ready', running: 0, limit: 4 },
+    ];
+    const command = vi.fn().mockResolvedValue({ providerId: 'anthropic', configured: true, boundAccountId: 'a', accounts });
+    Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
+    const menu = (taskId: string) => <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null, taskId }}>
+      <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="default@example.test" modelId="claude-sonnet" />
+    </ModelSourceUsageProvider>;
+    const view = render(menu('existing'));
+    await act(async () => {});
+    expect(command).toHaveBeenCalledWith({ action: 'read', providerId: 'anthropic', taskId: 'existing' });
+    expect(view.container.textContent).toContain('bound@example.test · Pro');
+    expect(view.container.textContent).toContain('34%');
+    expect(view.container.textContent).not.toContain('candidate@example.test');
+    command.mockResolvedValue({ providerId: 'anthropic', configured: true, accounts });
+    view.rerender(menu('old-peer-task'));
+    await act(async () => {});
+    expect(view.container.textContent).toBe('Claude');
+    expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('candidate@example.test');
+    expect(view.container.textContent).not.toContain('bound@example.test');
   });
 
   // #9739 review (unit): same-owner repairs advance the generation without
@@ -263,7 +295,7 @@ describe('model source second line', () => {
     const command = vi.fn().mockResolvedValue(pool('before@example.test'));
     Object.assign(window, { electronAPI: { subscriptionAccounts: { command, onChanged: () => () => {} } } });
     const menu = () => (
-      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null, previewSubscriptionPool: true }}>
+      <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={{ deviceId: null }}>
         <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="default@example.test" modelId="claude-sonnet" />
       </ModelSourceUsageProvider>
     );

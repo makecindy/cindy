@@ -820,6 +820,14 @@ export interface AgentStatus {
   contextWindowFromRuntime?: boolean;
   isRunning: boolean;
   startedAt: number | null;
+  /**
+   * Start clock of the turn that is current. Written to that turn's own
+   * `startedAt` every time a turn begins (stream start, continuation, reconnect
+   * recovery) and never copied forward from the previous turn. Unlike
+   * `startedAt`, it stays after the turn stops so a following needs-reply or
+   * error can still name this turn.
+   */
+  lastStartedAt?: number | null;
   /** Turn-cumulative output tokens for live TPS. */
   outputTokens?: number;
   /** Generation-only milliseconds including any open interval at emit time. */
@@ -3079,6 +3087,7 @@ function createInitialState(): SessionChatState {
       contextWindow: 0,
       isRunning: false,
       startedAt: null,
+      lastStartedAt: null,
     },
     error: null,
     usageLimitRecovery: null,
@@ -3165,6 +3174,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
     contextWindow: 0,
     isRunning: false,
     startedAt: null,
+    lastStartedAt: null,
   },
   error: null,
   usageLimitRecovery: null,
@@ -5242,7 +5252,13 @@ function requestInputProjection(
           } else if (hostRecovery && projection.turnInProgress === true) {
             setState(sessionId, s => ({
               ...s, isStreaming: true,
-              agentStatus: { ...s.agentStatus, isRunning: true },
+              agentStatus: {
+                ...s.agentStatus,
+                isRunning: true,
+                // 断连期间新起的一轮：这个窗口从没见过它开始，必须铸一个新时钟。
+                // 沿用上一轮的残留会让这一轮的失败看起来是重复告警，主进程按 id 直接吞掉。
+                ...turnClockForRunning(s.agentStatus),
+              },
             }));
           }
           applyInputProjection(projection, { supersedeQueries: false });
@@ -6482,7 +6498,7 @@ export function handleStreamEvent(
           agentStatus: {
             ...state.agentStatus,
             isRunning: true,
-            startedAt: state.agentStatus.startedAt ?? Date.now(),
+            ...turnClockForRunning(state.agentStatus),
           },
         };
       }
@@ -6604,6 +6620,7 @@ export function handleStreamEvent(
           ...state.agentStatus,
           isRunning: false,
           startedAt: null,
+          ...stoppedTurnClock(state.agentStatus),
         },
       };
     }
@@ -6708,7 +6725,7 @@ export function handleStreamEvent(
                 : {
                     ...state.agentStatus,
                     isRunning: true,
-                    startedAt: state.agentStatus.startedAt ?? Date.now(),
+                    ...turnClockForRunning(state.agentStatus),
                   }),
             },
           };
@@ -6731,7 +6748,7 @@ export function handleStreamEvent(
           agentStatus: {
             ...state.agentStatus,
             isRunning: true,
-            startedAt: state.agentStatus.startedAt ?? Date.now(),
+            ...turnClockForRunning(state.agentStatus),
           },
         };
       }
@@ -6826,6 +6843,7 @@ export function handleStreamEvent(
           ...state.agentStatus,
           isRunning: false,
           startedAt: null,
+          ...stoppedTurnClock(state.agentStatus),
         },
       };
     }
@@ -7362,8 +7380,47 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
       ...finalized.agentStatus,
       isRunning: false,
       startedAt: null,
+      ...stoppedTurnClock(finalized.agentStatus),
     },
   };
+}
+
+/**
+ * Start clock for a turn that is only now beginning.
+ * `Date.now()` can land on the previous turn's stamp. Alert ids are built from
+ * this number, so an equal stamp would make the next failure look like one that
+ * was already notified.
+ */
+function freshTurnStartedAt(status: AgentStatus, now = Date.now()): number {
+  return status.lastStartedAt != null && now <= status.lastStartedAt
+    ? status.lastStartedAt + 1
+    : now;
+}
+
+/**
+ * `lastStartedAt` is the start clock of the turn that is current, not of the
+ * turn that happened to run most recently. A turn that is already running keeps
+ * its own clock (a late frame must not mint a second one). A turn that is only
+ * now starting gets a fresh clock: carrying the previous turn's value forward
+ * makes the next failure look like a repeat of the last one, and the desktop
+ * alert ledger then swallows it.
+ */
+function turnClockForRunning(
+  status: AgentStatus,
+  now = Date.now(),
+): { startedAt: number; lastStartedAt: number } {
+  const startedAt = status.startedAt ?? freshTurnStartedAt(status, now);
+  const lastStartedAt = status.startedAt != null
+    ? (status.lastStartedAt ?? status.startedAt)
+    : startedAt;
+  return { startedAt, lastStartedAt };
+}
+
+/** The turn stopped. Keep its start clock so a following alert can still name it. */
+function stoppedTurnClock(
+  status: AgentStatus,
+): { lastStartedAt: number | null | undefined } {
+  return { lastStartedAt: status.startedAt ?? status.lastStartedAt ?? null };
 }
 
 function mergeLiveGenerationStatus(
@@ -7473,7 +7530,19 @@ function handleStatusUpdate(
     // product turn running until its unclaimed terminal tail arrives.
     return state;
   }
-  const startedAt = update.isRunning ? (state.agentStatus.startedAt ?? Date.now()) : null;
+  const startedAt = update.isRunning
+    ? (state.agentStatus.startedAt ?? freshTurnStartedAt(state.agentStatus))
+    : null;
+  // A new product turn (not running → running) gets its own start clock. Keeping
+  // the previous turn's clock here made the next failure share that turn's alert
+  // id, so the desktop ledger treated it as a duplicate and dropped it. Once this
+  // turn is running, later frames reuse the clock already stamped on it; when it
+  // stops, the clock stays so a following needs-reply or error can still name it.
+  const lastStartedAt = update.isRunning
+    ? (state.agentStatus.startedAt != null
+      ? (state.agentStatus.lastStartedAt ?? state.agentStatus.startedAt)
+      : startedAt)
+    : (state.agentStatus.startedAt ?? state.agentStatus.lastStartedAt ?? null);
 
   // skipTurnReset: side-channel running 信号 (mivo MJ 按钮等不走 LLM 的后台任务)。
   // 只翻 isRunning + 接收新的 status 文案("Mivo …"), 不当 turn 起止处理 —
@@ -7491,6 +7560,7 @@ function handleStatusUpdate(
         status: update.status || state.agentStatus.status,
         isRunning: update.isRunning,
         startedAt,
+        lastStartedAt,
         sideTaskRunning: update.isRunning,
       },
       isStreaming: update.isRunning
@@ -7581,6 +7651,7 @@ function handleStatusUpdate(
       contextWindowFromRuntime: hasContextSnapshot || state.agentStatus.contextWindowFromRuntime,
       isRunning: update.isRunning,
       startedAt,
+      lastStartedAt,
       ...mergeLiveGenerationStatus(isTurnStart, update, state.agentStatus),
     },
     activeTurnRetryText: isTurnComplete ? null : state.activeTurnRetryText,
@@ -10448,6 +10519,12 @@ export interface SessionStatusInfo {
   hasActionableInputHandoff?: boolean;
   /** Stable identities for pending interactions; changes even when pending booleans stay true. */
   pendingRequestKeys?: readonly string[];
+  /**
+   * The turn this snapshot belongs to. Started when the agent begins running and
+   * kept after it stops, so a later needs-reply or error can name that turn.
+   * Absent for a pending card that appeared without a running edge in this window.
+   */
+  turnStartedAt?: number | null;
 }
 
 /**
@@ -10548,6 +10625,9 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
     const hasActionableInputHandoff = !!state.pendingInputHandoff &&
       inputHandoffDialogHasContent(state.pendingInputHandoff, false);
     const requestKeys = pendingRequestKeys(state);
+    // Keep the turn clock after the agent stops. A needs-reply or error that
+    // follows this turn has to name the same turn, not "whatever is running now".
+    const turnStartedAt = state.agentStatus.startedAt ?? state.agentStatus.lastStartedAt ?? null;
 
     // 后台 subagent 折算:主 turn 已结束但 wake 型后台任务(local_agent /
     // local_workflow)还在跑,或正处于「任务终态 → wake turn 启动」的桥接空窗
@@ -10572,6 +10652,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingInputHandoff,
         hasActionableInputHandoff,
         pendingRequestKeys: requestKeys,
+        turnStartedAt,
       });
     } else if (
       hasPendingAskUser ||
@@ -10592,6 +10673,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingInputHandoff,
         hasActionableInputHandoff,
         pendingRequestKeys: requestKeys,
+        turnStartedAt,
       });
     }
   }
@@ -10619,6 +10701,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
       hasActionableInputHandoff: !!state.pendingInputHandoff &&
         inputHandoffDialogHasContent(state.pendingInputHandoff, false),
       pendingRequestKeys: pendingRequestKeys(state),
+      turnStartedAt: state.agentStatus.startedAt ?? state.agentStatus.lastStartedAt ?? null,
     });
   }
 
@@ -10886,7 +10969,10 @@ function syncActiveTurnsFromMain(): void {
               ...s.agentStatus,
               status: s.agentStatus.status || 'Running',
               isRunning: true,
-              startedAt: s.agentStatus.startedAt ?? Date.now(),
+              // Reload recovery of a turn this window never saw start. Stamp a
+              // fresh clock; the previous turn's leftover would make this
+              // recovered turn's failure look like a repeat alert.
+              ...turnClockForRunning(s.agentStatus),
             },
           };
         });
@@ -16639,6 +16725,7 @@ function stopSession(
         contextWindow: s.agentStatus.contextWindow,
         isRunning: false,
         startedAt: null,
+        ...stoppedTurnClock(s.agentStatus),
       },
     };
   });
@@ -17289,6 +17376,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
         contextWindow: 0,
         isRunning: false,
         startedAt: null,
+        lastStartedAt: null,
       },
     };
   });

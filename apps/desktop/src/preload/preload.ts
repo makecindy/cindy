@@ -4160,6 +4160,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     kind: 'done' | 'error' | 'needs-reply';
     inputHandoffRequestId?: string;
     remoteDeviceId?: string;
+    /**
+     * Stable identity of a repeated needs-reply or error. Main turns two
+     * deliveries of the same id into one desktop toast. Completions omit it.
+     */
+    alertEventId?: string;
     channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
     markAttention?: boolean;
   }): Promise<void> => ipcRenderer.invoke('notification:show-session-event', payload),
@@ -7086,6 +7091,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:provider:oauth:cancel', providerId, options),
     importProviderFile: (): Promise<string | string[] | null> =>
       ipcRenderer.invoke('maker:provider:import:file'),
+    scanLocalProviderImports: (): Promise<import('../shared/localProviderImport').LocalProviderImportScan> =>
+      ipcRenderer.invoke('maker:provider:import:local-scan'),
+    editLocalProviderImport: (id: string, input: import('../shared/localProviderImport').LocalProviderImportEdit): Promise<import('../shared/localProviderImport').LocalProviderImportItem> =>
+      ipcRenderer.invoke('maker:provider:import:local-edit', id, input),
     previewProviderImport: (
       importId: string,
       targetProviderId?: string,

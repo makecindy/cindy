@@ -108,6 +108,20 @@ describe('shared session event notifications', () => {
     });
   });
 
+  // #9317 / unit: the production sender is the only place that reaches main.
+  // A needs-reply or error must carry the turn identity the hook built, or main
+  // never records it and the same event toasts again. A completion keeps its own
+  // turn identity there, so its id must not ride along (main rejects it).
+  it('forwards the alert identity for a needs-reply or error and drops it on completion', () => {
+    sendSessionEventNotification('session-1', 'Task', 'needs-reply', { alertEventId: 'turn:100:ask:1' });
+    sendSessionEventNotification('session-1', 'Task', 'error', { alertEventId: 'turn:100:error' });
+    sendSessionEventNotification('session-1', 'Task', 'done', { alertEventId: 'turn:100:error' });
+
+    expect(showSessionEvent.mock.calls.map(([payload]) => payload.alertEventId)).toEqual([
+      'turn:100:ask:1', 'turn:100:error', undefined,
+    ]);
+  });
+
   it('keeps the desktop reminder but skips duplicate phone and Feishu delivery for an input handoff', () => {
     gates.feishu = true;
 

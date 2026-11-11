@@ -22,9 +22,8 @@ import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { ChevronDown, Folder, Plus, TriangleAlert, X } from 'lucide-react';
+import { ChevronDown, Folder, Plus, X } from 'lucide-react';
 import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDialog';
-import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
@@ -35,7 +34,6 @@ import {
 } from '@cindy/model-providers';
 
 import { FastModeToggle } from '@/components/new-chat/FastModeToggle';
-import { FullAccessConfirmContent } from '@/components/new-chat/FullAccessConfirmContent';
 import { ModelSelector, type RemoteAgentSelectorOptions } from '@/components/new-chat/ModelSelector';
 import { remoteAgentProviders } from '@/components/new-chat/unifiedModelSelection';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
@@ -1021,23 +1019,10 @@ export function CreateWorkerPopover({
   const resolvedSubmitLabel = submitLabel ?? t('orca.createWorker.submit');
 
   const updateWorkerPermissionMode = useCallback(
-    async (nextMode: OrcaWorkerPermissionMode) => {
-      if (requiresFullAccessConfirmation(selectedWorkerPermissionMode, nextMode)) {
-        const confirmed = await confirmDialog({
-          title: t('newChat.chatInput.fullAccessConfirmation.title'),
-          description: t('newChat.chatInput.fullAccessConfirmation.description'),
-          content: <FullAccessConfirmContent />,
-          describeContent: true,
-          maxWidth: 440,
-          confirmText: t('newChat.chatInput.fullAccessConfirmation.confirm'),
-          cancelText: t('newChat.chatInput.fullAccessConfirmation.cancel'),
-          confirmIcon: <TriangleAlert size={14} />,
-        });
-        if (!confirmed) return;
-      }
+    (nextMode: OrcaWorkerPermissionMode) => {
       setSelectedWorkerPermissionMode(nextMode);
     },
-    [confirmDialog, selectedWorkerPermissionMode, t],
+    [],
   );
 
   const handleCreate = useCallback(async () => {

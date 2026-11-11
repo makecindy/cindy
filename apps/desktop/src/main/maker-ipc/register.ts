@@ -275,7 +275,8 @@ import {
   ownerScopedUserDataPath,
 } from '../appSessionState.js';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
-import { resolveSessionProject } from '../mcp-integrations/projectManagement.js';
+import { createRemoteSessionOpener, createRemoteSessionExecutionResolver } from './remoteSessionCreation.js';
+import { resolveSessionProject, listProjects } from '../mcp-integrations/projectManagement.js';
 import { isRetainableProjectSession } from '../../shared/sessionSource.js';
 import { initializePluginOauthCards } from '../plugin-oauth/cards.js';
 import { currentOauthIdentityScope, loadOauthSigningKey } from '../plugin-oauth/desktopIdentity.js';
@@ -635,6 +636,7 @@ import {
 } from '../../shared/orca-worker-permission-mode.js';
 import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
+import { createSessionActionRuntime, type SessionRuntimeAction } from './sessionActionRuntime.js';
 import { createColdPiRehydrationForWindowVerification, classifyColdPiRehydrationOutcome } from './coldPiRehydration.js';
 import { ColdPiRehydrationError, logColdPiRehydrationFailure, reportColdPiRehydrationFailure } from './coldPiRehydrationFailure.js';
 import {
@@ -3054,7 +3056,8 @@ interface OrcaCollabService {
     callerLeadSessionId: string;
     workerId: string;
   }) => Promise<
-    { ok: true; workerId?: string } | { ok: false; errorCode: string; message: string }
+    | { ok: true; workerId?: string; withdrawnFailureNotices?: number }
+    | { ok: false; errorCode: string; message: string }
   >;
   updateWorker: (params: {
     callerLeadSessionId: string;
@@ -4842,6 +4845,21 @@ function providerTurnLeaseId(sessionInstanceId: string, turnGeneration: number):
 const productTurnWallClockTracker = new ProductTurnWallClockTracker();
 const productTurnUsageTargetTracker = new ProductTurnUsageTargetTracker();
 const claudeOutputLagTimingGuard = new ClaudeOutputLagTimingGuard();
+
+let sessionActionRuntime: ReturnType<typeof createSessionActionRuntime> | undefined;
+
+export async function prepareSessionForHistoryAction(sessionId: string, action: SessionRuntimeAction) {
+  if (!sessionActionRuntime) throwIpcError('PRECONDITION_FAILED', 'Task runtime is not ready');
+  return sessionActionRuntime(sessionId, action);
+}
+
+/** Close a runtime that only a history action restored (see createSessionActionRuntime). */
+export async function releaseSessionAfterHistoryAction(
+  sessionId: string,
+  opts?: { rewindCommitted?: boolean },
+) {
+  await sessionActionRuntime?.release(sessionId, opts);
+}
 
 /**
  * Own the session input boundary while rewind stops an active turn and changes
@@ -8359,20 +8377,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
           }
         });
+        let descriptors: Awaited<ReturnType<typeof builtInSkillDescriptorsAsync>> | undefined;
+        let disabled: ReadonlySet<string> | undefined;
+        const readActivation = async () => {
+          descriptors = await measureTraceOperation('maker:list-agent-skills:identity',
+            () => builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData')));
+          const paths = readDisabledSkillPaths(descriptors);
+          disabled = new Set(paths);
+          return paths;
+        };
+        // The preview filter and built-in projection share this request's verified
+        // facts. Live sessions still filter using their engine startup snapshot.
         const result = await measureTraceOperation('maker:list-agent-skills:scan',
-          () => maker.listAgentSkills(kind, skillParams));
-        // Verify integrity asynchronously once per request, then reuse the snapshot
-        // when resolving activation aliases instead of rehashing every Skill.
-        const descriptors = await measureTraceOperation('maker:list-agent-skills:identity',
-          () => builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData')));
-        const disabled = new Set(readDisabledSkillPaths(descriptors));
+          () => maker.listAgentSkills(kind, skillParams, readActivation));
+        if (!descriptors) await readActivation();
         return {
           success: true,
           ...result,
           skills: await markCindyOfficialSkills(activeCindyBuiltInAgentSkills(
             result.skills,
-            descriptors,
-            (source) => !disabled.has(skillActivationKey(source)),
+            descriptors!,
+            (source) => !disabled!.has(skillActivationKey(source)),
           ), skillParams.remoteHostId),
         };
       } catch (err) {
@@ -13514,6 +13539,42 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // 同账号另一台电脑上的任务发来的消息（Agent 的 send_to_session 传 deviceId::sessionId）。
   registerSessionHandoffIpc({
+    listProjects: options => listProjects({ ...options, callerSessionId: undefined }),
+    create: createRemoteSessionOpener({
+      openSession,
+      captureOwner: () => captureSessionOwner(),
+      withSessionLock: withSendToSessionLock,
+      sessionExists: async id => Boolean((await getDbClient().drizzle.select({ id: sessions.id }).from(sessions).where(eq(sessions.id, id)).limit(1))[0]),
+      resolveProject: input => resolveSessionProject({ ...input, callerSessionId: undefined }),
+      validateDirectory: validateHandoffWorkingDir,
+      resolveExecution: createRemoteSessionExecutionResolver({
+        isSelfDeviceId: id => id === getSelfDeviceId(),
+        resolveLocal: input => resolveSessionExecution({ agentKind: input.agentKind, model: input.model, effort: input.effort, fastMode: input.fast }),
+        readDefault: () => {
+          const route = getSelectedNewMakerRoute(activeOwnerScopeKey());
+          return route ? { agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
+            model: route.model, effort: (route.effort || undefined) as Effort | undefined, fastMode: route.fastMode } : undefined;
+        },
+        readRemoteRouting: async (id, agent) => deviceWorkerRoutingContext(await readDeviceProviderViews(remoteBackgroundInvoke, id), agent),
+      }),
+      prepareWorktree: async (id, directory) => {
+        const prepared = await prepareHandoffWorktree({
+          getForSession: worktreeManager.getForSession, listAll: worktreeManager.listAll,
+          detectCwd: worktreeManager.detectCwd, suggestName: worktreeManager.suggestName,
+          listBranches: worktreeManager.listBranches, resolveCommit: worktreeManager.revParseCommit,
+          createWorktree: worktreeManager.createWorktree, createId: () => id,
+          resolveFreshSource: resolveFreshSourceBranch,
+        }, undefined, directory);
+        return prepared.ok ? { ok: true, path: prepared.meta.path }
+          : { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prepared.message };
+      },
+      discardWorktree: id => worktreeManager.removeWorktreeForSession(id),
+      openSessionCommit: async (row, assertCurrent) => {
+        const db = getDbClient(); assertCurrent();
+        await db.drizzle.insert(sessions).values(row).run();
+      },
+      broadcastCreated: broadcastSessionCreated,
+    }),
     send: (params) => sendToSessionInternal(params),
     validate: async (deviceId, input) => {
       const response = await invokeBotPeer(deviceId, 'maker:session:handoff', [{ action: 'validate-task-action', ...input }]);
@@ -18178,6 +18239,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     listAvailableModels: async ({ agent, callerSessionId, executionDeviceId, agentDeviceId: requestedAgentDeviceId }) => {
       try {
+        if (executionDeviceId === 'local' || executionDeviceId === getSelfDeviceId()) {
+          executionDeviceId = undefined;
+          requestedAgentDeviceId ??= null;
+        }
         if (executionDeviceId) {
           if (!orcaRemoteWorkersForHost) throw new Error('[HOST_NOT_READY] Worker service is not ready');
           const result = await orcaRemoteWorkersForHost.readModels(executionDeviceId, {
@@ -25171,7 +25236,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'sessionId required');
     }
-    const sess = maker.getSession(sessionId);
+    const sess = await getOrResumeSessionForHistory(sessionId, 'pi-history');
     if (!sess) {
       log.debug('export-session-html: session not found, no-op', { sessionId });
       return null;
@@ -25215,92 +25280,75 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (instructions !== undefined && typeof instructions !== 'string') {
         throwIpcError('INVALID_PARAMS', 'instructions must be a string when provided');
       }
-      const sess = maker.getSession(sessionId);
-      if (!sess) {
-        throwIpcError('NOT_FOUND', 'Resume the task before compacting its context');
-      }
-      if (!sess.capabilities.manualCompact?.supported) {
-        throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
-      }
-      return sess.compactSession(instructions);
+      return withSendToSessionLock(sessionId, async () => {
+        try {
+          const sess = await getOrResumeSessionForHistory(sessionId, 'compact');
+          if (!sess?.capabilities.manualCompact?.supported) {
+            throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
+          }
+          return await sess.compactSession(instructions);
+        } finally {
+          await getOrResumeSessionForHistory.release(sessionId);
+        }
+      });
     },
   );
 
-  /**
-   * 会话树是历史浏览入口，不能要求用户先发一条消息把旧 Pi 会话唤醒。
-   * 这里按持久化元数据恢复同一原生 session；Maker.createSession 自带 per-id singleflight。
-   */
-  async function getOrResumeSessionTreeSession(sessionId: string) {
-    const live = maker.getSession(sessionId);
-    if (live) return live;
-    const meta = await maker.getSessionMeta(sessionId).catch(() => null);
-    if (!meta || meta.agentKind !== 'pi') return null;
-    const db = getDbClient().drizzle;
-    const [row] = await db
-      .select({
-        providerId: sessions.providerId,
-        effort: sessions.effort,
-        fastMode: sessions.fastMode,
-        permissionMode: sessions.permissionMode,
-        remoteHostId: sessions.remoteHostId,
-        orcaRole: sessions.orcaRole,
-        status: sessions.status,
-      })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    if (!row) return null;
-    // 轮 40-w3 MEDIUM:会话树是历史浏览入口, lazy resume 会**复活**会话
-    // (重建 desktop 内存 session + 远端 daemon session)。已归档/软删除的
-    // 会话必须保持死态 —— 只允许 active 会话被懒恢复, 否则「查看会话树」
-    // 这个只读动作会让产品持久态(归档/删除)与运行态(活跃进程)分叉。
-    if (row.status !== 'active') {
-      log.debug('session-tree: skip lazy resume for non-active session', {
-        sessionId,
-        status: row.status,
+  // History actions restore the persisted native session, without a model turn.
+  // bootstrap's strict resume also prevents fresh-history/provider failover.
+  const getOrResumeSessionForHistory = createSessionActionRuntime({
+    getLive: (sessionId) => maker.getSession(sessionId),
+    ownerGeneration: () => getActiveAppSession().generation,
+    load: async (sessionId) => {
+      const [row] = await getDbClient().drizzle.select().from(sessions)
+        .where(eq(sessions.id, sessionId)).limit(1);
+      return row;
+    },
+    resume: async (sessionId, row, assertCurrent) => {
+      if (!row.workingDir) throwIpcError('NOT_FOUND', 'Task working directory is unavailable');
+      const createOpts = buildCreateOptsWithStderr({
+        id: sessionId,
+        agentKind: dbToMakerAgentKind(row.agentKind),
+        workingDir: row.workingDir,
+        model: row.model ?? undefined,
+        providerId: row.providerId,
+        resumeSessionId: row.sdkSessionId ?? undefined,
+        effort: row.effort as CreateOpts['effort'],
+        fastMode: row.fastMode ?? false,
+        permissionMode: permissionModeOrAsk(row.permissionMode),
+        planMode: row.planModeEnabled === true,
+        title: row.title ?? undefined,
+        remoteHostId: row.remoteHostId ?? undefined,
+        agentDeviceId: row.agentDeviceId ?? undefined,
+        orcaRole: row.orcaRole as CreateOpts['orcaRole'],
       });
-      return null;
-    }
-    const createOpts = buildCreateOptsWithStderr({
-      id: sessionId,
-      agentKind: 'pi',
-      workingDir: meta.workDir,
-      model: meta.model,
-      // providerId=null 是显式的 Cindy 默认路由；undefined 才允许 Pi 按同名模型
-      // 反查原生 BYOM。会话树懒恢复必须原样保留 DB 的三态契约。
-      providerId: row.providerId,
-      resumeSessionId: meta.sdkSessionId,
-      effort: row.effort as CreateOpts['effort'],
-      fastMode: (row.fastMode ?? false),
-      permissionMode: permissionModeOrAsk(row.permissionMode),
-      title: meta.title,
-      remoteHostId: row.remoteHostId ?? undefined,
-      orcaRole: row.orcaRole as CreateOpts['orcaRole'],
-    });
-    const workDirReady = await checkWorkDirExists(
-      sessionId,
-      createOpts.workingDir,
-      createOpts.agentKind,
-      createOpts.remoteHostId,
-    );
-    if (!workDirReady) return null;
-    await synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
-    const extraDirs = await readSessionExtraDirsFromDb(sessionId).catch(() => []);
-    if (extraDirs.length > 0) Object.assign(createOpts, directoryGrantsForRuntime(extraDirs));
-    const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
-    if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
-    await ensureRemoteReadyForSessionStart({ createOpts });
-    const { session: resumed } = await bootstrapSession(createOpts);
-    await markOrcaRoleIfNeeded(resumed.id, createOpts.orcaRole);
-    log.info('session-tree: lazily resumed Pi session', {
-      sessionId,
-      sdkSessionId: meta.sdkSessionId ?? null,
-    });
-    return resumed;
-  }
+      const ready = await checkWorkDirExists(sessionId, createOpts.workingDir,
+        createOpts.agentKind, createOpts.remoteHostId);
+      assertCurrent();
+      if (!ready) throwIpcError('NOT_FOUND', 'Task working directory is unavailable');
+      await synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
+      assertCurrent();
+      const extraDirs = await readSessionExtraDirsFromDb(sessionId);
+      assertCurrent();
+      if (extraDirs.length > 0) Object.assign(createOpts, directoryGrantsForRuntime(extraDirs));
+      const writableDirs = await readSessionWritableDirsFromDb(sessionId);
+      assertCurrent();
+      if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
+      await ensureRemoteReadyForSessionStart({ createOpts });
+      assertCurrent();
+      const { session } = await bootstrapSession(createOpts, assertCurrent, true);
+      assertCurrent();
+      await markOrcaRoleIfNeeded(session.id, createOpts.orcaRole);
+      return session;
+    },
+    close: (sessionId, live) => withRehydrateCloseSuppressed(sessionId,
+      () => maker.closeSessionIfCurrent(live, 'runtime-refresh').then(() => undefined)),
+    holdsPendingRewind: (live) => live.agentKind === 'claude-code',
+  });
+  sessionActionRuntime = getOrResumeSessionForHistory;
 
   ipcMain.handle(MAKER_INVOKE.GET_SESSION_TREE, async (event, sessionId: unknown) => {
-    // getOrResumeSessionTreeSession 会 lazy resume(spawn Agent)→ 有副作用。非
+    // getOrResumeSessionForHistory 会 lazy resume(spawn Agent)→ 有副作用。非
     // device-link 本机调用须受信顶层页面(codex review);device-link 独立鉴权,放行。
     if (!isDeviceLinkInvoke()) {
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
@@ -25308,7 +25356,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'sessionId required');
     }
-    const sess = await getOrResumeSessionTreeSession(sessionId);
+    const sess = await getOrResumeSessionForHistory(sessionId, 'pi-history');
     if (!sess || !sess.capabilities.sessionTree?.supported) return null;
     return sess.getSessionTree();
   });
@@ -25338,7 +25386,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ) {
         throwIpcError('INVALID_PARAMS', 'customInstructions must be string');
       }
-      const sess = await getOrResumeSessionTreeSession(sessionId);
+      const sess = await getOrResumeSessionForHistory(sessionId, 'pi-history');
       if (!sess || !sess.capabilities.sessionTree?.supported) return null;
       // 整个「原生分支导航 → 捕获 result.messages → session.treeRehydrate 重建 SQLite」窗口
       // 必须与 maker:send 走同一把 per-session 锁(acquireSendToSessionLock)。否则另一窗口 /

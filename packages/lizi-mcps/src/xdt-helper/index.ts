@@ -72,6 +72,7 @@ export {
   type OrcaMessageDelivery,
   type SendToWorkerDeps,
   type SteerFallbackReason,
+  type SupersededFailureNotice,
 } from './send_to_worker.js';
 export {
   registerGetWorkerQueueStatusTool,

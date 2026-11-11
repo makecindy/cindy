@@ -143,6 +143,7 @@ import {
   workspaceSettingsOverrideMessage,
 } from './workspace-settings-guard.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
+import { materializeClaudeFlagSettings } from './flag-settings-file.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
   buildClaudeDisallowedTools,
@@ -2991,10 +2992,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         settings.disableSkillShellExecution = true;
         const excludes = deviceHostedGuestClaudeMdExcludes(hosted);
         if (excludes.length > 0) settings.claudeMdExcludes = [...(settings.claudeMdExcludes ?? []), ...excludes];
-        // 路由令牌请求头在最高优先级的设置层再写一次：会话中途出现的项目设置不能把它改掉。
-        if (guestRouteHeader && env.ANTHROPIC_CUSTOM_HEADERS) {
-          settings.env = { ...settings.env, ANTHROPIC_CUSTOM_HEADERS: env.ANTHROPIC_CUSTOM_HEADERS };
-        }
+        // 路由令牌只走子进程 env.ANTHROPIC_CUSTOM_HEADERS（上方 guestRouteHeader 的唯一写入点，
+        // SDK 把 options.env 当 CLI 进程环境）。不写进 settings：flag settings 超过命令行上限时
+        // 会整份序列化落盘，明文令牌不能进那份文件。会话中途的项目设置也改不掉它：
+        // 受邀者不走订阅直连，env 里有 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST，CLI 会从所有
+        // settings 来源的 env 里剥掉 ANTHROPIC_CUSTOM_HEADERS（见 env-builder 第三道防线）。
       }
       if (!reviewMode) return settings;
       return {
@@ -3748,6 +3750,19 @@ export class ClaudeCodeAgent extends BaseAgent {
     // /clear 等价于开新 session → 重建 handle → 状态自然清零, 无需额外重置。
     const oneShotTipState: OneShotState = { displayed: new Map(), pity: new Map() };
 
+    // 模型白名单过长时, 本地 flag settings 落到这份临时文件, 避免 `--settings`
+    // 内联 JSON 撑破 Windows 命令行上限 (spawn ENAMETOOLONG, #9753)。短设置不建
+    // 文件。声明在 buildQuery 之外, 让 handle.close 也能删掉它。
+    let flagSettingsFile: { kind: 'file'; settingsPath: string; dispose: () => Promise<void> } | null = null;
+    const releaseFlagSettingsFile = () => {
+      const current = flagSettingsFile;
+      if (!current) return;
+      flagSettingsFile = null;
+      void current.dispose().catch((error) => {
+        log.warn('claude flag settings file cleanup failed', { error: String(error) });
+      });
+    };
+
     // ── sdkQuery 装配 (可被 rewind 重复调用) ──────────────────────────────────
     // 三件套 (resume + resumeSessionAt + forkSession) 通过 extra 注入。
     // startSession 首次调 buildQuery() 不传 extra, 走 vendorOptions.resumeSessionAt /
@@ -4454,6 +4469,30 @@ export class ClaudeCodeAgent extends BaseAgent {
         ? await prepareManagedSkillPlugins(allowedManagedSkills, (name) => {
           log.warn('managed skill disappeared before Query startup; skipping', { skill: name });
         }) : undefined;
+      // 设置对象的落盘时间放在 spawn 前: 内容要跟着本次 Query 的输出上限 / 白名单快照,
+      // 提前算会把上一代的 env 与模型清单写进文件。见 createLocalQueryArgs 处。
+      let localClaudeSettingsOption: () => string | Settings = () => buildSettings();
+      const prepareFlagSettings = async (): Promise<void> => {
+        // 短设置仍内联, 与既有行为逐字节一致。超限才写临时文件。同一会话复用一份
+        // 文件, 重建时按当前设置重写 (热切白名单另走 applyFlagSettings, 不依赖它)。
+        // 落盘失败时托管技能插件已经铺好暂存目录, 而此刻启动清理 try 都还没进来 ——
+        // 必须在这里先把它拆掉, 否则整份暂存目录会残留。
+        const flagSettingsDelivery = await materializeClaudeFlagSettings(
+          buildSettings(),
+          flagSettingsFile ?? undefined,
+        ).catch(async (error: unknown) => {
+          if (managedPlugins) {
+            await managedPlugins.dispose().catch((cleanupError) => {
+              log.warn('managed skill plugin cleanup failed', { error: String(cleanupError) });
+            });
+          }
+          throw error;
+        });
+        if (flagSettingsDelivery.kind === 'file') flagSettingsFile = flagSettingsDelivery;
+        localClaudeSettingsOption = () => (flagSettingsDelivery.kind === 'inline'
+          ? flagSettingsDelivery.settings
+          : flagSettingsDelivery.settingsPath);
+      };
       const releaseManagedPlugins = () => {
         void managedPlugins?.dispose().catch((error) => log.warn('managed skill plugin cleanup failed', { error: String(error) }));
       };
@@ -4615,8 +4654,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           //  - showThinkingSummaries        : reasoning summary 展示开关
           //  - autoMemoryEnabled / autoDream: memory 联动 (host 通过 runtimeConfig.memoryEnabled 或
           //    BaseAgent.setMemory 控制; this.memoryOverride === undefined 时不传, 让 SDK 走默认)
-          // **同一对象远端分支也透传 (extraOptions.settings)**, 别在两边漂移。
-          settings: buildSettings(),
+          // 内容与远端 extraOptions.settings 同源。本地 SDK 会把内联对象序列化成
+          // `--settings <json>` 命令行参数; 模型白名单超过 Windows 命令行上限时改传
+          // 临时文件路径 (#9753)。远端 daemon 读不到这份本机文件, 仍传对象。
+          settings: localClaudeSettingsOption(),
           allowDangerouslySkipPermissions:
             !reviewMode,
           stderr: vo.onStderrLine as ((line: string) => void) | undefined,
@@ -4646,6 +4687,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         companionEnvironment?.assertCurrent?.();
         if (managedPlugins && querySignal.aborted) throw new Error('Claude session closed before skill plugins were loaded');
         activeQueryModelEnvGeneration = applyModelOutputEnv();
+        // 必须紧跟输出上限 / 模型 env 的快照之后再序列化设置: 设置层里的
+        // CLAUDE_CODE_MAX_OUTPUT_TOKENS 与模型白名单都要反映这一次 spawn 的值。
+        await prepareFlagSettings();
+        // 落盘是异步的：等它回来期间账号可能被换掉、伙伴可能被删。围栏要在
+        // 真正拉起 SDK 之前再验一次，失效的启动走下面 catch 的清理路径。
+        companionEnvironment?.assertCurrent?.();
         const queryArgs = createLocalQueryArgs();
         if (newSdkSessionId) sdkSessionId = newSdkSessionId;
         onRuntimeStartAttempted();
@@ -4654,7 +4701,19 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (sdkSessionId === newSdkSessionId) sdkSessionId = previousSdkSessionId;
         querySignal.removeEventListener('abort', releaseManagedPlugins);
         if (managedPlugins) await managedPlugins.dispose();
+        if (flagSettingsFile) await flagSettingsFile.dispose();
+        flagSettingsFile = null;
         throw error;
+      }
+      if (closed) {
+        // 关闭在准备阶段赢了这个竞态 (close 已删过旧文件并提前返回, 不会再来收这一份)。
+        // 调用方建完这个 query 会立刻关掉它, 借着那次 close 一并把文件删掉 —— 不在这里
+        // 直接删, 免得抢在 CLI 读 settings 之前。
+        const closeQueryAfterHandleClose = query.close.bind(query);
+        query.close = () => {
+          try { return closeQueryAfterHandleClose(); }
+          finally { releaseFlagSettingsFile(); }
+        };
       }
       if (newSdkSessionId && finalFork && resumeSdkSid) {
         unacceptedForks.add(query);
@@ -4754,6 +4813,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       try { abortController.abort(); } catch (e) {
         log.warn(`${logLabel}: abortController.abort threw`, { error: String(e) });
       }
+      // 这里已经把 closed 置 true, 之后宿主再调 close() 会提前返回, 走不到那边
+      // 的清理 —— 长模型目录落下的临时设置文件必须在死亡路径上自己删掉。
+      releaseFlagSettingsFile();
       // remoteQuery.close 是 async + 可能已经死了 (RpcClient closed), 调它会走
       // 兜底 catch (best-effort)。fire-and-forget 不 await — startForwardLoop
       // 里同步路径不能阻塞 finally。
@@ -7540,6 +7602,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // close 会终结 CLI 子进程(本地)/ 远端 session,后台任务随之死亡。
           runningBackgroundTasks.clear();
           terminalBackgroundTaskIds.clear();
+          // 启动中途关闭由 startSession 的 catch 删文件; Query 已经建起来之后再关闭
+          // 走这里, 覆盖 SDK close 不会再回到那个 catch 的路径。
+          releaseFlagSettingsFile();
         } catch (e) {
           log.warn('close threw', { error: String(e) });
         }
