@@ -9,6 +9,7 @@ import {
 } from '../themes/families';
 import { onLocalThemesChange } from '../themes/local-themes';
 import { presentTheme } from '../appearance/AppearancePresenter';
+import { AppearanceMotionContext } from '../appearance/AppearanceMotionContext';
 import type { ThemeType } from '../themes/types';
 import { parseThemeSelection, type ThemeSelection } from '../../shared/appearanceDefinition';
 
@@ -259,6 +260,7 @@ export function ThemeProvider({
 }) {
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
   const [familyId, setFamilyIdState] = useState<string>(getStoredFamilyId);
+  const [appearanceReduced, setAppearanceReduced] = useState(() => window.electronAPI?.appearanceSettings?.getSync?.()?.motion === 0);
   // 跟踪系统色偏好, 让 fallbackFromType 在 OS theme 变化时也能正确刷新。
   const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() =>
     typeof window === 'undefined' || typeof window.matchMedia !== 'function'
@@ -329,6 +331,7 @@ export function ThemeProvider({
   // Cross-window synchronization consumes the same Host appearance publication.
   useEffect(() => {
     return window.electronAPI?.appearanceSettings?.onChanged?.(settings => {
+      setAppearanceReduced(settings.motion === 0);
       const next = parseThemeSelection(settings.themeSelection);
       if (!next) return;
       setThemeState(next.mode);
@@ -377,18 +380,12 @@ export function ThemeProvider({
     return family[requestedType] === null ? requestedType : null;
   }, [familyId, theme, systemPrefersDark, localThemeRev]);
 
+  const value = useMemo(() => ({ theme, setTheme, familyId, setFamily, fallbackFromType }),
+    [theme, setTheme, familyId, setFamily, fallbackFromType]);
   return createElement(
-    ThemeContext.Provider,
-    {
-      value: {
-        theme,
-        setTheme,
-        familyId,
-        setFamily,
-        fallbackFromType,
-      },
-    },
-    children,
+    AppearanceMotionContext.Provider,
+    { value: appearanceReduced },
+    createElement(ThemeContext.Provider, { value }, children),
   );
 }
 

@@ -8,7 +8,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { act, render, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 
 import '../../themes/colors';
@@ -16,6 +16,7 @@ import { bootstrapLocalThemesSync } from '../../themes/local-themes';
 import { themeService } from '../../themes/theme-service';
 import type { LocalThemesResult } from '../../../shared/local-themes';
 import { normalizeAppearanceSettings, type AppearanceSettings } from '../../../shared/appearanceSettings';
+import { useReducedMotion } from '../useReducedMotion';
 import {
   __resetLoginFirstLaunchLightGateForTest,
   endLoginFirstLaunchLightGate,
@@ -80,6 +81,36 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
         onChanged: (receive: (settings: AppearanceSettings) => void) => { hostListeners.add(receive); return () => hostListeners.delete(receive); } },
     };
     applyVibrancyMock.mockClear();
+  });
+
+  // Unit performance regression: 100 real consumers previously added 100 Host
+  // subscriptions. Unrelated font writes must not rerender motion or palette users.
+  it('shares the existing Host subscription across motion consumers and isolates unrelated updates', async () => {
+    hostSnapshot = normalizeAppearanceSettings({ themeSelection: { mode: 'light', familyId: 'default' } });
+    let motionRenders = 0, paletteRenders = 0, reduced = false;
+    function MotionConsumer() { motionRenders++; reduced = useReducedMotion(); return null; }
+    function PaletteConsumer() { paletteRenders++; useTheme(); return null; }
+    const view = render(createElement(ThemeProvider, null,
+      ...Array.from({ length: 100 }, (_, key) => createElement(MotionConsumer, { key })),
+      createElement(PaletteConsumer),
+    ));
+    expect(hostListeners.size).toBe(1);
+    expect(reduced).toBe(false);
+    const initialMotion = motionRenders, initialPalette = paletteRenders;
+    await act(async () => {
+      hostSnapshot = normalizeAppearanceSettings({ ...hostSnapshot, uiSize: 19 });
+      for (const receive of hostListeners) receive(hostSnapshot);
+    });
+    expect(motionRenders).toBe(initialMotion);
+    await act(async () => {
+      hostSnapshot = normalizeAppearanceSettings({ ...hostSnapshot, motion: 0 });
+      for (const receive of hostListeners) receive(hostSnapshot);
+    });
+    expect(reduced).toBe(true);
+    expect(motionRenders).toBe(initialMotion + 100);
+    expect(paletteRenders).toBe(initialPalette);
+    view.unmount();
+    expect(hostListeners.size).toBe(0);
   });
 
   // Performance: completed migration must be a synchronous startup branch;

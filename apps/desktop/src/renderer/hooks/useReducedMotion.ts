@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useAppearanceReducedMotion } from '../appearance/AppearanceMotionContext';
 
 const MEDIA_QUERY = '(prefers-reduced-motion: reduce)';
 
@@ -26,11 +27,7 @@ function readInitial(): boolean {
 
 export function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState<boolean>(readInitial);
-  const [appearanceReduced, setAppearanceReduced] = useState(() => typeof window !== 'undefined' && window.electronAPI?.appearanceSettings?.getSync?.()?.motion === 0);
-
-  useEffect(() => window.electronAPI?.appearanceSettings?.onChanged?.(settings => {
-    setAppearanceReduced(settings.motion === 0);
-  }), []);
+  const appearanceReduced = useAppearanceReducedMotion();
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
