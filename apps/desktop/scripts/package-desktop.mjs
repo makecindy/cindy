@@ -47,7 +47,9 @@
 //                                   不签名,产出 <baseName>-<arch>-unsigned.zip 与
 //                                   signing.mode = pending 的 build-info.json;拷到签名机后
 //                                   跑 sign-desktop.mjs --build-info <该文件> 完成签名、公证、
-//                                   DMG 与热更 ZIP。本机不持有密钥,可放心用 --vendors latest。
+//                                   DMG 与热更 ZIP。这只让签名密钥离开打包机,不证明包的内容:
+//                                   签名机照签打包机交来的任何内容,所以发版仍用缺省的
+//                                   --vendors pinned,打包机不执行上游代码。
 //                                   要开 Touch ID 时在打包机设置 APPLE_TEAM_ID(公开信息)。
 //                                   Windows 不需要这一步:CINDY_WIN_SIGN_CMD 指向远程签名服务即可。
 //

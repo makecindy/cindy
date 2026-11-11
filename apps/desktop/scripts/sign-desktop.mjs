@@ -55,7 +55,9 @@ function main() {
     fail(`${buildInfoPath} 不是可签名的 --stage build 产物: ${err.message}`);
   }
   const unsigned = pending.files.find((f) => f.role === 'unsigned-app');
-  // 签名前先核对拷来的包就是打包机记下的那一份(传输损坏或被换包都在这里拦下)。
+  // 核对拷来的包就是打包机记下的那一份。这只能发现传输损坏或拷错文件:哈希与包都来自打包机,
+  // 被攻陷的打包机可以连同哈希一起改,签名机照签不误。包内容的可信度取决于打包机本身,
+  // 所以发版打包仍用缺省的 --vendors pinned(打包机不执行上游代码)。
   const payloadPath = path.join(artifactDir, unsignedName);
   if (!fs.existsSync(payloadPath)) fail(`未签名包不存在: ${payloadPath}`);
   const actual = { sha256: sha256(payloadPath), size: fs.statSync(payloadPath).size };
