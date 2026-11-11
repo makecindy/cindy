@@ -21,6 +21,7 @@ import { createId } from '@paralleldrive/cuid2';
 
 import { MAKER_INVOKE } from './channels.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { SUPPORTED_LOCALES } from '../../shared/locale.js';
 import { createLogger } from '../logger.js';
 import type {
   HelpFeedbackDraft,
@@ -30,7 +31,7 @@ import type {
 
 const log = createLogger('help-feedback');
 
-const VALID_LOCALES: ReadonlySet<HelpLocale> = new Set<HelpLocale>(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR', 'zh-Hant-x-lzh', 'zh-Hans-x-lzh']);
+const VALID_LOCALES: ReadonlySet<HelpLocale> = new Set<HelpLocale>(SUPPORTED_LOCALES);
 
 function draftFilePath(): string {
   return path.join(app.getPath('userData'), 'help-feedback-drafts.json');
