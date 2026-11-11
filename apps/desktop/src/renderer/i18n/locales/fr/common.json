@@ -2329,6 +2329,7 @@
         "desktopVisibilityHint": "Laisse voir le bureau et les fenêtres derrière Cindy. Le texte et les commandes restent nets.",
         "desktopBlurLabel": "Flou du bureau",
         "desktopBlurHint": "Floute le bureau derrière la fenêtre. 0 désactive le flou ; une valeur plus élevée le renforce. Les systèmes sans réglage utilisent leur effet par défaut.",
+        "desktopBlurSwitchHint": "Floute le bureau derrière la fenêtre avec l’effet système de Windows. Nécessite Windows 11 version 22H2 ou ultérieure.",
         "blurLabel": "Flou du fond d'écran",
         "blurHint": "Floute uniquement le fond d'écran. Réglez sur 0 pour désactiver. Flouter un fond d'écran animé augmente l'utilisation du GPU.",
         "motionLabel": "Affichage",
@@ -20059,6 +20060,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Compte non attribué",
+    "boundUnavailable": "Compte indisponible",
     "providerManagedAuth": "Le fournisseur actuel de Codex ne permet pas de consulter le compte ChatGPT. Lors de l’ajout du fournisseur, choisissez « $t(subscriptionAccounts.signIn.anotherAccount) » pour utiliser un dossier séparé.",
     "signIn": {
       "checking": "Vérification du compte local…",

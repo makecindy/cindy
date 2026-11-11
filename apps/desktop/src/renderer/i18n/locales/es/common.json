@@ -2329,6 +2329,7 @@
         "desktopVisibilityHint": "Muestra el escritorio y las ventanas detrás de Cindy. El texto y los controles se mantienen nítidos.",
         "desktopBlurLabel": "Desenfoque del escritorio",
         "desktopBlurHint": "Desenfoca el escritorio detrás de la ventana. 0 lo desactiva; un valor mayor aumenta el desenfoque. Los sistemas sin ajuste de intensidad usan su efecto predeterminado.",
+        "desktopBlurSwitchHint": "Desenfoca el escritorio detrás de la ventana con el efecto del sistema de Windows. Requiere Windows 11, versión 22H2 o posterior.",
         "blurLabel": "Fondo de pantalla borroso",
         "blurHint": "Desenfoca solo el fondo de pantalla. Establezca en 0 para apagar. El fondo de pantalla animado borroso aumenta el uso de GPU.",
         "motionLabel": "Pantalla",
@@ -20059,6 +20060,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Cuenta sin asignar",
+    "boundUnavailable": "Cuenta no disponible",
     "providerManagedAuth": "El proveedor actual de Codex no permite consultar la cuenta de ChatGPT. Al añadir el proveedor, elige «$t(subscriptionAccounts.signIn.anotherAccount)» para usar una carpeta independiente.",
     "signIn": {
       "checking": "Comprobando la cuenta local…",

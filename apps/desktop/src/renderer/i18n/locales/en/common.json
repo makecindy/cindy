@@ -2291,6 +2291,7 @@
         "desktopVisibilityHint": "Reveal the desktop and windows behind Cindy. Text and controls stay clear.",
         "desktopBlurLabel": "Desktop Blur",
         "desktopBlurHint": "Blur the desktop behind the window. 0 turns it off; higher values increase blur. Systems without adjustable blur use their default effect.",
+        "desktopBlurSwitchHint": "Blur the desktop behind the window with the Windows system effect. Requires Windows 11 version 22H2 or later.",
         "blurLabel": "Wallpaper Blur",
         "blurHint": "Blur only the wallpaper. Set to 0 to turn off. Blurring animated wallpaper increases GPU usage.",
         "motionLabel": "Display",
@@ -19872,6 +19873,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Account not assigned",
+    "boundUnavailable": "Account unavailable",
     "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",

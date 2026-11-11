@@ -2261,6 +2261,7 @@
         "desktopVisibilityHint": "Cindy の背後にあるデスクトップやウィンドウを透かします。文字や操作部分は鮮明に保たれます。",
         "desktopBlurLabel": "デスクトップのぼかし",
         "desktopBlurHint": "背後のデスクトップをぼかします。0 でオフ、値が大きいほど強くなります。強さを調整できない OS では標準の効果を使います。",
+        "desktopBlurSwitchHint": "Windows のシステム効果でウィンドウ背後のデスクトップをぼかします。Windows 11 バージョン 22H2 以降が必要です。",
         "blurLabel": "壁紙のぼかし",
         "blurHint": "壁紙だけをぼかします。0でオフになります。動く壁紙のぼかしはGPU負荷を増やします。",
         "motionLabel": "表示方法",
@@ -19800,6 +19801,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "アカウント未割り当て",
+    "boundUnavailable": "アカウントを利用できません",
     "providerManagedAuth": "現在の Codex プロバイダーでは ChatGPT アカウント情報を取得できません。プロバイダーの追加時に「$t(subscriptionAccounts.signIn.anotherAccount)」を選ぶと、別のフォルダーを使用できます。",
     "signIn": {
       "checking": "ローカルアカウントを確認中…",
