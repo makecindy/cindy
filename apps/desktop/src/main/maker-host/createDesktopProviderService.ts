@@ -136,6 +136,7 @@ import {
   refreshOpenAiMediaModels,
 } from './model-discovery/openai-media.js';
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
+import { organizationProviderLogoKind } from '../organizationProviderLogo.js';
 import { getAuthState } from '../authManager.js';
 import { getCindyAiProviderName, getCindyAiProviderLogoKind } from '../cindyAiProviderName.js';
 import { getActiveAppSession, activeOwnerScopeKey } from '../appSessionState.js';
@@ -900,6 +901,10 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
       return readLegacyCodexAccountId(provider.id)
         ? { ...projected, subscriptionPoolAlias: true }
         : projected;
+    },
+    getOrganizationProviderLogoKind: (provider) => {
+      const state = getAuthState();
+      return organizationProviderLogoKind(provider, state.mode === 'cloud' ? state.user : null);
     },
     getProviderPresentation: (providerId) => {
       const presentation = readProviderPresentation(providerId);
