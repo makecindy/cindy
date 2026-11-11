@@ -32,10 +32,11 @@ const catalog = {
 describe("Registry V4 local model contract", () => {
   // Unit: new-language descriptions used to reject the catalog; older servers still send five languages.
   // Verify client fallback never replaces newer server copy with a stale translation.
-  it('accepts French metadata and translates only an unchanged reviewed English description', () => {
-    const localized = { ...catalog, models: [{ ...catalog.models[0], descriptions: { en: 'Local candidate', fr: 'Candidat local' } }] };
+  it('accepts French and Turkish metadata and translates only an unchanged reviewed English description', () => {
+    const localized = { ...catalog, models: [{ ...catalog.models[0], descriptions: { en: 'Local candidate', fr: 'Candidat local', tr: 'Yerel aday' } }] };
     expect(parseLocalModelCatalog(localized)).toEqual(localized);
     expect(localModelDescription(localized.models[0].descriptions, 'fr')).toBe('Candidat local');
+    expect(localModelDescription(localized.models[0].descriptions, 'tr')).toBe('Yerel aday');
     expect(localModelDescription({ en: 'Low-memory candidate to compare with Gemma 4 12B.' }, 'fr')).toBe('Candidat peu gourmand en mémoire à comparer avec Gemma 4 12B.');
     expect(localModelDescription({ en: 'Low-memory candidate to compare with Gemma 4 12B.' }, 'tr')).toBe('Gemma 4 12B ile karşılaştırmak için düşük bellekli aday.');
     expect(localModelDescription({ en: 'New evaluation pending.' }, 'fr')).toBe('New evaluation pending.');

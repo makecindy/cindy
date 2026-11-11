@@ -1,7 +1,20 @@
 /** Registry V4 local-model curation. Data only; execution stays in the client. */
 import descriptionTranslations from './localModelDescriptions.json';
 
-export type LocalModelDescriptionLocale = 'en' | 'zh-CN' | 'zh-TW' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'pt-PT' | 'pt-BR' | 'tr';
+export const LOCAL_MODEL_DESCRIPTION_LOCALES = [
+  'en',
+  'zh-CN',
+  'zh-TW',
+  'ja',
+  'ko',
+  'es',
+  'fr',
+  'de',
+  'pt-PT',
+  'pt-BR',
+  'tr',
+] as const;
+export type LocalModelDescriptionLocale = (typeof LOCAL_MODEL_DESCRIPTION_LOCALES)[number];
 export interface LocalModelVariant {
   libraryName: string;
   sizeBytes: number;
@@ -177,7 +190,7 @@ export function parseLocalModelCatalog(v: unknown): LocalModelCatalog | null {
     if (
       m.descriptions !== undefined &&
       (!object(m.descriptions) ||
-        !fields(m.descriptions, ["en", "zh-CN", "zh-TW", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR"]) ||
+        !fields(m.descriptions, LOCAL_MODEL_DESCRIPTION_LOCALES as unknown as string[]) ||
         !Object.values(m.descriptions).every((s) => string(s, 500)))
     )
       return null;
