@@ -767,3 +767,7 @@ provider 尚未确认 idle、持久写入尚在进行时，以及旧账号或关
   这次仍为真实 Host/SQLite/原生 Codex 加模拟上游，不代替真实账号、模型或打包运行验收。
 - 完整日志为 `/tmp/cindy-stop-receipt-{host-tests,host-types,native}.log`；该修复独立提交，
   未推送。后续切引擎及其他装配缺口不因本次实跑通过而视作已完成。
+
+网页适配层已显式忽略 `input_receipt`，不再把传输回执转成 Agent 消息；排队投影仍正常更新。
+既有真实 shim bundle 的事件测试增加回执与后续文字帧，先红后绿：
+`/tmp/cindy-stop-shim-red.log`、`/tmp/cindy-stop-shim-green.log`。未做浏览器实机目检。
