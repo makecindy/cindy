@@ -6293,7 +6293,7 @@
           "check": {
             "checking": "Verificando o servidor…",
             "checkingHint": "Conectando ao servidor para verificar o sistema, as portas e os serviços existentes.",
-            "idle": "Depois que você escolher um servidor, o Cindy verificará se é possível implantar nele.",
+            "idle": "Escolha um servidor para o Cindy verificar se dá para implantar nele.",
             "ready": "Pronto para implantar",
             "blocked": "Não é possível implantar automaticamente",
             "recheck": "Verificar novamente",
