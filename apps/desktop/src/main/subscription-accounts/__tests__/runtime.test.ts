@@ -28,7 +28,9 @@ const h = vi.hoisted(() => ({
   importedLogin: vi.fn(),
   accountAllowed: vi.fn(),
   setLegacyPaused: vi.fn(),
+  remote: vi.fn(),
 }));
+vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: h.remote }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => h.owner,
   isAppSessionBoundaryPending: () => false,
@@ -85,6 +87,7 @@ vi.mock('../store.js', () => ({
 }));
 import {
   acquireSubscriptionAccount,
+  needsSubscriptionAccountHandoff,
   readSubscriptionPool,
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
@@ -127,6 +130,67 @@ beforeEach(() => {
   h.importedLogin.mockReset().mockResolvedValue(undefined);
   h.accountAllowed.mockReset().mockReturnValue(true);
   h.setLegacyPaused.mockReset();
+  h.remote.mockReset();
+});
+
+// Unit, 2026-11-11 pause report: exercise the pre-send probe and real agent
+// wrapper. Earlier coverage intentionally kept paused native sessions pinned;
+// now the host must hand off first, then a fresh context may choose another account.
+describe('paused account next-turn handoff', () => {
+  it.each(['anthropic', 'openai'] as const)('moves a fresh %s context while preserving native history ownership', async provider => {
+    h.pools[provider] = { strategy: 'order', accounts: [account('default'), account('second')] };
+    const first = await acquireSubscriptionAccount(provider, undefined, []);
+    await first!.bind(['task:task-a', 'native:old-history']);
+    first!.release();
+    h.pools[provider]!.accounts[0].paused = true;
+    expect(await needsSubscriptionAccountHandoff('task-a', { providerId: provider, agentKind: provider === 'anthropic' ? 'cc' : 'codex', sdkSessionId: 'old-history' })).toBe(true);
+    const next = await acquireSubscriptionAccount(provider, undefined, ['task:task-a'], false, { resuming: false });
+    expect(next!.account.configDir).toBe(`${provider}/second`);
+    await next!.bind(['task:task-a', 'native:new-history']);
+    expect(h.bindings.get('native:old-history')?.accountId).toBe('default');
+    expect(h.bindings.get('task:task-a')?.accountId).toBe('second');
+    next!.release();
+    h.pools[provider]!.accounts[1].paused = true;
+    await expect(needsSubscriptionAccountHandoff('task-a', { providerId: provider, agentKind: provider === 'anthropic' ? 'cc' : 'codex', sdkSessionId: 'new-history' })).rejects.toThrow('No subscription account');
+  });
+
+  it('checks the executing computer for a paused remote task and leaves shared providers alone', async () => {
+    h.remote.mockResolvedValueOnce({ ok: true, result: { providerId: 'anthropic', state: 'bound',
+      account: { isDefault: false, number: 2, paused: true, status: 'ready' } } })
+      .mockResolvedValueOnce({ ok: true, result: { providerId: 'anthropic', accounts: [{ paused: false, status: 'ready' }] } });
+    const row = { providerId: 'anthropic', agentKind: 'cc', sdkSessionId: 'remote-native', agentDeviceId: 'my-other-computer' };
+    expect(await needsSubscriptionAccountHandoff('task', row)).toBe(true);
+    expect(h.remote.mock.calls[0][2]).toEqual([{ action: 'session', providerId: 'anthropic', nativeSessionId: 'remote-native' }]);
+    expect(h.bindings.size).toBe(0);
+    h.remote.mockClear();
+    expect(await needsSubscriptionAccountHandoff('task', { ...row, agentDeviceId: 'share:someone' })).toBe(false);
+    expect(h.remote).not.toHaveBeenCalled();
+  });
+
+  it('starts a new task on an enabled account even when its draft already has a paused binding', async () => {
+    h.bindings.set('task:draft', { providerId: 'anthropic', accountId: 'default' });
+    h.pools.anthropic!.accounts[0].paused = true;
+    const start = vi.fn<BaseAgent['startSession']>(async () => ({ id: 'new-native', close: async () => {} } as unknown as AgentSessionHandle));
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: start } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'anthropic', model: 'claude-sonnet', sessionId: 'draft', workingDir: '.' });
+    expect(start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/second');
+    expect(h.bindings.get('task:draft')?.accountId).toBe('second');
+    await handle.close();
+  });
+
+  it('blocks the next send on an old handle but allows a turn already in progress to finish', async () => {
+    const send = vi.fn(async () => {});
+    const native = { kind: 'claude-code', startSession: async () => ({ id: 'native', send, close: async () => {} }) } as unknown as BaseAgent;
+    const agent = withSubscriptionAccounts(native);
+    const handle = await agent.startSession({ providerId: 'anthropic', model: 'claude-sonnet', sessionId: 'task-a', workingDir: '.' });
+    await handle.send({ type: 'user', content: 'first' });
+    h.pools.anthropic!.accounts[0].paused = true;
+    // In-flight protocol calls may still use the selected credentials.
+    expect(() => getSessionSubscriptionAccount('task-a')?.assertCurrent()).not.toThrow();
+    await expect(handle.send({ type: 'user', content: 'next' })).rejects.toThrow('paused');
+    expect(send).toHaveBeenCalledOnce();
+    await handle.close();
+  });
 });
 
 describe('tasks using imported Codex connections', () => {
@@ -1347,6 +1411,20 @@ describe('native account assignment on the executing computer', () => {
   });
   // Regression: settings showed one weekly bar per account. Each account must carry every
   // window of its own snapshot, and sharing must list only accounts that can serve tasks.
+  // Unit, user report 2026-11-11: a pause while CLI reads are pending must
+  // affect group quota and shared account listings. Existing tests paused first.
+  it.each(['aggregate', 'shared'] as const)('rechecks paused accounts after pending %s quota reads', async kind => {
+    let finish!: (value: object) => void;
+    const pending = new Promise<object>(resolve => { finish = resolve; });
+    h.usage.mockReturnValue(pending);
+    const read = kind === 'aggregate' ? readSubscriptionPoolUsage : readSubscriptionPoolAccountUsages;
+    const result = read('anthropic');
+    await vi.waitFor(() => expect(h.usage).toHaveBeenCalled());
+    h.pools.anthropic = { ...h.pools.anthropic!, accounts: h.pools.anthropic!.accounts.map(a => ({ ...a, paused: true })) };
+    finish({ claudeUsage: { updatedAt: Date.now(), fiveHour: { utilization: 10, resetsAt: Date.now() / 1000 + 3600 } } });
+    expect(await result).toEqual(kind === 'aggregate' ? null : []);
+  });
+
   it('reports every usage window per account and lists only assignable accounts for sharing', async () => {
     h.pools.anthropic!.accounts.push({ ...account('paused'), paused: true }, account('signed-out'));
     h.read.mockImplementation(async (_provider: string, dir: string) => ({
