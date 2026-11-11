@@ -373,7 +373,7 @@ describe('sendToSession ordering', () => {
     );
     expectOrder(
       block,
-      'prepareUnhealthySession(targetSessionId)',
+      'prepareUnhealthySessionForSend(targetSessionId)',
       'live = maker.getSession(targetSessionId);',
     );
     const liveBranch = extractBetween(
@@ -671,7 +671,7 @@ describe('sendToSession ordering', () => {
       ['reconcileBotModelRoute', 'reconcileBotModelRoute'],
       ['applyPendingAgentSwitchIfIdle', 'applyPendingAgentSwitchIfIdle'],
       ['applyScheduledModelSelection', 'applyScheduledProfile'],
-      ['prepareUnhealthySession', 'prepareUnhealthySession'],
+      ['prepareUnhealthySession', 'prepareUnhealthySessionForSend'],
     ]) {
       expectOrder(directSendSwitchBlock, `stage = 'direct-send:${operation}'`, `${call}(`);
     }

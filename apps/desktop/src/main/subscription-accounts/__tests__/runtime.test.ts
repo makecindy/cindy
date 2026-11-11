@@ -100,6 +100,8 @@ import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, provid
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
 import { getSessionSubscriptionAccount } from '../session.js';
+import { prepareSubscriptionAccountForSend } from '../prepareSend.js';
+import type { SessionRowSnapshot } from '../../localDb/sessionDispatchSnapshot.js';
 import { createProviderGroupDirectory } from '../../provider-group/directory.js';
 import { createProviderGroupRouter, type ProviderGroupPersistedCooling } from '../../provider-group/router.js';
 import { createProviderGroupService, type ProviderGroupSessionRow } from '../../provider-group/service.js';
@@ -1023,14 +1025,16 @@ describe('native account assignment on the executing computer', () => {
     expect(ordered!.account.configDir).toBe('anthropic/default');
     ordered!.release();
   });
-  it('keeps a resumed task on its original account, including a paused account, and refuses removed accounts', async () => {
+  it('refuses paused or removed native resumes instead of sending with disabled credentials', async () => {
     const original = await acquireSubscriptionAccount('anthropic', undefined, []);
     await original!.bind(['native:thread-a']);
     original!.release();
     h.pools.anthropic!.accounts[0].paused = true;
-    const resumed = await acquireSubscriptionAccount('anthropic', undefined, ['native:thread-a']);
-    expect(resumed!.account.id).toBe(original!.account.id);
-    resumed!.release();
+    await expect(acquireSubscriptionAccount('anthropic', undefined, ['native:thread-a'])).rejects.toThrow();
+    // History inspection/fork control may still read the original home.
+    const control = await acquireSubscriptionAccount('anthropic', undefined, ['native:thread-a'], true);
+    expect(control!.account.id).toBe(original!.account.id);
+    control!.release();
     h.pools.anthropic!.accounts.shift();
     await expect(
       acquireSubscriptionAccount('anthropic', undefined, ['native:thread-a']),
@@ -1627,5 +1631,99 @@ describe('native account assignment on the executing computer', () => {
     await agent.startSession(options);
     expect(start).toHaveBeenCalledExactlyOnceWith(options);
     expect(h.read).not.toHaveBeenCalled();
+  });
+});
+
+// Unit regression (2026-11-11): retry reused a disabled account despite another account
+// having quota. Existing lease tests did not exercise pre-send context transfer.
+// The production entry must change only task ownership after durable history recovery.
+describe('disabled task account recovery before send', () => {
+  async function fixture() {
+    const original = await acquireSubscriptionAccount('anthropic', 'claude-model', []);
+    await original!.bind(['task:task-a', 'native:native-a']);
+    original!.release();
+    h.pools.anthropic!.accounts[0].paused = true;
+    const row = { status: 'active', providerId: 'anthropic', agentKind: 'cc',
+      model: 'claude-model', sdkSessionId: 'native-a' } as SessionRowSnapshot;
+    const deps = {
+      readSession: vi.fn(async () => row),
+      isRunning: vi.fn(() => false),
+      rebuild: vi.fn(async (_id: string, assertCurrent: () => void) => {
+        assertCurrent();
+        row.sdkSessionId = null;
+      }),
+    };
+    return { row, deps, original: original! };
+  }
+  it.each(['paused', 'removed'] as const)('moves a %s task to a usable account while retaining original native history ownership', async cause => {
+    const { row, deps } = await fixture();
+    if (cause === 'removed') h.pools.anthropic!.accounts.shift();
+    expect(await prepareSubscriptionAccountForSend('task-a', deps)).toBe(true);
+    expect(row.sdkSessionId).toBeNull();
+    expect(h.bindings.get('task:task-a')?.accountId).toBe('second');
+    expect(h.bindings.get('native:native-a')?.accountId).toBe('default');
+    const resumed = await acquireSubscriptionAccount('anthropic', row.model!, ['task:task-a']);
+    expect(resumed?.account.configDir).toBe('anthropic/second');
+    resumed?.release();
+    await expect(acquireSubscriptionAccount('anthropic', row.model!, ['task:task-a', 'native:native-a']))
+      .rejects.toThrow('account changed');
+    expect(await prepareSubscriptionAccountForSend('task-a', deps)).toBe(false);
+    expect(deps.rebuild).toHaveBeenCalledOnce();
+  });
+  it('recovers an older Claude task whose original default home has no persisted binding', async () => {
+    const { deps } = await fixture();
+    h.bindings.clear();
+    expect(await prepareSubscriptionAccountForSend('task-a', deps)).toBe(true);
+    expect(h.bindings.get('task:task-a')?.accountId).toBe('second');
+    expect(h.bindings.has('native:native-a')).toBe(false);
+  });
+  it.each(['codex', 'cc', 'pi'])('uses the same account transfer for OpenAI %s tasks', async agentKind => {
+    const { row, deps } = await fixture();
+    row.providerId = 'openai';
+    row.agentKind = agentKind;
+    h.pools.openai = h.pools.anthropic;
+    h.bindings.set('task:task-a', { providerId: 'openai', accountId: 'default' });
+    h.bindings.set('native:native-a', { providerId: 'openai', accountId: 'default' });
+    expect(await prepareSubscriptionAccountForSend('task-a', deps)).toBe(true);
+    expect(h.bindings.get('task:task-a')).toEqual({ providerId: 'openai', accountId: 'second' });
+    expect(h.bindings.get('native:native-a')?.accountId).toBe('default');
+  });
+  it.each(['no-replacement', 'busy', 'rebuild-failed', 'owner-changed', 'target-disabled'] as const)('preserves the original binding on %s', async failure => {
+    const { row, deps } = await fixture();
+    if (failure === 'no-replacement') h.pools.anthropic!.accounts[1].paused = true;
+    if (failure === 'busy') deps.isRunning.mockReturnValue(true);
+    if (failure === 'rebuild-failed') deps.rebuild.mockRejectedValueOnce(new Error('disk full'));
+    if (failure === 'owner-changed') deps.readSession.mockImplementationOnce(async () => { h.owner = 'other-owner'; return row; });
+    if (failure === 'target-disabled') deps.rebuild.mockImplementationOnce(async (_id, assertCurrent) => {
+      h.pools.anthropic!.accounts[1].paused = true;
+      assertCurrent();
+    });
+    await expect(prepareSubscriptionAccountForSend('task-a', deps)).rejects.toThrow();
+    expect(row.sdkSessionId).toBe('native-a');
+    expect(h.bindings.get('task:task-a')?.accountId).toBe('default');
+    expect(h.bindings.get('native:native-a')?.accountId).toBe('default');
+    if (failure !== 'owner-changed')
+      expect((await readSubscriptionPool('anthropic')).accounts.every(a => a.running === 0)).toBe(true);
+  });
+  it.each(['enabled', 'ssh', 'remote-agent', 'different-provider'] as const)('does not transfer a task when %s', async kind => {
+    const { row, deps } = await fixture();
+    if (kind === 'enabled') h.pools.anthropic!.accounts[0].paused = false;
+    if (kind === 'ssh') row.remoteHostId = 'remote-host';
+    if (kind === 'remote-agent') row.agentDeviceId = 'other-computer';
+    if (kind === 'different-provider') row.providerId = 'custom';
+    expect(await prepareSubscriptionAccountForSend('task-a', deps)).toBe(false);
+    expect(deps.rebuild).not.toHaveBeenCalled();
+    expect(h.bindings.get('task:task-a')?.accountId).toBe('default');
+  });
+  it('blocks the next send on an already-live handle after its account is disabled', async () => {
+    const send = vi.fn(async () => {});
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => ({
+      id: 'native-a', send, close: async () => {},
+    }) } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'anthropic', sessionId: 'task-a' } as StartSessionOptions);
+    await runSubscriptionAccountCommand({ action: 'configure', providerId: 'anthropic', accountId: 'default', paused: true });
+    await expect(handle.send({ type: 'user', content: 'continue' })).rejects.toThrow('disabled');
+    expect(send).not.toHaveBeenCalled();
+    await handle.close();
   });
 });
