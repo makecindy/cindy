@@ -116,8 +116,11 @@ function wrapHandle(
                 }
               : event;
           }
-          // A consumer stopping (or a closed queue) does not establish runtime shutdown.
-          // close/detach owns final release; ordinary terminal events release only turn load.
+          // Idle teardown can clear native background work without a final event.
+          // Reconcile only at natural EOF, not when a consumer stops iterating.
+          // A closed queue does not prove process exit: keep close/detach protection
+          // and any foreground or native work still reported by the handle.
+          if (!cleanupPending) syncActivity();
         };
       const value = Reflect.get(target, property, target);
       return typeof value === 'function' ? value.bind(target) : value;

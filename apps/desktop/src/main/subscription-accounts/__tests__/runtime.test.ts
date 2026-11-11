@@ -747,6 +747,45 @@ describe('native account assignment on the executing computer', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(await state()).toMatchObject({ running: 0, waiting: 0 });
   });
+  // PR #9843: idle Claude teardown clears native work without another event or callback.
+  // Unit regression through startSession/events: EOF must clear the panel's waiting count
+  // and unblock account commands; event-driven completion above does not cover this path.
+  it.each([false, true])('clears stale waiting activity at natural EOF (pool=%s)', async (configured) => {
+    const accountId = configured ? 'second' : 'default';
+    if (!configured) h.pools = {};
+    else h.bindings.set('task:idle-exit', { providerId: 'anthropic', accountId });
+    let tasks: BackgroundTaskSnapshot[] = [{ taskId: 'background-command' }];
+    let pending = 1;
+    const nativeHandle = {
+      id: 'idle-exit-native',
+      send: async () => {},
+      close: vi.fn(async () => {}),
+      listBackgroundTasks: () => tasks,
+      countPendingWakeContinuations: () => pending,
+      events: async function* () {
+        yield { type: 'done', data: {} };
+        // Match teardownDeadHandle: no final event after an idle CLI crash.
+        tasks = [];
+        pending = 0;
+      },
+    } as unknown as AgentSessionHandle;
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => nativeHandle } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'anthropic', sessionId: 'idle-exit' } as StartSessionOptions);
+    const state = async () => (await readSubscriptionPool('anthropic')).accounts.find(a => a.id === accountId)!;
+    await handle.send({ type: 'user', content: 'run checks' });
+    const events = handle.events()[Symbol.asyncIterator]();
+    expect((await events.next()).value).toMatchObject({ type: 'done' });
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    expect((await events.next()).done).toBe(true);
+    expect(nativeHandle.close).not.toHaveBeenCalled();
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
+    await runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId, loginKey: 'after-idle-exit' });
+    expect(h.login).toHaveBeenCalledOnce();
+    if (configured) {
+      await runSubscriptionAccountCommand({ action: 'remove', providerId: 'anthropic', accountId });
+      expect((await readSubscriptionPool('anthropic')).accounts.some(a => a.id === accountId)).toBe(false);
+    }
+  });
   it.each([['anthropic', 'api'], ['api', 'anthropic']])(
     'rebuilds the activity tracker when switching from %s to %s without a pool',
     async (providerId, nextProviderId) => {
