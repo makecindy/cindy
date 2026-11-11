@@ -8855,6 +8855,119 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     controller.stop();
   }, 10_000);
 
+  // One retry path for both deltas. A list delta that cannot be applied is resent within what is
+  // left of the budget; once the first reply used it all up the failure is returned (the next refresh
+  // reads full). A history page is still read whole: the phone task screen turns a failed
+  // latest-page read into a sync error. Both re-check the caller first, as the first send does.
+  it('增量重发预算:列表只在剩余预算内重发,历史页总整页重读,两者重发前都复核调用方', async () => {
+    const codec = {
+      gzipBase64: (text: string) => gzipSync(Buffer.from(text, 'utf8')).toString('base64'),
+      gunzipBase64: (base64: string, maxChars: number) => gunzipSync(Buffer.from(base64, 'base64'), { maxOutputLength: maxChars }).toString('utf8'),
+      contentTag: (text: string) => createHash('sha256').update(text).digest('base64url'),
+    };
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: codec });
+    const controller = makeRelayClient(relay, 'ios', undefined, { transferCodec: codec });
+    const realNow = performance.now.bind(performance);
+    let skewMs = 0;
+    let deltaCostMs = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => realNow() + skewMs);
+    const rows = Array.from({ length: 100 }, (_, i) => ({ id: `s${i}`, preview: createHash('sha256').update(String(i)).digest('hex') }));
+    const fullPage = { version: 1, items: [{ type: 'messages', key: 'c1', messages: [{ id: 'm1', clientId: 'c1', role: 'user', content: 'hi', createdAt: '2026-11-11T00:00:00.000Z' }] }],
+      hasMore: false, nextCursor: null };
+    let scene: 'list' | 'history' | 'valid-history' | 'broken-history' = 'list';
+    let lastFullToken = '';
+    const handled: InvokePayload[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke' || !env.src || !env.id) return;
+      const invoke = env.payload as InvokePayload;
+      handled.push(invoke);
+      const options = invoke.args[1] as { historyDelta?: { base?: string } } | undefined;
+      if (scene === 'list' && invoke.transfer?.ifNoneMatch) {
+        skewMs += deltaCostMs;
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: null, transfer: { tag: 'x', delta: { base: invoke.transfer.ifNoneMatch, length: 1, sample: 0, patch: { a: [0] } } } });
+      } else if (scene === 'valid-history' && options?.historyDelta?.base) {
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: { ...fullPage, items: [{ type: 'same', from: 0, count: 1 }],
+          historyDelta: { version: 1, token: 'next', base: options.historyDelta.base } } });
+      } else if ((scene === 'history' && options?.historyDelta?.base) || scene === 'broken-history') {
+        skewMs += 5_000;
+        // Names a page this client does not hold.
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: { ...fullPage, items: [{ type: 'same', from: 0, count: 1 }],
+          historyDelta: { version: 1, token: 't9', base: 'unknown' } } });
+      } else if (scene === 'history') {
+        lastFullToken = `t${handled.length}`;
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: { ...fullPage, historyDelta: { version: 1, token: lastFullToken } } });
+      } else host.sendInvokeResult(env.src, env.id, { ok: true, result: rows });
+    });
+    try {
+      host.start();
+      controller.start();
+      await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+      await Promise.all([controller.openLink('desktop', { controllerName: 'iPhone', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+      let preSends = 0;
+      const call = async (channel: string, args: unknown[]) => {
+        const pending = controller.invoke('desktop', { channel, args }, 1_000, { preSend: () => { preSends += 1; } });
+        await relay.settle();
+        return pending;
+      };
+      const list: [string, unknown[]] = ['local-db:sessions:list', [200, 'active']];
+      const resend = async (channel: string, args: unknown[]) => {
+        preSends = 0;
+        const before = handled.length;
+        const result = await call(channel, args);
+        return { result, sent: handled.length - before, preSends };
+      };
+
+      await expect(call(...list)).resolves.toEqual({ ok: true, result: rows });
+      await expect(resend(...list)).resolves.toEqual({ result: { ok: true, result: rows }, sent: 2, preSends: 2 });
+      deltaCostMs = 5_000;
+      await expect(resend(...list)).resolves.toMatchObject({ result: { ok: false }, sent: 1, preSends: 1 });
+
+      scene = 'history';
+      const view = ['s1', { lazyDetails: true }];
+      await expect(call('local-db:messages:view', view)).resolves.toEqual({ ok: true, result: fullPage });
+      await expect(resend('local-db:messages:view', view)).resolves.toEqual({ result: { ok: true, result: fullPage }, sent: 2, preSends: 2 });
+      const historyBase = () => (handled.at(-1)!.args[1] as { historyDelta?: { base?: string } }).historyDelta?.base;
+      expect(historyBase()).toBeUndefined();
+
+      // The page read whole by the retry is the base of the next read.
+      const rereadToken = lastFullToken;
+      scene = 'valid-history';
+      await expect(resend('local-db:messages:view', view)).resolves.toEqual({ result: { ok: true, result: fullPage }, sent: 1, preSends: 1 });
+      expect(historyBase()).toBe(rereadToken);
+
+      // A caller the re-check rejects gets that error and no full read goes out.
+      scene = 'history';
+      const refused = new DeviceLinkError('REMOTE_DISABLED', 'remote device is unavailable');
+      let checks = 0;
+      let sentBefore = handled.length;
+      const rejectedRead = controller.invoke('desktop', { channel: 'local-db:messages:view', args: view }, 1_000, {
+        preSend: () => { checks += 1; if (checks === 2) throw refused; },
+      });
+      const rejectedAsCaller = expect(rejectedRead).rejects.toBe(refused);
+      await relay.settle();
+      await rejectedAsCaller;
+      expect([handled.length - sentBefore, checks]).toEqual([1, 2]);
+      expect(historyBase()).toBe('next');
+
+      // A Host that answers a full read with a delta again gets one full read, not a loop, and the
+      // caller sees the restore error itself.
+      scene = 'broken-history';
+      sentBefore = handled.length;
+      const broken = controller.invoke('desktop', { channel: 'local-db:messages:view', args: view }, 1_000);
+      const rejected = expect(broken).rejects.toMatchObject({ name: 'HistoryViewDeltaMiss' });
+      await relay.settle();
+      await rejected;
+      expect(handled.length - sentBefore).toBe(2);
+    } finally {
+      clock.mockRestore();
+      offHost();
+      host.stop();
+      controller.stop();
+    }
+  }, 10_000);
+
   it('新确认阶段:首个 link-accept 丢失时不提前发可靠帧,同 stream 重开确认后恢复小帧', async () => {
     const relay = new MemoryRelay();
     const host = makeRelayClient(relay, 'desktop');

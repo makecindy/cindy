@@ -2,7 +2,7 @@ import { isPeerResetRetryableInvoke, bypassInvokeScheduling, resolveInvokePriori
 import { InvokeScheduler } from './invokeScheduler.js';
 import { StallDiagnostics, diagnosticChannel, diagnosticOperation, diagnosticRef } from './stallDiagnostics.js';
 import { SessionMessageReuse } from './sessionMessageReuse.js';
-import { HistoryViewDeltaCache, isHistoryViewDeltaMiss } from './historyViewDelta.js';
+import { HistoryViewDeltaCache, isHistoryViewDeltaMiss, type HistoryViewDeltaMiss } from './historyViewDelta.js';
 import {
   InboundInvokeTransferOptions,
   InvokeResultCache,
@@ -854,6 +854,14 @@ interface ReceiveStreamState {
 }
 
 // ─── 客户端实现 ───────────────────────────────────────────────────────────────
+
+/**
+ * 一次 invoke 往返的结局。列表增量套用失败仍有可返回的失败结果（`remaining-budget`）；
+ * 历史页增量还原不出基页时没有可返回的结果，只带着原错误（`full-timeout`）。
+ */
+type InvokeAttempt =
+  | { result: InvokeResultPayload; retry?: 'remaining-budget' }
+  | { retry: 'full-timeout'; error: HistoryViewDeltaMiss };
 
 export class DeviceLinkClient {
   private readonly stallDiagnostics = new StallDiagnostics(message => this.log.info(message));
@@ -2056,54 +2064,59 @@ export class DeviceLinkClient {
       }
       // Prepare at dispatch, not when joining the admission queue. Earlier
       // reads may have filled the existing cache while this one was waiting.
-      const attempt = async (id: string, fullHistory: boolean): Promise<InvokeResultPayload> => {
+      let decodeStarted = 0;
+      let sentId = requestId;
+      const sentAt = this.monotonicNow();
+      const attempt = async (id: string, fullHistory: boolean, timeout: number | undefined): Promise<InvokeAttempt> => {
         const reuse = this.messageReuse.prepare(dst, payload);
         const delta = isScopedPeer(dst) ? null : this.historyViewDelta.prepare(dst, reuse.payload, fullHistory);
         const tagged = requestSessionTagCatalog(delta?.payload ?? reuse.payload);
-        let decodeStarted = 0;
-        let sentId = id;
-        const sentAt = this.monotonicNow();
-        const exchange = async (exchangeId: string, timeout: number | undefined) => {
-          const transfer = isScopedPeer(dst) ? null : this.invokeResultCache.prepare(dst, tagged);
-          const env = await this.request(
-            { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: transfer?.payload ?? tagged },
-            'invoke-result',
-            timeout, true, { id: exchangeId, admissionMs, source: options?.diagnosticSource ?? 'client', operation: diagnosticOperation(payload) },
-          );
-          this.reportInvokeMetric(payload, env.payload as InvokeResultPayload);
-          decodeStarted = this.monotonicNow();
-          const result = transfer
-            ? await transfer.decode(env.payload as InvokeResultPayload, (timing) => this.reportInvokeDecode(payload, timing))
-            : env.payload as InvokeResultPayload;
-          return { result, retry: transfer?.retryWithoutBase() === true };
-        };
-        const first = await exchange(id, timeoutMs);
-        let result = first.result;
-        // 只读列表的增量套用失败时基准已丢弃，不带基准重发一次拿全文（不会再成循环）。
-        // 重发前复核调用方仍有效，只用原超时预算（含调度槽上限）剩下的部分；剩得太少就
-        // 直接返回这次失败，下一次读取自然拿全文。
+        const transfer = isScopedPeer(dst) ? null : this.invokeResultCache.prepare(dst, tagged);
+        const env = await this.request(
+          { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: transfer?.payload ?? tagged },
+          'invoke-result',
+          timeout, true, { id, admissionMs, source: options?.diagnosticSource ?? 'client', operation: diagnosticOperation(payload) },
+        );
+        this.reportInvokeMetric(payload, env.payload as InvokeResultPayload);
+        decodeStarted = this.monotonicNow();
+        const result = transfer
+          ? await transfer.decode(env.payload as InvokeResultPayload, (timing) => this.reportInvokeDecode(payload, timing))
+          : env.payload as InvokeResultPayload;
+        // 列表增量套用失败：基准已丢弃，结果是可返回的失败。
+        if (transfer?.retryWithoutBase()) return { result, retry: 'remaining-budget' };
+        if (!result.ok) return { result };
+        const restored = reuse.decode(decodeModelSpeedPayload(payload.channel, decodeSessionTagCatalog(payload.channel, result.result)));
+        try {
+          return { result: { ...result, result: delta ? delta.decode(restored) : restored } };
+        } catch (error) {
+          // 历史页增量引用了本端还原不出的基页：调用方只能拿完整页，没有可返回的结果。
+          if (!isHistoryViewDeltaMiss(error)) throw error;
+          this.log.debug(`device-link history delta miss dst=${dst.slice(0, 8)}: ${error.message}`);
+          return { retry: 'full-timeout', error };
+        }
+      };
+      let outcome = await attempt(requestId, false, timeoutMs);
+      // 增量还原失败时基准已丢弃，同一次调用里不带基准重发一次（不会再成循环）。重发前与首次发送
+      // 一样复核调用方（preSend）：它抛错时调用方拿到这个错误，不再重发。手机把对端误标为不可用
+      // （链路其实还通）时这次读取会失败，下一次读取恢复。预算按来源分：
+      // - 列表（remaining-budget）：只用原超时预算剩下的部分，不足 100 ms 就返回这次失败，下一次
+      //   读取自然拿全文；列表刷新各自有重试或下一拍。
+      // - 历史页（full-timeout）：再给一次完整超时。手机任务页把最新页读取失败当整轮同步失败
+      //   （横幅 + 暂停待发），不能把一次基页丢失变成用户看得到的错误。
+      if (outcome.retry) {
         const remainingMs = slotBudgetMs - Math.round(this.monotonicNow() - sentAt);
-        if (first.retry && remainingMs >= 100) {
+        const timeout = outcome.retry === 'full-timeout' ? timeoutMs : remainingMs;
+        if (outcome.retry === 'full-timeout' || remainingMs >= 100) {
           options?.preSend?.();
           sentId = createRequestId();
-          result = (await exchange(sentId, remainingMs)).result;
+          outcome = await attempt(sentId, outcome.retry === 'full-timeout', timeout);
         }
-        const restored = result.ok
-          ? reuse.decode(decodeModelSpeedPayload(payload.channel, decodeSessionTagCatalog(payload.channel, result.result)))
-          : undefined;
-        const decoded = result.ok ? { ...result, result: delta ? delta.decode(restored) : restored } : result;
-        const decodeMs = Math.round(this.monotonicNow() - decodeStarted);
-        if (decodeMs >= 250) this.stallDiagnostics.record('decode', { request: diagnosticRef(sentId), channel: diagnosticChannel(payload.channel), decodeMs });
-        return decoded;
-      };
-      try {
-        return await attempt(requestId, false);
-      } catch (error) {
-        // The Host answered relative to a page this client cannot restore: read it whole.
-        if (!isHistoryViewDeltaMiss(error)) throw error;
-        this.log.debug(`device-link history delta miss dst=${dst.slice(0, 8)}: ${error.message}`);
-        return attempt(createRequestId(), true);
       }
+      const decodeMs = Math.round(this.monotonicNow() - decodeStarted);
+      if (decodeMs >= 250) this.stallDiagnostics.record('decode', { request: diagnosticRef(sentId), channel: diagnosticChannel(payload.channel), decodeMs });
+      // 不带基页的整页读取理应还原得出；仍失败就把原错误交给调用方，与单独调用一致。
+      if (!('result' in outcome)) throw outcome.error;
+      return outcome.result;
     };
     return (bypassInvokeScheduling(payload) ? send() : this.invokeScheduler.run(
       dst, resolveInvokePriority(payload.channel, options?.background),
