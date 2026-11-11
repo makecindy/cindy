@@ -165,7 +165,8 @@ describe('plugin scheduler command boundary', () => {
       const approval = getPluginPreparedHookApproval();
       if (approval) await approval(prepared);
       installed();
-      return { ...prepared, test: { decision: 'run' as const, exitCode: 0, durationMs: 0, stdout: '', stderr: '' } };
+      return { ...prepared, test: { decision: 'run' as const, status: 'passed' as const, exitCode: 0, durationMs: 0,
+        stdout: '', stderr: '', stdoutTruncated: false, stderrTruncated: false, timedOut: false, aborted: false } };
     });
     let actualScheduler: Scheduler | undefined;
     const dialog = { showMessageBox: vi.fn(async (_parent: unknown, _options: Record<string, unknown>) => ({ response: allow ? 0 : 1 })) };
