@@ -4633,8 +4633,23 @@ export default async function cindyBridge(piApi: any) {
     });
   }
   const runtimeModelRouting = installRuntimeModelControl(pi);
-  installTextOnlyTurnPolicy(pi, runtimeModelRouting.prepare);
   const runtimeRequestModel = runtimeModelRouting.requestModel;
+  // Tool-efficiency policy: direct parallel calls stay cheaper than a script for a few small
+  // results, so the split has to be stated where the model will read it. Only injected when
+  // codemode is actually active; guests and review sessions never reach this branch.
+  pi.on('before_agent_start', (event: any) => {
+    if (guestToolGate && guestToolGate.blocks('codemode')) return;
+    if (typeof pi.getActiveTools !== 'function') return;
+    const active: string[] = pi.getActiveTools() || [];
+    if (!active.includes('codemode')) return;
+    const options = event && event.systemPromptOptions;
+    if (!options || !Array.isArray(options.promptGuidelines)) return;
+    options.promptGuidelines.push(
+      'Put independent tool calls in the same message: Pi runs them in parallel and they cost one round trip.',
+      'For one or two small calls, call the tools directly instead of writing a codemode script.',
+    );
+  });
+  installTextOnlyTurnPolicy(pi, runtimeModelRouting.prepare);
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
   const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined

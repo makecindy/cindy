@@ -1779,6 +1779,8 @@ export function buildPiSettingsJsonContent(
     ? undefined
     : Math.max(1, Math.ceil(effectiveContextWindow - budget * ((piCompactionPct ?? 90) / 100)));
   return JSON.stringify({
+    // Native codemode is opt-in upstream; `+name` keeps the inherited tool set and only adds it.
+    defaultTools: ['+codemode'],
     transport: 'sse',
     retry: {
       enabled: true,
