@@ -111,6 +111,8 @@ function makeSessionHarness(sessionId: string): SessionHarness {
     abort: vi.fn(async () => undefined),
     send,
     isTurnRunning: vi.fn(() => false),
+    getStatus: vi.fn(() => 'active'),
+    hasStartedClosing: vi.fn(() => false),
     onEvent(listener: (event: AgentEvent) => void) {
       listeners.push(listener);
       return () => {

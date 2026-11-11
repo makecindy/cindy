@@ -530,6 +530,92 @@ describe('Session close lifecycle', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：`Session.send` 的拒绝错误带稳定 `code`；宿主的派发前失败
+   *   日志与渠道文案据此归因，而不是只剩 `Error`。
+   * - Bug／规则依据：issue #9636、#8952；规则见 `docs/dev-rules/im-turn-flow.md` §3.6b。
+   * - 现有覆盖缺口：既有用例只断言 `is closing` / `is closed` 文案，渠道侧拿不到可分类
+   *   的标识；`SESSION_RUNNING` 早已有 code，这条路径没有。
+   * - 最小失败输入：`close()` 在飞（`closePromise` 已设）或已完成后 `send()`。
+   * - tier：unit。
+   */
+  it('codes a refused send so hosts can tell "busy" from "runtime no longer usable"', async () => {
+    const transportClose = createDeferred();
+    const close = vi.fn(() => transportClose.promise);
+    const send = vi.fn(async () => undefined);
+    const handle = {
+      id: 'thread-closing-send',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      send,
+      events: () => createAsyncQueue<AgentEvent>(),
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-closing-send',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+      permissionMode: 'bypassPermissions',
+    });
+
+    const closing = session.close();
+    // 飞书 / 调度按 `code` 分类派发前失败；之前只有一句裸 Error，宿主只能记 'Error'。
+    await expect(session.send('after close')).rejects.toMatchObject({
+      code: 'SESSION_CLOSING',
+      message: 'Session session-closing-send is closing',
+    });
+
+    transportClose.resolve();
+    await closing;
+
+    await expect(session.send('after closed')).rejects.toMatchObject({
+      code: 'SESSION_CLOSED',
+      message: 'Session session-closing-send is closed',
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('codes a send on a runtime left in the error state by a failed close', async () => {
+    const close = vi.fn(async () => {
+      throw new Error('transport close failed');
+    });
+    const send = vi.fn(async () => undefined);
+    const handle = {
+      id: 'thread-close-failed-send',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      send,
+      events: () => createAsyncQueue<AgentEvent>(),
+      close,
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({
+      id: 'session-close-failed-send',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {} as never,
+      logger: createLogger() as never,
+      permissionMode: 'bypassPermissions',
+    });
+
+    await expect(session.close()).rejects.toThrow('transport close failed');
+    expect(session.getStatus()).toBe('error');
+    // 拆除已经放弃（teardown started，但不会自己完成）：报 error 而不是「正在关闭」，
+    // 宿主据此直接重建，不会把它当成短瞬态去等。
+    await expect(session.send('after failed close')).rejects.toMatchObject({
+      code: 'SESSION_ERROR',
+      message: 'Session session-close-failed-send is in error state',
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('rejects permission changes once transport shutdown has started', async () => {
     const transportClose = createDeferred();
     const close = vi.fn(() => transportClose.promise);

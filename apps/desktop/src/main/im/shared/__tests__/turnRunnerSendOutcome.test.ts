@@ -224,6 +224,9 @@ interface SessionHarness {
   send: ReturnType<typeof vi.fn<HarnessSend>>;
   /** maker-core Session.isTurnRunning 的 mock — 模拟接管模式下 desktop 侧 turn 在跑。 */
   isTurnRunning: ReturnType<typeof vi.fn>;
+  /** 运行时状态探针 — 模拟 close 进行中 / close 失败停在 error 态。 */
+  getStatus: ReturnType<typeof vi.fn>;
+  hasStartedClosing: ReturnType<typeof vi.fn>;
   /** maker-core Session.abort 的 mock — !stop 中止路径断言用。 */
   abort: ReturnType<typeof vi.fn>;
   acquireTurnLease: ReturnType<typeof vi.fn>;
@@ -255,6 +258,9 @@ function createSessionHarness(
   const abort = vi.fn(async () => undefined);
   const releaseTurnLease = vi.fn();
   const acquireTurnLease = vi.fn(() => releaseTurnLease);
+  // 运行时存活探针: 派发前判活读这两个(maker-core Session 的真实接口)。
+  const getStatus = vi.fn((): string => 'active');
+  const hasStartedClosing = vi.fn(() => false);
   let interactionListener: Parameters<Session['setInteractionListener']>[0] = null;
   const session = {
     id: sessionId,
@@ -264,6 +270,8 @@ function createSessionHarness(
     capabilities: options.capabilities ?? ({} as Capabilities),
     send,
     isTurnRunning,
+    getStatus,
+    hasStartedClosing,
     abort,
     acquireTurnLease,
     onEvent(listener: (event: AgentEvent) => void) {
@@ -283,6 +291,8 @@ function createSessionHarness(
     session,
     send,
     isTurnRunning,
+    getStatus,
+    hasStartedClosing,
     abort,
     acquireTurnLease,
     releaseTurnLease,
@@ -5218,6 +5228,223 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
           channelOwned: false,
         });
         expect(localRunner.vendorOptionsForSession('desktop-attached-session')).toBeUndefined();
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+  });
+
+  /**
+   * issue #9636：派发前失败在飞书上只剩「❌ 启动 agent 失败：Error」。
+   * 这里锁两件事：(1) 带 code 的运行时失败保留真实原因；
+   * (2) 缓存里的运行时已开始拆除 / 停在 error 态时按 DB 行重建，而不是把消息打回。
+   *
+   * 测试价值
+   * - 生产入口与可观察结果：`createTurnRunner().runAgentTurn` → `makerSession.send`；
+   *   渠道侧是「❌ 启动 agent 失败：<code>」与 `feishu session send failed before dispatch`
+   *   日志里的 `reason` / `error.errorCode`，以及消息是否真的落到运行时。
+   * - Bug／规则依据：issue #9636、#8952（同一派发前失败降级）；规则见
+   *   `docs/dev-rules/im-turn-flow.md` §3.6b。
+   * - 现有覆盖缺口：既有用例只钉住「裸 Error → reason: 'Error'」与 `SESSION_RUNNING`
+   *   重排，没有覆盖带 code 的运行时不失败归因，也没有覆盖 `current === previous` 时
+   *   运行时其实已拆除的分支。
+   * - 最小失败输入：`send` 抛 `{code:'SESSION_CLOSING'}`；或 `maker.getSession()`
+   *   返回 `hasStartedClosing() === true` / `getStatus() === 'error'` 的同一实例。
+   * - tier：unit（进程内 fake Maker / Session，无外部资源）。
+   */
+  describe('session runtime liveness (#9636)', () => {
+    const SESSION_ID = 'feishu-session';
+
+    function createLivenessSetup(options: { onRebuild?: (previous: Session) => void } = {}) {
+      const previous = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
+      const replacement = createSessionHarness(async () => ({ accepted: true }), SESSION_ID);
+      let live: Session = previous.session;
+      const maker = {
+        getSession: vi.fn(() => live),
+        // Maker 的真实语义：同一 business id 重建后 activeSessions 里是新实例。
+        createSession: vi.fn(async () => {
+          if (maker.createSession.mock.calls.length === 1) {
+            live = previous.session;
+          } else {
+            // 重建路径会重试旧实例的 close；close 事件在 createSession 返回前就送达宿主。
+            options.onRebuild?.(previous.session);
+            live = replacement.session;
+          }
+          return live;
+        }),
+        on: vi.fn((listener: (event: MakerEvent) => void) => {
+          makerEventListeners.push(listener);
+          return () => {
+            makerEventListeners = makerEventListeners.filter((candidate) => candidate !== listener);
+          };
+        }),
+      };
+      mocks.getMaker.mockReturnValue(maker);
+      const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+        acquirePendingAgentSwitch: vi.fn(async () => () => {}),
+      });
+      const onTurnComplete = vi.fn();
+      const runTurn = () => localRunner.runAgentTurn({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        userMessageId: 'msg-liveness',
+        text: 'hello',
+        attachments: [],
+        onTurnComplete,
+      });
+      return { previous, replacement, maker, localRunner, runTurn, onTurnComplete };
+    }
+
+    it('keeps a coded runtime failure diagnosable instead of collapsing it to "Error"', async () => {
+      const h = setupSession(async () => {
+        throw Object.assign(new Error(`Session ${SESSION_ID} is closing`), {
+          code: 'SESSION_CLOSING',
+        });
+      });
+
+      await runDefaultTurn();
+      await flushMicrotasks();
+
+      expectSafeSendOutcomeLog({ source: 'session.send', reason: 'SESSION_CLOSING' });
+      const failureLog = mocks.logger.error.mock.calls.find(
+        (call) => call[0] === 'feishu session send failed before dispatch',
+      );
+      expect((failureLog?.[1] as { error?: unknown }).error).toEqual({
+        errorName: 'Error',
+        errorCode: 'SESSION_CLOSING',
+        safeMessage: 'SESSION_CLOSING',
+      });
+      expect(mocks.feishuIm.sendText.mock.calls.map((call) => String(call[1]))).toEqual([
+        '❌ 启动 agent 失败：SESSION_CLOSING',
+      ]);
+      expect(h.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('rebuilds a runtime that already started closing instead of failing the message', async () => {
+      const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup();
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        expect(mocks.logger.info).toHaveBeenCalledWith(
+          expect.stringContaining('rebuilding closing runtime before send'),
+        );
+        expect(previous.send).not.toHaveBeenCalled();
+        expect(replacement.send).toHaveBeenCalledTimes(1);
+        // 失败的文案不该出现——这条消息已经被重建后的运行时接住。
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+        expect(maker.createSession).toHaveBeenCalledTimes(2);
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    it('rebuilds a runtime left in the error state by a failed close', async () => {
+      const { previous, replacement, localRunner, runTurn } = createLivenessSetup();
+      // close 失败的真实形态：status=error，且 teardown 已经开始。
+      previous.getStatus.mockReturnValue('error');
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        expect(mocks.logger.info).toHaveBeenCalledWith(
+          expect.stringContaining('rebuilding status=error runtime before send'),
+        );
+        expect(previous.send).not.toHaveBeenCalled();
+        expect(replacement.send).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    it('keeps the turn alive when the replaced runtime closes during the rebuild', async () => {
+      let closedDuringRebuild = false;
+      const { previous, replacement, localRunner, runTurn, onTurnComplete } = createLivenessSetup({
+        onRebuild: (replaced) => {
+          closedDuringRebuild = true;
+          // 重建期间旧实例的 close 事件到达：不能把正在派发的这一轮清掉。
+          emitMakerEvent({
+            type: 'session:closed',
+            sessionId: SESSION_ID,
+            session: replaced,
+            reason: 'unexpected',
+          } as MakerEvent);
+        },
+      });
+      previous.hasStartedClosing.mockReturnValue(true);
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        expect(closedDuringRebuild).toBe(true);
+        expect(previous.send).not.toHaveBeenCalled();
+        expect(replacement.send).toHaveBeenCalledTimes(1);
+        expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+
+        // state 还在（观察者已换绑到新运行时）：这一轮的回复能回到渠道并正常收口。
+        await waitForAssertion(() => expect(replacement.session).toBeDefined());
+        replacement.emit({ type: 'text', data: { text: '重建后的回答', isFinal: true } });
+        replacement.emit({ type: 'done', data: {} });
+        await flushMicrotasks();
+
+        expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    it('fails visibly when the task is archived while its runtime is rebuilt', async () => {
+      const { previous, replacement, localRunner, runTurn } = createLivenessSetup();
+      previous.hasStartedClosing.mockReturnValue(true);
+      const activeRow = {
+        id: SESSION_ID,
+        status: 'active',
+        agentKind: 'claude-code',
+        workingDir: 'F:\\XDMaker',
+        model: 'claude-opus-4-7',
+        effort: 'xhigh',
+        permissionMode: 'bypassPermissions',
+        fastMode: false,
+        sdkSessionId: null,
+        providerId: null,
+      };
+      // 重建前读一次（可用），重建后再读一次（用户已关任务 → archived）。
+      mocks.desktopSessionRows
+        .mockReturnValueOnce([{ ...activeRow }])
+        .mockReturnValueOnce([{ ...activeRow, status: 'archived' }]);
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        // 忽略 close 事件不等于可以继续跑：任务已归档，这条消息必须明确失败。
+        expect(replacement.send).not.toHaveBeenCalled();
+        expect(mocks.logger.info).toHaveBeenCalledWith(
+          expect.stringContaining('rebuilding closing runtime before send'),
+        );
+        expect(mocks.feishuIm.sendText.mock.calls.map((call) => String(call[1]))).toContain(
+          '❌ 启动 agent 失败：SESSION_CLOSED',
+        );
+      } finally {
+        localRunner.disposeAllSessions();
+      }
+    });
+
+    it('keeps a healthy runtime and does not rebuild on every message', async () => {
+      const { previous, replacement, maker, localRunner, runTurn } = createLivenessSetup();
+      try {
+        await runTurn();
+        await flushMicrotasks();
+
+        expect(previous.send).toHaveBeenCalledTimes(1);
+        expect(replacement.send).not.toHaveBeenCalled();
+        // 只有接线时的那一次 createSession。
+        expect(maker.createSession).toHaveBeenCalledTimes(1);
+        expect(mocks.logger.info).not.toHaveBeenCalledWith(
+          expect.stringContaining('runtime before send'),
+        );
       } finally {
         localRunner.disposeAllSessions();
       }

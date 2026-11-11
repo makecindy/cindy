@@ -162,6 +162,35 @@ const GRACEFUL_STOP_CONFIRMATION_TIMEOUT_MS = 5_000;
 export const SESSION_CLOSED_MID_TURN_MESSAGE = 'Session closed before the current turn delivered a terminal event';
 
 /**
+ * 运行时已经无法接收新输入。
+ *
+ * 与 `SESSION_RUNNING`（竞态，可排队重试）区分：这里代表这条运行时本身不可再用，宿主
+ * 只能重建会话或明说失败。放在 `code` 上而不是让宿主去解析 message —— 飞书等渠道会把
+ * 派发前失败的原因直接回给用户，解析人话文案既脆弱又会把内部措辞漏出去；固定标识符
+ * 既安全又能进日志。
+ */
+export const SESSION_UNAVAILABLE_CODES = [
+  /** 底层句柄已关闭。 */
+  'SESSION_CLOSED',
+  /** 拆除已开始（含 close 尚未确认完成、以及静默停止后的运行时退场）。 */
+  'SESSION_CLOSING',
+  /** 上一次 close/detach 失败，句柄停在 error 态。 */
+  'SESSION_ERROR',
+] as const;
+
+export type SessionUnavailableCode = (typeof SESSION_UNAVAILABLE_CODES)[number];
+
+/** 带稳定 `code` 的不可用错误；message 保持原有措辞，供本地日志与人读。 */
+export function createSessionUnavailableError(
+  code: SessionUnavailableCode,
+  message: string,
+): Error & { code: SessionUnavailableCode } {
+  const err = new Error(message) as Error & { code: SessionUnavailableCode };
+  err.code = code;
+  return err;
+}
+
+/**
  * turn 零事件看门狗的计时分片长度。额度按片累加,片尾核对真实经过时间,
  * 借此把系统挂起(合盖睡眠)的那段排除掉 —— 见 armTurnStallSlice。
  */
@@ -979,7 +1008,9 @@ export class Session {
     if (this.retirementRequested
       && (this.retirementContinuationGeneration !== this.turnGeneration
         || !allowRetirementContinuation)) {
-      throw new Error(`Session ${this.id} is closing`);
+      throw createSessionUnavailableError(
+        'SESSION_CLOSING', `Session ${this.id} is closing`,
+      );
     }
     if (this.terminalErrorDrainGeneration !== null) {
       throw this.createSessionRunningError();
@@ -2543,13 +2574,21 @@ export class Session {
 
   private ensureActive(): void {
     if (this.status === 'closed') {
-      throw new Error(`Session ${this.id} is closed`);
+      throw createSessionUnavailableError(
+        'SESSION_CLOSED', `Session ${this.id} is closed`,
+      );
+    }
+    // 先认 error：上一次 close/detach 已经失败、teardown 也已经开始，此时「正在关闭」会
+    // 掩盖真正的事实（拆除放弃了，需要重建），宿主拿到的 code 也就失去了分类价值。
+    if (this.status === 'error') {
+      throw createSessionUnavailableError(
+        'SESSION_ERROR', `Session ${this.id} is in error state`,
+      );
     }
     if (this.closePromise || this.terminationStarted) {
-      throw new Error(`Session ${this.id} is closing`);
-    }
-    if (this.status === 'error') {
-      throw new Error(`Session ${this.id} is in error state`);
+      throw createSessionUnavailableError(
+        'SESSION_CLOSING', `Session ${this.id} is closing`,
+      );
     }
   }
 

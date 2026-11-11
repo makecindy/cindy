@@ -145,6 +145,14 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
    （[`cindy-bots-runtime.md` §3.2](../product-rules/cindy-bots-runtime.md)）。体检关闭 live handle 的原因是
    `runtime-refresh`，close 监听在有 `acquirePendingAgentSwitch` 时保住任务，新 handle 由
    `refreshSessionAfterPendingAgentSwitch` 按最新 DB 行重建；体检抛错按直发口径让这条消息失败。
+   这段重建同时负责**判活**：`maker.getSession()` 返回同一实例不等于运行时还能收输入 —— Maker
+   只在 `status === 'closed'` 时才把它移出 `activeSessions`，拆除已开始（`hasStartedClosing()`，
+   含 close 失败停住的实例）或停在 `error` 态时仍是同一个对象，只比对象身份的旧逻辑会跳过重建，
+   随后 `session.send` 直接抛 `is closing` / `is in error state`。因此按运行时状态判活，不可用就走
+   同一套按库重建（`maker.createSession` 自己会等旧 close 结束并自愈 error 态），并记一行
+   `rebuilding <原因> runtime before send`。派发前失败的原因按 maker-core 的
+   `SESSION_CLOSED / SESSION_CLOSING / SESSION_ERROR` code 归因（`SESSION_RUNNING` 仍是可重排竞态），
+   日志与渠道文案都用该 code，不得再统一显示 `Error`。
    6c. **全响应（ambient）前置判定不留痕迹**：`messageHandler.processOne` 只对 `event.ambient === true` 的消息、
    且 adapter 实现了 `ambientTurnGate` 时，在 ack / 提前落库 / 群上下文拼装**之前**问一次该不该插话；
    `'skip'` 直接 return（不落库、不起轮次、不推进群窗口游标），钩子抛错或判不出来按 `'proceed'` 走原路径。
