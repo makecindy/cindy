@@ -104,6 +104,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
       ["filter", "devices.list.menu.summaryNone", true],
       ["view", "devices.list.menu.view.list", true],
       ["taskInfo", "devices.list.menu.taskInfo.time", true],
+      ["teammates", "", true],
     ]);
     const sort = resolvePullDownSubmenu(actions, ["sort"]);
     expect(sort?.subactions?.map((action) => [action.id, action.state])).toEqual([
@@ -124,7 +125,7 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     );
     expect(androidHeader).toContain("actions={homeScopePullDownActions}");
     expect(androidHeader).toContain("onAction={handleHomeScopeAction}");
-    expect(androidHeader).toContain("actions={homeDisplayPullDownActions}");
+    expect(androidHeader).toContain("actions={stableDisplayActions}");
     // 自绘范围面板只在包里没有 MenuView 时兜底;显示菜单兜底用同一份菜单模型的自绘下拉。
     expect(androidHeader).toContain("onPress={nativeHomeMenus ? () => undefined : openDeviceMenu}");
     // Display selection is exercised through the rendered platform component in
@@ -163,6 +164,8 @@ describe("Android home chrome menus follow the iOS pull-down", () => {
     expect(settings).not.toMatch(/Platform\.OS\s*===\s*['"]ios['"]/);
     expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : openAppearancePicker}");
     expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}");
-    expect(settings.match(/<NativePullDownMenu/g)).toHaveLength(2);
+    expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}");
+    expect(settings).toContain("onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}");
+    expect(settings.match(/<NativePullDownMenu/g)).toHaveLength(4);
   });
 });

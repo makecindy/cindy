@@ -11,8 +11,9 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
-import { isProviderSharePeer, providerShareGuestPeer, REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
+import { isProviderSharePeer, parseRemoteAgentPollResult, parseRemoteAgentStreamItem, providerShareGuestPeer, REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
 import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
+import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay';
 import { createProviderGroupExternalLoad } from '../../provider-group/externalLoad';
@@ -20,9 +21,10 @@ import type { ProviderGroupRouter } from '../../provider-group/router';
 import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 
 import { RemoteAgentPoller } from '../controller/poller';
-import { RemoteAgentRunClient } from '../controller/runClient';
+import { RemoteAgentRemoteError, RemoteAgentRunClient } from '../controller/runClient';
+import { LineSplitter } from '../eventLog';
 import { relayConnId, relayKeyFor, reshareKeyFor, type RelayRunFailure } from '../host/groupRelay';
-import { createGuestProviderRouteBinder } from '../host/providerAccess';
+import { createGuestProviderRouteBinder, resolveGuestProviderId } from '../host/providerAccess';
 import { guestProviderRouteForToken } from '../../maker-host/guest-provider-route-store';
 import { createProviderShareUsageStore } from '../../device-link/providerShareUsageStore';
 import { memberBudgetStatus } from '../../device-link/providerShareBudgetCalculation';
@@ -34,6 +36,7 @@ import {
   type HostedStartInput,
   type RemoteAgentGroupRelayDeps,
 } from '../host/runHost';
+import { managedSkillDigest } from '../managedSkillDigest';
 
 const GUEST_A = 'share-guest-a';
 const GUEST_B = 'share-guest-b';
@@ -45,6 +48,7 @@ let root: string;
 interface Started {
   input: HostedStartInput;
   sends: unknown[];
+  modelChanges: unknown[][];
   /** 让这台上的 Agent 发出一个事件。 */
   emit(event: AgentEvent): void;
   /** 这台上是否正在运行一轮(写进状态)。 */
@@ -74,8 +78,10 @@ function fakeAgentHost(name: string, started: Started[], options: {
   resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
   modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
   bindGuestProviderRoute?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
+  managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
 }) {
   return createRemoteAgentHost({
+    ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
     forkHosted: async (_kind, opts) => ({ newSdkSessionId: `${opts.sourceSdkSessionId}-fork`, uuidMap: new Map([['old', 'new']]) }),
     prepareImageEvent: options.prepareImageEvent,
     imageArtifacts: options.imageArtifacts,
@@ -90,6 +96,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
       const record: Started = {
         input,
         sends: [],
+        modelChanges: [],
         running: false,
         emit(event) {
           queue.push(event);
@@ -113,6 +120,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
           await options.onSend?.(record);
         },
         async steer() {},
+        async setModel(...args: unknown[]) { record.modelChanges.push(args); },
         async abort() {},
         isTurnRunning: () => record.running,
         async close() {},
@@ -176,6 +184,34 @@ async function waitFor(condition: () => boolean, ms = 3_000): Promise<void> {
   }
 }
 
+// An open ACK precedes native startup and guest-index persistence. In the
+// forget races, a start-failed event must report its cause instead of becoming
+// a started.length timeout. Keep the existing three-second observation budget.
+async function waitForStarted(host: ReturnType<typeof fakeAgentHost>, peer: string, id: string): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  const splitter = new LineSplitter(64 * 1024 * 1024);
+  let cursor = 0;
+  let lastEvent = 'none';
+  while (Date.now() < deadline) {
+    const result = parseRemoteAgentPollResult(await host.handle(peer, {
+      op: 'poll', runs: [{ runId: id, cursor }], waitMs: Math.max(0, deadline - Date.now()),
+    }));
+    const run = result.runs.find(item => item.runId === id);
+    if (!run || run.missing) throw new Error(`Run ${id} disappeared before startup`);
+    cursor = run.cursor;
+    for (const line of splitter.push(Buffer.from(run.data ?? '', 'base64'))) {
+      const item = parseRemoteAgentStreamItem(line);
+      if (!item) continue;
+      lastEvent = item.t;
+      if (item.t === 'start-failed') throw new RemoteAgentRemoteError(item.error);
+      if (item.t === 'started') return;
+      if (item.t === 'closed') throw new Error(`Run ${id} closed before startup: ${item.reason}`);
+    }
+    if (run.done) throw new Error(`Run ${id} ended before startup; last event: ${lastEvent}`);
+  }
+  throw new Error(`Run ${id} did not start within 3000ms; cursor: ${cursor}; last event: ${lastEvent}`);
+}
+
 function readOwnerGuestIndex(): Record<string, { controller: string; forgetPending?: string[]; nativeIds: string[] }> {
   return JSON.parse(fs.readFileSync(path.join(root, 'owner', 'guest-sessions.json'), 'utf8'));
 }
@@ -223,6 +259,8 @@ function setup(options: {
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
+    resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
     prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
     modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
     directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
@@ -328,6 +366,142 @@ function switchTokenIn(stream: Awaited<ReturnType<typeof openAsGuest>>['stream']
 }
 
 describe('provider group relay for shared users', () => {
+  const signedOutProvider: ProviderView = {
+    id: 'shared-provider', name: 'Shared', source: 'builtin', auth: { method: 'none' },
+    connected: false, agents: ['claude-code'],
+    models: { 'claude-code': ['claude-opus', 'claude-sonnet'].map(id => ({
+      id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null,
+    })) },
+    routing: { 'claude-code': { upstream: 'https://example.invalid', authStrategy: 'none' } },
+  };
+  const signedOutResolver = (allowed = true): NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'] =>
+    async (kind, model, providerId, _controller, _sessionId, context) => resolveGuestProviderId(
+      [signedOutProvider], 'shared-provider', () => allowed, kind, model, providerId, context,
+    );
+
+  // Unit / PR #8475 review, provider-sharing.md §5.1: the real Host.open must reach group allocation
+  // and deliver a turn to M when O's own provider is signed out. Earlier relay fixtures returned a fixed
+  // provider ID and could not reproduce connected:false failing in resolveGuestProviderId before plan().
+  it('starts and sends through a signed-out group computer using the real provider resolver', async () => {
+    const env = setup({ owner: { resolveProvider: signedOutResolver() } });
+    try {
+      const { client } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+      await client.call('send', [{ content: 'hello', attachments: [] }, {}]);
+      expect(env.ownerStarted).toHaveLength(0);
+      expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+      await client.close('close', 'navigation');
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) {
+        await host.abortAll();
+        await host.dispose();
+      }
+    }
+  });
+
+  // PR #8475 follow-up: coordinator authorization also applies to ongoing model changes and forks.
+  // The startup regression alone never called these separate production paths with connected:false.
+  it.each(['model', 'fork'] as const)('performs %s on the executor through a signed-out coordinator', async operation => {
+    const env = setup({ owner: { resolveProvider: signedOutResolver() } });
+    try {
+      const { client, started } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+      if (operation === 'model') {
+        await expect(client.call('setModel', ['not-shared', {}])).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+        expect(env.memberStarted.mini[0].modelChanges).toHaveLength(0);
+        await client.call('setModel', ['claude-sonnet', {}]);
+        expect(env.memberStarted.mini[0].modelChanges).toEqual([['claude-sonnet', { providerId: 'anthropic-2' }]]);
+      } else {
+        const fork = await env.owner.handle(GUEST_A, { op: 'fork', sourceSessionId: SESSION,
+          newSessionId: 'signed-out-fork', agentKind: 'claude-code', sourceSdkSessionId: started.id,
+          model: 'claude-opus', providerId: 'shared-provider' }) as { newSdkSessionId: string };
+        expect(fork.newSdkSessionId).toBe(`${started.id}-fork`);
+        const child = await openAsGuest(env, GUEST_A, openPayload('signed-out-fork', {
+          options: { resumeSessionId: fork.newSdkSessionId },
+        }));
+        expect(env.memberStarted.mini[1].input.options.resumeSessionId).toBe(fork.newSdkSessionId);
+        await child.client.close('close', 'navigation');
+      }
+      await client.call('send', [{ content: 'after change', attachments: [] }, {}]);
+      expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+      expect(env.ownerStarted).toHaveLength(0);
+      await client.close('close', 'navigation');
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); await host.dispose(); }
+    }
+  });
+
+  it('keeps a local fork on the raw login check after the coordinator signs out', async () => {
+    let connected = true;
+    const env = setup({ plans: [{ kind: 'local' }], owner: {
+      resolveProvider: async (kind, model, providerId, _controller, _sessionId, context) => resolveGuestProviderId(
+        [{ ...signedOutProvider, connected }], 'shared-provider', () => true, kind, model, providerId, context,
+      ),
+    } });
+    try {
+      const { client, started } = await openAsGuest(env, GUEST_A, openPayload(SESSION));
+      connected = false;
+      await expect(client.call('setModel', ['claude-sonnet', {}])).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+      expect(env.ownerStarted[0].modelChanges).toHaveLength(0);
+      await expect(env.owner.handle(GUEST_A, { op: 'fork', sourceSessionId: SESSION,
+        newSessionId: 'local-fork', agentKind: 'claude-code', sourceSdkSessionId: started.id,
+        model: 'claude-opus', providerId: 'shared-provider' })).rejects.toThrow('REMOTE_AGENT_PROVIDER_NOT_ALLOWED');
+      await client.close('close', 'navigation');
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); await host.dispose(); }
+    }
+  });
+
+  // The group preflight must not authorize local execution, assigned executions, other models or revoked access.
+  it.each([
+    ['local', {}, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['no-group', {}, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['unavailable', {}, true, 'REMOTE_AGENT_UNAVAILABLE'],
+    ['fallback', {}, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['assigned', { groupAssigned: true }, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['relayed', { relay: relayKeyFor(GUEST_A) }, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['model', { options: { model: 'not-shared' } }, true, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+    ['revoked', {}, false, 'REMOTE_AGENT_PROVIDER_NOT_ALLOWED'],
+  ] as const)('rejects a signed-out group startup at the %s boundary', async (boundary, extra, allowed, code) => {
+    const release = vi.fn();
+    const local: GroupRelayPlan = { kind: 'local', load: { setRunning: vi.fn(), release } };
+    const plans: GroupRelayPlan[] = boundary === 'local'
+      ? [local]
+      : boundary === 'fallback' ? [{ kind: 'member', ...MEMBER_MINI }, local]
+      : boundary === 'unavailable' ? [{ kind: 'unavailable' }]
+      : boundary === 'no-group' ? [] : [{ kind: 'member', ...MEMBER_MINI }];
+    const env = setup({ plans, owner: { resolveProvider: signedOutResolver(allowed) },
+      mini: { failStart: boundary === 'fallback' } });
+    try {
+      await expect(openAsGuest(env, GUEST_A, openPayload(SESSION, extra))).rejects.toThrow(code);
+      expect(env.ownerStarted).toHaveLength(0);
+      expect(env.memberStarted.mini).toHaveLength(0);
+      if (boundary === 'local' || boundary === 'fallback') expect(release).toHaveBeenCalledOnce();
+    } finally {
+      for (const host of [env.owner, ...Object.values(env.members)]) {
+        await host.abortAll();
+        await host.dispose();
+      }
+    }
+  });
+
+  // The member owner's deliberate disconnect must survive the intermediary and
+  // must not offer the guest another computer to undo that decision.
+  it('forwards an intentional member disconnect without offering a group switch', async () => {
+    const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }] });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await guest.client.call('send', [{ content: 'run' }, {}]);
+      await env.members.mini.abortAll('navigation');
+      await waitFor(() => guest.isClosed());
+      expect(guest.closedReason()).toBe('controller-disconnected');
+      expect(switchTokenIn(guest.stream)).toBeUndefined();
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+      expect(env.relay.plan).toHaveBeenCalledTimes(1);
+    } finally {
+      await guest.client.close('close', 'navigation');
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
   it('does not let a group relay discard external application isolation on an older member', async () => {
     const env = setup({ intercept: async (_device, request, forward) => {
       const result = await forward();
@@ -813,6 +987,8 @@ describe('provider group relay for shared users', () => {
   // the tombstone's atomic rename. A failed rename followed by the same forget
   // ID must keep rejecting (O keeps it pending), then survive retry and restart
   // with no old native IDs (provider-sharing-direct-execution, deletion rules).
+  // CI #41004717568 exhausted the setup poll's 3s deadline before exercising
+  // forget. Await the real index rename instead; keep disk assertions and EIO injection.
   it('acknowledges a repeated direct forget only after its tombstone is durable', async () => {
     const started: Started[] = [];
     const peer = providerShareGuestPeer('share-durable', 'member-durable', 'guest-pc');
@@ -850,17 +1026,26 @@ describe('provider group relay for shared users', () => {
     const originalRename = fs.promises.rename.bind(fs.promises);
     let failRename = false;
     let failedWrites = 0;
+    let nativeIdWritten: (() => void) | undefined;
+    const nextNativeIdWrite = () => new Promise<void>((resolve) => { nativeIdWritten = resolve; });
     const rename = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
       if (String(to) === indexFile && failRename) {
         failedWrites += 1;
         throw Object.assign(new Error('injected guest index rename failure'), { code: 'EIO' });
       }
-      return originalRename(from, to);
+      await originalRename(from, to);
+      if (String(to) === indexFile && readRecord()?.nativeIds.length === 1) {
+        nativeIdWritten?.();
+        nativeIdWritten = undefined;
+      }
     });
     try {
       await grant('old-task', 1);
+      const oldNativeIdWritten = nextNativeIdWrite();
       await open('old-task');
-      await waitFor(() => started.length === 1 && readRecord().nativeIds.length === 1);
+      await oldNativeIdWritten;
+      expect(started).toHaveLength(1);
+      expect(readRecord().nativeIds).toHaveLength(1);
       const oldNative = readRecord().nativeIds[0];
       failRename = true;
       await expect(forget()).rejects.toThrow('injected guest index rename failure');
@@ -882,8 +1067,11 @@ describe('provider group relay for shared users', () => {
       expect(readRecord().nativeIds).toEqual([]);
       await grant('new-task', 2);
       await expect(open('new-task', { options: { resumeSessionId: oldNative } })).rejects.toThrow('REMOTE_AGENT_INVALID');
+      const newNativeIdWritten = nextNativeIdWrite();
       await open('new-task');
-      await waitFor(() => started.length === 2 && readRecord().nativeIds.length === 1);
+      await newNativeIdWritten;
+      expect(started).toHaveLength(2);
+      expect(readRecord().nativeIds).toHaveLength(1);
       await forget(); // old epoch must not delete the newly granted task
       expect(readRecord().cleanupEpoch).toBe(2);
       expect(readRecord().nativeIds).toEqual([`sdk-direct-forget-durable-${started[1].input.hostSessionId}`]);
@@ -928,7 +1116,9 @@ describe('provider group relay for shared users', () => {
       sessionId, cleanupEpoch, providerId: 'shared-provider', model: 'claude-opus',
       generation: '11111111-1111-4111-8111-111111111111',
     });
-    const open = (sessionId: string) => host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+    const oldRunId = runId();
+    const newRunId = runId();
+    const open = (sessionId: string, id: string) => host.handle(peer, { op: 'open', runId: id, agentKind: 'claude-code',
       payload: { json: openPayload(sessionId, { projectFiles: [{ path: 'AGENTS.md', data: Buffer.from('new task').toString('base64') }] }) } });
     const forget = { op: 'forget', directGuest: { shareId: 'share-race', memberId: 'member-race',
       guestDeviceId: 'guest-pc', forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1 } };
@@ -937,15 +1127,16 @@ describe('provider group relay for shared users', () => {
       () => { results.push(`${label}:failed`); });
     try {
       await grant('old-task', 1);
-      await open('old-task');
-      await waitFor(() => started.length === 1);
+      await open('old-task', oldRunId);
+      await waitForStarted(host, peer, oldRunId);
+      expect(started).toHaveLength(1);
       const first = capture('F1', host.handle(OWNER_DEVICE, forget));
       await purging;
       const second = host.handle(OWNER_DEVICE, forget);
       const secondResult = capture('F2', second);
       const reopened = second.then(async () => {
         await grant('new-task', 2);
-        await open('new-task');
+        await open('new-task', newRunId);
       }, () => undefined);
       // Give the duplicate real file I/O a short scheduling window. F1 is held
       // by an explicit barrier; no wall-clock timeout releases the deletion.
@@ -960,9 +1151,10 @@ describe('provider group relay for shared users', () => {
         // Failed cleanup must release its queue and dedupe entry for retry.
         await host.handle(OWNER_DEVICE, forget);
         await grant('new-task', 2);
-        await open('new-task');
+        await open('new-task', newRunId);
       }
-      await waitFor(() => started.length === 2);
+      await waitForStarted(host, peer, newRunId);
+      expect(started).toHaveLength(2);
       const session = started[1].input;
       const indexFile = path.join(root, 'direct-forget-race', 'guest-sessions.json');
       await waitFor(() => fs.readFileSync(indexFile, 'utf8').includes(`sdk-direct-forget-race-${session.hostSessionId}`));
@@ -980,6 +1172,73 @@ describe('provider group relay for shared users', () => {
       releasePurge();
       host.dispose();
     }
+  });
+
+  // Unit, #7783 integration: per-task revocation with an authorized sibling
+  // used to return missing, which restart recovery interpreted as a lost process.
+  it('ends a revoked direct task without exposing its buffer or restarting it', async () => {
+    const started: Started[] = [];
+    const sessions = new Set(['revoked', 'sibling']);
+    const peer = providerShareGuestPeer('share-revoke', 'member-revoke', 'guest-pc');
+    const host = fakeAgentHost('direct-revoke', started, {
+      trust: () => 'guest',
+      directGuestExecution: {
+        ownerScope: () => 'account-one', allocate: async () => null, status() {},
+        release: async () => {}, switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+        sessionAllowed: (_peer, sessionId) => sessions.has(sessionId),
+        sessionDelegated: (_peer, sessionId) => sessions.has(sessionId),
+      },
+    });
+    const ids = [runId(), runId()];
+    try {
+      for (const [index, sessionId] of ['revoked', 'sibling'].entries()) {
+        await host.handle(peer, { op: 'open', runId: ids[index], agentKind: 'claude-code', payload: { json: openPayload(sessionId) } });
+      }
+      await waitFor(() => started.length === 2);
+      sessions.delete('revoked');
+      const result = await host.handle(peer, { op: 'poll', runs: ids.map(id => ({ runId: id, cursor: 0 })), waitMs: 0 }) as {
+        runs: Array<{ runId: string; missing?: boolean; data?: string; done?: boolean }>;
+      };
+      const denied = result.runs.find(run => run.runId === ids[0])!;
+      expect(denied.missing).not.toBe(true);
+      expect(denied.done).toBe(true);
+      expect(Buffer.from(denied.data!, 'base64').toString()).toBe(JSON.stringify({ t: 'closed', reason: 'access-revoked' }) + '\n');
+      const sibling = result.runs.find(run => run.runId === ids[1]);
+      expect(sibling?.missing).not.toBe(true);
+      expect(sibling?.done).not.toBe(true);
+    } finally { host.dispose(); }
+  });
+
+  // Unit: shutdown must publish a busy boundary before waiting for a direct
+  // native startup; disposal must still drain that startup's late writes.
+  it('drains a direct startup after publishing the shutdown boundary', async () => {
+    const started: Started[] = [];
+    let release!: () => void;
+    let entered!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const starting = new Promise<void>(resolve => { entered = resolve; });
+    let shadow = '';
+    const host = fakeAgentHost('direct-shutdown', started, {
+      trust: () => 'guest',
+      beforeStart: async input => { shadow = input.shadowDir; entered(); await barrier; },
+      directGuestExecution: {
+        ownerScope: () => 'account-one', allocate: async () => null, status() {},
+        release: async () => {}, switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+        sessionAllowed: () => true, sessionDelegated: () => true,
+      },
+    });
+    const id = runId();
+    try {
+      await host.handle(GUEST_A, { op: 'open', runId: id, agentKind: 'claude-code', payload: { json: openPayload('shutdown-task') } });
+      await starting;
+      await host.abortAll('app-quit');
+      const result = await host.handle(GUEST_A, { op: 'poll', runs: [{ runId: id, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data: string }> };
+      expect(Buffer.from(result.runs[0].data, 'base64').toString()).toContain('"reason":"provider-restarting"');
+      host.dispose();
+      expect(fs.existsSync(shadow)).toBe(true);
+      release();
+      await waitFor(() => !fs.existsSync(shadow));
+    } finally { release(); host.dispose(); }
   });
 
   // Host.handle(open/forget/delegate), unit: forgetting during native startup
@@ -1038,10 +1297,13 @@ describe('provider group relay for shared users', () => {
       } }).then(() => { forgetAcknowledged = true; });
       await revoking;
       const newGrant = grant('new-task', 2);
-      const newOpen = open('new-task');
+      const newRunId = runId();
+      const newOpen = open('new-task', {}, newRunId);
       pending = Promise.all([forget, newGrant, newOpen]);
-      await open('relay-task', { relay: relayKeyFor(peer) });
-      await waitFor(() => started.some((item) => item.input.hostSessionId !== oldSessionId));
+      const relayRunId = runId();
+      await open('relay-task', { relay: relayKeyFor(peer) }, relayRunId);
+      await waitForStarted(host, peer, relayRunId);
+      expect(started.some((item) => item.input.hostSessionId !== oldSessionId)).toBe(true);
       await host.handle(peer, { op: 'poll', runs: [{ runId: oldRunId, cursor: 0 }], waitMs: 0 });
       await host.handle(OWNER_DEVICE, { op: 'delegate', action: 'grant',
         shareId: 'other-share', memberId: 'other-member', guestDeviceId: 'other-pc',
@@ -1053,7 +1315,8 @@ describe('provider group relay for shared users', () => {
       expect(sessions.has('other-task')).toBe(true);
       releaseStart();
       await pending;
-      await waitFor(() => started.length === 3);
+      await waitForStarted(host, peer, newRunId);
+      expect(started).toHaveLength(3);
       const newSession = started.find((item) => item.input.hostSessionId === hostSessionIdFor(peer, 'new-task'))!.input;
       expect(fs.existsSync(newSession.guestHome!)).toBe(true);
       expect(fs.existsSync(path.join(newSession.guestHome!, 'late-native.txt'))).toBe(false);
@@ -1088,6 +1351,8 @@ describe('provider group relay for shared users', () => {
     }, () => '33333333-3333-4333-8333-333333333333');
     await client.open('claude-code', openPayload('relayed', { relay: relayKeyFor(GUEST_A), groupAssigned: true }));
     expect(started[0].input.guest).toBe(true);
+    expect(started[0].input.hostSessionId).toBe(hostSessionIdFor(`${OWNER_DEVICE}\0relay:${relayKeyFor(GUEST_A)}`, 'relayed'));
+    expect(started[0].input.hostSessionId).not.toBe(hostSessionIdFor(`${GUEST_A}\0relay:${relayKeyFor(GUEST_A)}`, 'relayed'));
     // 被中转的任务不能凭 id 接上这台主人自己的会话。
     await expect(new RemoteAgentRunClient(runId(), poller, {
       onEvent: () => undefined,
@@ -1994,6 +2259,65 @@ describe('provider group reshare consent', () => {
     const second = await openAsGuest(env, C_AT_B, openPayload('task-2'));
     // 同账号的组内电脑不需要同意，不带键。
     expect(opens[1]).not.toHaveProperty('reshareKey');
+    await second.client.close('close', 'navigation');
+  });
+
+  // 受邀者按组所在电脑的指纹只报了名字：组内电脑有同样一份的继续只报名字，没有的由组所在电脑补上文件；
+  // 旧版组内电脑不认单独的托管额度，文件放回 files。
+  it('fills in managed skills the chosen group computer does not have', async () => {
+    const own = (name: string) => {
+      const dir = path.join(root, 'own', name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'SKILL.md'), name);
+      return dir;
+    };
+    const pr = own('pr');
+    const learn = own('learn');
+    const secret = own('secret');
+    // 指纹允许比同步限制更大的 Skill：补文件时也要按同步限制，放不下就整个不带。
+    const big = own('big');
+    fs.writeFileSync(path.join(big, 'asset.bin'), Buffer.alloc(600 * 1024, 1));
+    const opens: Array<{ personal: Record<string, unknown> }> = [];
+    let oldMember = false;
+    const env = setup({
+      plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_MINI }],
+      owner: { managedSkills: async () => [
+        { command: 'cindy:pr', dir: pr }, { command: 'cindy:learn', dir: learn }, { command: 'cindy-plugin-x:secret', dir: secret },
+        { command: 'cindy:big', dir: big },
+      ] },
+      intercept: async (_agentDeviceId, request, forward) => {
+        if (request.op === 'caps') {
+          const caps = { ...await forward() as Record<string, unknown> };
+          delete caps.managedSkills;
+          return oldMember ? caps : { ...caps, managedSkills: { digests: { 'cindy:pr': await managedSkillDigest(pr) } } };
+        }
+        if (request.op === 'open') opens.push((request.payload as { json: { personal: Record<string, unknown> } }).json);
+        return forward();
+      },
+    });
+    const personal = { files: [], managedSkills: [
+      { command: 'cindy:pr', dir: '.claude/skills/cindy-pr', digest: await managedSkillDigest(pr), reuse: true },
+      { command: 'cindy:learn', dir: '.claude/skills/cindy-learn', digest: await managedSkillDigest(learn), reuse: true },
+      { command: 'cindy:big', dir: '.claude/skills/cindy-big', digest: await managedSkillDigest(big), reuse: true },
+      // 受邀者点名提供者装的插件 Skill：组所在电脑不替它补文件。
+      { command: 'cindy-plugin-x:secret', dir: '.claude/skills/cindy-plugin-x-secret-00000000', digest: await managedSkillDigest(secret), reuse: true },
+    ] };
+    const learnFile = { path: '.claude/skills/cindy-learn/SKILL.md', data: Buffer.from('learn').toString('base64') };
+    const first = await openAsGuest(env, C_AT_B, openPayload('task-1', { personal }));
+    expect(opens[0].personal).toMatchObject({
+      files: [],
+      managedSkills: [personal.managedSkills[0], { command: 'cindy:learn', dir: '.claude/skills/cindy-learn' }],
+      managedFiles: [learnFile],
+    });
+    expect((opens[0].personal.managedSkills as Array<Record<string, unknown>>)[1]).not.toHaveProperty('reuse');
+    await first.client.close('close', 'navigation');
+    oldMember = true;
+    const second = await openAsGuest(env, C_AT_B, openPayload('task-2', { personal }));
+    expect(opens[1].personal.files).toEqual([
+      { path: '.claude/skills/cindy-pr/SKILL.md', data: Buffer.from('pr').toString('base64') },
+      learnFile,
+    ]);
+    expect(opens[1].personal).not.toHaveProperty('managedFiles');
     await second.client.close('close', 'navigation');
   });
 

@@ -17,6 +17,7 @@ import path from 'node:path';
 import {
   REMOTE_AGENT_GROUP_SWITCH_STATE_KEY,
   REMOTE_AGENT_RELAY_KEY_PATTERN,
+  type RemoteAgentCaps,
   type RemoteAgentKind,
   type RemoteAgentMethod,
   type RemoteAgentReply,
@@ -58,6 +59,7 @@ import {
 import { ExecServerRelay } from './execServerRelay';
 import { createReverseHttpRouter, type LocalMcpTarget } from './router';
 import { RemoteAgentPoller, RemoteAgentRunClient, type RemoteAgentInvoke } from './runClient';
+import { isSharedTaskAuthorizationDenied } from './poller';
 
 export interface PreparedRemoteMcp {
   /** 本任务可用的本机 MCP 服务(名字 → 带本任务身份的地址与请求头)。 */
@@ -68,6 +70,10 @@ export interface PreparedRemoteMcp {
 export interface StartRemoteAgentDeps {
   /** Cancellation for this startup attempt only; never cancels other starts of the task. */
   startupSignal?: AbortSignal;
+  /** A direct share must renew the original executor's grant before reopening. */
+  reconnectAuthorization?(isCurrent: () => boolean, options?: { force?: boolean }): Promise<void>;
+  /** Background renewal is allowed only while M has confirmed the current grant. */
+  onTaskGrantRenewable?(renewable: boolean): void;
   readImageDeliveryEpoch?(sessionId: string): Promise<number>;
   invoke: RemoteAgentInvoke;
   /** 这台电脑的共享拉取器(同一台电脑上的任务共用一个 poll)；缺省时本任务单独一个。 */
@@ -89,10 +95,14 @@ export interface StartRemoteAgentDeps {
   collectAncestorFiles?(workingDir: string): Promise<RemoteAgentWireAncestorFile[]>;
   /** 项目各级上级目录里 Codex 要找的名字有没有(对方据此少问)；缺省不带，对方照常逐个来问。 */
   collectAncestorMarkers?(workingDir: string): Promise<RemoteAgentWireAncestorMarkers>;
-  /** 你这台的个人配置；缺省不同步。 */
-  collectPersonal?(kind: RemoteAgentKind, projectFiles: readonly RemoteAgentWireFile[]): Promise<{
+  /**
+   * 你这台的个人配置；缺省不同步。agent：对方 caps 里与托管 Skill 有关的声明(新运行端才有)。
+   */
+  collectPersonal?(kind: RemoteAgentKind, projectFiles: readonly RemoteAgentWireFile[], agent?: {
+    managedSkillDigests?: Readonly<Record<string, string>>;
+  }): Promise<{
     personal: RemoteAgentWirePersonal;
-    roots: Array<{ relative: string; local: string }>;
+    roots: Array<{ relative: string; local: string; managed?: true }>;
   }>;
   /**
    * 说明文件里 `@` 导入的文件(只对 Claude Code)；会就地改写传入说明文件里的引用。缺省不同步。
@@ -170,10 +180,19 @@ export function takeGroupSwitchState(
  * 影子目录(对方电脑上的路径) → 本机真实路径的映射。虚拟工作区使用固定 opaque 层级，旧协议
  * 仍按真实路径逐级镜像；同步过去的个人 Skill 等映射回你这台的个人配置目录。越具体的放越前面。
  */
+/** 托管 Skill 的映射在影子目录里的虚拟路径(`shadowAliases` 生成的 `from`)。 */
+export function managedAliasSources(
+  shadowDir: string,
+  personalRoots: ReadonlyArray<{ relative: string; managed?: true }>,
+): Set<string> {
+  const shadow = shadowDir.replace(/[\\/]+$/, '');
+  return new Set(personalRoots.filter((root) => root.managed).map((root) => `${shadow}/${root.relative}`));
+}
+
 export function shadowAliases(
   started: { shadowDir: string; mirrorRoot?: string; previousMirrorRoots?: string[]; extraDirs?: string[]; writableDirs?: string[]; virtualWorkspace?: boolean },
   workingDir: string,
-  personalRoots: ReadonlyArray<{ relative: string; local: string }>,
+  personalRoots: ReadonlyArray<{ relative: string; local: string; managed?: true }>,
   directories?: { extraDirs: readonly string[]; writableDirs: readonly string[] },
 ): Array<{ from: string; to: string }> {
   if (!started.shadowDir) return [];
@@ -474,9 +493,13 @@ async function prepareAndStartRemoteAgentSession(
    * 第一轮之前可能还没落盘，带 id 接回反而会被当成接不回。
    */
   let hasHistory = isNativeSessionId(opts.resumeSessionId);
+  // Automatic continuation must not silently start with an empty conversation.
+  let restartResumeRequired = false;
   let lastStarted: RemoteStartedInfo | null = null;
 
-  let personalRoots: Array<{ relative: string; local: string }> = [];
+  let personalRoots: Array<{ relative: string; local: string; managed?: true }> = [];
+  /** 上一次打开时托管 Skill 的映射来源：这次不再有的要撤掉。 */
+  let managedAliasFroms = new Set<string>();
   /** 正在连或连着的那条连接(Codex 的执行环境帧经它推给对方)。 */
   let active: RemoteAgentRunClient | null = null;
   let linkState: LinkState = 'connecting';
@@ -485,6 +508,8 @@ async function prepareAndStartRemoteAgentSession(
   let lastActivity = Date.now();
   let releasing: Promise<void> | null = null;
   let reconnecting: Promise<RemoteAgentRunClient> | null = null;
+  /** O issued a replacement grant that M has not confirmed yet; do not issue another. */
+  let taskGrantReissued = false;
   const touch = () => {
     lastActivity = Date.now();
   };
@@ -607,8 +632,13 @@ async function prepareAndStartRemoteAgentSession(
     // 连回时只补新映射，不替换已有的(见 ExecutorWorkspace.addAliases)。
     const applyProjection = (projection: Parameters<typeof shadowAliases>[0], virtualRoot: string | undefined) => {
       const aliases = shadowAliases(projection, workspace.workingDir, personalRoots, openedDirs);
-      if (reconnect) workspace.addAliases(aliases);
-      else workspace.setAliases(aliases);
+      const managed = managedAliasSources(projection.shadowDir, personalRoots);
+      if (reconnect) {
+        // 托管 Skill 每次连回都重新同步(插件更新后目录也变了)：这次的以新的为准，上次有、这次已停用或卸载的也撤掉；
+        // 其余映射只补新的。
+        workspace.addAliases(aliases, new Set([...managedAliasFroms, ...managed]));
+      } else workspace.setAliases(aliases);
+      managedAliasFroms = managed;
       workspace.setVirtualRoot(virtualRoot);
     };
     const client: RemoteAgentRunClient = new RemoteAgentRunClient(deps.newId(), poller, {
@@ -653,6 +683,9 @@ async function prepareAndStartRemoteAgentSession(
         if (request.type === 'http') return router(request, signal);
         if (request.type === 'callback' && request.name === 'onInvalidResumeSession') {
           const expected = request.args[0];
+          if (reconnect && restartResumeRequired && expected === expectedResume) {
+            return { type: 'callback', value: false };
+          }
           const value = typeof expected === 'string' && opts.onInvalidResumeSession
             ? await opts.onInvalidResumeSession(expected)
             : false;
@@ -674,18 +707,33 @@ async function prepareAndStartRemoteAgentSession(
       },
       onClosed: (reason, error, idleReclaimed) => {
         // 让出名额或已被换下的连接：不是任务结束。
-        if (active !== client || linkState === 'releasing') return;
+        if (active !== client || linkState === 'releasing' || linkState === 'closed') return;
         if (!opened) {
           closedEarly = { reason, message: error?.message };
           return;
         }
         active = null;
+        deps.onTaskGrantRenewable?.(false);
         // 对方按闲置收回了它的 Agent 进程(它只收回不忙的任务)：与连接池让出名额一样，本机部分与对话都留着，
         // 要它干活时带原来的会话 id 连回。
-        if (idleReclaimed && controller) {
+        // 'aborted' is only a legacy-host compatibility fallback: old hosts used it
+        // for both shutdown and deliberate disconnect, with no distinguishing cap.
+        // Such an old host may reconnect after a user disconnect (toggle-off still
+        // refuses access). New hosts send controller-disconnected for user actions.
+        const restart = reason === 'missing' || reason === 'provider-restarting' || reason === 'aborted';
+        if ((idleReclaimed || restart) && controller) {
           relay?.reset();
           linkState = 'released';
-          deps.log?.info('remote agent connection reclaimed by the other computer', { kind, runId: client.runId });
+          deps.log?.info('remote agent connection released by the other computer', { kind, runId: client.runId, reason });
+          if (restart) {
+            // A first turn may already have changed local files before its first done.
+            // Resume the native conversation, never replay the original request.
+            if (controller.hasActiveTurn()) {
+              hasHistory = true;
+              restartResumeRequired = true;
+            }
+            controller.onInterrupted();
+          }
           return;
         }
         linkState = 'closed';
@@ -694,6 +742,10 @@ async function prepareAndStartRemoteAgentSession(
       },
       // Codex 经执行环境在本机起的进程还在跑(对方看不到)：拉取时告诉对方，免得被当成闲置收回。
       holdsRemote: () => isCurrent() && relay?.busy() === true,
+      recoverAuthorization: async () => {
+        const current = () => isCurrent() && opened;
+        if (current()) await deps.reconnectAuthorization?.(current);
+      },
     }, deps.newId, deps.log);
     if (stateNow() === 'closed') throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
     active = client;
@@ -708,6 +760,10 @@ async function prepareAndStartRemoteAgentSession(
         throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
       }
       const started = parseStartedInfo(raw, kind);
+      if (reconnect && restartResumeRequired && (!expectedResume || started.id !== expectedResume)) {
+        await client.close('close', 'navigation').catch(() => undefined);
+        throw new Error('[REMOTE_AGENT_UNAVAILABLE] The original conversation could not be resumed after the supplier stopped.');
+      }
       if (!projectionReady) applyProjection(started, started.virtualWorkspace ? started.mirrorRoot : undefined);
       opened = true;
       linkState = 'connected';
@@ -776,6 +832,7 @@ async function prepareAndStartRemoteAgentSession(
   async function buildPayload(
     reconnect: boolean,
     timing: ReturnType<typeof remoteAgentStartupTiming>,
+    caps: RemoteAgentCaps,
   ): Promise<RemoteAgentOpenPayload> {
     // 每次打开都读最新的图片清空代次：让出期间清空过的，连回的新进程按新代次交付。
     const imageDeliveryEpoch = await timing.measure('image-epoch', async () =>
@@ -805,7 +862,8 @@ async function prepareAndStartRemoteAgentSession(
     const collectedPersonal = await timing
       .measure(
         'personal-config',
-        () => (!hostToolsOnly && deps.collectPersonal?.(kind, projectFiles) || Promise.resolve(null)),
+        () => (!hostToolsOnly && deps.collectPersonal?.(kind, projectFiles, caps.managedSkills
+          ? { managedSkillDigests: caps.managedSkills.digests } : undefined) || Promise.resolve(null)),
       )
       .catch(() => null);
     requireOpen();
@@ -890,7 +948,7 @@ async function prepareAndStartRemoteAgentSession(
       deps.pool?.noteIdleReclaimMinutes(caps.idleReclaimMinutes);
       await timing.measure('connection-slot', async () => deps.pool?.beforeOpen(member));
       requireOpen();
-      const payload = await buildPayload(reconnect, timing);
+      const payload = await buildPayload(reconnect, timing, caps);
       requireOpen();
       try {
         const client = await timing.measure('remote-open', () =>
@@ -952,17 +1010,27 @@ async function prepareAndStartRemoteAgentSession(
       await releasing.catch(() => undefined);
     }
     linkState = 'connecting';
+    deps.onTaskGrantRenewable?.(false);
     let attempt: Promise<RemoteAgentRunClient> | null = null;
     attempt = (async () => {
-      try {
+      const connectOnce = async (skipAuthorization = false): Promise<RemoteAgentRunClient> => {
+        if (!skipAuthorization) await deps.reconnectAuthorization?.(() => stateNow() !== 'closed');
+        requireOpen();
         const client = await connect(true, (started) => {
           controller?.onReconnected(started);
         });
+        // M's task-scoped open is the confirmation that the current grant is
+        // usable. A later independent M restart may ask O for a new one again.
+        if (stateNow() === 'connected' && activeNow() === client) {
+          taskGrantReissued = false;
+          deps.onTaskGrantRenewable?.(true);
+        }
         touch();
         deps.log?.info('remote agent reconnected', { kind, runId: client.runId });
         try {
           await reapply(client);
         } catch (error) {
+          deps.onTaskGrantRenewable?.(false);
           // 补发失败：关掉这次开的进程、还回名额，保持已让出；待补发的内容都还在，下次调用重新连回再补。
           if (stateNow() === 'connected' && activeNow() === client) {
             linkState = 'releasing';
@@ -972,7 +1040,30 @@ async function prepareAndStartRemoteAgentSession(
         }
         if (stateNow() !== 'connected' || activeNow() !== client) throw new Error('[REMOTE_AGENT_EXPIRED] The task has ended on this computer.');
         return client;
+      };
+      try {
+        const connectWithRecovery = async (): Promise<RemoteAgentRunClient> => {
+          try {
+            return await connectOnce();
+          } catch (error) {
+            if (stateNow() === 'closed' || !deps.reconnectAuthorization
+              || taskGrantReissued || !isSharedTaskAuthorizationDenied(error)) throw error;
+            // M restarted and lost its in-memory task grant. Only O can reissue
+            // that grant, and only for the original M; never migrate native history.
+            // Mark the replacement only after O actually resolves: O being
+            // unreachable must not permanently suppress a later retry.
+            await deps.reconnectAuthorization(() => stateNow() !== 'closed', { force: true });
+            taskGrantReissued = true;
+            return await connectOnce(true);
+          }
+        };
+        const client = await connectWithRecovery();
+        restartResumeRequired = false;
+        return client;
       } catch (error) {
+        // Automatic recovery failed. A later explicit retry may use the normal
+        // invalid-resume callback/context rebuild instead of being stuck forever.
+        restartResumeRequired = false;
         // 连不回(对方忙、离线等)：保持已让出名额，下次发送再试。
         if (stateNow() === 'connecting') linkState = 'released';
         throw localizeRemoteError(error);

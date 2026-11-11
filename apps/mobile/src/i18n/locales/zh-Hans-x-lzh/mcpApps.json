@@ -1,0 +1,13 @@
+{
+  "sharedTaskReadOnly": "此卡唯差事之主可操之。",
+  "retry": "重载",
+  "loadFailed": "应用程序加载未成。请察连接后重载。",
+  "updateRequired": "此机尚不支 MCP Apps，请更新机上之 Cindy 后再试。",
+  "appName": "MCP App",
+  "cardTitle": "{{title}} · $t(mcpApps.appName)",
+  "messageSource": "$t(mcpApps.appName)「{{name}}」所遣",
+  "serverId": "MCP 服务器 ID：{{id}}",
+  "exitFullscreen": "出全屏幕",
+  "mobileUpdateRequired": "请更新手机上之 Cindy，再启此卡。",
+  "filesOnExecutionComputer": "卷之内容，请于行事之机观之"
+}

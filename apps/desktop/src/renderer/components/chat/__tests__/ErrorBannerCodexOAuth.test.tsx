@@ -309,6 +309,18 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(dismiss).toHaveBeenCalledOnce();
   });
 
+  // Unit regression: startup account errors need actionable copy, not replyFailed.
+  it.each([
+    ['[SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic', 'limited'],
+    ['[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] diagnostic', 'loginRequired'],
+    ['The task subscription account requires login or quota reset', 'legacy'],
+  ])('localizes subscription startup failure %s', (message, key) => {
+    const error = `LAZY_CREATE_FAILED: ${message}`;
+    render(<ErrorBanner error={error} retryText="original" onRetry={vi.fn()} agentKind="cc" />);
+    expect(screen.getByText(`chat.subscriptionAccountError.${key}`)).toBeTruthy();
+    expect(screen.queryByText(error)).toBeNull();
+  });
+
   it('localizes the Codex resume preflight marker without exposing the host envelope', () => {
     const error = `LAZY_CREATE_FAILED: ${CODEX_RESUME_NOT_READY_WIRE_MESSAGE}`;
     render(
@@ -1413,5 +1425,14 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     />);
     expect(screen.getByText('chat.errorBanner.modelAccessDenied')).toBeTruthy();
     expect(screen.queryByText(/Failed to authenticate/)).toBeNull();
+  });
+});
+
+
+describe('output-limit guidance', () => {
+  it.each([131064, 1000])('renders reasoning-aware usage and guidance (%s)', (reasoningTokens) => {
+    render(<ErrorBanner error="limit" errorReason="output-limit" outputLimit={{ outputTokens: 131072, reasoningTokens }} onRetry={vi.fn()} />);
+    const expected = reasoningTokens === 131064 ? 'logic.errors.outputLimitReasoning' : 'logic.errors.outputLimit';
+    expect(screen.getByText(`logic.errors.outputLimitUsage ${expected}`)).toBeTruthy();
   });
 });

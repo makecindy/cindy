@@ -63,7 +63,7 @@ function registerController(controller: RsbWindowController) {
     isDestroyed: () => false,
     webContents: mainWebContents,
   } as unknown as BrowserWindow;
-  registerRsbWindowIpc({ controller, getMainWindow: () => mainWindow, allowBotWorkbenchPermission: vi.fn(() => ({ accepted: true })) });
+  registerRsbWindowIpc({ controller, getMainWindow: () => mainWindow });
   return { handler: getSendCommandHandler(), mainWebContents };
 }
 
@@ -74,38 +74,24 @@ beforeEach(() => {
 });
 
 describe('right-sidebar-window IPC', () => {
-  it('allows only the visible detached Bot owner to approve its own permission', async () => {
-    const controller = makeController();
-    const sender = { id: 2 };
-    const approve = vi.fn(() => ({ accepted: true }));
-    controller.getVisibleSidebarWebContents.mockReturnValue(sender);
-    controller.getContext.mockReturnValue({ botOwner: { botId: 'bot-1', canonical: true }, remoteHostId: null });
-    registerRsbWindowIpc({ controller, getMainWindow: () => null, allowBotWorkbenchPermission: approve });
-    const handler = (ipcMain as unknown as { __handlers: Map<string, (e: unknown, p: unknown) => unknown> })
-      .__handlers.get(MAKER_INVOKE.RSB_WINDOW_ALLOW_BOT_WORKBENCH_PERMISSION)!;
-    const payload = { botId: 'bot-1', sessionId: 'task-1', requestId: 'permission-1' };
-    await expect(handler({ sender }, payload)).resolves.toEqual({ accepted: true });
-    expect(approve).toHaveBeenCalledWith('bot-1', 'task-1', 'permission-1');
-    await expect(handler({ sender: { id: 3 } }, payload)).resolves.toEqual({ accepted: false });
-    await expect(handler({ sender }, { ...payload, botId: 'bot-2' })).resolves.toEqual({ accepted: false });
-    await expect(handler({ sender }, { ...payload, requestId: '' })).rejects.toThrow(/requestId/);
-    expect(approve).toHaveBeenCalledTimes(1);
+  // Global named views have no task binding; reject extra task identity and
+  // preserve the resource payload through the real IPC validator. tier: unit.
+  it('routes global plugin views without inventing a task scope', async () => {
+    const controller = makeController(); const { handler, mainWebContents } = registerController(controller);
+    const command = { type: 'open-plugin-view', instanceId: 'planner', resourceViewId: 'board', resourceInput: { selected: 'one' } };
+    await handler({ sender: mainWebContents }, { command, allowOpen: true });
+    expect(controller.routeCommand).toHaveBeenCalledWith({ command, allowOpen: true });
+    for (const patch of [{ sessionId: 'wrong-task' }, { resourceViewId: '../bad' }, { resourceInput: [] }])
+      await expect(handler({ sender: mainWebContents }, { command: { ...command, ...patch }, allowOpen: true })).rejects.toThrow();
   });
-  it('accepts a popped-out workbench only after Main verifies the assigned tab', async () => {
+  // 具名视图必须进入已有分离侧栏路由，不能在 Main 校验时丢失目标或启动参数。
+  it('preserves a named plugin resource in the original window command', async () => {
     const controller = makeController();
-    const sender = { id: 4 };
-    const approve = vi.fn(() => ({ accepted: true }));
-    const authorizePoppedWorkbench = vi.fn(async () => true);
-    registerRsbWindowIpc({ controller, getMainWindow: () => null,
-      allowBotWorkbenchPermission: approve, authorizePoppedWorkbench });
-    const handler = (ipcMain as unknown as { __handlers: Map<string, (e: unknown, p: unknown) => unknown> })
-      .__handlers.get(MAKER_INVOKE.RSB_WINDOW_ALLOW_BOT_WORKBENCH_PERMISSION)!;
-    const payload = { botId: 'bot-1', sessionId: 'task-1', requestId: 'permission-1' };
-    await expect(handler({ sender }, payload)).resolves.toEqual({ accepted: true });
-    expect(authorizePoppedWorkbench).toHaveBeenCalledWith(sender, 'bot-1');
-    authorizePoppedWorkbench.mockResolvedValue(false);
-    await expect(handler({ sender }, payload)).resolves.toEqual({ accepted: false });
-    expect(approve).toHaveBeenCalledTimes(1);
+    const { handler, mainWebContents } = registerController(controller);
+    const command = { type: 'open-plugin-task', sessionId: 's1', instanceId: 'planner', resourceViewId: 'board', resourceInput: { filter: 'open' } };
+    await handler({ sender: mainWebContents }, { command, allowOpen: true });
+    expect(controller.routeCommand).toHaveBeenCalledWith({ command, allowOpen: true });
+    await expect(handler({ sender: mainWebContents }, { command: { ...command, resourceInput: [] }, allowOpen: true })).rejects.toThrow();
   });
   // The mail card gesture must survive detached-window routing without mail content.
   it('routes a mail card by ID and rejects malformed card references', async () => {

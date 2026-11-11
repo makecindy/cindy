@@ -3,6 +3,7 @@ import { act, createElement, forwardRef, useImperativeHandle, type ReactNode } f
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginCardActions } from "../plugins/PluginCardActions";
+import { pluginCardPlainText } from "../plugins/pluginCardText";
 import { pendingGhostCardFormDelivery } from "@cindy/maker-shared/ghost-card-form";
 import { MobileMailHtmlPreview } from '../plugins/MobileMailHtmlPreview';
 
@@ -15,11 +16,19 @@ vi.mock("@/auth/AuthContext", () => ({ useAuth: () => ({ getAccessToken: async (
 vi.mock("../plugins/mobileMailAttachment", () => ({ pickMobileMailAttachment: (...args: unknown[]) => h.pick(...args) }));
 vi.mock("@/session/useBotGroupRemoteMedia", () => ({ useBotGroupRemoteMedia: () => h.resolve }));
 vi.mock('@/components/FileTypeIcon', () => ({ FileTypeIcon: () => null }));
+vi.mock('lucide-react-native', async () => {
+  const { createElement: el } = await import('react');
+  const icon = (name: string) => () => el('i', { 'data-icon': name });
+  return Object.fromEntries(['Settings', 'ChevronDown', 'ExternalLink', 'GitPullRequest', 'GitMerge', 'GitPullRequestClosed', 'GitPullRequestDraft', 'Check', 'CircleMinus', 'CircleX', 'Clock'].map((name) => [name, icon(name)]));
+});
 
-const h = vi.hoisted(() => ({ invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
+const h = vi.hoisted(() => ({ noticeFrame: { y: 400, height: 24 }, invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
 vi.mock("react-native", () => {
-  const View = ({ children }: { children?: ReactNode }) =>
-    createElement("div", {}, children);
+  // The notice's frame comes from h.noticeFrame; every other View ignores its ref.
+  const View = ({ children, ref }: { children?: ReactNode; ref?: { current: unknown } }) =>
+    createElement("div", { ref: (el: HTMLElement | null) => {
+      if (ref) ref.current = el && Object.assign(el, { measureInWindow: (cb: (x: number, y: number, w: number, h: number) => void) => cb(0, h.noticeFrame.y, 300, h.noticeFrame.height) });
+    } }, children);
   return {
     View,
     KeyboardAvoidingView: View,
@@ -27,11 +36,18 @@ vi.mock("react-native", () => {
       children,
       onPress,
       disabled,
+      accessibilityLabel,
+      accessibilityRole,
+      accessibilityState,
     }: {
       children?: ReactNode;
       onPress(): void;
       disabled: boolean;
-    }) => createElement("button", { onClick: onPress, disabled }, children),
+      accessibilityLabel?: string;
+      accessibilityRole?: string;
+      accessibilityState?: { checked?: boolean; expanded?: boolean };
+    }) => createElement("button", { onClick: onPress, disabled, 'aria-label': accessibilityLabel,
+      role: accessibilityRole, 'aria-checked': accessibilityState?.checked, 'aria-expanded': accessibilityState?.expanded }, children),
     Modal: ({
       children,
       visible,
@@ -40,13 +56,24 @@ vi.mock("react-native", () => {
       visible: boolean;
     }) => (visible ? createElement("div", {}, children) : null),
     Platform: { OS: "ios" },
+    useWindowDimensions: () => ({ width: 400, height: 800 }),
     StyleSheet: { create: (value: unknown) => value },
     AppState: {
       currentState: "active",
       addEventListener: () => ({ remove: () => {} }),
     },
     Alert: { alert: vi.fn() },
-    Linking: { openURL: vi.fn() },
+    Linking: { openURL: vi.fn(async () => true) },
+    Switch: ({ value, onValueChange, accessibilityLabel }: { value: boolean; onValueChange(): void; accessibilityLabel?: string }) =>
+      createElement("input", { type: "checkbox", checked: value, onChange: onValueChange, "aria-label": accessibilityLabel }),
+    AccessibilityInfo: { isReduceMotionEnabled: async () => true },
+    Animated: {
+      Value: class { interpolate() { return 0; } },
+      View,
+      loop: () => ({ start() {}, stop() {} }),
+      timing: () => ({}),
+    },
+    Keyboard: { addListener: () => ({ remove: () => {} }) },
   };
 });
 vi.mock("@/components/AppText", () => ({
@@ -94,8 +121,205 @@ afterEach(() => {
   unmount?.();
   unmount = undefined;
   h.mode = 'light';
+  h.noticeFrame = { y: 400, height: 24 };
   vi.clearAllMocks();
 });
+// Unit: the phone used to show the PR card as a raw URL, identical grey buttons and "开启「…」"
+// buttons. A rich host now sends switches, the primary action, a live state and the title bar's
+// PR status; the phone draws them natively and a switch still goes through the card action.
+// Unit: the PR card on the phone read "\\#42 …", "cindy\\-demo/web" and turned "feat\\(mobile\\)" into a
+// formula: the desktop's escaped card text went through the Markdown renderer.
+it('shows desktop card text as plain text without its Markdown escapes', () => {
+  expect(pluginCardPlainText('\\#7290 feat\\(mobile\\): a\\_b \\*c\\* 5\\.5\ncindy\\-demo/web \\\\ \\[x\\]')).toBe('#7290 feat(mobile): a_b *c* 5.5\ncindy-demo/web \\ [x]');
+});
+
+describe("rich plugin card hints", () => {
+  // Unit regression: the merged PR settings were flattened into the summary/footer. Existing
+  // tests cover switches but not model choice state or the settings disclosure. Render the real
+  // component with a rich merged card and verify accessible state + unchanged remote actions.
+  it('groups merged PR settings and routes the model and disclosure controls to the host', async () => {
+    h.invoke.mockImplementation(async (_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return { effects: [] };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const data = { pluginId: 'cindy-github', revision: '1', items: [
+      { id: 'prui:settings', label: 'Hide PR settings', disabled: false },
+      { id: 'prset:archive', label: 'Archive', disabled: false, toggle: { on: true, title: 'Archive after merge' } },
+      { id: 'prset:modelTask', label: 'Follow task', disabled: false },
+      { id: 'prset:model', label: 'Custom (current)', disabled: false },
+      { id: 'prset:modelPick', label: 'Change model: Sonnet', disabled: false },
+    ] };
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#42 Fix layout\no/r · Merged\nfeature → main\nPR settings\nFollow-up model', data })));
+    expect(container.querySelector('[aria-expanded=true]')?.getAttribute('aria-label')).toBe('Hide PR settings');
+    expect(container.querySelector('[role=radio][aria-checked=true]')?.textContent).toBe('Custom (current)');
+    expect(container.textContent?.indexOf('Archive after merge')).toBeLessThan(container.textContent!.indexOf('Follow-up model'));
+    for (const [label, actionId] of [['Change model: Sonnet', 'prset:modelPick'], ['Hide PR settings', 'prui:settings']]) {
+      await act(async () => container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click());
+      expect(h.invoke).toHaveBeenCalledWith('device', expect.any(String), [expect.objectContaining({ actionId })], expect.any(Object));
+    }
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#42 Fix layout\no/r · Merged\nPR settings\nFollow-up model\nUses the task model',
+      data: { ...data, revision: '2', items: data.items.filter(item => item.id !== 'prset:modelPick') } })));
+    expect(container.querySelector('[role=radio][aria-checked=true]')?.textContent).toBe('Follow task');
+    expect(container.textContent?.indexOf('Archive after merge')).toBeLessThan(container.textContent!.indexOf('Uses the task model'));
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#42 Fix layout\no/r · Merged',
+      data: { ...data, revision: '3', items: [{ id: 'prui:settings', label: 'PR settings', disabled: false }] } })));
+    expect(container.querySelector('[aria-expanded=false]')?.getAttribute('aria-label')).toBe('PR settings');
+    expect(container.querySelector('[role=radio]')).toBeNull();
+    expect(container.textContent).not.toContain('Follow-up model');
+  });
+
+  // Bug (2026-11-08): after a merge the phone card had no archive button, no auto-archive notice and no way to
+  // cancel it, unlike Desktop. Minimal input: a card whose host says the task is done, with and without auto.
+  it('offers the archive button and the cancellable auto-archive notice the host allows', async () => {
+    const { taskAutoArchive } = await import('../plugins/taskAutoArchive');
+    const requested = vi.fn();
+    const offRequest = taskAutoArchive.onArchiveRequest(requested);
+    const disable = taskAutoArchive.enable('s-archive');
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => { act(() => root.unmount()); disable(); offRequest(); };
+    const card = (taskArchive?: { auto: boolean }) => act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's-archive', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [], ...(taskArchive ? { taskArchive } : {}) } })));
+    await card({ auto: true });
+    expect(container.textContent).toContain('plugins.taskArchive.pending');
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="plugins.taskArchive.now"]')!.click());
+    expect(requested).toHaveBeenCalledWith('s-archive');
+    // Shown in the focused task page: leaving would archive. Cancelling keeps the result visible and the button usable.
+    expect(taskAutoArchive.takeSeen('s-archive')).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="plugins.taskArchive.cancel"]')!.click());
+    expect(container.textContent).toContain('plugins.taskArchive.cancelled');
+    expect(container.querySelector('[aria-label="plugins.taskArchive.cancel"]')).toBeNull();
+    expect(container.querySelector('[aria-label="plugins.taskArchive.now"]')).not.toBeNull();
+    expect(taskAutoArchive.takeSeen('s-archive')).toBe(false);
+    // The host no longer says done (e.g. a PR reopened): no button, and the cancellation is forgotten.
+    await card();
+    expect(container.querySelector('[aria-label="plugins.taskArchive.now"]')).toBeNull();
+    expect(taskAutoArchive.getState('s-archive')).toBe('inactive');
+    // Without auto (or with an IM channel attached) only the manual button shows.
+    await card({ auto: false });
+    expect(container.querySelector('[aria-label="plugins.taskArchive.now"]')).not.toBeNull();
+    expect(container.textContent).not.toContain('plugins.taskArchive.pending');
+    // Bug (review of #9325): a cancellation kept from an earlier visit survived a card that mounts without auto.
+    taskAutoArchive.setArmed('s-archive', 'c', true);
+    taskAutoArchive.cancel('s-archive');
+    act(() => root.unmount());
+    const remount = createRoot(container);
+    unmount = () => { act(() => remount.unmount()); disable(); offRequest(); };
+    await act(async () => remount.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's-archive', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [] } })));
+    expect(taskAutoArchive.getState('s-archive')).toBe('inactive');
+    await act(async () => remount.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's-archive', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '2', items: [], taskArchive: { auto: true } } })));
+    expect(container.textContent).toContain('plugins.taskArchive.pending');
+  });
+
+  // Bug (review of #9325): a row passes the list's 5% visibility with a tall neighbour card on screen, so an armed card
+  // below the window was marked "seen" and archived without its notice or Cancel ever being shown.
+  it('marks the task seen only when the notice itself is inside the window', async () => {
+    const { taskAutoArchive } = await import('../plugins/taskAutoArchive');
+    const disable = taskAutoArchive.enable('s-seen');
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => { act(() => root.unmount()); disable(); taskAutoArchive.setArmed('s-seen', 'c', false); };
+    const card = () => act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's-seen', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [], taskArchive: { auto: true } } })));
+    h.noticeFrame = { y: 1200, height: 24 };
+    await card();
+    expect(container.textContent).toContain('plugins.taskArchive.pending');
+    expect(taskAutoArchive.takeSeen('s-seen')).toBe(false);
+    h.noticeFrame = { y: -60, height: 24 };
+    await card();
+    expect(taskAutoArchive.takeSeen('s-seen')).toBe(false);
+    // Back on screen (a fresh mount measures again): now the notice is really seen.
+    act(() => root.unmount());
+    h.noticeFrame = { y: 300, height: 24 };
+    const again = createRoot(container);
+    unmount = () => { act(() => again.unmount()); disable(); taskAutoArchive.setArmed('s-seen', 'c', false); };
+    await act(async () => again.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's-seen', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [], taskArchive: { auto: true } } })));
+    expect(taskAutoArchive.takeSeen('s-seen')).toBe(true);
+  });
+
+  it('draws PR checks, a live state, a primary action, a link by its host and settings as switches', async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return dispatch(args[0]);
+      if (args[0].actionId === 'open-interaction') return { result: { pageId: 'page' } };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const status = { ok: true, status: 'open', unresolvedCount: 2, checks: { total: 1, passed: 1, failed: 0, pending: 0, skipped: 0 }, mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' };
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c', data: {
+      pluginId: 'github', revision: '1', form: null, live: '跟进中',
+      prStatus: [{ key: 'o/r#9', fallback: ['CI 运行中'], status }],
+      items: [
+        { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
+        { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
+        { id: 'prset:rename', label: '关闭「自动改名」', disabled: false, toggle: { on: true, title: '自动改名', hint: '改成 PR 号' } },
+      ],
+    } })));
+    const text = container.textContent ?? '';
+    for (const part of ['plugins.prStatus.checksPassed', 'plugins.prStatus.threadsOpen', 'plugins.prStatus.mergeApproval', '跟进中', '自动改名', '改成 PR 号', 'plugins.openLinkHost', '转为正式 PR'])
+      expect(text).toContain(part);
+    expect(text).not.toContain('CI 运行中');
+    expect(text).not.toContain('关闭「自动改名」');
+    const toggle = container.querySelector<HTMLInputElement>('input[type=checkbox]')!;
+    expect(toggle.checked).toBe(true);
+    await act(async () => { toggle.click(); });
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'prset:rename' }));
+  });
+
+  it('draws a PR link with its own status, never another PR\'s', async () => {
+    h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const merged = { ok: true, status: 'merged', unresolvedCount: 0, checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 } };
+    const render = async (url: string) => {
+      await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c', text: '#9 Fix login\n\no/r', data: {
+        pluginId: 'github', revision: '1', form: null, prStatus: [{ key: 'o/r#10', fallback: [], status: merged }],
+        items: [{ id: 'link:0', label: '#9 Fix login', url, disabled: false }],
+      } })));
+      return Array.from(container.querySelectorAll('i')).map((node) => node.getAttribute('data-icon'));
+    };
+    expect(await render('https://github.com/o/r/pull/9')).toContain('GitPullRequest');
+    expect(await render('https://github.com/o/r/pull/9')).not.toContain('GitMerge');
+    expect(await render('https://github.com/O/R/pull/10')).toContain('GitMerge');
+  });
+
+  // Unit: on the phone the PR card's title, repo and branch were one loose block above a separate
+  // "open github.com" button. With the card text the title becomes the card's own link.
+  it('draws the card text as a title that opens the card link, without a separate link button', async () => {
+    h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c',
+      text: '#9 Fix login\n\no/r · 草稿', data: {
+        pluginId: 'github', revision: '1', form: null,
+        items: [
+          { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
+          { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
+        ],
+      } })));
+    const text = container.textContent ?? '';
+    expect(text.split('#9 Fix login')).toHaveLength(2);
+    expect(text).toContain('o/r · 草稿');
+    expect(text).not.toContain('plugins.openLinkHost');
+    // GitHub pages open directly (owner's choice); other addresses still ask first.
+    const { Alert, Linking } = await import('react-native');
+    const title = [...container.querySelectorAll('button')].find((button) => button.textContent === '#9 Fix login')!;
+    await act(async () => { title.click(); });
+    expect(Linking.openURL).toHaveBeenCalledWith('https://github.com/o/r/pull/9');
+    expect(Alert.alert).not.toHaveBeenCalled();
+  });
+});
+
 describe("native plugin card deliberate actions", () => {
   // Mobile parity regression: typing must use the real form delivery, update
   // both MIME alternatives and retain the authored HTML/CID bytes (unit).
@@ -201,7 +425,9 @@ describe("native plugin card deliberate actions", () => {
     try {
       const doc = frame.contentDocument!;
       doc.open(); doc.write(source.html); doc.close();
-      h.inject.mockImplementation(script => new Function('document', 'window', 'getComputedStyle', script)(doc, {}, doc.defaultView!.getComputedStyle.bind(doc.defaultView)));
+      const view = Object.assign(doc.defaultView!, { ReactNativeWebView: { postMessage: () => undefined } });
+      // Height fitting needs real layout; this test covers color repainting only.
+      h.inject.mockImplementation(script => new Function('document', 'window', 'getComputedStyle', 'requestAnimationFrame', 'setTimeout', script)(doc, view, view.getComputedStyle.bind(view), () => 0, () => 0));
       for (const mode of ['dark', 'light', 'dark']) {
         h.mode = mode;
         await render();
@@ -555,5 +781,27 @@ it('hides superseded mail entirely instead of showing another draft-updated card
       state: 'draft', status: 'Saved', sendLabel: 'Send', fromLabel: 'From', attachments: [], supersededBy: 'new' },
   } })));
   expect(container.innerHTML).toBe('');
+  expect(h.invoke).not.toHaveBeenCalled();
+});
+
+
+it('opens in-card task links through task navigation without a browser or plugin action', async () => {
+  h.invoke.mockImplementation(async () => ({ result: { confirms: [] } }));
+  const onOpenSessionLink = vi.fn();
+  const container = document.createElement('div'), root = createRoot(container);
+  unmount = () => act(() => root.unmount());
+  await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c', onOpenSessionLink,
+    data: { pluginId: 'github', revision: '1', form: null,
+      items: [{ id: 'link:0', label: '打开原任务', url: 'cindy://session/original-task', disabled: false }] } })));
+  const { Alert, Linking } = await import('react-native');
+  vi.mocked(Linking.openURL).mockClear();
+  vi.mocked(Alert.alert).mockClear();
+  h.invoke.mockClear();
+  const button = [...container.querySelectorAll('button')].find(button => button.textContent === '打开原任务')!;
+  expect(button).toBeTruthy();
+  await act(async () => button.click());
+  expect(onOpenSessionLink).toHaveBeenCalledWith('cindy://session/original-task');
+  expect(Linking.openURL).not.toHaveBeenCalled();
+  expect(Alert.alert).not.toHaveBeenCalled();
   expect(h.invoke).not.toHaveBeenCalled();
 });

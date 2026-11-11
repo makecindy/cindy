@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ rows: [] as unknown[][] }));
@@ -9,6 +10,7 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzl
 } } }) }));
 
 import { hydrateBotProfileRuntime } from '../botProfileRuntime';
+import { resolveMemoryScopeKey } from '@cindy/maker-core';
 import type { MakerSessionCreateOpts } from '../sessionRequest';
 import { BOT_IM_CHANNELS_VENDOR_KEY, type BotImChannel } from '../../../shared/botImConnection';
 
@@ -31,6 +33,59 @@ function prompt(opts: MakerSessionCreateOpts): string {
 }
 
 describe('IM channel lanes hydrate the full Bot profile', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('inherits only enabled official skills on %s', async agentKind => {
+    seed('channel', 'im:telegram:777:dm:555', { skillMode: 'allowlist', skills: ['personal'] });
+    const opts = { id: 'lane', agentKind, workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const catalog = [
+      { name: 'cindy:learn', path: '/official/learn/SKILL.md', cindyOfficial: true },
+      { name: 'cindy-plugin-github:pr', path: '/official/pr/SKILL.md', cindyOfficial: true },
+      { name: 'off', path: '/official/off/SKILL.md', cindyOfficial: true, enabled: false },
+      { name: 'personal', path: '/personal/SKILL.md' },
+      { name: 'harness', path: '/harness/SKILL.md' },
+      { name: 'cindy-plugin-github:pr', path: '/personal/pr/SKILL.md' },
+    ];
+    await hydrateBotProfileRuntime(opts, { listSkills: async () => catalog,
+      fingerprintSkillSource: async () => 'a'.repeat(64) }, { persistSnapshot: false });
+    expect(opts.botRuntimeProfile?.skillPolicy.configured).toEqual(['personal', 'cindy:learn', 'cindy-plugin-github:pr']);
+    expect(opts.botRuntimeProfile?.skillPolicy.catalog.find(item => item.path === '/personal/pr/SKILL.md')).toMatchObject({ enabled: false });
+    expect(opts.botRuntimeProfile?.skillPolicy.catalog.find(item => item.path === '/official/pr/SKILL.md')).toMatchObject({ contentSha256: 'a'.repeat(64) });
+  });
+
+  it('resumes a frozen delegation task with the official set it already ran with', async () => {
+    const resource = (name: string, path: string) => ({ name, path, sha256: 'a'.repeat(64) });
+    const run = async (skillResources: unknown[], skills = ['personal']) => {
+      seed('delegation', null, { skillMode: 'allowlist', skills });
+      state.rows.push([{ profileVersion: 3, resolvedJson: JSON.stringify({ skillResources }) }]);
+      const opts = { id: 'child', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+      await hydrateBotProfileRuntime(opts, { listSkills: async () => [
+        { name: 'pr', path: '/official/pr/SKILL.md', cindyOfficial: true },
+        { name: 'learn', path: '/official/learn/SKILL.md', cindyOfficial: true },
+        { name: 'personal', path: '/personal/SKILL.md' },
+        { name: 'pr', path: '/personal/pr/SKILL.md' },
+      ], fingerprintSkillSource: async () => 'a'.repeat(64) }, { persistSnapshot: false });
+      return opts.botRuntimeProfile?.skillPolicy.configured;
+    };
+    const personal = resource('personal', '/personal/SKILL.md');
+    expect(await run([personal])).toEqual(['personal']);
+    expect(await run([personal, resource('pr', '/official/pr/SKILL.md')])).toEqual(['personal', 'pr']);
+    // Frozen with its own same-name personal file: the namesake official file must not replace it.
+    expect(await run([resource('pr', '/personal/pr/SKILL.md')], ['pr'])).toEqual(['pr']);
+  });
+
+  it('keeps official inheritance under legacy defaults and fails closed on unreadable sources', async () => {
+    seed('canonical', null);
+    const opts = { id: 'main', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(opts, {
+      listSkills: async () => [
+        { name: 'pr', path: '/official/pr/SKILL.md', cindyOfficial: true },
+        { name: 'personal', path: '/personal/SKILL.md' },
+      ],
+      fingerprintSkillSource: async () => { throw new Error('unreadable'); },
+    }, { persistSnapshot: false });
+    expect(opts.botRuntimeProfile?.skillPolicy.configured).toEqual(['pr']);
+    expect(opts.botRuntimeProfile?.skillPolicy.catalog.find(item => item.name === 'pr')).toMatchObject({ enabled: false, runtimeStatus: 'failed' });
+  });
+
   it('treats a channel group lane as a full-profile lane with the whole SOUL', async () => {
     seed('channel', 'im:telegram:777:g:-100123');
     const opts = { id: 'lane', agentKind: 'claude-code', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
@@ -172,6 +227,77 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     await hydrateBotProfileRuntime(lane, deps, { persistSnapshot: false });
     expect(deps.listBotImChannels).not.toHaveBeenCalled();
     expect(lane.vendorOptions?.[BOT_IM_CHANNELS_VENDOR_KEY]).toBeUndefined();
+  });
+
+  // 伙伴 V2:在自己 workspace 里干活时就是普通项目任务——不用伙伴记忆,只叠加身份;本机关联项目只读挂载。
+  // 能力选择不收窄任何一个 session(主人 2026-11-10:群聊、私聊都是 session,要么都支持要么都不支持),
+  // 只聊天的群照旧没有工具。依据:主人 2026-11-06 / 2026-11-10;第三轮审查 #1。unit,mock DB。
+  it('runs a V2 teammate in its workspace as an ordinary project task', async () => {
+    const deps = {
+      readProfileFolder: vi.fn(async () => ({ homeDir: '/bots/bot', systemPromptOverride: '' })),
+      readMemoryIndex: vi.fn(async () => 'BOT MEMORY'),
+      listToolsets: vi.fn(async () => [
+        { id: 'browser', name: 'Browser', available: true },
+        { id: 'docs', name: 'Docs', available: true },
+      ]),
+      listLinkedProjectDirs: vi.fn(async () => ['/code/app']),
+    };
+    const narrow = { toolCapabilityVersion: 1, memory: true, mcpMode: 'allowlist', mcpServers: [], toolsetMode: 'allowlist', toolsets: [] };
+    seed('canonical', null, { ...narrow, projectMode: true });
+    const main = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const snapshot = await hydrateBotProfileRuntime(main, deps, { persistSnapshot: false });
+    expect(main.botRuntimeProfile?.projectContext).toBe(true);
+    expect(main.makerMemoryScopeKey).toBeUndefined();
+    // Project memory, switched by the teammate's own memory setting, not the global one.
+    expect(main.makerMemoryEnabled).toBe(true);
+    expect(main.makerMemorySwitchOwned).toBe(true);
+    expect(deps.readMemoryIndex).not.toHaveBeenCalled();
+    expect(snapshot?.disabledToolsets).toEqual([]);
+    expect(main.extraDirs).toEqual(['/code/app']);
+    expect(main.botProfileContextPrompt).toContain('/bots/bot/workspace');
+    // It works like an ordinary task: no teammate how-to guidance on top.
+    expect(main.botProfileContextPrompt).not.toContain('# 你会做什么');
+    expect(main.botProfileContextPrompt).not.toContain('teammate-guide');
+
+    seed('canonical', null, { ...narrow, projectMode: true });
+    const elsewhere = { id: 'plan', agentKind: 'pi', workingDir: '/code/app', model: 'm' } as MakerSessionCreateOpts;
+    const planSnapshot = await hydrateBotProfileRuntime(elsewhere, deps, { persistSnapshot: false });
+    expect(elsewhere.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(planSnapshot?.disabledToolsets).toEqual([]);
+
+    // A group lane has the same tools; whether the group may use them is the group's authorization.
+    seed('group', 'group:g1', { ...narrow, projectMode: true });
+    const group = { id: 'group', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const groupSnapshot = await hydrateBotProfileRuntime(group, deps, { persistSnapshot: false });
+    expect(group.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(groupSnapshot?.disabledToolsets).toEqual([]);
+    expect(group.botRuntimeProfile?.toolsetPolicy.configured).toEqual(['browser', 'docs']);
+    // ...but shares the teammate's one project memory, not the old teammate store.
+    expect(group.makerMemoryEnabled).toBe(true);
+    expect(group.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey(path.resolve('/bots/bot/workspace')));
+    expect(deps.readMemoryIndex).not.toHaveBeenCalled();
+
+    // An IM lane (other people) keeps the channel isolation: never the owner's ordinary-task
+    // context (personal instructions, settings, Skills), only the teammate's project memory.
+    seed('channel', 'im:telegram:777:g:-100123', { ...narrow, projectMode: true });
+    const lane = { id: 'lane', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const laneSnapshot = await hydrateBotProfileRuntime(lane, deps, { persistSnapshot: false });
+    expect(lane.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(laneSnapshot?.disabledToolsets).toEqual([]);
+    expect(lane.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey(path.resolve('/bots/bot/workspace')));
+
+    // A chat-only group still gets no tools.
+    seed('group', 'group:g1:access:chat:1', { ...narrow, projectMode: true });
+    const chatOnly = { id: 'chat', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(chatOnly, deps, { persistSnapshot: false });
+    expect(chatOnly.botRuntimeProfile?.toolsetPolicy.configured).toEqual([]);
+
+    seed('canonical', null, narrow);
+    const classic = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(classic, deps, { persistSnapshot: false });
+    expect(classic.botRuntimeProfile?.projectContext).toBeUndefined();
+    expect(classic.makerMemoryScopeKey).toBe('bot:bot');
+    expect(classic.extraDirs).toBeUndefined();
   });
 
   it('still refuses read-only history links', async () => {

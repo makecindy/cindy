@@ -1,3 +1,4 @@
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type { ImMessageSource } from '../../shared/imMessageSource';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
@@ -17,7 +18,11 @@ import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
-export type DeviceLinkConnectionStatus = 'connected' | 'disconnected';
+/**
+ * 远端设备在本窗口侧栏里的连接态。`connecting` = 还没拿到权威快照(冷启动的缓存种入、
+ * relay 瞬时重连):画成「检测中」而不是离线,但写操作与 `disconnected` 一样被挡住。
+ */
+export type DeviceLinkConnectionStatus = 'connected' | 'connecting' | 'disconnected';
 
 /**
  * 当前 session 接的是哪个 agent。决定 message.agentMeta 的 JSON 形态。
@@ -74,6 +79,8 @@ export interface MessageSessionOrigin {
    * 「来自 Worker「role」的消息」；来源标签仍只在有 senderSessionId 时出现。
    */
   orcaSenderLabel?: string;
+  /** 系统合批总条数；不把整批归到首个 Worker。 */
+  orcaAutoBridgeBatchCount?: number;
   /** true = 由 Orca 落库来源（kind:'orca'）投影而来。 */
   orca?: true;
 }
@@ -88,7 +95,18 @@ export type MessageAutomationOrigin = MessageSchedulerOrigin | MessageSessionOri
 export type StoredMessageOrigin =
   | MessageSchedulerOrigin
   | (MessageSessionOrigin & { displayText?: string })
-  | { kind: 'orca'; senderLabel?: string; displayText?: string; senderSessionId?: string };
+  | { kind: 'orca'; senderLabel?: string; displayText?: string; senderSessionId?: string; autoBridge?: true; autoBridgeBatchCount?: number };
+
+/** 新任务「让插件选」的结果记录(第一条消息下方的一行说明)。 */
+export interface PluginModelRouteNote {
+  pluginName: string;
+  outcome: 'routed' | 'kept';
+  /** routed：插件选的模型显示名与推理强度；kept：实际沿用的模型显示名。 */
+  modelName: string;
+  effort?: string;
+  reason?: string;
+  why?: 'no-opinion' | 'failed' | 'unavailable-route';
+}
 
 /**
  * Claude Code SDK 元信息——按消息类型不同填不同子集。
@@ -101,6 +119,8 @@ export type StoredMessageOrigin =
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  /** 新任务「让插件选」的结果(宿主写入，非模型回复)。 */
+  pluginModelRoute?: PluginModelRouteNote;
   /** Model boundary recorded by the host when the next input is dispatched. */
   modelChange?: { fromModel: string; toModel: string; modelOnly: true };
   /** Host-authored official MCP App snapshot; not an assistant prose reply. */
@@ -108,6 +128,10 @@ export interface CcMeta {
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
+  /** Native text item identity, used to reconcile streamed and imported history. */
+  agentMessageId?: string;
+  /** Codex item text is durable but its sampling request has not yet been accepted. */
+  samplingAttemptPending?: false | { runtimeId: string };
   /** Exact native sampling attempt that failed before response completion. Original text is retained. */
   failedSamplingAttempt?: { threadId: string; turnId: string; attempt: number; itemId: string; error?: string };
   uuid?: string;
@@ -343,9 +367,11 @@ export interface Session {
   userId: string;
   title: string;
   workingDir: string | null;
+  /** Explicit project membership; old hosts/tasks fall back to workingDir. */
+  projectDir?: string | null;
   /**
    * 侧边栏/产品归属语义。
-   * - project: workingDir 是项目目录, 参与 Projects 分组。
+   * - project: projectDir 决定 Projects 分组，旧任务回落 workingDir。
    * - dialogue: workingDir 只是对话运行/文件目录, 不参与 Projects 分组。
    */
   workspaceKind: WorkspaceKind;
@@ -401,7 +427,7 @@ export interface Session {
   /** 会话来源。scheduler 表示由自动化任务创建；缺失时按 desktop 兼容旧 payload。 */
   source?: SessionSource;
   /** Host-owned teammate link, also used by the existing history API. Display only. */
-  companion?: { id: string; role: string; channel?: string } | null;
+  companion?: { id: string; role: string; channel?: string; routineId?: string } | null;
   /** Orca split-session role marker. null/undefined means a regular Maker session. */
   orcaRole?: OrcaRole | null;
   /** fork-session：派生来源会话 id（self-FK，源被删 → SET NULL）。null = 顶层会话。 */
@@ -574,5 +600,6 @@ export interface Message {
   agentKind?: 'cc' | 'codex' | 'pi' | null;
   /** Structured guard details for a persisted tool-loop terminal error. */
   toolLoop?: ToolLoopErrorDetails;
+  outputLimit?: OutputLimitDetails;
   createdAt: string; // ISO 8601
 }

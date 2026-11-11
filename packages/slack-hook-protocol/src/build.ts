@@ -36,6 +36,8 @@ import {
   type HookPrefsStateMessage,
   type HookProviderBindCancelMessage,
   type HookProviderBindRevokeMessage,
+  type HookProviderBindSelectMessage,
+  type HookProviderBindSelectionMessage,
   type HookProviderBindStartMessage,
   type HookProviderBindStateMessage,
   type HookProviderBindUpdateMessage,
@@ -57,6 +59,11 @@ import {
   type HookToolResponseMessage,
   type HookTurnEndMessage,
   type HookTurnDeliveryMessage,
+  type HookXMediaAbortMessage,
+  type HookXMediaAppendMessage,
+  type HookXMediaFinalizeMessage,
+  type HookXMediaInitMessage,
+  type HookXMediaResultMessage,
   type HookTurnProgressMessage,
   type HookTurnReopenMessage,
   type HookWelcomeMessage,
@@ -72,6 +79,8 @@ import {
   type ProviderBehaviorStatePayload,
   type ProviderBindCancelPayload,
   type ProviderBindRevokePayload,
+  type ProviderBindSelectPayload,
+  type ProviderBindSelectionPayload,
   type ProviderBindStartPayload,
   type ProviderBindStatePayload,
   type ProviderBindUpdatePayload,
@@ -88,6 +97,11 @@ import {
   type ToolResponsePayload,
   type TurnEndPayload,
   type TurnDeliveryPayload,
+  type XMediaAbortPayload,
+  type XMediaAppendPayload,
+  type XMediaFinalizePayload,
+  type XMediaInitPayload,
+  type XMediaResultPayload,
   type TurnProgressPayload,
   type MessageOpPayload,
   type MessageOpResultPayload,
@@ -153,6 +167,26 @@ export function makeTurnEnd(payload: TurnEndPayload): HookTurnEndMessage {
 
 export function makeTurnDelivery(payload: TurnDeliveryPayload): HookTurnDeliveryMessage {
   return envelope('turn.delivery', payload);
+}
+
+export function makeXMediaInit(payload: XMediaInitPayload): HookXMediaInitMessage {
+  return envelope('x.media.init', payload);
+}
+
+export function makeXMediaAppend(payload: XMediaAppendPayload): HookXMediaAppendMessage {
+  return envelope('x.media.append', payload);
+}
+
+export function makeXMediaFinalize(payload: XMediaFinalizePayload): HookXMediaFinalizeMessage {
+  return envelope('x.media.finalize', payload);
+}
+
+export function makeXMediaAbort(payload: XMediaAbortPayload): HookXMediaAbortMessage {
+  return envelope('x.media.abort', payload);
+}
+
+export function makeXMediaResult(payload: XMediaResultPayload): HookXMediaResultMessage {
+  return envelope('x.media.result', payload);
 }
 
 export function makeTurnProgress(payload: TurnProgressPayload): HookTurnProgressMessage {
@@ -226,6 +260,13 @@ export function makeProviderBindRevoke(
   payload: ProviderBindRevokePayload,
 ): HookProviderBindRevokeMessage {
   return envelope('provider.bind.revoke', payload);
+}
+
+export function makeProviderBindSelect(payload: ProviderBindSelectPayload): HookProviderBindSelectMessage {
+  return envelope('provider.bind.select', payload);
+}
+export function makeProviderBindSelection(payload: ProviderBindSelectionPayload): HookProviderBindSelectionMessage {
+  return envelope('provider.bind.selection', payload);
 }
 
 export function makeProviderBindUpdate(

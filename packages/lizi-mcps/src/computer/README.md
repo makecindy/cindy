@@ -40,12 +40,94 @@ its error code and partial-input progress alongside the new observation. A faile
 observation does not replace the original action error. Cancelled actions and
 unresolved window identities do not trigger this follow-up read.
 
-Cindy MCP supplies the task's stable driver session. When using the native CLI
-instead, pass the **same non-default `session` on every read and action**, then
-call `end_session` for that session. Independent invocations without a session
-do not share the screenshot lease. Reuse discovered process/window identities;
-do not guess bundle IDs. Foreground input already activates its target, so a
-preceding `bring_to_front` is usually redundant.
+Cindy MCP supplies the task's stable driver session and is the only desktop
+input entry. The native `cua-driver` CLI/MCP, `osascript` keystrokes, `cliclick`,
+CGEvent scripts and clipboard paste are not alternatives: they skip the session,
+the secure-field refusal, remote-input and user-activity yield and result
+verification. Cindy keeps them out of reach: the user's own `cua-driver` / `cua`
+MCP registrations are always denied for Claude Code (`maker-host/capability-routing.ts`;
+Cindy's Computer Use setting is the one switch for driving this desktop, and a
+raw driver server would bypass it exactly when it is off), shell-synthesized
+input is denied by a Claude PreToolUse guard (local runtimes only; full-access
+included) and, under Ask / Auto, by the shared reviewer policy for the computer
+running Cindy (`maker-core/agents/shared/desktop-input-shell.ts`,
+`continuation-policy.ts`). Codex full access has no host interception point and
+Pi full access is left native. A refusal is a result to report. Reuse discovered process/window identities; do not guess bundle IDs.
+Foreground input already activates its target, so a preceding `bring_to_front`
+is usually redundant.
+
+## Routing facts from the 2026-10 audit
+
+- `USER_INPUT_ACTIVE`: foreground delivery is refused while system input newer
+  than the Agent's own last dispatch is under three seconds old
+  (`powerMonitor.getSystemIdleTime`, whole seconds). Background delivery and
+  `set_value` are unaffected. The refusal covers that foreground input only: the
+  error and the workflow steer the Agent to background routes (window-local
+  coordinates, `double_click`, menu bar items, `set_value`, files or CLI) and to
+  waiting or asking only when none works.
+- `HOTKEY_BLOCKED`: lock-screen, log-out and sleep chords never reach the driver.
+- `CUA_UNAVAILABLE` carries `reason`: `screen_locked` (host power monitor),
+  `window_gone` / `window_not_on_screen` (from recovery discovery) or
+  `driver_error`. Recovery discovery is compacted to window identity fields.
+- `list_windows` identities add `ios-simulator` (Simulator.app, Device Hub) with a
+  hint that synthetic input is not delivered there, and a `set_value` hint for
+  Electron / browser targets. `set_value` was verified on Cindy's own composer:
+  the field updates and its send button enables, without focus.
+
+## Background pointer advice (2026-11-06)
+
+On macOS 27, cua-driver 0.37 stamped screen points on window-routed clicks and
+every background coordinate click or element `double_click` missed by the
+window origin (fixed upstream in trycua/cua#5492, first in 0.39 and the
+2026-11-05 nightly). Its delivery note then said to retry with
+`delivery_mode:"foreground"` if nothing changed, which `USER_INPUT_ACTIVE`
+refuses while the person is working. `normalizePointerAdvice` in
+[result.ts](result.ts) replaces that advice on delivered `click`,
+`double_click`, `right_click` and `drag` results with a background-first hint;
+refusals keep the driver's prose, because there only the foreground reaches the
+target.
+
+A `click` on a row label without `AXPress` is answered by an `AXSelected` write
+reported as confirmed. That proves the selection, not the app's click action:
+Xcode's project navigator stays on "No Selection". Cindy reports it as
+`unknown` with a hint to click the row's coordinates or `double_click` it. The
+variant where the driver delivered a coordinate click and read the selection
+back stays confirmed.
+
+## Window-local scroll coordinates
+
+`scroll` accepts `x/y` in the latest `get_window_state` screenshot's pixels,
+with an exact `pid/window_id`. Supply both coordinates and omit element selectors.
+The host forwards the point through the ordinary session, input-ownership and
+driver-contract checks; it does not convert the point to screen coordinates.
+Drivers that do not advertise coordinates reject the call before delivery instead
+of dropping the point and scrolling somewhere else.
+
+On Windows, [cua-driver 0.46.1](https://github.com/trycua/cua/blob/cua-driver-rs-v0.46.1/libs/cua-driver/rust/crates/platform-windows/src/tools/scroll.rs)
+tries the indexed element's UIA scroll action first.
+For a project-row button without that action, its foreground wheel fallback uses
+the window center unless `x/y` is supplied. Use a screenshot point for nested web
+scrollers. A fresh observation must confirm movement; do not replay an uncertain
+scroll automatically. Background refusals and input guards still apply.
+
+This coordinate entry fixes Cindy's previously closed schema, which described
+point targeting but rejected `x/y`. It does not change the upstream element fallback.
+The MCP-entry regression covers coordinate delivery and malformed targets; native
+movement must be validated separately against the running version.
+
+## Input failure advice
+
+For `type_text`, `background_unavailable` and `type_text_incomplete` preserve
+error codes and structured progress/uncertainty, but replace driver recovery
+prose with Cindy MCP guidance. The driver may suggest pixel-targeted typing or
+foreground retries; Cindy's `type_text` schema does not accept `x/y` and a refusal
+must not trigger an automatic route change. Inspect web-content fields with
+`get_window_state`; `set_value` with a fresh element token is the supported text
+route when continuing is appropriate. After incomplete typing, do not resend the
+text or suffix without inspecting what happened. Observation success is not
+input completion. This applies to both thrown errors and returned refusals.
+See [result.ts](result.ts) and the MCP-entry regressions in
+[computerMcpServer.test.ts](computerMcpServer.test.ts).
 
 ## CUA 0.37 compatibility
 

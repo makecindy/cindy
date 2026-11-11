@@ -7,10 +7,15 @@ import type { ProviderGroupConfig } from '../../../shared/providerGroup.js';
 import type { RemoteAgentHostDeps } from '../../remote-agent/host/runHost.js';
 import type { ProviderShareUsageStore } from '../../device-link/providerShareUsageStore.js';
 import { hostSessionIdFor } from '../../remote-agent/host/sessionIdentity.js';
+import { reshareKeyFor } from '../../remote-agent/host/groupRelay.js';
+import { createProviderGroupExternalLoad } from '../externalLoad.js';
+import type { ProviderGroupPickInput, ProviderGroupPickResult, ProviderGroupRouter } from '../router.js';
 import { providerShareGuestPeer, type ProviderShareOwned, type RemoteAgentFastPolicy, type RemoteAgentRequest } from '@cindy/device-link';
 
 const state = vi.hoisted(() => ({
   owner: 'test',
+  stopHost: () => Promise.resolve(),
+  hostHandler: null as null | { handle(controller: string, raw: unknown): Promise<unknown> },
   config: null as ProviderGroupConfig | null,
   subscription: true,
   old: new Set<string>(),
@@ -22,6 +27,7 @@ const state = vi.hoisted(() => ({
   self: 'self',
   direct: false,
   planDevice: 'one',
+  plan: vi.fn(),
   approved: true,
   delegatedAllowed: true,
   modelChanged: undefined as (() => void) | undefined,
@@ -34,6 +40,9 @@ const state = vi.hoisted(() => ({
   pair: null as null | { generation: string; expiresAt: number; ownerDeviceId: string; executorDeviceId: string },
   check: vi.fn(),
   failGrant: false,
+  failGrantError: undefined as Error | undefined,
+  supportsDirect: true,
+  supportsFastCache: false,
   delegateCalls: [] as RemoteAgentRequest[],
 }));
 function ownedShareSnapshot(): readonly ProviderShareOwned[] | null {
@@ -50,7 +59,9 @@ vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'one' }));
 vi.mock('../../device-link/providerShareApi.js', () => ({
   providerShareOwnerKey: () => state.owner,
   checkProviderShareDelegation: (...args: unknown[]) => state.check(...args),
+  clearProviderShareDelegationChecks: () => {},
   grantProviderShareDelegation: async ({ executorDeviceId }: { executorDeviceId: string }) => {
+    if (state.failGrantError) throw state.failGrantError;
     if (state.failGrant) throw Error('server unavailable');
     state.pair = { generation: randomUUID(), expiresAt: Date.now() + 30 * 60_000,
       ownerDeviceId: 'self', executorDeviceId };
@@ -61,7 +72,7 @@ vi.mock('../../device-link/providerShareApi.js', () => ({
     if (state.pair?.generation === generation) state.pair = null;
   },
 }));
-vi.mock('../../device-link/settings-store.js', () => ({
+vi.mock('../../device-link/settings-store.desktop.js', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: state.revoked }),
   onDeviceLinkSettingChanged: () => () => {},
 }));
@@ -90,17 +101,19 @@ vi.mock('../../device-link/providerShareUsageStore.js', async (original) => ({
 }));
 vi.mock('../../remote-agent/host/runHost.js', () => ({
   createRemoteAgentHost: (deps: RemoteAgentHostDeps) => { state.hostDeps = deps; return {
-    dispose() {}, issueDirectGroupSwitchToken: () => randomUUID(),
+    dispose: state.stopHost,
+    handle: async () => ({ version: 1 }),
+    issueDirectGroupSwitchToken: () => randomUUID(),
   }; },
 }));
 vi.mock('../../remote-agent/controller/runClient.js', () => ({
-  RemoteAgentRunClient: { caps: async () => ({ directGuestExecution: true, guestRelay: true }) },
+  RemoteAgentRunClient: { caps: async () => ({ directGuestExecution: state.supportsDirect, guestRelay: state.supportsDirect,
+    ...(state.supportsFastCache ? { subscriptionFastPolicyCache: true } : {}) }) },
 }));
 vi.mock('../../remote-agent/controller/service', () => ({ remoteAgentPollerFor: vi.fn() }));
 vi.mock('../guestRelay.js', () => ({
   createProviderGroupGuestRelay: () => ({
-    plan: async () => ({ kind: 'member', agentDeviceId: state.planDevice, providerId: 'openai',
-      memberKey: `device:${state.planDevice}:openai`, sameAccount: true }),
+    plan: (...args: unknown[]) => state.plan(...args),
     trackRun: () => ({ setRunning() {}, release() {} }),
     connect: (device: string) => {
       if (state.offline.has(device)) throw Error('executor offline');
@@ -114,10 +127,13 @@ vi.mock('../guestRelay.js', () => ({
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => state.owner, isDataOwnerBroadcastScopeCurrent: () => true,
 }));
-vi.mock('../../device-link/dispatch.js', () => ({ setRemoteAgentHandler() {} }));
+vi.mock('../../device-link/dispatch.desktop.js', () => ({ setRemoteAgentHandler(handler: typeof state.hostHandler) { state.hostHandler = handler; } }));
 vi.mock('../../device-link/providerShareReshare.js', () => ({ handleProviderShareReshare() {}, providerShareReshareAllows() {} }));
 vi.mock('../reshareRuntime.js', () => ({ providerGroupReshare: {} }));
-vi.mock('../runtime.js', () => ({ getProviderGroupOwnerScope: () => state.owner }));
+vi.mock('../runtime.js', () => ({
+  getProviderGroupOwnerScope: () => state.owner,
+  hasProviderGroupContinuityHandler: () => false,
+}));
 vi.mock('../../remote-agent/host/limitsStore.js', () => ({ readRemoteAgentLimitsState: () => ({ value: {} }) }));
 vi.mock('../../remote-agent/host/providerAccess', () => ({ createGuestProviderRouteBinder: () => vi.fn() }));
 vi.mock('../../remote-agent/host/transcripts', () => ({}));
@@ -173,6 +189,7 @@ vi.mock('../../device-link/index.js', () => ({
           uploadChunkBytes: 1024,
           maxPayloadBytes: 8192,
           ...(!state.old.has(device) ? { subscriptionFastPolicy: true } : {}),
+          ...(state.supportsFastCache ? { subscriptionFastPolicyCache: true } : {}),
         },
       };
     if (state.direct && command.op === 'fast-policy') {
@@ -188,17 +205,24 @@ const { groupFastPolicyStore, createGroupFastPolicyStore } = await import('../fa
 const delegation = await import('../../device-link/providerShareDelegatedAccess.js');
 const { createProviderShareUsageStore } = await import('../../device-link/providerShareUsageStore.js');
 const { installRemoteAgentHost, disposeRemoteAgentHost } = await import('../../remote-agent/host/service.js');
+const realGuestRelay = await vi.importActual<typeof import('../guestRelay.js')>('../guestRelay.js');
 let sequence = 0;
 beforeEach(() => {
+  state.stopHost = () => Promise.resolve();
   state.self = 'self';
   state.direct = false;
   state.planDevice = 'one';
+  state.plan.mockReset().mockImplementation(async () => ({ kind: 'member', agentDeviceId: state.planDevice,
+    providerId: 'openai', memberKey: `device:${state.planDevice}:openai`, sameAccount: true }));
   state.approved = true;
   state.delegatedAllowed = true;
   state.modelChanged = undefined;
   state.revoked = [];
   state.pair = null;
   state.failGrant = false;
+  state.failGrantError = undefined;
+  state.supportsDirect = true;
+  state.supportsFastCache = false;
   state.delegateCalls = [];
   state.usage = undefined;
   state.check.mockReset().mockImplementation(async ({ executorDeviceId }) =>
@@ -237,6 +261,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 afterAll(() => fs.rmSync(temporary, { recursive: true, force: true }));
+afterEach(() => vi.useRealTimers());
 
 const guestPeer = providerShareGuestPeer('share', 'member', 'laptop');
 const directTask = (sessionId: string) => hostSessionIdFor(guestPeer, sessionId);
@@ -252,11 +277,64 @@ async function installDirectHost() {
 }
 const allocate = (sessionId: string) => state.hostDeps!.directGuestExecution!.allocate(guestPeer,
   { op: 'allocate', sessionId, agentKind: 'codex', model: 'gpt-5' });
+
+// Unit: real O allocation/ledger must distinguish denial and policy from
+// transport failure without forwarding the upstream secret-bearing message.
+// Previous coverage only asserted null; a pinned restore needs an actionable cause.
+it.each(['policy', 'denied', 'timeout', 'rate', 'service', 'unsupported', 'unknown'] as const)('reports pinned history blocker %s without changing legacy fallback', async reason => {
+  await installDirectHost();
+  await allocate('diagnostic-history');
+  if (reason === 'policy') state.delegatedAllowed = false;
+  else if (reason === 'denied') state.revoked = ['one'];
+  else if (reason === 'unsupported') state.supportsDirect = false;
+  else state.failGrantError = Object.assign(new Error('https://private.invalid/?token=secret'),
+    { code: reason === 'timeout' ? 'TIMEOUT' : reason === 'rate' ? 'RATE_LIMITED' : reason === 'service' ? 'NETWORK_ERROR' : 'PRIVATE_FAILURE' });
+  const pinned = state.hostDeps!.directGuestExecution!.allocate(guestPeer, {
+    op: 'allocate', sessionId: 'diagnostic-history', agentKind: 'codex', model: 'gpt-5', preferredExecutorDeviceId: 'one',
+  });
+  await expect(pinned).rejects.toThrow(`[SHARED_TASK_RECOVERY_${reason}]`);
+  await expect(pinned).rejects.toThrow(`[SHARED_TASK_STAGE_${reason === 'unsupported' ? 'capability'
+    : reason === 'policy' || reason === 'denied' ? 'allocation' : 'authorization'}]`);
+  await expect(pinned).rejects.not.toThrow('private.invalid');
+  await expect(allocate('diagnostic-history')).resolves.toBeNull();
+  expect(await state.hostDeps!.directGuestExecution!.locate!(guestPeer, { op: 'direct-locate', sessionId: 'diagnostic-history' })).toEqual({ deviceId: 'one' });
+});
 function failAllocationAt(stage: 'Fast' | 'commit' | 'register') {
   if (stage === 'Fast') state.notify.mockRejectedValue(Error('native policy failed'));
   else vi.spyOn(state.usage!, stage === 'commit' ? 'commitDirectReceiptRoute' : 'registerDirectReceiptRoute')
     .mockRejectedValue(Error('journal write failed'));
 }
+
+// #7976: service reinstall must fence the old filesystem cleanup, including
+// an intermediate host that is disposed before that cleanup finishes (unit).
+it('waits for retired hosts before dispatching and rejects an obsolete replacement', async () => {
+  let release!: () => void;
+  const cleaning = new Promise<void>(resolve => { release = resolve; });
+  state.stopHost = () => cleaning;
+  await installDirectHost();
+  disposeRemoteAgentHost();
+  state.stopHost = () => Promise.resolve();
+  await installDirectHost();
+  const obsolete = state.hostHandler!.handle('controller', { op: 'caps' }).catch(error => error);
+  disposeRemoteAgentHost();
+  await installDirectHost();
+  let completed = false;
+  const request = state.hostHandler!.handle('controller', { op: 'caps' }).then(result => {
+    completed = true;
+    return result;
+  });
+  try {
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    release();
+    await expect(request).resolves.toEqual({ version: 1 });
+    expect(await obsolete).toMatchObject({ message: expect.stringContaining('REMOTE_AGENT_UNAVAILABLE') });
+  } finally {
+    release();
+    await Promise.all([request, obsolete]);
+  }
+});
 
 // Unit / real installed O callbacks + durable journal. Previously only active
 // 30-minute receipts were tested: expiry/restart could send a native ID to M2.
@@ -323,8 +401,8 @@ describe('durable direct task routing', () => {
     state.revoked = ['one'];
     expect(await allocate('history')).toBeNull();
     expect(await locate('history')).toEqual({ deviceId: 'one' });
-    expect(await state.hostDeps!.directGuestExecution!.allocate(guestPeer,
-      { op: 'allocate', sessionId: 'history', agentKind: 'codex', model: 'gpt-5', preferredExecutorDeviceId: 'two' })).toBeNull();
+    await expect(state.hostDeps!.directGuestExecution!.allocate(guestPeer,
+      { op: 'allocate', sessionId: 'history', agentKind: 'codex', model: 'gpt-5', preferredExecutorDeviceId: 'two' })).rejects.toThrow('[SHARED_TASK_RECOVERY_history]');
   });
 
   it('clears the durable pin only when O accepts the switch token', async () => {
@@ -345,6 +423,34 @@ describe('durable direct task routing', () => {
     await state.usage!.flush();
     await installDirectHost();
     expect(await locate('history')).toBeNull();
+  });
+
+  // Unit, provider-sharing §4.3 / direct-execution §7: the installed direct
+  // switch must use the real guest planner's per-person approval. The old
+  // fixture always returned a same-account member, hiding this missing identity.
+  it.each([true, false])('issues a direct switch only for a spare approved for this guest: approved=%s', async approved => {
+    await installDirectHost();
+    await allocate('reshare-recovery');
+    const spare = { ...state.config!.members[1]!, key: 'share:spare:openai' as const,
+      kind: 'share' as const, agentDeviceId: 'share:spare' };
+    state.config!.members[1] = spare;
+    const externalLoad = createProviderGroupExternalLoad({ now: Date.now });
+    const planner = realGuestRelay.createProviderGroupGuestRelay({
+      readGroup: () => state.config,
+      reshareAllows: (device, key) => approved && device === spare.agentDeviceId && key === reshareKeyFor('share', 'member'),
+      scope: () => ({ isCurrent: () => true, externalLoad, router: {
+        pick: async ({ exclude }: ProviderGroupPickInput): Promise<ProviderGroupPickResult> => exclude?.has(spare.key)
+          ? { kind: 'unavailable' as const, resolved: [] }
+          : { kind: 'member' as const, member: spare, label: 'spare', resolved: [] },
+      } as ProviderGroupRouter }),
+      connect: () => { throw Error('Switch planning must not start the spare'); },
+      now: Date.now, log: { warn() {} },
+    });
+    state.plan.mockImplementation(input => planner.plan(input));
+    const result = await state.hostDeps!.directGuestExecution!.switch(guestPeer,
+      { op: 'direct-switch', sessionId: 'reshare-recovery' });
+    expect(Boolean(result.token)).toBe(approved);
+    expect(await locate('reshare-recovery')).toEqual({ deviceId: 'one' });
   });
 
   it('retains historical affinity on release but clears it on accepted fresh O fallback', async () => {
@@ -369,6 +475,88 @@ describe('durable direct task routing', () => {
 // Regression: B rollback must not revoke A's pair; group Fast prohibition must
 // be durable and applied before a guest can start (provider-groups.md §15).
 describe('direct allocation authorization and Fast prebinding', () => {
+  // Unit/integration: an authenticated grant must not accept M's stale ACK
+  // after O lost/restored its revision state. Authorization still succeeds.
+  it('runs ordinarily when a lower revision grant cannot replace the executor cached policy', async () => {
+    state.supportsFastCache = true;
+    state.direct = true;
+    state.config!.allowFast = true;
+    await installDirectHost();
+    const task = directTask('task_a');
+    await groupFastPolicyStore.receive('self', { group: 'openai', revision: 100, allowFast: true,
+      binding: { sessionId: 'task_a' } }, 'one', () => {}, task);
+    expect(groupFastPolicyStore.allows(task, true)).toBe(true);
+    state.config!.allowFast = false;
+    expect(await allocate('task_a')).not.toBeNull();
+    expect(delegation.delegatedProviderShareSessionAllowed(guestPeer, 'task_a')).toBe(true);
+    expect(groupFastPolicyStore.allows(task, true)).toBe(false);
+    // An unbound group refresh or another low-revision task binding cannot
+    // clear this task's ordinary-speed restriction.
+    await groupFastPolicyStore.receive('self', { group: 'openai', revision: 1, allowFast: false,
+      binding: { sessionId: 'task_a' } }, 'one', () => {}, task);
+    expect(groupFastPolicyStore.allows(task, true)).toBe(false);
+    await groupFastPolicyStore.receive('self', { group: 'openai', revision: 101, allowFast: false,
+      binding: { sessionId: 'task_a' } }, 'one', () => {}, task);
+    expect(groupFastPolicyStore.allows(task, true)).toBe(false);
+    await groupFastPolicyStore.receive('self', { group: 'openai', revision: 102, allowFast: true,
+      binding: { sessionId: 'task_a' } }, 'one', () => {}, task);
+    expect(groupFastPolicyStore.allows(task, true)).toBe(true);
+  });
+  it('continues an authorized task at ordinary speed after executor policy storage fails', async () => {
+    state.supportsFastCache = true;
+    state.direct = true;
+    state.config!.allowFast = true;
+    await installDirectHost();
+    expect(await allocate('task_a')).not.toBeNull();
+    expect(groupFastPolicyStore.allows(directTask('task_a'), true)).toBe(true);
+    state.config!.allowFast = false;
+    const failed = vi.spyOn(groupFastPolicyStore, 'receive').mockRejectedValue(new Error('Group Fast bindings could not be read'));
+    expect(await allocate('task_a')).not.toBeNull();
+    expect(delegation.delegatedProviderShareSessionAllowed(guestPeer, 'task_a')).toBe(true);
+    expect(groupFastPolicyStore.allows(directTask('task_a'), true)).toBe(false);
+    failed.mockRestore();
+    state.config!.allowFast = true;
+    expect(await allocate('task_a')).not.toBeNull();
+    expect(groupFastPolicyStore.allows(directTask('task_a'), true)).toBe(true);
+  });
+
+  it('does not reject a modern task grant when O cannot read its speed policy store', async () => {
+    state.supportsFastCache = true;
+    state.direct = true;
+    await installDirectHost();
+    const prepare = groupFastPolicyStore.prepare.bind(groupFastPolicyStore);
+    vi.spyOn(groupFastPolicyStore, 'prepare').mockImplementation((...args) => state.self === 'self'
+      ? Promise.reject(new Error('Group Fast policy could not be read')) : prepare(...args));
+    expect(await allocate('task_a')).not.toBeNull();
+    expect(delegation.delegatedProviderShareSessionAllowed(guestPeer, 'task_a')).toBe(true);
+    expect(groupFastPolicyStore.allows(directTask('task_a'), true)).toBe(false);
+    // Opening on M binds its own live account policy as well. That local
+    // default must not stand in for the missing authenticated O group policy.
+    const config = state.config;
+    state.self = 'one';
+    state.config = null;
+    try { await runtime.bindLocalHostedGroupFastPolicy('openai', directTask('task_a')); }
+    finally { state.self = 'self'; state.config = config; }
+    expect(groupFastPolicyStore.allows(directTask('task_a'))).toBe(true);
+    expect(groupFastPolicyStore.allows(directTask('task_a'), true)).toBe(false);
+  });
+  // Unit/integration: real allocate -> delegate -> durable store. The old
+  // prebinding path duplicates the server check; grant/renewal must carry policy.
+  it('piggybacks speed restrictions on an authenticated grant and renewal without a separate Fast handshake', async () => {
+    state.supportsFastCache = true;
+    state.direct = true;
+    await installDirectHost();
+    expect(await allocate('task_a')).not.toBeNull();
+    expect(groupFastPolicyStore.allows(directTask('task_a'), true)).toBe(false);
+    expect(state.calls.filter(call => call.command.op === 'fast-policy')).toHaveLength(0);
+    expect(state.check).toHaveBeenCalledTimes(1);
+    expect(state.delegateCalls).toContainEqual(expect.objectContaining({ op: 'delegate', action: 'grant',
+      fastPolicy: expect.objectContaining({ group: 'openai', allowFast: false }) }));
+    state.config!.allowFast = true;
+    expect(await allocate('task_a')).not.toBeNull();
+    expect(groupFastPolicyStore.allows(directTask('task_a'), true)).toBe(true);
+    expect(state.check).toHaveBeenCalledTimes(2);
+  });
   it.each(['Fast', 'commit', 'register'] as const)(
     'keeps A executable when new B fails at %s', async (stage) => {
       await installDirectHost();
@@ -470,8 +658,12 @@ describe('direct allocation authorization and Fast prebinding', () => {
 function blockCapabilitiesRequest() {
   let enter!: () => void;
   let unblock!: () => void;
-  const started = new Promise<void>((resolve) => { enter = resolve; });
-  const blocked = new Promise<void>((resolve) => { unblock = resolve; });
+  const started = new Promise<void>((resolve) => {
+    enter = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
   state.beforeCaps = () => {
     enter();
     return blocked;
@@ -486,6 +678,138 @@ function blockCapabilitiesRequest() {
 }
 
 describe('group owner to executor enforcement handshake', () => {
+  it('keeps modern group routing ordinary after O policy storage fails without weakening old peers', async () => {
+    vi.spyOn(groupFastPolicyStore, 'prepare').mockRejectedValue(new Error('Group Fast policy could not be read'));
+    state.supportsFastCache = true;
+    await expect(runtime.bindGroupFastPolicy({ group: 'openai', deviceId: 'one', sessionId: 'task' })).resolves.toBeUndefined();
+    state.supportsFastCache = false;
+    await expect(runtime.bindGroupFastPolicy({ group: 'openai', deviceId: 'one', sessionId: 'task' })).rejects.toThrow('could not be read');
+  });
+  // Unit/integration: modern best-effort returns false on mismatch instead
+  // of throwing into the prohibition catch. Exercise independent binding.
+  it.each(['revision rollback', 'executor write failure'] as const)('keeps an independently bound modern task ordinary after %s', async failure => {
+    state.supportsFastCache = true;
+    state.direct = true;
+    state.config!.allowFast = false;
+    const task = hostSessionIdFor('self', 'task');
+    await groupFastPolicyStore.receive('self', { group: 'openai', revision: failure === 'revision rollback' ? 100 : 1, allowFast: true,
+      binding: { sessionId: 'task' } }, 'one', () => {});
+    expect(groupFastPolicyStore.allows(task, true)).toBe(true);
+    const writeFile = fs.writeFileSync;
+    const writes = vi.spyOn(fs, 'writeFileSync').mockImplementation((...args) => {
+      if (failure === 'executor write failure' && state.self === 'one') throw new Error('test executor disk unavailable');
+      return writeFile(...args);
+    });
+    try {
+      await expect(runtime.bindGroupFastPolicy({ group: 'openai', deviceId: 'one', sessionId: 'task' }))
+        .resolves.toBeUndefined();
+    } finally { writes.mockRestore(); }
+    expect(groupFastPolicyStore.allows(task, true)).toBe(false);
+    await groupFastPolicyStore.receive('self', { group: 'openai', revision: 101, allowFast: true,
+      binding: { sessionId: 'task' } }, 'one', () => {});
+    expect(groupFastPolicyStore.allows(task, true)).toBe(true);
+  });
+
+  it('keeps a modern executor usable while its speed-policy ACK is pending', async () => {
+    state.supportsFastCache = true;
+    const receive = vi.spyOn(groupFastPolicyStore, 'acknowledge');
+    state.direct = true;
+    state.notify.mockRejectedValue(new Error('native speed update pending'));
+    await expect(runtime.bindGroupFastPolicy({ group: 'openai', deviceId: 'one', sessionId: 'task' }))
+      .resolves.toBeUndefined();
+    expect(receive).not.toHaveBeenCalled();
+    expect(groupFastPolicyStore.allows(hostSessionIdFor('self', 'task'), true)).toBe(false);
+  });
+  // #7848 / PR #9063, unit: real sync/store with a failed peer and virtual
+  // polling time. Initial-send failures alone miss the acknowledged-target
+  // refresh path, which must retain backoff without rewriting policy on polls.
+  it.each([false, true])('backs off failed peers up to five minutes without rewriting unchanged policy on polls (previously confirmed: %s)', async (confirmed) => {
+    // Only virtualize the retry clock: filesystem lock mtimes use real Date.
+    vi.useFakeTimers({ toFake: ['performance', 'setInterval', 'clearInterval'] });
+    if (confirmed) {
+      await runtime.syncGroupFastPolicy('openai');
+      vi.advanceTimersByTime(15 * 60_000);
+    }
+    state.offline.add('one');
+    await runtime.syncGroupFastPolicy('openai');
+    const file = path.join(temporary, state.owner, 'provider-group-fast-policy.json');
+    const timestamp = new Date('2020-01-01T00:00:00Z');
+    fs.utimesSync(file, timestamp, timestamp);
+    const stop = runtime.startGroupFastPolicySync();
+    const attempts = (device: string) =>
+      state.calls.filter((call) => call.device === device && call.command.op === 'caps').length;
+    let count = confirmed ? 2 : 1;
+    const healthyAttempts = confirmed ? 2 : 1;
+    let totalElapsed = 0;
+    try {
+      for (const delay of [5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000]) {
+        totalElapsed += delay;
+        // Drain each poll's real filesystem work before advancing to the next.
+        for (let elapsed = 5_000; elapsed < delay; elapsed += 5_000) {
+          await vi.advanceTimersByTimeAsync(5_000);
+          await runtime.syncGroupFastPolicy('openai');
+          expect(attempts('one')).toBe(count);
+        }
+        await vi.advanceTimersByTimeAsync(5_000);
+        await runtime.syncGroupFastPolicy('openai');
+        expect(attempts('one')).toBe(++count);
+        // Healthy peers refresh their speed cache on the existing sync loop
+        // after fifteen minutes; unsuccessful polls before then stay read-only.
+        expect(attempts('two')).toBe(healthyAttempts + (totalElapsed < 15 * 60_000 ? 0 : 1));
+        if (totalElapsed < 15 * 60_000) expect(fs.statSync(file).mtimeMs).toBe(timestamp.getTime());
+        expect(runtime.groupFastPolicyPending('openai')).toBe(!confirmed);
+      }
+      state.offline.clear();
+      await vi.advanceTimersByTimeAsync(300_000);
+      await runtime.syncGroupFastPolicy('openai');
+      expect(runtime.groupFastPolicyPending('openai')).toBe(false);
+      expect(attempts('one')).toBe(count + 1);
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(attempts('one')).toBe(count + 1);
+    } finally {
+      stop();
+      await runtime.syncGroupFastPolicy('openai');
+    }
+  });
+
+  it('sends new revisions and removed-member releases immediately despite previous failures', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] });
+    state.offline.add('one');
+    await runtime.syncGroupFastPolicy('openai');
+    const revision = groupFastPolicyStore.outgoing().openai.revision;
+    state.config!.allowFast = true;
+    await runtime.syncGroupFastPolicy('openai');
+    expect(state.calls.filter(({ device }) => device === 'one')).toHaveLength(2);
+    expect(groupFastPolicyStore.outgoing().openai.revision).toBe(revision + 1);
+    state.config!.members = state.config!.members.slice(1);
+    await runtime.syncGroupFastPolicy('openai');
+    expect(state.calls.filter(({ device }) => device === 'one')).toHaveLength(3);
+    expect(groupFastPolicyStore.outgoing().openai.targets.one).toBe(-1);
+    state.offline.clear();
+    await runtime.syncGroupFastPolicy('openai');
+    expect(state.calls.filter(({ device }) => device === 'one')).toHaveLength(3);
+    vi.advanceTimersByTime(5_000);
+    await runtime.syncGroupFastPolicy('openai');
+    expect(state.calls).toContainEqual({
+      device: 'one',
+      command: { op: 'fast-policy', group: 'openai', allowFast: true, revision: revision + 2 },
+    });
+    expect(groupFastPolicyStore.outgoing().openai.targets).not.toHaveProperty('one');
+    expect(runtime.groupFastPolicyPending('openai')).toBe(false);
+  });
+
+  it('does not carry failed-peer cooldown into a different owner with the same group and revision', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] });
+    state.broken.add('one');
+    await runtime.syncGroupFastPolicy('openai');
+    await runtime.syncGroupFastPolicy('openai');
+    expect(state.calls.filter(({ device }) => device === 'one')).toHaveLength(1);
+    state.owner = `other-${state.owner}`;
+    await runtime.syncGroupFastPolicy('openai');
+    expect(state.calls.filter(({ device }) => device === 'one')).toHaveLength(2);
+    expect(groupFastPolicyStore.outgoing().openai.targets.two).toBe(1);
+  });
+
   it('coalesces repeated sync requests while the same offline revision is in flight', async () => {
     const caps = blockCapabilitiesRequest();
     // Only one remote endpoint makes the blocked request count unambiguous.
@@ -567,12 +891,14 @@ describe('group owner to executor enforcement handshake', () => {
   });
 
   it('keeps offline and old executors pending, retries after recovery, and releases removed members with a newer revision', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] });
     state.old.add('one');
     state.offline.add('two');
     await runtime.syncGroupFastPolicy('openai');
     expect(runtime.groupFastPolicyPending('openai')).toBe(true);
     state.old.clear();
     state.offline.clear();
+    vi.advanceTimersByTime(5_000);
     await runtime.syncGroupFastPolicy('openai');
     expect(runtime.groupFastPolicyPending('openai')).toBe(false);
     const revision = groupFastPolicyStore.outgoing().openai.revision;
@@ -665,6 +991,7 @@ describe('group owner to executor enforcement handshake', () => {
   });
 
   it('shows local native failures as pending instead of acknowledging the whole group', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] });
     state.config!.members.push({
       key: 'local',
       kind: 'local',
@@ -678,6 +1005,7 @@ describe('group owner to executor enforcement handshake', () => {
     await expect(runtime.syncGroupFastPolicy('openai')).rejects.toThrow('native busy');
     expect(runtime.groupFastPolicyPending('openai')).toBe(true);
     state.notify.mockResolvedValue(undefined);
+    vi.advanceTimersByTime(5_000);
     await runtime.syncGroupFastPolicy('openai');
     expect(runtime.groupFastPolicyPending('openai')).toBe(false);
   });
@@ -698,6 +1026,31 @@ describe('group owner to executor enforcement handshake', () => {
 // change policy after publication; hold the durable commit to exercise F4's
 // missing post-await admission, including rollback restoration of a previous lease.
 describe('direct commit admission races', () => {
+  // Unit: a known permission change during durable commit is an authorization
+  // denial, not an unknown executor fault; the failed grant must not survive.
+  it.each(['caps', 'commit'] as const)('reports a pinned permission change during %s without installing a usable lease', async boundary => {
+    await installDirectHost();
+    if (boundary === 'caps') {
+      const { RemoteAgentRunClient } = await import('../../remote-agent/controller/runClient.js');
+      const readCaps = RemoteAgentRunClient.caps;
+      vi.spyOn(RemoteAgentRunClient, 'caps').mockImplementation(async (...args) => {
+        const caps = await readCaps(...args);
+        state.delegatedAllowed = false;
+        return caps;
+      });
+    } else {
+      const commit = state.usage!.commitDirectReceiptRoute.bind(state.usage!);
+      vi.spyOn(state.usage!, 'commitDirectReceiptRoute').mockImplementation(async input => {
+        await commit(input);
+        state.delegatedAllowed = false;
+      });
+    }
+    await expect(state.hostDeps!.directGuestExecution!.allocate(guestPeer, {
+      op: 'allocate', sessionId: 'pinned-commit', agentKind: 'codex', model: 'gpt-5', preferredExecutorDeviceId: 'one',
+    })).rejects.toThrow('[SHARED_TASK_RECOVERY_denied] [SHARED_TASK_STAGE_authorization]');
+    expect(delegation.delegatedProviderShareTaskAccess(guestPeer, 'pinned-commit')).toBeNull();
+    expect(state.usage!.listActiveDirectReceiptRoutes(state.owner)).toEqual([]);
+  });
   it.each(['new', 'restore'] as const)('rejects a budget enabled during %s commit and retires that generation', async (stage) => {
     await installDirectHost();
     if (stage === 'restore') expect(await allocate('commit-race')).not.toBeNull();

@@ -116,6 +116,7 @@ describe("resolveCatalogUrl", () => {
       region: "cn",
       registryMedia: "1",
       registryLocalRuntimes: "1",
+      registryRecommendedAgents: "1",
       registrySchemaVersion: "6",
     });
   });
@@ -147,7 +148,7 @@ describe("resolveCatalogUrl", () => {
     expect(
       resolveCatalogUrl({ baseUrl: "https://model-access.example.com/" }),
     ).toBe(
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1&registryRecommendedAgents=1",
     );
   });
   it("builds the migration OSS fallback URL", () => {
@@ -1074,7 +1075,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1&registryRecommendedAgents=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1134,7 +1135,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1&registryRecommendedAgents=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1192,7 +1193,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenNthCalledWith(
       1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1&registryRecommendedAgents=1",
       15_000,
     );
     expect(fetchText).toHaveBeenNthCalledWith(
@@ -1221,7 +1222,7 @@ describe("loadCatalog", () => {
     );
     expect(fetchText).toHaveBeenCalledTimes(1);
     expect(fetchText).toHaveBeenCalledWith(
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1&registryRecommendedAgents=1",
       15_000,
     );
     expect(cat.version).toBe(BUNDLED_CATALOG.version);
@@ -1355,6 +1356,18 @@ describe("registry visibility & sources(运行时注入 fixture)", () => {
     expect(connectedProvidersForAgent(views, "codex").map((p) => p.id)).toEqual(
       ["xd"],
     );
+  });
+
+  // 2026-11-11 upgrade regression, unit: the display marker must not disconnect saved routes.
+  it("keeps imported connection IDs available to saved-route validators", () => {
+    const connected = buildRegistry(runtimeCatalog(), { openai: true });
+    const original = connected.find(provider => provider.id === "openai")!;
+    const alias = { ...original, id: "openai-old", subscriptionPoolAlias: true as const };
+    const upgraded = [...connected, alias];
+    expect(connectedProvidersForAgent(upgraded, "codex").map(provider => provider.id)).toEqual(["openai", "openai-old"]);
+    expect(connectedProvidersForAgent(upgraded, "codex", { includeSuspended: true }).map(provider => provider.id))
+      .toEqual(["openai", "openai-old"]);
+    expect(sourcesForModel(upgraded, "gpt-5.5", "codex").some(provider => provider.id === "openai-old")).toBe(true);
   });
 
   it("agent selectors and model sources exclude disabled runtimes", () => {
@@ -1772,4 +1785,17 @@ it('keeps the accepted complete V6 snapshot when an old server answers with its 
   expect(result.catalog.modelRegistry).toEqual(current.modelRegistry);
   expect(result.capabilityEvidence).toBe('fallback');
   expect(writeCache).toHaveBeenCalledWith(expect.stringContaining('Version=6'), expect.any(String));
+});
+
+// Upgrading adds `registryRecommendedAgents=1`; an offline first start must still use the
+// V6 snapshot cached under the previous URL instead of dropping to the bundled catalog.
+it('falls back offline to the V6 snapshot cached before the recommendation capability', async () => {
+  const cached = { ...MINIMAL, modelRegistry: { ...structuredClone(BUNDLED_CATALOG.modelRegistry!), updatedAt: '2099-02-01T00:00:00.000Z' } };
+  const previous = 'https://models.example/api/model-catalog/catalog?registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1';
+  const result = await loadCatalogWithSource({ baseUrl: 'https://models.example' }, {
+    fetchText: async () => { throw new Error('offline'); },
+    readCache: async url => url === previous ? JSON.stringify(cached) : null,
+  });
+  expect(result.source).toBe('cache');
+  expect(result.catalog.modelRegistry?.updatedAt).toBe('2099-02-01T00:00:00.000Z');
 });

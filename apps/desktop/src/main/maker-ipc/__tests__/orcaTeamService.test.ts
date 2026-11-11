@@ -1,9 +1,7 @@
 import { admitTaskAction, captureTaskActionGuard } from '../taskActionAuthorization.js';
-import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 import { describe, expect, it, vi } from 'vitest';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
-import {isPluginTaskPermissionAllowed, PluginTaskError} from '../pluginTaskService.js';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
@@ -136,7 +134,7 @@ describe('model Orca cleanup authority', () => {
         },
       };
       const api = compile({
-        captureOrcaPluginAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
+        captureOrcaTaskAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
         orcaTeamService: service, listWorkersByLead: deps.listWorkersByLead, findFocusTargetWorker,
         setWorkerFocus: focus, resumeOrcaWorkerSessionIfMissing: resume,
         orcaWorkerResumeScheduler, log: { warn: vi.fn() },
@@ -156,7 +154,7 @@ describe('model Orca cleanup authority', () => {
       const assertCurrent = async () => { if (!allowed) throw Error('Revoked'); };
       const close = vi.fn(async () => undefined), archive = vi.fn(async () => []);
       const bindings = {
-        captureOrcaPluginAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
+        captureOrcaTaskAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
         getActiveTeamByLead: async () => team ? { id: 'team-1' } : null,
         getSessionOrcaRole: async () => { if (phase === 'lookup') allowed = false; return 'lead'; },
         listWorkersByLead: async () => { if (phase === 'lookup') allowed = false; return [createWorker()]; },
@@ -323,30 +321,7 @@ describe('OrcaTeamService updateWorker', () => {
     expect(getWorker()).toMatchObject({ role: 'Reviewer', label: 'backend-2' });
   });
 
-  it('rejects a label rename locked by the active plugin team plan but still allows role changes', async () => {
-    const isWorkerLabelLockedByPlan = vi.fn(async () => true);
-    const { deps, service, getWorker } = createDeps({ isWorkerLabelLockedByPlan });
 
-    await expect(service.updateWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      label: 'backend-2',
-    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
-    expect(isWorkerLabelLockedByPlan).toHaveBeenCalledWith({
-      leadSessionId: 'lead-1',
-      labels: ['research', 'backend-2'],
-    });
-    expect(deps.updateWorkerIdentity).not.toHaveBeenCalled();
-
-    // 计划只按 label 寻址，role 改名不受影响，也不触发计划查询。
-    await expect(service.updateWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      role: 'Reviewer',
-    })).resolves.toMatchObject({ ok: true, role: 'Reviewer', label: 'research' });
-    expect(isWorkerLabelLockedByPlan).toHaveBeenCalledTimes(1);
-    expect(getWorker()).toMatchObject({ role: 'Reviewer', label: 'research' });
-  });
 });
 
 function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
@@ -593,59 +568,34 @@ describe('OrcaTeamService', () => {
     })).resolves.toMatchObject({ dispatched: true, agentKind: 'pi' });
   });
 
-  // #6399: plugin-only coverage missed an ordinary owner input revoked after
-  // admission. Real host capture + public service; delayed acceptance escapes ALS.
-  it.each(['send', 'interrupt'].flatMap(action => [
-    ...['initial', 'lookup', 'restore', 'accept', 'queued', 'healthy'].map(phase => ({action,phase,source:'plugin'})),
-    ...['lookup', 'queued', 'healthy'].map(phase => ({action,phase,source:'action'})),
-  ]))(
-    'preserves $source authority for public $action across $phase', async ({action,phase,source:authoritySource}) => {
-      let revoked = phase === 'initial', nativeCalls = 0;
-      let delayed: (() => Promise<void>) | undefined;
-      const source = readFileSync(new URL('../register.ts',import.meta.url),'utf8');
-      const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='),source.indexOf('  const orcaWorkerCreationService ='));
-      const epoch = {client:{}};
-      const bindings = {PluginTaskError,isPluginTaskPermissionAllowed,getCurrentDbClientSnapshot:()=>epoch,
-        maker:{getSession:()=>null},inputCoordinator:{getAcceptedInputProvenance:()=>authoritySource==='plugin'?{clientId:'plugin-task:run'}:null},
-        createPluginTaskStore:()=>({get:async (id:string)=>authoritySource==='action'?undefined:id==='run'
-          ? {operation:'send',targetId:'lead-1',pluginId:'plugin',payload:'{"inputMessageId":"plugin-task:run"}'}
-          : {operation:'create',pluginId:'plugin',payload:JSON.stringify({ownershipRevoked:revoked})}}),
-        pluginTaskServiceForCurrentOwner:()=>({get:async()=>({status:'active',permissionMode:'auto'})}),
-        isPluginTaskAuthorized:()=>!revoked,getPluginTaskDefaults:()=>({permissionMode:'auto'})};
-      const capture = new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', ...Object.keys(bindings),ts.transpileModule(`${helper}\nreturn captureOrcaPluginAuthority;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(captureTaskActionGuard, hasAcceptedUserTaskInput, ...Object.values(bindings));
-      const {deps,service,getWorker}=createDeps({captureControlAuthority:async id=>(await capture(id)).assertCurrent});
-      const list=deps.listWorkersByLead;
-      deps.listWorkersByLead=vi.fn(async id=>{const r=await list(id);if(phase==='lookup')revoked=true;return r;});
-      deps.resumeWorkerSession=vi.fn(async()=>{if(phase==='restore')revoked=true;});
-      const dispatch=async (params: Parameters<OrcaTeamServiceDeps['reserveWorkerMessage']>[0]):Promise<DispatchWorkerMessageResult>=>{
-        if(action==='interrupt'){
-          if(phase==='restore')revoked=true;
-          await params.beforeReserve?.(); params.onReserved?.();
-        }
-        const accept=async()=>{if(phase==='accept')revoked=true;await runAcceptedCallback(params.onAccepted,'worker-session-1','input',deps.log);nativeCalls++;};
-        if(phase==='queued')delayed=accept;else await accept();
-        return {ok:true,mode:phase==='queued'?'queued':'dispatched',clientId:'input',dispatchOutcome:{kind:'session-dispatch',source:'test',dispatched:true},targetTitle:'Worker',targetLastUserSendAt:null};
-      };
-      deps.dispatchWorkerMessage=vi.fn(dispatch);deps.reserveWorkerMessage=vi.fn(dispatch);
-      const invoke=async()=>service[action==='send'?'sendToWorker':'interruptWorker']({callerLeadSessionId:'lead-1',targetSessionId:'worker-session-1',message:'Evaluate'});
-      const run=async()=>{
-        if(authoritySource==='plugin')return invoke();
-        const admitted=await admitTaskAction({sessionId:'lead-1',server:'cindy_orca',tool:action==='send'?'send_to_worker':'interrupt_worker',args:{}},
-          {key:'owner',ownerInput:true,delegated:false,assertCurrent:async()=>{if(revoked)throw new Error('Revoked');}});
-        if(!admitted.ok||!admitted.run)throw new Error('missing admission');
-        return admitted.run(invoke);
-      };
-      if(phase==='initial')await expect(run()).rejects.toThrow();
-      else {
-        const result=await run();
-        if(phase==='queued'){expect(result.ok).toBe(true);revoked=true;await expect(delayed!()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);}
-        else expect(result.ok).toBe(phase==='healthy');
-      }
-      expect(nativeCalls).toBe(phase==='healthy'?1:0);
-      expect(getWorker().status).toBe(phase==='healthy'?'running':'idle');
-      if(action==='interrupt'&&['initial','lookup','restore'].includes(phase))expect(deps.requestWorkerInterrupt).not.toHaveBeenCalled();
-      expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+  it.each(['send', 'interrupt'] as const)('rechecks task action authorization during public %s', async action => {
+    let allowed = true;
+    const { deps, service, getWorker } = createDeps({
+      captureControlAuthority: async () => {
+        const guard = captureTaskActionGuard();
+        await guard?.();
+        return async () => { await guard?.(); };
+      },
     });
+    const list = deps.listWorkersByLead;
+    deps.listWorkersByLead = vi.fn(async id => { const workers = await list(id); allowed = false; return workers; });
+    const admitted = await admitTaskAction({
+      sessionId: 'lead-1', server: 'cindy_orca', tool: action === 'send' ? 'send_to_worker' : 'interrupt_worker', args: {},
+    }, { key: 'owner', ownerInput: true, delegated: false,
+      assertCurrent: async () => { if (!allowed) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); } });
+    if (!admitted.ok || !admitted.run) throw new Error('missing admission');
+    const params = { callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: 'Evaluate' };
+    if (action === 'send') {
+      await expect(admitted.run(() => service.sendToWorker(params)))
+        .resolves.toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
+    } else {
+      await expect(admitted.run(() => service.interruptWorker(params)))
+        .resolves.toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
+    }
+    expect(getWorker().status).toBe('idle');
+    expect(deps.dispatchWorkerMessage).not.toHaveBeenCalled();
+    expect(deps.reserveWorkerMessage).not.toHaveBeenCalled();
+  });
   it.each(['lookup', 'resume', 'send', 'accepted-list', 'status-update', 'queued', 'healthy'])(
     'rechecks Host creation provenance at acceptance after %s', async phase => {
       let allowed = true, nativeCalls = 0;
@@ -1920,6 +1870,46 @@ describe('OrcaTeamService', () => {
     expect(onLeadWorkerReportsSettled).toHaveBeenCalledExactlyOnceWith('lead-1');
   });
 
+  // Rule: orca-team-architecture.md「消息派发与 auto-bridge」#12. Accepting a report, even into
+  // the Lead's queue, settles the assignment's duty to report, so withdrawing the assignment's
+  // only report would leave the Lead uninformed with nothing auto-bridged later. Review case:
+  // an earlier assignment's report still queued must not make the current one look covered.
+  // Unit tier, public service calls.
+  it('scopes report withdrawal to the Worker\'s current assignment', async () => {
+    const h = createDeps();
+    const sid = 'worker-session-1';
+    const send = () => h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: sid, message: 'A' });
+    const report = (receipt: { delivered: boolean; queuedMessageId?: string }, accepted = true) =>
+      h.service.captureLocalWorkerReport(sid)(accepted, receipt);
+    const standing = (id: string) => h.service.workerReportWithdrawalStanding(sid, id);
+
+    expect(standing('r1')).toBe('untracked'); // no Lead assignment is running
+    await send();
+    await report({ delivered: false, queuedMessageId: 'rejected' }, false);
+    await report({ delivered: false, queuedMessageId: 'r1' });
+    expect(standing('rejected')).toBe('other-assignment'); // a refused send is not a report
+    expect(standing('r1')).toBe('last');
+    await report({ delivered: false, queuedMessageId: 'r2' });
+    expect(standing('r1')).toBe('covered');
+    // r2 left the Lead's queue undelivered (withdrawn, merged away, Stop): r1 is the only one again.
+    h.service.forgetWorkerQueuedReports(sid, ['r2']);
+    expect(standing('r1')).toBe('last');
+    await report({ delivered: true });
+    expect(standing('r1')).toBe('covered');
+
+    // Next assignment: its own single queued report is not covered by the previous one's.
+    await send();
+    await report({ delivered: false, queuedMessageId: 'r3' });
+    expect(standing('r3')).toBe('last');
+    expect(standing('r1')).toBe('other-assignment');
+
+    // Review finding (#9594): merging r1 (earlier assignment) with r3 keeps r1 and drops r3. The
+    // survivor takes over this assignment's report, so it can no longer be withdrawn.
+    h.service.forgetWorkerQueuedReports(sid, ['r3']);
+    h.service.adoptWorkerQueuedReport(sid, 'r1');
+    expect(standing('r1')).toBe('last');
+  });
+
   it.each([true, false])('waits outside the transition lock for an in-flight manual report: accepted=%s', async accepted => {
     let generation = 1;
     const runtime = { isTurnRunning: () => true, getTurnGeneration: () => generation };
@@ -2632,9 +2622,17 @@ describe('OrcaTeamService', () => {
         `updateWorkerStatus:${status}`,
         'broadcastOrcaWorkerChanged',
       ]);
-      expect(leadMessages).toEqual([
-        `${status === 'error' ? '[Auto-bridged: worker 异常终止]' : '[Auto-bridged: worker 已完成，系统自动回传结果]'}\n\n完成了`,
-      ]);
+      expect(leadMessages).toHaveLength(1);
+      if (status === 'done') {
+        expect(leadMessages[0]).toBe('[Auto-bridged: worker 已完成，系统自动回传结果]\n\n完成了');
+      } else {
+        // 出错的 Worker 原样保留：回报末尾告诉 Lead 如何原地继续，而不是归档重建
+        // （2026-11-10 现场：五个撞上用量上限的 Worker 被全部归档重建）。
+        expect(leadMessages[0]).toMatch(/^\[Auto-bridged: worker 异常终止\]\n\n完成了\n\n\(Host note: /);
+        expect(leadMessages[0]).toContain('session_id: worker-session-1');
+        expect(leadMessages[0]).toContain('send_to_worker');
+        expect(leadMessages[0]).toContain('set_session_runtime');
+      }
     },
   );
 
@@ -2741,9 +2739,10 @@ describe('OrcaTeamService', () => {
       diagnostic: 'Claude session exited before producing a result',
     });
 
-    expect(leadMessages).toEqual([
-      '[Auto-bridged: worker 异常终止]\n\nClaude session exited before producing a result',
-    ]);
+    expect(leadMessages).toHaveLength(1);
+    expect(leadMessages[0]).toMatch(
+      /^\[Auto-bridged: worker 异常终止\]\n\nClaude session exited before producing a result\n\n\(Host note: /,
+    );
   });
 
   it('marks worker idle and clears bridge state before closing its session', async () => {
@@ -3492,6 +3491,147 @@ describe('OrcaTeamService', () => {
       sessionId: 'worker-session-1',
       err: 'close failed',
     });
+  });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：OrcaTeamService.archiveWorker / sendToWorker；Lead 队列里该 Worker 的
+ *   异常终止回报是否被撤下，回执是否带回正文。
+ * - Bug 依据：2026-11-10 协同任务里，五个撞上用量上限的 Worker 已被处理，剩余四条异常终止回报仍
+ *   逐条唤醒 Lead，各跑一轮只为确认「旧通知，忽略」。
+ * - 现有覆盖缺口：此前没有任何路径会在 Lead 采取行动后清理它自己队列里的过期回报。
+ * - 最小失败输入：Lead 队列里排着 worker-session-1 的一条异常终止回报时归档或重新派活。
+ * - tier：unit（内存 fake 的队列快照与 remove）。
+ */
+describe('OrcaTeamService superseded worker failure notices', () => {
+  const failureText = '[Auto-bridged: worker 异常终止]\n\nYou have reached your usage limit.';
+  function leadQueueItem(clientId: string, senderSessionId: string, displayText: string): AgentInputQueuedMessage {
+    return {
+      clientId,
+      text: `[From Orca Worker dev]\n${displayText}`,
+      persistedContent: displayText,
+      model: 'gpt-5.4',
+      effort: 'medium',
+      permissionMode: 'bypassPermissions',
+      workingDir: '/repo',
+      chatMessage: { clientId, role: 'user', content: displayText, createdAt: '2026-11-10T00:00:00.000Z' },
+      createOpts: { agentKind: 'codex', workingDir: '/repo', model: 'gpt-5.4' },
+      origin: { kind: 'orca', senderLabel: 'dev', displayText, senderSessionId },
+    } as AgentInputQueuedMessage;
+  }
+  function leadQueue(items: AgentInputQueuedMessage[], consumingClientIds: string[] = []) {
+    const queue = [...items];
+    return {
+      getSessionQueueSnapshot: vi.fn(async () => ({
+        pendingQueue: [...queue],
+        steeringClientIds: [],
+        consumingClientIds,
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
+      })),
+      removeQueuedMessage: vi.fn((_sessionId: string, clientId: string) => {
+        const index = queue.findIndex((item) => item.clientId === clientId);
+        if (index < 0) return false;
+        queue.splice(index, 1);
+        return true;
+      }),
+      push: (item: AgentInputQueuedMessage) => { queue.push(item); },
+      ids: () => queue.map((item) => item.clientId),
+    };
+  }
+
+  it('withdraws only the archived worker\'s unread failure notices and keeps every other report', async () => {
+    const queue = leadQueue([
+      leadQueueItem('own-failure', 'worker-session-1', failureText),
+      leadQueueItem('own-result', 'worker-session-1', '基准测量完成，结果见下。'),
+      leadQueueItem('other-failure', 'worker-session-2', failureText),
+      leadQueueItem('own-failure-delivering', 'worker-session-1', failureText),
+    ], ['own-failure-delivering']);
+    const { deps, service, setWorker } = createDeps(queue);
+    setWorker(createWorker({ status: 'error' }));
+
+    await expect(
+      service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' }),
+    ).resolves.toEqual({ ok: true, workerId: 'worker-1', withdrawnFailureNotices: 1 });
+
+    // 成果、其他 Worker 的回报与正在投递的条目都必须留下。
+    expect(queue.ids()).toEqual(['own-result', 'other-failure', 'own-failure-delivering']);
+    expect(deps.removeQueuedMessage).toHaveBeenCalledWith('lead-1', 'own-failure', expect.objectContaining({ clientId: 'own-failure' }));
+  });
+
+  it('still archives when the lead queue cannot be read', async () => {
+    const { service, setWorker, getWorker } = createDeps({
+      getSessionQueueSnapshot: vi.fn(async () => { throw new Error('queue unavailable'); }),
+    });
+    setWorker(createWorker({ status: 'error' }));
+
+    await expect(
+      service.archiveWorker({ callerLeadSessionId: 'lead-1', workerId: 'worker-1' }),
+    ).resolves.toEqual({ ok: true, workerId: 'worker-1' });
+    expect(getWorker().status).toBe('done');
+  });
+
+  it('hands the stale failure notice back in the receipt when the lead re-dispatches an errored worker', async () => {
+    const queue = leadQueue([leadQueueItem('stale-failure', 'worker-session-1', failureText)]);
+    const { service, setWorker } = createDeps({
+      ...queue,
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        // 新派发的这一轮立刻又失败：它的回报在派发之后才进队列，属于新一轮，不能被当成旧回报撤下。
+        queue.push(leadQueueItem('fresh-failure', 'worker-session-1', failureText));
+        return {
+          ok: true,
+          mode: 'dispatched',
+          clientId: 'dispatch-1',
+          dispatchOutcome: { kind: 'session-dispatch', source: params.dispatchMeta.source, dispatched: true },
+          targetTitle: 'Worker',
+          targetLastUserSendAt: null,
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+    setWorker(createWorker({ status: 'error' }));
+
+    const result = await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '换了模型，请从上次停下的地方继续。',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      supersededFailureNotices: [{ queuedMessageId: 'stale-failure', text: failureText }],
+    });
+    expect(queue.ids()).toEqual(['fresh-failure']);
+  });
+
+  it('leaves the queue alone when the dispatch fails or the worker was not in error', async () => {
+    const queue = leadQueue([leadQueueItem('stale-failure', 'worker-session-1', failureText)]);
+    const { deps, service, setWorker } = createDeps({
+      ...queue,
+      dispatchWorkerMessage: vi.fn(async (params) => ({
+        ok: false,
+        dispatchOutcome: {
+          kind: 'session-dispatch', source: params.dispatchMeta.source, dispatched: false,
+          reason: 'cancelled-before-dispatch', message: 'not ready', context: params.dispatchMeta.context,
+        },
+      } satisfies DispatchWorkerMessageResult)),
+    });
+    setWorker(createWorker({ status: 'error' }));
+    await expect(service.sendToWorker({
+      callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '继续',
+    })).resolves.toMatchObject({ ok: false });
+    expect(queue.ids()).toEqual(['stale-failure']);
+
+    const healthy = createDeps(queue);
+    healthy.setWorker(createWorker({ status: 'idle' }));
+    const sent = await healthy.service.sendToWorker({
+      callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '新任务',
+    });
+    expect(sent).toMatchObject({ ok: true });
+    expect(sent).not.toHaveProperty('supersededFailureNotices');
+    expect(queue.ids()).toEqual(['stale-failure']);
+    expect(deps.removeQueuedMessage).not.toHaveBeenCalled();
   });
 });
 

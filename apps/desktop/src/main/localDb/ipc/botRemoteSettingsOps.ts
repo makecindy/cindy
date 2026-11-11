@@ -1,23 +1,24 @@
 import {
   BOT_SETTINGS_CAPABILITY_FIELDS,
   BOT_SETTINGS_PATCH_FIELDS,
+  BOT_SETTINGS_RETIRED_CAPABILITY_FIELDS,
   type BotSettingsOp,
 } from '../../../shared/botRemoteSettings.js';
-import type { BotAutonomySettingsView } from '../../../shared/botAutonomy.js';
 import {
   BOT_IM_CHANNELS,
+  isBotImGroupChatId,
   type BotImAdoptablePersonalBotsPayload,
   type BotImChannel,
   type BotImConnectionAddResult,
   type BotImConnectionGroupsPayload,
+  type BotImDiscordChannelsPayload,
   type BotImConnectionLanesPayload,
   type BotImConnectionListPayload,
 } from '../../../shared/botImConnection.js';
 import type { BotModelRoute } from '../../../shared/botModelChain.js';
 import type { BotLifecycleActionRequest } from '../../../shared/botLifecycle.js';
 import type { BotMemoryDeleteInput, BotMemoryUpdateInput } from '../../../shared/botMemory.js';
-import type { BotSkillSummary } from '../../../shared/botSkill.js';
-import { parseRoutineInput, type Routine, type RoutineRun, type RoutineSource } from '@cindy/maker-scheduler';
+import type { BotCoreSkill, BotSkillDetail, BotSkillSaveInput, BotSkillSummary } from '../../../shared/botSkill.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import type { BotSettingsCall, BotSettingsOpHandler } from './botRemoteSettingsHost.js';
 
@@ -48,10 +49,13 @@ export interface BotSettingsOpsDeps {
   canonicalSessionId(botId: string): Promise<string | null>;
   capabilities(callerSessionId: string, kind: Kind): Promise<BotCapabilityCatalogEntry[]>;
   personalSkills(botId: string): Promise<BotSkillSummary[]>;
-  autonomy: {
-    get(): Promise<BotAutonomySettingsView>;
-    set(schedulerBotId: string | null): Promise<BotAutonomySettingsView>;
-    reset(): Promise<BotAutonomySettingsView>;
+  /** Core text and learned Skill actions (shared with the local capability page). */
+  skills: {
+    core(): BotCoreSkill;
+    read(botId: string, slug: string): Promise<BotSkillDetail | null>;
+    save(botId: string, input: BotSkillSaveInput): Promise<void>;
+    setEnabled(botId: string, slug: string, enabled: boolean): Promise<void>;
+    delete(botId: string, slug: string): Promise<void>;
   };
   searchHistory(botId: string, query: string, limit: number): Promise<unknown>;
   /**
@@ -64,6 +68,8 @@ export interface BotSettingsOpsDeps {
       remove(id: string): Promise<BotImConnectionListPayload>;
       listGroups(id: string): Promise<BotImConnectionGroupsPayload>;
       setGroupActivation(id: string, chatId: string, mode: 'mention' | 'always'): Promise<BotImConnectionGroupsPayload>;
+      listDiscordChannels(id: string): Promise<BotImDiscordChannelsPayload>;
+      setDiscordChannelAccess(id: string, access: unknown): Promise<BotImDiscordChannelsPayload>;
       listLanes(id: string): Promise<BotImConnectionLanesPayload>;
       resetLane(id: string, sessionId: string): Promise<BotImConnectionLanesPayload>;
       listAdoptable(): Promise<BotImAdoptablePersonalBotsPayload>;
@@ -88,18 +94,12 @@ export interface BotSettingsOpsDeps {
     preference(botId: string): Promise<unknown>;
     setPreference(botId: string, selection: unknown, sentencePlayback: unknown): Promise<unknown>;
   };
-  /** The routine service every surface shares (`routineTools`). */
-  routines: {
-    list(botId: string): Promise<Routine[]>;
-    sources(): Promise<RoutineSource[]>;
-    history(botId: string, id: string): Promise<RoutineRun[]>;
-    save(botId: string, input: ReturnType<typeof parseRoutineInput>, id?: string): Promise<Routine>;
-    runNow(botId: string, id: string): Promise<unknown>;
-    remove(botId: string, id: string): Promise<void>;
-  };
 }
 
 const fail = (message = 'Invalid settings arguments'): never => throwIpcError('INVALID_PARAMS', message);
+/** The settings view an older controller expects from `autonomy.get`, with follow-up off. */
+const FOLLOW_UP_OFF = { schedulerBotId: null, isCustomized: false, defaults: { schedulerBotId: null } } as const;
+const FOLLOW_UP_REMOVED = 'Follow-up is no longer available for teammates';
 const record = (value: unknown, name: string): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : fail(`${name} must be an object`);
 const text = (value: unknown, name: string, max: number, allowEmpty = false): string =>
@@ -126,17 +126,28 @@ export function projectBotSettingsProfile(raw: unknown): Record<string, unknown>
 }
 
 /** Whitelist of what an autosave may write; raising permissions stays in the confirmed generic form. */
-export function readBotSettingsPatch(value: unknown): Record<string, unknown> {
+export function readBotSettingsPatch(value: unknown, allowEmpty = false): Record<string, unknown> {
   const patch = record(value, 'patch');
   keysWithin(patch, BOT_SETTINGS_PATCH_FIELDS, 'patch');
-  if (patch.capabilities !== undefined) keysWithin(record(patch.capabilities, 'capabilities'), BOT_SETTINGS_CAPABILITY_FIELDS, 'capabilities');
+  if (patch.capabilities !== undefined) {
+    const capabilities = { ...record(patch.capabilities, 'capabilities') };
+    // An older controller's retired fields are ignored, so the rest of its save still applies.
+    for (const field of BOT_SETTINGS_RETIRED_CAPABILITY_FIELDS) delete capabilities[field];
+    if (Object.keys(capabilities).length) patch.capabilities = capabilities;
+    else delete patch.capabilities;
+    keysWithin(capabilities, BOT_SETTINGS_CAPABILITY_FIELDS, 'capabilities');
+    const location = capabilities.agentDeviceId;
+    if (location !== undefined && location !== null
+      && (typeof location !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(location))) {
+      fail('Invalid model execution location');
+    }
+  }
   if (patch.capabilityBaseline !== undefined) record(patch.capabilityBaseline, 'capabilityBaseline');
-  if (!Object.keys(patch).length) fail('patch is empty');
+  if (!allowEmpty && !Object.keys(patch).length) fail('patch is empty');
   return patch;
 }
 
 const ACTIONS = new Set(['resume', 'restart', 'delete']);
-const GROUP_CHAT_ID = /^-?\d{1,32}$/;
 const LANE_SESSION_ID = /^[A-Za-z0-9_.:-]{1,200}$/;
 
 /** A connection page operation may touch only this teammate's own connections. */
@@ -146,7 +157,8 @@ async function ownConnection(deps: BotSettingsOpsDeps, call: BotSettingsCall): P
   return own ? id : throwIpcError('NOT_FOUND', 'Connection unavailable');
 }
 const onlyThisTeammate = (deps: BotSettingsOpsDeps, payload: BotImConnectionListPayload, call: BotSettingsCall): BotImConnectionListPayload =>
-  ({ connections: payload.connections.filter((connection) => connection.botId === botOf(call)) });
+  ({ connections: payload.connections.filter((connection) => connection.botId === botOf(call)
+    && (connection.channel !== 'imessage' || (Array.isArray(call.args.supportedChannels) && call.args.supportedChannels.includes('imessage')))) });
 
 /** The path of the WeChat working folder belongs to the teammate's computer. */
 const wechatSettings = (settings: unknown) => ({ ...record(settings, 'settings'), workingDir: null });
@@ -163,14 +175,8 @@ const voiceCall = async <T>(run: () => T | Promise<T>): Promise<T> => {
   }
 };
 
-/** The local routine IPC reports every failure with this one message; so does the remote page. */
-const routineCall = async <T>(run: () => Promise<T>): Promise<T> => {
-  try {
-    return await run();
-  } catch {
-    return throwIpcError('INVALID_PARAMS', 'Routine operation failed; check the teammate and trigger settings');
-  }
-};
+const routinesRemoved = async (): Promise<never> =>
+  throwIpcError('UNSUPPORTED_CAPABILITY', 'Routines are no longer available for teammates; use project automations');
 const KINDS: readonly Kind[] = ['skill', 'mcp', 'toolset'];
 
 export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Record<BotSettingsOp, BotSettingsOpHandler>> {
@@ -180,6 +186,14 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       const botId = botOf(call);
       const patch = readBotSettingsPatch(call.args.patch);
       return { profile: projectBotSettingsProfile(await deps.updateProfile({ id: botId, ...patch })) };
+    },
+    'profile.acceptModelSelection': async call => {
+      const patch = readBotSettingsPatch(call.args.patch, true);
+      const version = call.args.expectedVersion;
+      if (!Number.isSafeInteger(version) || (version as number) < 1) fail('Invalid profile version');
+      return { profile: projectBotSettingsProfile(await deps.updateProfile({
+        id: botOf(call), ...patch, acceptSavedModelSelectionVersion: version,
+      })) };
     },
     'profile.chooseAvatar': async call => ({
       profile: projectBotSettingsProfile(await deps.setAvatar(botOf(call), text(call.args.avatarImageBase64, 'avatarImageBase64', 80_000))),
@@ -220,34 +234,47 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       const entries = await Promise.all(KINDS.map(async kind => [kind, await deps.capabilities(callerSessionId, kind)] as const));
       return { personal, entries: Object.fromEntries(entries) };
     },
-    'autonomy.get': async () => deps.autonomy.get(),
-    'autonomy.set': async call => {
-      const value = call.args.schedulerBotId;
-      if (value !== null && (typeof value !== 'string' || !value.trim() || value.length > 128)) fail('schedulerBotId must be a teammate id or null');
-      return deps.autonomy.set(value as string | null);
+    'skills.core': async call => {
+      botOf(call);
+      return deps.skills.core();
     },
-    'autonomy.reset': async () => deps.autonomy.reset(),
-    'routines.list': call => routineCall(() => deps.routines.list(botOf(call))),
-    'routines.sources': () => routineCall(() => deps.routines.sources()),
-    'routines.history': call => routineCall(() => deps.routines.history(botOf(call), text(call.args.id, 'id', 128))),
-    'routines.save': call => routineCall(() => {
-      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
-      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
-    }),
-    'routines.saveWithModel': call => routineCall(() => {
-      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
-      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
-    }),
-    // Advertised separately: older hosts accept `saveWithModel` but drop `sessionMode`.
-    'routines.saveWithSessionMode': call => routineCall(() => {
-      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
-      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
-    }),
-    'routines.runNow': call => routineCall(() => deps.routines.runNow(botOf(call), text(call.args.id, 'id', 128))),
-    'routines.remove': call => routineCall(async () => {
-      await deps.routines.remove(botOf(call), text(call.args.id, 'id', 128));
+    'skills.read': async call => deps.skills.read(botOf(call), text(call.args.slug, 'slug', 128)),
+    'skills.save': async call => {
+      await deps.skills.save(botOf(call), {
+        slug: text(call.args.slug, 'slug', 128),
+        name: text(call.args.name, 'name', 64),
+        description: text(call.args.description, 'description', 280),
+        body: text(call.args.body, 'body', 64 * 1024),
+        ...(call.args.expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt: text(call.args.expectedUpdatedAt, 'expectedUpdatedAt', 64, true) }),
+      });
       return null;
-    }),
+    },
+    'skills.setEnabled': async call => {
+      if (typeof call.args.enabled !== 'boolean') fail('enabled must be a boolean');
+      await deps.skills.setEnabled(botOf(call), text(call.args.slug, 'slug', 128), call.args.enabled as boolean);
+      return null;
+    },
+    'skills.delete': async call => {
+      await deps.skills.delete(botOf(call), text(call.args.slug, 'slug', 128));
+      return null;
+    },
+    // Follow-up was removed from teammates. Older controllers still call these (they are not
+    // advertised in caps): reading answers "off", writing is refused with a stable code.
+    'autonomy.get': async () => FOLLOW_UP_OFF,
+    'autonomy.set': async () => throwIpcError('UNSUPPORTED_CAPABILITY', FOLLOW_UP_REMOVED),
+    'autonomy.reset': async () => throwIpcError('UNSUPPORTED_CAPABILITY', FOLLOW_UP_REMOVED),
+    // Teammate routines were removed. Older controllers may still call these (they are not
+    // advertised in caps): every call is refused with a stable code.
+    'routines.list': routinesRemoved,
+    'routines.sources': routinesRemoved,
+    'routines.history': routinesRemoved,
+    'routines.save': routinesRemoved,
+    'routines.saveWithModel': routinesRemoved,
+    'routines.saveWithSessionMode': routinesRemoved,
+    'routines.deliveryTargets': routinesRemoved,
+    'routines.saveWithDelivery': routinesRemoved,
+    'routines.runNow': routinesRemoved,
+    'routines.remove': routinesRemoved,
     'voice.models': () => voiceCall(() => deps.voice.models()),
     'voice.voices': call => voiceCall(() => deps.voice.voices(call.args.selection)),
     'voice.preference': call => voiceCall(() => deps.voice.preference(botOf(call))),
@@ -261,8 +288,14 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
     'channels.im.listGroups': async call => deps.channels.im.listGroups(await ownConnection(deps, call)),
     'channels.im.setGroupActivation': async call => {
       const id = await ownConnection(deps, call);
-      if (typeof call.args.chatId !== 'string' || !GROUP_CHAT_ID.test(call.args.chatId)) fail('chatId is invalid');
+      if (!isBotImGroupChatId(call.args.chatId)) fail('chatId is invalid');
       return deps.channels.im.setGroupActivation(id, call.args.chatId as string, call.args.mode === 'always' ? 'always' : 'mention');
+    },
+    // 白名单只属于这位伙伴自己的连接（ownConnection 校验 botId 归属）；整份替换由主进程规整后落盘。
+    'channels.im.listDiscordChannels': async call => deps.channels.im.listDiscordChannels(await ownConnection(deps, call)),
+    'channels.im.setDiscordChannelAccess': async call => {
+      const id = await ownConnection(deps, call);
+      return deps.channels.im.setDiscordChannelAccess(id, record(call.args.access, 'access'));
     },
     'channels.im.listLanes': async call => deps.channels.im.listLanes(await ownConnection(deps, call)),
     'channels.im.resetLane': async call => {

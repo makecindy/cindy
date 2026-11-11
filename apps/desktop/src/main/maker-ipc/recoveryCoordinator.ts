@@ -1,5 +1,19 @@
 import type { RecoveryCheckpoint } from '../../shared/agentInputQueue.js';
 
+/** A model divider records routing, not assistant work. Unknown/actual output stays progress. */
+export function isEmptyModelChangeMarker(message: {
+  role: string;
+  content: unknown;
+  agentMeta?: Record<string, unknown> | null;
+}): boolean {
+  const change = message.agentMeta?.modelChange;
+  return message.role === 'assistant' && message.content === ''
+    && !!change && typeof change === 'object' && !Array.isArray(change)
+    && 'fromModel' in change && typeof change.fromModel === 'string'
+    && 'toModel' in change && typeof change.toModel === 'string'
+    && 'modelOnly' in change && change.modelOnly === true;
+}
+
 /** A bounded snapshot read from the durable message/session store. */
 export interface RecoveryContextSnapshot {
   contextTokens: number;
@@ -23,7 +37,8 @@ export type RecoveryMode = RecoveryCheckpoint['mode'];
  * must become stateful before the next turn is forced to compact again.
  */
 export const RECOVERY_CHECKPOINT_CONTEXT_RATIO = 0.72;
-export const RECOVERY_CHECKPOINT_MARKER = '\n\n[CINDY_RECOVERY_CHECKPOINT v1]';
+import { RECOVERY_CHECKPOINT_MARKER } from './recoveryMarker.js';
+export { RECOVERY_CHECKPOINT_MARKER };
 
 export function decideRecoveryMode(input: RecoveryDecisionInput): RecoveryMode {
   if (input.progressCount <= 0) return 'fast';

@@ -1,17 +1,14 @@
 import { chatErrorKey } from './chatError';
 import { useRef, useState } from 'react';
-import { ChatInviteDialog } from './ChatInviteDialog';
 import { ChatReactionButton } from './ChatReactionButton';
-import { UserPlus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { BubbleHoverToolbar, MessageActionBar } from '@/components/chat/MessageActionBar';
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
 import { SHARE_EXCLUDE_ATTR } from '@/lib/shareConversationImage';
-import { Tip } from '@/components/ui/tooltip';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import type { PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import type { BotGroupDetail, BotGroupMemberView, BotGroupMessageView } from '../../../shared/botGroupChat';
 
 const key = (name: string) => `bots.groupChat.server.${name}`;
@@ -45,6 +42,7 @@ function useChatReaction(groupId: string | undefined, messageId: string, onChang
 }
 
 interface ChatMessageActionProps {
+  pluginUi: PluginUiMessageCandidates;
   groupId?: string; shareScope: string; message: BotGroupMessageView; align?: 'left' | 'right';
   /** Who can be named on a reaction badge, and the message's reaction version (see `messageReactionRevision`). */
   members?: readonly BotGroupMemberView[]; reactionRevision?: string | number;
@@ -80,13 +78,13 @@ export function ChatMessageReactions({ groupId, message, members, reactionRevisi
   );
 }
 
-function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, onChanged, picker, onPickerChange, compact = false }: ChatMessageActionProps & {
+function ChatMessageToolbar({ groupId, shareScope, message, align = 'left', onQuote, onReply, replyCountShown, copyText, menuActions, onChanged, picker, onPickerChange, compact = false, pluginUi }: ChatMessageActionProps & {
   picker: boolean; onPickerChange: (open: boolean) => void; compact?: boolean;
 }) {
   const { t } = useTranslation();
   const { busy, react } = useChatReaction(groupId, message.id, onChanged);
   return (
-    <MessageActionBar copyText={copyText ?? message.content} menuActions={menuActions} createdAt={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}
+    <MessageActionBar pluginUi={pluginUi} copyText={copyText ?? message.content} menuActions={menuActions} createdAt={message.createdAt ? new Date(message.createdAt).toISOString() : undefined}
       align={align} hovered simplifiedBotConversation compact={compact}
       onShareAsImage={() => shareSelectionStore.enter(shareScope, message.id)}
       quoteAction={onQuote ? { onClick: onQuote, label: t(key('quoteReply')) } : undefined}
@@ -128,15 +126,4 @@ export function ChatMessageActions(props: ChatMessageActionProps) {
       <ChatMessageToolbar {...props} align={align} picker={picker} onPickerChange={setPicker} />
     </div>
   );
-}
-
-/** Group owners and admins create or revoke invitation links from the group header. */
-export function ChatInviteButton({ groupId }: { groupId: string }) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const title = t(key('invite'));
-  return <>
-    <Tip text={title}><button type="button" className={iconClass} style={WINDOW_NO_DRAG_STYLE} aria-label={title} onClick={() => setOpen(true)}><UserPlus size={16} /></button></Tip>
-    {open && <ChatInviteDialog groupId={groupId} onClose={() => setOpen(false)} />}
-  </>;
 }

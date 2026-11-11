@@ -41,7 +41,7 @@ vi.mock('../scheduler-host/runCostLedger.js', () => ({
   applyScheduleRunCostMetaChange: vi.fn(async () => undefined),
   recordScheduleRunCostDirect: vi.fn(async () => null),
 }));
-vi.mock('../messagePersistBroadcaster.js', () => ({
+vi.mock('../messagePersistBroadcaster.desktop.js', () => ({
   enqueueDurableWrite: vi.fn((_label: string, fn: () => unknown) => Promise.resolve(fn())),
 }));
 
@@ -90,6 +90,7 @@ function makeDeps(
     money: RegionalMoney | null;
     costUsd: number;
     hasEstimatedValue: boolean;
+    isFirstUserRound?: boolean;
   } | Error = {
     money: null,
     costUsd: 0,
@@ -141,6 +142,20 @@ beforeEach(() => {
 });
 
 describe('recordTurnCostOnMessage', () => {
+  // Unit: subscription valuation accompanying an API charge must affect only
+  // the displayed round, never the raw billing amount or scheduler input.
+  it('includes per-model subscription value in the display while preserving actual billing', async () => {
+    const { deps, broadcasts, patchCalls } = makeDeps();
+    await recordTurnCostOnMessage({ ...ARGS, money: usdMoney(1), turnUsageDetails: {
+      ...DETAILS, perModelCost: [
+        { model: 'subscription-model', billingSource: 'subscription',
+          money: { ...usdMoney(2), approximate: true, kind: 'value-estimate' } },
+        { model: 'api-model', billingSource: 'cindy-ai', money: usdMoney(1) },
+      ],
+    } }, deps);
+    expect(patchCalls[0].patch.turnCost).toEqual(usdMoney(1));
+    expect(broadcasts[0]).toMatchObject({ userTurnMoney: { amount: 3 }, userTurnCostIsEstimate: true });
+  });
   it('owner boundary after patch keeps success and suppresses stale broadcast', async () => {
     const { deps, broadcasts } = makeDeps(true);
     deps.enqueue = vi.fn(async (_label, fn) => {
@@ -429,6 +444,24 @@ describe('recordTurnCostOnMessage', () => {
     await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(false);
     expect(patchCalls).toHaveLength(0);
     expect(broadcasts).toHaveLength(0);
+  });
+});
+
+// Unit: the first user round has no prompt cache to reuse. Both writers must
+// persist that fact with the details, or the tooltip shows a misleading
+// "low cache hit rate" suggestion on every new task's first reply.
+describe('first user round marker', () => {
+  const firstRound = { money: null, costUsd: 0, hasEstimatedValue: false, isFirstUserRound: true };
+  it.each([
+    ['recordTurnCostOnMessage', (deps: TurnCostDeps) =>
+      recordTurnCostOnMessage({ ...ARGS, turnUsageDetails: DETAILS }, deps)],
+    ['recordTurnUsageOnMessage', (deps: TurnCostDeps) =>
+      recordTurnUsageOnMessage({ sessionId: 's1', clientId: 'm1', turnUsageDetails: DETAILS }, deps)],
+  ])('%s persists and broadcasts firstUserRound', async (_name, record) => {
+    const { deps, broadcasts, patchCalls } = makeDeps(true, firstRound);
+    await expect(record(deps)).resolves.toBe(true);
+    expect(patchCalls[0].patch.turnUsageDetails).toEqual({ ...DETAILS, firstUserRound: true });
+    expect(broadcasts[0].turnUsageDetails).toEqual({ ...DETAILS, firstUserRound: true });
   });
 });
 

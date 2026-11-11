@@ -26,7 +26,7 @@ function project() {
 }
 
 describe('communication notification extension', () => {
-  it.each(['com.xd.cindy', 'com.xd.cindycn', 'org.example.selfhost'])('embeds one extension with the actual %s identity', (bundleIdentifier) => {
+  it.each(['com.xd.cindy', 'com.xd.cindycn', 'org.example.selfhost'])('embeds one extension with the actual %s identity', async (bundleIdentifier) => {
     const root = mkdtempSync(path.join(tmpdir(), 'cindy-notification-plugin-'));
     roots.push(root);
     const pbx = project();
@@ -50,10 +50,16 @@ describe('communication notification extension', () => {
     const info = plist.parse(readFileSync(path.join(root, 'CindyNotificationService/Info.plist'), 'utf8'));
     expect(info.NSExtension.NSExtensionPointIdentifier).toBe('com.apple.usernotifications.service');
     expect(readFileSync(path.join(root, 'CindyNotificationService/teammate-cindy.png')).length).toBeGreaterThan(0);
+    // Regression: Xcode rejects Communication Notifications on the NSE target;
+    // the containing application must still request it (unit, actual plugin mods).
+    const extensionEntitlements = plist.parse(readFileSync(path.join(root, 'CindyNotificationService/CindyNotificationService.entitlements'), 'utf8'));
+    expect(extensionEntitlements).not.toHaveProperty('com.apple.developer.usernotifications.communication');
     const configured = plugin(config);
+    const mainEntitlements = await configured.mods.ios.entitlements({ ...configured, modResults: {}, modRequest: { introspect: true } });
+    expect(mainEntitlements.modResults['com.apple.developer.usernotifications.communication']).toBe(true);
     expect(configured.extra.eas.build.experimental.ios.appExtensions).toEqual([{
       targetName: 'CindyNotificationService', bundleIdentifier: `${bundleIdentifier}.CindyNotificationService`,
-      entitlements: { 'com.apple.developer.usernotifications.communication': true },
+      entitlements: { 'keychain-access-groups': [`$(AppIdentifierPrefix)${bundleIdentifier}.agent-net-notifications`] },
     }]);
   });
 });

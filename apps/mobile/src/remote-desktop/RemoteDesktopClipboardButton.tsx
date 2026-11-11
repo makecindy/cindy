@@ -22,13 +22,16 @@ export function RemoteDesktopClipboardButton({
   enabled,
   supported,
   transfer,
+  tint,
 }: {
+  tint?: string;
   enabled: boolean;
   supported: boolean;
   transfer(action: "copy" | "paste"): Promise<void>;
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const iconColor = tint ?? colors.textPrimary;
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -154,13 +157,13 @@ export function RemoteDesktopClipboardButton({
         ]}
       >
         {busy ? (
-          <ActivityIndicator size="small" color={colors.textPrimary} />
+          <ActivityIndicator size="small" color={iconColor} />
         ) : done ? (
           <View accessibilityLabel={t("remoteDesktop.clipboardDone")}>
-            <Check size={iconSize.action} strokeWidth={iconStroke.regular} color={colors.textPrimary} />
+            <Check size={iconSize.action} strokeWidth={iconStroke.regular} color={iconColor} />
           </View>
         ) : (
-          <ClipboardList size={iconSize.action} strokeWidth={iconStroke.regular} color={colors.textPrimary} />
+          <ClipboardList size={iconSize.action} strokeWidth={iconStroke.regular} color={iconColor} />
         )}
       </Pressable>
     </NativePullDownMenu>

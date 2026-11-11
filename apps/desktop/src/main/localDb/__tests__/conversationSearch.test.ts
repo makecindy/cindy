@@ -14,7 +14,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../chatHistorySearch.js', () => ({
-  searchChatHistoryHybrid: mocks.searchChatHistoryHybrid,
+  prepareChatHistorySearch: async (args: unknown) => (page: unknown) =>
+    mocks.searchChatHistoryHybrid({ ...(args as object), ...(page as object) }),
 }));
 
 import { searchConversations } from '../conversationSearch.js';
@@ -72,6 +73,7 @@ function createSearchDb(): Database.Database {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL DEFAULT 'New Maker',
       working_dir TEXT,
+      project_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
       scheduled_model_baseline TEXT,
@@ -143,6 +145,11 @@ function createSearchDb(): Database.Database {
     CREATE TABLE bot_session_links (
       session_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, role TEXT NOT NULL
     );
+    CREATE TABLE task_tags (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, name_customized INTEGER NOT NULL DEFAULT 0,
+      color TEXT NOT NULL, favorite_order INTEGER, sort_order INTEGER, revision INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE session_task_tags (session_id TEXT NOT NULL, tag_id TEXT NOT NULL);
     CREATE TABLE project_aliases (
       project_key TEXT PRIMARY KEY, alias TEXT NOT NULL, updated_at INTEGER NOT NULL
     );
@@ -195,6 +202,7 @@ describe('conversationSearch remote project aliases', () => {
         db.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(root, id);
       }
       db.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktree, 'worktree');
+      db.prepare('UPDATE sessions SET working_dir = ?, project_dir = ? WHERE id = ?').run('/tmp/arbitrary-checkout', root, 'older');
       db.exec("UPDATE sessions SET status = 'archived' WHERE id = 'archived'");
       db.exec("UPDATE sessions SET hidden_at = 1 WHERE id = 'hidden'");
       db.exec("UPDATE sessions SET orca_role = 'worker' WHERE id = 'worker'");
@@ -204,6 +212,10 @@ describe('conversationSearch remote project aliases', () => {
       const request = { query: 'CUSTOMER', limit: 2, semanticMode: 'keyword' as const, filters: { status: 'active' as const } };
       const result = await searchConversations(request, { remoteVisibleOnly: true });
       expect(result.results.map(item => item.session.id).sort()).toEqual(['older', 'worktree']);
+      expect(result.results.find(item => item.session.id === 'older')?.session)
+        .toMatchObject({ workingDir: '/tmp/arbitrary-checkout', projectDir: root });
+      expect((await searchConversations({ ...request, filters: { workingDirs: [root], status: 'active' } }, { remoteVisibleOnly: true })).results.map(item => item.session.id).sort())
+        .toEqual(['older', 'worktree']);
       expect(result.results.every(item => item.titleMatchIndices.length === 0)).toBe(true);
       expect(result.results.every(item => item.session.title.startsWith('needle '))).toBe(true);
       expect((await searchConversations(request)).results).toEqual([]);
@@ -456,6 +468,36 @@ it('projects forwarded search hits only with their persisted session origin', as
     }
     expect(db.prepare('SELECT content FROM messages WHERE id = ?').get('forwarded')).toEqual({ content });
     expect(mocks.searchChatHistoryHybrid.mock.calls[0][0].query).toBe('needle');
+  } finally {
+    clearCurrentDbClient(client);
+    db.close();
+  }
+});
+
+// Search dropped labels even though the ordinary task list showed them. Existing
+// fixtures had no tags. Unit: real search + in-memory SQLite, two tagged hits and
+// one untagged hit verify association and display order without touching user data.
+it('returns each search hit with its own ordered task tags', async () => {
+  const db = createSearchDb();
+  const client = makeSearchDbClient(db);
+  setCurrentDbClient(client, 'test-user');
+  mocks.searchChatHistoryHybrid.mockResolvedValue({
+    hits: [], sessions: {}, vectorUsed: false, vectorSkipReason: null,
+    nextOffset: null, hasMore: false, poolSize: 0, poolCapped: false,
+  });
+  try {
+    for (const id of ['a', 'b', 'untagged']) insertSearchSession(db, id, 1000, null);
+    db.exec(`INSERT INTO task_tags (id,name,color,sort_order,name_customized) VALUES
+      ('red','Important','red',1,1), ('blue','Later','blue',0,1);
+      INSERT INTO session_task_tags VALUES ('a','red'),('a','blue'),('b','red');`);
+    const response = await searchConversations({ query: 'needle', semanticMode: 'keyword' });
+    const tags = Object.fromEntries(response.results.map(item => [item.session.id, item.session.tags]));
+    expect(tags.a).toMatchObject([
+      { id: 'blue', name: 'Later', color: 'blue', nameCustomized: true },
+      { id: 'red', name: 'Important', color: 'red', nameCustomized: true },
+    ]);
+    expect(tags.b).toMatchObject([{ id: 'red' }]);
+    expect(tags.untagged).toEqual([]);
   } finally {
     clearCurrentDbClient(client);
     db.close();

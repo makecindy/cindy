@@ -1,6 +1,86 @@
 {
   "semantic": {
     "defaults": {
+      "plugin-identity-official-text": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-official-text.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-official-text.dark}"
+        }
+      },
+      "plugin-identity-official-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-official-bg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-official-bg.dark}"
+        }
+      },
+      "plugin-identity-community-text": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-community-text.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-community-text.dark}"
+        }
+      },
+      "plugin-identity-community-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-community-bg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-community-bg.dark}"
+        }
+      },
+      "plugin-identity-team-text": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-team-text.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-team-text.dark}"
+        }
+      },
+      "plugin-identity-team-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-team-bg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-team-bg.dark}"
+        }
+      },
+      "plugin-identity-custom-text": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-custom-text.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-custom-text.dark}"
+        }
+      },
+      "plugin-identity-custom-bg": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-custom-bg.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.plugin-identity-custom-bg.dark}"
+        }
+      },
       "surface": {
         "light": {
           "$type": "color",

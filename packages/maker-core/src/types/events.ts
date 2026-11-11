@@ -9,6 +9,9 @@
  * 与现有 ccAgent.types StreamEvent 接近，但精简了未启用字段。
  */
 
+import type { OutputLimitDetails } from '@cindy/maker-shared';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../interfaces/auth-adapter.js';
+
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import type { SubagentObservation } from '@cindy/maker-shared/subagent-observation';
@@ -92,6 +95,8 @@ export interface AgentErrorEventData {
   usageResetAt?: number;
   /** Structured details for reason='tool_use_loop_detected'. */
   toolLoop?: ToolLoopErrorDetails;
+  /** Bounded usage of the request that ended with reason='output-limit'. */
+  outputLimit?: OutputLimitDetails;
   [key: string]: unknown;
 }
 
@@ -127,6 +132,11 @@ export interface AgentTaskUpdateEventData {
   usage?: AgentTaskUsage;
   lastToolName?: string;
   taskType?: string;
+  /**
+   * 后台命令（taskType=local_bash）是会自己结束的工作，还是长驻服务。宿主按启动它的
+   * 命令写法判断（见 claude-code/background-command-kind.ts）；只用于展示，缺省按 work。
+   */
+  backgroundCommandKind?: 'work' | 'service';
   subagentParentContext?: 'none' | 'snapshot' | 'live';
   workflowName?: string;
   /**
@@ -215,6 +225,13 @@ export interface AgentEvent {
    * Session delivers it on `onRuntimeRecovery`, never on product `onEvent`.
    */
   runtimeRecovery?: true;
+  /**
+   * Host-only. Session fans this out after a listener-requested stream hold
+   * (`Session.holdEventStream`); the requesting host already persisted and
+   * published it. Translators never produce it, and it never crosses a
+   * renderer or device boundary.
+   */
+  hostProjection?: true;
   /**
    * A complete extension notice, independent of model text assembly and turn
    * settlement. Hosts deliver it as its own durable message, never as a delta
@@ -310,10 +327,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** 单道问题(用于 ask_user_question kind) */
 export interface AskUserQuestionItem {
+  /** Stable provider identity; absent on legacy questions. */
+  id?: string;
   question: string;
   header?: string;
   options?: Array<{ label: string; description?: string }>;
   multiSelect?: boolean;
+  answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
 }
 
 type InteractionRequestBase = {
@@ -338,6 +358,8 @@ export type InteractionRequest =
       questions: AskUserQuestionItem[];
       /** Optional question: the provider keeps running; absence means a blocking question. */
       delivery?: 'async';
+      /** Native RPC may resolve with empty answers after idle time. */
+      isBlocking?: boolean;
     })
   | (InteractionRequestBase & {
       kind: 'plan_review';
@@ -375,7 +397,9 @@ export type InteractionDecision =
     }
   | {
       kind: 'ask_user_question';
-      /** 用户对每道问题的回答, key=question(或 header), value=用户回答 */
+      /** Host-only activity receipt. It never settles or persists an answer. */
+      inProgress?: boolean;
+      /** Stable question id; legacy callers use question/header text. */
       answers: Record<string, string>;
       /**
        * true = 系统性 dismissal(会话 abort/close、turn 失败等自动空答),
@@ -443,7 +467,7 @@ export interface UsageSnapshot {
   generationActive?: boolean;
   /** False when live TPS must be hidden. Omitted on placeholder status frames. */
   generationReliable?: boolean;
-  /** Host-measured live tok/s (Pi extension algorithm). Display only. */
+  /** Host-measured live tok/s. Display only. */
   tokenSpeed?: TokenSpeedSnapshot;
   /**
    * Host/bridge 自动 compact 已确定性失败，下次 send 应换干净原生窗口。
@@ -517,6 +541,9 @@ export interface RewindCommitOptions {
    * (首条消息,或 /clear、上下文重建、切换引擎新开线程后的第一轮)。此时没有可作
    * fork 边界的 turn,rollback 不可用时 Codex 改为按当前配置新开一条空线程替换。
    * 只在没有 lastTurnId / forkAtTimestampMs 时生效。
+   *
+   * Claude:目标之前没有可续接的 assistant 时由宿主传入,只回滚文件、不设续接点;
+   * 宿主随后关闭会话并清掉原生会话 id,下次发送开全新原生会话。
    */
   rewindsToNativeThreadStart?: boolean;
 }
@@ -530,6 +557,7 @@ export interface RewindCommitResult {
 }
 
 export interface ForkSdkSessionOptions {
+  [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   /** Host-resolved shared-provider storage. Never accepted directly from a remote caller. */
   hostedGuestHome?: string;
   /** 源 session 的 SDK sessionId (从 sessions.sdk_session_id 取)。 */

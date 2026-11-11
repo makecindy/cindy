@@ -41,17 +41,14 @@ export const MOBILE_REMOTE_RESOURCE_PRIMITIVES = [
  */
 const RICH_REMOTE_RESOURCE_PRIMITIVES: readonly string[] = [
   'form',
-  'routine-list',
-  'routine-detail',
   BOT_GROUP_CHAT_PRIMITIVE,
   'plugin-capabilities',
   'plugin-card-actions',
   'plugin-card-forms',
   'mail-message',
-  'teammate-todos',
 ];
 
-/** Routines remain a desktop feature; other portable collections stay available. */
+/** Teammate routines are gone; a stale `routines` link from an older desktop stays unsupported. */
 export function isMobileRemoteCollectionSupported(collectionId: string): boolean {
   return collectionId !== 'routines';
 }
@@ -186,9 +183,12 @@ function normalizeRemoteDisplay(value: unknown): RemoteResourceDisplay | null {
     title,
     ...(subtitle ? { subtitle } : {}),
     ...(preview ? { preview } : {}),
+    ...(boundedString(recordOf(record.teammateActivity)?.phase, 80)
+      ? { teammateActivity: { phase: boundedString(recordOf(record.teammateActivity)?.phase, 80)! } } : {}),
     ...(generationPhase ? { generation: { phase: generationPhase, startedAt: generationStartedAt ?? null } } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(normalizeRemoteTimestamp(record.lastReplyAt) !== undefined ? { lastReplyAt: record.lastReplyAt as number } : {}),
+    ...(normalizeRemoteTimestamp(record.lastReadAt) !== undefined ? { lastReadAt: record.lastReadAt as number } : {}),
     ...(avatar ? { avatar } : {}),
     ...(status ? { status } : {}),
     ...(Array.isArray(record.badges) ? { badges: record.badges.slice(0, 8).flatMap(value => {

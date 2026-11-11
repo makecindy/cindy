@@ -85,14 +85,15 @@ describe('ChatInput:换位置进切换事务', () => {
 
   it('意图期内目录跟随意图里的电脑', () => {
     expect(chatInputSource).toContain(
-      'const catalogDeviceId = effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined;',
+      'const catalogDeviceId = modelCatalogKey(effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined, catalogHostDeviceId);',
     );
   });
 
   it('只对本机任务、或支持远程 Agent 的被控端任务开放,且要能走切换事务', () => {
     expect(chatInputSource).toContain(
       'if (!sessionId || !agentLocationAware || remoteHostId || !sessionEngineFilter ||\n' +
-        '        sessionOrcaRole === undefined || (sessionOrcaRole !== null && deviceLinkDeviceId) ||\n' +
+        '        sessionOrcaRole === undefined ||\n' +
+        '        (sessionOrcaRole !== null && deviceLinkDeviceId && !hostSupportsOrcaAgentRelocation) ||\n' +
         '        sessionOrcaRemoteWorker) return undefined;',
     );
     expect(chatInputSource).toContain('agentDeviceId: selection.agentDevice?.deviceId ?? null,');
@@ -155,7 +156,7 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
     expect(sessionViewSource).toContain('controlledTaskSupportsAgentLocation(session) &&');
     expect(sessionViewSource).toContain('!isSharedTaskPeer(remoteDeviceId) &&');
     const branch = sessionViewSource.indexOf(
-      'if (remoteDeviceId) {\n      return controlledAgentLocation',
+      'if (remoteDeviceId) {\n      if (controlledModelRoute.catalogHostDeviceId) return controlledModelRoute.devices;',
     );
     expect(branch).toBeGreaterThan(0);
     const remoteBranch = sessionViewSource.slice(
@@ -165,7 +166,7 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
     expect(remoteBranch).toContain('selectControlledTaskAgentDevices({');
     expect(remoteBranch).toContain('shareDevices: providerShareDevices,');
     expect(sessionViewSource).toContain(
-      'const catalogDeviceId = controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId;',
+      'controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId, controlledModelRoute.catalogHostDeviceId,',
     );
     expect(sessionViewSource).toContain('deviceLinkDeviceName={controlledDeviceName}');
   });
@@ -182,7 +183,7 @@ describe('被控电脑上的任务:换 Agent 所在电脑', () => {
       '...(controlledShareIds ? { readableShareIds: controlledShareIds } : {}),',
     );
     const branch = sessionViewSource.indexOf(
-      'if (remoteDeviceId) {\n      return controlledAgentLocation',
+      'if (remoteDeviceId) {\n      if (controlledModelRoute.catalogHostDeviceId) return controlledModelRoute.devices;',
     );
     const remoteBranch = sessionViewSource.slice(
       branch,

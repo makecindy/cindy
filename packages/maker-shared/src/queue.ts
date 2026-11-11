@@ -1,3 +1,4 @@
+import { asyncQuestionReplyDisplayText, isAsyncQuestionReplyClientId } from './interaction.js';
 import { syntheticTriggerKind } from './syntheticTrigger.js';
 import { presentationText, type PresentationLocalizer } from './presentationLocalization.js';
 
@@ -214,42 +215,94 @@ export function isAutoSentQueueItem(
  * （来源身份不再写进正文，而是派发时在 wire 消息上另加统一的 `[消息来源]` 说明）——
  * 可见正文以落库的 `persistedContent` 为准；带附件时落库是主机构造的
  * `{text, images, files}` 信封，取其中 text（只在确有附件时解包，正文本身是 JSON 的消息
- * 原样显示）。其它条目沿用 `text`。桌面排队面板、手机待发送气泡与共享访客投影共用此判据。
+ * 原样显示）。异步问题的回答同样以落库正文为准：`text` 是发给 Agent 的原生回答格式与
+ * 延迟回答说明，落库的是「题目 + 回答」。其它条目沿用 `text`。桌面排队面板、手机待发送
+ * 气泡与共享访客投影共用此判据。
  */
-export function queueItemVisibleText(item: {
+export function queueItemVisibleText(item: QueueVisibleTextItem): string {
+  const { text, replaceRanges } = queueItemVisibleSource(item);
+  return replaceRanges ? replacePastedRanges(text, replaceRanges) : text;
+}
+
+type QueueVisibleTextItem = {
+  clientId?: string;
   text?: string;
   persistedContent?: string;
   files?: readonly unknown[];
   origin?: unknown;
   sourcePlugin?: unknown;
   chatMessage?: { pastedTextRanges?: readonly { start: number; end: number; display: string }[] };
-}): string {
+};
+
+/**
+ * 与 `queueItemVisibleText` 同一判据，但不替换粘贴段：返回未折叠的可见正文，
+ * 以及（正文是信封里的 text 时）它对应的 `pastedTextRanges`。需要自己按范围渲染
+ * 粘贴标签的界面（桌面待发气泡）用它，避免范围与已折叠的正文错位。
+ */
+export function queueItemVisibleSource(item: QueueVisibleTextItem): {
+  text: string;
+  replaceRanges: readonly { start: number; end: number; display: string }[] | null;
+} {
   const text = item.text ?? '';
-  if (!isAutoSentQueueItem(item)) return text;
+  if (isAsyncQuestionReplyClientId(item.clientId)) {
+    return { text: asyncQuestionReplyDisplayText(persistedUserText(item.persistedContent) ?? text), replaceRanges: null };
+  }
+  if (!isAutoSentQueueItem(item)) return { text, replaceRanges: null };
   const persisted = item.persistedContent ?? text;
   const ranges = item.chatMessage?.pastedTextRanges;
-  if (!item.files?.length && !ranges?.length) return persisted;
+  if (!item.files?.length && !ranges?.length) return { text: persisted, replaceRanges: null };
   try {
     const envelope = JSON.parse(persisted) as unknown;
     const envelopeText = readRecord(envelope)?.text;
     if (typeof envelopeText === 'string') {
-      if (!ranges?.length) return envelopeText;
-      let cursor = 0;
-      const parts: string[] = [];
-      for (const range of ranges) {
-        if (!Number.isInteger(range.start) || !Number.isInteger(range.end)
-          || range.start < cursor || range.end <= range.start || range.end > envelopeText.length
-          || typeof range.display !== 'string') return envelopeText;
-        parts.push(envelopeText.slice(cursor, range.start), range.display);
-        cursor = range.end;
-      }
-      parts.push(envelopeText.slice(cursor));
-      return parts.join('');
+      return {
+        text: envelopeText,
+        replaceRanges: ranges?.length && rangesFit(envelopeText, ranges) ? ranges : null,
+      };
     }
   } catch {
     // Not an envelope: the persisted row is already the visible text.
   }
-  return persisted;
+  return { text: persisted, replaceRanges: null };
+}
+
+/** Queue items from a client wrap their text in a `{text, images, files}` envelope; the Host stores plain text. */
+function persistedUserText(persisted: string | undefined): string | undefined {
+  if (!persisted?.startsWith('{')) return persisted || undefined;
+  try {
+    const envelopeText = readRecord(JSON.parse(persisted) as unknown)?.text;
+    return typeof envelopeText === 'string' ? envelopeText : persisted;
+  } catch {
+    return persisted;
+  }
+}
+
+function rangesFit(
+  text: string,
+  ranges: readonly { start: number; end: number; display: string }[],
+): boolean {
+  let cursor = 0;
+  for (const range of ranges) {
+    if (!Number.isInteger(range.start) || !Number.isInteger(range.end)
+      || range.start < cursor || range.end <= range.start || range.end > text.length
+      || typeof range.display !== 'string') return false;
+    cursor = range.end;
+  }
+  return true;
+}
+
+function replacePastedRanges(
+  text: string,
+  ranges: readonly { start: number; end: number; display: string }[],
+): string {
+  let cursor = 0;
+  const parts: string[] = [];
+  for (const range of ranges) {
+    parts.push(text.slice(cursor, range.start), range.display);
+    cursor = range.end;
+  }
+  parts.push(text.slice(cursor));
+  return parts.join('');
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {

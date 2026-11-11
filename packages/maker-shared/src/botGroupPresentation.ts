@@ -6,6 +6,8 @@
 import { RichAnswerStream, splitRichAnswer, richMarkdown, richString, richLabel, richResolvedValues, richChart, richOptions, richCalculationUnavailable } from './richAnswer.js';
 import {
   isBotGroupPlanOpen,
+  isBotGroupCapabilityNoticeCode,
+  readBotGroupRuntimeFailureReason,
   type BotGroupDetail,
   type BotGroupErrorCode,
   type BotGroupExecutionFailureView,
@@ -90,7 +92,8 @@ export function botGroupNewMessageCount(messages: readonly BotGroupMessageView[]
   const incoming = new Set<string>();
   for (const message of messages) {
     if (BigInt(message.serverSequence ?? message.sequence) <= BigInt(seenThrough) || message.deleted || (message.threadRootId ?? undefined) !== threadRootId || message.isSelf === true
-      || (message.kind !== 'message' && message.kind !== 'plan')
+      || (message.kind !== 'message' && message.kind !== 'plan'
+        && !(message.kind === 'notice' && message.authorKind === 'bot' && isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)))
       || (message.authorKind !== 'bot' && message.isSelf !== false) || message.authorKind === 'system') continue;
     incoming.add(message.id);
   }
@@ -147,12 +150,14 @@ export function projectBotGroupExecutionFailures(
     kind: 'notice', authorKind: 'system', authorBotId: failure.botId, authorName: failure.botName,
     content: '', noticeCode: failure.code === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed',
     runtimeFailureCode: failure.code, mentions: { all: false, botIds: [] }, planId: failure.planId,
+    ...(readBotGroupRuntimeFailureReason(failure.code, failure.reason) ? { runtimeFailureReason: failure.reason } : {}),
     threadRootId: source.threadRootId ?? null, files: [], attachments: [], createdAt: failure.updatedAt ?? source.createdAt,
   }))]);
 }
 
 /** Copy variant for a refused group action; null keeps the caller's own fallback. */
 export type BotGroupErrorVariant =
+  | 'turnAlreadyStarted'
   | 'invalidAttachment'
   | 'attachmentUnavailable'
   | 'attachmentTooLarge'
@@ -170,6 +175,7 @@ export type BotGroupErrorVariant =
   | 'memberLimit'
   | 'memberUnavailable'
   | 'mentionUnavailable'
+  | 'allBotsMentionDisabled'
   | 'notFound'
   | 'hostNotReady'
   | 'planOpen'
@@ -194,10 +200,12 @@ const ERROR_VARIANTS: ReadonlyMap<string, BotGroupErrorVariant> = new Map<BotGro
   ['MEMBER_LIMIT', 'memberLimit'],
   ['MEMBER_UNAVAILABLE', 'memberUnavailable'],
   ['MENTION_UNAVAILABLE', 'mentionUnavailable'],
+  ['ALL_BOTS_MENTION_DISABLED', 'allBotsMentionDisabled'],
   ['NOT_FOUND', 'notFound'],
   ['HOST_NOT_READY', 'hostNotReady'],
   ['PLAN_OPEN', 'planOpen'],
   ['PLAN_CLOSED', 'planClosed'],
+  ['TURN_ALREADY_STARTED', 'turnAlreadyStarted'],
   ['QUOTE_UNAVAILABLE', 'quoteUnavailable'],
 ]);
 
@@ -235,6 +243,25 @@ export function currentBotGroupPlanStep(plan: BotGroupPlanView): BotGroupPlanSte
   return plan.steps.find((step) => step.position === plan.currentStep) ?? null;
 }
 
+/** Assignment and device admission are different states; stopped plans override stale step state. */
+export function botGroupPlanStepState(plan: BotGroupPlanView, step: BotGroupPlanStepView) {
+  if (plan.kind === 'talk' && step.status === 'running' && plan.status === 'stopped') return 'stopped';
+  if (plan.kind === 'talk' && step.status === 'running' && step.executionStatus === 'queued') return 'queued';
+  // A discussion turn that finished without publishing a message answered `NO_REPLY`, so the group
+  // shows nothing for it: it was skipped, not spoken. Only an explicit `null` counts — a host that
+  // does not report the field at all (legacy projection) keeps the plain done state.
+  if (plan.kind === 'talk' && step.status === 'done' && step.resultMessageId === null) return 'skipped';
+  return step.status;
+}
+
+export function canSkipBotGroupPlanStep(plan: BotGroupPlanView, step: BotGroupPlanStepView): boolean {
+  if (plan.kind !== 'talk' || plan.canManage !== true || plan.currentStep === null) return false;
+  if (plan.supportsPendingSkip === true && ['running', 'waiting'].includes(plan.status)
+    && step.position > plan.currentStep && step.status === 'pending') return true;
+  return plan.status === 'running' && step.position === plan.currentStep
+    && step.status === 'running' && step.executionStatus === 'queued' && !!step.executionId;
+}
+
 export type BotGroupPlanFollowUp =
   | { kind: 'continue'; next: BotGroupPlanStepView }
   | { kind: 'retry'; failed: BotGroupPlanStepView };
@@ -248,7 +275,7 @@ export function botGroupPlanFollowUp(plan: BotGroupPlanView | null): BotGroupPla
   const current = currentBotGroupPlanStep(plan);
   if (!current) return null;
   if (current.status === 'failed') return { kind: 'retry', failed: current };
-  if (current.status !== 'done') return null;
+  if (current.status !== 'done' && !(plan.kind === 'talk' && current.status === 'skipped')) return null;
   const index = plan.steps.indexOf(current);
   const next = plan.steps.slice(index + 1).find((step) => step.status === 'pending');
   return next ? { kind: 'continue', next } : null;
@@ -365,7 +392,7 @@ export function botGroupSidebarPlanPreview(group: BotGroupSummary): BotGroupSide
   const plan = group.openPlan;
   if (!plan) return null;
   const botName = plan.currentBotName?.trim() ?? '';
-  if (plan.status === 'running') {
+  if (plan.status === 'running' && plan.currentStepStatus === 'running') {
     return {
       kind: 'running',
       botName,
@@ -374,10 +401,10 @@ export function botGroupSidebarPlanPreview(group: BotGroupSummary): BotGroupSide
     };
   }
   if (plan.status === 'proposed') return { kind: 'proposed', organizerName: memberName(group.organizerBotId) };
-  if (plan.status === 'waiting') {
+  if (plan.status === 'waiting' || plan.status === 'running') {
     if (botName && plan.currentStepStatus === 'done') return { kind: 'step-done', botName };
     if (botName && plan.currentStepStatus === 'failed') return { kind: 'step-failed', botName };
-    return { kind: 'waiting' };
+    if (plan.status === 'waiting') return { kind: 'waiting' };
   }
   return null;
 }
@@ -456,4 +483,17 @@ export function botGroupBodyParts(content: string, authorKind?: BotGroupMessageV
     // Do not present a partial chart as complete data; preserve its source block.
     return result.length && !unavailableChart ? result : [{ kind: 'markdown' as const, content: source }];
   });
+}
+
+/** A long queue shows this many turns around the current one until it is expanded. */
+const QUEUE_VISIBLE_STEPS = 3;
+
+/** The turns a folded queue shows: the one before the current turn, it, and the next. */
+export function botGroupQueueWindow(plan: BotGroupPlanView): { start: number; end: number } {
+  const count = plan.steps.length;
+  // Folding away a single turn saves nothing.
+  if (count <= QUEUE_VISIBLE_STEPS + 1) return { start: 0, end: count };
+  const active = plan.steps.findIndex((step) => step.status !== 'done' && step.status !== 'skipped');
+  const start = Math.min(Math.max((active < 0 ? count - 1 : active) - 1, 0), count - QUEUE_VISIBLE_STEPS);
+  return { start, end: start + QUEUE_VISIBLE_STEPS };
 }

@@ -1,3 +1,8 @@
+import { glabCliTokenSource } from './glabCliTokenSource';
+import { fetchGitlabMr } from './gitlabPrSummary';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
+import { setGithubReadRuntime } from './githubReadRuntime';
+import { manageSessionPrs } from './manageSessionPrs';
 /**
  * git-context IPC 装配层 — 单例组装 + handler 注册 + renderer 广播。
  *
@@ -18,14 +23,22 @@
  * 徽标点击打开内置 gh 安装和设备码登录。不做 app 级 PAT 绑定。
  */
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import { GithubClient } from '@cindy/github-client';
+import { prStatusKey, isPrHost } from '@cindy/maker-shared';
 import { eq } from 'drizzle-orm';
 
 import { createLogger } from '../logger.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import {
+  createGithubReadService,
+  githubReadScope,
+  githubStatusFetch,
+  githubTransport,
+} from './githubReadHost';
+import type { GithubReadService } from './githubReadService';
+import type { GithubReadMethod } from '@cindy/maker-shared';
 import { optionalNullableString, requireString, throwIpcError } from '../utils/ipcValidate';
 import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
 import { registerGithubSetupIpc } from './githubSetupIpc.js';
@@ -48,6 +61,7 @@ import {
   ensurePrRefsBackfill,
   listAllPrRefs,
   listPrRefs,
+  managePrRefs,
   setPrRefsChangedListener,
 } from './prRefsStore.js';
 import {
@@ -57,6 +71,10 @@ import {
   type PrStatusResult,
   type PrRemoteState,
 } from './prStatusService.js';
+
+import { fetchPrSummary } from './prSummary';
+import { PrFollowWatch } from './prFollowWatch';
+import { getSchedulerIfInitialized } from '../scheduler-host/index.desktop.js';
 
 const log = createLogger('git-context/ipc');
 
@@ -68,6 +86,7 @@ export const GIT_CONTEXT_INVOKE = {
   UNWATCH: 'git-context:unwatch',
   PR_REFS_LIST: 'git-context:pr-refs:list',
   PR_REFS_LIST_ALL: 'git-context:pr-refs:list-all',
+  PR_REFS_MANAGE: 'git-context:pr-refs:manage',
   PR_STATUS: 'git-context:pr-status',
 } as const;
 
@@ -94,44 +113,41 @@ async function readGithubToken() {
   return ghCliTokenSource.readTokenDetailed();
 }
 
-/** GraphQL 查未解决 review thread 数(REST 不暴露 isResolved)。上限 100。 */
-const UNRESOLVED_THREADS_QUERY = `
-query($owner: String!, $repo: String!, $number: Int!) {
-  repository(owner: $owner, name: $repo) {
-    pullRequest(number: $number) {
-      reviewThreads(first: 100) { nodes { isResolved } }
-    }
-  }
-}`;
-
-async function fetchUnresolvedCount(client: GithubClient, q: PrStatusQuery): Promise<number> {
-  const data = await client.graphql<{
-    repository: {
-      pullRequest: { reviewThreads: { nodes: Array<{ isResolved: boolean }> } } | null;
-    } | null;
-  }>(UNRESOLVED_THREADS_QUERY, { owner: q.owner, repo: q.repo, number: q.prNumber });
-  const nodes = data.repository?.pullRequest?.reviewThreads?.nodes ?? [];
-  return nodes.filter((n) => !n.isResolved).length;
-}
-
 async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteState> {
   // fetchImpl:api.github.com 是境外端点,走吃系统代理的通道(见 maker-host/outbound-fetch)。
   const client = new GithubClient({
     token,
     owner: q.owner,
     repo: q.repo,
-    fetchImpl: outboundFetch,
+    fetchImpl: githubStatusFetch(token),
   });
   // 核心状态走 REST(所有 token 类型通用);未解决数走 GraphQL 增强信号,
   // 失败(老 fine-grained PAT 不支持 GraphQL 等)降级 null,不拖垮整条状态。
-  const [pr, unresolved] = await Promise.all([
+  const [pr, summary] = await Promise.all([
     client.getPullRequest(q.prNumber),
-    fetchUnresolvedCount(client, q).catch((err) => {
-      log.debug('unresolved threads query failed (degrade to null)', { err: String(err) });
+    fetchPrSummary(client, q).catch((err) => {
+      log.debug('PR summary query failed (degrade to null)', { err: String(err) });
       return null;
     }),
   ]);
+  const metadata = pr as typeof pr & {
+    mergeable?: boolean | null;
+    mergeable_state?: string;
+    updated_at?: string;
+    labels?: unknown[];
+    requested_reviewers?: unknown[];
+  };
   return {
+    metadata: {
+      body: pr.body,
+      author: pr.user,
+      base_sha: pr.base.sha ?? null,
+      mergeable: metadata.mergeable ?? null,
+      merge_state: metadata.mergeable_state ?? null,
+      updated_at: metadata.updated_at ?? null,
+      labels: metadata.labels ?? [],
+      review_requests: metadata.requested_reviewers ?? [],
+    },
     state: pr.state,
     draft: pr.draft,
     merged: pr.merged,
@@ -139,12 +155,55 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
     title: pr.title,
     html_url: pr.html_url,
     branch: pr.head.ref,
-    unresolved_count: unresolved,
+    head_sha: pr.head.sha,
+    base_branch: pr.base.ref,
+    review_decision: summary && summary.headOid === pr.head.sha ? (summary.reviewDecision ?? null) : null,
+    unresolved_count: summary?.unresolved ?? null,
+    checks: summary && summary.headOid === pr.head.sha ? summary.checks : null,
+    merge_state: summary && summary.headOid === pr.head.sha ? (summary.mergeState ?? null) : null,
   };
 }
 
 let gitContextService: GitContextService | null = null;
 let prStatusService: PrStatusService | null = null;
+let githubReadService: GithubReadService | null = null;
+/** Runs the schedules that follow a PR as soon as a status refresh sees that PR change. */
+const prFollowWatch = new PrFollowWatch({
+  // A passive instance (dev beside a release build on the same data) never starts runs by itself.
+  autoRunAllowed: () => getSchedulerIfInitialized()?.isPassive() === false,
+  listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
+  inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
+  hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
+  runNow: async (id, trigger) => {
+    const scheduler = getSchedulerIfInitialized();
+    if (!scheduler) return null;
+    return scheduler.runNow(id, { trigger });
+  },
+  log,
+});
+export async function manageGithubPrs(
+  sessionId: string,
+  args: Record<string, unknown>,
+  origin = 'same-account-remote',
+): Promise<Record<string, unknown>> {
+  if (!prStatusService) throw new Error('HOST_NOT_READY');
+  return manageSessionPrs(
+    sessionId,
+    args,
+    async (pr) => {
+      const [status] = await prStatusService!.getStatuses([pr], { waitForFresh: true });
+      if (!status?.ok) throw new Error('PR_VERIFICATION_FAILED');
+    },
+    origin,
+  );
+}
+export async function readGithub(
+  method: GithubReadMethod,
+  args: unknown,
+): Promise<Record<string, unknown>> {
+  if (!githubReadService) throw new Error('HOST_NOT_READY');
+  return githubReadService.read(method, args);
+}
 
 /** main 启动期注册(bootstrap-electron 调一次)。 */
 export function registerGitContextIpc(): void {
@@ -153,12 +212,39 @@ export function registerGitContextIpc(): void {
   });
   prStatusService = new PrStatusService({
     readToken: readGithubToken,
+    readGitlabToken: (host) => glabCliTokenSource.readTokenDetailed(host),
+    fetchGitlab: (token, query) => fetchGitlabMr(token, query, outboundFetch),
+    rejectGitlabToken: (host) => glabCliTokenSource.rejectToken(host),
+    invalidateGitlabTokenFailures: () => glabCliTokenSource.invalidateNegativeCache(),
+    scope: githubReadScope,
     fetchPr: fetchPrRemote,
+    // The renderer keeps its last value while awaiting fresh counts; no delayed second tick.
+    staleTtlMs: 0,
+    onObserved: (query, result) => prFollowWatch.observe(query, result),
   });
-  registerGithubSetupIpc(() => prStatusService?.invalidate());
-  setPrRefsChangedListener((sessionId) =>
-    broadcastToAllWindows(GIT_CONTEXT_PUSH.PR_REFS_CHANGED, { sessionId }),
-  );
+  app.on('browser-window-focus', () => {
+    prStatusService?.invalidateGitlabAuthFailures();
+  });
+  githubReadService = createGithubReadService(prStatusService);
+  setGithubReadRuntime({ read: readGithub, manage: manageGithubPrs });
+  registerGithubSetupIpc(() => {
+    prStatusService?.invalidate();
+    githubTransport.invalidate();
+  });
+  ipcMain.handle('git-context:github-read', async (event, payload: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    const input = payload as { method?: unknown; args?: unknown };
+    if (input?.method === 'manage_session_prs') {
+      const args = input.args as Record<string, unknown>;
+      return manageGithubPrs(requireString(args?.session_id, 'session_id'), args);
+    }
+    if (!['get_pr_status', 'get_pr_changes', 'get_pr_details'].includes(String(input?.method)))
+      throwIpcError('INVALID_PARAMS', 'Unknown GitHub read method');
+    return readGithub(input.method as GithubReadMethod, input.args);
+  });
+  setPrRefsChangedListener((sessionId) => {
+    broadcastToAllWindows(GIT_CONTEXT_PUSH.PR_REFS_CHANGED, { sessionId });
+  });
 
   ipcMain.handle(GIT_CONTEXT_INVOKE.GET, async (_e, workdir: unknown) => {
     const dir = requireString(workdir, 'workdir');
@@ -270,8 +356,6 @@ export function registerGitContextIpc(): void {
 
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_REFS_LIST, async (_e, sessionId: unknown) => {
     const sid = requireString(sessionId, 'sessionId');
-    // 一次性历史回填(fire-and-forget,幂等):功能上线前的老会话也能绑上 PR。
-    // 此处触发是因为 db 此时必然 ready;完成后经 pr-refs-changed 推送刷新。
     void ensurePrRefsBackfill();
     return listPrRefs(sid);
   });
@@ -280,13 +364,60 @@ export function registerGitContextIpc(): void {
     // PrRefsProvider 挂在 App 顶层,首次调用通常早于登录后的 db ensureReady。
     // 未就绪时返回 null 当"稍后再试"信号(renderer 定时重试),不抛错刷日志。
     if (getCurrentDbClientUserId() === null) return null;
-    // sidebar 启动期就会调这条 → 回填触发点前移到 app 打开侧边栏时,
-    // 不再依赖"先打开某个会话"。
     void ensurePrRefsBackfill();
     return listAllPrRefs();
   });
 
-  ipcMain.handle(GIT_CONTEXT_INVOKE.PR_STATUS, async (_e, queries: unknown) => {
+  // Same-account remote dispatch already authenticates the controller. Shared-task
+  // guests cannot call this channel (it is absent from their separate allowlist).
+  ipcMain.handle(GIT_CONTEXT_INVOKE.PR_REFS_MANAGE, async (event, payload: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    const obj = payload as {
+      sessionId?: unknown;
+      action?: unknown;
+      id?: unknown;
+      url?: unknown;
+      ids?: unknown;
+    };
+    const sessionId = requireString(obj?.sessionId, 'sessionId');
+    const action = requireString(obj?.action, 'action');
+    if (!['list', 'add', 'remove', 'restore', 'pin', 'unpin', 'reorder'].includes(action)) {
+      throwIpcError('INVALID_PARAMS', 'Unknown PR action');
+    }
+    if (action === 'reorder' && (!Array.isArray(obj.ids) || obj.ids.length === 0)) {
+      throwIpcError('INVALID_PARAMS', 'ids must be a nonempty array');
+    }
+    const operation =
+      action === 'reorder'
+        ? {
+            action: 'reorder' as const,
+            ids: (obj.ids as unknown[]).map((id) => requireString(id, 'id')),
+          }
+        : action === 'list'
+          ? { action: 'list' as const }
+          : action === 'add'
+            ? { action: 'add' as const, url: requireString(obj?.url, 'url') }
+            : {
+                action: action as 'remove' | 'restore' | 'pin' | 'unpin',
+                id: requireString(obj?.id, 'id'),
+              };
+    return managePrRefs(sessionId, operation, async (ref) => {
+      const [status] = await prStatusService!.getStatuses([ref], {
+        remote: isDeviceLinkInvoke(),
+        waitForFresh: true,
+      });
+      if (!status?.ok) {
+        throwIpcError(
+          status?.reason === 'not-found' ? 'NOT_FOUND' : 'PRECONDITION_FAILED',
+          status?.reason === 'glab-missing' || status?.reason === 'glab-not-logged-in'
+            ? status.reason
+            : 'Unable to verify PR or MR',
+        );
+      }
+    });
+  });
+
+  const statusHandler = async (_e: unknown, queries: unknown) => {
     let rawQueries: unknown = queries;
     let remoteSessionId: string | null = null;
     if (isDeviceLinkInvoke()) {
@@ -298,14 +429,38 @@ export function registerGitContextIpc(): void {
       throwIpcError('INVALID_PARAMS', 'queries 必须是数组');
     }
     let parsed: PrStatusQuery[] = (rawQueries as unknown[]).map((q) => {
-      const obj = q as { owner?: unknown; repo?: unknown; prNumber?: unknown };
+      const obj = q as {
+        owner?: unknown;
+        repo?: unknown;
+        prNumber?: unknown;
+        provider?: unknown;
+        host?: unknown;
+      };
       const owner = requireString(obj?.owner, 'owner');
       const repo = requireString(obj?.repo, 'repo');
       const prNumber = Number(obj?.prNumber);
       if (!Number.isSafeInteger(prNumber) || prNumber <= 0) {
         throwIpcError('INVALID_PARAMS', 'prNumber 必须是正整数');
       }
-      return { owner, repo, prNumber };
+      const provider = obj.provider ?? 'github';
+      const host = obj.host ?? 'github.com';
+      if (
+        (provider !== 'github' && provider !== 'gitlab') ||
+        !isPrHost(host) ||
+        (provider === 'github' && host !== 'github.com') ||
+        !/^[A-Za-z0-9_.-]+$/.test(repo) ||
+        `${owner}/${repo}`.split('/').some((part) => part === '.' || part === '..') ||
+        !(
+          provider === 'gitlab' ? /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/ : /^[A-Za-z0-9_.-]+$/
+        ).test(owner)
+      )
+        throwIpcError('INVALID_PARAMS', 'Invalid PR identity');
+      return {
+        owner,
+        repo,
+        prNumber,
+        ...(provider === 'gitlab' ? { provider, host: host.toLowerCase() } : {}),
+      };
     });
     if (remoteSessionId) {
       // A remote controller may only ask for statuses of PRs already extracted
@@ -327,18 +482,68 @@ export function registerGitContextIpc(): void {
       }
     }
     return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
-  });
+  };
+  ipcMain.handle(GIT_CONTEXT_INVOKE.PR_STATUS, statusHandler);
+  ipcMain.handle('git-context:mr-status', statusHandler);
 }
 
 /**
  * 任务摘要（get_task_digest）用：本机任务最近提到的几个 PR 的远端状态。与 PR_STATUS
  * 同一服务与缓存；服务未就绪或任务没有 PR 时返回空数组。只读本机已记录的 PR 引用。
  */
-export async function readSessionPrStatuses(sessionId: string, limit = 3): Promise<PrStatusResult[]> {
+export async function readSessionPrStatuses(
+  sessionId: string,
+  limit = 3,
+): Promise<PrStatusResult[]> {
   if (!prStatusService) return [];
   const refs = (await listPrRefs(sessionId)).slice(0, limit);
   if (refs.length === 0) return [];
-  return prStatusService.getStatuses(refs.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })));
+  return prStatusService.getStatuses(refs);
+}
+
+/**
+ * 手机查看插件卡片的 PR 状态位用：只查该任务已记录的 PR(与远程 PR_STATUS 同一过滤),
+ * 走同一服务与缓存。查不到或失败返回 undefined,卡片保留插件写的快照。
+ */
+export async function readSessionPrStatus(
+  sessionId: string,
+  key: string,
+): Promise<PrStatusResult | undefined> {
+  if (!prStatusService) return undefined;
+  try {
+    const ref = (await listPrRefs(sessionId)).find(
+      (item) => prStatusKey(item) === (key.includes(':') ? key : `github:github.com/${key}`),
+    );
+    if (!ref) return undefined;
+    const [status] = await prStatusService.getStatuses([ref], { remote: true });
+    return status;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 与电脑端任务页 areAllTaskPrsMerged 同一上限:超过这么多关联 PR 的任务不算可归档。 */
+const MAX_TASK_ARCHIVE_PRS = 30;
+const PR_STATUS_BATCH = 10;
+
+/**
+ * 手机读插件卡片的归档按钮用：任务记录的每个 PR 都确认已合并才算完成(与电脑端任务页同一判据)。
+ * 没有关联 PR、超过上限、任一 PR 查不到或失败都返回 false,卡片上不露出归档。
+ */
+export async function readSessionPrsAllMerged(sessionId: string): Promise<boolean> {
+  if (!prStatusService) return false;
+  try {
+    const refs = await listPrRefs(sessionId);
+    if (refs.length === 0 || refs.length > MAX_TASK_ARCHIVE_PRS) return false;
+    for (let i = 0; i < refs.length; i += PR_STATUS_BATCH) {
+      const batch = refs.slice(i, i + PR_STATUS_BATCH);
+      const statuses = await prStatusService.getStatuses(batch, { remote: true });
+      if (statuses.length !== batch.length || !statuses.every((status) => status.ok && status.status === 'merged')) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 应用退出时清理 watcher 订阅。 */

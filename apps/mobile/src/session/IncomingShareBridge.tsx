@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { AppState, Linking, Platform } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
 
@@ -19,7 +19,6 @@ export function IncomingShareBridge() {
   const router = useRouter();
   const segments = useSegments();
   const batch = useIncomingShareBatch();
-  const [shareLinkAttempt, setShareLinkAttempt] = useState(0);
   const presentedBatchId = useRef<string | null>(null);
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
@@ -30,34 +29,43 @@ export function IncomingShareBridge() {
     void import('@/session/incomingShareNative').then((sharing) => {
       if (!active) return;
       stopWatchingAccount = watchIncomingShareAccount(sharing, initialOwner);
-      const refresh = (explicitShare = false) => {
-        void import('@/session/incomingShareCleanup')
-          .then(({ cleanupExpiredIncomingShares }) => cleanupExpiredIncomingShares())
-          .catch(() => undefined)
-          .then(() => {
-            if (!active) return;
-            // Sweep before staging, so an expired native copy cannot start a new
-            // upload concurrently with deletion. The native adapter filters missing
-            // copies before they can trigger navigation.
-            try {
-              receiveIncomingShare(sharing);
-              if (explicitShare) {
-                presentedBatchId.current = null;
-                setShareLinkAttempt(value => value + 1);
-              }
-            } catch {
-              // Inbound sharing is unavailable in older native binaries.
+      let refreshing = false;
+      let refreshQueued = false;
+      const refresh = () => {
+        refreshQueued = true;
+        if (refreshing) return;
+        refreshing = true;
+        void (async () => {
+          try {
+            // Foreground and URL are notifications of the same native inbox.
+            // Serialize them; neither event can reset a user's chosen target.
+            while (active && refreshQueued) {
+              refreshQueued = false;
+              try {
+                const { cleanupExpiredIncomingShares } = await import('@/session/incomingShareCleanup');
+                await cleanupExpiredIncomingShares();
+              } catch { /* Older binaries may not expose the shared container. */ }
+              if (!active) return;
+              try { await receiveIncomingShare(sharing); }
+              catch { /* Preserve the native inbox for the next foreground/retry. */ }
             }
-          });
+          } finally { refreshing = false; }
+        })();
       };
       subscriptions = [
         AppState.addEventListener('change', (state) => { if (state === 'active') refresh(); }),
-        Linking.addEventListener('url', ({ url }) => refresh(/^[a-z][a-z0-9+.-]*:\/\/expo-sharing(?:[/?#]|$)/i.test(url))),
+        Linking.addEventListener('url', ({ url }) => {
+          if (/^[a-z][a-z0-9+.-]*:\/\/expo-sharing(?:[/?#]|$)/i.test(url)) refresh();
+        }),
         { remove: subscribeMobileAuthOwner(() => {
           if (!getMobileAuthOwner().switching && AppState.currentState === 'active') refresh();
         }) },
       ];
-      refresh();
+      // A push or background fetch can launch the app straight into the background, where iOS
+      // suspends it within seconds. The native read holds a file lock in the App Group while it
+      // waits on the shared preferences, and being suspended with that lock held ends the
+      // process (0xdead10cc). The 'active' listener above picks the inbox up on first foreground.
+      if (AppState.currentState !== 'background') refresh();
     }).catch(() => undefined);
     return () => {
       active = false;
@@ -75,6 +83,7 @@ export function IncomingShareBridge() {
       !auth.initialized
       || !auth.isAuthenticated
       || segments[0] === '(auth)'
+      || !!batch.destination
       || presentedBatchId.current === batch.id
     ) {
       return;
@@ -87,7 +96,7 @@ export function IncomingShareBridge() {
     // screen and return to retry instead of repeatedly forcing it back open.
     presentedBatchId.current = batch.id;
     router.navigate('/incoming-share');
-  }, [auth.initialized, auth.isAuthenticated, batch, router, segments, shareLinkAttempt]);
+  }, [auth.initialized, auth.isAuthenticated, batch, router, segments]);
 
   return null;
 }

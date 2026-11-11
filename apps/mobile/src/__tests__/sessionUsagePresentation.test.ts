@@ -63,10 +63,10 @@ describe("task menu usage presentation", () => {
     };
     expect(accountUsageRows(account, i18n.t, "zh-CN")[0]).toMatchObject({
       value: "¥0.00",
-      warning: true,
+      level: "crit",
     });
   });
-  it("uses real window periods, warns at low remaining, and marks expired observations", () => {
+  it("uses real window periods, colors low remaining (30% yellow, 10% red), and marks expired observations", () => {
     const account: SessionMenuAccountUsage = {
       source: "chatgpt",
       plan: "pro",
@@ -75,22 +75,24 @@ describe("task menu usage presentation", () => {
       windows: [
         { id: "a", minutes: 180, remainingPercent: 8, resetsAt: null },
         { id: "b", minutes: 10080, remainingPercent: 0, resetsAt: 1 },
+        { id: "c", minutes: 300, remainingPercent: 25, resetsAt: null },
       ],
     };
     const rows = accountUsageRows(account, i18n.t, "zh-CN", 1_000_000);
     expect(rows[0]).toMatchObject({
       label: "3 小时",
       value: "剩余 8%",
-      warning: true,
+      level: "crit",
     });
-    expect(rows[1]).toMatchObject({ value: "等待刷新", warning: false });
+    expect(rows[1]).toMatchObject({ value: "等待刷新", level: "normal" });
+    expect(rows[2]).toMatchObject({ value: "剩余 25%", level: "warn" });
   });
   it.each([
-    [{ balance: 1234.5, status: null }, "剩余 1,234.50", false],
-    [{ balance: null, status: "unlimited" }, "不限", false],
-    [{ balance: 0, status: "depleted" }, "剩余 0.00 · 已耗尽", true],
-    [{ balance: null, status: "available" }, "可用", false],
-  ] as const)("shows ChatGPT credits %o after the quota windows", (credits, value, warning) => {
+    [{ balance: 1234.5, status: null }, "剩余 1,234.50", "normal"],
+    [{ balance: null, status: "unlimited" }, "不限", "normal"],
+    [{ balance: 0, status: "depleted" }, "剩余 0.00 · 已耗尽", "crit"],
+    [{ balance: null, status: "available" }, "可用", "normal"],
+  ] as const)("shows ChatGPT credits %o after the quota windows", (credits, value, level) => {
     const account: SessionMenuAccountUsage = {
       source: "chatgpt",
       plan: null,
@@ -100,7 +102,7 @@ describe("task menu usage presentation", () => {
       credits,
     };
     const rows = accountUsageRows(account, i18n.t, "zh-CN");
-    expect(rows[1]).toEqual({ label: "Credits", value, warning });
+    expect(rows[1]).toEqual({ label: "Credits", value, level });
   });
   it("labels each quota by the time left until it resets, like the desktop status chip", () => {
     const now = 1_000_000_000_000;

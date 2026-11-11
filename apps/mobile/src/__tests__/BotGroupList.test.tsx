@@ -91,6 +91,8 @@ vi.mock('@/session/BotGroupAvatars', () => ({
   useBotGroupIdentities: () => (botId: string, fallbackName = '') => ({ botId, name: fallbackName || botId }),
 }));
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: () => h.teammates }));
+// This suite exercises host-backed creation; cloud roster behavior is covered by BotGroupCreateSheet.test.tsx.
+vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useCloudGroupCandidates: () => ({ rows: [], loading: false, failed: false }) }));
 vi.mock('@/session/useTeammateRoster', () => ({ TEAMMATE_COLLECTION_ID: 'teammates' }));
 
 import { BotGroupListRow } from '@/session/BotGroupList';
@@ -145,16 +147,16 @@ describe('group row', () => {
     return onPress;
   }
 
-  it('shows member avatars, the host’s localized preview without Markdown, and a working state in the time slot', async () => {
+  it('shows member avatars, the host’s localized preview without Markdown, and a working dot on the avatar', async () => {
     const onPress = await render();
     const fresh = byId('botGroups.item.pc.g-new')!;
     const done = byId('botGroups.item.mac.g-old')!;
     expect(fresh.textContent).toContain('咪咪正在安排…');
     expect(done.textContent).toContain('阿布：写好了');
     expect(done.textContent).not.toContain('**');
-    expect(fresh.querySelector('[data-testid="companion.row.working"]')).not.toBeNull();
-    expect(fresh.querySelector('[data-testid="duo"]')?.getAttribute('data-working')).toBe('true');
-    expect(done.querySelector('[data-testid="companion.row.working"]')).toBeNull();
+    expect(fresh.querySelector('[data-testid="teammate.status.running"]')).not.toBeNull();
+    expect(fresh.querySelector('[data-testid="duo"]')?.getAttribute('data-working')).toBe('false');
+    expect(done.querySelector('[data-testid="teammate.status.running"]')).toBeNull();
     expect(done.textContent).toContain('9:41');
     expect(done.querySelector('[data-testid="duo"]')?.textContent).toBe('咪咪+阿布');
     await click('botGroups.item.mac.g-old');
@@ -166,7 +168,7 @@ describe('group row', () => {
     const offline = byId('botGroups.item.pc.g-new')!;
     expect(offline.disabled).toBe(true);
     expect(offline.textContent).toContain('devices.resources.hostOffline');
-    expect(offline.querySelector('[data-testid="companion.row.working"]')).toBeNull();
+    expect(offline.querySelector('[data-testid="teammate.status.running"]')).toBeNull();
     expect(offline.querySelector('[data-testid="duo"]')?.getAttribute('data-working')).toBe('false');
   });
 });

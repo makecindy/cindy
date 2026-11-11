@@ -3,12 +3,23 @@ import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import ts from 'typescript';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { buildMessageContentLayout, nextSettledContentWidth } from '@/session/messageContentLayout';
 import { selectableTextVerticalOffset } from '@/session/selectableTextAlignment';
+import { MarkdownSelectableText } from '@/session/MarkdownSelectableText';
 import { rendererFunction, rendererSource, executeRenderer } from './fixtures/messageRendererComponents';
 import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExpandedBlank';
+
+vi.mock('react-native', () => ({
+  Platform: { OS: 'ios' },
+  Dimensions: { get: () => ({ fontScale: 1 }), addEventListener: () => ({ remove() {} }) },
+  StyleSheet: { flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)) },
+}));
+vi.mock('react-native-uitextview', () => ({ UITextView: (props: SurfaceProps) => UITextView(props) }));
+vi.mock('@/components/AppText', () => ({ Text: (props: SurfaceProps) => Text(props), MAX_FONT_SIZE_MULTIPLIER: 1.5 }));
+vi.mock('@/session/SelectionMenuText', () => ({ SelectionMenuText: (props: SurfaceProps) => Text(props) }));
+vi.mock('@/session/ShareMessageCheckbox', () => ({ useCancelShareSelectionRowTap: () => null }));
 
 import {
   AUTOMATION_USER_MESSAGE_COLLAPSED_LINES,
@@ -157,12 +168,13 @@ const bubbleStatements = rendererFunction('MessageBubble').body!.statements;
 const collapseStart = bubbleStatements.indexOf(bodyStatement('automationOrigin', 'MessageBubble'));
 const collapseEnd = bubbleStatements.indexOf(bodyStatement('longMessageCollapsed', 'MessageBubble'));
 const collapseCode = bubbleStatements.slice(collapseStart, collapseEnd + 1).map(statement => statement.getText(rendererSource)).join(String.fromCharCode(10));
-const markdownStateCode = ['contentWidth', 'handleSettledWidthLayout', 'pinSettledWidth', 'settledTextStyle', 'renderSingleBlock']
+const markdownStateCode = ['measuresSettledWidth', 'useRowState', 'contentWidth', 'handleSettledWidthLayout', 'pinSettledWidth', 'settledTextStyle', 'renderSingleBlock']
   .map(name => bodyStatement(name, 'MarkdownBodyBase').getText(rendererSource)).join(String.fromCharCode(10));
 const markdownReturn = rendererFunction('MarkdownBodyBase').body!.statements.find(ts.isReturnStatement);
 if (!markdownReturn) throw new Error('MarkdownBody return was not found');
 
 let root: Root;
+const harnessPlatform: { OS: 'ios' | 'android' } = { OS: 'ios' };
 let host: HTMLDivElement;
 const nativeLayouts = new Map<string, (event: unknown) => void>();
 const nativeTextLayouts = new Map<string, (event: unknown) => void>();
@@ -184,7 +196,7 @@ const Text = nativeText('rn-text');
 const UITextView = nativeText('ios-text-view');
 const ScrollView = (props: SurfaceProps) => React.createElement('div', { 'data-scroll': true }, props.children);
 const { BubbleHarness, MarkdownHarness } = executeRenderer<{ BubbleHarness: React.ComponentType<any>; MarkdownHarness: React.ComponentType<any> }>(
-  rendererFunction('MarkdownSelectableText').getText(rendererSource) + String.raw`
+  String.raw`
 function MarkdownHarness({ pinContentWidth = false, allowIosUITextView = true, boundTextRuns = false, selectable, text, layout, code = false, codeCopyEnabled = true }) {
   const styles = {};
   const onOpenPayload = undefined;
@@ -228,11 +240,11 @@ function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
 return { BubbleHarness, MarkdownHarness };
 `, {
     useContext: React.useContext, useRef: React.useRef, useMemo: React.useMemo,
-    useEffect: React.useEffect, useCallback: React.useCallback, useRecyclingState: React.useState,
+    useEffect: React.useEffect, useCallback: React.useCallback, useRecyclingState: React.useState, useRowStateHook: () => React.useState,
     SelectionQuoteContext: React.createContext(null), useWindowDimensions: () => ({ fontScale: 1 }),
-    Platform: { OS: 'ios' }, StyleSheet: { flatten: (style: unknown) => style },
+    Platform: harnessPlatform, StyleSheet: { flatten: (style: unknown) => style },
     selectableTextVerticalOffset, MAX_FONT_SIZE_MULTIPLIER: 2, i18n,
-    View: NativeView, Text, SelectionMenuText: Text, UITextView, ScrollView,
+    View: NativeView, Text, MarkdownSelectableText, ScrollView,
     buildMessageContentLayout, nextSettledContentWidth,
     MarkdownBlockContent: ({ block, renderBlock }: { block: unknown; renderBlock: (block: unknown) => React.ReactNode }) => renderBlock(block),
     HighlightedCodeText: ({ text }: { text: string }) => React.createElement('code', null, text),
@@ -252,6 +264,7 @@ describe('MessageRenderer bounded long-message native behavior', () => {
     root = createRoot(host);
     nativeLayouts.clear();
     nativeTextLayouts.clear();
+    harnessPlatform.OS = 'ios';
   });
   afterEach(() => act(() => root.unmount()));
 
@@ -284,7 +297,8 @@ describe('MessageRenderer bounded long-message native behavior', () => {
     act(() => host.querySelector<HTMLButtonElement>('[data-testid="message.collapseToggle"]')!.click());
     const markdown = () => host.querySelector('[data-testid="message.markdownBody"]')!;
     const before = markdown().getAttribute('data-style');
-    act(() => nativeLayouts.get('message.markdownBody')!({ nativeEvent: { layout: { width: 402 } } }));
+    // User bubbles hug their content and do not subscribe to width measurement.
+    act(() => nativeLayouts.get('message.markdownBody')?.({ nativeEvent: { layout: { width: 402 } } }));
     expect(markdown().getAttribute('data-style')).toBe(before);
     expect(markdown().firstElementChild?.getAttribute('data-style')).toBe('null');
     act(() => root.render(React.createElement(MarkdownHarness, { text: 'agent', selectable: true, pinContentWidth: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
@@ -296,16 +310,29 @@ describe('MessageRenderer bounded long-message native behavior', () => {
     expect(host.querySelector('[data-scroll]')).toBeNull();
   });
 
+  // Android 性能回归:二次测宽为 iOS UITextView 设计,旧实现在 Android 上也会在首次布局后
+  // 换 key 重挂 agent 正文,每条回复的原生文本挂载两遍。最小失败输入:Android + agent 正文 + 一次布局回报。
+  it('mounts Android agent markdown once at the stretched width', () => {
+    harnessPlatform.OS = 'android';
+    act(() => root.render(React.createElement(MarkdownHarness, { text: 'agent', selectable: true, pinContentWidth: true, layout: buildMessageContentLayout({ screenWidth: 402 }) })));
+    const markdown = host.querySelector('[data-testid="message.markdownBody"]')!;
+    const text = markdown.querySelector('[data-surface]');
+    act(() => nativeLayouts.get('message.markdownBody')?.({ nativeEvent: { layout: { width: 402 } } }));
+    expect(markdown.querySelector('[data-surface]')).toBe(text);
+    expect(markdown.firstElementChild?.getAttribute('data-style')).toBe('null');
+    expect(JSON.parse(markdown.getAttribute('data-style')!)).toContainEqual({ alignSelf: 'stretch' });
+  });
+
   it.each([
-    { codeCopyEnabled: true, text: 'const answer = 42;', hasCopy: true, padding: 0 },
-    { codeCopyEnabled: false, text: 'const answer = 42;', hasCopy: false, padding: null },
-    { codeCopyEnabled: true, text: '', hasCopy: false, padding: null },
-  ])('reserves copy-button space only for codeCopyEnabled=$codeCopyEnabled with text=$text', ({ codeCopyEnabled, text, hasCopy, padding }) => {
+    { codeCopyEnabled: true, text: 'const answer = 42;', hasCopy: true },
+    { codeCopyEnabled: false, text: 'const answer = 42;', hasCopy: false },
+    { codeCopyEnabled: true, text: '', hasCopy: false },
+  ])('keeps code at the top for codeCopyEnabled=$codeCopyEnabled with text=$text', ({ codeCopyEnabled, text, hasCopy }) => {
     const layout = buildMessageContentLayout({ screenWidth: 402 });
     act(() => root.render(React.createElement(MarkdownHarness, { text, code: true, codeCopyEnabled, layout })));
     const content = host.querySelector('code')!.parentElement!;
     const style = JSON.parse(content.getAttribute('data-style')!);
-    expect(style.at(-1).paddingTop).toBe(padding ?? layout.codePaddingVertical);
+    expect(style.find((entry: any) => entry?.paddingTop !== undefined).paddingTop).toBe(layout.codePaddingVertical);
     expect(host.querySelector('[data-testid="code-copy-stub"]') !== null).toBe(hasCopy);
   });
 });

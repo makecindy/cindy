@@ -118,6 +118,8 @@ const MEMBER_UNAVAILABLE_CODES = new Set([
   'REMOTE_AGENT_MODEL_UNAVAILABLE',
   'REMOTE_AGENT_SHARE_PAUSED',
   'REMOTE_AGENT_SHARE_REMOVED',
+  // 这台电脑开了「仅使用 Agent-Net」，旧版分享用不了：换组里别的电脑。
+  'REMOTE_AGENT_SHARE_LEGACY_DISABLED',
   'REMOTE_AGENT_ACCOUNT_CHANGED',
   'REMOTE_AGENT_PEER_TOO_OLD',
   'REMOTE_AGENT_UNSUPPORTED',
@@ -268,6 +270,7 @@ export function decideProviderGroupFailure(
   if (code && CONNECTION_LOST_CODES.has(code)) return switchTo('unavailable', 'lost');
   if (code && MEMBER_UNAVAILABLE_CODES.has(code)) return switchTo('unavailable', null);
   // 连续拉不到那台(remote-agent/controller/proxyHandle)：只说明连接断了。
+  if (reason === 'remote_agent_restarted') return switchTo('unavailable', 'lost');
   if (reason === REMOTE_AGENT_LOST_REASON) return switchTo('unavailable', 'lost');
   if ((code && CONNECTION_CHECK_CODES.has(code)) || reason === REMOTE_AGENT_CLOSED_REASON) return switchTo('unavailable', 'check');
 

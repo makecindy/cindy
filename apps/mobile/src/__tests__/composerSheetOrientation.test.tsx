@@ -214,6 +214,8 @@ it('keeps self-scrolling companion pages on the existing RN viewport path', () =
     expect(viewport?.querySelector('[data-preserve-position="0"]')?.textContent).toBe('Todo');
     expect(viewport?.textContent).toContain('Save');
     expect(viewport?.querySelector('[data-rn-scroll]')?.textContent).not.toContain('Save');
+    // The hosted viewport keeps the large layout; a medium detent would push the footer off screen.
+    expect(presentationDetents).toHaveBeenLastCalledWith(['large'], { selection: 'large' });
   } finally { act(() => root.unmount()); }
 });
 

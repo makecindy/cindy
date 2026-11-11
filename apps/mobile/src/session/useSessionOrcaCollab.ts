@@ -15,7 +15,6 @@ import type { ProviderView } from '@cindy/model-providers/registry';
 import type { AgentKind } from '@cindy/model-providers/types';
 import type { OrcaExecutionDeviceView } from '@cindy/device-link';
 import type { MobileModelOption } from '@/session/agentCapabilities';
-import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import {
   archiveOrcaWorker,
   buildOrcaEnableOptions,
@@ -42,13 +41,25 @@ import {
   type OrcaWorkerPermissionMode,
 } from '@/session/orcaTeam';
 import {
+  orcaWorkerTaskAfterRoleChange,
   parseOrcaCollaborationSettings,
   parseOrcaTeamWorkers,
   readOrcaTeamLeadSessionId,
   type OrcaCollaborationSettings,
 } from '@cindy/maker-shared/orca-team';
 import { subscribeRemoteOrcaWorkerChanged } from '@/device-link/DeviceLinkContext';
-import { canSubmitOrcaWorkerForm, isPredefinedOrcaRole } from '@/session/ContextSheetCollabView';
+import { canSubmitOrcaWorkerForm } from '@/session/ContextSheetCollabView';
+import {
+  BUILTIN_ORCA_ROLE_ENTRIES,
+  listedOrcaRoles,
+  orcaRoleDefaultTask,
+  orcaRoleDisplayName,
+  orcaRoleRememberMutation,
+  parseOrcaHostMemory,
+  resolveOrcaRoleInput,
+  withRememberedOrcaRole,
+  type OrcaWorkerRoleEntry,
+} from '@/session/orcaWorkerRoles';
 import { normalizeMobileAgentCapabilities } from '@/session/agentCapabilities';
 import {
   defaultOrcaWorkerCreationPrefs,
@@ -274,6 +285,13 @@ export function useOrcaWorkerLeadSessionId(params: {
  *
  * 模型选择器与 + 面板是两个 sheet(iOS 原生 sheet 不能叠开):选模型前收起面板,
  * 选择器完全收起后再展开面板回到表单。
+ *
+ * 记忆存在任务所在的电脑上(用户裁决：不记在手机上)，打开表单时读、提交或移除时写回(见
+ * orcaWorkerRoles)：角色清单与每个角色记的任务、权限、模型，以及上面说的不分角色的「上次选择」。
+ * 读到时用户还没动过表单，就按那台电脑的「上次选择」重建表单、选中第一个角色并带回它记的内容。
+ *  - 那台电脑版本太旧、没有这组通道：只列内置角色、不能增删，「上次选择」沿用手机本地的旧记忆
+ *    (orcaWorkerPrefs)，这是给旧电脑留的兼容。
+ *  - 一时读不到(连不上、账号切换中)：按首次默认值打开，不改用手机上的记忆。
  */
 export function useOrcaWorkerForm(params: {
   maker: MobileMakerTransport;
@@ -294,6 +312,11 @@ export function useOrcaWorkerForm(params: {
    * 模型选择器列出其他电脑与分享的供应商。不支持时不发送，Worker 跟 Lead。
    */
   agentLocationSelectable?: boolean;
+  /**
+   * Lead 是否已有可查的工作(缺省 true)。新建任务的草稿传 false：「审查」「测试」自带的首条任务
+   * 说的是 Lead 已有的工作，这时还没有，不带出。
+   */
+  leadHasWork?: boolean;
 }) {
   const { maker, prefsScope, active, setSheetOpen, connectionEpoch, taskHostDeviceId, sshRemote } = params;
   const leadAgentDeviceIdRef = useRef(params.leadAgentDeviceId ?? null);
@@ -328,6 +351,41 @@ export function useOrcaWorkerForm(params: {
   const [executionDevicesLoading, setExecutionDevicesLoading] = useState(false);
   const [executionDevicesError, setExecutionDevicesError] = useState<string | null>(null);
   const [customRoleMode, setCustomRoleMode] = useState(false);
+  const customRoleModeRef = useRef(customRoleMode);
+  customRoleModeRef.current = customRoleMode;
+  /**
+   * 任务所在电脑上的角色清单，连同它是从哪台电脑读的：换了电脑后上一台的清单不再算数。
+   * null = 还没读到或读不到，此时只列内置角色、不能增删也不记。
+   */
+  const [rolesState, setRolesState] = useState<{
+    source: MobileMakerTransport;
+    entries: readonly OrcaWorkerRoleEntry[];
+  } | null>(null);
+  const roleEntries = rolesState?.source === maker ? rolesState.entries : null;
+  const roleEntriesRef = useRef(roleEntries);
+  roleEntriesRef.current = roleEntries;
+  const rolesMakerRef = useRef(maker);
+  rolesMakerRef.current = maker;
+  /**
+   * 「上次选择」记在哪，按任务所在的电脑各自判断：'host' = 记在那台电脑上，prefs 是读回来的那份
+   * (本页提交后同步更新，不落盘)；'phone' = 那台电脑版本太旧，沿用手机本地的旧记忆(prefsRef)；
+   * null = 还没读到或一时读不到，表单按首次默认值起步，这一端不存。
+   */
+  const memoryHomeRef = useRef<
+    | { source: MobileMakerTransport; home: 'host'; prefs: OrcaWorkerCreationPrefs }
+    | { source: MobileMakerTransport; home: 'phone' }
+    | null
+  >(null);
+  const memoryHome = useCallback(
+    () => (memoryHomeRef.current?.source === rolesMakerRef.current ? memoryHomeRef.current : null),
+    [],
+  );
+  /** 表单起步、切 Agent 时带出模型用的「上次选择」。 */
+  const currentPrefs = useCallback((): OrcaWorkerCreationPrefs => {
+    const home = memoryHome();
+    if (home?.home === 'host') return home.prefs;
+    return home?.home === 'phone' ? prefsRef.current : defaultOrcaWorkerCreationPrefs();
+  }, [memoryHome]);
   const [agents, setAgents] = useState<readonly OrcaWorkerAgentKind[]>(ALL_AGENTS);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [modelsByAgent, setModelsByAgent] = useState<Partial<Record<OrcaWorkerAgentKind, readonly MobileModelOption[]>>>({});
@@ -396,6 +454,9 @@ export function useOrcaWorkerForm(params: {
     convergeGenRef.current += 1;
     prefsLoadedRef.current = false;
     prefsRef.current = defaultOrcaWorkerCreationPrefs();
+    // 另一个账号在那台电脑上是另一份记忆：上一个账号读到的不再算数。
+    memoryHomeRef.current = null;
+    setRolesState(null);
     setForm(withLeadLocation(orcaWorkerFormFromPrefs(prefsRef.current, prefsRef.current.lastAgent)));
     if (!prefsScope) {
       prefsLoadedRef.current = true;
@@ -437,6 +498,197 @@ export function useOrcaWorkerForm(params: {
       .catch(() => undefined);
   }, []);
 
+  // ─── 角色清单(存在任务所在的电脑上) ────────────────────────────────────────
+
+  const leadHasWorkRef = useRef(params.leadHasWork !== false);
+  leadHasWorkRef.current = params.leadHasWork !== false;
+  const defaultRoleTask = useCallback(
+    (role: string, entries: readonly OrcaWorkerRoleEntry[]) => orcaRoleDefaultTask(role, entries, leadHasWorkRef.current),
+    [],
+  );
+
+  /**
+   * 一个角色记的模型路线能不能带回表单：选了其他运行设备或 SSH 任务时模型目录不属于任务所在的
+   * 电脑，不套用；这台电脑不支持给 Worker 单独选 Agent 位置时，只套用和 Lead 同一位置的路线，
+   * 免得表单停在一个交不上去的选择上。
+   */
+  const roleRouteApplies = useCallback((
+    value: Pick<OrcaWorkerFormValue, 'executionDeviceId'>,
+    entry: OrcaWorkerRoleEntry | undefined,
+  ): boolean => {
+    const route = entry?.model;
+    if (!route || sshRemote || value.executionDeviceId) return false;
+    return leadLocationSelectableRef.current || route.agentDeviceId === leadAgentDeviceIdRef.current;
+  }, [sshRemote]);
+
+  /**
+   * 表单落到某个角色上(null = 一个角色都不剩，进入添加角色)：角色、它的任务，以及它记的权限和
+   * 模型；没记过的保持表单当前的选择不动。
+   */
+  const withRole = useCallback((
+    value: OrcaWorkerFormValue,
+    role: string | null,
+    entries: readonly OrcaWorkerRoleEntry[],
+    initialTask: string,
+  ): OrcaWorkerFormValue => {
+    if (role === null) return { ...value, role: '', initialTask };
+    const entry = entries.find((item) => item.role === role);
+    const next = {
+      ...value,
+      role,
+      initialTask,
+      ...(entry?.permission ? { permissionMode: entry.permission } : {}),
+    };
+    const route = entry?.model;
+    if (!route || !roleRouteApplies(next, entry)) return next;
+    return {
+      ...next,
+      agent: route.agent,
+      modelSelectionExplicit: true,
+      model: { id: route.model, providerId: route.providerId, effort: route.effort || null, fast: route.fast },
+      agentDeviceId: leadLocationSelectableRef.current ? route.agentDeviceId : undefined,
+    };
+  }, [roleRouteApplies]);
+
+  /** 带回的是一条手动选定的完整路线：和在选择器里选模型一样，作废在途的能力收敛。 */
+  const settleRoleRoute = useCallback((
+    value: Pick<OrcaWorkerFormValue, 'executionDeviceId'>,
+    role: string | null,
+    entries: readonly OrcaWorkerRoleEntry[],
+  ) => {
+    if (role === null || !roleRouteApplies(value, entries.find((item) => item.role === role))) return;
+    agentChosenRef.current = true;
+    convergeGenRef.current += 1;
+  }, [roleRouteApplies]);
+
+  /**
+   * 按一份「上次选择」重建表单(上次的 Agent 不在当前电脑上时取第一个可用 Agent)，并落到角色清单
+   * 的第一个角色上：带出它的任务，以及它记的权限和模型(优先于这份「上次选择」)。
+   */
+  const applyPrefs = useCallback((prefs: OrcaWorkerCreationPrefs) => {
+    const selection = !sshRemote && taskHostDeviceId ? prefs.modelSelectionByHost?.[taskHostDeviceId] : undefined;
+    const available = agentsRef.current;
+    const agent = selection?.agent ?? (available.includes(prefs.lastAgent) ? prefs.lastAgent : available[0] ?? prefs.lastAgent);
+    agentChosenRef.current = !!selection;
+    const entries = roleEntriesRef.current ?? BUILTIN_ORCA_ROLE_ENTRIES;
+    const role = entries[0]?.role ?? null;
+    setCustomRoleMode(role === null);
+    // 刚由记忆构造的表单没有选运行设备。
+    settleRoleRoute({}, role, entries);
+    setForm(withRole(selection ? {
+      ...orcaWorkerFormFromPrefs(prefs, agent),
+      ...selection,
+      modelSelectionExplicit: true,
+    } : withLeadLocation(orcaWorkerFormFromPrefs(prefs, agent)), role, entries,
+    role === null ? '' : defaultRoleTask(role, entries)));
+    converge(agent);
+  }, [converge, defaultRoleTask, settleRoleRoute, sshRemote, taskHostDeviceId, withLeadLocation, withRole]);
+
+  /** 旧电脑：按手机本地的旧记忆重建表单；预读还没完成(刚登录就打开)时读完后在没动过的表单上补一次。 */
+  const applyPhonePrefs = useCallback((epoch: number) => {
+    applyPrefs(prefsRef.current);
+    if (prefsLoadedRef.current || !prefsScope) return;
+    const scope = prefsScope;
+    void readOrcaWorkerCreationPrefs(scope).then((prefs) => {
+      if (prefsScopeRef.current !== scope || hostRef.current !== taskHostDeviceId) return;
+      prefsRef.current = prefs;
+      prefsLoadedRef.current = hasLoadedOrcaWorkerCreationPrefs(scope);
+      if (epoch !== formEpochRef.current || touchedRef.current) return;
+      applyPrefs(prefs);
+    });
+  }, [applyPrefs, prefsScope, taskHostDeviceId]);
+
+  /**
+   * 向任务所在的电脑读记忆(角色清单 + 「上次选择」)。读到时这次打开的表单还没被动过，就按它重建
+   * 表单；已经动过则只更新角色这一排，不替用户改选。那台电脑版本太旧时改用手机本地的旧记忆；
+   * 一时读不到则保持现状。
+   */
+  const loadRoles = useCallback((epoch: number) => {
+    const source = maker;
+    void Promise.resolve()
+      .then(() => source.orca.getWorkerRoles())
+      .then((value) => parseOrcaHostMemory(value, taskHostDeviceId))
+      .then(({ entries, prefs }) => {
+        if (rolesMakerRef.current !== source) return;
+        const previous = memoryHome();
+        // 本页上次读到的内容没变、表单就是按它打开的：不用再套一遍。
+        const unchanged = previous?.home === 'host'
+          && JSON.stringify([previous.prefs, roleEntriesRef.current]) === JSON.stringify([prefs, entries]);
+        memoryHomeRef.current = { source, home: 'host', prefs };
+        roleEntriesRef.current = entries;
+        setRolesState({ source, entries });
+        if (unchanged || epoch !== formEpochRef.current || touchedRef.current) return;
+        applyPrefs(prefs);
+      })
+      .catch((error) => {
+        if (rolesMakerRef.current !== source || !isOrcaUnsupportedError(error)) return;
+        const known = memoryHome()?.home === 'phone';
+        memoryHomeRef.current = { source, home: 'phone' };
+        roleEntriesRef.current = null;
+        setRolesState(null);
+        if (known || epoch !== formEpochRef.current || touchedRef.current) return;
+        applyPhonePrefs(epoch);
+      });
+  }, [applyPhonePrefs, applyPrefs, maker, memoryHome, taskHostDeviceId]);
+
+  // 重连后在打开的表单上重读一次：断线时读失败会停在「只有内置角色」。
+  const rolesEpochRef = useRef(connectionEpoch);
+  useEffect(() => {
+    if (rolesEpochRef.current === connectionEpoch) return;
+    rolesEpochRef.current = connectionEpoch;
+    if (active) loadRoles(formEpochRef.current);
+  }, [active, connectionEpoch, loadRoles]);
+
+  /** 点一个角色(null = 加号，输入一个新角色名)：任务框只在为空或仍是上一个角色原样带出的内容时替换。 */
+  const selectRole = useCallback((next: string | null) => {
+    const adding = customRoleModeRef.current;
+    if (next === null ? adding : !adding && next === formRef.current.role) return;
+    touchedRef.current = true;
+    const entries = roleEntriesRef.current ?? BUILTIN_ORCA_ROLE_ENTRIES;
+    const previousDefault = adding ? '' : defaultRoleTask(formRef.current.role, entries);
+    const nextDefault = next === null ? '' : defaultRoleTask(next, entries);
+    setCustomRoleMode(next === null);
+    settleRoleRoute(formRef.current, next, entries);
+    setForm((current) => withRole(
+      current,
+      next,
+      entries,
+      orcaWorkerTaskAfterRoleChange(current.initialTask, previousDefault, nextDefault),
+    ));
+  }, [defaultRoleTask, settleRoleRoute, withRole]);
+
+  /**
+   * 长按一个角色：确认后把它从电脑上的清单里移除(连同它记的内容)。这一排先拿掉；电脑没改成就
+   * 重新读一次，以它的实际清单为准。移除的是正在选中的那个时换到剩下的第一个。
+   */
+  const removeRole = useCallback((role: string) => {
+    if (!roleEntriesRef.current?.some((entry) => entry.role === role)) return;
+    Alert.alert(
+      i18n.t('session.collab.removeRoleConfirmTitle', { role: orcaRoleDisplayName(role) }),
+      i18n.t('session.collab.removeRoleConfirmDesc'),
+      [
+        { text: i18n.t('session.collab.cancel'), style: 'cancel' },
+        {
+          text: i18n.t('session.collab.removeRoleConfirm'),
+          onPress: () => {
+            const current = roleEntriesRef.current;
+            if (!current) return;
+            const entries = current.filter((entry) => entry.role !== role);
+            if (!customRoleModeRef.current && formRef.current.role === role) selectRole(entries[0]?.role ?? null);
+            touchedRef.current = true;
+            const source = rolesMakerRef.current;
+            roleEntriesRef.current = entries;
+            setRolesState({ source, entries });
+            const epoch = formEpochRef.current;
+            void Promise.resolve()
+              .then(() => source.orca.applyWorkerRoles({ kind: 'forget', role }))
+              .catch(() => { if (rolesMakerRef.current === source) loadRoles(epoch); });
+          },
+        },
+      ],
+    );
+  }, [loadRoles, selectRole]);
+
   // 换了被控电脑(新建任务页切设备):上一台的 Agent 列表作废,回到乐观全集等这台的结果,
   // 不让复位按上一台的列表挑 Agent。
   const rosterMakerRef = useRef(executionMaker);
@@ -468,27 +720,27 @@ export function useOrcaWorkerForm(params: {
         // 记住的路线由其所属电脑校验，不能被任务电脑的 Agent 列表改写。
         if (formRef.current.modelSelectionExplicit || orcaWorkerAgentElsewhere(formRef.current)) return;
         const current = formRef.current.agent;
-        const remembered = prefsRef.current.lastAgent;
+        const remembered = currentPrefs().lastAgent;
         const wanted = !agentChosenRef.current && next.includes(remembered) ? remembered : current;
         if (wanted === current && next.includes(current)) {
           converge(current);
           return;
         }
         const switched = next.includes(wanted) ? wanted : next[0]!;
-        const agentPrefs = prefsRef.current.agents[switched];
+        const agentPrefs = currentPrefs().agents[switched];
         setForm((value) => ({
           ...value,
           agent: switched,
           // 本机记忆的模型只属于被控电脑的目录；Agent 在另一台电脑时回到「默认」。
           model: orcaWorkerAgentElsewhere(value)
             ? null
-            : { id: agentPrefs.model, providerId: null, effort: agentPrefs.effort, fast: agentPrefs.fast },
+            : { id: agentPrefs.model, providerId: agentPrefs.providerId ?? null, effort: agentPrefs.effort, fast: agentPrefs.fast },
         }));
         converge(switched);
       })
       .catch(() => undefined);
     return () => { cancelled = true; };
-  }, [active, connectionEpoch, converge, executionMaker]);
+  }, [active, connectionEpoch, converge, currentPrefs, executionMaker]);
 
   /** 重新打开已确认的表单(新建任务的协同草稿):角色模式跟随保存的角色,不沿用上次未提交的编辑。 */
   const restore = useCallback((value: OrcaWorkerFormValue) => {
@@ -496,48 +748,32 @@ export function useOrcaWorkerForm(params: {
     agentChosenRef.current = true;
     convergeGenRef.current += 1;
     touchedRef.current = true;
-    setCustomRoleMode(!isPredefinedOrcaRole(value.role.trim().toLowerCase()));
+    // 草稿里的角色直接显示在这一排(不在清单里时排在最前)，不回到输入角色名的状态。
+    setCustomRoleMode(false);
     setForm(value);
-  }, []);
+    loadRoles(formEpochRef.current);
+  }, [loadRoles]);
 
-  /** 恢复记忆(上次的 Agent 不在当前电脑上时取第一个可用 Agent)。初始任务不记忆。 */
+  /**
+   * 打开表单：先按手头已有的「上次选择」起步(本页上次从电脑读到的；旧电脑用手机本地的；都没有则
+   * 首次默认值)，同时向任务所在的电脑读一次，读到后在没动过的表单上以它为准。
+   */
   const reset = useCallback(() => {
     const epoch = ++formEpochRef.current;
     touchedRef.current = false;
     agentChosenRef.current = false;
     setCustomRoleMode(false);
-    const apply = (prefs: OrcaWorkerCreationPrefs) => {
-      const selection = !sshRemote && taskHostDeviceId ? prefs.modelSelectionByHost?.[taskHostDeviceId] : undefined;
-      const available = agentsRef.current;
-      const agent = selection?.agent ?? (available.includes(prefs.lastAgent) ? prefs.lastAgent : available[0] ?? prefs.lastAgent);
-      agentChosenRef.current = !!selection;
-      setForm(selection ? {
-        ...orcaWorkerFormFromPrefs(prefs, agent),
-        ...selection,
-        modelSelectionExplicit: true,
-      } : withLeadLocation(orcaWorkerFormFromPrefs(prefs, agent)));
-      converge(agent);
-    };
-    apply(prefsRef.current);
-    // 预读尚未完成(极少见:刚登录就打开表单):读完后仅在用户还没动过这张表单时补一次。
-    if (!prefsLoadedRef.current && prefsScope) {
-      const scope = prefsScope;
-      void readOrcaWorkerCreationPrefs(scope).then((prefs) => {
-        if (prefsScopeRef.current !== scope || hostRef.current !== taskHostDeviceId) return;
-        prefsRef.current = prefs;
-        prefsLoadedRef.current = hasLoadedOrcaWorkerCreationPrefs(scope);
-        if (epoch !== formEpochRef.current || touchedRef.current) return;
-        apply(prefs);
-      });
-    }
-  }, [converge, prefsScope, sshRemote, taskHostDeviceId, withLeadLocation]);
+    if (memoryHome()?.home === 'phone') applyPhonePrefs(epoch);
+    else applyPrefs(currentPrefs());
+    loadRoles(epoch);
+  }, [applyPhonePrefs, applyPrefs, currentPrefs, loadRoles, memoryHome]);
 
   /** 切 Agent:带出该 Agent 上次的模型 / 推理强度 / Fast(对齐桌面)。 */
   const changeAgent = useCallback((agent: OrcaWorkerAgentKind) => {
     if (formRef.current.agent === agent) return;
     touchedRef.current = true;
     agentChosenRef.current = true;
-    const remembered = prefsRef.current.agents[agent];
+    const remembered = currentPrefs().agents[agent];
     setForm((current) => ({
       ...current,
       agent,
@@ -546,12 +782,16 @@ export function useOrcaWorkerForm(params: {
       // 本机记忆的模型只属于被控电脑的目录；Agent 在另一台电脑时回到「默认」。
       model: orcaWorkerAgentElsewhere(current)
         ? null
-        : { id: remembered.model, providerId: null, effort: remembered.effort, fast: remembered.fast },
+        : { id: remembered.model, providerId: remembered.providerId ?? null, effort: remembered.effort, fast: remembered.fast },
     }));
     converge(agent);
-  }, [converge]);
+  }, [converge, currentPrefs]);
 
-  /** 提交成功后写回记忆(与桌面一样只在提交时记);读—合并—写由 rememberOrcaWorkerChoice 一处完成。 */
+  /**
+   * 提交成功后记住这次的选择(与桌面一样只在提交时记)。记在任务所在的电脑上：这个角色的任务、
+   * 权限和手动选定的模型路线，连同不分角色的「上次选择」，手机不留副本。只有那台电脑版本太旧时
+   * 才按旧办法记在手机本地(读—合并—写由 rememberOrcaWorkerChoice 一处完成)。
+   */
   const remember = useCallback((choice: OrcaWorkerFormValue) => {
     if (prefsScopeRef.current !== prefsScope || hostRef.current !== taskHostDeviceId) return;
     // 未指定位置时按 Lead 的实际位置记忆，不能把旧端跟随远程 Lead 的模型写进本机旧槽。
@@ -568,15 +808,47 @@ export function useOrcaWorkerForm(params: {
           : null,
       } : {}),
     };
-    prefsRef.current = mergeOrcaWorkerChoice(prefsRef.current, submitted);
-    if (!prefsScope) return;
-    const scope = prefsScope;
-    void rememberOrcaWorkerChoice(scope, submitted).then((next) => {
-      if (prefsScopeRef.current !== scope) return;
-      prefsRef.current = next;
-      prefsLoadedRef.current = hasLoadedOrcaWorkerCreationPrefs(scope);
+    const rememberOnPhone = () => {
+      prefsRef.current = mergeOrcaWorkerChoice(prefsRef.current, submitted);
+      if (!prefsScope) return;
+      const scope = prefsScope;
+      void rememberOrcaWorkerChoice(scope, submitted).then((next) => {
+        if (prefsScopeRef.current !== scope) return;
+        prefsRef.current = next;
+        prefsLoadedRef.current = hasLoadedOrcaWorkerCreationPrefs(scope);
+      });
+    };
+    const home = memoryHome();
+    if (home?.home === 'phone') {
+      rememberOnPhone();
+      return;
+    }
+    const role = choice.role.trim();
+    if (!role) return;
+    const mutation = orcaRoleRememberMutation({ ...choice, role }, {
+      agentDeviceId,
+      explicit: choice.modelSelectionExplicit === true,
+      hostCatalog: !sshRemote && !choice.executionDeviceId,
+      fallbackEffort: currentPrefs().agents[choice.agent].effort,
     });
-  }, [prefsScope, sshRemote, taskHostDeviceId]);
+    const source = rolesMakerRef.current;
+    if (home) {
+      // 本页手头的这份跟着更新(不落盘)：马上再打开表单时不用等那台电脑读回来。
+      const merged = mergeOrcaWorkerChoice(home.prefs, submitted);
+      // 这次提交的来源也留在手头这份里：马上再打开表单切 Agent 时，不能退回「不指定来源」。
+      if (submitted.model) {
+        merged.agents[choice.agent] = { ...merged.agents[choice.agent], providerId: choice.model?.providerId ?? null };
+      }
+      memoryHomeRef.current = { ...home, prefs: merged };
+      const entries = withRememberedOrcaRole(roleEntriesRef.current ?? [], mutation);
+      roleEntriesRef.current = entries;
+      setRolesState({ source, entries });
+    }
+    void Promise.resolve().then(() => source.orca.applyWorkerRoles(mutation)).catch((error) => {
+      // 还没读到那台电脑的记忆就提交了，结果它版本太旧：这次按旧办法记在手机上。
+      if (!home && isOrcaUnsupportedError(error)) rememberOnPhone();
+    });
+  }, [currentPrefs, memoryHome, prefsScope, sshRemote, taskHostDeviceId]);
 
   const patch = useCallback((next: Partial<OrcaWorkerFormValue>) => {
     touchedRef.current = true;
@@ -601,11 +873,10 @@ export function useOrcaWorkerForm(params: {
     }
   }, [executionDevices, params.agentLocationSelectable]);
 
-  const changePermission = useCallback(async (mode: OrcaWorkerPermissionMode) => {
+  const changePermission = useCallback((mode: OrcaWorkerPermissionMode) => {
     touchedRef.current = true;
-    if (!await confirmFullAccessChange(form.permissionMode, mode)) return;
     setForm((current) => ({ ...current, permissionMode: mode }));
-  }, [form.permissionMode]);
+  }, []);
 
   const openPicker = useCallback(() => {
     setSheetOpen(false);
@@ -641,6 +912,14 @@ export function useOrcaWorkerForm(params: {
   }, []);
 
   const pickerAgents = useMemo<AgentKind[]>(() => [...agents], [agents]);
+  const roles = useMemo(
+    () => listedOrcaRoles(roleEntries ?? BUILTIN_ORCA_ROLE_ENTRIES, customRoleMode ? null : form.role),
+    [customRoleMode, form.role, roleEntries],
+  );
+  const submission = useMemo(
+    () => (customRoleMode ? { ...form, role: resolveOrcaRoleInput(form.role) } : form),
+    [customRoleMode, form],
+  );
 
   const directoryPicker = useOrcaWorkerDirectoryPicker({
     deviceId: form.executionDeviceId, maker: executionMaker, scope: prefsScope,
@@ -670,15 +949,22 @@ export function useOrcaWorkerForm(params: {
     executionDevicesLoading,
     executionDevicesError,
     form,
+    /** 提交用的表单：添加角色时输入的名字若是某个内置角色的名字，就按那个内置角色提交。 */
+    submission,
     restore,
     customRoleMode,
-    setCustomRoleMode,
+    /** 这一排列出的角色(最近使用在前)；表单当前的角色不在清单里时排在最前。 */
+    roles,
+    /** 电脑上的清单已读到：可以添加、长按移除，提交后会记住。 */
+    rolesEditable: roleEntries !== null,
+    selectRole,
+    removeRole,
     patch,
     changeAgent,
     changePermission,
     agents,
     pickerAgents,
-    valid: canSubmitOrcaWorkerForm(form, customRoleMode)
+    valid: canSubmitOrcaWorkerForm(submission)
       && (!form.modelSelectionExplicit || workerAgentLocationSelectable
         || form.agentDeviceId === undefined || form.agentDeviceId === (form.executionDeviceId ? null : params.leadAgentDeviceId ?? null))
       && (!form.executionDeviceId || executionDevices.some((device) => device.deviceId === form.executionDeviceId && device.supported)),
@@ -807,7 +1093,7 @@ export function useSessionOrcaCollab(params: {
     setSheetView('collab-create');
   }, [eligible, resetWorkerForm, setSheetView]);
 
-  const form = workerForm.form;
+  const form = workerForm.submission;
   const formValid = workerForm.valid;
   const getProvidersRef = useRef(getProviders);
   getProvidersRef.current = getProviders;

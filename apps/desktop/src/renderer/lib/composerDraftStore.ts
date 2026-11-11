@@ -60,6 +60,13 @@ export interface ComposerDraft {
   text: JSONContent | null;
   /** Snapshot of attachments at save time. Empty array means no attachments. */
   attachments: AttachedFile[];
+  /** Failed companion send being edited; follows this owner-scoped, in-memory draft only. */
+  botGroupEdit?: {
+    clientId: string;
+    enqueueOperationId?: string;
+    source: { groupId: string; clientId: string; revision: number };
+    signature: string;
+  };
   /** Plugin-page handoff consumed by ChatInput after its editor hydration. */
   pendingGhostId?: string;
   /** Routed built-in identity; re-resolve in the final task environment before sending. */
@@ -135,7 +142,7 @@ const ATTACHED_FILE_SNAPSHOT_KEYS = [
  * id-only cleanup can delete a newer file that happens to reuse the id. Keep
  * every mutable serialized field in the click-time snapshot comparison.
  */
-function areAttachedFileSnapshotsEqual(left: AttachedFile, right: AttachedFile): boolean {
+export function areAttachedFileSnapshotsEqual(left: AttachedFile, right: AttachedFile): boolean {
   return (
     ATTACHED_FILE_SNAPSHOT_KEYS.every((key) => left[key] === right[key]) &&
     JSON.stringify(left.annotationStrokes ?? null) ===
@@ -227,6 +234,7 @@ const remoteOptimisticRecoveryBatchSnapshots = new WeakMap<
 >();
 let remoteOptimisticAttachmentUrls: string[] = [];
 let botGroupOutboxAttachmentUrls: string[] = [];
+let botGroupThreadAttachmentUrls: string[] = [];
 let activeDataOwnerId: string | null = null;
 
 /**
@@ -243,6 +251,7 @@ function draftKey(sessionId: string): string {
 }
 
 export function setComposerDraftOwner(ownerId: string | null): void {
+  if (activeDataOwnerId !== ownerId) setBotGroupThreadAttachmentUrls([]);
   activeDataOwnerId = ownerId;
 }
 
@@ -326,6 +335,18 @@ export function draftHasContent(draft: ComposerDraft | undefined): boolean {
  */
 /** Every write to a draft, including silent keystroke saves (the new-task title preview). */
 const contentListeners = new Map<string, Set<DraftListener>>();
+const draftFlushers = new Map<string, DraftListener>();
+
+/** External editor operations first settle the original pending keystroke save. */
+export function registerDraftFlush(sessionId: string, flush: DraftListener): () => void {
+  const key = draftKey(sessionId);
+  draftFlushers.set(key, flush);
+  return () => { if (draftFlushers.get(key) === flush) draftFlushers.delete(key); };
+}
+
+export function flushDraft(sessionId: string): void {
+  draftFlushers.get(draftKey(sessionId))?.();
+}
 
 /** Subscribe to every save / clear of `sessionId`'s draft, including silent keystroke saves. */
 export function subscribeDraftContent(sessionId: string, handler: DraftListener): () => void {
@@ -382,9 +403,12 @@ export function getDraft(sessionId: string): ComposerDraft | undefined {
 /** Capture the current process-local discard generation for async draft work. */
 export function captureDraftDiscardToken(sessionId: string): ComposerDraftDiscardToken {
   const ownerScopedKey = draftKey(sessionId);
+  const generation = draftDiscardGenerations.get(ownerScopedKey) ?? 0;
+  // Remember even an empty scope: a picker may still be preparing its first file.
+  draftDiscardGenerations.set(ownerScopedKey, generation);
   return {
     ownerScopedKey,
-    generation: draftDiscardGenerations.get(ownerScopedKey) ?? 0,
+    generation,
   };
 }
 
@@ -534,6 +558,15 @@ export function discardDraft(sessionId: string): void {
   // recreate the discarded draft, while late async files are fenced by the
   // generation above and recycled by their owner.
   clearDraftAndNotify(sessionId);
+}
+
+/** Discard a colon-delimited scope and its children, including empty scopes with async work. */
+export function discardDraftTree(sessionId: string): void {
+  const root = draftKey(sessionId);
+  const keys = new Set([root, ...drafts.keys(), ...draftDiscardGenerations.keys(), ...listeners.keys()]);
+  for (const key of keys) {
+    if (key === root || key.startsWith(`${root}:`)) discardDraft(key.slice(ownerPrefix().length));
+  }
 }
 
 /**
@@ -801,7 +834,7 @@ export function restoreRemoteOptimisticDraft(
  * 没关系，main 侧只抽 cindy-media 指纹)。
  */
 export function getAllDraftAttachmentUrls(): string[] {
-  const urls = new Set<string>([...remoteOptimisticAttachmentUrls, ...botGroupOutboxAttachmentUrls]);
+  const urls = new Set<string>([...remoteOptimisticAttachmentUrls, ...botGroupOutboxAttachmentUrls, ...botGroupThreadAttachmentUrls]);
   // Owner switches retain each owner's draft so switching back can restore it.
   // Protect every retained namespace as well; reporting only the active owner
   // would leave an old owner's still-restorable attachment eligible for sweep.
@@ -847,6 +880,14 @@ export function setBotGroupOutboxAttachmentUrls(urls: readonly string[]): void {
     return;
   }
   botGroupOutboxAttachmentUrls = next;
+  syncDraftUrlsToMain();
+}
+
+/** Burned-in thread images remain retryable even while their panel is closed. */
+export function setBotGroupThreadAttachmentUrls(urls: readonly string[]): void {
+  const next = [...new Set(urls)].sort();
+  if (next.length === botGroupThreadAttachmentUrls.length && next.every((url, index) => url === botGroupThreadAttachmentUrls[index])) return;
+  botGroupThreadAttachmentUrls = next;
   syncDraftUrlsToMain();
 }
 

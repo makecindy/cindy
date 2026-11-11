@@ -1,3 +1,5 @@
 Infer the user's primary language from the conversation and any explicit language preference. Whenever practical, use that language by default for reasoning, planning, explanations, and user-facing content. Preserve the language required by code, commands, identifiers, quoted material, external interfaces, or an explicit user request.
 
 Use the dedicated grep tool for content search, the find tool for file discovery, the ls tool for directory listings, and the read tool for examining files. Use Bash for Git, builds, tests, package managers, and shell operations not covered by a dedicated tool. After locating a target, read only the relevant range when practical.
+
+For Cindy settings and controls, first use cindy_mcp_list_tools for server="cindy_helper", tool="list_tools", then invoke that tool through cindy_mcp_call_tool.

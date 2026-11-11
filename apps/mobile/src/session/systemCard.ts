@@ -30,6 +30,8 @@ export type MobileSystemCardType =
   | SystemCardType
   | 'goal-complete'
   | 'goal-resumed'
+  // 新任务「让插件选」的结果(桌面落库 agentMeta.pluginModelRoute,读侧派生)。
+  | 'plugin-model-route'
   | 'context-rebuild'
   | 'auto-resume'
   | 'learn'
@@ -105,7 +107,7 @@ export function buildMobileSystemCardData(
 ): Record<string, unknown> {
   // goal / auto-resume / agent-switch 卡的数据由桌面落库行派生,learn 卡的数据由
   // 发送侧 buildLearnCardData 直接组装,都不走本地 slash 命令的数据组装。
-  if (type === 'goal-complete' || type === 'goal-resumed' || type === 'context-rebuild' || type === 'auto-resume' || type === 'learn' || type === 'agent-switch' || type === 'input-handoff' || type === 'mcp-app') return {};
+  if (type === 'goal-complete' || type === 'goal-resumed' || type === 'plugin-model-route' || type === 'context-rebuild' || type === 'auto-resume' || type === 'learn' || type === 'agent-switch' || type === 'input-handoff' || type === 'mcp-app') return {};
   return buildSystemCardData(type, {
     ...options,
     localCommands: MOBILE_LOCAL_SYSTEM_COMMANDS,
@@ -120,6 +122,20 @@ export function formatMobileSystemCard(
   if (type === 'compact') return formatCompactCard(data);
   if (type === 'context-rebuild') return formatContextRebuildCard(data);
   if (type === 'goal-complete') return formatGoalCompleteCard(data);
+  if (type === 'plugin-model-route') {
+    const plugin = typeof data?.pluginName === 'string' ? data.pluginName : '';
+    const modelName = typeof data?.modelName === 'string' ? data.modelName : '';
+    const effort = typeof data?.effort === 'string' && data.effort ? data.effort : '';
+    const model = effort ? `${modelName} · ${i18n.t(`models.options.effortLevels.${effort}`, { defaultValue: effort })}` : modelName;
+    const why = data?.why === 'failed' || data?.why === 'unavailable-route' ? data.why : 'no-opinion';
+    return {
+      title: data?.outcome === 'routed'
+        ? i18n.t('message.systemCard.pluginModelRoute.routed', { plugin, model })
+        : i18n.t(`message.systemCard.pluginModelRoute.kept.${why}`, { plugin, model }),
+      ...(data?.outcome === 'routed' && typeof data.reason === 'string' && data.reason ? { body: data.reason } : {}),
+      rows: [],
+    };
+  }
   if (type === 'goal-resumed') {
     // 两种续跑原因共用这张卡, 但说法必须分开(与桌面 GoalResumedCard 同口径):
     // 上游过载那条只是干等了 60s、**没有**任何容量探测, 说「用量已恢复」是假信息;

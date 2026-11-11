@@ -4,7 +4,10 @@
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
 import { describe, expect, it, vi } from 'vitest';
 
-import { parseDeviceProviderViews, readDeviceProviderViews } from '../controller/deviceCatalog';
+import { parseDeviceProviderViews, readDeviceProviderViews, readRemoteProviderRoute } from '../controller/deviceCatalog';
+
+const deviceLink = vi.hoisted(() => ({ remoteBackgroundInvoke: vi.fn() }));
+vi.mock('../../device-link', () => deviceLink);
 
 const provider = (overrides: Record<string, unknown> = {}) => ({
   id: 'spark',
@@ -69,5 +72,33 @@ describe('readDeviceProviderViews', () => {
   it('keeps the error code when the other computer cannot answer', async () => {
     const invoke = vi.fn(async () => ({ ok: false, error: { code: 'DEVICE_OFFLINE', message: 'offline' } }));
     await expect(readDeviceProviderViews(invoke, 'device-b')).rejects.toMatchObject({ message: 'offline', code: 'DEVICE_OFFLINE' });
+  });
+
+  // provider-sharing.md §5.1 / provider-groups.md §6 (2026-11-02): a directly chosen shared group is judged by the
+  // group, so Worker and plugin catalogs built on this read keep it. A guest's own group keeps the member's raw state
+  // because a group-assigned task runs on that computer directly and would fail on its signed-out copy.
+  it.each([
+    ['share:s1', {}, true],
+    ['share:s1', { groupMember: true }, false],
+    ['device-b', {}, false],
+  ] as const)('reads a signed-out group on %s %o (connected=%s)', async (deviceId, options, connected) => {
+    const invoke = vi.fn(async () => ({ ok: true, result: { providers: [
+      provider({ remoteInvocationEnabled: true, connected: false, groupSize: 3 }),
+    ] } }));
+    const [view] = await readDeviceProviderViews(invoke, deviceId, options);
+    expect(view).toMatchObject({ id: 'spark', connected });
+  });
+
+  it.each([
+    ['share:s1', { groupSize: 3 }, true],
+    ['share:s1', {}, false],
+    ['device-b', { groupSize: 3 }, false],
+  ] as const)('checks a signed-out route on %s %o (accepted=%s)', async (agentDeviceId, extra, accepted) => {
+    deviceLink.remoteBackgroundInvoke.mockResolvedValueOnce({ ok: true, result: { providers: [
+      provider({ remoteInvocationEnabled: true, connected: false, ...extra }),
+    ] } });
+    const route = readRemoteProviderRoute({ agentDeviceId, agentKind: 'pi', providerId: 'spark', model: 'spark/qwen' });
+    if (accepted) await expect(route).resolves.toMatchObject({ provider: { id: 'spark' }, model: { id: 'spark/qwen' } });
+    else await expect(route).rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
   });
 });

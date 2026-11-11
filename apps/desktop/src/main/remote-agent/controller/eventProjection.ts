@@ -6,7 +6,10 @@ import { isTerminalAgentErrorEvent, type AgentEvent } from '@cindy/maker-core';
 
 import { mapJsonPathText, pathTextContext, type ExecutorWorkspace, type PathTextContext } from '../executor/workspace';
 
-const URL_TEXT = /[a-z][a-z0-9+.-]*:\/\/[^\s\x60"'<>()[\]{}]+/gi;
+// 文件链接仍按 Markdown 分隔符取路径；其它 URL 的括号、IPv6 方括号等属于地址，不能当成本机路径正文。
+const URL_TEXT = /(?:file|xdt-(?:file|audio|image)):\/\/[^\s\x60"'<>()[\]{}]+|[a-z][a-z0-9+.-]*:\/\/[^\s\x60"'<>]+/gi;
+/** 渠道说明要求的 `[名称](xdt-file:///绝对路径)`；括号内才是完整地址，路径可能带裸空格。 */
+const XDT_PATH_LINK = /\]\((xdt-(?:file|image):\/\/\/[^()\r\n]+)\)/gi;
 const TEXT_BOUNDARIES = new Set(['tool_use', 'tool_result', 'tool_result_full', 'interaction_request', 'done', 'error', 'compact_boundary']);
 const IDENTITY_FIELDS = new Set(['id', 'toolUseId', 'toolUseIds', 'agentMessageId', 'taskId', 'parentToolUseId', 'turnId', 'requestId', 'blockId', 'sessionId', 'sdkSessionId', 'toolName', 'lastToolName', 'model', 'providerId']);
 
@@ -25,6 +28,13 @@ function localFileUrl(value: string, workspace: ExecutorWorkspace): string {
       result.hash = url.hash;
       return result.href;
     }
+    if ((url.protocol === 'xdt-file:' || url.protocol === 'xdt-image:') && !url.hostname && !url.searchParams.has('path')) {
+      // 无 host 形态由出站收集器按本机路径读盘；括号也要编码，否则会提前闭合 Markdown 链接。
+      const remote = decodeURIComponent(url.pathname).replace(/^\/(?=[A-Za-z]:[\\/])/, '');
+      const local = workspace.mapAlias(remote);
+      if (local === remote) return value;
+      return url.protocol + pathToFileURL(local).href.slice('file:'.length).replace(/\(/g, '%28').replace(/\)/g, '%29');
+    }
     if (url.protocol === 'xdt-file:' || url.protocol === 'xdt-audio:') {
       const remote = url.searchParams.get('path');
       if (!remote) return value;
@@ -37,7 +47,8 @@ function localFileUrl(value: string, workspace: ExecutorWorkspace): string {
   return value;
 }
 
-function localText(value: string, workspace: ExecutorWorkspace, context: PathTextContext = 'text'): string {
+/** 事件正文与 MCP 文本入参共用的还原；URL、JSON 转义和源码分隔符沿用同一判据。 */
+export function localText(value: string, workspace: ExecutorWorkspace, context: PathTextContext = 'text'): string {
   // 先处理 JSON 字符串，保留 Windows 转义、正文格式和非字符串字节。
   if (/^\s*[{["]/.test(value)) {
     try {
@@ -57,6 +68,12 @@ function localText(value: string, workspace: ExecutorWorkspace, context: PathTex
     const local = workspace.mapAliasInText(remote);
     if (code !== undefined && local !== remote && /\s/.test(remote) && !fs.existsSync(local)) return literal;
     return local === remote ? literal : code !== undefined ? '\x60' + local + '\x60' : '<' + local + '>';
+  });
+  // URL 分词会在裸空格处截断路径，这类链接先按括号取完整地址；未映射的保持原文。
+  value = value.replace(XDT_PATH_LINK, (link, target: string) => {
+    const encoded = target.replace(/\s/g, encodeURIComponent);
+    const local = localFileUrl(encoded, workspace);
+    return local === encoded ? link : '](' + local + ')';
   });
   // URL 单独解析；HTTP 与媒体仓标识不得被普通路径替换改写。
   const parts: string[] = [];
@@ -105,7 +122,7 @@ function pendingPrefixes(workspace: ExecutorWorkspace): PendingPrefix[] {
     return [forward, backward, backward.replace(/\\/g, '\\\\')];
   });
   // 完整 URL 出现前保留 scheme，才能在后续 delta 中判断文件 URL 或外部 URL。
-  if (prefixes.length) prefixes.push('file://', 'xdt-file://', 'xdt-audio://', 'http://', 'https://', 'cindy-media://');
+  if (prefixes.length) prefixes.push('file://', 'xdt-file://', 'xdt-audio://', 'xdt-image://', 'http://', 'https://', 'cindy-media://');
   cached = prefixes.map((prefix) => {
     const insensitive = /^[A-Za-z]:|^[a-z-]+:\/\//i.test(prefix);
     return { prefix, insensitive, target: insensitive ? prefix.toLowerCase() : prefix };

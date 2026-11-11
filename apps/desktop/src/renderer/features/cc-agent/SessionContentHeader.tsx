@@ -1,5 +1,6 @@
 import { deviceDisplayName } from '@/lib/deviceName';
 import { SessionTaskMenu } from './sidebar/SessionTaskMenu';
+import { PluginUiSlot, PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
 import { TaskMigrationStatus } from './TaskMigrationStatus';
 /**
  * SessionContentHeader — 会话视图注入 ContentHeader 的中部内容
@@ -74,6 +75,7 @@ import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { MENU_ITEM_CLASS } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
 import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
+import { NewProjectFromTaskDialog } from './sidebar/NewProjectFromTaskDialog';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
@@ -375,6 +377,12 @@ export function SessionContentHeader({
    * 与 CCAgentSidebarUpper.handleMoveSession 同款守卫(远程不支持 / 执行中 /
    * 被 IM 接管中拦截)与乐观更新 + 失败回滚;不含 sidebar 的目标项目节点自动
    * 展开(collapse 是 CCAgentSidebarUpper 实例内 state,header 拿不到)。 */
+  // Pin the task when the dialog opens: switching tasks must not retarget a pending creation.
+  const [newProjectSessionId, setNewProjectSessionId] = useState<string | null>(null);
+  const closeNewProjectDialog = useCallback((open: boolean) => {
+    if (!open) setNewProjectSessionId(null);
+  }, []);
+
   const handleMoveSession = useCallback(
     async (target: SessionMoveTarget) => {
       if (session.remoteHostId || session.deviceLinkDeviceId) {
@@ -407,6 +415,11 @@ export function SessionContentHeader({
         }
       } catch {
         // resolveSession 失败时不阻断移动；它只是 IM 接管保护的额外检查。
+      }
+
+      if (target.kind === 'newProject') {
+        setNewProjectSessionId(session.id);
+        return;
       }
 
       let targetWorkingDir = target.kind === 'project' ? target.workingDir : undefined;
@@ -591,6 +604,8 @@ export function SessionContentHeader({
 
   return (
     <div className="flex min-w-0 items-center gap-0.5 pl-1">
+      <PluginUiSlot position="session.header" sessionId={session.id} disabled={!!session.remoteHostId || !!session.deviceLinkDeviceId} />
+      {!session.remoteHostId && !session.deviceLinkDeviceId && <PluginUiMenu sessionId={session.id} />}
       {session.source === 'side-chat' && session.parentSessionId && (
         <Tip text={t('chat.sideChat.returnMain')}>
           <Button variant="secondary" tone="quiet" size="sm" className="w-7 p-0" style={WINDOW_NO_DRAG_STYLE}
@@ -758,14 +773,13 @@ export function SessionContentHeader({
               canMoveToProject && (
                 <SessionProjectMoveSubmenu
                   projectOptions={projectOptions}
-                  currentWorkingDir={
-                    session.workspaceKind === 'project' ? session.workingDir : null
-                  }
+                  currentSession={session}
                   isDialogue={session.workspaceKind === 'dialogue'}
                   onSelectProject={(workingDir) =>
                     void handleMoveSession({ kind: 'project', workingDir })
                   }
                   onBrowseProject={() => void handleMoveSession({ kind: 'browseProject' })}
+                  onNewProject={() => void handleMoveSession({ kind: 'newProject' })}
                   onMoveToDialogue={() => void handleMoveSession({ kind: 'dialogue' })}
                 />
               )
@@ -779,6 +793,18 @@ export function SessionContentHeader({
       <TaskMigrationStatus session={session} />
 
       {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
+
+      {newProjectSessionId && (
+        <NewProjectFromTaskDialog
+          sessionId={newProjectSessionId}
+          onOpenChange={closeNewProjectDialog}
+          onCreated={(result) => {
+            patchLocal(newProjectSessionId, { workingDir: result.workingDir, workspaceKind: 'project' });
+            void recentWorkdirsStore.forceRefresh().catch(() => undefined);
+            toast.success(t('ccAgent.sidebar.newProjectDialog.done'));
+          }}
+        />
+      )}
 
       {/* 导出 .cshare 弹窗:仅打开时挂载,与 SessionItem 同款。 */}
       {shareExportOpen && (

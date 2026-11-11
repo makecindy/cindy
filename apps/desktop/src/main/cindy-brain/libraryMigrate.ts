@@ -22,6 +22,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isLibraryPublishTempName } from './libraryVault.js';
 
 import { validateLibraryCandidateLocation, type LibraryBindingDeps } from './libraryBinding.js';
 
@@ -60,6 +61,7 @@ async function collectManifest(root: string): Promise<Map<string, { bytes: numbe
       throw new Error(`清单收集失败(目录不可读:${dir}):${err instanceof Error ? err.message : String(err)}`);
     }
     for (const entry of entries) {
+      if (isLibraryPublishTempName(entry.name)) continue;
       if (dir === root && entry.name === '.cindy-library') continue; // 宿主元数据随迁但账本重扫
       const full = path.join(dir, entry.name);
       const rel = path.relative(root, full).split(path.sep).join('/');

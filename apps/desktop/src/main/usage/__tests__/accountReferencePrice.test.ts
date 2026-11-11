@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import { providerReferencePriceQuote, getModelPriceQuote, modelPricingKey } from '../../../shared/modelPriceQuote.js';
 
-vi.mock('../../maker-host/active-catalog.js', () => ({
-  getActiveCatalog: () => ({ ...BUNDLED_CATALOG, providers: [buildUserProvider({
+// Match the production catalog's stable snapshot: rebuilding these providers on every
+// lookup makes each historical projection pay for the same account expansion repeatedly.
+const accountCatalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider({
     id: 'openai-account', name: 'Account', auth: { method: 'oauth', native: 'codex' },
     runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-5.6-luna', name: 'Luna' }] } },
   }), buildUserProvider({ id: 'router-account', name: 'Router', runtimes: {
@@ -32,7 +33,10 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
     // The active catalog fills Claude membership from account discovery.
     if (native === 'claude') provider.models.codex = [{ id: 'claude-sonnet-4-6', name: 'Sonnet', contextWindow: 200000, efforts: [], defaultEffort: null }];
     return provider;
-  })] }),
+  })] };
+
+vi.mock('../../maker-host/active-catalog.js', () => ({
+  getActiveCatalog: () => accountCatalog,
 }));
 vi.mock('../modelPriceOverrideStore.js', () => ({
   applyModelPriceOverrides: (pricing: unknown) => pricing,
@@ -140,6 +144,35 @@ it('values subscriptions from manufacturer prices even when the supplier publish
         .toMatchObject({ inputPerMtok: 0.2, cacheCreatePerMtok: 0.25, providerId: 'openai-account' });
     }
     expect(getCodexProviderSubscriptionValuePrice('xd', 'openai/gpt-5.6-luna', {})).toBeUndefined();
+  } finally {
+    if (original === undefined) delete route.referencePrices;
+    else route.referencePrices = original;
+  }
+});
+
+// PR #8489 review: provider-share usage history values each day with that day's catalog.
+// It must keep route tariffs (not the subscription-only manufacturer price), resolve a tariff
+// that has expired by today, and leave gaps unpriced instead of borrowing another interval.
+it('resolves the reference catalog for a historical day with route tariffs', () => {
+  const registry = BUNDLED_CATALOG.modelRegistry!;
+  const route = registry.models.find(model => model.id === 'openai/gpt-5.6-luna')!.routes[0];
+  const original = route.referencePrices;
+  const source = { kind: 'provider-official' as const, url: 'https://example.com', verifiedAt: '2026-01-01' };
+  try {
+    route.referencePrices = [
+      { currency: 'USD', variant: 'standard', inputPerMtok: 111, outputPerMtok: 1,
+        effectiveFrom: '2026-01-01', effectiveUntil: '2026-06-01', source },
+      { currency: 'USD', variant: 'standard', inputPerMtok: 222, outputPerMtok: 1,
+        effectiveFrom: '2026-06-01', effectiveUntil: '2026-08-01', source },
+    ];
+    const quote = (at?: string) => getModelPriceQuote(getReferenceModelPricing({ at }), 'openai', 'gpt-5.6-luna');
+    expect(quote('2026-03-01')?.inputPerMtok).toBe(111);
+    expect(quote('2026-07-01')?.inputPerMtok).toBe(222);
+    expect(quote('2025-12-01')).toBeUndefined();
+    expect(quote()).toBeUndefined();
+    // Native subscription accounts in the same dated catalog still value from manufacturer prices.
+    expect(getModelPriceQuote(getReferenceModelPricing({ at: '2026-07-15' }), 'openai-account', 'gpt-5.6-luna', 'codex'))
+      .toMatchObject({ providerId: 'openai-account', inputPerMtok: 1 });
   } finally {
     if (original === undefined) delete route.referencePrices;
     else route.referencePrices = original;

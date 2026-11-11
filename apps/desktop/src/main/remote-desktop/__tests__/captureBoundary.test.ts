@@ -58,7 +58,10 @@ vi.mock('../waylandCapture', async (original) => ({
   ...(await original<typeof import('../waylandCapture')>()),
   isWaylandDesktop: () => h.wayland,
 }));
-vi.mock('../linuxInput', () => ({ readLinuxDesktopInputSupport: async () => h.linuxInput }));
+vi.mock('../linuxInput', () => ({
+  readLinuxDesktopInputSupport: async () => h.linuxInput,
+  isX11Desktop: () => process.platform === 'linux' && !h.wayland,
+}));
 vi.mock('../linuxDesktop', () => ({
   supportsLinuxDisplay: () => h.hyprland,
   supportsLinuxLock: () => false,
@@ -178,6 +181,9 @@ vi.mock('../controller', () => ({
     handoffWindow(value: string) {
       return value === h.lease ? h.handoff : null;
     }
+    liveScreen() {
+      return null;
+    }
     isBackgroundViewing(value: string) {
       return value === h.lease && h.background;
     }
@@ -238,7 +244,7 @@ vi.mock('../clipboard', () => ({
   transferDesktopClipboard: vi.fn(),
   transferDesktopClipboardContent: vi.fn(),
 }));
-vi.mock('../../device-link/settings-store', () => ({
+vi.mock('../../device-link/settings-store.desktop', () => ({
   readDeviceLinkSettings: () => ({}),
   writeDeviceLinkSetting: vi.fn(),
 }));
@@ -959,7 +965,7 @@ it('uses native Hyprland capture for video and relay without opening a portal pi
 });
 
 it('authorizes channel requests exactly like the relay and only for small control ops', async () => {
-  const settings = await import('../../device-link/settings-store');
+  const settings = await import('../../device-link/settings-store.desktop');
   const config = {
     remoteDesktopEnabled: true,
     remoteControlEnabled: true,
@@ -1017,7 +1023,7 @@ it('authorizes channel requests exactly like the relay and only for small contro
 
 it('advertises native Wayland geometry to existing viewers without a 16:9 placeholder', async () => {
   h.wayland = h.hyprland = true;
-  const settings = await import('../../device-link/settings-store');
+  const settings = await import('../../device-link/settings-store.desktop');
   const { screen } = await import('electron');
   vi.spyOn(settings, 'readDeviceLinkSettings').mockReturnValue({
     remoteDesktopEnabled: true,
@@ -1039,7 +1045,7 @@ it.each([true, false])(
     try {
       h.wayland = h.hyprland = true;
       h.linuxInput = supported;
-      const settings = await import('../../device-link/settings-store');
+      const settings = await import('../../device-link/settings-store.desktop');
       const { screen } = await import('electron');
       vi.spyOn(settings, 'readDeviceLinkSettings').mockReturnValue({
         remoteDesktopEnabled: true,
@@ -1324,4 +1330,29 @@ it('streams only the 代输入 window: native window capture, no screen source, 
   expect(h.nativeFrame).toHaveBeenLastCalledWith('1', true, undefined);
   h.deps.stopVideo();
   expect(h.setWindow).toHaveBeenLastCalledWith(null);
+});
+
+// A successful native XTest probe must be exposed by the real host entry point.
+it('advertises and starts X11 input while retaining the local opt-in', async () => {
+  const platform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'linux' });
+  try {
+    h.wayland = h.hyprland = false;
+    h.linuxInput = true;
+    const settings = await import('../../device-link/settings-store.desktop');
+    const { screen } = await import('electron');
+    vi.spyOn(screen, 'getAllDisplays').mockReturnValue([
+      { id: 1, size: { width: 800, height: 600 }, bounds: { x: 0, y: 0, width: 800, height: 600 } },
+    ] as any);
+    const config = { remoteDesktopEnabled: true, remoteControlEnabled: true };
+    vi.spyOn(settings, 'readDeviceLinkSettings').mockReturnValue(config as any);
+    expect((await h.deps.capabilities()).canControl).toBe(true);
+    h.startInput.mockClear();
+    await h.deps.startInput('1');
+    expect(h.startInput).toHaveBeenCalledExactlyOnceWith('1');
+    config.remoteDesktopEnabled = false;
+    expect((await h.deps.capabilities()).canControl).toBe(false);
+  } finally {
+    Object.defineProperty(process, 'platform', { value: platform });
+  }
 });

@@ -17,8 +17,9 @@ import type { GeneratedFileRef } from '@/lib/generatedFiles';
 import type { TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 import type { TodoItem } from './TodoListCard';
 import type { ToolMediaItem } from './AgentActionRow';
+import type { BotStartedTask } from './BotStartedTasks';
 
-export type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage };
+export type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage; pending?: true };
 type AgentPlanRenderItem = {
   type: 'agent_plan';
   key: string;
@@ -95,6 +96,7 @@ interface WorkGroupRenderItem {
    *  动作段展开后直接显示思考 / 工具行;外层展开后显示 assistant 文字和
    *  仍保持折叠的内层动作段。tool_media 不参与合并,继续留在组外可见。 */
   type: 'work_group';
+  teammateJournal?: boolean;
   key: string;
   children: WorkGroupChildItem[];
   deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;
@@ -115,6 +117,12 @@ export type RenderItem =
   | ForkOriginRenderItem
   | TurnChangesRenderItem
   | GeneratedFilesRenderItem
+  | {
+      /** Teammate chat: the tasks a reply started or sent work to (BotStartedTasks). */
+      type: 'bot_started_tasks';
+      key: string;
+      tasks: BotStartedTask[];
+    }
   | {
       /** tool-result-media: 把 tool_result 里的 xdt_image_url(s) / xdt_video_urls
        *  提取出来作为独立视觉消息渲染,跳出 tool_segment 折叠卡片。统一容器,
@@ -162,6 +170,10 @@ export function isCompletedAssistantMessage(message: ChatMessage): boolean {
   if (message.failedSamplingAttempt) return false;
   return (
     message.turnCompleted === true ||
+    // Older scheduler final reports were persisted without a completion marker.
+    // Their reserved client id identifies the canonical answer, not stream prose.
+    (message.role === 'assistant' && message.turnCompleted !== false && !message.isStreaming &&
+      message.clientId.startsWith('schedule-result:')) ||
     (message.turnMoney?.amount ?? 0) > 0 ||
     (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
     // turnUsageDetails 也只在 turn 结束时 patch(算不出报价的轮次只落它),

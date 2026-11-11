@@ -15,6 +15,7 @@ const dbMock = vi.hoisted(() => ({
     id?: string;
     title?: string;
     workingDir: string | null;
+    projectDir?: string | null;
     userSendAt: number | null;
     updatedAt: number;
   }>,
@@ -51,6 +52,13 @@ describe('/ctr control project/session picker', () => {
     dbMock.drizzle = null;
   });
 
+  it('keeps tasks running in checkouts under their selected project', async () => {
+    dbMock.rows = [{ id: 'task', title: 'Task', workingDir: '/tmp/checkout', projectDir: '/project', userSendAt: 1, updatedAt: 1 }];
+    expect((await listProjectsForControl()).map(row => row.workingDir)).toEqual(['/project']);
+    expect((await listSessionsForWorkspace('/project')).map(row => row.id)).toEqual(['task']);
+    expect(await listSessionsForWorkspace('/tmp/checkout')).toEqual([]);
+  });
+
   // Unit, #6529: hidden follow-ups leaked into IM and keyboard task pickers.
   // The old query mock ignored WHERE; execute the production catalog queries
   // against in-memory SQLite instead. Minimal rows: ordinary + side-chat +
@@ -59,9 +67,9 @@ describe('/ctr control project/session picker', () => {
     const sqlite = new Database(':memory:');
     try {
       sqlite.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, source TEXT,
-        status TEXT, working_dir TEXT, orca_role TEXT, user_send_at INTEGER,
+        status TEXT, working_dir TEXT, project_dir TEXT, orca_role TEXT, user_send_at INTEGER,
         updated_at INTEGER, pinned_at INTEGER)`);
-      const insert = sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const insert = sqlite.prepare('INSERT INTO sessions (id, title, source, status, working_dir, orca_role, user_send_at, updated_at, pinned_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
       for (const [id, source, role, dir] of [
         ['main', 'desktop', null, '/workspace/main'],
         ['child', 'side-chat', null, '/workspace/main'],

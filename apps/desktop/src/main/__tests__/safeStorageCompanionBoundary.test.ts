@@ -23,6 +23,7 @@ afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 function bridge() {
   const handlers = new Map<string, Handler>();
   const log = { error: vi.fn(), debug: vi.fn(), warn: vi.fn() };
+  const readXdKey = vi.fn<(id: string) => string | null>(() => null);
   const deps = {
     ipcMain: { handle: (channel: string, handler: Handler) => { handlers.set(channel, handler); } },
     isRendererAccessibleSafeStorageKey, isCustomProviderRuntimeKeyStorageKey,
@@ -35,6 +36,9 @@ function bridge() {
       decryptString: vi.fn((value: Buffer) => value.toString().slice('fixture:'.length)),
     },
     getCodexProxyAuthInjectionState: () => 'oauth-bearer',
+    activeOwnerScopeKey: vi.fn(() => 'fixture-owner'),
+    getProviderSecretStore: vi.fn(() => ({ get: readXdKey })),
+    noteCindyGatewayKeyReplaced: vi.fn(),
     noteManualXdKeySaved: vi.fn(), noteManualXdKeyRemoved: vi.fn(),
     getGhostSetupChangeBus: () => ({ emitAll: vi.fn() }),
     BrowserWindow: { getAllWindows: () => [] },
@@ -44,7 +48,7 @@ function bridge() {
   };
   new Function(...Object.keys(deps), compiled)(...Object.values(deps));
   expect([...handlers.keys()]).toEqual(['safe-storage-store', 'safe-storage-read', 'safe-storage-remove']);
-  return { ...deps, invoke: (operation: string, key: string, value?: string) => handlers.get(`safe-storage-${operation}`)!({}, key, value) };
+  return { ...deps, readXdKey, invoke: (operation: string, key: string, value?: string) => handlers.get(`safe-storage-${operation}`)!({}, key, value) };
 }
 
 describe('generic safeStorage companion boundary', () => {
@@ -82,5 +86,38 @@ describe('generic safeStorage companion boundary', () => {
     expect(await api.invoke('read', key)).toBeNull();
     expect(api.safeStorage.encryptString).toHaveBeenCalledTimes(1);
     expect(api.safeStorage.decryptString).toHaveBeenCalledTimes(1);
+    if (key !== 'api_key') {
+      expect(api.activeOwnerScopeKey).not.toHaveBeenCalled();
+      expect(api.getProviderSecretStore).not.toHaveBeenCalled();
+      expect(api.noteCindyGatewayKeyReplaced).not.toHaveBeenCalled();
+    }
+  });
+
+  // Regression for #9159: the real IPC registration needs the new gateway-only
+  // dependencies. Unit tier, using the existing encrypted-file fixture; no owner
+  // or gateway key lookup may affect unrelated Renderer credential operations.
+  it.each([false, true])('records a saved gateway replacement only for the same owner (changed=%s)', async changed => {
+    const api = bridge();
+    api.readXdKey.mockReturnValue('fixture-old-token');
+    api.activeOwnerScopeKey.mockReturnValueOnce('fixture-owner')
+      .mockReturnValue(changed ? 'fixture-other-owner' : 'fixture-owner');
+    expect(await api.invoke('store', 'api_key', 'fixture-new-token')).toBe(true);
+    expect(await api.invoke('read', 'api_key')).toBe('fixture-new-token');
+    expect(api.readXdKey).toHaveBeenCalledExactlyOnceWith('xd');
+    if (changed) expect(api.noteCindyGatewayKeyReplaced).not.toHaveBeenCalled();
+    else expect(api.noteCindyGatewayKeyReplaced).toHaveBeenCalledExactlyOnceWith('fixture-old-token', 'fixture-new-token');
+  });
+
+  it('does not record a gateway replacement when the encrypted write fails', async () => {
+    const api = bridge();
+    api.readXdKey.mockReturnValue('fixture-old-token');
+    const write = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => { throw new Error('fixture write failed'); });
+    try {
+      expect(await api.invoke('store', 'api_key', 'fixture-new-token')).toBe(false);
+      expect(api.noteCindyGatewayKeyReplaced).not.toHaveBeenCalled();
+      expect(api.noteManualXdKeySaved).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+    }
   });
 });

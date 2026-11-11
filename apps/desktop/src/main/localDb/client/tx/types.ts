@@ -3,13 +3,13 @@ import type { TaskTagRequest, TaskTagResult } from '@cindy/maker-shared';
 import type { ChatCacheTransaction, ChatCacheResult } from '../../worker/opHandlers/chatCacheTx.js';
 
 export type DbTxName =
+  | 'usage.recordPiUsage'
   | 'chatCache.execute'
   | 'usage.recordMediaSpend'
   | 'authorization.readProjection'
   | 'pluginUsage.execute'
+  | 'sessionImport.execute'
   | 'taskTags.execute'
-  | 'codex.importMessages'
-  | 'claude.importMessages'
   | 'rewind.commit'
   | 'session.treeRehydrate'
   | 'fork.session'
@@ -39,6 +39,7 @@ export type DbTxName =
   | 'message.updateContent'
   | 'message.leaseMutate'
   | 'message.rewindUserAfterClear'
+  | 'message.purgeRewoundSchedulerPrompts'
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
@@ -49,10 +50,6 @@ export type DbTxName =
   | 'bots.replaceCanonicalSession'
   | 'bots.prepareRuntime'
   | 'bots.finishRuntime'
-  | 'bots.finishDelegation'
-  | 'bots.reparentDelegations'
-  | 'bots.createDelegation'
-  | 'bots.reopenDelegation'
   | 'bots.pauseLifecycle'
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
@@ -62,7 +59,6 @@ export type DbTxName =
   | 'bots.persistSessionPermission'
   | 'bots.createGroupLane'
   | 'bots.createChannelLane'
-  | 'bots.createRoutineLane'
   | 'bots.createThreadLane'
   | 'bots.archiveChannelLanes'
   | 'botGroups.create'
@@ -94,35 +90,6 @@ export type DbTxName =
   | 'skillUsage.applyMutation'
   | 'session.importShare';
 
-export interface CodexImportMessagesArgs {
-  sessionId: string;
-  importClientIdPrefix: string;
-  sdkSessionId: string;
-  model: string;
-  rows: Array<{
-    lineNo: number;
-    role: 'user' | 'assistant';
-    text: string;
-    content: unknown;
-    createdAt: number;
-  }>;
-}
-
-export interface ClaudeImportMessagesArgs {
-  sessionId: string;
-  importClientIdPrefix: string;
-  sdkSessionId: string;
-  rows: Array<{
-    lineNo: number;
-    partIndex: number;
-    role: string;
-    content: unknown;
-    toolUseId: string | null;
-    agentMeta: Record<string, unknown> | null;
-    createdAt: number;
-  }>;
-}
-
 export interface RewindCommitArgs {
   sessionId: string;
   targetCreatedAt: number;
@@ -147,6 +114,15 @@ export interface RewindCommitArgs {
    * 省略或 null 表示当时会话未被清空。
    */
   expectedClearedAt?: number | null;
+  /**
+   * Claude 目标之前没有可续接的回复：与软删同一事务清掉 sdk_session_id，并追加隐藏
+   * context_rebuild 标记(内容含交接文本)，下次发送开全新原生会话并注入保留下来的历史。
+   */
+  nativeContextReset?: {
+    markerId: string;
+    markerClientId: string;
+    markerContent: string;
+  };
   now: number;
 }
 
@@ -466,6 +442,20 @@ export interface MessageRewindUserAfterClearArgs {
   sessionId: string;
   clientId: string;
   rewoundAt: number;
+  discard?: boolean;
+}
+
+export interface MessagePurgeRewoundSchedulerPromptsArgs {
+  limit: number;
+  /** 上一批返回的 cursor（窗口末尾 rewind_at）；省略从头扫。 */
+  cursor?: number;
+}
+
+export interface MessagePurgeRewoundSchedulerPromptsResult {
+  deleted: number;
+  sessionIds: string[];
+  /** 下一批的起点；null 表示所有隐藏行已扫完。 */
+  cursor: number | null;
 }
 
 /**
@@ -714,6 +704,7 @@ export interface BotsReplaceCanonicalSessionArgs {
     id: string;
     title: string;
     workingDir: string | null;
+    projectDir?: string | null;
     workspaceKind: string;
     model: string;
     effort: string;
@@ -781,56 +772,6 @@ export interface BotsFinishRuntimeArgs {
   eventId: string;
   eventType: 'runtime-applied' | 'runtime-failed';
   eventPayloadJson: string;
-}
-export interface BotsFinishDelegationArgs {
-  expectedRunSequence?: number;
-  expectedExecution?: { instanceId: string; generation: number };
-  delegationId: string;
-  status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
-  resultSummary: string | null;
-  outputArtifactsJson: string;
-  lastError: string | null;
-  tokensUsed?: number;
-  completedAt: number;
-}
-
-export interface BotsFinishDelegationResult {
-  id: string;
-  targetBotId: string | null;
-  runSequence: number;
-  parentSessionId: string | null;
-  childSessionId: string | null;
-  status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
-}
-
-export interface BotsReparentDelegationsArgs {
-  botId: string;
-  previousParentSessionId: string;
-  nextParentSessionId: string;
-  now: number;
-}
-
-export interface BotsReparentDelegationsResult {
-  delegationIds: string[];
-}
-
-export interface BotsCreateDelegationArgs {
-  maxActiveChildren: number;
-  delegation: {
-    id: string;
-    requestingBotId: string;
-    targetBotId: string | null;
-    parentSessionId: string;
-    childSessionId: string;
-    objective: string;
-    contextRefsJson: string;
-    permissionSnapshotJson: string;
-    lineageJson: string;
-    targetProfileVersion: number | null;
-    depth: number;
-    createdAt: number;
-  };
-  session: BotsReplaceCanonicalSessionArgs['session'];
 }
 
 export interface BotGroupsCreateLaneArgs {
@@ -986,27 +927,6 @@ export interface BotGroupsAppendMessageResult {
   created: boolean;
 }
 
-export interface BotsReopenDelegationArgs {
-  worktreePath?: string | null;
-  maxActiveChildren: number;
-  delegationId: string;
-  requestingBotId: string;
-  expectedStatus: 'completed' | 'failed' | 'cancelled' | 'timed-out';
-  parentSessionId: string;
-  childSessionId: string;
-  objective: string;
-  permissionSnapshotJson: string;
-  targetBotId: string | null;
-  targetProfileVersion: number | null;
-  session: BotsReplaceCanonicalSessionArgs['session'];
-  reopenedAt: number;
-}
-
-export interface BotsReopenDelegationResult {
-  reopened: boolean;
-  previousParentSessionId: string | null;
-}
-
 export interface BotsLifecycleTransitionArgs {
   botId: string;
   canonicalSessionId: string | null;
@@ -1023,6 +943,8 @@ export interface BotsDeleteProfileArgs {
   sessionIds: string[];
   keepTaskHistory: boolean;
   at: number;
+  /** Tasks in the teammate's own project (automation runs, tasks it opened there); kept or deleted like its own. */
+  projectSessionIds?: string[];
 }
 export interface ImRotateSessionArgs {
   previousSessionId: string | null;
@@ -1379,6 +1301,7 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'promote'; analyzerVersion: string };
 
 export interface MediaSpendArgs {
+  providerName?: string;
   day: string;
   model: string;
   amount: number;
@@ -1390,9 +1313,8 @@ export interface MediaSpendArgs {
 
 export type DbTxArgsByName = {
   'usage.recordMediaSpend': MediaSpendArgs;
+  'usage.recordPiUsage': import('../../worker/opHandlers/piUsageTx.js').PiUsageWrite[];
   'authorization.readProjection': { sessionId: string; leadId: string };
-  'codex.importMessages': CodexImportMessagesArgs;
-  'claude.importMessages': ClaudeImportMessagesArgs;
   'rewind.commit': RewindCommitArgs;
   'session.treeRehydrate': SessionTreeRehydrateArgs;
   'fork.session': ForkSessionArgs;
@@ -1415,6 +1337,7 @@ export type DbTxArgsByName = {
   'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
   'recentWorkdirs.removeWindowsIdentity': RecentWorkdirsRemoveWindowsIdentityArgs;
   'pluginUsage.execute': PluginUsageTransaction;
+  'sessionImport.execute': SessionImportTransactionArgs;
   'chatCache.execute': ChatCacheTransaction;
   'taskTags.execute': TaskTagRequest & { newId?: string; callerSessionId?: string };
   'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
@@ -1425,6 +1348,7 @@ export type DbTxArgsByName = {
   'message.updateContent': MessageUpdateContentArgs;
   'message.leaseMutate': MessageLeaseMutateArgs;
   'message.rewindUserAfterClear': MessageRewindUserAfterClearArgs;
+  'message.purgeRewoundSchedulerPrompts': MessagePurgeRewoundSchedulerPromptsArgs;
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
@@ -1435,10 +1359,6 @@ export type DbTxArgsByName = {
   'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionArgs;
   'bots.prepareRuntime': BotsPrepareRuntimeArgs;
   'bots.finishRuntime': BotsFinishRuntimeArgs;
-  'bots.finishDelegation': BotsFinishDelegationArgs;
-  'bots.reparentDelegations': BotsReparentDelegationsArgs;
-  'bots.createDelegation': BotsCreateDelegationArgs;
-  'bots.reopenDelegation': BotsReopenDelegationArgs;
   'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
@@ -1448,7 +1368,6 @@ export type DbTxArgsByName = {
   'bots.persistSessionPermission': { sessionId: string; mode: string };
   'bots.createGroupLane': BotGroupsCreateLaneArgs;
   'bots.createChannelLane': BotsCreateChannelLaneArgs;
-  'bots.createRoutineLane': BotsCreateChannelLaneArgs;
   'bots.createThreadLane': BotsCreateThreadLaneArgs;
   'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
   'botGroups.create': BotGroupsCreateArgs;
@@ -1482,6 +1401,7 @@ export type DbTxArgsByName = {
 };
 
 export type DbTxResultByName = {
+  'usage.recordPiUsage': { changed: boolean };
   'usage.recordMediaSpend': {
     legacyUsd: number;
     amount: number;
@@ -1489,9 +1409,7 @@ export type DbTxResultByName = {
     approximate: number;
   } | null;
   'authorization.readProjection': import('../../autoReviewProjection.js').StoredAutoReviewProjection;
-  'codex.importMessages': { changed: number };
-  'claude.importMessages': { changed: number };
-  'rewind.commit': undefined;
+  'rewind.commit': string[];
   'session.treeRehydrate': { messageCount: number; hiddenClientIds: string[] };
   'fork.session': { messageCount: number };
   'embedding.markDone': undefined;
@@ -1513,6 +1431,7 @@ export type DbTxResultByName = {
   'recentWorkdirs.mergeWindowsIdentity': undefined;
   'recentWorkdirs.removeWindowsIdentity': { changes: number };
   'pluginUsage.execute': PluginUsageHandle | null;
+  'sessionImport.execute': SessionImportTransactionResult;
   'chatCache.execute': ChatCacheResult;
   'taskTags.execute': TaskTagResult;
   'projectAliases.replaceIdentity': {
@@ -1527,6 +1446,7 @@ export type DbTxResultByName = {
   'message.updateContent': { changes: number };
   'message.leaseMutate': { changes: number };
   'message.rewindUserAfterClear': { changes: number };
+  'message.purgeRewoundSchedulerPrompts': MessagePurgeRewoundSchedulerPromptsResult;
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;
@@ -1537,10 +1457,6 @@ export type DbTxResultByName = {
   'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionResult;
   'bots.prepareRuntime': undefined;
   'bots.finishRuntime': boolean;
-  'bots.finishDelegation': BotsFinishDelegationResult | null;
-  'bots.reparentDelegations': BotsReparentDelegationsResult;
-  'bots.createDelegation': undefined;
-  'bots.reopenDelegation': BotsReopenDelegationResult;
   'bots.pauseLifecycle': undefined;
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };
@@ -1550,7 +1466,6 @@ export type DbTxResultByName = {
   'bots.persistSessionPermission': { updated: boolean };
   'bots.createGroupLane': BotGroupsCreateLaneResult;
   'bots.createChannelLane': BotGroupsCreateLaneResult;
-  'bots.createRoutineLane': BotGroupsCreateLaneResult;
   'bots.createThreadLane': BotGroupsCreateLaneResult;
   'bots.archiveChannelLanes': { archivedSessionIds: string[] };
   'botGroups.create': undefined;
@@ -1582,3 +1497,70 @@ export type DbTxResultByName = {
   'skillUsage.applyMutation': undefined;
   'session.importShare': { messageCount: number };
 };
+
+/** session-import 事务（实现见 worker/opHandlers/sessionImportTx.ts）。 */
+export type SessionImportTransactionArgs =
+  | {
+      action: 'begin';
+      now: number;
+      session: {
+        id: string;
+        title: string;
+        workingDir: string | null;
+        workspaceKind: 'project' | 'dialogue';
+        model: string;
+        providerId: string | null;
+        effort: string;
+        permissionMode: string;
+        status: 'active' | 'archived';
+        tokensUsed: number;
+        userSendAt: number;
+        agentKind: 'cc' | 'codex' | 'pi';
+        createdAt: number;
+        updatedAt: number;
+      };
+      record: {
+        source: string;
+        sourceSessionId: string;
+        fingerprint: string | null;
+        version: string | null;
+        mode: 'native' | 'handoff';
+        originalCwd: string | null;
+        requestId: string | null;
+      };
+    }
+  | {
+      action: 'messages';
+      sessionId: string;
+      clientIdPrefix: string;
+      idPrefix: string;
+      rows: Array<{
+        key: string;
+        role: string;
+        content: string;
+        toolUseId: string | null;
+        agentMeta: string | null;
+        agentKind: string | null;
+        createdAt: number;
+      }>;
+    }
+  | {
+      action: 'commit';
+      sessionId: string;
+      now: number;
+      status: 'ready' | 'action' | 'failed';
+      mode?: 'native' | 'handoff';
+      issue: string | null;
+      unhide: boolean;
+      sessionPatch?: { sdkSessionId?: string | null; workingDir?: string };
+      marker?: { id: string; clientId: string; content: string; createdAt: number };
+    }
+  | { action: 'adopt'; sessionId: string; source: string; sourceSessionId: string; now: number }
+  | { action: 'abort'; sessionId: string; requestId?: string };
+
+export type SessionImportTransactionResult =
+  | { created: boolean }
+  | { changed: number }
+  | { ok: true }
+  | { removed: number }
+  | { adopted: boolean };

@@ -1,3 +1,5 @@
+import { configureUserDataDir } from '../../../userDataPath.js';
+import { configureOwnerContext } from '../../../ownerContext.js';
 import { registerMakerSessionCreateHandler } from '../../../maker-ipc/sessionCreateHandler';
 import { MAKER_INVOKE } from '../../../maker-ipc/channels';
 import { withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
@@ -134,7 +136,7 @@ vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() 
 vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
-vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
+vi.mock('../../../imageCacheStore.desktop', () => ({ removeSession: vi.fn(async () => undefined) }));
 vi.mock('../../../device-link/sharedTaskRuntime.js', () => ({
   closeSharedTaskForTask: h.closeSharedTask,
   prepareSharedTaskClosureForTask: h.prepareSharedTaskClosure,
@@ -160,11 +162,14 @@ vi.mock('../../../security/trustedAppRenderer.js', () => ({
     !w.isDestroyed() && w.trusted !== false,
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
-vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../toolResultCompaction.js', () => ({
   compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
 }));
-vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
+vi.mock('../../../sessionIds', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../sessionIds')>(),
+  resolveBusinessSessionId: (id: string) => id,
+}));
 vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
 }));
@@ -287,6 +292,7 @@ function createDb(): void {
       im_default_route TEXT,
       summary TEXT,
       provider_id TEXT,
+      project_dir TEXT,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       active_turn_started_at INTEGER,
       active_turn_pid INTEGER,
@@ -391,6 +397,11 @@ beforeEach(() => {
   h.withRehydrateCloseSuppressed.mockImplementation(async (_sessionId, task) => task());
   h.getMakerIfReady.mockReturnValue({ isSessionAlive: () => false, closeSession: h.closeSession });
   h.userDataDir = mkdtempSync(path.join(os.tmpdir(), 'cindy-sessions-update-'));
+  configureUserDataDir(h.userDataDir);
+  configureOwnerContext({
+    read: () => ({ dataOwnerId: 'owner-a', generation: 1, boundaryPending: false }),
+    fallbackBaseDir: () => h.userDataDir!,
+  });
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
   setSessionRuntimeCleanup(h.runtimeCleanup);
@@ -1024,6 +1035,23 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(persisted).toEqual({ title: 'Release Bot', status: 'active' });
   });
 
+  it('archives, restores and deletes teammate tasks listed with ordinary tasks', async () => {
+    // 例行任务 / 渠道专线进入普通任务列表，生命周期与普通任务一致；主聊天仍由伙伴生命周期管理。
+    const link = h.sqlite!.prepare('INSERT INTO bot_session_links(session_id, bot_id, role, route_key) VALUES (?, ?, ?, ?)');
+    link.run('bot-local', 'bot-1', 'canonical', null);
+    await expect(invokeUpdate('bot-local', { status: 'archived' })).rejects.toThrow(/Bot task lifecycle/);
+
+    h.sqlite!.prepare('UPDATE bot_session_links SET role = ?, route_key = ? WHERE session_id = ?')
+      .run('routine', 'routine:daily', 'bot-local');
+    const status = () => (h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('bot-local') as { status: string }).status;
+    await invokeUpdate('bot-local', { status: 'archived' });
+    expect(status()).toBe('archived');
+    await restoreArchivedSessionForSend('bot-local');
+    expect(status()).toBe('active');
+    await invokeUpdate('bot-local', { status: 'deleted' });
+    expect(status()).toBe('deleted');
+  });
+
   it('persists and broadcasts title-only patches to device-link subscribers', async () => {
     await invokeUpdate('codex-local', { title: '排查远程标题同步' });
 
@@ -1110,6 +1138,45 @@ describe('local-db:sessions:update handler wiring', () => {
     h.tapWindowBroadcast.mockClear();
     await touchUserSendInDb('codex-local', 1_786_500_050_000);
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  // Unit with isolated SQLite: first send and later sends used to retain the
+  // temporary cwd as a project. Reopen/move must not retain stale membership.
+  it('retains only the selected project on send and clears membership on an explicit move', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET workspace_kind = 'project', project_dir = '/product', working_dir = '/tmp/checkout' WHERE id = ?")
+      .run('codex-local');
+    const real = await vi.importActual<typeof import('../recentWorkdirs')>('../recentWorkdirs');
+    h.upsertRecentWorkdir.mockImplementation(async (dir, atMs, platform) => real.upsertRecentWorkdir(dir, atMs, platform));
+    await touchUserSendInDb('codex-local', 100);
+    await touchUserSendInDb('codex-local', 200);
+    expect(h.sqlite!.prepare('SELECT path FROM recent_workdirs').all()).toEqual([{ path: '/product' }]);
+    await invokeUpdate('codex-local', { title: 'Renamed' });
+    expect(h.sqlite!.prepare('SELECT project_dir FROM sessions WHERE id = ?').get('codex-local')).toEqual({ project_dir: '/product' });
+    await invokeUpdate('codex-local', { workingDir: '/tmp/next-checkout' });
+    expect(h.sqlite!.prepare('SELECT project_dir FROM sessions WHERE id = ?').get('codex-local')).toEqual({ project_dir: '/product' });
+    await invokeUpdate('codex-local', { workingDir: '/another-project', workspaceKind: 'project' });
+    expect(h.sqlite!.prepare('SELECT project_dir FROM sessions WHERE id = ?').get('codex-local')).toEqual({ project_dir: null });
+  });
+
+  // Unit regression: persistence alone left other windows/device-link mirrors
+  // grouping by the old project. Exercise the real update handler and its pushes.
+  it.each([
+    { workingDir: '/another-project', workspaceKind: 'project' as const },
+    { workspaceKind: 'dialogue' as const },
+  ])('broadcasts cleared membership to mounted clients after a move: %j', async patch => {
+    h.sqlite!.prepare("UPDATE sessions SET project_dir = '/product' WHERE id = ?").run('codex-local');
+    const windows = [0, 1].map(() => ({
+      isDestroyed: vi.fn(() => false), webContents: { send: vi.fn() },
+    }));
+    h.windows = windows;
+    await invokeUpdate('codex-local', patch);
+    const payload = expect.objectContaining({
+      sessionId: 'codex-local', patch: expect.objectContaining({ ...patch, projectDir: null }),
+    });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', payload);
+    for (const window of windows) {
+      expect(window.webContents.send).toHaveBeenCalledWith('local-db:sessions:patched', payload);
+    }
   });
 
   it('does not advance a terminal handoff while the goal is active', async () => {

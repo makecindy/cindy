@@ -14,6 +14,16 @@ function fromDeviceLink(decision: unknown, desktopOnlyConfirmationPending = fals
 }
 
 describe('resolve interaction source boundary', () => {
+  it('allows same-account remote issue decisions only for a real pending issue, preserving other host gates', () => {
+    runDeviceLinkInvokeContext(
+      { controllerDeviceId: 'controller-1', channel: 'maker:resolve-interaction' },
+      () => {
+        expect(() => assertResolveInteractionOrigin({ kind: 'issue_confirm', confirmed: true }, false, true)).not.toThrow();
+        expect(() => assertResolveInteractionOrigin({ kind: 'issue_confirm', confirmed: false }, false, true)).not.toThrow();
+        expect(() => assertResolveInteractionOrigin({ kind: 'issue_confirm' }, true, true)).toThrow('PERMISSION_DENIED');
+      },
+    );
+  });
   it.each([
     { kind: 'permission', behavior: 'allow' },
     { kind: 'ask_user_question', answers: { provider: 'brave' } },

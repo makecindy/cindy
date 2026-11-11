@@ -1,4 +1,3 @@
-import { ipcMain } from 'electron';
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 
 import { searchConversations } from '../conversationSearch.js';
@@ -18,8 +17,7 @@ const STATUS_VALUES = ['active', 'archived', 'all'] as const;
 const AGENT_VALUES = ['all', 'cc', 'codex', 'pi'] as const;
 const LAST_ACTIVITY_VALUES = ['all', '1d', '3d', '7d', '30d'] as const;
 
-export function registerSearchIpc(): void {
-  ipcMain.handle('local-db:conversations:search', async (_e, payload: unknown) => {
+export async function executeConversationSearch(payload: unknown) {
     const body = requireObject(payload, 'payload');
     const query = typeof body.query === 'string' ? body.query.trim() : '';
     if (!query) {
@@ -49,7 +47,6 @@ export function registerSearchIpc(): void {
     return isDeviceLinkInvoke()
       ? searchConversations(request, { remoteVisibleOnly: true })
       : searchConversations(request);
-  });
 }
 
 /** i18n 文案不可能有这么长;超限说明调用方拼错了,宁可报错也不静默截断(见下)。 */

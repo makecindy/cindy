@@ -1,9 +1,10 @@
 import { useState } from 'react';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { mountPage, forbid, subscription } from '../../ui-page/harness';
 import { ProviderConnectionDialog } from '../../../src/renderer/components/settings/ProviderConnectionDialog';
 import { AddProviderWizard } from '../../../src/renderer/components/settings/AddProviderWizard';
 import type { DetectedProviderDraft } from '../../../src/shared/providerDetection';
-import { cases, presets, deployments } from './cases';
+import { cases, presets, deployments, retainedPreset } from './cases';
 const evidence: { saved?: unknown; handoff?: DetectedProviderDraft; fetches: unknown[] } = { fetches: [] };
 Object.assign(window, { templateEvidence: evidence, templateIds: presets.map(p => p.id) });
 function Page({ scenario }: { scenario: string }) {
@@ -21,8 +22,8 @@ mountPage({
   host: ctx => {
     const item = cases.find(c => c.id === ctx.case) ?? cases[0];
     return { maker: {
-      listProviderPresets: async () => ({ presets }),
-      fetchProviderModels: async (input: unknown) => { evidence.fetches.push(input); return { ok: true, models }; },
+      listProviderPresets: async () => ({ presets: ctx.case === 'wizard-deepseek-retained' ? [retainedPreset] : presets, modelRegistry: BUNDLED_CATALOG.modelRegistry }),
+      fetchProviderModels: async (input: unknown) => { evidence.fetches.push(input); return ctx.case === 'wizard-deepseek-retained' ? { ok: false } : { ok: true, models }; },
       detectProvider: async (input: { cancel?: boolean }) => ({ candidates: !input.cancel && deployments.includes(item.providerId) ? [item.providerId] : [], reason: 'matched', catalog: { ok: true, models } }),
       localModelList: async () => ({ status: { kind: 'absent', appInstalled: false }, models: [], memoryGb: 0 }),
       scanLocalCli: async () => ({ detections: [] }),

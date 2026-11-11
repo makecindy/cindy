@@ -26,7 +26,15 @@ import {
   type LocalePreference,
   type SupportedLocale,
 } from '@/i18n';
-import { readStoredLocale, writeStoredLocale, effectiveOf, getEffectiveLocale } from '@/lib/localePreference';
+import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
+import {
+  readStoredClassicalStyle,
+  readStoredLocale,
+  writeStoredClassicalStyle,
+  writeStoredLocale,
+  effectiveOf,
+  getEffectiveLocale,
+} from '@/lib/localePreference';
 
 interface LocaleContextValue {
   /** 用户的偏好选择 (含 'system')。 */
@@ -35,6 +43,9 @@ interface LocaleContextValue {
   effectiveLocale: SupportedLocale;
   /** 设置偏好 —— 持久化到 localStorage、刷 i18next、刷 <html lang>。 */
   setLocale: (next: LocalePreference) => void;
+  /** 古典界面（文言）下 AI 作答的输出风格。 */
+  classicalStyle: ClassicalReplyStyleId;
+  setClassicalStyle: (next: ClassicalReplyStyleId) => void;
 }
 
 const LocaleContext = createContext<LocaleContextValue | undefined>(undefined);
@@ -46,8 +57,15 @@ function syncApplicationMenuLocale(loc: SupportedLocale): void {
   });
 }
 
+function syncClassicalStyle(style: ClassicalReplyStyleId): void {
+  if (typeof window === 'undefined') return;
+  void window.electronAPI?.setClassicalReplyStyle?.(style).catch(() => {
+    /* Older hosts ignore it; replies then keep the default classical style. */
+  });
+}
+
 function applyLocale(loc: SupportedLocale): void {
-  // i18next 自带 isInitialized 检查；同步资源 + 同步 init 下永远是 true。
+  // 目标语言包已加载时立即切换；否则先按需加载，加载完成才切换并触发重渲染。
   void i18n.changeLanguage(loc);
   if (typeof document !== 'undefined') {
     document.documentElement.lang = loc;
@@ -58,9 +76,10 @@ function applyLocale(loc: SupportedLocale): void {
 /**
  * Apply the persisted locale before the first React render.
  *
- * Lightweight windows render their error boundary outside the provider tree;
- * initializing i18next synchronously here keeps even an early render failure
- * in the user's selected language.
+ * Lightweight windows render their error boundary outside the provider tree.
+ * The renderer dispatcher (index.tsx) waits for `i18nReady` before loading any
+ * window, so the selected language is already loaded here and applying it is
+ * synchronous; even an early render failure stays in the user's language.
  */
 export function bootstrapInitialLocale(): SupportedLocale {
   const effectiveLocale = getEffectiveLocale();
@@ -71,6 +90,17 @@ export function bootstrapInitialLocale(): SupportedLocale {
 export function LocaleProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<LocalePreference>(readStoredLocale);
   const [effectiveLocale, setEffectiveLocale] = useState<SupportedLocale>(getEffectiveLocale);
+  const [classicalStyle, setClassicalStyleState] = useState<ClassicalReplyStyleId>(readStoredClassicalStyle);
+
+  const setClassicalStyle = useCallback((next: ClassicalReplyStyleId) => {
+    setClassicalStyleState(next);
+    writeStoredClassicalStyle(next);
+  }, []);
+
+  // Main builds each turn's reply note, so it keeps the current style too.
+  useEffect(() => {
+    syncClassicalStyle(classicalStyle);
+  }, [classicalStyle]);
 
   const setLocale = useCallback((next: LocalePreference) => {
     setLocaleState(next);
@@ -88,8 +118,8 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   }, [effectiveLocale]);
 
   const value = useMemo<LocaleContextValue>(
-    () => ({ locale, effectiveLocale, setLocale }),
-    [locale, effectiveLocale, setLocale],
+    () => ({ locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle }),
+    [locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle],
   );
 
   return createElement(LocaleContext.Provider, { value }, children);

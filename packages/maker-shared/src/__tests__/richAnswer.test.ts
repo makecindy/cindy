@@ -404,6 +404,132 @@ describe('malformed node drafts stay readable', () => {
     expect(child?.props.text).toBe('正文');
   });
 });
+
+// 测试价值
+// - 生产入口与可观察结果：RichAnswerStream 重放 cindy-ui 围栏；用户看到容器卡片里的
+//   正文，而不是空卡片加「部分内容未能显示」。
+// - Bug／规则依据：会话 66065272 实录（details 写 children:["kind:stack"]，另有 5 条
+//   append 直接打到 stack/details 容器，正文全部丢失）；#7627 同族的第三类笔误。
+// - 现有覆盖缺口：#7627 用例只盖裸字符串 props 与对象型内联 children；
+//   append→容器与字符串 children draft 均无覆盖。
+// - 最小失败输入：create details(children:["kind:stack"]) + append 到容器。
+// - tier：unit（与同文件流归约测试同级，复用同一模块加载）。
+// - 实测耗时：pnpm --filter @cindy/maker-shared exec vitest run src/__tests__/richAnswer.test.ts
+//   （修复前新增用例红、修复后全绿）。
+describe('append to a container stays readable', () => {
+  it('routes prose appended to a container into one implicit markdown child', () => {
+    const parser = new RichAnswerStream();
+    const source =
+      line(1, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(2, { op: 'append', id: 'card', text: '**提交表**\n' });
+    const doc = parser.update(source + line(3, { op: 'append', id: 'card', text: '| a | b |' }));
+    const children = doc.nodes.get('card')?.children ?? [];
+    expect(children).toEqual(['card-1']);
+    expect(doc.nodes.get('card-1')?.kind).toBe('markdown');
+    expect(doc.nodes.get('card-1')?.props.text).toBe('**提交表**\n| a | b |');
+    expect(doc.issues).toBe(0);
+    // 历史消息从原文重放，容错结果必须逐节点一致。
+    expect(new RichAnswerStream().update(source + line(3, { op: 'append', id: 'card', text: '| a | b |' })).nodes).toEqual(doc.nodes);
+  });
+
+  it('keeps a details label and its appended body when children only name kinds', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'd', kind: 'details', props: { label: '折叠块', children: ['kind:stack'] } }) +
+      line(2, { op: 'append', id: 'd', text: '正文' }),
+    );
+    const details = doc.nodes.get('d');
+    expect(details?.props.label).toBe('折叠块');
+    expect(details?.children).toHaveLength(1);
+    expect(doc.nodes.get(details?.children[0] ?? '')?.props.text).toBe('正文');
+    // 只有救不回的字符串 draft 计一次，append 本身算成功。
+    expect(doc.issues).toBe(1);
+  });
+
+  it('grows a fresh implicit child after the old subtree is removed or moved away', () => {
+    const parser = new RichAnswerStream();
+    const base =
+      line(1, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(2, { op: 'append', id: 'card', text: 'one' });
+    const removed = parser.update(
+      base + line(3, { op: 'remove', id: 'card' }) +
+      line(4, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(5, { op: 'append', id: 'card', text: 'two' }),
+    );
+    expect(removed.nodes.get('card')?.children).toEqual(['card-1']);
+    expect(removed.nodes.get('card-1')?.props.text).toBe('two');
+    const moved = parser.update(
+      base + line(3, { op: 'move', id: 'card-1', parent: 'root' }) +
+      line(4, { op: 'append', id: 'card', text: 'two' }),
+    );
+    expect(moved.roots).toContain('card-1');
+    expect(moved.nodes.get('card-1')?.props.text).toBe('one');
+    expect(moved.nodes.get('card')?.children).toEqual(['card-1-2']);
+    expect(moved.nodes.get('card-1-2')?.props.text).toBe('two');
+  });
+
+  it('still rejects appends to leaves that render no text', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'stat', kind: 'stat', props: { value: 1 } }) +
+      line(2, { op: 'append', id: 'stat', text: 'x' }),
+    );
+    expect(doc.nodes.get('stat')?.props.text).toBeUndefined();
+    expect(doc.issues).toBe(1);
+  });
+
+  // Greptile P1：删除容器后旧映射仍在，重建同名容器时同 id 可能换成别的 kind，
+  // 正文会写进不渲染 props.text 的节点并且不计 issues。
+  it('keeps prose out of a rebuilt container child that is not the implicit one', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(2, { op: 'append', id: 'card', text: 'one' }) +
+      line(3, { op: 'remove', id: 'card' }) +
+      line(4, { op: 'create', id: 'card', kind: 'stack', props: { children: [{ kind: 'stat', props: { value: 1 } }] } }) +
+      line(5, { op: 'append', id: 'card', text: 'two' }),
+    );
+    const children = doc.nodes.get('card')?.children ?? [];
+    expect(children).toHaveLength(2);
+    const stat = doc.nodes.get(children[0]);
+    expect(stat?.kind).toBe('stat');
+    expect(stat?.props.text).toBeUndefined();
+    const body = doc.nodes.get(children[1]);
+    expect(body?.kind).toBe('markdown');
+    expect(body?.props.text).toBe('two');
+  });
+
+  // Greptile P2：节点数上限只在真要新建节点时才拦，追加到已有隐式子节点不受限。
+  it('appends to an existing implicit child after the node limit is reached', () => {
+    const head =
+      line(1, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(2, { op: 'append', id: 'card', text: 'one' });
+    const filler = Array.from({ length: 2046 }, (_, i) =>
+      line(i + 3, { op: 'create', id: `n${i}`, kind: 'text', props: { text: 'x' } }),
+    ).join('');
+    const doc = new RichAnswerStream().update(
+      head + filler + line(2049, { op: 'append', id: 'card', text: 'two' }),
+      true,
+    );
+    expect(doc.nodes.size).toBe(2048);
+    expect(doc.nodes.get('card-1')?.props.text).toBe('onetwo');
+    expect(doc.issues).toBe(0);
+  });
+
+  // 维护者 zqchris：append → create 子节点 → 再 append 时，第二段正文不能并进
+  // 排在子节点之前的隐式子节点，否则读者看到的顺序与模型写的顺序不一致。
+  it('keeps appended prose in the order the model wrote it', () => {
+    const doc = new RichAnswerStream().update(
+      line(1, { op: 'create', id: 'card', kind: 'stack' }) +
+      line(2, { op: 'append', id: 'card', text: 'before' }) +
+      line(3, { op: 'create', id: 'table', kind: 'markdown', parent: 'card', props: { text: '| a |' } }) +
+      line(4, { op: 'append', id: 'card', text: 'after' }),
+    );
+    const children = doc.nodes.get('card')?.children ?? [];
+    expect(children).toHaveLength(3);
+    expect(doc.nodes.get(children[0])?.props.text).toBe('before');
+    expect(doc.nodes.get(children[1])?.props.text).toBe('| a |');
+    expect(doc.nodes.get(children[2])?.props.text).toBe('after');
+    expect(doc.issues).toBe(0);
+  });
+});
 describe('inline draft limits', () => {
   it('caps nested inline drafts at the depth limit', () => {
     let nested: Record<string, unknown> = { kind: 'markdown', text: 'deepest' };

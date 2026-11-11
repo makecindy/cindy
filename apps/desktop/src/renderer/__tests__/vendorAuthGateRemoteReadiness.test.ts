@@ -13,7 +13,6 @@ import type { ProviderView } from '@cindy/model-providers';
 import { VOICE_INPUT_ASR_PROFILES } from '../../shared/voiceInputAsrProfiles';
 import {
   deriveRemoteReadiness,
-  pickVoiceInputDialogCopy,
   resolveRemoteProviderProbe,
   sourceReadyFromProviderList,
 } from '@/hooks/useVendorAuthGate';
@@ -155,31 +154,5 @@ describe('sourceReadyFromProviderList（隧道 provider:list 响应解析）', (
 describe('Codex voice input settings target', () => {
   it('routes the Codex ASR profile to Providers, matching the dialog copy', () => {
     expect(VOICE_INPUT_ASR_PROFILES['openai-realtime-whisper'].settingsTab).toBe('providers');
-  });
-});
-
-describe('pickVoiceInputDialogCopy（语音输入缺认证文案）', () => {
-  const copy: Parameters<typeof pickVoiceInputDialogCopy>[0] = {
-    'no-source': { title: 'no-source', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
-    'voice-api-key-unauth': { title: 'gateway', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
-    'voice-direct-api-key-unauth': { title: 'direct-key', description: '', confirmText: '', cancelText: '', settingsTab: 'api-keys' },
-    'codex-voice-unauth': { title: 'codex', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
-    'codex-binary-missing': { title: 'binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
-    'pi-binary-missing': { title: 'pi-binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
-  };
-
-  it('api-key + providers 使用 XD Gateway 文案', () => {
-    expect(pickVoiceInputDialogCopy(copy, { auth: 'api-key', settingsTab: 'providers' }).title)
-      .toBe('gateway');
-  });
-
-  it('api-key + api-keys 使用直连 API key 文案', () => {
-    expect(pickVoiceInputDialogCopy(copy, { auth: 'api-key', settingsTab: 'api-keys' }).title)
-      .toBe('direct-key');
-  });
-
-  it('codex 认证失败继续使用 Codex 连接文案', () => {
-    expect(pickVoiceInputDialogCopy(copy, { auth: 'codex', settingsTab: 'connections' }))
-      .toEqual(expect.objectContaining({ title: 'codex', settingsTab: 'providers' }));
   });
 });

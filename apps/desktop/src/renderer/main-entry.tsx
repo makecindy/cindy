@@ -2,20 +2,17 @@ import { createRoot } from 'react-dom/client';
 
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
-import 'harmonyos-sans-sc-webfont-splitted';
+import './styles/cjk-webfont.css';
 
-// Registers the `<model-viewer>` custom element globally. Used by
-// ModelLightbox to preview mivo-generated 3D models. Side-effect-only
-// import — the package self-registers when loaded.
-import '@google/model-viewer';
-
-// 在任何 React 组件渲染前先 import 触发 i18next 同步 init —— 否则首屏 useTranslation
-// 拿到的会是 fallback 英文文案再瞬切到目标语言，造成可见闪烁。
+// i18next 在此之前已 init：分发入口 index.tsx 等当前语言包加载完才加载本模块，
+// 首屏 useTranslation 直接拿到目标语言，不会先显示英文再切换。
 import '@/i18n';
 import './themes/colors';
 
 import { TopLevelErrorBoundary } from './components/error/TopLevelErrorBoundary';
 import { initTapdb } from './analytics/tapdbClient';
+import { createAuthService } from './lib/authService';
+import { createLogger } from './lib/logger';
 import { installScrollbarAutoHide } from './lib/scrollbarAutoHide';
 import { bootstrapMemorySettingsFromMain } from './lib/memorySettingsStore';
 import {
@@ -217,10 +214,17 @@ void (async () => {
   await bootstrapMemorySettingsFromMain();
   await bootstrapGitSafetySettingsFromMain();
 
+  // 认证预热独立于统计同意与 SDK 生命周期;AuthProvider 复用同一任务和最新快照。
+  const auth = createAuthService();
+  void auth.initialize().catch((error: unknown) => {
+    createLogger('auth-service').error('auth prewarm failed', error);
+  });
+  window.addEventListener('pagehide', () => auth.dispose(), { once: true });
+
   // TapDB 在线活跃上报 — 只在主视图启用,避免 voice-input 浮窗的弹出被算成 PV。
   // 这里只挂"同意闸":SDK 是否初始化由 main 的 analytics-settings 决定,用户没
   // 同意过《隐私政策》时一个字节都不会发出去(见 analytics/tapdbClient.ts)。
-  initTapdb();
+  initTapdb(auth);
 
   // 顶层 boundary:App 内 RouterProvider 之上的 provider 链渲染崩溃时兜底
   // (路由子树的崩溃仍由 router.tsx 的 errorElement 就近接住)。

@@ -27,7 +27,7 @@ describe('DS-3 · 结构守卫', () => {
 
   it('生产源经 Terrazzo 校验并生成；保留历史导入结构 oracle', async () => {
     expect(validateStructure(layers)).toEqual([]);
-    expect((await buildProductionFiles(repoRoot)).length).toBe(18);
+    expect((await buildProductionFiles(repoRoot)).length).toBe(19);
   }, 30_000); // Real Terrazzo build; allow CPU contention with the workspace suite.
 
   it('错误 fixture：非法 DTCG 语法被命中', () => {

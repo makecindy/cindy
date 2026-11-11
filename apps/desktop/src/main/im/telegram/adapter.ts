@@ -27,7 +27,6 @@ import {
   buildTelegramReplyContextBlock,
 } from './groupWindow';
 import { readTelegramPersona } from './behaviorStore';
-import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
 import { createTelegramGuestTurnPermissionPolicy } from './permissionPolicy';
 import { telegramUiText, ui, PROCESSING_EMOJI } from './uiText';
 import type { GroupHistoryAccessScope } from '../shared/groupHistoryAccess';
@@ -137,8 +136,8 @@ export function buildTelegramAdapter(
     terminalReactionEmoji: (kind) => (kind === 'error' ? '👎' : null),
     // /project: 从 Telegram 把当前会话切到 desktop 项目目录(bot 原生会话)。
     projectSwitching: true,
-    // 伙伴自有连接: 主人私聊进主任务; 群 / topic 按 lane 一条专线; 对外开放后的
-    // 陌生人私聊(transport guestDm)按用户一条专线。
+    // 伙伴自有连接: 主人私聊进主任务; 群 / topic 按 lane 一条专线。
+    // guest-dm 路由保留兼容旧专线；新陌生私信由 transport 在派发前拒绝。
     companionLane: (userId) => {
       const lane = decodeTelegramLaneUserId(userId);
       if (lane) return { kind: 'group', chatId: lane.chatId, threadId: lane.threadId };
@@ -209,8 +208,9 @@ export function buildTelegramAdapter(
     },
     // Full access 是 owner 对这条任务的明确授权。该档下各 Agent 的工具调用不会
     // 冒泡到 host，逐轮强确认策略无法兑现；owner 触发时取缔策略，避免 provider
-    // 启动前报不支持。非 owner 仍保留策略并 fail-closed，不能借同一群任务的
-    // Full access 直接驱动工具。这里仅负责新消息准入；主人对已受理轮次主动切档
+    // 启动前报不支持。非 owner 保留策略，临时按 Auto 受理；无法启用 Auto 才
+    // fail-closed，不能借同一群任务的 Full access 直接驱动工具。这里只负责新消息准入；
+    // 主人对已受理轮次主动切档
     // 按普通任务立即生效(2026-10-23 Dash 裁决)，不在这里增加运行中限制。
     // 其它权限档与群上下文隔离都不受影响。
     // 伙伴自有 bot: 完全访问是主人对这个伙伴的明确授权, 三种 Agent 在该档下都
@@ -220,8 +220,8 @@ export function buildTelegramAdapter(
       mode === 'bypassPermissions' && (companion || ownerGroupTurnPolicies.has(policy)),
     groupHistoryAccessFor: (event): GroupHistoryAccessScope | undefined => {
       const lane = decodeTelegramLaneUserId(event.senderId);
-      // Companion bots admit guest DMs too. Reuse the verified requester identity
-      // used by channelToolScopeFor; a DM alone is not proof of ownership.
+      // Keep the verified identity check even though transport rejects guest DMs;
+      // a DM alone is never proof of ownership (including legacy guest lanes).
       if (
         !lane &&
         !(event.speaker ? event.speaker.isOwner : event.senderId === telegramIm.getOwnerUserId())
@@ -300,6 +300,9 @@ export function buildTelegramAdapter(
         threadId: lane.threadId,
         cursorScope: lane.threadId,
         triggerMessageId,
+        replyMessageId: event.replyContext?.messageId,
+        reservedChars: replyBlock.length,
+        reservedMessages: event.replyContext ? 1 : 0,
       });
       // 「先发视频/图片、再单独 @bot」: 群上下文里纳入的那些消息带的附件一并补齐,
       // 只进模型消息不落库(contextAttachments 语义, 与飞书群上下文同口径)。
@@ -313,16 +316,13 @@ export function buildTelegramAdapter(
               assembly.messageIds ?? [],
               // 触发消息的相册成员与被引消息已随本轮附件送达, 由 transport 排除。
               event.raw as Parameters<TelegramIM['collectGroupHistoryMedia']>[2],
+              { attachmentMessageIds: assembly.attachmentMessageIds, provided: event.attachments },
             )
-            .catch(() => ({ attachments: [], unavailable: [] }));
+            .catch(() => ({ attachments: [], unavailable: ['历史附件读取失败，未提供原件'] }));
       const historyMediaNote = buildTelegramHistoryMediaNote({
         provided: historyMedia.attachments,
         unavailable: historyMedia.unavailable,
       });
-      // 记住每个人①: 群里说话的人自动登记进智能通讯录(尽力而为, 零阻塞)。
-      if (event.speaker) {
-        autoRegisterTelegramSpeaker(event.speaker, { chatName: null });
-      }
       // 全响应·自主判断(ambient): 安静上下文指令 — 值得说才说, 否则 NO_REPLY
       // 哨兵沉默(transport 在流式 finalize 吞掉哨兵并撤占位)。
       const ambientBlock = event.ambient
@@ -338,9 +338,12 @@ export function buildTelegramAdapter(
         : '';
       // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 发言人 → 用户正文。
       return {
-        agentText: `${persona}${ambientBlock}${assembly.prefix}${historyMediaNote}${replyBlock}${speakerLine}${event.text}`,
+        agentText: `${persona}${ambientBlock}${assembly.prefix}${historyMediaNote.modelText}${replyBlock}${speakerLine}${event.text}`,
         contextSnapshot: captureImContext({
-          groupPrefix: assembly.prefix,
+          groupPrefix: assembly.prefix.replace(
+            '\n</group_chat_context>',
+            () => `${historyMediaNote.displayText ? `\n${historyMediaNote.displayText}` : ''}\n</group_chat_context>`,
+          ),
           groupMessageCount: assembly.messageCount,
           replyPrefix: replyBlock,
           replyMessageCount: 1,

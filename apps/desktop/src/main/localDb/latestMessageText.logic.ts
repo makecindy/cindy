@@ -7,6 +7,8 @@
  * assistant。
  */
 
+import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
+
 export interface TitleMessageCandidate {
   role: 'user' | 'assistant';
   text: string;
@@ -25,11 +27,6 @@ export interface SelectedTitleMessage {
 }
 
 const EXPLICIT_TOOL_PARENT_META_KEYS = ['parentToolUseId', 'parent_tool_use_id'] as const;
-// Live Claude SDK tool ids use one of these prefixes. A bare `parentUuid` is
-// intentionally not enough: legacy Claude imports used that field for the
-// ordinary transcript chain, and deleting those rows would erase valid title
-// evidence from old sessions.
-const TOOL_PARENT_ID_RE = /^(?:toolu|call)[_-]/iu;
 
 function hasNonEmptyString(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
@@ -48,7 +45,7 @@ export function isTopLevelTitleAssistant(
   if (EXPLICIT_TOOL_PARENT_META_KEYS.some((key) => hasNonEmptyString(meta[key]))) return false;
   if (typeof meta.parentUuid !== 'string' || !meta.parentUuid.trim()) return true;
   const parentUuid = meta.parentUuid.trim();
-  return !knownToolUseIds.has(parentUuid) && !TOOL_PARENT_ID_RE.test(parentUuid);
+  return !knownToolUseIds.has(parentUuid) && !isSubagentParentToolUseId(parentUuid);
 }
 
 /** Host writes one of these fields when a real SDK turn reaches its terminal boundary. */

@@ -7,6 +7,10 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { importPickedFiles } from '../pickedFiles.js';
 
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import { getActiveCatalog, setActiveCatalog, setOpenAiImagesApiKeyConfigured } from '../../maker-host/active-catalog.js';
@@ -14,6 +18,8 @@ import { deriveCindyMediaConfig } from '../cindyMediaCatalog.js';
 
 import { GhostCindySlot, type CindySlotDeps } from '../cindySlot';
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
+import { probeImageSize } from '../imageProbe.js';
+import type { LegacyMediaResult } from '../../cindy-media/legacyMediaInvocation.js';
 import {
   GHOST_CINDY_DEPOSIT_BURST,
   GHOST_CINDY_DEPOSIT_MAX_BYTES,
@@ -63,7 +69,23 @@ function fakeGhost(
   } as InstalledGhost;
 }
 
-function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
+type MediaFixture = {
+  buffer: Uint8Array; mimeType: string;
+  videoParams?: LegacyMediaResult['videoParams'];
+};
+type FixtureParams = {
+  prompt: string; model: string; providerId?: string; imagePaths?: string[];
+  aspectRatio?: string; refMode?: string; duration?: number;
+  resolution?: string; ratio?: string; fps?: number; audio?: boolean;
+};
+type FixtureDeps = Partial<CindySlotDeps> & {
+  generateImage?: (params: FixtureParams) => Promise<MediaFixture>;
+  editImage?: (params: FixtureParams) => Promise<MediaFixture>;
+  generateVideo?: (params: FixtureParams) => Promise<MediaFixture>;
+  editVideo?: (params: FixtureParams) => Promise<MediaFixture>;
+};
+
+function makeSlot(overrides: FixtureDeps = {}): {
   slot: GhostCindySlot;
   generateImage: ReturnType<typeof vi.fn>;
   editImage: ReturnType<typeof vi.fn>;
@@ -114,7 +136,9 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
       : null,
   );
   const imageCapabilities = vi.fn(() => null);
-  const resolveOwnedMedia = vi.fn(async (_ghostId: string, hash: string) => `/disk/${hash}.png`);
+  const resolveOwnedMedia = vi.fn(async (_ghostId: string, hash: string) => ({
+    absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png`,
+  }));
   const getImageConfig = vi.fn(() => ({
     models: [
     { id: 'gpt-image-2', label: 'GPT Image 2' },
@@ -166,10 +190,34 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     getGhost: () => fakeGhost(),
     getOwnerScopeKey: () => 'cloud:test-owner:1',
     isOwnerBoundaryPending: () => false,
-    generateImage,
-    editImage,
-    generateVideo,
-    editVideo,
+    // Provider byte fixtures stand in for Core. Slot itself now consumes only
+    // already-ingested references; retain the old parameter/permission assertions.
+    invokeMedia: async (request) => {
+      const params: FixtureParams = {
+        prompt: request.prompt, model: request.model,
+        ...(request.providerId ? { providerId: request.providerId } : {}),
+        ...(request.aspectRatio !== undefined ? { aspectRatio: request.aspectRatio } : {}),
+        ...(request.kind.startsWith('edit_') ? { imagePaths: request.imagePaths } : {}),
+        ...(request.refMode ? { refMode: request.refMode } : {}),
+      };
+      for (const key of ['duration', 'resolution', 'ratio', 'fps', 'audio'] as const) {
+        if (request[key] !== undefined) Object.assign(params, { [key]: request[key] });
+      }
+      const generators = {
+        gen_image: overrides.generateImage ?? generateImage,
+        edit_image: overrides.editImage ?? editImage,
+        gen_video: overrides.generateVideo ?? generateVideo,
+        edit_video: overrides.editVideo ?? editVideo,
+      };
+      const generated = await generators[request.kind](params);
+      const dims = request.kind.endsWith('image') ? probeImageSize(generated.buffer) : null;
+      return {
+        url: 'cindy-media://blobs/abc.png', hash: 'a'.repeat(64), ext: '.png',
+        mimeType: generated.mimeType, bytes: generated.buffer.byteLength,
+        ...(dims ?? {}),
+        ...('videoParams' in generated ? { videoParams: generated.videoParams } : {}),
+      };
+    },
     resolveOwnedMedia,
     getImageConfig,
     getVideoConfig,
@@ -209,6 +257,44 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
 const REQ = { type: 'cindy-request', kind: 'gen_image', prompt: '一只猫' };
 const HASH_S = '5'.repeat(64);
 const EDIT_REQ = { type: 'cindy-request', kind: 'edit_image', prompt: '加顶帽子', hashes: [HASH_S] };
+
+describe('Core 媒体兼容入口', () => {
+  it('改图把归属校验得到的受管引用交给 Core，保留视频适配器所需的路径', async () => {
+    const url = `cindy-media://blobs/${HASH_S}.png`;
+    const output = { url, hash: HASH_S, ext: '.png', mimeType: 'image/png', bytes: 1 };
+    const invokeMedia = vi.fn(async () => output);
+    const { slot } = makeSlot({
+      invokeMedia,
+      resolveOwnedMedia: vi.fn(async () => ({ absPath: '/disk/source.png', url })),
+    });
+    expect(await slot.handleModelRequest('art', {
+      kind: 'edit_image', prompt: '换成蓝色', hashes: [HASH_S],
+    })).toMatchObject({ ok: true });
+    expect(invokeMedia).toHaveBeenCalledWith(expect.objectContaining({
+      imagePaths: ['/disk/source.png'], imageRefs: [url],
+    }));
+  });
+
+  it('保留 Core 已入仓的结果，不要求再次生成图片字节', async () => {
+    const media = {
+      url: `cindy-media://blobs/${'a'.repeat(64)}.png`,
+      hash: 'a'.repeat(64), ext: '.png', mimeType: 'image/png',
+      bytes: 1024, width: 512, height: 512,
+    };
+    const invokeMedia = vi.fn(async () => media);
+    const saveGhostMedia = vi.fn(async () => media);
+    const { slot, generateImage } = makeSlot({
+      invokeMedia, saveGhostMedia,
+    } as unknown as Partial<CindySlotDeps>);
+
+    expect(await slot.handleModelRequest('art', REQ)).toMatchObject({
+      ok: true, url: media.url, hash: media.hash, width: 512, height: 512,
+    });
+    expect(invokeMedia).toHaveBeenCalledOnce();
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({ media }));
+  });
+});
 
 describe('载荷校验', () => {
   it('未知 kind / 空 prompt / 超长 prompt → 结构化拒绝', async () => {
@@ -808,7 +894,9 @@ describe('视频代办(gen_video / edit_video)', () => {
     expect(r).toMatchObject({ ok: true, model: 'seedance-fast', modelLabel: 'Seedance 快速' });
     expect(getVideoConfig).toHaveBeenCalledWith('generate');
     expect(generateVideo).toHaveBeenCalledWith({ prompt: '一只猫奔跑', model: 'seedance-fast' });
-    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({ mimeType: 'video/mp4' }));
+    expect(saveGhostMedia).toHaveBeenCalledWith(expect.objectContaining({
+      media: expect.objectContaining({ mimeType: 'video/mp4' }),
+    }));
   });
 
   it('tier 档位查视频翻译表(best → seedance-pro);失效点名回落默认', async () => {
@@ -1012,7 +1100,7 @@ describe('代办链路', () => {
     expect(saveGhostMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         ghostId: 'art',
-        mimeType: 'image/png',
+        media: expect.objectContaining({ mimeType: 'image/png' }),
         ownerScopeKey: 'cloud:test-owner:1',
       }),
     );
@@ -1116,7 +1204,7 @@ describe('代办链路', () => {
     const { slot } = makeSlot({
       generateImage: vi.fn(
         () => new Promise<{ buffer: Uint8Array; mimeType: string }>((res) => pending.push(res)),
-      ) as unknown as CindySlotDeps['generateImage'],
+      ) as unknown as NonNullable<FixtureDeps['generateImage']>,
     });
 
     const first = slot.handleModelRequest('art', REQ);
@@ -1132,7 +1220,7 @@ describe('代办链路', () => {
     let release: (v: { buffer: Uint8Array; mimeType: string }) => void = () => {};
     const gate = new Promise<{ buffer: Uint8Array; mimeType: string }>((res) => (release = res));
     const { slot } = makeSlot({
-      generateImage: vi.fn(() => gate) as unknown as CindySlotDeps['generateImage'],
+      generateImage: vi.fn(() => gate) as unknown as NonNullable<FixtureDeps['generateImage']>,
       getInflightLimit: vi.fn(() => 1) as unknown as CindySlotDeps['getInflightLimit'],
     });
 
@@ -1154,7 +1242,7 @@ describe('代办链路', () => {
     const { slot } = makeSlot({
       generateImage: vi.fn(
         () => new Promise<{ buffer: Uint8Array; mimeType: string }>((res) => pending.push(res)),
-      ) as unknown as CindySlotDeps['generateImage'],
+      ) as unknown as NonNullable<FixtureDeps['generateImage']>,
       getInflightLimit: vi.fn(() => 2) as unknown as CindySlotDeps['getInflightLimit'],
     });
 
@@ -1273,7 +1361,7 @@ describe('改图代办(edit_image)', () => {
   it('任一源图不在本意识名下 → 整单拒(统一话术)', async () => {
     const { slot, editImage } = makeSlot({
       resolveOwnedMedia: vi.fn(async (_g: string, hash: string) =>
-        hash === HASH_S ? `/disk/${hash}.png` : null,
+        hash === HASH_S ? { absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png` } : null,
       ) as unknown as CindySlotDeps['resolveOwnedMedia'],
     });
     const r = await slot.handleModelRequest('art', {
@@ -1291,7 +1379,7 @@ describe('改图代办(edit_image)', () => {
       async (_ghostId: string, hash: string, taskOwnerScopeKey: string) => {
         expect(taskOwnerScopeKey).toBe('cloud:owner-a:1');
         ownerScopeKey = 'cloud:owner-b:2';
-        return `/disk/${hash}.png`;
+        return { absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png` };
       },
     );
     const editImage = vi.fn();
@@ -1313,7 +1401,7 @@ describe('改图代办(edit_image)', () => {
     const HASH = 'a'.repeat(64);
     const blob = `assets/${HASH.slice(0, 2)}/${HASH}/blob.png`;
     const resolveOwnedMedia = vi.fn(async (_g: string, key: string) =>
-      key === blob ? `/library/${blob}` : null,
+      key === blob ? { absPath: `/library/${blob}`, url: `cindy-media://blobs/${HASH}.png` } : null,
     );
     const { slot, editImage } = makeSlot({
       resolveOwnedMedia,
@@ -1582,6 +1670,46 @@ describe('寄存(deposit_media / release_media)', () => {
   });
   const releaseReq = (hash: unknown) => ({ type: 'cindy-request', kind: 'release_media', hash });
 
+  // #7924 / 4423005283, unit: real pick importer + cindy-request entry.
+  // Existing single-entry quota tests miss a legacy deposit started by pick progress.
+  // Only one PNG fits; both used to pass the same balance. A failed import must also
+  // release the quota operation so the following legacy deposit can succeed.
+  it.each([false, true])('shares quota with a picked import (import fails: %s)', async failImport => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-shared-deposit-'));
+    try {
+      const file = path.join(root, 'input.png');
+      await fs.writeFile(file, PNG);
+      let used = GHOST_CINDY_DEPOSIT_QUOTA_BYTES - PNG.length;
+      const { slot } = makeSlot({
+        depositUsageBytes: async () => used,
+        depositMedia: async () => {
+          used += PNG.length;
+          return { url: 'cindy-media://blobs/legacy.png', hash: 'd'.repeat(64), ext: '.png', bytes: PNG.length, deduplicated: false };
+        },
+      });
+      let second: ReturnType<typeof slot.handleModelRequest> | undefined;
+      const picked = await importPickedFiles({
+        tempRoot: root,
+        usageBytes: async () => used,
+        deposit: async () => {
+          if (failImport) throw new Error('disk write failed');
+          used += PNG.length;
+          return { url: 'cindy-media://blobs/picked.png' };
+        },
+        importLibrary: async () => { throw new Error('not used'); },
+        progress: () => bytes => {
+          if (bytes !== undefined && !second) second = slot.handleModelRequest('art', depositReq(b64(PNG)));
+        },
+      }, 'art', [file], { into: 'media', assertCurrent() {} });
+      expect(second).toBeDefined();
+      const legacy = await second!;
+      expect(picked.ok).toBe(!failImport);
+      expect(legacy.ok).toBe(failImport);
+      expect(used).toBe(GHOST_CINDY_DEPOSIT_QUOTA_BYTES);
+      expect((await fs.readdir(root)).filter(name => name.startsWith('cindy-pick-'))).toEqual([]);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
   it('happy path:字节 → 指纹,mime 由主机判定,配额口径随结果回传', async () => {
     const { slot, depositMedia } = makeSlot();
     const r = await slot.handleModelRequest('art', depositReq(b64(PNG), { label: '拖入的参考图' }));
@@ -1604,7 +1732,7 @@ describe('寄存(deposit_media / release_media)', () => {
     // 归属账本认寄存物(生产由 ledger.ghostCanRead 的 ghost-deposit 分支保证)。
     const { slot, editImage } = makeSlot({
       resolveOwnedMedia: vi.fn(async (_g: string, hash: string) =>
-        hash === HASH_D ? `/disk/${hash}.png` : null,
+        hash === HASH_D ? { absPath: `/disk/${hash}.png`, url: `cindy-media://blobs/${hash}.png` } : null,
       ),
     } as Partial<CindySlotDeps>);
     const dep = await slot.handleModelRequest('art', depositReq(b64(PNG)));

@@ -87,6 +87,7 @@ function Fixture({ scenario }: { scenario: string }) {
     : { membershipKind: 'org', orgSlug: scenario === 'cindy-xd' ? 'xd' : 'example', orgName: 'Example International Game Studio' }, t);
   const sourceProviders = gateway ? [...providers, {
     ...providers[1], id: 'xd', name: accountName, auth: { method: 'managed' },
+    logoKind: scenario === 'cindy-xd' ? 'xd' : 'cindy',
     models: { codex: [{ id: 'auto', name: 'Auto', group: 'gpt', contextWindow: 272000, efforts: [] }] },
   } as ProviderView] : providers;
   return (

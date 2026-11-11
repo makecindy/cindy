@@ -25,16 +25,17 @@ import { getDbClient, tryGetDbClient } from '../localDb/client/current';
 import { dialogueWorkspaceDayKey } from '../localDb/dialogueWorkspace';
 import { upsertRecentWorkdir } from '../localDb/ipc/recentWorkdirs';
 import { readDialogueWorkspaceSettings } from '../dialogue-workspace-settings';
-import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast';
 import { withSessionRouteLocks } from '../localDb/sessionRouteLock';
 import { getActiveTeamByLead } from '../localDb/orcaTeamStore';
 import { getSelfDeviceId, remoteInvoke } from '../device-link';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context';
-import { readDeviceLinkSettings } from '../device-link/settings-store';
+import { readDeviceLinkSettings } from '../device-link/settings-store.desktop';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { tryUploadPeerAttachment } from '../device-link/filePeer';
-import { uploadLocalFile, removeRemote, MAX_MEDIA_BYTES } from '../device-link/mediaTransfer';
+import { uploadLocalFile, removeRemote, MAX_MEDIA_BYTES } from '../device-link/mediaTransfer.desktop';
+import { withAgentNetMediaTarget } from '../device-link/agentNetMediaRouting';
 import {
   materializeRemoteAttachment,
   parseRemoteAttachmentRef,
@@ -43,7 +44,7 @@ import { createLogger } from '../logger';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { throwIpcError } from '../utils/ipcValidate';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile';
-import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal';
+import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop';
 import { exportSessionShare } from '../session-share/sessionShareExport';
 import {
   commitShareImport,
@@ -234,6 +235,7 @@ function view(scope: Scope, record: MigrationRecord | null): TaskMigrationView {
 interface SourceSession {
   id: string;
   workingDir: string;
+  projectDir: string | null;
   workspaceKind: string;
   remoteHostId: string | null;
   agentDeviceId: string | null;
@@ -250,7 +252,7 @@ async function assertSource(
   worker = false,
 ): Promise<SourceSession> {
   const row = await scope.db.queryOne<SourceSession>(
-    'SELECT id, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, agent_device_id AS agentDeviceId, orca_remote_lead AS orcaRemoteLead, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
+    'SELECT id, working_dir AS workingDir, project_dir AS projectDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, agent_device_id AS agentDeviceId, orca_remote_lead AS orcaRemoteLead, status, source, orca_role AS orcaRole, agent_kind AS agentKind, updated_at AS updatedAt FROM sessions WHERE id = ?',
     [sessionId],
   );
   scope.assertCurrent();
@@ -326,8 +328,9 @@ interface WorkspaceBundle extends PortableWorkspace {
 }
 function copyDestination(lead: SourceSession): NonNullable<WorkspaceBundle['destination']> {
   if (lead.workspaceKind === 'dialogue') return { kind: 'dialogue' };
-  // A task in a worktree belongs to the project the sidebar groups it under.
-  const project = collapseWorktreeDirForGrouping(lead.workingDir);
+  // Preserve explicit identity exactly; only legacy tasks infer a project from cwd.
+  const directory = sessionProjectDirectory(lead) ?? lead.workingDir;
+  const project = lead.projectDir != null ? directory : collapseWorktreeDirForGrouping(directory);
   const relative = path.relative(app.getPath('home'), project);
   const segments = relative ? relative.split(path.sep) : [];
   return {
@@ -665,11 +668,12 @@ async function sendPart(
     return { ref: peer, size: result.size, sha256: result.sha256 };
   }
   onProgress?.(0); // OSS fallback starts this part again, not a second completed part.
-  const result = await uploadLocalFile(file, {
+  const result = await withAgentNetMediaTarget(device, async () => uploadLocalFile(file, {
     maxBytes: (await fs.stat(file)).size,
     onProgress,
     signal,
-  });
+    assertCurrent: scope.assertCurrent,
+  }));
   // Record the upload before the checkpoint so a cancelled copy still deletes it.
   const keysFile = path.join(artifacts, 'transfer-keys.json');
   const keys = JSON.parse(readAtomicFileSync(keysFile) ?? '[]') as string[];

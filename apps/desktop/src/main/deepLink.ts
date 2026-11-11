@@ -8,6 +8,10 @@
  *   cindy://session/<sessionId>             —— sessionId 直接是 string id
  *   cindy://project/<urlencoded-workingDir> —— workingDir 全路径 URL-encoded
  *   cindy://settings/providers[?connect=<providerId>] —— 打开设置「模型供应商」页,
+ *   cindy://settings/builtin-tools —— 打开设置「内置工具」页(Computer Use 开关与系统权限引导;
+ *     agent 发现 Computer Use 未开启时把这条链接给用户),
+ *   cindy://settings/im-bot[?group=cindy|personal] —— 打开设置「IM 机器人」页并定位分区
+ *     (官方飞书机器人给未关联用户的引导卡经 https 中转页唤起这条链接),
  *     可选 connect 直达指定内置渠道或预设的接入流程(白名单校验,见 parseDeepLink)
  *
  * 命令行参数形态 (右键菜单 / 命令行):
@@ -36,16 +40,19 @@
  *     不会因为登录流程跳过而丢失"点击右键打开"这个意图。
  *
  * dev 模式说明:
- *   setAsDefaultProtocolClient 可把 scheme 临时注册到 Electron 解释器,因此能在 dev
- *   实例运行期间验证系统 URL 唤起;但协议归属受最后注册的正式版 / dev 实例影响,
- *   发布前仍需用 packaged build 做最终跨平台验证。
+ *   未打包实例不注册 OS 协议，避免退出后仍将正式链接交给临时 checkout 的 Electron。
+ *   macOS 不保存 setAsDefaultProtocolClient 的 Windows-only path / args，冷启动 stock
+ *   Electron.app 会丢失项目入口。URL / argv 接收和解析仍可测试；系统唤起用 packaged build。
  */
 
 import { isLocalPluginSnapshotId, isValidPluginResourceId } from '@cindy/plugin-protocol';
 import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
+import { buildAgentNetSharingInvitation, parseAgentNetSharingInvitation } from '@cindy/agent-net/portable';
 import { createLogger } from './logger';
+import { cancelPendingWindowHide } from './mainWindowCloseBehavior';
+import { isValidGhostId } from '../shared/ghost';
 import { registerWindowsDeepLinkName } from './deepLinkWindowsRegistration';
 import {
   DEEP_LINK_PRIMARY_SCHEME,
@@ -72,7 +79,7 @@ export type DeepLinkPayload =
   | { type: 'chat-invite'; token: string }
   /** 点开的群邀请链接口令残缺或被改动：不带任何链接内容，只让 Renderer 明确告知。 */
   | { type: 'chat-invite-malformed' }
-  | { type: 'shared-task-join'; invitation: string; server: string }
+  | { type: 'shared-task-join'; invitation: string; server: string; link?: string }
   /** 供应商分享链接：原样交给 Renderer 的申请弹窗，由主进程命令再解析与核对区域。 */
   | { type: 'provider-share-join'; link: string }
   | { type: 'plugin'; pluginId: string }
@@ -100,7 +107,20 @@ export type DeepLinkPayload =
    *      供应商接入流程)。URL 域只开放 tab=providers;connect 是可选的内置
    *      provider / preset id,经白名单校验后透传给 renderer 已有的消费逻辑。
    */
-  | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' }
+  | {
+      type: 'settings';
+      tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot';
+      connect?: string;
+      intent?: 'topup';
+      /** 仅 im-bot:定位到「官方」(cindy) 或「个人」(personal) 分区。 */
+      imGroup?: 'cindy' | 'personal';
+    }
+  /**
+   * cindy://plugins[/<ghostId>] —— 打开已安装插件列表,带 id 时直达该插件详情页
+   * (随包浏览器扩展等外部表面把用户带回对应插件的启用 / 连接设置)。id 须过
+   * ghost id 白名单,不合法整条拒绝。
+   */
+  | { type: 'installed-plugin'; ghostId?: string }
   /**
    * 纯"把窗口拉回前台"意图,不携带导航语义 (典型来源:OAuth 授权成功页的
    * "打开 xdt-maker" 按钮 / 自动唤起)。main 进程内消化,不发给 renderer、
@@ -119,6 +139,10 @@ export type DeepLinkPayload =
  */
 export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (typeof url !== 'string') return null;
+  const v2 = parseAgentNetSharingInvitation(url, 'shared-task');
+  if (v2) return { type: 'shared-task-join', invitation: v2.receipt.invitation, server: v2.server,
+    link: buildAgentNetSharingInvitation(v2.receipt, v2.server) };
+  if (parseAgentNetSharingInvitation(url, 'provider-share')) return { type: 'provider-share-join', link: url };
   const invitation = parseSharedTaskInvitationIntent(url);
   if (invitation) return { type: 'shared-task-join', ...invitation };
   if (parseProviderShareInvitationIntent(url)) return { type: 'provider-share-join', link: url };
@@ -141,6 +165,17 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (rest.startsWith('provider/')) {
     const importId = createProviderImportDraftFromRest(rest);
     return importId ? { type: 'provider-import', importId } : null;
+  }
+  if (/^plugins(?:[/?#]|$)/.test(rest)) {
+    const rawId = rest.slice('plugins'.length).replace(/^\//, '').replace(/[?#].*$/, '').replace(/\/+$/, '');
+    if (!rawId) return { type: 'installed-plugin' };
+    let ghostId: string;
+    try {
+      ghostId = decodeURIComponent(rawId);
+    } catch {
+      return null;
+    }
+    return isValidGhostId(ghostId) ? { type: 'installed-plugin', ghostId } : null;
   }
   const slashIdx = rest.indexOf('/');
   if (slashIdx <= 0) return null;
@@ -176,6 +211,17 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
     // URL 域只开放精确的 providers 路径(尾随 `/` 可忽略);不能沿用上方对其它
     // payload 的“首段即值”语义,否则 settings/providers/anything 也会被接收。
     const rawSettingsPath = rawValue.replace(/[?#].*$/, '').replace(/\/+$/, '');
+    // builtin-tools 只接受裸路径:Computer Use 的开启与系统权限都在那一页完成,没有参数。
+    if (rawSettingsPath === 'builtin-tools' && decoded === 'builtin-tools') {
+      return { type: 'settings', tab: 'builtin-tools' };
+    }
+    // im-bot:官方 IM 机器人(如飞书)给未关联用户的引导卡直接打开这一页;group 只接受
+    // cindy / personal,其它值整条拒绝。
+    if (rawSettingsPath === 'im-bot' && decoded === 'im-bot') {
+      const group = parseSessionQueryParam(rawValue, 'group');
+      if (group === null) return { type: 'settings', tab: 'im-bot' };
+      return group === 'cindy' || group === 'personal' ? { type: 'settings', tab: 'im-bot', imGroup: group } : null;
+    }
     if (rawSettingsPath !== 'providers' || decoded !== 'providers') return null;
     // connect 是可选 provider / preset id;深链是不可信输入,值必须过共享白名单,
     // 不合法就整条拒绝,避免 main/preload 规则漂移。
@@ -217,7 +263,7 @@ function parseSettingsConnectParam(rawValue: string): string | null | typeof INV
  * 从 session 深链的原始 value 里抽消息锚点或设备归属。
  * 值为空 / 解码失败 → null(锚点非法不拖累 sessionId 本身的解析)。
  */
-function parseSessionQueryParam(rawValue: string, key: 'message' | 'device'): string | null {
+function parseSessionQueryParam(rawValue: string, key: 'message' | 'device' | 'group'): string | null {
   const hashIdx = rawValue.indexOf('#');
   const noHash = hashIdx >= 0 ? rawValue.slice(0, hashIdx) : rawValue;
   const queryIdx = noHash.indexOf('?');
@@ -403,6 +449,7 @@ export function handleIncomingShareFile(filePath: string, source: string): void 
 export function focusMainWindow(platform: NodeJS.Platform = process.platform): boolean {
   const win = mainWindowRef;
   if (!win || win.isDestroyed()) return false;
+  cancelPendingWindowHide(win);
   if (!win.isVisible()) win.show();
   if (win.isMinimized()) win.restore();
   if (platform === 'win32') {
@@ -444,12 +491,12 @@ export function openMainWindowBillingTopUp(): void {
 }
 
 /**
- * 主进程内部发起的会话聚焦(workspace 槽 focus:true)。复用 deep link 的
- * 前台 + renderer dispatch 通道,行为与用户点 cindy://session/<id> 一致。
+ * 主进程内部发起的会话导航。用户点击默认拉回前台；后台插件用
+ * if-active，仅在 Cindy 已有聚焦窗口时提升主窗口，不打断其它应用。
  */
 export function openMainWindowSession(
   sessionId: string,
-  options?: { focus?: boolean; islandEntryId?: string; deviceId?: string; messageClientId?: string },
+  options?: { focus?: boolean | 'if-active'; islandEntryId?: string; deviceId?: string; messageClientId?: string },
 ): void {
   dispatchDeepLink(
     { type: 'session', id: sessionId,
@@ -457,7 +504,9 @@ export function openMainWindowSession(
       ...(options?.deviceId ? { deviceId: options.deviceId } : {}),
       ...(options?.messageClientId ? { messageClientId: options.messageClientId } : {}),
     },
-    options?.focus !== false,
+    options?.focus === 'if-active'
+      ? BrowserWindow.getFocusedWindow() !== null
+      : options?.focus !== false,
     captureDataOwnerBroadcastScope(),
   );
 }
@@ -666,28 +715,19 @@ function isWindowsSlashSwitch(value: string): boolean {
 }
 
 /**
- * 把当前 packaged / unpackaged 状态下的 client 注册给 OS。主 + 历史 scheme
- * 逐个注册(Windows/Linux 运行时写注册表 / .desktop;macOS 以 Info.plist 的
- * CFBundleURLTypes 双注册为准,此调用是兜底,同样遍历保持行为一致)。
- * - packaged:直接 setAsDefaultProtocolClient(scheme) 即可
- * - dev:需要带 execPath + argv 让系统知道怎么把链接路由回当前 Electron 解释器
+ * 仅为 packaged client 注册主 + 历史 scheme。未打包实例即使没有 process.defaultApp
+ * 也不能接管系统关联；退出时 removeAsDefaultProtocolClient 不保证恢复原处理程序。
+ * Windows/Linux 运行时写注册表 / .desktop；macOS 还需要打包时声明 CFBundleURLTypes。
  *
- * 必须在 app.whenReady 之前调用一次(Electron 文档要求)。重复调用幂等。
+ * 由 bootstrap-electron 启动时调用。open-url listener 另行尽早挂载，以接住冷启动事件。
  */
 export function registerDeepLinkProtocol(): void {
+  // Packaged smoke runs use a disposable profile, but OS protocol ownership is
+  // outside that profile and must remain with the installed desktop client.
+  if (!app.isPackaged || process.argv.includes('--smoke-test')) return;
+
   for (const scheme of DEEP_LINK_SCHEMES) {
-    let registered: boolean;
-    if (process.defaultApp) {
-      // dev:用 Electron 解释器跑 main 入口
-      if (process.argv.length >= 2) {
-        registered = app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
-      } else {
-        registered = app.setAsDefaultProtocolClient(scheme);
-      }
-    } else {
-      // packaged:直接调,OS 用 app bundle 路径
-      registered = app.setAsDefaultProtocolClient(scheme);
-    }
+    const registered = app.setAsDefaultProtocolClient(scheme);
     if (registered) void registerWindowsDeepLinkName(scheme);
   }
 }

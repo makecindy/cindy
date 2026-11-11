@@ -5,6 +5,31 @@ This inventory applies to Cindy Headless `0.4.3`, based on Cindy upstream commit
 only when the Headless CLI or Harbor adapter can exercise it; vendored source
 alone is not sufficient.
 
+## Pi runtime pin alignment: 2026-11-11
+
+Pi example and smoke profiles follow `tools/pi/latest.json` at `1.5.0`, with
+the production Pi profile lock regenerated via `pnpm profiles:freeze`.
+Pi's message-scoped Anthropic effort keeps a fixed top-level `low` default;
+per-reply markers preserve the selected effort and its history. The real-binary
+PiAgent integration test checks both markers and ordinary relay requests.
+This is a runtime pin update, not a Headless release or live-model validation.
+
+## Runtime pin alignment: 2026-11-10
+
+Claude example and smoke profiles now follow Claude Code `2.1.321` (from
+`tools/claude/latest.json`), and the `cindy-production-claude` lock was
+regenerated with `pnpm profiles:freeze`. Pi and Codex pins are unchanged.
+
+## Runtime pin alignment: 2026-10-30
+
+Example and smoke profiles now follow Claude Code `2.1.312` and Pi `1.4.0`,
+with both production profile locks regenerated. Headless Codex continues to
+follow `tools/codex/latest.json` at `0.159.2`; Desktop's separate
+`tools/codex-package/latest.json` now pins `0.166.0`. This only updates runtime
+version pins, without a broader upstream capability sync or a new Headless release.
+The existing `src/production-profile-parity.test.ts` verifies version alignment
+and that the frozen production profiles load with their committed locks.
+
 ## Upstream integration audit: 2026-10-12
 
 PR #4750 is synchronized with `fa3fc88d37d205ea993a67d85612fa9a5436fae5`
@@ -48,6 +73,15 @@ binary checks run through `package:release`; no live model benchmark is implied.
 
 ## Available in Headless
 
+The host prompt now owns user-facing plan guidance for all three harnesses;
+the Claude/Codex supplement files are empty. Pi's frozen prompt includes the
+shared plan guidance and its MCP gateway instructions. All three frozen prompts
+and their profile digests remove commit attribution and application-update
+procedures: attribution belongs to the GitHub plugin's PR Skill, and update
+instructions belong to Desktop tool discovery and receipts. This focused prompt
+sync does not add Desktop settings tools to Headless or advance the broader
+upstream baseline.
+
 | Cindy capability | Claude Code | Codex | Pi | Headless evidence |
 |---|---:|---:|---:|---|
 | Multi-turn Maker session | Yes | Yes | Yes | `run --turns-file`, structured terminal events |
@@ -69,8 +103,8 @@ binary checks run through `package:release`; no live model benchmark is implied.
 
 Pi is connected through its native RPC and `models.json` compatibility layer.
 Headless does not translate Pi traffic through Claude Code. The bundled Pi
-version is `0.85.1`; its complete runtime directory is required because the
-standalone executable depends on sibling themes and native assets.
+version follows `tools/pi/latest.json`; its complete runtime directory is required
+because the standalone executable depends on sibling themes and native assets.
 
 ## Present in Maker Core but not exposed by the Headless CLI
 

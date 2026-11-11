@@ -17,8 +17,8 @@ import { describe, expect, it } from 'vitest';
  * 是另一语义,不受本守卫约束。
  */
 describe('mobile message text selection highlight', () => {
-  it('never overrides the platform selection highlight in the message renderer', async () => {
-    const source = await readFile(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
+  it.each(['MessageRenderer.tsx', 'MarkdownSelectableText.tsx'])('never overrides the platform selection highlight in %s', async (file) => {
+    const source = await readFile(resolve(process.cwd(), 'src/session', file), 'utf8');
 
     expect(source).not.toMatch(/selectionColor=/);
   });

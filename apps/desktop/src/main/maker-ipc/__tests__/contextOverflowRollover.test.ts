@@ -55,6 +55,10 @@ describe('isContextOverflowErrorData', () => {
   });
 
   it('treats Codex remote compact encrypted-content 400 as rebuildable', () => {
+    expect(isContextOverflowErrorData({
+      reason: 'remote-compact-encrypted-content',
+      message: 'Error running remote compact task',
+    })).toBe(true);
     expect(
       isContextOverflowErrorData({
         message:
@@ -605,6 +609,48 @@ describe('createContextOverflowRollover', () => {
     expect(assertCurrent).toHaveBeenCalledTimes(2);
   });
 
+  // Unit: disabling an account carries ordinary task context, including completed
+  // tools, without replay; earlier recovery coverage only allowed Bot restart or a route change.
+  it.each(['native-a', null])('retains ordinary task history for an account switch with native id %s', async sdkSessionId => {
+    const deps = makeDeps([
+      msg('user', 'continue building the game', 'u1'),
+      { ...msg('tool_result', { fullText: 'Saved zombie model successfully' }, 'r1'), toolUseId: 'save-1' },
+      msg('assistant', 'Next: verify the scene', 'a1'),
+    ]);
+    deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'desktop', sdkSessionId });
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn());
+    const handoff = deps.setPendingHandoff.mock.calls[0]![1];
+    expect(handoff).toContain('continue building the game');
+    expect(handoff).toContain('Saved zombie model successfully');
+    expect(handoff).toContain('Next: verify the scene');
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.any(String),
+      expect.not.objectContaining({ replacementRoute: expect.anything() }), expect.any(AbortSignal));
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  // Regression #9964: an idle root turn can still own background builds/tests.
+  // Earlier recovery tests only covered foreground work; closing here kills that work.
+  it.each(['retain-route', { model: 'new-model', providerId: 'openai', effort: null, fastMode: false }] as const)(
+    'does not close background work during native recovery (%j)', async target => {
+      const deps = makeDeps([msg('user', 'keep the build running', 'u1')]);
+      deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false, listBackgroundTasks: () => [{}] });
+      await expect(createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', target, vi.fn()))
+        .rejects.toThrow('running');
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+      expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    });
+
+  it('does not commit an account handoff after the user stops recovery', async () => {
+    const deps = makeDeps([msg('user', 'keep this context', 'u1')]);
+    const recovery = createContextOverflowRollover(deps);
+    deps.closeSession.mockImplementationOnce(async () => { recovery.cancelRecovery('s1'); });
+    await expect(recovery.prepareNativeSessionRecovery('s1', 'retain-route', vi.fn())).rejects.toThrow();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
   it('keeps the original native binding when the recorded conversation cannot be loaded', async () => {
     const deps = makeDeps([]);
     deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), contextTokens: 1200 });
@@ -634,7 +680,15 @@ describe('createContextOverflowRollover', () => {
   it.each(['cc', 'pi'] as const)(
     'rebuilds %s native context before a pressured 500K → 272K model switch',
     async (agentKind) => {
+      // #9973, unit: exercise the real smaller-window entry with an early long
+      // request; the former two short rows never exercised lossy early history.
+      const initial = `${'background '.repeat(25)}Keep the production database read-only.${'context '.repeat(25)}`;
       const deps = makeDeps([
+        msg('user', initial, 'initial', 0),
+        ...Array.from({ length: 3 }, (_, i) => [
+          msg('user', `Progress ${i}`, `early-u${i}`, i + 1),
+          msg('assistant', 'Checking', `early-a${i}`, i + 1),
+        ]).flat(),
         msg('user', '先做 A', 'u1', 1),
         msg('assistant', '做完 A', 'a1', 2),
       ]);
@@ -672,6 +726,7 @@ describe('createContextOverflowRollover', () => {
       );
       const commitCalls = deps.commitRebuild.mock.calls as unknown as Array<[string, string]>;
       const handoff = String(commitCalls[0]?.[1] ?? '');
+      expect(handoff).toContain(initial);
       expect(handoff).toContain('switching to a model with a smaller context window');
       expect(handoff).not.toContain("exceeded the model's context window");
       expect(deps.setPendingHandoff).toHaveBeenCalled();
@@ -1180,6 +1235,17 @@ describe('createContextOverflowRollover', () => {
       return deps;
     }
 
+    it('does not stack legacy rebuild or learning on a native cache recovery decision', async () => {
+      const deps = makePiDeps([msg('user', 'Reply OK', 'u1', 1)]);
+      const rollover = createContextOverflowRollover(deps);
+      rollover.claim('s1');
+      expect(await rollover.tryRecover('s1', { ...receipt, reason: 'unsupported-request-option', message: rejection,
+        piCacheRecoveryHandled: true })).toBe(false);
+      expect(deps.recordPiNativeCompatOverride).not.toHaveBeenCalled();
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    });
+
     it.each([
       rejection,
       ...['prompt_cache_key', 'prompt_cache_retention'].map(field => '400: ' + JSON.stringify({
@@ -1653,6 +1719,41 @@ describe('createContextOverflowRollover', () => {
     ).resolves.toBe(false);
     expect(deps.commitRebuild).not.toHaveBeenCalled();
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  // Regression: the empty model-switch divider used to count as a side effect.
+  // Exercise the recovery entry point: only metadata may be ignored, never output.
+  it.each([
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra', modelOnly: true } }, true],
+    ['Already sent the approval.', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra', modelOnly: true } }, false],
+    ['', null, false],
+    ['', { modelChange: {} }, false],
+    ['', { modelChange: { toModel: 'gpt-6-astra', modelOnly: true } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', modelOnly: true } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra' } }, false],
+    ['', { modelChange: { fromModel: 1, toModel: 'gpt-6-astra', modelOnly: true } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: null, modelOnly: true } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra', modelOnly: false } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra', modelOnly: 1 } }, false],
+    ['', { modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra', modelOnly: 'true' } }, false],
+    ['', { modelChange: [] }, false],
+  ])('recovers remote compact failure only for a pure model marker (%j)', async (content, agentMeta, expected) => {
+    const deps = makeDeps([
+      msg('user', 'Continue the pending work', 'u1'),
+      { ...msg('assistant', content, 'm1'), agentMeta },
+    ]);
+    const rollover = createContextOverflowRollover(deps);
+    rollover.claim('s1');
+    await expect(rollover.tryRecover('s1', {
+      message: 'Error running remote compact task: invalid_encrypted_content',
+    })).resolves.toBe(expected);
+    if (expected) {
+      expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.any(String), expect.objectContaining({ sourceUserClientId: 'u1' }), expect.anything());
+      expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', 'Continue the pending work', undefined, expect.anything());
+    } else {
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+      expect(deps.replayUserMessage).not.toHaveBeenCalled();
+    }
   });
 
   it('rebuilds before send when the trailing error is a Codex remote compact encrypted-content 400', async () => {

@@ -7,6 +7,7 @@ import {
   isAccountUsageLimitError,
   type UsageLimitAutoResumeDeps,
 } from '../usageLimitAutoResume';
+import { readTurnUsageResetAt } from '../../goal-host/usageLimit';
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue';
 
 const NOW = 1_000_000;
@@ -73,6 +74,37 @@ describe('isAccountUsageLimitError', () => {
 });
 
 describe('UsageLimitAutoResume', () => {
+  // Unit regression: real classifier + reset parser + timer. Earlier cases supplied
+  // sdkError; text-only Claude limits never armed automatic continuation.
+  it('schedules and continues a text-only five-hour limit at the stated reset time', async () => {
+    const now = Date.parse('2026-11-11T10:00:00Z');
+    const resumeAt = Date.parse('2026-11-11T13:30:00Z') + USAGE_LIMIT_RESUME_BUFFER_MS;
+    const h = harness({ now: () => now, resolveResetAt: async (_id, signals) => readTurnUsageResetAt(signals, now) });
+    expect(await h.guard.onTurnError('five-hour', {
+      message: "You've hit your 5-hour limit · resets 2:30am (Pacific/Auckland)",
+    })).toBe(true);
+    expect(h.deps.arm).toHaveBeenCalledWith('five-hour', 1, resumeAt);
+    expect(h.timers.at(-1)?.delayMs).toBe(resumeAt - now);
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+  });
+
+  // Unit: real quota classifier + timer callback, using the Fable SDK envelope.
+  // No wall-clock wait or model request; normal errors previously used generic text.
+  it('waits for the structured Fable deadline and continues once when its timer fires', async () => {
+    const h = harness({ resolveResetAt: async (_id, signals) => readTurnUsageResetAt(signals, NOW) });
+    await h.guard.onTurnError('fable', {
+      sdkError: 'rate_limit', usageResetAt: RESET_AT,
+      message: "You've reached your Fable limit. Switch to another model to continue.",
+    });
+    expect(h.deps.arm).toHaveBeenCalledWith('fable', 1, RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS);
+    expect(h.deps.continueSession).not.toHaveBeenCalled();
+    expect(h.timers.at(-1)?.delayMs).toBe(RESET_AT - NOW + USAGE_LIMIT_RESUME_BUFFER_MS);
+    await h.fireLast();
+    expect(h.deps.continueSession).toHaveBeenCalledOnce();
+  });
+
   it('restores the saved deadline and attempt budget; overdue startup waits buffer once', async () => {
     const h = harness();
     expect(h.guard.restore('restarted', 42, RESET_AT, 2)).toBe(true);

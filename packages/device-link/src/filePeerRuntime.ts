@@ -1,8 +1,10 @@
 /// <reference lib="dom" />
 
+export type FilePeerCloseReason = "failed" | "closed" | "disconnect-timeout";
+
 export interface FilePeerRuntimeBridge {
   /** Local lifecycle event, never a wire message. */
-  closed?(connection: string): void;
+  closed?(connection: string, reason?: FilePeerCloseReason): void;
   read(connection: string, ticket: string, offset: number): Promise<string>;
   write(sink: string, offset: number, base64: string): Promise<void>;
   /** Local bridge capability only; coalesces already-arrived frames up to 256 KiB. */
@@ -53,6 +55,7 @@ interface PeerState {
   busy: boolean;
   recv?: ReceiveProgress;
   send?: SendProgress;
+  disconnectTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -267,15 +270,19 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
       },
     });
   }
-  function close(id: string) {
+  function close(id: string, reason?: FilePeerCloseReason) {
     const rpc = rpcPeers.get(id);
     rpcPeers.delete(id);
     rpc?.close();
     const p = peers.get(id);
     peers.delete(id);
+    clearTimeout(p?.disconnectTimer);
     p?.dc?.close();
     p?.pc.close();
-    if (p) bridge.closed?.(id);
+    if (p) {
+      if (reason) bridge.closed?.(id, reason);
+      else bridge.closed?.(id);
+    }
   }
   function create(id: string, servers: RTCIceServer[]) {
     if (peers.has(id) || peers.size >= 4) throw new Error("FILE_PEER_BUSY");
@@ -283,8 +290,20 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
     const p: PeerState = { pc, dc: null, busy: false };
     peers.set(id, p);
     pc.onconnectionstatechange = () => {
-      if (peers.get(id) === p && ["failed", "closed", "disconnected"].includes(pc.connectionState))
-        close(id);
+      if (peers.get(id) !== p) return;
+      if (pc.connectionState === "disconnected") {
+        // ICE can recover without replacing the established direct path. Bound
+        // this grace by the existing command/stall budget; repeated events do
+        // not extend it, and terminal failure/explicit cancellation still close.
+        p.disconnectTimer ??= setTimeout(() => {
+          if (peers.get(id) === p) close(id, "disconnect-timeout");
+        }, 15000);
+      } else if (pc.connectionState === "connected" || pc.connectionState === "failed" || pc.connectionState === "closed") {
+        clearTimeout(p.disconnectTimer);
+        p.disconnectTimer = undefined;
+        if (pc.connectionState === "failed" || pc.connectionState === "closed")
+          close(id, pc.connectionState);
+      }
     };
     return p;
   }
@@ -800,7 +819,20 @@ export function createFilePeerRuntime(bridge: FilePeerRuntimeBridge) {
       const now = Date.now();
       const recv = p.recv;
       const send = p.send;
+      // Bounded check outcomes, without candidate IDs, addresses or credentials.
+      const checks = [...entries.values()]
+        .filter((entry) => entry.type === "candidate-pair")
+        .slice(0, 8)
+        .map((entry) => ({
+          ...pick(entry, ["state", "requestsSent", "responsesReceived"]),
+          local: pick(entries.get(entry.localCandidateId), ["candidateType", "protocol"]),
+          remote: pick(entries.get(entry.remoteCandidateId), ["candidateType", "protocol"]),
+          selected: entry === selected,
+        }));
       return JSON.stringify({
+        connectionState: p.pc.connectionState,
+        iceConnectionState: p.pc.iceConnectionState,
+        checks,
         path: !selected
           ? "unknown"
           : local?.candidateType === "relay" ||

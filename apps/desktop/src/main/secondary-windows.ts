@@ -1,3 +1,5 @@
+import { applyMacWindowBackdrop } from './macosDesktopBlur';
+import { setWindowsWindowDarkMode } from './windowsWindowDarkMode';
 /**
  * secondary-windows —— 「在新窗口打开」会话多开功能的主进程侧。
  *
@@ -28,15 +30,16 @@ import {
   type ScreenPoint,
 } from './windowBounds.js';
 import { readWindowBehaviorSettings } from './window-behavior-settings-store.js';
-import { resolveVibrancyConfig } from './vibrancyConfig.js';
+import { resolveVibrancyConfig, resolveWindowVibrancyConfig } from './vibrancyConfig.js';
 import {
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop.js';
 import type { WindowsBackdropMaterial } from './vibrancyConfig.js';
 import { installSelectionContextMenu } from './selection-context-menu.js';
-import { applyAppearanceToWindow } from './appearance-settings-ipc.js';
+import { applyAppearanceToWindow, installWindowZoomRestoration } from './appearance-settings-ipc.js';
 import { installWindowFullscreenStateBroadcast } from './mainWindowFullscreenStartup.js';
+import { installWindowsTransparentTitleBar } from './windowsTransparentTitleBar.js';
 import { resolveAppThemeIsDark } from './resolved-app-theme.js';
 import { readWindowThemeSnapshot } from './window-theme-mode-store.js';
 
@@ -152,6 +155,7 @@ export function openSessionInNewWindow(
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
+    transparent: true,
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
           backgroundMaterial: winBackdropConfig.backgroundMaterial,
@@ -172,11 +176,16 @@ export function openSessionInNewWindow(
     },
   });
   markAppContentWindow(win);
+  installWindowsTransparentTitleBar(win);
   applyAppearanceToWindow(win);
   win.webContents.on('did-finish-load', () => {
     if (win.isDestroyed()) return;
     applyAppearanceToWindow(win);
   });
+  // 副窗先落在 /cc-agent/boot 网关路由，再由 renderer 导航到 canonical route
+  // （后续选择任务也可能再次 hash 导航）。这些页面内导航不触发 did-finish-load，
+  // 需要单独恢复已保存的缩放，否则 Chromium 会沿用该 URL 的旧 zoom 记录。
+  installWindowZoomRestoration(win);
   installNewMakerWindowShortcut(win);
   installSelectionContextMenu(win);
   installWindowFullscreenStateBroadcast(win, {
@@ -278,10 +287,8 @@ export function isSecondaryAppWindow(win: BrowserWindow | null | undefined): boo
 export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolean): void {
   for (const win of secondaryWindows) {
     if (win.isDestroyed()) continue;
-    const config = resolveVibrancyConfig(familyId, isDark, process.platform);
-    if (process.platform === 'darwin') {
-      win.setVibrancy(config.vibrancy as 'under-window' | null);
-    }
+    const config = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
+
     // Windows 11:副窗口与主窗口一致地应用 acrylic/mica 材质;切回非 CINDY family 时
     // config.backgroundMaterial 为 'none',显式复位,避免会话副窗口残留上一次的毛玻璃材质。
     if (process.platform === 'win32' && config.backgroundMaterial) {
@@ -296,6 +303,8 @@ export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolea
         );
       }
     }
-    win.setBackgroundColor(config.backgroundColor);
+    setWindowsWindowDarkMode(win, isDark);
+    if (process.platform === 'darwin') applyMacWindowBackdrop(win, config);
+    else win.setBackgroundColor(config.backgroundColor);
   }
 }

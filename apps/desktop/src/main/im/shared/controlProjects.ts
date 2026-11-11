@@ -75,6 +75,7 @@ export async function listProjectsForControl(): Promise<ControlProject[]> {
       id: sessions.id,
       title: sessions.title,
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       userSendAt: sessions.userSendAt,
       updatedAt: sessions.updatedAt,
     })
@@ -95,7 +96,7 @@ export async function listProjectsForControl(): Promise<ControlProject[]> {
   for (const r of rows) {
     // 新建页里还没发送的任务不出现在渠道的项目 / 任务列表里。
     if (isProvisionalSession(r.id)) continue;
-    const dir = normalizeWorkingDir(r.workingDir);
+    const dir = normalizeWorkingDir(r.projectDir ?? r.workingDir);
     if (!dir) continue;
     const t = r.userSendAt ?? r.updatedAt;
     if (!latestByDir.has(dir) || t > (latestByDir.get(dir) ?? 0)) {
@@ -181,6 +182,7 @@ export async function listRecentSessionsForPicker(
       id: sessions.id,
       title: sessions.title,
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       userSendAt: sessions.userSendAt,
       updatedAt: sessions.updatedAt,
     })
@@ -200,7 +202,7 @@ export async function listRecentSessionsForPicker(
   for (const r of rows) {
     // 新建页里还没发送的任务不出现在渠道的项目 / 任务列表里。
     if (isProvisionalSession(r.id)) continue;
-    const dir = normalizeWorkingDir(r.workingDir);
+    const dir = normalizeWorkingDir(r.projectDir ?? r.workingDir);
     if (!dir) continue;
     const base = dir.split('/').filter(Boolean).pop() ?? '';
     out.push({
@@ -226,6 +228,7 @@ export async function listSessionsForWorkspace(
       id: sessions.id,
       title: sessions.title,
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       userSendAt: sessions.userSendAt,
       updatedAt: sessions.updatedAt,
     })
@@ -244,7 +247,7 @@ export async function listSessionsForWorkspace(
   for (const r of rows) {
     // 新建页里还没发送的任务不出现在渠道的项目 / 任务列表里。
     if (isProvisionalSession(r.id)) continue;
-    if (normalizeWorkingDir(r.workingDir) !== target) continue;
+    if (normalizeWorkingDir(r.projectDir ?? r.workingDir) !== target) continue;
     out.push({
       id: r.id,
       title: r.title,
