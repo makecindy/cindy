@@ -63,6 +63,7 @@ interface OwnerRuntime {
   cache: Map<string, AccountSnapshot>;
   flights: Map<string, Promise<AccountSnapshot>>;
   running: Map<string, Set<string>>;
+  waiting: Map<string, Set<string>>;
   lastPicked: Map<SubscriptionProvider, string>;
   logins: Map<string, { abort: AbortController; accountId: string }>;
   invalidated: Map<string, { token: string; reason: string }>;
@@ -95,6 +96,7 @@ function currentRuntime(): OwnerRuntime {
       cache: new Map(),
       flights: new Map(),
       running: new Map(),
+      waiting: new Map(),
       lastPicked: new Map(),
       logins: new Map(),
       invalidated: new Map(),
@@ -103,6 +105,10 @@ function currentRuntime(): OwnerRuntime {
   return runtime;
 }
 const keyOf = (provider: SubscriptionProvider, id: string) => `${provider}:${id}`;
+function accountInUse(state: OwnerRuntime, provider: SubscriptionProvider, id: string): boolean {
+  const key = keyOf(provider, id);
+  return !!(state.running.get(key)?.size || state.waiting.get(key)?.size);
+}
 function legacyCodexDefault(provider: SubscriptionProvider): boolean {
   if (provider !== 'openai') return false;
   const pool = readPool(provider);
@@ -480,6 +486,7 @@ export async function readSubscriptionPool(
                   ? ('limited' as const)
                   : ('ready' as const),
         running: state.running.get(keyOf(provider, account.id))?.size ?? 0,
+        waiting: state.waiting.get(keyOf(provider, account.id))?.size ?? 0,
         ...(!pool.disconnected && info.auth.authenticated ? accountUsage(info.usage) : {}),
       };
     }),
@@ -495,6 +502,7 @@ export async function readSubscriptionPool(
 
 export interface SubscriptionAccountActivity {
   running(active: boolean): void;
+  waiting(active: boolean): void;
   release(): void;
 }
 export interface SubscriptionAccountLease extends SubscriptionAccountActivity {
@@ -511,20 +519,26 @@ function accountActivity(
   const token = randomUUID();
   const key = keyOf(provider, accountId);
   const active = state.running.get(key) ?? new Set<string>();
+  const waiting = state.waiting.get(key) ?? new Set<string>();
   state.running.set(key, active);
+  state.waiting.set(key, waiting);
   let released = false;
+  const update = (tokens: Set<string>, value: boolean) => {
+    const wasActive = tokens.has(token);
+    if (!released) {
+      if (value) tokens.add(token);
+      else tokens.delete(token);
+    }
+    if (wasActive !== tokens.has(token)) changed(provider);
+  };
   return {
-    running: (value) => {
-      const wasActive = active.has(token);
-      if (!released) {
-        if (value) active.add(token);
-        else active.delete(token);
-      }
-      if (wasActive !== active.has(token)) changed(provider);
-    },
+    running: (value) => update(active, value),
+    waiting: (value) => update(waiting, value),
     release: () => {
       released = true;
-      if (active.delete(token)) changed(provider);
+      const wasRunning = active.delete(token);
+      const wasWaiting = waiting.delete(token);
+      if (wasRunning || wasWaiting) changed(provider);
     },
   };
 }
@@ -688,7 +702,7 @@ export async function runSubscriptionAccountCommand(
   } else if (command.action === 'remove') {
     if (command.accountId === 'default')
       throw new Error('The default CLI account cannot be removed');
-    if (state.running.get(keyOf(provider, command.accountId))?.size)
+    if (accountInUse(state, provider, command.accountId))
       throw new Error('Account is in use');
     if ([...state.logins.values()].some((login) => login.accountId === command.accountId))
       throw new Error('login_in_progress');
@@ -714,7 +728,7 @@ export async function runSubscriptionAccountCommand(
     // Native browser logins may share a callback port. Reserve before the first await.
     if ([...state.logins.keys()].some((key) => key.startsWith(provider + ':')))
       throw new Error('login_in_progress');
-    if (state.running.get(keyOf(provider, accountId))?.size) throw new Error('Account is in use');
+    if (accountInUse(state, provider, accountId)) throw new Error('Account is in use');
     const abort = new AbortController();
     const key = `${provider}:${command.loginKey}`;
     state.logins.set(key, { abort, accountId });
@@ -738,7 +752,7 @@ export async function runSubscriptionAccountCommand(
           accountId = 'default';
         }
         state.logins.set(key, { abort, accountId });
-        if (state.running.get(keyOf(provider, accountId))?.size)
+        if (accountInUse(state, provider, accountId))
           throw new Error('Account is in use');
       }
       if (adding) {

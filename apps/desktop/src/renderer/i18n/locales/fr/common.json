@@ -20027,6 +20027,7 @@
     "lineNumbers": "Numéros de ligne"
   },
   "subscriptionAccounts": {
+    "waitingCount": "En attente des résultats en arrière-plan : {{count}}",
     "unassigned": "Compte non attribué",
     "providerManagedAuth": "Le fournisseur actuel de Codex ne permet pas de consulter le compte ChatGPT. Lors de l’ajout du fournisseur, choisissez « $t(subscriptionAccounts.signIn.anotherAccount) » pour utiliser un dossier séparé.",
     "signIn": {

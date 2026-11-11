@@ -19840,6 +19840,7 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "waitingCount": "Warten auf Hintergrund-Ergebnisse: {{count}}",
     "unassigned": "Konto nicht zugewiesen",
     "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",
     "signIn": {

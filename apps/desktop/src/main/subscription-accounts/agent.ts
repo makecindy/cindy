@@ -41,17 +41,34 @@ function wrapHandle(
   lease?: SubscriptionAccountLease,
 ): AgentSessionHandle {
   let cleanupPending = false;
+  let running = false;
+  const syncActivity = () => {
+    // Count the parent task once, including the gap before its automatic continuation.
+    // Long-lived services alone do not mean Claude is waiting for work to finish.
+    const waiting = !running && (
+      (handle.listBackgroundTasks?.() ?? []).some(task => task.backgroundCommandKind !== 'service') ||
+      (handle.countPendingWakeContinuations?.() ?? 0) > 0
+    );
+    activity.running(running);
+    activity.waiting(waiting);
+  };
+  const unsubscribe = handle.onTurnContinuationChange?.(syncActivity);
+  syncActivity();
   return new Proxy(handle, {
     get(target, property) {
       if (property === 'send')
         return async (...args: Parameters<AgentSessionHandle['send']>) => {
           if (cleanupPending) throw new Error('Subscription account runtime is closing');
           lease?.account.assertCurrent();
-          activity.running(true);
+          running = true;
+          syncActivity();
           try {
             return await target.send(...args);
           } catch (error) {
-            if (!cleanupPending) activity.running(false);
+            if (!cleanupPending) {
+              running = false;
+              syncActivity();
+            }
             throw error;
           }
         };
@@ -62,23 +79,33 @@ function wrapHandle(
               // Closing the event queue is not proof that the process stopped.
               // Keep credentials protected through pending/failed close and any late events.
               cleanupPending = true;
-              activity.running(true);
+              running = true;
+              syncActivity();
               const result = await method.apply(target, args);
+              unsubscribe?.();
               unregister();
               activity.release();
               return result;
             }
           : undefined;
       }
+      if (property === 'stopBackgroundTask' && target.stopBackgroundTask)
+        return async (...args: Parameters<NonNullable<AgentSessionHandle['stopBackgroundTask']>>) => {
+          const result = await target.stopBackgroundTask!(...args);
+          syncActivity();
+          return result;
+        };
       if (property === 'events')
         return async function* () {
           for await (const event of target.events()) {
             if (lease && event.type === 'account_usage')
               observeSubscriptionAccountUsage(lease.account, event.data);
             if (lease && event.type === 'session_id') await lease.bind([`native:${target.id}`]);
-            if (isTerminalTurnEvent(event) && !cleanupPending) activity.running(false);
-            if (event.type === 'status' && (event.data as { isRunning?: boolean })?.isRunning)
-              activity.running(true);
+            if (event.turnScope !== 'background' && isTerminalTurnEvent(event) && !cleanupPending) running = false;
+            if (event.turnScope !== 'background' && event.type === 'status' &&
+                (event.data as { isRunning?: boolean })?.isRunning) running = true;
+            if (isTerminalTurnEvent(event) || event.type === 'status' || event.type === 'agent_task_update')
+              syncActivity();
             yield lease && event.type === 'account_usage'
               ? {
                   ...event,

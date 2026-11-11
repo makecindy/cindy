@@ -274,19 +274,22 @@ export function SubscriptionAccountsSection({
                   locale,
                 );
                 // As in provider groups, a usable account reports its load; other states add it.
-                const running = t('providerGroup.member.runningCount', { count: account.running });
+                const load = [
+                  account.running > 0 && t('providerGroup.member.runningCount', { count: account.running }),
+                  (account.waiting ?? 0) > 0 && t('subscriptionAccounts.waitingCount', { count: account.waiting }),
+                ].filter(Boolean).join(' · ');
                 const state = account.paused
                   ? t('providerGroup.member.status.paused')
                   : account.status === 'ready'
-                    ? account.running > 0
-                      ? running
+                    ? load
+                      ? load
                       : t('providerGroup.member.status.idle')
                     : t(
                         `subscriptionAccounts.${account.status === 'signed-out' ? 'signedOut' : account.status}`,
                       );
                 const status =
-                  account.running > 0 && (account.paused || account.status !== 'ready')
-                    ? `${state} · ${running}`
+                  load && (account.paused || account.status !== 'ready')
+                    ? `${state} · ${load}`
                     : state;
                 const usageNode =
                   account.id === 'default' && defaultUsage ? (
@@ -340,7 +343,7 @@ export function SubscriptionAccountsSection({
                                   : statusDot[account.status],
                               }}
                             />
-                            <span title={status} className="min-w-0 truncate">
+                            <span className="min-w-0 break-words">
                               {status}
                             </span>
                           </div>
@@ -423,7 +426,7 @@ export function SubscriptionAccountsSection({
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem
-                              disabled={busy || account.running > 0}
+                              disabled={busy || account.running > 0 || (account.waiting ?? 0) > 0}
                               onSelect={() =>
                                 void run({
                                   action: 'login',
@@ -453,7 +456,7 @@ export function SubscriptionAccountsSection({
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem
                                   variant="danger"
-                                  disabled={busy || account.running > 0}
+                                  disabled={busy || account.running > 0 || (account.waiting ?? 0) > 0}
                                   onSelect={() => {
                                     void confirm({
                                       title: t('subscriptionAccounts.removeTitle', { name }),

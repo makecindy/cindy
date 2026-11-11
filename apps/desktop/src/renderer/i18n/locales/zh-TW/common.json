@@ -19768,6 +19768,7 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "waitingCount": "{{count}} 個任務等待背景結果",
     "unassigned": "帳號待分配",
     "providerManagedAuth": "Codex 目前的供應商未提供 ChatGPT 帳號資訊。請在新增供應商時選擇「$t(subscriptionAccounts.signIn.anotherAccount)」，使用獨立目錄",
     "signIn": {

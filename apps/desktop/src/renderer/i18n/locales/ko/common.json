@@ -19768,6 +19768,7 @@
     "lineNumbers": "줄 번호"
   },
   "subscriptionAccounts": {
+    "waitingCount": "백그라운드 결과 대기: {{count}}",
     "unassigned": "계정 미배정",
     "providerManagedAuth": "현재 Codex 제공자에서는 ChatGPT 계정 정보를 확인할 수 없습니다. 제공자를 추가할 때 ‘$t(subscriptionAccounts.signIn.anotherAccount)’를 선택하면 별도 폴더를 사용할 수 있습니다.",
     "signIn": {

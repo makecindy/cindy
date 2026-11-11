@@ -19840,6 +19840,7 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "waitingCount": "Waiting for background results: {{count}}",
     "unassigned": "Account not assigned",
     "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {

@@ -12,6 +12,8 @@ import {
   type AgentSessionHandle,
   type StartSessionOptions,
   type ForkSdkSessionOptions,
+  type AgentEvent,
+  type BackgroundTaskSnapshot,
 } from '@cindy/maker-core';
 const h = vi.hoisted(() => ({
   owner: 'owner-a:1',
@@ -662,6 +664,88 @@ describe('native account assignment on the executing computer', () => {
     await handle.send({ type: 'user', content: 'late' });
     expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(0);
     await handle.close();
+  });
+  // Unit regression: foreground done previously made a task with background work
+  // look idle. Exercise the real wrapper/read/command entries across SDK wake gaps,
+  // two account identities, cancellation and old single-account installations.
+  it.each([false, true])('tracks background waiting independently of foreground load (pool=%s)', async (configured) => {
+    const accountId = configured ? 'second' : 'default';
+    if (!configured) h.pools = {};
+    else h.bindings.set('task:background-parent', { providerId: 'anthropic', accountId });
+    let tasks: BackgroundTaskSnapshot[] = [];
+    let pending = 0;
+    let continuationChanged: (() => void) | undefined;
+    const unsubscribe = vi.fn();
+    const events: AgentEvent[] = [];
+    const nativeHandle = {
+      id: 'background-native',
+      send: async () => {},
+      close: async () => {},
+      listBackgroundTasks: () => tasks,
+      countPendingWakeContinuations: () => pending,
+      onTurnContinuationChange: (listener: () => void) => {
+        continuationChanged = listener;
+        return unsubscribe;
+      },
+      stopBackgroundTask: async () => { tasks = []; },
+      events: async function* () { while (events.length) yield events.shift()!; },
+    } as unknown as AgentSessionHandle;
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: async () => nativeHandle } as unknown as BaseAgent);
+    const handle = await agent.startSession({ providerId: 'anthropic', sessionId: 'background-parent' } as StartSessionOptions);
+    const emit = async (event: AgentEvent) => {
+      events.push(event);
+      for await (const _ of handle.events()) { /* consume through the production wrapper */ }
+    };
+    const state = async () => (await readSubscriptionPool('anthropic')).accounts.find(a => a.id === accountId)!;
+    await handle.send({ type: 'user', content: 'run checks' });
+    tasks = [{ taskId: 'one' }, { taskId: 'two' }];
+    await emit({ type: 'agent_task_update', data: { taskId: 'two', status: 'running' } });
+    expect(await state()).toMatchObject({ running: 1, waiting: 0 });
+    await emit({ type: 'done', data: {}, turnScope: 'background' });
+    expect(await state()).toMatchObject({ running: 1, waiting: 0 });
+    await emit({ type: 'done', data: {} });
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    await expect(runSubscriptionAccountCommand({ action: 'login', providerId: 'anthropic', accountId, loginKey: 'waiting' })).rejects.toThrow('Account is in use');
+    if (configured) {
+      const pool = await readSubscriptionPool('anthropic');
+      expect(pool.accounts[0]).toMatchObject({ id: 'default', running: 0, waiting: 0 });
+      await expect(runSubscriptionAccountCommand({ action: 'remove', providerId: 'anthropic', accountId })).rejects.toThrow('Account is in use');
+      // A waiting task must not consume the account's sole foreground slot.
+      const next = await acquireSubscriptionAccount('anthropic', undefined, ['task:background-parent']);
+      expect(next!.account.configDir).toBe('anthropic/second');
+      expect(await state()).toMatchObject({ running: 1, waiting: 1 });
+      next!.release();
+    }
+    tasks = [];
+    pending = 1;
+    await emit({ type: 'agent_task_update', data: { taskId: 'two', status: 'completed' } });
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    await emit({ type: 'status', data: { isRunning: true }, turnScope: 'background' });
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    await emit({ type: 'status', data: { isRunning: true, providerInitiatedTurn: true } });
+    expect(await state()).toMatchObject({ running: 1, waiting: 0 });
+    pending = 0;
+    await emit({ type: 'done', data: {} });
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
+    tasks = [{ taskId: 'dev-server', backgroundCommandKind: 'service' }];
+    await emit({ type: 'agent_task_update', data: { taskId: 'dev-server', status: 'running' } });
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
+    tasks = [{ taskId: 'stoppable' }];
+    await emit({ type: 'agent_task_update', data: { taskId: 'stoppable', status: 'running' } });
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    await handle.stopBackgroundTask!('stoppable');
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
+    pending = 1;
+    continuationChanged!();
+    expect(await state()).toMatchObject({ running: 0, waiting: 1 });
+    pending = 0;
+    continuationChanged!();
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
+    tasks = [{ taskId: 'remaining' }];
+    await emit({ type: 'agent_task_update', data: { taskId: 'remaining', status: 'running' } });
+    await handle.close();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(await state()).toMatchObject({ running: 0, waiting: 0 });
   });
   it.each([['anthropic', 'api'], ['api', 'anthropic']])(
     'rebuilds the activity tracker when switching from %s to %s without a pool',

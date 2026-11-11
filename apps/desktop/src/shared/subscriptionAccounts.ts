@@ -50,6 +50,8 @@ export interface SubscriptionAccountView extends SubscriptionAccountConfig {
   /** Advisory diagnosis only; absent on older hosts. Never includes CLI output. */
   authIssue?: 'codex-provider-managed-auth';
   running: number;
+  /** Foreground idle, with background work or an automatic continuation pending; absent on older hosts. */
+  waiting?: number;
   usage?: SubscriptionAccountUsage;
 }
 export interface SubscriptionPoolView {
@@ -100,6 +102,7 @@ export function isUnusedDefaultAccount(account: SubscriptionAccountView): boolea
     account.id === 'default' &&
     account.status === 'signed-out' &&
     account.running === 0 &&
+    (account.waiting ?? 0) === 0 &&
     !account.identity
   );
 }
