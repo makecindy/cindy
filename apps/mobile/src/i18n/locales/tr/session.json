@@ -664,6 +664,8 @@
     "taskAlreadyCreated": "Görev zaten oluşturuldu"
   },
   "remoteError": {
+    "REMOTE_AGENT_GROUP_FULL": "Bu görevi çalıştırabilecek her hesap veya bilgisayar eşzamanlılık sınırına ulaştı. Çalışan bir görevin tamamlanmasını bekleyin veya sağlayıcı ayarlarından sınırı yükseltin.",
+    "SUBSCRIPTION_ACCOUNTS_FULL": "Bu görevi çalıştırabilecek her hesap veya bilgisayar eşzamanlılık sınırına ulaştı. Çalışan bir görevin tamamlanmasını bekleyin veya sağlayıcı ayarlarından sınırı yükseltin.",
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "Bu SSH görevi Harness değiştiremez. Geçerli Harness'ında bir model seçin veya ihtiyacınız olan Harness ile yeni bir SSH görevi oluşturun.",
     "MODEL_SELECTION_UNAVAILABLE": "Seçilen model artık sağlayıcısından kullanılamıyor. Ayarlar'dan bağlantıyı kontrol edin veya kullanılabilir başka bir model seçin.",
     "HARNESS_SWITCH_NOT_READY": "Harness değişimi hazır değil. Başka bir model seçin.",
