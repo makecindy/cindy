@@ -107,7 +107,7 @@ describe('provider weekly quota identity and windows', () => {
       <UnifiedModelRail items={[{ kind: 'provider', providerId }]} active={{ kind: 'all' }}
         providers={providers} providerLabel={() => 'Provider'} onSelect={() => {}} providerUsage={{ deviceId: null }} />
       <ModelPoolQuotaSummary providerId={providerId}/>
-      <ModelSourceDetails providerId={providerId} label="Provider" modelId={providerId === 'anthropic' ? 'claude-sonnet' : 'gpt-5.6'} />
+      <ModelSourceDetails providerId={providerId} label="Provider" modelId={providerId === 'anthropic' ? 'claude-sonnet' : 'chatgpt/gpt-5.6'} />
     </ModelSourceUsageProvider>);
     await act(async () => {});
     const button = screen.getByRole('button', {name:'Provider · providerGroup.member.accountCount'});
@@ -119,6 +119,8 @@ describe('provider weekly quota identity and windows', () => {
     expect(view.container.textContent).not.toContain('34% / 80%');
     expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('a@example.test');
     expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('b@example.test');
+    // Native pool bridges use the same account buckets as runtime admission.
+    expect(view.container.querySelector('[data-model-source-details]')?.getAttribute('title')).toContain('34%');
   });
   // #9711 / unit: rail and row must consume the same pool snapshot, not an
   // identity from B beside a weekly bar borrowed from paused default account A.

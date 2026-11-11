@@ -151,7 +151,9 @@ function ScopedModelPickerAccount({
                           })),
                         },
                 ] as const;
-              } catch {
+              } catch (error) {
+                if (String(error).includes("channel 'maker:subscription-accounts' not allowed remotely"))
+                  return [providerId, null] as const;
                 return [providerId, UNASSIGNED] as const;
               }
             })();

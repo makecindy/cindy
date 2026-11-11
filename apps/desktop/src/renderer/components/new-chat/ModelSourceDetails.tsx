@@ -195,13 +195,14 @@ function modelSourceQuota(
     };
   if (usage.source === 'codex') {
     const data = usage.codex;
-    // ChatGPT bridge and Codex CLI consume different slots; never cross-fallback.
-    const bucket = modelId.startsWith(CHATGPT_MODEL_PREFIX)
+    // Mirror codexAccountUsageLimit: native pool bridges consume app-server
+    // buckets; legacy web bridges keep their independent WHAM slot.
+    const bucket = modelId.startsWith(CHATGPT_MODEL_PREFIX) && !data?.nativeAccountPool
       ? data?.web
-      : matchCodexBucketForModel(data?.buckets, modelId, nowMs);
+      : matchCodexBucketForModel(data?.buckets, data?.nativeAccountPool ? modelId.replace(/^chatgpt\//, '') : modelId, nowMs);
     return {
       plan: formatCodexPlanLabel(
-        modelId.startsWith(CHATGPT_MODEL_PREFIX)
+        modelId.startsWith(CHATGPT_MODEL_PREFIX) && !data?.nativeAccountPool
           ? bucket?.planType
           : (bucket?.planType ?? data?.planType),
       ),
@@ -261,6 +262,7 @@ export function ModelSourceDetails({
           buckets: poolCodexBuckets(account.usage),
           planType: account.plan ?? null,
           web: null,
+          nativeAccountPool: true,
         },
         claude: account.usage?.claude ?? null,
         xai: null,

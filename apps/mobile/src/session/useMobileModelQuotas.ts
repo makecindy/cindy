@@ -6,6 +6,7 @@ import type { MobileCodexRateLimitsResult } from "@cindy/maker-shared/device-lin
 import {
   selectableSubscriptionAccount,
   subscriptionQuotaAccounts,
+  subscriptionQuotaOverview,
 } from "@cindy/maker-shared/subscription-selection";
 import { isProviderShareAgentDeviceId } from "./providerShareAgentDevice";
 import {
@@ -50,6 +51,7 @@ function quotaTimeKey(values: QuotaValues, now: number): string {
       quota && [
         quota.remaining,
         quota.resetsAt,
+        subscriptionQuotaOverview([quota], now).reset,
         quota.resetsAt === null
           ? null
           : quotaCountdown(quota.resetsAt, now, undefined, quota.windowMinutes),
@@ -170,7 +172,6 @@ export function useMobileModelQuotas(
               ((id === "anthropic" && source === "claude") ||
                 (id === "openai" && source === "codex"))
             ) {
-              values[key] = { source, raw: null, accountIdentity: null };
               const pool = await invoke<PickerPool>(
                 sourceDeviceId,
                 "maker:subscription-accounts",
@@ -181,18 +182,22 @@ export function useMobileModelQuotas(
                     ...(sourceTaskId ? { taskId: sourceTaskId } : {}),
                   },
                 ],
-              );
-              if (
+              ).catch((error: unknown) => {
+                // Only an old host's exact missing-channel response permits legacy reads.
+                if (String(error).includes("channel 'maker:subscription-accounts' not allowed remotely")) return undefined;
+                throw error;
+              });
+              if (pool && (
                 pool?.providerId !== id ||
                 typeof pool.configured !== "boolean" ||
                 !Array.isArray(pool.accounts)
-              )
+              ))
                 return;
-              const account = selectableSubscriptionAccount(
+              const account = pool ? selectableSubscriptionAccount(
                 pool,
                 !!sourceTaskId,
-              );
-              if (account !== undefined) {
+              ) : undefined;
+              if (pool && account !== undefined) {
                 const accountValue = (member: typeof account): QuotaValue => {
                   const buckets = member?.usage?.codex?.buckets;
                   return {

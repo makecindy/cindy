@@ -80,6 +80,8 @@ export interface CodexQuotaView {
   planType: string | null;
   /** WHAM (openai-web) slot consumed by chatgpt/ bridge models. */
   web: RateLimitSnapshot | null;
+  /** Native pool bridges consume the selected account's app-server buckets. */
+  nativeAccountPool?: boolean;
 }
 
 /** Unknown percentages stay unknown; do not turn absent quota into a zero. */
@@ -215,7 +217,7 @@ export function useProviderUsageSnapshots(
       source !== 'codex'
         ? null
         : pickerAccount
-          ? { buckets: poolCodexBuckets(pickerAccount.usage), planType: pickerAccount.plan ?? null, web: null }
+          ? { buckets: poolCodexBuckets(pickerAccount.usage), planType: pickerAccount.plan ?? null, web: null, nativeAccountPool: true }
           : local ? localCodexQuotaView(localCodex, localWeb) : remoteCodexQuotaView(remoteCodex),
     [source, local, localCodex, localWeb, remoteCodex, pickerAccount],
   );

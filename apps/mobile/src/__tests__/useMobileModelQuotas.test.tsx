@@ -204,3 +204,39 @@ it('keeps separate pool quotas, excludes paused accounts, and expires each windo
   await advance(16000);
   expect(view.quotas.openai.members?.map(member => member.remaining)).toEqual([undefined, undefined]);
 });
+
+// PR #9891 review / unit: successful data must survive a transient poll error;
+// prior tests only rejected after the pool was already empty.
+it("retains the last successful quota after a transient pool read failure", async () => {
+  await mount();
+  h.invoke.mockRejectedValue(new Error("timeout"));
+  await advance(30000);
+  expect(view.quotas.openai.accountIdentity).toBe("b@example.test");
+  expect(view.quotas.openai.remaining).toBe(80);
+});
+
+// Old-host missing channel may degrade, while a permission/transport error may not.
+it.each([true, false])("uses legacy quota only for an explicitly absent pool channel (%s)", async (unsupported) => {
+  h.invoke.mockImplementation(async (_device: string, channel: string) => {
+    if (channel === "maker:subscription-accounts") throw new Error(unsupported
+      ? "[CHANNEL_NOT_ALLOWED] channel 'maker:subscription-accounts' not allowed remotely"
+      : "[FORBIDDEN] access denied");
+    return { account: { planType: "pro" }, rateLimits: { secondary: window(86400) } };
+  });
+  await mount();
+  expect(view.quotas.openai.remaining).toBe(unsupported ? 80 : undefined);
+  expect(h.invoke.mock.calls.some(call => call[1] === "maker:usage:codex-rate-limits")).toBe(unsupported);
+});
+
+// The compact pool header floors hours whereas the old detail countdown rounds up.
+it("updates the pool summary at the six-hour boundary without a network poll", async () => {
+  h.invoke.mockResolvedValue({ providerId: 'openai', configured: true, accounts: [1,2].map(id => ({
+    identity: `${id}@example.test`, status: 'ready', paused: false, running: 0, limit: 4,
+    usage: { codex: { buckets: { codex: { secondary: window(6 * 3600 + 1) } } } },
+  })) });
+  await mount();
+  await advance(1000);
+  await advance(1000);
+  expect(view.now).toBe(2000);
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+});
