@@ -92,7 +92,7 @@ export const OWNERSHIP_RULES = [
   },
   {
     owner: 'C', sub: 'special',
-    reason: '安全边界待专项设计：主人填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动',
+    reason: '安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动',
     channel: /^(input-handoff:|device-link:invoke$)/,
   },
   {

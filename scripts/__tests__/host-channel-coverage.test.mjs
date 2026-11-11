@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import {
+  OWNERSHIP_RULES, SYNC_LOCAL_DOMAINS,
   createWindowApiScanner, classify, clientBehavior, isHostWork, isWindowClass, moduleGroup, owningFile, rankUsage, summarize,
 } from '../host-channel-coverage.mjs';
 
@@ -55,6 +56,21 @@ test('sync channels form their own class: local settings or Host data behind a w
   // A window-only sync read stays B.
   assert.equal(sync('voice-input:history:get', 'voice-input/index.ts'), 'B');
   assert.equal(owner({ channel: 'sidebar-settings:get-project-order', file: main('projectOrderStore.ts') }), 'W');
+});
+
+test('sync-local domains match A-rule reasons exactly, so renaming a domain cannot silently reclassify', () => {
+  const domains = new Set(OWNERSHIP_RULES.filter((rule) => rule.owner === 'A').map((rule) => rule.reason));
+  for (const domain of SYNC_LOCAL_DOMAINS) {
+    assert.ok(domains.has(domain), `SYNC_LOCAL_DOMAINS has "${domain}", which no A rule uses as its reason`);
+  }
+  // Each domain keeps its channels local, and the account hint keeps its own wording.
+  const sync = (channel, file) => classify({ channel, kind: 'event', file: main(file), sync: true, gui: [] }, contract);
+  const settings = sync('layout:get', 'layout/ipc.ts');
+  assert.deepEqual([settings.category, settings.sub], ['S', 'local']);
+  assert.match(settings.reason, /界面设置/);
+  const account = sync('auth:has-persisted-session-hint-sync', 'bootstrap-electron.ts');
+  assert.deepEqual([account.category, account.sub], ['S', 'local']);
+  assert.match(account.reason, /账号提示/);
 });
 
 test('receipt channels and the relaunch checks are labelled, not mixed into window work', () => {
