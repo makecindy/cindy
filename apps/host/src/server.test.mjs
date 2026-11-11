@@ -454,3 +454,31 @@ test('expired-account boundary revokes browser access and drains admitted writes
   release(); await first; await pause;
   assert.equal(drained, true);
 });
+
+// Regression: a disconnected embedded browser queues get-health. The HTTP
+// boundary must cancel it before draining writers, without a replacement window.
+for (const boundary of ['logout', 'expired-owner', 'stop']) {
+  test(`${boundary} cancels platform waits before draining HTTP`, { timeout: 5000 }, async t => {
+    const bridge = createPlatformClientBridge({ ownerId: 'fixture-owner', assertCurrent() {} });
+    let entered;
+    const started = new Promise(resolve => { entered = resolve; });
+    const server = createHostServer({ token: TOKEN, platformClient: () => bridge,
+      browserBackend: () => { entered(); return bridge.call({ method: 'browser.probe' }); },
+      logout: async () => { assert.equal(bridge.status().waiting, 0); return { authenticated: false }; },
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => { bridge.close(); server.closeAllConnections(); server.close(); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const headers = { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
+    const pending = fetch(`${base}/api/browser-backend/get-health`, { method: 'POST', headers, body: '{}' });
+    await started;
+    assert.equal(bridge.status().waiting, 1);
+    if (boundary === 'logout') {
+      const response = await fetch(`${base}/api/auth/logout`, { method: 'POST', headers, body: '{}' });
+      assert.equal(response.status, 200);
+    } else if (boundary === 'expired-owner') await server.pauseOwnerRequests();
+    else await server.stopAccepting();
+    assert.equal((await pending).status, 500);
+    assert.equal(bridge.status().waiting, 0);
+  });
+}

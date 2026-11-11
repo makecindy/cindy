@@ -98,6 +98,7 @@ export function createHostServer(input) {
     // Revoke browser streams immediately and drain existing database callers
     // before the owner runtime closes. Concurrent sign-out clicks share a result.
     deps.webAuth.clear();
+    deps.platformClient?.()?.close();
     logoutFlight = cancelPendingAuth().then(() => Promise.all([...ownerRequests])).then(() => deps.logout())
       .finally(() => { logoutFlight = undefined; });
     return logoutFlight;
@@ -374,6 +375,8 @@ export function createHostServer(input) {
   // queue and runtime have drained; they do not keep database requests in flight.
   const stopAccepting = () => {
     stopping = true;
+    // Reject queued and in-flight platform calls before HTTP drains them.
+    deps.platformClient?.()?.close();
     for (const socket of platformSockets.clients) socket.terminate();
     server.close();
     const drained = activeRequests ? new Promise(resolve => drainWaiters.add(resolve)) : Promise.resolve();
@@ -381,6 +384,7 @@ export function createHostServer(input) {
   };
   const pauseOwnerRequests = () => {
     ownerPaused = true;
+    deps.platformClient?.()?.close();
     for (const socket of platformSockets.clients) socket.terminate();
     deps.webAuth.clear();
     return Promise.all([cancelPendingAuth(), Promise.allSettled([...ownerRequests])]);
