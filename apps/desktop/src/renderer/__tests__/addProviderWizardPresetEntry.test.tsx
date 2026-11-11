@@ -59,6 +59,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
 import retainedDeepSeek from './fixtures/deepseek-retained-catalog.json';
 import { toast } from '@/lib/toast';
 import { AddProviderWizard, OFFICIAL_API_PRESETS } from '@/components/settings/AddProviderWizard';
+import { openFirstRunGuide, closeFirstRunGuide, parkFirstRunGuideForConnection, updateFirstRunGuideConnections, getFirstRunGuideState } from '@/features/first-run-guide/firstRunGuideStore';
 import { AddSpeechModelsDialog } from '@/components/settings/AddSpeechModelsDialog';
 import { UnifiedModelList } from '@/components/settings/UnifiedModelList';
 import { speechModels } from '../../main/voice-conversation/models';
@@ -348,6 +349,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeFirstRunGuide();
   cleanup();
   vi.clearAllMocks();
 });
@@ -1863,20 +1865,29 @@ it.each(['finish', 'back', 'close'] as const)('logs in without a key and handles
     onProviderOAuthProgress: vi.fn(() => () => undefined),
     listProviders: vi.fn(async () => ({ providers: [{ ...buildUserProvider(created), connected: true }] })),
   });
+  // #9997: auth success precedes model selection; only the real dialog completion returns.
+  openFirstRunGuide({ manual: false, migration: false, legacyMigrated: false });
+  parkFirstRunGuideForConnection([]);
   const view = renderWizard('openrouter');
   fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.authorize' }));
   await screen.findByText('Test model');
   expect(screen.getByText('settings.providers.wizard.recommended')).toBeTruthy();
+  act(() => updateFirstRunGuideConnections([created.id]));
+  expect(getFirstRunGuideState().parked).toBe(true);
   expect(created.auth).toMatchObject({ method: 'oauth', oauth: { tokenUrl: 'https://openrouter.ai/api/v1/auth/keys' } });
   if (action !== 'finish') {
     if (action === 'back') fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));
     else view.unmount();
     await waitFor(() => expect(deleteCustomProvider).toHaveBeenCalledWith(created.id));
     expect(updateCustomProvider).not.toHaveBeenCalled();
+    expect(getFirstRunGuideState().parked).toBe(true);
+    closeFirstRunGuide();
     return;
   }
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
   await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledWith(expect.objectContaining({ id: created.id, auth: created.auth }), {}));
+  await waitFor(() => expect(getFirstRunGuideState().parked).toBe(false));
+  closeFirstRunGuide();
   const deletedBefore = vi.mocked(deleteCustomProvider).mock.calls.length;
   view.unmount();
   expect(vi.mocked(deleteCustomProvider).mock.calls.length).toBe(deletedBefore);

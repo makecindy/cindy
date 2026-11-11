@@ -95,7 +95,7 @@ export function ToastContainer() {
 
       // Play: 下一帧平滑滑到新位置
       requestAnimationFrame(() => {
-        el.style.transition = 'transform 300ms ease-out';
+        el.style.transition = 'transform var(--motion-base) var(--motion-ease-move)';
         el.style.transform = '';
       });
     });

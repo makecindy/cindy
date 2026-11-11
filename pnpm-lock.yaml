@@ -687,6 +687,9 @@ importers:
       '@cindy/auth-client':
         specifier: workspace:*
         version: link:../../packages/auth-client
+      '@cindy/browser-control-runtime':
+        specifier: workspace:*
+        version: link:../../packages/browser-control-runtime
       '@cindy/device-link':
         specifier: workspace:*
         version: link:../../packages/device-link

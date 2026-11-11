@@ -1,6 +1,6 @@
 import { GhostManager } from '../../../desktop/src/main/cindy-brain/GhostManager.js';
 import { loadGhostFirstPartyFactsLoader } from '../../../desktop/src/main/cindy-brain/ghostFirstPartyFacts.js';
-import { authorizeGhostTokenBroker } from '../../../desktop/src/main/cindy-brain/ghostFirstPartyPrivilege.js';
+import { authorizeGhostTokenBroker, isTrustedPublicMarketPackage } from '../../../desktop/src/main/cindy-brain/ghostFirstPartyPrivilege.js';
 import { loadConnectionAudienceResolver } from '../../../desktop/src/main/cindy-brain/connectionAudienceResolver.js';
 import { PluginMarketLedger } from '../../../desktop/src/main/plugin-market/ledger.js';
 import { createOrganizationPrefixStore } from '../../../desktop/src/main/plugin-market/organizationPrefixStore.js';
@@ -56,6 +56,14 @@ export function createHostPluginIdentity(options: {
     },
   });
   return {
+    isVerifiedPublicMarket(id: string) {
+      assertCurrent();
+      const user = options.getUser();
+      const load = firstParty.load(id, 'runtime', {
+        membershipKind: user?.membershipKind ?? 'personal', orgId: user?.orgId ?? null, orgSlug: user?.orgSlug ?? null,
+      });
+      return load.kind === 'ready' && isTrustedPublicMarketPackage(load.facts);
+    },
     brokerAuthorized(id: string) {
       assertCurrent();
       const user = options.getUser();
