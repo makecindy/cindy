@@ -1,5 +1,5 @@
 import type { HostKeyErrorDetails } from '@cindy/maker-remote-ssh';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 
 /** Use the current UI language and the store's actual path for SSH repair guidance. */
 export function formatHostKeyError(details: HostKeyErrorDetails): string {

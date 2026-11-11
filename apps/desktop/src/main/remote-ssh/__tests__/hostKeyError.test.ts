@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ app: { getPreferredSystemLanguages: () => ['en'] } }));
 
-import { setMainLocale } from '../../i18n.js';
+import { setMainLocale } from '../../i18n.desktop.js';
 import { SUPPORTED_LOCALES } from '../../../shared/locale.js';
 import { formatHostKeyError } from '../host-key-error.js';
 
