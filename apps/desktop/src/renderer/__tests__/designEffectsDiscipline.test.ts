@@ -10,7 +10,9 @@ import '../themes/colors';
  *
  * 这几类写法都能通过编译，界面却静默出错：无类型的 `shadow-[var(--x)]` 被 Tailwind 当成
  * 阴影颜色，不产生阴影；HSL 三元组 token 直接写进 `text-[var(--x)]` 是无效颜色；
- * `enabled:hover:` 的优先级低于 Button 变体，覆盖不生效。清单外的阴影和渐变则让 §6、§7
+ * `enabled:hover:` 的优先级低于 Button 变体，覆盖不生效；`globals.css` 对非输入元素全局
+ * `outline: none !important`，只写 `focus-visible:outline*` 的按钮 Tab 聚焦时什么都不画
+ * （§14.2，2026-11 维护者裁决：以规范为准改代码）。清单外的阴影和渐变则让 §6、§7
  * 的封闭清单与代码再次脱节。新增例外须先有设计决定，再登记到这里和对应规范。
  *
  * 不扫 CSS 与行内 style 里的 box-shadow 和 HSL 颜色：它们目前都走登记 token、细线或 hsl()，
@@ -86,6 +88,8 @@ const FIXES = {
   gradient: '改成纯色；确需保留先有设计决定，再登记到 GRADIENT_REGISTRY 和 §2 / §7',
   invalidHslColor: '这个 token 是 HSL 三元组，改成 hsl(var(--x)) 或对应的 Tailwind 颜色类',
   losingButtonState: '会输给 Button 变体：用 palette，或写成 enabled:[&:not([aria-disabled=true])]:hover:',
+  invisibleFocus:
+    'globals.css 压掉了非输入元素的 outline，键盘焦点看不见：改成 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]，或换用 Button（DESIGN.md §14.2）',
 } as const;
 
 type EffectKind = keyof typeof FIXES;
@@ -105,6 +109,43 @@ function isRegisteredArbitraryShadow(value: string): boolean {
 function isCommentLine(source: string, index: number): boolean {
   const line = source.slice(source.lastIndexOf('\n', index) + 1, index).trimStart();
   return line.startsWith('//') || line.startsWith('*') || line.startsWith('/*');
+}
+
+/** globals.css 只对 input / textarea / contenteditable 恢复 outline。 */
+const OUTLINE_KEEPING_TAG = /^(?:input|textarea|Input|Textarea)$/;
+
+/** 匹配所在的单个字符串字面量，以及外层 cn/clsx/twMerge(...) 调用（分行写法）。 */
+function classRegionsAround(source: string, index: number): string[] {
+  const regions: string[] = [];
+  const lineStart = source.lastIndexOf('\n', index) + 1;
+  const lineEnd = source.indexOf('\n', index);
+  const line = source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd);
+  for (const literal of line.matchAll(/(['"`])(?:(?!\1)[^\\]|\\.)*\1/g)) {
+    const start = lineStart + (literal.index ?? 0);
+    if (start <= index && index < start + literal[0].length) regions.push(literal[0]);
+  }
+  for (const call of source.slice(0, index).matchAll(/\b(?:cn|clsx|twMerge)\s*\(/g)) {
+    let depth = 0;
+    const open = (call.index ?? 0) + call[0].length - 1;
+    for (let i = open; i < source.length; i += 1) {
+      if (source[i] === '(') depth += 1;
+      else if (source[i] === ')' && --depth === 0) {
+        if (i > index) regions.push(source.slice(open, i + 1));
+        break;
+      }
+    }
+  }
+  return regions;
+}
+
+/** 只靠 outline 画焦点：不在输入元素上，且同一 class 区域没有 focus-visible 焦点圈兜底。 */
+function relyOnlyOnOutline(source: string, index: number): boolean {
+  const opening = [...source.slice(0, index).matchAll(/<([A-Za-z][\w.]*)/g)].at(-1);
+  const tagText = opening ? source.slice(opening.index, index) : '';
+  const insideInput =
+    opening && !/\/>|<\//.test(tagText) && (OUTLINE_KEEPING_TAG.test(opening[1]) || /\bcontentEditable\b/.test(tagText));
+  if (insideInput) return false;
+  return !classRegionsAround(source, index).some((region) => /focus-visible:(?:[\w-]+:)*ring-/.test(region));
 }
 
 function findEffects(source: string, hslTokens: ReadonlySet<string>): Finding[] {
@@ -130,6 +171,11 @@ function findEffects(source: string, hslTokens: ReadonlySet<string>): Finding[] 
   );
   collect('invalidHslColor', /\[--button-face-(?:bg|border):var\(--([a-z0-9-]+)\)\]/g, (match) => hslTokens.has(match[1]));
   collect('losingButtonState', /\benabled:(?:hover|active):\[--button-face-/g);
+  collect(
+    'invisibleFocus',
+    /(?<![\w-])focus-visible:outline(?!-none)(?:-[^\s'"`]*)?(?:\s+focus-visible:outline(?!-none)(?:-[^\s'"`]*)?)*/g,
+    (match) => !isCommentLine(source, match.index ?? 0) && relyOnlyOnOutline(source, match.index ?? 0),
+  );
   return findings;
 }
 
@@ -187,6 +233,33 @@ describe('阴影、渐变与写法失效门禁', () => {
     ).toEqual([]);
   });
 
+  it('焦点规则只拦非输入元素上没有焦点圈兜底的 outline', () => {
+    const kinds = (source: string) => findEffects(source, new Set()).map(({ kind }) => kind);
+    // Toast ×、附件预览图标按钮等:只写 outline,Tab 聚焦时 outline=none、box-shadow=none。
+    expect(kinds('<button className="size-8 focus-visible:outline focus-visible:outline-2">')).toEqual(['invisibleFocus']);
+    expect(kinds("const ICON = 'h-8 w-8 focus-visible:outline focus-visible:outline-[var(--focus-ring)]';")).toEqual([
+      'invisibleFocus',
+    ]);
+    expect(kinds("<summary className=\"underline focus-visible:outline-2\">")).toEqual(['invisibleFocus']);
+    // cn() 分行写法:焦点圈在同一个 cn 的另一行也算兜底。
+    expect(kinds("className={cn(\n  'rounded-full',\n  'focus-visible:outline focus-visible:outline-2',\n)}")).toEqual([
+      'invisibleFocus',
+    ]);
+    expect(
+      kinds("className={cn(\n  'focus-visible:outline focus-visible:outline-2',\n  'focus-visible:ring-2',\n)}"),
+    ).toEqual([]);
+
+    expect(
+      kinds(`<button className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
+        <a className="focus-visible:outline focus-visible:ring-2">
+        <button className="focus-visible:outline-none focus-visible:after:ring-2">
+        <input onChange={(e) => set(e.target.value)} className="focus-visible:outline focus-visible:outline-2" />
+        <textarea className="focus-visible:outline-2" />
+        <div contentEditable className="focus-visible:outline" />
+        // focus-visible:outline in prose`),
+    ).toEqual([]);
+  });
+
   it('错误信息带文件、行号和改法', () => {
     const [finding] = findEffects("first line\n'shadow-md'", new Set());
     expect(finding).toEqual({ kind: 'shadow', line: 2, value: 'shadow-md' });
@@ -211,5 +284,9 @@ describe('阴影、渐变与写法失效门禁', () => {
 
   it('enabled:hover 覆盖只写在裸按钮框上，Button 用 palette 或同修饰符', () => {
     expect(registryDrift(['losingButtonState'], RAW_BUTTON_FRAMES)).toEqual([]);
+  });
+
+  it('非输入元素的键盘焦点用 focus-visible 焦点圈，不只靠 outline', () => {
+    expect(registryDrift(['invisibleFocus'])).toEqual([]);
   });
 });
