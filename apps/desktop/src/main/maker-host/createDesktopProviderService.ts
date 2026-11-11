@@ -842,9 +842,17 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  const catalog = filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
+  return projectSubscriptionPoolCatalog(getDesktopSelectableBaseCatalog());
+}
+
+function getDesktopSelectableBaseCatalog(): Catalog {
+  return filterProviderCatalogForAccount(filterLegacyGptContextProfiles(getActiveCatalog()), {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
+}
+
+/** Apply account membership to both selectable and full routing snapshots. */
+function projectSubscriptionPoolCatalog(catalog: Catalog): Catalog {
   const pool = readPool('openai');
   const aliases = pool?.legacyCodexAccounts;
   if (!aliases || pool.disconnected) return catalog;
@@ -908,7 +916,8 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
         logoKind: getCindyAiProviderLogoKind(),
       };
     },
-    getCatalog: getDesktopSelectableCatalog,
+    getCatalog: getDesktopSelectableBaseCatalog,
+    projectCatalog: projectSubscriptionPoolCatalog,
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,
       // Claude/Codex 是原生 Harness，可继承本机 CLI 凭证；xAI 是下游 provider，

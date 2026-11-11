@@ -20,6 +20,7 @@ import { providerGroupCodexUsageSnapshot } from '../provider-group/usage.js';
 import { codexLimitBucketKey } from '@cindy/maker-shared/codex-usage-buckets';
 import {
   mergeClaudeSubscriptionUsageSnapshot,
+  mergeClaudeSubscriptionUsageDuringRead,
   parseClaudeSdkRateLimitInfo,
 } from '../../shared/claudeSubscriptionUsage.js';
 import type {
@@ -192,7 +193,7 @@ export function observeSubscriptionAccountUsage(
   });
   // Notifications contain one bucket directly. Merge it before sanitizing, retaining
   // omitted fields and unrelated model buckets instead of treating it as an RPC reply.
-  const codexUsage =
+  let codexUsage =
     codexEvent && ('primary' in codexEvent || 'secondary' in codexEvent)
       ? providerGroupCodexUsageSnapshot({
           appServerBuckets: {
@@ -206,6 +207,19 @@ export function observeSubscriptionAccountUsage(
           webSnapshot: previousCodex?.webSnapshot,
         })
       : previousCodex;
+  if (codexUsage !== previousCodex && codexUsage?.appServerBuckets?.[bucketKey] && codexEvent) {
+    const bucket = codexUsage.appServerBuckets[bucketKey];
+    const previous = previousCodex?.appServerBuckets?.[bucketKey];
+    // Preserve references for fields the event did not observe. This makes the
+    // concurrent delta distinguish a repeated 100% event from an omitted window.
+    codexUsage = { ...codexUsage, appServerBuckets: {
+      ...previousCodex?.appServerBuckets,
+      [bucketKey]: { ...bucket,
+        primary: 'primary' in codexEvent ? bucket.primary : previous?.primary ?? null,
+        secondary: 'secondary' in codexEvent ? bucket.secondary : previous?.secondary ?? null,
+      },
+    } };
+  }
   const usage: Usage =
     provider === 'anthropic'
       ? {
@@ -214,7 +228,9 @@ export function observeSubscriptionAccountUsage(
             : cached.usage?.claudeUsage,
         }
       : { ...cached.usage, codexUsage };
-  state.cache.set(key, { ...cached, usage, at: Date.now() });
+  // The event updates usage, not the last account/endpoint read. Renewing `at`
+  // here lets a stream of SDK events postpone authoritative polling indefinitely.
+  state.cache.set(key, { ...cached, usage });
   changed(provider);
 }
 async function snapshot(
@@ -249,22 +265,59 @@ async function snapshot(
             auth = { ...auth, authenticated: false, errorReason: invalidated.reason };
           else if (state.invalidated.get(key) === invalidated) state.invalidated.delete(key);
         }
+        // Auth reads yield: quota events may have replaced the captured cache.
+        const current = state.cache.get(key);
+        const sameAccount = current?.auth.identity === auth.identity;
         const reuseUsage =
-          cached?.auth.identity === auth.identity &&
-          cached?.usageAt !== undefined &&
-          Date.now() - cached.usageAt < 180_000;
-        const usage = auth.authenticated
+          sameAccount &&
+          current?.usageAt !== undefined &&
+          Date.now() - current.usageAt < 180_000;
+        let usage = auth.authenticated
           ? reuseUsage
-            ? cached?.usage
+            ? current?.usage
             : await readNativeAccountUsage(provider, directory).catch(() =>
-                cached?.auth.identity === auth.identity ? cached?.usage : undefined,
+                state.cache.get(key)?.auth.identity === auth.identity ? state.cache.get(key)?.usage : undefined,
               )
           : undefined;
+        const latest = state.cache.get(key);
+        const eventDuringRead = auth.authenticated && latest?.auth.identity === auth.identity
+          && latest?.usage !== current?.usage;
+        // A successful read owns the full snapshot; overlay only concurrent
+        // events, not the old endpoint fields carried along in the event cache.
+        if (eventDuringRead && usage !== latest?.usage) {
+          if (provider === 'anthropic' && latest?.usage?.claudeUsage) {
+            usage = { ...usage, claudeUsage: usage?.claudeUsage ? mergeClaudeSubscriptionUsageDuringRead(
+              current?.usage?.claudeUsage, usage.claudeUsage, latest.usage.claudeUsage,
+            ) : latest.usage.claudeUsage };
+          } else if (provider === 'openai' && latest?.usage?.codexUsage) {
+            const buckets = { ...usage?.codexUsage?.appServerBuckets };
+            for (const [id, bucket] of Object.entries(latest.usage.codexUsage.appServerBuckets ?? {})) {
+              const previous = current?.usage?.codexUsage?.appServerBuckets?.[id];
+              if (bucket === previous) continue;
+              // Omitted event fields still belong to the fresh RPC result.
+              const delta = Object.fromEntries(Object.entries(bucket).filter(([field, value]) => {
+                if (value === previous?.[field as keyof typeof previous]) return false;
+                if (field === 'primary' || field === 'secondary') {
+                  const eventReset = bucket[field]?.resetsAt;
+                  const readReset = buckets[id]?.[field]?.resetsAt;
+                  if (eventReset != null && readReset != null && eventReset < readReset) return false;
+                }
+                return true;
+              }));
+              buckets[id] = { ...buckets[id], ...delta,
+                updatedAt: Math.max(bucket.updatedAt ?? 0, buckets[id]?.updatedAt ?? 0) } as typeof bucket;
+            }
+            usage = { ...usage, codexUsage: providerGroupCodexUsageSnapshot({
+              ...usage?.codexUsage, appServerBuckets: buckets,
+            }) };
+          }
+        }
         result = {
           auth,
           usage,
           at: Date.now(),
-          usageAt: reuseUsage ? cached?.usageAt : Date.now(),
+          usageAt: reuseUsage ? current?.usageAt
+            : eventDuringRead && usage === latest?.usage ? latest?.usageAt : Date.now(),
         };
       } catch {
         result = { auth: { authenticated: false }, unavailable: true, at: Date.now() };
@@ -621,6 +674,8 @@ export async function readSubscriptionPool(
 
 export interface SubscriptionAccountLease {
   account: NativeSubscriptionAccount;
+  /** New turns must not reuse an account explicitly disabled by the user. */
+  assertDispatchable(): void;
   observeFailure(error: unknown, model: string | undefined, phase: 'start' | 'run'): void;
   changeModel(model: string, apply: () => Promise<void>): Promise<void>;
   bind(keys: string[]): Promise<void>;
@@ -639,7 +694,12 @@ export async function acquireSubscriptionAccount(
   if (!pool) return null;
   if (pool.disconnected) throw new Error('Subscription provider was disconnected');
   const state = currentRuntime();
-  const binding = keys.map((key) => readAccountBinding(key, provider)).find(Boolean);
+  const bindings = keys.map((key) => readAccountBinding(key, provider)).filter(Boolean);
+  const binding = bindings[0];
+  // A stale caller may still carry the pre-switch native id. Never resume it in
+  // the newly bound task account's home or overwrite its historical ownership.
+  if (bindings.some(entry => entry?.accountId !== binding?.accountId))
+    throw new Error('The task subscription account changed');
   const snapshots = await Promise.all(pool.accounts.map((a) => snapshot(state, provider, a.id)));
   // Remote access stores also wire share lifecycle dependencies. Load them only
   // for actual OpenAI selection, not while unrelated catalogs initialize.
@@ -665,6 +725,10 @@ export async function acquireSubscriptionAccount(
       ...a,
       paused: control ? false : a.paused,
       key: a.id,
+      loggingIn,
+      auth: info?.auth,
+      unavailable: info?.unavailable,
+      usage,
       usable: !loggingIn && info?.auth.authenticated === true && (control || (!usage.limited
         && (Boolean(binding) || latest.accounts.length < 2 || !accountCooling(state, provider, a.id, model))))
         && (control || !imported || legacyAccess?.legacyCodexAccountCanRun(imported, model, {
@@ -685,12 +749,23 @@ export async function acquireSubscriptionAccount(
       lastPicked: state.lastPicked.get(provider),
     });
   const member = members.find((a) => a.id === selected);
-  if (!selected || !member || !member.usable)
-    throw new Error(
-      pinned
-        ? 'The task subscription account requires login or quota reset'
-        : 'No subscription account is available',
-    );
+  if (!selected || !member || !member.usable || (!control && member.paused)) {
+    if (!pinned) throw new Error('No subscription account is available');
+    // Keep account affinity and admission unchanged; report the actual reason.
+    // Do not include identity or configDir: errors also reach shared viewers.
+    if (!member || member.unavailable || !member.auth || member.auth.errorReason === 'codex_provider_managed_auth')
+      throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account is unavailable');
+    if (member.loggingIn)
+      throw new Error('[SUBSCRIPTION_ACCOUNT_SIGNING_IN] The task subscription account is signing in');
+    if (!member.auth.authenticated)
+      throw new Error('[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login');
+    if (!control && member.usage.limited) {
+      const reset = member.usage.resetAtMs;
+      throw new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] The task subscription account is waiting for its usage window to reset'
+        + (reset && Number.isFinite(reset) && reset > Date.now() ? `\nresetAtMs=${reset}` : ''));
+    }
+    throw new Error('[SUBSCRIPTION_ACCOUNT_UNAVAILABLE] The task subscription account cannot be used for this request');
+  }
   const token = randomUUID();
   const key = keyOf(provider, selected);
   const active = state.running.get(key) ?? new Set<string>();
@@ -717,6 +792,11 @@ export async function acquireSubscriptionAccount(
       throw new Error(options.remote ? 'Subscription account remote access was revoked' : 'Subscription account does not allow this model');
   };
   return {
+    assertDispatchable: () => {
+      assertCurrent();
+      if (readPool(provider)?.accounts.find(a => a.id === selected)?.paused)
+        throw new Error('The task subscription account is disabled; retry to switch accounts');
+    },
     observeFailure(error, failedModel, phase) {
       try { assertCurrent(); } catch { return; } // Ignore late failures after owner/account removal.
       const signals = providerGroupFailureSignals(error);

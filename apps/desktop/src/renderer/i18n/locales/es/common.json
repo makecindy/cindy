@@ -8241,7 +8241,9 @@
         "mcpUi": "Mostrar páginas interactivas en la conversación",
         "mcpUiDomains": "Dominios de red de las páginas: {{domains}}",
         "mcpAppOnly": "Solo página",
-        "uiPageAccess": "Páginas: {{pages}}; dominios: {{domains}}; herramientas disponibles para las páginas: {{tools}}"
+        "uiPageAccess": "Páginas: {{pages}}; dominios: {{domains}}; herramientas disponibles para las páginas: {{tools}}",
+        "uiHost": "Proporcionar interfaces y acciones del anfitrión en Cindy",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Agregar dirección de conexión",
@@ -14234,6 +14236,7 @@
       "botSentNamed": "Enviado por el compañero \"{{name}}\"",
       "orcaFromLead": "Mensaje de Lead",
       "orcaFromWorker": "Mensaje de Worker",
+      "orcaFromWorkerBatch": "Informe del sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensaje del Worker \"{{role}}\"",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado desde el teléfono \"{{name}}\"",
@@ -14626,6 +14629,14 @@
       "replied": "respondió",
       "toggle": "Mostrar u ocultar la respuesta de «{{title}}»",
       "openTask": "Abrir tarea"
+    },
+    "subscriptionAccountError": {
+      "limited": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Espera a que se restablezca o elige otra fuente de modelos. La cuenta no cambia automáticamente.",
+      "limitedUntil": "La cuenta de suscripción de esta tarea ha alcanzado su límite de uso. Restablecimiento previsto: {{resetAt}}. Espera hasta entonces o elige otra fuente de modelos. La cuenta no cambia automáticamente.",
+      "loginRequired": "La cuenta de suscripción de esta tarea requiere iniciar sesión de nuevo. Hazlo en el ordenador que ejecuta la tarea y vuelve a intentarlo.",
+      "signingIn": "Se está iniciando sesión en la cuenta de suscripción de esta tarea. Vuelve a intentarlo cuando termine.",
+      "unavailable": "La cuenta de suscripción asignada a esta tarea no se puede usar para esta solicitud. Revisa la cuenta en los ajustes del proveedor de modelos del ordenador que ejecuta la tarea o elige otra fuente de modelos.",
+      "legacy": "La cuenta de suscripción asignada a esta tarea no está disponible. Revisa el inicio de sesión y el uso en el ordenador que ejecuta la tarea o elige otra fuente de modelos. La cuenta no cambia automáticamente."
     }
   },
   "ccAgent": {
@@ -19636,6 +19647,12 @@
       "restore": "Restaurar valores predeterminados"
     }
   },
+  "pluginUi": {
+    "display": "Visualización",
+    "original": "Original",
+    "menu": "Vistas y comandos del complemento",
+    "actionFailed": "No se pudo completar la acción del complemento. Vuelve a intentarlo."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "Sólo el propietario de la sesión puede interactuar con esta tarjeta.",
     "retry": "Recargar",
@@ -20136,6 +20153,10 @@
     "openDirectoryFailed": "No se pudo abrir la carpeta de la cuenta. Puede que se haya movido o eliminado.",
     "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión",
+    "quotaRecoverIn": "Disponible en {{duration}}",
+    "quotaExhausted": "Cuota agotada",
+    "quotaFiveHourRemaining": "Cuota de 5 horas restante: {{percent}}%",
+    "quotaFiveHourExhausted": "Cuota de 5 horas agotada",
     "quotaAverage": "Media restante {{percent}} %",
     "quotaUpdating": "Cuota pendiente de actualizar",
     "quotaResetSoon": "Se restablece pronto",

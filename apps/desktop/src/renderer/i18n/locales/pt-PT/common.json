@@ -8241,7 +8241,9 @@
         "mcpUi": "Apresentar páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Apenas a página",
-        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}"
+        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}",
+        "uiHost": "Fornecer interfaces e ações do anfitrião no Cindy",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de ligação",
@@ -14234,6 +14236,7 @@
       "botSentNamed": "Enviado pelo colega \"{{name}}\"",
       "orcaFromLead": "Mensagem do Lead",
       "orcaFromWorker": "Mensagem do Worker",
+      "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensagem do Worker \"{{role}}\"",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado do telemóvel \"{{name}}\"",
@@ -14626,6 +14629,14 @@
       "replied": "respondeu",
       "toggle": "Mostrar ou ocultar a resposta de «{{title}}»",
       "openTask": "Abrir tarefa"
+    },
+    "subscriptionAccountError": {
+      "limited": "A conta de subscrição desta tarefa atingiu o limite de utilização. Aguarda a reposição ou escolhe outra origem de modelos. A conta não muda automaticamente.",
+      "limitedUntil": "A conta de subscrição desta tarefa atingiu o limite de utilização. Reposição prevista: {{resetAt}}. Aguarda até lá ou escolhe outra origem de modelos. A conta não muda automaticamente.",
+      "loginRequired": "A conta de subscrição desta tarefa requer um novo início de sessão. Inicia sessão no computador que executa a tarefa e tenta novamente.",
+      "signingIn": "O início de sessão na conta de subscrição desta tarefa está em curso. Tenta novamente quando terminar.",
+      "unavailable": "A conta de subscrição atribuída a esta tarefa não pode ser utilizada neste pedido. Verifica a conta nas definições do fornecedor de modelos no computador que executa a tarefa ou escolhe outra origem de modelos.",
+      "legacy": "A conta de subscrição atribuída a esta tarefa não está disponível. Verifica o início de sessão e a utilização no computador que executa a tarefa ou escolhe outra origem de modelos. A conta não muda automaticamente."
     }
   },
   "ccAgent": {
@@ -19636,6 +19647,12 @@
       "restore": "Repor predefinições"
     }
   },
+  "pluginUi": {
+    "display": "Apresentação",
+    "original": "Original",
+    "menu": "Vistas e comandos do plugin",
+    "actionFailed": "Não foi possível concluir a ação do plugin. Tente novamente."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "Só o proprietário da sessão pode interagir com este cartão.",
     "retry": "Recarregar",
@@ -20136,6 +20153,10 @@
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Pode ter sido movida ou eliminada.",
     "loginAgain": "Iniciar sessão novamente",
     "login": "Iniciar sessão",
+    "quotaRecoverIn": "Disponível dentro de {{duration}}",
+    "quotaExhausted": "Quota esgotada",
+    "quotaFiveHourRemaining": "Quota de 5 horas restante: {{percent}}%",
+    "quotaFiveHourExhausted": "Quota de 5 horas esgotada",
     "quotaAverage": "Média restante {{percent}}%",
     "quotaUpdating": "Quota a aguardar atualização",
     "quotaResetSoon": "Reposição em breve",

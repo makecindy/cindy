@@ -8126,7 +8126,9 @@
         "mcpUi": "会話にインタラクティブなページを表示",
         "mcpUiDomains": "ページが接続できるドメイン：{{domains}}",
         "mcpAppOnly": "ページ専用",
-        "uiPageAccess": "ページ：{{pages}}、ドメイン：{{domains}}、ページから呼び出せるツール：{{tools}}"
+        "uiPageAccess": "ページ：{{pages}}、ドメイン：{{domains}}、ページから呼び出せるツール：{{tools}}",
+        "uiHost": "Cindy に画面とホスト操作を追加",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -14089,6 +14091,7 @@
       "botSentNamed": "仲間「{{name}}」から送信",
       "orcaFromLead": "Lead からのメッセージ",
       "orcaFromWorker": "Worker からのメッセージ",
+      "orcaFromWorkerBatch": "システムから報告された {{count}} 件の Worker 結果",
       "orcaFromWorkerNamed": "Worker「{{role}}」からのメッセージ",
       "hookChannelFrom": "{{channel}} から",
       "deviceSentMobileNamed": "スマートフォン「{{name}}」から送信",
@@ -14425,6 +14428,14 @@
       "replied": "からの返信",
       "toggle": "「{{title}}」からの返信を開閉",
       "openTask": "タスクを開く"
+    },
+    "subscriptionAccountError": {
+      "limited": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。上限のリセットを待って再試行するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。",
+      "limitedUntil": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。リセット予定：{{resetAt}}。リセット後に再試行するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。",
+      "loginRequired": "このタスクで使用しているサブスクリプションアカウントへの再ログインが必要です。タスクを実行しているコンピューターで再ログインしてから、再試行してください。",
+      "signingIn": "このタスクで使用しているサブスクリプションアカウントにログイン中です。完了後に再試行してください。",
+      "unavailable": "このタスクに割り当てられたサブスクリプションアカウントは、このリクエストに使用できません。実行先のコンピューターでモデルプロバイダーのアカウント設定を確認するか、別のモデル接続先を選んでください。",
+      "legacy": "このタスクに割り当てられたサブスクリプションアカウントを利用できません。実行先のコンピューターでログイン状態と使用量を確認するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。"
     }
   },
   "ccAgent": {
@@ -19390,6 +19401,12 @@
       "restore": "既定に戻す"
     }
   },
+  "pluginUi": {
+    "display": "表示方法",
+    "original": "元の表示",
+    "menu": "プラグインのビューとコマンド",
+    "actionFailed": "プラグインの操作を完了できませんでした。もう一度お試しください。"
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "このカードを操作できるのはセッションのオーナーだけです。",
     "retry": "再読み込み",
@@ -19877,6 +19894,10 @@
     "openDirectoryFailed": "アカウントフォルダーを開けませんでした。移動または削除された可能性があります。",
     "loginAgain": "再ログイン",
     "login": "ログイン",
+    "quotaRecoverIn": "{{duration}}後に利用可能",
+    "quotaExhausted": "利用枠を使い切りました",
+    "quotaFiveHourRemaining": "5時間枠の残り {{percent}}%",
+    "quotaFiveHourExhausted": "5時間枠を使い切りました",
     "quotaAverage": "クォータ残り {{percent}}%（平均）",
     "quotaUpdating": "クォータ更新待ち",
     "quotaResetSoon": "まもなくリセット",

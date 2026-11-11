@@ -3,7 +3,8 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { pluginUiDomains } from '@cindy/plugin-protocol';
-import { hasGhostUiPermission, type InstalledGhost } from '../../shared/ghost.js';
+import { hasGhostUiPermission, getApprovedGhostHostUi, type InstalledGhost } from '../../shared/ghost.js';
+import type { GhostHostUi } from '@cindy/plugin-protocol';
 import { deliveryNamespaceFields, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import { resolveGhostContentPathSync } from '../cindy-brain/ghostContentTree.js';
 import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
@@ -25,6 +26,9 @@ let runPageTool:
 function setPluginPageToolRunner(runner: NonNullable<typeof runPageTool>): void {
   runPageTool = runner;
 }
+/** Cold-path projection rebuilt by the existing plugin lifecycle, never per message. */
+const hostEntries = new Map<string, { ghost: InstalledGhost; host: GhostHostUi; config: AppServerConfig; owner: string; fingerprint: string }>();
+function readPluginHostUi(instance: string) { return hostEntries.get(instance); }
 /** Registry belongs only to the App host, never to an Agent's MCP providers. */
 function refreshPluginApps(
   ghosts: InstalledGhost[],
@@ -35,6 +39,8 @@ function refreshPluginApps(
   },
 ): void {
   const configs = new Map<string, () => AppServerConfig>();
+  const previousHostEntries = new Map(hostEntries);
+  hostEntries.clear();
   for (const ghost of ghosts) {
     if (!hasGhostUiPermission(ghost) || !deps.available() || ghost.approval.state !== 'approved')
       continue;
@@ -107,9 +113,16 @@ function refreshPluginApps(
       assertCurrent();
       return config;
     });
+    const host = getApprovedGhostHostUi(ghost);
+    if (host) {
+      const fingerprint = JSON.stringify([revision, packageSha256, directory, ghost.approvedHostUi]);
+      const previous = previousHostEntries.get(instance);
+      hostEntries.set(instance, previous?.owner === owner && previous.fingerprint === fingerprint
+        ? previous : { ghost, host, config, owner, fingerprint });
+    }
   }
   replacePluginAppServers(configs);
 }
 
-return { setPluginPageToolRunner, refreshPluginApps };
+return { setPluginPageToolRunner, refreshPluginApps, readPluginHostUi };
 }

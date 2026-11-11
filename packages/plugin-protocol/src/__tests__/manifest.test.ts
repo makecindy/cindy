@@ -1,4 +1,5 @@
 import { getPluginToolUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
+import { hostUiApprovalSubjects } from '../hostUi.js';
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANUAL_DESCRIPTION_MAX_CHARS,
@@ -2062,6 +2063,61 @@ describe('interactive page declarations', () => {
     expect(result.manifest.mcpApps).toEqual(base.mcpApps);
     expect(result.manifest.tools).toEqual(original.manifest.tools);
     expect(validateGhostManifest({ ...base, mcpApps: { ui: { resources: [], tools: { help: { visibility: ['app'] } } } } }).ok).toBe(true);
+  });
+  // New host placements reference the same resource catalog. They must not
+  // require a dummy business tool or accept references outside that catalog.
+  it('accepts a resource-only named view without changing existing tool declarations', () => {
+    const mcpApps = { ui: { resources: base.mcpApps.ui.resources, tools: {} }, host: {
+      views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://planner', scope: 'global' }],
+      contributions: [{ id: 'open', title: 'Open workspace', position: 'composer.toolbar', view: 'workspace' }],
+    } };
+    expect(validateGhostManifest({ ...base, mcpApps })).toMatchObject({ ok: true, manifest: { mcpApps } });
+  });
+  it('includes a declared message menu action in explicit host approval', () => {
+    const host = { contributions: [{ id: 'help-menu', title: 'Help', position: 'message.menu', tool: 'help' }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host)).toContainEqual(expect.objectContaining({ key: 'contribution:help-menu' }));
+  });
+  it('validates appearance resource declarations and grants only known fields', () => {
+    const host = { capabilities: ['appearance', 'app-icon'], appearance: { fields: ['bodyFont', 'appIcon', 'future-field'],
+      resources: [{ id: 'font', kind: 'font' as const, path: 'assets/font.woff2' }] } };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toEqual([
+      'capability:appearance', 'appearance:bodyFont', 'appearance-resource:font',
+    ]);
+    for (const path of ['../font.woff2', '/font.woff2', 'assets/../../font.woff2']) {
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...host, appearance: { ...host.appearance, resources: [{ id: 'font', kind: 'font', path }] } },
+      } }).ok).toBe(false);
+    }
+  });
+  it('requires renewed approval to present a view in an entry popover', () => {
+    const entry = { id: 'open', title: 'Open', position: 'composer.toolbar', view: 'board' };
+    const host = { views: [{ id: 'board', title: 'Board', resourceUri: 'ui://planner' }], contributions: [entry] };
+    const popup = { ...host, contributions: [{ ...entry, presentation: 'popover' as const }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: popup } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(popup)).not.toEqual(hostUiApprovalSubjects(host));
+    for (const position of ['message.menu', 'message.body', 'tool.body'])
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...popup, contributions: [{ ...popup.contributions[0], position }] },
+      } }).ok).toBe(false);
+  });
+  it.each([
+    { kind: 'status' },
+    { kind: 'select', tool: 'help', options: [{ label: 'Help', value: 'help' }] },
+  ])('rejects a non-action message menu declaration: %j', declaration => {
+    const host = { contributions: [{ id: 'help-menu', title: 'Help', position: 'message.menu', ...declaration }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
+  });
+  it.each([
+    { views: [{ id: 'workspace', title: 'Workspace', resourceUri: 'ui://missing', scope: 'global' }] },
+    { views: [{ id: '../escape', title: 'Workspace', resourceUri: 'ui://planner', scope: 'global' }] },
+    { contributions: [{ id: 'open', title: 'Open', position: 'composer.toolbar', view: 'missing' }] },
+    { contributions: [{ id: 'open', title: 'Open', position: 'message.body', tool: 'help' }] },
+    { contributions: [{ id: 'one', title: 'One', position: 'composer.toolbar', tool: 'missing' }] },
+    { capabilities: ['context', 'context'] },
+  ])('rejects invalid host UI authority: %j', host => {
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(false);
   });
   it.each([
     { resources: [{

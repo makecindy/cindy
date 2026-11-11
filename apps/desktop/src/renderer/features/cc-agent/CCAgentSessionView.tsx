@@ -91,6 +91,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
+import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
 import {
   SessionSubscriptionAccountProvider,
   sessionSubscriptionPoolProvider,
@@ -870,6 +871,7 @@ function CCAgentSessionContent({
   onBotReadThrough,
 }: CCAgentSessionViewProps = {}) {
   const { t } = useTranslation();
+  const hasPluginStatusbar = usePluginUiHas('statusbar');
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const navigate = useNavigate();
@@ -5378,10 +5380,10 @@ function CCAgentSessionContent({
     if (sessionId) requestChatTaskFocus(sessionId, clientId);
   }, [sessionId]);
   const pendingMessages = useMemo(() => pendingQueue.map((entry) => entry.chatMessage), [pendingQueue]);
-  const renderPendingMessage = (message: ChatMessage) => {
+  const renderPendingMessage = (message: ChatMessage, pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates) => {
     const index = pendingQueue.findIndex((entry) => entry.clientId === message.clientId);
     const entry = pendingQueue[index];
-    return entry ? <PendingQueueBubble entry={entry} sessionId={sessionId} index={index} count={pendingQueue.length}
+    return entry ? <PendingQueueBubble pluginUi={pluginUi} entry={entry} sessionId={sessionId} index={index} count={pendingQueue.length}
       editingClientId={activeQueueComposerEdit?.clientId ?? null}
       steeringClientIds={steeringQueueClientIds} editLocks={queueEditLocks} interactionLocks={queueInteractionLocks}
       readOnly={readOnly || queueAbortPending}
@@ -5713,6 +5715,7 @@ function CCAgentSessionContent({
       )}
       <section
         className="relative flex h-full w-full flex-col bg-content-area"
+        data-plugin-ui-task={!session?.remoteHostId && !session?.deviceLinkDeviceId ? sessionId : undefined}
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
         onDragEnter={(e) => {
           if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
@@ -5859,6 +5862,7 @@ function CCAgentSessionContent({
            refs, and ResizeObservers are fresh — guarantees per-session isolation. */}
         <div
           className="wallpaper-message-viewport relative min-h-0 flex-1"
+          data-plugin-ui-element="messages"
           style={{ '--wallpaper-composer-height': `${overlayHeight}px` } as CSSProperties}
         >
           {/* perf/session-switch 探针纯诊断:仅 DEV 用 Profiler 量 MessageStream commit,
@@ -6039,6 +6043,7 @@ function CCAgentSessionContent({
                  InteractionPromptHost: 普通模式下行为不变(直接 inline 渲染)。
                  当外部 (workdir-browse 等窄 rail 场景) 挂了 InteractionPromptSlot
                  时,卡片会被 portal 出去,这里就显占位。 */}
+              <div className="contents" data-plugin-ui-keep-visible>
               <InteractionPromptHost
                 hasInteraction={
                   !!(
@@ -6148,6 +6153,7 @@ function CCAgentSessionContent({
                   />
                 ) : null}
               </InteractionPromptHost>
+              </div>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               {!isSharedTaskPeer(remoteDeviceId ?? '') && <GoalIndicator sessionId={sessionId} />}
               {/* Only the compact bar reserves composer space; its transcript is a
@@ -6392,7 +6398,7 @@ function CCAgentSessionContent({
                 <div
                   className={cn(
                     'mt-1.5 flex w-full items-center justify-between gap-3 px-1',
-                    !session?.workingDir && !worktreeCreation && 'invisible',
+                    !session?.workingDir && !worktreeCreation && !hasPluginStatusbar && 'invisible',
                   )}
                 >
                   {/* Left: workingDir — 点击在系统文件管理器中打开;
@@ -6455,6 +6461,14 @@ function CCAgentSessionContent({
                         </button>
                       )}
                     </WorkingDirectoryTip>
+                  )}
+
+                  {hasPluginStatusbar && (
+                    <div className="min-w-0 flex-1 overflow-x-auto">
+                      <div className="w-max">
+                        <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
+                      </div>
+                    </div>
                   )}
 
                   {/* Right: quota segments may wrap before the context indicator. */}
@@ -6523,7 +6537,9 @@ function CCAgentSessionContent({
                     />
                   </div>
                 </div>
-              ) : null}
+              ) : (
+                <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
+              )}
             </div>
           </div>
         </div>
