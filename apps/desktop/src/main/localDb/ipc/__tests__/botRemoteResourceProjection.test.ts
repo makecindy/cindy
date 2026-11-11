@@ -3,6 +3,7 @@ import { companionHomes } from '../../../companion-cloud/homes.js';
 
 import {
   botRemoteCollectionItemFromSource,
+  TEAMMATES_TITLE,
   visibleBotRemoteResourceSources,
 } from '../botRemoteResourceProjection.js';
 
@@ -109,5 +110,12 @@ describe('bot remote resource projection', () => {
     } finally {
       companionHomes.reset();
     }
+  });
+
+  it('supplies Turkish translations for teammates title and statuses', () => {
+    expect(TEAMMATES_TITLE.translations?.tr).toBe('Tüm ekip arkadaşları');
+    const projected = botRemoteCollectionItemFromSource(source);
+    const label = projected.display.status?.label;
+    expect(typeof label === 'object' ? label.translations?.tr : undefined).toBe('Kullanılabilir');
   });
 });
