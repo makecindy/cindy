@@ -191,7 +191,7 @@ import {
 import { createToolResultImageDescriptor } from '../vision-bridge/tool-result-image-descriptor.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
 import { buildPiVisionBridgeEnv } from '../vision-bridge/pi-vision-bridge-env.js';
-import { captureCodexLocalAuthPolicy, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
+import { captureCodexLocalAuthPolicy, resolveConnectedDefaultProviderIdForModel, resolveVisionBackendRoute, setVisionGatewayKeyReader } from './provider-route.js';
 import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js';
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
@@ -321,7 +321,7 @@ import {
   ESSENTIAL_PLUGIN_IDS,
   resolveBotAllowedBuiltinPluginIds,
 } from './plugins/types.js';
-import { cleanupComputerDriverSession } from '../mcp-integrations/computer.js';
+import { cleanupComputerDriverSession } from '../mcp-integrations/computer.desktop.js';
 import { createPluginRegistry, resetPluginRegistry } from './plugins/index.js';
 import {
   withCodexMcpDiscoveryContext,
@@ -2120,8 +2120,11 @@ export function getMaker(): Maker {
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
     // 保留同一份可变 map，供可选 Pi runtime 在 Maker 构造后动态注册。
     const makerAgents: ConstructorParameters<typeof Maker>[0]['agents'] = {
-      'claude-code': withSubscriptionAccounts(claudeAgent),
-      codex: withSubscriptionAccounts(codexAgent),
+      'claude-code': withSubscriptionAccounts(claudeAgent, desktopClaudeAuthAdapter),
+      codex: withSubscriptionAccounts(codexAgent, {
+        getState: desktopCodexAuthAdapter.getState.bind(desktopCodexAuthAdapter),
+        resolveDefaultProvider: model => model ? resolveConnectedDefaultProviderIdForModel(model, 'codex') : null,
+      }),
     };
     attachAgentsToMakerMemory(makerMemoryManager, makerAgents);
     if (makerMemoryManager.isEnabled()) {
