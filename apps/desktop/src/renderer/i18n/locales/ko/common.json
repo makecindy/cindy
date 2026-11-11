@@ -20018,7 +20018,8 @@
       "recentTitle": "최근 선택",
       "recentEmpty": "아직 경로나 모드를 사용한 작업이 없습니다.",
       "keptOriginal": "지금 쓸 수 있는 모델이 없어 원래 선택한 모델을 사용했습니다.",
-      "keptOriginalShort": "원래 모델 사용"
+      "keptOriginalShort": "원래 모델 사용",
+      "latest": "가장 최근 작업이 지나간 경로"
     },
     "switchOffer": {
       "action": "{{model}}(으)로 바꿔 계속"

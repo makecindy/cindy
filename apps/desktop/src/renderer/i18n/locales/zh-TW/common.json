@@ -20018,7 +20018,8 @@
       "recentTitle": "最近的選擇",
       "recentEmpty": "還沒有任務用過路線或模式。",
       "keptOriginal": "裡面沒有現在能用的模型，沿用了原來選的模型。",
-      "keptOriginalShort": "沿用原來的模型"
+      "keptOriginalShort": "沿用原來的模型",
+      "latest": "最近一次任務走的路"
     },
     "switchOffer": {
       "action": "換到 {{model}} 繼續"

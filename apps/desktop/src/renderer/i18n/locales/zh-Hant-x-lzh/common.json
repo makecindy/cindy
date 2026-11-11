@@ -20018,7 +20018,8 @@
       "recentTitle": "近日所擇",
       "recentEmpty": "尚無差事用過路線或模式。",
       "keptOriginal": "其中今無可用之模型，仍用原擇之模型。",
-      "keptOriginalShort": "仍用原模型"
+      "keptOriginalShort": "仍用原模型",
+      "latest": "近一差事所行之路"
     },
     "switchOffer": {
       "action": "易用 {{model}} 續之"

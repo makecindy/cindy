@@ -20018,7 +20018,8 @@
       "recentTitle": "最近の選択",
       "recentEmpty": "ルートやモードを使ったタスクはまだありません。",
       "keptOriginal": "今使えるモデルがなかったため、元々選んでいたモデルを使いました。",
-      "keptOriginalShort": "元のモデルを使用"
+      "keptOriginalShort": "元のモデルを使用",
+      "latest": "直近のタスクが通った経路"
     },
     "switchOffer": {
       "action": "{{model}} に切り替えて続行"

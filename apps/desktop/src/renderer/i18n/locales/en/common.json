@@ -20091,7 +20091,8 @@
       "recentTitle": "Recent choices",
       "recentEmpty": "No task has used a route or mode yet.",
       "keptOriginal": "Nothing in it was available, so the task kept the model you had chosen.",
-      "keptOriginalShort": "Kept your model"
+      "keptOriginalShort": "Kept your model",
+      "latest": "The path the latest task took"
     },
     "switchOffer": {
       "action": "Continue with {{model}}"

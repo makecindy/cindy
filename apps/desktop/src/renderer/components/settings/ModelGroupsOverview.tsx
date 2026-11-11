@@ -101,9 +101,13 @@ function leftTone(left: number): string {
 
 interface Point { l: number; r: number; y: number }
 
-function MapNodeButton({ node, active, onHover, register, providers }: {
+function MapNodeButton({ node, active, latest, enterDelayMs, onHover, register, providers }: {
   node: MapNode;
   active: boolean;
+  /** 最近一次任务实际经过这一格。 */
+  latest: boolean;
+  /** 入场错开的毫秒数：从左到右一列一列出现。 */
+  enterDelayMs: number;
   onHover(id: string | null): void;
   register(id: string, element: HTMLButtonElement | null): void;
   providers: ReturnType<typeof useCandidateNames>;
@@ -130,11 +134,14 @@ function MapNodeButton({ node, active, onHover, register, providers }: {
       onMouseLeave={() => onHover(null)}
       onFocus={() => onHover(node.id)}
       onBlur={() => onHover(null)}
+      data-latest={latest ? '' : undefined}
+      style={{ animationDelay: `${enterDelayMs}ms`, animationFillMode: 'both' }}
       className={cn(
+        'animate-fade-in motion-reduce:animate-none',
         'relative z-[1] flex h-9 min-h-8 w-full min-w-0 items-center gap-2 rounded-lg border bg-[var(--settings-theme-card-bg)] px-2.5 text-left text-13 font-medium leading-[1.38] text-[var(--text-primary)] outline-none',
         'transition-[border-color,background-color] duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
         'hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-        active ? 'border-[var(--text-tertiary)]' : 'border-[var(--settings-theme-card-border)]',
+        active ? 'border-[var(--text-secondary)]' : latest ? 'border-[var(--text-tertiary)]' : 'border-[var(--settings-theme-card-border)]',
         !node.open && 'cursor-default',
       )}
     >
@@ -143,6 +150,7 @@ function MapNodeButton({ node, active, onHover, register, providers }: {
       {node.left != null && (
         <span className={cn('shrink-0 text-12 font-normal tabular-nums leading-[1.33]', leftTone(node.left))}>{node.left}%</span>
       )}
+      {latest && <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--text-secondary)]" />}
     </button>
   );
 }
@@ -236,6 +244,22 @@ function RelationMap({ config, decisions, onOpenRoute, onOpenMode }: {
   }, [measure, columns]);
 
   const related = useMemo(() => (hovered ? relatedNodes(hovered, edges) : null), [hovered, edges]);
+  // 最近一次任务实际走的路：选的那一项、它走的路线、最后落到的来源。例外改了道时，只标得出图上有的那几格。
+  const latest = useMemo(() => {
+    const last = decisions.find((item) => item.outcome === 'routed' && item.agentKind && item.providerId && item.model);
+    const out = new Set<string>();
+    if (!last?.agentKind || !last.providerId || !last.model) return out;
+    const sourceKey = modelGroupCandidateKey({ agentKind: last.agentKind, providerId: last.providerId, model: last.model });
+    const group = nodeId(last.groupType, last.groupId);
+    const ends = [nodeId('source', sourceKey), nodeId('model', sourceKey)];
+    // 从选中的那一项出发，只留下能通到这次来源的那条路。
+    const reach = (from: string, trail: string[]): boolean => {
+      if (ends.includes(from)) { for (const id of [...trail, from]) out.add(id); return true; }
+      return edges.filter((edge) => edge.from === from && !trail.includes(edge.to)).map((edge) => reach(edge.to, [...trail, from])).some(Boolean);
+    };
+    reach(group, []);
+    return out;
+  }, [decisions, edges]);
   const paths = edges
     .map((edge) => {
       const a = points.get(edge.from);
@@ -246,16 +270,19 @@ function RelationMap({ config, decisions, onOpenRoute, onOpenMode }: {
         key: `${edge.from}>${edge.to}`,
         d: `M${a.r} ${a.y} C${a.r + dx} ${a.y}, ${b.l - dx} ${b.y}, ${b.l} ${b.y}`,
         on: !!related && related.has(edge.from) && related.has(edge.to),
+        latest: latest.has(edge.from) && latest.has(edge.to),
         off: edge.off,
       };
     })
     .filter((item): item is NonNullable<typeof item> => !!item)
     // 高亮的线最后画，叠在别的线上面。
-    .sort((x, y) => Number(x.on) - Number(y.on));
+    .sort((x, y) => (Number(x.on) * 2 + Number(x.latest)) - (Number(y.on) * 2 + Number(y.latest)));
 
   return (
     <div ref={containerRef} className="relative grid grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.4fr)] gap-x-12 px-4 pb-4 pt-3" data-testid="model-groups-map">
-      <svg className="pointer-events-none absolute inset-0 size-full overflow-visible" aria-hidden>
+      {/* 连线跟在格子后面淡入；动的是外层 HTML 元素，不在 SVG 上做动画。 */}
+      <div className="pointer-events-none absolute inset-0 animate-fade-in motion-reduce:animate-none" style={{ animationDelay: '220ms', animationFillMode: 'both' }} aria-hidden>
+      <svg className="absolute inset-0 size-full overflow-visible">
         {paths.map((path) => (
           <path
             key={path.key}
@@ -265,20 +292,23 @@ function RelationMap({ config, decisions, onOpenRoute, onOpenMode }: {
             strokeDasharray={path.off ? '3 3' : undefined}
             className={cn(
               'transition-[stroke] duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
-              path.on ? 'stroke-[var(--text-secondary)]' : 'stroke-[var(--border-default)]',
+              path.on ? 'stroke-[var(--text-primary)]' : path.latest ? 'stroke-[var(--text-tertiary)]' : 'stroke-[var(--border-default)]',
             )}
           />
         ))}
       </svg>
-      {columns.map((column) => (
+      </div>
+      {columns.map((column, columnIndex) => (
         <div key={column.key} className="flex min-w-0 flex-col gap-2.5">
           <div className="truncate text-12 font-medium leading-[1.33] text-[var(--text-tertiary)]">{column.title}</div>
           <div className="flex flex-1 flex-col justify-center gap-2">
-            {column.nodes.map((node) => (
+            {column.nodes.map((node, rowIndex) => (
               <MapNodeButton
                 key={node.id}
                 node={node}
                 active={!!related?.has(node.id)}
+                latest={latest.has(node.id)}
+                enterDelayMs={columnIndex * 70 + rowIndex * 25}
                 onHover={setHovered}
                 register={register}
                 providers={namesOf}
@@ -389,6 +419,12 @@ export function ModelGroupsOverview({ config, onOpenRoute, onOpenMode }: {
       <SettingsSection title={t('modelGroups.overview.mapTitle')} description={t('modelGroups.overview.mapDescription')}>
         <SettingsCard>
           <RelationMap config={config} decisions={decisions ?? []} onOpenRoute={onOpenRoute} onOpenMode={onOpenMode} />
+          {(decisions ?? []).some((item) => item.outcome === 'routed') && (
+            <div className="flex items-center gap-1.5 border-t border-[var(--settings-theme-card-border)] px-4 py-2.5 text-12 leading-[1.33] text-[var(--text-tertiary)]">
+              <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--text-secondary)]" />
+              {t('modelGroups.overview.latest')}
+            </div>
+          )}
         </SettingsCard>
       </SettingsSection>
       {decisions && (

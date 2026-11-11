@@ -20279,7 +20279,8 @@
       "recentTitle": "Escolhas recentes",
       "recentEmpty": "Nenhuma tarefa usou uma rota ou um modo ainda.",
       "keptOriginal": "Não havia nenhum modelo disponível, então a tarefa manteve o modelo que você tinha escolhido.",
-      "keptOriginalShort": "Seu modelo foi mantido"
+      "keptOriginalShort": "Seu modelo foi mantido",
+      "latest": "O caminho que a última tarefa seguiu"
     },
     "switchOffer": {
       "action": "Continuar com {{model}}"

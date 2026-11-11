@@ -20279,7 +20279,8 @@
       "recentTitle": "Choix récents",
       "recentEmpty": "Aucune tâche n'a encore utilisé d'itinéraire ou de mode.",
       "keptOriginal": "Aucun modèle n'était disponible : la tâche a gardé le modèle que vous aviez choisi.",
-      "keptOriginalShort": "Votre modèle a été conservé"
+      "keptOriginalShort": "Votre modèle a été conservé",
+      "latest": "Le chemin suivi par la dernière tâche"
     },
     "switchOffer": {
       "action": "Continuer avec {{model}}"

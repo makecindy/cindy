@@ -20091,7 +20091,8 @@
       "recentTitle": "Letzte Auswahl",
       "recentEmpty": "Noch keine Aufgabe hat eine Route oder einen Modus verwendet.",
       "keptOriginal": "Darin war kein Modell verfügbar, daher blieb die Aufgabe beim Modell, das du gewählt hattest.",
-      "keptOriginalShort": "Dein Modell wurde beibehalten"
+      "keptOriginalShort": "Dein Modell wurde beibehalten",
+      "latest": "Der Weg der letzten Aufgabe"
     },
     "switchOffer": {
       "action": "Mit {{model}} fortfahren"
