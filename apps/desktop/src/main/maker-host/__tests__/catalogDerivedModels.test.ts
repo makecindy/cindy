@@ -833,7 +833,7 @@ describe('resolveModelDefaultContextWindow — settings defaults configure the s
 
   it('applies the displayed default for custom models without a saved override', () => {
     const catalog = catalogWithCustom();
-    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(200_000);
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(500_000);
   });
 
   it('applies Gateway and subscription defaults independently for the same model id', () => {

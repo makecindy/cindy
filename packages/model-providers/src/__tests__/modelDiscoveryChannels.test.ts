@@ -54,7 +54,7 @@ describe('shared provider discovery', () => {
       const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
         pi: { baseUrl: 'https://relay.example/v1', models },
       } });
-      expect(provider.models.pi?.[0]?.contextWindow).toBe(200_000);
+      expect(provider.models.pi?.[0]?.contextWindow).toBe(500_000);
       expect(provider.models.pi?.[0]?.contextWindowVerified).not.toBe(true);
     }
   });
