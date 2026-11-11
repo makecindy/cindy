@@ -23,6 +23,7 @@ import {
   createTelegramIM,
   createWecomIM,
   type DingTalkIM,
+  type DiscordChannelAccessStore,
   type DiscordIM,
   type FeishuIM,
   type IMHost,
@@ -35,16 +36,17 @@ import { TencentIlinkTransport } from '@cindy/wechat-ilink';
 import { inboundFileStaging } from './shared/inboundFileStaging';
 import { verifiedInboundMediaMime } from './shared/inboundMediaVerify';
 import { createLogger } from '../logger';
-import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore';
+import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore.desktop';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop';
 import {
   integrationCacheGet,
   integrationCacheKey,
   integrationCachePut,
 } from '../cindy-media/integrationCache';
 import { pinBlob } from '../cindy-media/ledger';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { discordUiText } from './discord/uiText';
+import { discordChannelAccessStore } from './discord/channelAccessStore';
 import { telegramUiText } from './telegram/uiText';
 import {
   patchTelegramBehavior,
@@ -210,6 +212,8 @@ export function createBotFeishuIM(secretKeyPrefix: string): FeishuIM {
   });
 }
 export const discordIm = createDiscordIM(host, {
+  channelAccess: discordChannelAccessStore,
+  ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),
   resolveImageUrl: resolveManagedImageAbsPath,
   expiredCardNotice: discordUiText.expiredCardNotice,
   ownerNoticeText: (phase) => t(`settings.discordBot.ownerNotice.${phase}`),
@@ -264,8 +268,14 @@ export function createBotDingTalkIM(secretKeyPrefix: string): DingTalkIM {
     ipc: false,
   });
 }
-export function createBotDiscordIM(secretKeyPrefix: string): DiscordIM {
+export function createBotDiscordIM(
+  secretKeyPrefix: string,
+  options: { channelAccess?: DiscordChannelAccessStore } = {},
+): DiscordIM {
   return createDiscordIM(host, {
+    // 服务器频道白名单按连接各一份、由连接记录提供（缺省 = 不开放任何频道）。
+    ...(options.channelAccess ? { channelAccess: options.channelAccess } : {}),
+    ownerOnlyCardNotice: () => t('settings.discordBot.channels.ownerOnlyCardNotice'),
     resolveImageUrl: resolveManagedImageAbsPath,
     expiredCardNotice: discordUiText.expiredCardNotice,
     ownerNoticeText: (phase) => t(`settings.discordBot.ownerNotice.${phase}`),

@@ -99,6 +99,8 @@ import {
   type SendOptions,
   type StartSessionOptions,
   type TurnPermissionPolicy,
+  botRuntimeSkillPolicy,
+  isolatedBotProfile,
 } from '../base-agent.js';
 import {
   CINDY_BRIDGE_EXTENSION_FILENAME,
@@ -246,8 +248,11 @@ import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
   emptyPiProjectResourceCliPaths,
+  type PiProjectResourceCliPaths,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
+  piProjectResourcesDrifted,
+  snapshotPiProjectResourceLaunch,
 } from './project-resource-cli.js';
 import {
   createPiTranslateContext,
@@ -2684,7 +2689,8 @@ export class PiAgent extends BaseAgent {
     }
     assertRemotePiContextProfileAvailable(opts.remoteHostId, opts.model, opts.providerId);
     const reviewMode = opts.reviewMode === true;
-    const botMemoryScope = opts.makerMemoryScopeKey?.startsWith('bot:') === true;
+    // A teammate's memory follows its own switch, also once it is a project (V2, no `bot:` scope).
+    const botMemoryScope = opts.makerMemoryScopeKey?.startsWith('bot:') === true || opts.makerMemorySwitchOwned === true;
     const sessionMemoryEnabled = !reviewMode
       && (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true
       && (botMemoryScope || (this.memoryOverride ?? true));
@@ -3282,7 +3288,7 @@ export class PiAgent extends BaseAgent {
     // Bot contexts remain profile-only. SSH tasks use the remote user's rules,
     // never the controlling desktop's personal instructions.
     // 受邀者会话不带本机用户的全局说明(~/.pi/agent/AGENTS.md 等)。
-    const globalContextFiles = opts.botRuntimeProfile || hostedGuest ? [] : await readPiGlobalContext(
+    const globalContextFiles = isolatedBotProfile(opts.botRuntimeProfile) || hostedGuest ? [] : await readPiGlobalContext(
       this.deps.resolvePiGlobalContextHome?.(opts.remoteHostId),
       fileOps,
     );
@@ -3797,8 +3803,8 @@ export class PiAgent extends BaseAgent {
           // 不得再二次 resolve (Codex #2399 P2)。
           ...((sessionMemoryEnabled || opts.makerMemoryScopeKey) ? { memoryScopeKey } : {}),
           memoryEnabled: sessionMemoryEnabled,
-          ...(opts.botRuntimeProfile?.mcpPolicy
-            ? { botMcpPolicy: opts.botRuntimeProfile.mcpPolicy }
+          ...(isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy
+            ? { botMcpPolicy: isolatedBotProfile(opts.botRuntimeProfile)!.mcpPolicy }
             : {}),
           vendorOptions: mutableVendorOptions,
           mcpCallerKind: 'root',
@@ -3882,7 +3888,7 @@ export class PiAgent extends BaseAgent {
     // 与用户段。前缀稳定(默认 prompt 静态),易变内容禁止进入(缓存规则 3.1)。
     // 设备托管(含受邀者)用任务所在电脑给的花名册：插件工具经隧道在那台，本机装的插件不进这个任务。
     const localGhostRoster = () => this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
-    const ghostRosterPrompt = reviewMode || opts.botRuntimeProfile
+    const ghostRosterPrompt = reviewMode || isolatedBotProfile(opts.botRuntimeProfile)
       ? ''
       : hosted
         ? deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, localGhostRoster)
@@ -3890,14 +3896,14 @@ export class PiAgent extends BaseAgent {
     const promptSourceEntries: Array<[string, string | undefined]> = [
       ['delivery', reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt?.trim()],
       ['profile', reviewMode ? undefined : opts.botProfilePrompt?.trim()],
-      ['host', opts.botRuntimeProfile ? undefined : this.deps.runtimeConfig.systemPrompt?.trim()],
+      ['host', isolatedBotProfile(opts.botRuntimeProfile) ? undefined : this.deps.runtimeConfig.systemPrompt?.trim()],
       ['plugins', ghostRosterPrompt.trim()],
       ['profile', reviewMode ? undefined : opts.botProfileContextPrompt?.trim()],
       ['memoryRules', makerMemoryPromptEnabled && !opts.makerMemoryScopeKey?.startsWith('bot:')
         ? MAKER_MEMORY_RULES : undefined],
       ['memoryIndex', makerMemoryIndex.trim()],
       ['user', reviewMode ? undefined : opts.botUserProfilePrompt?.trim()],
-      ['user', reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt?.trim()],
+      ['user', reviewMode || isolatedBotProfile(opts.botRuntimeProfile) ? undefined : opts.userPrompt?.trim()],
       ['directories', piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs, mutableLibraryRoot)],
     ];
     const promptSources: PiPromptSource[] = promptSourceEntries.flatMap(([source, text]) =>
@@ -3945,11 +3951,11 @@ export class PiAgent extends BaseAgent {
     // skills. Missing/throwing authorities and paths fail closed; never infer
     // approval from permission mode, MCP/plugin state, or caller vendor options.
     // 受邀者不读本机用户的技能停用偏好(本机技能整体不加载)。
-    const disabledSkillPaths = opts.remoteHostId || opts.botRuntimeProfile || reviewMode || hostedGuest
+    const disabledSkillPaths = opts.remoteHostId || isolatedBotProfile(opts.botRuntimeProfile) || reviewMode || hostedGuest
       ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
     let disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
     const disabledSkillSnapshot = disabledSkillLaunch.identities;
-    const loadProjectResourcesInPlace = !reviewMode && !opts.botRuntimeProfile && !opts.remoteHostId && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
+    const loadProjectResourcesInPlace = !reviewMode && !isolatedBotProfile(opts.botRuntimeProfile) && !opts.remoteHostId && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
     let projectResourceAssembly = unavailablePiProjectResourceAssembly(
       reviewMode ? 'review-mode-project-resources-disabled' : 'approval-resolver-unavailable',
     );
@@ -3982,7 +3988,7 @@ export class PiAgent extends BaseAgent {
       requestedSkillCount: projectResourceAssembly.diagnostic.requestedSkillCount,
     });
     const botSkillSelection = applyPiBotSkillPolicy(
-      reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
+      reviewMode ? undefined : botRuntimeSkillPolicy(opts.botRuntimeProfile),
       projectResourceAssembly,
     );
     projectResourceAssembly = botSkillSelection.projectAssembly;
@@ -4065,20 +4071,30 @@ export class PiAgent extends BaseAgent {
     // Local root tasks load project skills/prompts/extensions in place via
     // explicit CLI flags. Keep --no-approve so `.pi/settings.json` is unread.
     // 受邀者：只要会话目录内的技能与提示词模板，项目扩展不加载(会在本机执行)。
-    const collectedProjectResources = loadProjectResourcesInPlace
-      ? guestRoot
-        ? restrictPiGuestProjectResources(collectPiProjectResourceCliPaths(opts.workingDir), guestRoot)
-        : collectPiProjectResourceCliPaths(opts.workingDir)
-      : emptyPiProjectResourceCliPaths();
+    // 采集只发生这一次:其结果既是 argv 资源段,也是漂移检测的基准。漂移判定
+    // 复用同一个 collector 重新采集后逐项比较(见 piProjectResourcesDrifted),
+    // 不另存任何基线 —— 存基线就等于手写一份「collector 消费什么」的镜像,
+    // 镜像与实现必然分歧(2026-11-10 六轮漏检全部出在这里)。
+    // spawn 时冻结的停用清单:argv 与漂移比较都必须用这一份,否则「删掉一个
+    // 从未加载的停用 skill」会被当成漂移,白等一次冷启动(Greptile P2)。
+    const disabledSkillPathsAtLaunch = currentDisabledSkillLaunchPaths(disabledSkillLaunch);
+    // 采集 → argv 资源集合的唯一口径(受邀者裁剪 + 停用过滤)。启动与漂移比较
+    // 共用它,所以「比较口径」不可能与「实际 argv」分叉。
+    const projectResourceToCliPaths = (collected: PiProjectResourceCliPaths): PiProjectResourceCliPaths => {
+      const scoped = guestRoot ? restrictPiGuestProjectResources(collected, guestRoot) : collected;
+      return {
+        ...scoped,
+        skills: filterPiProjectCliSkills(scoped.skills, disabledSkillPathsAtLaunch),
+      };
+    };
     const projectResourceCli = loadProjectResourcesInPlace
-      ? {
-          ...collectedProjectResources,
-          skills: filterPiProjectCliSkills(
-            collectedProjectResources.skills,
-            currentDisabledSkillLaunchPaths(disabledSkillLaunch),
-          ),
-        }
-      : collectedProjectResources;
+      ? projectResourceToCliPaths(collectPiProjectResourceCliPaths(opts.workingDir))
+      : emptyPiProjectResourceCliPaths();
+    // 启动快照:供运行时空闲时的资源漂移检测(见 handle.hasProjectResourceDrift)。
+    // 只存 argv 实际用的集合与该口径 —— 没有第二份基线。
+    const projectResourceLaunchSnapshot = loadProjectResourcesInPlace
+      ? snapshotPiProjectResourceLaunch(opts.workingDir, projectResourceCli, projectResourceToCliPaths)
+      : null;
 
     // Own the entire managed-skill setup in the existing startup rollback:
     // discovery and path checks can fail before any projection is created.
@@ -4086,7 +4102,7 @@ export class PiAgent extends BaseAgent {
     let managedSkillRoot: string | undefined;
     let args: string[];
     try {
-      const managedSkillGrants = snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy);
+      const managedSkillGrants = snapshotManagedSkillGrants(isolatedBotProfile(opts.botRuntimeProfile)?.skillPolicy);
       // 受邀者不带本机安装的托管技能(属于本机用户与其组织)。
       // 任务所在电脑提供了托管技能时，它们已作为项目技能放在影子目录，本机的不再加载。
       const managedSkills = opts.remoteHostId || reviewMode || hostedGuest || hosted?.controllerManagedSkills || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : await this.deps.getManagedSkills?.() ?? [];
@@ -4135,14 +4151,14 @@ export class PiAgent extends BaseAgent {
         initialWireModel,
         ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
         ...(opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? ['--no-skills', '--no-context-files', '--no-prompt-templates'] : []),
-        // Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
-        // the cwd chain — their context is the Bot profile, not the workspace.
-        ...(opts.botRuntimeProfile ? ['--no-context-files'] : []),
+        // Classic Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
+        // the cwd chain — their context is the Bot profile. V2 teammates load them like any task.
+        ...(isolatedBotProfile(opts.botRuntimeProfile) ? ['--no-context-files'] : []),
         ...(botSkillSelection.disableImplicitSkills ? ['--no-skills'] : []),
         // 受邀者：不发现本机用户的技能、模板与会话目录之外的说明文件；受邀者自己的用下面的显式路径。
         ...(hostedGuest
           ? PI_DEVICE_HOSTED_GUEST_FLAGS.filter((flag) => !(
-            (flag === '--no-context-files' && opts.botRuntimeProfile)
+            (flag === '--no-context-files' && isolatedBotProfile(opts.botRuntimeProfile))
             || (flag === '--no-skills' && botSkillSelection.disableImplicitSkills)))
           : []),
         ...additionalSkillPaths.filter((skillPath) => !projectResourceCli.skills
@@ -6454,24 +6470,53 @@ export class PiAgent extends BaseAgent {
       runtimeCapabilityRefreshPromise = tracked;
       return tracked;
     };
-    const awaitRuntimeCapabilitiesForSlashCommand = async (text: string): Promise<void> => {
+    const awaitRuntimeCapabilitiesForSlashCommand = async (
+      text: string,
+      pinnedSkill = false,
+      signal?: AbortSignal,
+    ): Promise<void> => {
       const trimmed = text.trimStart();
       // 只有已确认 loaded 的清单才能放行派发;非 loaded(unknown/failed)清单是
       // 过渡快照:若重试链仍在跑,等它(重试成功会升级为 loaded);重试已耗尽时
-      // runtimeCapabilityRefreshPromise 为 undefined,race 立即返回,按原样逃逸。
-      if (!trimmed.startsWith('/') || trimmed.startsWith('/skill:') || runtimeCapabilityManifest?.status === 'loaded') return;
+      // runtimeCapabilityRefreshPromise 为 undefined,立即返回,由调用方继续
+      // 普通命令转义或 pinned Skill 来源校验。
+      if (
+        !trimmed.startsWith('/')
+        || (trimmed.startsWith('/skill:') && !pinnedSkill)
+        || runtimeCapabilityManifest?.status === 'loaded'
+      ) return;
+      const pending = runtimeCapabilityRefreshPromise;
+      if (!pending) return;
       // get_commands starts asynchronously after Pi's ready boundary. A prompt
       // template selected on a brand-new task must wait for that exact runtime
       // catalog instead of being escaped into ordinary model text.
+      // Pinned Skills also need that catalog to prove the selected path. A
+      // failed/unknown attempt may still have a successful retry in flight.
       // race 上限要覆盖重试链全生命周期(末次 5s + Σ(delay_i+5s) = 5+4+5+10+5+20+5
       // ≈ 54s,确定性有界):cap 从派发时刻起算,/template 可能恰在 ready 即发出,
       // 此时初次采集还在跑 —— 上限必须盖住链尾,否则重试成功前一瞬仍会逃逸
       // (Codex P2:10s cap 在 10.6s 才就绪的场景下提前胜出)。链结束或耗尽时
       // promise 已 settle,race 立即返回,不把用户卡在派发上。
-      await Promise.race([
-        runtimeCapabilityRefreshPromise,
-        new Promise<void>((resolve) => { setTimeout(resolve, 60_000).unref?.(); }),
-      ]);
+      let finishWaiting!: () => void;
+      let timeout!: ReturnType<typeof setTimeout>;
+      const deadlineOrAbort = new Promise<void>((resolve) => {
+        finishWaiting = resolve;
+        timeout = setTimeout(resolve, 60_000);
+        timeout.unref?.();
+        signal?.addEventListener('abort', finishWaiting, { once: true });
+        if (signal?.aborted) finishWaiting();
+      });
+      try {
+        await Promise.race([pending, deadlineOrAbort]);
+        if (signal?.aborted) {
+          // No prompt has reached Pi. Let Session release its reservation without
+          // waiting for a terminal event; the shared catalog retry keeps running.
+          throw new TurnDispatchRejectedError('pi send cancelled before acceptance');
+        }
+      } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', finishWaiting);
+      }
     };
     const routeManagedPackageCommand = async (
       text: string,
@@ -6610,6 +6655,9 @@ export class PiAgent extends BaseAgent {
           resumeFileExists = false;
         }
         if (!resumeFileExists) {
+          if (opts.vendorOptions?._cindyRequireNativeResume === true) {
+            throw new Error('Native Pi history is unavailable; refusing an empty replacement');
+          }
           // 轮 25 CRITICAL:session 文件缺失 = 历史数据已不存在, fresh 是唯一
           // 合理选择 —— 不因 onInvalidResumeSession 的 CAS 结果(防并发覆盖的
           // claude 语义)拒绝 fallback。CAS 仍执行(清 DB 残留 id), 但返回值
@@ -6625,6 +6673,9 @@ export class PiAgent extends BaseAgent {
             sessionPath: opts.resumeSessionId,
           }, { timeoutMs: PI_RESUME_TIMEOUT_MS });
           if (!switched.success) {
+            if (opts.vendorOptions?._cindyRequireNativeResume === true) {
+              throw new Error(`Native Pi history could not be restored: ${switched.error ?? 'switch_session failed'}`);
+            }
             // 轮 25 CRITICAL:switch 失败也允许 fallback(同文件缺失理由)——
             // CAS 结果不作门禁, fresh 比卡死强。CAS 仍执行清 DB 残留。
             // 轮 42 P2(codex-connector):fresh fallback 前**必须**检查 CAS 结果
@@ -7760,6 +7811,10 @@ export class PiAgent extends BaseAgent {
         return runtimeCapabilityManifest;
       },
       disabledSkillPaths: disabledSkillSnapshot,
+      hasProjectResourceDrift() {
+        return projectResourceLaunchSnapshot !== null
+          && piProjectResourcesDrifted(projectResourceLaunchSnapshot);
+      },
       onRuntimeCapabilitiesChange(listener) {
         if (closed) {
           notifyRuntimeCapabilityListener(listener, undefined);
@@ -7868,14 +7923,15 @@ export class PiAgent extends BaseAgent {
           // acceptance boundary. A Stop that races after that point must not
           // erase the user message/receipt while leaving an installed package.
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
-          await awaitRuntimeCapabilitiesForSlashCommand(text);
-          if (pinnedSkill && !runtimeCapabilityManifest) {
-            await runtimeCapabilityRefreshPromise;
-          }
+          await awaitRuntimeCapabilitiesForSlashCommand(
+            text,
+            pinnedSkill !== undefined,
+            managedPackageRoute.accepted ? undefined : sendOpts?.signal,
+          );
+          if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
           if (pinnedSkill) {
             text = preparePinnedPiSkillInvocation(text, pinnedSkill, runtimeCapabilityManifest);
           }
-          if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
           // setExtraDirs 是热更新；Pi 没有独立的 mid-session system-prompt RPC，所以在
           // 后续 user turn 前附上短引用目录段(但 /skill: 起始时不前置,见 composePiPromptText)。
           const promptText = composePiPromptText(

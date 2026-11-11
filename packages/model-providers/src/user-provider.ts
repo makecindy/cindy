@@ -604,9 +604,9 @@ export function buildUserProvider(
             m.api ?? (agent === 'pi' ? m.piApi ?? wire : wire),
             !m.api && !m.piApi && !m.route)
           ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, resolvedBaseUrl, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry)
-            ? providerPresetModelRecord(rt.catalogPresetId, m.id) : undefined)
+            ? providerPresetModelRecord(rt.catalogPresetId, m.id, undefined, m.route?.baseUrl ?? resolvedBaseUrl) : undefined)
           ?? (followsPreset && sameRoute && m.api && presetModel?.api === m.api
-            ? providerPresetModelRecord(preset?.id, m.id, m.api) : undefined)
+            ? providerPresetModelRecord(preset?.id, m.id, m.api, m.route?.baseUrl ?? resolvedBaseUrl) : undefined)
           ?? providerModelGenerationRecord(m.id, m.route?.baseUrl ?? resolvedBaseUrl, m.api ?? m.piApi ?? wire, followsPreset ? preset?.id : undefined)
         : undefined;
       // Existing catalog identities keep their established execution path. A

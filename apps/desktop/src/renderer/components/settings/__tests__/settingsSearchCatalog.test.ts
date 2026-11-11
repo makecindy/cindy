@@ -46,6 +46,17 @@ const searchContext = { platform: 'win32', region: 'cn', mode: 'cloud', membersh
 } as const;
 
 describe('settings discoverability regressions', () => {
+  it('finds the local API import entry by its titles and source app names before mounting settings', () => {
+    const documents = buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, searchContext);
+    for (const query of [
+      searchI18n.t('settings.providers.import.local.title'),
+      searchI18n.t('settings.providers.import.local.title', { lng: 'en' }),
+      'Alma', 'CC Switch', 'OpenCode',
+    ]) {
+      const result = searchSettings(documents, query).find(({ entry }) => entry.id === 'providers.localImport');
+      expect(result?.entry, query).toMatchObject({ tab: 'providers', targetId: 'settings-provider-local-import' });
+    }
+  });
   // Unit regression (#8481): automatic mode renders no slot explanations.
   // Existing catalog tests did not query those hidden descriptions.
   it('does not advertise custom-only auxiliary slot explanations', () => {

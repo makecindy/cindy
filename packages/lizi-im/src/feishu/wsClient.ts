@@ -977,6 +977,18 @@ async function processClaimedMessage(
       ? resolveMentionPlaceholders(parsed.text, data.message.mentions, selfOpenId)
       : parsed.text;
 
+  // 直接转发的第三方/模板卡片抽不出正文。引用解析必须继续留空(群历史回退),
+  // 所以兜底只加在入站: 记一条 unsupported, 编排才能回可见提示, 而不是被下面
+  // 的空门禁静默丢掉(#9245)。
+  if (
+    (msgType === 'interactive' || msgType === 'card') &&
+    !text.trim() &&
+    attachments.length === 0 &&
+    unsupported.length === 0
+  ) {
+    unsupported = [...unsupported, { type: 'interactive', label: '卡片消息' }];
+  }
+
   // Drop entirely only when there's literally nothing to relay.
   if (!text && attachments.length === 0 && unsupported.length === 0 && !(isGroup && parsed.text.trim())) {
     abandonUnpairedFlat?.();

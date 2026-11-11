@@ -707,6 +707,10 @@ class Builder {
     const remaining = state.remaining;
     const level = levelOf(remaining);
     const reserve = remaining <= 0 && (source.creditsUnlimited || (source.credits ?? 0) > 0);
+    // Keep the narrow tube header readable, including fractional and unlimited credits.
+    const creditValue = source.creditsUnlimited ? '∞' : new Intl.NumberFormat(this.input.locale, {
+      notation: 'compact', maximumSignificantDigits: 3,
+    }).format(source.credits ?? 0);
     const limit = state.limit;
     // Read together with the percentage above: "90% · resets in 6d 7h", for the window shown.
     // An unreachable computer's reading says how old it is instead of a countdown.
@@ -725,9 +729,9 @@ class Builder {
     return {
       ...base,
       name,
-      value: reserve ? null : String(Math.round(remaining)),
-      valueUnit: reserve ? null : '%',
-      valueLabel: reserve ? this.t('cell.credits') : null,
+      value: reserve ? creditValue : String(Math.round(remaining)),
+      valueUnit: reserve ? this.t('cell.credits') : '%',
+      valueLabel: null,
       level,
       fill: clamp(remaining / 100, 0, 1),
       reserve,
@@ -737,7 +741,7 @@ class Builder {
       ...(unusedAtReset ? { unusedAtReset: true } : {}),
       ...(seenAtMs !== null ? { stale: true } : {}),
       accessibilityLabel: reserve
-        ? this.t('a11y.reserve', { name: `${source.brand} ${name}` })
+        ? `${this.t('a11y.reserve', { name: `${source.brand} ${name}` })} · ${source.creditsUnlimited ? this.t('fact.unlimited') : source.credits?.toLocaleString(this.input.locale, { maximumSignificantDigits: 21 })} ${this.t('cell.credits')}`
         : this.t('a11y.remaining', { name: source.brand === name ? name : `${source.brand} ${name}`, n: Math.round(remaining) }),
     };
   }

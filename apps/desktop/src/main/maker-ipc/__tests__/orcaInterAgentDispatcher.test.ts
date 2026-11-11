@@ -460,6 +460,29 @@ describe('Orca lead/worker dispatcher', () => {
     expect(liveSession.send).not.toHaveBeenCalled();
   });
 
+  it('recycles a drifted runtime before live dispatch and rebuilds via the queued path', async () => {
+    // Orca 直发绕过发送事务:漂移时先回收(重建窗口内),本条消息转
+    // sendToSessionInternal 的 lazy/queued 路径重扫重建投递,不拿旧 argv 跑。
+    const recycleProjectResourceRuntime = vi.fn(async () => true);
+    const h = createHarness({ recycleProjectResourceRuntime });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Run with the refreshed skill set',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'drift-recycle-test' },
+    });
+
+    expect(recycleProjectResourceRuntime).toHaveBeenCalledWith('target-session');
+    expect(h.liveSession.send).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(h.deps.sendToSessionInternal).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'target-session',
+      clientId: 'client-1',
+    }));
+  });
+
   it('still sends through the live handle after prepare leaves it open', async () => {
     const prepareUnhealthySession = vi.fn(async () => false);
     const h = createHarness({ prepareUnhealthySession });
@@ -476,6 +499,63 @@ describe('Orca lead/worker dispatcher', () => {
     expect(prepareUnhealthySession).toHaveBeenCalledWith('target-session');
     expect(h.liveSession.send).toHaveBeenCalled();
     expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
+  });
+
+  // Regression: collaboration started from the panel marks an already-live session as Lead
+  // without rebuilding it. A Worker report then started a Lead turn that had no Lead
+  // instructions or Orca tools, and the Lead ended the turn with an empty answer.
+  it('rebuilds a live target that lacks Orca hydration and delivers to the rebuilt runtime', async () => {
+    const accept = async (_message: UserMessage, opts?: SessionSendOptions): Promise<SessionSendResult> => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    };
+    const staleSession = createLiveSession(accept);
+    const hydratedSession = createLiveSession(accept);
+    let current = staleSession;
+    const hydrateOrcaSessionIfNeeded = vi.fn(async () => {
+      current = hydratedSession;
+    });
+    const h = createHarness({
+      getLiveSession: vi.fn(() => current),
+      hydrateOrcaSessionIfNeeded,
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Review finished',
+      source: 'worker',
+      senderLabel: 'Worker',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'hydrate-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(hydrateOrcaSessionIfNeeded).toHaveBeenCalledWith(
+      'target-session',
+      expect.objectContaining({ agentKind: 'codex' }),
+    );
+    expect(staleSession.send).not.toHaveBeenCalled();
+    expect(hydratedSession.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('still delivers the message when the hydration rebuild fails', async () => {
+    const h = createHarness({
+      hydrateOrcaSessionIfNeeded: vi.fn(async () => {
+        throw new Error('bootstrap failed');
+      }),
+    });
+
+    const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Review finished',
+      source: 'worker',
+      senderLabel: 'Worker',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'hydrate-failure-test' },
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'dispatched' });
+    expect(h.liveSession.send).toHaveBeenCalledTimes(1);
   });
 
   it('serializes concurrent live prepare/send on the per-session lock', async () => {

@@ -1,0 +1,30 @@
+{
+  "core_fingerprint": "bc94b7e56a6d26a8264d0eb5629b032fb7035806",
+  "model": "independent-burst-calendar-v2",
+  "all_policy_rows": 192,
+  "kcp_reference_rows": 768,
+  "unchanged_non_burst_rows": {
+    "auto": 54,
+    "lean": 54,
+    "fast": 54
+  },
+  "tests_passed": 43,
+  "profiling_ignored": 1,
+  "default_stress_seeds": 10000,
+  "per_policy_stress_seeds": 1000,
+  "fresh_seed_start": 300000,
+  "fresh_seed_count": 1000,
+  "public_runs_completed": 90,
+  "public_send_failures": 0,
+  "netperf_source_matches_remote": true,
+  "all_targets_check_exit": 0,
+  "added_line_whitespace_issues": 0,
+  "benchmark_limits": [
+    "rounded raw output",
+    "single public path",
+    "three public repeats",
+    "host CPU contention",
+    "no product settings integration",
+    "no encryption or production integration"
+  ]
+}

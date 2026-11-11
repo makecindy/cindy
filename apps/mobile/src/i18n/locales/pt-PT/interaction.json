@@ -29,6 +29,13 @@
       "description": "O acesso total desativa a sandbox do espaço de trabalho e dispensa as aprovações de rotina. {{appName}} pode modificar ficheiros fora do espaço de trabalho e executar comandos de rede sem perguntar; as operações de alto risco integradas continuarão a exigir confirmação.",
       "confirm": "Ativar acesso total",
       "cancel": "Manter permissões atuais"
+    },
+    "description": {
+      "default": "Aprova as ações quando necessário.",
+      "acceptEdits": "As edições de ficheiros são permitidas diretamente; aprova as outras ações quando necessário.",
+      "auto": "Um modelo de IA aprova as ações, o que pode exigir mais espera; confirma quando necessário.",
+      "bypass": "As ações habituais são permitidas diretamente, incluindo ficheiros fora do espaço de trabalho e comandos de rede.",
+      "plan": "Analisa e planeia sem alterar ficheiros."
     }
   },
   "planMode": {
@@ -36,6 +43,10 @@
     "exit": "Sair do modo de planeamento"
   },
   "panel": {
+    "questionUnanswered": "Sem resposta",
+    "questionWithdrawn": "Já não precisa de resposta",
+    "withdrawnDraft": "Esta pergunta já não precisa de resposta.\n{{reason}}\nO rascunho foi guardado e pode ser enviado como complemento.",
+    "sendSupplement": "Enviar complemento",
     "readOnlyKind": "Pendente",
     "readOnlyTitle": "A aguardar confirmação no seu computador",
     "pendingRequests": "Pedidos pendentes",
@@ -454,5 +465,39 @@
       "ghost_id": "Plugin",
       "tool": "Ferramenta"
     }
+  },
+  "issueConfirm": {
+    "title": "Confirmar envio de feedback para {{appName}}",
+    "typeBug": "Erro",
+    "typeFeature": "Funcionalidade",
+    "titleLabel": "Título",
+    "bodyLabel": "Corpo (Markdown)",
+    "privacyHint": "O título e o corpo da ocorrência serão públicos e poderão ser pesquisáveis ou guardados em cache. A ocultação automática abrange apenas alguns padrões comuns e não consegue detetar todo o contexto sensível.",
+    "relatedLogsHint": "Este envio inclui os registos do cliente relacionados apresentados acima. São filtrados, expurgados e limitados em extensão antes da publicação.",
+    "privacyConfirm": "Revi o conteúdo público acima e não contém informação pessoal, de conversas ou empresarial que deva permanecer privada",
+    "submissionMethodLabel": "Identidade de envio",
+    "identityGithubUser": "A minha conta GitHub @{{login}}",
+    "identityGithubUserHint": "Será o autor no GitHub e poderá editar ou fechar esta ocorrência no GitHub",
+    "identityPlatform": "Bot oficial do Cindy @{{login}} (predefinição)",
+    "identityPlatformHint": "Não é necessário configurar uma conta GitHub. O bot oficial cria a ocorrência e pode adicionar uma atribuição pública no corpo",
+    "publicNameLabel": "Atribuição pública",
+    "publicNameHint": "Esta atribuição aparecerá publicamente no corpo da ocorrência",
+    "anonymous": "Anónimo",
+    "useAnonymous": "Usar atribuição anónima",
+    "envLine": "Ambiente do cliente de envio (anexado automaticamente ao enviar): cliente {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · Idioma da interface {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · ID do modelo {{modelId}} (esta sessão)",
+    "regionLine": "Região da compilação: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Enviar feedback",
+    "cancel": "Cancelar",
+    "previewLabel": "GitHub · Feedback público",
+    "edit": "Editar",
+    "doneEditing": "Concluir edição",
+    "publicSubmit": "Enviar publicamente",
+    "publicationNotice": "O conteúdo e o seu nome ficarão públicos no GitHub.",
+    "attribution": "Por {{name}}",
+    "environment": "Ambiente incluído",
+    "identitySettings": "Nome e conta"
   }
 }

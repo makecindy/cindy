@@ -36,6 +36,10 @@ const makerSendSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/makerSendTransaction.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const queuedInputOriginSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/queuedInputOrigin.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -332,9 +336,9 @@ describe('session runtime control wiring', () => {
       expect(body).toContain('if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);');
       expect(body).toContain('stampTrustedDesktopQueuedOrigin(');
     }
-    expect(makerSendSource).toContain('clientId: explicitUserItem.clientId');
-    expect(makerSendSource).toContain('persistedContent: explicitUserItem.persistedContent');
-    expect(makerSendSource).toContain(
+    expect(queuedInputOriginSource).toContain('clientId: explicitUserItem.clientId');
+    expect(queuedInputOriginSource).toContain('persistedContent: explicitUserItem.persistedContent');
+    expect(queuedInputOriginSource).toContain(
       'if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem',
     );
     expect(makerSendSource).toContain('TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT');

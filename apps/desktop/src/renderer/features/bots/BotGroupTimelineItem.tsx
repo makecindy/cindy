@@ -414,6 +414,13 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       </Row>
     );
   }
+  // The full timeline read supplies plans alongside their messages. A missing detail
+  // here has no known organizer or kind: retain the fallback without inventing authorship.
+  if (message.kind === 'plan' && !props.plan) {
+    return <Row {...rowProps} block="system">
+      <SystemLine><span>{t('bots.groupChat.plan.missing')}</span></SystemLine>
+    </Row>;
+  }
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || authorName;
     if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Row {...rowProps} block="system">

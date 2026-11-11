@@ -19,7 +19,7 @@ import { PI_REASONING_EFFORTS, PROVIDER_MODEL_CATALOG, providerEndpointBindings,
 export function invocationModelRecord(model: CatalogModel, upstream: string, api?: PiModelApi): ProviderModelRecord | undefined {
   const selected = model.api ?? api;
   const known = providerModelRecord(model.id, upstream, selected)
-    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected) : undefined)
+    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected, upstream) : undefined)
     ?? providerModelGenerationRecord(model.id, upstream, selected, model.catalogPresetId);
   if (!selected && !known) return undefined;
   // The active catalog is authoritative; unknown capability must not silently

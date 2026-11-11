@@ -26,10 +26,10 @@ describe('custom auxiliary chain does not hit the session agent', () => {
     expect(source).not.toContain('isAuxiliaryModelCustomized');
     expect(source).toContain('await getMaker().oneShot');
     expect(source).toContain('const ownerScopeKey = activeOwnerScopeKey();');
-    expect(source).toContain('const beforeSessionAgentDispatch = async () =>');
+    expect(source).toContain('const beforeSessionAgentDispatch = async (route?: { model?: string }) =>');
     expect(source).toContain('beforeDispatch: beforeSessionAgentDispatch');
-    expect(source).toContain('isAgentOneShotRouteDisabled(agentKind)');
-    const disabledCheck = source.indexOf('isAgentOneShotRouteDisabled(agentKind)');
+    expect(source).toContain('isAgentOneShotRouteDisabled(agentKind, route?.model)');
+    const disabledCheck = source.indexOf('isAgentOneShotRouteDisabled(agentKind, route?.model)');
     const ownerRecheck = source.indexOf('return isAuxiliaryOwnerScopeCurrent(ownerScopeKey, auxiliaryChainSnapshot);', disabledCheck);
     expect(ownerRecheck).toBeGreaterThan(disabledCheck);
   });

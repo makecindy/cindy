@@ -13,7 +13,7 @@
 
 import type { IMUnsupportedEntry } from '@cindy/im';
 
-import { t } from '../../i18n';
+import { t } from '../../i18n.desktop';
 import type { ImUiTextPack } from '../shared/types';
 
 export const ui = {

@@ -3,6 +3,8 @@
 当前先基于 PR #9246 提供主动启用的实验性基础网页版，让用户从浏览器操作 Host 上的基础任务。
 普通桌面启动保持原状；不以完整迁移桌面功能为第一版前提。
 当前范围与未完成验收见 [基础网页版](basic-web.md)，实际修复记录见 [本地完善与验收](pr-9246-completion.md)。
+下一阶段目标已扩展为支持桌面、手机、网页及无图形 Linux 的共用后台，见
+[完整无界面 Cindy 计划](headless-runtime-plan.md)；该目标尚未全部实现。
 
 代码中的两个入口：
 
@@ -13,8 +15,10 @@
 
 | 文档 | 内容 |
 |---|---|
-| [architecture-and-status.md](architecture-and-status.md) | 模块耦合分析、Host 入口、阶段进度 |
-| [feature-parity.md](feature-parity.md) | 逐项功能状态（已验证 / 部分 / 禁用+TODO）与最终审计 |
+| [headless-runtime-plan.md](headless-runtime-plan.md) | 当前架构目标、能力缺口、分批交付与完整无界面验收 |
+| [architecture-and-status.md](architecture-and-status.md) | 原 PR 阶段的模块分析与实验记录；现状以基础网页版和当前计划为准 |
+| [maintenance-plan.md](maintenance-plan.md) | PR #9246 合并后的维护计划与逐批验收边界 |
+| [feature-parity.md](feature-parity.md) | 原 PR 阶段的逐项功能记录与审计，保留历史验证范围 |
 | [electron-client-mode.md](electron-client-mode.md) | Electron 以客户端模式运行：通道代理表、安全边界、未迁移清单 |
 | [systemd.md](systemd.md) | user unit 安装与运维 |
 | [maker-assembly-extraction-plan.md](maker-assembly-extraction-plan.md) | Runtime 装配抽离计划 |
@@ -50,7 +54,8 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 ## 当前边界
 
 - Host 只监听 `127.0.0.1`，所有数据接口要求 profile bearer 或本机 cookie。
-- 当前已完成 macOS 上真实文本任务、刷新与 Host 重启续接；停止、权限确认和断线恢复仍待浏览器实测。
+- 当前已完成 macOS 上真实文本任务、刷新、停止、允许一次、Host 重启续接与受控事件断线恢复；
+  手机、三平台实机与真实网络切换仍待验收，见 [本地人工验收](basic-web.md#本地人工验收2026-11-10)。
 - Electron 客户端模式覆盖任务、消息、供应商、能力、Agent 命令/技能、输入队列、交互与告警；
   插件执行、MCP、scheduler、device-link、记忆/文件工具仍由 Desktop Runtime 承担（见上表 TODO）。
 
