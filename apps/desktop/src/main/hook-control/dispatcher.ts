@@ -50,6 +50,8 @@ import {
   makeTurnReopen,
   HOOK_FEATURE_TELEGRAM_CARD_OPS,
   HOOK_FEATURE_TELEGRAM_COMMANDS,
+  HOOK_FEATURE_FEISHU_FINAL_OPS,
+  HOOK_FEATURE_FEISHU_PROGRESS_OPS,
   HOOK_FEATURE_TELEGRAM_FINAL_OPS,
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
   HOOK_FEATURE_TURN_DELIVERY,
@@ -72,8 +74,15 @@ import {
   type TurnEndPayload,
   type TelegramCommandMenu,
   makeProviderCommandsSet,
+  CHANNEL_HISTORY_MAX_MESSAGES,
+  CHANNEL_HISTORY_ENTRY_MAX_CHARS,
+  CHANNEL_HISTORY_ATTACHMENT_TEXT_MAX_CHARS,
 } from '@cindy/slack-hook-protocol';
-import { createTelegramMessageLifecycle, type TelegramMessageLifecycle } from '@cindy/im';
+import {
+  createTelegramMessageLifecycle,
+  type StreamingProcessRecord,
+  type TelegramMessageLifecycle,
+} from '@cindy/im';
 import type { SendOrigin } from '@cindy/maker-core';
 import type { ChannelTurnSource } from '../maker-ipc/channelTurnSignal.js';
 import type { AutoReviewQuotedMessage } from '@cindy/maker-shared/auto-review-intent';
@@ -87,6 +96,7 @@ import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
 import { createAckReactions, type AckReactionTask } from './ackReactions.js';
 import { createMsgOpResultRouter, isTelegramTurnOpId } from './telegramMsgOp.js';
+import { createOfficialFeishuTurnCarrier } from './feishuTurnCarrier.js';
 import {
   createOfficialTelegramTurnCarrier,
   isClientFinalEligible,
@@ -184,6 +194,12 @@ export interface HookContinuationWatchRequest {
 export interface HookRunRequest {
   /** Host-resolved companion channel lane; never accepted from the wire. */
   companionBotId?: string;
+  /**
+   * 取消探针(dispatcher 侧 task.cancel 账本):runner 在回收/重建等长窗口后、
+   * 发送前查询 —— 喊停若落在窗口内, 中止信号对旧实例无目标、对新实例未登记,
+   * 只有这个账本能告诉 runner「用户已喊停」。未注入 = 无取消通道。
+   */
+  isCancelRequested?: () => boolean;
   /** Untruncated user body for persistence; source.userText is only a bounded display preview. */
   userText?: string;
   /** Local display snapshot; not part of the server wire protocol. */
@@ -300,6 +316,11 @@ export interface HookRunOutcome {
   attachments?: TaskAttachment[];
   /** 已分块转传到 X 的媒体, 随 turn.end 回传。 */
   xMediaIds?: string[];
+  /**
+   * 这一轮的过程记录(成功轮次才有)。只交给本端排版的终稿载体(官方飞书把它折叠在答案
+   * 上方), 不进 turn.end, 也不落持久出箱。
+   */
+  process?: StreamingProcessRecord;
 }
 
 /** 为新会话预建独立 worktree 的结果(成功时调用方必须用返回的 sessionId 建会话)。 */
@@ -538,9 +559,10 @@ const SOURCE_TRIGGER_MESSAGE_ID_MAX = 64;
 const SOURCE_CHANNEL_NAME_MAX = 160;
 const SOURCE_TEAM_ID_MAX = 128;
 const SOURCE_TEAM_NAME_MAX = 160;
-const SOURCE_THREAD_CONTEXT_MAX = 20;
+const SOURCE_THREAD_CONTEXT_MAX = CHANNEL_HISTORY_MAX_MESSAGES;
 const SOURCE_THREAD_AUTHOR_MAX = 128;
-const SOURCE_THREAD_TEXT_MAX = 4_000;
+// History body plus timestamp and bounded attachment status must remain visible.
+const SOURCE_THREAD_TEXT_MAX = CHANNEL_HISTORY_ENTRY_MAX_CHARS + CHANNEL_HISTORY_ATTACHMENT_TEXT_MAX_CHARS + 256;
 
 /**
  * Bound IM display metadata before it reaches session persistence. The wire
@@ -565,7 +587,7 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
   const displayContext = source.im === 'x' && source.triggerMessageId && source.userText?.trim()
     ? source.threadContext?.filter((entry) => entry.messageId !== source.triggerMessageId)
     : source.threadContext;
-  const threadContext = displayContext?.slice(0, SOURCE_THREAD_CONTEXT_MAX).map((entry) => ({
+  const threadContext = displayContext?.slice(-SOURCE_THREAD_CONTEXT_MAX).map((entry) => ({
     ...(entry.messageId !== undefined ? { messageId: entry.messageId.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) } : {}),
     ...(entry.authorId !== undefined ? { authorId: entry.authorId.slice(0, SOURCE_THREAD_AUTHOR_MAX) } : {}),
     ...(entry.replyToMessageId !== undefined ? { replyToMessageId: entry.replyToMessageId?.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) ?? null } : {}),
@@ -688,14 +710,15 @@ interface PendingTurnEnd {
 /**
  * 渠道形态(dm / group)—— 只看 externalKey 的前缀形状, 不查任何状态。
  *
- * **唯一用途**: 官方 Telegram 群轮次在 send 时取 session turn lease, 把
+ * **唯一用途**: 官方 Telegram / 飞书群轮次在 send 时取 session turn lease, 把
  * 「前台 done → 后台任务续跑」这段空窗也算作本轮独占, 否则 Desktop 轮次会被
  * 放进来与它共享 session 事件流 / origin / 交互路由(codex review #1490)。
  * 与权限档**无关** —— 群轮次不再改用户配的权限模式(见 session-runner)。
  * execute() 与续跑观察共用同一判据, 分叉会让续跑轮丢掉这层独占。
+ * 官方飞书 / Lark 的群消息一律在话题里回复(`feishu:topic:…`), 同样是多人可见的群轮次。
  */
 function deriveLaneKind(externalKey: string): 'dm' | 'group' {
-  return /^telegram:(group|topic):/.test(externalKey) ? 'group' : 'dm';
+  return /^(?:telegram|feishu):(?:group|topic):/.test(externalKey) ? 'group' : 'dm';
 }
 
 interface PendingReopen {
@@ -992,6 +1015,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     requestId: string,
     externalKey: string,
     accountGeneration: number,
+    channel: 'telegram' | 'feishu' = 'telegram',
   ): {
     update(markdown: string): void;
     /** 不由本端发布终稿时的收口: 冲刷最后一帧进度后停下(wire 上先于 turn.end)。 */
@@ -1011,17 +1035,29 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     let carrier: OfficialTelegramTurnCarrier | null = null;
     let progressLost = false;
     let stopped = false;
+    // 官方飞书 / Lark 走同一套协商与收口, 只是能力名和排版实现不同(个人飞书 bot 的
+    // 卡片排版, 见 feishuTurnCarrier.ts)。
+    const progressFeature =
+      channel === 'feishu' ? HOOK_FEATURE_FEISHU_PROGRESS_OPS : HOOK_FEATURE_TELEGRAM_PROGRESS_OPS;
+    const finalFeature =
+      channel === 'feishu' ? HOOK_FEATURE_FEISHU_FINAL_OPS : HOOK_FEATURE_TELEGRAM_FINAL_OPS;
     const ensureCarrier = (): OfficialTelegramTurnCarrier => {
       if (!carrier) {
-        carrier = createOfficialTelegramTurnCarrier({
+        const common = {
           connectionId,
           requestId,
           externalKey,
-          directMessage: deriveLaneKind(externalKey) === 'dm',
           getSend: () => sendForGeneration(connectionId, accountGeneration),
           router: telegramOpRouter,
           log,
-        });
+        };
+        carrier =
+          channel === 'feishu'
+            ? createOfficialFeishuTurnCarrier(common)
+            : createOfficialTelegramTurnCarrier({
+                ...common,
+                directMessage: deriveLaneKind(externalKey) === 'dm',
+              });
         activeTurnCarriers.add(carrier);
       }
       return carrier;
@@ -1033,7 +1069,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     return {
       update(markdown) {
         if (stopped || progressLost) return;
-        const negotiated = telegramOpsNegotiated(connectionId, HOOK_FEATURE_TELEGRAM_PROGRESS_OPS);
+        const negotiated = telegramOpsNegotiated(connectionId, progressFeature);
         if (negotiated === undefined) return;
         if (!negotiated) {
           // 已经由本端建过进度消息: 新节点不认这份能力, 本轮进度到此为止(旧节点自己渲染)。
@@ -1049,7 +1085,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       async publishFinal(input, beforePublish) {
         if (stopped) return null;
         const negotiated =
-          telegramOpsNegotiated(connectionId, HOOK_FEATURE_TELEGRAM_FINAL_OPS) === true;
+          telegramOpsNegotiated(connectionId, finalFeature) === true;
         if (!negotiated || !isClientFinalEligible(input)) {
           carrier?.finish();
           stop();
@@ -1886,6 +1922,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       task.requestId,
       task.run.source,
     );
+    // 官方 Telegram 与官方飞书 / Lark 的进度与成功终稿由本端排版(各自协商后才生效)。
     const turnCarrier = messageLifecycle
       ? telegramTurnCarrier(
           task.connectionId,
@@ -1893,7 +1930,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           task.externalKey,
           task.accountGeneration,
         )
-      : null;
+      : task.run.source?.im === 'feishu'
+        ? telegramTurnCarrier(
+            task.connectionId,
+            task.requestId,
+            task.externalKey,
+            task.accountGeneration,
+            'feishu',
+          )
+        : null;
 
     // 进度快照直发不缓存: 断线期间的中间帧没有补发价值(turn.end 会带最终
     // 结果), 发送失败静默丢弃即可。协商了客户端进度时 turn.progress 仍照发
@@ -1977,6 +2022,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         outcome = await runner.run({
           ...task.run,
           ...xVideoRelayOption(task, runningEntry),
+          // 取消探针:runner 在回收/重建窗口后发送前查询,喊停不落进新进程执行。
+          isCancelRequested: () => cancelRequested.has(requestKey),
           onTurnTerminal: () => { runningEntry.observing = false; },
           onProgress,
           ...(task.run.source?.im === 'telegram' ? {
@@ -2085,7 +2132,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 发布前先把不带 clientFinal 的 turn.end 写进持久出箱: 中途崩溃时重启重放的是
       // 「交回服务端」那一版, 服务端删掉已落地的客户端终稿段并自己发布, 终稿必达不降级。
       const clientFinal = await turnCarrier.publishFinal(
-        { status, finalText: turnEnd.finalText, attachments: turnEnd.attachments },
+        {
+          status,
+          finalText: turnEnd.finalText,
+          attachments: turnEnd.attachments,
+          ...(outcome.process ? { process: outcome.process } : {}),
+        },
         () => {
           persistedBeforePublish = persistTerminal({
             ...terminalRecord,
@@ -2710,7 +2762,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           titleText,
           bareKey,
           payload.source?.teamName ??
-            (payload.source?.im === 'telegram' || payload.source?.im === 'x'
+            (payload.source?.im === 'telegram' ||
+            payload.source?.im === 'x' ||
+            payload.source?.im === 'feishu'
               ? payload.source.channelName
               : null),
         ),

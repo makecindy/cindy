@@ -3,7 +3,7 @@ import { previousModelGenerations } from '../modelGeneration.js';
 import { buildUserProvider } from '../user-provider.js';
 import { isChatEligible } from '../classification.js';
 import { BUNDLED_CATALOG } from '../builtin.js';
-import { providerModelGenerationRecord, providerModelRecord, providerModelAdapterId } from '../providerModelCatalog.js';
+import { providerModelGenerationRecord, providerModelRecord, providerPresetModelRecord, providerModelAdapterId } from '../providerModelCatalog.js';
 import { parseModelsListResponse } from '../modelDiscovery.js';
 import { mergeDiscoveredRuntimeModels } from '../modelMetadataLayers.js';
 import type { ProviderRuntimeModelConfig, ProviderWireProtocol } from '../types.js';
@@ -192,6 +192,38 @@ describe('new model generation defaults', () => {
     expect(providerModelGenerationRecord('gpt-5.4', 'https://relay.example/v1', 'anthropic-messages')).toBeUndefined();
   });
 
+  // #9630, unit: a relay may accept Messages without supporting message-scoped
+  // effort. Existing inheritance tests only checked ordinary serializer fields.
+  it.each(['claude-opus-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-fable-5-2'])(
+    'keeps message-scoped effort local to the declared endpoint for %s', (id) => {
+      const official = providerModelGenerationRecord(id, 'https://api.anthropic.com/', 'anthropic-messages')!;
+      const original = structuredClone(official);
+      const relay = providerModelGenerationRecord(id, 'https://relay.example/v1', 'anthropic-messages')!;
+      expect(relay.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+      expect(relay.execution.pi.compat).toMatchObject({ forceAdaptiveThinking: true });
+      expect(relay.execution.pi.thinkingLevelMap).toEqual(official.execution.pi.thinkingLevelMap);
+      expect(official.execution.pi.compat).toMatchObject({ supportsMidConvoEffort: true });
+      expect(providerModelGenerationRecord(id, 'https://api.anthropic.com/', 'anthropic-messages')).toEqual(original);
+      const preset = providerModelGenerationRecord(id, 'https://account.example', 'anthropic-messages', 'anthropic-api')!;
+      expect(preset.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+    },
+  );
+
+  // Editing a preset URL retains its ID; exact catalog rows must enforce the
+  // same channel boundary as generation fallback, without mutating the catalog.
+  it('does not treat a saved Anthropic preset ID as a message-scoped effort declaration', () => {
+    const official = providerPresetModelRecord('anthropic-api', 'claude-opus-5', 'anthropic-messages')!;
+    const original = structuredClone(official);
+    for (const endpoint of ['https://relay.example', 'https://api.anthropic.com/proxy']) {
+      const relay = providerPresetModelRecord('anthropic-api', 'claude-opus-5', 'anthropic-messages', endpoint)!;
+      expect(relay.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+      expect(relay.execution.pi.compat).toMatchObject({ forceAdaptiveThinking: true });
+    }
+    expect(providerPresetModelRecord('anthropic-api', 'claude-opus-5', 'anthropic-messages', 'https://api.anthropic.com/')!
+      .execution.pi.compat).toMatchObject({ supportsMidConvoEffort: true });
+    expect(official).toEqual(original);
+  });
+
   it('retains exact adapter metadata across engines even without Registry entries', () => {
     const exact = providerModelRecord('grok-4.7', 'https://api.x.ai/v1', 'openai-responses')!;
     expect(exact).toBeDefined();
@@ -246,6 +278,43 @@ describe('new model generation defaults', () => {
     expect(inherited.cost).toBeUndefined();
     expect(inherited.execution.pi.headers).toBeUndefined();
     expect(providerModelGenerationRecord('gpt-9-sol', 'https://relay.example/v1', 'anthropic-messages')).toBeUndefined();
+  });
+
+  // #9808: a strict OpenAI-compatible gateway rejects DeepSeek's top-level `thinking`
+  // object. Official rows keep the dialect; an unmatched custom endpoint must not.
+  it('does not lend a vendor thinking dialect to an unmatched custom chat endpoint (#9808)', () => {
+    const upstream = 'https://developer.amd.example/v1';
+    for (const id of ['DeepSeek-V4.1-Flash', 'deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash']) {
+      const inherited = providerModelGenerationRecord(id, upstream, 'openai-completions');
+      expect(inherited, id).toBeDefined();
+      expect(inherited!.execution.pi.compat?.thinkingFormat, id).toBeUndefined();
+      expect(inherited!.execution.pi.thinkingLevelMap, id).toBeDefined();
+    }
+    const official = providerModelRecord('deepseek-v4-flash', 'https://api.deepseek.com', 'openai-completions')!;
+    expect(official.execution.pi.compat?.thinkingFormat).toBe('deepseek');
+    const sameHost = providerModelGenerationRecord('DeepSeek-V4.1-Flash', 'https://api.deepseek.com/v1', 'openai-completions')!;
+    expect(sameHost.execution.pi.compat?.thinkingFormat).toBe('deepseek');
+  });
+
+  // #9808 review: an account-pinned template (Cloudflare account/gateway path) still names
+  // one vendor host. A new generation added through that preset must keep the dialect,
+  // while the self-hosted `{endpoint}` template must not.
+  it('keeps the dialect for an account-pinned template but not for a self-hosted one (#9808)', () => {
+    const cloudflare = providerModelGenerationRecord(
+      'workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017',
+      'https://gateway.ai.cloudflare.com/v1/account-id/gateway-id/compat',
+      'openai-completions',
+      'cloudflare-ai-gateway',
+    )!;
+    expect(cloudflare.execution.pi.compat?.thinkingFormat).toBe('deepseek');
+    expect(cloudflare.execution.pi.compat?.supportsReasoningEffort).toBe(false);
+
+    const selfHosted = providerModelGenerationRecord(
+      'deepseek-v4.1-flash',
+      'https://developer.amd.example/v1',
+      'openai-completions',
+    )!;
+    expect(selfHosted.execution.pi.compat?.thinkingFormat).toBeUndefined();
   });
 });
 

@@ -1,3 +1,4 @@
+import type { ScrollViewInstance, ViewInstance } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -107,8 +108,8 @@ export function VoiceSpeakerFilterScreen({ services = liveServices }: { services
   const [saving, setSaving] = useState(false);
   const [enrollError, setEnrollError] = useState<{ key: EnrollErrorKey; clipIndex?: number } | null>(null);
   const [retryIndex, setRetryIndex] = useState<number | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
-  const passageRef = useRef<View>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
+  const passageRef = useRef<ViewInstance>(null);
   const scrollOffset = useRef(0);
   const revealFrame = useRef<number | null>(null);
   const revealGeneration = useRef(0);

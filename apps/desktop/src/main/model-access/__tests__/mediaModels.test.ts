@@ -7,7 +7,7 @@ const isCatalogMediaModelVisibleMock = vi.hoisted(() =>
   vi.fn((_providerId: string, _modelId: string, _defaultEnabled?: boolean) => true),
 );
 
-vi.mock('../../serverApiClient.js', () => ({
+vi.mock('../../serverApiClient.desktop.js', () => ({
   serverApiFetch: serverApiFetchMock,
   ServerApiError: class ServerApiError extends Error {
     constructor(

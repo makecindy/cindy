@@ -24,7 +24,7 @@ import {
   withChannelTurnSource,
 } from '../../maker-ipc/channelTurnSignal';
 import { bindRuntimeRecoveryNotice } from '../../im/shared/runtimeRecoveryNotice';
-import { setMainLocale } from '../../i18n';
+import { setMainLocale } from '../../i18n.desktop';
 
 import {
   HOOK_FEATURE_MESSAGE_OPS,
@@ -696,10 +696,10 @@ describe('normalizeTaskSource', () => {
       teamId: 'i'.repeat(200),
       teamName: 'n'.repeat(200),
       userText: 'u'.repeat(20_100),
-      threadContext: Array.from({ length: 25 }, (_, index) => ({
+      threadContext: Array.from({ length: 55 }, (_, index) => ({
         author: `author-${index}-${'a'.repeat(140)}`,
-        text: 't'.repeat(4_100),
-        isBot: index === 0,
+        text: 't'.repeat(9_000),
+        isBot: index === 5,
       })),
     });
 
@@ -707,14 +707,14 @@ describe('normalizeTaskSource', () => {
     expect(source.teamId).toHaveLength(128);
     expect(source.teamName).toHaveLength(160);
     expect(source.userText).toHaveLength(20_000);
-    expect(source.threadContext).toHaveLength(20);
+    expect(source.threadContext).toHaveLength(50);
     expect(source.threadContext?.[0]).toEqual({
       author: expect.any(String),
       text: expect.any(String),
       isBot: true,
     });
     expect(source.threadContext?.[0]?.author).toHaveLength(128);
-    expect(source.threadContext?.[0]?.text).toHaveLength(4_000);
+    expect(source.threadContext?.[0]?.text).toHaveLength(8_256);
     expect(source.threadContext?.[1]).not.toHaveProperty('isBot');
   });
 
@@ -746,9 +746,9 @@ describe('normalizeTaskSource', () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
-    // A 21-ancestor X chain ending in the current request: display keeps the oldest 20.
+    // A 51-ancestor X chain ending in the current request: display keeps the newest 50.
     const threadContext = [
-      ...Array.from({ length: 21 }, (_, index) => ({ messageId: `m${index}`, author: `@a${index}`, text: `ancestor ${index}` })),
+      ...Array.from({ length: 51 }, (_, index) => ({ messageId: `m${index}`, author: `@a${index}`, text: `ancestor ${index}` })),
       { messageId: 'current', author: '@user', text: '@bot is this true?' },
     ];
     d.handleDispatch('conn-1', dispatch({
@@ -756,15 +756,15 @@ describe('normalizeTaskSource', () => {
     }), c.send);
     await tick();
 
-    expect(fr.calls[0]?.source?.threadContext).toHaveLength(20);
-    expect(fr.calls[0]?.source?.threadContext?.at(-1)?.text).toBe('ancestor 19');
-    expect(fr.calls[0]?.autoReviewReplyTarget).toEqual({ author: '@a20', text: 'ancestor 20' });
+    expect(fr.calls[0]?.source?.threadContext).toHaveLength(50);
+    expect(fr.calls[0]?.source?.threadContext?.at(-1)?.text).toBe('ancestor 50');
+    expect(fr.calls[0]?.autoReviewReplyTarget).toEqual({ author: '@a50', text: 'ancestor 50' });
     fr.finish();
   });
 
   // laneKind 的唯一消费者是群轮次的 turn lease(见 session-runner);派生判据必须
   // 在正常派发与续跑观察两条路径上一致, 否则续跑轮会丢掉那层独占。
-  it('laneKind 派生: telegram group/topic externalKey → group, DM 与 Slack → dm', async () => {
+  it('laneKind 派生: telegram group/topic 与飞书话题 externalKey → group, DM 与 Slack → dm', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
@@ -774,6 +774,9 @@ describe('normalizeTaskSource', () => {
       'telegram:topic:bot:-900:77:9:g0',
       'telegram:dm:bot:user:g0',
       'team-slack:C1:1.1',
+      // 官方飞书 / Lark: 群里一律在话题回复, 话题 lane 是多人可见的群轮次。
+      'feishu:topic:cli_app:oc_chat:om_root:ou_user:g0',
+      'feishu:dm:cli_app:ou_user:g0',
     ];
     for (const [i, externalKey] of keys.entries()) {
       d.handleDispatch('conn-1', dispatch({ requestId: `req-lane-${i}`, externalKey }), c.send);
@@ -781,7 +784,7 @@ describe('normalizeTaskSource', () => {
       fr.finish();
       await tick();
     }
-    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm']);
+    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm', 'group', 'dm']);
     expect(fr.calls[0]?.groupHistoryAccess).toEqual({
       access: 'lane',
       provider: 'telegram:9',
@@ -1019,7 +1022,7 @@ describe('dispatcher 核心语义', () => {
       userText: '查看 PR', triggerMessageId: '2', xContext: { requesterId: 'u' },
     });
     expect(fr.calls[0]?.source?.threadContext).toEqual([
-      expect.objectContaining({ messageId: '1', author: '@other', text: longText.slice(0, 4000) }),
+      expect.objectContaining({ messageId: '1', author: '@other', text: longText }),
     ]);
   });
 
@@ -5498,6 +5501,50 @@ describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', 
     const end = c.last('turn.end')!.payload;
     expect(end.clientFinal).toEqual({ complete: true });
     expect(ledger.get('conn-1', 'req-1')?.turnEnd?.clientFinal).toEqual({ complete: true });
+  });
+
+  // 规则: 官方飞书 / Lark 与官方 Telegram 走同一套协商与收口(im-turn-flow.md「官方飞书 / Lark」),
+  // 排版用个人飞书 bot 的卡片。入口: 真实 dispatcher 的 handleDispatch → turn.end; 此前飞书任务
+  // 不建载体, 这条分支没有覆盖。最小输入: 一轮带过程记录的成功任务; unit。
+  it.each([
+    ['协商了电脑排版', ['msg-op-v1', 'feishu-progress-ops-v1', 'feishu-final-ops-v1'], true],
+    ['服务端没有宣告电脑排版', [], false],
+  ] as const)('官方飞书: %s', async (_name, features, clientRenders) => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, [...features]);
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ externalKey: 'feishu:dm:cli_app:ou_alice:g1', source: { im: 'feishu' } }),
+      c.send,
+    );
+    await tick();
+    fr.finish({
+      finalText: '**答案**',
+      process: { title: '过程记录 · 1 项 · 3s', lines: ['✓ 读取 a.ts'] },
+    });
+    await tick(40);
+
+    const end = c.last('turn.end')!.payload;
+    expect(end.finalText).toBe('**答案**');
+    expect(end).not.toHaveProperty('process');
+    if (!clientRenders) {
+      expect(ops(c.sent)).toHaveLength(0);
+      expect(end.clientFinal).toBeUndefined();
+      return;
+    }
+    const finals = ops(c.sent, 'turn-final');
+    expect(finals).toHaveLength(1);
+    expect(finals[0].payload).toMatchObject({ finalPart: 0, action: { kind: 'send' } });
+    const action = finals[0].payload.action;
+    const card = JSON.parse(action.kind === 'send' ? action.text : '{}') as {
+      body: { elements: Array<{ tag: string; content?: string }> };
+    };
+    expect(card.body.elements.map((element) => element.tag)).toEqual(['collapsible_panel', 'markdown']);
+    expect(card.body.elements[1].content).toBe('**答案**');
+    expect(c.sent.findIndex((m) => m.type === 'turn.end')).toBeGreaterThan(c.sent.indexOf(finals[0]));
+    expect(end.clientFinal).toEqual({ complete: true });
   });
 
   it('客户端终稿没有完整确认 → turn.end 带 clientFinal.complete=false(服务端照旧发布)', async () => {

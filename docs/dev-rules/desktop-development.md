@@ -1,5 +1,13 @@
 # Desktop 开发、启动与验证
 
+## 排队消息展示
+
+Desktop 与 Mobile 都把待发消息作为消息流气泡展示，气泡下方的「排队中」菜单提供插话、编辑、上移、下移与取消发送。输入框不再承载独立队列列表。已在提问卡展示的异步回答不产生待发气泡或菜单，判据与手机共用 `isAnsweredAsyncQuestionClientId`；后台投递照常。
+
+Desktop 在工作过程分组后追加待发项（`pendingQueueItems.ts`），避免待发输入提前截断当前助手轮次。待发项与正式回流使用相同的 `msg-clientId` key，已回流的历史优先，防止队列快照迟到造成双显。`PendingQueueBubble` 复用 `UserMessage`，操作可用性使用 `maker-shared/queue` 的共享判据。编辑锁由任务页持有，不随气泡虚拟化卸载而释放；队列通知放在消息流 footer。
+
+定向界面验证：`pnpm ui:check --page pending-queue --theme all`。真实派发仍由现有输入协调器负责。
+
 > **读取时机**：安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时
 
 本文是 Desktop 开发命令及其使用条件的权威说明；可执行脚本以当前 checkout 的根
@@ -57,6 +65,12 @@ Agent 没有 TTY 时，dev 会在新开的 Terminal（macOS）／cmd（Windows�
 该窗口的输出同时写入当前 checkout 的 `apps/desktop/logs/dev-terminal.log`（每次启动覆盖，
 只保留前 8MB，足够覆盖启动过程；之后的运行日志看按天轮转的 `main-*.log`），窗口关掉后仍可查；启动失败时命令会直接打印日志末尾，verdict 带 `log=` 指向该文件。
 排查启动失败先读这份日志，不要靠反复重启猜原因。
+
+Forge 开发进程默认使用 8 GiB 的 Node 堆上限，为主进程／Worker 的 watch 图和 Renderer
+冷启动转换留出空间；已复现过 6 GiB 上限在完整冷启动时触发 `JavaScript heap out of memory`
+并以 `134` 退出。显式设置的 `NODE_OPTIONS` 堆上限仍优先，入口见
+`scripts/shared/desktop-dev-node-options.mjs`。restart 的就绪等待包含完整冷构建与窗口／登录态／
+数据库初始化，默认等待 180 秒，避免在构建刚完成时误报超时。
 
 停止旧实例后的 macOS Terminal 标签页清理，只访问已经运行的 Terminal，并按旧实例的精确
 TTY 匹配标签页；Terminal 未运行时直接跳过，不能因清理 iTerm 等终端的 TTY 而将它启动。
@@ -170,8 +184,15 @@ checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个
   目录内，进程归属按命中的最深 worktree 判定。从主 checkout restart 不会停掉托管 worktree
   的实例，冲突门也会把它们当作其他 checkout。检测靠 helper 进程命令行上的
   `--user-data-dir`，对方实例刚启动还没起 helper 时可能漏检，属尽力而为。
+- **借用的 Node 不算归属**：判断归属前先去掉命令行开头的 Node 运行时与包管理器入口
+  （node / pnpm / npm / corepack）。另一份 checkout 借用本 checkout 自带的 node 启动 dev
+  时，本 checkout 的 restart 不会把它当成自己的实例杀掉；Electron、electron-forge 等指向
+  checkout 自身依赖的路径仍是归属依据。
 - **CDP 端口**：dev 的 remote-debugging-port 固定 9222，只有先起的实例能绑上。后起
   实例需要 CDP 调试面时，用 `XDT_CDP_PORT=<端口>` 覆写（仅数字生效，dev-only）。
+- **模拟 Rosetta 转译**：在 Apple 芯片上检查「Intel 包换装提示」和启动日志的 `[arch]`
+  行时，加 `XDT_SIMULATE_ARM64_TRANSLATION=1`；只在源码运行时生效，安装包只认 Electron
+  的 `app.runningUnderARM64Translation`。
 - 同一 checkout 内仍是单实例语义：restart 会替换本 checkout 上一个实例（不论沙箱
   名字），一个 worktree 同时只跑一份 dev。
 - 共享 userData 的并行（`--preserve-running` 被动预览）语义不变：不停任何实例、强制
@@ -240,7 +261,10 @@ main 日志里 scope 为 `memory-usage` 的行是各进程内存采样（正式�
 `process.memoryUsage()` 细分，后面按进程类型分组列出 `app.getAppMetrics()` 的常驻内存，
 组内从大到小，单位 MB。排查「越用越卡」时，先按启动分段看 `Browser`（主进程）和最大的
 `Tab`（主界面）每小时涨多少：持续上涨、重启才回落就是泄漏；再看 `heapUsed` 与 `external` /
-`arrayBuffers` 谁在涨，区分 JS 对象和 Buffer。该 scope 只写进程类型与数字，已精确放行进
+`arrayBuffers` 谁在涨，区分 JS 对象和 Buffer。`mcpBridgeSessions` 是 Codex / Pi MCP 桥上
+存活的会话数：每个会话持有一整个 MCP server（连同全部工具 schema），它应随运行中的
+Codex / Pi 进程数起落，持续上涨说明有客户端退出后会话没被关闭（见
+`mcp-integrations/codexHttpBridge.ts` 的 `closeSessionOwnedTransports`）。该 scope 只写进程类型与数字，已精确放行进
 日志上报，不要往这行里加标题、服务名、pid 或路径。
 
 `getAppMetrics()` 的 GPU 数字不含 IOSurface 等显存，macOS 上要看 GPU 进程真实占用用
@@ -281,6 +305,12 @@ pnpm test:unit
 - 数据库 migration、协议、更新器、权限与用户数据另有高风险专项规则；命中时先读取
   对应规则，不以本页命令替代专项验证。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
+
+菜单栏状态按钮的原生回归在 macOS 上运行
+`node apps/desktop/native/menubar/test.mjs`。它编译完整 Swift helper，并在离屏 AppKit
+按钮上检查重复更新、标题、提示文字、远控标识和 Light/Dark 切换；不启动 Cindy 或创建
+菜单栏项。该检查属于原生集成层，独立于默认单测池，需在 macOS 上手动执行，未接入 CI。
+脚本分别输出编译与测试耗时；Windows/Linux 不支持运行，不能将其计为通过。
 
 ## 单页 UI 快速验证
 
@@ -368,7 +398,9 @@ PR 截图给评审看改了什么，不是自检总览的搬运：
 
 Linux 主窗口创建时注册 Electron Tray，提供显示主窗口、打开日志目录、退出 Cindy。
 与 Windows 共用菜单动作和活动任务退出确认，但 Linux 使用 `setContextMenu` 发布原生
-菜单，切换语言后重新发布；不依赖仅 Windows/macOS 提供的 `right-click` 事件。
+菜单，切换语言后重新发布；不依赖仅 Windows/macOS 提供的 `right-click` 事件。创建图标后
+同时设置悬停提示（`BRAND_NAME`）：不设置时 StatusNotifierItem 的 Title 为空，桌面面板会
+回退显示内部图标 Id（如 `Cindy_status_icon_1`）。
 实现见 `main/linuxTrayLifecycle.ts` 与 `bootstrap-electron.ts`，回归见
 `main/__tests__/linuxTrayLifecycle.test.ts`。
 
@@ -426,3 +458,88 @@ node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
 生产 NSIS 钩子的当前用户安装、覆盖安装和卸载。它不改系统 DLL、不安装服务、不操作
 正式 Cindy 的安装。该故障注入不能代替干净 Windows 虚拟机、「所有用户」安装或已注册
 远程桌面服务的真实验收；编译与安装器子进程不进入默认单测。
+
+
+## 右侧栏展开、拖宽与恢复
+
+主界面最右侧的内嵌工具栏从收起变为展开时，`LayoutRoot` 按面板宽度与 CSS clamp
+计算保持聊天区宽度所需的增量，经本机 `window-sidebar-expansion` IPC 交给
+`SidebarWindowExpansion`。窗口左边缘不动，增量止于当前显示器工作区右边缘；
+空间不足的部分由窗口内部布局分配。最大化与原生全屏不改窗口尺寸，左侧停靠和
+独立工具窗口不触发右扩。启动恢复已展开的侧栏只登记现有几何基准，不重复扩大；
+该基准的权威说明见本节末尾「侧边栏与主窗口几何」。
+
+展开后以内容区像素宽度为基准：聊天区与其它停靠面板保持宽度，最右侧栏使用 CSS
+剩余空间吸收窗口伸缩；达到最小尺寸后仍遵守原有空间约束。实时缩放不在每个 resize
+事件里重写 React 状态或偏好。主动拖中间分隔线前以实测宽度校准份额账本，提交后
+重新建立聊天区宽度基准。收起时窗口整体回到展开前的位置和大小（扩展后主动拖宽、
+原生移动或缩放都只算临时空间分配，不保留）；关闭、移位或重新展开时解除／重建临时基准。
+
+用户主动调整侧栏后，把实际像素宽度写入布局树 pane 的可选 `preferredWidth`，通过
+既有 LayoutStore 保存到 `layout.v1.json`；下次展开及重启后优先恢复该宽度。
+旧布局缺少该字段时继续使用原份额，无需迁移；重置布局同时清除该偏好。
+中间分隔线在手势提交时保存，macOS / Windows 原生窗口边缘通过 Electron 的
+`will-resize` + `resized` 区分手动缩放后保存。程序展开、屏幕空间不足、最大化与全屏
+造成的临时变化不覆盖用户偏好。Linux 没有上述原生手势事件，仍可通过中间分隔线保存。
+
+展开／收起时 `sidebarPresentation` 暂时固定内容区旧宽度并保留旧侧栏状态；主进程
+回传实际增量后，等待 renderer 观察到对应 viewport 宽度，再在同一帧释放旧宽并切换
+侧栏。原生窗口有尺寸变化时不叠加侧栏的 250ms 宽度动画，避免聊天消息先压缩或
+拉宽再恢复；无可用空间时保留窗口内动画。快速反向操作丢弃迟到回包。
+
+侧栏开关归聊天区所有，点击展开、再次点击收起；展开后仍留在聊天区原来的角上
+（macOS 顶栏右端、Windows 内容区入口）。侧栏自己的顶栏末端显示 × 关闭按钮；
+关闭仅收起侧栏，不关闭页签。分离和最大化入口仍属于侧栏，沿用现有主题与多语言文案。
+
+新增 IPC 只允许 Cindy 自有顶层应用窗口操作自身，不进入 device-link 白名单；SSH 或
+远程任务仍调整当前查看端窗口，手机没有对应的原生窗口行为。
+
+回归入口：`sidebarWindowExpansion.test.ts`、`sidebarWindowExpansionIpc.test.ts`、
+`LayoutStore.test.ts`、`layout/__tests__/sidebarExpansion.test.ts`、
+`sidebarPresentation.test.tsx`、`LayoutRoot.test.tsx`、`rootDividerDrag.test.tsx` 与
+`RightSidebar.presentation.test.tsx`。覆盖几何边界、快速开关、首次恢复、拖宽后收起、
+宽度落盘重载、临时夹取不写偏好，以及原生扩宽后继续拖分隔线。
+
+## 意外退出后的诊断入口
+
+主窗口重启后，`StartupRecoveryDialogs` 在开屏与数据库就绪、更新说明关闭后，
+先显示已有的中断任务恢复入口，用户选择继续、暂不继续或关闭后，再询问是否诊断意外退出。
+没有中断任务时直接进入诊断提示；任务列表加载期间不会抢先弹诊断，继续任务无需等执行完成。正常退出、更新重启、
+显式信号退出和仍在运行的并存实例不触发；多条异常运行记录合并为一次提示。
+提示由 `crash-diagnosis.ts` 消费既有启动诊断快照，处理状态留在 main 内存，
+窗口重载不重复提示；历史 run marker 的清理仍归启动诊断，不改日志补传标记。
+PID 复用延迟核对出的陈旧退出仍只写日志，不触发新提示。
+
+点击「诊断问题」才读取现有白名单与脱敏管道的 main 日志，取退出锚点前后五分钟的
+最多 100 条、16,000 字符完整记录，按与退出时刻的距离优先选择，并排除本轮进程启动后的
+记录，避免重启噪声挤掉故障现场。无可靠时间或日志不可读时只带退出摘要并说明
+材料不足。原生 dump、Agent 日志、任务正文和原始请求不进入这份草稿。
+此路径不上传日志，也不改变崩溃自动上传偏好。
+
+诊断沿用错误卡的 `buildErrorDiagnosisPrompt` / `prefillErrorDiagnosisDraft`，
+保留已有未发送草稿，用户检查并发送后才交给模型分析。若需反馈，继续使用已有
+issue 提交确认卡，不自动公开材料。这里的「意外退出」不等于已证明软件崩溃，
+强制终止、断电等原因由诊断结合证据区分。
+
+三个 `crash-diagnosis:*` IPC 仅供本机可信顶层应用窗口，不进入 device-link
+allowlist；SSH、远程任务及手机不会误触本机重启提示。此功能不恢复或改变任务执行状态，
+诊断失败不会阻止使用应用；关闭提示后仍可从任务已有入口继续中断任务。
+
+验证入口：`crashDiagnosis.test.ts`、`StartupRecoveryDialogs.test.tsx`，以及
+`pnpm ui:check --page crash-diagnosis --case all --theme all`。单页场景不覆盖原生崩溃、
+真实模型执行或 issue 提交，须与定向测试及完整 Desktop 验收分开报告。
+
+## 侧边栏与主窗口几何
+
+主窗口的位置和大小以没有右侧边栏时的矩形为准。打开侧边栏前保存该矩形，
+打开期间分隔线只调整两侧空间分配，原生窗口移动和缩放也不覆盖这份基准；
+关闭侧边栏或离开对应页面后恢复打开前的矩形。最大化／全屏时不强制修改窗口边界。
+窗口状态持久化同样读取这份基准，重启后若侧边栏仍打开，则从基准重新展开，
+不能再次从已保存的主窗口宽度中扣除侧边栏。旧版本保存的矩形作为首次升级后的基准。
+同一原生窗口再次打开侧边栏时，恢复上次展开的总宽度，并应用布局中已保存的侧栏宽度；
+不能把拖动分隔线后的侧栏宽度当成新增窗口宽度，否则聊天区域会被重置。展开宽度在
+窗口生命周期内独立记忆，关闭状态的调整只更新独立主窗口基准；重新打开仍受当前屏幕边界限制。
+Windows 的贴边／贴满判断仍读真实窗口（程序自己的展开不算贴满），贴满照常记为最大化。
+若打开期间显示器被拔掉或分辨率变小，收起时旧矩形改放回当前工作区内。
+实现见 `main/sidebarWindowExpansion.ts`、`renderer/layout/sidebarPresentation.ts`；
+回归见 `sidebarWindowExpansion.test.ts` 和 `sidebarPresentation.test.tsx`。

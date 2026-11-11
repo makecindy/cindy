@@ -12,6 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AuthState, AuthStateSource } from '../lib/authService';
 
 const tapdb = vi.hoisted(() => ({
   init: vi.fn(),
@@ -69,6 +70,15 @@ type SettingsPayload = {
 
 let settingsListener: ((payload: SettingsPayload) => void) | null = null;
 let authListener: ((state: unknown) => void) | null = null;
+let authSeed: AuthState | null = null;
+const authObserver = {
+  getSnapshot: () => authSeed,
+  onAuthStateChange: (listener: (state: AuthState, source: AuthStateSource) => void) => {
+    authListener = (state) => listener(state as AuthState, 'push');
+    if (authSeed) listener(authSeed, 'snapshot');
+    return () => { authListener = null; };
+  },
+};
 let getAnalyticsSettings: () => Promise<SettingsPayload>;
 /** 本文件内注册过的 visibilitychange 回调(见 hidePage)。 */
 const visibilityHandlers: Array<() => void> = [];
@@ -85,6 +95,7 @@ function fireWindowEvent(type: 'focus' | 'keydown' | 'pointerdown'): void {
 }
 
 function installElectronApi(initial: SettingsPayload): void {
+  authSeed = null;
   getAnalyticsSettings = vi.fn(async () => initial);
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     appVersion: '9.9.9',
@@ -224,7 +235,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(DENIED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
 
     expect(tapdb.init).not.toHaveBeenCalled();
@@ -235,7 +246,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(ALLOWED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
 
     expect(tapdb.init).toHaveBeenCalledTimes(1);
@@ -246,7 +257,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(DENIED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     authListener?.({ isAuthenticated: true, user: { id: 'user-1' } });
 
@@ -258,7 +269,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(DENIED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     // 冷启动已登录:auth 事件早于同意到达,userId 必须被记住而不是丢掉。
     authListener?.({ isAuthenticated: true, user: { id: 'user-1' } });
@@ -274,7 +285,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(ALLOWED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     expect(tapdb.init).toHaveBeenCalledTimes(1);
 
@@ -287,7 +298,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(ALLOWED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     tapdb.setSuperProperties.mockClear();
 
@@ -313,7 +324,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(ALLOWED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
 
     expect(tapdb.init).toHaveBeenCalledWith(
@@ -325,7 +336,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(ALLOWED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     hidePage();
 
@@ -336,7 +347,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(ALLOWED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     settingsListener?.({ privacyConsentAccepted: true, analyticsEnabled: false, allowed: false });
     tapdb.track.mockClear();
@@ -350,7 +361,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(DENIED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     hidePage();
 
@@ -372,7 +383,7 @@ describe('TapDB consent gate', () => {
     );
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
 
     settingsListener?.({ privacyConsentAccepted: true, analyticsEnabled: false, allowed: false });
@@ -390,7 +401,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(ALLOWED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     tapdb.optOutTracking.mockImplementationOnce(() => {
       throw new Error('localStorage unavailable');
@@ -415,7 +426,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(ALLOWED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     tapdb.optOutTracking.mockImplementation(() => {
       throw new Error('localStorage unavailable');
@@ -432,7 +443,7 @@ describe('TapDB consent gate', () => {
     installElectronApi(ALLOWED);
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     tapdb.optOutTracking.mockImplementation(() => {
       throw new Error('localStorage unavailable');
@@ -454,7 +465,7 @@ describe('TapDB consent gate', () => {
     });
     const client = await importClient();
 
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
 
     expect(tapdb.init).not.toHaveBeenCalled();
@@ -481,7 +492,7 @@ describe('engagement-driven activity reporting', () => {
   async function initAllowed() {
     installElectronApi(ALLOWED);
     const client = await importClient();
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     return client;
   }
@@ -673,14 +684,15 @@ describe('engagement-driven activity reporting', () => {
     expect(tapdb.setUser).toHaveBeenCalledTimes(2);
   });
 
-  it('seeds identity via authInitialize so a secondary window does not misread refresh as login', async () => {
+  it('reads an existing identity without initializing auth or misreading a later refresh as login', async () => {
     // 登录后才打开的二级窗口错过初始广播:补种身份后,半夜 token 刷新广播的
     // 同一账号不得被当成「身份变化」触发 setUser。
     installElectronApi(ALLOWED);
-    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.authInitialize =
-      vi.fn(async () => ({ isAuthenticated: true, user: { id: 'user-1' } }));
+    const initialize = vi.fn();
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.authInitialize = initialize;
+    authSeed = { isAuthenticated: true, user: { id: 'user-1' } } as AuthState;
     const client = await importClient();
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
     tapdb.setUser.mockClear();
 
@@ -688,6 +700,34 @@ describe('engagement-driven activity reporting', () => {
     authListener?.({ isAuthenticated: true, user: { id: 'user-1' } });
 
     expect(tapdb.setUser).not.toHaveBeenCalled();
+    expect(initialize).not.toHaveBeenCalled();
+  });
+
+  // 真实服务 + 统计入口：晚到的初始化只补种身份，不制造无交互的账号活跃。
+  it('does not report a late initialization as login when consent resolves first', async () => {
+    installElectronApi(ALLOWED);
+    let finish!: (state: AuthState) => void;
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.authInitialize =
+      vi.fn(() => new Promise<AuthState>((resolve) => { finish = resolve; }));
+    const client = await importClient();
+    const { createAuthService } = await import('../lib/authService');
+    const service = createAuthService();
+    try {
+      const initializing = service.initialize();
+      client.initTapdb(service);
+      await flush();
+      tapdb.setUser.mockClear();
+      finish({ isAuthenticated: true, user: { id: 'user-1' }, mode: 'cloud' } as AuthState);
+      await initializing;
+      expect(tapdb.setUser).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(30 * 60 * 1_000);
+      fireWindowEvent('pointerdown');
+      expect(tapdb.setUser).toHaveBeenLastCalledWith('user-1');
+      authListener?.({ isAuthenticated: true, user: { id: 'user-2' }, mode: 'cloud' });
+      expect(tapdb.setUser).toHaveBeenLastCalledWith('user-2');
+    } finally {
+      service.dispose();
+    }
   });
 
   it('a token-refresh auth broadcast on a new day does not emit setUser (no interaction)', async () => {
@@ -742,7 +782,7 @@ describe('engagement-driven activity reporting', () => {
   it('ignores input while unconsented, then reports normally after consent', async () => {
     installElectronApi(DENIED);
     const client = await importClient();
-    client.initTapdb();
+    client.initTapdb(authObserver);
     await flush();
 
     fireWindowEvent('keydown');

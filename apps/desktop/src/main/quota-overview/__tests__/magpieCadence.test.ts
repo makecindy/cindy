@@ -28,7 +28,19 @@ vi.mock('../../device-link/index.js', () => ({}));
 vi.mock('../../device-link/dispatch.js', () => ({ getActiveControllers: () => [] }));
 vi.mock('../../device-link/ipc.js', () => ({}));
 vi.mock('../../device-link/deviceName.js', () => ({ deviceName: () => 'Fixture' }));
-vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => 'en', mainStringKeysUnder: () => [], rawMainString: (key: string) => key }));
+vi.mock('../../i18n.js', () => ({
+  createMainI18n: () => ({
+    getResolvedMainLocale: () => 'en',
+    mainStringKeysUnder: () => [],
+    rawMainString: (key: string) => key,
+    t: (key: string) => key,
+    tCount: (key: string) => key,
+    setMainLocale: () => {},
+    setMainClassicalStyle: () => {},
+    getMainClassicalStyle: () => false,
+    lookupWithFallbackForTest: () => undefined,
+  }),
+}));
 vi.mock('../../localDb/ipc/sessions.js', () => ({ getSessionRowSnapshot: async () => null }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => mocks.providers }) }));
@@ -37,7 +49,12 @@ vi.mock('../../maker-ipc/register.js', () => ({}));
 vi.mock('../../maker-ipc/usage.js', () => ({}));
 vi.mock('../../magpie/quotaReader.js', () => ({ readMagpieQuotas: mocks.readMagpieQuotas, MAGPIE_QUOTA_TIMEOUT_MS: 5000, MAGPIE_QUOTA_COLD_READ_TIMEOUT_MS: 15000 }));
 vi.mock('../../notificationService.js', () => ({}));
-vi.mock('../../serverApiClient.js', () => ({}));
+vi.mock('../../serverApiClient.js', () => ({
+  createServerApiClient: () => async () => {
+    throw new Error('server api unused in magpie cadence test');
+  },
+  ServerApiError: class ServerApiError extends Error {},
+}));
 vi.mock('../../usage/claudeAccountUsage.js', () => ({ readClaudeAccountUsageRevision: () => mocks.revision, observeClaudeAccountUsage: (l: () => void) => { mocks.listeners.add(l); return () => { mocks.listeners.delete(l); }; }, triggerClaudeAccountUsageRefresh: () => mocks.refresh(), readClaudeAccountUsageSnapshot: () => mocks.quota }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
 vi.mock('../../usage/usageHistory.js', () => ({ readUsageHistory: async () => ({ todayKey: '2026-11-06', modelDaily: [], tasks: [], taskDaily: [], devices: [] }) }));

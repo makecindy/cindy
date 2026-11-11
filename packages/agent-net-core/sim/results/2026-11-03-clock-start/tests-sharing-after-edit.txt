@@ -1,0 +1,21 @@
+   Compiling agent-net-sim v0.0.0 (<home>/Documents/Cindy/cindy/.cindy-worktrees/agent-net/packages/agent-net-core/sim)
+    Finished `sim` profile [optimized] target(s) in 0.35s
+     Running tests/sharing.rs (target/sim/deps/sharing-cc17d91038167680)
+
+running 13 tests
+test fair_share_takes_an_empty_line_right_away ... ok
+test probing_does_not_get_stuck_on_a_rate_limiter ... ok
+test fair_share_does_not_take_timeouts_for_congestion ... ok
+test fair_share_window_floor_does_not_shrink_with_the_packet ... ok
+test coarse_timers_do_not_cap_the_rate ... ok
+test fair_share_fills_an_empty_line_and_full_is_the_default ... ok
+test fair_share_survives_beside_a_full_speed_connection ... ok
+test fair_share_splits_the_line_with_tcp ... ok
+test misread_loss_stays_bounded_on_shallow_queues ... ok
+test several_connections_do_not_collapse_the_bottleneck ... ok
+test late_joiners_do_not_keep_overshooting ... ok
+test two_connections_share_evenly ... ok
+test tcp_and_agent_net_both_get_a_share ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.81s
+

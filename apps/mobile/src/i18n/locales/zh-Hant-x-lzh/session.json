@@ -93,6 +93,7 @@
     "context": "上下文",
     "screenshot": "截圖",
     "photo": "照片",
+    "photosAndVideos": "照片與影片",
     "takePhoto": "攝影",
     "file": "卷",
     "joinConversation": "納入言談（{{num}} 張）",
@@ -481,6 +482,11 @@
     "worktreeCleanupPending": "前次之 worktree 尚待回收，請重連裝置後再試。"
   },
   "menu": {
+    "moveToProject": "移差事",
+    "moveFailed": "移差事未成",
+    "moveRunning": "差事方行，畢後再移",
+    "moveWorktree": "此差事之工作目錄乃 worktree，暫不支援移至他案",
+    "moveUnsupported": "請新所連電腦之 Cindy，乃可移差事。",
     "details": "差事詳情",
     "chipPinned": "已居首",
     "chipArchived": "已封存",
@@ -700,6 +706,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "彼機未允遠端呼叫此供方。請於彼機之「設定 → 模型供應商」中開啟「允許遠端呼叫」，或易一模型。",
     "REMOTE_AGENT_FORK_FAILED": "行 Agent 之機未能自此另開差事。請再試，或換一則訊再試。",
     "REMOTE_AGENT_SHARE_PAUSED": "對方已暫停對君之分享，復之前不能用此等模型。可易他模型以續。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "此乃舊版分享，啟「唯用 Agent-Net」時暫不可用。關此開關即可續之，亦可易他模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "此分享已不可用（對方刪之或君已退出）。可易他模型以續。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "所分享之供方暫不可用：對方之機或不在線，或對方暫闔分享。可稍後再試，或易他模型以續。"
   },
@@ -725,21 +732,34 @@
     "remoteDirPathHint": "於行之裝置上察目錄；不存則報謬，不改用 Lead 所在之機之目錄。",
     "remoteDirInvalid": "請書行之裝置上之絕對路徑。",
     "roleLabel": "角色之名",
-    "roleHint": "僅一名號，便於多協作者時辨其角色，不改其能",
-    "customRole": "自擬",
-    "customRolePlaceholder": "自訂角色之名",
-    "customRolePredefinedError": "自訂角色之名不可與預設角色同名",
+    "taskLabel": "Worker 所司何事",
+    "enableHint": "今之差事為 Lead，司分派與驗收；另一 Agent 為 Worker，司執行而回報。",
+    "roles": {
+      "reviewer": {
+        "name": "審查",
+        "task": "覽 Lead 之所為，略陳建言。"
+      },
+      "developer": {
+        "name": "開發"
+      },
+      "tester": {
+        "name": "測試",
+        "task": "測試 Lead 迄今之成果，報其未過者與重現之步。"
+      }
+    },
+    "addRole": "增角色",
+    "removeRoleHint": "久按可除之",
+    "removeRoleConfirmTitle": "除「{{role}}」乎？",
+    "removeRoleConfirmDesc": "日後可由「增角色」隨時復增之。",
+    "removeRoleConfirm": "除角色",
+    "moreSettings": "其餘規制",
     "agentLabel": "Agent",
-    "modelLabel": "模型",
     "modelDefault": "常例",
     "modelDefaultHint": "沿用電腦端之 Worker 預設模型",
-    "permissionLabel": "權柄模式",
     "permissionAuto": "自動審批",
     "permissionFull": "完全存取",
-    "permissionAutoHint": "許於工作區內讀寫，並自動審批提權之請求；高風險之操作或遭拒，或須確認。",
-    "permissionFullHint": "許修改任意之卷並行連網之指令，無須再確認。風險最高，僅宜可信之差事。",
     "initialTaskLabel": "初始差事（可略）",
-    "initialTaskPlaceholder": "予此 Worker 之首則差事，可略",
+    "initialTaskPlaceholder": "書其首事以付之；留空則待命，由 Lead 分派",
     "workerCountSummary_one": "{{count}} 個 Worker · {{running}} 方行",
     "workerCountSummary_other": "{{count}} 個 Worker · {{running}} 方行",
     "loading": "方讀 Worker…",
@@ -815,12 +835,6 @@
     "failed": "存之未成，請再試。",
     "restore": "復預設"
   },
-  "followUp": {
-    "title": "要吾替君跟進差事否？",
-    "start": "始跟進",
-    "notNow": "暫不啟",
-    "saveFailed": "未能存之，請再試"
-  },
   "providerGroupRebalance": {
     "title": "改至 {{label}} 續之？",
     "body": "為均耗各名籍之限額，宜將此訊改由 {{label}} 遣出（{{quota}}）。改過去將攜近數輪言談與摘要，更早之細節或記不全。",
@@ -828,7 +842,10 @@
     "quotaReset": "尚餘 {{left}}%，{{reset}}後重置",
     "confirm": "改之",
     "remember": "改之，此後自動改（僅此差事）",
-    "cancel": "罷"
+    "cancel": "罷",
+    "disable": "此任務勿自動切換",
+    "disableFailed": "未能確認此選擇已存。請查連線，並確認任務所在電腦之 Cindy 已更新，再試。此訊仍照常送出。",
+    "moreOptions": "更多選項"
   },
   "messageEdit": {
     "editing": "方修此訊",

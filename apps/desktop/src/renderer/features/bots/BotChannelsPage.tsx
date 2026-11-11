@@ -13,7 +13,7 @@ import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
  */
 
 import { HookConnectionsSection } from '@/components/settings/HookConnectionsSection';
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Archive, ArrowUpRight, Briefcase, ChevronRight, ChevronUp, Gamepad2, MessageSquare, Plus, Send, Zap, type LucideIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -27,6 +27,7 @@ import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
+import { DiscordChannelAccessSection } from '@/components/settings/DiscordChannelAccessSection';
 import { WechatBotSection } from '@/components/settings/WechatBotSection';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -52,7 +53,9 @@ import {
   archiveBotImConnectionLane,
   botImConnectionLaneArchiveSupported,
   adoptPersonalBot,
+  botImConnectionDiscordChannelsSupported,
   botImConnectionGroupsSupported,
+  discordChannelAccessSourceFor,
   botImConnectionLanesSupported,
   listBotImConnectionGroups,
   listBotImConnectionLanes,
@@ -80,10 +83,11 @@ const CHANNEL_ICON: Record<BotImChannel, LucideIcon> = {
   wecom: Briefcase,
   dingtalk: Zap,
   discord: Gamepad2,
+  imessage: MessageSquare,
 };
 
 function ChannelIcon({ channel }: { channel: BotImChannel }) {
-  const Icon = CHANNEL_ICON[channel];
+  const Icon = CHANNEL_ICON[channel] ?? MessageSquare;
   return <Icon size={18} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />;
 }
 
@@ -231,8 +235,16 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   {t('bots.channels.remove')}
                 </Button>
                 </div>
-                {view.channel === 'telegram' && view.botContextId && botImConnectionGroupsSupported(im) ? (
+                {view.health && view.health.uncertainInputs + view.health.uncertainSends > 0 ? (
+                  <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.uncertain', {
+                    count: view.health.uncertainInputs + view.health.uncertainSends,
+                  })}</p>
+                ) : null}
+                {(view.channel === 'telegram' || view.channel === 'imessage') && view.botContextId && botImConnectionGroupsSupported(im) ? (
                   <ConnectionGroups api={im} connectionId={view.id} botName={bot.name} />
+                ) : null}
+                {view.channel === 'discord' && im && botImConnectionDiscordChannelsSupported(im) ? (
+                  <ConnectionDiscordChannels api={im} connectionId={view.id} botName={bot.name} deviceId={target.deviceId} />
                 ) : null}
                 {view.botContextId && botImConnectionLanesSupported(im) ? (
                   <ConnectionLanes api={im} connectionId={view.id} botName={bot.name}
@@ -367,6 +379,24 @@ function ConnectionGroups({ api, connectionId, botName }: { api: BotImConnection
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * 一条 Discord 连接的「服务器频道」小节：白名单按连接各一份，默认不开放；每个频道可单独允许成员，
+ * 成员沿用这位伙伴的既有权限、工具与共享记忆。读写走连接设置（另一台电脑上的伙伴经远程操作）。
+ */
+function ConnectionDiscordChannels({ api, connectionId, botName, deviceId }: {
+  api: BotImConnectionApi; connectionId: string; botName: string; deviceId: string | null | undefined;
+}) {
+  const source = useMemo(() => discordChannelAccessSourceFor(api, connectionId), [api, connectionId]);
+  return (
+    <DiscordChannelAccessSection
+      connected
+      source={source}
+      sourceKey={`${deviceId ?? 'local'}:${connectionId}`}
+      members={{ botName }}
+    />
   );
 }
 
@@ -639,7 +669,7 @@ function ConnectionLanes({ api, connectionId, botName, platform, deviceId }: {
   );
 }
 
-const PLATFORMS: ReadonlyArray<BotImChannel> = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord'];
+const PLATFORMS: ReadonlyArray<BotImChannel> = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord', 'imessage'];
 
 /** 个人 bot 给人看的身份: Telegram @用户名 / Discord 标签原样, 其它平台的 id 打码。 */
 function adoptableIdentity(item: BotImAdoptablePersonalBot): string | undefined {
@@ -718,6 +748,7 @@ function BotChannelAddDialog({
   const [dingtalkAppSecret, setDingtalkAppSecret] = useState('');
   const [discordToken, setDiscordToken] = useState('');
   const [discordOwnerUserId, setDiscordOwnerUserId] = useState('');
+  const [imessage, setIMessage] = useState({ serverUrl: '', password: '', ownerAddress: '', chatGuids: '', listenHost: '', listenPort: '18747' });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -750,6 +781,8 @@ function BotChannelAddDialog({
     ? true
     : !credentialsHere
       ? false
+      : channel === 'imessage'
+      ? filled(...Object.values(imessage))
       : channel === 'telegram'
       ? filled(token, ownerUserId)
       : channel === 'feishu'
@@ -762,6 +795,9 @@ function BotChannelAddDialog({
 
   const buildInput = (): BotImConnectionAddInput | string => {
     switch (channel) {
+      case 'imessage': return { botId: bot.id, channel, ...imessage, groupAliases: [bot.name],
+        chatGuids: imessage.chatGuids.split(/[,\n]/).map(value => value.trim()).filter(Boolean),
+        listenPort: Number(imessage.listenPort) };
       case 'telegram': {
         const trimmedToken = token.trim();
         const trimmedOwner = ownerUserId.trim();
@@ -928,6 +964,18 @@ function BotChannelAddDialog({
                 <p className="px-1 text-12 leading-[1.5] text-[var(--text-secondary)]">
                   {t('bots.remoteSettings.finishOnHost', { device: remoteName })}
                 </p>
+              ) : channel === 'imessage' ? (
+                <>
+                  <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t('bots.channels.add.imessage.hint')}</p>
+                  {(Object.keys(imessage) as Array<keyof typeof imessage>).map(key => (
+                    <FormField key={key} label={t(`bots.channels.add.imessage.${key}Label`)}>
+                      {control => <Input {...control} mono secret={key === 'password'} value={imessage[key]}
+                        onChange={value => setIMessage(previous => ({ ...previous, [key]: value }))}
+                        placeholder={t(`bots.channels.add.imessage.${key}Placeholder`)} autoComplete="off"
+                        spellCheck={false} disabled={busy} secretTipContentClassName="z-[10001]" />}
+                    </FormField>
+                  ))}
+                </>
               ) : channel === 'telegram' ? (
                 <>
                   <FormField label={t('bots.channels.add.telegram.tokenLabel')}>

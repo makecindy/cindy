@@ -23,7 +23,7 @@ vi.mock("react-native", async () => {
         children,
       ),
     StyleSheet: { create: (value: unknown) => value },
-    useWindowDimensions: () => ({ width: native.width }),
+    Dimensions: { get: () => ({ width: native.width }), addEventListener: () => ({ remove() {} }) },
   };
 });
 vi.mock("react-native-reanimated", async () => {

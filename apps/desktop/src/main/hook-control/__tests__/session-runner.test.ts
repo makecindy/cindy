@@ -181,7 +181,7 @@ vi.mock('../../turn-change-set/store.js', () => ({
 vi.mock('../../maker-host/send-outcome.js', () => ({
   toDesktopSessionDispatchOutcome: () => ({ dispatched: true as const }),
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   enqueueDurableWrite: vi.fn(async (_label: string, fn: () => unknown) => fn()),
 }));
 vi.mock('../../localDb/ipc/messages.js', () => ({
@@ -231,7 +231,7 @@ vi.mock('../../maker-ipc/agentHandoffPendingSingleton.js', () => ({
 vi.mock('../../goal-host/inactiveNote.js', () => ({
   peekGoalInactiveNote: h.peekGoalInactiveNote,
 }));
-vi.mock('../../imageCacheStore.js', () => ({
+vi.mock('../../imageCacheStore.desktop.js', () => ({
   resolveSafe: vi.fn(),
 }));
 // cindy-media:入站图片写入媒体总仓,mock 记调用。
@@ -261,7 +261,7 @@ vi.mock('../../cindy-media/ingest.js', () => ({
   ingestMedia: cindyMock.ingestMedia,
   supportedMime: cindyMock.supportedMime,
 }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ resolveSafe: cindyMock.resolveSafe }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ resolveSafe: cindyMock.resolveSafe }));
 vi.mock('../../worktree/index.js', () => ({
   worktreeStore: { get: () => undefined },
   WorktreeManager: { removeWorktreeForSession: vi.fn(async () => undefined) },
@@ -343,10 +343,16 @@ function makePermissionModeFake() {
 }
 
 /** fake maker: createSession 返回"send 即接受、随后立刻 done"的会话。 */
-function makeFakeSession(id: string) {
+function makeFakeSession(
+  id: string,
+  status: 'active' | 'aborting' | 'closed' | 'error' = 'active',
+) {
   const permission = makePermissionModeFake();
   return {
     id,
+    // close 失败会让真实 Session 停在 error;测试用初始状态复刻这一后果。
+    getStatus: () => status,
+
     ...({ instanceId: `instance-${id}` } as { instanceId?: string }),
     workDir: 'D:/repo',
     get permissionModeState() {
@@ -395,6 +401,8 @@ function makeFakeSession(id: string) {
 
 const fakeMaker = {
   createSession: vi.fn(async (opts: { id?: string }) => makeFakeSession(opts.id ?? 'sess-x')),
+  // 默认无漂移:漂移相关用例按需覆写(maker 方法缺省 false → 不回收)
+  recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   getSessionMeta: vi.fn(async () => ({
     workDir: 'D:/repo',
     model: 'meta-model',
@@ -429,9 +437,9 @@ import { createMakerHookSessionRunner, extractToolResultMediaUrls } from '../ses
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
-import { getResolvedMainLocale } from '../../i18n.js';
+import { getResolvedMainLocale } from '../../i18n.desktop.js';
 import { buildUiLanguageErrorNote } from '../../maker-ipc/uiLanguageErrorNote.js';
-import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
+import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.desktop.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 import { createModelRoutingTransform, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host.js';
 import { clearAllSessionRuntimeAxes, setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store.js';
@@ -815,6 +823,53 @@ describe('hook task model selection on next send', () => {
     }));
     expect(result.status).toBe('error');
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces the real rebuild failure after a drift recycle instead of sending on the closed instance', async () => {
+    // 回收已关旧实例后重建失败:错误必须原样上抛,不得吞掉后拿已关闭实例投递
+    // (那只会报误导性的「会话已关闭」,真正的启动原因被吞 —— Greptile P2)。
+    const oldSession = makeFakeSession('sess-old');
+    fakeMaker.recyclePiRuntimeIfResourcesDrifted.mockResolvedValueOnce(true);
+    fakeMaker.createSession
+      .mockImplementationOnce(async () => oldSession)
+      .mockRejectedValueOnce(new Error('pi startup failed: bad extension'));
+    const result = await createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
+    expect(result.status).toBe('error');
+    expect(result.errorMessage).toContain('pi startup failed: bad extension');
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(2);
+    expect(oldSession.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps delivering on the live instance when the recycle itself fails', async () => {
+    // 回收本身失败但实例仍 active → 原样投递(hook 轮次不因回收故障中断)。
+    const session = makeFakeSession('sess-new');
+    session.send.mockResolvedValue({ accepted: true });
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    fakeMaker.recyclePiRuntimeIfResourcesDrifted.mockRejectedValueOnce(new Error('recycle boom'));
+    const run = createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
+    await vi.waitFor(() => expect(session.send).toHaveBeenCalledOnce());
+    h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+    const result = await run;
+    expect(result.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
+    expect(session.send).toHaveBeenCalledOnce();
+  });
+
+  it('rebuilds when the recycle fails and the session is no longer active', async () => {
+    // Codex P2:close 抛出时 Session 已停在 error,旧实例不可用 —— 必须重建,
+    // 否则 send 被 ensureActive 拒、runner 永远绑在坏实例上。
+    const broken = makeFakeSession('sess-new', 'error');
+    const rebuilt = makeFakeSession('sess-new');
+    rebuilt.send.mockResolvedValue({ accepted: true });
+    fakeMaker.createSession.mockResolvedValueOnce(broken).mockResolvedValueOnce(rebuilt);
+    fakeMaker.recyclePiRuntimeIfResourcesDrifted.mockRejectedValueOnce(new Error('close boom'));
+    const run = createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
+    await vi.waitFor(() => expect(rebuilt.send).toHaveBeenCalledOnce());
+    h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+    const result = await run;
+    expect(result.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(2);
+    expect(broken.send).not.toHaveBeenCalled();
   });
 
   it('does not send with the old model when applying the choice fails', async () => {
@@ -1342,37 +1397,45 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(session.send).not.toHaveBeenCalled();
   });
 
-  it('官方 Telegram 新会话保留 provider 标记并把包命令留给 Desktop 确认', async () => {
+  it.each([
+    ['telegram', 'telegram:dm:bot:user:g0', 'telegram'],
+    // 官方飞书的 vendorOptions.source 刻意不是 'feishu'(个人飞书 bot 会话的值):
+    // cindy_feishu_bot 据此追加官方会话提示, 插件配置按无桌面交互面收口。
+    ['feishu', 'feishu:dm:cli_app:ou_user:g0', 'feishu-hook'],
+  ] as const)('官方 %s 新会话保留 provider 标记并把包命令留给 Desktop 确认', async (im, externalKey, vendorSource) => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
       baseReq({
-        source: { im: 'telegram', channelName: 'Release topic', userText: 'hello' },
+        source: { im, channelName: 'Release topic', userText: 'hello' },
         origin: {
-          connectionId: 'slack:account:telegram',
-          connectionName: 'Cindy Telegram',
-          externalKey: 'telegram:dm:bot:user:g0',
+          connectionId: `slack:account:${im}`,
+          connectionName: `Cindy ${im}`,
+          externalKey,
         },
       }),
     );
     expect(outcome.status).toBe('ok');
     expect(fakeMaker.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ vendorOptions: { source: 'telegram' } }),
+      expect.objectContaining({ vendorOptions: { source: vendorSource } }),
     );
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.send.mock.calls[0][0]).toMatchObject({
-      content: `hello\n\n${buildHookPromptNote('telegram')}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
+      content: `hello\n\n${buildHookPromptNote(im)}\n\n${buildUiLanguageErrorNote(getResolvedMainLocale())}`,
     });
     expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).toEqual({
-      origin: { kind: 'hook', source: 'telegram' },
+      origin: { kind: 'hook', source: im },
       rawChannelText: 'hello',
     });
-    expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', 'telegram');
+    expect(h.setSessionSourceInDb).toHaveBeenCalledWith('sess-new', im);
   });
 
   it.each([
     ['slack', { kind: 'im', channel: 'slack' }],
     ['telegram', { kind: 'hook', source: 'telegram' }],
     ['x', { kind: 'hook', source: 'x' }],
+    // 安全回归: 官方飞书 hook 的 source.im 与个人飞书 bot 同为 'feishu', 但它是服务端
+    // 转发的轮次, 不得拿到个人 bot 的可信 IM origin(否则包管理命令绕过桌面确认)。
+    ['feishu', { kind: 'hook', source: 'feishu' }],
   ] as const)('线程来源 %s 使用 source.userText 作为确定性命令原文', async (im, expectedOrigin) => {
     const runner = createMakerHookSessionRunner({ log });
     const rawCommand = 'pi install npm:context-mode';
@@ -1733,6 +1796,8 @@ describe('进度快照(turn.progress 链路)', () => {
         return permission.permissionModeState;
       },
       id,
+      // 与 makeFakeSession 同形状:生产代码按 getStatus 判定实例是否仍可用。
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(
         cb: (ev: {
@@ -2730,6 +2795,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     return {
       ...makePermissionModeFake(),
       id,
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
@@ -3050,6 +3116,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     return {
       ...makePermissionModeFake(),
       id,
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(
         cb: (ev: {

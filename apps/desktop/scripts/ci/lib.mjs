@@ -49,6 +49,10 @@ export {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const SCRIPTS_DIR = path.resolve(__dirname, '..');
+/** App Sandbox entitlements of the Live Activity widget extension (native/agent-island/live-activity). */
+const APP_EXTENSION_ENTITLEMENTS_PATH = path.resolve(
+  __dirname, '../../native/agent-island/live-activity/extension.entitlements',
+);
 export const DESKTOP_ROOT = path.resolve(SCRIPTS_DIR, '..');
 export const PROJECT_ROOT = path.resolve(DESKTOP_ROOT, '../..');
 export const RELEASE_DIR = path.join(DESKTOP_ROOT, 'release');
@@ -835,6 +839,14 @@ export function signMacAppWithIdentity(
   // 3. Framework bundles
   console.log('    Signing frameworks...');
   exec(`find "${frameworksDir}" -maxdepth 1 -name "*.framework" -exec ${signBase} "{}" \\;`);
+
+  // 4. Contents/PlugIns/ 下的 app extension(如 macOS 实时活动的 WidgetKit 扩展)。必须在主 app 之前
+  //    单独签,且带 App Sandbox entitlements:扩展没有沙盒无法加载;主 app 用 --deep 统一签会丢掉它。
+  const plugInsDir = path.join(appPath, 'Contents', 'PlugIns');
+  if (fs.existsSync(plugInsDir)) {
+    console.log('    Signing app extensions in Contents/PlugIns/...');
+    exec(`find "${plugInsDir}" -maxdepth 1 -name "*.appex" -exec ${signBase} --entitlements "${APP_EXTENSION_ENTITLEMENTS_PATH}" "{}" \\;`);
+  }
 
   // 5. 主 app bundle
   console.log('    Signing main app...');

@@ -76,6 +76,7 @@ import type {
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
   ASYNC_QUESTION_ANSWER,
+  SUPERSEDE_ASYNC_QUESTIONS,
   AUTO_REVIEW_USER_INTENT,
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
@@ -216,6 +217,12 @@ export interface SessionOptions {
   turnStallMs?: number;
   /** `holdEventStream` 的最长等待(ms)。省略 = EVENT_STREAM_HOLD_MS；主要供测试注入。 */
   eventStreamHoldMs?: number;
+  /**
+   * 宿主整机拆除(Maker.shutdown / 应用退出 / 账号边界切换)是否已开始。
+   * 注入后,Session 用它识别「空闲会话的进程死亡终态错误」并抑制派发;
+   * 缺省 = 永不抑制,与旧行为一致。
+   */
+  isHostShuttingDown?: () => boolean;
   /**
    * 可选：视觉桥钩子（层 B）。host 注入后，session.send 在组装 UserMessage、交给
    * handle 前调用一次，把用户贴图替换为视觉描述。host 不注入 = 完全跳过，字节级零干扰
@@ -374,7 +381,7 @@ export interface SessionTurnLifecycleObserver {
   /** Last synchronous authorization check; no asynchronous work may follow before handle.send. */
   onDispatching?(): void;
   /** Awaited after option validation and before any provider-owned start hook or send. */
-  beforeProviderStart(turnGeneration: number): void | Promise<void>;
+  beforeProviderStart(turnGeneration: number, signal?: AbortSignal): void | Promise<void>;
   /** Called when a prepared generation never crosses the provider dispatch boundary. */
   onUndispatched(turnGeneration: number): void | Promise<void>;
   /** Called before event listeners for a foreground unclaimed done or terminal error. */
@@ -515,6 +522,8 @@ export class Session {
   private closePromise: Promise<void> | null = null;
   /** close/detach 一进入同步入口就置位，早于底层 handle 的异步关闭完成。 */
   private terminationStarted = false;
+  /** 见 SessionOptions.isHostShuttingDown。 */
+  private readonly isHostShuttingDown: () => boolean;
   /**
    * The runtime itself began this teardown (dead handle, crashed loop, failed
    * dispatch, abort / terminal-error recovery). External close()/closeIfIdle()/
@@ -621,8 +630,6 @@ export class Session {
   private turnStallSliceStartedAt = 0;
   /** 正在等用户回应的交互数；>0 期间不计 stall 额度（没事件是正常的）。 */
   private pendingInteractions = 0;
-  /** Blocking question cards take precedence over optional async cards. */
-  private pendingUserQuestions = 0;
   /** 最近一次 fan-out 事件的时刻，仅用于日志诊断。 */
   private lastEventAt = 0;
   /**
@@ -638,6 +645,8 @@ export class Session {
   private turnGeneration = 0;
   /** 已为哪个 turn 代号排过 abort 复核；同一 turn 上重复 abort 不重复排。 */
   private abortRecoveryScheduledFor: number | null = null;
+  /** Host operations can start new work without creating a user-turn generation. */
+  private abortRecoveryEpoch = 0;
   private lastEventType: string | null = null;
   /** 优雅停止所需的 turn 控制事实；不承担 UI/MCP 会话状态投影。 */
   private turnControlState: TurnControlState | null = null;
@@ -662,15 +671,29 @@ export class Session {
     this.turnStallMs =
       opts.turnStallMs ?? parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
     this.eventStreamHoldMs = opts.eventStreamHoldMs ?? EVENT_STREAM_HOLD_MS;
+    this.isHostShuttingDown = opts.isHostShuttingDown ?? (() => false);
     this.visionBridge = opts.visionBridge;
     this.toolLoopReviewer = opts.toolLoopReviewer;
     this.asyncUserQuestions = new AsyncUserQuestions({
       isActive: (generation) => this.status === 'active' && !this.terminationStarted
-        && generation === this.turnGeneration && this.handle.isTurnRunning?.() === true,
+        && generation === this.turnGeneration,
+      isLateAnswer: (generation) => generation !== this.turnGeneration || !this.handle.isTurnRunning?.(),
       resolve: (request) => this.interactionListener!(request),
-      deliver: (text, signal) => this.steer(text, { signal, [ASYNC_QUESTION_ANSWER]: true }),
-      dismiss: (requestId, reason) => this.fanOutEvent({
-        type: 'interaction_dismissed', data: { requestId, reason, resolvedAs: 'deny' }, source: this.agentKind,
+      deliver: async (text, signal, requestId, displayText) => {
+        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId, displayText);
+        const options = { signal, [ASYNC_QUESTION_ANSWER]: true as const };
+        if (this.handle.isTurnRunning?.()) {
+          try { await this.steer(text, options); return; } catch (error) {
+            // Only a definite idle rejection can start a new turn. Unknown delivery is never replayed.
+            if (!/has no active turn to steer/.test(String(error))) throw error;
+          }
+        }
+        if (signal.aborted) return;
+        const result = await this.send(text, options);
+        if (!result.accepted) throw new Error('Async question answer was not accepted');
+      },
+      dismiss: (requestId, reason, withdrawalReason) => this.fanOutEvent({
+        type: 'interaction_dismissed', data: { requestId, reason, resolvedAs: 'deny', ...(withdrawalReason ? { withdrawalReason } : {}) }, source: this.agentKind,
       }),
       reportError: () => this.fanOutEvent({ type: 'error', source: this.agentKind,
         data: { message: 'Async question answer delivery failed.', isTerminal: false } }),
@@ -678,19 +701,27 @@ export class Session {
 
     // 注入 InteractionResolver 到底层 handle, 转发到 host 维护的 listener。
     // 没接 listener 时按 kind 给出安全默认: 都视作 deny(host 必须接 listener 才能交互)。
-    this.handle.setInteractionResolver((req, signal) => this.runHostInteraction(req, async () => {
-      if (!this.interactionListener) {
-        this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
-        if (req.kind === 'ask_user_question') {
-          return { kind: 'ask_user_question', answers: {} };
-        }
-        if (req.kind === 'plan_review') {
-          return { kind: 'plan_review', behavior: 'deny', reason: 'no_listener_attached', dismissed: true };
-        }
-        return { kind: req.kind, behavior: 'deny', reason: 'no_listener_attached' } as InteractionDecision;
+    this.handle.setInteractionResolver((req, signal) => {
+      if (req.kind === 'ask_user_question' && req.delivery === 'async' && this.interactionListener) {
+        // Native Codex emits messages, not pending RPCs. The Session owns their UI lifetime,
+        // just as it owns Claude/Pi questions; do not leave a second adapter continuation.
+        this.asyncUserQuestions.ask(req.questions, this.turnGeneration, req.requestId);
+        return Promise.resolve({ kind: 'ask_user_question' as const, answers: {}, dismissed: true });
       }
-      return await (signal ? this.interactionListener(req, signal) : this.interactionListener(req));
-    }));
+      return this.runHostInteraction(req, async () => {
+        if (!this.interactionListener) {
+          this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
+          if (req.kind === 'ask_user_question') {
+            return { kind: 'ask_user_question', answers: {} };
+          }
+          if (req.kind === 'plan_review') {
+            return { kind: 'plan_review', behavior: 'deny', reason: 'no_listener_attached', dismissed: true };
+          }
+          return { kind: req.kind, behavior: 'deny', reason: 'no_listener_attached' } as InteractionDecision;
+        }
+        return await (signal ? this.interactionListener(req, signal) : this.interactionListener(req));
+      });
+    });
   }
 
   // ── 公开 API ─────────────────────────────────────────────────────────────
@@ -852,8 +883,35 @@ export class Session {
     return snapshot;
   }
 
+  private asyncQuestionAnswerDispatcher?: (text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>;
+
+  /**
+   * Hosts with a durable input queue own admission/persistence of question replies.
+   * `text` is the model's copy; `displayText` is what history and queues show.
+   */
+  setAsyncQuestionAnswerDispatcher(dispatch: (text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>): void {
+    this.asyncQuestionAnswerDispatcher = dispatch;
+  }
+
+  submitAsyncQuestionAnswer(requestId: string, decision: InteractionDecision): Promise<boolean> {
+    return this.asyncUserQuestions.submit(requestId, decision);
+  }
+
+  /** Called only after an ordinary user input has been accepted by the host. */
+  dismissAsyncQuestionsForUserInput(): void { this.asyncUserQuestions.expire('superseded'); }
+
+  manageAsyncUserQuestions(input: { action: 'list' } | { action: 'withdraw'; request_ids: string[]; reason: string }) {
+    if (this.getStatus() !== 'active' || this.terminationStarted) throw new Error('No active question session');
+    return input.action === 'list'
+      ? { questions: this.asyncUserQuestions.list() }
+      : { results: this.asyncUserQuestions.withdraw(input.request_ids, input.reason) };
+  }
+
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
-    return this.dispatchSend(message, opts, false);
+    const pending = this.asyncUserQuestions.snapshot();
+    const result = await this.dispatchSend(message, opts, false);
+    if (result.accepted && opts?.[SUPERSEDE_ASYNC_QUESTIONS] && !opts[ASYNC_QUESTION_ANSWER]) this.asyncUserQuestions.expire('superseded', pending);
+    return result;
   }
 
   /**
@@ -994,9 +1052,22 @@ export class Session {
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
       if (turnLifecycleObserver) {
-        await turnLifecycleObserver.beforeProviderStart(reservedTurnGeneration);
+        try {
+          await turnLifecycleObserver.beforeProviderStart(
+            reservedTurnGeneration,
+            reservation.abortController.signal,
+          );
+        } catch (error) {
+          // A cancelled readiness wait never reached provider dispatch. Release
+          // its reservation normally, while preserving genuine startup errors.
+          const cancelled = finishCancelledBeforeDispatch();
+          if (cancelled !== null) return cancelled;
+          throw error;
+        }
         turnLifecyclePrepared = true;
       }
+      const cancelledAfterPreparation = finishCancelledBeforeDispatch();
+      if (cancelledAfterPreparation !== null) return cancelledAfterPreparation;
       if (beforeProviderStart) await beforeProviderStart();
       const cancelledBeforeAcceptance = finishCancelledBeforeDispatch();
       if (cancelledBeforeAcceptance !== null) return cancelledBeforeAcceptance;
@@ -1089,7 +1160,12 @@ export class Session {
           // work. This path is safe to reschedule and must not arm the
           // ambiguous-tail drain used for unknown dispatch failures.
           dispatchConfirmedUndispatched = true;
-          return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+          // A cancelled adapter preflight is also a definite non-dispatch.
+          // Preserve Stop's reason so hosts do not report it as a send failure.
+          return {
+            accepted: false,
+            reason: reservation.cancelled ? 'cancelled-before-dispatch' : 'provider-rejected-before-dispatch',
+          };
         }
         // Cancellation cannot downgrade an explicitly ambiguous provider result
         // into "cancelled before dispatch"; that would skip the mandatory
@@ -1258,6 +1334,7 @@ export class Session {
     let msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
+    const pendingQuestions = this.asyncUserQuestions.snapshot();
     this.logger.debug('steer', summarizeUserMessage(msg));
     this.ensureActive();
     if (!this.capabilities.sameTurnSteer.supported) {
@@ -1297,6 +1374,7 @@ export class Session {
     try {
       this.toolLoopUserIntent = loopIntent;
       await this.handle.steer(msg, { ...handleOpts, [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent });
+      if (opts?.[SUPERSEDE_ASYNC_QUESTIONS] && !opts[ASYNC_QUESTION_ANSWER]) this.asyncUserQuestions.expire('superseded', pendingQuestions);
     } catch (error) {
       if (this.getTurnGeneration() === steerTurnGeneration && this.toolLoopUserIntent === loopIntent) {
         this.toolLoopUserIntent = previousLoopIntent;
@@ -1329,7 +1407,7 @@ export class Session {
   async abort(): Promise<void> {
     if (this.status === 'closed') return;
     if (this.status === 'error') return;
-    this.asyncUserQuestions.expire('session_aborted');
+    // Stop ends execution, not unanswered questions.
     // The provider's terminal must not wait for a host hold: the manual-abort
     // recovery grace is shorter than EVENT_STREAM_HOLD_MS.
     this.releaseEventStreamHold();
@@ -1385,7 +1463,7 @@ export class Session {
   }
 
   async requestGracefulStop(): Promise<SessionGracefulStopResult> {
-    this.asyncUserQuestions.expire('session_stopping');
+    // Stop ends execution, not unanswered questions.
     const reservation = this.sendReservation;
     if (reservation) return this.requestGracefulStopForReservation(reservation);
     const control = this.turnControlState;
@@ -2173,6 +2251,9 @@ export class Session {
   /** 手动压缩会话上下文(capability 见 Capabilities.manualCompact)。 */
   async compactSession(instructions?: string): Promise<ManualCompactResult> {
     this.ensureActive();
+    if (this.agentKind === 'codex' && (this.sendReservation !== null || this.hostTurnLeases.size > 0)) {
+      throw new Error('Cannot compact while a Codex send is reserved');
+    }
     if (!this.capabilities.manualCompact?.supported) {
       throw new NotSupportedError(
         'manualCompact',
@@ -2181,6 +2262,16 @@ export class Session {
     }
     if (!this.handle.compactSession) {
       throw new NotSupportedError('manualCompact', { supported: false, reason: 'not-implemented' });
+    }
+    if (this.agentKind === 'codex') {
+      // Only a fully settled prior turn may yield to native compaction. Retire
+      // its Stop check without inventing a new user turn; a Stop on the compact
+      // itself must still get a fresh, bounded recovery check.
+      if (this.isTurnRunning() || this.hasUnsettledTurn()) {
+        throw this.createSessionRunningError();
+      }
+      this.abortRecoveryEpoch += 1;
+      this.abortRecoveryScheduledFor = null;
     }
     return this.handle.compactSession(instructions);
   }
@@ -2291,6 +2382,26 @@ export class Session {
     );
   }
 
+  /**
+   * 项目资源漂移且满足回收空闲口径时返回 true(仅 pi 本地根任务实现,其余 agent
+   * 恒 false)。只判定不执行 close:close 必须由持有 Maker 的调用方走
+   * closeSessionIfCurrent(session, 'runtime-refresh'),让 session:closed 带上 Maker
+   * 认识的刷新原因 —— 直接 Session.close 绕过 Maker 的 closeReasons 登记,IM
+   * runner 会按 unexpected 清掉排队中的回合、丢失已接受的派发。空闲口径与
+   * closeIfIdle 一致:turn 运行中、结束未收口的 turn、换代续接、手动压缩 /
+   * rewind 等宿主排他操作进行中绝不回收。回收后由既有 lazy bootstrap 在下次
+   * 发送时重扫项目资源、重算 argv。
+   */
+  hasRecyclableProjectResourceDrift(): boolean {
+    if (this.status !== 'active' || this.closePromise) return false;
+    if (this.isTurnRunning() || this.hasUnsettledTurn()
+      || this.retirementContinuationGeneration === this.turnGeneration
+      || this.hasPendingHostOperation()) {
+      return false;
+    }
+    return this.handle.hasProjectResourceDrift?.() === true;
+  }
+
   getCurrentTurnId(): string | null {
     return this.handle.getCurrentTurnId?.() ?? null;
   }
@@ -2394,18 +2505,12 @@ export class Session {
     // Native async questions use the same card resolver, but never suspend turn
     // protection or register a waiting interaction with the lifecycle observer.
     if (request.kind === 'ask_user_question' && request.delivery === 'async') return resolve();
-    const isQuestion = request.kind === 'ask_user_question';
-    if (isQuestion) {
-      this.pendingUserQuestions += 1;
-      this.asyncUserQuestions.expire('superseded');
-    }
     this.pendingInteractions += 1;
     const runtime = this.observeInteractionStarted(request);
     this.armTurnStallWatchdog();
     try {
       return await resolve();
     } finally {
-      if (isQuestion) this.pendingUserQuestions -= 1;
       this.pendingInteractions = Math.max(0, this.pendingInteractions - 1);
       this.observeInteractionSettled(runtime);
       this.armTurnStallWatchdog();
@@ -2416,14 +2521,13 @@ export class Session {
     this.interactionListener = listener;
   }
 
-  /** Display an optional question and return immediately; answers steer only this execution. */
-  askUserQuestionAsync(questions: AskUserQuestionItem[]): string {
+  /** Display independent questions immediately; answers use the current or next turn. */
+  askUserQuestionAsync(questions: AskUserQuestionItem[]) {
     // Use the live Session identity, even if a stale MCP context claims another
     // harness. Codex's native adapter is its sole async question owner.
     if (this.agentKind === 'codex') throw new Error('Codex uses native async questions');
     this.ensureActive();
     if (!this.interactionListener) throw new Error('Question UI is unavailable');
-    if (this.pendingUserQuestions > 0) throw new Error('A blocking user question is already pending');
     if (!this.capabilities.sameTurnSteer.supported) {
       throw new NotSupportedError('sameTurnSteer', this.capabilities.sameTurnSteer);
     }
@@ -2464,7 +2568,6 @@ export class Session {
   }
 
   private beginTurnControl(generation: number): void {
-    this.asyncUserQuestions.expire('superseded');
     this.turnControlState?.toolLoopMonitor?.dispose();
     this.turnControlState = {
       generation,
@@ -2693,7 +2796,13 @@ export class Session {
     isBackgroundEvent: boolean,
     isCurrentGeneration: boolean,
   ): boolean {
-    if (isBackgroundEvent || !isCurrentGeneration || !this.isNewTurnProgressEvent(event)) return false;
+    // Claude knows a top-level automatic turn started even when the first
+    // response is only an API-error envelope. Ordinary running/child statuses
+    // are not evidence: they can be leftover activity from the preceding turn.
+    const providerStart = event.source === 'claude-code' && event.type === 'status' &&
+      (event.data as { isRunning?: unknown; providerInitiatedTurn?: unknown } | null)?.isRunning === true &&
+      (event.data as { providerInitiatedTurn?: unknown } | null)?.providerInitiatedTurn === true;
+    if (isBackgroundEvent || !isCurrentGeneration || (!providerStart && !this.isNewTurnProgressEvent(event))) return false;
     const parentUuid = event.agentMeta?.parentUuid;
     if (typeof parentUuid === 'string' && parentUuid.length > 0) return false;
     const generation = this.turnGeneration;
@@ -2944,9 +3053,7 @@ export class Session {
     const hasPendingContinuation = continuationState !== null;
     const isTerminal =
       (event.type === 'done' && !hasPendingContinuation) || isTerminalAgentErrorEvent(event);
-    if (isTerminal && !isBackgroundEvent) {
-      this.asyncUserQuestions.expire(event.type === 'error' ? 'turn_failed' : 'turn_completed', resolvedGeneration);
-    }
+    // Async questions remain available after completion/failure, independently of this generation.
     // A dispatching send is not enough evidence that a terminal event belongs
     // to it: Codex can enqueue the previous turn's terminal error after flipping
     // its handle idle. Only runEventLoop's generation adoption may transfer
@@ -3431,7 +3538,7 @@ export class Session {
     // 复核于是关掉一条其实还响应得动的会话(第十八轮 P1)。与 armTurnStallSlice、codex 的
     // armUpstreamIdleSlice、claude-code 的 armUpstreamResponseIdleSlice、scheduler 的
     // absorbSuspendGap、排队派发的 QUEUED_DISPATCH_SUSPEND_GAP_MS 同源:壁钟差 ≠ 清醒时间。
-    this.armAbortRecoverySlice(generation, graceMs, graceMs, trigger);
+    this.armAbortRecoverySlice(generation, graceMs, graceMs, trigger, ++this.abortRecoveryEpoch);
   }
 
   /** 宽限的分片计时:片尾核对壁钟,发现被冻结过就把那一片作废重开(额度不扣)。 */
@@ -3440,10 +3547,12 @@ export class Session {
     remainingMs: number,
     graceMs: number,
     trigger: 'stall-watchdog' | 'manual-abort',
+    recoveryEpoch: number,
   ): void {
     const slice = Math.min(remainingMs, TURN_STALL_SLICE_MS);
     const startedAt = Date.now();
     const timer = setTimeout(() => {
+      if (recoveryEpoch !== this.abortRecoveryEpoch) return;
       const elapsed = Date.now() - startedAt;
       if (elapsed > slice + TURN_STALL_SUSPEND_GAP_MS) {
         this.logger.info('abort recovery skipped a suspended slice', {
@@ -3451,12 +3560,12 @@ export class Session {
           sliceMs: slice,
           elapsedMs: elapsed,
         });
-        this.armAbortRecoverySlice(generation, remainingMs, graceMs, trigger);
+        this.armAbortRecoverySlice(generation, remainingMs, graceMs, trigger, recoveryEpoch);
         return;
       }
       const left = remainingMs - Math.max(0, elapsed);
       if (left > 0) {
-        this.armAbortRecoverySlice(generation, left, graceMs, trigger);
+        this.armAbortRecoverySlice(generation, left, graceMs, trigger, recoveryEpoch);
         return;
       }
       // 把真正生效的宽限与触发来源带进复核:两条路径的宽限不同(手动 60s / 看门狗 10s),
@@ -3619,6 +3728,17 @@ export class Session {
           observedGeneration = this.turnGeneration;
         }
         if (this.terminationStarted) continue;
+        // 宿主整机拆除已开始时,空闲会话收到的子进程死亡终态错误不属于任何轮次;
+        // 照常派发会落一条伪造的「上轮失败」记录(#8831)。有在跑/未收口轮次时
+        // 仍照常派发,不吞真实失败。
+        if (
+          this.isHostShuttingDown() &&
+          isTerminalAgentErrorEvent(event) &&
+          !this.isTurnRunning() &&
+          !this.hasUnsettledTurn()
+        ) {
+          continue;
+        }
         // origin 打标与终态清理都收在 fanOutEvent 里（看门狗合成的事件共用同一语义，
         // 见那里的注释）。关闭门一旦占住，旧 handle 的迟到事件不得再改写业务状态。
         this.fanOutEvent(event, observedGeneration, awaitingGeneration, true);

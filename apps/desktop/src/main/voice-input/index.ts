@@ -46,6 +46,7 @@ import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejecti
 import {
   activeOwnerScopeKey,
   getActiveAppSession,
+  getPersistedAppSessionMode,
   isAppSessionBoundaryPending,
 } from '../appSessionState.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
@@ -304,6 +305,7 @@ let cachedMicrophonePermission: VoiceInputMicrophonePermissionCache | null = nul
 let rendererVerifiedMicrophonePermission = false;
 let cachedVoiceInputReadiness: VoiceInputReadiness | null = null;
 let readinessRefreshPromise: Promise<VoiceInputReadiness> | null = null;
+const voiceInputReadyListeners = new Set<() => void>();
 let lastModelSelectionSignature = '';
 let modelSelectionGeneration = 0;
 const MAX_REFINEMENT_SIDE_CONTEXT_CHARS = 1_200;
@@ -1530,12 +1532,50 @@ async function refreshVoiceInputReadinessCache(reason: string): Promise<VoiceInp
         provider: readiness.provider,
         auth: readiness.auth,
       });
+      if (readiness.ok && generation === modelSelectionGeneration) {
+        for (const listener of voiceInputReadyListeners) {
+          try {
+            listener();
+          } catch (error) {
+            log.warn('voice input ready listener failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
       return readiness;
     })
     .finally(() => {
       readinessRefreshPromise = null;
     });
   return readinessRefreshPromise;
+}
+
+/** Notified whenever a readiness refresh finds a startable dictation path. */
+export function onVoiceInputReady(listener: () => void): () => void {
+  voiceInputReadyListeners.add(listener);
+  return () => { voiceInputReadyListeners.delete(listener); };
+}
+
+/**
+ * Whether the global overlay is worth keeping warm for this profile. Cloud
+ * profiles — including a persisted cloud intent while auth is still verifying
+ * at startup — keep the unconditional prewarm. Local and signed-out profiles
+ * can only dictate through explicitly configured user credentials; without
+ * them the shortcut can only surface a setup error, so the hidden renderer
+ * would stay resident for nothing.
+ */
+export async function canGlobalVoiceInputOverlayStartDictation(): Promise<boolean> {
+  if (getAppCapabilities().canUseCindyAccountServices) return true;
+  if (getPersistedAppSessionMode() === 'cloud') return true;
+  try {
+    return (await refreshVoiceInputReadinessCache('global-overlay-prewarm')).ok;
+  } catch (error) {
+    log.debug('global overlay readiness check failed; keeping prewarm', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return true;
+  }
 }
 
 function resetVoiceInputModelSelectionCaches(

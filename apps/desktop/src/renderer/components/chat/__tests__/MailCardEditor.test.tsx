@@ -6,12 +6,16 @@ import { renderMailCard } from '../../../../main/cindy-brain/mailCards';
 import { ingestCardPush } from '@/cindy-brain/ghostCardStore';
 import type { MailCardData } from '@cindy/maker-shared/ghost-card-form';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
+import { enableGhostCardTaskAutoArchive, isGhostCardTaskAutoArchivePending } from '@/cindy-brain/ghostCardTaskArchive';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/cindy-brain/useGhostCardThemeVars', () => ({ useGhostCardThemeVars: () => '' }));
 vi.mock('@/features/right-sidebar/lib/mailPreview', () => ({ openMailCard: vi.fn() }));
-vi.mock('@/contexts/PrRefsContext', () => ({ usePrStatuses: () => ({ statuses: new Map() }) }));
+const prStatuses = vi.hoisted(() => new Map<string, unknown>());
+vi.mock('@/contexts/PrRefsContext', () => ({ useTaskPrArchiveEligibility: () => ({ eligible: true, checkEligibility: () => true }),
+  usePrStatuses: () => ({ statuses: prStatuses }) }));
 vi.mock('../GhostCardModelSelect', () => ({ GhostCardModelSelect: () => null }));
+vi.mock('../GhostCardSessionLink', () => ({ GhostCardSessionLink: () => null }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 // User regression (unit): syncing between pointerdown/click lost Send, and
@@ -171,4 +175,27 @@ it('waits for the iframe root and body and binds actions after each document loa
   } finally {
     content.mockRestore();
   }
+});
+
+// Review of PR 9147: a card replaced in place by content without any PR marker must withdraw its own
+// auto-archive eligibility, or the task-level "pending" and "seen" state outlives the card's declaration.
+// Production entry: the card canvas, rerendered with the new card HTML (card-update).
+it('withdraws auto-archive when the card is replaced by content without PR markers', () => {
+  prStatuses.set('octo/repo#9', { ok: true, owner: 'octo', repo: 'repo', prNumber: 9, status: 'merged', title: 'T', htmlUrl: '', branch: 'b', unresolvedCount: 0, checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 } });
+  const disable = enableGhostCardTaskAutoArchive('review-session');
+  const props = { callId: 'pr-card', sessionId: 'review-session', height: 80 };
+  const merged = '<div><button data-ghost-task-archive="octo/repo#9" data-ghost-task-archive-auto aria-label="Archive" style="display:none"></button></div>';
+  const view = render(<MailCardEditor {...props} html={merged} />);
+  const load = () => {
+    const frame = screen.getByTitle('mailReader.title') as HTMLIFrameElement;
+    frame.contentDocument!.open(); frame.contentDocument!.write(frame.srcdoc); frame.contentDocument!.close();
+    fireEvent.load(frame);
+  };
+  load();
+  expect(isGhostCardTaskAutoArchivePending('review-session')).toBe(true);
+  view.rerender(<MailCardEditor {...props} html="<div>No PR here</div>" />);
+  load();
+  expect(isGhostCardTaskAutoArchivePending('review-session')).toBe(false);
+  disable();
+  prStatuses.clear();
 });

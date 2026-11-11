@@ -93,6 +93,7 @@
     "context": "Contexto",
     "screenshot": "Captura de ecrã",
     "photo": "Fotografias",
+    "photosAndVideos": "Fotografias e vídeos",
     "takePhoto": "Tirar fotografia",
     "file": "Ficheiro",
     "joinConversation": "Adicionar à conversa ({{num}})",
@@ -482,6 +483,11 @@
     "worktreeCleanupPending": "O worktree anterior ainda aguarda limpeza. Volte a ligar o dispositivo e tente novamente."
   },
   "menu": {
+    "moveToProject": "Mover tarefa",
+    "moveFailed": "Não foi possível mover a tarefa",
+    "moveRunning": "Esta tarefa está em execução. Mova-a quando terminar.",
+    "moveWorktree": "O diretório de trabalho desta tarefa é um worktree, pelo que ainda não pode ser movida para outro projeto",
+    "moveUnsupported": "Atualize o Cindy no computador ligado para mover tarefas.",
     "details": "Detalhes da sessão",
     "chipPinned": "Fixadas",
     "chipArchived": "Arquivadas",
@@ -703,6 +709,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Esse computador não permitiu a utilização remota deste fornecedor. Nesse computador, ativa «Permitir utilização remota» em Definições → Fornecedores ou escolhe outro modelo.",
     "REMOTE_AGENT_FORK_FAILED": "O computador que executa o Agent não conseguiu iniciar uma nova sessão a partir daqui. Tenta novamente ou tenta uma mensagem diferente.",
     "REMOTE_AGENT_SHARE_PAUSED": "O proprietário colocou esta partilha em pausa para ti, pelo que estes modelos não podem ser usados até ser retomada. Muda para outro modelo para continuar.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Esta é uma partilha antiga e não pode ser usada enquanto \"Usar apenas Agent-Net\" estiver ativado. Desativa esta opção para continuar ou muda para outro modelo.",
     "REMOTE_AGENT_SHARE_REMOVED": "Esta partilha já não está disponível (o proprietário removeu-a ou saíste). Muda para outro modelo para continuar.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "O fornecedor partilhado está temporariamente indisponível. O computador do proprietário pode estar offline ou a partilha pode estar desativada por agora. Tenta mais tarde ou muda para outro modelo para continuar."
   },
@@ -728,21 +735,34 @@
     "remoteDirPathHint": "A pasta é verificada no dispositivo de execução. Uma pasta inexistente causa um erro; a pasta do Lead nunca é usada como alternativa.",
     "remoteDirInvalid": "Introduz um caminho absoluto no dispositivo de execução.",
     "roleLabel": "Nome da função",
-    "roleHint": "Apenas um nome para distinguir os colaboradores. Não altera as capacidades.",
-    "customRole": "Personalizado",
-    "customRolePlaceholder": "Nome de função personalizado",
-    "customRolePredefinedError": "Um nome de função personalizado não pode ser igual ao de uma função predefinida",
+    "taskLabel": "O que o Worker faz",
+    "enableHint": "Esta tarefa passa a ser o Lead: distribui o trabalho e verifica os resultados. O Worker é outro Agent independente, que executa o trabalho e comunica o resultado.",
+    "roles": {
+      "reviewer": {
+        "name": "Rever",
+        "task": "Dê uma vista de olhos ao trabalho do Lead e faça algumas sugestões."
+      },
+      "developer": {
+        "name": "Desenvolver"
+      },
+      "tester": {
+        "name": "Testar",
+        "task": "Teste o trabalho do Lead até agora e comunique as falhas com os passos para as reproduzir."
+      }
+    },
+    "addRole": "Adicionar função",
+    "removeRoleHint": "Toque sem soltar para remover",
+    "removeRoleConfirmTitle": "Remover «{{role}}»?",
+    "removeRoleConfirmDesc": "Pode voltar a adicioná-la quando quiser em «Adicionar função».",
+    "removeRoleConfirm": "Remover função",
+    "moreSettings": "Mais definições",
     "agentLabel": "Agent",
-    "modelLabel": "Modelo",
     "modelDefault": "Predefinido",
     "modelDefaultHint": "Usa o modelo Worker predefinido do computador",
-    "permissionLabel": "Modo de permissões",
     "permissionAuto": "Revisão automática",
     "permissionFull": "Acesso total",
-    "permissionAutoHint": "Lê e escreve no espaço de trabalho e revê automaticamente os pedidos de elevação de privilégios. As ações de alto risco podem ser recusadas ou exigir confirmação.",
-    "permissionFullHint": "Pode alterar qualquer ficheiro e executar comandos com acesso à rede sem voltar a perguntar. Risco máximo; usar apenas em tarefas de confiança.",
     "initialTaskLabel": "Tarefa inicial (opcional)",
-    "initialTaskPlaceholder": "Uma primeira tarefa opcional para este Worker",
+    "initialTaskPlaceholder": "Escreva a primeira coisa a entregar-lhe ou deixe em branco para o Lead distribuir o trabalho",
     "workerCountSummary_one": "{{count}} Worker · {{running}} em execução",
     "workerCountSummary_other": "{{count}} Workers · {{running}} em execução",
     "loading": "A carregar Workers…",
@@ -820,12 +840,6 @@
     "failed": "Não foi possível guardar. Tenta novamente.",
     "restore": "Repor predefinições"
   },
-  "followUp": {
-    "title": "Queres que acompanhe as tuas sessões?",
-    "start": "Iniciar acompanhamento",
-    "notNow": "Agora não",
-    "saveFailed": "Não foi possível guardar. Tente novamente."
-  },
   "providerGroupRebalance": {
     "title": "Continuar em {{label}}?",
     "body": "Para usar a quota de todas as contas de forma equilibrada, envia esta mensagem a partir de {{label}} ({{quota}}). As últimas mensagens e um resumo são transferidos; os detalhes mais antigos podem perder-se.",
@@ -833,7 +847,10 @@
     "quotaReset": "{{left}}% restante · reposição em {{reset}}",
     "confirm": "Mudar",
     "remember": "Mudar e fazê-lo automaticamente a partir de agora (apenas nesta tarefa)",
-    "cancel": "Cancelar"
+    "cancel": "Cancelar",
+    "disable": "Não mudar automaticamente (esta tarefa)",
+    "disableFailed": "Não foi possível confirmar se a tua escolha foi guardada. Verifica a ligação e se o Cindy está atualizado no computador onde está a tarefa e tenta novamente. Esta mensagem será enviada normalmente.",
+    "moreOptions": "Mais opções"
   },
   "messageEdit": {
     "editing": "A editar a mensagem",

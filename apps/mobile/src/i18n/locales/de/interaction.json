@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Fertig",
+    "mcpCancel": "Abbrechen",
     "mode": {
       "default": "Standardberechtigungen",
       "acceptEdits": "Änderungen erlauben",
@@ -34,6 +36,10 @@
     "exit": "Planmodus beenden"
   },
   "panel": {
+    "questionUnanswered": "Unbeantwortet",
+    "questionWithdrawn": "Keine Antwort mehr nötig",
+    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
+    "sendSupplement": "Ergänzung senden",
     "readOnlyKind": "Ausstehend",
     "readOnlyTitle": "Warten auf Bestätigung auf deinem Computer",
     "pendingRequests": "Ausstehende Anfragen",
@@ -98,7 +104,14 @@
     "planFeedbackPlaceholder": "Sag Claude, was zu tun ist",
     "planFeedbackRequired": "Gib vor dem Senden Feedback ein.",
     "planFeedbackSubmit": "Feedback zum Plan senden",
-    "planFeedbackAccessibility": "Gib Feedback, um den Plan zu ändern"
+    "planFeedbackAccessibility": "Gib Feedback, um den Plan zu ändern",
+    "validation": {
+      "required": "Füllen Sie dieses Pflichtfeld aus.",
+      "choice": "Wählen Sie eine der aufgeführten Optionen.",
+      "tooShort": "Geben Sie mindestens {{count}} Zeichen ein.",
+      "tooLong": "Geben Sie höchstens {{count}} Zeichen ein."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -385,6 +398,8 @@
       "submitting": "Wird eingereicht"
     },
     "permission": {
+      "titleStdin": "Eingabe in diesem Terminal erlauben?",
+      "titleMcpUrl": "Anfrage von {{server}} abschließen",
       "highRiskTitle": "Berechtigung mit hohem Risiko erfordert Bestätigung",
       "highRiskDetail": "Prüfe den Befehl und bestätige erneut, um ihn zu erlauben. Lehne ihn ab, wenn du unsicher bist.",
       "sessionAllowTitle": "Einmal oder für diese Aufgabe immer erlauben",
@@ -439,5 +454,39 @@
       "ghost_id": "Plugin",
       "tool": "Tool"
     }
+  },
+  "issueConfirm": {
+    "title": "Feedback an {{appName}} bestätigen",
+    "typeBug": "Fehler",
+    "typeFeature": "Funktion",
+    "titleLabel": "Titel",
+    "bodyLabel": "Text (Markdown)",
+    "privacyHint": "Titel und Text des Issues werden öffentlich und können über Suchmaschinen auffindbar sein oder zwischengespeichert werden. Die automatische Bereinigung deckt nur einige gängige Muster ab und kann nicht alle sensiblen Zusammenhänge erkennen.",
+    "relatedLogsHint": "Diese Einreichung enthält die oben angezeigten zugehörigen Client-Protokolle. Sie werden vor der Veröffentlichung gefiltert, bereinigt und in der Länge begrenzt.",
+    "privacyConfirm": "Ich habe die obigen öffentlichen Inhalte geprüft. Sie enthalten keine persönlichen, gesprächsbezogenen oder geschäftlichen Informationen, die privat bleiben sollten",
+    "submissionMethodLabel": "Identität beim Einreichen",
+    "identityGithubUser": "Mein GitHub-Konto @{{login}}",
+    "identityGithubUserHint": "Du wirst auf GitHub als Autor eingetragen und kannst dieses Issue dort bearbeiten oder schließen",
+    "identityPlatform": "Offizieller Cindy-Bot @{{login}} (Standard)",
+    "identityPlatformHint": "Es muss kein GitHub-Konto eingerichtet werden. Der offizielle Bot erstellt das Issue, und du kannst im Text eine öffentliche Namensnennung hinzufügen",
+    "publicNameLabel": "Öffentliche Namensnennung",
+    "publicNameHint": "Diese Namensnennung erscheint öffentlich im Text des Issues",
+    "anonymous": "Anonym",
+    "useAnonymous": "Anonym einreichen",
+    "envLine": "Client-Umgebung (wird beim Absenden automatisch angehängt): Client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI-Sprache {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Modell-ID {{modelId}} (diese Sitzung)",
+    "regionLine": "Build-Region: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Feedback absenden",
+    "cancel": "Abbrechen",
+    "previewLabel": "GitHub · Öffentliches Feedback",
+    "edit": "Bearbeiten",
+    "doneEditing": "Fertig",
+    "publicSubmit": "Öffentlich senden",
+    "publicationNotice": "Feedback und Name werden auf GitHub veröffentlicht.",
+    "attribution": "Von {{name}}",
+    "environment": "Laufzeitumgebung enthalten",
+    "identitySettings": "Name und Konto"
   }
 }

@@ -10,6 +10,7 @@
  */
 
 import type { OutputLimitDetails } from '@cindy/maker-shared';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../interfaces/auth-adapter.js';
 
 import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
@@ -131,6 +132,11 @@ export interface AgentTaskUpdateEventData {
   usage?: AgentTaskUsage;
   lastToolName?: string;
   taskType?: string;
+  /**
+   * 后台命令（taskType=local_bash）是会自己结束的工作，还是长驻服务。宿主按启动它的
+   * 命令写法判断（见 claude-code/background-command-kind.ts）；只用于展示，缺省按 work。
+   */
+  backgroundCommandKind?: 'work' | 'service';
   subagentParentContext?: 'none' | 'snapshot' | 'live';
   workflowName?: string;
   /**
@@ -321,10 +327,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** 单道问题(用于 ask_user_question kind) */
 export interface AskUserQuestionItem {
+  /** Stable provider identity; absent on legacy questions. */
+  id?: string;
   question: string;
   header?: string;
   options?: Array<{ label: string; description?: string }>;
   multiSelect?: boolean;
+  answerConstraints?: import('@cindy/maker-shared').AskAnswerConstraints;
 }
 
 type InteractionRequestBase = {
@@ -349,6 +358,8 @@ export type InteractionRequest =
       questions: AskUserQuestionItem[];
       /** Optional question: the provider keeps running; absence means a blocking question. */
       delivery?: 'async';
+      /** Native RPC may resolve with empty answers after idle time. */
+      isBlocking?: boolean;
     })
   | (InteractionRequestBase & {
       kind: 'plan_review';
@@ -386,7 +397,9 @@ export type InteractionDecision =
     }
   | {
       kind: 'ask_user_question';
-      /** 用户对每道问题的回答, key=question(或 header), value=用户回答 */
+      /** Host-only activity receipt. It never settles or persists an answer. */
+      inProgress?: boolean;
+      /** Stable question id; legacy callers use question/header text. */
       answers: Record<string, string>;
       /**
        * true = 系统性 dismissal(会话 abort/close、turn 失败等自动空答),
@@ -454,7 +467,7 @@ export interface UsageSnapshot {
   generationActive?: boolean;
   /** False when live TPS must be hidden. Omitted on placeholder status frames. */
   generationReliable?: boolean;
-  /** Host-measured live tok/s (Pi extension algorithm). Display only. */
+  /** Host-measured live tok/s. Display only. */
   tokenSpeed?: TokenSpeedSnapshot;
   /**
    * Host/bridge 自动 compact 已确定性失败，下次 send 应换干净原生窗口。
@@ -544,6 +557,7 @@ export interface RewindCommitResult {
 }
 
 export interface ForkSdkSessionOptions {
+  [NATIVE_SUBSCRIPTION_ACCOUNT]?: NativeSubscriptionAccount;
   /** Host-resolved shared-provider storage. Never accepted directly from a remote caller. */
   hostedGuestHome?: string;
   /** 源 session 的 SDK sessionId (从 sessions.sdk_session_id 取)。 */

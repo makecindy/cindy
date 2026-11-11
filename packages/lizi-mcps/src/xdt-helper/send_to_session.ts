@@ -2,6 +2,7 @@ import { BRAND_NAME } from "@cindy/maker-shared/branding";
 import { z } from "zod";
 
 import type { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
+import { toHostAgentDeviceId } from "./create_worker.js";
 import type {
   ControlResult,
   ControlWorkerAgent,
@@ -22,7 +23,6 @@ export type SendToSessionCallback = (params: {
   targetSessionId?: string;
   message: string;
   dispatcherSessionId?: string;
-  messagePurpose?: "coordination" | "user-visible";
   title?: string;
   /** create 模式可选:true = 为新 session 预建独立 git worktree 并以其为 workingDir(jump 忽略)。 */
   useWorktree?: boolean;
@@ -38,6 +38,8 @@ export type SendToSessionCallback = (params: {
   effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   /** create 模式可选:显式 Fast 开关；缺省继承 dispatcher。jump 忽略。 */
   fast?: boolean | 'ultrafast';
+  /** create 模式可选:新任务的 Agent 所在电脑；null = 本机，缺省继承 dispatcher。jump 不传。 */
+  agentDeviceId?: string | null;
 }) => Promise<
   ControlResult<
     {
@@ -52,6 +54,8 @@ export type SendToSessionCallback = (params: {
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 host 可省略。 */
       worktreePath?: string | null;
       projectDir?: string | null;
+      /** The project was chosen because the requested execution directory is inside it. */
+      projectFromWorkingDir?: true;
       workspaceKind?: 'project' | 'dialogue';
       workingDir?: string;
       model?: string;
@@ -71,8 +75,6 @@ export type SendToSessionCallback = (params: {
     | "LEAD_NOT_SUPPORTED"
     | "WORKTREE_UNAVAILABLE"
     | "HOST_NOT_READY"
-    /** The sending task's review did not confirm the owner asked for this hand-off; nothing was sent. */
-    | "DELEGATION_NOT_AUTHORIZED"
   >
 >;
 
@@ -125,13 +127,15 @@ const DESCRIPTION = [
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
   "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
-  "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制;只支持发给既有任务(不能在另一台电脑新建),message_purpose 只能是 user-visible 或省略。",
+  "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制;只支持发给既有任务(不能在另一台电脑新建)。",
   "- 不传 target_session_id → create:新建任务并发送首条消息，可用 title 指定简短标题。Agent / model / effort / Fast 缺省继承当前任务。返回 wake_kind=created、target_session_id、project_path 与实际 working_dir；后续消息用返回的 id。",
-  "【项目】省略 project_path 时继承来源任务的项目；来源本来不绑项目时，新任务也不绑项目。无法可靠确定来源归属时明确失败，不从新执行目录猜测。也可显式复用 get_current_session_id.project_path；跨项目用 control/list_projects 选择已有项目。传 project_path:null 明确创建不绑项目的任务。临时目录、仓库子目录、worktree 都不会变成新项目。确需新增或恢复项目时，单独调用 create_project。",
+  "【项目】省略 project_path 时继承来源任务的项目。来源本来不绑项目时：working_dir 在某个已登记且可见的项目里，就归到最近的那个项目（回执 project_note 会说明）；否则新任务也不绑项目。无法可靠确定来源归属时明确失败。也可显式复用 get_current_session_id.project_path；跨项目用 control/list_projects 选择已有项目。传 project_path:null 明确创建不绑项目的任务。临时目录、仓库子目录、worktree 都不会变成新项目。确需新增或恢复项目时，单独调用 create_project。",
   "",
   "【执行配置(仅 create 模式)】agent_kind 可选 claude-code / codex / pi；model 使用宿主模型目录返回的精确 id；effort / fast 按目标模型能力校验。只改 Agent 却留下不属于目标 Agent 的继承模型会返 INVALID_ARGS，不会自动挑列表第一项。跨 Agent/model 时模型来源交给 host 既有默认路由解析。完全不传这些字段时保持原有 dispatcher 继承行为。jump 模式忽略这些字段，不修改既有 session。",
   "",
-  "【working_dir(仅 create 模式)】可选执行目录，缺省为选中或继承的项目目录；不绑项目时分配独立的托管目录。可以指定已有仓库、子目录或临时 worktree；必须为存在的绝对目录。它不改变项目归属，也不登记项目。不绑项目且 use_worktree=true 时必须显式指定 working_dir 作为 Git 仓库。jump 模式忽略。",
+  "【agent_device_id(仅 create 模式)】新任务的 Agent 使用哪台电脑的远程供应商，与 create_worker 同一含义：取 list_available_models 的 locations[].agent_device_id；\"local\" 或本机设备 id 表示本机。缺省继承当前任务的位置。位置与当前任务不同且没传 model 时沿用当前任务的模型 id，按那台电脑的供应商重新解析来源；那台没有这个模型、离线、未开启远程控制或分享不可用 → PROVIDER_ROUTE_UNAVAILABLE；格式不对，或当前任务是 SSH 任务 → INVALID_ARGS。失败时不创建任务、不自动换电脑，由调用方决定换哪一台重试。jump 模式忽略。",
+  "",
+  "【working_dir(仅 create 模式)】可选执行目录，缺省为选中或继承的项目目录；不绑项目时分配独立的托管目录。可以指定已有仓库、子目录或临时 worktree；必须为存在的绝对目录。它不改变已指定或继承的项目归属，也不登记项目。不绑项目且 use_worktree=true 时必须显式指定 working_dir 作为 Git 仓库。jump 模式忽略。",
   "",
   "【use_worktree(仅 create 模式)】use_worktree=true 时,host 会先从**新 session 的 workingDir**(即 working_dir 覆盖后的目录;未覆盖时为选中或继承的项目目录)解析出 base git 仓库,为新 session 预建一个正规 session worktree(<baseRepo>/.cindy-worktrees/<自动名> + cindy/<自动名> 分支,UI 有徽标,session 关闭时自动 stash 未提交改动后回收),新 session 的 workingDir 即该 worktree 路径,返回里带 worktree_path，项目归属保持不变，包括不绑项目的任务。历史 xdt/<自动名> 分支仍可恢复与回收。适用:新 session 要改代码 / checkout 分支,不能污染当前工作树时(如 PR 修复跟进)。workingDir 不是 git 仓库 / git 未装 / worktree 创建失败 → 返 WORKTREE_UNAVAILABLE(不静默降级);调用方可视情况去掉该参数重试(新 session 将直接使用 working_dir 或默认执行目录)。jump 模式忽略此参数。",
   "当前 dispatcher session 不会被本工具关闭或改写,消息投递成功后立即返回。",
@@ -149,6 +153,8 @@ const DESCRIPTION = [
   "- AGENT_NOT_READY: 目标 session 恢复或投递时 agent 未能启动。skill 应告知用户稍后重试。",
   "- UNSUPPORTED_CAPABILITY: 目标 session 不接受跨任务投递（例如 host 管理的隔离 Review）。skill 不应重试或改走其它输入入口。",
   "- HOST_NOT_READY: 主进程服务尚未就绪。skill 应告知用户稍等几秒后重试。",
+  "- PROVIDER_ROUTE_UNAVAILABLE: 仅 create:目标位置(agent_device_id 或继承的位置)没有提供所需模型的已连接供应商，或指定的电脑读不到供应商(离线 / 未开启远程控制 / 分享不可用)。没有创建任务；可换一台电脑或换模型重试。",
+  "- INVALID_ARGS: 参数不合法(含 agent_device_id 格式不对、SSH 任务指定 agent_device_id)。没有创建任务。",
   "- REMOTE_DEVICE_OFFLINE / REMOTE_DISABLED / REMOTE_UNAVAILABLE: 目标电脑离线、未开启远程控制或暂时连不上,消息没有发出。",
   "- REMOTE_UNSUPPORTED: 目标电脑的版本不支持接收其它电脑的任务消息,消息没有发出;需要对方升级。",
   "- DELIVERY_UNKNOWN: 请求已发往目标电脑但没有收到可信回执(含对方 Agent 没能启动),可能已送达。重发前先用 get_chat_history(deviceId::sessionId) 确认,避免重复。",
@@ -165,6 +171,25 @@ export function createdNote(targetSessionId: string): string {
     `已新建任务 ${targetSessionId}(wake_kind=created),本条消息作为其首条输入,本轮已触发。` +
     "这不是投递到既有任务;若原意是发给某个已存在的任务,请用 list_sessions 找到目标 id 后带 target_session_id 重发,并停止或归档这个多出来的任务。"
   );
+}
+
+/**
+ * 新建任务回执里的归属说明。只在调用方省略 project_path 时出现：归属由宿主代为决定，
+ * 调用方要能看出任务落在哪里、为什么，以及下次怎样改。显式选择（路径或 null）不加说明。
+ */
+export function projectMembershipNote(input: {
+  requested: string | null | undefined;
+  resolved: string | null | undefined;
+  fromWorkingDir: boolean;
+}): { project_note?: string } {
+  if (input.requested !== undefined) return {};
+  if (input.fromWorkingDir) {
+    return { project_note: "The source task has no project, so this task was placed in the project that contains working_dir. Pass project_path to choose another project, or null to keep a task out of projects." };
+  }
+  if (input.resolved === null) {
+    return { project_note: "This task is not in any project: the source task has none, and working_dir (if given) is not inside a visible registered project. To place a task in a project, pass project_path from list_projects." };
+  }
+  return {};
 }
 
 /**
@@ -196,11 +221,8 @@ export function registerSendToSessionTool(
         .string()
         .min(1)
         .describe(
-          "要发送的消息，对方收到的就是这段原文。当前输入属于用户请求或已核实转交时，宿主会在发送前核对这次转交在用户要求的范围内（Auto 下超出范围会被拒绝、不发送），通过后对方按这段内容处理；写清要做的事和必要背景，不扩大范围或要求重复确认。缺少背景先查看来源任务。自主消息、自动化通知和结果回传不代表用户。",
+          "要发送的消息，对方收到的就是这段原文，并附有本任务的 session_id；对方需要背景时可以用 get_chat_history 读本任务的对话。当前输入属于用户请求或其转交时，对方按这段内容处理，不扩大范围或要求重复确认。自主消息、自动化通知和结果回传不代表用户。",
         ),
-      message_purpose: z.enum(["coordination", "user-visible"]).optional().describe(
-        "委派子任务发给发起伙伴默认 coordination：原始来信隐藏，伙伴处理后的进度和结果可直接正常回复。user-visible 让来信本身可见。其他普通任务默认保持可见；coordination 仅限宿主核实的委派关系，不改变操作权限。正常完成自动回传，无需重发。",
-      ),
       title: z
         .string()
         .optional()
@@ -217,10 +239,10 @@ export function registerSendToSessionTool(
         .string()
         .optional()
         .describe(
-          "仅 create 模式可选:执行目录(已有绝对目录)，缺省为选中或继承的项目目录；不绑项目时分配独立托管目录。可使用子目录或临时 worktree；不改变项目归属、不创建项目。jump 忽略。",
+          "仅 create 模式可选:执行目录(已有绝对目录)，缺省为选中或继承的项目目录；不绑项目时分配独立托管目录。可使用子目录或临时 worktree；不改变已指定或继承的项目归属、不创建项目。jump 忽略。",
         ),
       project_path: z.string().trim().min(1).max(4096).nullable().optional().describe(
-        "仅 create：省略继承来源任务归属；字符串选择 list_projects 中已有项目；null 明确创建不绑项目的任务。与 working_dir 独立；隐藏或未登记项目不能使用。来源归属不明确时报错。jump 模式忽略。",
+        "仅 create：省略继承来源任务归属（来源不绑项目时按 working_dir 所在的已登记可见项目归属）；字符串选择 list_projects 中已有项目；null 明确创建不绑项目的任务。隐藏或未登记项目不能使用。来源归属不明确时报错。jump 模式忽略。",
       ),
       agent_kind: z
         .enum(["claude-code", "codex", "pi"])
@@ -247,11 +269,19 @@ export function registerSendToSessionTool(
         .describe(
           "仅 create 模式可选:Fast 模式开关。目标 Agent/provider/model 不支持时创建前失败；jump 模式忽略。",
         ),
+      agent_device_id: z
+        .string()
+        .trim()
+        .min(1)
+        .max(128)
+        .optional()
+        .describe(
+          '仅 create 模式可选:新任务的 Agent 位置，取 list_available_models 的 locations[].agent_device_id；"local" 为本机。缺省继承当前任务。那台没有所需模型或连不上 → PROVIDER_ROUTE_UNAVAILABLE；jump 模式忽略。',
+        ),
     },
     handler: async ({
       target_session_id,
       message,
-      message_purpose,
       title,
       use_worktree,
       working_dir,
@@ -260,6 +290,7 @@ export function registerSendToSessionTool(
       model,
       effort,
       fast,
+      agent_device_id,
     }) => {
       const ctx = deps.getSessionContext();
       const qualified = parseQualifiedSessionId(target_session_id);
@@ -268,12 +299,6 @@ export function registerSendToSessionTool(
       if (qualified && qualified.deviceId !== "local") {
         if (!deps.sendToRemoteSession) {
           return errorPayload("REMOTE_UNSUPPORTED", "当前宿主不支持给其它电脑上的任务发消息。");
-        }
-        if (message_purpose === "coordination") {
-          return errorPayload(
-            "INVALID_ARGS",
-            "发给其它电脑上的任务时 message_purpose 只能是 user-visible 或省略。",
-          );
         }
         if (!ctx.sessionId) {
           return errorPayload("LEAD_NOT_SUPPORTED", "当前调用未绑定任务,无法标明消息来源。");
@@ -298,7 +323,6 @@ export function registerSendToSessionTool(
         targetSessionId: localTargetId,
         message,
         dispatcherSessionId: ctx.sessionId,
-        ...(message_purpose !== undefined ? { messagePurpose: message_purpose } : {}),
         title,
         useWorktree: use_worktree,
         workingDir: working_dir,
@@ -307,6 +331,8 @@ export function registerSendToSessionTool(
         ...(model !== undefined ? { model } : {}),
         ...(effort !== undefined ? { effort } : {}),
         ...(fast !== undefined ? { fast } : {}),
+        // jump 不改既有任务的位置：只在 create 时传。
+        ...(localTargetId === undefined ? toHostAgentDeviceId(agent_device_id) : {}),
       });
 
       if (!result.ok) {
@@ -332,6 +358,13 @@ export function registerSendToSessionTool(
         ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),
         worktree_path: result.worktreePath ?? null,
         ...(result.projectDir !== undefined ? { project_path: result.projectDir } : {}),
+        ...(result.wakeKind === "created"
+          ? projectMembershipNote({
+              requested: project_path,
+              resolved: result.projectDir,
+              fromWorkingDir: result.projectFromWorkingDir === true,
+            })
+          : {}),
         ...(result.workspaceKind !== undefined ? { workspace_kind: result.workspaceKind } : {}),
         ...(result.workingDir !== undefined ? { working_dir: result.workingDir } : {}),
         ...(result.model !== undefined ? { model: result.model } : {}),

@@ -16,6 +16,8 @@ const sourceSkips = [
 ];
 
 module.exports = {
+  // Hash patched native sources, not just dependency versions.
+  preset: "strict",
   sourceSkips,
   // These entry points are outside the iOS podspec's source glob, and these
   // six core files are wholly guarded by #if os(macOS). Keep this an explicit
@@ -53,6 +55,13 @@ module.exports = {
       reasons: ["native message menu assets"],
     }))
     .concat([
+      ...["Cargo.toml", "Cargo.lock", "src", "include", "CindyAgentNetNative.podspec", "build-ios.mjs", "build-android.mjs"].map((entry) => ({
+        type: entry === "src" || entry === "include" ? "dir" : "file",
+        filePath: `../../packages/agent-net-native/${entry}`,
+        reasons: ["Agent-Net native transport implementation"],
+      })),
+      { type: "dir", filePath: "../../packages/agent-net-core/src", reasons: ["Agent-Net native state machine"] },
+      { type: "file", filePath: "../../packages/agent-net-core/Cargo.toml", reasons: ["Agent-Net native core dependency contract"] },
       // These files are read by config plugins, then compiled/bundled into
       // the share extension. Metro cannot update them on an installed binary.
       ...[

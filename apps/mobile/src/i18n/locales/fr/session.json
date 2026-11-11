@@ -93,6 +93,7 @@
     "context": "Contexte",
     "screenshot": "Capture d'écran",
     "photo": "Photos",
+    "photosAndVideos": "Photos et vidéos",
     "takePhoto": "Prendre une photo",
     "file": "Fichier",
     "joinConversation": "Ajouter à la conversation ({{num}})",
@@ -482,6 +483,11 @@
     "worktreeCleanupPending": "Le worktree précédent est toujours en attente de nettoyage. Reconnectez l'appareil et réessayez."
   },
   "menu": {
+    "moveToProject": "Déplacer la tâche",
+    "moveFailed": "Échec du déplacement de la tâche",
+    "moveRunning": "Cette tâche est en cours d'exécution. Déplacez-la une fois terminée.",
+    "moveWorktree": "Le répertoire de travail de cette tâche est un worktree : elle ne peut pas encore être déplacée vers un autre projet",
+    "moveUnsupported": "Mettez à jour Cindy sur l’ordinateur connecté pour déplacer des tâches.",
     "details": "Détails de la session",
     "chipPinned": "Épinglée",
     "chipArchived": "Archivée",
@@ -703,6 +709,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Cet ordinateur n'a pas autorisé l'utilisation à distance de ce fournisseur. Sur cet ordinateur, activez « Autoriser l'utilisation à distance » dans Paramètres → Fournisseurs, ou choisissez un autre modèle.",
     "REMOTE_AGENT_FORK_FAILED": "L'ordinateur qui exécute l'Agent n'a pas pu démarrer une nouvelle session à partir d'ici. Réessayez, ou essayez avec un autre message.",
     "REMOTE_AGENT_SHARE_PAUSED": "Le propriétaire a suspendu ce partage pour vous : ces modèles ne peuvent donc pas être utilisés tant qu'il n'est pas réactivé. Passez à un autre modèle pour continuer.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Ceci est un ancien partage, inutilisable tant que « Utiliser uniquement Agent-Net » est activé. Désactivez cette option pour continuer, ou passez à un autre modèle.",
     "REMOTE_AGENT_SHARE_REMOVED": "Ce partage n'est plus disponible (le propriétaire l'a supprimé ou vous l'avez quitté). Passez à un autre modèle pour continuer.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Le fournisseur partagé est temporairement indisponible. L'ordinateur du propriétaire est peut-être hors ligne, ou le partage est désactivé pour le moment. Réessayez plus tard ou passez à un autre modèle pour continuer."
   },
@@ -728,21 +735,34 @@
     "remoteDirPathHint": "Le dossier est vérifié sur l'appareil d'exécution. Un dossier introuvable provoque une erreur ; le dossier du Lead n'est jamais utilisé à la place.",
     "remoteDirInvalid": "Saisissez un chemin absolu sur l'appareil d'exécution.",
     "roleLabel": "Nom du rôle",
-    "roleHint": "Simple nom pour distinguer les collaborateurs. Il ne modifie pas les capacités.",
-    "customRole": "Personnalisé",
-    "customRolePlaceholder": "Nom de rôle personnalisé",
-    "customRolePredefinedError": "Un nom de rôle personnalisé ne peut pas être identique à un rôle prédéfini",
+    "taskLabel": "Ce que fait le Worker",
+    "enableHint": "Cette tâche devient le Lead : elle répartit le travail et vérifie les résultats. Le Worker est un autre Agent indépendant qui exécute le travail et rend compte.",
+    "roles": {
+      "reviewer": {
+        "name": "Revue",
+        "task": "Jetez un œil au travail du Lead et faites quelques suggestions."
+      },
+      "developer": {
+        "name": "Développer"
+      },
+      "tester": {
+        "name": "Tester",
+        "task": "Testez le travail effectué jusqu'ici par le Lead et signalez les échecs avec les étapes pour les reproduire."
+      }
+    },
+    "addRole": "Ajouter un rôle",
+    "removeRoleHint": "Appuyez longuement pour retirer",
+    "removeRoleConfirmTitle": "Retirer « {{role}} » ?",
+    "removeRoleConfirmDesc": "Vous pourrez le rajouter à tout moment avec « Ajouter un rôle ».",
+    "removeRoleConfirm": "Retirer le rôle",
+    "moreSettings": "Autres paramètres",
     "agentLabel": "Agent",
-    "modelLabel": "Modèle",
     "modelDefault": "Par défaut",
     "modelDefaultHint": "Utilise le modèle Worker par défaut de l'ordinateur",
-    "permissionLabel": "Mode d'autorisation",
     "permissionAuto": "Revue automatique",
     "permissionFull": "Accès complet",
-    "permissionAutoHint": "Lit et écrit dans l'espace de travail et soumet automatiquement les demandes d'élévation à une revue. Les actions à haut risque peuvent être refusées ou nécessiter une confirmation.",
-    "permissionFullHint": "Peut modifier n'importe quel fichier et exécuter des commandes réseau sans redemander. Risque le plus élevé ; à réserver aux tâches de confiance.",
     "initialTaskLabel": "Tâche initiale (facultatif)",
-    "initialTaskPlaceholder": "Une première tâche facultative pour ce Worker",
+    "initialTaskPlaceholder": "Indiquez la première chose à lui confier, ou laissez vide pour que le Lead répartisse le travail",
     "workerCountSummary_one": "{{count}} Worker · {{running}} en cours",
     "workerCountSummary_other": "{{count}} Workers · {{running}} en cours",
     "loading": "Chargement des Workers…",
@@ -820,12 +840,6 @@
     "failed": "Impossible d'enregistrer. Réessayez.",
     "restore": "Réinitialiser"
   },
-  "followUp": {
-    "title": "Voulez-vous que je suive vos sessions ?",
-    "start": "Commencer le suivi",
-    "notNow": "Plus tard",
-    "saveFailed": "Impossible d'enregistrer. Réessayez."
-  },
   "providerGroupRebalance": {
     "title": "Continuer sur {{label}} ?",
     "body": "Pour consommer le quota de chaque compte de façon équilibrée, envoyez ce message depuis {{label}} ({{quota}}). Les derniers messages et un résumé sont repris ; des détails plus anciens peuvent être perdus.",
@@ -833,7 +847,10 @@
     "quotaReset": "{{left}} % restant · réinitialisation dans {{reset}}",
     "confirm": "Changer",
     "remember": "Changer, et le faire automatiquement désormais (cette tâche uniquement)",
-    "cancel": "Annuler"
+    "cancel": "Annuler",
+    "disable": "Ne pas changer automatiquement (cette tâche)",
+    "disableFailed": "Impossible de confirmer si votre choix a été enregistré. Vérifiez la connexion et que Cindy est à jour sur l’ordinateur où se trouve la tâche, puis réessayez. Ce message sera envoyé normalement.",
+    "moreOptions": "Plus d’options"
   },
   "messageEdit": {
     "editing": "Modification du message",

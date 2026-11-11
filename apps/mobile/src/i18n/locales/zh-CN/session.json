@@ -93,6 +93,7 @@
     "context": "上下文",
     "screenshot": "截图",
     "photo": "照片",
+    "photosAndVideos": "照片与视频",
     "takePhoto": "拍照",
     "file": "文件",
     "joinConversation": "加入对话（{{num}} 张）",
@@ -465,6 +466,11 @@
     "worktreeCleanupPending": "上一次 worktree 仍待回收，请重新连接设备后再试。"
   },
   "menu": {
+    "moveToProject": "移动任务",
+    "moveFailed": "移动任务失败",
+    "moveRunning": "任务正在运行，结束后再移动",
+    "moveWorktree": "该任务的工作目录是 worktree，暂不支持移动到其他项目",
+    "moveUnsupported": "请更新所连接电脑上的 Cindy 后再移动任务。",
     "details": "任务详情",
     "chipPinned": "已置顶",
     "chipArchived": "已归档",
@@ -684,6 +690,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。",
     "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
     "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "这是旧版分享，开启「仅使用 Agent-Net」后暂时不能用。关闭这个开关就能继续，也可以换成其他模型。",
     "REMOTE_AGENT_SHARE_REMOVED": "这个分享已不可用（对方删除了分享或你已退出）。可以换成其他模型继续。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。"
   },
@@ -709,21 +716,34 @@
     "remoteDirPathHint": "在运行设备上检查目录；不存在时报错，不会改用 Lead 所在电脑的目录。",
     "remoteDirInvalid": "请输入运行设备上的绝对路径。",
     "roleLabel": "角色名",
-    "roleHint": "只是一个名字，方便多个协作者时分辨角色，不改变能力",
-    "customRole": "自定义",
-    "customRolePlaceholder": "自定义角色名",
-    "customRolePredefinedError": "自定义角色名不能使用预设角色名",
+    "taskLabel": "让 Worker 做什么",
+    "enableHint": "当前任务作为 Lead 分派和验收，另一个 Agent 作为 Worker 执行并回报。",
+    "roles": {
+      "reviewer": {
+        "name": "审查",
+        "task": "看一下 Lead 的工作，给出一些建议。"
+      },
+      "developer": {
+        "name": "开发"
+      },
+      "tester": {
+        "name": "测试",
+        "task": "测试 Lead 目前的成果，报告没通过的地方和复现步骤。"
+      }
+    },
+    "addRole": "添加角色",
+    "removeRoleHint": "长按可移除",
+    "removeRoleConfirmTitle": "移除「{{role}}」？",
+    "removeRoleConfirmDesc": "随时可以用「添加角色」加回来。",
+    "removeRoleConfirm": "移除角色",
+    "moreSettings": "更多设置",
     "agentLabel": "Agent",
-    "modelLabel": "模型",
     "modelDefault": "默认",
     "modelDefaultHint": "跟随电脑端的 Worker 默认模型",
-    "permissionLabel": "权限模式",
     "permissionAuto": "自动审批",
     "permissionFull": "完全访问",
-    "permissionAutoHint": "允许在工作区内读写，并自动审批提权请求；高风险操作可能被拒绝或要求确认。",
-    "permissionFullHint": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。",
     "initialTaskLabel": "初始任务（可选）",
-    "initialTaskPlaceholder": "给这个 Worker 的可选第一条任务",
+    "initialTaskPlaceholder": "写下交给它的第一件事；留空则先待命，由 Lead 分派",
     "workerCountSummary_one": "{{count}} 个 Worker · {{running}} 运行中",
     "workerCountSummary_other": "{{count}} 个 Worker · {{running}} 运行中",
     "loading": "正在读取 Worker…",
@@ -799,12 +819,6 @@
     "failed": "保存失败，请重试。",
     "restore": "恢复默认"
   },
-  "followUp": {
-    "title": "要我帮你跟进任务吗？",
-    "start": "开始跟进",
-    "notNow": "暂不开启",
-    "saveFailed": "没能保存，请重试"
-  },
   "providerGroupRebalance": {
     "title": "换到 {{label}} 继续？",
     "body": "为了均匀用完各账号的配额，建议这条消息换到 {{label}} 发送（{{quota}}）。换过去会带上最近几轮对话和摘要，更早的细节可能记不全。",
@@ -812,7 +826,10 @@
     "quotaReset": "还剩 {{left}}%，{{reset}}后重置",
     "confirm": "换过去",
     "remember": "换过去，以后自动换（仅本任务）",
-    "cancel": "取消"
+    "cancel": "取消",
+    "disable": "不自动切换（仅本任务）",
+    "disableFailed": "未能确认选择是否已保存。请检查连接，并确认任务所在电脑上的 Cindy 已更新后重试。这条消息仍照常发送。",
+    "moreOptions": "更多选项"
   },
   "messageEdit": {
     "editing": "正在编辑消息",

@@ -92,12 +92,16 @@ const makerCoreIntegrationInclude = [
 ];
 const makerCoreGuardInclude = [
   'src/agents/shared/auto-review-remote-wiring.test.ts',
+  // Host-owned extra-directory authority and private filesystem-root disclosure contract.
+  'src/agents/pi/__tests__/pi-extra-dirs-prompt.test.ts',
 ];
 const makerPiManagerIntegrationInclude = [
   'src/__tests__/pi-manager.integration.test.ts',
 ];
 const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
+  // The Terra proxy regression starts a real Codex binary when explicitly configured.
+  'src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts',
   // Guest fork through a provider group with a real Claude Code; skipped without apps/claude-code-bin.
   'src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts',
   'src/main/remote-agent/__tests__/startupProbe.e2e.test.ts',
@@ -158,6 +162,8 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  // Build fuses and Node worker entrypoints are a cross-file packaging contract.
+  'src/main/cindy-brain/__tests__/nodeRuntimePackaging.test.ts',
   'src/renderer/components/settings/__tests__/settingsSearchCatalog.guard.test.ts',
   // Cross-file host/engine prompt ownership and remote-authorization isolation.
   'src/main/plugin-oauth/__tests__/runtimePrompt.test.ts',
@@ -173,6 +179,7 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/promptRecommendationBadge.test.ts',
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',
   'src/renderer/__tests__/typographyDiscipline.test.ts',
+  'src/renderer/__tests__/designEffectsDiscipline.test.ts',
   'src/renderer/__tests__/windowBackdropAcrylic.test.ts',
   // Existing credential/permission/protocol contracts, separated from runtime units.
   'src/main/__tests__/analyticsConsentMigrationGuards.test.ts',
@@ -338,6 +345,8 @@ const requiredUnitWorkspace = (name, cwd, { workers = 1, execution, pool, exclud
 export default {
   workspaces: [
     requiredUnitWorkspace('cindy-headless', 'apps/cindy-headless'),
+    noCollectableWorkspace('@cindy/host', 'apps/host',
+      'Uses node:test and runs in the dedicated Host regressions CI job on macOS, Windows and Linux (pnpm --dir apps/host test).'),
     {
       name: 'desktop',
       cwd: 'apps/desktop',
@@ -383,11 +392,11 @@ export default {
         },
         integration: {
           status: 'manual',
-          reason: 'Local application Agent protocol tests open real loopback sockets and temporary authorization stores.',
+          reason: 'Local Agent protocol tests use real sockets; Skill archive size regressions perform large encrypted disk transfers.',
           execution: 'exclusive',
           coverage: 'allowlist',
           command: vitestBin('run', '--maxWorkers=2'),
-          include: ['src/main/local-agent/__tests__/*.integration.test.ts'],
+          include: ['src/main/local-agent/__tests__/*.integration.test.ts', 'src/main/bot-import/__tests__/skillArchive.integration.test.ts'],
         },
         'git-integration': {
           status: 'manual',
@@ -526,6 +535,52 @@ export default {
     requiredUnitWorkspace('cindy-tools', 'packages/cindy-tools'),
     requiredUnitWorkspace('@cindy/device-link', 'packages/device-link'),
     requiredUnitWorkspace('@cindy/device-link-relay', 'packages/device-link-relay'),
+    noCollectableWorkspace('@cindy/device-link-sharing', 'packages/device-link-sharing',
+      'Shared sharing-domain implementation is exercised by the agent-net-relay integration suite and Desktop provider-share/shared-task runtime suites; this package has no standalone test files.'),
+    requiredUnitWorkspace('@cindy/agent-net-protocol', 'packages/agent-net-protocol'),
+    noCollectableWorkspace('@cindy/agent-net-core', 'packages/agent-net-core',
+      'Rust core has its cargo/simulation suites; the Node ABI is exercised by agent-net integration tests.'),
+    {
+      name: '@cindy/agent-net',
+      cwd: 'packages/agent-net',
+      status: 'required',
+      tiers: {
+        unit: {
+          status: 'required',
+          command: unitVitestCommand(),
+          exclude: ['src/__tests__/*.integration.test.ts'],
+        },
+        integration: {
+          status: 'manual',
+          reason: 'Real Rust WASM, UDP/WebSocket, signed device certificates and existing DeviceLinkClient interop.',
+          preflight: [{ type: 'packageScript', script: 'prepare-core' }],
+          execution: 'exclusive',
+          coverage: 'allowlist',
+          command: vitestBin('run', '--pool=forks', '--maxWorkers=1'),
+          include: ['src/__tests__/*.integration.test.ts'],
+        },
+      },
+    },
+    {
+      name: '@cindy/agent-net-relay',
+      cwd: 'packages/agent-net-relay',
+      status: 'required',
+      tiers: {
+        unit: {
+          status: 'required',
+          command: unitVitestCommand(),
+          exclude: ['src/__tests__/relay.integration.test.ts'],
+        },
+        integration: {
+          status: 'manual',
+          reason: 'V2 relay integration tests use actual local HTTP, WebSocket, UDP and temporary persistent storage.',
+          execution: 'exclusive',
+          coverage: 'allowlist',
+          command: vitestBin('run', '--pool=forks', '--maxWorkers=1'),
+          include: ['src/__tests__/relay.integration.test.ts'],
+        },
+      },
+    },
     noCollectableWorkspace('@cindy/embedding-client', 'packages/embedding-client'),
     requiredUnitWorkspace('@cindy/file-browser-core', 'packages/file-browser-core'),
     noCollectableWorkspace('@cindy/github-client', 'packages/github-client'),

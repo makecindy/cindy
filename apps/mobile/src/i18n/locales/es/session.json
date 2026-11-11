@@ -93,6 +93,7 @@
     "context": "Contexto",
     "screenshot": "Captura de pantalla",
     "photo": "Fotos",
+    "photosAndVideos": "Fotos y vídeos",
     "takePhoto": "Tomar foto",
     "file": "Archivo",
     "joinConversation": "Añadir al chat ({{num}})",
@@ -482,6 +483,11 @@
     "worktreeCleanupPending": "El worktree anterior aún está pendiente de limpieza. Vuelve a conectar el dispositivo e inténtalo de nuevo."
   },
   "menu": {
+    "moveToProject": "Mover tarea",
+    "moveFailed": "No se pudo mover la tarea",
+    "moveRunning": "Esta tarea está en ejecución. Muévela cuando termine.",
+    "moveWorktree": "El directorio de trabajo de esta tarea es un worktree, por lo que aún no se puede mover a otro proyecto",
+    "moveUnsupported": "Actualiza Cindy en el ordenador conectado para mover tareas.",
     "details": "Detalles de la sesión",
     "chipPinned": "Fijado",
     "chipArchived": "Archivado",
@@ -703,6 +709,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Ese ordenador no ha permitido el uso remoto de este proveedor. En esa computadora, active \"Permitir uso remoto\" en Configuración → Proveedores, o elija otro modelo.",
     "REMOTE_AGENT_FORK_FAILED": "La computadora que ejecuta el Agent no pudo iniciar una nueva sesión desde aquí. Inténtalo de nuevo o prueba con un mensaje diferente.",
     "REMOTE_AGENT_SHARE_PAUSED": "El propietario ha pausado este intercambio por usted, por lo que estos modelos no se pueden usar hasta que se reanude. Cambie a otro modelo para continuar.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Este es un recurso compartido antiguo y no se puede usar mientras «Usar solo Agent-Net» esté activado. Desactívelo para continuar o cambie a otro modelo.",
     "REMOTE_AGENT_SHARE_REMOVED": "Este recurso compartido ya no está disponible (el propietario lo eliminó o usted se fue). Cambie a otro modelo para continuar.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "El proveedor compartido no está disponible temporalmente. Es posible que la computadora del propietario esté desconectada o que el uso compartido esté desactivado por ahora. Inténtalo de nuevo más tarde o cambia a otro modelo para continuar."
   },
@@ -728,21 +735,34 @@
     "remoteDirPathHint": "La carpeta se verifica en el dispositivo de ejecución. Una carpeta faltante provoca un error; En su lugar, la carpeta Lead nunca se utiliza.",
     "remoteDirInvalid": "Ingrese una ruta absoluta en el dispositivo de ejecución.",
     "roleLabel": "Nombre del rol",
-    "roleHint": "Sólo un nombre para distinguir a los colaboradores. No cambia las capacidades.",
-    "customRole": "Personalizado",
-    "customRolePlaceholder": "Nombre de rol personalizado",
-    "customRolePredefinedError": "El nombre de un rol personalizado no puede coincidir con un rol preestablecido",
+    "taskLabel": "Qué hace el Worker",
+    "enableHint": "Esta tarea pasa a ser el Lead: reparte el trabajo y revisa los resultados. El Worker es otro Agent independiente que hace el trabajo e informa del resultado.",
+    "roles": {
+      "reviewer": {
+        "name": "Revisar",
+        "task": "Échale un vistazo al trabajo del Lead y da algunas sugerencias."
+      },
+      "developer": {
+        "name": "Desarrollar"
+      },
+      "tester": {
+        "name": "Probar",
+        "task": "Prueba el trabajo del Lead hasta ahora e informa de los fallos con los pasos para reproducirlos."
+      }
+    },
+    "addRole": "Añadir rol",
+    "removeRoleHint": "Mantén pulsado para quitar",
+    "removeRoleConfirmTitle": "¿Quitar «{{role}}»?",
+    "removeRoleConfirmDesc": "Puedes volver a añadirlo cuando quieras con «Añadir rol».",
+    "removeRoleConfirm": "Quitar rol",
+    "moreSettings": "Más configuración",
     "agentLabel": "Agent",
-    "modelLabel": "Modelo",
     "modelDefault": "Predeterminado",
     "modelDefaultHint": "Utiliza el modelo Worker predeterminado de la computadora.",
-    "permissionLabel": "Modo de permiso",
     "permissionAuto": "Revisión automática",
     "permissionFull": "Acceso completo",
-    "permissionAutoHint": "Lee y escribe dentro del espacio de trabajo y revisa automáticamente las solicitudes de elevación. Las acciones de alto riesgo pueden ser negadas o necesitar confirmación.",
-    "permissionFullHint": "Puede cambiar cualquier archivo y ejecutar comandos en red sin volver a preguntar. Mayor riesgo; Úselo solo para tareas confiables.",
     "initialTaskLabel": "Tarea inicial (opcional)",
-    "initialTaskPlaceholder": "Una primera tarea opcional para este Worker",
+    "initialTaskPlaceholder": "Escribe lo primero que quieres encargarle o déjalo en blanco para que el Lead reparta el trabajo",
     "workerCountSummary_one": "{{count}} Worker · {{running}} funcionando",
     "workerCountSummary_other": "{{count}} Workers · {{running}} funcionando",
     "loading": "Cargando Workers…",
@@ -820,12 +840,6 @@
     "failed": "No se pudo guardar. Intentar otra vez.",
     "restore": "Restaurar valores predeterminados"
   },
-  "followUp": {
-    "title": "¿Quieres que haga un seguimiento de tus sesiones?",
-    "start": "Comience a realizar un seguimiento",
-    "notNow": "Ahora no",
-    "saveFailed": "No se pudo guardar. Intentar otra vez."
-  },
   "providerGroupRebalance": {
     "title": "¿Continuar en {{label}}?",
     "body": "Para utilizar la cuota de cada cuenta de manera uniforme, envíe este mensaje desde {{label}} ({{quota}}). Los últimos mensajes y un resumen se conservan; Es posible que se pierdan detalles más antiguos.",
@@ -833,7 +847,10 @@
     "quotaReset": "{{left}}% restante · se reinicia en {{reset}}",
     "confirm": "Cambiar",
     "remember": "Cambia y hazlo automáticamente a partir de ahora (solo esta tarea)",
-    "cancel": "Cancelar"
+    "cancel": "Cancelar",
+    "disable": "No cambiar automáticamente (esta tarea)",
+    "disableFailed": "No se pudo confirmar si se guardó tu elección. Comprueba la conexión y que Cindy esté actualizado en el ordenador donde está la tarea, e inténtalo de nuevo. Este mensaje se enviará con normalidad.",
+    "moreOptions": "Más opciones"
   },
   "messageEdit": {
     "editing": "Editando mensaje",

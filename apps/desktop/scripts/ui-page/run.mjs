@@ -158,26 +158,23 @@ function compareOverlay(ref) {
 
 function overviewHtml(rows) {
   const esc = (value) => String(value).replace(/[&<>"]/g, (char) => `&#${char.charCodeAt(0)};`);
+  const stages = [...new Set(rows.flatMap(row => row.pairs.flat().map(image => image.label)))];
   return `<!doctype html><meta charset="utf-8"><style>
     body{margin:0;padding:16px;font:12px -apple-system,system-ui,sans-serif;background:#f4f4f5;color:#18181b}
-    .row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;margin-bottom:20px}
-    .label{width:180px;flex-shrink:0;line-height:1.5}.failed{color:#b91c1c;font-weight:600}
+    .row{display:grid;grid-template-columns:repeat(${stages.length},minmax(0,1fr));gap:12px;align-items:start;margin-bottom:24px}
+    .label{grid-column:1/-1;line-height:1.5}.failed{color:#b91c1c;font-weight:600}
     figure{margin:0;background:#fff;border:1px solid #d4d4d8;border-radius:6px;padding:6px}
-    figcaption{margin-bottom:4px;color:#52525b}img{display:block;max-width:640px;max-height:440px}
-    .pair{display:flex;gap:6px;align-items:flex-start}
+    figcaption{margin-bottom:4px;color:#52525b}img{display:block;width:100%;height:440px;object-fit:contain;object-position:top center}.empty{visibility:hidden}
   </style>${rows
     .map(
       (row) =>
-        `<div class="row"><div class="label"><b>${esc(row.title)}</b><br>${esc(row.subtitle)}<br><span class="${row.status === 'failed' ? 'failed' : ''}">${esc(row.status)}${row.warnings ? ` · ${row.warnings} warnings` : ''}</span></div>${row.pairs
-          .map(
-            (pair) =>
-              `<div class="pair">${pair
-                .map(
-                  (image) =>
-                    `<figure><figcaption>${esc(image.label)}</figcaption><img src="/__evidence/${image.src}"></figure>`,
-                )
-                .join('')}</div>`,
-          )
+        `<div class="row"><div class="label"><b>${esc(row.title)}</b><br>${esc(row.subtitle)}<br><span class="${row.status === 'failed' ? 'failed' : ''}">${esc(row.status)}${row.warnings ? ` · ${row.warnings} warnings` : ''}</span></div>${stages
+          .map((stage) => {
+            const image = row.pairs.flat().find(image => image.label === stage);
+            return image
+              ? `<figure><figcaption>${esc(image.label)}</figcaption><img src="/__evidence/${image.src}"></figure>`
+              : '<figure class="empty" aria-hidden="true"></figure>';
+          })
           .join('')}</div>`,
     )
     .join('')}`;
@@ -443,14 +440,14 @@ export async function runPlan(plan, options, externalSignal) {
           // Same density as a Retina Mac and as the Electron runner, so crops are comparable.
           deviceScaleFactor: 2,
           serviceWorkers: 'block',
-          reducedMotion: 'reduce',
+          reducedMotion: options.motion ? 'no-preference' : 'reduce',
           colorScheme: variant.theme,
           locale: variant.locale,
         });
         await routePage(context);
         page = await context.newPage();
       }
-      await page.emulateMedia({ colorScheme: variant.theme, reducedMotion: 'reduce' });
+      await page.emulateMedia({ colorScheme: variant.theme, reducedMotion: options.motion ? 'no-preference' : 'reduce' });
       const errors = [];
       const onError = (error) => errors.push(error.message);
       const onConsole = (message) => {

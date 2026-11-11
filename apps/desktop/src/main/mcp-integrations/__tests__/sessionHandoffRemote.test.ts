@@ -42,7 +42,7 @@ function setup(outcome: unknown = { ok: true, result: accepted }) {
 describe('cross-device send_to_session sender', () => {
   // 2026-11-05: a newer receiver takes the agent's own text with a checked hand-off; an older one
   // still verifies the quoted envelope, so it keeps receiving exactly what it received before.
-  // Unit: real capture and sender against both capability answers, plus a refused hand-off.
+  // Unit: real capture and sender against both capability answers.
   it.each([
     [{ taskActionVersion: 1, plainRequestBody: 1 }, 'plain'],
     [{ taskActionVersion: 1 }, 'legacy'],
@@ -53,8 +53,7 @@ describe('cross-device send_to_session sender', () => {
       return { ok: true, result: accepted };
     });
     const captureRequest = (sessionId: string, message: string, target?: { sessionId?: string }) => captureAgentRequest(sessionId, message,
-      { clientId: 'owner-input', authoredText: '修好就合进去' }, async () => [], true, true,
-      { targetSessionId: target?.sessionId, authorize: async () => ({ kind: 'authorized' }) });
+      { clientId: 'owner-input', authoredText: '修好就合进去' }, async () => [], true, true, target?.sessionId);
     const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {}, captureRequest });
     expect(await send({ deviceId: 'mbp', sessionId: 's9' },
       { message: 'Fix #12 and merge it.', sender: async () => ({ sessionId: 'me', title: 'T' }) })).toEqual(accepted);
@@ -67,18 +66,6 @@ describe('cross-device send_to_session sender', () => {
       expect(wire.message).toContain('修好就合进去');
       expect(wire.requestSource).toEqual({ userText: '修好就合进去', sessionId: 'me', clientId: 'owner-input', ownerVerified: true });
     }
-  });
-
-  it('sends nothing to the other computer when this computer refuses the hand-off', async () => {
-    const invoke = vi.fn(async (): Promise<InvokeResultPayload> => ({ ok: true, result: accepted }));
-    const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {},
-      captureRequest: (sessionId, message) => captureAgentRequest(sessionId, message,
-        { clientId: 'owner-input', authoredText: 'Only check it' }, async () => [], true, true,
-        { authorize: async () => ({ kind: 'blocked', reason: 'Not requested.' }) }) });
-    expect(await send({ deviceId: 'mbp', sessionId: 's9' },
-      { message: 'Deploy it.', sender: async () => ({ sessionId: 'me', title: 'T' }) }))
-      .toEqual({ ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: 'Not requested.' });
-    expect(invoke).not.toHaveBeenCalled();
   });
 
   // #6399, unit: the existing result-code matrix did not inspect receipt lifetime.

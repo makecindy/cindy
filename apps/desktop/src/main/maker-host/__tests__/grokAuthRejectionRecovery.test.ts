@@ -58,7 +58,7 @@ vi.mock('../nativeProviderAuthBinding.js', () => ({
 
 // The recovery tests inject global fetch responses; keep the production
 // proxy-aware transport out of this unit's network boundary.
-vi.mock('../outbound-fetch.js', () => ({
+vi.mock('../outbound-fetch.desktop.js', () => ({
   outboundFetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
 }));
 
@@ -70,7 +70,7 @@ import {
   recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
   peekGrokAccessToken,
-} from '../grok-oauth-login.js';
+} from '../grok-oauth-login.desktop.js';
 
 const SECRET_ID = 'xai';
 /** 上游拒掉的那把 access_token —— 收口必须绑定到它。 */

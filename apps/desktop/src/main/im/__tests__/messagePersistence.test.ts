@@ -7,7 +7,7 @@ vi.mock('../../localDb/ipc/messages', () => ({
   patchMessageAgentMeta: vi.fn(async () => true),
   broadcastMessageAgentMetaUpdate: vi.fn(async () => true),
 }));
-vi.mock('../../messagePersistBroadcaster', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop', () => ({
   enqueueDurableWrite: vi.fn(async (_label, write) => write('captured-owner')),
 }));
 vi.mock('../../logger', () => ({
@@ -15,7 +15,7 @@ vi.mock('../../logger', () => ({
 }));
 
 import { buildPersistedUserContent, persistUserMessage } from '../messagePersistence';
-import { enqueueDurableWrite } from '../../messagePersistBroadcaster';
+import { enqueueDurableWrite } from '../../messagePersistBroadcaster.desktop';
 import {
   createMessage,
   patchMessageAgentMeta,

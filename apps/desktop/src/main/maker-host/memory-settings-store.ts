@@ -19,7 +19,6 @@
  * read 失败 (corrupt JSON / 文件不存在) → 走默认值, 同时清掉坏文件避免反复报错。
  */
 
-import { app } from 'electron';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -28,7 +27,8 @@ import {
   portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
-import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import { hasCommittedOwner, ownerScopedPath } from '../ownerContext.js';
+import { userDataPath } from '../userDataPath.js';
 
 const log = desktopMakerLogger.child('memory-settings-store');
 
@@ -47,7 +47,7 @@ const DEFAULTS: MemorySettings = {
 };
 
 function settingsFilePath(rootPath?: string): string {
-  return path.join(rootPath ?? app.getPath('userData'), 'memory-settings.json');
+  return rootPath ? path.join(rootPath, 'memory-settings.json') : userDataPath('memory-settings.json');
 }
 
 function normalize(raw: unknown): MemorySettings {
@@ -64,7 +64,7 @@ function normalize(raw: unknown): MemorySettings {
 const stores = new Map<string, ReturnType<typeof createOverrideSettingsFile<MemorySettings>>>();
 
 function currentStore(rootPath?: string) {
-  const ownerRoot = rootPath ?? (getActiveAppSession().dataOwnerId ? ownerScopedUserDataPath() : null);
+  const ownerRoot = rootPath ?? (hasCommittedOwner() ? ownerScopedPath() : null);
   const key = ownerRoot ?? '<global>';
   let current = stores.get(key);
   if (!current) {

@@ -1,4 +1,5 @@
 import { parseOutputLimitDetails } from '@cindy/maker-shared';
+import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { isQuietScheduledOutput, revealScheduledOutput } from '../scheduler-host/silent-output.js';
@@ -19,7 +20,7 @@ import { parseAgentInputToolLoopDetails } from '../../shared/agentInputQueue.js'
 import { noteSubagentObservationTurnStarted } from '../subagentObservationRewindFence.js';
 
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import { markSessionTurnStarted } from '../localDb/sessionActiveTurn.js';
 import {
@@ -27,9 +28,9 @@ import {
   noteAgentMeta,
   noteTurnStarted,
   onStandaloneTextEvent,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 import { isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { clearPromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 import { MAKER_PUSH } from './channels.js';
 import { finalizeTurnChangeSet } from '../turn-change-set/store.js';
@@ -130,11 +131,6 @@ export interface PrepareSessionEventDeps {
   ) => boolean;
   readonly isGatewayProxyTokenRecoveryErrorEvent: (sessionId: string, event: AgentEvent) => boolean;
   /**
-   * 伙伴工作记忆刷新登记(botWorkingMemory):原生自动压缩后,下一次发送前置一次账本。
-   * 对所有会话登记,发送时再按伙伴主对话 / 有无账本决定是否真的注入。
-   */
-  readonly workingMemoryRefresh?: { markCompacted(sessionId: string): void };
-  /**
    * 逐轮环境说明的去重记忆(wireNoteMemory.ts)。原生自动压缩后摘要可能已丢掉旧说明,
    * 下一轮要整体重发一次;缺省(未注入)不去重,行为同旧版。
    */
@@ -153,9 +149,6 @@ export function prepareSessionEvent(
   // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
   // potentially multi-megabyte payload to every renderer and device-link controller.
   if (event.type === 'turn_diff') return;
-  // Native compaction keeps its current runtime. Only explicit resource/configuration
-  // changes register a companion refresh; compaction itself is not such a change.
-  if (event.type === 'compact_boundary') deps.workingMemoryRefresh?.markCompacted(session.id);
   if (event.type === 'compact_boundary') deps.wireNoteMemory?.reset(session.id);
   if (
     event.turnScope === 'background' &&
@@ -283,7 +276,7 @@ export function prepareSessionEvent(
   }
   const broadcastEvent = deps.redactEventForRenderer(attributedEvent);
   if (event.type === 'interaction_dismissed') {
-    const data = event.data as { requestId?: unknown; reason?: unknown };
+    const data = event.data as { requestId?: unknown; reason?: unknown; withdrawalReason?: unknown };
     if (typeof data.requestId === 'string') {
       deps.handleAgentIslandInteractionDismissed(session.id, data.requestId);
       const entry = deps.clearPendingInteraction(data.requestId);
@@ -292,13 +285,16 @@ export function prepareSessionEvent(
           entry.kind,
           typeof data.reason === 'string' ? data.reason : 'dismissed',
         );
+        const persistedDecision = data.reason === 'question_withdrawn' && entry.kind === 'ask_user_question'
+          && typeof data.withdrawalReason === 'string'
+          ? { ...decision, withdrawalReason: data.withdrawalReason } : decision;
         entry.resolve(decision);
         deps.persistInteractionDecision(
           session.id,
           entry.persistId,
           entry.kind,
           entry.request,
-          decision,
+          persistedDecision,
         );
       }
     }
@@ -338,7 +334,8 @@ export function prepareSessionEvent(
       turnContinuationId: event.turnContinuationId,
     });
   }
-  if (event.type === 'account_usage' && event.source === 'codex' && !session.remoteHostId) {
+  if (event.type === 'account_usage' && event.source === 'codex' && !session.remoteHostId
+      && !(event.data as { [NATIVE_SUBSCRIPTION_ACCOUNT]?: boolean })?.[NATIVE_SUBSCRIPTION_ACCOUNT]) {
     pendingCodexAccountUsageSnapshot = event.data;
   }
   if (event.type === 'status') {

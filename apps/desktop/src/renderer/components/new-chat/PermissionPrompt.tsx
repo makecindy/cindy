@@ -13,9 +13,9 @@
  *   Esc         → Deny
  */
 
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { describePermissionAction, type PermissionActionSummary } from '@cindy/maker-shared/interaction';
+import { describePermissionAction, permissionTitle } from '@cindy/maker-shared/interaction';
 
 import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
@@ -52,13 +52,6 @@ export function formatToolInput(toolName: string, input: Record<string, unknown>
   return text.length > 500 ? text.slice(0, 500) + '...' : text;
 }
 
-const ACTION_TITLE_KEYS: Record<Exclude<PermissionActionSummary['kind'], 'tool' | 'plugin'>, string> = {
-  command: 'newChat.permissionPrompt.titleCommand',
-  'file-read': 'newChat.permissionPrompt.titleFileRead',
-  'file-write': 'newChat.permissionPrompt.titleFileWrite',
-  browser: 'newChat.permissionPrompt.titleBrowser',
-};
-
 function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
   if (!Array.isArray(suggestions)) return [];
   return suggestions.filter((suggestion) =>
@@ -76,8 +69,6 @@ const actionClass = 'h-auto min-h-9 max-w-full gap-2 px-3 py-1.5';
 const secondaryActionClass = cn(
   actionClass,
   '[--button-face-border:var(--chat-input-border)] [--button-face-bg:transparent] text-[var(--chat-input-text)]',
-  'enabled:hover:[--button-face-bg:var(--perm-code-bg)]',
-  'enabled:active:[--button-face-bg:color-mix(in_srgb,var(--perm-code-bg)_90%,var(--chat-input-text))]',
 );
 // Allow once takes its fill and states from palette="permission" (DESIGN.md §4 Filled button
 // states): a local hover class would lose to the variant's more specific selector.
@@ -90,8 +81,10 @@ const allowActionClass = cn(actionClass, '[--button-face-border:var(--chat-input
 export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
-  const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
+  const { toolName, input, description, suggestions, autoReviewUnavailable,
     autoReviewReason, submitting, submissionFailed } = permission;
+  const isMcpUrl = toolName === 'mcp_url' && typeof input.url === 'string' && /^https?:\/\//i.test(input.url);
+  const [linkOpenFailed, setLinkOpenFailed] = useState(false);
   const isMediaDownload = toolName === 'cindy.media.download';
   // 插件安装确认由 Host 渲染成纯文本：首行是版本与来源，其余是权限清单。手机按原样
   // 逐行显示；这里首行作说明，清单放进可滚动区域，不显示内部参数。
@@ -105,16 +98,11 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       ? consentHead
       : description;
 
-  // Say what will happen ("run this command") instead of an internal tool name or an
-  // English harness title; unknown tools keep the previous wording.
-  const action = describePermissionAction(toolName, input);
-  const displayTitle = action.kind === 'plugin' && action.subject
-    ? t('newChat.permissionPrompt.titlePlugin', { plugin: action.subject })
-    : action.kind !== 'tool' && action.kind !== 'plugin'
-      ? t(ACTION_TITLE_KEYS[action.kind])
-      : displayName
-        ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
-        : title || t('agentIsland.native.permissionPromptTitleWithTool', { toolName });
+  const displayTitle = permissionTitle({ ...permission }, {
+    translate: (key, fallback, values) => key === 'interaction.presentation.permission.title'
+      ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: values?.tool })
+      : t(key.replace('interaction.presentation.permission.', 'newChat.permissionPrompt.'), { defaultValue: fallback, ...values }),
+  });
   const codeContent = isPluginInstallConsent
     ? consentBody.join('\n')
     : formatToolInput(toolName, input);
@@ -238,7 +226,15 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
             : 'max-h-[120px] font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-relaxed text-[var(--chat-input-text)]',
         )}
       >
-        {isPluginInstallConsent ? (
+        {isMcpUrl ? (
+          <a href={String(input.url)} className="break-all underline" onClick={(event) => {
+            event.preventDefault();
+            setLinkOpenFailed(false);
+            void window.electronAPI.openExternal(String(input.url)).then((result) => {
+              setLinkOpenFailed(!result.success);
+            }).catch(() => setLinkOpenFailed(true));
+          }}>{String(input.url)}</a>
+        ) : isPluginInstallConsent ? (
           <p className="whitespace-pre-wrap break-words">{codeContent}</p>
         ) : (
           <pre className="whitespace-pre-wrap break-all">{codeContent}</pre>
@@ -248,9 +244,9 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       {/* Action buttons — inline text + kbd badges, right-aligned.
           flex-wrap:带范围的「本对话都允许 …」按钮会比原来长,窄宽(doc rail portal)
           下允许整行折行,而不是把 Deny / Allow once 挤出容器。 */}
-      {(submitting || submissionFailed) && (
+      {(submitting || submissionFailed || linkOpenFailed) && (
         <p role="status" className="mt-3 text-13 text-[var(--status-bar-meta)]">
-          {t(submitting ? 'newChat.permissionPrompt.submitting' : 'newChat.permissionPrompt.submissionFailed')}
+          {t(submitting ? 'newChat.permissionPrompt.submitting' : linkOpenFailed ? 'newChat.pluginSetup.form.openLinkFailed' : 'newChat.permissionPrompt.submissionFailed')}
         </p>
       )}
       <div className="mt-4 flex flex-wrap items-center justify-end gap-2 [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
@@ -263,7 +259,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           disabled={submitting}
           className={secondaryActionClass}
         >
-          <span>{t(isMediaDownload ? 'newChat.mediaDownload.defer' : 'agentIsland.native.deny')}</span>
+          <span>{t(isMcpUrl ? 'newChat.permissionPrompt.mcpCancel' : isMediaDownload ? 'newChat.mediaDownload.defer' : 'agentIsland.native.deny')}</span>
           <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
             Esc
           </kbd>
@@ -317,7 +313,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           disabled={submitting}
           className={allowActionClass}
         >
-          <span>{t(isMediaDownload ? 'newChat.mediaDownload.allow' : 'agentIsland.native.allowOnce')}</span>
+          <span>{t(isMcpUrl ? 'newChat.permissionPrompt.mcpComplete' : isMediaDownload ? 'newChat.mediaDownload.allow' : 'agentIsland.native.allowOnce')}</span>
           <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             Enter
           </kbd>

@@ -14,10 +14,13 @@ import type { SharedTaskInvitationApp } from './sharedTaskInvitation.js';
 import {
   computeRelayPairProof,
   createRelaySigningKey,
+  encodeBase64Url,
   isRelayPublicKey,
+  utf8Bytes,
   verifyRelayDeviceCert,
   type RelayAuthCrypto,
   type RelayDeviceCert,
+  type RelaySigningKey,
 } from './selfHostedRelayAuth.js';
 
 export const RELAY_JOIN_HOST = 'relay';
@@ -33,11 +36,58 @@ const API_PREFIX = '/api/device-link';
 export interface RelayJoinLink {
   /** 中转的基础地址(不含 `/api/...`),如 `http://192.168.1.20:47820`。 */
   baseUrl: string;
-  code: string;
+  /** 旧版(V1)加入码;只走 V2 的网络(别人分享给你的中转)没有它,此时必有 `agentNetCode`。 */
+  code?: string;
   /** 主人公钥(base64url):核对中转转交的设备证书。 */
   ownerPublicKey: string;
   /** 一次性配对秘密(base64url):新设备用它证明自己的公钥。 */
   pairSecret: string;
+  /** Additive pairing for V2 on the same owner-pinned origin. Old clients continue using `code`. */
+  agentNetCode?: string;
+  /** 分享给其他账号:在这个中转上建自己网络的一次性邀请码(V2,self-hosted-relay-plan.md §5.5)。 */
+  tenantCode?: string;
+  /** 主人账号的标记(`relayAccountTag`):打开链接的设备据此判断是自己的账号还是别人分享的。 */
+  ownerAccountTag?: string;
+  /** 分享者的显示名(自己写的,只用于展示「X 分享」)。 */
+  ownerName?: string;
+  /** 只走 V2 的链接要加入的网络 ID(`private:<relayId>` 里的 relayId);旧链接由 `/relay/info` 给出。 */
+  relayId?: string;
+}
+
+const V2_CODE_PATTERN = /^[A-Za-z0-9_-]{32}$/;
+const ACCOUNT_TAG_PATTERN = /^[A-Za-z0-9_-]{22}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const OWNER_NAME_MAX = 64;
+
+function ownerNameOf(value: string | null | undefined): string | null {
+  const name = value?.trim();
+  return name && name.length <= OWNER_NAME_MAX ? name : null;
+}
+
+/** 账号 ID 的短哈希,写进分享链接,不暴露账号 ID 本身。 */
+export function relayAccountTag(crypto: Pick<RelayAuthCrypto, 'sha256' | 'utf8'>, accountUserId: string): string {
+  const bytes = crypto.utf8?.(`cindy-relay-account/1:${accountUserId}`) ?? utf8Bytes(`cindy-relay-account/1:${accountUserId}`);
+  return encodeBase64Url(crypto.sha256(bytes)).slice(0, 22);
+}
+
+/**
+ * 只走 V2 的申请(V2 设备加入、其他账号建网络)两边显示的 4 位配对码:由申请里的配对证明推出。
+ * 证明是用链接里的配对秘密算的,中转改不了,所以两边一致即说明申请出自拿着链接的那台设备。
+ */
+export function relayPairingVerifyCode(crypto: Pick<RelayAuthCrypto, 'sha256' | 'utf8'>, pairingProof: string): string {
+  const text = `cindy-relay-verify/1:${pairingProof}`;
+  const digest = crypto.sha256(crypto.utf8?.(text) ?? utf8Bytes(text));
+  const value = ((digest[0] << 24) | (digest[1] << 16) | (digest[2] << 8) | digest[3]) >>> 0;
+  return String(value % 10_000).padStart(4, '0');
+}
+
+/** 链接属于别的账号(要在中转上建自己的网络),还是自己的账号(加入主人的网络)。 */
+export function isRelayLinkForOtherAccount(
+  crypto: Pick<RelayAuthCrypto, 'sha256' | 'utf8'>,
+  link: RelayJoinLink,
+  accountUserId: string,
+): boolean {
+  return Boolean(link.tenantCode && link.ownerAccountTag && link.ownerAccountTag !== relayAccountTag(crypto, accountUserId));
 }
 
 /** 规范化中转地址:只接受 http(s)、不带账号密码 / 查询 / 片段;去掉末尾斜杠。 */
@@ -57,22 +107,45 @@ export function normalizeRelayBaseUrl(value: string): string | null {
 
 export function buildRelayJoinLink(input: {
   baseUrl: string;
-  code: string;
+  /** 旧版加入码;只走 V2 的网络不传,但必须有 `agentNetCode`。 */
+  code?: string;
   ownerPublicKey: string;
   pairSecret: string;
   app: SharedTaskInvitationApp;
+  agentNetCode?: string;
+  tenantCode?: string;
+  ownerAccountTag?: string;
+  ownerName?: string;
+  /** 只走 V2 的链接(没有 `code`)必须给出网络 ID。 */
+  relayId?: string;
 }): string {
   const baseUrl = normalizeRelayBaseUrl(input.baseUrl);
   if (
     !baseUrl ||
-    !JOIN_CODE_PATTERN.test(input.code) ||
+    (input.code === undefined
+      ? input.agentNetCode === undefined || !input.relayId || !UUID_PATTERN.test(input.relayId)
+      : !JOIN_CODE_PATTERN.test(input.code)) ||
     !isRelayPublicKey(input.ownerPublicKey) ||
     !PAIR_SECRET_PATTERN.test(input.pairSecret) ||
     !RELAY_APPS.has(input.app)
   ) {
     throw new Error('Invalid relay join link');
   }
-  const query = new URLSearchParams({ u: baseUrl, c: input.code, o: input.ownerPublicKey, s: input.pairSecret });
+  const query = new URLSearchParams({ u: baseUrl, ...(input.code ? { c: input.code } : {}), o: input.ownerPublicKey, s: input.pairSecret });
+  if (input.agentNetCode !== undefined) {
+    if (!V2_CODE_PATTERN.test(input.agentNetCode)) throw new Error('Invalid Agent-Net join code');
+    query.set('a', input.agentNetCode);
+  }
+  if (input.tenantCode !== undefined || input.ownerAccountTag !== undefined) {
+    if (!input.tenantCode || !V2_CODE_PATTERN.test(input.tenantCode) || !input.ownerAccountTag || !ACCOUNT_TAG_PATTERN.test(input.ownerAccountTag)) {
+      throw new Error('Invalid relay share code');
+    }
+    query.set('g', input.tenantCode);
+    query.set('h', input.ownerAccountTag);
+  }
+  if (input.code === undefined) query.set('r', input.relayId!);
+  const ownerName = ownerNameOf(input.ownerName);
+  if (ownerName) query.set('n', ownerName);
   return `${input.app}://${RELAY_JOIN_HOST}${RELAY_JOIN_PATH}?${query.toString()}`;
 }
 
@@ -91,10 +164,29 @@ export function parseRelayJoinLink(value: string): RelayJoinLink | null {
   const code = params.get('c');
   const ownerPublicKey = params.get('o');
   const pairSecret = params.get('s');
-  if (!rawBase || !code || !JOIN_CODE_PATTERN.test(code)) return null;
+  const agentNetCode = params.get('a');
+  if (!rawBase || (code !== null && !JOIN_CODE_PATTERN.test(code))) return null;
   if (!isRelayPublicKey(ownerPublicKey) || !pairSecret || !PAIR_SECRET_PATTERN.test(pairSecret)) return null;
+  if (agentNetCode !== null && !V2_CODE_PATTERN.test(agentNetCode)) return null;
+  // 没有旧版加入码的链接只能走 V2,而且要说清加入哪个网络。
+  const relayId = params.get('r');
+  if (code === null && (agentNetCode === null || !relayId || !UUID_PATTERN.test(relayId))) return null;
+  const ownerName = ownerNameOf(params.get('n'));
+  const tenantCode = params.get('g');
+  const ownerAccountTag = params.get('h');
+  if ((tenantCode === null) !== (ownerAccountTag === null)) return null;
+  if (tenantCode !== null && (!V2_CODE_PATTERN.test(tenantCode) || !ACCOUNT_TAG_PATTERN.test(ownerAccountTag!))) return null;
   const baseUrl = normalizeRelayBaseUrl(rawBase);
-  return baseUrl ? { baseUrl, code, ownerPublicKey, pairSecret } : null;
+  return baseUrl ? {
+    baseUrl,
+    ...(code ? { code } : {}),
+    ownerPublicKey,
+    pairSecret,
+    ...(agentNetCode ? { agentNetCode } : {}),
+    ...(tenantCode && ownerAccountTag ? { tenantCode, ownerAccountTag } : {}),
+    ...(ownerName ? { ownerName } : {}),
+    ...(code === null && relayId ? { relayId } : {}),
+  } : null;
 }
 
 // ─── 加入流程 ────────────────────────────────────────────────────────────────
@@ -226,6 +318,8 @@ export async function submitRelayPairRequest(
   },
   signal?: AbortSignal,
 ): Promise<RelayPairRequest> {
+  // 只走 V2 的链接没有旧版加入码,调用方应改走 V2 加入。
+  if (!link.code) throw new RelayJoinError('INCOMPATIBLE', 'this link only supports Agent-Net pairing');
   const { ok, status, body } = await call(fetchFn, `${link.baseUrl}${API_PREFIX}/relay/pair`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -294,14 +388,18 @@ export interface RelayJoinIdentity {
   proof: string;
 }
 
-/** 为这次加入生成本机签名密钥,并用链接里的配对秘密做公钥证明。 */
+/**
+ * 为这次加入生成本机签名密钥,并用链接里的配对秘密做公钥证明。
+ * 同账号免链接加入时密钥事先生成、公钥已登记给主人电脑(relayAccountDirectory.ts),由 `key` 传入。
+ */
 export function createRelayJoinIdentity(
   crypto: RelayAuthCrypto,
   link: RelayJoinLink,
   relayId: string,
   deviceId: string,
+  presetKey?: RelaySigningKey,
 ): RelayJoinIdentity {
-  const key = createRelaySigningKey(crypto);
+  const key = presetKey ?? createRelaySigningKey(crypto);
   return {
     seed: key.seed,
     publicKey: key.publicKey,

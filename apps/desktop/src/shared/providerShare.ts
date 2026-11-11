@@ -14,7 +14,7 @@ import type {
   ProviderShareRequestState,
 } from '@cindy/device-link';
 import type { DataOwnerPushStamp } from './dataOwnerPush';
-import type { ProviderShareInsights, ProviderShareQuotaAccount, ProviderShareVisibility } from './providerShareInsights';
+import type { ProviderShareInsights, ProviderShareQuotaAccountResult, ProviderShareVisibility } from './providerShareInsights';
 
 /** 本机收藏清理依据。未加载、断线和账号切换的空列表不能用于撤权清理。 */
 export interface ProviderShareReceivedSnapshot {
@@ -26,6 +26,7 @@ export interface ProviderShareReceivedSnapshot {
   active?: boolean;
   /** Per-region remaining display budget measured by Main's wall and monotonic clocks. */
   regionBudget?: Partial<Record<ProviderShareReceived['owner']['region'], ProviderShareRegionBudget>>;
+  unavailableShareIds?: readonly string[];
 }
 
 /**
@@ -260,7 +261,7 @@ export interface ProviderShareCommandResult {
   'set-model-access': RemoteModelAccessView;
   'get-visibility': ProviderShareVisibility;
   'set-visibility': ProviderShareVisibility;
-  'quota-account': ProviderShareQuotaAccount;
+  'quota-account': ProviderShareQuotaAccountResult;
   insights: ProviderShareInsights;
   'get-run-limits': RemoteAgentLimitsView;
   'set-run-limits': RemoteAgentLimitsView;

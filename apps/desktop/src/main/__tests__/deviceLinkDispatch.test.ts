@@ -1,3 +1,6 @@
+// Media IO is a platform port; authorization tests use the real dispatcher and projections.
+vi.mock('../cindy-media/toolProcessMedia.js', () => ({ materializeToolProcessMedia: vi.fn(async value => value) }));
+vi.mock('../device-link/providerShareAvailability.js', () => ({ prepareShareAvailability: vi.fn() }));
 /**
  * device-link 被控端 dispatch 单测:runInvoke 的双层校验(被控开关 + allowlist)
  * 与 invoke-registry 的 dispatchLocalInvoke。
@@ -6,8 +9,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 let remoteControlEnabled = true;
 let revokedControllers: string[] = [];
-vi.mock('../device-link/settings-store', () => ({
-  readDeviceLinkSettings: () => ({ remoteControlEnabled, revokedControllers }),
+let modelUseRevokedControllers: string[] = [];
+vi.mock('../device-link/settings-store.desktop', () => ({
+  readDeviceLinkSettings: () => ({ remoteControlEnabled, revokedControllers, modelUseRevokedControllers }),
 }));
 const diagnosticLog = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock('../logger', () => ({ createLogger: () => diagnosticLog }));
@@ -19,6 +23,7 @@ vi.mock('electron', () => ({
 // boundary isolated; delegated guest admission is exercised in providerShareRuntime.test.ts.
 vi.mock('../device-link/providerShareDelegatedAccess.js', () => ({
   delegatedProviderShareGuestAccess: () => null,
+  delegatedProviderShareLeases: () => [], invalidateProviderShareDelegation: vi.fn(),
 }));
 // This suite exercises dispatch authorization, not authenticated ICE HTTP setup.
 vi.mock('../task-migration/service', () => ({ requestTaskMigration: vi.fn() }));
@@ -44,7 +49,7 @@ import {
   handleControllerOffline,
   __testing as dispatchTesting,
   type ActiveController,
-} from '../device-link/dispatch';
+} from '../device-link/dispatch.desktop';
 import { __testing as registry, dispatchLocalInvoke } from '../device-link/invoke-registry';
 import {
   deviceLinkInvokeControllerSupports,
@@ -62,6 +67,7 @@ import { authenticateOauthController } from '../plugin-oauth/authentication';
 beforeEach(() => {
   remoteControlEnabled = true;
   revokedControllers = [];
+  modelUseRevokedControllers = [];
   registry.reset();
   dispatchTesting.reset(); // 清订阅 registry / tap / onControllersChanged / activeClient
   setRemoteWorkingDirGuard(null); // 默认不注入,行为同生产未就绪态(放行)
@@ -513,7 +519,7 @@ import {
   setRemoteAgentHandler,
   setProviderGroupRemoteHandler,
   pushSessionActivityToController,
-} from '../device-link/dispatch';
+} from '../device-link/dispatch.desktop';
 import {
   applyControllerDisplayNameDirectorySnapshot,
   applyControllerDisplayNamePresence,
@@ -895,6 +901,23 @@ describe('被控端控制链路生命周期', () => {
 
     expect(dispatchTesting.queuedPushesFor('ctrl-drop-queue')).toEqual([]);
     expect(hasBroadcastTapListener()).toBe(false);
+  });
+
+  it('a computer whose "use models here" is off still reads the catalog but sees nothing it can borrow', async () => {
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    registry.register('maker:provider:list', () => ({
+      providers: [{ id: 'openai', name: 'OpenAI', remoteInvocationEnabled: true }],
+    }));
+    for (const src of ['ctrl-borrow', 'ctrl-no-models']) {
+      feed({ v: 1, kind: 'link-open', id: `open-${src}`, src, payload: { controllerName: src, protocolVersion: 1, appVersion: '2.0.0' } });
+    }
+    modelUseRevokedControllers = ['ctrl-no-models'];
+
+    const allowed = await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] });
+    const denied = await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] });
+    expect(allowed).toMatchObject({ ok: true, result: { providers: [{ id: 'openai', remoteInvocationEnabled: true }] } });
+    expect(denied).toMatchObject({ ok: true, result: { providers: [{ id: 'openai', remoteInvocationEnabled: false }] } });
   });
 
   it('link-open capability controls whether provider projection includes new logo kinds', async () => {

@@ -72,7 +72,7 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道前，
   必须先读 `docs/product-rules/im-permission-confirmation.md`；Desktop、Mobile 与共享
   packages 共用同一最终决定，渠道收到回答不代表执行已恢复。
-- 新增或修改代输入（`ask_owner` 的 fill／scan、宿主步骤读取与执行、代输入卡、截图扫码、终端 askpass、
+- 新增或修改代输入（`request_input_handoff`、宿主步骤读取与执行、代输入卡、截图扫码、终端 askpass、
   单窗口实时画面、设备码识别，或任何经手主人填写值的路径）前，必须先读
   `docs/product-rules/input-handoff.md`：主人填写的值只交给宿主执行，不进模型、记录、日志、IM 与推送。
 - 新增或修改自动化任务的 Webhook 触发条件、接收服务、事件排队、密钥或相关界面前，必须先读
@@ -81,13 +81,13 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
   必须先读 `docs/product-rules/usage-limit-auto-continue.md`。
 - 新增或修改自动发送／远程发送消息的路径、消息来源标签，或发给模型的来源说明前，必须先读
   `docs/product-rules/message-source.md`：界面标签与模型说明同源，两侧一起改。
-- 修改伙伴（Bot）的身份、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
-  委派协作或伙伴设置前，必须先读 `docs/product-rules/cindy-bots-runtime.md`。
-- 新增或修改只对伙伴生效的工具、提示词规则、回执或例行任务等专属机制前，先读
+- 修改伙伴（Bot）的身份、伙伴项目、Session 生命周期、模型 fallback、工作目录、Skill / MCP 装配、
+  伙伴间协作或伙伴设置前，必须先读 `docs/product-rules/cindy-bots-runtime.md`。
+- 新增或修改只对伙伴生效的工具、提示词规则、回执或定时工作等专属机制前，先读
   `docs/product-rules/teammate-capability-ledger.md`：伙伴的工作方式属于伙伴自己的规则，先判断
   普通任务或项目能力能否做到；做不到时优先补成通用能力。这是引导，不是审批。
-- 修改伙伴调用任务写工具的身份判定（主人代办 / 受托 / 自主）、自主轮可做的范围、转达主人原话的
-  核实凭证，或伙伴提示词里对应的说法前，必须先读 `docs/product-rules/teammate-authority.md`。
+- 修改伙伴调用任务写工具的权限（2026-11-08 起不设伙伴专属权限门）、转达主人原话的来源记录，
+  或伙伴提示词里对应的说法前，必须先读 `docs/product-rules/teammate-authority.md`。
 - 修改伙伴的跨电脑身份、主力电脑（登记、接管、交出、降级）、云端对话层与资料上传，或
   `apps/desktop/src/main/companion-cloud/`、Chat Server 的伙伴 actor／1:1 房间合同前，必须先读
   `docs/product-rules/cloud-companions.md`。
@@ -171,6 +171,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、跨平台（macOS／
   Windows）行为，或任何 UI 文案的 i18n 落地前，必须先读
   `docs/dev-rules/engineering-conventions.md`。
+- 新增一处每个功能都要来登记的列表、台账、注册表或版本号前，先读
+  `docs/dev-rules/engineering-conventions.md` §8：不规定「加在开头／末尾」，不让多个 PR
+  改同一行；一项一个文件、按键排序或从内容推导。
 - 新增或改写任一测试前，必须先读
   `docs/dev-rules/engineering-conventions.md` §3.2「新增测试的价值门槛」。测试必须通过
   真实生产入口验证可观察结果，并说明 Bug／规则依据、现有覆盖缺口、最小失败输入和 tier；
@@ -190,14 +193,19 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
   `docs/dev-rules/protocol-compatibility.md`。
+- 新增或修改 agent-net（Agent 网络）的传输核心、节点模型、能力清单、加密、中继选择、网络分享或拓扑界面前，
+  必须先读 `docs/product-rules/agent-net.md` 与 `docs/agent-net-plan.md`：两节点之间任何路径都必须
+  端到端加密、不允许明文降级，用户自建中继是一等能力，现有 device-link 能力不得退化；
+  `packages/agent-net-core` 是通用的可靠 UDP 协议层，不得写入 Cindy 专属设计。
 - 修改 Device Link 客户端、协议、relay、设备／媒体接口、能力协商或连接恢复行为前，必须先读
   `docs/dev-rules/protocol-compatibility.md` 的「自建中转同步维护」：凡影响自建中转的改动，
   必须在同一次改动中完成必要的同步适配与互通验证，不得留到后续。
 - 新增或修改直接／间接的服务器请求、订阅、推送、同步、轮询或重试（包括界面调用方）前，
   必须先读 `docs/dev-rules/server-channel-review.md`：结合通道用途、共享容量与累计压力
   检查调用方式及次数频率；自审与 AI review 按实际严重程度报告问题，不排除 P2 缺陷。
-- 修改 package 依赖方向、main 进程模块加载方式，或主界面布局树结构前，必须先读
-  `docs/dev-rules/architecture-invariants.md`。
+- 修改 package 依赖方向、main 进程模块加载方式、桌面与 Node Host（`apps/host`）共用的业务主体
+  （`*.desktop.ts` 装配、工厂端口注入），或主界面布局树结构前，必须先读
+  `docs/dev-rules/architecture-invariants.md`；改共用主体后还要跑 Host 的测试和类型检查（§5）。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider
   开关前，必须先读 `docs/dev-rules/configuration-and-overrides.md`。
 - 新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，新增 IPC channel／推送事件，

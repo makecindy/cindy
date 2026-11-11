@@ -3,7 +3,7 @@
  * 的第三个控制目标。
  *
  * 与另外两个后端的差别:
- * - 页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 不启停它;
+ * - 页面活在用户自己的 Chrome / Edge 里,带着用户本人的登录态;Cindy 按需启动但不关闭它;
  * - 用哪个浏览器是用户的选择,所以能力与专用浏览器对齐(扩展 0.4.42 起):截图、
  *   上传、页面脚本、控制台、网络、弹窗、坐标与拖拽都可用。底线是不打扰用户自己的
  *   使用:新页面开在 Cindy 自己的后台窗口,不抢焦点,不切换用户正在看的标签页;
@@ -42,6 +42,7 @@ export interface UserBrowserPageControl {
 export interface UserBrowserBackendOptions {
   /** 声明 browserExtension.pageControl 的插件桥接;null = 没有这样的插件(或未启用)。 */
   getPageControl(): UserBrowserPageControl | null;
+  getUnavailableReason?(): 'plugin-missing' | 'plugin-updating' | 'plugin-selection-required';
   /** 上传可读取的本地目录(按会话);没有则上传不可用。 */
   resolveUploadRoots?(sessionId: string): Promise<string[]>;
   logger: {
@@ -51,6 +52,9 @@ export interface UserBrowserBackendOptions {
   now?(): number;
   /** status 时扩展未连接,先等它重连这么久(扩展刷新或更新后会断开几秒);默认 8 秒。 */
   reconnectWaitMs?: number;
+  /** Only called for actual browser use, never passive status/doctor/settings reads. */
+  startBrowser?(): Promise<void>;
+  startupWaitMs?: number;
 }
 
 interface TargetRecord {
@@ -224,7 +228,7 @@ const TAB_ACTION_LABEL: Partial<Record<BackendRequest['action'], string>> = {
 const NOT_CONFIGURED_MESSAGE =
   '没有已启用的浏览器扩展插件提供页面控制(安装并启用 Cindy Chrome 插件后再选择「我的浏览器」)。';
 const DISCONNECTED_MESSAGE =
-  '浏览器扩展未连接:请在用户的 Chrome / Edge 中安装并启用 Cindy 扩展,保持 Cindy 运行;连接后重新查询 status。';
+  '浏览器扩展尚未连接；start 会尝试启动浏览器并等待连接。自动启动后仍未连接时检查扩展是否启用或需要配对；未连接不代表未安装。';
 
 const UNPAIRED_MESSAGE =
   '浏览器扩展已连到 Cindy,但还没完成配对或授权:请让用户在 Cindy Chrome 插件页确认这个浏览器,或重新启用插件后再查询 status。';
@@ -244,6 +248,7 @@ export class UserBrowserBackend implements BrowserBackend {
   private readonly recipePumps = new Map<string, () => Promise<void>>();
   private nextAlias = 1;
   private disposed = false;
+  private preparing: { wantsLaunch: boolean; promise: Promise<void> } | null = null;
 
   constructor(private readonly opts: UserBrowserBackendOptions) {}
 
@@ -255,6 +260,11 @@ export class UserBrowserBackend implements BrowserBackend {
         'BROWSER_RUNTIME_UNAVAILABLE',
       );
     try {
+      if (!['status', 'doctor', 'profiles', 'stop'].includes(request.action) &&
+          request.proxyServer === undefined && request.proxyAllowedHostnames === undefined) {
+        await this.ensureConnected(request);
+      }
+      if (this.disposed) return actionFailed(request.action, 'user browser backend disposed', 'BROWSER_RUNTIME_UNAVAILABLE');
       const result = await this.dispatch(request);
       this.noteSessionTab(request, result);
       return result;
@@ -265,6 +275,45 @@ export class UserBrowserBackend implements BrowserBackend {
       });
       return actionFailed(request.action, err instanceof Error ? err.message : String(err));
     }
+  }
+
+  private async ensureConnected(req: BackendRequest): Promise<void> {
+    const control = this.opts.getPageControl();
+    if (!control || !this.opts.startBrowser || this.connectedClients(control).length > 0) return;
+    // A named connection may belong to a different browser/profile. Never substitute the OS
+    // default for it. Requests without a profile may still join a wait that began earlier and
+    // ask it to launch the default browser, so the first caller's profile does not decide for all.
+    if (!req.profile && this.preparing) this.preparing.wantsLaunch = true;
+    if (!this.preparing) {
+      const state: { wantsLaunch: boolean; promise: Promise<void> } = {
+        wantsLaunch: !req.profile,
+        promise: Promise.resolve(),
+      };
+      const stillCurrent = () => !this.disposed && this.opts.getPageControl()?.bridge === control.bridge;
+      const prepare = async () => {
+        let status = await control.bridge.status();
+        // Pairing is a separate boundary; opening more browsers cannot resolve it.
+        if (!stillCurrent() || !status.ok || status.clients.some(c => c.connected || c.trusted === false)) return;
+        let launched = false;
+        const launchIfWanted = async () => {
+          if (!state.wantsLaunch || launched) return;
+          launched = true;
+          await this.opts.startBrowser!();
+        };
+        await launchIfWanted();
+        const deadline = (this.opts.now ?? Date.now)() + (this.opts.startupWaitMs ?? 35_000);
+        while (stillCurrent() && this.connectedClients(control).length === 0 && (this.opts.now ?? Date.now)() < deadline) {
+          await sleep(500);
+          await launchIfWanted();
+          status = await control.bridge.status();
+          // The extension came online but still needs the user's approval: waiting cannot fix that.
+          if (status.ok && status.clients.some(c => c.trusted === false)) return;
+        }
+      };
+      state.promise = prepare().finally(() => { this.preparing = null; });
+      this.preparing = state;
+    }
+    await this.preparing.promise;
   }
 
   async dispose(): Promise<void> {
@@ -310,7 +359,7 @@ export class UserBrowserBackend implements BrowserBackend {
         return actionOk(req.action, {
           ready: true,
           backend: this.kind,
-          note: '用户浏览器由用户自己启停,Cindy 不关闭它。',
+          note: 'Cindy 会按需启动用户浏览器，不会关闭它。',
         });
       case 'profiles':
         return this.handleProfiles(req);
@@ -347,6 +396,18 @@ export class UserBrowserBackend implements BrowserBackend {
 
   // ── 连接解析 ────────────────────────────────────────────────────────────
 
+  private unavailable() {
+    const reason = this.opts.getUnavailableReason?.() ?? 'plugin-missing';
+    return {
+      reason,
+      message: reason === 'plugin-updating'
+        ? '浏览器连接正在更新，完成后会自动恢复。'
+        : reason === 'plugin-selection-required'
+          ? '请在插件详情中选择「使用此浏览器扩展」。'
+          : NOT_CONFIGURED_MESSAGE,
+    };
+  }
+
   private control(
     action: BackendRequest['action'],
   ): { ok: true; control: UserBrowserPageControl } | { ok: false; result: BackendResult } {
@@ -354,7 +415,7 @@ export class UserBrowserBackend implements BrowserBackend {
     if (!control)
       return {
         ok: false,
-        result: actionFailed(action, NOT_CONFIGURED_MESSAGE, 'BROWSER_RUNTIME_NOT_CONFIGURED'),
+        result: actionFailed(action, this.unavailable().message, 'BROWSER_RUNTIME_NOT_CONFIGURED'),
       };
     return { ok: true, control };
   }
@@ -651,7 +712,7 @@ export class UserBrowserBackend implements BrowserBackend {
         backend: this.kind,
         running: false,
         configured: false,
-        message: NOT_CONFIGURED_MESSAGE,
+        ...this.unavailable(),
         capabilities: userBrowserCapabilities(null),
       });
     }
@@ -659,13 +720,14 @@ export class UserBrowserBackend implements BrowserBackend {
     // Right after an extension reload or update it reconnects within seconds: wait briefly before
     // reporting "not connected", so the agent does not give up on a browser that is coming back.
     const deadline = (this.opts.now ?? Date.now)() + (this.opts.reconnectWaitMs ?? 8000);
-    // Only an extension that was connected before (now dropped) is worth waiting for. One that never
-    // finished connecting, such as an unpaired install, is reported at once with its own reason.
+    // Expired clients are omitted from status.clients. Remember a successful connection independently
+    // so the reconnect grace still applies, including on the first status read after expiry.
+    // An install that has never connected (including an unpaired install) does not wait.
     if (status.ok) for (const c of status.clients) if (c.connected) this.everReady.add(c.id);
     while (
       status.ok &&
-      status.clients.some((c) => this.everReady.has(c.id)) &&
-      !status.clients.some((c) => c.connected) &&
+      (status.hadConnectedClient === true || this.everReady.size > 0) &&
+      !status.clients.some((c) => c.connected || c.trusted === false) &&
       (this.opts.now ?? Date.now)() < deadline
     ) {
       await sleep(500);

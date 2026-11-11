@@ -288,6 +288,12 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'maker:get-new-maker-defaults',
   'maker:model-favorites:get',
   'maker:model-favorites:apply',
+  // 协同创建 Worker 的角色清单与每个角色的记忆(任务文字、权限、模型路线):真相在被控端当前账号,
+  // 手机与远程控制的电脑只读写这一份。get 读被控端 renderer 镜像给 main 的快照;apply 只接受
+  // 「记下一次创建 / 移除一个角色」两种操作,由被控端转给自身 renderer 写回真源(无 sender 依赖、
+  // 无本机 UI 副作用)。老被控端无此 handler → 控制端收 CHANNEL_NOT_ALLOWED → 只显示内置角色、不记忆。
+  'maker:worker-roles:get',
+  'maker:worker-roles:apply',
   // device-link 草稿「每个模型 effort/fast」写穿(控制端 → 被控端):控制端在远程项目草稿里改
   // 选中 / 非选中模型的 effort/fast 时通知被控端,被控端调它原来的本地 setter(setEffortForModel /
   // setFastModeForModel)写真实草稿;被控端 newMakerDraft 变更自动经既有 maker:sync-new-maker-draft
@@ -587,6 +593,9 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // Codex app-server 官方控制面:额度/reset 次数读取 + 经 desktop 账号绑定 offer 的
   // 人工 reset。mutation 不接收 creditId,不能泛化成任意账号/凭证控制入口。
   'maker:usage:codex-rate-limits',
+  // Owner-only native subscription profile management; no credentials cross this channel.
+  'maker:subscription-accounts',
+  'maker:subscription-pool:quota',
   'maker:usage:codex-rate-limit-reset',
   'maker:usage:codex-reset-auto-use',
   // 桌面小组件快照（只读，被控端 dispatch 拦截；准入同上方用量只读通道）。
@@ -646,8 +655,9 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // 放行标准：① 只读 ② 同账号已授权控制端本就能经 maker:list-active / sessions:get-many 看到
   // 同样的任务标题与状态 ③ 没有任何写入或本机特权动作。设置读写（settings-*）不放行。
   'local-db:bots:autonomy:glance',
-  // Same-account opted-in controllers may inspect and stop a companion's own
-  // child task and read a participant-checked private thread. No profile mutation.
+  // Same-account opted-in controllers read a companion's old task cards (read-only; cancel stays
+  // for older controllers and answers UNSUPPORTED_CAPABILITY) and a participant-checked private
+  // thread. No profile mutation.
   'maker:bot-delegations:list',
   'maker:bot-delegation:cancel',
   'maker:bot-direct-message-thread:get',
@@ -797,6 +807,7 @@ export const REMOTE_INVOKE_ALLOWLIST: ReadonlySet<string> = new Set([
  * 命中这些 channel 的事件才会经 link 转发给控制端。
  */
 export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
+  // Older hosts still push task-card changes; this host no longer emits it.
   'maker:bot-delegation:changed',
   // 伙伴自主跟进状态变化（payload 只有 { botIds? }，节流 ≤1 次/秒），控制端据此重读「一眼」。
   'maker:bot-autonomy:changed',
@@ -846,6 +857,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // headers 观察器按 (5h,7d,status) 签名去抖、端点刷新 180s 节流,只有数值变化才
   // 广播,不随 turn 内逐请求刷帧。
   'usage:claude-subscription-changed',
+  'subscription-accounts:changed',
   // Codex 账号订阅用量变化(账号级组合 payload:app-server 桶表 + WHAM web 槽):
   // 控制端远程 codex / chatgpt-bridge 会话 chip 镜像被控端限额窗口。频率上限:
   // app-server 每 turn 记录一次、WHAM 后台刷新 10s 节流。

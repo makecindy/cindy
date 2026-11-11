@@ -21,7 +21,7 @@ import { getRemoteOauthContext, notifyOauthCardClosed } from '../plugin-oauth/co
 import type { OauthCardBinding } from '../plugin-oauth/transactions.js';
 import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import { resolvePreferredSystemLocale } from '../../shared/locale.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { mobilePluginUsage } from './mobilePluginUsage.js';
 import { readGhostReadmeFromDir } from './ghostReadme.js';
 import type { GhostReadmeContent } from '@cindy/plugin-protocol';

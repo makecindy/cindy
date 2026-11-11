@@ -164,14 +164,6 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return botsPrepareRuntime(db, txArgs);
     case 'bots.finishRuntime':
       return botsFinishRuntime(db, txArgs);
-    case 'bots.finishDelegation':
-      return botsFinishDelegation(db, txArgs);
-    case 'bots.reparentDelegations':
-      return botsReparentDelegations(db, txArgs);
-    case 'bots.createDelegation':
-      return botsCreateDelegation(db, txArgs);
-    case 'bots.reopenDelegation':
-      return botsReopenDelegation(db, txArgs);
     case 'bots.pauseLifecycle':
       return botsPauseLifecycle(db, txArgs);
     case 'bots.resumeLifecycle':
@@ -189,8 +181,6 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return botsPersistSessionPermission(db, txArgs);
     case 'bots.createGroupLane':
       return botsCreateGroupLane(db, txArgs as BotGroupsCreateLaneArgs);
-    case 'bots.createRoutineLane':
-      return botsCreateChannelLane(db, txArgs as BotsCreateChannelLaneArgs, 'routine');
     case 'bots.createChannelLane':
       return botsCreateChannelLane(db, txArgs as BotsCreateChannelLaneArgs);
     case 'bots.createThreadLane':
@@ -894,11 +884,12 @@ function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArg
  * of creating a second. Unlike group lanes there is no member table: the
  * connection binding (owner-scoped setting) is the authority, checked by Main.
  */
-function botsCreateChannelLane(db: Database.Database, args: BotsCreateChannelLaneArgs, role: 'channel' | 'routine' = 'channel'): BotGroupsCreateLaneResult {
+function botsCreateChannelLane(db: Database.Database, args: BotsCreateChannelLaneArgs): BotGroupsCreateLaneResult {
+  const role = 'channel';
   const p = asRecord(args, 'bots.createChannelLane args');
   const botId = expectString(p.botId, 'botId');
   const routeKey = expectString(p.routeKey, 'routeKey');
-  if (!routeKey.startsWith(role === 'routine' ? 'routine:' : 'im:')) throw new Error('Invalid companion lane route key');
+  if (!routeKey.startsWith('im:')) throw new Error('Invalid companion lane route key');
   const s = asRecord(p.session, 'session');
   const sessionId = expectString(s.id, 'session.id');
   const createdAt = expectNumber(s.createdAt, 'session.createdAt');
@@ -1001,224 +992,6 @@ function botsArchiveChannelLanes(
       archiveSession.run(now, row.sessionId);
     }
     return { archivedSessionIds: targets.map((row) => row.sessionId) };
-  })();
-}
-
-function botsFinishDelegation(
-  db: Database.Database,
-  args: unknown,
-): { id: string; parentSessionId: string | null; childSessionId: string | null; targetBotId: string | null; runSequence: number; status: string } | null {
-  const p = asRecord(args, 'bots.finishDelegation args');
-  return db.transaction(() => {
-    const values: unknown[] = [
-      expectString(p.status, 'status'), nullableString(p.resultSummary),
-      expectString(p.outputArtifactsJson, 'outputArtifactsJson'), nullableString(p.lastError),
-    ];
-    const tokenSet = p.tokensUsed === undefined ? '' : ', tokens_used = ?';
-    if (p.tokensUsed !== undefined) values.push(expectNumber(p.tokensUsed, 'tokensUsed'));
-    const completedAt = expectNumber(p.completedAt, 'completedAt');
-    values.push(completedAt, completedAt, expectString(p.delegationId, 'delegationId'));
-    let receiptGuard = '';
-    if (p.expectedRunSequence !== undefined) {
-      receiptGuard += ' AND run_sequence = ?';
-      values.push(expectNumber(p.expectedRunSequence, 'expectedRunSequence'));
-    }
-    if (p.expectedExecution !== undefined) {
-      const receipt = asRecord(p.expectedExecution, 'expectedExecution');
-      receiptGuard += " AND json_extract(permission_snapshot_json, '$.taskExecution.runSequence') = run_sequence AND json_extract(permission_snapshot_json, '$.taskExecution.instanceId') = ? AND json_extract(permission_snapshot_json, '$.taskExecution.generation') = ?";
-      values.push(expectString(receipt.instanceId, 'instanceId'), expectNumber(receipt.generation, 'generation'));
-    }
-    const row = db.prepare(`UPDATE bot_delegations SET status = ?, result_summary = ?, output_artifacts_json = ?, last_error = ?
-      ${tokenSet}, pending_interaction_json = NULL, completed_at = ?, completion_delivered_at = NULL, updated_at = ?
-      WHERE id = ? AND status IN ('queued','running','waiting') ${receiptGuard}
-      RETURNING id, parent_session_id AS parentSessionId, child_session_id AS childSessionId, target_bot_id AS targetBotId, run_sequence AS runSequence, status`)
-      .get(...values) as
-      | { id: string; parentSessionId: string | null; childSessionId: string | null; targetBotId: string | null; runSequence: number; status: string }
-      | undefined;
-    if (!row) return null;
-    if (row.childSessionId && row.targetBotId !== null) {
-      // Only legacy Bot-to-Bot execution containers have this archive lifecycle.
-      // An independent Session (target_bot_id IS NULL) outlives a turn, including
-      // failure/cancellation: visibility and explicit archive belong to its user.
-      db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
-        WHERE id = ? AND status = 'active'`)
-        .run(completedAt, row.childSessionId);
-      // 保留 route_key('delegation:<id>')作为来源标记:bot_delegations 行会随发起伙伴
-      // 的删除级联消失,之后只有它能证明这段 history 是"别人派给我的",不是自己的私聊
-      // (botHistoryScope.listBotRecallSessionIds)。route_key 的其它读者都只认 group 键。
-      db.prepare(`UPDATE bot_session_links SET role = 'history',
-        archived_at = ? WHERE session_id = ?`)
-        .run(completedAt, row.childSessionId);
-    }
-    return row;
-  })();
-}
-
-function botsReparentDelegations(
-  db: Database.Database,
-  args: unknown,
-): { delegationIds: string[] } {
-  const p = asRecord(args, 'bots.reparentDelegations args');
-  const botId = expectString(p.botId, 'botId');
-  const previousParentSessionId = expectString(p.previousParentSessionId, 'previousParentSessionId');
-  const nextParentSessionId = expectString(p.nextParentSessionId, 'nextParentSessionId');
-  const at = expectNumber(p.now, 'now');
-  return db.transaction(() => {
-    const rows = db.prepare(`SELECT id, child_session_id AS childSessionId
-      FROM bot_delegations
-      WHERE requesting_bot_id = ? AND parent_session_id = ?
-        AND target_bot_id IS NULL`)
-      .all(botId, previousParentSessionId) as Array<{
-        id: string;
-        childSessionId: string | null;
-      }>;
-    if (rows.length === 0) return { delegationIds: [] };
-    db.prepare(`UPDATE bot_delegations SET parent_session_id = ?, updated_at = ?
-      WHERE requesting_bot_id = ? AND parent_session_id = ?
-        AND target_bot_id IS NULL`)
-      .run(nextParentSessionId, at, botId, previousParentSessionId);
-    const updateChild = db.prepare(`UPDATE sessions SET parent_session_id = ?, updated_at = ?
-      WHERE id = ? AND status <> 'deleted'`);
-    for (const row of rows) {
-      if (row.childSessionId) updateChild.run(nextParentSessionId, at, row.childSessionId);
-    }
-    return { delegationIds: rows.map((row) => row.id) };
-  })();
-}
-
-function botsCreateDelegation(db: Database.Database, args: unknown): void {
-  const p = asRecord(args, 'bots.createDelegation args');
-  const d = asRecord(p.delegation, 'delegation');
-  const requestingBotId = expectString(d.requestingBotId, 'delegation.requestingBotId');
-  const maxActiveChildren = expectNumber(p.maxActiveChildren, 'maxActiveChildren');
-  const createdAt = expectNumber(d.createdAt, 'delegation.createdAt');
-  db.transaction(() => {
-    const count = db.prepare(`SELECT COUNT(*) AS count FROM bot_delegations
-      WHERE requesting_bot_id = ? AND status IN ('queued','running','waiting')`)
-      .get(requestingBotId) as { count: number };
-    if (count.count >= maxActiveChildren) throw new Error('BOT_DELEGATION_CONCURRENCY_LIMIT');
-    // null = 委派给一条普通 Cindy 任务(非 Bot),不建 bot_session_links 行。
-    const targetBotId = nullableString(d.targetBotId);
-    const targetProfileVersion = d.targetProfileVersion === null || d.targetProfileVersion === undefined
-      ? null
-      : expectNumber(d.targetProfileVersion, 'delegation.targetProfileVersion');
-    const s = asRecord(p.session, 'session');
-    insertBotSession(db, s);
-    const childSessionId = expectString(d.childSessionId, 'delegation.childSessionId');
-    const delegationId = expectString(d.id, 'delegation.id');
-    if (targetBotId) {
-      db.prepare(`INSERT INTO bot_session_links
-        (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
-        VALUES (?, ?, ?, ?, 'delegation', ?, ?, NULL)`)
-        .run(`${targetBotId}:${childSessionId}`, targetBotId, childSessionId,
-          targetProfileVersion,
-          `delegation:${delegationId}`, createdAt);
-    }
-    db.prepare(`INSERT INTO bot_delegations
-      (id, requesting_bot_id, target_bot_id, parent_session_id, child_session_id, objective,
-       context_refs_json, artifact_refs_json, permission_snapshot_json, lineage_json,
-       target_profile_version, depth, budget_tokens, tokens_used, status, result_summary,
-       last_error, created_at, accepted_at, completed_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, NULL, 0, 'queued', NULL, NULL, ?, NULL, NULL, ?)`)
-      .run(delegationId, requestingBotId, targetBotId,
-        expectString(d.parentSessionId, 'delegation.parentSessionId'), childSessionId,
-        expectString(d.objective, 'delegation.objective'), expectString(d.contextRefsJson, 'delegation.contextRefsJson'),
-        expectString(d.permissionSnapshotJson, 'delegation.permissionSnapshotJson'),
-        expectString(d.lineageJson, 'delegation.lineageJson'),
-        targetProfileVersion,
-        expectNumber(d.depth, 'delegation.depth'),
-        createdAt, createdAt);
-  })();
-}
-
-function botsReopenDelegation(
-  db: Database.Database,
-  args: unknown,
-): { reopened: boolean; previousParentSessionId: string | null } {
-  const p = asRecord(args, 'bots.reopenDelegation args');
-  const delegationId = expectString(p.delegationId, 'delegationId');
-  const requestingBotId = expectString(p.requestingBotId, 'requestingBotId');
-  const expectedStatus = expectString(p.expectedStatus, 'expectedStatus');
-  if (!['completed', 'failed', 'cancelled', 'timed-out'].includes(expectedStatus)) {
-    throw new Error('bots.reopenDelegation expectedStatus must be terminal');
-  }
-  const targetBotId = nullableString(p.targetBotId);
-  const targetProfileVersion = p.targetProfileVersion === null || p.targetProfileVersion === undefined
-    ? null
-    : expectNumber(p.targetProfileVersion, 'targetProfileVersion');
-  const reopenedAt = expectNumber(p.reopenedAt, 'reopenedAt');
-  const maxActiveChildren = expectNumber(p.maxActiveChildren, 'maxActiveChildren');
-
-  return db.transaction(() => {
-    const current = db.prepare(`SELECT requesting_bot_id AS requestingBotId,
-      target_bot_id AS targetBotId, target_profile_version AS targetProfileVersion,
-      parent_session_id AS parentSessionId, child_session_id AS childSessionId, status
-      FROM bot_delegations WHERE id = ?`).get(delegationId) as
-      | {
-          requestingBotId: string;
-          targetBotId: string | null;
-          targetProfileVersion: number | null;
-          parentSessionId: string | null;
-          childSessionId: string | null;
-          status: string;
-        }
-      | undefined;
-    if (
-      !current
-      || current.requestingBotId !== requestingBotId
-      || current.targetBotId !== targetBotId
-      || current.targetProfileVersion !== targetProfileVersion
-      || current.status !== expectedStatus
-    ) {
-      return { reopened: false, previousParentSessionId: current?.parentSessionId ?? null };
-    }
-    const count = db.prepare(`SELECT COUNT(*) AS count FROM bot_delegations
-      WHERE requesting_bot_id = ? AND id <> ? AND status IN ('queued','running','waiting')`)
-      .get(requestingBotId, delegationId) as { count: number };
-    if (count.count >= maxActiveChildren) throw new Error('BOT_DELEGATION_CONCURRENCY_LIMIT');
-
-    const childSessionId = expectString(p.childSessionId, 'childSessionId');
-    if (targetBotId === null) {
-      // Recheck in the transaction, after any asynchronous worktree lookup.
-      // Never resurrect an explicitly archived/deleted task or replace history.
-      const child = db.prepare('SELECT status FROM sessions WHERE id = ?').get(childSessionId) as
-        { status: string } | undefined;
-      if (current.childSessionId !== childSessionId || child?.status !== 'active') {
-        return { reopened: false, previousParentSessionId: current.parentSessionId };
-      }
-      db.prepare('UPDATE sessions SET parent_session_id = ?, updated_at = ? WHERE id = ?')
-        .run(expectString(p.parentSessionId, 'parentSessionId'), reopenedAt, childSessionId);
-    } else {
-      insertBotSession(db, asRecord(p.session, 'session'));
-    }
-    if (p.worktreePath != null) {
-      db.prepare('UPDATE sessions SET worktree_path = ? WHERE id = ?')
-        .run(expectString(p.worktreePath, 'worktreePath'), childSessionId);
-    }
-    if (targetBotId) {
-      db.prepare(`INSERT INTO bot_session_links
-        (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
-        VALUES (?, ?, ?, ?, 'delegation', ?, ?, NULL)`)
-        .run(`${targetBotId}:${childSessionId}`, targetBotId, childSessionId,
-          targetProfileVersion, `delegation:${delegationId}`, reopenedAt);
-    }
-    const updated = db.prepare(`UPDATE bot_delegations SET
-      parent_session_id = ?, child_session_id = ?, objective = ?,
-      permission_snapshot_json = ?, status = 'queued', result_summary = NULL,
-      output_artifacts_json = '[]', pending_interaction_json = NULL, last_error = NULL, tokens_used = 0,
-      run_sequence = run_sequence + 1, accepted_at = NULL, completed_at = NULL,
-      completion_delivered_at = NULL, updated_at = ?
-      WHERE id = ? AND status = ?`).run(
-      expectString(p.parentSessionId, 'parentSessionId'),
-      childSessionId,
-      expectString(p.objective, 'objective'),
-      expectString(p.permissionSnapshotJson, 'permissionSnapshotJson'),
-      reopenedAt,
-      delegationId,
-      expectedStatus,
-    );
-    if (updated.changes !== 1) throw new Error('BOT_DELEGATION_REOPEN_RACE');
-    return { reopened: true, previousParentSessionId: current.parentSessionId };
   })();
 }
 
@@ -1439,6 +1212,9 @@ function botsDeleteProfile(
   }
   const keepTaskHistory = p.keepTaskHistory;
   const at = expectNumber(p.at, 'at');
+  const projectSessionIds = [...new Set((p.projectSessionIds === undefined ? [] : expectArray(p.projectSessionIds, 'projectSessionIds'))
+    .map((value, index) => expectString(value, `projectSessionIds.${index}`)))]
+    .filter((id) => !sessionIds.includes(id));
   const status: 'archived' | 'deleted' = keepTaskHistory ? 'archived' : 'deleted';
   return db.transaction(() => {
     const profile = db.prepare('SELECT status FROM bot_profiles WHERE id = ?').get(botId) as
@@ -1482,6 +1258,17 @@ function botsDeleteProfile(
           (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('group', 'channel'))` : ''}`)
         .run(status, at, ...sessionIds, ...(hasLinkRoles ? [botId] : []));
     }
+    // The teammate's project goes with it: its other tasks follow the same keep-or-delete choice.
+    let projectChanged: string[] = [];
+    if (projectSessionIds.length > 0) {
+      const placeholders = projectSessionIds.map(() => '?').join(',');
+      projectChanged = (db.prepare(`SELECT id FROM sessions WHERE status != 'deleted' AND id IN (${placeholders})`)
+        .all(...projectSessionIds) as Array<{ id: string }>).map((row) => row.id);
+      if (projectChanged.length > 0) {
+        db.prepare(`UPDATE sessions SET status = ?, updated_at = ? WHERE id IN (${projectChanged.map(() => '?').join(',')})`)
+          .run(status, at, ...projectChanged);
+      }
+    }
 
     const hasMediaRefs = Boolean(db.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_refs'",
@@ -1498,7 +1285,7 @@ function botsDeleteProfile(
       new Error('Bot 生命周期已被另一处操作更新'),
       { code: 'PRECONDITION_FAILED' },
     );
-    return { sessionIds: allSessionIds, status };
+    return { sessionIds: [...allSessionIds, ...projectChanged], status };
   })();
 }
 
@@ -2586,7 +2373,7 @@ function imRotateSession(
   })();
 }
 
-function rewindCommit(db: Database.Database, args: unknown): void {
+function rewindCommit(db: Database.Database, args: unknown): string[] {
   const payload = asRecord(args, 'rewind.commit args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const targetCreatedAt = expectNumber(payload.targetCreatedAt, 'targetCreatedAt');
@@ -2648,6 +2435,7 @@ function rewindCommit(db: Database.Database, args: unknown): void {
     targetMessageUuid,
     preserveMessageUuid,
   });
+  const rewoundIds = new Set(idsToRewind);
   const updateMessage = db.prepare('UPDATE messages SET rewind_at = ? WHERE id = ?');
   const hasSubagentRuns = Boolean(
     db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'subagent_runs'").get(),
@@ -2696,7 +2484,6 @@ function rewindCommit(db: Database.Database, args: unknown): void {
     // 保留下来的消息若持有旧 thread 的原生 turn 锚点,随 thread 替换一起重映射
     // (与 fork.session 复制消息时的处理一致),软删与重映射同一事务。
     if (nativeForkAnchorSessionMap.size > 0) {
-      const rewoundIds = new Set(idsToRewind);
       for (const row of rows) {
         if (rewoundIds.has(row.id) || !row.agent_meta) continue;
         const remapped = remapNativeForkAnchorSession(row.agent_meta, nativeForkAnchorSessionMap);
@@ -2704,7 +2491,6 @@ function rewindCommit(db: Database.Database, args: unknown): void {
       }
     }
     if (rewindSubagentByParent && rewindParentlessSubagentTail) {
-      const rewoundIds = new Set(idsToRewind);
       const parentToolUseIds = new Set(
         rows.flatMap((row) => (rewoundIds.has(row.id) && row.tool_use_id ? [row.tool_use_id] : [])),
       );
@@ -2754,6 +2540,7 @@ function rewindCommit(db: Database.Database, args: unknown): void {
     }
   });
   transaction();
+  return rows.filter((row) => rewoundIds.has(row.id)).map((row) => row.client_id);
 }
 
 interface TreeAttachmentSourceRow {
@@ -3723,6 +3510,11 @@ function orcaReserveWorkerCreation(db: Database.Database, args: unknown): unknow
   return db.transaction(() => {
     // DELETE 即使没有命中也会先取得 writer lock，后续检查与 INSERT 因而跨连接串行。
     db.prepare('DELETE FROM orca_worker_creation_reservations WHERE expires_at <= ?').run(now);
+    // 已归档／已删除任务的 Worker 不再占用名字：把它的 label 改成带自身 id 的唯一值后放行
+    // （`~` 不在可填写的 label 字符集内，不会与任何新名字相撞）。记录、历史与关联都保留。
+    db.prepare(`UPDATE orca_workers SET label = label || '~' || id, updated_at = ?
+      WHERE team_id = ? AND label = ? COLLATE NOCASE
+        AND session_id IN (SELECT id FROM sessions WHERE status != 'active')`).run(now, teamId, label);
     const duplicateWorker = db.prepare(
       'SELECT 1 FROM orca_workers WHERE team_id = ? AND label = ? COLLATE NOCASE LIMIT 1',
     ).get(teamId, label);

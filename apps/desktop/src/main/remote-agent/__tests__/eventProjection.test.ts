@@ -77,11 +77,18 @@ describe('remote terminal error ownership', () => {
       message: "You've hit your weekly limit · resets 9am (Pacific/Auckland)",
       sdkError: 'rate_limit', usageResetAt: 1792612800000,
     } };
+    // An automatic turn can fail before producing any text. Its explicit start
+    // must survive the same remote projection as the quota error and deadline.
+    const start: AgentEvent = { type: 'status', source: 'claude-code', data: {
+      isRunning: true, providerInitiatedTurn: true,
+    } };
+    controller.onEvent(start);
     controller.onEvent(error);
     if (done) controller.onEvent({ type: 'done', source: 'claude-code', data: {} });
     controller.onClosed('missing', '[REMOTE_AGENT_EXPIRED] The task is no longer running on the other computer.');
     const events: AgentEvent[] = [];
     for await (const event of controller.handle.events()) events.push(event);
+    expect(events[0]).toEqual(start);
     expect(events.filter(event => event.type === 'error')).toEqual([error]);
   });
 

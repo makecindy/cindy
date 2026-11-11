@@ -1,5 +1,5 @@
 import { parseMcpAppRecord, projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
-import { t } from '../i18n.js';
+import { uiText } from '../uiText.js';
 
 /** Keep Host trust visible in the existing public title, without exporting private metadata. */
 export function projectMcpAppHistory(content: unknown, marked = false): unknown {
@@ -15,5 +15,5 @@ export function projectMcpAppHistory(content: unknown, marked = false): unknown 
   if (!plugin || typeof plugin.name !== 'string' || typeof plugin.trust !== 'string' ||
       !['unverified', 'cindy-official', 'reviewed', 'verified-publisher'].includes(plugin.trust)) return projected;
   const history = (projected as { mcpAppHistory: { version: number; title: string; text: string } }).mcpAppHistory;
-  return { mcpAppHistory: { ...history, title: `${plugin.name} · ${t(`mcpApps.pluginTrust.${plugin.trust}`)}` } };
+  return { mcpAppHistory: { ...history, title: `${plugin.name} · ${uiText(`mcpApps.pluginTrust.${plugin.trust}`, plugin.trust)}` } };
 }

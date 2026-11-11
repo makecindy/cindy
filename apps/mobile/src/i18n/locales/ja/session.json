@@ -93,6 +93,7 @@
     "context": "コンテキスト",
     "screenshot": "スクリーンショット",
     "photo": "写真",
+    "photosAndVideos": "写真と動画",
     "takePhoto": "写真を撮る",
     "file": "ファイル",
     "joinConversation": "会話に追加（{{num}} 枚）",
@@ -469,6 +470,11 @@
     "worktreeCleanupPending": "前回の worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。"
   },
   "menu": {
+    "moveToProject": "タスクを移動",
+    "moveFailed": "タスクの移動に失敗しました",
+    "moveRunning": "このタスクは実行中です。完了後に移動してください。",
+    "moveWorktree": "このタスクの作業ディレクトリは worktree のため、他のプロジェクトへは移動できません",
+    "moveUnsupported": "タスクを移動するには、接続先のコンピューターで Cindy を更新してください。",
     "details": "セッションの詳細",
     "chipPinned": "ピン留め済み",
     "chipArchived": "アーカイブ済み",
@@ -688,6 +694,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "そのパソコンでは、このプロバイダーのリモート利用が許可されていません。そのパソコンの「設定 → モデルプロバイダー」で「リモート利用を許可」をオンにするか、別のモデルを選んでください。",
     "REMOTE_AGENT_FORK_FAILED": "Agent を実行しているパソコンで、ここから新しいセッションを始められませんでした。もう一度試すか、別のメッセージでお試しください。",
     "REMOTE_AGENT_SHARE_PAUSED": "共有した人があなたへの共有を一時停止したため、再開されるまでこれらのモデルは使えません。別のモデルに切り替えて続けられます。",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "これは旧方式の共有のため、「Agent-Net のみ使用」がオンの間は使えません。オフにすると続けられます。別のモデルに切り替えることもできます。",
     "REMOTE_AGENT_SHARE_REMOVED": "この共有は利用できなくなりました（共有した人が削除したか、あなたが退出しました）。別のモデルに切り替えて続けられます。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "共有されたプロバイダーは一時的に利用できません。共有した人のパソコンがオフラインか、共有が一時的にオフになっている可能性があります。後でもう一度試すか、別のモデルに切り替えて続けられます。"
   },
@@ -713,21 +720,34 @@
     "remoteDirPathHint": "実行デバイスでディレクトリを確認します。存在しない場合はエラーになり、Lead のディレクトリには切り替わりません。",
     "remoteDirInvalid": "実行デバイスの絶対パスを入力してください。",
     "roleLabel": "ロール名",
-    "roleHint": "複数の協力者を見分けるための名前で、能力は変わりません",
-    "customRole": "カスタム",
-    "customRolePlaceholder": "カスタムロール名",
-    "customRolePredefinedError": "カスタムロール名にプリセットのロール名は使えません",
+    "taskLabel": "Worker に任せること",
+    "enableHint": "このタスクが Lead となり、作業の割り振りと確認を担当します。Worker は別の独立した Agent で、作業を実行して結果を報告します。",
+    "roles": {
+      "reviewer": {
+        "name": "レビュー",
+        "task": "Lead の作業を確認して、いくつか提案してください。"
+      },
+      "developer": {
+        "name": "開発"
+      },
+      "tester": {
+        "name": "テスト",
+        "task": "Lead のここまでの成果をテストし、失敗した項目と再現手順を報告してください。"
+      }
+    },
+    "addRole": "ロールを追加",
+    "removeRoleHint": "長押しで削除",
+    "removeRoleConfirmTitle": "「{{role}}」を削除しますか？",
+    "removeRoleConfirmDesc": "「ロールを追加」からいつでも追加し直せます。",
+    "removeRoleConfirm": "ロールを削除",
+    "moreSettings": "その他の設定",
     "agentLabel": "Agent",
-    "modelLabel": "モデル",
     "modelDefault": "デフォルト",
     "modelDefaultHint": "コンピューター側の Worker 既定モデルを使います",
-    "permissionLabel": "権限モード",
     "permissionAuto": "自動承認",
     "permissionFull": "フルアクセス",
-    "permissionAutoHint": "ワークスペース内の読み書きを許可し、権限昇格を自動承認します。高リスクの操作は拒否または確認が必要になることがあります。",
-    "permissionFullHint": "任意のファイル変更やネットワークコマンドを確認なしで実行できます。最もリスクが高く、信頼できるタスク向けです。",
     "initialTaskLabel": "最初のタスク（任意）",
-    "initialTaskPlaceholder": "この Worker に任意で渡す最初のタスク",
+    "initialTaskPlaceholder": "最初に任せることを入力。空欄の場合は待機し、Lead が割り振ります",
     "workerCountSummary_one": "Worker {{count}} 件 · 実行中 {{running}}",
     "workerCountSummary_other": "Worker {{count}} 件 · 実行中 {{running}}",
     "loading": "Worker を読み込み中…",
@@ -803,12 +823,6 @@
     "failed": "保存できませんでした。再試行してください。",
     "restore": "既定に戻す"
   },
-  "followUp": {
-    "title": "セッションのフォローを始めましょうか？",
-    "start": "フォローを開始",
-    "notNow": "今はしない",
-    "saveFailed": "保存できませんでした。もう一度お試しください"
-  },
   "providerGroupRebalance": {
     "title": "{{label}} に切り替えて続けますか？",
     "body": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。直近数回のやり取りと要約は引き継がれますが、それより前の細部は失われることがあります。",
@@ -816,7 +830,10 @@
     "quotaReset": "残り {{left}}%・{{reset}}後にリセット",
     "confirm": "切り替える",
     "remember": "切り替えて、今後は自動にする（このタスクのみ）",
-    "cancel": "キャンセル"
+    "cancel": "キャンセル",
+    "disable": "このタスクでは自動で切り替えない",
+    "disableFailed": "選択が保存されたか確認できませんでした。接続を確認し、タスクがあるパソコンの Cindy を最新版にしてから、もう一度お試しください。このメッセージは通常どおり送信されます。",
+    "moreOptions": "その他の選択肢"
   },
   "messageEdit": {
     "editing": "メッセージを編集中",

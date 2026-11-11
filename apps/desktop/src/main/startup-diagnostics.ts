@@ -40,6 +40,7 @@
 import { app, crashReporter } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isRunningUnderArm64Translation } from './arm64Translation';
 import { createLogger } from './logger';
 import { readProcessStartTimes } from './processIdentity';
 
@@ -509,6 +510,18 @@ export function initStartupDiagnostics(): void {
     log.info(`crashReporter started (local-only), dumps dir: ${app.getPath('crashDumps')}`);
   } catch (err) {
     log.warn('crashReporter.start failed (non-fatal)', err);
+  }
+  // 1.5) 架构转译：Apple 芯片上跑 x64 包时整体慢一个数量级，日志里只有 arch=x64
+  //      看不出来(NZWG-9FC9 曾因此被当作功能卡顿排查)。直接写明，免得再靠推断。
+  try {
+    if (isRunningUnderArm64Translation()) {
+      log.warn(
+        `[arch] ${process.platform}-${process.arch} build is running under ARM64 translation ` +
+          '(Rosetta on macOS) — startup and CPU use will be much worse than the native arm64 build',
+      );
+    }
+  } catch (err) {
+    log.warn('arm64 translation check failed (non-fatal)', err);
   }
   // 2) run marker 尸检 + 本实例标记 + 心跳。
   try {

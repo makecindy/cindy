@@ -29,9 +29,16 @@ import { createId } from '@paralleldrive/cuid2';
 import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
-import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
+import { listMessagesForAgentHandoff, type MessageDeletedPayload } from '../localDb/ipc/messages.js';
+import {
+  captureDataOwnerBroadcastScope,
+  isDataOwnerBroadcastScopeCurrent,
+  tapWindowBroadcast,
+  type DataOwnerBroadcastScope,
+} from '../device-link/broadcast-tap.js';
 import type { RewindCommitArgs } from '../localDb/client/tx/types';
 import { getMaker, withRehydrateCloseSuppressed } from '../maker-host/index.js';
+import { syncBackgroundCommandWork } from '../maker-host/claude-background-command-work-sync.js';
 import { buildHandoffText } from '../maker-ipc/agentHandoff.js';
 import { readGitSafetySettings } from '../maker-host/git-safety-settings-store.js';
 import { ownerScopedUserDataPath } from '../appSessionState';
@@ -40,7 +47,7 @@ import type { Session } from '../../renderer/lib/ccAgent.types';
 import type { RewindFilesResult } from '@cindy/maker-core';
 
 import { createLogger } from '../logger';
-import { setLastAssistantTranscriptUuid } from '../messagePersistBroadcaster.js';
+import { setLastAssistantTranscriptUuid } from '../messagePersistBroadcaster.desktop.js';
 import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
 import { isCodexNativeThreadStart, resolveCodexForkEventTimestamp, resolveCodexTurnAnchor } from './fork';
 import {
@@ -70,6 +77,7 @@ import {
 } from '../git-snapshot/gitSnapshotService';
 import { detectCwd } from '../worktree/WorktreeManager.js';
 import { gitExec } from '../worktree/gitExec';
+import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
 import {
   loadClaudeTranscriptAnchorIndex,
   parseClaudeAgentMeta,
@@ -358,6 +366,7 @@ async function loadRewindContext(
     ? await loadClaudeTranscriptAnchorIndex({
         sdkSessionId,
         workingDir: makerSession.workDir,
+        claudeConfigDir: readBoundClaudeConfigDir(sdkSessionId),
       }).catch(() => null)
     : null;
   const assistantAnchor = resolveClaudeRewindAssistantEntry(targetMeta.uuid, anchorIndex);
@@ -826,11 +835,18 @@ async function closeSessionForNativeRestart(sessionId: string): Promise<undefine
   return undefined;
 }
 
+export interface RewindCommitOptions {
+  requireLatestUser?: boolean;
+  allowFileRestore?: boolean;
+  ownerScope?: DataOwnerBroadcastScope;
+}
+
 export async function commitRewindAtMessage(
   sessionId: string,
   clientId: string,
-  opts?: { requireLatestUser?: boolean; allowFileRestore?: boolean },
+  opts?: RewindCommitOptions,
 ): Promise<Session> {
+  const ownerScope = opts?.ownerScope ?? captureDataOwnerBroadcastScope();
   const ctx = await loadRewindContext(sessionId, clientId, opts);
 
   // makerSession 必有 (loadRewindContext 已 guard); 这里只为类型收紧。
@@ -971,6 +987,10 @@ export async function commitRewindAtMessage(
     }
   }
 
+  // 回退提交会关闭旧 Query,连同它的后台命令一起终止,任务表被不带事件地清空:
+  // 刷新「后台命令仍在工作」,任务列表才不会一直显示已不存在的命令在跑。
+  if (makerSession) syncBackgroundCommandWork(makerSession);
+
   // ── 段 2：SQLite 事务（软删消息 + 同步写回 replacement sdk_session_id）──
   // edit-last-message 的第二道最新校验直接下沉进 worker 事务临界区(payload 带
   // requireLatestUser 标志,worker 在软删同一同步临界区内断言"target 之后无
@@ -979,8 +999,9 @@ export async function commitRewindAtMessage(
   // 命中时文件回滚可能已发生,但**对话历史仍完好**:宁可留下"文件已回退、
   // 对话未裁剪"的可恢复态并报错,也不静默软删刚追加的新轮次。
   const now = Date.now();
+  let rewoundClientIds: string[];
   try {
-    await getDbClient().tx('rewind.commit', {
+    rewoundClientIds = await getDbClient().tx('rewind.commit', {
       sessionId,
       targetCreatedAt: ctx.targetCreatedAt,
       targetMessageId: ctx.targetMessageId,
@@ -1031,6 +1052,18 @@ export async function commitRewindAtMessage(
       'REWIND_GIT_FAILED',
       `rewind 持久化失败(运行态已切换但 DB 未提交): ${err instanceof Error ? err.message : String(err)}`,
     );
+  }
+
+  // Remote controllers can hold cached history even after SQLite committed.
+  // Keep the initiating renderer's reload and edit-and-resend on their existing paths.
+  const [firstRewoundClientId] = rewoundClientIds;
+  if (!opts?.requireLatestUser && firstRewoundClientId && isDataOwnerBroadcastScopeCurrent(ownerScope)) {
+    const payload: MessageDeletedPayload = {
+      sessionId,
+      clientId: rewoundClientIds.includes(ctx.targetClientId) ? ctx.targetClientId : firstRewoundClientId,
+      clientIds: rewoundClientIds,
+    };
+    tapWindowBroadcast('local-db:messages:deleted', payload, ownerScope.ownerStamp);
   }
 
   const [row] = await getDbClient().drizzle.select().from(sessions).where(eq(sessions.id, sessionId));

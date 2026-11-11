@@ -93,6 +93,7 @@
     "context": "컨텍스트",
     "screenshot": "스크린샷",
     "photo": "사진",
+    "photosAndVideos": "사진 및 동영상",
     "takePhoto": "사진 촬영",
     "file": "파일",
     "joinConversation": "대화에 추가 ({{num}}장)",
@@ -465,6 +466,11 @@
     "worktreeCleanupPending": "이전 worktree가 아직 정리 대기 중입니다. 기기를 다시 연결한 후 재시도하세요."
   },
   "menu": {
+    "moveToProject": "작업 이동",
+    "moveFailed": "작업을 이동하지 못했습니다",
+    "moveRunning": "이 작업은 실행 중입니다. 완료된 후 이동하세요.",
+    "moveWorktree": "이 작업의 작업 디렉터리는 worktree이므로 다른 프로젝트로 이동할 수 없습니다",
+    "moveUnsupported": "작업을 이동하려면 연결된 컴퓨터의 Cindy를 업데이트하세요.",
     "details": "세션 상세 정보",
     "chipPinned": "고정됨",
     "chipArchived": "보관됨",
@@ -684,6 +690,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자의 원격 사용을 허용하지 않았습니다. 그 컴퓨터의 설정 → 모델 제공자에서 원격 사용 허용을 켜거나 다른 모델을 선택하세요.",
     "REMOTE_AGENT_FORK_FAILED": "Agent를 실행하는 컴퓨터에서 여기서 새 세션을 시작하지 못했습니다. 다시 시도하거나 다른 메시지로 시도해 주세요.",
     "REMOTE_AGENT_SHARE_PAUSED": "공유한 사람이 나에 대한 공유를 일시 중지해서 재개될 때까지 이 모델을 사용할 수 없습니다. 다른 모델로 바꿔 계속할 수 있습니다.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "기존 방식의 공유라서 'Agent-Net만 사용'이 켜져 있는 동안에는 사용할 수 없습니다. 이 옵션을 끄면 계속할 수 있고, 다른 모델로 바꿀 수도 있습니다.",
     "REMOTE_AGENT_SHARE_REMOVED": "이 공유는 더 이상 사용할 수 없습니다(공유한 사람이 삭제했거나 내가 나갔습니다). 다른 모델로 바꿔 계속할 수 있습니다.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "공유된 제공자를 일시적으로 사용할 수 없습니다. 공유한 사람의 컴퓨터가 오프라인이거나 공유가 잠시 꺼져 있을 수 있습니다. 나중에 다시 시도하거나 다른 모델로 바꿔 계속할 수 있습니다."
   },
@@ -709,21 +716,34 @@
     "remoteDirPathHint": "실행 기기에서 디렉터리를 확인합니다. 없으면 오류를 표시하며 Lead의 디렉터리로 전환하지 않습니다.",
     "remoteDirInvalid": "실행 기기의 절대 경로를 입력하세요.",
     "roleLabel": "역할 이름",
-    "roleHint": "여러 협업자를 구분하기 위한 이름일 뿐이며 능력은 바뀌지 않습니다",
-    "customRole": "사용자 지정",
-    "customRolePlaceholder": "사용자 지정 역할 이름",
-    "customRolePredefinedError": "사용자 지정 역할 이름에 기본 역할 이름을 쓸 수 없습니다",
+    "taskLabel": "Worker에게 맡길 일",
+    "enableHint": "이 작업이 Lead가 되어 일을 배분하고 결과를 확인합니다. Worker는 별도의 독립된 Agent로, 일을 수행하고 결과를 보고합니다.",
+    "roles": {
+      "reviewer": {
+        "name": "리뷰",
+        "task": "Lead의 작업을 살펴보고 몇 가지 제안을 해 주세요."
+      },
+      "developer": {
+        "name": "개발"
+      },
+      "tester": {
+        "name": "테스트",
+        "task": "Lead가 지금까지 만든 결과물을 테스트하고 실패한 항목과 재현 절차를 보고하세요."
+      }
+    },
+    "addRole": "역할 추가",
+    "removeRoleHint": "길게 눌러 제거",
+    "removeRoleConfirmTitle": "“{{role}}” 역할을 제거할까요?",
+    "removeRoleConfirmDesc": "‘역할 추가’로 언제든 다시 추가할 수 있습니다.",
+    "removeRoleConfirm": "역할 제거",
+    "moreSettings": "추가 설정",
     "agentLabel": "Agent",
-    "modelLabel": "모델",
     "modelDefault": "기본값",
     "modelDefaultHint": "컴퓨터의 Worker 기본 모델을 사용합니다",
-    "permissionLabel": "권한 모드",
     "permissionAuto": "자동 승인",
     "permissionFull": "전체 액세스",
-    "permissionAutoHint": "작업 공간 안에서 읽고 쓰며 권한 상승 요청을 자동 승인합니다. 위험도가 높은 작업은 거부되거나 확인이 필요할 수 있습니다.",
-    "permissionFullHint": "확인 없이 모든 파일을 수정하고 네트워크 명령을 실행할 수 있습니다. 위험도가 가장 높으니 신뢰할 수 있는 작업에만 사용하세요.",
     "initialTaskLabel": "초기 작업(선택)",
-    "initialTaskPlaceholder": "이 Worker에게 줄 선택적 첫 작업",
+    "initialTaskPlaceholder": "처음 맡길 일을 입력하세요. 비워 두면 대기하며 Lead가 배분합니다",
     "workerCountSummary_one": "Worker {{count}}개 · 실행 중 {{running}}",
     "workerCountSummary_other": "Worker {{count}}개 · 실행 중 {{running}}",
     "loading": "Worker를 불러오는 중…",
@@ -799,12 +819,6 @@
     "failed": "저장하지 못했습니다. 다시 시도하세요.",
     "restore": "기본값 복원"
   },
-  "followUp": {
-    "title": "세션 후속 확인을 시작할까요?",
-    "start": "후속 확인 시작",
-    "notNow": "나중에",
-    "saveFailed": "저장하지 못했습니다. 다시 시도하세요"
-  },
   "providerGroupRebalance": {
     "title": "{{label}}(으)로 바꿔서 계속할까요?",
     "body": "각 계정의 할당량을 고르게 쓰기 위해 이 메시지는 {{label}}에서 보내는 것을 권장합니다({{quota}}). 최근 몇 번의 대화와 요약은 이어지지만, 그 이전의 세부 내용은 빠질 수 있습니다.",
@@ -812,7 +826,10 @@
     "quotaReset": "{{left}}% 남음 · {{reset}} 후 초기화",
     "confirm": "전환",
     "remember": "전환하고 앞으로 자동으로(이 작업만)",
-    "cancel": "취소"
+    "cancel": "취소",
+    "disable": "이 작업에서 자동 전환 안 함",
+    "disableFailed": "선택이 저장되었는지 확인하지 못했습니다. 연결을 확인하고 작업이 있는 컴퓨터의 Cindy가 최신 버전인지 확인한 후 다시 시도해 주세요. 이 메시지는 평소대로 전송됩니다.",
+    "moreOptions": "추가 옵션"
   },
   "messageEdit": {
     "editing": "메시지 편집 중",

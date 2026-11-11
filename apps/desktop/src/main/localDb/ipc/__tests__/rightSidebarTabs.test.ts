@@ -35,7 +35,7 @@ vi.mock('../../client/current.js', () => ({
   getDbClient: () => ({ drizzle: h.db }),
 }));
 
-import { hasAssignedBotWorkbenchTab, registerRightSidebarTabsIpc } from '../rightSidebarTabs.js';
+import { registerRightSidebarTabsIpc } from '../rightSidebarTabs.js';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 
 function createDb(): Database.Database {
@@ -91,16 +91,6 @@ describe('rightSidebarTabs IPC', () => {
     h.handlers.clear();
     createDb();
     registerRightSidebarTabsIpc();
-  });
-
-  it('matches a popped-out Bot workbench only by session, assigned tab and Bot id', async () => {
-    await invoke('local-db:right-sidebar-tabs:upsert', {
-      id: 'workbench-1', sessionId: 's1', kind: 'bot-workbench', position: 0, state: { botId: 'bot-1' },
-    });
-    expect(await hasAssignedBotWorkbenchTab('s1', ['workbench-1'], 'bot-1')).toBe(true);
-    expect(await hasAssignedBotWorkbenchTab('s1', ['other-tab'], 'bot-1')).toBe(false);
-    expect(await hasAssignedBotWorkbenchTab('s1', ['workbench-1'], 'bot-2')).toBe(false);
-    expect(await hasAssignedBotWorkbenchTab('s2', ['workbench-1'], 'bot-1')).toBe(false);
   });
 
   it('rejects every read and write handler before parsing untrusted payloads', async () => {

@@ -3,6 +3,7 @@ import { zstdCompress, zstdDecompress, zstdCompressSync, zstdDecompressSync } fr
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
+import type { NativeSubscriptionAccount } from '@cindy/maker-core';
 
 const { ownerState } = vi.hoisted(() => ({
   ownerState: {
@@ -24,7 +25,18 @@ vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/cindy-pi-native-forwarding-test' },
 }));
 
-vi.mock('../../appSessionState.js', () => ({
+// The HTTP transport fixture injects account readers below. Global Skill
+// projection has its own tests and must not start Desktop services here.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
+vi.mock('../model-discovery/xai.js', () => ({
+  discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
+vi.mock('../../appSessionState.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../appSessionState.js')>(),
   isAppSessionBoundaryPending: () => ownerState.pending,
   activeOwnerScopeKey: () => ownerState.scope,
 }));
@@ -60,6 +72,9 @@ vi.mock('../logger-adapter.js', () => ({
 
 import {
   getPiNativeSubscriptionHandler,
+  getChatgptBridgeAuth,
+  getChatgptBridgeAuthForDispatch,
+  invalidateChatgptBridgeAuth,
   type PiNativeSubscriptionHandlerDeps,
 } from '../anthropic-responses-bridge-host.js';
 import { buildUserProvider } from '@cindy/model-providers';
@@ -117,6 +132,38 @@ function deps(overrides: Partial<PiNativeSubscriptionHandlerDeps> = {}): PiNativ
 }
 
 describe('PI native subscription forwarding', () => {
+  // Standard: exercise the real account bridge without reading an on-disk credential.
+  it('reads and refreshes only the selected profile and fences its dispatch proof', async () => {
+    let current = true;
+    const read = vi.fn(async () => ({ accessToken: 'fixture-access-b', chatgptAccountId: 'fixture-account-b', canDispatch: () => current }));
+    const invalidate = vi.fn();
+    const account: NativeSubscriptionAccount = { id: 'fixture-profile-b', configDir: '/fixture/.codex-b',
+      assertCurrent: () => {}, readState: async () => ({ authenticated: true }), readCodexTokens: read, invalidateAuth: invalidate };
+    const auth = await getChatgptBridgeAuth('openai', account);
+    expect(auth.accountId).toBe('fixture-account-b');
+    const proof = await getChatgptBridgeAuthForDispatch('openai', account);
+    expect(proof.canDispatch()).toBe(true);
+    current = false;
+    expect(proof.canDispatch()).toBe(false);
+    current = true;
+    await invalidateChatgptBridgeAuth({ status: 401, body: 'token_revoked', failedAccessToken: 'old-fixture-token' }, 'openai', account);
+    expect(invalidate).not.toHaveBeenCalled();
+    await invalidateChatgptBridgeAuth({ status: 401, body: 'token_revoked', failedAccessToken: 'fixture-access-b' }, 'openai', account);
+    expect(invalidate).toHaveBeenCalledWith('token_revoked', 'fixture-access-b');
+  });
+  it('uses the selected account for HTTP headers and never invalidates the default account', async () => {
+    const account: NativeSubscriptionAccount = { id: 'fixture-profile-b', configDir: '/fixture/.codex-b',
+      assertCurrent: () => {}, readState: async () => ({ authenticated: true }) };
+    const injected = deps({ fetch: vi.fn(async () => new Response('token_revoked', { status: 401 })) });
+    const body = { model: 'gpt-6-astra', input: [] };
+    const res = responseRecorder();
+    await getPiNativeSubscriptionHandler('openai', 'pool-http', injected, account)({
+      rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body,
+      ctx: { reqId: 1, method: 'POST', url: '/codex/responses', headers: {} }, res: res as never,
+    });
+    expect(injected.getChatgptAuth).toHaveBeenCalledWith('openai', account);
+    expect(injected.invalidateChatgpt).toHaveBeenCalledWith(expect.objectContaining({ failedAccessToken: 'host-openai-token' }), 'openai', account);
+  });
   // provider-sharing §12: decoding cannot bypass exact model grants. The earlier
   // forwarding tests had no hosted binding, while routing tests only sent plain JSON.
   it.each(['guest', 'owner'].flatMap(trust => [false, true].map(compressed => ({ trust, compressed }))))(

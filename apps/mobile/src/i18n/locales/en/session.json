@@ -93,6 +93,7 @@
     "context": "Context",
     "screenshot": "Screenshot",
     "photo": "Photos",
+    "photosAndVideos": "Photos and videos",
     "takePhoto": "Take Photo",
     "file": "File",
     "joinConversation": "Add to chat ({{num}})",
@@ -469,6 +470,11 @@
     "worktreeCleanupPending": "The previous worktree is still awaiting cleanup. Reconnect the device and try again."
   },
   "menu": {
+    "moveToProject": "Move task",
+    "moveFailed": "Failed to move task",
+    "moveRunning": "This task is running. Move it after it finishes.",
+    "moveWorktree": "This task's working directory is a worktree, so it can't be moved to another project yet",
+    "moveUnsupported": "Update the connected computer to move tasks.",
     "details": "Session details",
     "chipPinned": "Pinned",
     "chipArchived": "Archived",
@@ -688,6 +694,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "That computer hasn’t allowed remote use of this provider. On that computer, turn on “Allow remote use” in Settings → Providers, or pick another model.",
     "REMOTE_AGENT_FORK_FAILED": "The computer running the Agent couldn’t start a new session from here. Try again, or try a different message.",
     "REMOTE_AGENT_SHARE_PAUSED": "The owner has paused this share for you, so these models can’t be used until it’s resumed. Switch to another model to continue.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "This is a legacy share, and it can't be used while \"Use Only Agent-Net\" is on. Turn that switch off to continue, or switch to another model.",
     "REMOTE_AGENT_SHARE_REMOVED": "This share is no longer available (the owner removed it or you left). Switch to another model to continue.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "The shared provider is temporarily unavailable. The owner's computer may be offline, or sharing is turned off for now. Try again later, or switch to another model to continue."
   },
@@ -713,21 +720,34 @@
     "remoteDirPathHint": "The folder is checked on the execution device. A missing folder causes an error; the Lead's folder is never used instead.",
     "remoteDirInvalid": "Enter an absolute path on the execution device.",
     "roleLabel": "Role name",
-    "roleHint": "Just a name to tell collaborators apart. It doesn't change capabilities.",
-    "customRole": "Custom",
-    "customRolePlaceholder": "Custom role name",
-    "customRolePredefinedError": "A custom role name can't match a preset role",
+    "taskLabel": "What the Worker does",
+    "enableHint": "This task becomes the Lead: it assigns work and checks the results. The Worker is a separate Agent that does the work and reports back.",
+    "roles": {
+      "reviewer": {
+        "name": "Review",
+        "task": "Take a look at the Lead’s work and give some suggestions."
+      },
+      "developer": {
+        "name": "Develop"
+      },
+      "tester": {
+        "name": "Test",
+        "task": "Test the Lead’s work so far and report what failed, with steps to reproduce."
+      }
+    },
+    "addRole": "Add role",
+    "removeRoleHint": "Touch and hold to remove",
+    "removeRoleConfirmTitle": "Remove “{{role}}”?",
+    "removeRoleConfirmDesc": "You can add it back anytime with Add role.",
+    "removeRoleConfirm": "Remove role",
+    "moreSettings": "More settings",
     "agentLabel": "Agent",
-    "modelLabel": "Model",
     "modelDefault": "Default",
     "modelDefaultHint": "Uses the computer's default Worker model",
-    "permissionLabel": "Permission mode",
     "permissionAuto": "Auto-review",
     "permissionFull": "Full access",
-    "permissionAutoHint": "Reads and writes inside the workspace and auto-reviews elevation requests. High-risk actions may be denied or need confirmation.",
-    "permissionFullHint": "Can change any file and run networked commands without asking again. Highest risk; use only for trusted tasks.",
     "initialTaskLabel": "Initial task (optional)",
-    "initialTaskPlaceholder": "An optional first task for this Worker",
+    "initialTaskPlaceholder": "Write the first thing to hand it, or leave blank and let the Lead assign work",
     "workerCountSummary_one": "{{count}} Worker · {{running}} running",
     "workerCountSummary_other": "{{count}} Workers · {{running}} running",
     "loading": "Loading Workers…",
@@ -803,12 +823,6 @@
     "failed": "Could not save. Try again.",
     "restore": "Restore defaults"
   },
-  "followUp": {
-    "title": "Would you like me to follow up on your sessions?",
-    "start": "Start Following Up",
-    "notNow": "Not Now",
-    "saveFailed": "Couldn't save. Try again."
-  },
   "providerGroupRebalance": {
     "title": "Continue on {{label}}?",
     "body": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). The last few messages and a summary carry over; older details may be lost.",
@@ -816,7 +830,10 @@
     "quotaReset": "{{left}}% left · resets in {{reset}}",
     "confirm": "Switch",
     "remember": "Switch, and do it automatically from now on (this task only)",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "disable": "Don't switch automatically (this task)",
+    "disableFailed": "Couldn't confirm whether your choice was saved. Check the connection and make sure Cindy on the task’s computer is up to date, then try again. This message will still be sent as usual.",
+    "moreOptions": "More options"
   },
   "messageEdit": {
     "editing": "Editing message",

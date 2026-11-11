@@ -93,6 +93,7 @@
     "context": "Kontext",
     "screenshot": "Screenshot",
     "photo": "Fotos",
+    "photosAndVideos": "Fotos und Videos",
     "takePhoto": "Foto aufnehmen",
     "file": "Datei",
     "joinConversation": "Zum Chat hinzufügen ({{num}})",
@@ -481,6 +482,11 @@
     "worktreeCleanupPending": "Der vorherige Worktree wartet noch auf die Bereinigung. Verbinde das Gerät erneut und versuch es noch einmal."
   },
   "menu": {
+    "moveToProject": "Aufgabe verschieben",
+    "moveFailed": "Aufgabe konnte nicht verschoben werden",
+    "moveRunning": "Diese Aufgabe läuft. Verschiebe sie, sobald sie beendet ist.",
+    "moveWorktree": "Das Arbeitsverzeichnis dieser Aufgabe ist ein Worktree. Sie kann daher noch nicht in ein anderes Projekt verschoben werden.",
+    "moveUnsupported": "Aktualisiere Cindy auf dem verbundenen Computer, um Aufgaben zu verschieben.",
     "details": "Sitzungsdetails",
     "chipPinned": "Angeheftet",
     "chipArchived": "Archiviert",
@@ -700,6 +706,7 @@
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "Dieser Computer erlaubt die Remote-Nutzung dieses Anbieters nicht. Aktiviere dort „Remote-Nutzung erlauben“ unter Einstellungen → Anbieter oder wähle ein anderes Modell.",
     "REMOTE_AGENT_FORK_FAILED": "Der Computer, auf dem der Agent läuft, konnte von hier aus keine neue Sitzung starten. Versuch es erneut oder wähle eine andere Nachricht.",
     "REMOTE_AGENT_SHARE_PAUSED": "Der Eigentümer hat diese Freigabe für dich pausiert. Diese Modelle können erst wieder genutzt werden, wenn sie fortgesetzt wird. Wechsle zu einem anderen Modell, um fortzufahren.",
+    "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "Dies ist eine ältere Freigabe; sie ist nicht nutzbar, solange „Nur Agent-Net verwenden“ aktiviert ist. Schalte die Option aus, um fortzufahren, oder wechsle zu einem anderen Modell.",
     "REMOTE_AGENT_SHARE_REMOVED": "Diese Freigabe ist nicht mehr verfügbar (der Eigentümer hat sie entfernt oder du hast sie verlassen). Wechsle zu einem anderen Modell, um fortzufahren.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Der freigegebene Anbieter ist vorübergehend nicht verfügbar. Der Computer des Eigentümers ist möglicherweise offline oder die Freigabe ist derzeit deaktiviert. Versuch es später erneut oder wechsle zu einem anderen Modell, um fortzufahren."
   },
@@ -725,21 +732,34 @@
     "remoteDirPathHint": "Der Ordner wird auf dem Ausführungsgerät geprüft. Ein fehlender Ordner führt zu einem Fehler. Der Ordner des Lead wird niemals ersatzweise verwendet.",
     "remoteDirInvalid": "Gib einen absoluten Pfad auf dem Ausführungsgerät ein.",
     "roleLabel": "Rollenname",
-    "roleHint": "Nur ein Name, um Beteiligte zu unterscheiden. Er ändert keine Fähigkeiten.",
-    "customRole": "Benutzerdefiniert",
-    "customRolePlaceholder": "Eigener Rollenname",
-    "customRolePredefinedError": "Ein eigener Rollenname darf keiner vordefinierten Rolle entsprechen",
+    "taskLabel": "Was der Worker übernimmt",
+    "enableHint": "Diese Aufgabe wird zum Lead: Sie verteilt die Arbeit und prüft die Ergebnisse. Der Worker ist ein eigenständiger Agent, der die Arbeit ausführt und Bericht erstattet.",
+    "roles": {
+      "reviewer": {
+        "name": "Review",
+        "task": "Sieh dir die Arbeit des Leads an und mach ein paar Vorschläge."
+      },
+      "developer": {
+        "name": "Entwickeln"
+      },
+      "tester": {
+        "name": "Testen",
+        "task": "Teste die bisherige Arbeit des Leads und melde Fehler mit Schritten zur Reproduktion."
+      }
+    },
+    "addRole": "Rolle hinzufügen",
+    "removeRoleHint": "Zum Entfernen gedrückt halten",
+    "removeRoleConfirmTitle": "„{{role}}“ entfernen?",
+    "removeRoleConfirmDesc": "Über „Rolle hinzufügen“ kannst du sie jederzeit wieder hinzufügen.",
+    "removeRoleConfirm": "Rolle entfernen",
+    "moreSettings": "Weitere Einstellungen",
     "agentLabel": "Agent",
-    "modelLabel": "Modell",
     "modelDefault": "Standard",
     "modelDefaultHint": "Verwendet das Standardmodell für Worker des Computers",
-    "permissionLabel": "Berechtigungsmodus",
     "permissionAuto": "Automatische Prüfung",
     "permissionFull": "Vollzugriff",
-    "permissionAutoHint": "Liest und schreibt im Arbeitsbereich und prüft automatisch Anfragen nach erweiterten Rechten. Aktionen mit hohem Risiko können abgelehnt werden oder eine Bestätigung erfordern.",
-    "permissionFullHint": "Kann jede Datei ändern und Befehle mit Netzwerkzugriff ohne erneute Rückfrage ausführen. Höchstes Risiko; nur für vertrauenswürdige Aufgaben verwenden.",
     "initialTaskLabel": "Erste Aufgabe (optional)",
-    "initialTaskPlaceholder": "Eine optionale erste Aufgabe für diesen Worker",
+    "initialTaskPlaceholder": "Erste Aufgabe für den Worker eingeben oder leer lassen, dann verteilt der Lead die Arbeit",
     "workerCountSummary_one": "{{count}} Worker · {{running}} aktiv",
     "workerCountSummary_other": "{{count}} Workers · {{running}} aktiv",
     "loading": "Workers werden geladen…",
@@ -815,12 +835,6 @@
     "failed": "Speichern fehlgeschlagen. Versuch es erneut.",
     "restore": "Standardwerte wiederherstellen"
   },
-  "followUp": {
-    "title": "Soll ich deine Sitzungen weiterverfolgen?",
-    "start": "Nachverfolgung starten",
-    "notNow": "Nicht jetzt",
-    "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut."
-  },
   "providerGroupRebalance": {
     "title": "Auf {{label}} fortsetzen?",
     "body": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Die letzten Nachrichten und eine Zusammenfassung werden übernommen; ältere Details können verloren gehen.",
@@ -828,7 +842,10 @@
     "quotaReset": "{{left}} % übrig · Zurücksetzung in {{reset}}",
     "confirm": "Wechseln",
     "remember": "Wechseln und künftig automatisch wechseln (nur für diese Aufgabe)",
-    "cancel": "Abbrechen"
+    "cancel": "Abbrechen",
+    "disable": "Nicht automatisch wechseln (diese Aufgabe)",
+    "disableFailed": "Es konnte nicht bestätigt werden, ob deine Auswahl gespeichert wurde. Prüfe die Verbindung und ob Cindy auf dem Computer mit dieser Aufgabe aktuell ist, und versuche es erneut. Diese Nachricht wird wie gewohnt gesendet.",
+    "moreOptions": "Weitere Optionen"
   },
   "messageEdit": {
     "editing": "Nachricht bearbeiten",

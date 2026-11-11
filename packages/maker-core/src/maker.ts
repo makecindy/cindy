@@ -108,8 +108,23 @@ export interface SessionLifecycleHooks {
   onStartFailed?: (context: SessionStartFailureContext) => void | Promise<void>;
   /** Failed startup's handle was finally closed after deferred cleanup; no task ownership change. */
   onStartCleanupSucceeded?: (sessionId: string, options: CreateSessionOptions) => void | Promise<void>;
-  /** session 关闭时调用；options 始终属于该次启动，不从当前同 id 的 runtime 取值。 */
-  onClose?: (sessionId: string, options: CreateSessionOptions) => void | Promise<void>;
+  /**
+   * 关闭请求发起时刻同步取样：这次 close 是否为「瞬态重建」——同一任务随后会按 DB
+   * 行重建，worktree 与暂存附件必须留给重建后的 runtime。
+   *
+   * 只在请求入口问一次，结果随 onClose 下发。onClose 是异步的、close 不等待它，
+   * 任何「调用方在关闭期间开一个窗口」的旁路到钩子真正执行时都可能已释放。
+   */
+  isTransientCloseRequest?: (sessionId: string) => boolean;
+  /**
+   * session 关闭时调用；options 始终属于该次启动，不从当前同 id 的 runtime 取值。
+   * close 是 Maker 在请求入口固化的关闭事实，reason 与瞬态标记同批取样。
+   */
+  onClose?: (
+    sessionId: string,
+    options: CreateSessionOptions,
+    close: MakerSessionCloseFacts,
+  ) => void | Promise<void>;
   /**
    * Codex-only: resume 前读取该业务 session 对应 thread history 是否已可靠包含
    * 产品 prompt。读取失败由 Maker 视为 unknown,让 Codex fail toward restore。
@@ -203,6 +218,13 @@ export type MakerSessionCloseReason =
   | 'agent-switch'
   | 'runtime-refresh'
   | 'unexpected';
+
+/** 一次 close 请求固化下来的事实；事后 close 竞态或退出确认失败都不再改写。 */
+export interface MakerSessionCloseFacts {
+  reason: MakerSessionCloseReason;
+  /** 同一任务随后会重建；onClose 据此跳过 worktree 释放与暂存附件清理。 */
+  transient: boolean;
+}
 
 export type MakerEvent =
   | { type: 'session:created'; session: Session }
@@ -538,8 +560,8 @@ export class Maker {
   private readonly sdkSessionPersistenceTails = new Map<string, Promise<void>>();
   /** 已确认失效的 vendor id；用于丢弃 CAS 之后才到达的旧 query session_id 事件。 */
   private readonly invalidSdkSessionIds = new Map<string, Set<string>>();
-  /** Explicit close cause keyed by the exact Session instance that will emit closed. */
-  private readonly closeReasons = new WeakMap<Session, MakerSessionCloseReason>();
+  /** Close facts keyed by the exact Session instance that will emit closed. */
+  private readonly closeFacts = new WeakMap<Session, MakerSessionCloseFacts>();
   /** Host cleanup hooks must settle before Maker.shutdown() releases its process barrier. */
   private readonly pendingLifecycleCloses = new Set<Promise<void>>();
   /** Maker Memory 顶层单例 (可选). undefined 时 maker memory 功能整体禁用. */
@@ -1206,6 +1228,8 @@ export class Maker {
       // 层 B：视觉桥钩子（per-session 优先，否则全局默认；缺省不传 = 零干扰）。
       visionBridge: startOpts.visionBridge ?? this.visionBridge,
       toolLoopReviewer: this.toolLoopReviewer,
+      // 整机拆除期间抑制空闲会话的进程死亡终态错误(#8831 退出期守卫)。
+      isHostShuttingDown: () => this.shutdownStarted,
     });
 
     // 另一台电脑上的 Claude Code：新编号等这一轮成功结束才落库。失联的回合里，对方可能还没写出
@@ -1259,11 +1283,12 @@ export class Maker {
         codexThreadClaim?.release();
         // 不再持久化运行态: 'closed' 是 SDK 子进程的瞬态, 重启即灭, 无意义存盘。
         this.activeSessions.delete(meta.id);
+        const close = this.getSessionCloseFacts(session);
         this.emit({
           type: 'session:closed',
           sessionId: meta.id,
           session,
-          reason: this.closeReasons.get(session) ?? 'unexpected',
+          reason: close.reason,
         });
         // 注入的副作用钩子 (worktree / temp 文件 / image cache 清理等)。
         // fire-and-forget, 异常只记日志, 不影响其他清理。在 storage update / activeSessions
@@ -1271,7 +1296,7 @@ export class Maker {
         // 自己的 invariant 先一致。
         if (this.lifecycleHooks.onClose) {
           const cleanup = Promise.resolve()
-            .then(() => this.lifecycleHooks.onClose!(meta.id, startOpts))
+            .then(() => this.lifecycleHooks.onClose!(meta.id, startOpts, close))
             .catch((err) => {
               this.logger.warn('lifecycleHooks.onClose threw', { sessionId: meta.id, error: String(err) });
             });
@@ -1445,14 +1470,34 @@ export class Maker {
     // Deferred internal retirement is only intent. An explicit closer may
     // take ownership until Session actually starts teardown; after that the
     // cause stays fixed even if exit confirmation fails or another close races.
-    const previousReason = this.closeReasons.get(session);
-    if (previousReason === undefined || (
-      previousReason === 'runtime-refresh' && !opts?.afterCurrentTurn && !session.hasStartedClosing()
-    )) this.closeReasons.set(session, reason);
+    const previous = this.closeFacts.get(session);
+    if (previous === undefined || (
+      previous.reason === 'runtime-refresh' && !opts?.afterCurrentTurn && !session.hasStartedClosing()
+    )) {
+      // 原因与瞬态标记必须在同一个请求入口固化:onClose 是异步的,close 不等它,
+      // 调用方的抑制窗口在 close 返回后就释放了,到钩子里再问必然错过。
+      this.closeFacts.set(session, {
+        reason,
+        transient: this.lifecycleHooks.isTransientCloseRequest?.(session.id) ?? false,
+      });
+    }
     if (opts?.afterCurrentTurn) return session.closeAfterCurrentTurn(opts);
     await session.close();
     return 'closed';
     // status listener 会自动清理 activeSessions 并 emit
+  }
+
+  /**
+   * 项目资源漂移的 pi 本地根任务:空闲时经 Maker 以 runtime-refresh 原因回收运行时。
+   * 供直发链路(IM turnRunner / scheduler 直发降级 / goal)在 send 前调用,与桌面发送
+   * 事务(makerSendTransaction 的 lazy bootstrap)同口径;调用方随后按各自的自愈路径
+   * 重建会话再投递。非本 maker 会话/未漂移/非空闲一律 no-op 返回 false。
+   */
+  async recyclePiRuntimeIfResourcesDrifted(session: Session): Promise<boolean> {
+    if (this.activeSessions.get(session.id) !== session) return false;
+    if (!session.hasRecyclableProjectResourceDrift()) return false;
+    await this.closeSessionIfCurrent(session, 'runtime-refresh');
+    return true;
   }
 
   /** 关闭并移除一个 session */
@@ -1473,7 +1518,12 @@ export class Maker {
    * created before a late close notification from the old instance arrives.
    */
   getSessionCloseReason(session: Session): MakerSessionCloseReason {
-    return this.closeReasons.get(session) ?? 'unexpected';
+    return this.getSessionCloseFacts(session).reason;
+  }
+
+  /** 关闭事实（原因 + 瞬态标记）；自关闭的 Session 没有显式原因。 */
+  private getSessionCloseFacts(session: Session): MakerSessionCloseFacts {
+    return this.closeFacts.get(session) ?? { reason: 'unexpected', transient: false };
   }
 
   /**
@@ -1518,7 +1568,10 @@ export class Maker {
       phase: 'initial' | 'late',
     ): Array<Promise<void>> => {
       for (const session of sessions) {
-        if (!this.closeReasons.has(session)) this.closeReasons.set(session, 'requested');
+        if (!this.closeFacts.has(session)) {
+          // 退出期不做瞬时取样：onClose 副作用此时已被 shutdown 整体抑制。
+          this.closeFacts.set(session, { reason: 'requested', transient: false });
+        }
       }
       return sessions.map((session) =>
         Promise.resolve()
@@ -1668,6 +1721,8 @@ export class Maker {
         permissionMode: opts.permissionMode,
         capabilities: deviceId ? applicationHandleCapabilities(handle) : capabilitiesForSession(kind, agent!.capabilities, undefined, undefined, handle),
         toolLoopReviewer: this.toolLoopReviewer,
+        // 整机拆除期间抑制空闲会话的进程死亡终态错误(#8831 退出期守卫)。
+        isHostShuttingDown: () => this.shutdownStarted,
       });
       this.localAgentSessions.add(session);
       session.onStatusChange(status => {
@@ -1697,6 +1752,8 @@ export class Maker {
   async listAgentSkills(
     agentKind: AgentKind,
     opts: ListAgentSkillsOptions & { sessionId?: string },
+    /** Host-only request-scoped verification; never part of renderer/remote options. */
+    readDisabledSkillPaths?: () => Promise<readonly string[]>,
   ): Promise<ListAgentSkillsResult> {
     const { sessionId, ...agentOpts } = opts;
     const sessionMeta = sessionId ? await this.storage.get(sessionId) : null;
@@ -1708,11 +1765,13 @@ export class Maker {
       ));
     const agent = this.requireAgent(agentKind);
     const session = sessionId ? this.getSession(sessionId) : undefined;
-    const filter = (result: ListAgentSkillsResult) => agent.filterActiveSkillCommands(
-      result, agentOpts.remoteHostId ?? sessionMeta?.remoteHostId ?? undefined,
-      session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined,
-    );
-    const result = filter(await agent.listAgentSkills({
+    const filter = async (result: ListAgentSkillsResult) => {
+      const remoteHostId = agentOpts.remoteHostId ?? sessionMeta?.remoteHostId ?? undefined;
+      const snapshot = session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined;
+      const current = !remoteHostId && snapshot === undefined ? await readDisabledSkillPaths?.() : undefined;
+      return agent.filterActiveSkillCommands(result, remoteHostId, snapshot, current);
+    };
+    const result = await filter(await agent.listAgentSkills({
       ...agentOpts,
       includeManagedPiPackages,
     }));

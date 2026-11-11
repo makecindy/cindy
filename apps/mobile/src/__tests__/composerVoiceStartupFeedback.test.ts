@@ -48,6 +48,7 @@ function readCallbacks(page: string) {
         const composerImageHoldActive = false;
         // 收起胶囊点开的过渡期(useComposerPillOpen)不在本用例范围:语音按下前后都未点胶囊。
         const composerPillOpen = { opening: false };
+        const composerDragOpen = false;
         return ${cardActive};
       } };`,
       { compilerOptions: { target: ts.ScriptTarget.ES2022 } },

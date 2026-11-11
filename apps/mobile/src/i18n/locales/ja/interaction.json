@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "完了",
+    "mcpCancel": "キャンセル",
     "mode": {
       "default": "デフォルト権限",
       "acceptEdits": "編集を許可",
@@ -34,6 +36,10 @@
     "exit": "プランモードを終了"
   },
   "panel": {
+    "questionUnanswered": "未回答",
+    "questionWithdrawn": "回答は不要になりました",
+    "withdrawnDraft": "この質問への回答は不要になりました。\n{{reason}}\n下書きは保存されています。補足として送信できます。",
+    "sendSupplement": "補足を送信",
     "readOnlyKind": "確認待ち",
     "readOnlyTitle": "パソコンで確認を待っています",
     "pendingRequests": "保留中のリクエスト",
@@ -98,7 +104,14 @@
     "planFeedbackPlaceholder": "Claude にどうすべきか伝える",
     "planFeedbackRequired": "送信前にフィードバックを入力してください。",
     "planFeedbackSubmit": "プランのフィードバックを送信",
-    "planFeedbackAccessibility": "プランを変更するフィードバック"
+    "planFeedbackAccessibility": "プランを変更するフィードバック",
+    "validation": {
+      "required": "この必須項目を入力してください。",
+      "choice": "一覧の選択肢から選んでください。",
+      "tooShort": "{{count}}文字以上で入力してください。",
+      "tooLong": "{{count}}文字以内で入力してください。"
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -385,6 +398,8 @@
       "submitting": "送信中"
     },
     "permission": {
+      "titleStdin": "端末への入力を許可しますか？",
+      "titleMcpUrl": "{{server}} のリクエストを完了",
       "highRiskTitle": "高リスクの権限は再確認が必要です",
       "highRiskDetail": "コマンドを確認し、もう一度許可を確定してください。不明な場合は拒否してください。",
       "sessionAllowTitle": "今回だけ許可するか、このタスクで常に許可できます",
@@ -439,5 +454,39 @@
       "ghost_id": "プラグイン",
       "tool": "ツール"
     }
+  },
+  "issueConfirm": {
+    "title": "{{appName}} へのフィードバック送信を確認",
+    "typeBug": "バグ",
+    "typeFeature": "機能要望",
+    "titleLabel": "タイトル",
+    "bodyLabel": "本文(Markdown)",
+    "privacyHint": "Issue のタイトルと本文は公開され、検索やキャッシュの対象になる場合があります。自動マスキングで検出できるのは一部の一般的な形式だけで、文脈上の機密情報をすべて判別することはできません。",
+    "relatedLogsHint": "この送信には、上に表示された関連するクライアントログが含まれます。公開前にフィルタリング、マスキング、長さ制限が適用されます。",
+    "privacyConfirm": "上記の公開内容を確認し、非公開にすべき個人情報、会話内容、業務情報が含まれていないことを確認しました",
+    "submissionMethodLabel": "送信元",
+    "identityGithubUser": "自分の GitHub アカウント @{{login}}",
+    "identityGithubUserHint": "GitHub 上の Issue 作成者となり、自分で編集またはクローズできます",
+    "identityPlatform": "Cindy 公式 Bot @{{login}}（既定）",
+    "identityPlatformHint": "GitHub アカウントの設定は不要です。Issue は公式 Bot が作成し、本文に公開署名を付けられます",
+    "publicNameLabel": "公開署名",
+    "publicNameHint": "この署名は Issue 本文に公開表示されます",
+    "anonymous": "匿名",
+    "useAnonymous": "匿名の署名を使用",
+    "envLine": "送信クライアント環境（送信時に自動で付加）:クライアント {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 表示言語 {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（このセッション）",
+    "regionLine": "リージョン:{{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "フィードバックを送信",
+    "cancel": "キャンセル",
+    "previewLabel": "GitHub · 公開フィードバック",
+    "edit": "編集",
+    "doneEditing": "編集を完了",
+    "publicSubmit": "公開で送信",
+    "publicationNotice": "内容と署名は GitHub で公開されます。",
+    "attribution": "署名：{{name}}",
+    "environment": "動作環境を添付",
+    "identitySettings": "署名とアカウント"
   }
 }

@@ -27,7 +27,7 @@ import {
   CallbackListener,
   XAI_CALLBACK_PORT_OCCUPIED_MESSAGE,
   xaiCallbackCorsHeaders,
-} from '../grok-oauth-login.js';
+} from '../grok-oauth-login.desktop.js';
 
 const PORT = 56121;
 const XAI_ORIGIN = 'https://accounts.x.ai';

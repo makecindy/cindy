@@ -1,5 +1,5 @@
 {
-  "officialRelayNote": "You’re using your own relay. Shared task content still goes through the {{appName}} relay.",
+  "officialRelayNote": "Agent-Net shares use the relay specified in the invitation; legacy shares still use the {{appName}} relay.",
   "selfJoin": "You started this shared task, so you don’t need to join. Open it from “Shared by Me”.",
   "waitingHost": "Waiting for the host to respond. You can continue sending messages.",
   "join": "Join Shared Task",

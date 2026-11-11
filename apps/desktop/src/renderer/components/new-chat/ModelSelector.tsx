@@ -100,6 +100,7 @@ import {
   useDeviceProviders,
 } from '@/hooks/useDeviceProviders';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
+import { effectiveRunLocation, RUN_LOCATION_LOCAL } from '@/lib/providerRunLocation';
 import { modelCatalogKey, type ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
@@ -153,6 +154,7 @@ import {
   sourcesForModel,
   unifiedModelEntries,
   visibleModelUnion,
+  withEffectiveModelContextWindows,
   type ProviderView,
 } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
@@ -803,6 +805,8 @@ export interface ModelSelectorBaseProps {
   sourceDisconnected?: boolean;
   /** 语义同 ModelSelectorContentProps.actualRoute(仅已建会话传 true)。 */
   actualRoute?: boolean;
+  /** Only new-task composers preview unbound subscription accounts. */
+  previewSubscriptionPool?: boolean;
   /** 语义同 ModelSelectorContentProps.taskStarted。 */
   taskStarted?: boolean;
   /** Fast Mode 状态 + 回调(从工具栏搬进 Edit 配置列)。不传 → 配置列不显示 Fast 开关。 */
@@ -1006,6 +1010,7 @@ export interface ModelSelectorContentBaseProps {
    * (PR #744 review 第十轮)。
    */
   actualRoute?: boolean;
+  previewSubscriptionPool?: boolean;
   /**
    * 任务已经运行过(有 Agent 回复)。供应商组在任务第一次运行时选好电脑(provider-groups.md §6),
    * 之后组那一项的用量按任务实际运行的那台显示;草稿与还没运行过的任务不传。
@@ -1260,6 +1265,7 @@ function ModelSelectorContentView({
   excludeChatBridgedCodex,
   onDismiss,
   actualRoute = false,
+  previewSubscriptionPool = false,
   taskStarted = false,
   maxVisibleModelRows,
   overlayContentClassName,
@@ -1437,7 +1443,7 @@ function ModelSelectorContentView({
     () =>
       remoteAgentBrowsing
         ? remoteAgentProviders(remoteProviders.providers)
-        : remoteProviders.providers,
+        : remoteProviders.providers.map(withEffectiveModelContextWindows),
     [remoteAgentBrowsing, remoteProviders.providers],
   );
   const sshCodexProviders = sshCodex?.providers;
@@ -1454,8 +1460,8 @@ function ModelSelectorContentView({
   // 订阅用量跟随目录归属:本机目录读本机账号,远程目录读被控端镜像(与会话用量 chip 共用缓存);
   // 外部注入的目录(providersOverride)与 SSH 混合目录归属不明,不显示任何账号用量。
   const providerUsageScope = useMemo<ProviderUsageScope | null>(
-    () => (deviceId ? { deviceId } : mixedCatalog ? null : { deviceId: null }),
-    [deviceId, mixedCatalog],
+    () => (deviceId ? { deviceId } : mixedCatalog ? null : { deviceId: null, previewSubscriptionPool: previewSubscriptionPool && !actualRoute }),
+    [deviceId, mixedCatalog, previewSubscriptionPool, actualRoute],
   );
   // Old device-link hosts expose capabilities only. Never substitute local routes.
   const unifiedPanel = useUnifiedPanel && !(deviceId && remoteProviders.unsupported);
@@ -1751,6 +1757,37 @@ function ModelSelectorContentView({
   /** 正在浏览归的组那一项所在的目录：那一项里的模型显示为正在用的，选中时留在此刻运行的那台。 */
   const browsingBoundGroupEntry =
     stayInGroup && boundEntry !== null && (remoteBrowse?.deviceId ?? null) === boundEntry.deviceId;
+  /**
+   * 同账号借用(供应商「运行于」)：同一个供应商在本机和自己的其他电脑上都能用时只列一处——本机能用且没改选
+   * 就是本机那一项，否则是「运行于」那台电脑那一项。只管本机任务、同账号电脑、不在供应商组里的供应商；
+   * 当前任务此刻正在用的那一项始终保留，免得选中项消失。
+   */
+  const runLocationFold = useMemo(() => {
+    const hiddenRemote = new Set<string>();
+    const hiddenLocal = new Set<string>();
+    if (!remoteAgentDevices || homeDeviceId) return { hiddenRemote, hiddenLocal };
+    for (const provider of localProviders.providers) {
+      if (localProviderGroups[provider.id]) continue;
+      const candidates = remoteAgentDevices.flatMap((device) => {
+        if (isProviderShareAgentDeviceId(device.deviceId)) return [];
+        const offered = remoteDeviceCatalogs.get(device.deviceId)?.providers.find((entry) => entry.id === provider.id);
+        return offered?.connected && !offered.suspended && offered.remoteInvocationEnabled === true
+          && !(offered as { group?: unknown }).group
+          ? [{ deviceId: device.deviceId, name: device.name }]
+          : [];
+      });
+      if (candidates.length === 0) continue;
+      const location = effectiveRunLocation(provider as typeof provider & { runLocation?: string }, candidates);
+      for (const candidate of candidates) {
+        const inUse = candidate.deviceId === remoteAgentDeviceId && provider.id === currentProviderId;
+        if (candidate.deviceId !== location && !inUse) hiddenRemote.add(remoteProviderEntryKey(candidate.deviceId, provider.id));
+      }
+      const localInUse = !remoteAgentDeviceId && provider.id === currentProviderId;
+      if (location !== RUN_LOCATION_LOCAL && !localInUse) hiddenLocal.add(provider.id);
+    }
+    return { hiddenRemote, hiddenLocal };
+  }, [remoteAgentDevices, homeDeviceId, localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
+    remoteAgentDeviceId, currentProviderId]);
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
@@ -1769,12 +1806,15 @@ function ModelSelectorContentView({
         includePaymentRequired: true,
         scope: 'draft',
       });
-      const providerIds = [...new Set(entries.map((entry) => entry.providerId))];
-      return providerIds.length > 0
+      // 「运行于」收起的供应商只是不占左栏；那台电脑上的收藏仍按完整目录解析，不因收起消失。
+      const providerIds = [...new Set(entries.map((entry) => entry.providerId))].filter(
+        (providerId) => !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId)),
+      );
+      return entries.length > 0
         ? [{ deviceId: device.deviceId, providers: shared, providerIds, entries }]
         : [];
     });
-  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups]);
+  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold]);
   // 目录还在读或读取失败的其他电脑(分享不算):收藏区里它们的收藏置灰列出,不当作模型已下架。
   const remoteAgentUnavailableDeviceIds = useMemo(
     () =>
@@ -1792,7 +1832,7 @@ function ModelSelectorContentView({
     if (!hasRemoteAgent) return undefined;
     void visibilityVersion;
     const entries = unifiedModelEntries({
-      providers: homeProviders,
+      providers: homeProviders.filter((provider) => !runLocationFold.hiddenLocal.has(provider.id)),
       isVisible: homeDeviceId
         ? (providerId, model, agent) =>
             isDeviceModelVisible(homeModelVisibilityOverrides, agent, providerId, model)
@@ -1808,6 +1848,7 @@ function ModelSelectorContentView({
     homeModelVisibilityOverrides,
     localProviders.providerOrder,
     visibilityVersion,
+    runLocationFold,
   ]);
   // 供应商组在分组标题与左栏提示里带上台数(provider-groups.md §10)：「Anthropic · 供应商组 · 2 台电脑」。
   // 只算任务所在电脑就是本机时本机建的组；被控电脑上的任务看那台的目录，不在这里标。远程 Agent 面板正在浏览
@@ -3644,6 +3685,10 @@ function ModelSelectorContentView({
             providerUsage={providerUsageScope}
             providerGroupUsage={providerGroupUsage}
             providers={providers}
+            // 「运行于」另一台的本机供应商只从模型分组收起；本机收藏仍按完整目录解析。
+            {...(!deviceId && runLocationFold.hiddenLocal.size > 0
+              ? { listHiddenProviderIds: runLocationFold.hiddenLocal }
+              : {})}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}
             {...(unifiedAgents ? { agents: unifiedAgents } : {})}
             scope={unifiedScope}
@@ -4148,6 +4193,7 @@ export function ModelSelector({
   currentProviderId,
   sourceDisconnected = false,
   actualRoute = false,
+  previewSubscriptionPool = false,
   taskStarted = false,
   onProviderChange,
   onNavigateToProviders,
@@ -4997,6 +5043,7 @@ export function ModelSelector({
       excludeChatBridgedCodex={excludeChatBridgedCodex}
       onDismiss={() => setOpenWithoutAutoRefresh(false)}
       actualRoute={actualRoute}
+      previewSubscriptionPool={previewSubscriptionPool}
       taskStarted={taskStarted}
       maxVisibleModelRows={maxVisibleModelRows}
       currentProviderId={currentProviderId}
@@ -5079,9 +5126,8 @@ export function ModelSelector({
         collisionPadding={8}
         className={cn(
           // field 形态面板宽度绑定 trigger(DESIGN.md §4 Select & Dropdown 宽度铁则,
-          // 与隔壁权限字段同规则),且压掉共享 PopoverContent 的 shadow-md(§4 面板无
-          // 阴影);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
-          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)] shadow-none' : 'w-auto',
+          // 与隔壁权限字段同规则);toolbar 等非 field 的 Radix 分支维持既有视觉不动。
+          isFieldTrigger ? 'w-[var(--radix-popover-trigger-width)]' : 'w-auto',
           'flex min-h-0 max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-[12px] p-0',
           'bg-[var(--model-dropdown-bg)]',
           'border border-[var(--model-dropdown-border)]',

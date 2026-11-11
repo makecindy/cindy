@@ -1,3 +1,6 @@
+import { getSessionRowSnapshot, getSessionRowSnapshotStrict, type SessionRowSnapshot } from '../sessionDispatchSnapshot.js';
+import { commitProvisionalSession as commitSessionDraft, discardProvisionalSessionRow as discardSessionDraft } from '../sessionDraftLifecycle.js';
+import { createUserSession, withWorktreeMutation } from './createUserSession.js';
 import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js';
 import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
@@ -30,7 +33,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { ipcMain, app, BrowserWindow } from 'electron';
-import { eq, ne, and, desc, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
+import { eq, ne, and, desc, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 
 import {
   clearPiSubagentDeletedTombstone,
@@ -47,8 +50,8 @@ import type { SessionsSetTerminalStatusResult } from '../client/tx/types';
 import { sessions, messages, botSessionLinks } from '../schema';
 import { clearSessionAttention } from '../../appBadgeService';
 import {
-  selectSessionListRows,
-  ordinaryTaskListFilter,
+  selectOrdinarySessionListRows,
+  touchUserSendRow,
   selectSessionWithCount,
   selectSessionsByIds,
   flattenSessionReadRow,
@@ -81,7 +84,7 @@ import {
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
 import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
-import * as imageCacheStore from '../../imageCacheStore';
+import * as imageCacheStore from '../../imageCacheStore.desktop';
 import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
 import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/shared/inboundFileStaging';
 import { upsertRecentWorkdir } from './recentWorkdirs';
@@ -115,7 +118,7 @@ import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
 import { ensureSessionFlagRegistryLoaded, noteSessionNotificationsMuted } from '../sessionFlagRegistry.js';
 import { recoverGeneratedImagesForHistory } from '../../cindy-media/generatedImageRecovery';
-import { noteSessionClearBoundary } from '../../messagePersistBroadcaster';
+import { noteSessionClearBoundary } from '../../messagePersistBroadcaster.desktop';
 import {
   ackSessionTurnEndedDurable,
   ackSessionTurnEndedIfUnchanged,
@@ -352,19 +355,6 @@ async function readSessionWorktreeResources(
   }
 }
 
-async function withWorktreeMutation<T>(resources: string[], task: () => Promise<T>): Promise<T> {
-  try {
-    return await withWorktreeResourceLocks(resources, task);
-  } catch (error) {
-    const code = (error as { code?: string })?.code;
-    if (code && error instanceof Error && error.message.startsWith(`[${code}]`)) throw error;
-    log.warn('worktree mutation postponed', { code: code ?? 'unavailable' });
-    throwIpcError(
-      'PRECONDITION_FAILED',
-      'Worktree is busy or its recovery record could not be saved',
-    );
-  }
-}
 
 async function writeSessionPatch(
   db: DbClient['drizzle'],
@@ -1031,87 +1021,7 @@ export function createSessionRemoteHostIdReader(): (sessionId: string) => Promis
   };
 }
 
-export interface SessionRowSnapshot {
-  status: string;
-  /** Bound schedule cold resumes preserve the owner's permission choice. */
-  permissionMode?: string | null;
-  planModeEnabled?: boolean | null;
-  title: string | null;
-  userSendAt: number | null;
-  workingDir: string | null;
-  projectDir?: string | null;
-  workspaceKind: string | null;
-  providerId: string | null;
-  /** Hook exact-takeover must reject SSH-owned sessions. */
-  remoteHostId?: string | null;
-  /** 远程 Agent 所在电脑(null = 本机);限额自动继续据此不拿本机账号快照推算。 */
-  agentDeviceId?: string | null;
-  /** Hook exact-takeover must reject internal Orca worker sessions. */
-  orcaRole?: 'lead' | 'worker' | null;
-  /** 协同远端 Worker 标记(raw JSON);非空时不能再开启协同。 */
-  orcaRemoteLead?: string | null;
-  /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
-  agentKind?: string | null;
-  /** 会话来源(`bot` = 伙伴会话);限额自动继续据此排除伙伴。 */
-  source?: string | null;
-  /** 会话当前模型;限额判定据此只看该模型的额度窗口。 */
-  model?: string | null;
-  /** Authoritative `/clear` visibility boundary (unix ms). */
-  clearedAt?: number | null;
-}
-
-async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot | null> {
-  const db = getDbClient().drizzle;
-  const [row] = await db
-    .select({
-      status: sessions.status,
-      permissionMode: sessions.permissionMode,
-      planModeEnabled: sessions.planModeEnabled,
-      title: sessions.title,
-      userSendAt: sessions.userSendAt,
-      workingDir: sessions.workingDir,
-      projectDir: sessions.projectDir,
-      workspaceKind: sessions.workspaceKind,
-      // heartbeat 任务 providerId 留空时,沿用绑定会话在聊天里选的来源(与 model
-      // 留空沿用 meta.model 对称)。零新增查询,复用 runner 已并行取的这行快照。
-      providerId: sessions.providerId,
-      clearedAt: sessions.clearedAt,
-      remoteHostId: sessions.remoteHostId,
-      agentDeviceId: sessions.agentDeviceId,
-      orcaRole: sessions.orcaRole,
-      orcaRemoteLead: sessions.orcaRemoteLead,
-      agentKind: sessions.agentKind,
-      source: sessions.source,
-      model: sessions.model,
-    })
-    .from(sessions)
-    .where(eq(sessions.id, id))
-    .limit(1);
-  return row ?? null;
-}
-
-/**
- * 严格读取发送前的 session 行。
- *
- * 远控输入必须区分「明确不存在」和「数据库暂时不可读」：前者是可恢复之外的
- * 终态拒绝,后者则应让 renderer 保留草稿并稍后重试。普通 scheduler / 展示路径
- * 继续使用下面的 swallow 版本,避免扩大既有错误语义。
- */
-export async function getSessionRowSnapshotStrict(id: string): Promise<SessionRowSnapshot | null> {
-  return selectSessionRowSnapshot(id);
-}
-
-export async function getSessionRowSnapshot(id: string): Promise<SessionRowSnapshot | null> {
-  try {
-    return await selectSessionRowSnapshot(id);
-  } catch (err) {
-    log.warn('getSessionRowSnapshot failed', {
-      sessionId: id,
-      err: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
-}
+export { getSessionRowSnapshot, getSessionRowSnapshotStrict, type SessionRowSnapshot } from '../sessionDispatchSnapshot.js';
 
 /**
  * 按 session id 查 fs 槽(意识写文件)守门要看的会话快照:workdir 位置、
@@ -1119,33 +1029,7 @@ export async function getSessionRowSnapshot(id: string): Promise<SessionRowSnaps
  * 由它映射派生)、plan 开关、远程工作区标记。失败 swallow 返 null(调用方按
  * 「会话不存在」拒绝写入,不抛)。
  */
-export async function getSessionFsSnapshot(id: string): Promise<{
-  workingDir: string | null;
-  permissionMode: string;
-  planModeEnabled: boolean;
-  remoteHostId: string | null;
-} | null> {
-  try {
-    const db = getDbClient().drizzle;
-    const [row] = await db
-      .select({
-        workingDir: sessions.workingDir,
-        permissionMode: sessions.permissionMode,
-        planModeEnabled: sessions.planModeEnabled,
-        remoteHostId: sessions.remoteHostId,
-      })
-      .from(sessions)
-      .where(eq(sessions.id, id))
-      .limit(1);
-    return row ?? null;
-  } catch (err) {
-    log.warn('getSessionFsSnapshot failed', {
-      sessionId: id,
-      err: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
-}
+export { getSessionFsSnapshot } from '../sessionFsSnapshot.js';
 
 export async function touchSessionActivityInDb(
   id: string,
@@ -1199,30 +1083,7 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
   // WHERE 条件由 SQLite 行锁原子执行，消除竞态窗口。
   // updatedAt 用 MAX 防止 run 完成路径写入 finishedAt 后被更早的 firedAt 回退。
   // 保留 updatedAt 的既有写入；列表活动时间与真人发送时间在同一条 UPDATE 中推进。
-  const updated = await db
-    .update(sessions)
-    .set({
-      userSendAt: ts,
-      lastActivityAt: sql`MAX(COALESCE(${sessions.lastActivityAt}, 0), ${ts})`,
-      updatedAt: sql`MAX(${sessions.updatedAt}, ${ts})`,
-    })
-    .where(
-      and(
-        eq(sessions.id, id),
-        sql`(${sessions.userSendAt} IS NULL OR ${sessions.userSendAt} < ${ts})`,
-      ),
-    )
-    .returning({
-      userSendAt: sessions.userSendAt,
-      lastActivityAt: sessions.lastActivityAt,
-      updatedAt: sessions.updatedAt,
-      workingDir: sessions.workingDir,
-      projectDir: sessions.projectDir,
-      workspaceKind: sessions.workspaceKind,
-      remoteHostId: sessions.remoteHostId,
-      source: sessions.source,
-      orcaRole: sessions.orcaRole,
-    });
+  const updated = await touchUserSendRow(db, id, ts);
   if (updated.length === 0) return;
   // 广播 sessions:patched,让 renderer 把刚发过消息的会话从「草稿(未分类)」即时重归到
   // 项目分组下(projectGrouping 的草稿兜底:userSendAt==null && messages==0 → unclassified)。
@@ -1261,63 +1122,15 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
  * 未发送任务转为普通任务（第一次发送）：补做建任务时延后的副作用，并让控制端看到它。
  * 不是未发送任务时什么都不做。最近项目由随后的 touchUserSend 照常记录。
  */
-export async function commitProvisionalSession(sessionId: string): Promise<boolean> {
-  if (claimOwnedProvisionalSession(sessionId) !== 'owned') return false;
-  const db = getDbClient().drizzle;
-  const [row] = await db
-    .select({
-      workingDir: sessions.workingDir,
-      workspaceKind: sessions.workspaceKind,
-      remoteHostId: sessions.remoteHostId,
-    })
-    .from(sessions)
-    .where(eq(sessions.id, sessionId))
-    .limit(1);
-  if (!row) return false;
-  await ensureOpenedProjectGit({ id: sessionId, ...row }).catch((error) => {
-    log.warn('provisional session git bootstrap failed', {
-      sessionId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
-  // The account may have changed during the awaits: then it stays an unsent leftover of the
-  // old account (claim parks it) instead of becoming an ordinary task there.
-  if (claimOwnedProvisionalSession(sessionId) !== 'owned') return false;
-  forgetProvisionalSession(sessionId);
-  emitSessionCreated(sessionId);
-  void import('../../cindy-brain/index.js')
-    .then((m) =>
-      m.notifyGhostSessionEvent('created', {
-        sessionId,
-        ...(row.workingDir ? { workdir: row.workingDir } : {}),
-      }),
-    )
-    .catch(() => {});
-  log.info('provisional session committed', { sessionId });
-  return true;
-}
-
-/**
- * 删掉一个未发送任务（用户清空了新建页的输入）：仍未发送、没有消息时才真正删除行，
- * 顺带删掉为它新建、仍为空的对话目录，并通知本机窗口移除。调用方负责先关掉它的 Agent。
- */
-export async function discardProvisionalSessionRow(sessionId: string): Promise<boolean> {
-  if (claimOwnedProvisionalSession(sessionId) !== 'owned') return false;
-  const managedDir = provisionalManagedDir(sessionId);
-  const deleted = await deleteUnsentSessionRow(sessionId);
-  if (!deleted) {
-    // Already sent (or gone): it is an ordinary task now.
-    forgetProvisionalSession(sessionId);
-    return false;
-  }
-  removeEmptyDialogueDir(sessionId, managedDir);
-  forgetProvisionalSession(sessionId);
-  // Other local windows re-read their lists; the row is gone, so it drops out. No status
-  // patch: the same id may be opened again when the user types again.
-  emitSessionListChangedLocally(sessionId);
-  log.info('provisional session discarded', { sessionId });
-  return true;
-}
+const sessionDraftPorts = {
+  emitSessionCreated: (...args: Parameters<typeof emitSessionCreated>) => emitSessionCreated(...args),
+  emitSessionListChangedLocally: (...args: Parameters<typeof emitSessionListChangedLocally>) => emitSessionListChangedLocally(...args),
+  notifyPluginSessionCreated: (input: { sessionId: string; workdir?: string }) => {
+    void import('../../cindy-brain/index.js').then(m => m.notifyGhostSessionEvent('created', input)).catch(() => {});
+  },
+};
+export const commitProvisionalSession = (sessionId: string) => commitSessionDraft(sessionId, sessionDraftPorts);
+export const discardProvisionalSessionRow = (sessionId: string) => discardSessionDraft(sessionId, sessionDraftPorts);
 
 /** fork 出来的会话的占位标题前缀("[Fork] …" / "[Fork·已剥离] …")。 */
 const FORK_PLACEHOLDER_TITLE_PREFIX = '[Fork';
@@ -1614,29 +1427,9 @@ export function registerSessionIpc(
         status === 'active' || status === 'archived' ? status : null;
       const loadRows = async () => {
         if (ids?.length === 0) return [];
-        // 按 DESKTOP_VISIBLE_SESSION_SOURCES 白名单过滤 — 包含 IM 渠道
-        // (feishu/slack/discord)与本机自动化(scheduler/learn/shared);
-        // feishu 会话以「对话」分组展示(workspaceKind='dialogue')。/review 审查任务
-        // 只从来源任务的审查卡片打开,不进普通任务列表(用量历史仍包含)。
-        // 插件后台隐藏任务(hidden_at 非空)同样不进任务列表,只在插件详情页「后台任务」
-        // 查看与接手;手机/远控经 device-link 调同一 handler,口径一致。
-        const sourceFilter = ordinaryTaskListFilter();
-        const statusWhere = () =>
-          statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
-        const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere(), ids ? inArray(sessions.id, ids) : undefined), cap, before);
-
-        let mergedRows = rows;
-        if (includePinned) {
-          const pinnedRows = await selectSessionListRows(
-            db,
-            and(sourceFilter, statusWhere(), isNotNull(sessions.pinnedAt)),
-            null,
-          );
-          mergedRows = mergeSessionListRows(rows, pinnedRows);
-        }
-
-        scheduleSessionListProjectionBackfill(mergedRows);
-        return mergedRows.map((row) =>
+        const rows = await selectOrdinarySessionListRows(db, { cap, statusFilter, includePinned, before, ids });
+        scheduleSessionListProjectionBackfill(rows);
+        return rows.map((row) =>
           projectSessionReadResult(flattenSessionReadRow(row), opts.resolveContextWindow),
         );
       };
@@ -1701,161 +1494,13 @@ export function registerSessionIpc(
 
   ipcMain.handle('local-db:sessions:create', async (event, body) => {
     assertTrustedAppRendererEvent(event);
-    const db = getDbClient().drizzle;
-    const now = Date.now();
-    const bodyObj = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
-    const id = resolveBusinessSessionId(bodyObj.id);
-    // 未发送任务（新建页开始输入时先建出来，见 provisionalSessions.ts）：只给本机普通任务，
-    // 延后的创建副作用在第一次发送转正时补做。
-    const { provisional: provisionalFlag, ...bodyWithoutProvisional } = bodyObj;
-    const provisional = provisionalFlag === true;
-    if (provisional && (
-      bodyObj.remoteHostId || bodyObj.agentDeviceId || bodyObj.orcaRole || bodyObj.source !== undefined
-      || (Array.isArray(bodyObj.writableDirs) && bodyObj.writableDirs.length > 0)
-    )) {
-      throwIpcError('INVALID_PARAMS', 'only ordinary local tasks can be opened before the first send');
-    }
-    const createBody = bodyWithoutProvisional as Parameters<typeof sessionCreateToRow>[1];
-    // M16: agentKind 白名单校验（防止 renderer 传非法值）
-    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi']);
-    if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
-      throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
-    }
-    if (
-      bodyObj.title !== undefined &&
-      (typeof bodyObj.title !== 'string' || bodyObj.title.length > 200)
-    ) {
-      throwIpcError('INVALID_PARAMS', 'title must be a string no longer than 200 characters');
-    }
-    const ALLOWED_WORKSPACE_KINDS = new Set<string>(['project', 'dialogue']);
-    if (
-      bodyObj.workspaceKind !== undefined &&
-      !ALLOWED_WORKSPACE_KINDS.has(bodyObj.workspaceKind as string)
-    ) {
-      throwIpcError('INVALID_PARAMS', `invalid workspaceKind: ${String(bodyObj.workspaceKind)}`);
-    }
-    const ALLOWED_ORCA_ROLES = new Set<string>(['lead', 'worker']);
-    if (
-      bodyObj.orcaRole !== undefined &&
-      bodyObj.orcaRole !== null &&
-      !ALLOWED_ORCA_ROLES.has(bodyObj.orcaRole as string)
-    ) {
-      throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(bodyObj.orcaRole)}`);
-    }
-    // Agent 在同账号另一台电脑运行：只接受设备 id 形态的值(与 maker:create-session 同一规则)。
-    if (
-      bodyObj.agentDeviceId !== undefined &&
-      bodyObj.agentDeviceId !== null &&
-      (typeof bodyObj.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(bodyObj.agentDeviceId))
-    ) {
-      throwIpcError('INVALID_PARAMS', 'agentDeviceId must be a device id');
-    }
-    const workspaceKind =
-      (createBody?.workspaceKind as 'project' | 'dialogue' | undefined) ?? 'project';
-    const explicitWorkingDir =
-      normalizeWorkingDirForStorage(
-        typeof createBody?.workingDir === 'string' ? createBody.workingDir : null,
-      ) ?? undefined;
-    assertRendererSessionSourceAllowed({
-      source: bodyObj.source,
-      workingDir: explicitWorkingDir,
-      remoteHostId: createBody?.remoteHostId,
-      userData: app.getPath('userData'),
+    return createUserSession(body, {
+      senderId: event.sender.id,
+      userDataDir: app.getPath('userData'),
+      notifyPluginSessionCreated: (input) => {
+        void import('../../cindy-brain/index.js').then(m => m.notifyGhostSessionEvent('created', input)).catch(() => {});
+      },
     });
-    const workingDir =
-      workspaceKind === 'dialogue' && !explicitWorkingDir
-        ? ensureDialogueWorkspaceDir(id, now)
-        : explicitWorkingDir;
-    if (workspaceKind === 'dialogue' && !explicitWorkingDir) {
-      log.info('[localDb] allocated dialogue workspace', { sessionId: id, workingDir });
-    }
-    const requestedWritableDirs = createBody?.writableDirs ?? [];
-    if (
-      !Array.isArray(requestedWritableDirs) ||
-      !requestedWritableDirs.every((dir) => typeof dir === 'string')
-    ) {
-      throwIpcError('INVALID_PARAMS', 'writableDirs must be string[]');
-    }
-    const requestedRemoteHostId = normalizeRemoteHostId(createBody?.remoteHostId);
-    if (requestedRemoteHostId && requestedWritableDirs.length > 0) {
-      throwIpcError(
-        'PRECONDITION_FAILED',
-        'remote writable directories can only be revoked from an existing task',
-      );
-    }
-    if (!requestedRemoteHostId && requestedWritableDirs.length > 0) {
-      try {
-        await consumeWritableDirectoryPickerGrants({
-          scopeId: id,
-          senderId: event.sender.id,
-          requestedDirs: requestedWritableDirs,
-          previousDirs: [],
-        });
-      } catch (error) {
-        throwIpcError(
-          error instanceof WritableDirectoryPickerGrantError ? error.code : 'PRECONDITION_FAILED',
-          error instanceof Error ? error.message : 'Writable directory authorization failed',
-        );
-      }
-    }
-    // 未发送任务在写入之前就登记：行一出现，任务列表 / 控制端 / IM / hook 的过滤就已生效。
-    const markedProvisional = provisional && !isProvisionalSession(id);
-    if (markedProvisional) {
-      // Only a dialogue folder allocated here is ours to tidy up if the task is discarded.
-      const managedDir = workspaceKind === 'dialogue' && !explicitWorkingDir ? workingDir : undefined;
-      markProvisionalSession(id, now, managedDir);
-    }
-    let insertRow: Awaited<ReturnType<typeof openSession>>['row'];
-    let row: typeof sessions.$inferSelect | undefined;
-    try {
-      ({ row: insertRow } = await openSession({ id, now,
-        body: { ...createBody, workspaceKind, workingDir },
-        ...(provisional ? { deferGitInit: true } : {}),
-      }, async (prepared, assertCurrent) => {
-        const resource = !prepared.remoteHostId && prepared.workingDir
-          ? managedWorktreeRoot(prepared.workingDir) : null;
-        const insert = async () => { assertCurrent(); await db.insert(sessions).values(prepared); };
-        if (resource) await withWorktreeMutation([resource], insert);
-        else await insert();
-      }));
-      [row] = await db.select().from(sessions).where(eq(sessions.id, id));
-    } catch (error) {
-      if (markedProvisional) forgetProvisionalSession(id);
-      throw error;
-    }
-    if (!row) throwIpcError('NOT_FOUND', 'Session 创建后查询失败');
-    if (provisional) {
-      log.info('provisional session opened', { sessionId: id, workspaceKind: insertRow.workspaceKind });
-      return sessionToCamel({ ...row, messageCount: 0 });
-    }
-    // recent-workdirs: 项目目录走 sidebar 分组,要进"最近"列表;dialogue 目录是
-    // app-managed 临时 cwd,跟用户选过的项目目录语义不同,不污染最近列表。
-    // 失败仅日志,不阻断创建流程。
-    //
-    // remote 项目排除:recent_workdirs 表只有 path 主键、无 host 维度,若把 remote
-    // 路径写进去,后续 New Maker 项目下拉选中它时会丢失 host、按本机路径创建出一个
-    // 错误的本地会话(指向本机不存在的同名目录)。在 host-aware 最近项目(给该表加
-    // remote_host_id 列 + picker 区分 local/remote)落地前,remote 项目一律不进最近列表。
-    if (
-      insertRow.workspaceKind === 'project' &&
-      insertRow.workingDir &&
-      !insertRow.remoteHostId &&
-      isRetainableProjectSession(insertRow)
-    ) {
-      void upsertRecentWorkdir(insertRow.projectDir ?? insertRow.workingDir, now);
-    }
-    // 订阅槽①旁路通知(fire-and-forget,动态 import 防环):意识旁听会话创建。
-    // 资格过滤(用户主会话)与订阅者快路径都在 cindy-brain 内部,这里零判断。
-    void import('../../cindy-brain/index.js')
-      .then((m) =>
-        m.notifyGhostSessionEvent('created', {
-          sessionId: id,
-          ...(row.workingDir ? { workdir: row.workingDir } : {}),
-        }),
-      )
-      .catch(() => {});
-    // 新建 session 必然无 message，直接拼 0，免一次 join。
-    return sessionToCamel({ ...row, messageCount: 0 });
   });
 
   // interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。
@@ -3065,16 +2710,18 @@ export async function deleteBotProfileAndDetachSessionsInDb(
   botId: string,
   sessionIds: string[],
   keepTaskHistory: boolean,
+  projectSessionIds: string[] = [],
 ): Promise<void> {
-  const ids = [...new Set(sessionIds)];
+  const ids = [...new Set([...sessionIds, ...projectSessionIds])];
   const ownerScope = captureOwnerScope();
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
   const commitDeletion = () =>
     commitBotProfileDeletion({
       botId,
-      sessionIds: ids,
+      sessionIds: [...new Set(sessionIds)],
       keepTaskHistory,
+      projectSessionIds,
     });
   const prepared: SharedTaskClosurePreparation[] = [];
   let committedStatus = false;
@@ -3528,24 +3175,6 @@ function shouldUseUsageHistoryQuery(options: unknown): boolean {
   );
 }
 
-function mergeSessionListRows<T extends { session: { id: string } }>(
-  recentRows: readonly T[],
-  pinnedRows: readonly T[],
-): T[] {
-  const seen = new Set<string>();
-  const merged: T[] = [];
-  for (const row of recentRows) {
-    seen.add(row.session.id);
-    merged.push(row);
-  }
-  for (const row of pinnedRows) {
-    if (seen.has(row.session.id)) continue;
-    seen.add(row.session.id);
-    merged.push(row);
-  }
-  return merged;
-}
-
 /**
  * worktree-parallel-sessions: 把 sessions.worktree_path 同步到 DB（反范式快照）。
  * source of truth 是 worktreeStore（electron-store）；DB 字段仅为 sidebar 渲染优化。
@@ -3603,7 +3232,7 @@ export async function setSessionProviderIdInDb(
 /** Persist the provider-facing source for a newly-created shared IM session. */
 export async function setSessionSourceInDb(
   sessionId: string,
-  source: 'telegram' | 'x',
+  source: 'telegram' | 'x' | 'feishu',
 ): Promise<void> {
   try {
     const db = getDbClient().drizzle;

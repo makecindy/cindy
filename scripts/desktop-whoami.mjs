@@ -142,7 +142,8 @@ function repositoryWorktrees(cwd = rootDir) {
 }
 
 function extractArgumentPath(command, name) {
-  const match = command.match(new RegExp(`--${name}=(.*?)(?=\\s--[A-Za-z0-9-]+=|\\s--[A-Za-z0-9-]+\\s|$)`));
+  // Windows Crashpad puts /prefetch:N between the profile path and --switches.
+  const match = command.match(new RegExp(`--${name}=(.*?)(?=\\s--[A-Za-z0-9-]+=|\\s--[A-Za-z0-9-]+\\s|\\s/prefetch:\\d+(?:\\s|$)|$)`));
   return match?.[1]?.replace(/^['"]|['"]$/g, '') ?? null;
 }
 

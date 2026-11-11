@@ -23,6 +23,8 @@
  */
 
 import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
+import { claudeProfileSessionStore } from './profile-session-store.js';
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -76,6 +78,7 @@ import {
   type RefreshLocalModelsOptions,
   type SendOptions,
   type TurnPermissionPolicy,
+  isolatedBotProfile,
 } from '../base-agent.js';
 import { preparePinnedClaudeSkillInvocation } from './pinned-skill-invocation.js';
 import { isBotMcpServerAllowed } from '../shared/bot-runtime-policy.js';
@@ -140,6 +143,7 @@ import {
   workspaceSettingsOverrideMessage,
 } from './workspace-settings-guard.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
+import { materializeClaudeFlagSettings } from './flag-settings-file.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
   buildClaudeDisallowedTools,
@@ -161,6 +165,8 @@ import {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
+  createAutoReviewAgentTextTracker,
+  isAutoReviewNewUserInput,
   type AutoReviewUserIntent,
   isAutoReviewUnavailableMetadata,
   isSystemPermissionDenialReason,
@@ -182,6 +188,7 @@ import { normalizeClaudeSessionJsonlToolIds } from './jsonl-tool-id-normalize.js
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
 import { resetClaudeGenerationTiming } from './generation-timing.js';
+import { classifyBackgroundCommand, type BackgroundCommandKind } from './background-command-kind.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
 import { clampEffortToSupported } from '@cindy/model-providers/effort-resolution';
 import type {
@@ -222,6 +229,7 @@ import {
   DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS,
   DEVICE_HOSTED_EXEC_MCP_SERVER,
   DEVICE_HOSTED_GUEST_CLAUDE_TOOLS,
+  DEVICE_HOSTED_MCP_TIMEOUT_MS,
   deviceHostedBuiltinToolName,
   deviceHostedClaudeNote,
   deviceHostedGhostRoster,
@@ -873,19 +881,19 @@ export function setClaudeSupportedModelsListener(
  * 5h / 7d 余量改由 CLI 自己上报的 SDK `rate_limit_event` 提供。只对本机订阅会话
  * (nativeCliAuth)转发;listener 抛错不影响会话。
  */
-let rateLimitInfoListener: ((info: unknown) => void) | null = null;
+let rateLimitInfoListener: ((info: unknown, account?: NativeSubscriptionAccount) => void) | null = null;
 
 /** host 注入订阅会话 rate_limit_event 捕获回调;传 null 解除。 */
-export function setClaudeRateLimitInfoListener(listener: ((info: unknown) => void) | null): void {
+export function setClaudeRateLimitInfoListener(listener: ((info: unknown, account?: NativeSubscriptionAccount) => void) | null): void {
   rateLimitInfoListener = listener;
 }
 
-function notifyRateLimitInfo(rawMsg: unknown): void {
+function notifyRateLimitInfo(rawMsg: unknown, account?: NativeSubscriptionAccount): void {
   if (!rateLimitInfoListener) return;
   const info = (rawMsg as { rate_limit_info?: unknown } | null)?.rate_limit_info;
   if (!info || typeof info !== 'object') return;
   try {
-    rateLimitInfoListener(info);
+    rateLimitInfoListener(info, account);
   } catch {
     /* listener 异常不得打断事件循环 */
   }
@@ -1073,6 +1081,8 @@ export class ClaudeCodeAgent extends BaseAgent {
    * 未登录订阅、无接收方、项目设置被改写或探测任一阶段失败时返回 false,不抛错。
    */
   override async refreshLocalModels(options?: RefreshLocalModelsOptions): Promise<boolean> {
+    const nativeSubscriptionAccount = options?.[NATIVE_SUBSCRIPTION_ACCOUNT];
+    nativeSubscriptionAccount?.assertCurrent();
     const deliver = options?.onSupportedModels ?? supportedModelsListener;
     if (!deliver) return false;
     const log = this.deps.logger.child('claude-code/supportedModels');
@@ -1083,7 +1093,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const idleInput = createAsyncQueue<never>();
     try {
       // oauth-bearer 形态下 auth adapter 只按本机 Claude Code 订阅登录作答。
-      const authState = await this.deps.auth.getState({ credentialMode: 'oauth-bearer' });
+      const authState = await this.deps.auth.getState({ credentialMode: 'oauth-bearer', nativeSubscriptionAccount });
       if (!authState.authenticated) return false;
       // 独立的新建空目录:不继承共享临时目录里可能存在的项目级设置;仍按订阅会话同一
       // 规则检查,能改写上游 / 鉴权 / TLS 的设置一律拒绝。
@@ -1095,6 +1105,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
         credentialMode: 'oauth-bearer',
+        nativeSubscriptionAccount,
         nativeCliAuth: true,
         subagentModel: null,
       });
@@ -1461,7 +1472,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(credentialMode !== 'gateway-key' && opts.providerId ? { providerId: opts.providerId } : {}),
         }
       : { model: opts.model };
-    const authState = await this.deps.auth.getState(authOptions);
+    const nativeSubscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
+    nativeSubscriptionAccount?.assertCurrent();
+    const authState = await this.deps.auth.getState({ ...authOptions, nativeSubscriptionAccount });
     if (!authState.authenticated) {
       throw new AgentNotAuthenticatedError(
         'claude-code',
@@ -1549,6 +1562,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     const companionEnvironment = opts.botRuntimeProfile && !opts.remoteHostId && opts.sessionId
       ? await this.deps.resolveSessionEnvironment?.(opts.sessionId) : undefined;
     const env = await buildClaudeEnv(this.deps.auth, this.deps.runtimeConfig, {
+      nativeSubscriptionAccount,
       credentialMode,
       nativeCliAuth,
       authModel: opts.model,
@@ -1675,6 +1689,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       ? `${DEVICE_HOSTED_GUEST_ROUTE_HEADER}: ${guestProvider.routeToken}`
       : undefined;
     if (guestProvider) env.ANTHROPIC_SMALL_FAST_MODEL = sdkModel;
+    // 设备托管的 Cindy 工具都经隧道连回任务所在电脑：链路慢时也要等它们连上(见常量说明)。
+    // 用户自己设过 MCP_TIMEOUT 时以用户为准。
+    if (hosted && !env.MCP_TIMEOUT) env.MCP_TIMEOUT = String(DEVICE_HOSTED_MCP_TIMEOUT_MS);
     // Input handoff askpass for this owner's own local tasks only.
     if (!opts.remoteHostId && !hosted && !reviewMode && opts.sessionId) {
       Object.assign(env, this.deps.runtimeConfig.taskShellEnv?.({ sessionId: opts.sessionId }));
@@ -1727,12 +1744,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     }
     // A Bot has its own Profile prompt. The Cindy host identity/custom prompt
     // belongs to ordinary Sessions and must not be layered into every Bot.
-    const hostSystemPrompt = opts.botRuntimeProfile
+    const hostSystemPrompt = isolatedBotProfile(opts.botRuntimeProfile)
       ? undefined
       : this.deps.runtimeConfig.systemPrompt;
     // 设备托管(含受邀者)用任务所在电脑给的花名册：插件工具在那台，本机装的插件不进这个任务。
     const localGhostRoster = () => this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
-    const ghostRosterPrompt = opts.remoteHostId || reviewMode || opts.botRuntimeProfile
+    const ghostRosterPrompt = opts.remoteHostId || reviewMode || isolatedBotProfile(opts.botRuntimeProfile)
       ? ''
       : hosted
         ? deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, localGhostRoster)
@@ -1971,7 +1988,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 不可序列化, 这里跳过, 由 host 的 remoteCcQueryFactory 按同一 flag 以
         // http 形态经 bridge 注入 (见 cc-remote-mcp.ts)。
         if (provider.name === 'cindy_memory' && (!makerMemoryEnabled || opts.remoteHostId)) continue;
-        if (!isBotMcpServerAllowed(opts.botRuntimeProfile?.mcpPolicy, provider.name)) continue;
+        if (!isBotMcpServerAllowed(isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy, provider.name)) continue;
         if (provider.isEnabled && !provider.isEnabled(context)) continue;
         // 同名 provider 先注册者胜 —— host 把用户自定义 MCP **追加**在内置之后, 后写
         // 覆盖会让一个 id 取名 `cindy_browser` 的自定义远程端点顶替内置 server:
@@ -2678,6 +2695,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           hosted ? hosted.platform : opts.remoteHostId ? 'linux' : process.platform,
           mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt,
           reviewPermissionMode !== 'auto',
+          // A subagent's call must not borrow the main agent's explanation.
+          { toolDescription: (input as { description?: unknown } | null)?.description, mainScope: !options.agentID },
         );
         // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)
         // 或放宽(→Full)。必须按**最新**档位决策,否则进入审查前的旧 auto 档 allow 会绕过用户
@@ -2901,17 +2920,28 @@ export class ClaudeCodeAgent extends BaseAgent {
         : undefined;
     };
 
+    // API connections own their output limit; native Claude subscriptions retain
+    // the CLI's model defaults. Do not read the flattened, cross-provider catalog.
+    const resolveMaxOutputTokens = (model: string, providerId = mutableProviderId): number | null => {
+      if (effectiveCredentialMode === 'oauth-bearer') return null;
+      const value = this.deps.resolveModelMaxOutputTokens?.(providerId, model);
+      return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
+    };
+    const originalOutputTokenEnv = env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+    const originalRemoteOutputTokenEnv = remoteEnv?.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+    let appliedMaxOutputTokens: number | null = null;
+
     // SDK settings 对象 (优先级最高, 覆盖 user/project/local 文件层) — 本地分支
     // 和远端分支必须**保持一致** , 否则同 session setting 跨本地 / 远端表现不同
     // (eg. summarized reasoning UI 本地有 remote 没)。getter 让 memOverride /
     // mutableFastMode 读最新值 (setMemory / setFastMode 运行时改) 而不是 buildQuery
     // 时快照。装配逻辑(含 apiKeyHelper 恒置空的鉴权防线)在 flag-settings.ts。
-    const managedSkillGrants = snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy);
+    const managedSkillGrants = snapshotManagedSkillGrants(isolatedBotProfile(opts.botRuntimeProfile)?.skillPolicy);
     // 受邀者(另一个账号)的托管会话不读本机用户的技能偏好。
     const launchDisabledSkillPaths = opts.remoteHostId || reviewMode || hosted?.guest
       ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
     const managedDisabledSkillLaunch = snapshotDisabledSkillLaunch(launchDisabledSkillPaths);
-    const disabledSkillPaths = opts.botRuntimeProfile ? [] : launchDisabledSkillPaths;
+    const disabledSkillPaths = isolatedBotProfile(opts.botRuntimeProfile) ? [] : launchDisabledSkillPaths;
     const disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
     const disabledSkillSnapshot = disabledSkillLaunch.identities;
     const disabledSkillOverrides = disabledSkillPaths.length > 0
@@ -2930,15 +2960,20 @@ export class ClaudeCodeAgent extends BaseAgent {
         // configuration. Maker Memory on remote sessions is injected via the
         // host bridge (prompt + http MCP), which coexists with — but does not
         // rewrite — the remote machine's native memory settings.
-        memoryOverride: reviewMode || opts.botRuntimeProfile ? false : opts.remoteHostId ? undefined : this.memoryOverride,
+        memoryOverride: reviewMode || isolatedBotProfile(opts.botRuntimeProfile) ? false : opts.remoteHostId ? undefined : this.memoryOverride,
         // Fast 模式:进 flag settings 层(= --settings),解锁 cc 二进制在 Agent SDK 通道下的
         // fast(否则二进制按 "Agent SDK 不可用" 拒绝)。是否 Opus/官方/firstParty 由二进制把关,
         // agent 层不重复硬判(规则 9:确定性逻辑就近,但 fast 的最终门槛是二进制 + 配置门控)。
         fastMode: opts.fastModePolicy?.isAllowed() === false ? false : mutableFastMode,
         fastModeAllowed: opts.fastModePolicy?.isRequestAllowed?.() ?? opts.fastModePolicy?.isAllowed(),
-        botSkillPolicy: reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
+        botSkillPolicy: reviewMode ? undefined : isolatedBotProfile(opts.botRuntimeProfile)?.skillPolicy,
         capabilityRouting: reviewMode ? undefined : capabilityRouting,
       });
+      if (appliedMaxOutputTokens !== null) {
+        // --settings wins over settings.json.env without changing that file.
+        // Process env alone can be overwritten by the user's global settings.
+        settings.env = { ...settings.env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(appliedMaxOutputTokens) };
+      }
       if (duplicateMcpChoices.denyNativeServers.length) {
         settings.deniedMcpServers = [...(settings.deniedMcpServers ?? []),
           ...duplicateMcpChoices.denyNativeServers.map(serverName => ({ serverName }))];
@@ -2957,10 +2992,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         settings.disableSkillShellExecution = true;
         const excludes = deviceHostedGuestClaudeMdExcludes(hosted);
         if (excludes.length > 0) settings.claudeMdExcludes = [...(settings.claudeMdExcludes ?? []), ...excludes];
-        // 路由令牌请求头在最高优先级的设置层再写一次：会话中途出现的项目设置不能把它改掉。
-        if (guestRouteHeader && env.ANTHROPIC_CUSTOM_HEADERS) {
-          settings.env = { ...settings.env, ANTHROPIC_CUSTOM_HEADERS: env.ANTHROPIC_CUSTOM_HEADERS };
-        }
+        // 路由令牌只走子进程 env.ANTHROPIC_CUSTOM_HEADERS（上方 guestRouteHeader 的唯一写入点，
+        // SDK 把 options.env 当 CLI 进程环境）。不写进 settings：flag settings 超过命令行上限时
+        // 会整份序列化落盘，明文令牌不能进那份文件。会话中途的项目设置也改不掉它：
+        // 受邀者不走订阅直连，env 里有 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST，CLI 会从所有
+        // settings 来源的 env 里剥掉 ANTHROPIC_CUSTOM_HEADERS（见 env-builder 第三道防线）。
       }
       if (!reviewMode) return settings;
       return {
@@ -2997,6 +3033,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     let currentAutoReviewIntent: AutoReviewUserIntent = '';
     let autoReviewIntentInitialized = false;
     const autoReviewActionContext = createAutoReviewActionContext();
+    const autoReviewAgentText = createAutoReviewAgentTextTracker();
     const autoReviewContext = () => activeTurnPermissionPolicy?.autoReviewContext
       ?? (activeTurnPermissionPolicy?.origin.kind === 'im'
         ? { requesterAuthority: 'unknown' as const, source: 'direct' as const }
@@ -3020,8 +3057,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       // bypasses canUseTool. Use the scope frozen into the active Query: after revoke,
       // that Query still carries its broader directory allowlist.
       && !activeQueryHasDirectoryGrants;
-    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
+    // A synthetic continuation is not new user input, so it must not move the reply the user answered.
+    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }, newUserInput = true): void => {
       autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
+      if (newUserInput) autoReviewAgentText.beginUserInput();
       currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
       autoReviewIntentInitialized = true;
       currentAutoReviewAuthority = source.authority && { ...source.authority };
@@ -3065,8 +3104,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       platform: NodeJS.Platform,
       hostAutoApprove = false,
       hostShortcutOnly = false,
+      purpose: { toolDescription?: unknown; mainScope?: boolean } = {},
     ): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
+      const agentContext = autoReviewAgentText.snapshot(purpose.toolDescription, purpose.mainScope ?? true);
       const request = {
         sessionId: opts.sessionId,
         agentKind: 'claude-code' as const,
@@ -3074,6 +3115,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         model: mutableModel,
         userIntent: currentAutoReviewIntent,
         precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
+        ...(agentContext ? { agentContext } : {}),
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots,
@@ -3233,11 +3275,24 @@ export class ClaudeCodeAgent extends BaseAgent {
     let activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
     let activeQueryReadonlyDirs = [...mutableExtraDirs];
     let extraDirsRebuildAttempted = false;
-    // 本机热切跨过 Explore inherit-cap 策略后,子进程 env 必须随 Query 重建。
+    // 本机热切改变输出上限或 Explore inherit-cap 后,子进程 env 必须随 Query 重建。
     // 代际与 extraDirs 同款:setModel 只加代,buildQuery 才把当前 Query 标成已吃进
     // 该代。await buildQuery 期间再切一次不会被这次 spawn 误标成已同步。
-    let exploreInheritCapEnvGeneration = 0;
-    let activeQueryExploreInheritCapGeneration = exploreInheritCapEnvGeneration;
+    let modelEnvGeneration = 0;
+    let activeQueryModelEnvGeneration = modelEnvGeneration;
+    const applyModelOutputEnv = (): number => {
+      // MCP / transcript / skill preparation can await while a blocked setter
+      // changes the route. Resolve at spawn, and acknowledge only this snapshot.
+      const generation = modelEnvGeneration;
+      appliedMaxOutputTokens = resolveMaxOutputTokens(mutableModel);
+      for (const [targetEnv, fallback] of [[env, originalOutputTokenEnv], [remoteEnv, originalRemoteOutputTokenEnv]] as const) {
+        if (!targetEnv) continue;
+        const value = appliedMaxOutputTokens === null ? fallback : String(appliedMaxOutputTokens);
+        if (value === undefined) delete targetEnv.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+        else targetEnv.CLAUDE_CODE_MAX_OUTPUT_TOKENS = value;
+      }
+      return generation;
+    };
     // 拷贝进工作目录只允许作 Claude resume 不吃新 additionalDirectories 时的临时缺口。
     // 默认关闭;启用条件:extraDirsRebuildAttempted 且下一 Query 代际仍落后。落地后
     // library extraDirs 重建成功即删副本,不得把拷贝写成架构。
@@ -3695,6 +3750,19 @@ export class ClaudeCodeAgent extends BaseAgent {
     // /clear 等价于开新 session → 重建 handle → 状态自然清零, 无需额外重置。
     const oneShotTipState: OneShotState = { displayed: new Map(), pity: new Map() };
 
+    // 模型白名单过长时, 本地 flag settings 落到这份临时文件, 避免 `--settings`
+    // 内联 JSON 撑破 Windows 命令行上限 (spawn ENAMETOOLONG, #9753)。短设置不建
+    // 文件。声明在 buildQuery 之外, 让 handle.close 也能删掉它。
+    let flagSettingsFile: { kind: 'file'; settingsPath: string; dispose: () => Promise<void> } | null = null;
+    const releaseFlagSettingsFile = () => {
+      const current = flagSettingsFile;
+      if (!current) return;
+      flagSettingsFile = null;
+      void current.dispose().catch((error) => {
+        log.warn('claude flag settings file cleanup failed', { error: String(error) });
+      });
+    };
+
     // ── sdkQuery 装配 (可被 rewind 重复调用) ──────────────────────────────────
     // 三件套 (resume + resumeSessionAt + forkSession) 通过 extra 注入。
     // startSession 首次调 buildQuery() 不传 extra, 走 vendorOptions.resumeSessionAt /
@@ -3721,7 +3789,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const finalResumeAt = extra?.fresh ? undefined : (extra?.resumeSessionAt ?? baseResumeAt);
       const finalFork = extra?.fresh ? false : (extra?.forkSession ?? baseFork);
       duplicateMcpChoices = { skipHostServers: [], denyNativeServers: [] };
-      if (!reviewMode && !opts.botRuntimeProfile && !opts.remoteHostId && !hosted && !opts[LOCAL_AGENT_CLIENT]) {
+      if (!reviewMode && !isolatedBotProfile(opts.botRuntimeProfile) && !opts.remoteHostId && !hosted && !opts[LOCAL_AGENT_CLIENT]) {
         try {
           duplicateMcpChoices = await this.deps.resolveLocalMcpDuplicateChoices?.({ workingDir: opts.workingDir, env })
             ?? duplicateMcpChoices;
@@ -3864,6 +3932,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
         ];
 
+        activeQueryModelEnvGeneration = applyModelOutputEnv();
         const startParams: Record<string, unknown> = {
           cwd: opts.workingDir,
           model: currentSdkModel,
@@ -3896,7 +3965,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               botProfileContextPrompt:
                 reviewMode ? undefined : opts.botProfileContextPrompt,
               botUserProfilePrompt: reviewMode ? undefined : opts.botUserProfilePrompt,
-              userPrompt: reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt,
+              userPrompt: reviewMode || isolatedBotProfile(opts.botRuntimeProfile) ? undefined : opts.userPrompt,
               ...(hosted ? { deviceHostedNote: deviceHostedClaudeNote(hosted, opts.workingDir) } : {}),
             });
             return {
@@ -3923,7 +3992,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // options (cc-mgr.ts:106), 所以 extraOptions 是任意 SDK 字段的统一透传出口。
           extraOptions: {
             includePartialMessages: true,
-            ...(opts.botRuntimeProfile ? { strictMcpConfig: true } : {}),
+            ...(isolatedBotProfile(opts.botRuntimeProfile) ? { strictMcpConfig: true } : {}),
             ...thinkingOpts,
             ...(currentSdkEffort ? { effort: currentSdkEffort } : {}),
             // settings 对象跟本地分支同源 — 不透传则远端 SDK 拿不到
@@ -3933,7 +4002,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 上的 ~/.claude / 项目 .claude / cwd-local 三层 settings 文件 (slash
             // commands / output styles / hooks / per-project model 等)。不透传
             // SDK 默认不读, 远端会丢用户配置, 跟本地行为分歧。
-            settingSources: reviewMode || !!opts.botRuntimeProfile
+            settingSources: reviewMode || !!isolatedBotProfile(opts.botRuntimeProfile)
               ? []
               : ['user', 'project', 'local'],
           },
@@ -4133,6 +4202,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 'linux',
                 remoteMcpPolicy === 'auto-approve' && !remoteTurnPolicyForcePrompt,
                 reviewPermissionMode !== 'auto',
+                { toolDescription: (params.input as { description?: unknown } | undefined)?.description, mainScope: !params.metadata?.agentID },
               );
               const modeAfterReview = mutablePermissionMode as PermissionMode;
               if (isPlanToolBlocked(remoteToolName)) {
@@ -4382,7 +4452,6 @@ export class ClaudeCodeAgent extends BaseAgent {
       activeQueryDirectoryGeneration = autoReviewDirectoryGeneration;
       activeQueryReadonlyDirs = [...mutableExtraDirs];
       extraDirsRebuildAttempted = false;
-      activeQueryExploreInheritCapGeneration = exploreInheritCapEnvGeneration;
       const sdkStartPermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
       sdkInPlanMode = sdkStartPermissionMode === 'plan';
       // Review 会话不带任何 Bot 身份/能力(与 botSkillPolicy 同口径)。
@@ -4400,6 +4469,30 @@ export class ClaudeCodeAgent extends BaseAgent {
         ? await prepareManagedSkillPlugins(allowedManagedSkills, (name) => {
           log.warn('managed skill disappeared before Query startup; skipping', { skill: name });
         }) : undefined;
+      // 设置对象的落盘时间放在 spawn 前: 内容要跟着本次 Query 的输出上限 / 白名单快照,
+      // 提前算会把上一代的 env 与模型清单写进文件。见 createLocalQueryArgs 处。
+      let localClaudeSettingsOption: () => string | Settings = () => buildSettings();
+      const prepareFlagSettings = async (): Promise<void> => {
+        // 短设置仍内联, 与既有行为逐字节一致。超限才写临时文件。同一会话复用一份
+        // 文件, 重建时按当前设置重写 (热切白名单另走 applyFlagSettings, 不依赖它)。
+        // 落盘失败时托管技能插件已经铺好暂存目录, 而此刻启动清理 try 都还没进来 ——
+        // 必须在这里先把它拆掉, 否则整份暂存目录会残留。
+        const flagSettingsDelivery = await materializeClaudeFlagSettings(
+          buildSettings(),
+          flagSettingsFile ?? undefined,
+        ).catch(async (error: unknown) => {
+          if (managedPlugins) {
+            await managedPlugins.dispose().catch((cleanupError) => {
+              log.warn('managed skill plugin cleanup failed', { error: String(cleanupError) });
+            });
+          }
+          throw error;
+        });
+        if (flagSettingsDelivery.kind === 'file') flagSettingsFile = flagSettingsDelivery;
+        localClaudeSettingsOption = () => (flagSettingsDelivery.kind === 'inline'
+          ? flagSettingsDelivery.settings
+          : flagSettingsDelivery.settingsPath);
+      };
       const releaseManagedPlugins = () => {
         void managedPlugins?.dispose().catch((error) => log.warn('managed skill plugin cleanup failed', { error: String(error) }));
       };
@@ -4468,7 +4561,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               botProfileContextPrompt:
                 reviewMode ? undefined : opts.botProfileContextPrompt,
               botUserProfilePrompt: reviewMode ? undefined : opts.botUserProfilePrompt,
-              userPrompt: reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt,
+              userPrompt: reviewMode || isolatedBotProfile(opts.botRuntimeProfile) ? undefined : opts.userPrompt,
               ...(hosted ? { deviceHostedNote: deviceHostedClaudeNote(hosted, opts.workingDir) } : {}),
             });
             return {
@@ -4542,7 +4635,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           canUseTool: sdkCanUseTool,
           // Bot MCP selection is explicit; native delegation remains available.
           // 设备托管：只用经隧道的 MCP(本机用户 / 项目里的 MCP 启动命令会在本机执行)。
-          ...(opts.botRuntimeProfile || hosted || opts[LOCAL_AGENT_CLIENT] ? { strictMcpConfig: true } : {}),
+          ...(isolatedBotProfile(opts.botRuntimeProfile) || hosted || opts[LOCAL_AGENT_CLIENT] ? { strictMcpConfig: true } : {}),
           ...(opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? { tools: [] } : {}),
           // 设备托管：自带文件与命令工具只能操作本机，关掉，由 cindy_exec 顶替；
           // 另含 host 路由表关闭的自带工具(见 claudeDisallowedTools)。
@@ -4554,15 +4647,17 @@ export class ClaudeCodeAgent extends BaseAgent {
             ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
-          settingSources: reviewMode || !!opts.botRuntimeProfile || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
+          settingSources: reviewMode || !!isolatedBotProfile(opts.botRuntimeProfile) || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
             ? []
             : hosted ? ['project', 'local'] : ['user', 'project', 'local'],
           // Settings (SDK "flag settings" 层, 优先级最高 — 覆盖 user/project/local 文件层):
           //  - showThinkingSummaries        : reasoning summary 展示开关
           //  - autoMemoryEnabled / autoDream: memory 联动 (host 通过 runtimeConfig.memoryEnabled 或
           //    BaseAgent.setMemory 控制; this.memoryOverride === undefined 时不传, 让 SDK 走默认)
-          // **同一对象远端分支也透传 (extraOptions.settings)**, 别在两边漂移。
-          settings: buildSettings(),
+          // 内容与远端 extraOptions.settings 同源。本地 SDK 会把内联对象序列化成
+          // `--settings <json>` 命令行参数; 模型白名单超过 Windows 命令行上限时改传
+          // 临时文件路径 (#9753)。远端 daemon 读不到这份本机文件, 仍传对象。
+          settings: localClaudeSettingsOption(),
           allowDangerouslySkipPermissions:
             !reviewMode,
           stderr: vo.onStderrLine as ((line: string) => void) | undefined,
@@ -4591,6 +4686,13 @@ export class ClaudeCodeAgent extends BaseAgent {
       try {
         companionEnvironment?.assertCurrent?.();
         if (managedPlugins && querySignal.aborted) throw new Error('Claude session closed before skill plugins were loaded');
+        activeQueryModelEnvGeneration = applyModelOutputEnv();
+        // 必须紧跟输出上限 / 模型 env 的快照之后再序列化设置: 设置层里的
+        // CLAUDE_CODE_MAX_OUTPUT_TOKENS 与模型白名单都要反映这一次 spawn 的值。
+        await prepareFlagSettings();
+        // 落盘是异步的：等它回来期间账号可能被换掉、伙伴可能被删。围栏要在
+        // 真正拉起 SDK 之前再验一次，失效的启动走下面 catch 的清理路径。
+        companionEnvironment?.assertCurrent?.();
         const queryArgs = createLocalQueryArgs();
         if (newSdkSessionId) sdkSessionId = newSdkSessionId;
         onRuntimeStartAttempted();
@@ -4599,7 +4701,19 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (sdkSessionId === newSdkSessionId) sdkSessionId = previousSdkSessionId;
         querySignal.removeEventListener('abort', releaseManagedPlugins);
         if (managedPlugins) await managedPlugins.dispose();
+        if (flagSettingsFile) await flagSettingsFile.dispose();
+        flagSettingsFile = null;
         throw error;
+      }
+      if (closed) {
+        // 关闭在准备阶段赢了这个竞态 (close 已删过旧文件并提前返回, 不会再来收这一份)。
+        // 调用方建完这个 query 会立刻关掉它, 借着那次 close 一并把文件删掉 —— 不在这里
+        // 直接删, 免得抢在 CLI 读 settings 之前。
+        const closeQueryAfterHandleClose = query.close.bind(query);
+        query.close = () => {
+          try { return closeQueryAfterHandleClose(); }
+          finally { releaseFlagSettingsFile(); }
+        };
       }
       if (newSdkSessionId && finalFork && resumeSdkSid) {
         unacceptedForks.add(query);
@@ -4699,6 +4813,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       try { abortController.abort(); } catch (e) {
         log.warn(`${logLabel}: abortController.abort threw`, { error: String(e) });
       }
+      // 这里已经把 closed 置 true, 之后宿主再调 close() 会提前返回, 走不到那边
+      // 的清理 —— 长模型目录落下的临时设置文件必须在死亡路径上自己删掉。
+      releaseFlagSettingsFile();
       // remoteQuery.close 是 async + 可能已经死了 (RpcClient closed), 调它会走
       // 兜底 catch (best-effort)。fire-and-forget 不 await — startForwardLoop
       // 里同步路径不能阻塞 finally。
@@ -4807,8 +4924,33 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 快照(renderer 挂载/重载后重新水合任务卡)依赖这些字段还原展示。
     const runningBackgroundTasks = new Map<
       string,
-      { wake: boolean; taskType?: string; toolUseId?: string; title?: string; outputFile?: string }
+      {
+        wake: boolean;
+        taskType?: string;
+        toolUseId?: string;
+        title?: string;
+        outputFile?: string;
+        commandKind?: BackgroundCommandKind;
+      }
     >();
+    // Bash 工具调用的命令文本(按 tool_use id)。task_started 只带描述不带命令,后台命令
+    // 是「工作」还是「长驻服务」要靠启动它的命令写法判断。有界:只为紧随其后的
+    // task_started 服务,超限丢最老的。
+    const bashCommandByToolUseId = new Map<string, string>();
+    const BASH_COMMAND_CACHE_LIMIT = 64;
+    function noteBashToolUse(e: AgentEvent): void {
+      if (e.type !== 'tool_use') return;
+      const data = e.data as { toolUseId?: unknown; toolName?: unknown; input?: unknown } | null | undefined;
+      if (data?.toolName !== 'Bash' || typeof data.toolUseId !== 'string') return;
+      const command = (data.input as { command?: unknown } | null | undefined)?.command;
+      if (typeof command !== 'string') return;
+      bashCommandByToolUseId.delete(data.toolUseId);
+      bashCommandByToolUseId.set(data.toolUseId, command);
+      if (bashCommandByToolUseId.size > BASH_COMMAND_CACHE_LIMIT) {
+        const oldest = bashCommandByToolUseId.keys().next().value;
+        if (oldest !== undefined) bashCommandByToolUseId.delete(oldest);
+      }
+    }
     // SDK task progress can race behind its terminal notification. Once a task
     // is terminal within the current Query generation, a late running/progress
     // patch must not resurrect it into runningBackgroundTasks and manufacture
@@ -4882,6 +5024,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       activeContinuationId === null
         ? null
         : continuationClaims.get(activeContinuationId) ?? null;
+    // 「有产品 turn 仍在执行」的单一判据:isTurnRunning() 与崩溃收尾共用。
+    // 只凭 turnInFlight 会把 SDK 段间续 turn claim 与已入队未派发的边界误当空闲。
+    const isAnyProductTurnActive = (): boolean =>
+      turnInFlight ||
+      activeContinuationClaim()?.state === 'awaiting' ||
+      pendingContinuationTerminalBoundaries > 0;
     // A foreground result can leave the same product waiting on background work.
     // Its live SDK input queue still accepts corrections during that interval.
     const hasSteerableTurn = (): boolean =>
@@ -5114,16 +5262,30 @@ export class ClaudeCodeAgent extends BaseAgent {
         const wake =
           prev?.wake === true ||
           (typeof data?.taskType === 'string' && WAKE_BACKGROUND_TASK_TYPES.has(data.taskType));
+        const taskType =
+          typeof data?.taskType === 'string' && data.taskType ? data.taskType : prev?.taskType;
+        const toolUseId =
+          typeof data?.parentToolUseId === 'string' && data.parentToolUseId
+            ? data.parentToolUseId
+            : prev?.toolUseId;
+        // 后台命令的种类只判一次并锁存;命令文本未知(没见过对应 Bash 调用)时不标,下游按 work。
+        const launchCommand = toolUseId ? bashCommandByToolUseId.get(toolUseId) : undefined;
+        const commandKind =
+          prev?.commandKind ??
+          (taskType === 'local_bash' && launchCommand !== undefined
+            ? classifyBackgroundCommand(launchCommand)
+            : undefined);
+        if (commandKind && data) {
+          (data as { backgroundCommandKind?: BackgroundCommandKind }).backgroundCommandKind = commandKind;
+        }
         runningBackgroundTasks.set(taskId, {
           wake,
-          taskType: typeof data?.taskType === 'string' && data.taskType ? data.taskType : prev?.taskType,
-          toolUseId:
-            typeof data?.parentToolUseId === 'string' && data.parentToolUseId
-              ? data.parentToolUseId
-              : prev?.toolUseId,
+          taskType,
+          toolUseId,
           title: typeof data?.title === 'string' && data.title ? data.title : prev?.title,
           outputFile:
             typeof data?.outputFile === 'string' && data.outputFile ? data.outputFile : prev?.outputFile,
+          ...(commandKind ? { commandKind } : {}),
         });
         const claim = activeContinuationClaim();
         if ((claim?.state === 'awaiting' || claim?.state === 'active') && wake) {
@@ -5412,6 +5574,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           return true;
         }
         // 后台任务表旁路观察(O(1) type check,task 事件低频,不碰热路径逻辑)。
+        noteBashToolUse(e);
         const cancelledContinuation = noteBackgroundTaskEvent(e);
         if (ignoredLateTerminalTaskEvents.delete(e)) return true;
         if (e.type === 'error' && isTerminalAgentErrorEvent(e)) queuedAsyncAnswer = false;
@@ -5502,6 +5665,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (isContinuationTerminalDone) {
           continuationTerminalBoundaryEvents.add(e);
           pendingContinuationTerminalBoundaries += 1;
+        }
+        if (e.type === 'tool_use' || (e.type === 'text' && turnInFlight && !turnState.interruptRequested)) {
+          autoReviewAgentText.observe(e);
         }
         if (e.type === 'text' && turnInFlight && !turnState.interruptRequested) {
           const data = e.data as { text?: unknown; isFinal?: unknown } | undefined;
@@ -5670,7 +5836,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             const rawSubtype = (rawMsg as { subtype?: string } | null)?.subtype;
             const rawStatus = (rawMsg as { status?: string } | null)?.status;
             // 只旁路取值,消息照常往下走(与改动前的处理顺序一致)。
-            if (rawType === 'rate_limit_event' && nativeCliAuth) notifyRateLimitInfo(rawMsg);
+            if (rawType === 'rate_limit_event' && nativeCliAuth) notifyRateLimitInfo(rawMsg, nativeSubscriptionAccount);
             const isTerminalTaskNotification =
               rawType === 'system' &&
               rawSubtype === 'task_notification' &&
@@ -5808,6 +5974,14 @@ export class ClaudeCodeAgent extends BaseAgent {
               beginNewTurn(mutableFastMode ? 'priority' : 'standard');
               resetToolLoopGuards();
               turnInFlight = true;
+              // An API-error envelope produces no text/thinking/tool event. Tell
+              // Session that this is a new provider turn before translating it,
+              // or its terminal error looks like the previous done's stale tail.
+              forwardEventSink.push({
+                type: 'status',
+                source: 'claude-code',
+                data: { status: 'Thinking', isRunning: true, providerInitiatedTurn: true },
+              });
             }
             noteUpstreamResponseActivity(typeof rawType === 'string' ? rawType : 'unknown');
             const shouldCorrelateResumeFailure =
@@ -6066,23 +6240,43 @@ export class ClaudeCodeAgent extends BaseAgent {
             // 此前只推 error + 清 turnInFlight, 不置 closed / 不 end inputQueue → handle
             // 对外装活, 下次 send 进无消费者的 inputQueue 黑洞 (2026-07-05 fork resume 实踩),
             // 现在与 U2 同款走 teardownDeadHandle 全套收尾。
-            log.error('event loop crashed', { error: String(e) });
-            // teardownDeadHandle 会清 turnInFlight, 先快照: turn 是否还没收尾
-            // (translator 已 drain 过 result 正常收尾时为 false, 不重复补收尾事件)。
+            // teardownDeadHandle 会清 turnInFlight, 先快照。补终态的判据不是
+            // isAnyProductTurnActive() 的 busy 语义,而是「轮次仍在执行且还缺终态」:
+            // pendingContinuationTerminalBoundaries > 0 表示终态 done 已入队、
+            // Session 尚未消费 —— 与纯空闲同义,再补 emitTurnBoundary 会向 Session
+            // 发同一轮的第二个 done,再推 error 会把已收口的轮次标成失败(#8831)。
             const turnWasInFlight = turnInFlight;
-            eventQueue.push({
-              type: 'error',
-              data: { message: String(e), isTerminal: true, reason: 'sdk_stream_crashed' },
-              source: 'claude-code',
-            });
-            if (turnWasInFlight) {
-              // turn 中途崩 (没有 result 走 translator 收尾) → 补齐与 translator 失败
-              // 序列同构的收尾 (error → status Done → done), renderer 的 running 态和
-              // main 的 turn 终止链路才能闭合。done 不带 usage 字段, 记账 sink 读不到
-              // 数不会双计 (与 U2 的 done data 同款语义)。
-              emitTurnBoundary('sdk_stream_crashed');
+            const continuationAwaitingSegment = activeContinuationClaim()?.state === 'awaiting';
+            if (
+              (!turnWasInFlight && !continuationAwaitingSegment) ||
+              pendingContinuationTerminalBoundaries > 0
+            ) {
+              // 空闲期进程被强杀(典型: app 退出时 reap-claude-children 先 taskkill
+              // 全部 claude.exe, #8831): 没有任何轮次缺终态,派发终态错误只会落
+              // 一条伪造的 role:'error' 记录,重启后被误读成「上一轮未完成」并注入
+              // 续跑提示。只回收死句柄,已入队的事件照常交付,Session 走
+              // runEventLoop 自然结束兜底。
+              log.warn('event loop crashed while idle; skipping terminal error', {
+                error: String(e),
+              });
+              teardownDeadHandle('idle crash teardown');
+            } else {
+              log.error('event loop crashed', { error: String(e) });
+              eventQueue.push({
+                type: 'error',
+                data: { message: String(e), isTerminal: true, reason: 'sdk_stream_crashed' },
+                source: 'claude-code',
+              });
+              if (turnWasInFlight) {
+                // turn 中途崩 (没有 result 走 translator 收尾) → 补齐与 translator 失败
+                // 序列同构的收尾 (error → status Done → done), renderer 的 running 态和
+                // main 的 turn 终止链路才能闭合。done 不带 usage 字段, 记账 sink 读不到
+                // 数不会双计 (与 U2 的 done data 同款语义)。续跑 claim 的边界早已
+                // 派发,只补 error 让 host 释放 continuation lease,不重复发 done。
+                emitTurnBoundary('sdk_stream_crashed');
+              }
+              teardownDeadHandle('crash teardown');
             }
-            teardownDeadHandle('crash teardown');
           }
         } finally {
           if (closed || isCurrentQuery(currentQ)) {
@@ -6554,7 +6748,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           pendingRewindTo = durableSdkSessionId;
           extraDirsRebuildAttempted = true;
         } else if (
-          activeQueryExploreInheritCapGeneration !== exploreInheritCapEnvGeneration
+          activeQueryModelEnvGeneration !== modelEnvGeneration
           && !pendingRewindTo
           && !activeBridgeRewindResumeAt
           && durableSdkSessionId
@@ -6764,11 +6958,26 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
           }
           const forkSourceId = durableSdkSessionId;
-          q = await buildQuery({
-            ...(directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }),
-            forkSession: true,
-            permissionMode: snapSdkPermissionMode,
-          });
+          const sourceSdkSessionId = sdkSessionId;
+          for (;;) {
+            q = await buildQuery({
+              ...(directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }),
+              forkSession: true,
+              permissionMode: snapSdkPermissionMode,
+            });
+            if (resolveMaxOutputTokens(mutableModel) === appliedMaxOutputTokens || sendOpts?.signal?.aborted || closed) break;
+            // Native MCP selection can still await after spawn. A setter in
+            // that window must rebuild before this send reaches the old env.
+            rewindTransitionQueries.add(q);
+            unacceptedForks.delete(q);
+            try { q.close(); } catch (e) {
+              log.warn('model env drift: closing superseded rebuild failed', { error: String(e) });
+            }
+            inputQueue.end();
+            inputQueue = createAsyncQueue<SdkUserInput>();
+            abortController = new AbortController();
+            sdkSessionId = sourceSdkSessionId;
+          }
           const rebuiltQuery = q;
           const forkDestinationId = sdkSessionId;
           // Until the user input is accepted, a cancelled fork must retry its source.
@@ -6928,7 +7137,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
           }
           activeCapabilitySelectionText = userMessageTextForCapabilityRouting(message.content);
-          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
+          setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() }, isAutoReviewNewUserInput(sendOpts));
           replayableUserInput = sdkInput;
           sendInAcceptPhase = false;
           // upstream-response-idle watchdog 起表 — 放在 inputQueue.push 之后, 避免把
@@ -7021,7 +7230,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         appendActiveCapabilitySelectionText(
           userMessageTextForCapabilityRouting(message.content),
         );
-        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
+        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), undefined, isAutoReviewNewUserInput(sendOpts));
         armUpstreamResponseIdle();
       },
 
@@ -7339,6 +7548,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(info.toolUseId ? { toolUseId: info.toolUseId } : {}),
           ...(info.title ? { title: info.title } : {}),
           ...(info.outputFile ? { outputFile: info.outputFile } : {}),
+          ...(info.commandKind ? { backgroundCommandKind: info.commandKind } : {}),
         }));
       },
 
@@ -7392,6 +7602,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // close 会终结 CLI 子进程(本地)/ 远端 session,后台任务随之死亡。
           runningBackgroundTasks.clear();
           terminalBackgroundTaskIds.clear();
+          // 启动中途关闭由 startSession 的 catch 删文件; Query 已经建起来之后再关闭
+          // 走这里, 覆盖 SDK close 不会再回到那个 catch 的路径。
+          releaseFlagSettingsFile();
         } catch (e) {
           log.warn('close threw', { error: String(e) });
         }
@@ -7496,7 +7709,8 @@ export class ClaudeCodeAgent extends BaseAgent {
         applyClaudeContextWindow(expected, window, getAutoCompactThresholdPct(model, provider));
         const liveEnv = opts.remoteHostId ? remoteEnv : env;
         return expected.CLAUDE_CODE_AUTO_COMPACT_WINDOW !== liveEnv?.CLAUDE_CODE_AUTO_COMPACT_WINDOW
-          || expected.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE !== liveEnv?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+          || expected.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE !== liveEnv?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+          || resolveMaxOutputTokens(model, provider) !== appliedMaxOutputTokens;
       },
 
       async setModel(
@@ -7600,6 +7814,12 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 误拒(codex P2 #1035)。
         }
         const sdkModel = sdkModelFor(newModel);
+        const outputLimitNeedsRebuild = resolveMaxOutputTokens(newModel, targetProviderId) !== appliedMaxOutputTokens;
+        if (outputLimitNeedsRebuild && opts.remoteHostId) {
+          throw new Error(
+            `[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] switching to "${newModel}" requires a different output limit; close and recreate the remote session to apply it`,
+          );
+        }
         const isControlBlocked = controlRequestsBlocked();
         const liveEnv = opts.remoteHostId ? remoteEnv : env;
         const exploreInheritCapNeedsRebuild = liveEnv
@@ -7703,7 +7923,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 下一轮 send 再走 extraDirs 同款 resume+fork 重建。这里不碰
           // pendingRewindTo:热切若落在 in-flight turn / rewind 接受窗,提前设标记
           // 会让 forward loop 把当前 Query 当成过渡态静音。
-          exploreInheritCapEnvGeneration += 1;
+        }
+        if ((exploreInheritCapNeedsRebuild || outputLimitNeedsRebuild) && !opts.remoteHostId) {
+          modelEnvGeneration += 1;
         }
       },
 
@@ -7911,11 +8133,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // turnInFlight 清成 false，但从产品/Session 视角 Agent 仍未执行结束。
         // 把 provider 已锁存的 continuation claim 纳入权威 busy 判据，统一阻止
         // 新 send、rewind 与 closeIfIdle 插入该窗口。
-        return (
-          turnInFlight ||
-          activeContinuationClaim()?.state === 'awaiting' ||
-          pendingContinuationTerminalBoundaries > 0
-        );
+        return isAnyProductTurnActive();
       },
 
       async previewRewindFiles(userUuid: string): Promise<RewindFilesResult> {
@@ -8014,6 +8232,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         // turn 没在跑了, 清守卫标记 (rewind 必然在 idle 时调, 但兜底一把)
         turnInFlight = false;
+        // close 会连 CLI 子进程一起杀,后台任务(含后台命令)随之终止:与其它 close 路径同口径立即清表。
+        // 不等下次 send 换 Query 时清,否则宿主在这段空窗里读到的快照仍带着已死的任务。
+        runningBackgroundTasks.clear();
+        terminalBackgroundTaskIds.clear();
         // bridge counter 兜底: rewind idle 时应该已经归零, 但如果上一轮 bridge 中途异常
         // (SDK 崩 / abort 未 drain result) counter 可能残留, 会污染 rebuild 后的第一 turn。
         clearBridgeState();
@@ -8151,6 +8373,10 @@ export class ClaudeCodeAgent extends BaseAgent {
    * upToMessageId 拿的是 A 的旧 uuid, 在新 jsonl 找不到 → SDK 报错。
    */
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
+    const account = opts.providerId === 'anthropic' ? opts[NATIVE_SUBSCRIPTION_ACCOUNT] : undefined;
+    account?.assertCurrent();
+    const projectsRoot = account ? path.join(account.configDir, 'projects') : undefined;
+    const sessionStore = projectsRoot ? await claudeProfileSessionStore(projectsRoot, opts.sourceSdkSessionId, opts.workingDir) : undefined;
     const log = this.deps.logger.child('claude-code/fork');
     const logRepairResult = (
       phase: 'source-preflight' | 'source-retry' | 'forked-post',
@@ -8176,6 +8402,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       });
     };
     const forkOnce = () => sdkForkSession(opts.sourceSdkSessionId, {
+      ...(sessionStore ? { sessionStore, dir: opts.workingDir } : {}),
       upToMessageId: opts.upToMessageId,
       title: opts.title,
     });
@@ -8186,6 +8413,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       workingDir: opts.workingDir ?? '<none>',
     });
     const sourceRepairResult = await repairForkedClaudeSessionJsonl({
+      projectsRoot,
       sessionId: opts.sourceSdkSessionId,
       workingDir: opts.workingDir,
     });
@@ -8205,6 +8433,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         error: error instanceof Error ? error.message : String(error),
       });
       const retryRepairResult = await repairForkedClaudeSessionJsonl({
+        projectsRoot,
         sessionId: opts.sourceSdkSessionId,
         workingDir: opts.workingDir,
       });
@@ -8229,6 +8458,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
     }
     const repairResult = await repairForkedClaudeSessionJsonl({
+      projectsRoot,
       sessionId: newSdkSessionId,
       workingDir: opts.workingDir,
     });
@@ -8249,6 +8479,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       try {
         const outcome = await ensureClaudeTranscriptInWorkingDir({
           sdkSessionId: newSdkSessionId,
+          projectsRoot,
           workingDir: opts.workingDir,
         });
         if (outcome === 'restored') {
