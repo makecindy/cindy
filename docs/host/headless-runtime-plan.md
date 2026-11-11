@@ -1060,3 +1060,48 @@ Host 生产接线继续保留：不能只给 REST 换地址却让 WebSocket 仍�
 设备目录还需要 Node 装配。另核实 `disableShareAvailability` 在桌面是官方跨账号服务，
 不能直接改为跟随自建中转，后续应复用显式官方服务入口。未验证项仍同上一检查点；没有
 开放 Host 远程附件、没有改正式应用或 profile，本检查点未推送或开 PR。
+
+### 本批收尾与主线同步（2026-11-11）
+
+本批交付范围收在发送、插话、历史授权、消息回退与本机附件的共用实现。远程媒体传输和
+设备互联 API 已抽成可在 Node 加载的工厂，但 Host 生产装配仍未接通。剩余工作涉及
+加密网络运行时、中转凭证存储、设备目录，以及 WebSocket/REST 的一致选路，不能只接
+下载函数或回退到官方端点后宣称支持自建中转。本批不继续扩展这组生命周期；远程附件、
+完整引擎切换、归档恢复、工作目录恢复和正式调度器装配仍按上述未完成项推进。
+
+同步 main `83ebe1811d`（相对上次同步新增 41 个提交、92 个文件），无冲突。与本分支
+重叠的三个文件是 `register.ts`、`bootstrap-electron.ts` 和
+`sessionRuntimeControlWiring.test.ts`；main 的引擎切换回调与冒烟窗口参数均完整保留。
+在添加本段验证记录之前，暂存树与 `git merge-tree` 的机械合并结果完全相同，日志
+`/tmp/cindy-host-parity-final-merge-audit.log`。
+
+合并后验证：
+
+- PASS Desktop 定向 Vitest：11 个文件、1,667 项，15.33 秒，覆盖发送、插话、协调器、
+  历史授权、引擎切换、附件和设备 API。日志
+  `/tmp/cindy-host-parity-final-merge-desktop-tests.log`。
+- PASS Desktop 类型检查（复用独立的临时 tsbuildinfo）；日志
+  `/tmp/cindy-host-parity-final-merge-desktop-types.log`。
+- PASS Host 全部 227 项测试和类型检查；日志
+  `/tmp/cindy-host-parity-final-merge-host-tests.log`、
+  `/tmp/cindy-host-parity-final-merge-host-types.log`。
+- PASS `apps/host/scripts/codex-runtime.e2e.mjs`：真实原生 Codex 进程、生产 Host HTTP/队列、
+  SQLite 与附件装配，在隔离 profile、测试凭证和本机合成上游下验证发送、UUID 与回复
+  落库、插话、运行时重开、停止，以及图片字节到达上游、文件路径保留和媒体地址落库；
+  原有网关/自定义供应商与运行中换 key 场景也通过。日志
+  `/tmp/cindy-host-parity-final-merge-native.log`。这不是真实账号或真实模型验收。
+
+Orca Worker 已逐批复核所有实现检查点至 `0a9ed3e0ec`，未报告未解决的阻断项；本次
+无冲突主线同步由 Lead 核对并重跑上述门禁。静态模块顺序、函数体比对、隔离进程实跑与
+真实桌面 GUI 是不同证据；真实登录桌面附件/设备互联、真实 Pi、打包运行、Windows 和
+手机仍未验收。正式 Cindy 与正式 profile 未被重启或用于本批测试。
+
+为 PR 的测试价值说明单独运行改写或新增用例所在的文件，全部通过。命令墙钟耗时：
+Desktop `makerSendTransaction` 10.92 秒、`normalizeAttachmentsTemp` 1.57 秒、
+`goal-host/controller` 9.52 秒、`sendToSessionLazyResumePermission` 4.06 秒、
+`sessionTreeProviderResume` 1.95 秒；Host `input-queue` 2.54 秒、`boundary` 0.29 秒、
+`chat.interactions` 1.43 秒、`chat` 0.41 秒、`sessions` 1.03 秒、`web-shim` 0.26 秒。
+发送事务文件的 Vitest 自报总时长 10.24 秒，其中收集/转换 8.87 秒、302 项用例执行
+313 毫秒；超过 10 秒来自既有大模块的加载成本，没有新增真实等待或放宽超时。
+日志 `/tmp/cindy-host-parity-single-{desktop,host}-*.log`；文档合同与测试卫生检查均通过，
+日志 `/tmp/cindy-host-parity-final-{docs,hygiene}.log`。

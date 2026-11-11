@@ -11695,6 +11695,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...(switchOptions?.reason ? { providerGroupSwitchReason: switchOptions.reason } : {}),
           // 用户在等锁、读交接素材期间接手：在改动之前停下。
           ...(isCurrent ? { assertSelectionCurrent: assertCurrent } : {}),
+          ...(switchOptions?.onRelocationMutationStart
+            ? { onRelocationMutationStart: switchOptions.onRelocationMutationStart } : {}),
           beforeMutation: async () => {
             const owner = activeOwnerScopeKey();
             const row = await getSessionRowSnapshotStrict(sessionId);

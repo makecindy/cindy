@@ -1,0 +1,63 @@
+diff --git a/android/src/main/java/expo/modules/image/ExpoImageView.kt b/android/src/main/java/expo/modules/image/ExpoImageView.kt
+index 423e3b72923a3c0e1b3efb9145a757942a312378..81b64f6a77dcd99bdb6a0f9229c5a212b0b52cda 100644
+--- a/android/src/main/java/expo/modules/image/ExpoImageView.kt
++++ b/android/src/main/java/expo/modules/image/ExpoImageView.kt
+@@ -2,6 +2,7 @@ package expo.modules.image
+ 
+ import android.annotation.SuppressLint
+ import android.content.Context
++import android.graphics.Bitmap
+ import android.graphics.Canvas
+ import android.graphics.PorterDuff
+ import android.graphics.RectF
+@@ -179,14 +180,44 @@ class ExpoImageView(
+     // If we encounter a recycled bitmap here, it suggests an issue where we may have failed to
+     // finish clearing the image bitmap before the UI attempts to display it.
+     // One solution could be to suppress the error and assume that the second image view is currently responsible for displaying the correct view.
+-    if ((drawable as? BitmapDrawable)?.bitmap?.isRecycled == true) {
++    val bitmap = (drawable as? BitmapDrawable)?.bitmap
++    if (bitmap?.isRecycled == true) {
+       Log.e("ExpoImage", "Trying to use a recycled bitmap")
+-      recycleView()?.let { target ->
+-        (parent as? ExpoImageViewWrapper)?.requestManager?.let { requestManager ->
+-          target.clear(requestManager)
+-        }
++      dropUndrawableImage()
++    } else if (bitmap != null && !bitmap.isPremultiplied && bitmap.config == Bitmap.Config.ARGB_8888 && bitmap.hasAlpha()) {
++      // Cindy patch: android.graphics.BaseCanvas.throwIfCannotDraw rejects exactly this
++      // combination, and a RuntimeException thrown from a draw pass takes the whole app down
++      // (Play crash reports on Android 17 point at this check). Glide's bitmap pool applies the same
++      // normalisation to every bitmap it hands out, so the flag is corrected instead of
++      // discarding the image.
++      try {
++        bitmap.isPremultiplied = true
++      } catch (e: RuntimeException) {
++        Log.e("ExpoImage", "Dropping a non-premultiplied bitmap", e)
++        dropUndrawableImage()
++      }
++    }
++    val saveCount = canvas.saveCount
++    try {
++      super.draw(canvas)
++    } catch (e: RuntimeException) {
++      // Cindy patch: last line of defence for the remaining throwIfCannotDraw checks (a bitmap
++      // recycled between the check above and the draw, or one that is too large). One image
++      // the canvas refuses must not crash the app; any other exception is rethrown unchanged.
++      if (e.message?.startsWith("Canvas: trying to") != true) {
++        throw e
++      }
++      canvas.restoreToCount(saveCount)
++      Log.e("ExpoImage", "Dropping an image the canvas refused to draw", e)
++      dropUndrawableImage()
++    }
++  }
++
++  private fun dropUndrawableImage() {
++    recycleView()?.let { target ->
++      (parent as? ExpoImageViewWrapper)?.requestManager?.let { requestManager ->
++        target.clear(requestManager)
+       }
+     }
+-    super.draw(canvas)
+   }
+ }
