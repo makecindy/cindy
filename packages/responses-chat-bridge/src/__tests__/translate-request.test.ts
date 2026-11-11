@@ -939,7 +939,7 @@ describe('translateResponsesRequest', () => {
     expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'read' } });
   });
 
-  it('does not flatten a selector whose kind contradicts the declaration (#9715)', () => {
+  it('keeps the namespace when a qualified selector has the wrong kind (#9715)', () => {
     const out = translateResponsesRequest(base({
       input: [
         {
@@ -952,7 +952,9 @@ describe('translateResponsesRequest', () => {
       tool_choice: { type: 'custom', name: 'now', namespace: 'clock' },
     }));
 
-    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'now' } });
+    // The declared kind is function; a custom selector must not be flattened onto it, and a
+    // qualified miss keeps the namespace so the provider rejects the undeclared selector.
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'clock__now' } });
   });
 
   it('leaves a selector ambiguous when a bare and a namespaced tool share the name (#9715)', () => {
