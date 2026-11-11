@@ -41,6 +41,7 @@ export const CINDY_TOOL_FOLD_ENV_NAMES = [
   'CINDY_PI_TOOL_FOLD_INGEST_LIMIT',
   'CINDY_PI_TOOL_FOLD_INGEST_KEEP',
   'CINDY_PI_TOOL_FOLD_GIANTS',
+  'CINDY_PI_TOOL_FOLD_MAX_FOLDED',
 ] as const;
 
 export const CINDY_TOOL_FOLD_EXTENSION_SOURCE = String.raw`/**
@@ -92,7 +93,7 @@ export default function (pi) {
   var INGEST_KEEP = intEnv('CINDY_PI_TOOL_FOLD_INGEST_KEEP', 2000, 500, 32000);
   var GIANT_KEEP = intEnv('CINDY_PI_TOOL_FOLD_GIANTS', 64, 8, 512);
   var LINE = 160;
-  var MAX_FOLDED = 4000;
+  var MAX_FOLDED = intEnv('CINDY_PI_TOOL_FOLD_MAX_FOLDED', 4000, 100, 1000000);
 
   // Sticky fold marks: toolCallId -> payload chars. Survives requests in this process;
   // a restart simply re-folds on the next batch.
@@ -413,6 +414,7 @@ export default function (pi) {
 
     var candidates = [];
     var candidateChars = 0;
+    var candidateCalls = 0;
     for (var f = 0; f < trips.length; f++) {
       var probe = trips[f];
       if (probe.end >= boundary || probe.hasImage || probe.chars < 80) continue;
@@ -422,11 +424,27 @@ export default function (pi) {
       if (already) continue;
       candidates.push(probe);
       candidateChars += probe.chars;
+      candidateCalls += probe.callCount;
     }
-    if (candidates.length > 0 && (candidates.length >= MIN_PAIRS || candidateChars >= MIN_CHARS)) {
+    if (candidateCalls >= MIN_PAIRS || candidateChars >= MIN_CHARS) {
       if (foldedSize > MAX_FOLDED) {
-        foldedIds = Object.create(null);
-        foldedSize = 0;
+        // Prune instead of wipe: keep marks for trips still in the context (their
+        // full text must not come back — that would be a wide prefix-cache miss) and
+        // drop marks for ids already removed by compaction or edits.
+        var liveIds = Object.create(null);
+        for (var lt = 0; lt < trips.length; lt++) {
+          for (var lc = 0; lc < trips[lt].calls.length; lc++) liveIds[String(trips[lt].calls[lc].id)] = true;
+        }
+        var pruned = Object.create(null);
+        var prunedSize = 0;
+        for (var key in foldedIds) {
+          if (liveIds[key]) {
+            pruned[key] = foldedIds[key];
+            prunedSize += 1;
+          }
+        }
+        foldedIds = pruned;
+        foldedSize = prunedSize;
       }
       for (var m = 0; m < candidates.length; m++) {
         for (var mi = 0; mi < candidates[m].calls.length; mi++) markFolded(candidates[m].calls[mi].id, candidates[m].chars);

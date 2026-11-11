@@ -167,4 +167,32 @@ describe('cindy-tool-fold extension source', () => {
     const out = projection(context, messages);
     expect(isFolded(out[0])).toBe(true);
   });
+
+  it('counts parallel calls, not messages, toward the pairs gate', () => {
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '32', CINDY_PI_TOOL_FOLD_MIN_CHARS: '1000000000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    // One assistant message with 32 parallel calls: 32 complete pairs in one trip.
+    const blocks = Array.from({ length: 32 }, (_, i) => ({ type: 'toolCall', id: `par-${i}`, name: 'bash', arguments: { command: `parallel step ${i}` } }));
+    const results = blocks.map((b, i) => result(String(b.id), 'bash', `parallel ${i} ok ${'z'.repeat(120)}`));
+    // A newer trailing pair keeps the 32-call trip outside the KEEP=1 resident window.
+    const messages: Message[] = [
+      { role: 'assistant', content: blocks as Block[] },
+      ...results,
+      call('tail-1', 'bash', { command: 'tail probe' }),
+      result('tail-1', 'bash', 'tail ok'),
+    ];
+    const out = projection(context, messages);
+    expect(isFolded(out[0])).toBe(true);
+    expect(out[1]).not.toBe(messages[1]); // result folded to a one-liner
+  });
+
+  it('keeps live fold marks when the registry cap is pruned', () => {
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '1000', CINDY_PI_TOOL_FOLD_KEEP: '1', CINDY_PI_TOOL_FOLD_MAX_FOLDED: '8' });
+    const first = projection(context, pairs(12));   // 11 folded -> registry 11 > cap 8
+    expect(isFolded(first[0])).toBe(true);
+    const grown = pairs(20);
+    const second = projection(context, grown);      // new batch triggers the prune path
+    expect(isFolded(second[0])).toBe(true);          // old marks survive: no full-text rebound
+    expect(isFolded(second[36])).toBe(true);         // newly foldable backlog (trip 18) folds too
+    expect(second[38]).toBe(grown[38]);              // newest 1 pair stays verbatim (KEEP=1)
+  });
 });
