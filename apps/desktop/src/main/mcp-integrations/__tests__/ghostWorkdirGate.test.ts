@@ -3890,20 +3890,44 @@ describe('plugin page audience and shared tool execution', () => {
     expect(listInstalledAsyncMock).not.toHaveBeenCalled();
     expect(listInstalledMock).not.toHaveBeenCalled();
   });
+  function legacyPageCopies(): [InstalledGhost, InstalledGhost] {
+    const bound: InstalledGhost = { ...pageGhost(), instanceKey: 'art', namespace: null };
+    const other: InstalledGhost = { ...bound, instanceKey: '_ns__acme__art', namespace: 'acme',
+      dir: path.join(tmpUserData, '_ns', 'acme', 'art') };
+    return [bound, other];
+  }
+  // Unit regression: a legacy bare storage key became ambiguous after installing
+  // a namesake. A page ticket already binds an instance; model name lookup does not.
+  // Existing modern-key coverage missed this case. Minimum: two same-name copies.
+  it('keeps a legacy page bound to its instance while model name lookup remains ambiguous', async () => {
+    const [bound, other] = legacyPageCopies();
+    listMock.mockReturnValue([bound, other]);
+    expect(await callPage(bound)).toMatchObject({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: bound.instanceKey, tool: 'run' }));
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).not.toHaveBeenCalled();
+
+    dispatchMock.mockClear();
+    expect(await makeDeps().callGhostTool({ ghostId: bound.manifest.id, tool: 'run', args: {} }))
+      .toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
   // The initial lookup must retain the same errors before setup can run;
   // revision drift here is a page authorization error, unlike drift after await.
+  // Keep the other copy available throughout: neither gate may redirect to it.
   it.each([
     ['disabled', 'GHOST_ASLEEP'],
     ['revision', 'PERMISSION_DENIED'],
     ['workdir', 'GHOST_DISABLED_IN_WORKDIR'],
     ['missing', 'GHOST_NOT_FOUND'],
   ] as const)('rejects an initially %s page target before setup', async (change, errorCode) => {
-    const ghost = pageGhost();
-    listMock.mockReturnValue([ghost]);
-    if (change === 'disabled') listMock.mockReturnValue([{ ...ghost, enabled: false }]);
-    if (change === 'revision') listMock.mockReturnValue([{ ...ghost, approval: { state: 'approved', revision: 'replacement' } }]);
+    const [ghost, other] = legacyPageCopies();
+    listMock.mockReturnValue([ghost, other]);
+    if (change === 'disabled') listMock.mockReturnValue([{ ...ghost, enabled: false }, other]);
+    if (change === 'revision') listMock.mockReturnValue([{ ...ghost, approval: { state: 'approved', revision: 'replacement' } }, other]);
     if (change === 'workdir') setGhostDisabledForWorkdir(WORKDIR, installedGhostStoragePart(ghost), true);
-    if (change === 'missing') listMock.mockReturnValue([]);
+    if (change === 'missing') listMock.mockReturnValue([other]);
     expect(await callPage(ghost)).toMatchObject({ ok: false, errorCode });
     expect(ensureReadyMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -3916,14 +3940,14 @@ describe('plugin page audience and shared tool execution', () => {
     ['workdir', 'GHOST_DISABLED_IN_WORKDIR'],
     ['missing', 'GHOST_NOT_FOUND'],
   ] as const)('rejects a page tool when %s changes during session context lookup', async (change, errorCode) => {
-    const ghost = pageGhost();
+    const [ghost, other] = legacyPageCopies();
     ghost.manifest.sessionContext = true;
-    listMock.mockReturnValue([ghost]);
+    listMock.mockReturnValue([ghost, other]);
     sessionSnapshotMock.mockImplementationOnce(async () => {
-      if (change === 'disabled') listMock.mockReturnValue([{ ...ghost, enabled: false }]);
-      if (change === 'revision') listMock.mockReturnValue([{ ...ghost, approval: { state: 'approved', revision: 'replacement' } }]);
+      if (change === 'disabled') listMock.mockReturnValue([{ ...ghost, enabled: false }, other]);
+      if (change === 'revision') listMock.mockReturnValue([{ ...ghost, approval: { state: 'approved', revision: 'replacement' } }, other]);
       if (change === 'workdir') setGhostDisabledForWorkdir(WORKDIR, installedGhostStoragePart(ghost), true);
-      if (change === 'missing') listMock.mockReturnValue([]);
+      if (change === 'missing') listMock.mockReturnValue([other]);
       return { workingDir: WORKDIR, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null };
     });
     expect(await callPage(ghost)).toMatchObject({ ok: false, errorCode });
