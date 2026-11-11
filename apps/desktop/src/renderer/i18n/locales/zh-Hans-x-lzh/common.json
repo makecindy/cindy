@@ -2270,7 +2270,7 @@
         "desktopVisibilityHint": "透见 Cindy 后之桌面与窗口，文字控件仍清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗后桌面；0 则关闭，值愈大则愈朦胧。系统若不可调，仍用预设之效。",
-        "desktopBlurSwitchHint": "以 Windows 系统之效模糊窗后桌面；须 Windows 11 22H2 或更新之版。",
+        "desktopBlurSwitchHint": "以 Windows 系统之效模糊窗后桌面；须 Windows 11 22H2 或更新之版。关之，须重启应用方生效。",
         "blurLabel": "壁纸朦胧",
         "blurHint": "仅朦胧壁纸，0 为阖。动态壁纸启朦胧则增显卡之负。",
         "motionLabel": "展示之式",
