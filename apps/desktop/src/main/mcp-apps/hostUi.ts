@@ -98,14 +98,17 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
   if (view.scope !== 'task' && sessionId !== null) throw new Error('MCP_APP_INVALID_SCOPE');
   callerWindow(caller);
   const owner = activeOwnerScopeKey();
+  const capabilities = entry.host.capabilities ?? [];
+  const watching = sessionId !== null && (capabilities.includes('draft') || capabilities.includes('context'))
+    ? new AbortController() : undefined;
   const assertCurrent = () => {
+    if (watching?.signal.aborted) throw new Error('MCP_APP_SESSION_UNAVAILABLE');
     if (owner !== activeOwnerScopeKey() || readPluginHostUi(instance) !== entry) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
     entry.config.plugin!.assertCurrent(sessionId ?? undefined);
     callerWindow(caller);
   };
   assertCurrent();
   const assertOperation = async () => { assertCurrent(); await assertScope?.(); assertCurrent(); };
-  const capabilities = entry.host.capabilities ?? [];
   let draft: Record<string, unknown> | null = null;
   const tools: Tool[] = [tool('open', 'Open another approved view of this plugin.', { viewId: { type: 'string' }, input: { type: 'object' } }, ['viewId'])];
   if (capabilities.includes('draft') && sessionId !== null) tools.push(tool('draft',
@@ -122,9 +125,8 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
   return {
     id: `${instance}:${viewId}`, title: view.title, serverId: entry.config.id,
     serverRevision: revision(entry.config), resourceUri: view.resourceUri, assertCurrent, assertOperation, hostTools: tools,
-    ...(sessionId !== null && capabilities.includes('draft') ? {
+    ...(watching ? {
       async observeContext(changed: () => void, signal: AbortSignal) {
-        const watching = new AbortController();
         const stop = () => { signal.removeEventListener('abort', stop); unlistenSession(); watching.abort(); };
         const unlistenSession = onPagePermissionSessionChanged((id, patch) => {
           if (id !== sessionId || !('clearedAt' in patch || 'status' in patch && patch.status !== 'active')) return;
@@ -134,6 +136,7 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
         signal.addEventListener('abort', stop, { once: true });
         if (signal.aborted) stop();
         try {
+          if (!capabilities.includes('draft')) return stop;
           await rendererAction(caller, { kind: 'draft-watch', sessionId }, watching.signal, assertCurrent, value => {
             assertCurrent();
             const snapshot = value as Record<string, unknown>;
@@ -144,6 +147,7 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
       },
     } : {}),
     projectContext(context: McpUiHostContext) {
+      assertCurrent();
       const supplied = context.cindy && typeof context.cindy === 'object' && !Array.isArray(context.cindy)
         ? context.cindy as Record<string, unknown> : {};
       return { source: { instanceId: instance, viewId, sessionId }, capabilities,

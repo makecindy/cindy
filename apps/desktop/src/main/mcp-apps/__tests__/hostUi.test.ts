@@ -17,6 +17,8 @@ import { bindPluginUiResource, finishPluginUiAction } from '../hostUi';
 import { releasePluginUiRegions } from '../visibility';
 import { markRsbWindowWebContentsId } from '../../right-sidebar-window/registry';
 import { pagePermissionSessionChanged } from '../pagePermissions';
+import { McpAppsHost } from '../host';
+import type { AppConnection, AppServerConfig } from '../connection';
 
 // 生产入口：Main 的资源来源绑定和真实宿主工具，观察给所属编辑器的命令与拒绝结果。
 // 规则：页面不能自选任务/操作、缺能力不开放、任务清空/owner 切换撤权。
@@ -204,7 +206,8 @@ it.each([
     const changes = changed.mock.calls.length;
     pagePermissionSessionChanged('task-a', patch);
     expect(boundary.send).toHaveBeenLastCalledWith('plugin-ui:action', expect.objectContaining({ kind: 'draft-unwatch', requestId: action.requestId }));
-    expect(binding.projectContext!({}).draft).toBeNull();
+    expect(() => binding.projectContext!({})).toThrow('MCP_APP_SESSION_UNAVAILABLE');
+    expect(() => binding.assertCurrent()).toThrow('MCP_APP_SESSION_UNAVAILABLE');
     expect(() => finishPluginUiAction('renderer:1', action.requestId,
       { revision: 'after', selection: { from: 1, to: 4, text: 'new' } })).toThrow('MCP_APP_ACTION_UNAVAILABLE');
     pagePermissionSessionChanged('task-a', patch);
@@ -228,6 +231,41 @@ it('cancels a draft observer when the task clears before its initial snapshot ar
     expect(() => finishPluginUiAction('renderer:1', action.requestId, { revision: 'late', selection: null }))
       .toThrow('MCP_APP_ACTION_UNAVAILABLE');
   } finally { abort.abort(); await settled; }
+});
+
+// The same task boundary protects renderer selectionchange -> host.context,
+// including pages with context but no draft capability. Exercise the real Host
+// entry, with only resource I/O mocked; no card read or per-push scope query.
+it.each([
+  ['clear', { clearedAt: 1 }], ['archive', { status: 'archived' }],
+] as const)('rejects new selection pushes to a context-only page after task %s', async (_kind, patch) => {
+  const entry = boundary.entry as { host: { capabilities: string[] }; config: AppServerConfig };
+  entry.host.capabilities = ['context'];
+  const config = { ...entry.config, url: 'https://mcp.example.invalid', transport: 'http' as const };
+  entry.config = config;
+  const owner = {}, readCard = vi.fn(), assertScope = vi.fn(async () => {});
+  const connection = { getClient: async () => ({ getServerCapabilities: () => ({}) }),
+    resource: async () => ({ result: { contents: [{ uri: 'ui://task', mimeType: 'text/html;profile=mcp-app', text: '<html>task</html>' }] } }),
+    listen: () => () => {}, close: async () => {},
+  } as unknown as AppConnection;
+  const host = new McpAppsHost({ owner: () => owner, config: () => config, readCard,
+    writeCard: vi.fn(), authorizeTool: async () => {}, sendMessage: async () => {}, connection: () => connection });
+  try {
+    const binding = bindPluginUiResource('renderer:1', 'task-a', 'plugin', 'task', item => host.serverRevision(item), assertScope);
+    const document = await host.openResource('renderer:1', 'task-a', binding, {});
+    const scopeQueries = assertScope.mock.calls.length;
+    host.context('renderer:1', 'task-a', document.viewId, { cindy: { selection: 'before' } });
+    pagePermissionSessionChanged('other-task', patch);
+    pagePermissionSessionChanged('task-a', { title: 'Renamed' });
+    host.context('renderer:1', 'task-a', document.viewId, { cindy: { selection: 'still current' } });
+    pagePermissionSessionChanged('task-a', patch);
+    expect(() => host.context('renderer:1', 'task-a', document.viewId, { cindy: { selection: 'new task text' } }))
+      .toThrow('MCP_APP_SESSION_UNAVAILABLE');
+    await expect(host.assertViewAuthorized('renderer:1', 'task-a', document.viewId)).rejects.toThrow('MCP_APP_SESSION_UNAVAILABLE');
+    expect(assertScope).toHaveBeenCalledTimes(scopeQueries);
+    expect(readCard).not.toHaveBeenCalled();
+    expect(boundary.send).not.toHaveBeenCalled();
+  } finally { await host.reset(); }
 });
 
 // Complete application windows own their composer; both sidebar factories use
