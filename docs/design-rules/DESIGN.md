@@ -516,6 +516,41 @@ Mobile shows the same form in the "+" panel (`OrcaWorkerFormView`), rules in
 toolbar row in the same order. On the phone the permission shrinks to the composer's icon-only
 button (owner request, 2026-11-10) and roles are removed by touch and hold.
 
+### Get-started guide (owner-approved, 2026-11-11)
+
+Desktop `features/first-run-guide/FirstRunGuide.tsx` is a multi-step dialog shown once after the
+first sign-in; product rules are in [`../product-rules/first-run-guide.md`](../product-rules/first-run-guide.md).
+The owner asked for a more designed guide whose first page stands apart. It keeps the shared
+`.modal-scrim` / `.modal-panel`, pill buttons and the registered wizard step chips, with these
+differences from the general multi-step dialog rule:
+
+- **Fixed size.** 640px wide (`min(640px, 100vw-32px)`) and `min(640px, 88vh)` high on every
+  step, so the window does not jump between steps; a step that is taller scrolls inside it.
+- **Cover page (new users only).** No step chips, no header title and no footer. Centered: the
+  brand block (§15.7), a 28px/500 headline, one 15px sentence, three bordered 12px-radius cards
+  and a single centered CTA with one 12px line naming the steps that follow. Each card opens
+  with an 88px `--surface-chip` stage holding a small scene assembled from the product's own
+  elements — task rows being ticked off, three registered provider marks (Anthropic, OpenAI,
+  DeepSeek — a fixed set, the same in every edition, owner decision 2026-11-11) and a key, a
+  computer and a phone showing the same task — then a 14px/500 title and 13px body.
+  The scenes replaced generic glyph tiles at the owner's request (2026-11-11); they use only
+  semantic tokens and registered marks, with no drawn illustration. This is the only page with
+  a centered commit action.
+- **Step pages.** The header carries the guide title and the step chips; only the current step
+  shows its label. Each page opens with a neutral icon tile, a 20px/500 title and one 14px
+  sentence. Sparse pages (earlier-version data, migration, finish) center their content; the
+  migration page shows two neutral computer tiles joined by an arrow. Option cards on the model
+  page are bordered 12px containers with an outlined pill label.
+- **Closing.** A top-right × on every page, because the footer holds navigation (back, skip,
+  next) rather than a Cancel action; Esc also closes. The scrim never closes it.
+- **No decoration beyond the cover's brand block**: no illustration, gradient, shadow or colour
+  outside the semantic tokens; icons are lucide glyphs in `--text-primary` / `--text-secondary`.
+- **Motion.** Step content arrives with the registered get-started guide entrance (§14.4); the
+  window itself keeps the shared modal entrance and nothing loops.
+
+Other wizards keep the registered rule; this entry does not authorize removing step chips,
+centering commit actions or adding a × elsewhere.
+
 ### Inputs & Forms
 
 ```
@@ -1405,6 +1440,12 @@ Only the two registered chart members inside Usage History may enlarge their non
   - **Parameters**: each segment `--motion-base` / `--motion-ease-out`, opacity 0→1 and `translateY(6px→0)`; adjacent segments start **30ms** apart via `--rise-index` (`animation-delay: calc(var(--rise-index) * 30ms)`); at most **6** segments (the index is clamped at 5). `transform` / `opacity` only. This is an explicit exception to the rule that stagger is limited to the composer-container rows (≤20ms/row) and must not leak elsewhere.
   - **Degradation**: `.bot-market-rise` is in the `prefers-reduced-motion` whitelist in `globals.css`; reduced motion lands on the final frame directly.
   - **Scope boundary**: this page only. The same detail page's other motion uses existing tiers: the header identity and compact action fade in on `--motion-fast` / `--motion-ease-out` and out on `--motion-instant` / `--motion-ease-in` (a state-driven transition, not a keyframe); placeholders appear only after 300ms of loading, static, with no shimmer. Implementation: `.bot-market-rise` in `globals.css`.
+- **Get-started guide entrance(开始引导入场)** — the tenth sanctioned motion class (owner-requested 2026-11-11; the cover's timing was tuned twice the same day), **only** for the Desktop get-started guide (`features/first-run-guide/FirstRunGuide.tsx`):
+  - **Step pages**: when a step is reached with Start / Next / Skip / Back, its blocks fade in and rise 6px one after another in reading order, so the page reads as content arriving rather than a hard cut. Bot Market detail values: `--motion-base` / `--motion-ease-out`, adjacent blocks **30ms** apart via `--rise-index`, the index clamped at 5.
+  - **Cover**: a single choreography of about 1.3 seconds, played once when the cover mounts. The brand block, headline, sentence, three cards, the Start button and the line below it arrive in that order on the step-page values (`--motion-base` / `--motion-ease-out`), rising 8px, **45ms** apart, so everything is in place within about half a second — the owner found a slower arrival of the top block deliberate-looking (2026-11-11), and an earlier 0.3s version was over before it could be seen, so the arrival stays brisk and the scenes carry what is worth watching. Each card's scene plays once, starting 150ms after its card began to arrive: three task lines are drawn from the left 180ms apart and ticked off, the last one showing a ring for a moment before its tick replaces it; the provider marks pop in 100ms apart; the computer appears, three dots step toward the phone 70ms apart, the phone appears and the same task line is drawn on it. The Start button is clickable throughout.
+  - **Parameters**: every element uses a duration and curve token — pop (`opacity` 0→1, `scale(0.6→1)`) and draw (`opacity` 0→1, `scaleX(0→1)` from the left edge) on `--motion-base` / `--motion-ease-out`, the ring's exit (`opacity` 1→0) on `--motion-fast` / `--motion-ease-in`. Only the start times are literals, passed per element as `--at`. No overshoot, no looping, no replay on rerender, data arrival, scroll or hover, and no exit animation. Motion sits on HTML wrappers, never on an SVG glyph. `transform` / `opacity` only. Like the Bot Market entry, this is an explicit exception to the rule that stagger is limited to the composer-container rows.
+  - **Degradation**: `.first-run-rise`, `.first-run-pop`, `.first-run-draw` and `.first-run-leave` are in the `prefers-reduced-motion` whitelist in `globals.css`; reduced motion lands on the final frame directly — every task ticked, every mark and both screens present, the ring absent.
+  - **Scope boundary**: this guide only. The cover scenes illustrate what the product does on the welcome page; they are not status signals and must not be reused for real task, provider or device state, which keep their registered responses. Implementation: `.first-run-*` in `globals.css`; start times in `FirstRunGuide.tsx`.
 - **Remote connection message packets(远程连接消息流动)** — the ninth sanctioned motion class (owner requests 2026-11-06: show messages moving while the owner works with a machine; 2026-11-07, after comets with bounce, a pipe of dots and hhh-style light points: no moving circles at all — a connected line is solid green and a line with messages becomes a green dashed line flowing in the message direction), **only** for the lines of the Desktop 远程连接 V2 topology (`TopologyFlow.tsx`):
   - **Definition**: when this computer and another device have actually exchanged business messages in the last few seconds, the line between them turns from solid green to a blue dashed line whose dashes flow toward where the messages go, so the owner can see which machine they are working with. The signal is real: device-link records, per link, when a business message (invoke / invoke-result / push, excluding ACKs, retransmits and direct-path negotiation) was last sent or received, and the page reads it every 2 seconds while visible; the line turns solid again within about 4–6 seconds after the last message (`FLOW_WINDOW_MS`). No traffic, no motion.
   - **Rhythm**: steady and linear — the dashes move at a constant 16px/s (`SPEED`) on every line, one dash-plus-gap every ~12px (`SPACING`, rounded to fill the line), with each gap fading in and out over the first and last 6px so the loop has no seam. Direction: toward the device for 发送中 and 收发中, toward this computer for 接收中; a relayed device's flow also runs on the hub-to-relay trunk. Phases are pinned to the document timeline so the 2-second refresh never jolts them. There are no light points, ripples, pulses, bounce or overshoot.
@@ -1535,6 +1576,12 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 - **Lockup**: Desktop uses one static 40×40px product-approved Cindy character crop (8px radius), followed by the active theme's 24px-high wordmark with an 8px gap. Mobile uses the same crop at 22×22px (6px radius), followed by an 18px-high wordmark with a 6px gap, keeping the narrower export understated. Do not append a website or regional host. The character keeps the source asset's original color and opacity without component-authored filtering.
 - **Constraints**: no animation, shadow, decorative background, additional brand color, enlarged hero treatment, or alternate character composition. This approval identifies the source of an exported Cindy conversation; it is not precedent for adding mascots to cards, dialogs, tool output, or other share-adjacent UI.
 - **Theme boundary**: Light and Dark use their matching wordmark assets. The same static character crop may be used in both modes because it is an exported brand asset, not a UI color surface.
+
+**Sanctioned brand surface — get-started guide cover (owner-requested 2026-11-11).**
+
+- **Where**: the cover page of `features/first-run-guide/FirstRunGuide.tsx` only — the first page a new user sees after the first sign-in on a computer. It welcomes the person to the product, so showing the product's own brand block is identification, not decoration.
+- **Asset**: the unchanged `ThemeBrandLockup` (the new-session brand block: 50×50px icon + horizontal logo, active theme's artwork, existing registered icon shadow). Do not rescale it, pair it with a slogan or character artwork, or add a plate, border or motion.
+- **Scope boundary**: the cover only. The guide's other steps, its parked bar and the Settings entry stay neutral; this is not precedent for brand imagery in other dialogs, cards or empty states.
 
 **Sanctioned brand surface — mobile download dialog (approved 2026-07-25).**
 

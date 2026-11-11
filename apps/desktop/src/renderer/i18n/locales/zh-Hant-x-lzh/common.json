@@ -19834,12 +19834,6 @@
       "from": "遷自「{{name}}」",
       "closeChecklist": "闔清單"
     },
-    "suggestion": {
-      "title": "用遷移助理從「{{name}}」遷移？",
-      "description": "可以把那台電腦上的法器、技藝、設定和連線搬到這台電腦。需要在這台電腦上重新登入或授權的內容會列成清單。之後也可以在「設定 → 通用 → 遷移助理」中開啟。",
-      "confirm": "開啟遷移助理",
-      "later": "暫緩"
-    },
     "walkthrough": {
       "progress": "辦理清單 {{current}} / {{total}}",
       "open": "開啟",
@@ -19861,6 +19855,103 @@
         "allow": "允許",
         "deny": "拒絕"
       }
+    }
+  },
+  "firstRunGuide": {
+    "title": {
+      "new": "歡迎使用 Cindy",
+      "returning": "歡迎回來"
+    },
+    "stepsLabel": "引導步驟",
+    "close": "關閉引導",
+    "next": "次之",
+    "skip": "略過",
+    "preparing": "正在準備…",
+    "steps": {
+      "legacy": "舊版資料",
+      "intro": "識 Cindy",
+      "migration": "自舊電腦遷移",
+      "models": "連模型",
+      "import": "納已有之物",
+      "finish": "畢"
+    },
+    "legacy": {
+      "title": "舊版之資料已攜至",
+      "body": "歷史差事、媒體檔案與 Agent 瀏覽器之登入狀態已遷至新版，可續用。",
+      "note": "已授權之第三方金鑰與憑證不隨資料而遷，須於設定中重新授權或填寫。"
+    },
+    "intro": {
+      "lead": "Cindy 乃助你心想事成之 AI 助手。",
+      "work": {
+        "title": "以事託之",
+        "body": "它於你的卷匣與應用中徑直成事，非止答問。"
+      },
+      "connect": {
+        "title": "用你已有之模型與器具",
+        "body": "接上自己的訂閱或 API Key，法器與技藝按需新增。"
+      },
+      "continue": {
+        "title": "何處皆可續做",
+        "body": "於手機上發起、查看並續做電腦上的差事。"
+      },
+      "start": "始",
+      "next": "其後"
+    },
+    "migration": {
+      "title": "將另一台電腦上的 Cindy 搬來",
+      "body": "你的帳號下有一台電腦已設定妥當。遷移助理會把它的法器、技藝、設定和連線複製到這台電腦；金鑰只在你在那台電腦上點「允許」後複製。",
+      "manualBody": "若曾在另一台電腦上用過 Cindy，遷移助理可把它的法器、技藝、設定和連線複製到這台電腦。",
+      "done": "已自「{{name}}」遷移",
+      "from": "舊電腦",
+      "to": "這台電腦"
+    },
+    "models": {
+      "title": "為 Cindy 接上模型",
+      "body": "以下二法可並用。",
+      "cindy": {
+        "badge": "官方之役",
+        "body": "Cindy 官方所供之模型服務，登入即有，無須開通。新帳號有贈予之餘資，可供試用；付費之後，幾乎諸模型皆可用，不付費則可用模型之範圍有限。",
+        "active": "已含於你的帳號，可徑直使用",
+        "freeBalance": "贈予之資，歡迎試用"
+      },
+      "own": {
+        "title": "用你自己的訂閱",
+        "badge": "更為實惠",
+        "body": "已有 Claude、ChatGPT 等訂閱或 API Key？甚薦接入並用，如此體驗最佳。",
+        "more": "其他供方與 API Key",
+        "connected": "已連"
+      }
+    },
+    "import": {
+      "title": "將此機已有之物攜入",
+      "body": "以下乃此機其他 AI 器具中所得。唯讀原錄，不改其分毫。",
+      "empty": "此機未見可納之物。",
+      "tasksHeading": "差事",
+      "tasksHint": "勾選器具，將其中差事接至 Cindy 續做。",
+      "pick": "逐一揀選",
+      "started": "已於背景開始納入，可於「設定 → 差事匯入」察其進度。",
+      "startFailed": "納入未始。可於「設定 → 差事匯入」重新納入。",
+      "teammatesHeading": "同僚",
+      "teammatesHint": "將其他器具中的 Agent 連同記憶、技藝與自動化納為同僚。",
+      "importTeammate": "納為同僚"
+    },
+    "finish": {
+      "title": "諸事已備",
+      "legacy": "舊版之資料已遷至新版",
+      "modelReady": "模型已連",
+      "modelMissing": "尚未連模型。新建差事時可隨時連之。",
+      "importStarted": "其他器具之差事正於背景納入",
+      "native": "你在 Claude Code、Codex 中的技藝與 MCP 可徑直使用，無須納入。",
+      "start": "始第一件差事"
+    },
+    "resume": {
+      "label": "引導進行中 · {{step}}",
+      "back": "返引導"
+    },
+    "settings": {
+      "title": "起步引導",
+      "description": "重覽識 Cindy、自舊電腦遷移、連模型與納已有之物的引導。",
+      "open": "開啟引導"
     }
   },
   "subscriptionAccounts": {
