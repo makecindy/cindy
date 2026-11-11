@@ -152,6 +152,9 @@ interface ShowSessionEventPayload {
 // 时就回收掉，导致 click handler 丢失甚至触发异常事件。用 Set 持引用，等
 // close/click 后再 release。
 const liveNotifications = new Set<Notification>();
+// Only completed replies replace one another. Action requests and errors must
+// remain visible independently; the OS objects are retained until explicitly released.
+const latestReplyNotifications = new Map<string, { notification: Notification; dismiss: () => void }>();
 type NotifiedReply = { eventId: string } | { fallbackSentAt: number };
 const notifiedReplies = new Map<string, NotifiedReply>();
 /**
@@ -510,13 +513,16 @@ export function showDesktopSessionEvent(
   if (isLocalSession && isSessionNotificationsMutedSync(sessionId)) return false;
   const safeTitle = title?.trim() || sessionId.slice(0, 8) || getSessionNotificationUntitled();
   const owner = captureDataOwnerBroadcastScope();
+  const replyKey = process.platform === 'darwin' && kind === 'done' && sessionId
+    ? JSON.stringify([owner.ownerScopeKey ?? owner.ownerStamp ?? null, payload.deviceId ?? null, sessionId])
+    : undefined;
   return showDesktopToast(safeTitle, kind, () => {
     if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
     if (sessionId) openMainWindowSession(sessionId, {
       ...(payload.deviceId ? { deviceId: payload.deviceId } : {}),
       ...(payload.messageClientId ? { messageClientId: payload.messageClientId } : {}),
     });
-  }, payload.body, payload.teammate, payload.avatarJpeg, !sessionId);
+  }, payload.body, payload.teammate, payload.avatarJpeg, !sessionId, replyKey);
 }
 
 /**
@@ -751,6 +757,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
               sessionId, title: notificationTitle, kind, teammate, markAttention, avatarJpeg,
+              deviceId: payload.remoteDeviceId,
               messageClientId: preview?.reply?.clientId,
               body: teammate ? notificationPreview(detail ?? '', 240, getNotificationImageLabel()) || fallbackBody : undefined,
             });
@@ -895,8 +902,11 @@ function assertValidSessionEventPayload(
   }
 }
 
-/** 桌面 toast 分支 — 原实现保持不变,只是拆出来便于 channels 选择性执行。 */
-function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: () => void, previewBody?: string, teammate = false, avatarJpeg?: string, keepSystemSound = false): boolean {
+/** Desktop delivery, with optional replacement of a previous macOS session reply. */
+function showDesktopToast(
+  safeTitle: string, kind: SessionEventKind, onClick: () => void, previewBody?: string,
+  teammate = false, avatarJpeg?: string, keepSystemSound = false, replyKey?: string,
+): boolean {
   const body = previewBody ?? getSessionNotificationBody(kind);
 
   // Electron Notification 在某些 Linux 桌面环境下可能不可用——静默兜底。
@@ -918,16 +928,39 @@ function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: ()
 
   const release = () => {
     liveNotifications.delete(notif);
+    // A dismissed predecessor can emit close/failed after its successor is shown.
+    if (replyKey && latestReplyNotifications.get(replyKey)?.notification === notif) {
+      latestReplyNotifications.delete(replyKey);
+    }
+  };
+  const dismiss = () => {
+    try { notif.close(); }
+    catch (error) { log.warn('[notification] failed to dismiss previous reply:', error); }
+    finally { release(); } // Electron does not guarantee a close event.
   };
 
-  notif.on('click', onClick);
+  notif.on('click', () => {
+    release();
+    onClick();
+  });
   notif.on('close', release);
   notif.on('failed', (_e, error) => {
     // 通知发不出去时主动留痕，方便定位 AUMID / 系统通知开关 / Focus Assist 类问题。
     log.warn('[notification] failed to show:', error);
     release();
   });
-  notif.show();
+  if (replyKey) {
+    const previous = latestReplyNotifications.get(replyKey);
+    latestReplyNotifications.set(replyKey, { notification: notif, dismiss });
+    previous?.dismiss();
+    // Native icon preparation can finish after a newer notification has replaced
+    // this one. Remove that late delivery rather than leaving an obsolete reply.
+    notif.on('show', () => {
+      if (latestReplyNotifications.get(replyKey)?.notification !== notif) dismiss();
+    });
+  }
+  try { notif.show(); }
+  catch (error) { release(); throw error; }
   return true;
 }
 
