@@ -371,6 +371,69 @@ describe('computer mcp integration', () => {
     await callComputerDriverTool('get_desktop_state', {}, context);
     await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
   });
+  // PR #9919 P1: the three-second busy guard expires, but a picture taken before
+  // local HID input stays stale. Unit tier through production dispatch; the old
+  // coverage only invalidated captures for remote/Agent input or a failed read.
+  it.each(['click', 'drag'] as const)('rejects %s from before physical input even after the person pauses', async (tool) => {
+    vi.useFakeTimers();
+    resetDesktopInputGuardStateForTests();
+    try {
+      mcpListToolsMock.mockResolvedValue({ tools: COMPUTER_TOOLS.map((entry) => ({
+        name: entry.name, inputSchema: { type: 'object', properties: { target: {}, capture_id: {} }, additionalProperties: true },
+      })) });
+      mcpCallToolMock.mockImplementation(async ({ name }) => ({ structuredContent: name === 'get_desktop_state'
+        ? { capture_id: 'physical-input-capture', screenshot_frame_valid: true } : { ok: true, effect: 'confirmed' } }));
+      const context = { sessionId: `physical-input-${tool}` };
+      const pointer = { target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'physical-input-capture',
+        delivery_mode: 'foreground', ...(tool === 'click' ? { x: 10, y: 20 } : { from_x: 10, from_y: 20, to_x: 30, to_y: 20 }) };
+      powerMonitorState.idleSeconds = 10;
+      await callComputerDriverTool('get_desktop_state', {}, context);
+      vi.advanceTimersByTime(6_000);
+      powerMonitorState.idleSeconds = 4; // User input two seconds after capture, now quiet.
+      await expect(callComputerDriverTool(tool, pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === tool)).toHaveLength(0);
+      await callComputerDriverTool('get_desktop_state', {}, context);
+      await expect(callComputerDriverTool(tool, pointer, context)).resolves.toBeDefined();
+      expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === tool)).toHaveLength(1);
+    } finally {
+      powerMonitorState.idleSeconds = 3600;
+      resetDesktopInputGuardStateForTests();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps input during a slow desktop capture stale and rejects unknown idle time', async () => {
+    vi.useFakeTimers();
+    resetDesktopInputGuardStateForTests();
+    try {
+      mcpListToolsMock.mockResolvedValue({ tools: COMPUTER_TOOLS.map((entry) => ({
+        name: entry.name, inputSchema: { type: 'object', properties: { target: {}, capture_id: {} }, additionalProperties: true },
+      })) });
+      let duringCapture = true;
+      mcpCallToolMock.mockImplementation(async ({ name }) => {
+        if (name === 'get_desktop_state' && duringCapture) {
+          vi.advanceTimersByTime(6_000);
+          powerMonitorState.idleSeconds = 4;
+        }
+        return { structuredContent: name === 'get_desktop_state'
+          ? { capture_id: 'slow-capture', screenshot_frame_valid: true } : { ok: true, effect: 'confirmed' } };
+      });
+      const context = { sessionId: 'physical-input-during-capture' };
+      const pointer = { target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'slow-capture', delivery_mode: 'foreground', x: 10, y: 20 };
+      powerMonitorState.idleSeconds = 10;
+      await callComputerDriverTool('get_desktop_state', {}, context);
+      await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      duringCapture = false;
+      await callComputerDriverTool('get_desktop_state', {}, context);
+      powerMonitorState.idleSeconds = Number.NaN;
+      await expect(callComputerDriverTool('click', pointer, context)).rejects.toMatchObject({ code: 'STALE_SNAPSHOT' });
+      expect(mcpCallToolMock.mock.calls.filter(([call]) => call.name === 'click')).toHaveLength(0);
+    } finally {
+      powerMonitorState.idleSeconds = 3600;
+      resetDesktopInputGuardStateForTests();
+      vi.useRealTimers();
+    }
+  });
   let revisionSpy: ReturnType<typeof vi.spyOn>;
   let agentRevisionSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(async () => {

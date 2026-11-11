@@ -3595,7 +3595,11 @@ export async function grantComputerDriverPermissions(
 
 // Human input and other tasks invalidate observed targets after ownership ends.
 // Own sequential primitives retain their observations; overlapping reads do not.
-const inputObservations = new Map<string, { windows: Map<string, number | symbol>; requiresObservation: boolean; desktopCaptureId?: string }>();
+const inputObservations = new Map<string, {
+  windows: Map<string, number | symbol>;
+  requiresObservation: boolean;
+  desktopCapture?: { id: string; startedAt: number };
+}>();
 
 /**
  * Foreground delivery shares the keyboard and mouse with whoever is at this
@@ -3748,6 +3752,22 @@ export function assertNoRecentUserInput(name: ComputerMcpToolName, args: Record<
   );
 }
 
+/** A quiet user is not proof that an earlier desktop picture is still current. */
+function hasNoInputSinceDesktopCapture(startedAt: number): boolean {
+  try {
+    const idleSeconds = powerMonitor.getSystemIdleTime();
+    const now = Date.now();
+    // Unlike the busy guard, do not attribute HID events to our previous action:
+    // even its late events can invalidate a picture taken in the meantime.
+    // Subtracting floored idle seconds gives the latest possible input instant.
+    // When it overlaps capture, require another observation, not a grace period.
+    return Number.isFinite(idleSeconds) && idleSeconds >= 0 && now >= startedAt
+      && now - idleSeconds * 1000 < startedAt;
+  } catch {
+    return false;
+  }
+}
+
 export async function callComputerDriverTool(
   name: ComputerMcpToolName,
   args: Record<string, unknown>,
@@ -3765,6 +3785,7 @@ export async function callComputerDriverTool(
   const desktop = name === 'get_desktop_state' || isDesktopComputerTarget(args);
   const window = desktop ? 'desktop:primary' : `${args.pid}:${args.window_id}`;
   if (getComputerTool(name)?.readOnly === true) {
+    const observationStartedAt = Date.now();
     const agentRevision = agentDesktopInputRevision();
     const startedIdle = !isHumanDesktopInputActive() && !isAgentDesktopInputActive();
     const explicitObservation = (name === 'get_window_state' || name === 'get_desktop_state') && context?.observationPurpose !== 'recovery';
@@ -3772,7 +3793,7 @@ export async function callComputerDriverTool(
     const app = `${args.pid}:undefined`;
     if (explicitObservation) {
       if (observations) observations.requiresObservation = true;
-      if (desktop && observations) observations.desktopCaptureId = undefined;
+      if (desktop && observations) observations.desktopCapture = undefined;
       // Revoke old permission and prevent an older concurrent read from
       // restoring it after this read fails or is cancelled.
       observations?.windows.set(window, observation);
@@ -3785,7 +3806,10 @@ export async function callComputerDriverTool(
       && agentRevision === agentDesktopInputRevision() && !isAgentDesktopInputActive()) {
       if (observations?.windows.get(window) === observation) {
         observations.windows.set(window, revision);
-        if (desktop) observations.desktopCaptureId = (result as { capture_id: string }).capture_id;
+        if (desktop) observations.desktopCapture = {
+          id: (result as { capture_id: string }).capture_id,
+          startedAt: observationStartedAt,
+        };
       }
       // App-scoped actions may omit window_id; a successful observation of
       // that app also refreshes its focus, without refreshing other windows.
@@ -3809,8 +3833,15 @@ export async function callComputerDriverTool(
         ? 'Desktop input or a newer observation invalidated this target. Call get_desktop_state before acting again.'
         : 'Desktop input or a newer observation invalidated this target. Get fresh state for this window before acting again.', 'STALE_SNAPSHOT');
     }
-    if (desktop && args.capture_id !== observations?.desktopCaptureId) {
-      throw new ComputerDriverError('Desktop capture is stale or already used. Call get_desktop_state again before pointer input.', 'STALE_SNAPSHOT');
+    if (desktop) {
+      const capture = observations?.desktopCapture;
+      if (!observations || !capture || args.capture_id !== capture.id) {
+        throw new ComputerDriverError('Desktop capture is stale or already used. Call get_desktop_state again before pointer input.', 'STALE_SNAPSHOT');
+      }
+      if (!hasNoInputSinceDesktopCapture(capture.startedAt)) {
+        observations.desktopCapture = undefined;
+        throw new ComputerDriverError('System input may have occurred since this desktop capture. Call get_desktop_state again after input settles; no pointer input was sent.', 'STALE_SNAPSHOT');
+      }
     }
   };
   assertCurrent();
@@ -3874,7 +3905,7 @@ async function callComputerDriverToolImpl(
           // CUA 0.47.6 can retain earlier captures. Any input (including own
           // window input) may change the desktop; require a new picture next.
           const observation = inputObservations.get(sessionId);
-          if (observation) observation.desktopCaptureId = undefined;
+          if (observation) observation.desktopCapture = undefined;
         }
       }, { signal, assertCurrent: assertActive });
     return name === 'list_windows' ? enrichAndFilterListWindowsResult(result, rawArgs) : result;

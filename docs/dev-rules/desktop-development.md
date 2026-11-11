@@ -291,6 +291,11 @@ AX token 或 zoom；操作后重新截图核实。窗口失败不会自动转成
 操作或失败的桌面读取之后，都需要新的桌面观察。新字段只用于本机 CUA 调用，无新增
 device-link 帧、IPC 或服务端接口。
 
+桌面截图记录读取开始时间，并在输入排队前、取得队列及派发前核对系统 HID 空闲时钟。
+截图后出现输入，即使用户已停顿超过忙碌保护窗口，旧截图仍失效；读取期间的输入同样失效。
+系统空闲时钟只有整秒精度，输入时间与截图重叠或无法读取时要求重新观察，不使用上次 Agent
+输入的归因宽限期放行。连续桌面操作应在上一动作的输入落定后重新截图。
+
 原生接入回归可用 `CINDY_CUA_SMOKE=desktop-pointer pnpm restart:desktop:remote -- --mock --region=global --isolated=cua-desktop-test`。
 它通过真实 Cindy MCP → host → CUA 在自己的临时窗口点击计数按钮，验证旧截图拒绝和
 新截图精确点击与桌面滑块拖动；结果写入该隔离沙箱的 `computer-use-smoke.json`，测试窗口、截图及驱动
