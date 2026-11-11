@@ -1171,9 +1171,9 @@ CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指
 Orca、伙伴与 IM、远程执行。S 与 R 已从 A 中单列，C-窗口本地与 C-专项设计不计入。后续各批的
 范围与“还差多少”以此为准。
 
-**窗口类在客户端模式下**（窗口类 = B + W + S·本地 + C-窗口本地，共 385；对照客户端模式登录页
+**窗口类在客户端模式下**（窗口类 = B + W + S·本地 + C-窗口本地，共 386；对照客户端模式登录页
 [`evidence/channel-usage-client-login.json`](evidence/channel-usage-client-login.json) 与普通模式
-巡检后两份主进程处理者快照）：已注册 **371**；未注册 **12**——`maker:computer:*` 10 个与
+巡检后两份主进程处理者快照）：已注册 **372**；未注册 **12**——`maker:computer:*` 10 个与
 `maker:browser:*` 2 个，只在客户端模式跳过的 `registerMakerIpcsAfterSplash` → `registerMakerIpc`
 里注册，今天返回 `UNSUPPORTED_CAPABILITY`（拖拽开始是事件，无人监听）。**未实现**；#9991 不接，
 归本任务第 1a 批：#9991 合并后，把这 12 个注册拆成客户端模式也会调用的函数。另 2 个插件页面通道
