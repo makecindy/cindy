@@ -329,7 +329,7 @@ function pushes(controller: BaselineController, handler: (channel: string, paylo
   });
 }
 
-/** Mobile task screen push reactions: DeviceLinkContext.tsx:2280-2301. */
+/** Mobile task screen push reactions: DeviceLinkContext.tsx:2296-2317. */
 function wirePhoneTask(controller: BaselineController, view: HistoryViewController<HistoryMessageSource>, sessionId: string): () => void {
   return pushes(controller, (channel, payload) => {
     if ((payload as { sessionId?: unknown } | null)?.sessionId !== sessionId) return;
@@ -516,8 +516,8 @@ type TopicRegistry = InstanceType<MobileRecoveryCore['DeviceLinkTopicRegistry']>
 
 /**
  * Mobile recovery wiring shared by reconnect and foreground: PeerRecoveryScheduler →
- * rehydrateDeviceLinkPeer over a DeviceLinkTopicRegistry plan (DeviceLinkContext.tsx:1073-1089,
- * 897-909). `rebuild` is rebuildSessionSnapshot for each held `session:<id>` topic.
+ * rehydrateDeviceLinkPeer over a DeviceLinkTopicRegistry plan (DeviceLinkContext.tsx:1083-1099,
+ * 907-919). `rebuild` is rebuildSessionSnapshot for each held `session:<id>` topic.
  */
 function createPhoneRecovery(core: MobileRecoveryCore, controller: BaselineController, hostId: string,
   openSessionId: string | null, rebuild: (sessionId: string) => Promise<unknown>) {
@@ -556,7 +556,7 @@ function createPhoneRecovery(core: MobileRecoveryCore, controller: BaselineContr
   return { state, scheduler };
 }
 
-/** Mobile reconnect: DeviceLinkContext.tsx:1455-1462, rehydrate.ts:80-199, rebuildSessionSnapshot DLC:2304-2493, re-run syncSession SCR:4531-4537. */
+/** Mobile reconnect: DeviceLinkContext.tsx:1470-1477, rehydrate.ts:80-199, rebuildSessionSnapshot DLC:2320-2509, re-run syncSession SCR:4531-4537. */
 interface ReconnectOptions {
   /** What the host does while the controller is away (v1: the short catch-up turn). */
   offlineWork?: () => Promise<unknown>;
@@ -597,7 +597,7 @@ async function reconnectPhone(env: ScenarioEnv, controller: BaselineController, 
   if (state.reseeds > 0) await refreshSidebar(controller, { openSessionId: sessionId, prefetched: options.prefetched });
 }
 
-/** Desktop reconnect: index.ts:1177 subscription replay, useDeviceLinkRemoteProjects.ts:616-687 sidebar bootstrap, useRemoteSessionSync.ts:450-459. */
+/** Desktop reconnect: index.ts:1189 subscription replay, useDeviceLinkRemoteProjects.ts:616-687 sidebar bootstrap, useRemoteSessionSync.ts:450-459. */
 async function reconnectDesktop(env: ScenarioEnv, controller: BaselineController, task: OpenTask, sessionId: string,
   options: ReconnectOptions = {}): Promise<void> {
   controller.dropNetwork();
@@ -699,8 +699,8 @@ async function touchSession(host: BaselineHost, sessionId: string, at: number, s
 }
 
 /**
- * Mobile back from background after the stop grace: DeviceLinkContext.tsx:1784-1794
- * (stop after BACKGROUND_STOP_GRACE_MS, connectAllNow on active), :1802-1828 (rehydrate,
+ * Mobile back from background after the stop grace: DeviceLinkContext.tsx:1799-1810
+ * (stop after BACKGROUND_STOP_GRACE_MS, connectAllNow on active), :1818-1844 (rehydrate,
  * one explicit aliases refresh), rehydrate.ts reseed → Home list refresh + read ahead,
  * skipping tasks this process already read ahead.
  */
@@ -723,7 +723,7 @@ async function phoneBackgroundForeground(env: ScenarioEnv, controller: BaselineC
   await until(() => state.done, 'phone foreground recovery');
   scheduler.pause();
   if (state.reseeds === 0) throw new Error('foreground recovery did not reseed the task list');
-  // DeviceLinkContext.tsx:1822-1827 refreshes aliases once on return; Home's list refresh sends its own (:2035).
+  // DeviceLinkContext.tsx:1838-1843 refreshes aliases once on return; Home's list refresh sends its own (:2051).
   await controller.invoke('sidebar-settings:get-project-aliases', []);
   await refreshSidebar(controller, { prefetched });
 }
