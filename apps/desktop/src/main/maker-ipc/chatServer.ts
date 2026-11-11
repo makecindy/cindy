@@ -2455,10 +2455,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         unpublishable = error;
       } finally { run.delivery = undefined; }
       if (running.get(run.execution.id) === run && run.settlement === pending) {
-        deps.log?.warn('Group turn ended without publishing a result', {
-          groupId: run.execution.conversation_id, executionId: run.execution.id, outcome: pending.terminal.outcome,
-          ...(unpublishable === undefined ? {} : chatErrorDiagnostic(unpublishable)),
-        });
+        // Only a turn whose result could not be published at all is worth this line: `settleRun`
+        // returning normally means the group (or its failure notice) received it.
+        if (unpublishable !== undefined) {
+          deps.log?.warn('Group turn ended without publishing a result', {
+            groupId: run.execution.conversation_id, executionId: run.execution.id, outcome: pending.terminal.outcome,
+            ...chatErrorDiagnostic(unpublishable),
+          });
+        }
         run.releaseToolAuthority?.();
         forgetRun(run);
         // Refresh both delivered results and local failures without waiting for an echo.

@@ -1445,7 +1445,8 @@ describe('group timeline', () => {
         { position: 1, botId: 'abu', botName: '阿布', task: '', status: 'running' },
         { position: 2, botId: 'xiaoman', botName: '小满', task: '', status: 'pending' },
       ] };
-    await render(data);
+    // Through the computer's projection: an explicit null must survive parsing, not become "missing".
+    await render(parseBotGroupChatData(data)!);
     const steps = [...byId('botGroup.plan')!.querySelectorAll('[data-testid="botGroup.plan.step"]')];
     // The skipped turn keeps its mark and label; nothing claims it spoke.
     expect(steps[0]?.textContent).toContain('groupChat.plan.stepSkipped');

@@ -1375,6 +1375,16 @@ describe('Chat Server result delivery and refresh', () => {
       expect(ended[0][1]).toMatchObject({ groupId: roomId, executionId: execution.id, outcome: 'error', code: 'PERMISSION_DENIED', status: 403 });
     });
 
+    // A published result is not a silent ending: the common cleanup must not leave this line.
+    it('stays quiet when the group actually received the result', async () => {
+      const warn = withLogger();
+      await start();
+      await service.settleLaneTurn(terminal);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(notWarned(warn, 'Group turn ended without publishing a result')).toHaveLength(0);
+      expect(deliveries()).toHaveLength(1);
+    });
+
     // A queued execution for an actor no local profile answers for is never claimed: the room
     // stays empty and nothing is refused. The pushed notice is the one place a trace can come from.
     it('records queued work for a companion whose local identity no longer resolves', async () => {
