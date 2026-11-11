@@ -208,17 +208,20 @@ export function messageSourceSenderFromMeta(meta: unknown): MessageSourceSender 
   return undefined;
 }
 
-/**
- * 来源任务在另一台电脑上（Agent 跨电脑发消息时，接收电脑把来源任务 id 记为
- * `deviceId::sessionId`）。它不是本机可打开的任务 id：界面照常显示标签与 id，但不提供跳转。
- */
-export function isCrossDeviceSourceSessionId(sessionId: string | undefined): boolean {
-  if (!sessionId) return false;
+/** 来源任务的设备前缀由接收宿主盖章；跳转时拆开设备与任务，不能把复合 ID 当成本机任务。 */
+export function parseSourceSessionTarget(sessionId: string | undefined): { sessionId: string; deviceId?: string } | null {
+  if (!sessionId) return null;
   const split = sessionId.indexOf('::');
-  return split > 0 && split < sessionId.length - 2;
+  if (split < 0) return { sessionId };
+  if (split === 0 || split === sessionId.length - 2) return null;
+  return { deviceId: sessionId.slice(0, split), sessionId: sessionId.slice(split + 2) };
 }
 
-export type MessageSourceIdKind = 'plugin' | 'mcpApp' | 'teammate' | 'session' | 'automation' | 'member';
+export function isCrossDeviceSourceSessionId(sessionId: string | undefined): boolean {
+  return !!parseSourceSessionTarget(sessionId)?.deviceId;
+}
+
+export type MessageSourceIdKind = 'plugin' | 'mcpApp' | 'localApp' | 'teammate' | 'session' | 'automation' | 'member';
 
 export interface MessageSourceIdEntry {
   kind: MessageSourceIdKind;
@@ -233,6 +236,7 @@ export interface MessageSourceIdEntry {
 export function messageSourceIdEntries(meta: unknown): MessageSourceIdEntry[] {
   const sender = messageSourceSenderFromMeta(meta);
   if (sender?.kind === 'plugin') {
+    if (sender.pluginId.startsWith('local-app:')) return [{ kind: 'localApp', id: sender.pluginId.slice(10) }];
     return sender.pluginId.startsWith('mcp-app:')
       ? [{ kind: 'mcpApp', id: sender.pluginId.slice(8) }]
       : [{ kind: 'plugin', id: sender.pluginId }];
@@ -274,6 +278,7 @@ export function describeMessageSourceSender(sender: MessageSourceSender): string
       return ref ? `由任务${ref} 发送` : '由其他任务发送';
     }
     case 'plugin':
+      if (sender.pluginId.startsWith('local-app:')) return `由本机应用${formatSourceRef(sender.name, 'app_id', sender.pluginId.slice(10))} 发送`;
       if (sender.pluginId.startsWith('mcp-app:')) return `由 MCP App${formatSourceRef(sender.name, 'mcp_server_id', sender.pluginId.slice(8))} 发送`;
       return `由插件${formatSourceRef(sender.name, 'plugin_id', sender.pluginId)} 发送`;
     case 'shared-member':

@@ -10,7 +10,6 @@ export const VERSION = '0.0.0';
 
 export * from './types.js';
 export * from './providers.js';
-export * from './outboundImage.js';
 export type { ToolCallAuthorization, ToolCallAuthorizer } from './tool-call-authority.js';
 
 // feishu/ OpenAPI MCP 模块已于 2026-07-22 整体退役:能力早已迁入插件
@@ -49,6 +48,8 @@ export * from './android/index.js';
 export * from './browser/index.js';
 export * from './computer/index.js';
 
-export * from './contacts/approval.js';
 
-export { TEAMMATE_CONTROL_GUIDANCE, BOT_CONTROL_GUIDANCE, type BotControlState } from './xdt-helper/bot_capabilities.js';
+export { TEAMMATE_CONTROL_GUIDANCE, BOT_CONTROL_GUIDANCE, type BotControlState, type TeammateCapabilityKind } from './xdt-helper/bot_capabilities.js';
+export { TEAMMATE_CORE_TOPICS } from './xdt-helper/teammate_skills.js';
+
+export type { AppModelsRequest } from './xdt-helper/app_models.js';

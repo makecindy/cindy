@@ -25,7 +25,7 @@ import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
-import { sendFileWithImagePreview, type LiziMcpSessionContext, type PrepareOutboundImage } from '@cindy/mcps';
+import type { LiziMcpSessionContext } from '@cindy/mcps';
 import { TELEGRAM_OUTBOUND_MEDIA, TelegramApiError, type TgMessage } from '@cindy/im';
 
 import { createLogger } from '../logger.js';
@@ -38,7 +38,6 @@ const log = createLogger('mcp/cindy_telegram_bot');
 
 export interface TelegramBotMcpDeps {
   getSessionContext(): LiziMcpSessionContext;
-  prepareOutboundImage?: PrepareOutboundImage;
 }
 
 /** 任何人都不能经 Agent 调的方法: 抢长轮询 / 改 webhook / 注销 bot。 */
@@ -291,21 +290,15 @@ export function createTelegramBotMcpServer(deps: TelegramBotMcpDeps): McpServer 
         }
       }
       try {
-        const send = async (filePath?: string) => {
-          const sent = await scope.im.sendMedia(scope.laneUserId, {
-            kind: kind as keyof typeof TELEGRAM_OUTBOUND_MEDIA,
-            ...(filePath ? { absPath: filePath } : {}),
-            ...(url ? { url } : {}),
-            ...(file_id ? { fileId: file_id } : {}),
-            ...(caption ? { caption } : {}),
-            ...(reply_to_message_id ? { replyToMessageId: reply_to_message_id } : {}),
-          });
-          return { ok: true, messageId: sent.messageId };
-        };
-        const sent = uploadPath && kind === 'photo'
-          ? await sendFileWithImagePreview(uploadPath, undefined, deps.prepareOutboundImage, send)
-          : await send(uploadPath);
-        return result({ ...sent, kind, ...(absPath ? { file: path.basename(absPath) } : {}) });
+        const sent = await scope.im.sendMedia(scope.laneUserId, {
+          kind: kind as keyof typeof TELEGRAM_OUTBOUND_MEDIA,
+          ...(uploadPath ? { absPath: uploadPath } : {}),
+          ...(url ? { url } : {}),
+          ...(file_id ? { fileId: file_id } : {}),
+          ...(caption ? { caption } : {}),
+          ...(reply_to_message_id ? { replyToMessageId: reply_to_message_id } : {}),
+        });
+        return result({ ok: true, messageId: sent.messageId, kind, ...(absPath ? { file: path.basename(absPath) } : {}) });
       } catch (err) {
         return failure(err, TELEGRAM_OUTBOUND_MEDIA[kind as keyof typeof TELEGRAM_OUTBOUND_MEDIA]?.method ?? 'sendMedia');
       }
@@ -521,3 +514,4 @@ export function createTelegramBotMcpServer(deps: TelegramBotMcpDeps): McpServer 
 
 /** 测试用: 下载目录名(与 download_file 同源)。 */
 export const TELEGRAM_DOWNLOAD_SUBDIR = DOWNLOAD_SUBDIR;
+

@@ -35,11 +35,53 @@ describe('guest usage meter', () => {
       .toEqual([{ model: 'sonnet', turns: 1, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0 }]);
   });
 
+  // Native Claude bypasses the HTTP proxy: streaming usage must settle before a long turn ends.
+  // The SDK result may additionally include child-only usage; neither source may double-charge. Unit.
+  it('reconciles live Claude model receipts with cumulative root and child totals', () => {
+    const meter = createGuestUsageMeter('claude-code');
+    const requestUsage = { epoch: 'native', models: [{ model: 'future-model', inputTokens: 100, outputTokens: 20 }] };
+    expect(meter.observe({ type: 'status', data: { requestUsage } } as AgentEvent, 'root')[0])
+      .toMatchObject({ model: 'future-model', inputTokens: 100, outputTokens: 20 });
+    const result = { requestUsage, modelUsageCumulativeStartsAtZero: true, modelUsage: {
+      'future-model': { inputTokens: 100, outputTokens: 25 }, 'child-model': { inputTokens: 40, outputTokens: 10 },
+    } };
+    const samples = meter.observe(done(result), 'root');
+    expect(samples.find(row => row.model === 'future-model')).toMatchObject({ inputTokens: 0, outputTokens: 5 });
+    expect(samples.find(row => row.model === 'child-model')).toMatchObject({ inputTokens: 40, outputTokens: 10 });
+    expect(meter.observe(done(result), 'root').every(row => row.inputTokens === 0 && row.outputTokens === 0)).toBe(true);
+  });
+
   it('reads Codex and Pi per-turn usage against the current model', () => {
     expect(createGuestUsageMeter('codex').observe(done({ usage: { promptTokens: 9, completionTokens: 4, cachedTokens: 3, cacheCreationTokens: 1 } }), 'gpt-5.5'))
       .toEqual([{ model: 'gpt-5.5', turns: 1, inputTokens: 9, outputTokens: 4, cacheReadTokens: 3, cacheCreateTokens: 1, sdkCostUsd: 0 }]);
     expect(createGuestUsageMeter('pi').observe(done({ usage: { inputTokens: 7, outputTokens: 2, cacheReadTokens: 1 } }), 'grok'))
       .toEqual([{ model: 'grok', turns: 1, inputTokens: 7, outputTokens: 2, cacheReadTokens: 1, cacheCreateTokens: 0, sdkCostUsd: 0 }]);
+  });
+
+  // Unit regression: the first resumed SDK total establishes a baseline. Live
+  // receipts covered by that total must not consume the following turn's delta.
+  it('settles live receipts when a resumed Claude process establishes its baseline', () => {
+    const meter = createGuestUsageMeter('claude-code');
+    const requestUsage = { epoch: 'resumed', models: [{ model: 'model-a', inputTokens: 10, outputTokens: 5 }] };
+    expect(meter.observe({ type: 'status', data: { requestUsage } } as AgentEvent, 'model-a')[0])
+      .toMatchObject({ inputTokens: 10, outputTokens: 5 });
+    meter.observe(done({ requestUsage, modelUsage: { 'model-a': { inputTokens: 110, outputTokens: 55 } } }), 'model-a');
+    const next = meter.observe(done({ requestUsage, modelUsage: { 'model-a': { inputTokens: 120, outputTokens: 60 } } }), 'model-a');
+    expect(next[0]).toMatchObject({ inputTokens: 10, outputTokens: 5 });
+  });
+
+  // A long shared turn must settle model receipts before done, without charging retries twice.
+  it.each(['codex', 'pi'])('meters %s request receipts by actual model across turns and runtime restarts', kind => {
+    const meter = createGuestUsageMeter(kind);
+    const snapshot = (epoch: string, outputTokens: number) => ({ type: 'status', data: { requestUsage: {
+      epoch, models: [{ model: 'astra', inputTokens: 10, outputTokens, cacheReadTokens: 2 }],
+    } } } as unknown as AgentEvent);
+    expect(meter.observe(snapshot('run-a', 4), 'sol')[0]).toMatchObject({ model: 'astra', inputTokens: 10, outputTokens: 4, turns: 0 });
+    expect(meter.observe(snapshot('run-a', 4), 'terra')).toEqual([]);
+    expect(meter.observe(snapshot('run-a', 2), 'terra')).toEqual([]);
+    expect(meter.observe(done({ usage: { promptTokens: 10, completionTokens: 4 } }), 'terra')[0]).toMatchObject({ turns: 1, inputTokens: 0, outputTokens: 0 });
+    expect(meter.observe(snapshot('run-a', 6), 'terra')[0]).toMatchObject({ model: 'astra', inputTokens: 0, outputTokens: 2 });
+    expect(meter.observe(snapshot('run-b', 1), 'terra')[0]).toMatchObject({ model: 'astra', inputTokens: 10, outputTokens: 1 });
   });
 
   it('ignores events other than done and malformed numbers', () => {

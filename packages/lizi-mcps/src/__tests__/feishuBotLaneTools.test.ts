@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
-import { extractPayloadToolResultMedia } from '@cindy/maker-shared/payload-summary';
 
 import { createFeishuBotMcpServer } from '../cindy_feishuBotMcpServer';
 import type { FeishuBotLaneScope, FeishuBotLaneTransport } from '../types.js';
@@ -59,13 +58,12 @@ function scopeOf(im: FeishuBotLaneTransport, overrides: Partial<FeishuBotLaneSco
   };
 }
 
-async function harness(getLaneScope?: () => FeishuBotLaneScope | null, extra: Record<string, unknown> = {}) {
+async function harness(getLaneScope?: () => FeishuBotLaneScope | null) {
   const server = createFeishuBotMcpServer({
     getChatId: () => 'oc_here',
     sendFile: vi.fn(async () => ({ ok: true })),
     sendMessage: vi.fn(async () => ({ ok: true, messageId: 'om_x' })),
     ...(getLaneScope ? { getLaneScope } : {}),
-    ...extra,
   });
   const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'feishu-lane-test', version: '0.0.0' });
@@ -81,55 +79,6 @@ async function harness(getLaneScope?: () => FeishuBotLaneScope | null, extra: Re
 }
 
 describe('cindy_feishu_bot 轮次内直通工具', () => {
-  // Regression: sent design screenshots were only visible in Feishu. These unit
-  // cases exercise both real MCP entry points; previous tests only checked send receipts.
-  it.each(['send_file', 'send_file_to_user'])('%s returns the sent image for chat without forwarding it again', async (name) => {
-    const im = fakeTransport();
-    const source = join(tmpdir(), 'design.png');
-    const stored = join(tmpdir(), 'managed-design.png');
-    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
-    const sendFile = vi.fn(async () => ({ ok: true, messageId: 'om_file' }));
-    const h = await harness(() => scopeOf(im), {
-      sendFile,
-      prepareOutboundImage: async () => ({ path: stored, url }),
-    });
-    try {
-      const res = name === 'send_file'
-        ? await h.call(name, { path: source })
-        : await h.call('call_tool', { name, args: { absPath: source } });
-      expect(res.payload).toMatchObject({ ok: true, xdt_image_urls: [url], _xdt_forward_media: false });
-      expect(extractPayloadToolResultMedia(JSON.stringify(res.payload))).toEqual([
-        expect.objectContaining({ kind: 'image', url }),
-      ]);
-      const transport = name === 'send_file' ? im.sendFile : sendFile;
-      expect(transport).toHaveBeenCalledExactlyOnceWith(name === 'send_file' ? 'g/oc_here' : 'oc_here', stored, 'design.png');
-    } finally { await h.close(); }
-  });
-
-  it.each(['throw', 'unavailable', 'send-failed', 'scope-changed'] as const)('keeps image preview and channel delivery outcomes distinct: %s', async (mode) => {
-    const im = fakeTransport({ sendFile: vi.fn(async () => mode === 'send-failed'
-      ? { ok: false, reason: 'UPLOAD_FAIL' } : { ok: true, messageId: 'om_file' }) });
-    const source = join(tmpdir(), 'design.png');
-    const h = await harness(() => scopeOf(im), {
-      prepareOutboundImage: async () => {
-        if (mode === 'throw') throw new Error('preview failure');
-        if (mode === 'unavailable') return { path: source, errorCode: 'MEDIA_READ_FAILED' };
-        return { path: source, url: `cindy-media://blobs/${'b'.repeat(64)}.png`,
-          assertCurrent: () => { if (mode === 'scope-changed') throw new Error('SESSION_SCOPE_CHANGED'); } };
-      },
-    });
-    try {
-      const { payload } = await h.call('send_file', { path: source });
-      expect(payload.ok).toBe(mode === 'throw' || mode === 'unavailable');
-      expect(payload.xdt_image_urls).toBeUndefined();
-      if (mode === 'throw' || mode === 'unavailable') {
-        expect(payload).toMatchObject({ messageId: 'om_file', imagePreviewError: expect.any(String) });
-        expect(im.sendFile).toHaveBeenCalledExactlyOnceWith('g/oc_here', source, undefined);
-      } else if (mode === 'scope-changed') expect(im.sendFile).not.toHaveBeenCalled();
-      else expect(payload.errorCode).toBe('UPLOAD_FAIL');
-    } finally { await h.close(); }
-  });
-
   it('未注入作用域读取器时 server 形态不变(只有 list_tools / call_tool)', async () => {
     const h = await harness();
     expect((await h.client.listTools()).tools.map((t) => t.name).sort()).toEqual(['call_tool', 'list_tools']);

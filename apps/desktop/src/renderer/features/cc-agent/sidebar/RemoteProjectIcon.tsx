@@ -26,12 +26,15 @@ export function RemoteProjectIcon({
   className,
 }: RemoteProjectIconProps) {
   const disconnected = kind !== 'ssh' && connectionStatus === 'disconnected';
+  // 检测中(冷启动缓存 / relay 重连,尚未拿到权威快照):保留普通设备图标,只压低一档,
+  // 不画 MonitorOff —— 那是「确认离线」的意思,启动头几秒画它会把每台电脑都画成掉线。
+  const connecting = kind !== 'ssh' && connectionStatus === 'connecting';
   const Icon = disconnected ? MonitorOff : kind === 'device-link' ? MonitorSmartphone : Globe;
   return (
     <Icon
       size={size}
       strokeWidth={strokeWidth}
-      className={cn('shrink-0', disconnected && 'opacity-75', className)}
+      className={cn('shrink-0', (disconnected || connecting) && 'opacity-75', className)}
       aria-hidden
     />
   );

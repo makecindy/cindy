@@ -18,6 +18,7 @@
 import { projectScheduleSidebarIndex } from '../scheduler/lib/projectScheduleSidebarIndex';
 import { parseScheduleBindings } from '../scheduler/lib/scheduleBindingIndex';
 import type { ScheduleSidebarIndexSnapshot } from '../scheduler/lib/scheduleSidebarIndexRuns';
+import { isTeammateTaskSession } from '../../../shared/sessionSource';
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
@@ -114,6 +115,41 @@ function parseRemoteSessionList(value: unknown, expectedStatus: RemoteSessionSta
   return value as unknown as Session[];
 }
 
+/** Old hosts omit teammate lanes from sessions:list; their owner-authorized history API already exposes exact links. */
+async function readRemoteTeammateTasks(
+  deviceId: string, status: RemoteSessionStatus, limit: number, current: () => boolean,
+): Promise<Session[]> {
+  const links = new Map<string, NonNullable<Session['companion']>>();
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  try {
+    do {
+      if (!current()) return [];
+      const response = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:history:query', [{
+        tool: 'list_sessions', args: { source: 'bot', time_field: 'activity', limit: 200, ...(cursor ? { cursor } : {}) },
+      }]) as { ok?: boolean; sessions?: Array<{ id?: unknown; status?: unknown; source?: unknown; companion?: Session['companion'] }>; hasMore?: boolean; nextCursor?: string };
+      if (!current() || response?.ok !== true || !Array.isArray(response.sessions)) return [];
+      for (const row of response.sessions) {
+        if (typeof row.id === 'string' && row.status === status && isTeammateTaskSession(row)
+          && typeof row.companion?.id === 'string') links.set(row.id, row.companion);
+      }
+      if (!response.hasMore || links.size >= limit) break;
+      if (!response.nextCursor || cursors.has(response.nextCursor)) return [];
+      cursor = response.nextCursor;
+      cursors.add(cursor);
+    } while (current());
+    if (!current() || links.size === 0) return [];
+    const rows = await readSessionBatch([...links.keys()].slice(0, limit), deviceId);
+    if (!current()) return [];
+    return rows.flatMap(({ sessionId, value }) => value && value.source === 'bot' && value.status === status
+      ? [{ ...value, companion: links.get(sessionId)! }] : []);
+  } catch (error) {
+    if (String(error).includes(ACCESS_REVOKED_MARKER)) throw error;
+    // Unsupported/offline history must not replace ordinary tasks or cached companion rows.
+    return [];
+  }
+}
+
 /** 退避:250ms 起指数增长,封顶 3000ms。 */
 function backoffMs(attempt: number): number {
   return Math.min(250 * 2 ** attempt, 3000);
@@ -154,6 +190,25 @@ interface RefreshTask {
 }
 
 const refreshTasks = new Map<string, RefreshTask>();
+
+/** Every schedule index read takes the next sequence number when it starts. */
+let scheduleIndexReadSeq = 0;
+const lastScheduleIndexRead = new Map<string, { seq: number; startedAt: number }>();
+
+/**
+ * The last schedule index read that succeeded for this device. A refresh result of
+ * `ok` does not prove the index was read: a weak periodic tick may reuse a
+ * sessions-only refresh, and scope `both` tolerates an index failure. Compare `seq`
+ * with {@link remoteScheduleIndexReadSeq} taken earlier to know whether a read started
+ * after that point.
+ */
+export function remoteScheduleIndexLastRead(deviceId: string): { seq: number; startedAt: number } | undefined {
+  return lastScheduleIndexRead.get(deviceId);
+}
+
+export function remoteScheduleIndexReadSeq(): number {
+  return scheduleIndexReadSeq;
+}
 
 function refreshTaskKey(deviceId: string, status: RemoteSessionStatus): string {
   return `${deviceId}\u0000${status}`;
@@ -370,7 +425,14 @@ async function runRefreshRemoteDeviceSessions(
         // 乱序保护:本次拉取已不是最新一次 → 丢弃,别覆盖更新的结果。
         if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status))
           return 'superseded';
-        const sessions = parseRemoteSessionList(value, status);
+        const ordinary = parseRemoteSessionList(value, status);
+        // Optional old-host history may span many pages. Publish the successful
+        // ordinary read now; reconcile removals only after discovery completes.
+        remoteProjectsStore.mergeDeviceSessions(deviceId, deviceName, ordinary, status);
+        const teammateTasks = await readRemoteTeammateTasks(deviceId, status, listLimit,
+          () => remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status));
+        if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
+        const sessions = [...new Map([...teammateTasks, ...ordinary].map(session => [session.id, session])).values()];
         // Companions are fetched by resource:get + sessions:get, not by the
         // ordinary task list. Keep their live state and reconcile them by id,
         // even when the ordinary list is empty or is a full replacement.
@@ -410,6 +472,7 @@ async function runRefreshRemoteDeviceSessions(
         if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
         let scheduleIndexError: unknown;
         try {
+          const indexRead = { seq: ++scheduleIndexReadSeq, startedAt: Date.now() };
           const raw = await window.electronAPI.deviceLink.invoke(
             deviceId,
             'maker:schedule:list-sidebar-index-runs',
@@ -428,6 +491,9 @@ async function runRefreshRemoteDeviceSessions(
             deviceId,
             projectScheduleSidebarIndex((raw as ScheduleSidebarIndexSnapshot).runs),
           );
+          if (indexRead.seq > (lastScheduleIndexRead.get(deviceId)?.seq ?? 0)) {
+            lastScheduleIndexRead.set(deviceId, indexRead);
+          }
         } catch (error) {
           // Older peers may not expose this existing channel. Keep the last mirror;
           // failure of optional schedule metadata must not hide a valid session list.

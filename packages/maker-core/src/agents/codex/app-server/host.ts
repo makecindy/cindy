@@ -87,8 +87,6 @@ const SUBSCRIBED_METHODS = [
   'thread/started',
   'turn/started',
   'turn/completed',
-  'hook/started',
-  'hook/completed',
   'turn/diff/updated',
   'thread/tokenUsage/updated', // Codex usage 走单独通知 (不在 turn/completed 上), 必订
   'item/started',
@@ -136,9 +134,6 @@ function extractThreadId(method: string, params: unknown): string | null {
 }
 
 export interface ThreadEventHandlers {
-  /** Native Hook receipts; decisions still go through the native handler. */
-  hookStarted?: (params: unknown) => void;
-  hookCompleted?: (params: unknown) => void;
   threadStarted?: (params: ThreadStartedNotification['params']) => void;
   descendantThreadStarted?: (params: ThreadStartedNotification['params']) => void;
   /**
@@ -216,17 +211,21 @@ export interface ThreadEventHandlers {
   /** server 要求审批 shell 命令执行。 */
   commandExecutionApproval?: (
     params: CommandExecutionRequestApprovalParams,
+    meta?: ServerRequestMeta,
   ) => Promise<CommandExecutionRequestApprovalResponse>;
   /** server 要求审批文件改动。 */
   fileChangeApproval?: (
     params: FileChangeRequestApprovalParams,
+    meta?: ServerRequestMeta,
   ) => Promise<FileChangeRequestApprovalResponse>;
   mcpServerElicitation?: (
     params: McpServerElicitationRequestParams,
+    meta?: ServerRequestMeta,
   ) => Promise<McpServerElicitationRequestResponse>;
   /** server 要求审批 MCP 工具等权限请求 (item/permissions/requestApproval)。 */
   permissionsApproval?: (
     params: PermissionsRequestApprovalParams,
+    meta?: ServerRequestMeta,
   ) => Promise<PermissionsRequestApprovalResponse>;
   /** EXPERIMENTAL: model/native tool asks the client to collect user input. */
   requestUserInput?: (
@@ -259,7 +258,10 @@ export interface AppServerHostOptions {
    * 本地 codex 用 `createStdioTransport({binaryPath, cwd, env, extraArgs})`,
    * 远端 codex 用 `createSshDaemonTransport({remoteHost, ...})` (P2)。
    */
-  createTransport: () => Transport;
+  createTransport: (modelProvider?: string) => Transport;
+  /** Local proxy hosts can align the process default with their task's provider. */
+  supportsModelProviderSelection?: boolean;
+  defaultModelProviderId?: string;
   logger: Logger;
   /** initialize 时上报的客户端身份 (走 server 日志 / thread metadata)。 */
   clientInfo: ClientInfo;
@@ -347,7 +349,6 @@ interface BufferedNotification {
 export class CodexNativeInitializationStoppedError extends Error {}
 
 export class AppServerHost {
-  private nativeRuntimeVersion: string | null = null;
   private readonly externalAuth: CodexExternalAuthSession | undefined;
   private readonly connectionId = randomUUID();
   private readonly logger: Logger;
@@ -361,6 +362,7 @@ export class AppServerHost {
   private readonly writerCandidates = new WeakSet<AppServerClient>();
   /** 同次 ensureStarted 并发调用共享一个 init Promise (避免重复 spawn)。 */
   private startPromise: Promise<InitializeResponse> | null = null;
+  private modelProvider: string | undefined;
   private nativeInitializationEpoch = 0;
 
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
@@ -420,16 +422,16 @@ export class AppServerHost {
     return this.opts.codexProxyActive === true;
   }
 
+  getDefaultModelProviderId(): string | undefined {
+    return this.opts.defaultModelProviderId;
+  }
+
   isCodexBrowserUseAvailable(): boolean {
     return this.opts.codexBrowserUseAvailable === true;
   }
 
   getCodexBrowserUseVersion(): string | null {
     return this.opts.codexBrowserUseVersion ?? null;
-  }
-
-  getNativeRuntimeVersion(): string | null {
-    return this.nativeRuntimeVersion;
   }
 
   /**
@@ -681,7 +683,7 @@ export class AppServerHost {
     nativeEpoch = this.nativeInitializationEpoch,
   ): Promise<InitializeResponse> {
     const client = new AppServerClient({
-      createTransport: this.opts.createTransport,
+      createTransport: () => this.opts.createTransport(this.modelProvider),
       logger: this.opts.logger,
       onTransportError: (err) => {
         // Keep the shared startPromise while recovering this one pre-protocol
@@ -719,7 +721,7 @@ export class AppServerHost {
 
     // ServerRequest handlers (Phase 2 approval) — 同样在 initialize 前注册,
     // 防 server 在握手过程中就发出 approval (虽然实际不会, 但 defensive)。
-    client.setRequestHandler(Method.CommandExecutionRequestApproval, async (rawParams) => {
+    client.setRequestHandler(Method.CommandExecutionRequestApproval, async (rawParams, meta) => {
       const params = rawParams as CommandExecutionRequestApprovalParams;
       const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
       const handlers = resolvedHandlers instanceof Promise
@@ -733,7 +735,7 @@ export class AppServerHost {
         return { decision: 'decline' };
       }
       try {
-        return await handlers.commandExecutionApproval(params);
+        return await handlers.commandExecutionApproval(params, { requestId: meta.id });
       } catch (e) {
         this.logger.error('commandExecutionApproval handler threw → decline', {
           threadId: params.threadId,
@@ -743,7 +745,7 @@ export class AppServerHost {
       }
     });
 
-    client.setRequestHandler(Method.FileChangeRequestApproval, async (rawParams) => {
+    client.setRequestHandler(Method.FileChangeRequestApproval, async (rawParams, meta) => {
       const params = rawParams as FileChangeRequestApprovalParams;
       const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
       const handlers = resolvedHandlers instanceof Promise
@@ -757,7 +759,7 @@ export class AppServerHost {
         return { decision: 'decline' };
       }
       try {
-        return await handlers.fileChangeApproval(params);
+        return await handlers.fileChangeApproval(params, { requestId: meta.id });
       } catch (e) {
         this.logger.error('fileChangeApproval handler threw → decline', {
           threadId: params.threadId,
@@ -767,7 +769,7 @@ export class AppServerHost {
       }
     });
 
-    client.setRequestHandler(Method.McpServerElicitationRequest, async (rawParams) => {
+    client.setRequestHandler(Method.McpServerElicitationRequest, async (rawParams, meta) => {
       const params = rawParams as McpServerElicitationRequestParams;
       const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
       const handlers = resolvedHandlers instanceof Promise
@@ -781,7 +783,7 @@ export class AppServerHost {
         return { action: 'decline', content: null, _meta: null } satisfies McpServerElicitationRequestResponse;
       }
       try {
-        return await handlers.mcpServerElicitation(params);
+        return await handlers.mcpServerElicitation(params, { requestId: meta.id });
       } catch (e) {
         this.logger.error('mcpServerElicitation handler threw -> decline', {
           threadId: params.threadId,
@@ -792,7 +794,7 @@ export class AppServerHost {
       }
     });
 
-    client.setRequestHandler(Method.PermissionsRequestApproval, async (rawParams) => {
+    client.setRequestHandler(Method.PermissionsRequestApproval, async (rawParams, meta) => {
       const params = rawParams as PermissionsRequestApprovalParams;
       const resolvedHandlers = this.resolveRequestHandlers(params.threadId);
       const handlers = resolvedHandlers instanceof Promise
@@ -805,7 +807,7 @@ export class AppServerHost {
         return { permissions: {}, scope: 'turn' } satisfies PermissionsRequestApprovalResponse;
       }
       try {
-        return await handlers.permissionsApproval(params);
+        return await handlers.permissionsApproval(params, { requestId: meta.id });
       } catch (e) {
         this.logger.error('permissionsApproval handler threw → decline', {
           threadId: params.threadId,
@@ -898,7 +900,6 @@ export class AppServerHost {
       this.logger.warn('retrying exited native SQLite initialization', { attempt: nativeAttempt + 2, maxAttempts: 3 });
       return this.bootstrap(capabilities, nativeAttempt + 1, nativeEpoch);
     }
-    this.nativeRuntimeVersion = resp.userAgent.match(/\/(\d+\.\d+\.\d+)(?:\s|$)/)?.[1] ?? null;
     if (this.opts.requireEphemeralAuth || this.externalAuth) {
       // Requirements can override CLI configuration. Reject before any task RPC
       // or token installation; initialization has already loaded native config.
@@ -986,6 +987,18 @@ export class AppServerHost {
       { threadId },
       { timeoutMs: this.threadUnsubscribeTimeoutMs },
     );
+  }
+
+  async selectModelProvider(modelProvider: string | undefined): Promise<void> {
+    if (!this.opts.supportsModelProviderSelection || this.modelProvider === modelProvider) return;
+    // Native 0.166+ compares the thread provider with the process configuration
+    // on every input. Thread overrides alone no longer select a working route.
+    // Never restart a host while another task still owns a subscription.
+    if (this.subscribers.size > 0) throw new Error('Cannot change Codex provider while threads are subscribed');
+    if (this.client || this.startPromise) {
+      await this.shutdown('Codex task model provider changed', { throwOnTransportError: true });
+    }
+    this.modelProvider = modelProvider;
   }
 
   /**
@@ -1676,8 +1689,6 @@ export class AppServerHost {
       case 'thread/started': fn = handlers.threadStarted as (p: never) => void; break;
       case 'turn/started': fn = handlers.turnStarted as (p: never) => void; break;
       case 'turn/completed': fn = handlers.turnCompleted as (p: never) => void; break;
-      case 'hook/started': fn = handlers.hookStarted as (p: never) => void; break;
-      case 'hook/completed': fn = handlers.hookCompleted as (p: never) => void; break;
       case 'turn/diff/updated': fn = handlers.turnDiffUpdated as (p: never) => void; break;
       case 'thread/tokenUsage/updated': fn = handlers.tokenUsageUpdated as (p: never) => void; break;
       case 'item/started': fn = handlers.itemStarted as (p: never) => void; break;

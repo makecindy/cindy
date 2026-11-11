@@ -44,7 +44,7 @@ import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useAgentCapabilities, type AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
-import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { agentDeviceModelMemoryAccessors } from '@/state/agentDeviceModelMemory';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import type { MakerVendor } from '@/lib/ccAgent.types';
@@ -128,9 +128,9 @@ export interface HookWorkspacePrefsState {
   showTeamChip: boolean;
 }
 
-export type HookPrefsProvider = 'slack' | 'telegram' | 'x';
+export type HookPrefsProvider = 'slack' | 'telegram' | 'x' | 'feishu';
 
-/** provider-neutral prefs 线(Telegram / X): 走 provider.bind/prefs 帧, 绑定按 bindingId 归属。 */
+/** provider-neutral prefs 线(Telegram / X / 飞书): 走 provider.bind/prefs 帧, 绑定按 bindingId 归属。 */
 type NeutralPrefsProvider = Exclude<HookPrefsProvider, 'slack'>;
 function isNeutralPrefsProvider(provider: HookPrefsProvider): provider is NeutralPrefsProvider {
   return provider !== 'slack';
@@ -453,7 +453,9 @@ export function useHookWorkspacePrefs(
       ? 'settings.tina.prefs.providerTelegram'
       : provider === 'x'
         ? 'settings.tina.prefs.providerX'
-        : 'settings.tina.prefs.providerSlack',
+        : provider === 'feishu'
+          ? 'settings.tina.prefs.providerFeishu'
+          : 'settings.tina.prefs.providerSlack',
   );
   const hint = loadError === 'unavailable'
     ? t('settings.tina.prefs.serverUnsupported')
@@ -517,7 +519,7 @@ export function WorkspacePrefsEditor({
 }) {
   const { t } = useTranslation();
   const agentDeviceId = state.agentDeviceFor(alias);
-  const sharedDevices = useProviderShareAgentDevices([agentDeviceId]);
+  const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: agentDeviceId });
   const claudeCaps = useAgentCapabilities('claude-code', agentDeviceId ?? undefined);
   const codexCaps = useAgentCapabilities('codex', agentDeviceId ?? undefined);
   const piCaps = useAgentCapabilities('pi', agentDeviceId ?? undefined);
@@ -565,7 +567,7 @@ export function WorkspacePrefsEditor({
           路由 —— 「选 A 落 B」的根因(选了来源没地方存)已消除。 */}
       <PrefsField label={t('settings.tina.prefs.modelLabel')} className="flex-1 basis-[220px]">
         <ModelSelector
-          remoteAgent={{ devices: sharedDevices.devices, selectedDeviceId: agentDeviceId }}
+          remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: agentDeviceId }}
           fastModeConfigurable={false}
           unifiedAgents={pickerAgents}
           onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => state.applyPatch(

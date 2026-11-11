@@ -218,6 +218,7 @@ export function getCurrentBotAppId(): string | null {
 
 export function setLifecycleAnnouncement(enabled: boolean): void {
   S().lifecycleAnnouncementEnabled = enabled;
+  if (!enabled) S().pendingOfflineNotice = false;
   getLog().info(`[feishu/wsClient] lifecycleAnnouncement set to ${enabled}`);
 }
 
@@ -682,18 +683,28 @@ async function stopCurrentClient(opts: StopOptions): Promise<void> {
 async function announceLifecycle(phase: 'online' | 'offline'): Promise<void> {
   const log = getLog();
 
+  // A shared-profile preview owns only its local socket, not the bot's presence.
+  // Do not create an offline-history warning or persist a user preference here.
+  if (getScope().shouldAnnounceLifecycle?.() === false) {
+    log.info(
+      `[feishu/wsClient] announceLifecycle ${phase}: suppressed for secondary instance`,
+    );
+    return;
+  }
+
   const owner = ownerGuard.firstAllowed();
   if (!owner) {
     log.info(`[feishu/wsClient] announceLifecycle ${phase}: no owner whitelisted, skip`);
     return;
   }
 
-  if (phase === 'offline') S().pendingOfflineNotice = true;
-
   if (!S().lifecycleAnnouncementEnabled) {
     log.info(`[feishu/wsClient] announceLifecycle ${phase}: message suppressed by setting`);
     return;
   }
+
+  // 离线补发提醒属于同一类生命周期通知:关闭后不记待发标记(与 Discord 口径一致)。
+  if (phase === 'offline') S().pendingOfflineNotice = true;
 
   const text =
     phase === 'online' ? transportMessages.lifecycle.online : transportMessages.lifecycle.offline;
@@ -965,6 +976,18 @@ async function processClaimedMessage(
     isGroup && data.message?.mentions && selfOpenId
       ? resolveMentionPlaceholders(parsed.text, data.message.mentions, selfOpenId)
       : parsed.text;
+
+  // 直接转发的第三方/模板卡片抽不出正文。引用解析必须继续留空(群历史回退),
+  // 所以兜底只加在入站: 记一条 unsupported, 编排才能回可见提示, 而不是被下面
+  // 的空门禁静默丢掉(#9245)。
+  if (
+    (msgType === 'interactive' || msgType === 'card') &&
+    !text.trim() &&
+    attachments.length === 0 &&
+    unsupported.length === 0
+  ) {
+    unsupported = [...unsupported, { type: 'interactive', label: '卡片消息' }];
+  }
 
   // Drop entirely only when there's literally nothing to relay.
   if (!text && attachments.length === 0 && unsupported.length === 0 && !(isGroup && parsed.text.trim())) {

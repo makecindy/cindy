@@ -25,8 +25,8 @@ import { useTeammateRoster } from '@/session/useTeammateRoster';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 let result: ReturnType<typeof useTeammateRoster>;
-function Probe() { result = useTeammateRoster(); return null; }
-async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
+function Probe({ enabled = true }: { enabled?: boolean }) { result = useTeammateRoster(enabled); return null; }
+async function render(enabled = true) { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe, { enabled }))); }
 beforeEach(() => {
   vi.clearAllMocks(); h.list.items = []; h.revoked.clear(); h.link.openLink.mockResolvedValue(undefined); h.link.status = 'online'; h.link.connectionEpoch = 1; h.auth.accountGeneration = 1;
   h.list.isOnline.mockReturnValue(true);
@@ -251,4 +251,19 @@ it('keeps every cached roster host in the list targets while a partial home mani
   await act(async () => finish({ protocolVersion: 1, collections: [] }));
   expect(result.targets.map(host => host.deviceId)).toEqual(['old']);
   expect(result.items).toEqual([rows[0]]);
+});
+
+it('reuses discovered hosts through 20 switches, with explicit, expired and reconnect refreshes', async () => {
+  vi.useFakeTimers(); await render();
+  const groups = result.groupTargets;
+  for (let n = 0; n < 20; n++) { await render(false); await render(true); }
+  expect(h.link.readDeviceList).toHaveBeenCalledTimes(1);
+  expect(h.link.invoke).toHaveBeenCalledTimes(2);
+  expect(result.groupTargets).toBe(groups);
+  await act(async () => result.refresh());
+  expect(h.link.invoke).toHaveBeenCalledTimes(4);
+  await render(false); await act(async () => vi.advanceTimersByTimeAsync(30001)); await render(true);
+  expect(h.link.invoke).toHaveBeenCalledTimes(6);
+  h.link.connectionEpoch++; await render();
+  expect(h.link.invoke).toHaveBeenCalledTimes(8);
 });

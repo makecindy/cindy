@@ -10,7 +10,8 @@ import path from 'node:path';
 import { readOriginDefaultBranch } from './branchSync';
 import { createBranchSyncHandlers } from './branchSyncHandlers';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
-import { isDeviceLinkInvoke } from '../device-link/invoke-context';
+import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../device-link/invoke-context';
+import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 
 import { ipcMain as ipcMainType, type IpcMain, shell } from 'electron';
 import * as WorktreeManager from './WorktreeManager';
@@ -53,7 +54,20 @@ export * from './types';
  * 调用方保证只调一次。
  */
 export function registerWorktreeIpc(ipcMain: IpcMain = ipcMainType): void {
-  const branchSync = createBranchSyncHandlers({ assertTrustedAppRendererEvent, isDeviceLinkInvoke });
+  const branchSync = createBranchSyncHandlers({
+    assertTrustedAppRendererEvent,
+    isDeviceLinkInvoke,
+    getCallerScope: () => {
+      const owner = getCurrentDbClientSnapshot();
+      return owner
+        ? JSON.stringify([
+            owner.userId,
+            owner.clientEpoch,
+            getDeviceLinkInvokeContext()?.controllerDeviceId ?? 'local',
+          ])
+        : null;
+    },
+  });
   ipcMain.handle('worktree:branch-sync-status', branchSync.status);
   ipcMain.handle('worktree:sync-branch', branchSync.sync);
 

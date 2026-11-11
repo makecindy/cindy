@@ -1,8 +1,8 @@
 /**
- * ContextWindowBudgetChip — 任务级工作上下文窗口档位选择。
+ * ContextWindowBudgetChip — 上下文圆环的详情与任务窗口档位浮层。
  *
  * 语义（与 main 侧 `model-context-settings.ts` 同一口径）：
- *   - 档位决定**本任务**的工作窗口（分母）；全局的自动压缩阈值百分比不动。
+ *   - 档位决定**本任务**的工作窗口（分母）；模型的自动压缩阈值百分比不动。
  *   - 「跟随模型默认」= 上报 null，不把当前默认值快照进任务。
  *   - 有效窗口还受用户在同一路由上设过的模型级上限与目录物理上限约束（由 main 收敛），
  *     所以这里展示的是**选择**，运行时真值仍以圆环的窗口读数为准。
@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as React from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -49,22 +50,12 @@ import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
 import type { Catalog } from '@cindy/model-providers';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 
-/**
- * 触发器上的标记：一枚「上下双向箭头」符号 + 当前档位百分比（用户拍板）—— 底栏不挂文字标签，
- * 但百分比要看得见（它是「这个任务用多大窗口」的相对口径）。用 ↕ 而不是方括号：方括号语义不明确
- * （读不出"窗口大小"），↕ 至少表达"可上可下 / 可调"。
- * 当前档位的绝对值仍进 `aria-label`（`triggerLabel`）与卡片行（`aria-checked` 命中的那一行）。
- *
- * 它是普通文本（不是图标、也不是括号），与 `¥`、圆环 `1%` 同基线、同字重、同颜色层
- * （`opacity-60`，与货币符号完全一致）。
- *
- * 字号用 `text-11`（用户拍板，`text-10` 略小）：箭头字形天生比数字高 —— 12px 下 `↕` 墨迹 12px
- * （上缘 11 / 下缘 1），而 `¥` 是 9/0、圆环 `1%` 是 9/1；11px 下墨迹 ≈11px（10.1/0.9），
- * 与两个邻居同一基线、同一中心线，观感上也和它们的**字面**大小相当。换字形/字号只需改这两行。
- */
-const CONTEXT_WINDOW_MARKER = '↕';
-
 export interface ContextWindowBudgetChipProps {
+  /** 复用上下文用量圆环；窗口档位只在它的浮层里显示。 */
+  children: React.ReactNode;
+  details?: React.ReactNode;
+  onInspect?: () => void;
+  onCompact?: () => void;
   sessionId: string;
   /** 运行期上下文占用，用于「换小档位会立刻触发压缩」的提示。 */
   contextTokens: number;
@@ -99,6 +90,10 @@ function inputPriceAtTokens(quote: ModelPriceQuote | undefined, tokens: number):
 }
 
 export function ContextWindowBudgetChip({
+  children,
+  details,
+  onInspect,
+  onCompact,
   sessionId,
   contextTokens,
   model,
@@ -109,6 +104,7 @@ export function ContextWindowBudgetChip({
   disabled = false,
 }: ContextWindowBudgetChipProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [committing, setCommitting] = useState(false);
   // 被控端不支持预算通道（老版本）：卡转只读直到会话换设备。
   const [remoteUnsupported, setRemoteUnsupported] = useState(false);
@@ -161,11 +157,12 @@ export function ContextWindowBudgetChip({
     // 过期缓存刷新：悬浮与点击都走这里（键盘路径在 onOpenChange 里已有）。
     // 刷新函数声明在本组件后部（hook 返回值），经 ref 中转避免 TDZ。
     refreshIfStaleRef.current?.();
+    onInspect?.();
     // 两卡互斥：自己展开时，用量卡立刻收起（用户要求"该窗体为唯一窗体"）；
     // 分屏下同种类的另一张 chip 也在这条路径上被关掉。
     cardHandleRef.current?.request();
     setCardOpen(true);
-  }, [clearCardTimers]);
+  }, [clearCardTimers, onInspect]);
   const closeCard = useCallback(() => {
     clearCardTimers();
     cardHandleRef.current?.release();
@@ -402,7 +399,8 @@ export function ContextWindowBudgetChip({
     if (checkedIndex >= 0) setTierTabStopIndex(checkedIndex);
   }, [options, selectedTokens]);
 
-  if (effectiveDefaultWindow === null || options.length === 0 || selectedTokens === null) return null;
+  // 目录尚未就绪时仍保留圆环和运行期详情，只隐藏没有可靠边界的档位。
+  const hasOptions = effectiveDefaultWindow !== null && options.length > 0 && selectedTokens !== null;
 
   const agent = agentKind === 'cc' ? 'claude-code' : agentKind;
   // 远程任务不显示价带：两份报价（gateway 服务端报价 + 本地参考价/用户覆盖）都来自
@@ -413,14 +411,12 @@ export function ContextWindowBudgetChip({
     : getModelPriceQuote(gatewayPricing, providerId, model, agent)
       ?? getModelPriceQuote(referencePricing, providerId, model, agent);
 
-  // 当前档位占基准的百分比：与卡片行同一口径（默认档 = 100%）。
-  const selectedPercent = contextWindowBudgetTierPercent(selectedTokens, tierBase);
   /**
    * 方向键在单选组内移动**焦点**（不提交）：`role="radio"` 语义下方向键必须能动，
    * 而每次提交都会落库并可能触发活实例重建 —— 扫过一遍档位不该连写好几次库。
    * 选中仍由 Enter / Space / 点击完成（与之前 Radix 菜单的键盘行为一致）。
-   * 焦点可能落在行上（键盘打开 + Tab）或浮层容器上（Radix 默认聚焦内容）：
-   * 两种情况都按“当前行 → 选中行 → 停靠点”的顺序推出起点。
+   * 只在单选组里处理方向键，避免从压缩按钮跳进档位。
+   * 起点按“当前行 → 选中行 → 停靠点”取值。
    */
   const handleTierKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
     const rows = tierRowRefs.current.filter((row): row is HTMLButtonElement => row !== null);
@@ -439,7 +435,7 @@ export function ContextWindowBudgetChip({
     setTierTabStopIndex(wrapped);
     rows[wrapped].focus();
   };
-  const shrinkWarning = selectedTokens < contextTokens && contextTokens > 0;
+  const shrinkWarning = selectedTokens !== null && selectedTokens < contextTokens && contextTokens > 0;
 
   const commit = async (tokens: number): Promise<void> => {
     // 选中「有效默认档」上报 null（跟随默认，不快照当前值）。
@@ -514,6 +510,7 @@ export function ContextWindowBudgetChip({
           // 键盘/点击打开（指针不在触发器上）与悬浮打开走同一个开卡入口。
           if (!cardPointerInsideRef.current) cardOpenSourceRef.current = 'focus';
           refreshBoundsIfStale();
+          onInspect?.();
           cardHandleRef.current?.request();
           setCardOpen(true);
           return;
@@ -548,32 +545,20 @@ export function ContextWindowBudgetChip({
             cardPointerInsideRef.current = false;
             scheduleCardClose();
           }}
-          // 视觉上没有数值，当前值必须进可访问名，否则读屏无从得知现在是多少。
+          // 底栏只显示上下文占用，当前窗口容量仍放在可访问名里。
           aria-label={t('ccAgent.contextWindowBudget.triggerLabel', {
-            window: formatTokenCount(selectedTokens),
+            window: selectedTokens === null ? '—' : formatTokenCount(selectedTokens),
           })}
           className={cn(
-            // 与右下角用量 chip（`TodaySpendChip`：货币符号 + 金额）同一套视觉：同高 `h-5`、
-            // 同字号字重 `text-12 font-medium leading-none`、同颜色 `--msg-tool-card-chevron`
-            // （hover 提亮到 `foreground`）、同 `tabular-nums`；符号与数值同色，不做双色拼贴。
-            'inline-flex h-5 shrink-0 items-center rounded-full text-12 font-medium leading-none tabular-nums',
+            // 保留用量圆环的外观，24px 热区与键盘焦点包住圆环和占用百分比。
+            'inline-flex h-6 shrink-0 items-center gap-1 rounded-full text-12 font-medium leading-none tabular-nums',
             'text-[var(--msg-tool-card-chevron)] transition-colors hover:text-foreground',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
             // 只读/提交中仍然可聚焦可展开，但把“不可改”表现在外观上。
             isDisabled && 'cursor-default opacity-50',
           )}
         >
-          {/* `opacity-60` 与货币 chip 的符号完全一致（`TodaySpendChip`：`<span className="tabular-nums
-              opacity-60">{symbol}</span>`）—— 同一个色值再压 40%，两枚符号在底栏里才是同一种灰。
-              百分比不压暗：它就是这一档的"值"，与货币 chip 里金额的位置对应。 */}
-          <span className="shrink-0 text-11 leading-none opacity-60" aria-hidden="true">
-            {CONTEXT_WINDOW_MARKER}
-          </span>
-          {selectedPercent !== null && (
-            <span className="shrink-0">{t('ccAgent.contextWindowBudget.optionPercent', {
-              percent: selectedPercent,
-            })}</span>
-          )}
+          {children}
         </button>
       </PopoverTrigger>
       {/* 浮层挂到触发器**紧跟其后**的宿主：portal 到 body 时卡片在文档最末，焦点一旦
@@ -584,7 +569,7 @@ export function ContextWindowBudgetChip({
         side="top"
         sideOffset={8}
         portalContainer={cardPortalHost}
-        className="min-w-[220px] p-1.5"
+        className="max-h-[var(--radix-popover-content-available-height)] w-[340px] max-w-[calc(100vw-24px)] overflow-y-auto p-4"
         // Radix 给 FocusScope 写死 `loop: true`：Tab 在卡内永远环回，键盘用户一辈子出不了卡。
         // 把两个 Tab 边缘接过来（capture 先于 Radix 的 bubble handler）：在最后一个/第一个
         // 可 Tab 元素上把焦点交出卡外，其余卡内 Tab 行为不变。
@@ -617,90 +602,146 @@ export function ContextWindowBudgetChip({
           cardPointerInsideRef.current = false;
           scheduleCardClose();
         }}
-        // 键盘导航挂在浮层上（而不是只挂在单选组上）：Radix 打开时把焦点给浮层容器，
-        // 按键会落在容器而不是行上，挂在组上会收不到。
-        onKeyDown={handleTierKeyDown}
       >
-        <div className="px-2 pb-1.5 pt-1">
-          <p className="text-12 font-medium text-[var(--text-primary)]">
-            {t('ccAgent.contextWindowBudget.menuTitle')}
-          </p>
-          {/* 说明与注解统一用 `--text-secondary`：即「用量明细」卡（货币符号那个界面）里
-              说明文字的同一档灰（实测 rgb(111,111,111)），面板里只有一种「次要灰」。 */}
-          {/* 字号/字重与「用量明细」卡（货币符号那个界面）同一套：标题 12/500、说明 12/400、
-              档位行 13/500、注解 12/400 —— 面板与卡片读起来才是同一个系统。 */}
-          <p className="mt-0.5 text-12 font-normal leading-[1.5] text-[var(--text-secondary)]">
-            {t('ccAgent.contextWindowBudget.menuHint')}
-          </p>
-          {deviceId && !authoritativeBounds && (
-            // 没能从被控端拿到该路由的边界（老版本 / 拉取失败）：这里只能给出不超过
-            // 本地已知默认值的档位，文案必须如实说明，不能留给用户“能调大”的预期。
-            <p className="mt-0.5 text-12 font-normal leading-[1.5] text-[var(--text-secondary)]">
-              {t('ccAgent.contextWindowBudget.remoteTightenOnly')}
-            </p>
-          )}
-          {disabled && (
-            // 只读任务：卡片照常可展开（能看当前档位与价带），但档位行不可选 —— 给出原因，
-            // 而不是把所有行默默变灰。
-            <p className="mt-0.5 text-12 font-normal leading-[1.5] text-[var(--text-secondary)]">
-              {t('ccAgent.contextWindowBudget.readOnlyHint')}
-            </p>
-          )}
-          {remoteUnsupported && (
-            // 被控端不支持预算通道：整卡只读并说明原因，避免反复提交必然失败的修改。
-            <p className="mt-0.5 text-12 font-normal leading-[1.5] text-[var(--text-secondary)]">
-              {t('ccAgent.contextWindowBudget.remoteUnsupported')}
-            </p>
-          )}
-        </div>
-        <div role="radiogroup" aria-label={t('ccAgent.contextWindowBudget.menuTitle')}>
-          {options.map((option, index) => {
-            const price = inputPriceAtTokens(quote, option.tokens);
-            return (
-              <TierRow
-                key={`${option.kind}-${option.tokens}`}
-                tokens={option.tokens}
-                checked={option.tokens === selectedTokens}
-                disabled={isDisabled}
-                onSelect={() => void commit(option.tokens)}
-                // roving tabindex：单选组只占一个 Tab 位，其余行用方向键抵达。
-                tabIndex={index === tierTabStopIndex ? 0 : -1}
-                buttonRef={(node) => {
-                  tierRowRefs.current[index] = node;
-                }}
-                onFocus={() => setTierTabStopIndex(index)}
-              >
-                {(() => {
-                  // 形态统一：`百分比 · 绝对值`（默认档 = 100% · 模型默认窗口）；百分比与绝对值
-                  // 同色（继承行色），不再出现「灰百分比 + 白绝对值」的两色拼贴。基准未知时只显绝对值。
-                  const percent = contextWindowBudgetTierPercent(option.tokens, tierBase);
-                  const absolute = formatTokenCount(option.tokens);
-                  return (
-                    <span className="tabular-nums">
-                      {percent === null ? absolute : `${t('ccAgent.contextWindowBudget.optionPercent', { percent })} · ${absolute}`}
-                    </span>
-                  );
-                })()}
-                {option.kind === 'default' && (
-                  <span className="ml-1.5 text-12 font-normal text-[var(--text-secondary)]">
-                    {t('ccAgent.contextWindowBudget.optionDefault')}
-                  </span>
+        {details && (
+          <div className="text-12 leading-[1.5] text-[var(--text-secondary)]">
+            {details}
+          </div>
+        )}
+        {onCompact && (
+          <div className="mt-4 border-t border-[var(--border-default)] pt-3">
+            <button
+              type="button"
+              className="rounded-full border border-[var(--border-default)] px-3 py-1.5 text-12 font-medium text-[var(--text-primary)] hover:bg-sidebar-item-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              onClick={() => { closeCard(); onCompact(); }}
+            >
+              {t('ccAgent.contextRingPanel.compact')}
+            </button>
+            <p className="mt-2 text-12 leading-relaxed text-[var(--text-secondary)]">{t('ccAgent.contextRingPanel.compactHelp')}</p>
+          </div>
+        )}
+        {hasOptions && (
+          <details className="group mt-4 border-t border-[var(--border-default)] pt-3" data-context-window-options>
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 rounded-lg py-1 text-12 font-medium text-[var(--text-secondary)] outline-none hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden">
+              <span>{t('ccAgent.contextRingPanel.adjust')}</span>
+              <span className="flex items-center gap-2 tabular-nums">
+                {formatTokenCount(selectedTokens!)}
+                <span aria-hidden="true" className="transition-transform group-open:rotate-90">›</span>
+              </span>
+            </summary>
+            <div className="pb-2 pt-2">
+              <p className="text-12 font-medium text-[var(--text-primary)]">{t('ccAgent.contextRingPanel.taskScope')}</p>
+              {/* 说明与注解统一用 `--text-secondary`：即「用量明细」卡（货币符号那个界面）里
+                  说明文字的同一档灰（实测 rgb(111,111,111)），面板里只有一种「次要灰」。 */}
+              {/* 字号/字重与「用量明细」卡（货币符号那个界面）同一套：标题 12/500、说明 12/400、
+                  档位行 13/500、注解 12/400 —— 面板与卡片读起来才是同一个系统。 */}
+              <p className="mt-0.5 text-12 font-normal leading-[1.5] text-[var(--text-secondary)]">
+                {t('ccAgent.contextWindowBudget.menuHint')}
+              </p>
+              <p className="mt-1 text-12 leading-relaxed text-[var(--text-secondary)]">{t('ccAgent.contextRingPanel.costHint')}</p>
+              {deviceId && !authoritativeBounds && (
+                // 没能从被控端拿到该路由的边界（老版本 / 拉取失败）：这里只能给出不超过
+                // 本地已知默认值的档位，文案必须如实说明，不能留给用户“能调大”的预期。
+                <p className="mt-0.5 text-12 font-normal leading-[1.5] text-[var(--text-secondary)]">
+                  {t('ccAgent.contextWindowBudget.remoteTightenOnly')}
+                </p>
+              )}
+              {disabled && (
+                // 只读任务：卡片照常可展开（能看当前档位与价带），但档位行不可选 —— 给出原因，
+                // 而不是把所有行默默变灰。
+                <p className="mt-0.5 text-12 font-normal leading-[1.5] text-[var(--text-secondary)]">
+                  {t('ccAgent.contextWindowBudget.readOnlyHint')}
+                </p>
+              )}
+              {remoteUnsupported && (
+                // 被控端不支持预算通道：整卡只读并说明原因，避免反复提交必然失败的修改。
+                <p className="mt-0.5 text-12 font-normal leading-[1.5] text-[var(--text-secondary)]">
+                  {t('ccAgent.contextWindowBudget.remoteUnsupported')}
+                </p>
+              )}
+            </div>
+            <div role="radiogroup" aria-label={t('ccAgent.contextWindowBudget.menuTitle')} onKeyDown={handleTierKeyDown}>
+              {options.map((option, index) => {
+                const price = inputPriceAtTokens(quote, option.tokens);
+                return (
+                  <TierRow
+                    key={`${option.kind}-${option.tokens}`}
+                    tokens={option.tokens}
+                    checked={option.tokens === selectedTokens}
+                    disabled={isDisabled}
+                    onSelect={() => void commit(option.tokens)}
+                    // roving tabindex：单选组只占一个 Tab 位，其余行用方向键抵达。
+                    tabIndex={index === tierTabStopIndex ? 0 : -1}
+                    buttonRef={(node) => {
+                      tierRowRefs.current[index] = node;
+                    }}
+                    onFocus={() => setTierTabStopIndex(index)}
+                  >
+                    {(() => {
+                      // 形态统一：`百分比 · 绝对值`（默认档 = 100% · 模型默认窗口）；百分比与绝对值
+                      // 同色（继承行色），不再出现「灰百分比 + 白绝对值」的两色拼贴。基准未知时只显绝对值。
+                      const percent = contextWindowBudgetTierPercent(option.tokens, tierBase);
+                      const absolute = formatTokenCount(option.tokens);
+                      return (
+                        <span className="tabular-nums">
+                          {percent === null ? absolute : `${t('ccAgent.contextWindowBudget.optionPercent', { percent })} · ${absolute}`}
+                        </span>
+                      );
+                    })()}
+                    {option.kind === 'default' && (
+                      <span className="ml-1.5 text-12 font-normal text-[var(--text-secondary)]">
+                        {t('ccAgent.contextWindowBudget.optionDefault')}
+                      </span>
+                    )}
+                    {price && (
+                      <span className="ml-auto pl-3 text-12 font-normal tabular-nums text-[var(--text-secondary)]">
+                        {t('ccAgent.contextWindowBudget.inputPrice', { price })}
+                      </span>
+                    )}
+                  </TierRow>
+                );
+              })}
+            </div>
+            {shrinkWarning && (
+              <p className="mx-2 mt-1.5 border-t border-[var(--border-default)] pt-1.5 text-11 leading-[1.5] text-[var(--warning-fg)]">
+                {t('ccAgent.contextWindowBudget.shrinkWarning', {
+                  used: formatTokenCount(contextTokens),
+                })}
+              </p>
+            )}
+            {!disabled && limitProviderId && (
+              <div className="mt-3 border-t border-[var(--border-default)] pt-3">
+                {deviceId ? (
+                  <p className="text-12 leading-relaxed text-[var(--text-secondary)]">
+                    {t('ccAgent.contextRingPanel.remoteModelSettings')}
+                  </p>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const params = new URLSearchParams({
+                          tab: 'providers',
+                          connect: limitProviderId,
+                          model,
+                          agent: makerAgent,
+                        });
+                        closeCard();
+                        navigate(`/settings?${params.toString()}`);
+                      }}
+                      className="inline-flex min-h-6 items-center gap-1 rounded-full text-12 font-medium text-[var(--text-secondary)] outline-none hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                    >
+                      {t('ccAgent.contextRingPanel.modelSettings')}
+                      <span aria-hidden="true">↗</span>
+                    </button>
+                    <p className="mt-1 text-12 leading-relaxed text-[var(--text-secondary)]">
+                      {t('ccAgent.contextRingPanel.modelSettingsHint')}
+                    </p>
+                  </>
                 )}
-                {price && (
-                  <span className="ml-auto pl-3 text-12 font-normal tabular-nums text-[var(--text-secondary)]">
-                    {t('ccAgent.contextWindowBudget.inputPrice', { price })}
-                  </span>
-                )}
-              </TierRow>
-            );
-          })}
-        </div>
-        {shrinkWarning && (
-          <p className="mx-2 mt-1.5 border-t border-[var(--border-default)] pt-1.5 text-11 leading-[1.5] text-[var(--warning-fg)]">
-            {t('ccAgent.contextWindowBudget.shrinkWarning', {
-              used: formatTokenCount(contextTokens),
-            })}
-          </p>
+              </div>
+            )}
+          </details>
         )}
       </PopoverContent>
     </Popover>

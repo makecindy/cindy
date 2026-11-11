@@ -4,6 +4,7 @@ import {
   buildMessageSourceNote,
   describeMessageSourceSender,
   isCrossDeviceSourceSessionId,
+  parseSourceSessionTarget,
   messageSourceIdEntries,
   formatSourceRef,
   promptSafeSourceName,
@@ -45,6 +46,13 @@ describe('promptSafeSourceName', () => {
 });
 
 describe('formatSourceRef', () => {
+  // #7631: the task badge and model note identify a local app, never a plugin.
+  it('keeps local application attribution and IDs consistent for display and handoff', () => {
+    const sourcePlugin = { pluginId: 'local-app:com.taptap.pc', name: 'TapTap' };
+    expect(messageSourceIdEntries({ sourcePlugin })).toEqual([{ kind: 'localApp', id: 'com.taptap.pc' }]);
+    expect(buildMessageSourceNote(messageSourceSenderFromMeta({ sourcePlugin })))
+      .toBe('[消息来源] 本条由本机应用「TapTap」(app_id: com.taptap.pc) 发送，不是用户本人输入。');
+  });
   it('pairs every name with its id', () => {
     expect(formatSourceRef('发布检查', 'session_id', 's-1')).toBe('「发布检查」(session_id: s-1)');
   });
@@ -260,5 +268,14 @@ describe('isCrossDeviceSourceSessionId', () => {
     for (const local of [undefined, '', 'task-1', '::task-1', 'dev-A::']) {
       expect(isCrossDeviceSourceSessionId(local)).toBe(false);
     }
+  });
+});
+
+// Routing must preserve the explicit device, while redacted/malformed sources stay inert.
+describe('parseSourceSessionTarget', () => {
+  it('splits a stamped source and preserves same-host legacy ids', () => {
+    expect(parseSourceSessionTarget('dev-A::task-1')).toEqual({ deviceId: 'dev-A', sessionId: 'task-1' });
+    expect(parseSourceSessionTarget('task-1')).toEqual({ sessionId: 'task-1' });
+    for (const id of [undefined, '', '::task-1', 'dev-A::']) expect(parseSourceSessionTarget(id)).toBeNull();
   });
 });

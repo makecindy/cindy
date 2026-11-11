@@ -6,7 +6,7 @@ import { isMobileRemoteCollectionSupported, normalizeRemoteCollectionItems, pars
 const PREFIX = 'cindy.remoteResources.v1.';
 const MAX_CHARS = 256 * 1024;
 type ChatRoster = { items: HostedRemoteCollectionItem[]; ids: string[] };
-export type CachedCloudHome = { supported: boolean; actors: ChatActor[]; deviceNames: Array<[string, string]> };
+export type CachedCloudHome = { cindyIds?: string[]; supported: boolean; actors: ChatActor[]; deviceNames: Array<[string, string]> };
 type Snapshot = { home: RemoteHomeCollection[]; items: Record<string, HostedRemoteCollectionItem[]>; read: Record<string, number>; readSequences?: Record<string, string>; chatRosters?: Record<string, ChatRoster>; cloudHomes?: Record<string, CachedCloudHome> };
 const empty = (): Snapshot => ({ home: [], items: {}, read: {}, readSequences: {} });
 const validSequence = (value: unknown): value is string => typeof value === 'string' && /^\d{1,30}$/.test(value);
@@ -30,6 +30,7 @@ function normalize(raw: unknown): Snapshot {
     const home = value.cloudHomes[realm];
     if (!home || typeof home.supported !== 'boolean' || !Array.isArray(home.actors) || !Array.isArray(home.deviceNames)) continue;
     (out.cloudHomes ??= {})[realm] = { supported: home.supported,
+      ...(Array.isArray(home.cindyIds) ? { cindyIds: home.cindyIds.filter(id => typeof id === 'string' && home.actors.some(actor => actor?.externalId === id)) } : {}),
       actors: home.actors.filter(actor => actor && typeof actor.id === 'string' && typeof actor.name === 'string'
         && typeof actor.kind === 'string' && typeof actor.externalId === 'string'
         && (actor.homeDeviceId === null || typeof actor.homeDeviceId === 'string')
@@ -111,6 +112,15 @@ export const cacheCloudHome = (userId: string, realm: string, value: CachedCloud
   if (current()) (s.cloudHomes ??= {})[realm] = value;
 });
 
+/** Independent metadata reads merge inside the serialized cache update. */
+export const patchCachedCloudHome = (userId: string, realm: string,
+  patch: Pick<CachedCloudHome, 'cindyIds'> & Partial<Pick<CachedCloudHome, 'deviceNames'>>,
+  current: () => boolean,
+) => update(userId, s => {
+  const home = s.cloudHomes?.[realm];
+  if (current() && home) s.cloudHomes![realm] = { ...home, ...patch };
+});
+
 /** Trim only the disposable disk mirror; live rows and read positions stay intact. */
 function diskSnapshot(raw: string): string {
   if (raw.length <= MAX_CHARS) return raw;
@@ -157,8 +167,16 @@ async function update(userId: string, change: (snapshot: Snapshot) => void): Pro
     const snapshot = await readRemoteResourceSnapshot(userId);
     if (expected !== epoch) return;
     const before = JSON.stringify(snapshot);
+    const previousCloudHomes = { ...snapshot.cloudHomes };
     change(snapshot);
     const cleaned = normalize(snapshot);
+    // Selectors need stable snapshots: normalizing unrelated task/read changes must not
+    // invalidate companion consumers. Writers replace cloud homes rather than mutate them.
+    for (const [realm, home] of Object.entries(cleaned.cloudHomes ?? {})) {
+      const previousHome = previousCloudHomes[realm];
+      if (previousHome && (snapshot.cloudHomes?.[realm] === previousHome
+        || JSON.stringify(previousHome) === JSON.stringify(home))) cleaned.cloudHomes![realm] = previousHome;
+    }
     const raw = JSON.stringify(cleaned);
     snapshots.set(userId, cleaned);
     // An unchanged cache must stay silent: subscribers re-render on every emit, and an
@@ -188,6 +206,9 @@ export const cacheRemoteResourceItems = (userId: string, collectionId: string, i
   for (const row of items) {
     const key = remoteResourceReadKey(row.host.deviceId, row.item.ref.id);
     if ((row.item.ref.kind === 'bot' || row.item.ref.kind === 'bot-group') && s.read[key] === undefined) s.read[key] = row.item.display.lastReplyAt ?? 0;
+    // The computer's own read position (read there or on another device) moves this one forward.
+    const hostRead = row.item.display.lastReadAt;
+    if (typeof hostRead === 'number' && hostRead > (s.read[key] ?? 0)) s.read[key] = hostRead;
   }
 });
 export const markRemoteResourceRead = (userId: string, deviceId: string, resourceId: string, at: number, sequence?: string) => update(userId, (s) => {

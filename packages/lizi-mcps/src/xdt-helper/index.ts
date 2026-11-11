@@ -43,6 +43,11 @@ export {
   type SetSessionsStatusResult,
   type RemoteSessionsStatusResult,
 } from './archive_sessions.js';
+export {
+  registerSessionImportTools,
+  type SessionImportCallbacks,
+  type SessionImportDeps,
+} from './session_import.js';
 // multi-worker Phase 1 control tools
 export {
   registerStartTeamTool,
@@ -67,6 +72,7 @@ export {
   type OrcaMessageDelivery,
   type SendToWorkerDeps,
   type SteerFallbackReason,
+  type SupersededFailureNotice,
 } from './send_to_worker.js';
 export {
   registerGetWorkerQueueStatusTool,
@@ -164,16 +170,10 @@ export {
   type BotSkillToolDeps,
 } from './bot_skills.js';
 export {
-  registerBotWorkbenchTools,
-  glanceForModel,
-  WORKBENCH_MESSAGE_MAX_CHARS,
-  type BotGlanceWire,
-  type BotWorkbenchCallbacks,
-  type BotWorkbenchToolDeps,
-  type GlanceKindWire,
-  type GlanceRowWire,
-  type WorkbenchTranscriptWire,
-} from './bot_workbench.js';
+  registerTeammateProjectTools,
+  type TeammateProjectsCallback,
+  type TeammateProjectToolDeps,
+} from './teammate_projects.js';
 export {
   registerGetTaskDigestTool,
   boundTaskDigest,

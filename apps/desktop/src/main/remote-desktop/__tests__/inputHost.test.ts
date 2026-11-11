@@ -1,13 +1,16 @@
 import { EventEmitter } from 'node:events';
+import { screen } from 'electron';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DesktopInputHost } from '../inputHost';
+import { x11InputGeometry, isX11Desktop } from '../linuxInput';
 import { HUMAN_INPUT_QUIET_MS, withAgentDesktopInput } from '../inputOwnership';
 import { openWindowsDesktopConnection } from '../windowsHost';
 
 const platform = process.platform;
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   Object.defineProperty(process, 'platform', { value: platform });
 });
 const flush = async () => {
@@ -19,7 +22,9 @@ let cursor = { x: 0, y: 0 };
 vi.mock('electron', () => ({
   app: {},
   screen: {
-    getAllDisplays: () => [{ id: 1, bounds: { x: 0, y: 0, width: 100, height: 100 } }],
+    getAllDisplays: () => [
+      { id: 1, scaleFactor: 1, bounds: { x: 0, y: 0, width: 100, height: 100 } },
+    ],
     dipToScreenPoint: (point: unknown) => point,
     getCursorScreenPoint: () => cursor,
   },
@@ -536,4 +541,86 @@ describe('代输入 window input', () => {
     }
     expect(spawn).not.toHaveBeenCalled();
   });
+});
+
+// GX102/X11: the existing helper lifecycle must also cover physical XTest input.
+it('starts an X11 helper with monitor geometry and releases held keys on teardown', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('DISPLAY', ':test');
+  vi.stubEnv('XDG_SESSION_TYPE', 'x11');
+  vi.stubEnv('WAYLAND_DISPLAY', '');
+  const c = childProcess();
+  const spawn = vi.fn(() => {
+    queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+    return c.typed;
+  });
+  const host = new DesktopInputHost(vi.fn(), {
+    platform: 'linux',
+    resolveBinary: async () => '/test/input',
+    spawn,
+  });
+  try {
+    await host.start('1');
+    expect(spawn).toHaveBeenCalledWith('/test/input', ['--x11', '0', '0', '100', '100']);
+    const events = [{ kind: 'button' as const, x: 1, y: 0, button: 0 as const, down: true }];
+    host.input(events);
+    await flush();
+    expect(c.child.stdin.write.mock.calls[0][0]).toBe(JSON.stringify(events) + '\n');
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    const releasing = host.release();
+    expect(c.child.stdin.end).toHaveBeenCalledWith('[{"kind":"release"}]\n');
+    c.exit();
+    await releasing;
+  } finally {
+    host.stop();
+    c.exit();
+  }
+});
+
+it('maps an X11 display from scaled desktop coordinates and rejects ambiguous layouts', () => {
+  const left = { id: 1, scaleFactor: 2, bounds: { x: -100, y: 0, width: 100, height: 80 } };
+  const right = { id: 2, scaleFactor: 2, bounds: { x: 0, y: 0, width: 120, height: 100 } };
+  expect(x11InputGeometry([left, right], '2')).toEqual(['200', '0', '240', '200']);
+  expect(() => x11InputGeometry([left, right], '3')).toThrow('DESKTOP_DISPLAY_MISSING');
+  expect(() => x11InputGeometry([left, { ...right, scaleFactor: 1 }], '2')).toThrow(
+    'DESKTOP_INPUT_UNSUPPORTED',
+  );
+  vi.stubEnv('DISPLAY', ':1');
+  vi.stubEnv('XDG_SESSION_TYPE', 'wayland');
+  expect(isX11Desktop('linux')).toBe(false); // XWayland is not X11 desktop access.
+});
+
+it('drops queued X11 input if monitor geometry changes while an earlier batch is pending', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('DISPLAY', ':test');
+  vi.stubEnv('XDG_SESSION_TYPE', 'x11');
+  vi.stubEnv('WAYLAND_DISPLAY', '');
+  const c = childProcess();
+  const failure = vi.fn();
+  const display = { id: 1, scaleFactor: 1, bounds: { x: 0, y: 0, width: 100, height: 100 } };
+  const query = vi.spyOn(screen, 'getAllDisplays').mockReturnValue([display] as any);
+  const host = new DesktopInputHost(failure, {
+    platform: 'linux',
+    resolveBinary: async () => '/test/input',
+    spawn: () => {
+      queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+      return c.typed;
+    },
+  });
+  try {
+    await host.start('1');
+    host.input([{ kind: 'move', x: 0, y: 0 }]);
+    await flush();
+    host.input([{ kind: 'button', button: 0, down: true, x: 1, y: 1 }]);
+    display.bounds.width = 200;
+    c.child.stdout.emit('data', Buffer.from('ok\n'));
+    await flush();
+    expect(c.child.stdin.write).toHaveBeenCalledTimes(1);
+    expect(failure).toHaveBeenCalledOnce();
+  } finally {
+    host.stop();
+    c.exit();
+    query.mockRestore();
+  }
 });

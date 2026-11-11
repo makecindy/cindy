@@ -1115,3 +1115,39 @@ it('does not stamp previous-owner model tuning during the auth handoff', async (
   expect(memory.snapshotForSeed('B')).toEqual({});
   expect(memory.snapshotForSeed('A')).toBeNull();
 });
+
+
+describe('alias model memory batch', () => {
+  it('retains explicit false, writes both aliases, and resets only the requested agents', async () => {
+    const m = await loadModule();
+    m.setProviderModelEffort('pi', 'p', 'old', 'low');
+    m.setProviderModelEffort('codex', 'other-provider', 'other', 'low');
+    const writes = ['old', 'new'].flatMap((model) => [
+      { kind: 'set-effort' as const, agent: 'codex' as const, providerId: 'p', model, effort: 'high' as const },
+      { kind: 'set-fast' as const, agent: 'codex' as const, providerId: 'p', model, enabled: false },
+    ]);
+    expect(m.editProviderModelMemoryBatch(writes)).toBe(true);
+    for (const model of ['old', 'new']) {
+      expect(m.getProviderModelEffort('codex', 'p', model)).toBe('high');
+      expect(m.getProviderModelFast('codex', 'p', model)).toBe(false);
+    }
+    expect(m.editProviderModelMemoryBatch(['old', 'new'].flatMap((model) => [
+      { kind: 'clear-effort' as const, agent: 'codex' as const, providerId: 'p', model },
+      { kind: 'clear-fast' as const, agent: 'codex' as const, providerId: 'p', model },
+    ]))).toBe(true);
+    expect(m.getProviderModelEffort('codex', 'p', 'old')).toBeUndefined();
+    expect(m.getProviderModelFast('codex', 'p', 'new')).toBeUndefined();
+    expect(m.getProviderModelEffort('pi', 'p', 'old')).toBe('low');
+    expect(m.getProviderModelEffort('codex', 'other-provider', 'other')).toBe('low');
+  });
+  it('does not partly update aliases on storage failure', async () => {
+    const m = await loadModule();
+    m.setProviderModelEffort('codex', 'p', 'old', 'low');
+    memStorage.setWritesFail(true);
+    expect(m.editProviderModelMemoryBatch(['old', 'new'].map((model) => ({
+      kind: 'set-effort' as const, agent: 'codex' as const, providerId: 'p', model, effort: 'high' as const,
+    })))).toBe(false);
+    expect(m.getProviderModelEffort('codex', 'p', 'old')).toBe('low');
+    expect(m.getProviderModelEffort('codex', 'p', 'new')).toBeUndefined();
+  });
+});

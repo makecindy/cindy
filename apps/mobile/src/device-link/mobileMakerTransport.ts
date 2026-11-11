@@ -39,6 +39,8 @@ import {
 import {
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   ORCA_EXECUTION_DEVICES_CHANNEL,
+  ORCA_WORKER_ROLES_APPLY,
+  ORCA_WORKER_ROLES_GET,
   isSharedTaskPeer,
   readDeviceFile,
   FILE_PEER_MAX_BYTES,
@@ -47,13 +49,14 @@ import {
   assertFileReadActive,
   validFileVersion,
   type DeviceFileResult,
+  type OrcaWorkerRolesMutation,
 } from "@cindy/device-link";
 import { errorText, mediaExtOf, nextFileTrace } from "@/debug/fileDiagnostics";
 import { mobileDebugLog } from "@/debug/mobileDebugLog";
 import type {
   HistoryViewPage,
   HistoryDetailPage,
-  HistoryWorkSummary,
+  HistoryWorkReference,
 } from "@cindy/maker-shared/message-window";
 import type {
   MobileGoalLimitsInput,
@@ -560,12 +563,12 @@ export interface MobileMakerTransport {
   ): Promise<HistoryViewPage<RemoteMessage>>;
   readWorkDetails(
     sessionId: string,
-    ref: HistoryWorkSummary,
+    ref: HistoryWorkReference,
     after?: string,
   ): Promise<HistoryDetailPage<RemoteMessage>>;
   setHistoryExpanded(
     sessionId: string,
-    refs: readonly HistoryWorkSummary[],
+    refs: readonly HistoryWorkReference[],
   ): Promise<void>;
   aroundMessages(
     sessionId: string,
@@ -632,7 +635,8 @@ export interface MobileMakerTransport {
   ): Promise<unknown>;
   getSessionEstimatedValue(
     sessionId: string,
-  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number }>;
+    options?: { includeBreakdown?: boolean; clientId?: string },
+  ): Promise<{ totalValueMoney?: unknown; totalValueUsd?: number; costBreakdown?: unknown }>;
   /** Codex app-server authoritative windows plus banked reset credits and a bound reset offer. */
   getCodexRateLimits(providerId?: string): Promise<MobileCodexRateLimitsResult>;
   setCodexResetAutoUse(patch: Partial<CodexResetAutoUseSettings> | null, accountKey: string, providerId?: string): Promise<MobileCodexRateLimitsResult>;
@@ -765,7 +769,8 @@ export interface MobileMakerTransport {
   rewindCommit(
     sessionId: string,
     clientId: string,
-    opts?: { allowFileRestore?: boolean },
+    /** requireLatestUser:编辑最后一条消息专用,被控端权威核对目标仍是最新用户消息。 */
+    opts?: { allowFileRestore?: boolean; requireLatestUser?: boolean },
   ): Promise<RemoteSession>;
   deleteMessage(
     sessionId: string,
@@ -790,6 +795,12 @@ export interface MobileMakerTransport {
     acknowledgeDone(leadSessionId: string, workerId: string): Promise<unknown>;
     archiveWorker(leadSessionId: string, workerId: string): Promise<unknown>;
     getCollaborationSettings(): Promise<unknown>;
+    /**
+     * 创建 Worker 的角色清单与每个角色记的任务、权限、模型：只存在任务所在的电脑上，手机不留副本。
+     * 旧电脑没有这两个通道(CHANNEL_NOT_ALLOWED)，调用方按「只有内置角色、不记忆」处理。
+     */
+    getWorkerRoles(): Promise<unknown>;
+    applyWorkerRoles(mutation: OrcaWorkerRolesMutation): Promise<unknown>;
   };
   /**
    * 会话未读已读回执:手机端真实展示会话内容后,清掉被控端该会话的未读态
@@ -1192,7 +1203,7 @@ export function createMobileMakerTransport({
           prepare: () =>
             stage("prepare", () => fetch(!opts?.thumbnail, !opts?.thumbnail), describeResult),
           peer: (metadata) =>
-            metadata.size <= FILE_PEER_MAX_BYTES
+            !isSharedTaskPeer(deviceId) && metadata.size <= FILE_PEER_MAX_BYTES
               ? stage(
                   "direct",
                   () => tryMobilePeerFile(deviceId, url, opts?.signal, trace || undefined,
@@ -1202,7 +1213,9 @@ export function createMobileMakerTransport({
               : Promise.resolve(null),
           fallback: () => {
             try { opts?.onProgress?.(0, 0); } catch { /* Observer only; upload bytes are unavailable. */ }
-            return stage("upload", fallback ?? (() => fetch(false)), describeResult);
+            // Workdir export jobs are same-account only. Shared media fetch
+            // rechecks task access and stages bytes in the shared-task scope.
+            return stage("upload", !isSharedTaskPeer(deviceId) && fallback ? fallback : () => fetch(false), describeResult);
           },
         }),
       (result) => ({
@@ -1356,8 +1369,8 @@ export function createMobileMakerTransport({
         throw new Error("PRECONDITION_FAILED: Account scope unsupported");
       return result;
     },
-    getSessionEstimatedValue: (sessionId) =>
-      call("local-db:messages:estimatedSessionValue", [sessionId]),
+    getSessionEstimatedValue: (sessionId, options) =>
+      call("local-db:messages:estimatedSessionValue", [sessionId, ...(options ? [options] : [])]),
     getCodexRateLimits: async (providerId) => {
       const result = await call<MobileCodexRateLimitsResult>(
         "maker:usage:codex-rate-limits",
@@ -1491,6 +1504,8 @@ export function createMobileMakerTransport({
       archiveWorker: (leadSessionId, workerId) =>
         call("maker:worker:archive", [{ leadSessionId, workerId }]),
       getCollaborationSettings: () => call("maker:collaboration-settings:get"),
+      getWorkerRoles: () => call(ORCA_WORKER_ROLES_GET),
+      applyWorkerRoles: (mutation) => call(ORCA_WORKER_ROLES_APPLY, [mutation]),
     },
     clearSessionAttention: (sessionId, intent) =>
       call("notification:clear-session-attention", [sessionId, intent]),
@@ -1624,7 +1639,7 @@ export function createMobileMakerTransport({
           workdir,
         });
         assertFileReadActive(signal);
-        if (!caps.fileRead) {
+        if (!caps.fileRead && !isSharedTaskPeer(deviceId)) {
           mobileDebugLog("debug", "files", "file export without direct read", {
             reason: "host-lacks-file-read",
           });

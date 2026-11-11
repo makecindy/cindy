@@ -1,6 +1,7 @@
 import { deviceDisplayName } from '@/lib/deviceName';
+import type { CompanionCloudSnapshot } from '../../../shared/companionCloud';
 import type { BotProfile } from './botStore';
-import { isRemoteBotUnread, type RemoteBot } from './remoteBotRoster';
+import { isRemoteBotUnread, taskBotKey, type RemoteBot } from './remoteBotRoster';
 
 export type CindyDeviceBot = BotProfile | RemoteBot;
 
@@ -20,6 +21,17 @@ export interface CindyDeviceOption {
  * Unknown/custom profiles stay separate rather than disappearing into this group. */
 export function isCindyDeviceBot(bot: { id: string; templateId?: string }): boolean {
   return bot.templateId === 'cindy' || bot.id === 'cindy-default';
+}
+
+/** Task filtering follows the built-in teammate across computers, including historical tasks. */
+export function taskCreatorFilterKey(
+  bot: { id: string; deviceId?: string; templateId?: string; filterKey?: string },
+  cloud?: CompanionCloudSnapshot,
+): string {
+  if (bot.filterKey) return bot.filterKey;
+  if (isCindyDeviceBot(bot)) return JSON.stringify(['teammate', 'cindy']);
+  if (cloud?.enabled && cloud.actors.some(actor => actor.externalId === bot.id)) return JSON.stringify(['companion', bot.id]);
+  return taskBotKey(bot);
 }
 
 export function cindyDeviceKey(bot: { id: string; deviceId?: string }): string {

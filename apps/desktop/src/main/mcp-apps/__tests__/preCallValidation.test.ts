@@ -5,7 +5,7 @@ import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { McpAppRecord } from '../../../shared/mcpApps.js';
 import { AppConnection } from '../connection.js';
 import { McpAppsHost } from '../host.js';
-import { createAppServerProxy } from '../serverProxy.js';
+import { createAppServerProxy } from '../serverProxy.desktop.js';
 import { setMcpAppsHost, registerAppServer, clearAppServerConfigs } from '../runtime.js';
 
 const cleanup: Array<() => Promise<void>> = [];

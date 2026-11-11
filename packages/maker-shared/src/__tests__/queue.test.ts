@@ -18,6 +18,19 @@ function queued(clientId: string): { clientId: string } {
 }
 
 describe('shared queue presentation model', () => {
+  // unit: plugin context without an image still uses a persisted envelope. The
+  // old files-only decoder exposed that envelope and its raw capture diagnostics.
+  it('projects collapsed plugin context in pending rows with or without images', () => {
+    const body = 'Look here';
+    const text = body + '\n\nWindow details';
+    const pastedTextRanges = [{ start: body.length, end: text.length, display: 'Attached context' }];
+    for (const files of [undefined, [{ name: 'window.png' }]]) {
+      const item = { text, persistedContent: JSON.stringify({ text, pastedTextRanges }), files,
+        sourcePlugin: { pluginId: 'example' }, chatMessage: { pastedTextRanges } };
+      expect(queueItemVisibleText(item)).toBe(body + 'Attached context');
+      expect(item.text).toContain('Window details');
+    }
+  });
   it('preserves and pauses queue only when Stop sees queued rows', () => {
     expect(stopOptionsForProjection({ pendingQueue: [] })).toBeUndefined();
     expect(stopOptionsForProjection({ pendingQueue: [queued('q-1')] })).toEqual({
@@ -334,6 +347,19 @@ describe('queueItemVisibleText', () => {
       persistedContent: 'heartbeat prompt',
       origin: { kind: 'scheduler', scheduleId: 's' },
     })).toBe('heartbeat prompt');
+  });
+
+  // Bug: a queued answer to a question showed the reply markup sent to the model.
+  it.each([
+    ['the readable copy saved by the Host', '> Install?\n\nYes'],
+    ['the envelope saved by a client', JSON.stringify({ text: '> Install?\n\nYes', images: [], files: [] })],
+    ['a copy saved in the model format', undefined],
+  ])('shows a question answer from %s', (_case, persistedContent) => {
+    expect(queueItemVisibleText({
+      clientId: 'question-reply:answered:q1:digest',
+      text: '<send_user_message_question_reply>\n[{"questionItemId":"q1","question":"Install?","answer":"Yes"}]\n</send_user_message_question_reply>',
+      ...(persistedContent ? { persistedContent } : {}),
+    })).toBe('> Install?\n\nYes');
   });
 
   it('keeps an intentionally empty persisted body instead of exposing agent instructions', () => {

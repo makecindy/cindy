@@ -116,6 +116,29 @@ describe('ollamaRuntime', () => {
     expect(status.kind).toBe('port-conflict');
   });
 
+  it('keeps waiting past the default deadline when the caller extends it', async () => {
+    // Cold sidecar starts were measured at ~19s; the default 15s gave up too early.
+    let clock = 0;
+    const run = (startTimeoutMs?: number) =>
+      startOfficialOllamaApp({
+        platform: 'darwin',
+        appExists: () => true,
+        openApp: async () => undefined,
+        now: () => clock,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+        startTimeoutMs,
+        fetchImpl: async () => {
+          if (clock < 20_000) throw new OllamaHttpError('refused', 'down');
+          return new Response(JSON.stringify({ version: '0.34.4' }));
+        },
+      });
+    expect((await run()).kind).toBe('stopped');
+    clock = 0;
+    expect((await run(120_000)).kind).toBe('ready');
+  });
+
   it('aborts start polling when the install signal fires', async () => {
     const abort = new AbortController();
     const pending = startOfficialOllamaApp({

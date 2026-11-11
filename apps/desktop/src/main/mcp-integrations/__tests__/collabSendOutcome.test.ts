@@ -1,5 +1,4 @@
 import type { SessionSendResult } from '@cindy/maker-core';
-import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mockState = vi.hoisted(() => ({
@@ -22,8 +21,10 @@ const mockState = vi.hoisted(() => ({
     _sessionInstanceId: string | undefined,
   ) => ({ ok: true as const })),
   capturedProvidersConfig: null as null | Record<string, unknown>,
-  publishImage: vi.fn(),
   afterSelectCompanion: null as null | (() => void),
+  invitationSession: null as null | { instanceId: string; stablePermissionModeState: { mode: string; generation: number } },
+  invitationInput: null as null | { key: string; boundary: string; permission: { isCurrent(): boolean; planModeEnabled: boolean; permissionMode: string } },
+  invitationOwner: true,
   personalFeishu: {
     getOwnerOpenId: () => 'ou_personal',
     sendMarkdownText: vi.fn(async () => ({ messageId: 'om_personal_text' })),
@@ -49,9 +50,11 @@ vi.mock('../../logger.js', () => ({
 vi.mock('../../maker-ipc/register.js', () => ({
   tryGetOrcaCollabService: () => mockState.collabService,
   isSessionInTurn: () => false,
-  getTaskActionInputState: () => ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
-  getTaskActionSession: () => undefined,
+  getTaskActionInputState: () => mockState.invitationInput ?? ({ key: 'owner-input', ownerInput: true, boundary: 'runtime-1' }),
+  getTaskActionSession: () => mockState.invitationSession ?? undefined,
+  isActiveInputAccountScoped: () => mockState.invitationOwner,
   confirmTaskAction: vi.fn(async () => true),
+  captureTaskActionPermissionRequest: vi.fn(async () => null),
 }));
 
 vi.mock('@cindy/mcps', () => ({
@@ -82,7 +85,7 @@ vi.mock('../../maker-host/index.js', () => ({
   }),
 }));
 
-vi.mock('../../scheduler-host/index.js', () => ({
+vi.mock('../../scheduler-host/index.desktop.js', () => ({
   getScheduler: () => null,
 }));
 
@@ -100,8 +103,6 @@ vi.mock('../../im/shared/botImConnectionRuntime', () => ({
 vi.mock('../cindyProxyMedia.js', () => ({
   getCindyProxyMediaService: () => ({ mcp: {} }),
 }));
-
-vi.mock('../../cindy-media/publishImage.js', () => ({ publishImage: mockState.publishImage }));
 
 vi.mock('../../maker-host/session-search.js', () => ({
   searchSessionsFn: vi.fn(),
@@ -141,7 +142,7 @@ import {
 import { createDesktopMcpProviders } from '../mcp-providers.js';
 import { createDbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
-import type { FeishuBotMcpHostDeps, CreateLiziMcpProvidersOptions } from '@cindy/mcps';
+import type { FeishuBotMcpHostDeps, XdtHelperMcpDeps } from '@cindy/mcps';
 import { beginAppSessionBoundary, commitVolatileAppSession } from '../../appSessionState.js';
 
 const botCapabilities = {
@@ -195,69 +196,6 @@ function createCollabService(overrides: Record<string, ReturnType<typeof vi.fn>>
 }
 
 describe('collab send outcome semantics', () => {
-  // Unit: exercise the real provider callback with the existing media importer
-  // as its boundary. Missing sent-image previews and stale-task publication were
-  // not covered by the channel transport tests.
-  it.each(['ready', 'unavailable', 'non-image', 'unsupported-image', 'remote'] as const)('prepares outbound chat images with task ownership: %s', async (state) => {
-    mockState.publishImage.mockReset().mockResolvedValue(state === 'unavailable'
-      ? { ok: false, errorCode: 'MEDIA_PUBLISH_FAILED' }
-      : { ok: true, url: `cindy-media://blobs/${'a'.repeat(64)}.png` });
-    let live = true;
-    createDesktopMcpProviders({
-      botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
-      pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never,
-      invokeRemote: vi.fn(), getLiveSessionGrantState: () => ({
-        permissionMode: 'auto', remoteHostId: null, isCurrent: () => live,
-      }),
-    });
-    const prepare = mockState.capturedProvidersConfig!.prepareOutboundImage as NonNullable<CreateLiziMcpProvidersOptions['prepareOutboundImage']>;
-    const source = path.join(path.sep, 'task', state === 'non-image' ? 'report.pdf'
-      : state === 'unsupported-image' ? 'photo.BMP' : 'photo.png');
-    const prepared = await prepare(source, { agentKind: 'codex', workingDir: path.dirname(source),
-      sessionId: 'image-task', sessionInstanceId: 'runtime', ...(state === 'remote' ? { remoteHostId: 'ssh-host' } : {}) });
-    if (state === 'non-image' || state === 'remote' || state === 'unsupported-image') {
-      expect(mockState.publishImage).not.toHaveBeenCalled();
-      expect(prepared.path).toBe(source);
-      expect(prepared.url).toBeUndefined();
-      if (state === 'unsupported-image') expect(prepared.errorCode).toBe('IMAGE_PREVIEW_UNSUPPORTED');
-      return;
-    }
-    expect(mockState.publishImage).toHaveBeenCalledWith(source,
-      { sessionId: 'image-task', workingDir: path.dirname(source) },
-      expect.objectContaining({ isCurrent: expect.any(Function), authorize: expect.any(Function) }));
-    if (state === 'ready') {
-      expect(prepared).toMatchObject({ url: `cindy-media://blobs/${'a'.repeat(64)}.png`,
-        path: path.resolve(mockState.userDataDir, 'cindy-media', 'blobs', 'aa', `${'a'.repeat(64)}.png`) });
-    } else expect(prepared).toMatchObject({ path: source, errorCode: 'MEDIA_PUBLISH_FAILED' });
-    prepared.assertCurrent!();
-    live = false;
-    expect(prepared.assertCurrent).toThrow('SESSION_SCOPE_CHANGED');
-  });
-
-  // The live authority API returns a fresh snapshot on every call. Reacquiring
-  // one after I/O would silently authorize a new permission/Plan generation.
-  it('pins the permission generation before image preparation first yields', async () => {
-    let generation = 0;
-    mockState.publishImage.mockReset().mockResolvedValue({ ok: false, errorCode: 'PERMISSION_DENIED' });
-    createDesktopMcpProviders({
-      botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
-      pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never,
-      invokeRemote: vi.fn(), getLiveSessionGrantState: () => {
-        const captured = generation;
-        return { permissionMode: 'auto', remoteHostId: null, isCurrent: () => captured === generation };
-      },
-    });
-    const prepare = mockState.capturedProvidersConfig!.prepareOutboundImage as NonNullable<CreateLiziMcpProvidersOptions['prepareOutboundImage']>;
-    const preparing = prepare(path.join(path.sep, 'task', 'photo.png'), {
-      agentKind: 'codex', workingDir: path.join(path.sep, 'task'),
-      sessionId: 'image-task', sessionInstanceId: 'runtime',
-    });
-    generation++;
-    const prepared = await preparing;
-    expect(mockState.publishImage.mock.calls[0]![2].isCurrent()).toBe(false);
-    expect(prepared.assertCurrent).toThrow('SESSION_SCOPE_CHANGED');
-  });
-
   afterEach(() => {
     mockState.logger.warn.mockClear();
     mockState.logger.info.mockClear();
@@ -271,7 +209,52 @@ describe('collab send outcome semantics', () => {
     mockState.consumeLearnInvocationGrant.mockReset();
     mockState.consumeLearnInvocationGrant.mockResolvedValue({ ok: true });
     mockState.capturedProvidersConfig = null;
+    mockState.invitationSession = null;
+    mockState.invitationInput = null;
+    mockState.invitationOwner = true;
     vi.clearAllMocks();
+  });
+
+  // Unit: actual Desktop provider + worker DB. Host tests inject caller facts;
+  // this covers production wiring of live instance, owner input and permissions.
+  it('binds invitations to live task authority regardless of the Agent execution device', async () => {
+    const client = await createDbClient({ transport: 'worker-thread', useInlineWorker: true });
+    try {
+      commitVolatileAppSession('cloud', 'invitation-test-owner');
+      await client.exec('CREATE TABLE bot_session_links (session_id TEXT, bot_id TEXT, role TEXT)');
+      setCurrentDbClient(client, 'invitation-test-owner');
+      mockState.invitationSession = { instanceId: 'instance', stablePermissionModeState: { mode: 'bypass', generation: 1 } };
+      mockState.invitationInput = { key: 'input', boundary: 'instance:1', permission: { isCurrent: () => true, planModeEnabled: false, permissionMode: 'bypass' } };
+      const invitation = 'A'.repeat(43);
+      let changeDuringInvite = false;
+      const command = vi.fn(async (request: { action: string }) => {
+        if (request.action === 'state') return { available: true, detail: { sessionId: 'task', sharedTaskId: 'shared', status: 'active' } };
+        if (changeDuringInvite) mockState.invitationSession!.stablePermissionModeState.generation++;
+        return { sharedTaskId: 'shared', invitation, invitationLink: 'https://relay.example.test/shared-task/join#' + invitation };
+      });
+      createDesktopMcpProviders({ botCapabilities, getMakerMemoryManager: vi.fn(), lspPool: {} as never,
+        pluginRegistry: { isEnabled: () => true, getPlugins: () => [] } as never, invokeRemote: vi.fn(),
+        captureSharedTaskCommand: () => command,
+      });
+      const sharedTask = (mockState.capturedProvidersConfig!.xdtHelper as XdtHelperMcpDeps).sharedTask!;
+      const context = { agentKind: 'codex' as const, workingDir: '/fixture', sessionId: 'task', sessionInstanceId: 'instance', remoteHostId: 'ssh-workspace' };
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: true, sessionId: 'task', device: 'local', sharedTaskId: 'shared' });
+      command.mockClear();
+      mockState.invitationOwner = false;
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      mockState.invitationOwner = true;
+      expect(await sharedTask({ ...context, sessionInstanceId: 'old' }, 'invite')).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      mockState.invitationInput.permission.planModeEnabled = true;
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: false, errorCode: 'PLAN_MODE' });
+      expect(command).not.toHaveBeenCalled();
+      expect(await sharedTask(context, 'state')).toMatchObject({ ok: true });
+      mockState.invitationInput.permission.planModeEnabled = false;
+      changeDuringInvite = true;
+      expect(await sharedTask(context, 'invite')).toMatchObject({ ok: false, errorCode: 'SHARED_TASK_RESULT_UNKNOWN' });
+    } finally {
+      mockState.invitationSession = null; mockState.invitationInput = null;
+      commitVolatileAppSession('signed-out'); clearCurrentDbClient(client); await client.dispose();
+    }
   });
 
   it('keeps cindy_orca registered when project policy is disabled at session startup', () => {

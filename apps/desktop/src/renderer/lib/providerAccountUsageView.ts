@@ -24,7 +24,9 @@ export function getProviderAccountUsageDashboardUrlView(
 const DEEPSEEK_ORIGIN = 'https://api.deepseek.com';
 const ZHIPU_ANTHROPIC_BASES = [
   'https://open.bigmodel.cn/api/anthropic',
+  'https://open.bigmodel.cn/api/anthropic/',
   'https://api.z.ai/api/anthropic',
+  'https://api.z.ai/api/anthropic/',
 ];
 const ZHIPU_CODING_PREFIXES = [
   'https://open.bigmodel.cn/api/coding/',

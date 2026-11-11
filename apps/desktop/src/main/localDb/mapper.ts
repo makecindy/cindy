@@ -13,7 +13,7 @@ import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activ
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { getSessionInterruptionBootAt } from './sessionInterruptionBoot';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
-import { projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
+import { projectMcpAppHistory } from '../mcp-apps/history.js';
 import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
 import {
   parseOrcaRemoteLead,
@@ -50,9 +50,13 @@ import type {
   RunStatus,
   AgentKind as SchedulerAgentKind,
   ScriptExecutionConfig,
+  ScheduleWebhookTrigger,
   ScriptCapability,
   PreRunHookRunResult,
+  PreRunPluginFailureAction,
 } from '@cindy/maker-scheduler';
+// 子路径只加载这一份无依赖的格式校验，不引入引擎。
+import { normalizeScheduleWebhookSource, type ScheduleWebhookSource } from '@cindy/maker-scheduler/webhook-formats';
 import { normalizeSessionSource } from '../../shared/sessionSource.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
@@ -128,6 +132,7 @@ export function projectSessionRuntimeFields(session: SessionRuntimeFields): Part
  * preview 落 null，渲染端兜底隐藏。
  */
 export type SessionRowWithCount = SessionRow & {
+  companion?: Session['companion'];
   tags?: import('@cindy/maker-shared').TaskTag[];
   messageCount: number;
   latestMessageContent?: string | null;
@@ -139,6 +144,10 @@ export type SessionRowWithCount = SessionRow & {
 const PREVIEW_MAX_CHARS = 140;
 /** Bound serialized content before JSON.parse so oversized rows stay valid JSON. */
 const PREVIEW_CONTENT_BOUND_CHARS = 4096;
+// Cache only this pure projection, never a session row. Exact text/role keys
+// keep edits visible; both entry count and input size bound retained memory.
+const PREVIEW_CACHE_ENTRIES = 1024;
+const plainPreviewCache = new Map<string, string | null>();
 
 /**
  * 从消息 content（DB 存的 JSON string）提炼 sidebar 卡片预览纯文本。
@@ -152,6 +161,26 @@ export function finalizePlainPreview(
   role: string | null | undefined,
 ): string | null {
   if (!text) return null;
+  const key = text.length <= PREVIEW_CONTENT_BOUND_CHARS
+    ? `${role === 'assistant' ? 'assistant' : 'plain'}:${text}`
+    : null;
+  if (key !== null && plainPreviewCache.has(key)) {
+    const cached = plainPreviewCache.get(key)!;
+    plainPreviewCache.delete(key);
+    plainPreviewCache.set(key, cached);
+    return cached;
+  }
+  const preview = computePlainPreview(text, role);
+  if (key !== null) {
+    plainPreviewCache.set(key, preview);
+    if (plainPreviewCache.size > PREVIEW_CACHE_ENTRIES) {
+      plainPreviewCache.delete(plainPreviewCache.keys().next().value!);
+    }
+  }
+  return preview;
+}
+
+function computePlainPreview(text: string, role: string | null | undefined): string | null {
   let next = text;
   // 合成 UI 指令行(隐藏续跑 / 图片按钮)不进 sidebar 预览(review P2):它是
   // role='user' 的正常落库行,但对用户不可见 —— 预览显示隐藏英文指令会暴露
@@ -245,10 +274,12 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     row.totalCostUsd + (row.totalCostCurrency === 'USD' ? row.totalCostAmount : 0);
   const base: Session = {
     id: row.id,
+    ...(row.companion ? { companion: row.companion } : {}),
     ...(row.tags ? { tags: row.tags } : {}),
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
     title: row.title,
     workingDir: row.workingDir,
+    projectDir: row.projectDir,
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
     model: row.model,
     effort: row.effort as Effort,
@@ -266,6 +297,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     clearedAt: msToIso(row.clearedAt),
     pinnedAt: msToIso(row.pinnedAt),
     hiddenAt: msToIso(row.hiddenAt),
+    notificationsMuted: !!row.notificationsMuted,
     userSendAt: msToIso(row.userSendAt),
     lastActivityAt: msToIso(row.lastActivityAt),
     agentKind: row.agentKind as AgentKind,
@@ -356,7 +388,7 @@ export function messageToCamel(row: MessageRow): Message {
     clientId: row.clientId,
     sessionId: row.sessionId,
     role: row.role as MessageRole,
-    content: projectMcpAppContent(content, agentMeta?.mcpApp === true),
+    content: projectMcpAppHistory(content, agentMeta?.mcpApp === true),
     toolUseId: row.toolUseId,
     agentMeta,
     agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
@@ -387,6 +419,7 @@ export function sessionCreateToRow(
         id?: string;
         title?: string;
         workingDir?: string;
+        projectDir?: string | null;
         workspaceKind?: WorkspaceKind;
         model?: string;
         effort?: string;
@@ -424,6 +457,7 @@ export function sessionCreateToRow(
         ? body.title.trim()
         : DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: normalizeWorkingDirForStorage(body?.workingDir),
+    projectDir: normalizeWorkingDirForStorage(body?.projectDir),
     workspaceKind: body?.workspaceKind ?? 'project',
     model: body?.model ?? 'claude-sonnet-4-6',
     effort: (body?.effort as SessionInsert['effort']) ?? 'high',
@@ -488,6 +522,7 @@ export function sessionPatchToRow(
     contextWindow?: number;
     clearedAt?: string | null;
     pinnedAt?: string | null;
+    notificationsMuted?: boolean;
     status?: SessionStatus;
     orcaRole?: OrcaRole | null;
     extraDirs?: string[];
@@ -500,6 +535,10 @@ export function sessionPatchToRow(
   if (patch.workingDir !== undefined)
     out.workingDir = normalizeWorkingDirForStorage(patch.workingDir);
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
+  // Move controls explicitly set workspaceKind; an execution-only cwd update
+  // (e.g. attaching a worktree) must preserve the chosen project.
+  if (patch.workspaceKind === 'dialogue'
+    || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) out.projectDir = null;
   if (patch.model !== undefined) out.model = patch.model;
   const persistableEffort = persistableSessionEffort(patch.effort);
   if (persistableEffort !== undefined) out.effort = persistableEffort;
@@ -515,6 +554,7 @@ export function sessionPatchToRow(
   if (patch.contextWindow !== undefined) out.contextWindow = patch.contextWindow;
   if (patch.clearedAt !== undefined) out.clearedAt = isoToMs(patch.clearedAt);
   if (patch.pinnedAt !== undefined) out.pinnedAt = isoToMs(patch.pinnedAt);
+  if (patch.notificationsMuted !== undefined) out.notificationsMuted = !!patch.notificationsMuted;
   if (patch.status !== undefined) out.status = patch.status;
   if (patch.orcaRole !== undefined) out.orcaRole = patch.orcaRole;
   if (patch.extraDirs !== undefined) out.extraDirs = safeStringify(patch.extraDirs);
@@ -665,6 +705,11 @@ function parseScriptConfig(raw: string | null): ScriptExecutionConfig | undefine
 const PRE_RUN_HOOK_STATUSES = new Set(['passed', 'skipped', 'failed', 'timed_out', 'aborted']);
 const PRE_RUN_HOOK_DECISIONS = new Set(['run', 'skip', 'block']);
 
+/** 本文件只做 type-only import,取值表在此重复声明;未知值按最严格的 block 读。 */
+function isPreRunPluginFailureAction(value: string | null): value is PreRunPluginFailureAction {
+  return value === 'allow' || value === 'skip' || value === 'block';
+}
+
 /** 兼容损坏/手工写入的 JSON：非法结果不应让整个运行历史加载失败。 */
 function parsePreRunHookResult(raw: string | null): PreRunHookRunResult | undefined {
   if (!raw) return undefined;
@@ -692,6 +737,33 @@ function parsePreRunHookResult(raw: string | null): PreRunHookRunResult | undefi
   }
 }
 
+/**
+ * 更新版本写入的预设本机可能不认识：原样保留，不当作 GitHub，否则下次同步会覆盖服务器上的格式。
+ */
+function parseWebhookSource(value: unknown): Pick<ScheduleWebhookTrigger, 'source'> {
+  if (value === undefined) return {};
+  try {
+    return { source: normalizeScheduleWebhookSource(value) };
+  } catch {
+    const preset = (value as { preset?: unknown } | null)?.preset;
+    return typeof preset === 'string' && preset ? { source: value as ScheduleWebhookSource } : {};
+  }
+}
+
+function parseWebhookTrigger(raw: string | null): ScheduleWebhookTrigger | undefined {
+  if (!raw) return undefined;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof value.endpointId !== 'string' || !value.endpointId) return undefined;
+    const events = Array.isArray(value.events)
+      ? value.events.filter((event): event is string => typeof event === 'string')
+      : [];
+    return { endpointId: value.endpointId, ...(events.length ? { events } : {}), ...parseWebhookSource(value.source) };
+  } catch {
+    return undefined;
+  }
+}
+
 function serializeScriptConfig(config: ScriptExecutionConfig | undefined): string | null {
   return config ? JSON.stringify(config) : null;
 }
@@ -706,6 +778,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     jobConfig: row.jobConfig ?? undefined,
     executionMode: row.executionMode === 'script' ? 'script' : 'agent',
     scriptConfig: parseScriptConfig(row.scriptConfig),
+    webhookTrigger: parseWebhookTrigger(row.webhookTrigger),
     source: row.source === 'project' ? 'project' : row.source === 'bot' ? 'bot' : 'user',
     projectConfigId: row.projectConfigId ?? undefined,
     kind: row.kind,
@@ -716,6 +789,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     intervalMs: row.intervalMs ?? undefined,
     agentKind: row.agentKind as SchedulerAgentKind,
     modelAgentKind: row.modelAgentKind ?? undefined,
+    modelAgentDeviceId: row.modelAgentDeviceId ?? undefined,
     model: row.model ?? undefined,
     providerId: row.providerId ?? undefined,
     agentDeviceId: row.agentDeviceId ?? undefined,
@@ -732,6 +806,12 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
       ? {
           command: row.preRunHookCommand,
           timeoutMs: row.preRunHookTimeoutMs ?? undefined,
+        }
+      : undefined,
+    preRunPlugin: row.preRunPluginId
+      ? {
+          pluginId: row.preRunPluginId,
+          onFailure: isPreRunPluginFailureAction(row.preRunPluginOnFailure) ? row.preRunPluginOnFailure : 'block',
         }
       : undefined,
     notify: {
@@ -759,6 +839,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     jobConfig: s.jobConfig ?? null,
     executionMode: s.executionMode ?? 'agent',
     scriptConfig: serializeScriptConfig(s.scriptConfig),
+    webhookTrigger: s.webhookTrigger ? JSON.stringify(s.webhookTrigger) : null,
     source: s.source ?? 'user',
     projectConfigId: s.projectConfigId ?? null,
     kind: s.kind,
@@ -769,6 +850,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     intervalMs: s.intervalMs ?? null,
     agentKind: s.agentKind,
     modelAgentKind: s.modelAgentKind ?? null,
+    modelAgentDeviceId: s.modelAgentDeviceId ?? null,
     model: s.model ?? null,
     providerId: s.providerId ?? null,
     agentDeviceId: s.agentDeviceId ?? null,
@@ -782,6 +864,8 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     silentWhenIdle: !!s.silentWhenIdle,
     preRunHookCommand: s.preRunHook?.command ?? null,
     preRunHookTimeoutMs: s.preRunHook?.timeoutMs ?? null,
+    preRunPluginId: s.preRunPlugin?.pluginId ?? null,
+    preRunPluginOnFailure: s.preRunPlugin?.onFailure ?? null,
     notifyDesktop: s.notify.desktop,
     notifyFeishu: s.notify.feishu,
     notifyWecomGroup: s.notify.wecomGroup === true,
@@ -814,6 +898,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'jobConfig')) out.jobConfig = patch.jobConfig ?? null;
   if (hasKey(patch, 'executionMode')) out.executionMode = patch.executionMode ?? 'agent';
   if (hasKey(patch, 'scriptConfig')) out.scriptConfig = serializeScriptConfig(patch.scriptConfig);
+  if (hasKey(patch, 'webhookTrigger')) out.webhookTrigger = patch.webhookTrigger ? JSON.stringify(patch.webhookTrigger) : null;
   if (hasKey(patch, 'source')) out.source = patch.source ?? 'user';
   if (hasKey(patch, 'projectConfigId')) out.projectConfigId = patch.projectConfigId ?? null;
   if (hasKey(patch, 'kind')) out.kind = patch.kind as ScheduleInsert['kind'];
@@ -825,6 +910,7 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
   if (hasKey(patch, 'intervalMs')) out.intervalMs = patch.intervalMs ?? null;
   if (hasKey(patch, 'agentKind')) out.agentKind = patch.agentKind as ScheduleInsert['agentKind'];
   if (hasKey(patch, 'modelAgentKind')) out.modelAgentKind = patch.modelAgentKind ?? null;
+  if (hasKey(patch, 'modelAgentDeviceId')) out.modelAgentDeviceId = patch.modelAgentDeviceId ?? null;
   if (hasKey(patch, 'model')) out.model = patch.model ?? null;
   if (hasKey(patch, 'providerId')) out.providerId = patch.providerId ?? null;
   if (hasKey(patch, 'agentDeviceId')) out.agentDeviceId = patch.agentDeviceId ?? null;
@@ -840,6 +926,10 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
     // 嵌套对象整体替换(同 notify):出现即两列同写;undefined = 关闭 hook,双列清 NULL
     out.preRunHookCommand = patch.preRunHook?.command ?? null;
     out.preRunHookTimeoutMs = patch.preRunHook?.timeoutMs ?? null;
+  }
+  if (hasKey(patch, 'preRunPlugin')) {
+    out.preRunPluginId = patch.preRunPlugin?.pluginId ?? null;
+    out.preRunPluginOnFailure = patch.preRunPlugin?.onFailure ?? null;
   }
   if (hasKey(patch, 'notify')) {
     const n = patch.notify;
@@ -944,6 +1034,7 @@ export function scheduleRunToCamel(row: ScheduleRunRow): ScheduleRun {
     costAttribution: row.costAttribution,
     resultText: row.resultText ?? undefined,
     preRunHookResult: parsePreRunHookResult(row.preRunHookResult),
+    triggerSource: row.triggerSource === 'webhook' ? 'webhook' : undefined,
     readAt: row.readAt ?? undefined,
     heartbeatAt: row.heartbeatAt ?? undefined,
   };
@@ -969,6 +1060,7 @@ export function scheduleRunCreateToRow(r: ScheduleRun): ScheduleRunInsert {
     costAttribution: r.costAttribution ?? 'exact',
     resultText: r.resultText ?? null,
     preRunHookResult: r.preRunHookResult ? JSON.stringify(r.preRunHookResult) : null,
+    triggerSource: r.triggerSource ?? null,
     readAt: r.readAt ?? null,
     heartbeatAt: r.heartbeatAt ?? null,
   };

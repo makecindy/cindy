@@ -1,7 +1,7 @@
 /**
  * Shared sticky top bar for both Plugin detail surfaces (installed + market).
  *
- * Inputs: back label/handler, scroll state and optional page actions.
+ * Inputs: back label/handler, scroll state, optional page actions and owning page's horizontal frame.
  * Outputs: the back button, page actions and, on macOS, the window-drag region.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
@@ -19,6 +19,8 @@ interface PluginDetailTopBarProps {
   onBack: () => void;
   /** 滚动帧是否已离开顶部；顶栏据此从透明切到实底 + hairline。 */
   scrolled: boolean;
+  /** 管理页传入与正文共用的宽度和留白；详情页保留默认阅读宽度。 */
+  frameClassName?: string;
   actions?: ReactNode;
 }
 
@@ -66,7 +68,13 @@ export function usePluginDetailScrolled(): {
  * cindy-dark.ts:131,两端同值),两条线同时出现即为一片 --surface 上相隔 64px 的
  * 两条同色平行线;那两端由 ContentHeader 的下边框充当顶部分隔,本行只留实底。
  */
-export function PluginDetailTopBar({ label, onBack, scrolled, actions }: PluginDetailTopBarProps) {
+export function PluginDetailTopBar({
+  label,
+  onBack,
+  scrolled,
+  frameClassName,
+  actions,
+}: PluginDetailTopBarProps) {
   const { isMac } = useMacFullscreen();
 
   // Both installed and market detail surfaces share this escape hatch. Let
@@ -112,7 +120,12 @@ export function PluginDetailTopBar({ label, onBack, scrolled, actions }: PluginD
       )}
       style={isMac ? WINDOW_DRAG_STYLE : undefined}
     >
-      <div className="mx-auto flex h-16 w-full max-w-[824px] items-center justify-between gap-3 px-8 max-[760px]:px-6">
+      <div
+        className={cn(
+          'flex h-16 items-center justify-between gap-3',
+          frameClassName ?? 'mx-auto w-full max-w-[824px] px-8 max-[760px]:px-6',
+        )}
+      >
         <button
           type="button"
           onClick={onBack}

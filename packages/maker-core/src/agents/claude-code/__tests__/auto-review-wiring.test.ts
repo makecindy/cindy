@@ -303,32 +303,6 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
-  // Unit merge regression: actual SDK hook registration must retain native Auto
-  // handback and plugin decisions together; plugin continue must never grant permission.
-  it.each(['continue', 'block'] as const)('preserves native Auto handback with plugin %s', async (action) => {
-    const { handle, preToolUse, queryPermissionMode, reviewAutoPermissionAction } = await startSession('auto', {
-      providerId: 'anthropic',
-      authSource: 'oauth',
-      mcpProviderNames: ['cindy_orca'],
-      mcpToolApprovalPolicy: () => 'auto-approve',
-    });
-    const plugin = vi.fn(async () => ({ action }));
-    try {
-      expect(queryPermissionMode).toBe('auto');
-      expect(handle.setHarnessHookHandler).toBeTypeOf('function');
-      handle.setHarnessHookHandler!(plugin);
-      expect(await preToolUse('mcp__cindy_orca__create_workers', { workers: [] }))
-        .toEqual(action === 'block' ? ['ask', 'deny'] : ['ask']);
-      expect(plugin).toHaveBeenCalledWith({
-        name: 'tool.before', toolName: 'mcp__cindy_orca__create_workers',
-        toolUseId: 'tu', input: { workers: [] },
-      });
-      expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
-    } finally {
-      await handle.close();
-    }
-  });
-
   it('keeps native Claude Auto when the SDK init reveals settings MCPs', async () => {
     const { handle, fakeQuery, queryPermissionMode } = await startSession('auto', {
       providerId: 'anthropic',
@@ -926,6 +900,15 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     expect(r.behavior).toBe('allow');
     expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
     expect(permissionRequests(seen)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it("passes the Bash description as the stated purpose, and omits it when absent", async () => {
+    const { handle, canUseTool, reviewAutoPermissionAction } = await startSession('auto', { reviewVerdict: 'allow' });
+    await canUseTool('Bash', { command: 'npm install left-pad', description: 'Install the missing dependency' }, { toolUseID: 't-desc' });
+    await canUseTool('Bash', { command: 'npm install right-pad' }, { toolUseID: 't-plain', agentID: 'sub-1' } as never);
+    expect(reviewedRequest(reviewAutoPermissionAction, 0).agentContext).toEqual({ statedPurpose: 'Install the missing dependency' });
+    expect(reviewedRequest(reviewAutoPermissionAction, 1)).not.toHaveProperty('agentContext');
     await handle.close();
   });
 

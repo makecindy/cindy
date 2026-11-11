@@ -35,9 +35,9 @@ vi.mock('../../shared/wallpaper-video-manifest.json', () => ({
 }));
 vi.mock('../downloader/index.js', () => ({ createDownloader: () => m.download }));
 vi.mock('../clientEndpointsService.js', () => ({ getClientEndpoint: m.endpoint }));
-vi.mock('../maker-host/outbound-fetch.js', () => ({ guardedOutboundFetch: vi.fn() }));
+vi.mock('../maker-host/outbound-fetch.desktop.js', () => ({ guardedOutboundFetch: vi.fn() }));
 vi.mock('../cindy-media/ingest.js', async () => {
-  const { writeBlob } = await import('../cindy-media/blobStore');
+  const { writeBlob } = await import('../cindy-media/blobStore.desktop');
   return {
     ingestClientWallpaper: (args: { buffer: Buffer; mimeType: string }) =>
       writeBlob({ ...args, scope: 'client-wallpaper' }),
@@ -49,7 +49,7 @@ vi.mock('../custom-wallpaper-settings.js', () => ({
     ['.mp4', '.webp'].map((ext) => `cindy-media://client-wallpaper/${m.hash}${ext}`),
 }));
 import { ensureWallpaperVideo, ensureWallpaperImage, __testing } from '../wallpaper-video';
-import { resolveHashRef, readClientWallpaperFile } from '../cindy-media/blobStore';
+import { resolveHashRef, readClientWallpaperFile } from '../cindy-media/blobStore.desktop';
 
 beforeEach(() => {
   vi.clearAllMocks();

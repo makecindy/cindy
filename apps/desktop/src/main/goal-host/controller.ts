@@ -2506,6 +2506,12 @@ export class GoalController {
       releaseAgentSwitchLock =
         (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
       if (!isCurrentLifecycle()) return;
+      // 项目资源漂移:先经注入的回收 seam 回收旧运行时(runtime-refresh),随后的
+      // ensureSession 活化即重扫重建;与桌面发送事务同口径。测试装配不注入即跳过
+      // (不能顶层 import maker-host:其模块图带 Electron 访问,会污染单测收集)。
+      if (await this.deps.recyclePiRuntimeIfResourcesDrifted?.(sessionId)) {
+        this.deps.logger.info?.('[goal] project resources drifted, recycled runtime before dispatch', { sessionId });
+      }
       const session = await this.deps.ensureSession(sessionId);
       if (!isCurrentLifecycle()) return;
       if (!session) throw new GoalSessionRestoreError();
@@ -2532,7 +2538,7 @@ export class GoalController {
       // 由 turnsUsed 派生,'first' 可能被 busy 重试 / 暂停后重发,放这里会重复落库。
       // 这里只负责把完整 directive(含裁决约定)发给模型。
       if (this.deps.beforeDispatchUserTurn) {
-        await this.deps.beforeDispatchUserTurn(sessionId);
+        await this.deps.beforeDispatchUserTurn(sessionId, dispatchAbortController.signal);
         baselineStarted = true;
       }
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),

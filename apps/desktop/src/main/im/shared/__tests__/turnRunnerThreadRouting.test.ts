@@ -75,7 +75,7 @@ vi.mock('../../../localDb/client/current', () => ({
   })),
 }));
 vi.mock('../../../localDb/schema', () => ({ sessions: {} }));
-vi.mock('../../../imageCacheStore', () => ({ resolveSafe: mocks.resolveXdtImageUrl }));
+vi.mock('../../../imageCacheStore.desktop', () => ({ resolveSafe: mocks.resolveXdtImageUrl }));
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
   toCoreAgentKind: (kind: string) => (kind === 'codex' ? 'codex' : 'claude-code'),
@@ -698,9 +698,7 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     next.emit({ type: 'done', data: {} });
   });
 
-  // Unit: sent-image results stay visible in chat without being auto-sent a
-  // second time. Previously only generated-image collection was covered here.
-  it.each(['rich-card', 'chunked-text'] as const)('%s 回传新工具图片并去重，跳过工具已经发送的图片', async (kind) => {
+  it.each(['rich-card', 'chunked-text'] as const)('%s 回传纯工具图片并去重，不依赖最终正文', async (kind) => {
     const stub = streamingHandleStub();
     mocks.slackIm.startStreamingText.mockResolvedValue(stub);
     if (kind === 'chunked-text') {
@@ -712,10 +710,6 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     runner.attachSessionOutput(h.session, 'U1', undefined, 'other-task');
     const absPath = path.resolve('generated.png');
     mocks.resolveXdtImageUrl.mockReturnValue({ absPath });
-    h.emit({ type: 'tool_result_full', data: {
-      fullText: JSON.stringify({ xdt_image_urls: ['xdt-image://already-sent'], _xdt_forward_media: false }),
-    } });
-    expect(mocks.resolveXdtImageUrl).not.toHaveBeenCalled();
     const event: AgentEvent = { type: 'tool_result_full', data: {
       fullText: JSON.stringify({ xdt_image_url: 'xdt-image://generated' }),
     } };
@@ -985,7 +979,8 @@ describe('turnRunner 渠道任务后台结果回传', () => {
     await vi.waitFor(() => expect(stub.finalize).toHaveBeenCalledExactlyOnceWith('最终报告'));
     expect(mocks.slackIm.startStreamingText).toHaveBeenCalledExactlyOnceWith('U1', undefined, { threadTs: '100.1' });
 
-    // The mark ends with that turn: the next desktop-typed turn stays in the app.
+    // The mark ends with that turn: a desktop-origin wake stays in the app too.
+    runner.noteChannelTurnSource(h.session, 'provider-wake-local');
     h.emit({ type: 'text', data: { text: '桌面里的回复', isFinal: true } });
     h.emit({ type: 'done', data: {} });
     await new Promise((resolve) => setTimeout(resolve, 10));

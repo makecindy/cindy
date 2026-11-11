@@ -12,8 +12,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const knobs = vi.hoisted(() => ({
   compactResponse: null as null | { success: boolean; data?: unknown; error?: string },
   lastCompactCommand: null as null | Record<string, unknown>,
-  onEvent: null as null | ((event: Record<string, unknown>) => void),
-  compactWait: null as Promise<void> | null,
 }));
 
 vi.mock('../transport.js', () => ({
@@ -37,16 +35,12 @@ vi.mock('../transport.js', () => ({
 vi.mock('../rpc-client.js', () => ({
   PiRpcProcess: class {
     isClosed = false;
-    constructor(options: { onEvent: (event: Record<string, unknown>) => void }) {
-      knobs.onEvent = options.onEvent;
-    }
     async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown; error?: string }> {
       if (cmd.type === 'get_state') {
         return { success: true, data: { sessionFile: '/mock/s.jsonl', model: { contextWindow: 200000 } } };
       }
       if (cmd.type === 'compact') {
         knobs.lastCompactCommand = cmd as Record<string, unknown>;
-        await knobs.compactWait;
         return knobs.compactResponse ?? { success: true, data: {} };
       }
       return { success: true, data: { entries: [] } };
@@ -74,8 +68,6 @@ describe('PiAgent.compactSession (mocked pi process)', () => {
   beforeEach(() => {
     knobs.compactResponse = null;
     knobs.lastCompactCommand = null;
-    knobs.onEvent = null;
-    knobs.compactWait = null;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-compact-unit-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-compact-unit-cwd-'));
   });
@@ -113,37 +105,6 @@ describe('PiAgent.compactSession (mocked pi process)', () => {
     expect(new PiAgent(buildDeps()).capabilities.manualCompact?.supported).toBe(true);
   });
 
-  it('forwards the plugin action through the existing native compact RPC', async () => {
-    const handle = await start();
-    try {
-      await expect(handle.requestHarnessCompaction?.()).resolves.toEqual({});
-      expect(knobs.lastCompactCommand).toEqual({ type: 'compact' });
-      knobs.onEvent?.({ type: 'compaction_start' });
-      await expect(handle.requestHarnessCompaction?.()).rejects.toThrow('SESSION_RUNNING');
-      knobs.onEvent?.({ type: 'compaction_end' });
-      await expect(handle.requestHarnessCompaction?.()).resolves.toEqual({});
-    } finally { await handle.close(); }
-  });
-
-  it('orders a following prompt after native compaction completes', async () => {
-    const handle = await start();
-    let finish!: () => void;
-    knobs.compactWait = new Promise(resolve => { finish = resolve; });
-    try {
-      const compaction = handle.requestHarnessCompaction!();
-      await vi.waitFor(() => expect(knobs.lastCompactCommand).not.toBeNull());
-      const send = handle.send({ type: 'user', content: 'next request' });
-      let accepted = false;
-      void send.then(() => { accepted = true; });
-      await Promise.resolve();
-      expect(accepted).toBe(false);
-      finish();
-      await compaction;
-      await send;
-      expect(accepted).toBe(true);
-    } finally { finish(); await handle.close(); }
-  });
-
   it('parses tokensBefore/estimatedTokensAfter and omits missing numbers', async () => {
     knobs.compactResponse = {
       success: true,
@@ -172,16 +133,6 @@ describe('PiAgent.compactSession (mocked pi process)', () => {
     knobs.compactResponse = { success: false, error: 'context too small' };
     await expect(handle.compactSession?.()).resolves.toEqual({ noop: true });
     await handle.close();
-  });
-
-  it('returns noop when the native pre-compaction hook cancels the plugin action', async () => {
-    const handle = await start();
-    try {
-      knobs.compactResponse = { success: false, error: 'Compaction cancelled' };
-      await expect(handle.requestHarnessCompaction?.()).resolves.toEqual({ noop: true });
-      knobs.compactResponse = { success: false, error: 'gateway 500' };
-      await expect(handle.requestHarnessCompaction?.()).rejects.toThrow(/gateway 500/);
-    } finally { await handle.close(); }
   });
 
   it('throws on a genuine compact failure', async () => {

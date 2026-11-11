@@ -1,6 +1,9 @@
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
 
 export const CODEX_GLOBAL_RULES_FILE_NAME = 'AGENTS.md';
 export const CODEX_GLOBAL_RULES_MARKER_FILE_NAME = 'AGENTS.md.xdt-managed';
@@ -43,6 +46,67 @@ export function codexGlobalRulesPaths(codexHome: string, homeDir = os.homedir())
     managedRulesFile: path.join(codexHome, CODEX_GLOBAL_RULES_FILE_NAME),
     markerFile: path.join(codexHome, CODEX_GLOBAL_RULES_MARKER_FILE_NAME),
   };
+}
+
+/** Keep document references anchored to the source without copying its directory. */
+function managedRulesContent(source: Buffer, sourceRulesFile: string): Buffer {
+  const original = source.toString('utf8');
+  // remark removes a leading BOM before assigning offsets; keep it outside edits.
+  const bom = original.startsWith('\uFEFF') ? '\uFEFF' : '';
+  const text = original.slice(bom.length);
+  const base = pathToFileURL(sourceRulesFile);
+  const edits: { start: number; end: number; value: string }[] = [];
+  const capture = (
+    node: { type: string; url?: string } | undefined,
+    token: { start: { offset: number }; end: { offset: number } },
+  ) => {
+    if (node?.type !== 'link' && node?.type !== 'definition') return;
+    const url = node.url;
+    if (!url || /^(?:[a-z][a-z0-9+.-]*:|[/\\#?]|~(?:[/\\]|$))/i.test(url)) return;
+
+    // Markdown destinations use URL semantics: preserve existing escapes and
+    // suffixes; encode literal percent signs and parentheses for bare links.
+    // Escape ampersands for Markdown without changing URL query separators.
+    const value = new URL(url.replace(/%(?![\da-f]{2})/gi, '%25'), base).href
+      .replace(/&/g, '&amp;').replace(/\(/g, '%28').replace(/\)/g, '%29');
+    const enclosed = text[token.start.offset] === '<';
+    edits.push({
+      start: token.start.offset + (enclosed ? 1 : 0),
+      end: token.end.offset - (enclosed ? 1 : 0),
+      value,
+    });
+  };
+
+  // Destination tokens retain exact source offsets. Hook their enclosing exit
+  // after remark has decoded the URL, leaving labels, titles and examples intact.
+  unified().use(remarkParse).data('fromMarkdownExtensions', [{
+    exit: {
+      resourceDestination(token) { capture(this.stack.at(-1), token); },
+      definitionDestination(token) { capture(this.stack.at(-1), token); },
+    },
+  }]).parse(text);
+
+  if (!edits.length) return source;
+  let result = text;
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    result = result.slice(0, edit.start) + edit.value + result.slice(edit.end);
+  }
+  return Buffer.from(bom + result, 'utf8');
+}
+
+async function writeManagedRules(
+  paths: ReturnType<typeof codexGlobalRulesPaths>,
+  content: Buffer,
+): Promise<void> {
+  // copyFile used to preserve source permissions, including on existing copies.
+  const mode = (await fsp.stat(paths.sourceRulesFile)).mode & 0o777;
+  const file = await fsp.open(paths.managedRulesFile, 'w', mode);
+  try {
+    await file.writeFile(content);
+    await file.chmod(mode);
+  } finally {
+    await file.close();
+  }
 }
 
 async function statFile(value: string, followSymlink: boolean): Promise<PathState> {
@@ -111,7 +175,8 @@ async function copyWithMarker(paths: ReturnType<typeof codexGlobalRulesPaths>): 
   }
 
   try {
-    await fsp.copyFile(paths.sourceRulesFile, paths.managedRulesFile);
+    const source = await fsp.readFile(paths.sourceRulesFile);
+    await writeManagedRules(paths, managedRulesContent(source, paths.sourceRulesFile));
     return makeResult(paths, 'copied', true);
   } catch (err) {
     const warning = `cannot copy Codex rules from ${paths.sourceRulesFile} to ${paths.managedRulesFile}: ${
@@ -123,9 +188,10 @@ async function copyWithMarker(paths: ReturnType<typeof codexGlobalRulesPaths>): 
 
 async function updateManagedCopy(
   paths: ReturnType<typeof codexGlobalRulesPaths>,
+  content: Buffer,
 ): Promise<CodexGlobalRulesPrepareResult> {
   try {
-    await fsp.copyFile(paths.sourceRulesFile, paths.managedRulesFile);
+    await writeManagedRules(paths, content);
   } catch (err) {
     const warning = `cannot update Codex rules copy ${paths.managedRulesFile}: ${(err as Error).message}`;
     return makeResult(paths, 'error', false, [warning], warning);
@@ -199,10 +265,11 @@ async function prepareCodexGlobalRulesCopyInner(
       fsp.readFile(paths.sourceRulesFile),
       fsp.readFile(paths.managedRulesFile),
     ]);
-    if (sourceBuffer.equals(destinationBuffer)) {
+    const content = managedRulesContent(sourceBuffer, paths.sourceRulesFile);
+    if (content.equals(destinationBuffer)) {
       return makeResult(paths, 'kept', false);
     }
-    return updateManagedCopy(paths);
+    return updateManagedCopy(paths, content);
   } catch (err) {
     const warning = `cannot compare Codex rules files: ${(err as Error).message}`;
     return makeResult(paths, 'error', false, [warning], warning);

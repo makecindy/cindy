@@ -9,12 +9,42 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { handleStreamEvent, EMPTY_SESSION_STATE } from '@/lib/makerChatStore';
-import { buildSubagentModelMap } from '../components/chat/MessageStream';
+import { handleStreamEvent, EMPTY_SESSION_STATE, makerChatStore } from '@/lib/makerChatStore';
+import type { Message } from '@/lib/ccAgent.types';
+import { buildRenderItems, buildSubagentModelMap, selectVisibleMessages } from '../components/chat/MessageStream';
 
 const SUBAGENT_META = { parentUuid: 'toolu_AGENT', model: 'claude-haiku-4-5-20251001' };
 
 describe('handleStreamEvent — subagent model/parentToolUseId projection', () => {
+  // HY4 的 chatcmpl-tool-* 父调用曾漏过主流过滤；原用例只有 toolu_*，
+  // 未覆盖真实 stream → render 和 DB 历史投影 → render 的兼容 ID 分支。
+  it.each(['live', 'history'] as const)(
+    'hides HY4 child progress while preserving parent and legacy prose (%s)', (mode) => {
+      const parentUuid = 'chatcmpl-tool-a1b2c3d4e5f60718';
+      const rows = [
+        { clientId: 'main', text: 'Main answer', agentMeta: { model: 'tencent/hy4' } },
+        { clientId: 'child', text: 'Let me check the remaining details.', agentMeta: { parentUuid, model: 'tencent/hy4' } },
+        { clientId: 'legacy', text: 'Legacy answer', agentMeta: { parentUuid: 'preceding-user-uuid' } },
+      ];
+      const messages = mode === 'history'
+        ? makerChatStore.__mapServerMessagesForTest(rows.map(({ clientId, text, agentMeta }) => ({
+            id: clientId, clientId, sessionId: 's1', role: 'assistant', content: text,
+            createdAt: '2026-11-05T00:00:00.000Z', agentMeta,
+          } as Message)))
+        : rows.reduce((state, { clientId, text, agentMeta }) => handleStreamEvent(state, {
+            sessionId: 's1', type: 'text', persistId: clientId, agentMeta,
+            data: { text, isFinal: true },
+          }), EMPTY_SESSION_STATE).messages;
+
+      expect(messages.find(message => message.clientId === 'child')?.parentToolUseId).toBe(parentUuid);
+      expect(selectVisibleMessages(messages).map(message => message.clientId)).toEqual(['main', 'legacy']);
+      expect(buildRenderItems(messages).items.flatMap(item =>
+        item.type === 'message' ? [item.message.content] : [],
+      )).toEqual(['Main answer', 'Legacy answer']);
+      expect(buildSubagentModelMap(messages).get(parentUuid)).toBe('tencent/hy4');
+    },
+  );
+
   it('projects onto a live (final) assistant text message → map hits it', () => {
     const next = handleStreamEvent(EMPTY_SESSION_STATE, {
       sessionId: 's1',

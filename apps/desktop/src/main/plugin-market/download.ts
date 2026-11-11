@@ -1,6 +1,7 @@
 import { PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES } from '@cindy/plugin-protocol';
 import { download, DownloadError } from '../downloader/index.js';
 import { createIpcError } from '../../shared/ipc-errors.js';
+import { pluginObjectUrlAllowed, pluginObjectUrlOptions } from './objectUrlPolicy.js';
 
 /** Plugin policy only; transport, timeouts, byte limits and hashing are shared. */
 export async function downloadVerifiedPlugin(
@@ -17,8 +18,10 @@ export async function downloadVerifiedPlugin(
     throw createIpcError('GHOST_FILE_INVALID', 'Plugin Release size or SHA-256 is invalid');
   }
   try {
+    const urlOptions = pluginObjectUrlOptions();
     await download({
       url,
+      isUrlAllowed: (candidate) => pluginObjectUrlAllowed(candidate, urlOptions),
       targetPath,
       sha256: expected.sha256,
       expectedSize: expected.sizeBytes,

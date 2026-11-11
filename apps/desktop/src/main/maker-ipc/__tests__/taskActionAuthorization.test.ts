@@ -1,8 +1,8 @@
 /**
  * Value: production tool admission + queued dispatch guards, no real account or network.
  * Regression: task actions added owner consent checks after the normal runtime permission flow;
- * later (#6699) any live mode admitted a teammate's own wake-ups as if the owner had asked.
- * Rule: teammate-authority.md — the Host decides the turn's principal before the permission mode.
+ * 2026-10-29: missing owner provenance silently rejected routine_save and task creation.
+ * Rule: teammate-authority.md — separate source identity, account access and explicit operation risks.
  * Gap: workbench tests cover visibility; SDK approval tests cannot prove Host consent.
  * Minimum input: non-owner provenance + runtime change; live execution modes do not review twice.
  * Tier: unit. This file isolates the process-local authorization lifetime from SQLite/IPC.
@@ -14,7 +14,6 @@ import { withToolCallAuthority } from '../../../../../../packages/lizi-mcps/src/
 import { createOrcaMcpServer } from '../../../../../../packages/lizi-mcps/src/orca/server.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
-  approvedTaskDelegation,
   assertTaskActionCurrent,
   bindTaskActionInput,
   createTaskActionAuthorizer,
@@ -24,6 +23,8 @@ import {
   ORCA_TASK_ACTION_TOOLS,
   captureTaskActionSyncGuard,
   captureTaskActionGuard,
+  captureTaskActionDeliveryGuard,
+  isTaskActionRevoked,
 } from '../taskActionAuthorization.js';
 
 function fixture(ownerInput = false, delegated = false) {
@@ -48,7 +49,7 @@ function fixture(ownerInput = false, delegated = false) {
     },
   };
 }
-const call = (tool = 'continue_workbench_task') => ({
+const call = (tool = 'steer_session') => ({
   sessionId: 'companion',
   server: 'cindy_helper' as const,
   tool,
@@ -99,7 +100,7 @@ describe('Host task action authorization', () => {
     expect(queue).toEqual([]);
     expect(route).toBe('original');
     expect(h.confirm).not.toHaveBeenCalled();
-    for (const tool of ['get_task_digest', 'get_workbench', 'schedule_notify_current_run']) {
+    for (const tool of ['get_task_digest', 'schedule_notify_current_run']) {
       expect(
         await withToolCallAuthority(h.authorize, call(tool), async () => 'read-or-remind'),
       ).toBe('read-or-remind');
@@ -144,28 +145,16 @@ describe('Host task action authorization', () => {
     });
   });
 
-  it('reuses a verified delegation without another confirmation and mints creation evidence only in the Host call', async () => {
+  it('reuses an already confirmed scope without another confirmation', async () => {
     const h = fixture(false, true);
-    expect(approvedTaskDelegation('companion')).toBeUndefined();
     expect(
       await withToolCallAuthority(
         h.authorize,
-        call('message_session_task'),
+        call('send_to_session'),
         async () => 'continued',
       ),
     ).toBe('continued');
     expect(h.confirm).not.toHaveBeenCalled();
-    const owner = fixture(true);
-    const receipt = await withToolCallAuthority(
-      owner.authorize,
-      call('start_session_task'),
-      async () => approvedTaskDelegation('companion'),
-    );
-    expect(receipt).toMatchObject({
-      version: 1,
-      actions: expect.arrayContaining(['message_session_task']),
-    });
-    expect(approvedTaskDelegation('companion')).toBeUndefined();
   });
 
   it('checks delayed input again, rejects target/content changes and cannot restore authority from JSON', async () => {
@@ -188,33 +177,28 @@ describe('Host task action authorization', () => {
     await expect(taskActionInputGuard('target', queued)!()).rejects.toThrow('revoked');
   });
 
-  it('holds old Bot queue rows on upgrade without deleting sent history or treating ordinary user input as automatic', async () => {
-    await expect(taskActionInputGuard('target', input())!()).rejects.toThrow(
-      'AUTHORIZATION_REQUIRED',
-    );
+  // 2026-11-08: a restored local teammate message is an ordinary task message; only rows that
+  // needed a live grant (remote senders, admitted actions) are held without their guard.
+  it('holds restored remote queue rows, but delivers local teammate and ordinary user rows', async () => {
+    expect(taskActionInputGuard('target', input())).toBeUndefined();
+    const remote = { ...input(), origin: { ...input().origin!, senderSessionId: 'mac::companion' } } as AgentInputQueuedMessage;
+    await expect(taskActionInputGuard('target', remote)!()).rejects.toThrow('AUTHORIZATION_REQUIRED');
     expect(taskActionInputGuard('target', { ...input(), origin: undefined })).toBeUndefined();
   });
 });
 
-// Regression #6399: the pure scope fixture above cannot detect lost group owner
-// provenance or a second confirmation added to the owner's ordinary tool flow.
-// Exercise the Desktop adapter + real group registry + shared helper/Orca entry.
-// SQLite/account/routine IO is replaced with in-memory facts (unit tier).
+// Regression #6399: the pure scope fixture above cannot detect a second confirmation
+// added to the owner's ordinary tool flow.
+// Exercise the Desktop adapter + shared helper/Orca entry.
+// SQLite/account IO is replaced with in-memory facts (unit tier).
 const hostFacts = vi.hoisted(() => ({ getDb: vi.fn(), boundaryPending: vi.fn() }));
 vi.mock('../../localDb/client/current.js', () => ({ tryGetDbClient: hostFacts.getDb }));
 vi.mock('../../appSessionState.js', () => ({
   isAppSessionBoundaryPending: hostFacts.boundaryPending,
 }));
-vi.mock('../../routines/service.js', () => ({
-  readActiveFollowUpRoutine: () => ({ enabled: false, revision: 1 }),
-}));
-import { botDelegations, orcaTeams } from '../../localDb/schema.js';
+import { orcaTeams } from '../../localDb/schema.js';
 import { createDesktopTaskActionAuthorizer } from '../taskActionHost.js';
 import { beginChannelToolScope } from '../../im/shared/channelToolScope.js';
-import {
-  registerGroupToolAuthority,
-  GroupToolAuthorizationError,
-} from '../botGroupToolAuthorization.js';
 
 const releases: Array<() => void> = [];
 afterEach(() => {
@@ -231,11 +215,6 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
     clearedAt: null,
   };
   const rows = {
-    delegation: null as null | {
-      status: string;
-      runSequence: number;
-      permissionSnapshotJson: string;
-    },
     team: null as null | { id: string },
   };
   const db = {
@@ -251,15 +230,12 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
           innerJoin: () => query,
           where: () => query,
           limit: async () =>
-            table === botDelegations
-              ? rows.delegation
-                ? [rows.delegation]
+            table === orcaTeams
+              ? rows.team
+                ? [rows.team]
                 : []
-              : table === orcaTeams
-                ? rows.team
-                  ? [rows.team]
-                  : []
-                : [caller],
+              // SQL reads return value snapshots, not a shared mutable row.
+              : [{ ...caller }],
         };
         return query;
       },
@@ -276,9 +252,9 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
     orcaSenderSessionId: undefined as string | undefined,
     key: 'owner-request',
     ownerInput: kind === 'private',
-    ownerContinuation: false,
     automatic: kind !== 'private',
     boundary: 'runtime-1',
+    clearBoundaryMs: null as number | null,
   };
   const confirm = vi.fn(async () => true);
   const runtime = {
@@ -289,17 +265,13 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
     reviewHostPermissionAction: vi.fn(async (): Promise<AutoReviewDecision> => ({ verdict: 'allow' })),
   };
   const getSession = vi.fn((): typeof runtime | undefined => runtime);
-  const entrusted = vi.fn(async () => false);
   const authorize = createDesktopTaskActionAuthorizer({
-    input: () => ({ ...activeInput }), confirm, getSession, isEntrustedTask: entrusted,
+    input: () => ({ ...activeInput }), confirm, getSession,
   });
-  return { authorize, confirm, activeInput, caller, rows, runtime, getSession, entrusted };
+  return { authorize, confirm, activeInput, caller, rows, runtime, getSession };
 }
 const ownerWrites = [
-  ['cindy_helper', 'start_session_task'],
   ['cindy_helper', 'send_to_session'],
-  ['cindy_helper', 'continue_workbench_task'],
-  ['cindy_helper', 'set_workbench_task_responsibility'],
   ['cindy_helper', 'set_session_runtime'],
   ['cindy_orca', 'create_worker'],
   ['cindy_orca', 'send_to_worker'],
@@ -399,7 +371,19 @@ describe('Owner-delegated scheduled task actions', () => {
     expect(effect).not.toHaveBeenCalled();
   });
 
-  it.each(['permission', 'plan', 'instance', 'account', 'input'] as const)('invalidates admission and delayed delivery after %s changes', async changed => {
+  // teammate-authority.md「延迟投递只认真实撤权」(2026-10-30): live turn facts still
+  // expire the admission, but only real revocation stops a queued message. Before,
+  // any of these rollovers between turns dropped every supplement still queued.
+  // A held app-session boundary alone proves nothing (a same-owner Ghost projection repair holds
+  // it too): the captured database client is the owner identity (review on #7969).
+  it.each([
+    ['permission', 'delivered'],
+    ['plan', 'delivered'],
+    ['instance', 'delivered'],
+    ['input', 'delivered'],
+    ['boundary', 'retryable'],
+    ['owner', 'revoked'],
+  ] as const)('invalidates admission after %s changes; delayed delivery is %s', async (changed, outcome) => {
     const h = scheduledFixture();
     const queued = input();
     const guard = await withToolCallAuthority(h.authorize, scheduledSend(), async () => {
@@ -412,10 +396,42 @@ describe('Owner-delegated scheduled task actions', () => {
     if (changed === 'permission') h.runtime.stablePermissionModeState.generation++;
     if (changed === 'plan') h.runtime.stablePlanModeState.generation++;
     if (changed === 'instance') h.getSession.mockReturnValue({ ...h.runtime });
-    if (changed === 'account') hostFacts.boundaryPending.mockReturnValue(true);
+    if (changed === 'boundary') hostFacts.boundaryPending.mockReturnValue(true);
+    if (changed === 'owner') hostFacts.getDb.mockReturnValue({});
     if (changed === 'input') h.activeInput.boundary = 'replacement-runtime';
     expect(() => guard()).toThrow('AUTHORIZATION_EXPIRED');
-    await expect(taskActionInputGuard('target', queued)!()).rejects.toThrow('AUTHORIZATION_EXPIRED');
+    const rejection = await taskActionInputGuard('target', queued)!().then(() => null, (error: unknown) => ({ error }));
+    if (outcome === 'delivered') expect(rejection).toBeNull();
+    else expect(rejection && isTaskActionRevoked(rejection.error)).toBe(outcome === 'revoked');
+  });
+
+  // Review on #7969: /clear moves the coordinator's boundary before cleared_at is persisted,
+  // and persisting may fail, so delivery reads that boundary too. A persisted boundary the
+  // coordinator merely loads late (restart) is older than the admission, not a new clear.
+  it.each([
+    { name: 'cleared in memory after admission', dbClearedAt: null, memoryAfter: 2_000, expired: true },
+    { name: 'older persisted boundary loaded late', dbClearedAt: 1_000, memoryAfter: 1_000, expired: false },
+  ])('queued delivery when $name (expired=$expired)', async ({ dbClearedAt, memoryAfter, expired }) => {
+    const h = scheduledFixture();
+    Object.assign(h.caller, { clearedAt: dbClearedAt });
+    const queued = input();
+    await withToolCallAuthority(h.authorize, scheduledSend(), async () => bindTaskActionInput('target', queued));
+    h.activeInput.clearBoundaryMs = memoryAfter;
+    const delivery = expect(taskActionInputGuard('target', queued)!());
+    if (expired) await delivery.rejects.toThrow('AUTHORIZATION_EXPIRED');
+    else await delivery.resolves.toBeUndefined();
+  });
+
+  // Only a proven revocation may destroy a queued message; a failed check keeps it for retry.
+  it.each([
+    [new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'), true],
+    [new Error('TASK_ACTION_AUTHORIZATION_REQUIRED'), true],
+    [new Error('OWNER_SCOPE_CHANGED'), true],
+    [Object.assign(new Error('revoked'), { code: 'GROUP_AUTHORIZATION_REQUIRED' }), true],
+    [Object.assign(new Error('transport'), { code: 'GROUP_AUTHORIZATION_UNAVAILABLE' }), false],
+    [new Error('DbClient not ready'), false],
+  ])('classifies %s as revoked=%s', (error, revoked) => {
+    expect(isTaskActionRevoked(error)).toBe(revoked);
   });
 
   it.each(['permission', 'account', 'turn'] as const)('does not act or prompt if %s changes during review', async changed => {
@@ -478,7 +494,7 @@ describe('Desktop owner input task actions', () => {
   );
 
   it.each(['bypassPermissions', 'auto', 'ask'])(
-    'revokes the %s admission before execution and delayed delivery when live permissions change', async permissionMode => {
+    'revokes the %s admission before execution but keeps its queued message when live permissions change', async permissionMode => {
       const h = desktopFixture('private');
       let current = true;
       h.activeInput.permission = {
@@ -494,7 +510,7 @@ describe('Desktop owner input task actions', () => {
       current = false;
       const effect = vi.fn(async () => 'changed');
       await expect(decision.run(effect)).rejects.toThrow('AUTHORIZATION_EXPIRED');
-      await expect(taskActionInputGuard('target', queued)!()).rejects.toThrow('AUTHORIZATION_EXPIRED');
+      await expect(taskActionInputGuard('target', queued)!()).resolves.toBeUndefined();
       expect(() => syncGuard()).toThrow('AUTHORIZATION_EXPIRED');
       expect(effect).not.toHaveBeenCalled();
     },
@@ -541,45 +557,28 @@ describe('Desktop owner input task actions', () => {
   });
 
   // #6399, unit: an async admission is not a transport preSend generation check.
-  it.each(['input', 'account', 'group'] as const)('invalidates a captured synchronous guard on %s replacement', async change => {
-    const h = desktopFixture(change === 'group' ? 'group' : 'private');
-    let groupCurrent = true;
-    if (change === 'group') releases.push(registerGroupToolAuthority('companion', {
-      botId: 'bot', mode: 'owner', isCurrent: () => groupCurrent, validate: async () => {},
-    }));
+  it.each(['input', 'account'] as const)('invalidates a captured synchronous guard on %s replacement', async change => {
+    const h = desktopFixture('private');
     const decision = await h.authorize(call('archive_sessions'));
     if (!decision.ok || !decision.run) throw new Error('Expected owner admission');
     const guard = await decision.run(async () => captureTaskActionSyncGuard()!);
     expect(() => guard()).not.toThrow();
     if (change === 'input') h.activeInput.key = 'replacement';
     if (change === 'account') hostFacts.boundaryPending.mockReturnValue(true);
-    if (change === 'group') groupCurrent = false;
     expect(() => guard()).toThrow();
     expect(h.confirm).not.toHaveBeenCalled();
   });
 
-  it.each(['private', 'group'] as const)(
-    'accepts %s owner input without a second confirmation, including downstream authorization',
-    async (kind) => {
-      const h = desktopFixture(kind);
-      const validate = vi.fn(async () => {});
-      if (kind === 'group')
-        releases.push(
-          registerGroupToolAuthority('companion', {
-            botId: 'bot',
-            mode: 'owner',
-            isCurrent: () => true,
-            validate,
-          }),
-        );
+  it(
+    'accepts private owner input without a second confirmation, including downstream authorization',
+    async () => {
+      const h = desktopFixture('private');
       for (const [server, tool] of ownerWrites) {
         const result = await withToolCallAuthority(
           h.authorize,
           { ...call(tool), server },
           async () => {
             expect(hasTaskActionAuthorization('companion')).toBe(true);
-            if (tool === 'start_session_task')
-              expect(approvedTaskDelegation('companion')).toMatchObject({ version: 1 });
             const queued = input();
             bindTaskActionInput('target', queued);
             await expect(taskActionInputGuard('target', queued)!()).resolves.toBeUndefined();
@@ -590,49 +589,11 @@ describe('Desktop owner input task actions', () => {
       }
       expect(h.confirm).not.toHaveBeenCalled();
       expect(hasTaskActionAuthorization('companion')).toBe(false);
-      if (kind === 'group') expect(validate).toHaveBeenCalled();
     },
   );
 
-  it.each(['chat', 'tools', 'missing', 'stale', 'other-bot', 'unavailable', 'revoked'] as const)(
-    'rejects %s group authority before helper or Orca effects, without prompting',
-    async (mode) => {
-      const h = desktopFixture();
-      h.activeInput.permission = {
-        permissionMode: 'bypassPermissions', planModeEnabled: false, isCurrent: () => true,
-      };
-      if (mode !== 'missing')
-        releases.push(
-          registerGroupToolAuthority('companion', {
-            botId: mode === 'other-bot' ? 'another' : 'bot',
-            mode: mode === 'chat' || mode === 'tools' ? mode : 'owner',
-            isCurrent: () => mode !== 'stale',
-            validate: async () => {
-              if (mode === 'unavailable') throw new GroupToolAuthorizationError(true);
-              if (mode === 'revoked') throw new GroupToolAuthorizationError();
-            },
-          }),
-        );
-      const effect = vi.fn(async () => 'changed');
-      for (const [server, tool] of ownerWrites)
-        expect(
-          await withToolCallAuthority(h.authorize, { ...call(tool), server }, effect),
-        ).toMatchObject({ isError: true });
-      expect(effect).not.toHaveBeenCalled();
-      expect(h.confirm).not.toHaveBeenCalled();
-    },
-  );
-
-  it('keeps automatic/forwarded input restricted even with an unrelated live group owner grant', async () => {
+  it('keeps automatic/forwarded input without a live permission flow restricted', async () => {
     const h = desktopFixture('automatic');
-    releases.push(
-      registerGroupToolAuthority('another-lane', {
-        botId: 'bot',
-        mode: 'owner',
-        isCurrent: () => true,
-        validate: async () => {},
-      }),
-    );
     const effect = vi.fn(async () => 'changed');
     for (const [server, tool] of ownerWrites)
       expect(
@@ -644,71 +605,30 @@ describe('Desktop owner input task actions', () => {
     expect(effect).not.toHaveBeenCalled();
     expect(h.confirm).not.toHaveBeenCalled();
   });
-
-  it('rechecks owner authority before execution and queued delivery without another confirmation', async () => {
-    const h = desktopFixture();
-    let live = true;
-    releases.push(
-      registerGroupToolAuthority('companion', {
-        botId: 'bot',
-        mode: 'owner',
-        isCurrent: () => live,
-        validate: async () => {},
-      }),
-    );
-    const queued = input();
-    await withToolCallAuthority(h.authorize, call('send_to_session'), async () =>
-      bindTaskActionInput('target', queued),
-    );
-    const decision = await h.authorize(call('start_session_task'));
-    if (!decision.ok || !decision.run) throw new Error('missing owner admission');
-    live = false;
-    const effect = vi.fn(async () => 'started');
-    await expect(decision.run(effect)).rejects.toThrow();
-    await expect(taskActionInputGuard('target', queued)!()).rejects.toThrow();
-    expect(effect).not.toHaveBeenCalled();
-    expect(h.confirm).not.toHaveBeenCalled();
-  });
 });
 
-// Review regressions: caller identity must not erase scoped delegation or mint it.
+// Review regressions: caller identity must not erase an admitted scope.
 // Existing owner-input cases did not exercise automatic continuations. Unit tier.
 describe('Existing execution authority', () => {
-  it('keeps delegated work independent of follow-up enablement, but respects pause/revocation', async () => {
-    const h = desktopFixture('automatic');
-    const grant = {
-      taskActionAuthority: { version: 1, actions: ['message_session_task', 'stop_session_task'] },
-    };
-    h.rows.delegation = {
-      status: 'running',
-      runSequence: 1,
-      permissionSnapshotJson: JSON.stringify(grant),
-    };
-    for (const tool of ['message_session_task', 'stop_session_task']) {
-      expect(await withToolCallAuthority(h.authorize, call(tool), async () => 'continued')).toBe(
-        'continued',
-      );
-    }
-    const queued = input();
-    await withToolCallAuthority(h.authorize, call('message_session_task'), async () =>
-      bindTaskActionInput('target', queued),
-    );
-    const pauseCall = { ...call('stop_session_task'), args: { task_id: 'task', mode: 'pause' } };
-    const pauseDecision = await h.authorize(pauseCall);
-    if (!pauseDecision.ok || !pauseDecision.run) throw new Error('Expected pause admission');
-    const completingPause = await pauseDecision.run(async () => captureTaskActionGuard()!);
-    h.rows.delegation.permissionSnapshotJson = JSON.stringify({
-      ...grant,
-      taskPause: { reason: 'owner' },
-    });
-    expect(await h.authorize(call('message_session_task'))).toMatchObject({ ok: false });
-    expect(await h.authorize(pauseCall)).toMatchObject({ ok: false });
-    await expect(completingPause()).resolves.toBeUndefined();
-    h.rows.delegation = { ...h.rows.delegation, runSequence: 2 };
-    await expect(completingPause()).rejects.toThrow('AUTHORIZATION_EXPIRED');
-    await expect(taskActionInputGuard('target', queued)!()).rejects.toThrow(
-      'AUTHORIZATION_EXPIRED',
-    );
+  // Regression: a queued input's onAccepted must use the Host delivery scope after
+  // source-input rollover. Prior queue-binding tests did not capture this guard.
+  // Minimum: one owner-admitted call + new input key; unit, no real account/IO.
+  it.each(['source-only', 'cleared', 'deleted', 'bot-paused', 'archived'] as const)
+  ('retains delivery scope across source-input rollover while rejecting %s revocation', async changed => {
+    const h = desktopFixture('private');
+    const decision = await h.authorize(call('send_to_session'));
+    if (!decision.ok || !decision.run) throw new Error('missing admission');
+    const guards = await decision.run(async () => ({
+      mutation: captureTaskActionGuard()!, delivery: captureTaskActionDeliveryGuard()!,
+    }));
+    h.activeInput.key = 'next-owner-input';
+    await expect(guards.mutation()).rejects.toThrow('AUTHORIZATION_EXPIRED');
+    if (changed === 'cleared') Object.assign(h.caller, { clearedAt: 1 });
+    if (changed === 'deleted') h.caller.status = 'deleted';
+    if (changed === 'bot-paused') h.caller.botStatus = 'paused';
+    if (changed === 'archived') Object.assign(h.caller, { archivedAt: 1 });
+    if (changed === 'source-only') await expect(guards.delivery()).resolves.toBeUndefined();
+    else await expect(guards.delivery()).rejects.toThrow('AUTHORIZATION_EXPIRED');
     expect(h.confirm).not.toHaveBeenCalled();
   });
 
@@ -758,149 +678,66 @@ describe('teammate turn principal', () => {
     helper('steer_session', { session_id: 'owner-task', message: 'Change course' }),
     helper('stop_session_turn', { session_id: 'owner-task' }),
     helper('set_session_runtime', { session_id: 'owner-task', model: 'other' }),
-    helper('start_session_task', { message: 'New work' }),
+    helper('send_to_session', { message: 'New work' }),
     helper('archive_sessions', { session_ids: ['owner-task'] }),
-    helper('set_workbench_task_responsibility', { task_id: 'owner-task', responsible: true }),
   ];
 
-  // The 2026-10-22 behavior: Full Access admitted a follow-up wake-up as the owner.
-  it.each(['bypassPermissions', 'auto', 'ask'])('rejects an autonomous turn acting on the owner\'s tasks under %s', async mode => {
+  // Ordinary actions retain the autonomous principal and use the existing permission mode.
+  it.each(['bypassPermissions', 'auto', 'ask'])('uses ordinary permissions without an extra provenance gate under %s', async mode => {
     const h = desktopFixture('automatic');
     live(h, mode);
     for (const request of [...ownerTaskWrites, { ...call('create_worker'), server: 'cindy_orca' as const }]) {
       const effect = vi.fn(async () => 'changed');
       const result = await withToolCallAuthority(h.authorize, request, effect);
-      expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
-      expect(effect).not.toHaveBeenCalled();
+      expect(result).toBe('changed');
+      expect(effect).toHaveBeenCalledTimes(1);
     }
-    expect(h.confirm).not.toHaveBeenCalled();
+    expect(h.confirm).not.toHaveBeenCalled(); // reversible task controls are ordinary work
   });
 
-  it('keeps the teammate\'s own scope on its own initiative', async () => {
-    const h = desktopFixture('automatic');
-    live(h);
-    const admitted = async (request: ReturnType<typeof helper>) =>
-      withToolCallAuthority(h.authorize, request, async () => 'changed');
-    expect(await admitted(helper('send_to_agent', { target_id: 'other', message: 'hi' }))).toBe('changed');
-    expect(await admitted(helper('continue_workbench_task', { task_id: 'handed', message: 'Carry on' }))).toBe('changed');
-    expect(await admitted(helper('set_workbench_task_responsibility', { task_id: 'handed', responsible: false }))).toBe('changed');
-    expect(await admitted(helper('set_session_runtime', { model: 'self' }))).toBe('changed');
-    h.entrusted.mockResolvedValue(true);
-    expect(await admitted(helper('set_session_runtime', { session_id: 'handed', model: 'next' }))).toBe('changed');
-    expect(h.entrusted).toHaveBeenCalledWith('companion', 'handed');
-    h.rows.delegation = { status: 'completed', runSequence: 1, permissionSnapshotJson: '{}' };
-    expect(await admitted(helper('message_session_task', { task_id: 'own', message: 'Fill the gap' }))).toBe('changed');
-    expect(await admitted(helper('message_session_task', { task_id: 'own', answers: { q: 'a' } }))).toBe('changed');
-    expect(await admitted(helper('stop_session_task', { task_id: 'own' }))).toBe('changed');
-    expect(await admitted(helper('send_to_session', { target_session_id: 'own-child', message: 'Fix it' }))).toBe('changed');
-    // Permission decisions and resuming a pause stay with the owner, even on its own task.
-    for (const args of [{ task_id: 'own', decision: 'approve' }, { task_id: 'own', mode: 'resume' }])
-      expect(JSON.stringify(await admitted(helper('message_session_task', args)))).toContain('NEEDS_OWNER_REQUEST');
-  });
-
-  it('continues its own Orca team from a Worker report, but cannot start a team', async () => {
+  it('uses normal permissions for Orca writes without a second team allowlist', async () => {
     const h = desktopFixture('automatic');
     live(h);
     h.activeInput.orcaSenderSessionId = 'worker-session';
     h.rows.team = { id: 'team' };
     const orca = (tool: string) => ({ ...call(tool), server: 'cindy_orca' as const });
     expect(await withToolCallAuthority(h.authorize, orca('send_to_worker'), async () => 'changed')).toBe('changed');
-    expect(JSON.stringify(await withToolCallAuthority(h.authorize, orca('start_team'), async () => 'changed')))
-      .toContain('NEEDS_OWNER_REQUEST');
+    expect(await withToolCallAuthority(h.authorize, orca('start_team'), async () => 'changed')).toBe('changed');
+    expect(h.confirm).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['routine-user-weekly', true],
-    ['routine-builtin-follow-up-bot', false],
-    ['routine-builtin-todo-check-bot', false],
-  ] as const)('treats routine %s as entrusted=%s', async (scheduleId, entrusted) => {
+  // 2026-11-08: any task can already open a Full Access task with send_to_session, so a
+  // teammate turn gets no extra speaker check or risk card. The 2026-11-07 test build showed
+  // these gates refusing an owner-requested teammate hand-off. Unit, in-memory IO.
+  it('admits former teammate-only risks and non-owner IM speakers under ordinary permissions', async () => {
     const h = desktopFixture('automatic');
-    live(h);
-    h.runtime.getCurrentTurnOrigin = () => ({ kind: 'scheduler', scheduleId, runId: 'run' });
-    const result = await withToolCallAuthority(h.authorize, ownerTaskWrites[0], async () => 'changed');
-    if (entrusted) expect(result).toBe('changed');
-    else expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
-  });
-
-  it.each([true, false])('lets the IM lane requester decide (owner=%s)', async requesterIsOwner => {
-    const h = desktopFixture('automatic');
-    live(h);
-    // A desktop-looking active input cannot override the lane's per-turn requester.
-    h.activeInput.ownerInput = !requesterIsOwner;
+    live(h, 'auto');
     releases.push(beginChannelToolScope({
       sessionId: 'companion', sessionInstanceId: 'instance-1',
-      scope: { channel: 'wecom', botId: 'bot', laneUserId: 'user', chatId: 'chat', chatKind: 'group', requesterIsOwner, companion: true },
+      scope: { channel: 'wecom', botId: 'bot', laneUserId: 'user', chatId: 'chat', chatKind: 'group', requesterIsOwner: false, companion: true },
     }));
-    const result = await withToolCallAuthority(h.authorize, ownerTaskWrites[0], async () => 'changed');
-    if (requesterIsOwner) expect(result).toBe('changed');
-    else expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
-  });
-
-  // A teammate must not create or fire an owner routine on its own: the next run would be
-  // entrusted, turning its own initiative into a standing grant.
-  it.each(['routine_save', 'routine_run_now', 'routine_delete', 'schedule_set_pre_run_hook'])(
-    'reserves %s for owner or entrusted turns', async tool => {
-      const h = desktopFixture('automatic');
-      live(h);
-      const request = helper(tool, { name: 'r', prompt: 'Message the owner\'s task', enabled: true });
-      expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, async () => 'saved')))
-        .toContain('NEEDS_OWNER_REQUEST');
-      h.activeInput.ownerInput = true;
-      expect(await withToolCallAuthority(h.authorize, request, async () => 'saved')).toBe('saved');
-      expect(await withToolCallAuthority(h.authorize, helper('routine_list', {}), async () => 'listed')).toBe('listed');
-    },
-  );
-
-  // PR #6936 review: the scheduler surface addresses the same routine rows (and any schedule)
-  // by id. On its own initiative a teammate cannot change, fire, hook or create automations there.
-  it.each(['schedule_update', 'schedule_delete', 'schedule_run_now', 'schedule_set_pre_run_hook',
-    'schedule_pause', 'schedule_resume', 'schedule_create', 'routine_save', 'routine_run_now', 'routine_delete'])(
-    'reserves cindy_scheduler %s for owner or entrusted turns', async tool => {
-      const h = desktopFixture('automatic');
-      live(h);
-      const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool,
-        args: { id: 'routine-owner-weekly', scheduleId: 'routine-owner-weekly', prompt: 'Merge everything' } };
-      expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, async () => 'changed')))
-        .toContain('NEEDS_OWNER_REQUEST');
-      h.activeInput.ownerInput = true;
-      expect(await withToolCallAuthority(h.authorize, request, async () => 'changed')).toBe('changed');
-    },
-  );
-
-  it.each(['schedule_list', 'schedule_get', 'schedule_list_runs', 'schedule_notify_current_run', 'routine_list'])(
-    'keeps cindy_scheduler %s available on its own initiative', async tool => {
-      const h = desktopFixture('automatic');
-      live(h);
-      const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool, args: {} };
-      expect(await withToolCallAuthority(h.authorize, request, async () => 'read')).toBe('read');
-    },
-  );
-
-  it('keeps the owner principal through an automatic resume of the owner\'s input', async () => {
-    const h = desktopFixture('automatic');
-    live(h);
-    h.activeInput.ownerContinuation = true;
-    expect(await withToolCallAuthority(h.authorize, ownerTaskWrites[0], async () => 'changed')).toBe('changed');
+    for (const request of [
+      ownerTaskWrites[0],
+      helper('send_to_session', { message: 'Start a Full Access task' }),
+      { sessionId: 'companion', server: 'cindy_scheduler' as const, tool: 'schedule_resume', args: { id: 'paused' } },
+    ]) expect(await withToolCallAuthority(h.authorize, request, async () => 'changed')).toBe('changed');
+    expect(h.confirm).not.toHaveBeenCalled();
   });
 });
 
-// A bare allow must not reuse an outer action's authority, even through the
-// in-process MCP path. Existing Desktop fixtures called the gate at top level.
-// Production Desktop admission + guards; unit tier, in-memory Host facts.
 describe('independent Desktop tool invocation', () => {
   it('rechecks an ordinary call without inheriting stale authorization or forcing its queue', async () => {
     const outer = fixture(true);
     const h = desktopFixture('private');
     h.caller.botId = null;
     h.caller.source = 'desktop';
-    await withToolCallAuthority(outer.authorize, call('start_session_task'), async () => {
+    await withToolCallAuthority(outer.authorize, call('archive_sessions'), async () => {
       outer.revoke();
       const result = await withToolCallAuthority(h.authorize, {
         ...call('send_to_session'), sessionId: 'ordinary-task',
       }, async () => {
         await assertTaskActionCurrent();
         expect(hasTaskActionAuthorization()).toBe(false);
-        expect(approvedTaskDelegation('companion')).toBeUndefined();
         return 'sent';
       });
       expect(result).toBe('sent');
@@ -932,11 +769,11 @@ describe('independent Desktop tool invocation', () => {
     const outer = fixture(true);
     const h = desktopFixture('automatic');
     const effect = vi.fn(async () => 'sent');
-    await withToolCallAuthority(outer.authorize, call('start_session_task'), async () => {
+    await withToolCallAuthority(outer.authorize, call('archive_sessions'), async () => {
       const result = await withToolCallAuthority(h.authorize, call('send_to_session'), effect);
-      expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
+      expect(JSON.stringify(result)).toContain('TASK_ACTION_AUTHORIZATION_REQUIRED');
       expect(effect).not.toHaveBeenCalled();
-      expect(approvedTaskDelegation('companion')).toBeDefined();
+      expect(hasTaskActionAuthorization('companion')).toBe(true);
     });
   });
 });

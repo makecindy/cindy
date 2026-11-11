@@ -25,6 +25,7 @@ import {
   type ProviderView,
   type Provider,
   isCustomRoutedProvider,
+  type AgentKind,
 } from '@cindy/model-providers';
 
 const log = createLogger('provider-service');
@@ -75,8 +76,12 @@ export interface ProviderConnectionReaders {
 }
 
 export interface ProviderServiceDeps {
+  /** Read once per view; exact agent/provider/model keys, never written into the catalog. */
+  getModelContextLimits?: () => Readonly<Record<string, number>>;
   projectProvider?: (provider: ProviderView) => ProviderView;
-  getProviderPresentation?: (providerId: string) => { name?: string; removed?: boolean };
+  getProviderPresentation?: (providerId: string) => { name?: string; removed?: boolean; logoKind?: ProviderView['logoKind'] };
+  /** Exact-route user budget/price overrides keep independent rows. */
+  hasModelAliasOverride?: (providerId: string, agent: AgentKind, modelId: string) => boolean;
   /** 返回当前生效目录（同步）。桌面端注入 active-catalog 的 getActiveCatalog。 */
   getCatalog: () => Catalog;
   /** 连接状态判定器。 */
@@ -209,7 +214,31 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     if (!readOpts.snapshotOnly && deps.subscriptionAccountInfo) await Promise.all(catalog.providers
       .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
+    const contextLimits = deps.getModelContextLimits?.() ?? {};
     return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => ({
+      ...provider,
+      models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
+        agent, models?.map((model) => {
+          const { contextWindowOverride: _previous, ...base } = model;
+          const limit = contextLimits[`${agent}:${provider.id}:${model.id}`];
+          return typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+            ? { ...base, contextWindowOverride: limit } : base;
+        }),
+      ])),
+    })).map((provider) => {
+      if (!deps.hasModelAliasOverride) return provider;
+      const blocked = new Set(Object.entries(provider.models).flatMap(([agent, models]) =>
+        (models ?? []).filter((m) => m.selectionAliasKey &&
+          deps.hasModelAliasOverride!(provider.id, agent as AgentKind, m.id))
+          .map((m) => m.selectionAliasKey!)));
+      if (!blocked.size) return provider;
+      return { ...provider, models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) =>
+        [agent, models?.map((m) => {
+          if (!m.selectionAliasKey || !blocked.has(m.selectionAliasKey)) return m;
+          const { selectionAliasKey: _marker, ...original } = m;
+          return original;
+        })])) };
+    }).map((provider) => ({
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
       ...provider, ...(provider.source === 'builtin' ? deps.getProviderPresentation?.(provider.id) ?? {} : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
       // Deletion disconnects first. A live binding wins over a stale removed flag if

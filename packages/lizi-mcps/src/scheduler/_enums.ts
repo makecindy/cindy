@@ -13,4 +13,4 @@ export const AGENT_KIND = ['claude-code', 'codex', 'pi'] as const;
 export const EFFORT = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 export const SCHEDULE_STATUS = ['active', 'paused', 'expired'] as const;
 export const EXECUTION_MODE = ['agent', 'script'] as const;
-export const SCRIPT_CAPABILITY = ['jira.read', 'jira.comment', 'sessions.dispatch', 'feishu.read'] as const;
+export const SCRIPT_CAPABILITY = ['github.read', 'jira.read', 'jira.comment', 'sessions.dispatch', 'feishu.read'] as const;

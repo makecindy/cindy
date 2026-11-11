@@ -102,6 +102,7 @@
     "fetchAvFailed": "取得に失敗しました：{{detail}}",
     "fetchPdfFailed": "PDF の取得に失敗しました：{{detail}}",
     "fetchingPdf": "パソコンから PDF を取得中…",
+    "androidPdfHint": "Android では Cindy 内で PDF をプレビューできません。下の「書き出し / 共有」をタップし、PDF リーダーを選んで開いてください。",
     "unsupportedType": "この種類はスマートフォンではまだプレビューできません",
     "oversize": "ファイルがプレビュー上限（{{size}}）を超えています。オリジナルをダウンロードして表示できます",
     "oversizeUnknown": "大きすぎます",

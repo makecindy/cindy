@@ -14,14 +14,18 @@ describe('custom xAI Videos protocol', () => {
     expect(guide.response.mode).toBe('async');
   });
 
-  it('uses only the explicitly enabled video source, without borrowing a chat key', () => {
+  it.each(['https://video.example/v1', 'https://router.requesty.ai/v1'])
+  ('uses only the explicit video source at %s with its application headers', baseUrl => {
     const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
       'claude-code': { baseUrl: 'https://chat.example/v1', models: [{ ...model }] },
-      pi: { baseUrl: 'https://video.example/v1', wireProtocol: 'openai-chat', videoApi: 'xai-videos', models: [{ ...model }] },
+      pi: { baseUrl, wireProtocol: 'openai-chat', videoApi: 'xai-videos', models: [{ ...model }] },
     } });
     expect(provider.videoModels?.[0]?.sourceAgent).toBe('pi');
     const options = { getProvider: () => provider, readApiKey: (agent: string) => agent === 'pi' ? 'test-video-key' : 'test-chat-key', isOwnerBoundaryPending: () => false };
-    expect(resolveCustomMediaConnection(options, model.id, 'video')).toMatchObject({ agent: 'pi', baseUrl: 'https://video.example/v1', headers: { authorization: 'Bearer test-video-key' } });
+    const connection = resolveCustomMediaConnection(options, model.id, 'video');
+    expect(connection).toMatchObject({ agent: 'pi', baseUrl, headers: { authorization: 'Bearer test-video-key' } });
+    expect(connection?.headers['http-referer']).toBe(baseUrl.includes('requesty.ai') ? 'https://cindy.app' : undefined);
+    expect(connection?.headers['x-title']).toBe(baseUrl.includes('requesty.ai') ? 'Cindy' : undefined);
     expect(resolveCustomMediaConnection({ ...options, readApiKey: () => null }, model.id, 'video')).toBeNull();
     provider.routing.pi!.videoApi = undefined;
     expect(resolveCustomMediaConnection(options, model.id, 'video')).toBeNull();

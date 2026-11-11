@@ -15,7 +15,8 @@ import { onSharedTaskMembershipChanged } from './sharedTaskMembershipSignal';
 export function useSharedTasks(): readonly SharedTaskListItem[] {
   const { accountGeneration, isAuthenticated } = useAuth();
   const api = useSharedTaskApi();
-  const { openLink, closeLink, invoke, status, sharedTaskAvailable } = useDeviceLink();
+  const { openLink, closeLink, invoke, status: primaryStatus, sharedTaskAvailable, sharedTaskConnection } = useDeviceLink();
+  const status = sharedTaskConnection?.status ?? primaryStatus;
   const [owned, setOwned] = useState<{ owner: ReturnType<typeof getMobileAuthOwner>; tasks: SharedTaskListItem[] } | null>(null);
   useEffect(() => {
     // Reconnecting reruns this effect, which reads immediately.

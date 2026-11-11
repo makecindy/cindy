@@ -11,6 +11,13 @@ import path from 'node:path';
 let userDataDir = '';
 
 vi.mock('electron', () => ({ app: { getPath: () => userDataDir } }));
+// Keep policy locking and settings I/O real, but scope all files to this fake owner.
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => 'settings-test-owner',
+  isAppSessionBoundaryPending: () => false,
+  ownerScopedUserDataPath: (...parts: string[]) => path.join(userDataDir, ...parts),
+}));
+vi.mock('../providerShareAvailabilityTransport.js', () => ({ disableShareAvailability: vi.fn() }));
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
@@ -19,7 +26,7 @@ import {
   readDeviceLinkSettings,
   updateDeviceLinkSetting,
   writeDeviceLinkSetting,
-} from '../settings-store';
+} from '../settings-store.desktop';
 
 const FILE = 'device-link-settings.json';
 
@@ -41,7 +48,12 @@ afterAll(() => {
 
 describe('settings-store 多实例 mtime 失效', () => {
   it('无文件时返回默认值', () => {
-    expect(readDeviceLinkSettings().remoteControlEnabled).toBe(false);
+    // agent-net 产品规则：新安装不自动启用实验连接或限制旧版连接。
+    expect(readDeviceLinkSettings()).toMatchObject({
+      remoteControlEnabled: false,
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
+    });
   });
 
   it('本实例写入后读到新值(常规缓存路径)', async () => {
@@ -54,6 +66,14 @@ describe('settings-store 多实例 mtime 失效', () => {
     const s = readDeviceLinkSettings();
     expect(s.remoteControlEnabled).toBe(false);
     expect(s.revokedControllers).toEqual(['dev-x']);
+    // 升级前的文件缺少 Agent-Net 字段时，同样保留 V1 默认路径。
+    expect(s.agentNetEnabled).toBe(false);
+    expect(s.agentNetOnlyEncrypted).toBe(false);
+  });
+
+  it('升级读取保留用户显式启用的 Agent-Net 设置', () => {
+    externalWrite({ agentNetEnabled: true, agentNetOnlyEncrypted: true }, 3_000);
+    expect(readDeviceLinkSettings()).toMatchObject({ agentNetEnabled: true, agentNetOnlyEncrypted: true });
   });
 
   it('外部改动后本实例写入:以盘上最新内容为基线合并,不丢外部字段', async () => {

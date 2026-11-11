@@ -1,8 +1,10 @@
+import { historyCompanionJson, parseHistoryCompanion } from './historyCompanion';
 import { normalizeTaskTags } from '@cindy/maker-shared';
 /** Shared database reads for local IPC, remote IPC and internal callers. */
-import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { DbClient } from './client/DbClient';
 import { sessions } from './schema';
+import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource';
 import { LIST_PREVIEW_EXTRACT_SQL, LATEST_VISIBLE_PREVIEW_FILTER_SQL } from './sessionListProjection';
 import { sessionToCamel, type SessionRowWithCount } from './mapper';
 import { projectSessionContextWindow, type ContextWindowSession } from '../../shared/sessionContextWindow';
@@ -13,6 +15,20 @@ import { projectSessionContextWindow, type ContextWindowSession } from '../../sh
 // Identifier fragments retain the outer scope in both single-table and joined reads.
 const OUTER_SESSION_ID_SQL = sql`${sql.identifier('sessions')}.${sql.identifier('id')}`;
 const OUTER_SESSION_CLEARED_AT_SQL = sql`${sql.identifier('sessions')}.${sql.identifier('cleared_at')}`;
+
+/** Main task list: exact teammate lanes join ordinary sources; private chat lanes keep their own entry. */
+export function ordinaryTaskListFilter(): SQL | undefined {
+  return and(
+    or(inArray(sessions.source, DESKTOP_TASK_LIST_SESSION_SOURCES),
+      and(eq(sessions.source, 'bot'), sql`EXISTS (
+        SELECT 1 FROM bot_session_links task_link
+        JOIN bot_profiles task_bot ON task_bot.id = task_link.bot_id
+        WHERE task_link.session_id = ${OUTER_SESSION_ID_SQL} AND task_link.role IN ('routine', 'channel')
+          AND task_bot.status <> 'deleting' AND (task_bot.hidden_at IS NULL OR task_bot.hidden_at = 0)
+      )`)),
+    isNull(sessions.hiddenAt),
+  );
+}
 
 /**
  * list / get / update 共用的 messageCount：标量子查询。口径是该会话的全部 messages 行数，
@@ -79,11 +95,13 @@ export interface SessionListRow {
   latestMessageExtract: string | null;
   latestMessageRole: string | null;
   tagsJson?: string;
+  companionJson?: string | null;
 }
 
 function sessionReadSelection() {
   return {
     session: sessions,
+    companionJson: historyCompanionJson(OUTER_SESSION_ID_SQL).as('companion_json'),
     tagsJson:
       sql<string>`(SELECT coalesce(json_group_array(json_object('id',t.id,'name',t.name,'nameCustomized',json(CASE WHEN t.name_customized THEN 'true' ELSE 'false' END),'color',t.color,'favoriteOrder',t.favorite_order,'sortOrder',t.sort_order,'revision',t.revision)), '[]') FROM task_tags t JOIN session_task_tags st ON st.tag_id=t.id WHERE st.session_id=${OUTER_SESSION_ID_SQL})`.as(
         'tags_json',
@@ -96,6 +114,7 @@ function sessionReadSelection() {
 
 export function flattenSessionReadRow(row: SessionListRow): SessionRowWithCount {
   return { ...row.session,
+    companion: parseHistoryCompanion(row.companionJson),
     tags: normalizeTaskTags(JSON.parse(row.tagsJson ?? '[]')), messageCount: row.messageCount,
     latestMessageExtract: row.latestMessageExtract, latestMessageRole: row.latestMessageRole };
 }
@@ -121,6 +140,41 @@ export async function selectSessionsByIds(db: DbClient['drizzle'], ids: readonly
 
 export async function selectSessionWithCount(db: DbClient['drizzle'], id: string): Promise<SessionRowWithCount | undefined> {
   return (await selectSessionsByIds(db, [id]))[0];
+}
+
+/**
+ * Ordinary task lists share visibility, status, ordering and pinned completion
+ * across desktop IPC and the standalone Host. The caller supplies an owner-bound
+ * database and validates access to privileged cursors / ID subsets; this service
+ * does not choose an account or widen a transport's permissions.
+ */
+export async function selectOrdinarySessionListRows(
+  db: DbClient['drizzle'],
+  query: {
+    cap: number;
+    statusFilter: 'active' | 'archived' | null;
+    includePinned?: boolean;
+    before?: { updatedAt: number; id: string };
+    ids?: readonly string[];
+  },
+): Promise<SessionListRow[]> {
+  if (query.ids?.length === 0) return [];
+  const where = and(
+    ordinaryTaskListFilter(),
+    query.statusFilter ? eq(sessions.status, query.statusFilter) : ne(sessions.status, 'deleted'),
+    query.ids ? inArray(sessions.id, [...query.ids]) : undefined,
+  );
+  const rows = await selectSessionListRows(db, where, query.cap, query.before);
+  if (!query.includePinned) return rows;
+
+  const pinnedRows = await selectSessionListRows(db, and(where, isNotNull(sessions.pinnedAt)), null);
+  const seen = new Set(rows.map(row => row.session.id));
+  for (const row of pinnedRows) {
+    if (seen.has(row.session.id)) continue;
+    seen.add(row.session.id);
+    rows.push(row);
+  }
+  return rows;
 }
 
 /**
@@ -166,4 +220,32 @@ export function selectSessionListRows(
     .innerJoin(picked, eq(picked.id, sessions.id))
     .where(where)
     .orderBy(desc(sessions.updatedAt), desc(sessions.id));
+}
+
+/** Atomic activity update shared by desktop and the independent runtime. */
+export async function touchUserSendRow(db: DbClient['drizzle'], id: string, ts: number) {
+  return db
+    .update(sessions)
+    .set({
+      userSendAt: ts,
+      lastActivityAt: sql`MAX(COALESCE(${sessions.lastActivityAt}, 0), ${ts})`,
+      updatedAt: sql`MAX(${sessions.updatedAt}, ${ts})`,
+    })
+    .where(
+      and(
+        eq(sessions.id, id),
+        sql`(${sessions.userSendAt} IS NULL OR ${sessions.userSendAt} < ${ts})`,
+      ),
+    )
+    .returning({
+      userSendAt: sessions.userSendAt,
+      lastActivityAt: sessions.lastActivityAt,
+      updatedAt: sessions.updatedAt,
+      workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
+      workspaceKind: sessions.workspaceKind,
+      remoteHostId: sessions.remoteHostId,
+      source: sessions.source,
+      orcaRole: sessions.orcaRole,
+    });
 }

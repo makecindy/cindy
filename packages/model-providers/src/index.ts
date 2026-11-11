@@ -1,6 +1,6 @@
 export { parseModelDisplayPricing, type ModelDisplayPricing, type ModelDisplayPricingSummary, type SummaryQuote } from './modelDisplayPricing.js';
 export { providerProtocolCandidates, type ProviderProtocolCandidate } from './providerProtocolProbe.js';
-export { remoteInvocationModels } from './remoteModels.js';
+export { remoteInvocationModels, withEffectiveModelContextWindows } from './remoteModels.js';
 /**
  * @cindy/model-providers — 模型供应商目录 + 路由抽象（纯逻辑，零 Electron / maker-core 运行时依赖）。
  *
@@ -117,6 +117,7 @@ export {
   decideModelRegistrySnapshot,
   findModelRegistryRoute,
   resolveModelNativeApi,
+  resolveRecommendedAgent,
   resolveCatalogModelNativeApi,
   resolveModelReferencePrice,
   resolveBaseModelReferencePrice,
@@ -258,6 +259,7 @@ export {
   normalizeModelIdForClassification,
   catalogModelIdCandidates,
   findCatalogModel,
+  uniqueRenamedSessionModelId,
   resolveWireModelId,
   candidateAgentsForModel,
   nativeAgentForProviderModel,
@@ -265,6 +267,8 @@ export {
   recommendedAgentForModel,
   resolveAgentCapability,
   unifiedModelEntries,
+  resolveStoredModelEntry,
+  displayNameOfStoredModelId,
   partitionEntriesByNativeAgent,
   sortEntriesForAgent,
 } from "./unifiedSelection.js";
@@ -294,6 +298,7 @@ export type { VisionCapability } from "./visionCapability.js";
 
 export {
   parseLocalModelCatalog,
+  localModelDescription,
   isLocalModelLibraryName,
 } from "./localModelCatalog.js";
 export type {
@@ -329,7 +334,7 @@ export { PROVIDER_MEDIA_FIELDS, providerMediaField, projectProviderMediaModels }
 
 export { PROVIDER_MODEL_CATALOG, providerModelRecord, providerModelGenerationRecord, providerModelAdapterId, providerPresetModelRecord, providerModelMetadata, providerCatalogForPi, providerModelsForRoute } from "./providerModelCatalog.js";
 
-export { parseModelsListResponse, isOpenRouterModelsUrl } from "./modelDiscovery.js";
+export { parseModelsListResponse, isOpenRouterModelsUrl, isOpenHubsModelsUrl } from "./modelDiscovery.js";
 
 export type { ProviderModelRecord } from "./providerModelCatalog.js";
 
@@ -342,3 +347,10 @@ export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi }
 
 export { availableModelInterfaces, modelWithInterface, MODEL_INTERFACE_CAPABILITIES } from './providerInterfaceRoutes.js';
 export * from './providerDetection.js';
+
+export { validDiscoveredModelSource, modelSupplierLabel } from './modelSource.js';
+export type { DiscoveredModelSource } from './modelSource.js';
+export {
+  markedSelectionAliasGroups, projectSelectionAliases, inheritSelectionAliasPreferences,
+  selectionAliasTargets, type SelectionAliasGroup, type SelectionAliasPreferences,
+} from './selectionAliasGroups.js';

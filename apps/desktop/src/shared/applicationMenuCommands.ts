@@ -18,6 +18,7 @@ export const APPLICATION_MENU_COMMANDS = [
   'open-release-notes',
   'open-help',
   'open-issues',
+  'open-performance-trace',
   'open-agent-island-settings',
   'toggle-agent-island-sound',
   'new-maker',

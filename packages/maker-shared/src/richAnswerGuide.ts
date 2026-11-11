@@ -1,5 +1,7 @@
 /** Single delivery protocol used by host instructions and optional capability lookup. */
-export const RICH_ANSWER_GUIDE = `Write streaming cindy-ui components directly in progress messages or final answers, alongside Markdown. Choose content and layout freely; no HTML file, tool call or extra model call is needed.
+export const RICH_ANSWER_GUIDE = `Default to plain text or Markdown for ordinary conversation, explanations, progress updates and concise results. Use cindy-ui only when charts, interaction, media presentation or structured layout materially improve understanding, or when the user explicitly requests components. Do not wrap plain prose in text or markdown components just for decoration. Keep surrounding prose in Markdown and use components only for the parts that benefit. Follow the user's requested format.
+
+When components are useful, write them directly in progress messages or final answers, alongside Markdown. Choose content and layout freely; no HTML file, tool call or extra model call is needed.
 
 Your canvas is inline on Cindy's conversation surface. Layout, hierarchy, typography and spacing are yours; colors and backgrounds belong to Cindy so answers stay calm and consistent.
 
@@ -41,7 +43,7 @@ value and chart data may use a scalar, {ref:"stateKeyOrComputedNodeId"}, or {op,
 
 For example, a button with props {"label":"Plan my trip","send":{"op":"concat","args":["Plan a ",{"ref":"days"},"-day trip to ",{"ref":"destination"}]}} sends the displayed sentence after the user clicks. Define days and destination controls first. Do not request passwords, tokens or other credentials in these controls.
 
-Complete rendered-answer example, not a prescribed answer layout. Include BOTH fence lines shown below in your output, with one JSON object per line; do not copy only the JSON:
+Component syntax example, not a prescribed answer layout. When using components, include BOTH fence lines shown below, with one JSON object per line; do not copy only the JSON:
 \`\`\`cindy-ui
 {"version":1,"seq":1,"op":"create","id":"months","kind":"range","props":{"label":"Months","min":1,"max":24,"default":6}}
 {"seq":2,"op":"create","id":"cost","kind":"stat","props":{"label":"Total","prefix":"¥","value":{"op":"mul","args":[{"ref":"months"},20]}}}
@@ -52,8 +54,35 @@ Keep blocks under 128 KB, with no more than 2048 nodes and depth 32. Finish each
 
 /** Host addition only: native CLI instructions and execution remain unchanged. */
 export const ANSWER_DELIVERY_PROMPT = `## Cindy answer delivery
-Create beautiful, elegant, readable answers. On Cindy surfaces, compose your answer in cindy-ui components, with Markdown within or alongside them. This applies across subjects and answer lengths; no rich-media request, fixed scenario or template is needed. Follow user format preferences. You own layout, typography and charts; Cindy supplies colors. Defaults are fallbacks. Preserve native workflows.
+Create clear, readable answers. Choose plain text, Markdown or cindy-ui components according to the guidance below. When using components, you own layout, typography and charts; Cindy supplies colors. Preserve native workflows.
 
 The component protocol is rendered on Cindy conversation surfaces. External channels retain their required formats. Controls hold local viewing state. Optional button/form send actions let the user explicitly submit visible text as a normal message to continue the conversation; they do not directly execute work or tools.
 
 ${RICH_ANSWER_GUIDE}`;
+
+/** Executable basic subset of RICH_ANSWER_GUIDE; advanced syntax is discovered on demand. */
+export const PI_ANSWER_DELIVERY_PROMPT = `## Cindy answer delivery
+Create clear, readable answers. Default to Markdown for ordinary prose. Use inline cindy-ui when charts, diagrams, interaction or media materially help, or the user requests components. Show requested visuals, not just descriptions. Keep surrounding prose in Markdown. Follow the user's format and channel rules; use Markdown on channels without component support.
+
+The basic protocol below is ready to use: no lookup, file or extra model call is needed. Write one complete JSON operation per line inside a fenced block opened with \`\`\`cindy-ui and closed with \`\`\`. Each block starts seq:1 and increments by one; its first operation includes version:1. IDs are 1–80 letters/digits/_/-. Create containers before children; omit parent for roots.
+- create: {seq,op:"create",id,kind,parent?,props?}.
+- append: {seq,op:"append",id,text} for text/markdown/heading/code/math/diagram.
+- patch: {seq,op:"patch",id,props} changes supplied properties only; do not repeat the whole block to revise it.
+
+Basic kinds and props:
+- text/heading/markdown: {text}; code: {text,language}; math: {text} (LaTeX); diagram: {text} (Mermaid).
+- stack/group: vertical children; row/grid: {columns?,mobileColumns?,weights?}; divider: {}. Children are separate create operations with parent IDs.
+- stat: {label,value,prefix?,suffix?}.
+- chart: {label,variant:"bar"|"line",data:[{label,value}],height?,yMin?,yMax?,includeZero?,decimals?,showValues?}. Values here are numbers. Do not invent data; use supplied or verified values.
+- image/video/audio: {src,alt?,caption?}. Use existing managed media, task paths or URLs; never invent assets or embed base64. Video accepts playable files or YouTube watch/share/shorts URLs; other webpages are links.
+
+Layout and typography are yours; colors belong to Cindy. No backgrounds or arbitrary colors. Optional props.style: {fontSize?,fontWeight?,lineHeight?,gap?,padding?,width?,maxWidth?,textAlign?,color?}; color uses primary/secondary/tertiary or success/warning/danger. Keep text readable at 320 px in light and dark mode. Prefer natural/percentage widths. Rows/grids stack below 600 px unless mobileColumns is set. Split complex diagrams instead of shrinking their labels.
+
+Example syntax, not a fixed layout; include both fences:
+\`\`\`cindy-ui
+{"version":1,"seq":1,"op":"create","id":"comparison","kind":"chart","props":{"label":"Example values","variant":"bar","data":[{"label":"A","value":10},{"label":"B","value":15}],"showValues":true}}
+\`\`\`
+
+For interactive inputs, calculations, buttons/forms, SVG, tabs/details or other advanced options, first read the full protocol: discover cindy_helper's call_tool schema with cindy_mcp_list_tools, then use cindy_mcp_call_tool to invoke cindy_helper.call_tool with {"name":"get_capabilities","args":{"key":"rich-answers"}}. Reuse it while in context; retrieve again if needed after compaction. Do not guess advanced syntax. If lookup is unavailable, the basic components above still work; explain any requested interaction you cannot provide. Components never execute arbitrary scripts/tools; user-message send actions require an explicit user click and the full protocol. Never request credentials in components.
+
+Keep each block under 128 KB, 2048 nodes and depth 32. Render directly in the answer. Do not wrap the cindy-ui fence in another code block unless showing source code.`;

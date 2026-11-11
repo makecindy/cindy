@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   __extraDirsPathOverlapForTesting,
+  addRecentWritableDir,
   countUserExtraDirs,
   extraDirDisplayLabel,
   LIBRARY_EXTRA_DIR_SLOT_PREFIX,
   MAX_EXTRA_DIRS,
   partitionExtraDirs,
   pickAndAddExtraDir,
+  selectableRecentExtraDirs,
 } from '../components/new-chat/extraDirsActions';
 
 afterEach(() => {
@@ -25,6 +27,19 @@ describe('ExtraDirsButton path overlap normalization', () => {
     expect(isSelfOrSubdir('D:\\repo\\app\\src', 'D:/repo/app')).toBe(true);
     expect(isParentOrAncestor('D:\\repo', 'D:/repo/app')).toBe(true);
     expect(isSelfOrSubdir('D:\\repo-other', 'D:/repo')).toBe(false);
+  });
+
+  // PR #8602 review：最近列表直接授权，漏判上级目录 = 不经二次确认就把整个上级目录交给 Agent。
+  // 根目录曾被比成空串；Windows 盘符路径大小写不同也认不出。POSIX 路径仍区分大小写。
+  it.each([
+    ['/', '/home/me/project', []],
+    ['D:/repo', 'D:/Repo/App', []],
+    ['D:/REPO/APP/src', 'D:/Repo/App', []],
+    ['/Users/Me', '/users/me/app', ['/Users/Me']],
+  ])('recent list hides %s for working dir %s unless it is unrelated', (path, workingDir, kept) => {
+    expect(
+      selectableRecentExtraDirs([{ path }], { addedDirs: [], workingDir }).map((o) => o.path),
+    ).toEqual(kept);
   });
 });
 
@@ -124,6 +139,59 @@ describe('pickAndAddExtraDir', () => {
         cancelText: 'cancel',
       },
     });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('添加目录二级页的保存与留页依据', () => {
+  // 取消系统选择器时二级页要留着，ChatInput 靠返回值决定关不关面板。
+  it('选择器取消时返回 false 且不保存', async () => {
+    vi.stubGlobal('window', {
+      electronAPI: { dialog: { showOpenDirectory: vi.fn(async () => ({ success: true, path: null })) } },
+    });
+    const onChange = vi.fn();
+    await expect(pickAndAddExtraDir({
+      extraDirs: [],
+      workingDir: '/workspace',
+      writableGrantScope: 'task',
+      onChange,
+      confirm: vi.fn(async () => true),
+      parentDirectoryConfirm: {
+        title: 'title',
+        description: (path) => path,
+        confirmText: 'confirm',
+        cancelText: 'cancel',
+      },
+    })).resolves.toBe(false);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('最近目录先由 Main 授权再保存；授权被拒时不保存', async () => {
+    const authorizeRecentWritableDirectory = vi.fn(async () => ({ success: true as const }));
+    vi.stubGlobal('window', { electronAPI: { dialog: { authorizeRecentWritableDirectory } } });
+    const onChange = vi.fn();
+    await addRecentWritableDir({
+      path: 'D:/work/ai-gateway',
+      writableDirs: ['/work/refs'],
+      writableGrantScope: 'task',
+      onChange,
+    });
+    expect(authorizeRecentWritableDirectory).toHaveBeenCalledWith({
+      directory: 'D:/work/ai-gateway',
+      writableGrantScope: 'task',
+    });
+    expect(onChange).toHaveBeenCalledWith(['/work/refs', 'D:/work/ai-gateway']);
+
+    authorizeRecentWritableDirectory.mockRejectedValueOnce(
+      new Error('[WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED] not recent'),
+    );
+    onChange.mockClear();
+    await expect(addRecentWritableDir({
+      path: '/work/other',
+      writableDirs: [],
+      writableGrantScope: 'task',
+      onChange,
+    })).rejects.toThrow(/AUTHORIZATION_REQUIRED/);
     expect(onChange).not.toHaveBeenCalled();
   });
 });

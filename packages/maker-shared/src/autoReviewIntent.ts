@@ -55,6 +55,11 @@ export function splitAutoReviewUserReferences(intent: AutoReviewUserIntent): {
   return sharedProjection().splitReferences(intent);
 }
 
+/** Read only a host-owned receipt, never model text or a wire-supplied approval. */
+export function verifiedOwnerRequestText(receipt: unknown): string | undefined {
+  return sharedProjection().verifiedOwnerRequestText(receipt);
+}
+
 let sharedProjectionInstance: ReturnType<typeof createAutoReviewIntentProjection> | undefined;
 function sharedProjection(): ReturnType<typeof createAutoReviewIntentProjection> {
   return (sharedProjectionInstance ??= createAutoReviewIntentProjection());
@@ -70,9 +75,30 @@ export interface AutoReviewHistoryMessage {
 
 /** Dependency-free factory shared by harnesses and both database worker transports. */
 export function createAutoReviewIntentProjection() {
-  const MAX_USER_INTENT_CHARS = 2_000;
+  // Large enough for long requests and delegations; the action itself may be far larger.
+  const MAX_USER_INTENT_CHARS = 30_000;
   const OMITTED_USER_INTENT =
     "User message omitted because it exceeds the review budget; it cannot establish authorization.";
+
+  // Kept inside the factory because database workers evaluate its source.
+  function verifiedOwnerRequestText(receipt: unknown): string | undefined {
+    if (!receipt || typeof receipt !== "object" || !("kind" in receipt) ||
+      !["agent-request", "delegated-continuation"].includes(String(receipt.kind)) || !("request" in receipt)) return undefined;
+    const source = receipt.request;
+    if (!source || typeof source !== "object" ||
+      !("sessionId" in source) || typeof source.sessionId !== "string" || !source.sessionId ||
+      !("clientId" in source) || typeof source.clientId !== "string" || !source.clientId) return undefined;
+    // A host-checked hand-off (2026-11-05) is reviewed by the delegated work itself; only the
+    // sending host writes it, and only in a turn that spoke for the owner.
+    if ("plainBody" in source && source.plainBody === true) {
+      return "delegatedText" in source && typeof source.delegatedText === "string" && source.delegatedText.trim()
+        ? source.delegatedText : undefined;
+    }
+    // Older receipts carry the owner's words, marked when the sending host verified them.
+    return "ownerVerified" in source && source.ownerVerified === true &&
+      "userText" in source && typeof source.userText === "string" && source.userText.trim()
+      ? source.userText : undefined;
+  }
 
   function compactCurrentUserIntent(
     text: string,
@@ -209,15 +235,25 @@ export function createAutoReviewIntentProjection() {
       JSON.stringify(candidate).length <= MAX_USER_INTENT_CHARS
     )
       return candidate;
-    // Drop all earlier grants together, flag the missing restrictions, and never sample the latest text.
+    // Keep only the newest contiguous messages so a kept grant never outlives a dropped later
+    // restriction; flag the gap and never sample the latest text. Trimming down to half the
+    // budget leaves later appends prefix-stable, which lets a provider that caches prefixes reuse them.
     const omitted = {
-      earlierUserMessages: [],
+      earlierUserMessages: [] as string[],
       currentUserMessage,
       historyOmitted: true as const,
     };
-    return JSON.stringify(omitted).length <= MAX_USER_INTENT_CHARS
-      ? omitted
-      : { ...omitted, currentUserMessage: OMITTED_USER_INTENT };
+    let size = JSON.stringify(omitted).length;
+    if (currentUserMessage === OMITTED_USER_INTENT || size > MAX_USER_INTENT_CHARS)
+      return { ...omitted, currentUserMessage: OMITTED_USER_INTENT };
+    const kept: string[] = [];
+    for (let index = intent.earlierUserMessages.length - 1; index >= 0; index--) {
+      const added = JSON.stringify(intent.earlierUserMessages[index]).length + (kept.length > 0 ? 1 : 0);
+      if (size + added > MAX_USER_INTENT_CHARS / 2) break;
+      size += added;
+      kept.push(intent.earlierUserMessages[index]!);
+    }
+    return { ...omitted, earlierUserMessages: kept.reverse() };
   }
 
   function appendAutoReviewUserIntent(
@@ -255,7 +291,7 @@ export function createAutoReviewIntentProjection() {
       : null;
   }
 
-  function readAutoReviewUserText(content: unknown): string | null {
+  function readAutoReviewUserText(content: unknown, wireText?: string): string | null {
     if (typeof content === "string") {
       try {
         content = JSON.parse(content);
@@ -276,10 +312,10 @@ export function createAutoReviewIntentProjection() {
         "sessionReferences",
         "agentReferences",
         "references",
-        "pastedTextRanges",
       ].some((key) => Array.isArray(value[key]) && value[key].length > 0)
     )
       return null;
+    if (wireText !== undefined && value.text !== wireText) return null;
     return value.text;
   }
 
@@ -304,7 +340,8 @@ export function createAutoReviewIntentProjection() {
     const receipt = meta?.autoReviewUserText;
     return !!(meta?.autoResume || meta?.contextRebuild ||
       (receipt && typeof receipt === "object" && "kind" in receipt &&
-        (receipt.kind === "scheduled-continuation" || receipt.kind === "delegated-continuation")));
+        (receipt.kind === "scheduled-continuation" ||
+          (receipt.kind === "delegated-continuation" && verifiedOwnerRequestText(receipt) === undefined))));
   }
 
   function restoreAutoReviewUserIntent(
@@ -344,11 +381,14 @@ export function createAutoReviewIntentProjection() {
       if (message.role !== "user") continue;
       // An already-persisted retry is the same input, not a second authorization.
       if (current && message.clientId === current.clientId) {
-        if (message.agentMeta?.autoReviewUserText !== latest) return "";
+        const receipt = message.agentMeta?.autoReviewUserText;
+        if ((typeof receipt === "string" ? receipt : verifiedOwnerRequestText(receipt)) !== latest) return "";
         replayed = true;
       }
       const meta = message.agentMeta;
-      const text = meta?.autoReviewUserText;
+      const receipt = meta?.autoReviewUserText;
+      const text = typeof receipt === "string" ? receipt
+        : !meta?.sourcePlugin && !meta?.sharedTaskAuthor ? verifiedOwnerRequestText(receipt) : undefined;
       if (typeof text === "string" && text.startsWith("[UI_ACTION_TRIGGER]"))
         omitted = true;
       // delivery/wire alone are not authorship proof: plugin rewrites have the same shape.
@@ -394,6 +434,7 @@ export function createAutoReviewIntentProjection() {
       // Empty authored receipts reset earlier resource consent and need ordering too.
       const authored =
         typeof receipt === "string" ||
+        verifiedOwnerRequestText(receipt) !== undefined ||
         (receipt &&
           typeof receipt === "object" &&
           "text" in receipt &&
@@ -421,16 +462,18 @@ export function createAutoReviewIntentProjection() {
           omitted = true;
         }
       } else if (m.role === "user") {
+        const relayed = !m.agentMeta?.sourcePlugin && !m.agentMeta?.sharedTaskAuthor
+          ? verifiedOwnerRequestText(receipt) : undefined;
         // Legacy UI triggers and literal user text share this string receipt.
         // Keep restrictions, but do not let ambiguous provenance establish Auto consent.
         if (typeof receipt === "string" && receipt.startsWith("[UI_ACTION_TRIGGER]"))
           omitted = true;
         if (
-          typeof receipt === "string" &&
+          (typeof receipt === "string" || relayed !== undefined) &&
           ["turn", "steer"].includes(String(m.agentMeta?.delivery))
         ) {
           if (readAutoReviewUserText(m.content) === null) intent = "";
-          intent = appendAutoReviewUserIntent(intent, receipt);
+          intent = appendAutoReviewUserIntent(intent, typeof receipt === "string" ? receipt : relayed!);
         } else {
           omitted = true;
         }
@@ -454,6 +497,7 @@ export function createAutoReviewIntentProjection() {
   }
 
   return {
+    maxIntentChars: MAX_USER_INTENT_CHARS,
     compact: compactCurrentUserIntent,
     normalize: normalizeAutoReviewUserIntent,
     withReferences: withAutoReviewUserReferences,
@@ -461,6 +505,7 @@ export function createAutoReviewIntentProjection() {
     splitReferences: splitAutoReviewUserReferences,
     append: appendAutoReviewUserIntent,
     readText: readAutoReviewUserText,
+    verifiedOwnerRequestText,
     restore: restoreAutoReviewUserIntent,
     ambiguousAnswers,
     isSynthetic,

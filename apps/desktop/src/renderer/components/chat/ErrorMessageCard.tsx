@@ -1,3 +1,6 @@
+import { localizeOutputLimit } from './outputLimitI18n';
+import { type OutputLimitDetails } from '@cindy/maker-shared';
+import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 /**
  * ErrorMessageCard — 消息流里的静态错误记录卡
  * ---------------------------------------------------------------------------
@@ -15,6 +18,7 @@
  * 视觉与实时错误共用 ErrorNotice，中性底色与正文，红色仅标识状态图标。
  */
 
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { useTranslation } from 'react-i18next';
 import {
@@ -25,7 +29,7 @@ import {
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
 import { decodeRemoteErrorMessage, remoteErrorI18nKey } from '../../lib/makerChatStore';
-import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { errorReasonI18nKey } from './errorReasonI18n';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
@@ -34,29 +38,33 @@ export function ErrorMessageCard({
   reason,
   providerId,
   toolLoop,
+  outputLimit,
   sessionSource,
   kind = 'reply-error',
+  onDiagnose,
 }: {
   message: string;
+  onDiagnose?: (error: ErrorDiagnosisSource) => void;
   /** Blocked input has not reached the agent; its explanation is already user-facing. */
   kind?: 'reply-error' | 'blocked-input';
   reason?: string;
   providerId?: string;
   /** Structured details for a tool-loop terminal error (optional for legacy rows). */
   toolLoop?: ToolLoopErrorDetails;
+  outputLimit?: OutputLimitDetails;
   /** 当前任务来源。个人微信不能建议切到完全访问。 */
   sessionSource?: string | null;
 }) {
   const { t, i18n } = useTranslation();
   const decoded = decodeRemoteErrorMessage(message);
   const parsedRemoteKey = remoteErrorI18nKey(message);
-  const remoteKey = parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
+  const remoteKey = isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
     ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource)
     : parsedRemoteKey;
   const isAttachmentAccessDenied = kind === 'reply-error'
     && remoteKey === 'chat.remoteError.DEVICE_LINK_MEDIA_ACCESS_DENIED';
   const remoteGuidance = remoteKey && i18n.exists(remoteKey) ? t(remoteKey) : undefined;
-  const i18nKey = reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
+  const i18nKey = errorReasonI18nKey(reason, decoded);
   const isStreamInterrupted = isStreamInterruptedErrorMessage(message, reason);
   const isGatewayProxyTokenInvalid = isCindyGatewayProxyTokenInvalidError({
     reason,
@@ -65,11 +73,13 @@ export function ErrorMessageCard({
   });
   const toolLoopI18nKey = reason === 'tool_use_loop_detected' ? getToolLoopI18nKey(toolLoop) : undefined;
   const localizedReasonError =
-    toolLoopI18nKey && toolLoop
-      ? t(toolLoopI18nKey, { count: toolLoop.count })
-      : i18nKey
-        ? t(i18nKey)
-        : undefined;
+    reason === 'output-limit'
+      ? localizeOutputLimit(t, outputLimit)
+      : toolLoopI18nKey && toolLoop
+        ? t(toolLoopI18nKey, { count: toolLoop.count })
+        : i18nKey
+          ? t(i18nKey)
+          : undefined;
   const text = kind === 'blocked-input'
     ? redactSensitiveText(decoded)
     : isResponsesLiteParallelToolCallsError(decoded)
@@ -78,16 +88,19 @@ export function ErrorMessageCard({
         ? t('chat.errorBanner.streamInterruptedNoRetry')
         : isGatewayProxyTokenInvalid
           ? t('chat.errorBanner.gatewayProxyTokenInvalidNoRetry')
-          : localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
+          : (parsedRemoteKey?.startsWith('sharedTaskRecovery.') ? remoteGuidance : undefined)
+            ?? localizedReasonError ?? remoteGuidance ?? t('chat.errorBanner.replyFailed');
   const showRawToggle = kind === 'reply-error' && Boolean(decoded);
 
   if (!text) return null;
   return (
     <ErrorNotice
       key={`${reason ?? ''}:${kind}`}
+      className="p-2"
       message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
       description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery') : undefined}
       details={showRawToggle ? message : undefined}
+      onDiagnose={showRawToggle && onDiagnose ? () => onDiagnose({ message: text, details: message, reason }) : undefined}
       data-testid="error-message-card"
     />
   );

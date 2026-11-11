@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { resolveLoginGroupPlacement } from '@/auth/loginGroupPlacement';
@@ -1261,7 +1262,7 @@ export function LoginScreen({
   // v5 冻结测量拓扑:基线只在下方「外层未变换测量 wrapper」上 measureInWindow
   // (天然不含 translate);键盘事件 / viewport 变化(Android resize)后重测,
   // 基线随 resize 更新 → 位移只计一次,无系统/自定义双算。
-  const outerGroupRef = useRef<View>(null);
+  const outerGroupRef = useRef<ViewInstance>(null);
   const [groupBaseline, setGroupBaseline] = useState<{
     x: number;
     y: number;
@@ -1376,7 +1377,7 @@ export function LoginScreen({
       ) : null}
 
       {additionalAccount && onClose ? (
-        <View style={{ position: 'absolute', right: spacing.lg, top: insets.top + spacing.sm, zIndex: 20 }}>
+        <View style={{ position: 'absolute', right: insets.right + spacing.lg, top: insets.top + spacing.sm, zIndex: 20 }}>
           <HomeHeaderGlassButton accessibilityLabel={t('shared.closePanel')}
             disabled={auth.isBusy} onPress={onClose} testID="login.closeButton">
             <X color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />

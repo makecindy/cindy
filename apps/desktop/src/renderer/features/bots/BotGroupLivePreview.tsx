@@ -1,12 +1,12 @@
-/**
- * 正在发言的伙伴此刻写到哪了：群专线（或分工 Session）在这台电脑上跑时，它的流式正文已经
- * 在 makerChatStore 里（maker 事件按 sessionId 写入，不需要读历史），这里只取最后几行，
- * 让群里像打字一样逐字出来。专线不在本机运行（服务器群的别的电脑在执行）时没有内容，
- * 什么也不显示；正文可能还会变成静默标记 NO_REPLY，在那之前不显示。
- */
-import { useCallback, useSyncExternalStore } from 'react';
+import { BotGroupProcessEntries } from './BotGroupProcess';
+import type { BotGroupProcessMessage } from '../../../shared/botGroupChat';
+import { useRemoteSessionSync } from '@/features/cc-agent/hooks/useRemoteSessionSync';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+/** Latest public progress in the current turn, including the note before a tool call.
+ * Remote work uses the authenticated activity summary and opens the original task. */
+import { useCallback, useLayoutEffect, useSyncExternalStore } from 'react';
 
-import { makerChatStore } from '@/lib/makerChatStore';
+import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import { cn } from '@/lib/utils';
 import { isBotGroupNoReplyPrefix } from '../../../shared/botGroupChat';
 
@@ -16,17 +16,57 @@ export function botGroupLiveTail(text: string, lines: number): string {
   return text.split('\n').map((line) => line.trim()).filter(Boolean).slice(-lines).join('\n');
 }
 
+/** Keep the latest progress note visible while tools run; never revive an older turn,
+ * private reply or reasoning block when streamingText is cleared between messages. */
+export function botGroupWorkPreview(state: {
+  streamingText: string;
+  messages: readonly ChatMessage[];
+  agentStatus: { startedAt: number | null };
+}, lines: number): string {
+  if (state.streamingText.trim()) return botGroupLiveTail(state.streamingText, lines);
+  const since = state.agentStatus.startedAt;
+  if (since === null) return '';
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    const message = state.messages[i]!;
+    const createdAt = message.createdAt ? Date.parse(message.createdAt) : NaN;
+    if (message.role !== 'assistant' || message.assistantPhase !== 'commentary'
+      || message.botPrivateReply || message.failedSamplingAttempt || !Number.isFinite(createdAt) || createdAt < since) continue;
+    return botGroupLiveTail(message.content, lines);
+  }
+  return '';
+}
+
 export function BotGroupLivePreview({ sessionId, lines = 2, className }: { sessionId: string; lines?: number; className?: string }) {
   const subscribe = useCallback((listener: () => void) => makerChatStore.subscribe(sessionId, listener), [sessionId]);
   // A string snapshot: unrelated store updates of this Session do not re-render.
-  const read = useCallback(() => botGroupLiveTail(makerChatStore.getSnapshot(sessionId).streamingText ?? '', lines), [sessionId, lines]);
+  const read = useCallback(() => botGroupWorkPreview(makerChatStore.getSnapshot(sessionId), lines), [sessionId, lines]);
   const tail = useSyncExternalStore(subscribe, read, read);
   if (!tail) return null;
   return (
-    <div data-testid="bot-group-live-preview" aria-hidden className={cn('flex min-w-0 flex-col text-13 leading-5 text-[var(--text-secondary)]', className)}>
+    <div data-testid="bot-group-live-preview" className={cn('flex min-w-0 flex-col text-13 leading-5 text-[var(--text-secondary)]', className)}>
       {tail.split('\n').map((line, index) => (
         <span key={index} className="min-w-0 truncate">{line}</span>
       ))}
     </div>
   );
+}
+
+/** All public stage notes from this execution, kept in original order between tool calls. */
+export function BotGroupProcessNotes({ sessionId, since }: { sessionId: string; since: number }) {
+  const subscribe = useCallback((listener: () => void) => makerChatStore.subscribe(sessionId, listener), [sessionId]);
+  const read = useCallback(() => JSON.stringify(makerChatStore.getSnapshot(sessionId).messages
+    .filter(message => !message.botPrivateReply && !message.failedSamplingAttempt
+      && !!message.createdAt && Date.parse(message.createdAt) >= since)
+    .map(message => ({ clientId: message.clientId, role: message.role, createdAt: message.createdAt, toolUseId: message.toolUseId,
+      content: message.role === 'tool_use' ? { toolName: message.toolName, input: message.toolInput } : message.role === 'thinking' ? '' : message.content,
+      agentMeta: { assistantPhase: message.assistantPhase, turnCompleted: message.turnCompleted } }))), [sessionId, since]);
+  const snapshot = useSyncExternalStore(subscribe, read, read);
+  const messages = JSON.parse(snapshot) as BotGroupProcessMessage[];
+  return <BotGroupProcessEntries messages={messages} id={`group-live:${sessionId}`} running />;
+}
+
+export function BotGroupRemoteProcessNotes({ sessionId, deviceId, since }: { sessionId: string; deviceId: string; since: number }) {
+  useLayoutEffect(() => { remoteProjectsStore.pinSessionOrigin(deviceId, sessionId); }, [deviceId, sessionId]);
+  useRemoteSessionSync(sessionId, deviceId);
+  return <BotGroupProcessNotes sessionId={sessionId} since={since} />;
 }

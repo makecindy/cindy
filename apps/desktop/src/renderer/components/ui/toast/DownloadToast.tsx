@@ -67,7 +67,7 @@ export function DownloadToast({ items }: { items: readonly FileTransferToast[] }
                     compact
                     className="shrink-0"
                     aria-label={`${item.action?.label} ${item.name}`}
-                    onClick={item.action?.onClick}
+                    onClick={() => item.action?.onClick()}
                   >
                     {item.action?.label}
                   </Button>

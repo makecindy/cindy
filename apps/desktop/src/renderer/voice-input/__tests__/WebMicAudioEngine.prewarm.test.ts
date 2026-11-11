@@ -8,6 +8,7 @@ import {
 import {
   disposeKeepAliveVoiceInputMicrophone,
   isMicrophoneDeviceUnavailableError,
+  noteVoiceInputUse,
   prewarmVoiceInputMicrophoneWithAutomaticFallback,
   prepareVoiceInputMicrophone,
   WebMicAudioEngine,
@@ -111,6 +112,9 @@ describe('prewarmVoiceInputMicrophoneWithAutomaticFallback', () => {
       workletReady: Promise.resolve(),
       workletUrl: 'https://app.local/pcm16k-worklet.js',
     });
+    // Establish the renderer before recording intent: it also subscribes to
+    // power releases, even if no microphone has been opened yet.
+    noteVoiceInputUse();
   });
 
   afterEach(async () => {
@@ -188,10 +192,11 @@ describe('prewarmVoiceInputMicrophoneWithAutomaticFallback', () => {
   });
 
   it('closes a temporary replacement device even when preparation could not open the selected one', async () => {
+    getUserMedia.mockRejectedValueOnce(new DOMException('Device missing', 'NotFoundError'));
     const release = prepareVoiceInputMicrophone({
       workletUrl: 'https://app.local/pcm16k-worklet.js', deviceId: 'missing-device',
     });
-    await vi.waitFor(() => expect(enumerateDevices).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
     release?.();
     const engine = new WebMicAudioEngine({
       workletUrl: 'https://app.local/pcm16k-worklet.js', keepAlive: true, releaseAfterUse: true,
@@ -257,6 +262,7 @@ describe('prewarmVoiceInputMicrophoneWithAutomaticFallback', () => {
 
   it('falls back to automatic microphone prewarm when the selected device is unavailable', async () => {
     const onFallback = vi.fn();
+    getUserMedia.mockRejectedValueOnce(new DOMException('Device missing', 'OverconstrainedError'));
 
     await prewarmVoiceInputMicrophoneWithAutomaticFallback({
       workletUrl: 'https://app.local/pcm16k-worklet.js',
@@ -264,8 +270,9 @@ describe('prewarmVoiceInputMicrophoneWithAutomaticFallback', () => {
     }, onFallback);
 
     expect(onFallback).toHaveBeenCalledTimes(1);
-    expect(enumerateDevices).toHaveBeenCalledTimes(1);
-    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(enumerateDevices).not.toHaveBeenCalled();
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(getUserMedia.mock.calls[0][0].audio.deviceId).toEqual({ exact: 'missing-device' });
     expect(getUserMedia).toHaveBeenCalledWith({
       audio: {
         autoGainControl: true,

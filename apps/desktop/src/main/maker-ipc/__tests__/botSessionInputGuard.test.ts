@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   botSessionInputBlockReason,
-  isShadowedCompanionCanonical,
+  isShadowedCompanionSession,
 } from '../botSessionInputGuard.js';
 
 describe('Bot task input guard', () => {
@@ -33,16 +33,17 @@ describe('Bot task input guard', () => {
 
 describe('shadowed companion guard', () => {
   const shadowed = (botId: string) => botId === 'bot_mia';
-  it('blocks only the main task of a demoted copy', () => {
-    expect(isShadowedCompanionCanonical({ role: 'canonical', botId: 'bot_mia' }, shadowed)).toBe(
+  // #7256: routine history must not restart a companion on its old computer.
+  it.each(['canonical', 'routine'])('blocks the %s task of a demoted copy', (role) => {
+    expect(isShadowedCompanionSession({ role, botId: 'bot_mia' }, shadowed)).toBe(
       true,
     );
-    expect(isShadowedCompanionCanonical({ role: 'delegation', botId: 'bot_mia' }, shadowed)).toBe(
+    expect(isShadowedCompanionSession({ role: 'delegation', botId: 'bot_mia' }, shadowed)).toBe(
       false,
     );
-    expect(isShadowedCompanionCanonical({ role: 'canonical', botId: 'bot_other' }, shadowed)).toBe(
+    expect(isShadowedCompanionSession({ role, botId: 'bot_other' }, shadowed)).toBe(
       false,
     );
-    expect(isShadowedCompanionCanonical(null, shadowed)).toBe(false);
+    expect(isShadowedCompanionSession(null, shadowed)).toBe(false);
   });
 });

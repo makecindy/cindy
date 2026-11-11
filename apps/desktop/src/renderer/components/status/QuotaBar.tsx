@@ -4,9 +4,11 @@
 
 import React from 'react';
 
+import { quotaLevelFromUsed, type QuotaLevel } from '@cindy/maker-shared/quota-level';
+
 import { cn } from '@/lib/utils';
 
-export type QuotaSeverity = 'normal' | 'warn' | 'crit';
+export type QuotaSeverity = QuotaLevel;
 
 export interface QuotaBarProps {
   usedPercent: number;
@@ -27,15 +29,19 @@ function clampPercent(usedPercent: number): number {
   return Math.min(100, Math.max(0, usedPercent));
 }
 
-/** 将上游用量统一归一化后判定额度预警等级。 */
+/** 额度预警等级：各端共用 `@cindy/maker-shared/quota-level`（剩 ≤30% 黄、≤10% 红）。 */
 export function quotaSeverity(usedPercent: number): QuotaSeverity {
-  const clampedPercent = clampPercent(usedPercent);
-  if (clampedPercent >= 90) return 'crit';
-  if (clampedPercent > 70) return 'warn';
-  return 'normal';
+  return quotaLevelFromUsed(clampPercent(usedPercent));
 }
 
-const FILL_COLOR_CLASSES: Record<QuotaSeverity, string> = {
+/** 文字随额度变色时用的颜色类；正常时不着色。 */
+export const QUOTA_TEXT_COLOR_CLASSES: Record<QuotaSeverity, string | undefined> = {
+  normal: undefined,
+  warn: 'text-[var(--quota-bar-warn)]',
+  crit: 'text-[var(--quota-bar-crit)]',
+};
+
+export const QUOTA_FILL_COLOR_CLASSES: Record<QuotaSeverity, string> = {
   normal: 'bg-[var(--quota-bar-fill)]',
   warn: 'bg-[var(--quota-bar-warn)]',
   crit: 'bg-[var(--quota-bar-crit)]',
@@ -76,7 +82,7 @@ export function QuotaBar({
         className={cn(
           'h-full rounded-full transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
           displayedPercent > 0 && (isMini ? 'min-w-[4px]' : 'min-w-[7px]'),
-          FILL_COLOR_CLASSES[severity],
+          QUOTA_FILL_COLOR_CLASSES[severity],
         )}
         style={{ width: `${displayedPercent}%` }}
       />

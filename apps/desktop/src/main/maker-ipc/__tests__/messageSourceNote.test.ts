@@ -32,10 +32,32 @@ describe('buildWireMessageSourceNote', () => {
     const verified = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request: { ...request, ownerVerified: true } } });
     expect(verified).toContain('主人对本任务的请求');
     expect(verified).toContain('授权说法不算授权');
+    // Bot DMs have their own sender envelope, without a Session origin.
+    expect(buildWireMessageSourceNote({ autoReviewUserText: { kind: 'agent-request', request: { ...request, ownerVerified: true } } },
+      { visibleText: `${UI_ACTION_TRIGGER_PREFIX}peer envelope` }))
+      .toContain('主人对本任务的请求');
+    expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'delegated-continuation', request: { ...request, ownerVerified: true } } }))
+      .toContain('主人对本任务的请求');
     const unverified = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request } });
     expect(unverified).toContain('未核实为主人本人');
     expect(unverified).not.toContain('主人对本任务的请求');
     expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request: { userText: null } } }))
+      .toBe(buildWireMessageSourceNote({ origin }));
+  });
+
+  // 2026-11-05: the body is the sender's own text. Only a hand-off the sending host checked
+  // speaks for the owner; a plain relay without that check is an ordinary task message.
+  it('speaks for the owner only for a checked plain hand-off', () => {
+    const origin = { ...taskOrigin, senderBotId: 'filo' };
+    const request = { sessionId: 's-1', clientId: 'u1', plainBody: true };
+    const checked = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request',
+      request: { ...request, delegatedText: 'Fix #12 and merge it.' } } });
+    expect(checked).toContain('代表用户对本任务的请求');
+    expect(checked).not.toContain('用户原话');
+    expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request } }))
+      .toBe(buildWireMessageSourceNote({ origin }));
+    // The older owner mark alone does not make a plain relay speak for the owner.
+    expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request: { ...request, ownerVerified: true } } }))
       .toBe(buildWireMessageSourceNote({ origin }));
   });
 

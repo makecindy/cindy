@@ -23,7 +23,8 @@ import type { SessionUsageMoney } from '@/hooks/useSessionUsageMoney';
 import type { ProviderView } from '@cindy/model-providers';
 
 type TestProvider = Pick<ProviderView, 'id' | 'openAiAccount' | 'subscriptionAccount'> & {
-  auth: { native: string };
+  name?: string;
+  auth?: { native: string };
 };
 
 const mocks = vi.hoisted(() => ({
@@ -40,6 +41,9 @@ const mocks = vi.hoisted(() => ({
   remoteCodexDeviceIds: [] as Array<string | null>,
   remoteClaudeQuota: null as Record<string, unknown> | null,
   remoteXaiSnapshot: null as Record<string, unknown> | null,
+  openCodeUsageProviderIds: [] as Array<string | undefined>,
+  openCodeUsageDeviceIds: [] as Array<string | null>,
+  openCodeUsage: null as Record<string, unknown> | null,
   sessionUsage: {
     actualMoney: null,
     estimatedValueMoney: null,
@@ -109,6 +113,19 @@ vi.mock('@/hooks/useAccountUsage', async (importOriginal) => {
     useAccountUsage: () => null,
   };
 });
+vi.mock('@/hooks/useProviderAccountUsage', () => ({
+  useProviderAccountUsage: (
+    provider: { id: string } | undefined,
+    _agent?: string,
+    deviceId: string | null = null,
+  ) => {
+    mocks.openCodeUsageProviderIds.push(provider?.id);
+    mocks.openCodeUsageDeviceIds.push(deviceId);
+    return provider && mocks.openCodeUsage
+      ? { supported: true, result: mocks.openCodeUsage, busy: false, refresh: vi.fn() }
+      : { supported: false, result: null, busy: false, refresh: vi.fn() };
+  },
+}));
 vi.mock('@/hooks/useClaudeAccountUsage', () => ({ useClaudeAccountUsage: () => null }));
 vi.mock('@/hooks/useModelAccessCreditUsage', () => ({ useModelAccessCreditUsage: () => null }));
 vi.mock('@/hooks/useClaudeSubscriptionUsage', () => ({
@@ -194,6 +211,9 @@ beforeEach(() => {
   mocks.remoteCodexDeviceIds = [];
   mocks.remoteClaudeQuota = null;
   mocks.remoteXaiSnapshot = null;
+  mocks.openCodeUsageProviderIds = [];
+  mocks.openCodeUsageDeviceIds = [];
+  mocks.openCodeUsage = null;
   mocks.sessionUsage = {
     actualMoney: null,
     estimatedValueMoney: null,
@@ -228,6 +248,46 @@ describe('TodaySpendChip device-link remote sessions', () => {
     expect(container.textContent).toContain('Fable 周限 剩余 66%');
     // 远程订阅会话读的是被控端镜像 hook(deviceId 透传),不读本机快照。
     expect(mocks.remoteHookDeviceIds).toContain('device-abc');
+  });
+
+  it('renders remote OpenCode Go rolling, weekly, and monthly meters independently', () => {
+    mocks.deviceProviders = [{
+      id: 'opencode-go',
+      connected: true,
+      suspended: false,
+      auth: { method: 'apiKey' },
+      routing: {},
+      opencodeGoUsageAgents: ['codex'],
+    } as unknown as TestProvider];
+    mocks.openCodeUsage = {
+      status: 'ready',
+      stale: false,
+      snapshot: {
+        kind: 'opencode-go-quota',
+        fetchedAt: Date.now(),
+        windows: [
+          { id: 'rolling', usedPercent: 10, limited: false, resetsAt: null },
+          { id: 'weekly', usedPercent: 45, limited: false, resetsAt: null },
+          { id: 'monthly', usedPercent: 65, limited: false, resetsAt: null },
+        ],
+      },
+    };
+
+    const { container } = render(
+      <TodaySpendChip
+        vendorKey="codex"
+        providerId="opencode-go"
+        modelId="opencode-go/kimi-k2"
+        sessionId="session-remote-opencode-go"
+        deviceLinkDeviceId="device-opencode-go"
+      />,
+    );
+
+    expect(mocks.openCodeUsageProviderIds).toContain('opencode-go');
+    expect(mocks.openCodeUsageDeviceIds).toContain('device-opencode-go');
+    expect(container.textContent).toContain('90%');
+    expect(container.textContent).toContain('55%');
+    expect(container.textContent).toContain('35%');
   });
 
   it('远程订阅会话悬停出额度卡,chip 不可点(看板属被控端账号)', () => {
@@ -297,6 +357,8 @@ describe('TodaySpendChip device-link remote sessions', () => {
 
   it('默认路由远程会话路由观察值为 gateway 时按网关形态渲染被控端配额镜像', () => {
     mocks.remoteRoute = 'gateway';
+    mocks.localProviders = [{ id: 'xd', name: 'Cindy AI · 个人' }];
+    mocks.deviceProviders = [{ id: 'xd', name: 'Cindy AI · 心动' }];
     mocks.remoteClaudeQuota = {
       spend: 120,
       maxBudget: 3000,
@@ -309,6 +371,9 @@ describe('TodaySpendChip device-link remote sessions', () => {
     // 网关形态主 chip 显示今日额度(月度进 tooltip),数据来自被控端 LiteLLM 镜像。
     expect(container.textContent).toContain('今日');
     expect(container.textContent).not.toContain('剩余 ');
+    fireEvent.click(screen.getByRole('button', { name: 'quotaCard.usageTitle' }));
+    expect(screen.getByText('Cindy AI · 心动')).toBeTruthy();
+    expect(screen.queryByText('Cindy AI · 个人')).toBeNull();
   });
 
   it('远程 codex 会话按订阅形态渲染被控端账号窗口(组合 payload 选桶)', () => {

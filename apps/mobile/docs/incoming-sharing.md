@@ -2,8 +2,14 @@
 
 Cindy's iOS share extension accepts representations exported through `NSItemProvider`.
 Sharing opens a destination picker: a new task, an existing active task, or a companion
-with a writable conversation. Selection populates the ordinary composer, preserving its
-existing draft. The user can add instructions, review uploads, and send normally.
+with a writable conversation. The picker shows a compact content preview (including a local image thumbnail),
+companion avatars and recent tasks. Search matches titles and computer names,
+with explicit empty results and a clear action. Selection populates the ordinary
+composer, preserving its existing draft. The user can add instructions, review uploads, and send normally.
+The new-task route carries the same eligible-computer list as Home, so device
+selection and the normal model defaults remain usable; without a controllable
+computer, the share stays unclaimed and the picker explains why. Directory
+refreshes retain already loaded destinations for the same account.
 Back cancels the unclaimed share and releases only its owned copies.
 It never dispatches a message just because an external app opened Cindy.
 
@@ -51,6 +57,10 @@ new sending privileges: normal conversation hydration and authorization still ap
 - `fingerprint.config.cjs`: explicitly hashes the share extension's Swift, strings
   and Safari script resources. Register additional native resources here so format
   changes invalidate cached binaries and require a compatible native release.
+- `plugins/incoming-share-feedback.swift`: a standard UIKit receiving indicator
+  and cancellation, followed by the existing launch/failure feedback. The extension
+  uses `UIViewController`, avoiding the unrelated Social Post editor flashing
+  before the containing app opens; it does not send or choose a destination.
 - `plugins/with-incoming-share-files.js`: App Group file ownership, activation predicate,
   Safari script packaging and existing native-slot write/launch feedback. Expo Xcode
   mods run in reverse registration order; keep this plugin before `expo-sharing`.
@@ -69,6 +79,20 @@ Provider temporary URLs are copied **inside** the `loadFileRepresentation` or
 URLs; web URLs precede abstract `public.image` previews but follow concrete file exports.
 Security-scoped access is balanced; directories use `NSFileCoordinator.forUploading`.
 Each input owns a unique App Group directory, so equal filenames cannot overwrite.
+Routine foreground reads run on the native module's background queue. Synchronous
+acknowledgement and account-boundary operations use a nonblocking lock: contention
+fails and retains the share instead of waiting on the JavaScript/UI thread.
+Foreground, share-link and account notifications are serialized; a late notification
+never resets the destination the user already selected. Destination taps are fenced
+until the chooser regains focus, so queued taps cannot replace an in-flight handoff.
+Reads still in flight remember batches acknowledged during that read, so a copied
+native snapshot cannot requeue a share already consumed or cancelled. This fence
+expires with the read; subsequent identical legacy shares remain eligible.
+
+New native snapshots carry a UUID for each system-share invocation. Identical text
+or URLs shared twice therefore remain distinct mailbox entries; repeated notifications
+for one invocation are still deduplicated. The adapter accepts legacy array snapshots
+from an existing installation and acknowledges their original bytes unchanged.
 The native slot is acknowledged only by the selected, focused, hydrated composer;
 account changes and upload cleanup use the existing ownership fences. Rejection-marker
 removal is acknowledged only after a successful durable flush; failures retain the

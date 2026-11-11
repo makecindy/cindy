@@ -477,7 +477,7 @@ describe('BotChannelsPage', () => {
     fireEvent.change(within(dialog).getByLabelText('bots.channels.add.feishu.appSecretLabel'), {
       target: { value: 'secret' },
     });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^bots\.channels\.add\.feishu\.confirm:/ }));
 
     await waitFor(() =>
       expect(api.add).toHaveBeenCalledWith({
@@ -493,6 +493,66 @@ describe('BotChannelsPage', () => {
       'bots.channels.add.errors.connectFailed:{"reason":"invalid app secret"}',
     );
     expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  // Feature: users can create an application before entering credentials. Exercise
+  // the real form, external-link bridge and service payload; no live Feishu account.
+  it('opens the matching creation platform, toggles setup help and connects Lark with the entered credentials', async () => {
+    const api = installApi({ connections: [] });
+    const openExternal = vi.fn();
+    Object.assign(window.electronAPI, { openExternal });
+    render(<BotChannelsPage bot={mia} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.add.button' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.platform.feishu' }));
+
+    const create = () => within(dialog).getByRole('link', { name: /^bots\.channels\.add\.feishu\.createLink:/ });
+    const steps = within(dialog).getByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' });
+    expect(steps.getAttribute('aria-expanded')).toBe('false');
+    expect(within(dialog).queryByText('bots.channels.add.feishu.stepCreate')).toBeNull();
+    fireEvent.click(steps);
+    expect(steps.getAttribute('aria-expanded')).toBe('true');
+    expect(await within(dialog).findByText('bots.channels.add.feishu.stepCreate')).toBeTruthy();
+    fireEvent.click(steps);
+    expect(steps.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(create());
+    expect(openExternal).toHaveBeenLastCalledWith('https://open.feishu.cn/page/launcher?from=backend_oneclick');
+    expect(api.add).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    const submit = () => within(dialog).getByRole('button', { name: /^bots\.channels\.add\.feishu\.confirm:/ });
+    expect((submit() as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.feishu.appIdLabel'), { target: { value: ' cli_lark ' } });
+    fireEvent.change(within(dialog).getByLabelText('bots.channels.add.feishu.appSecretLabel'), { target: { value: ' secret ' } });
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.platform.lark' }));
+    expect(create().textContent).toContain('"service":"bots.channels.platform.lark"');
+    expect(submit().textContent).toContain('"service":"bots.channels.platform.lark"');
+    expect(within(dialog).getByText(/^bots\.channels\.add\.feishu\.description:/).textContent).toContain('"service":"bots.channels.platform.lark"');
+    fireEvent.click(create());
+    expect(openExternal).toHaveBeenLastCalledWith('https://open.larksuite.com/page/launcher?from=backend_oneclick');
+    fireEvent.click(submit());
+    await waitFor(() => expect(api.add).toHaveBeenCalledWith({ botId: 'bot-1', channel: 'feishu', service: 'lark', appId: 'cli_lark', appSecret: 'secret' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('shows creation guidance only for manual Feishu setup and preserves existing-bot adoption', async () => {
+    const api = Object.assign(installApi({ connections: [] }), {
+      listAdoptable: vi.fn(async () => ({ bots: [{ channel: 'feishu', identity: 'cli_existing' }] })),
+      adopt: vi.fn(async () => ({ connections: [connection({ channel: 'feishu' })] })),
+    });
+    render(<BotChannelsPage bot={mia} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.add.button' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.platform.feishu' }));
+    const existing = await within(dialog).findByRole('radio', { name: /bots\.channels\.add\.source\.existing/ });
+    expect(within(dialog).queryByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.add.source.manual' }));
+    expect(within(dialog).getByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' })).toBeTruthy();
+    fireEvent.click(existing);
+    expect(within(dialog).queryByLabelText('bots.channels.add.feishu.appSecretLabel')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' }));
+    await waitFor(() => expect(api.adopt).toHaveBeenCalledWith({ botId: 'bot-1', channel: 'feishu' }));
+    expect(api.add).not.toHaveBeenCalled();
   });
 
   it('tells the user when the same bot is already connected on this computer', async () => {
@@ -610,6 +670,10 @@ describe('BotChannelsPage for a teammate on another computer', () => {
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).queryByLabelText('bots.channels.add.telegram.tokenLabel')).toBeNull();
     expect(within(dialog).getByText(/bots\.remoteSettings\.finishOnHost:.*Studio/)).toBeTruthy();
+    expect((within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'bots.channels.platform.feishu' }));
+    expect(within(dialog).queryByLabelText('bots.channels.add.feishu.appIdLabel')).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'bots.channels.add.feishu.stepsLabel' })).toBeNull();
     expect((within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' }) as HTMLButtonElement).disabled).toBe(true);
     expect(api.add).not.toHaveBeenCalled();
   });

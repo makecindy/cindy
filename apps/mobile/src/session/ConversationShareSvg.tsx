@@ -1,13 +1,28 @@
 import {
   forwardRef,
+  createElement,
+  type ComponentType,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { Image as NativeImage, PixelRatio, Platform, StyleSheet, View } from "react-native";
+import {
+  Image as NativeImage,
+  PixelRatio,
+  Platform,
+  StyleSheet,
+  View,
+} from "react-native";
 import Svg, {
+  G,
+  Path,
+  Circle,
+  Ellipse,
+  Line,
+  Polygon,
+  Polyline,
   ClipPath,
   Defs,
   Image as SvgImage,
@@ -16,6 +31,7 @@ import Svg, {
   TSpan,
 } from "react-native-svg";
 
+import type { ShareVector } from "./conversationShareRichAnswer";
 import {
   CONVERSATION_SHARE_HAIRLINE,
   type ConversationShareMessage,
@@ -140,7 +156,7 @@ export const ConversationShareSvg = forwardRef<
   } | null>(null);
   useEffect(() => () => exportJob.current?.cancel(), []);
   const logoSource = NativeImage.resolveAssetSource(logoAsset);
-  const logoWidth = (SHARE_LOGO_HEIGHT * logoSource.width) / logoSource.height;
+  const logoWidth = (SHARE_LOGO_HEIGHT * (logoSource?.width ?? 1)) / (logoSource?.height || 1);
   const lockupWidth = SHARE_CHARACTER_SIZE + SHARE_LOCKUP_GAP + logoWidth;
   const lockupX = (layout.width - lockupWidth) / 2;
 
@@ -260,9 +276,9 @@ export const ConversationShareSvg = forwardRef<
                 // Android SVG cache hits do not emit onLoad. This mounted Image
                 // holds the same unresized Fresco bitmap; encoded/disk cache alone
                 // is insufficient, including when Fresco refuses a large bitmap.
-                const uri = NativeImage.resolveAssetSource(source).uri;
-                const cached = NativeImage.queryCache?.([uri]);
-                if (!cached) {
+                const uri = NativeImage.resolveAssetSource(source)?.uri;
+                const cached = uri ? NativeImage.queryCache?.([uri]) : undefined;
+                if (!uri || !cached) {
                   keys.forEach(assetGate.markFailed);
                   return;
                 }
@@ -294,7 +310,11 @@ export const ConversationShareSvg = forwardRef<
         {!renderSize.sourceTooLarge ? (
           <>
             {layout.bubbles.map((bubble, bubbleIndex) => (
-              <SvgBubbleView bubble={bubble} key={`bubble-${bubbleIndex}`} />
+              <SvgBubbleView
+                bubble={bubble}
+                key={`bubble-${bubbleIndex}`}
+                clipIdPrefix={`share-bubble-${bubbleIndex}`}
+              />
             ))}
             {keyedImages.map((image) => (
               <SvgImage
@@ -310,6 +330,17 @@ export const ConversationShareSvg = forwardRef<
                 }}
               />
             ))}
+            {layout.bubbles.flatMap((bubble, bubbleIndex) =>
+              (bubble.vectors ?? [])
+                .filter((vector) => vector.overlay)
+                .map((vector, index) => (
+                  <ShareVectorView
+                    key={`overlay-${bubbleIndex}-${index}`}
+                    item={vector}
+                    clipId={`share-overlay-${bubbleIndex}-${index}`}
+                  />
+                )),
+            )}
             {layout.gaps.map((gap, gapIndex) => (
               <SvgText
                 fill={gap.color}
@@ -378,7 +409,13 @@ export const ConversationShareSvg = forwardRef<
   );
 });
 
-function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
+function SvgBubbleView({
+  bubble,
+  clipIdPrefix,
+}: {
+  bubble: ConversationShareSvgBubble;
+  clipIdPrefix: string;
+}) {
   return (
     <>
       {bubble.fill || bubble.stroke ? (
@@ -400,6 +437,15 @@ function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
           strokeWidth={SHARE_BUBBLE_STROKE_WIDTH}
         />
       ))}
+      {bubble.vectors
+        ?.filter((vector) => !vector.overlay)
+        .map((vector, index) => (
+          <ShareVectorView
+            key={`vector-${index}`}
+            item={vector}
+            clipId={`${clipIdPrefix}-vector-${index}`}
+          />
+        ))}
       {bubble.textBlocks.map((block, blockIndex) => (
         <SvgText
           fill={block.color}
@@ -438,3 +484,51 @@ const styles = StyleSheet.create({
     top: 0,
   },
 });
+
+// A nested Svg creates a native root/viewport and can clip the rest of a long export.
+// Keep every shape in the single capture root; map the component viewBox with groups.
+function ShareVectorView({
+  item,
+  clipId,
+}: {
+  item: ShareVector;
+  clipId: string;
+}) {
+  const [vx, vy, vw, vh] = item.vector.viewBox.split(" ").map(Number);
+  const scale = Math.min(item.width / vw!, item.height / vh!);
+  const dx = item.x + (item.width - vw! * scale) / 2 - vx! * scale;
+  const dy = item.y + (item.height - vh! * scale) / 2 - vy! * scale;
+  const types = {
+    path: Path,
+    rect: Rect,
+    circle: Circle,
+    ellipse: Ellipse,
+    line: Line,
+    polyline: Polyline,
+    polygon: Polygon,
+    text: SvgText,
+  };
+  return (
+    <>
+      <Defs>
+        <ClipPath id={clipId}>
+          <Rect x={item.x} y={item.y} width={item.width} height={item.height} />
+        </ClipPath>
+      </Defs>
+      <G clipPath={`url(#${clipId})`}>
+        <G
+          transform={`translate(${dx},${dy}) scale(${scale})`}
+          fill={item.color}
+        >
+          {item.vector.shapes.map((shape, index) =>
+            createElement(
+              types[shape.type] as ComponentType<any>,
+              { ...shape.props, key: index },
+              shape.text,
+            ),
+          )}
+        </G>
+      </G>
+    </>
+  );
+}

@@ -103,7 +103,7 @@ export function ImageHoverPreview({
 
   return createPortal(
     <div
-      className="pointer-events-none fixed z-50 overflow-hidden rounded-xl shadow-[var(--shadow-menu)]"
+      className="pointer-events-none fixed z-50 overflow-hidden rounded-xl shadow-[shadow:var(--shadow-menu)]"
       style={{
         top: position.top,
         left: position.left,

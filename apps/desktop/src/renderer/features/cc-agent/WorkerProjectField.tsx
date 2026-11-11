@@ -8,6 +8,7 @@ import {
 import { BranchWorktreeChip } from '@/components/new-chat/WorktreeChipsRow';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { Button } from '@/components/ui/button';
+import { workingDirEquals } from '../../../shared/workingDir';
 import type {
   WorkerProjectContext,
   WorkerWorktreeRequest,
@@ -18,6 +19,11 @@ const basename = (value: string) =>
     .replace(/[\\/]$/, '')
     .split(/[\\/]/)
     .pop() || value;
+
+/** 选中项目的显示名:主仓目录名,不带 worktree 后缀。 */
+export function workerProjectName(context: WorkerProjectContext): string {
+  return basename(context.selected.baseRepo ?? context.selected.directory);
+}
 
 export function useWorkerProjectSelection(
   open: boolean,
@@ -37,6 +43,7 @@ export function useWorkerProjectSelection(
   const [snapshot, setSnapshot] = useState<{
     key: string;
     context?: WorkerProjectContext;
+    preferredBranch?: string;
     failed?: boolean;
   }>();
   const key = JSON.stringify([scope, directory, retry]);
@@ -67,14 +74,39 @@ export function useWorkerProjectSelection(
       return { ...base, selected };
     };
     void read().then(
-      (context) => {
+      async (context) => {
+        let preferredBranch: string | undefined;
+        if (
+          context.selected.directory !== context.inherited.directory &&
+          context.selected.baseRepo &&
+          !workingDirEquals(context.selected.baseRepo, context.inherited.baseRepo, {
+            windows: window.electronAPI.platform === 'win32',
+          })
+        ) {
+          try {
+            const baseRepo = context.selected.baseRepo;
+            const pref = await window.electronAPI.getNewMakerWorktreeBranchPreference(baseRepo);
+            const remembered = (pref as { sourceBranch?: string } | null)?.sourceBranch;
+            if (remembered) {
+              const listed = await window.electronAPI.worktreeListBranches({ baseRepo });
+              const branches = listed as { branches: string[]; remoteDefaultBranch?: string };
+              if (
+                branches.branches.includes(remembered) ||
+                branches.remoteDefaultBranch === remembered
+              )
+                preferredBranch = remembered;
+            }
+          } catch {
+            /* Old hosts without this read keep the checkout's current branch. */
+          }
+        }
         const current = getDataOwnerGeneration();
         if (
           !cancelled &&
           current.dataOwnerId === capturedOwner.dataOwnerId &&
           current.generation === capturedOwner.generation
         )
-          setSnapshot({ key, context });
+          setSnapshot({ key, context, preferredBranch });
       },
       () => {
         if (!cancelled) setSnapshot({ key, failed: true });
@@ -91,7 +123,11 @@ export function useWorkerProjectSelection(
     !!context.selected.baseRepo &&
     context.selected.headState !== 'unborn' &&
     !(sameProject && context.dialogue);
-  const branch = sourceBranch || context?.selected.branch || '';
+  const branch =
+    sourceBranch ||
+    (snapshot?.key === key ? snapshot.preferredBranch : undefined) ||
+    context?.selected.branch ||
+    '';
   return {
     context,
     sameProject,
@@ -171,9 +207,7 @@ export function WorkerProjectField({
         if (request === branchRequest.current) setBranchLoading(false);
       });
   };
-  const selectedName = context
-    ? basename(context.selected.baseRepo ?? context.selected.directory)
-    : '';
+  const selectedName = context ? workerProjectName(context) : '';
   const sharedName = context
     ? `${selectedName}${context.selected.isWorktree ? ` (${context.selected.worktreeName ?? basename(context.selected.directory)})` : ''}`
     : '';

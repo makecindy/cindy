@@ -1,4 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { resolveRemoteText } from '@cindy/device-link';
+import { i18n } from '@/i18n';
 const disk = vi.hoisted(() => new Map<string, string>());
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: vi.fn(async (key: string) => disk.get(key) ?? null),
@@ -86,6 +88,20 @@ it('keeps device-qualified read positions and treats only later host replies as 
   expect(isRemoteResourceUnread('alice', 'home', 'writer', 200)).toBe(false);
   expect((await readRemoteResourceSnapshot('bob')).items).toEqual({});
 });
+// Reading the companion on the computer (or another device) advances the computer's position;
+// the phone's badge must clear from that alone, and an older host position never rewinds it.
+it('clears a reply read on the computer from the host read position, never rewinding', async () => {
+  const withHostRead = (lastReplyAt: number, lastReadAt: number) => rows('home', lastReplyAt)
+    .map(row => ({ ...row, item: { ...row.item, display: { ...row.item.display, lastReadAt } } }));
+  await cacheRemoteResourceItems('alice', 'teammates', rows('home', 100));
+  await cacheRemoteResourceItems('alice', 'teammates', withHostRead(200, 100));
+  expect(isRemoteResourceUnread('alice', 'home', 'writer', 200)).toBe(true);
+  await cacheRemoteResourceItems('alice', 'teammates', withHostRead(200, 200));
+  expect(isRemoteResourceUnread('alice', 'home', 'writer', 200)).toBe(false);
+  await markRemoteResourceRead('alice', 'home', 'writer', 300);
+  await cacheRemoteResourceItems('alice', 'teammates', withHostRead(300, 200));
+  expect(isRemoteResourceUnread('alice', 'home', 'writer', 300)).toBe(false);
+});
 it('preserves unread replies in the same millisecond using exact server sequences', async () => {
   const first = '9007199254740992', second = '9007199254740993';
   const data: ChatSnapshot = { room: { id: 'group', name: 'Discussion', kind: 'group', archived: false, revision: 1,
@@ -170,6 +186,35 @@ it('restores portable roster data after process restart and never persists runti
   expect(JSON.stringify(restored)).not.toContain('online');
   await fresh.clearRemoteResourceCache();
   expect(disk.size).toBe(0);
+});
+
+it('resolves cached join notices in the current language without fetching the roster again', async () => {
+  const language = i18n.language;
+  await i18n.changeLanguage('zh-CN');
+  try {
+    const room: ChatSnapshot['room'] = { id: 'group', name: 'Group', kind: 'group', archived: false,
+      created_at: '2026-10-01', updated_at: '2026-10-02', revision: 1, response_mode: 'all', speaking_mode: 'auto' };
+    const row = chatRoomRow(room, { room, members: [], cursor: '1', messages: [{
+      id: 'join', seq: '1', authorId: 'member', author: { kind: 'human', name: 'Taylor' },
+      createdAt: '2026-10-02', deleted: false, threadRootId: null, origin: 'system',
+      content: [{ type: 'card', namespace: 'cindy.membership', schemaRevision: 1,
+        fallback: 'Taylor joined the group', data: { type: 'member.joined', displayName: 'Taylor' } }],
+    }] });
+    await cacheChatRoster('alice', 'global', [row], [room.id]);
+    const saved = disk.get('cindy.remoteResources.v1.alice')!;
+    await clearRemoteResourceCache(); disk.set('cindy.remoteResources.v1.alice', saved);
+    const restored = (await readCachedChatRoster('alice', 'global'))!.items[0];
+    for (const [locale, expected] of [
+      ['en', 'Taylor joined the group'], ['ja', 'Taylorさんがグループに参加しました'],
+      ['ko', 'Taylor 님이 그룹에 참여했습니다'], ['zh-TW', 'Taylor加入了群聊'], ['zh-CN', 'Taylor加入了群聊'],
+    ]) {
+      await i18n.changeLanguage(locale);
+      expect(resolveRemoteText(row.item.display.preview!, i18n.language)).toBe(expected);
+      expect(resolveRemoteText(restored.item.display.preview!, i18n.language)).toBe(expected);
+    }
+  } finally {
+    await i18n.changeLanguage(language);
+  }
 });
 
 // Review regression (unit): valid group/member data can exceed the shared 256 KiB

@@ -1,3 +1,6 @@
+// Media IO is a platform port; authorization tests use the real dispatcher and projections.
+vi.mock('../cindy-media/toolProcessMedia.js', () => ({ materializeToolProcessMedia: vi.fn(async value => value) }));
+vi.mock('../device-link/providerShareAvailability.js', () => ({ prepareShareAvailability: vi.fn() }));
 /**
  * device-link 被控端 dispatch 单测:runInvoke 的双层校验(被控开关 + allowlist)
  * 与 invoke-registry 的 dispatchLocalInvoke。
@@ -6,14 +9,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 let remoteControlEnabled = true;
 let revokedControllers: string[] = [];
-vi.mock('../device-link/settings-store', () => ({
-  readDeviceLinkSettings: () => ({ remoteControlEnabled, revokedControllers }),
+let modelUseRevokedControllers: string[] = [];
+vi.mock('../device-link/settings-store.desktop', () => ({
+  readDeviceLinkSettings: () => ({ remoteControlEnabled, revokedControllers, modelUseRevokedControllers }),
 }));
 const diagnosticLog = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock('../logger', () => ({ createLogger: () => diagnosticLog }));
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
   app: { getVersion: () => '1.0.0' },
+}));
+// Ordinary same-account dispatch has no delegated share lease. Keep the host account
+// boundary isolated; delegated guest admission is exercised in providerShareRuntime.test.ts.
+vi.mock('../device-link/providerShareDelegatedAccess.js', () => ({
+  delegatedProviderShareGuestAccess: () => null,
+  delegatedProviderShareLeases: () => [], invalidateProviderShareDelegation: vi.fn(),
 }));
 // This suite exercises dispatch authorization, not authenticated ICE HTTP setup.
 vi.mock('../task-migration/service', () => ({ requestTaskMigration: vi.fn() }));
@@ -39,7 +49,7 @@ import {
   handleControllerOffline,
   __testing as dispatchTesting,
   type ActiveController,
-} from '../device-link/dispatch';
+} from '../device-link/dispatch.desktop';
 import { __testing as registry, dispatchLocalInvoke } from '../device-link/invoke-registry';
 import {
   deviceLinkInvokeControllerSupports,
@@ -57,6 +67,7 @@ import { authenticateOauthController } from '../plugin-oauth/authentication';
 beforeEach(() => {
   remoteControlEnabled = true;
   revokedControllers = [];
+  modelUseRevokedControllers = [];
   registry.reset();
   dispatchTesting.reset(); // 清订阅 registry / tap / onControllersChanged / activeClient
   setRemoteWorkingDirGuard(null); // 默认不注入,行为同生产未就绪态(放行)
@@ -495,6 +506,7 @@ describe('dispatchLocalInvoke', () => {
 import {
   wireInboundDispatch,
   setControllersChangedListener,
+  setOrdinaryPeerLinkAcceptedListener,
   setRemoteInvokeBusyChangedListener,
   setSessionsSubscribedListener,
   setControllerDisplayName,
@@ -504,8 +516,10 @@ import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
   dropAllControllers,
+  setRemoteAgentHandler,
+  setProviderGroupRemoteHandler,
   pushSessionActivityToController,
-} from '../device-link/dispatch';
+} from '../device-link/dispatch.desktop';
 import {
   applyControllerDisplayNameDirectorySnapshot,
   applyControllerDisplayNamePresence,
@@ -515,11 +529,15 @@ import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broa
 import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DeviceLinkError,
+  PROVIDER_GROUP_REMOTE_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
   type Envelope,
 } from '@cindy/device-link';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { MAKER_PUSH } from '../maker-ipc/channels';
+import { createGroupContinuityExecutor } from '../provider-group/continuityExecutor';
+import { deviceAccessGeneration, isControllerAccessAllowed, remoteControlAccessGeneration,
+  syncRemoteControlAccessGeneration } from '../device-link/remoteControlAccess';
 
 /** 最小 fake client:捕获 onFrame handler,记录出站调用 */
 function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'online') {
@@ -570,6 +588,18 @@ function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'on
 }
 
 describe('被控端控制链路生命周期', () => {
+  // Restart recovery must not turn the provider owner's explicit disconnect into
+  // an automatic reconnect. Exercise the production dropAll entry for each cause.
+  it.each(['user', 'toggle-off', 'shutdown'] as const)('passes the teardown intent to the Agent host: %s', reason => {
+    const { client } = makeFakeClient();
+    const abortAll = vi.fn();
+    setRemoteAgentHandler({ handle: vi.fn(), abortAll });
+    try {
+      dropAllControllers(client, reason);
+      expect(abortAll).toHaveBeenCalledExactlyOnceWith(reason === 'shutdown' ? 'app-quit' : 'navigation');
+    } finally { setRemoteAgentHandler(null); }
+  });
+
   beforeEach(() => {
     setControllersChangedListener(null);
     // 清掉可能残留的 controllers:dropAll 需要 client,改用重置 listener 后逐个 close
@@ -582,9 +612,15 @@ describe('被控端控制链路生命周期', () => {
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
 
+    // #6572: inbound subscription recovery must observe a successfully sent
+    // accept, never merely receipt of an unverified link-open.
+    const onAccepted = vi.fn(() => expect(calls.linkAccept).toHaveLength(1));
+    setOrdinaryPeerLinkAcceptedListener(onAccepted);
+
     feed({ v: 1, kind: 'link-open', id: 'r1', src: 'ctrl-a', payload: { controllerName: 'MacBook', protocolVersion: 1, appVersion: '1.0.0' } });
 
     expect(calls.linkAccept).toHaveLength(1);
+    expect(onAccepted).toHaveBeenCalledExactlyOnceWith('ctrl-a');
     const ctrls = getActiveControllers();
     expect(ctrls).toEqual([{ deviceId: 'ctrl-a', name: 'MacBook' }]);
     expect(hasBroadcastTapListener()).toBe(true);
@@ -777,17 +813,23 @@ describe('被控端控制链路生命周期', () => {
     expect(getActiveControllers()).toEqual([{ deviceId, name: '12345678' }]);
   });
 
-  it('link-open(开关关)→ 不 accept、不记录', () => {
-    remoteControlEnabled = false;
+  it.each(['disabled', 'revoked'] as const)('link-open(%s)→ 不 accept、不触发订阅恢复', (reason) => {
+    remoteControlEnabled = reason !== 'disabled';
+    if (reason === 'revoked') revokedControllers = ['ctrl-b'];
+    const onAccepted = vi.fn();
+    setOrdinaryPeerLinkAcceptedListener(onAccepted);
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
     feed({ v: 1, kind: 'link-open', id: 'r2', src: 'ctrl-b', payload: { controllerName: 'X', protocolVersion: 1, appVersion: '1' } });
     expect(calls.linkAccept).toHaveLength(0);
     expect(getActiveControllers()).toHaveLength(0);
+    expect(onAccepted).not.toHaveBeenCalled();
   });
 
   it('link-accept 发送失败时不提交幽灵控制端订阅', async () => {
     remoteControlEnabled = true;
+    const onAccepted = vi.fn();
+    setOrdinaryPeerLinkAcceptedListener(onAccepted);
     const { client, feed } = makeFakeClient();
     const mutableClient = client as unknown as {
       sendLinkAccept: (dst: string, requestId: string) => void;
@@ -813,6 +855,7 @@ describe('被控端控制链路生命周期', () => {
 
     expect(getActiveControllers()).toEqual([]);
     expect(hasBroadcastTapListener()).toBe(false);
+    expect(onAccepted).not.toHaveBeenCalled();
   });
 
   it('弱网下 link-close 写 socket 失败也会完成本地 dropAll 清理', () => {
@@ -858,6 +901,23 @@ describe('被控端控制链路生命周期', () => {
 
     expect(dispatchTesting.queuedPushesFor('ctrl-drop-queue')).toEqual([]);
     expect(hasBroadcastTapListener()).toBe(false);
+  });
+
+  it('a computer whose "use models here" is off still reads the catalog but sees nothing it can borrow', async () => {
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    registry.register('maker:provider:list', () => ({
+      providers: [{ id: 'openai', name: 'OpenAI', remoteInvocationEnabled: true }],
+    }));
+    for (const src of ['ctrl-borrow', 'ctrl-no-models']) {
+      feed({ v: 1, kind: 'link-open', id: `open-${src}`, src, payload: { controllerName: src, protocolVersion: 1, appVersion: '2.0.0' } });
+    }
+    modelUseRevokedControllers = ['ctrl-no-models'];
+
+    const allowed = await runInvoke('ctrl-borrow', { channel: 'maker:provider:list', args: [] });
+    const denied = await runInvoke('ctrl-no-models', { channel: 'maker:provider:list', args: [] });
+    expect(allowed).toMatchObject({ ok: true, result: { providers: [{ id: 'openai', remoteInvocationEnabled: true }] } });
+    expect(denied).toMatchObject({ ok: true, result: { providers: [{ id: 'openai', remoteInvocationEnabled: false }] } });
   });
 
   it('link-open capability controls whether provider projection includes new logo kinds', async () => {
@@ -907,6 +967,13 @@ describe('被控端控制链路生命周期', () => {
     });
     expect((legacy as { result: { providers: Record<string, unknown>[] } }).result.providers[0])
       .not.toHaveProperty('logoKind');
+  });
+
+  // Unit: host membership must survive the real projection; controllers cannot infer it.
+  it.each(['xd', 'cindy'] as const)('preserves the host Cindy AI identity: %s', async (logoKind) => {
+    registry.register('maker:provider:list', () => ({ providers: [{ id: 'xd', name: 'Cindy AI', logoKind, routing: {} }] }));
+    const result = await runInvoke('ctrl-list-only', { channel: 'maker:provider:list', args: [{ capabilities: ['provider-logo-kinds-v2'] }] });
+    expect(result).toMatchObject({ ok: true, result: { providers: [{ id: 'xd', logoKind }] } });
   });
 
   it('listing-only invoke can negotiate new logo kinds without link-open', async () => {
@@ -1281,7 +1348,7 @@ describe('被控端控制链路生命周期', () => {
 
   it('sessions:list fresh 请求不并入已有 listing 单飞', async () => {
     remoteControlEnabled = true;
-    let resolvers: Array<(value: unknown[]) => void> = [];
+    const resolvers: Array<(value: unknown[]) => void> = [];
     const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
       resolvers.push(resolve);
     }));
@@ -3044,5 +3111,176 @@ describe('remote subscription data reads', () => {
     revokedControllers = ['ctrl'];
     await expect(runInvoke('ctrl', { channel, args: ['account-2'] })).resolves.toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
     expect(reader).not.toHaveBeenCalled();
+  });
+});
+
+// ─── F2-3: dispatch permission observation must end retained continuity ─────────
+
+type F23Grant = {
+  id: string; group: string; controller: string; providerId: string;
+  agentKind: 'codex'; model: string; fastPolicyRequired: boolean; remainingMs: number;
+};
+
+function f23Grant(id: string, controller: string): F23Grant {
+  return { id, group: 'openai', controller, providerId: 'openai', agentKind: 'codex',
+    model: 'model', fastPolicyRequired: false, remainingMs: 1_800_000 };
+}
+
+function f23Prepare(src: string, grant: F23Grant) {
+  return runInvoke(src, { channel: PROVIDER_GROUP_REMOTE_CHANNEL,
+    args: [{ action: 'continuity-prepare', grant }] });
+}
+
+function f23ContinuityRequest(
+  action: 'continuity-inspect' | 'continuity-admit', id: string, owner: string, sessionId: string,
+) {
+  return { channel: PROVIDER_GROUP_REMOTE_CHANNEL,
+    args: [{ action, id, ownerDeviceId: owner, sessionId }] };
+}
+
+/** Same capture binding as createGroupContinuityRuntime's executor: real helpers, no local map. */
+function f23Executor() {
+  return createGroupContinuityExecutor({
+    capture: (origin, controller) => {
+      const controlGeneration = remoteControlAccessGeneration();
+      const originAccess = deviceAccessGeneration(origin);
+      const controllerAccess = deviceAccessGeneration(controller);
+      return () => controlGeneration === remoteControlAccessGeneration()
+        && originAccess === deviceAccessGeneration(origin)
+        && controllerAccess === deviceAccessGeneration(controller)
+        && isControllerAccessAllowed(origin) && isControllerAccessAllowed(controller);
+    },
+    inspect: async () => ({ running: 0, fastPolicyRequired: false }),
+    bindFast: async () => undefined,
+    wall: Date.now,
+    mono: () => performance.now(),
+  });
+}
+
+function f23SetHandler(executor: ReturnType<typeof createGroupContinuityExecutor>) {
+  setProviderGroupRemoteHandler({
+    handle: (controller, raw) => executor.handle(controller, raw),
+    decorateProviderList: (result) => result,
+    sharedGroupSize: () => null,
+  });
+}
+
+// F2-3: real dispatch gate; an observed off/revoke ends continuity, and a later restore must not revive the old grant.
+// Tier: unit; real Main dispatch entry + real executor. Only settings and provider/load I/O are replaced.
+describe('F2-3 dispatch permission observation', () => {
+  beforeEach(() => {
+    remoteControlEnabled = true;
+    revokedControllers = [];
+    syncRemoteControlAccessGeneration();
+  });
+
+  it('fences a retained grant when the real invoke gate observes remote control off', async () => {
+    const executor = f23Executor();
+    f23SetHandler(executor);
+    const owner = 'f23-owner-off', controller = 'f23-ctrl-off';
+    const retainedId = 'f23-off-retained';
+    try {
+      await expect(f23Prepare(owner, f23Grant(retainedId, controller))).resolves.toMatchObject({ ok: true });
+      await expect(runInvoke(controller, f23ContinuityRequest('continuity-admit', retainedId, owner, 'before')))
+        .resolves.toMatchObject({ ok: true, result: { id: retainedId } });
+
+      remoteControlEnabled = false; // external instance write, owner poll has not run
+      await expect(runInvoke(controller, f23ContinuityRequest('continuity-admit', retainedId, owner, 'while-off')))
+        .resolves.toMatchObject({ ok: false, error: { code: 'REMOTE_DISABLED' } });
+
+      remoteControlEnabled = true; // external restore, still before the owner poll
+      const replay = await runInvoke(controller,
+        f23ContinuityRequest('continuity-admit', retainedId, owner, 'after-restore'));
+      expect(replay.ok).toBe(false);
+      expect(replay).toMatchObject({ error: { message: expect.stringContaining('ACCESS_REVOKED') } });
+
+      const freshId = 'f23-off-fresh';
+      await expect(f23Prepare(owner, f23Grant(freshId, controller))).resolves.toMatchObject({ ok: true });
+      await expect(runInvoke(controller, f23ContinuityRequest('continuity-admit', freshId, owner, 'fresh')))
+        .resolves.toMatchObject({ ok: true, result: { id: freshId } });
+      const neighborId = 'f23-off-neighbor';
+      await expect(f23Prepare(owner, f23Grant(neighborId, 'f23-ctrl-off-neighbor'))).resolves.toMatchObject({ ok: true });
+      await expect(runInvoke('f23-ctrl-off-neighbor',
+        f23ContinuityRequest('continuity-admit', neighborId, owner, 'neighbor')))
+        .resolves.toMatchObject({ ok: true, result: { id: neighborId } });
+    } finally {
+      setProviderGroupRemoteHandler(null);
+    }
+  });
+
+  it('fences only the revoked controller observed by the wire admission gate', async () => {
+    const executor = f23Executor();
+    f23SetHandler(executor);
+    const owner = 'f23-owner-revoked', controller = 'f23-ctrl-revoked', neighbor = 'f23-ctrl-neighbor';
+    const retainedId = 'f23-revoked-retained', neighborId = 'f23-revoked-neighbor';
+    try {
+      await expect(f23Prepare(owner, f23Grant(retainedId, controller))).resolves.toMatchObject({ ok: true });
+      await expect(f23Prepare(owner, f23Grant(neighborId, neighbor))).resolves.toMatchObject({ ok: true });
+      await expect(runInvoke(controller, f23ContinuityRequest('continuity-admit', retainedId, owner, 'before')))
+        .resolves.toMatchObject({ ok: true, result: { id: retainedId } });
+      await expect(runInvoke(neighbor, f23ContinuityRequest('continuity-admit', neighborId, owner, 'before-neighbor')))
+        .resolves.toMatchObject({ ok: true, result: { id: neighborId } });
+
+      const generationBefore = deviceAccessGeneration(controller);
+      revokedControllers = [controller]; // external write, no poll/sync
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+      feed({ v: 1, kind: 'invoke', id: 'f23-revoked-denied-1', src: controller,
+        payload: f23ContinuityRequest('continuity-admit', retainedId, owner, 'while-revoked') });
+      await vi.waitFor(() => expect(calls.invokeResult).toContainEqual(expect.objectContaining({
+        dst: controller, requestId: 'f23-revoked-denied-1',
+        payload: expect.objectContaining({ ok: false, error: expect.objectContaining({ code: 'ACCESS_REVOKED' }) }),
+      })));
+
+      feed({ v: 1, kind: 'invoke', id: 'f23-revoked-denied-2', src: controller,
+        payload: f23ContinuityRequest('continuity-admit', retainedId, owner, 'repeat-revoked') });
+      await vi.waitFor(() => expect(calls.invokeResult).toContainEqual(expect.objectContaining({
+        dst: controller, requestId: 'f23-revoked-denied-2',
+        payload: expect.objectContaining({ ok: false, error: expect.objectContaining({ code: 'ACCESS_REVOKED' }) }),
+      })));
+
+      revokedControllers = []; // external restore, still before the owner poll
+      feed({ v: 1, kind: 'invoke', id: 'f23-revoked-replay', src: controller,
+        payload: f23ContinuityRequest('continuity-admit', retainedId, owner, 'after-restore') });
+      await vi.waitFor(() => expect(calls.invokeResult.some(row => row.requestId === 'f23-revoked-replay')).toBe(true));
+      const replayResult = calls.invokeResult.find(row => row.requestId === 'f23-revoked-replay')!;
+      expect(replayResult.payload).toMatchObject({ ok: false, error: {
+        message: expect.stringContaining('ACCESS_REVOKED') } });
+      expect(deviceAccessGeneration(controller)).toBe(generationBefore + 1);
+
+      await expect(runInvoke(neighbor, f23ContinuityRequest('continuity-admit', neighborId, owner, 'neighbor-after')))
+        .resolves.toMatchObject({ ok: true, result: { id: neighborId } });
+      const freshId = 'f23-revoked-fresh';
+      await expect(f23Prepare(owner, f23Grant(freshId, controller))).resolves.toMatchObject({ ok: true });
+      await expect(runInvoke(controller, f23ContinuityRequest('continuity-admit', freshId, owner, 'fresh')))
+        .resolves.toMatchObject({ ok: true, result: { id: freshId } });
+    } finally {
+      setProviderGroupRemoteHandler(null);
+    }
+  });
+
+  it('fences a retained grant when link-open observes remote control off before the poll', async () => {
+    const executor = f23Executor();
+    f23SetHandler(executor);
+    const owner = 'f23-owner-link', controller = 'f23-ctrl-link';
+    const retainedId = 'f23-link-retained';
+    try {
+      await expect(f23Prepare(owner, f23Grant(retainedId, controller))).resolves.toMatchObject({ ok: true });
+      await expect(runInvoke(controller, f23ContinuityRequest('continuity-admit', retainedId, owner, 'before')))
+        .resolves.toMatchObject({ ok: true, result: { id: retainedId } });
+      remoteControlEnabled = false;
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+      feed({ v: 1, kind: 'link-open', id: 'f23-link-open', src: controller,
+        payload: { controllerName: 'controller', protocolVersion: 1, appVersion: '1.0.0' } });
+      expect(calls.linkAccept).toHaveLength(0);
+      remoteControlEnabled = true;
+      const replay = await runInvoke(controller,
+        f23ContinuityRequest('continuity-admit', retainedId, owner, 'after-link-open'));
+      expect(replay.ok).toBe(false);
+      expect(replay).toMatchObject({ error: { message: expect.stringContaining('ACCESS_REVOKED') } });
+    } finally {
+      setProviderGroupRemoteHandler(null);
+    }
   });
 });

@@ -9,6 +9,10 @@ export interface ChatSocket {
   close(): void;
   readonly readyState: number;
 }
+// Owner work hints only wake companions on a computer; the phone runs none. Refreshing
+// for them would re-download every visible room, so acknowledge without a reload.
+const onlyWorkHints = (changes: unknown) => Array.isArray(changes) && changes.length > 0
+  && changes.every(change => (change as { type?: unknown } | null)?.type === 'work.available');
 /** One focused view owns one socket. Reconnect re-reads state, never replays a write. */
 export function subscribeChatServer(options: {
   baseUrl: string; token(): Promise<string | null>; current(): boolean;
@@ -52,7 +56,7 @@ export function subscribeChatServer(options: {
               options.available?.();
             }
           } else if (value.type === 'changes' && scopes.has(value.scope)) {
-            await options.changed(value.changes);
+            if (!onlyWorkHints(value.changes)) await options.changed(value.changes);
             if (current(ws) && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ack', scope: value.scope, cursor: chatCursor(value.cursor) }));
           } else if (value.type === 'scope_error' && scopes.has(value.scope)) {
             // A full authenticated reload clears removed membership and resets expired cursors.

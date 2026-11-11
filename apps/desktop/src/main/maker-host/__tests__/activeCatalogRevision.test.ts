@@ -144,7 +144,7 @@ describe('active catalog revision', () => {
     ) }]);
     const check = (provider: ReturnType<typeof read>) => {
       for (const agent of agents) expect(provider.models[agent]![0]).toMatchObject({
-        id, nativeApi: 'google-generative-ai', defaultEnabled: agent === 'pi',
+        id, nativeApi: 'google-generative-ai', defaultEnabled: true,
         contextWindow: 1_048_576, maxOutput: 65_536, supportsImageInput: true,
       });
     };

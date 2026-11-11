@@ -239,7 +239,7 @@ describe('collapsed project attention wiring', () => {
     expect(automationGroupSource).toContain('resolveCollapsedGroupHeaderSessionId({');
     expect(automationGroupSource).toMatch(/tone:\s*collapsedAttention\.tone/);
     expect(automationGroupSource).toMatch(/new Set\(collapsedAttention\.errorSessionIds\)/);
-    expect(automationGroupSource).toContain('alertSessionIds,');
+    expect(automationGroupSource).toContain('collapsedAttentionSessionIds,');
     // 收起态不再是"空列表",子行的取舍统一由 getAutomationGroupChildView 决定。
     expect(automationGroupSource).toContain('const visibleSessions = childView.visibleSessions;');
     expect(automationGroupSource).not.toMatch(/collapsed\s*\?\s*\[\]\s*:/);

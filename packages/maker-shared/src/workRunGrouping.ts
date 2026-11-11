@@ -31,6 +31,12 @@ export interface WorkRunGroupingAdapter<TItem, TChild extends TItem> {
   ): TItem;
   /** Only the mobile plan projection currently needs a streaming flag on standalone cards. */
   activeStandalone?(item: TItem, afterCompletedBoundary: boolean): TItem;
+  /**
+   * Folding an activity that started before the answer into the run above it can leave that
+   * run's row range ending after the answer row. Renderers regroup rows they already hold,
+   * but a pager that cuts by message id must keep ranges monotonic: set false there.
+   */
+  foldAnswerTail?: boolean;
 }
 
 /**
@@ -254,21 +260,111 @@ function groupAnsweredTurn<TItem, TChild extends TItem>(
   const out: TItem[] = [];
   let run: TChild[] = [];
   let previousBoundary = turnStart;
-  const flushRun = (next?: TItem) => {
-    if (run.length === 0) return;
-    out.push(adapter.createCompletedGroup(run, next, previousBoundary));
+  // A thinking block is persisted when it closes, so one that spans the answer text lands
+  // behind it. Those items still started before the answer, so they belong to the run above
+  // it: fold them back instead of opening a second, few-second "已工作" beneath the answer.
+  let beforeAnswer: {
+    index: number;
+    run: TChild[];
+    next: TItem;
+    boundary: number | null;
+    /** 连续多段最终回答时取最后一段:比它更早开始的尾随动作仍属于上方那一组。 */
+    answerMs: number | null;
+  } | null = null;
+  const foldTail = (tail: TChild[]): boolean => {
+    const target = beforeAnswer;
+    if (target === null || target.answerMs === null || adapter.foldAnswerTail === false) return false;
+    for (const child of tail) {
+      const startMs = adapter.startTimestamp(child);
+      if (startMs === null || startMs > target.answerMs) return false;
+    }
+    out[target.index] = adapter.createCompletedGroup(
+      [...target.run, ...tail],
+      target.next,
+      target.boundary,
+    );
+    beforeAnswer = null;
+    return true;
+  };
+  const flushRun = (next?: TItem): TChild[] => {
+    const flushed = run;
     run = [];
+    if (flushed.length === 0) return flushed;
+    if (!foldTail(flushed)) {
+      out.push(adapter.createCompletedGroup(flushed, next, previousBoundary));
+    }
+    return flushed;
   };
   for (let index = 0; index < items.length; index++) {
     const item = items[index];
     if (!answers.has(index) && adapter.isArchivable(item)) {
       run.push(item);
-    } else {
-      flushRun(item);
-      out.push(item);
-      previousBoundary = adapter.boundaryTimestamp(item);
+      continue;
     }
+    const groupIndex = out.length;
+    const flushed = flushRun(item);
+    const grouped = out.length > groupIndex;
+    out.push(item);
+    if (!answers.has(index)) {
+      beforeAnswer = null;
+    } else if (grouped) {
+      beforeAnswer = {
+        index: groupIndex,
+        run: flushed,
+        next: item,
+        boundary: previousBoundary,
+        answerMs: adapter.boundaryTimestamp(item),
+      };
+    } else if (beforeAnswer !== null) {
+      // 连续的多段最终回答之间没有动作:合入目标仍是它们上方那一组,边界取后一段。
+      beforeAnswer.answerMs = adapter.boundaryTimestamp(item);
+    }
+    previousBoundary = adapter.boundaryTimestamp(item);
   }
   flushRun();
   return out;
+}
+
+
+/** Teammate-only presentation: join progress and activity under one stable disclosure.
+ * Keep opaque history groups intact so their existing lazy loaders remain authoritative.
+ * Replies, interactive cards, real user rows and history gaps are never swallowed.
+ */
+export function groupTeammateProcess<T extends { key: string }>(
+  items: readonly T[],
+  adapter: {
+    isProgress(item: T): boolean;
+    isRecovery(item: T): boolean;
+    children(item: T): readonly T[] | undefined;
+    start(item: T): number | null;
+    end(item: T): number | null;
+    streaming(item: T): boolean;
+    create(children: T[], key: string, streaming: boolean, start: number | null, end: number | null): T;
+  },
+): T[] {
+  const result: T[] = [];
+  let pending: T[] = [];
+  let previousEnd: number | null = null;
+  let anchor: string | undefined;
+  // The history placeholder keeps its outer key when children arrive. Deriving the
+  // journal key from loaded descendants would close the very disclosure that loaded them.
+  const firstKey = (item: T): string => item.key.replace(/^work-(?:summary-)?/, '').replace(/^(?:msg|thinking|tools)-/, '');
+  const flush = () => {
+    if (!pending.length) return;
+    const starts = pending.map(adapter.start).filter((v): v is number => v !== null);
+    const ends = pending.map(adapter.end).filter((v): v is number => v !== null);
+    result.push(adapter.create(pending, `work-journal-${anchor ?? firstKey(pending[0]!)}`,
+      pending.some(adapter.streaming), starts.length ? Math.min(...starts) : null, ends.length ? Math.max(...ends) : null));
+    pending = [];
+  };
+  for (const item of items) {
+    const start = adapter.start(item);
+    if (previousEnd !== null && start !== null && start - previousEnd > HISTORY_GAP_SPLIT_MS) { flush(); anchor = undefined; }
+    if (adapter.children(item) || adapter.isProgress(item) || adapter.isRecovery(item)) pending.push(item);
+    else { flush(); result.push(item); anchor = item.key; }
+    const end = adapter.end(item);
+    if (end !== null) previousEnd = previousEnd === null ? end : Math.max(previousEnd, end);
+  }
+  flush();
+  return result;
 }

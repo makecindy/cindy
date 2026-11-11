@@ -6,7 +6,9 @@ import {
 } from '../../../shared/agentIsland.js';
 import {
   acknowledgeAgentIslandSessionRead,
-  AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS,
+  applyAgentIslandEvent,
+  applyAgentIslandInteractionRequest,
+  AGENT_ISLAND_COMPLETED_RETENTION_MS,
   buildAgentIslandDisplayState,
   buildAllSessionActivitySnapshots,
   createAgentIslandState,
@@ -37,6 +39,45 @@ function remote(
 }
 
 describe('Agent Island device sessions', () => {
+  // Unit, review #8848: local-only coverage misses remote transitions that do
+  // not replace the card identity. Equal-clock reminders must follow arrival order.
+  it.each(['completed', 'error'] as const)('shows remote input after a local %s reminder in the same millisecond', (phase) => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    syncAgentIslandDeviceSessions(state, [remote('running')], 900);
+    applyAgentIslandEvent(state, { sessionId: 'local' }, phase === 'completed'
+      ? { type: 'done', data: {} }
+      : { type: 'error', data: { message: 'Failed' } }, 1_000);
+    expect(buildAgentIslandDisplayState(state, 1_000).compactReminder?.phase).toBe(phase);
+
+    syncAgentIslandDeviceSessions(state, [remote('needs-interaction', { interactionKind: 'permission' })], 1_000);
+    // Rendering may happen after ingestion; requeuing the old terminal hint must
+    // not give it a later start clock and let it overtake the newer interaction.
+    for (const now of [1_001, 3_999]) {
+      expect(buildAgentIslandDisplayState(state, now).compactReminder)
+        .toEqual({ phase: 'needs-interaction', until: 4_000 });
+    }
+    const settled = buildAgentIslandDisplayState(state, 4_000);
+    expect(settled.compactReminder).toBeUndefined();
+    expect(settled.pillSnapshot.attentionCount).toBe(2);
+  });
+
+  it.each(['completed', 'error'] as const)('shows remote %s after local input in the same millisecond', (phase) => {
+    const state = createAgentIslandState();
+    state.subtleReminders = true;
+    syncAgentIslandDeviceSessions(state, [remote('running')], 900);
+    applyAgentIslandInteractionRequest(state, { sessionId: 'local' }, {
+      kind: 'ask_user_question', requestId: 'question', questions: [],
+    }, 1_000);
+    expect(buildAgentIslandDisplayState(state, 1_000).compactReminder?.phase).toBe('needs-interaction');
+
+    syncAgentIslandDeviceSessions(state, [remote(phase)], 1_000);
+    for (const now of [1_000, 3_999]) {
+      expect(buildAgentIslandDisplayState(state, now).compactReminder).toEqual({ phase, until: 4_000 });
+    }
+    expect(buildAgentIslandDisplayState(state, 4_000).compactReminder).toBeUndefined();
+  });
+
   it.each(['teammate', undefined] as const)('resolves pending remote completion once without changing task state (%s)', completionNotification => {
     const state = createAgentIslandState();
     syncAgentIslandDeviceSessions(state, [remote('running')], 1_000);
@@ -171,6 +212,28 @@ describe('Agent Island device sessions', () => {
     ]);
   });
 
+  // Screenshot regression: a remote host had already flattened and shortened
+  // the rich fence. Exercise IPC parsing and native display projection together.
+  it('hides flattened remote component operations during output and completion', () => {
+    const state = createAgentIslandState();
+    const detail = '```cindy-ui {"version":1,"seq":1,"op":"create","id":"device-preview-link","kind":"markdown","props":...';
+    const sync = (phase: 'running' | 'completed', text: string, now: number) =>
+      syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions([remote(phase, { detail: text })])!, now);
+    sync('running', detail, 1_000);
+    const running = buildAgentIslandDisplayState(state, 1_000).sessions[0];
+    expect(running?.detail).toBe('');
+    expect(running?.compactDetail).not.toContain('cindy-ui');
+    sync('completed', detail, 2_000);
+    expect(buildAgentIslandDisplayState(state, 2_000).sessions[0]?.activityLines)
+      .toEqual([expect.objectContaining({ kind: 'status', text: 'Done' })]);
+    sync('completed', '**预览已完成**', 3_000);
+    expect(buildAgentIslandDisplayState(state, 3_000).sessions[0]?.compactDetail).toBe('预览已完成');
+    sync('completed', detail, 4_000);
+    expect(buildAgentIslandDisplayState(state, 4_000).sessions[0]?.compactDetail).toBe('Done');
+    sync('completed', '更新完成 ' + detail, 5_000);
+    expect(buildAgentIslandDisplayState(state, 5_000).sessions[0]?.compactDetail).toBe('更新完成');
+  });
+
   it('does not repeat events for an unchanged phase', () => {
     const state = createAgentIslandState();
     syncAgentIslandDeviceSessions(state, [remote('running')], 1_000);
@@ -245,7 +308,7 @@ describe('Agent Island device sessions', () => {
   it('does not prune expired remote tasks or mirror local app-badge attention onto them', () => {
     const state = createAgentIslandState();
     syncAgentIslandDeviceSessions(state, [remote('completed')], 1_000);
-    const later = 1_000 + AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS + 1;
+    const later = 1_000 + AGENT_ISLAND_COMPLETED_RETENTION_MS + 1;
 
     pruneAgentIslandSessions(state, later);
     expect(state.sessions.has('remote-1')).toBe(true);

@@ -32,7 +32,7 @@ import {
 import { createBusinessSessionId } from '../sessionIds.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { getSessionRuntimeControlSnapshot } from '../maker-ipc/sessionRuntimeControl.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import {

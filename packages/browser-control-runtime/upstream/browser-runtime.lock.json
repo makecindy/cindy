@@ -28,6 +28,10 @@
     },
     {
       "file": "extension/src/browser/chrome.ts",
+      "desc": "read the selected managed Chrome profile for silent macOS startup"
+    },
+    {
+      "file": "extension/src/browser/chrome.ts",
       "desc": "reuse the bounded CDP command helper for graceful Windows Chrome shutdown"
     },
     {
@@ -36,7 +40,7 @@
     },
     {
       "file": "extension/src/browser/chrome.ts",
-      "desc": "start headed automation Chrome without an empty foreground window"
+      "desc": "start headed automation Chrome without a foreground window while preserving macOS Quit"
     },
     {
       "file": "extension/src/browser/chrome.ts",
@@ -92,6 +96,10 @@
     },
     {
       "file": "extension/src/browser/routes/agent.act.ts",
+      "desc": "execute fixed structured DOM reads in an isolated world without the interaction grace delay"
+    },
+    {
+      "file": "extension/src/browser/routes/agent.act.ts",
       "desc": "resolve the selected tab alias before comparing or executing action targets"
     },
     {
@@ -120,7 +128,7 @@
     }
   ],
   "fileCount": 335,
-  "contentHash": "0e13e4827f1eea59d796bb5727e1775aac55b5066f98fe204458801fba1f6171",
+  "contentHash": "fb0bc9516bb715e79dc6abeadd2a03792170992c4ddf7b4dec03ac47ad76a614",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

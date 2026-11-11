@@ -2,12 +2,13 @@
  * Plugin list/detail view models derived only from the installed Ghost contract.
  *
  * Inputs: shared Ghost manifests and install records.
- * Outputs: renderer-safe list/detail facts, including the optional Host task settings card.
+ * Outputs: renderer-safe list/detail facts, legacy icon presentation and the optional Host task settings card.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
 import {
   ghostContentKeys,
+  ghostFallbackDisplayAuthor,
   ghostPermissionItems,
   type GhostInstallApproval,
   type GhostPermissionItem,
@@ -17,15 +18,20 @@ import {
 } from '../../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
-import { marketItemMatchesInstalledGhost } from './pluginMarketPresentation';
+import { marketItemMatchesInstalledGhost, type PluginPresentationOrigin } from './pluginMarketPresentation';
 
 export interface GhostPluginListItem {
   /** Instance key (storage part). Use this for enable/uninstall/panel IPC. */
   id: string;
   /** Logical plugin id from the manifest. */
   ghostId: string;
+  installationLabelKey?: 'localDevelopment' | 'publicInstall' | 'organizationInstall';
+  installationNamespace?: string;
   name: string;
   description: string;
+  publisherKind?: PluginMarketItem['publisherKind'];
+  /** Source facts from the Host; omitted for unverifiable/legacy installations. */
+  origin?: PluginPresentationOrigin;
   version: string;
   enabled: boolean;
   canUse: boolean;
@@ -67,6 +73,7 @@ export function ghostPrimaryAction(
   return 'manage';
 }
 export interface GhostPluginDetail extends GhostPluginListItem {
+  releaseNotes?: string;
   trust: GhostTrustInfo;
   author: string | null;
   contents: readonly string[];
@@ -95,13 +102,14 @@ export interface GhostPluginMarketPresentation {
   name: string;
   description: string;
   author: string | null;
+  publisherKind?: PluginMarketItem['publisherKind'];
   iconDataUrl: string | undefined;
 }
 
 /**
  * Returns a market presentation only when the installed package is the exact
- * market-owned version. A local install, a conflicting ghostId, an unavailable
- * market item, or a pending version update must keep using its local manifest.
+ * market-owned version. A verified older installation keeps its local content
+ * and uses only the saved public attribution and privacy projection from Main.
  */
 export function marketPresentationForInstalledGhost(
   ghost: Pick<InstalledGhost, 'manifest' | 'iconDataUrl'>,
@@ -114,16 +122,29 @@ export function marketPresentationForInstalledGhost(
         | 'name'
         | 'description'
         | 'author'
+        | 'installedAuthor'
         | 'icon'
         | 'sourceType'
       > &
-        Pick<PluginMarketItem, 'namespace'>)
+        Pick<PluginMarketItem, 'namespace'> &
+        Partial<Pick<PluginMarketItem, 'scope' | 'publisherKind'>>)
     | null
     | undefined,
 ): GhostPluginMarketPresentation | null {
   if (
     !marketItem ||
-    !marketItemMatchesInstalledGhost(marketItem, ghost) ||
+    !marketItemMatchesInstalledGhost(marketItem, ghost)
+  ) return null;
+  const publisherKind = marketItem.sourceType === 'server' && marketItem.scope === 'public'
+    ? marketItem.publisherKind : undefined;
+  const publicAnonymous = marketItem.sourceType === 'server' && marketItem.scope === 'public'
+    && publisherKind !== 'official';
+  if (marketItem.sourceType === 'server' && marketItem.installState === 'update-available'
+    && marketItem.installedAuthor !== undefined) {
+    return { name: ghost.manifest.name, description: ghost.manifest.description ?? '',
+      iconDataUrl: ghost.iconDataUrl, author: publicAnonymous ? null : marketItem.installedAuthor, publisherKind };
+  }
+  if (
     marketItem.installState !== 'installed' ||
     marketItem.version !== ghost.manifest.version
   ) {
@@ -132,12 +153,27 @@ export function marketPresentationForInstalledGhost(
   return {
     name: marketItem.name,
     description: marketItem.description ?? '',
-    author: marketItem.author,
+    author: publicAnonymous ? null : marketItem.author,
+    publisherKind,
     iconDataUrl:
       marketItem.sourceType === 'git-market' && !marketItem.icon
-        ? ghost.iconDataUrl
-        : marketItem.icon?.url,
+        ? ghostPluginIconSource(ghost.iconDataUrl)
+        : ghostPluginIconSource(marketItem.icon?.url, marketItem.icon?.sha256),
   };
+}
+
+// Exact asset shipped by the old scaffold. Other solid-color author assets remain valid.
+const LEGACY_SCAFFOLD_ICON_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAABEElEQVR42u3SMREAIAwAsfpFAAsKOETgtCyYgGZ4A3+J1leqbmECAEYAIABuY259HAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJgEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQAAIAAEgAASAABAAAkAACAABIAAEgAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAmASAABAAAkAACAABIAAEgAAQAAJAAAgAASAABIAAEAACQADodQCqFQAAmACAynYAQtWXyojiIUQAAAAASUVORK5CYII=';
+const LEGACY_SCAFFOLD_ICON_SHA256 =
+  'd4b6d2997b1472f9bdfd48a034aec12d341b5a0d541a9d19122dcb79015bf3ee';
+
+/** Treat the historical placeholder as missing without modifying the Plugin package. */
+export function ghostPluginIconSource(source?: string, sha256?: string): string | undefined {
+  if (source === LEGACY_SCAFFOLD_ICON_DATA_URL || sha256 === LEGACY_SCAFFOLD_ICON_SHA256) {
+    return undefined;
+  }
+  return source;
 }
 
 export type GhostFallbackIconKind =
@@ -145,7 +181,7 @@ export type GhostFallbackIconKind =
 
 /**
  * Chooses a restrained local symbol when a Plugin package has no icon asset.
- * This is presentation-only: a package-provided icon always wins.
+ * This is presentation-only: a real package-provided icon always wins.
  */
 export function ghostFallbackIconKind(name: string, id: string): GhostFallbackIconKind {
   const identity = `${id} ${name}`.toLocaleLowerCase();
@@ -255,8 +291,8 @@ export function installedVisibleCount<T extends Pick<GhostPluginListItem, 'id' |
 /**
  * 将安装清单转换成列表卡片需要的最小字段。
  *
- * 这里刻意不加入安装量、使用量、认证徽章等旧原型字段;这些字段在 Ghost
- * runtime 中没有事实来源,页面不应继续展示伪数据。
+ * 安装量、使用量等没有事实来源的旧原型字段不加入；发布身份仅消费
+ * Host 核实后的 public 市场投影，不能从包内声明或昵称推断。
  */
 export function toGhostPluginListItem(
   ghost: InstalledGhost,
@@ -271,8 +307,20 @@ export function toGhostPluginListItem(
   return {
     id: installedGhostStoragePart(ghost),
     ghostId: manifest.id,
+    ...(ghost.namespaceState === 'confirmed' ? {
+      installationLabelKey: ghost.namespace === 'local' || ghost.publishingSource?.kind === 'local'
+        ? 'localDevelopment' as const : typeof ghost.namespace === 'string'
+          ? 'organizationInstall' as const : ghost.publishingSource?.kind === 'public-market'
+            ? 'publicInstall' as const : undefined,
+      installationNamespace: typeof ghost.namespace === 'string' ? ghost.namespace : undefined,
+    } : {}),
     name: display.name,
     description: display.description,
+    publisherKind: presentation?.publisherKind,
+    origin: ghost.publishingSource?.kind === 'public-market' ? 'public'
+      : ghost.publishingSource?.kind === 'local' || (ghost.namespaceState === 'confirmed' && ghost.namespace === 'local') ? 'local'
+        : ghost.namespaceState === 'confirmed' && ghost.namespace && ghost.namespace !== 'local'
+          ? 'organization' : undefined,
     version: manifest.version,
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
@@ -308,7 +356,9 @@ export function toGhostPluginDetail(
   return {
     ...listItem,
     trust: listItem.trust!,
-    author: presentation ? presentation.author : (manifest.author ?? null),
+    releaseNotes: manifest.releaseNotes,
+    author: listItem.origin === 'public' && listItem.publisherKind !== 'official'
+      ? null : presentation ? presentation.author : ghostFallbackDisplayAuthor(ghost),
     contents: ghostContentKeys(manifest),
     permissions: ghostPermissionItems(manifest),
     tools: manifest.tools ?? [],

@@ -7,9 +7,8 @@ import type { Session } from '@/lib/ccAgent.types';
 import { useProjectGroups } from '@/features/cc-agent/hooks/useProjectGroups';
 import { sessionCardVisualCases } from '@/features/cc-agent/sidebar/__fixtures__/sessionCardVisualCases';
 
-const state = vi.hoisted(() => ({ hosts: [] as unknown[], bots: [] as unknown[], aliases: new Map() as ProjectAliasesByDevice }));
+const state = vi.hoisted(() => ({ hosts: [] as unknown[], aliases: new Map() as ProjectAliasesByDevice }));
 vi.mock('@/hooks/useRemoteSshHosts', () => ({ useRemoteSshHosts: () => state.hosts }));
-vi.mock('@/features/bots/botStore', () => ({ useBotProfiles: () => state.bots }));
 vi.mock('@/features/device-link/remoteProjectAliases', () => ({ remoteProjectAliases: {
   subscribe: () => () => {}, getSnapshot: () => state.aliases,
 } }));
@@ -73,7 +72,9 @@ describe('project grouping hook references', () => {
   it('keeps enriched projects stable and shares identical filtered results', () => {
     const { result, rerender } = renderHook(
       ({ rows }) => {
-        const all = useProjectGroups(rows);
+        // #7469: the real sidebar rebuilds the complete alias-member array on
+        // every snapshot. Existing tests omitted it, hiding full regrouping.
+        const all = useProjectGroups(rows, undefined, false, undefined, '', undefined, [...rows]);
         const filtered = useProjectGroups(rows, undefined, false, undefined, '', all);
         return { all, filtered };
       },

@@ -6,6 +6,7 @@
  * Empty model preferences use the originating task or the current new-task route.
  * New ordinary tasks use ask; the legacy adapter retains its historical default.
  * Permissions stay independently user-owned, never caller-inherited.
+ * A plugin that hides its Host task card does not read or use this store at runtime.
  * Model admission belongs to the shared ordinary-session resolver, never this store.
  * The same model fields are the plugin's single "model" preference: Cindy quick
  * answers (cindy.text.oneshot) use them too; empty = the system auxiliary model.
