@@ -194,16 +194,19 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
     if (stepRef.current === 'models' || stepRef.current === 'import') parkFirstRunGuide();
   }, [location.key]);
 
-  // Only a connection started from this guide can return automatically. Existing
-  // connections (including Cindy AI) do not complete another provider's setup.
-  const pendingConnection = useRef<{ id: string | null; connected: Set<string> } | null>(null);
+  // The wizard may rename or change a preset: its route ID is not the created connection ID.
+  // Capture usable connections once on departure, for all connection entry points.
+  const pendingConnection = useRef<Set<string> | null>(null);
 
   // Come back by itself once the reason for leaving is settled.
   useEffect(() => {
-    if (!parked) return;
+    if (!parked) {
+      pendingConnection.current = null;
+      return;
+    }
     const pending = pendingConnection.current;
     if (step === 'models' && pending && providers.some((provider) =>
-      provider.connected && !pending.connected.has(provider.id) && (!pending.id || provider.id === pending.id),
+      provider.connected && !pending.has(provider.id),
     )) {
       pendingConnection.current = null;
       resumeFirstRunGuide();
@@ -313,10 +316,8 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
   const giftedBalance = balance ? Number(balance.promotionalCredits) > 0 : false;
 
   const goConnect = (id: string | null) => {
-    pendingConnection.current = {
-      id,
-      connected: new Set(providers.filter((provider) => provider.connected).map((provider) => provider.id)),
-    };
+    pendingConnection.current = new Set(providers.filter((provider) => provider.connected).map((provider) => provider.id));
+    parkFirstRunGuide();
     navigate(id ? `/settings?tab=providers&connect=${encodeURIComponent(id)}` : '/settings?tab=providers&wizard=1');
   };
   const connectedRows = providers.filter((provider) => provider.connected && provider.id !== 'xd').slice(0, MODEL_ROWS);
@@ -400,7 +401,7 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
                   // What is in the account now. A balance made only of gifted credit is named as
                   // free and for trying; once the person has paid, it is their available balance.
                   <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="text-20 font-medium leading-7 tabular-nums text-[var(--confirm-title)]">
+                    <span className="text-20 font-medium leading-[1.4] tabular-nums text-[var(--confirm-title)]">
                       {money(balance.available)}
                     </span>
                     <span className="text-12 leading-relaxed text-[var(--confirm-desc)]">
