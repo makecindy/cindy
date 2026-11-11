@@ -7996,7 +7996,7 @@
         "hostTools_settings": "앱 설정",
         "hostTools_settingsDetail": "Cindy의 설정 도구로 앱 설정을 읽고 변경할 수 있습니다. 비밀 값은 반환되지 않으며 민감한 정보는 직접 입력해야 합니다.",
         "hostTools_scheduler": "자동화 관리",
-        "hostTools_schedulerDetail": "Cindy의 자동화 도구로 자동 작업을 생성, 조회, 수정, 일시 정지, 재개, 삭제, 즉시 실행하고 실행 기록을 볼 수 있습니다. 위험도가 높은 작업은 매번 확인합니다.",
+        "hostTools_schedulerDetail": "승인하면 플러그인이 자동 작업을 생성, 조회, 수정, 일시 정지, 재개, 삭제, 실행하고 실행 기록을 볼 수 있습니다. Agent가 실행하는 예약 작업은 전체 접근을 포함한 작업의 기본 권한으로 실행됩니다. 위험도가 높은 호스트 작업은 매번 확인합니다.",
         "hostToolsRequest": "{{group}} 권한 확인",
         "hostToolCallTitle": "플러그인 작업 허용",
         "hostToolCallMessage": "플러그인 ‘{{name}}’이(가) {{server}} / {{tool}}을(를) 호출하려고 합니다. 이번 허용은 아래 매개변수에만 적용됩니다.",

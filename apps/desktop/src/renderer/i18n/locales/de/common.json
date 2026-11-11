@@ -8039,7 +8039,7 @@
         "hostTools_settings": "App-Einstellungen",
         "hostTools_settingsDetail": "Mit Cindys Werkzeugen die App-Konfiguration lesen und ändern. Geheimnisse werden nicht zurückgegeben; vertrauliche Eingaben machst du selbst.",
         "hostTools_scheduler": "Automatisierungsverwaltung",
-        "hostTools_schedulerDetail": "Mit Cindys Werkzeugen automatische Aufgaben erstellen, auflisten, ändern, pausieren, fortsetzen, löschen und ausführen sowie den Verlauf lesen. Vorgänge mit hohem Risiko erfordern jedes Mal eine Bestätigung.",
+        "hostTools_schedulerDetail": "Nach der Genehmigung kann das Plugin automatische Aufgaben erstellen, anzeigen, ändern, pausieren, fortsetzen, löschen und ausführen sowie den Verlauf lesen. Von Agent ausgeführte geplante Aufgaben verwenden die Standardberechtigungen der Aufgabe, einschließlich Vollzugriff. Host-Vorgänge mit hohem Risiko erfordern jedes Mal eine Bestätigung.",
         "hostToolsRequest": "Berechtigung für {{group}} prüfen",
         "hostToolCallTitle": "Plugin-Vorgang erlauben",
         "hostToolCallMessage": "Das Plugin „{{name}}“ möchte {{server}} / {{tool}} aufrufen. Diese Erlaubnis gilt nur für die folgenden Parameter.",

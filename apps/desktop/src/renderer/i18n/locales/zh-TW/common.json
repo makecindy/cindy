@@ -7996,7 +7996,7 @@
         "hostTools_settings": "應用程式設定",
         "hostTools_settingsDetail": "透過 Cindy 的設定工具讀取及修改應用程式設定；不傳回金鑰，也不代你完成機密輸入。",
         "hostTools_scheduler": "自動化管理",
-        "hostTools_schedulerDetail": "透過 Cindy 的自動化工具建立、查詢、修改、暫停、繼續、刪除及立即執行自動任務，並檢視執行記錄。高風險操作每次確認。",
+        "hostTools_schedulerDetail": "批准後，插件可建立、查詢、修改、暫停、繼續、刪除及執行自動任務，並檢視執行記錄。由 Agent 執行的定時任務使用任務預設權限，包含完全訪問（Full Access）。高風險宿主操作每次確認。",
         "hostToolsRequest": "確認{{group}}權限",
         "hostToolCallTitle": "允許插件執行操作",
         "hostToolCallMessage": "插件「{{name}}」要呼叫 {{server}} / {{tool}}。此次允許僅適用於下列參數。",

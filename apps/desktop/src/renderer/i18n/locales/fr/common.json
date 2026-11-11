@@ -8111,7 +8111,7 @@
         "hostTools_settings": "Paramètres de l’application",
         "hostTools_settingsDetail": "Utiliser les outils de Cindy pour lire et modifier la configuration. Aucun secret n’est renvoyé et les saisies confidentielles restent à votre charge.",
         "hostTools_scheduler": "Gestion des automatisations",
-        "hostTools_schedulerDetail": "Créer, consulter, modifier, suspendre, reprendre, supprimer et lancer les tâches automatiques, et lire leur historique avec les outils de Cindy. Les opérations à haut risque demandent toujours confirmation.",
+        "hostTools_schedulerDetail": "Après approbation, le plugin peut créer, consulter, modifier, suspendre, reprendre, supprimer et lancer des tâches automatiques et consulter leur historique. Les tâches planifiées exécutées par Agent utilisent les autorisations par défaut de la tâche, y compris Accès complet. Les opérations à haut risque de l’hôte demandent une confirmation à chaque fois.",
         "hostToolsRequest": "Vérifier l’autorisation : {{group}}",
         "hostToolCallTitle": "Autoriser l’opération du plugin",
         "hostToolCallMessage": "Le plugin « {{name}} » souhaite appeler {{server}} / {{tool}}. Cette autorisation s’applique uniquement aux paramètres ci-dessous.",

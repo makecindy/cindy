@@ -8111,7 +8111,7 @@
         "hostTools_settings": "Ajustes de la aplicación",
         "hostTools_settingsDetail": "Usar las herramientas de Cindy para leer y cambiar la configuración. No se devuelven secretos y los datos privados los introduces tú.",
         "hostTools_scheduler": "Gestión de automatizaciones",
-        "hostTools_schedulerDetail": "Crear, consultar, editar, pausar, reanudar, eliminar y ejecutar tareas automáticas, y leer su historial con las herramientas de Cindy. Las operaciones de alto riesgo requieren confirmación cada vez.",
+        "hostTools_schedulerDetail": "Tras la aprobación, el complemento puede crear, consultar, editar, pausar, reanudar, eliminar y ejecutar tareas automáticas, y consultar su historial. Las tareas programadas que ejecuta Agent usan los permisos predeterminados de la tarea, incluido Acceso completo. Las operaciones de alto riesgo del sistema anfitrión requieren confirmación cada vez.",
         "hostToolsRequest": "Revisar el permiso de {{group}}",
         "hostToolCallTitle": "Permitir operación del complemento",
         "hostToolCallMessage": "El complemento «{{name}}» quiere llamar a {{server}} / {{tool}}. Esta autorización solo se aplica a los parámetros siguientes.",

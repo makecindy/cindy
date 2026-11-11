@@ -7982,7 +7982,7 @@
         "hostTools_settings": "應用設定",
         "hostTools_settingsDetail": "得循 Cindy 之器閱改應用設定；不返金鑰，祕文仍由主人親填。",
         "hostTools_scheduler": "自動化治辦",
-        "hostTools_schedulerDetail": "得循 Cindy 之器建、查、改、停、復、刪及即行自動任務，並閱執行之錄。涉重險者每次親允。",
+        "hostTools_schedulerDetail": "批准後，法器可建、查、改、停、復、刪及執行自動任務，並閱執行記錄。由 Agent 執行的定時任務使用任務預設權限，包含完全存取（Full Access）。高風險宿主操作每次確認。",
         "hostToolsRequest": "確認{{group}}之權柄",
         "hostToolCallTitle": "允法器行事",
         "hostToolCallMessage": "法器「{{name}}」欲調 {{server}} / {{tool}}。此允僅施於下列參數。",

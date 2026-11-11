@@ -8039,7 +8039,7 @@
         "hostTools_settings": "App Settings",
         "hostTools_settingsDetail": "Use Cindy’s settings tools to read and change app configuration. Secrets are not returned, and private input remains yours to provide.",
         "hostTools_scheduler": "Automation Management",
-        "hostTools_schedulerDetail": "Use Cindy’s automation tools to create, list, edit, pause, resume, delete and run automated tasks, and read run history. High-risk operations require confirmation each time.",
+        "hostTools_schedulerDetail": "After approval, the plugin can create, list, edit, pause, resume, delete and run automated tasks, and read run history. Agent-run scheduled tasks use the task’s default permissions, including Full Access. High-risk host operations require confirmation each time.",
         "hostToolsRequest": "Review {{group}} Permission",
         "hostToolCallTitle": "Allow Plugin Operation",
         "hostToolCallMessage": "The plugin “{{name}}” wants to call {{server}} / {{tool}}. This approval applies only to the parameters below.",

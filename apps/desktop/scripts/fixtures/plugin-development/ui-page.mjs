@@ -32,6 +32,9 @@ export default {
       }
       await page.getByRole('button', { name: await ui.t('settings.ghosts.perm.hostToolsRequest', { group: await ui.t('settings.ghosts.perm.subscribeTaskState') }), exact: true }).scrollIntoViewIfNeeded();
       await ui.capture('host-group-approval');
+      await page.getByRole('button', { name: await ui.t('settings.ghosts.detail.viewAllPermissions'), exact: true }).click();
+      await page.getByRole('dialog').getByText(await ui.t('settings.ghosts.perm.hostTools_schedulerDetail'), { exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture('scheduler-permission');
       return;
     }
     if (ui.case === 'authoring') {
