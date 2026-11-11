@@ -866,6 +866,22 @@ describe('translateResponsesRequest', () => {
     expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'clock__exec' } });
   });
 
+  it('does not honour a bare selector whose kind contradicts the declaration (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'function', name: 'read', parameters: { type: 'object' } }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'custom', name: 'read' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'read' } });
+  });
+
   it('does not flatten a selector whose kind contradicts the declaration (#9715)', () => {
     const out = translateResponsesRequest(base({
       input: [
