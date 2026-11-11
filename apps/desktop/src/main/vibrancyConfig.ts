@@ -2,8 +2,8 @@
  * 无壁纸时采用用户的桌面模糊数值；以下为没有桌面覆盖状态的主题默认值。
  * E4D 毛玻璃 vibrancy 配置(R1 audit,用户裁决透壁纸 2026-07-17)。
  * 仅 CINDY family 启用 macOS vibrancy + 透明底(透出桌面壁纸);其他 family 恢复
- * 不透明。Windows 11 CINDY family 启用 Electron backgroundMaterial;Windows 10/Linux
- * 回退不透明。
+ * 不透明。Windows 11 22H2+ CINDY family 启用 Electron backgroundMaterial;Windows 10、
+ * 较早 Windows 11 与 Linux 回退不透明。
  */
 import type { BrowserWindow } from 'electron';
 import { createLogger } from './logger.js';
@@ -79,9 +79,12 @@ function parseWindowsBuild(systemVersion: string | null): number | null {
   return Number.isFinite(build) ? build : null;
 }
 
-function isWindows11(options?: ResolveVibrancyConfigOptions): boolean {
+/** Electron applies Windows system backdrops only from Windows 11 22H2 (build 22621). */
+const WINDOWS_SYSTEM_BACKDROP_MIN_BUILD = 22621;
+
+function supportsWindowsSystemBackdrop(options?: ResolveVibrancyConfigOptions): boolean {
   const build = parseWindowsBuild(readWindowsSystemVersion(options));
-  return build !== null && build >= 22000;
+  return build !== null && build >= WINDOWS_SYSTEM_BACKDROP_MIN_BUILD;
 }
 
 function resolveBackdropMaterial(): WindowsBackdropMaterial {
@@ -111,7 +114,7 @@ export function resolveVibrancyConfig(
       ...(platform === 'darwin' && familyId === 'cindy'
         ? { sidebarMaterial: isDark ? 'dark' as const : 'light' as const } : {}),
       ...(platform === 'win32' ? {
-        backgroundMaterial: options.desktopBlur && (parseWindowsBuild(readWindowsSystemVersion(options)) ?? 0) >= 22621
+        backgroundMaterial: options.desktopBlur && supportsWindowsSystemBackdrop(options)
           ? 'acrylic' : 'none',
       } : {}),
     };
@@ -128,7 +131,9 @@ export function resolveVibrancyConfig(
     };
   }
   if (platform === 'win32') {
-    if (isCindy && isWindows11(options)) {
+    // Earlier Windows 11 builds have no system backdrop: a translucent Acrylic backing
+    // without its material would leave the window see-through, so keep the opaque surface.
+    if (isCindy && supportsWindowsSystemBackdrop(options)) {
       const backgroundMaterial = resolveBackdropMaterial();
       return {
         vibrancy: null,
