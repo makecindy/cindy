@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "微信",
       "wecom": "企业微信",
-      "dingtalk": "钉钉"
+      "dingtalk": "钉钉",
+      "imessage": "iMessage"
     },
     "modelMismatch": "本轮由 {{actual}} 响应，而非所选的 {{selected}}（服务端临时降级）",
     "copyStateCopying": "复制中",

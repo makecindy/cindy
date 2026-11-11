@@ -12,6 +12,7 @@ export interface ProviderImportRuntimePreview {
 }
 
 export interface ProviderImportPreview {
+  localSource?: import('./localProviderImport.js').LocalProviderSource;
   importId: string;
   kind: 'builtin' | 'custom';
   name: string;

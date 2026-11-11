@@ -4281,6 +4281,8 @@ interface ElectronAPI {
   subscriptionAccounts: {
     onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider }) => void): () => void;
     command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
+    /** Validate the reply with parseSubscriptionSessionAccountView. */
+    sessionAccount?(query: import('../shared/subscriptionAccounts').SubscriptionSessionAccountQuery): Promise<unknown>;
   };
   providerGroup: {
     command<C extends import('../shared/providerGroup').ProviderGroupCommand>(
@@ -5990,6 +5992,8 @@ interface ElectronAPI {
       options?: { releaseOwner?: boolean; ownerId?: string },
     ) => Promise<{ ok: true }>;
     importProviderFile: () => Promise<string | string[] | null>;
+    scanLocalProviderImports: () => Promise<import('../shared/localProviderImport').LocalProviderImportScan>;
+    editLocalProviderImport: (id: string, input: import('../shared/localProviderImport').LocalProviderImportEdit) => Promise<import('../shared/localProviderImport').LocalProviderImportItem>;
     previewProviderImport: (
       importId: string,
       targetProviderId?: string,

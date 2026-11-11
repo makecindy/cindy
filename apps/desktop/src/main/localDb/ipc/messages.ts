@@ -37,6 +37,7 @@ import { getDbClient, getCurrentDbClientSnapshot } from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import type { ContextRebuildArgs } from '../client/tx/types';
 import { latestVisiblePreviewRow } from '../latestMessageText';
+import { isEmptyAssistantContent } from '../sessionListProjection.sql';
 import { messages, sessions } from '../schema';
 import {
   messageToCamel,
@@ -210,6 +211,7 @@ function isVisibleSessionListPreviewRow(row: MessageRow): boolean {
 /**
  * 可见 user/assistant 落库后立刻刷新侧栏 preview,不等 turn-done / 全量 reseed。
  * 只广播当前仍是该会话最近可见消息的那一行:改写旧回复不得盖住已经更新的预览。
+ * 空正文的 assistant 行不参与预览:改写或写入这种行时广播列表实际会显示的那一条。
  */
 async function maybeBroadcastSessionListPreview(
   sessionId: string,
@@ -229,9 +231,12 @@ async function maybeBroadcastSessionListPreview(
     });
     return;
   }
-  if (isCurrent?.() === false || latest?.clientId !== row.clientId) return;
+  const emptyRow = row.role === 'assistant' && isEmptyAssistantContent(row.content);
+  if (isCurrent?.() === false || (!emptyRow && latest?.clientId !== row.clientId)) return;
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
-  const preview = extractMessagePreview(row.content, row.role);
+  const preview = emptyRow
+    ? extractMessagePreview(latest?.content, latest?.role)
+    : extractMessagePreview(row.content, row.role);
   // 不在这里落库。insert/update 事务已经把 list_preview 置空；事后 persist 无法
   // 校验同一 clientId 的内容版本，交错改写会把旧正文写回非 NULL 缓存。
   // 侧栏即时刷新靠广播；下次 list/回填从 messages 现算。

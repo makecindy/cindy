@@ -150,6 +150,7 @@ describe('createGitSnapshotCoordinator', () => {
         maxTokens: 80,
         timeoutMs: 1_000,
         signal: expect.any(AbortSignal),
+        beforeDispatch: expect.any(Function),
       },
     );
   });

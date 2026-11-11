@@ -972,5 +972,8 @@
       "disk-full": "Couldn’t import: not enough disk space",
       "native-unloadable": "Couldn’t import: the original history can’t be loaded"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "Waiting for update"
   }
 }
