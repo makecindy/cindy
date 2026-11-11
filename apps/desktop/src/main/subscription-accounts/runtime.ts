@@ -493,11 +493,45 @@ export async function readSubscriptionPool(
   };
 }
 
-export interface SubscriptionAccountLease {
-  account: NativeSubscriptionAccount;
-  bind(keys: string[]): Promise<void>;
+export interface SubscriptionAccountActivity {
   running(active: boolean): void;
   release(): void;
+}
+export interface SubscriptionAccountLease extends SubscriptionAccountActivity {
+  account: NativeSubscriptionAccount;
+  bind(keys: string[]): Promise<void>;
+}
+
+/** Count a runtime without selecting credentials or creating persistent bindings. */
+function accountActivity(
+  state: OwnerRuntime,
+  provider: SubscriptionProvider,
+  accountId: string,
+): SubscriptionAccountActivity {
+  const token = randomUUID();
+  const key = keyOf(provider, accountId);
+  const active = state.running.get(key) ?? new Set<string>();
+  state.running.set(key, active);
+  let released = false;
+  return {
+    running: (value) => {
+      const wasActive = active.has(token);
+      if (!released) {
+        if (value) active.add(token);
+        else active.delete(token);
+      }
+      if (wasActive !== active.has(token)) changed(provider);
+    },
+    release: () => {
+      released = true;
+      if (active.delete(token)) changed(provider);
+    },
+  };
+}
+
+/** Legacy Claude always uses the default CLI profile, even before a pool exists. */
+export function trackLegacyClaudeAccountActivity(): SubscriptionAccountActivity {
+  return accountActivity(currentRuntime(), 'anthropic', 'default');
 }
 /** Await status first; selection and reservation then happen in one synchronous segment. */
 export async function acquireSubscriptionAccount(
@@ -552,16 +586,12 @@ export async function acquireSubscriptionAccount(
         ? 'The task subscription account requires login or quota reset'
         : 'No subscription account is available',
     );
-  const token = randomUUID();
   const key = keyOf(provider, selected);
-  const active = state.running.get(key) ?? new Set<string>();
-  state.running.set(key, active);
+  const activity = accountActivity(state, provider, selected);
   if (!control) {
-    active.add(token);
     state.lastPicked.set(provider, selected);
-    changed(provider);
+    activity.running(true);
   }
-  let released = false;
   const assertCurrent = () => {
     assertOwner(state);
     const current = readPool(provider);
@@ -624,20 +654,7 @@ export async function acquireSubscriptionAccount(
       await writeAccountBindings(ids, provider, selected);
       assertCurrent();
     },
-    running: (value) => {
-      const wasActive = active.has(token);
-      if (!released) {
-        if (value) active.add(token);
-        else active.delete(token);
-      }
-      if (wasActive !== active.has(token)) {
-        changed(provider);
-      }
-    },
-    release: () => {
-      released = true;
-      if (active.delete(token)) changed(provider);
-    },
+    ...activity,
   };
 }
 

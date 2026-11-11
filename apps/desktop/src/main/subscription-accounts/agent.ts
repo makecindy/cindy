@@ -17,6 +17,8 @@ import {
 import {
   acquireSubscriptionAccount,
   observeSubscriptionAccountUsage,
+  trackLegacyClaudeAccountActivity,
+  type SubscriptionAccountActivity,
   type SubscriptionAccountLease,
 } from './runtime.js';
 import { readAccountBinding, readPool, writeAccountBindings } from './store.js';
@@ -34,8 +36,9 @@ function providerFor(
 }
 function wrapHandle(
   handle: AgentSessionHandle,
-  lease: SubscriptionAccountLease,
+  activity: SubscriptionAccountActivity,
   unregister: () => void,
+  lease?: SubscriptionAccountLease,
 ): AgentSessionHandle {
   let cleanupPending = false;
   return new Proxy(handle, {
@@ -43,12 +46,12 @@ function wrapHandle(
       if (property === 'send')
         return async (...args: Parameters<AgentSessionHandle['send']>) => {
           if (cleanupPending) throw new Error('Subscription account runtime is closing');
-          lease.account.assertCurrent();
-          lease.running(true);
+          lease?.account.assertCurrent();
+          activity.running(true);
           try {
             return await target.send(...args);
           } catch (error) {
-            if (!cleanupPending) lease.running(false);
+            if (!cleanupPending) activity.running(false);
             throw error;
           }
         };
@@ -59,10 +62,10 @@ function wrapHandle(
               // Closing the event queue is not proof that the process stopped.
               // Keep credentials protected through pending/failed close and any late events.
               cleanupPending = true;
-              lease.running(true);
+              activity.running(true);
               const result = await method.apply(target, args);
               unregister();
-              lease.release();
+              activity.release();
               return result;
             }
           : undefined;
@@ -70,13 +73,13 @@ function wrapHandle(
       if (property === 'events')
         return async function* () {
           for await (const event of target.events()) {
-            if (event.type === 'account_usage')
+            if (lease && event.type === 'account_usage')
               observeSubscriptionAccountUsage(lease.account, event.data);
-            if (event.type === 'session_id') await lease.bind([`native:${target.id}`]);
-            if (isTerminalTurnEvent(event) && !cleanupPending) lease.running(false);
+            if (lease && event.type === 'session_id') await lease.bind([`native:${target.id}`]);
+            if (isTerminalTurnEvent(event) && !cleanupPending) activity.running(false);
             if (event.type === 'status' && (event.data as { isRunning?: boolean })?.isRunning)
-              lease.running(true);
-            yield event.type === 'account_usage'
+              activity.running(true);
+            yield lease && event.type === 'account_usage'
               ? {
                   ...event,
                   data: {
@@ -95,7 +98,7 @@ function wrapHandle(
   });
 }
 
-/** A provider switch must select its account before the new runtime starts. */
+/** A provider switch must select its account and activity tracker before startup. */
 function guardAccountSwitch(
   handle: AgentSessionHandle,
   agent: BaseAgent,
@@ -108,7 +111,9 @@ function guardAccountSwitch(
       next !== providerId &&
       [providerId, next].some((id) => {
         const provider = providerFor(agent, { providerId: id, remoteHostId: initial.remoteHostId });
-        return provider && readPool(provider);
+        // Legacy Claude is also observed: crossing its provider boundary must
+        // replace the tracker instead of attributing the next turn to Claude.
+        return provider && (provider === 'anthropic' || readPool(provider));
       })
     );
   };
@@ -169,8 +174,18 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T): T {
         };
       if (property === 'startSession')
         return async (options: StartSessionOptions) => {
-          const startLegacy = async () =>
-            guardAccountSwitch(await target.startSession(options), target, options);
+          const startLegacy = async () => {
+            const activity = providerFor(target, options) === 'anthropic'
+              ? trackLegacyClaudeAccountActivity()
+              : undefined;
+            const handle = await target.startSession(options);
+            // Preserve the original auth/usage route; observation alone must not
+            // opt an existing single-account installation into pool management.
+            const tracked = activity
+              ? wrapHandle(handle, activity, () => {})
+              : handle;
+            return guardAccountSwitch(tracked, target, options);
+          };
           const keys = [
             options.sessionId ? `task:${options.sessionId}` : '',
             options.resumeSessionId ? `native:${options.resumeSessionId}` : '',
@@ -201,7 +216,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T): T {
             });
             await lease.bind([...keys, `native:${handle.id}`]);
             lease.running(false);
-            return guardAccountSwitch(wrapHandle(handle, lease, unregister), target, options);
+            return guardAccountSwitch(wrapHandle(handle, lease, unregister, lease), target, options);
           } catch (error) {
             const release = () => {
               unregister();

@@ -605,6 +605,86 @@ describe('native account assignment on the executing computer', () => {
     expect(h.login).not.toHaveBeenCalled();
     expect(h.pools).toEqual({});
   });
+  // Unit regression: the settings default row exists before a pool does. Legacy
+  // Claude sends must count there without changing their original login route.
+  it('counts an existing Claude task before and after adding an account pool', async () => {
+    h.pools = {};
+    const usage = { type: 'account_usage', data: { fiveHour: { utilization: 10 } } };
+    const nativeHandle = {
+      id: 'legacy-claude',
+      send: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      events: async function* () {
+        yield usage;
+        yield { type: 'session_id', data: {} };
+        yield { type: 'done', data: {} };
+      },
+    } as unknown as AgentSessionHandle;
+    const start = vi.fn(async () => nativeHandle);
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: start } as unknown as BaseAgent);
+    const options = { providerId: 'anthropic', sessionId: 'legacy-task' } as StartSessionOptions;
+    const handle = await agent.startSession(options);
+    await handle.send({ type: 'user', content: 'hello' });
+    expect(start).toHaveBeenCalledExactlyOnceWith(options);
+    expect(h.pools).toEqual({});
+    expect(h.bindings.size).toBe(0);
+    expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(1);
+
+    h.pools.anthropic = { strategy: 'least', accounts: [account('default'), account('second')] };
+    const next = await acquireSubscriptionAccount('anthropic', undefined, []);
+    expect(next!.account.configDir).toBe('anthropic/second');
+    for await (const event of handle.events()) {
+      if (event.type === 'account_usage') expect(event).toBe(usage);
+    }
+    expect(h.bindings.size).toBe(0);
+    expect((await readSubscriptionPool('anthropic')).accounts.map((a) => a.running)).toEqual([0, 1]);
+    await handle.send({ type: 'user', content: 'continue' });
+    expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(1);
+    await handle.close();
+    next!.release();
+    expect((await readSubscriptionPool('anthropic')).accounts.map((a) => a.running)).toEqual([0, 0]);
+  });
+  it('does not count a late legacy Claude startup against a new Cindy owner', async () => {
+    h.pools = {};
+    let resolveStart!: (handle: AgentSessionHandle) => void;
+    const agent = withSubscriptionAccounts({
+      kind: 'claude-code',
+      startSession: () => new Promise<AgentSessionHandle>((resolve) => { resolveStart = resolve; }),
+    } as unknown as BaseAgent);
+    const pending = agent.startSession({ providerId: 'anthropic' } as StartSessionOptions);
+    h.owner = 'another-owner';
+    resolveStart({
+      id: 'old-owner-thread',
+      send: async () => {},
+      close: async () => {},
+    } as unknown as AgentSessionHandle);
+    const handle = await pending;
+    await handle.send({ type: 'user', content: 'late' });
+    expect((await readSubscriptionPool('anthropic')).accounts[0].running).toBe(0);
+    await handle.close();
+  });
+  it.each([['anthropic', 'api'], ['api', 'anthropic']])(
+    'rebuilds the activity tracker when switching from %s to %s without a pool',
+    async (providerId, nextProviderId) => {
+      h.pools = {};
+      const setModel = vi.fn();
+      const agent = withSubscriptionAccounts({
+        kind: 'claude-code',
+        startSession: async () => ({
+          id: 'switching',
+          setModel,
+          requiresModelSwitchRebuild: async () => false,
+          previewModelSwitch: async () => ({ action: 'live' }),
+        }),
+      } as unknown as BaseAgent);
+      const handle = await agent.startSession({ providerId } as StartSessionOptions);
+      expect(await handle.requiresModelSwitchRebuild?.('model', { providerId })).toBe(false);
+      expect(await handle.requiresModelSwitchRebuild?.('model', { providerId: nextProviderId })).toBe(true);
+      expect(await handle.previewModelSwitch?.('model', { providerId: nextProviderId })).toMatchObject({ action: 'rebuild' });
+      await expect(handle.setModel?.('model', { providerId: nextProviderId })).rejects.toThrow('rebuilding');
+      expect(setModel).not.toHaveBeenCalled();
+    },
+  );
   it('keeps the authorized private Codex account after adding a second account fails, and then balances both after success', async () => {
     h.pools = {};
     h.shared = false;
