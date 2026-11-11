@@ -64,20 +64,27 @@ describe('GhostInstallConsentHost', () => {
     let dismiss: ((payload: { requestId: string }) => void) | undefined;
     let finish: ((value: boolean) => void) | undefined;
     const resolveConfirm = vi.fn(async () => ({ handled: false }));
+    const unsubscribeDismiss = vi.fn();
+    const subscribeDismiss = vi.fn((callback: typeof dismiss) => { dismiss = callback; return unsubscribeDismiss; });
     Object.assign(window.electronAPI.ghosts, {
       onConfirmRequest: (callback: typeof request) => { request = callback; return () => {}; },
-      onConfirmDismissed: (callback: typeof dismiss) => { dismiss = callback; return () => {}; },
+      onConfirmDismissed: subscribeDismiss,
       resolveConfirm,
     });
     mocks.confirm.mockImplementation(() => new Promise<boolean>(resolve => { finish = resolve; }));
     render(<GhostConfirmDialogHost />);
+    // Performance regression: mounting the app without any dialog must not add
+    // the new dismissal subscription. Keep it only for an actual pending answer.
+    expect(subscribeDismiss).not.toHaveBeenCalled();
     await act(async () => request?.({ requestId: 'command', ghostId: 'demo', ghostName: 'Demo',
       body: 'Run terminal_start', confirmText: null, cancelText: null, danger: false }));
     expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    expect(subscribeDismiss).toHaveBeenCalledOnce();
     const signal = mocks.confirm.mock.calls[0][1] as AbortSignal;
     await act(async () => { dismiss?.({ requestId: 'command' }); finish?.(true); });
     expect(signal.aborted).toBe(true);
     await waitFor(() => expect(resolveConfirm).toHaveBeenCalledWith('command', false));
+    expect(unsubscribeDismiss).toHaveBeenCalledOnce();
   });
 
   it('shows the added permissions of an update and returns the answer to Main', async () => {
