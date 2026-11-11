@@ -18,6 +18,7 @@ function failed(
   candidate: (typeof DEDICATED_AUTO_REVIEW_CANDIDATES)[number],
   reason: 'timeout' | 'empty_response' | 'request_failed' | 'http_error',
   httpStatus?: number,
+  quotaExhausted = false,
 ): UtilityTextResult {
   return {
     ok: false,
@@ -30,6 +31,7 @@ function failed(
         status: 'failed',
         reason,
         httpStatus: httpStatus ?? 500,
+        ...(quotaExhausted ? { quotaExhausted: true } : {}),
       }
       : {
         providerId: candidate.providerId,
@@ -59,6 +61,30 @@ afterEach(() => {
 });
 
 describe('dedicated Auto-review candidate policy', () => {
+  it('does not retry a deterministic quota response and reports the safe failure', async () => {
+    const requestCandidate = vi.fn(async (_prompt, candidate) => failed(candidate, 'http_error', 429, true));
+    const route = createAutoReviewModelRouter({ logger: logger(), requestCandidate });
+
+    await expect(route('classify')).resolves.toEqual({
+      kind: 'auto-review-model-failure',
+      reason: 'quota_exhausted',
+    });
+    expect(requestCandidate).toHaveBeenCalledTimes(3);
+    expect(requestCandidate.mock.calls.map((call) => call[1].id)).toEqual([
+      'cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna',
+    ]);
+  });
+
+  it('continues to the next candidate after a quota response when one is available', async () => {
+    const requestCandidate = vi.fn(async (_prompt, candidate) => candidate.id === 'cindy-gateway'
+      ? failed(candidate, 'http_error', 429, true)
+      : succeeded(candidate, '{"verdict":"allow"}'));
+    const route = createAutoReviewModelRouter({ logger: logger(), requestCandidate });
+
+    await expect(route('classify')).resolves.toBe('{"verdict":"allow"}');
+    expect(requestCandidate).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps both routing phases inside the host and core deadlines', () => {
     expect(AUTO_REVIEW_TOTAL_TIMEOUT_MS).toBe(AUTO_REVIEW_CHAIN_TIMEOUT_MS + AUTO_REVIEW_AUXILIARY_TIMEOUT_MS);
     expect(AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS).toBeGreaterThan(AUTO_REVIEW_TOTAL_TIMEOUT_MS);
@@ -72,6 +98,20 @@ describe('dedicated Auto-review candidate policy', () => {
       requestCandidate: async (_prompt, candidate) => succeeded(candidate, '{"verdict":"allow"}'),
     });
     await expect(route('classify')).resolves.toBe('{"verdict":"allow"}');
+  });
+
+  it('propagates a quota-marked failure from the custom auxiliary chain', async () => {
+    const route = createAutoReviewModelRouter({
+      logger: logger(),
+      requestCandidate: async (_prompt, candidate) => failed(candidate, 'http_error', 400),
+      createAuxiliaryFallback: () => async () =>
+        failed(DEDICATED_AUTO_REVIEW_CANDIDATES[0], 'http_error', 402, true),
+    });
+
+    await expect(route('classify')).resolves.toEqual({
+      kind: 'auto-review-model-failure',
+      reason: 'quota_exhausted',
+    });
   });
 
   it('uses the captured custom fallback only after all dedicated candidates fail', async () => {

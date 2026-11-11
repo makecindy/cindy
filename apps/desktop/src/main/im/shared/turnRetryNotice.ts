@@ -31,6 +31,7 @@ import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy
 
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import {
+  autoReviewUnavailableDetail,
   isAutoReviewConfirmUndeliveredNotice,
   isAutoReviewUnavailableNotice,
   parseOverloadError,
@@ -56,6 +57,12 @@ import { isQuotaExhaustedErrorMessage } from '../../../shared/providerErrors.js'
  */
 function autoReviewUnavailableNotice(message: string, channel?: string): string | null {
   if (isAutoReviewUnavailableNotice(message)) {
+    // Quota exhaustion has its own recovery: check usage or billing. Full access
+    // cannot restore the review gateway's quota, so never suggest it here.
+    const detail = autoReviewUnavailableDetail(message);
+    if (detail && isQuotaExhaustedErrorMessage(detail)) {
+      return '自动审批模型网关额度已耗尽，暂时无法自动判断。请检查用量或计费，再确认这次操作。';
+    }
     if (channel === 'wechat') {
       return '自动审批暂时无法给出判断，需要审批的操作已改为由你确认。'
         + '个人微信不能使用「完全访问」，请直接确认这次操作。';

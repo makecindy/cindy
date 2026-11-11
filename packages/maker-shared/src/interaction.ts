@@ -344,7 +344,9 @@ export function buildPermissionReviewPresentation(
 
   return {
     autoReviewUnavailable: permissionAutoReviewUnavailable(request),
-    autoReviewReason: permissionAutoReviewUnavailable(request) ? null : permissionAutoReviewReason(request),
+    // Unavailable handoffs can carry a concrete reason (for example quota
+    // exhaustion); dropping it would force every surface back to generic copy.
+    autoReviewReason: permissionAutoReviewReason(request),
     ...(sourceDescription ? { sourceDescription } : {}),
     canAlwaysAllow,
     code: formatPermissionInput(toolName, input),

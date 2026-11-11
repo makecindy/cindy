@@ -8318,7 +8318,7 @@ assertRouteCurrent();
             // 审阅器故障降级来的 ask 提示一次,让用户知道为何突然开始被问。
             // 用户点「允许」只批准当前这一次,不再重新跑审阅器。
             if (decision.unavailable) {
-              autoReviewUnavailableNotice.notify();
+              autoReviewUnavailableNotice.notify(decision.reason);
               unavailableHandoff = true;
             }
             if (approvalRequest.kind === 'permission') {
@@ -13409,7 +13409,7 @@ assertRouteCurrent();
       getAutoReviewOwner: () => currentApprovalConfig().approvalsReviewer === 'auto_review' ? 'native' : 'cindy',
       reviewAutoPermissionAction: async (action) => {
         const decision = await reviewAutoAction(action);
-        if (decision.unavailable) autoReviewUnavailableNotice.notify();
+        if (decision.unavailable) autoReviewUnavailableNotice.notify(decision.reason);
         return decision;
       },
       get id() { return sdkSessionId ?? '<pending>'; },

@@ -24,9 +24,11 @@ import { useTranslation } from 'react-i18next';
 import {
   isCindyGatewayProxyTokenInvalidError,
   isResponsesLiteParallelToolCallsError,
+  parseAgentErrorCode,
   redactSensitiveText,
 } from '@cindy/maker-shared/error-redaction';
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
+import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
 import { decodeRemoteErrorMessage, remoteErrorI18nKey } from '../../lib/makerChatStore';
 import { errorReasonI18nKey } from './errorReasonI18n';
@@ -58,8 +60,12 @@ export function ErrorMessageCard({
   const { t, i18n } = useTranslation();
   const decoded = decodeRemoteErrorMessage(message);
   const parsedRemoteKey = remoteErrorI18nKey(message);
+  const parsedRemoteError = parseAgentErrorCode(message);
+  // Quota exhaustion must not keep the generic "switch to Full access" copy.
+  const autoReviewQuotaExhausted = parsedRemoteError?.code === 'AUTO_REVIEW_UNAVAILABLE'
+    && isQuotaExhaustedErrorMessage(parsedRemoteError.fallback);
   const remoteKey = isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
-    ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource)
+    ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource, autoReviewQuotaExhausted)
     : parsedRemoteKey;
   const isAttachmentAccessDenied = kind === 'reply-error'
     && remoteKey === 'chat.remoteError.DEVICE_LINK_MEDIA_ACCESS_DENIED';

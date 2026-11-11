@@ -24,6 +24,11 @@ export const AUTO_REVIEW_ROUTER_GUARD_TIMEOUT_MS = AUTO_REVIEW_TOTAL_TIMEOUT_MS 
 const AUTO_REVIEW_TRANSIENT_RETRY_ATTEMPTS = 2;
 const AUTO_REVIEW_TRANSIENT_RETRY_BACKOFF_MS = 100;
 
+export type AutoReviewModelFailure = {
+  kind: 'auto-review-model-failure';
+  reason: 'quota_exhausted';
+};
+
 interface AutoReviewModelRouterLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
@@ -68,6 +73,7 @@ function transientCandidateFailure(result: UtilityTextResult): boolean {
       return true;
     }
     return attempt.reason === 'http_error'
+      && attempt.quotaExhausted !== true
       && (attempt.httpStatus === 408 || attempt.httpStatus === 429 || attempt.httpStatus >= 500);
   });
 }
@@ -130,7 +136,7 @@ interface PendingCandidateAttempt {
  */
 export function createAutoReviewModelRouter(
   deps: AutoReviewModelRouterDeps,
-): (prompt: string, signal?: AbortSignal) => Promise<string | null> {
+): (prompt: string, signal?: AbortSignal) => Promise<string | AutoReviewModelFailure | null> {
   const candidates = deps.candidates ?? DEDICATED_AUTO_REVIEW_CANDIDATES;
   const requestCandidate = deps.requestCandidate ?? requestDedicatedAutoReviewCandidateText;
   const parseDecision = deps.parseDecision ?? parseAutoPermissionReviewDecision;
@@ -153,6 +159,7 @@ export function createAutoReviewModelRouter(
     if (parentSignal?.aborted) abortFromParent();
     else parentSignal?.addEventListener('abort', abortFromParent, { once: true });
     const deadline = setTimeout(() => controller.abort(), totalTimeoutMs);
+    let quotaExhausted = false;
 
     try {
       const queue: PendingCandidateAttempt[] = candidates.map((candidate) => ({ candidate, attempt: 1 }));
@@ -213,6 +220,9 @@ export function createAutoReviewModelRouter(
           });
           continue;
         }
+        quotaExhausted ||= result.attempts.some((attempt) =>
+          attempt.status === 'failed' && attempt.reason === 'http_error' && attempt.quotaExhausted === true,
+        );
 
         // Queued work keeps its order: a retry may only jump ahead when the budget still covers
         // one full timeout for every pending attempt, including earlier deferred retries.
@@ -267,6 +277,15 @@ export function createAutoReviewModelRouter(
               });
               return JSON.stringify(decision);
             }
+            // The custom auxiliary chain is a real candidate chain too: if it is
+            // the only phase that reports a deterministic quota failure, the
+            // caller still needs that reason instead of a generic "unavailable".
+            // A malformed successful reply carries no attempt diagnostics.
+            if (!result.ok) {
+              quotaExhausted ||= result.attempts.some((attempt) =>
+                attempt.status === 'failed' && attempt.reason === 'http_error' && attempt.quotaExhausted === true,
+              );
+            }
             deps.logger.warn('auto-review auxiliary fallback failed', {
               reason: result.ok ? 'malformed_decision' : safeFailureReason(result),
             });
@@ -285,6 +304,6 @@ export function createAutoReviewModelRouter(
       aborted: controller.signal.aborted,
       durationMs: now() - startedAt,
     });
-    return null;
+    return quotaExhausted ? { kind: 'auto-review-model-failure', reason: 'quota_exhausted' } : null;
   };
 }

@@ -672,6 +672,7 @@
     "REMOTE_DAEMON_CLOSED": "Die Remote-Verbindung wurde unterbrochen, möglicherweise während eines Updates. Dieser Durchgang wurde beendet. Sende die Nachricht erneut.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Lokale Datei-/Bildanhänge sind in Remote-Sitzungen nicht zugänglich. Füge stattdessen den Inhalt direkt ein.",
     "AUTO_REVIEW_UNAVAILABLE": "Die automatische Genehmigung konnte keine Entscheidung treffen. Genehmigungspflichtige Aktionen brauchen jetzt deine Bestätigung. Wechsle für diese Sitzung zu „Vollzugriff“, wenn du nicht unterbrochen werden möchtest. Dieser Modus birgt ein höheres Risiko.",
+    "AUTO_REVIEW_UNAVAILABLE_QUOTA": "Die automatische Genehmigung konnte nicht ausgeführt werden, weil das Kontingent des Prüfmodell-Gateways erschöpft ist. Prüfe die Nutzung oder Abrechnung und bestätige dann diese Aktion.",
     "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Die automatische Genehmigung konnte keine Entscheidung treffen. Genehmigungspflichtige Aktionen brauchen jetzt deine Bestätigung. Persönliches WeChat kann keinen Vollzugriff nutzen. Bestätige diese Aktion direkt.",
     "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Die automatische Genehmigung war nicht verfügbar und die Bestätigungsanfrage wurde nicht abgeschlossen. Dies ist keine Ablehnung durch den Nutzer.",
     "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote-Aufgaben können den Kompatibilitätsweg dieses Computers nicht nutzen. Wechsle zu Cindy AI oder fahre in einer lokalen Aufgabe fort.",

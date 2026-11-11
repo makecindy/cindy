@@ -28,6 +28,8 @@ export type UtilityTextAttempt =
     reason: 'http_error';
     /** Safe transport metadata; response bodies are deliberately never exposed. */
     httpStatus: number;
+    /** The provider rejected the request because a hard usage budget is exhausted. */
+    quotaExhausted?: boolean;
   })
   | (UtilityTextAttemptBase & {
     reason: Exclude<UtilityTextAttemptReason, 'http_error'>;

@@ -305,4 +305,25 @@ describe.each(SUPPORTED_LOCALES)('error presentation in %s', locale => {
     expect(screen.queryByText(generic)).toBeNull();
     expect(screen.queryByText(/Switch this task/)).toBeNull();
   });
+
+  it.each(['live', 'tail', 'history'] as const)(
+    'names quota exhaustion without suggesting Full access in %s',
+    async surface => {
+      const i18n = createInstance();
+      await i18n.init({ lng: locale, fallbackLng: 'en', resources: Object.fromEntries(Object.entries(locales).map(([lng, common]) => [lng, { translation: common }])) });
+      const rawRemoteError = '[AUTO_REVIEW_UNAVAILABLE] The automatic review model gateway quota is '
+        + 'exhausted. Check usage or billing, then confirm this action.';
+      const bannerError = remoteErrorMessageForBanner(rawRemoteError);
+      const quota = locales[locale].chat.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA;
+      const generic = locales[locale].chat.remoteError.AUTO_REVIEW_UNAVAILABLE;
+      cleanup();
+      render(<I18nextProvider i18n={i18n}>{surface === 'live'
+        ? <ErrorBanner error={bannerError} onRetry={vi.fn()} />
+        : surface === 'tail'
+          ? <ErrorTailErrorBanner errorText={bannerError} onContinue={vi.fn()} onDismiss={vi.fn()} />
+          : <ErrorMessageCard message={rawRemoteError} />}</I18nextProvider>);
+      expect(screen.getByText(quota)).toBeTruthy();
+      expect(screen.queryByText(generic)).toBeNull();
+    },
+  );
 });

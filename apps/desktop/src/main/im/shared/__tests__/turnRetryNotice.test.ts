@@ -253,6 +253,19 @@ describe('terminalErrorText', () => {
     expect(notice).not.toContain('Auto-review could not');
   });
 
+  it('额度耗尽时给出额度恢复路径，而不是完全访问', () => {
+    const notice = turnRetryNotice({
+      message: '[AUTO_REVIEW_UNAVAILABLE] The automatic review model gateway quota is exhausted. '
+        + 'Check usage or billing, then confirm this action.',
+      isTerminal: false,
+    });
+    expect(notice).toContain('额度已耗尽');
+    expect(notice).toContain('用量或计费');
+    expect(notice).not.toContain('完全访问');
+    expect(notice).not.toContain('AUTO_REVIEW_UNAVAILABLE');
+    expect(notice).not.toContain('quota is exhausted');
+  });
+
   it('个人微信不建议切到完全访问', () => {
     const notice = turnRetryNotice({
       message: '[AUTO_REVIEW_UNAVAILABLE] Auto-review could not reach a decision',

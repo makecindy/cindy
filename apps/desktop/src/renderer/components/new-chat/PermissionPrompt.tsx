@@ -26,6 +26,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
 import type { PendingPermission } from '@/lib/makerChatStore';
 import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope';
+import { isQuotaExhaustedErrorMessage } from '@/utils/quotaError';
 import { GHOST_INSTALL_CONSENT_TOOL_NAME } from '../../../shared/ghostInstallConsent';
 
 // ---------------------------------------------------------------------------
@@ -92,8 +93,14 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   const [consentHead, ...consentBody] = isPluginInstallConsent
     ? (description ?? '').split('\n')
     : [];
+  // A quota-exhaustion handoff must explain the real recovery (usage/billing)
+  // instead of suggesting Full access, which cannot restore the gateway quota.
+  const autoReviewQuotaExhausted = autoReviewUnavailable
+    && isQuotaExhaustedErrorMessage(autoReviewReason ?? '');
   const promptDescription = autoReviewUnavailable
-    ? t('newChat.permissionPrompt.autoReviewUnavailable')
+    ? t(autoReviewQuotaExhausted
+      ? 'newChat.permissionPrompt.autoReviewUnavailableQuota'
+      : 'newChat.permissionPrompt.autoReviewUnavailable')
     : isPluginInstallConsent
       ? consentHead
       : description;
@@ -209,8 +216,9 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           {promptDescription}
         </p>
       )}
-      {/* Why Auto stopped to ask: the reviewer's own explanation, in the user's language. */}
-      {!autoReviewUnavailable && autoReviewReason && (
+      {/* Why Auto stopped to ask: the reviewer's own explanation, in the user's language.
+          Unavailable handoffs keep it too — quota exhaustion is itself the reason. */}
+      {autoReviewReason && (
         <p className="mt-1.5 whitespace-pre-wrap break-words text-13 font-normal leading-snug text-[var(--chat-input-text)]">
           {t('newChat.permissionPrompt.autoReviewReason', { reason: autoReviewReason })}
         </p>

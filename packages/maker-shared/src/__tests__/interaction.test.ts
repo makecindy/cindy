@@ -373,13 +373,17 @@ describe('interaction shared model', () => {
       { path: '/repo/old.ts', kind: { type: 'delete' } },
     ] }).preview).toBe('update /repo/a.ts \u2192 /repo/b.ts\n@@ -1 +1 @@\ndelete /repo/old.ts');
 
-    // A failed review shows its own fixed copy, never a stale model reason.
+    // Unavailable handoffs keep a concrete reason (for example quota exhaustion);
+    // dropping it would force every surface back to the generic "Full access" copy.
     expect(buildPermissionReviewPresentation({
       kind: 'permission',
       requestId: 'p-down',
       toolName: 'Bash',
-      metadata: { autoReviewUnavailable: true, autoReviewReason: 'stale' },
-    }).autoReviewReason).toBeNull();
+      metadata: {
+        autoReviewUnavailable: true,
+        autoReviewReason: 'The review gateway quota is exhausted.',
+      },
+    }).autoReviewReason).toBe('The review gateway quota is exhausted.');
   });
 
   // Regression: ordinary MCP servers were labeled plugins and hid the Host's own title.

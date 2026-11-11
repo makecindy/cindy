@@ -7,7 +7,10 @@ import { describe, expect, it } from 'vitest';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../../../../../../..');
 
-function readNotice(file: string, key: 'AUTO_REVIEW_UNAVAILABLE' | 'AUTO_REVIEW_UNAVAILABLE_WECHAT'): string {
+function readNotice(
+  file: string,
+  key: 'AUTO_REVIEW_UNAVAILABLE' | 'AUTO_REVIEW_UNAVAILABLE_QUOTA' | 'AUTO_REVIEW_UNAVAILABLE_WECHAT',
+): string {
   const data = JSON.parse(readFileSync(file, 'utf8')) as {
     chat?: { remoteError?: Record<string, string> };
     remoteError?: Record<string, string>;
@@ -50,6 +53,31 @@ describe('auto-review unavailable copy', () => {
       for (const phrase of expected[locale]) expect(notice).toContain(phrase);
       expect(notice).not.toContain('默认权限');
       expect(notice).not.toContain('Default permissions');
+    }
+  });
+
+  it('quota exhaustion points at usage or billing and never at Full access', () => {
+    const expected = {
+      'zh-CN': ['用量', '计费'],
+      'zh-TW': ['用量', '計費'],
+      en: ['usage', 'billing'],
+      ja: ['使用量', '請求'],
+      ko: ['사용량', '청구'],
+    } as const;
+    const forbidden = ['完全访问', '完全訪問', 'Full access', 'フルアクセス', '전체 접근'];
+    for (const locale of desktopLocales) {
+      const notice = readNotice(path.join(
+        repoRoot, 'apps/desktop/src/renderer/i18n/locales', locale, 'common.json',
+      ), 'AUTO_REVIEW_UNAVAILABLE_QUOTA');
+      for (const phrase of expected[locale]) expect(notice).toContain(phrase);
+      for (const phrase of forbidden) expect(notice).not.toContain(phrase);
+    }
+    for (const locale of mobileLocales) {
+      const notice = readNotice(path.join(
+        repoRoot, 'apps/mobile/src/i18n/locales', locale, 'session.json',
+      ), 'AUTO_REVIEW_UNAVAILABLE_QUOTA');
+      for (const phrase of expected[locale]) expect(notice).toContain(phrase);
+      for (const phrase of forbidden) expect(notice).not.toContain(phrase);
     }
   });
 

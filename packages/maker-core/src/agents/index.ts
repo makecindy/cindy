@@ -115,6 +115,7 @@ export {
   annotatePermissionRequestForAutoReview,
   AUTO_REVIEW_REASON_METADATA_KEY,
   autoReviewReasonFromMetadata,
+  autoReviewUnavailableDetail,
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   type AutoReviewUserIntent,

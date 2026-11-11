@@ -7,12 +7,14 @@ import {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_CODE,
   AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
+  AUTO_REVIEW_REASON_METADATA_KEY,
   AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
   AUTO_REVIEW_MAX_REQUEST_TIMEOUT_MS,
   AUTO_REVIEW_RETRY_ATTEMPTS,
   AUTO_REVIEW_RETRY_BACKOFF_MS,
   annotatePermissionRequestForUnavailableReview,
   autoReviewRetryBudgetMs,
+  autoReviewUnavailableDetail,
   getAutoReviewDelegateHardCeilingMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   classifyLocalAutoReviewTier,
@@ -363,13 +365,31 @@ describe('resolveAutoReviewDecision', () => {
       expect(oversized.unavailable).toBeUndefined();
     });
 
-    it('ignores an unavailable flag claimed by a delegate that did answer', async () => {
-      // delegate 给出了合法 verdict 就说明它跑起来了;它无权自称 unavailable。
+    it('ignores an unavailable flag attached to a model block verdict', async () => {
+      // 模型判定不是基础设施故障;只有宿主返回的 ask 接管可以带 unavailable。
       const decision = await resolveAutoReviewDecision(
         gray,
         async () => ({ verdict: 'block', reason: 'nope', unavailable: true }),
       );
       expect(decision.unavailable).toBeUndefined();
+    });
+
+    it('keeps the host quota handoff flagged as unavailable with its real reason', async () => {
+      // 网关额度耗尽时宿主返回的是一次 ask 接管,不是模型判定;这个标记必须
+      // 继续传给确认卡与会话提示,否则用户只会看到通用的「审阅不可用」。
+      const decision = await resolveAutoReviewDecision(
+        gray,
+        async () => ({
+          verdict: 'ask',
+          reason: 'The automatic review model gateway quota is exhausted.',
+          unavailable: true,
+        }),
+      );
+      expect(decision).toEqual({
+        verdict: 'ask',
+        reason: 'The automatic review model gateway quota is exhausted.',
+        unavailable: true,
+      });
     });
   });
 });
@@ -393,6 +413,15 @@ describe('isAutoReviewUnavailableNotice', () => {
     expect(isAutoReviewUnavailableNotice(null)).toBe(false);
     expect(isAutoReviewUnavailableNotice(123)).toBe(false);
   });
+
+  it('extracts the bounded detail without consuming other codes', () => {
+    expect(autoReviewUnavailableDetail(
+      `[${AUTO_REVIEW_UNAVAILABLE_CODE}] The review gateway quota is exhausted.`,
+    )).toBe('The review gateway quota is exhausted.');
+    expect(autoReviewUnavailableDetail(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]   `)).toBeUndefined();
+    expect(autoReviewUnavailableDetail('[REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED] nope')).toBeUndefined();
+    expect(autoReviewUnavailableDetail(undefined)).toBeUndefined();
+  });
 });
 
 describe('host evidence guard', () => {
@@ -414,6 +443,24 @@ describe('host evidence guard', () => {
 });
 
 describe('annotatePermissionRequestForUnavailableReview', () => {
+  it('keeps a deterministic quota reason on the handoff card without exposing gateway details', () => {
+    const annotated = annotatePermissionRequestForUnavailableReview({
+      kind: 'permission',
+      requestId: 'req-quota',
+      toolName: 'exec',
+      input: { command: 'npm test' },
+      description: undefined,
+      metadata: undefined,
+    }, 'The automatic review model gateway quota is exhausted. Check usage or billing.');
+
+    expect(annotated.description).toContain('The automatic review model gateway quota is exhausted.');
+    expect(annotated.metadata).toMatchObject({
+      [AUTO_REVIEW_UNAVAILABLE_METADATA_KEY]: true,
+      [AUTO_REVIEW_REASON_METADATA_KEY]: expect.stringContaining('quota is exhausted'),
+    });
+    expect(annotated.description).not.toContain('response body');
+  });
+
   it('marks the confirmation card as an auto-review handoff without re-reviewing', () => {
     const annotated = annotatePermissionRequestForUnavailableReview({
       kind: 'permission',
