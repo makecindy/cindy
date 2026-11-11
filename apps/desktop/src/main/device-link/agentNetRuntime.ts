@@ -6,7 +6,7 @@ import WebSocket from 'ws';
 import { AgentNetWorkerSocket, type AgentNetAppSocket } from '@cindy/agent-net';
 import { approveJoin, identityFromSeed, issueCertificate, publicBytes, signTenantJoinRequest, verifyCertificate, type Bootstrap, type Identity, type JoinRequest, type DeviceCertificate, type TenantJoinRequest } from '@cindy/agent-net-relay';
 import { AgentNetClient, createDelegationApprover, createTransportModeProof, verifyTransportModeProof } from '@cindy/agent-net-relay/client';
-import { CERT_LIFETIME_MS, type DeviceView } from '@cindy/agent-net-protocol';
+import { CERT_LIFETIME_MS, agentNetStunServer, type DeviceView } from '@cindy/agent-net-protocol';
 import { createOutboundHttpAgent, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readDeviceLinkSettings } from './settings-store.desktop.js';
@@ -263,10 +263,10 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   const stunServers: string[] = [];
   try {
     const response = await outboundFetch(api.base + '/api/agent-net/info', { signal: AbortSignal.timeout(5000) });
-    const info = await response.json() as { udpPort?: unknown }; assertOwner();
-    if (response.ok && Number.isInteger(info.udpPort) && Number(info.udpPort) > 0 && Number(info.udpPort) < 65536) {
-      stunServers.push(new URL(api.base).hostname + ':' + info.udpPort);
-    }
+    const info: unknown = await response.json(); assertOwner();
+    // UDP may be published on its own host (e.g. NLB beside an HTTPS ALB); relays without one keep the API host.
+    const server = response.ok ? agentNetStunServer(api.base, info) : null;
+    if (server) stunServers.push(server);
   } catch { assertOwner(); }
   const workerFile = [path.join(process.resourcesPath ?? '', 'agent-net', 'node-worker.mjs'),
     path.join(app.getAppPath(), 'resources', 'agent-net', 'node-worker.mjs'),

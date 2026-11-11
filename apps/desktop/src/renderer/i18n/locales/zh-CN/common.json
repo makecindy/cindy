@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "保存",
+    "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",
+    "title": "任务插件",
+    "description": "为这个任务选择插件。修改从下一条消息起生效。",
+    "unsupported": "每次请求前处理仅支持本机 Pi，当前任务的引擎不支持。",
+    "failed": "未能读取或保存设置，请重新打开此面板重试。"
+  },
   "sharedTaskRecovery": {
     "title": "无法在原电脑上恢复任务",
     "description": "可以选择其他电脑或供应商，通过上下文交接继续。原消息保留，但切换不会迁移原电脑上的完整运行状态。",
@@ -3780,6 +3788,10 @@
           "openaiImagesHint": "使用此连接的地址和 API Key 调用 /images/generations 与 /images/edits。开启后，此连接将作为供应商唯一的图片连接。缺少的模型可手动添加 ID，再到模型详情声明图片能力。",
           "xaiVideos": "使用 xAI 兼容视频接口",
           "xaiVideosHint": "使用此连接的地址和 API Key 提交、查询视频任务。开启后，此连接将作为供应商唯一的视频连接。缺少的模型可手动添加 ID，再到模型详情声明视频能力。",
+          "minimaxVideos": "使用 MiniMax 兼容视频接口",
+          "minimaxVideosHint": "使用此连接的地址和 API Key 提交、查询 MiniMax 视频任务（如 MiniMax-H3）。每个供应商只能使用一种视频接口。缺少的模型可手动添加 ID，再到模型详情声明视频能力。",
+          "openaiVideos": "使用 OpenAI 兼容视频接口（/v1/videos）",
+          "openaiVideosHint": "使用此连接的地址和 API Key，以 tu-zi 等多数中转站采用的 POST /v1/videos 格式提交、查询视频任务，MiniMax-H3 等模型也可通过它使用。每个供应商只能使用一种视频接口。缺少的模型可手动添加 ID，再到模型详情声明视频能力。",
           "runtimeSupportsImageGeneration": "支持图片生成与编辑",
           "runtimeSupportsImageGenerationHelpLabel": "了解图片生成与编辑支持",
           "runtimeSupportsImageGenerationConditionTitle": "适用条件",
@@ -6587,7 +6599,7 @@
             "unavailable": "组织未配置",
             "unavailablePersonal": "暂未开放",
             "disabled": "已停用",
-            "none": "未绑定",
+            "none": "未关联",
             "pending": "在浏览器里授权，或把关联码发给飞书机器人",
             "awaiting_confirmation": "请在飞书 / Lark 里确认更换这台电脑关联的账号",
             "confirmed": "{{user}} 已关联飞书机器人",
@@ -6604,8 +6616,27 @@
             "copied": "关联码已复制",
             "hint": "或者在飞书里把关联码私聊发给 Cindy 机器人"
           },
+          "linkedAccounts": "已关联账号：{{count}}",
+          "connectionTenant": "所属企业：{{tenant}}",
           "setWorkingDevice": "设为工作电脑",
-          "workingDeviceSet": "已设为工作电脑"
+          "workingDeviceSet": "已设为工作电脑",
+          "appType": {
+            "self_built": "组织自建应用",
+            "store": "商店应用"
+          },
+          "linkedBotsSummary": "已关联 {{bots}} 个机器人 · {{accounts}} 个飞书账号",
+          "chooseBot": "选择要关联的机器人，可以同时使用多个机器人。",
+          "connectBot": "关联此机器人",
+          "linkAnotherAccount": "关联其他飞书账号",
+          "botFallback": "Cindy 机器人",
+          "bridgeTitle": "飞书机器人",
+          "bridgeDescription": "机器人只负责把飞书里的消息转给 Cindy。每个飞书账号的消息交给它的工作电脑处理，任务按机器人和飞书账号分开。",
+          "settingsTitle": "工作目录与模型",
+          "settingsDescription": "属于你的 Cindy 账号和这台电脑，不随机器人或飞书账号变化：所有飞书机器人共用同一份。工作目录清单也与其他渠道共用。",
+          "workingDeviceLabel": "工作电脑：{{name}}",
+          "workingDeviceThisComputer": "本机",
+          "workingDeviceUnknown": "工作电脑尚未同步",
+          "workingDeviceUnnamed": "未命名电脑"
         }
       },
       "summary": {
@@ -8026,8 +8057,18 @@
         "subscribeScheduleRunDetail": "在「前置检查」里选了它的自动化，运行前会先问它。它看得到这条自动化的名称和指令，可以让这次跳过或停止，但不能替你批准。",
         "subscribeRoutineRun": "可在你选定的伙伴例行任务运行前做检查",
         "subscribeRoutineRunDetail": "在「前置检查」里选了它的例行任务，每次触发后会先问它。它看得到例行任务的指令和触发它的事件内容，可以让这次跳过或停止，但不能替你批准。",
+        "systemPrompt": "可为所选任务补充系统提示词",
+        "systemPromptDetail": "下方静态片段只会进入选了这个插件的任务，放在 Cindy 固定提示词之后，顺序与引擎范围按包内声明。修改从下一条消息起生效，出错时按任务设置处理。",
+        "subscribeComposeContext": "可在所选任务回复前补充资料",
+        "subscribeComposeContextDetail": "只有选了它的任务会将当前消息交给它。返回内容作为普通参考资料，不进入系统提示词，也不代表主人授权。出错时按任务设置处理。",
+        "subscribeSearchMemory": "可为所选任务提供记忆",
+        "subscribeSearchMemoryDetail": "在现有 memory_search 中合并完整条目并标明来源插件。需先启用记忆检索；只共享所选任务的查询，插件失败时保留 Cindy 自己的结果。",
+        "subscribeStartTurn": "可在选定任务的每次回复前选择模型",
+        "subscribeStartTurnDetail": "仅在你为任务选择此插件时，读取本条消息并选择已连接的模型、推理强度及 Fast。出错按该任务的设置处理，不能替你批准操作。",
+        "subscribeModelRequest": "可在选定任务中处理每次模型请求",
+        "subscribeModelRequestDetail": "仅在你为任务选择此插件时，读取并处理发送给模型的请求内容，调整模型和参数。目前仅支持本机 Pi；出错按任务设置处理，不包含连接凭证。",
         "subscribeStartTask": "可为新任务选模型",
-        "subscribeStartTaskDetail": "新任务选了它提供的模型时，它会看第一条消息，从你已连接的模型里选一个。只选一次，任务中途不会换模型。",
+        "subscribeStartTaskDetail": "新任务选了它提供的模型时，它会看第一条消息，从你已连接的模型里选一个。这个节点只在第一条消息发出前运行一次。",
         "card": "渲染消息卡片",
         "cardExternalLink": "卡片内可声明外链，经你确认后打开浏览器",
         "cardExternalLinkDetail": "卡片中的链接点击后会弹出确认框，你同意后才会在系统浏览器中打开；仅限 http/https 地址。",
@@ -9305,6 +9346,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT 配额更新失败，请重试读取。其他用量信息仍会保留",
+    "retryQuota": "重试读取配额",
+    "retryingQuota": "正在读取配额…",
     "usageCritical": "用量较高",
     "usageWarning": "用量偏高",
     "usageTitle": "用量明细",
@@ -11735,7 +11779,7 @@
       "remove": "移除",
       "removeAria": "移除 {{platform}}",
       "empty": "把你已有的机器人添加到平台，或在下方连接个人微信，{{name}} 就会在那里回复。",
-      "externalNote": "给这个机器人发消息的人都是在和 {{name}} 对话。你自己的消息按 {{name}} 的权限执行；其他人各有一条隐藏任务，权限受限。",
+      "externalNote": "Telegram 和飞书/Lark 绑定后只接收主人的私聊。群聊按各平台的参与设置接收消息，工具沿用 {{name}} 的权限。独立任务共享资料与记忆。",
       "sharedMemoryNote": "{{name}} 会把这里和其它对话里的信息放在一起用。想隔开记忆，请换一位伙伴。",
       "groups": {
         "title": "群聊",
