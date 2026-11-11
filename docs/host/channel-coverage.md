@@ -1,7 +1,7 @@
 # Host 通道覆盖清单（脚本生成）
 
 > 由 `node scripts/host-channel-coverage.mjs` 生成，不要手工修改；行号只在 `--json` 输出里。
-> 生成时的源码提交：`291a649254`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
+> 生成时的源码提交：`3aae196f8b`。归属规则见下方「归属规则」，正本在脚本的 `OWNERSHIP_RULES`。
 
 统计对象是桌面主进程（`apps/desktop/src/main`，不含测试）里所有 `ipcMain.handle/on`
 及其包装函数注册的通道；注册、调用次数和排行均按 `(kind, channel)` 区分。
@@ -56,34 +56,34 @@
 
 | 归属 | 原因 | 通道名 | 注册模块 |
 |---|---|---|---|
-| B | 窗口外壳、窗口布局与多窗口 | `^(window[-:]\|window$\|win:\|titlebar\|fullscreen\|toggle-fullscreen\|get-fullscreen-state\|find-in-page\|page-zoom\|theme:\|app-menu:\|app-locale:\|startup-gate\|maker:open-session-in-new-window\|maker:session-drag-preview\|maker:sidebar-tab-drag-preview\|maker:sidebar-tab-window\|sidebar-tab-window\|maker:rsb-window\|rsb-window\|resource-usage-window\|agent-island\|menubar)` | `^(sidebar-tab-window\|sidebarWindowExpansionIpc\|right-sidebar-window\|resource-usage-window\|agent-island\|menubar)\b` |
-| B | 原生对话框、剪贴板、系统外壳与通知 | `^(dialog:\|show-open-directory-dialog\|clipboard:\|shell:\|open-with:\|notification:\|media:copy-(png-)?to-clipboard\|media:open-with-default-app\|media:save-as\|chat-attachment:save-as\|login-item:\|accessibility-support)` | `^(notificationService\|appBadgeService\|login-item-ipc\|accessibility-support-ipc)\b` |
-| B | 本机屏幕截取、录制与远程桌面 | `^(region-screenshot\|recording-preview\|recording-audio\|remote-desktop\|away-guard)` | `^(region-screenshot\|remote-desktop\|remote-desktop-viewer)\b` |
-| B | 图形能力，由窗口替 Agent 执行（平台 RPC） | `^(maker:computer\|maker:browser\|browser-backend\|rsb-browser-bridge\|rsb-native-popup)` | `^(rsb-browser-bridge)\b` |
-| B | 本机输入设备与语音 | `^(voice-input\|voice-conversation\|xbox-gamepad\|worklouder-codex\|codex-micro-guard\|app-shortcuts:set-recording)` | `^(voice-input\|voice-conversation\|xbox-gamepad\|worklouder-codex)\b` |
-| B | 桌面安装包自身：更新、版本、日志与诊断 | `^(update-(?!relaunch:)\|get-app-version\|get-app-display-version-info\|get-os-release\|release-notes:\|app:get-arm64-translation\|app:open-logs-dir\|crash-diagnosis\|log-upload\|performance-trace\|renderer:log\|dev:\|cc:set-debug-net\|deep-link:)` | `^(updateService\|crash-diagnosis\|log-upload\|performance-trace)\b` |
-| C-专项设计（安全边界） | 安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | `^(input-handoff:\|device-link:invoke$)` | — |
+| B | 窗口外壳、窗口布局与多窗口 | <code>^(window[-:]&#124;window$&#124;win:&#124;titlebar&#124;fullscreen&#124;toggle-fullscreen&#124;get-fullscreen-state&#124;find-in-page&#124;page-zoom&#124;theme:&#124;app-menu:&#124;app-locale:&#124;startup-gate&#124;maker:open-session-in-new-window&#124;maker:session-drag-preview&#124;maker:sidebar-tab-drag-preview&#124;maker:sidebar-tab-window&#124;sidebar-tab-window&#124;maker:rsb-window&#124;rsb-window&#124;resource-usage-window&#124;agent-island&#124;menubar)</code> | <code>^(sidebar-tab-window&#124;sidebarWindowExpansionIpc&#124;right-sidebar-window&#124;resource-usage-window&#124;agent-island&#124;menubar)&#92;b</code> |
+| B | 原生对话框、剪贴板、系统外壳与通知 | <code>^(dialog:&#124;show-open-directory-dialog&#124;clipboard:&#124;shell:&#124;open-with:&#124;notification:&#124;media:copy-(png-)?to-clipboard&#124;media:open-with-default-app&#124;media:save-as&#124;chat-attachment:save-as&#124;login-item:&#124;accessibility-support)</code> | <code>^(notificationService&#124;appBadgeService&#124;login-item-ipc&#124;accessibility-support-ipc)&#92;b</code> |
+| B | 本机屏幕截取、录制与远程桌面 | <code>^(region-screenshot&#124;recording-preview&#124;recording-audio&#124;remote-desktop&#124;away-guard)</code> | <code>^(region-screenshot&#124;remote-desktop&#124;remote-desktop-viewer)&#92;b</code> |
+| B | 图形能力，由窗口替 Agent 执行（平台 RPC） | <code>^(maker:computer&#124;maker:browser&#124;browser-backend&#124;rsb-browser-bridge&#124;rsb-native-popup)</code> | <code>^(rsb-browser-bridge)&#92;b</code> |
+| B | 本机输入设备与语音 | <code>^(voice-input&#124;voice-conversation&#124;xbox-gamepad&#124;worklouder-codex&#124;codex-micro-guard&#124;app-shortcuts:set-recording)</code> | <code>^(voice-input&#124;voice-conversation&#124;xbox-gamepad&#124;worklouder-codex)&#92;b</code> |
+| B | 桌面安装包自身：更新、版本、日志与诊断 | <code>^(update-(?!relaunch:)&#124;get-app-version&#124;get-app-display-version-info&#124;get-os-release&#124;release-notes:&#124;app:get-arm64-translation&#124;app:open-logs-dir&#124;crash-diagnosis&#124;log-upload&#124;performance-trace&#124;renderer:log&#124;dev:&#124;cc:set-debug-net&#124;deep-link:)</code> | <code>^(updateService&#124;crash-diagnosis&#124;log-upload&#124;performance-trace)&#92;b</code> |
+| C-专项设计（安全边界） | 安全边界待专项设计：用户填写的值只交给宿主执行（input-handoff），远程控制派发；方案出来前不动 | <code>^(input-handoff:&#124;device-link:invoke$)</code> | — |
 | C-后台 | 终端 PTY：换窗口时不能断，网页和手机也要用（优先级低，放后面批次） | `^terminal:` | — |
-| C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | `^(maker:file-browser\|maker:chat-file\|maker:chat-folder\|maker:html-preview\|maker:search:\|file-browser:remote-op$)` | — |
-| C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | `^(fs:\|read-file-bytes\|read-file-for-attachment\|peek-file-header\|text-file:\|file:thumbnail\|process-monitor:subscribe$)` | `^fsBrowse\b` |
-| C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | `(^\|:)(choose\|pick)([A-Z-]\|$)` | — |
-| C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | `(:\|-)(open-dir\|reveal)$\|:open-[a-z-]*-dir(ectory)?$\|^billing:open-` | — |
-| R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | `(^\|:)(host-ready\|host-reply\|host-changed)$\|^app-preferences:reply$` | — |
+| C-后台 | 任务范围内的文件操作：换窗口时不能断，网页和手机也要用，路径授权跟着运行时 | <code>^(maker:file-browser&#124;maker:chat-file&#124;maker:chat-folder&#124;maker:html-preview&#124;maker:search:&#124;file-browser:remote-op$)</code> | — |
+| C-窗口本地 | 用户在本窗口选择或拖入的本机文件、本机进程监视：窗口直接处理，客户端模式下照常注册 | <code>^(fs:&#124;read-file-bytes&#124;read-file-for-attachment&#124;peek-file-header&#124;text-file:&#124;file:thumbnail&#124;process-monitor:subscribe$)</code> | <code>^fsBrowse&#92;b</code> |
+| C-两段式（窗口做界面动作，数据调 Host） | 弹出系统选择框后写入后台数据：选择在窗口，结果归后台 | <code>(^&#124;:)(choose&#124;pick)([A-Z-]&#124;$)</code> | — |
+| C-两段式（窗口做界面动作，数据调 Host） | 在访达／资源管理器或系统浏览器里打开后台持有的内容 | <code>(:&#124;-)(open-dir&#124;reveal)$&#124;:open-[a-z-]*-dir(ectory)?$&#124;^billing:open-</code> | — |
+| R | 主进程向界面要数据的回执协议：数据在界面本地存储，Host 要用需经窗口往返，先不排期 | <code>(^&#124;:)(host-ready&#124;host-reply&#124;host-changed)$&#124;^app-preferences:reply$</code> | — |
 | W | 窗口本地设置：窗口直接读写同一份 profile 文件，不经 Host | `^sidebar-settings:` | — |
 | A | 升级与交接（归交接任务：它留在原工作区的升级流程） | `^update-relaunch:` | — |
-| A | 任务、消息与输入队列 | `^(local-db:(sessions\|messages\|history\|session-share\|session-import\|right-sidebar-tabs\|recent-workdirs\|subagent-runs\|conversations\|task-tags\|project-aliases\|ensure-ready\|maintenance)\|maker:(session\|input\|send\|steer\|create-session\|close-session\|abort-session\|fork\|rewind\|compact\|message\|get-session\|navigate-session\|side-chat\|goal\|turn-change\|persist-turn\|working-status\|any-session\|export-session\|generate-title\|regenerate-title\|auto-title\|predict-prompt\|switch-session-agent\|write-plan-file\|images\|list-desktop-commands\|execute-desktop-command\|get-context\|set-))` | — |
+| A | 任务、消息与输入队列 | <code>^(local-db:(sessions&#124;messages&#124;history&#124;session-share&#124;session-import&#124;right-sidebar-tabs&#124;recent-workdirs&#124;subagent-runs&#124;conversations&#124;task-tags&#124;project-aliases&#124;ensure-ready&#124;maintenance)&#124;maker:(session&#124;input&#124;send&#124;steer&#124;create-session&#124;close-session&#124;abort-session&#124;fork&#124;rewind&#124;compact&#124;message&#124;get-session&#124;navigate-session&#124;side-chat&#124;goal&#124;turn-change&#124;persist-turn&#124;working-status&#124;any-session&#124;export-session&#124;generate-title&#124;regenerate-title&#124;auto-title&#124;predict-prompt&#124;switch-session-agent&#124;write-plan-file&#124;images&#124;list-desktop-commands&#124;execute-desktop-command&#124;get-context&#124;set-))</code> | — |
 | A | 自动化 | `^maker:schedule` | — |
-| A | Orca | `^(maker:(orca\|worker\|team\|mark-orca\|sync-worker)\|local-db:orca)` | — |
-| A | 伙伴与 IM | `^(maker:(bot\|companion\|im-)\|local-db:bots\|binding:\|botImConnection\|telegramBot\|wechatBot\|feishuBot\|discordBot\|dingtalkBot\|wecomBot\|wecomGroupNotification\|desktop:cc-prefs\|companion-import)` | `^(im\|bot-import)\b` |
-| A | 账号与凭据 | `^(auth:\|safe-storage\|builtin-api-key\|plugin-oauth\|maker:(api-key\|claude-oauth\|xai-oauth\|auth:\|subscription))` | — |
-| A | 供应商与模型 | `^(maker:(provider\|model\|usage\|local-model\|llamacpp\|sync-provider\|auxiliary-model\|subagent-model\|vision-bridge\|claude-session-route)\|provider-group\|provider-share\|model-favorites\|model-access)` | — |
-| A | 插件、技能与 MCP | `^(ghosts:\|ghost-pipe\|forge-oidc\|maker:(plugins\|plugin-setup\|mcp\|runtime-plugins\|pi-packages)\|plugin-market\|plugin-publisher\|plugin-contributions\|skillhub)` | — |
-| A | 设备互联与远程执行 | `^(device-link\|direct-link\|file-peer\|shared-task\|self-hosted-relay\|local-agent\|maker:(remote-resources\|shared-task\|remote-ssh\|provider-share))` | — |
-| A | git 与工作树 | `^(git-context\|git-review\|worktree\|remote-precreated-worktree\|maker:git-safety)` | — |
-| A | 记忆、学习与钩子 | `^(maker:(memory\|maker-memory\|hook-control)\|learn:)` | — |
-| A | 附件与媒体库 | `^(chat-attachment\|cindy-media\|image-cache\|media:)` | — |
-| A | 设置与偏好 | `^(sidebar-settings\|app-shortcuts\|appearance-settings\|layout:\|analytics\|database-size-warning\|app-preferences\|local-themes\|profile:\|projects-root\|maker:[a-z-]*settings)` | — |
-| A | Cindy Make | `^app:(.*cindy-make\|cindy-versions)` | — |
+| A | Orca | <code>^(maker:(orca&#124;worker&#124;team&#124;mark-orca&#124;sync-worker)&#124;local-db:orca)</code> | — |
+| A | 伙伴与 IM | <code>^(maker:(bot&#124;companion&#124;im-)&#124;local-db:bots&#124;binding:&#124;botImConnection&#124;telegramBot&#124;wechatBot&#124;feishuBot&#124;discordBot&#124;dingtalkBot&#124;wecomBot&#124;wecomGroupNotification&#124;desktop:cc-prefs&#124;companion-import)</code> | <code>^(im&#124;bot-import)&#92;b</code> |
+| A | 账号与凭据 | <code>^(auth:&#124;safe-storage&#124;builtin-api-key&#124;plugin-oauth&#124;maker:(api-key&#124;claude-oauth&#124;xai-oauth&#124;auth:&#124;subscription))</code> | — |
+| A | 供应商与模型 | <code>^(maker:(provider&#124;model&#124;usage&#124;local-model&#124;llamacpp&#124;sync-provider&#124;auxiliary-model&#124;subagent-model&#124;vision-bridge&#124;claude-session-route)&#124;provider-group&#124;provider-share&#124;model-favorites&#124;model-access)</code> | — |
+| A | 插件、技能与 MCP | <code>^(ghosts:&#124;ghost-pipe&#124;forge-oidc&#124;maker:(plugins&#124;plugin-setup&#124;mcp&#124;runtime-plugins&#124;pi-packages)&#124;plugin-market&#124;plugin-publisher&#124;plugin-contributions&#124;skillhub)</code> | — |
+| A | 设备互联与远程执行 | <code>^(device-link&#124;direct-link&#124;file-peer&#124;shared-task&#124;self-hosted-relay&#124;local-agent&#124;maker:(remote-resources&#124;shared-task&#124;remote-ssh&#124;provider-share))</code> | — |
+| A | git 与工作树 | <code>^(git-context&#124;git-review&#124;worktree&#124;remote-precreated-worktree&#124;maker:git-safety)</code> | — |
+| A | 记忆、学习与钩子 | <code>^(maker:(memory&#124;maker-memory&#124;hook-control)&#124;learn:)</code> | — |
+| A | 附件与媒体库 | <code>^(chat-attachment&#124;cindy-media&#124;image-cache&#124;media:)</code> | — |
+| A | 设置与偏好 | <code>^(sidebar-settings&#124;app-shortcuts&#124;appearance-settings&#124;layout:&#124;analytics&#124;database-size-warning&#124;app-preferences&#124;local-themes&#124;profile:&#124;projects-root&#124;maker:[a-z-]*settings)</code> | — |
+| A | Cindy Make | <code>^app:(.*cindy-make&#124;cindy-versions)</code> | — |
 
 窗口 API：Electron 导出 `dialog`、`shell`、`clipboard`、`Menu`、`MenuItem`、`screen`、`desktopCapturer`、`Notification`、`globalShortcut`、`systemPreferences`、`nativeTheme`、`Tray`、`TouchBar`、`BrowserView`、`WebContentsView`、`powerSaveBlocker`、`nativeImage`、`autoUpdater`；成员 `BrowserWindow.fromWebContents`、`BrowserWindow.getFocusedWindow`、`BrowserWindow.fromId`、`BrowserWindow.fromBrowserView`、`app.focus`、`app.dock`、`app.setBadgeCount`、`app.relaunch`、`app.quit`、`app.exit`、`app.setLoginItemSettings`、`app.getLoginItemSettings`、`app.show`、`app.hide`、`app.setAsDefaultProtocolClient`、`app.getFileIcon`；以及 `new BrowserWindow`。不计入：发送方校验（`src/main/security/`，客户端模式下由 Host 令牌鉴权），以及发给某个窗口的推送（`webContents.fromId`、`event.sender`，客户端模式下推送走 Host 事件流）。
 

@@ -950,7 +950,16 @@ function gitHead() {
   }
 }
 
-const code = (text) => `\`${String(text).replace(/`/g, "'").replace(/\|/g, '\\|')}\``;
+function code(text) {
+  const value = String(text);
+  // GFM splits table cells before parsing code spans: \| is special even
+  // inside backticks. HTML entities preserve literal slashes, pipes and ticks
+  // without changing escape parity or letting the input close the code element.
+  if (!/[\\`|&<>\r\n]/.test(value)) return `\`${value}\``;
+  const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '|': '&#124;',
+    '\\': '&#92;', '`': '&#96;', '\r': '&#13;', '\n': '&#10;' };
+  return `<code>${value.replace(/[&<>|\\`\r\n]/g, (char) => entities[char])}</code>`;
+}
 const label = (row) => (subKey(row) ? SUB_LABELS[subKey(row)] : row.category);
 
 export function renderMarkdown(summary, { usageSource, clientSource } = {}) {

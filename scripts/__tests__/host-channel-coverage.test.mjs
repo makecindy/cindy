@@ -7,10 +7,35 @@ import { fileURLToPath } from 'node:url';
 import {
   OWNERSHIP_RULES, SYNC_LOCAL_DOMAINS,
   collectContractChannels, createConstResolver, createWindowApiScanner, classify, clientBehavior, isHostWork, isWindowClass,
-  moduleGroup, owningFile, rankUsage, requireResolvedContract, summarize,
+  moduleGroup, owningFile, rankUsage, renderMarkdown, requireResolvedContract, summarize,
 } from '../host-channel-coverage.mjs';
 
 const main = (file) => `apps/desktop/src/main/${file}`;
+
+// Production renderMarkdown output, CodeQL #489: a backslash before a pipe broke
+// the GFM cell. Existing tests only covered classification, not rendered cells.
+// Minimal failure: one channel containing "\\|". Tier: runner, in-process GFM.
+test('renders code cells without splitting tables or changing literal characters', () => {
+  const require = createRequire(new URL('../../apps/desktop/package.json', import.meta.url));
+  const { marked } = require('marked');
+  for (const [channel, expected] of [
+    ['plain:channel', 'plain:channel'],
+    ['pipe|alone', 'pipe&#124;alone'],
+    [String.raw`slash\|pipe`, 'slash&#92;&#124;pipe'],
+    [String.raw`two\\|pipe`, 'two&#92;&#92;&#124;pipe'],
+    [String.raw`path\file`, 'path&#92;file'],
+    ['tick`<&|', 'tick&#96;&lt;&amp;&#124;'],
+    ['</code>\r\n|next', '&lt;/code&gt;&#13;&#10;&#124;next'],
+  ]) {
+    const summary = summarize({ registrations: [
+      { channel, kind: 'invoke', file: main('test.ts'), line: 1, gui: [] },
+    ], unresolved: [], contract: new Set() });
+    const document = renderMarkdown(summary);
+    const html = marked.parse(document.slice(document.indexOf('## 全部通道')));
+    assert.ok(html.includes(`<td><code>${expected}</code></td>`), html);
+    assert.equal((html.match(/<td(?:\s[^>]*)?>/g) ?? []).length, 5, 'one row with exactly five cells');
+  }
+});
 const contract = new Set(['local-db:sessions:list']);
 const owner = (registration) => {
   const { category, sub } = classify(registration, contract);
