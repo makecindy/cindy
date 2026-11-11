@@ -186,13 +186,42 @@ describe('cindy-tool-fold extension source', () => {
   });
 
   it('keeps live fold marks when the registry cap is pruned', () => {
-    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '1000', CINDY_PI_TOOL_FOLD_KEEP: '1', CINDY_PI_TOOL_FOLD_MAX_FOLDED: '8' });
-    const first = projection(context, pairs(12));   // 11 folded -> registry 11 > cap 8
+    // MAX_FOLDED min is 100: the probe must produce more than 100 live marks before the
+    // prune branch runs, otherwise the test cannot distinguish prune from wipe.
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '512', CINDY_PI_TOOL_FOLD_MIN_CHARS: '240000', CINDY_PI_TOOL_FOLD_KEEP: '1', CINDY_PI_TOOL_FOLD_MAX_FOLDED: '100' });
+    // First pass: one large batch folds 120 pairs -> registry 120 > cap 100.
+    const first = projection(context, pairs(120));
     expect(isFolded(first[0])).toBe(true);
-    const grown = pairs(20);
-    const second = projection(context, grown);      // new batch triggers the prune path
-    expect(isFolded(second[0])).toBe(true);          // old marks survive: no full-text rebound
-    expect(isFolded(second[36])).toBe(true);         // newly foldable backlog (trip 18) folds too
-    expect(second[38]).toBe(grown[38]);              // newest 1 pair stays verbatim (KEEP=1)
+    // Second pass doubles the backlog: the 120 new pairs form a new batch, the prune
+    // path runs with 121 live marks against cap 100, and every old id stays live.
+    const grown = pairs(240);
+    const second = projection(context, grown);
+    expect(isFolded(second[0])).toBe(true);   // old marks survive the prune: no full-text rebound
+    expect(isFolded(second[100])).toBe(true); // mid-history marks survive too
+    expect(isFolded(second[236])).toBe(true); // newly foldable backlog folds too
+    expect(second[478]).toBe(grown[478]);     // newest 1 pair stays verbatim (KEEP=1)
+  });
+
+  it('rejects recovery of an evicted giant instead of serving the transcript preview', async () => {
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_GIANTS: '8', CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    // 8 giants fill the registry; the 9th evicts giant-0 (oldest first).
+    for (let i = 0; i < 9; i += 1) {
+      toolResult({ toolName: 'bash', toolCallId: `giant-${i}`, content: [{ type: 'text', text: `payload ${i} ${'g'.repeat(25000)}` }] });
+    }
+    // The transcript keeps only the truncation preview, as pi would store it; the
+    // tool_result hook passes it through (small enough), so build it inline.
+    const previewText = 'payload 0 ' + 'g'.repeat(1800) + '\n[truncated 23000 of 25011 chars; toolfold_read("giant-0") returns the full text]';
+    const preview = { role: 'toolResult', toolCallId: 'giant-0', toolName: 'bash', content: [{ type: 'text', text: previewText }] } as unknown as { content: Block[] };
+    expect(preview).toBeDefined();
+    projection(context, [
+      call('giant-0', 'bash', { command: 'make giant 0' }),
+      preview!,
+    ]);
+    const refused = await tool.execute('t1', { call_id: 'giant-0' });
+    expect(refused.isError).toBe(true);
+    expect(String(refused.content![0].text)).toContain('full text is no longer available');
+    // A live giant still recovers.
+    const live = await tool.execute('t2', { call_id: 'giant-8' });
+    expect(String(live.content![0].text)).toBe(`payload 8 ${'g'.repeat(25000)}`);
   });
 });

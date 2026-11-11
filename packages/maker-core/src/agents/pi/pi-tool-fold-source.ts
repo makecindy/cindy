@@ -313,6 +313,7 @@ export default function (pi) {
     if (!messages) return null;
     var callBlock = null;
     var resultMsg = null;
+    var truncatedResult = false;
     for (var i = 0; i < messages.length; i++) {
       var message = messages[i];
       if (!message) continue;
@@ -323,9 +324,17 @@ export default function (pi) {
         }
       } else if (message.role === 'toolResult' && String(message.toolCallId) === key) {
         resultMsg = message;
+        var resultText = textOf(message.content);
+        // Ingestion-truncated entries whose full text is gone (registry evicted or lost
+        // on resume) must refuse recovery: serving the preview as the original would
+        // let the model proceed on incomplete data behind the recovery contract.
+        if (resultText.indexOf('[truncated ') !== -1 && resultText.indexOf('toolfold_read') !== -1) truncatedResult = true;
       }
     }
     if (!callBlock && !resultMsg) return null;
+    // Evicted/lost giant with only the call block: the result in context is the
+    // truncation preview, not the original — refuse rather than serve it.
+    if (truncatedResult) return null;
     var bits = [];
     if (callBlock) {
       bits.push('call: ' + callSummary(callBlock));
@@ -378,7 +387,7 @@ export default function (pi) {
       if (!id) throw new Error('call_id is required');
       var original = findOriginal(id);
       if (original === null || typeof original !== 'string') {
-        return { content: [{ type: 'text', text: 'No folded or truncated round-trip with id ' + id + ' exists in this session.' }], isError: true };
+        return { content: [{ type: 'text', text: 'No folded or truncated round-trip with id ' + id + ' exists in this session. If the record says [truncated], its full text is no longer available (registry evicted or lost on resume); re-run the command instead.' }], isError: true };
       }
       if (!giants.has(String(id))) pinOriginal(id);
       return { content: [{ type: 'text', text: original }] };
