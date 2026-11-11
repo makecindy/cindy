@@ -123,6 +123,35 @@ describe('task runtime plugin control', () => {
     expect(screen).toHaveBeenCalledTimes(5);
   });
 
+  // Shared memory_search has no App turn boundary. Unit/fake clock: exhausting
+  // the App budget must not suppress later searches or renew the App budget.
+  it('keeps memory searches independent after the same task exhausts its App budget', async () => {
+    let clock = 0;
+    const settings: RuntimePluginSettings = {
+      'will-start-turn': Array.from({ length: 5 }, (_, i) => ({ pluginId: `router-${i}`, onFailure: 'block' })),
+      'will-search-memory': [{ pluginId: 'memory', onFailure: 'allow' }],
+    };
+    const screen = vi.fn(async (point: string, _data: unknown, _target: RuntimePluginTarget, timeoutMs?: number): Promise<GhostRuntimeControlPointResult> => {
+      clock += timeoutMs ?? 0;
+      return point === 'will-search-memory'
+        ? { action: 'memories', ghostId: 'memory', ghostName: 'Memory', entries: [{ id: 'm', title: 'Fixture', content: 'Reference' }] }
+        : { action: 'allow' };
+    });
+    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
+      screen, now: () => clock });
+    const apply = vi.fn(async () => {});
+    await control.run('will-start-turn', 'task', async () => input, apply);
+    expect(clock).toBe(5000);
+    const providers = createRuntimeContextProviders(control);
+    for (let i = 0; i < 2; i++) {
+      expect(await providers.search({ sessionId: 'task', query: 'fixture', limit: 10 }))
+        .toMatchObject({ hits: [{ id: 'm', content: 'Reference', sourcePlugin: { id: 'memory' } }] });
+    }
+    expect(screen.mock.calls.filter(call => call[0] === 'will-search-memory').map(call => call[3])).toEqual([1500, 1500]);
+    await expect(control.run('will-start-turn', 'task', async () => input, apply)).rejects.toMatchObject({ action: 'block', failure: true });
+    expect(screen).toHaveBeenCalledTimes(7);
+  });
+
   it.each(['will-compose-context', 'will-search-memory'] as const)('collects %s concurrently but merges in the selected order', async point => {
     let settings: RuntimePluginSettings = { [point]: [
       { pluginId: 'first', onFailure: 'allow' }, { pluginId: 'second', onFailure: 'allow' },

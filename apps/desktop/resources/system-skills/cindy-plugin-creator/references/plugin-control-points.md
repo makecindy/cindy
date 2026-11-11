@@ -77,7 +77,7 @@ cindy.onHostMessage(async (msg) => {
 
 ### 任务运行时等待预算
 
-四个新增运行时节点共用每轮 **5 秒**插件等待预算。App 普通消息在统一发送准备入口开启新预算，
+`will-start-turn`、`will-compose-context` 和 `will-model-request` 共用每轮 **5 秒**插件等待预算。App 普通消息在统一发送准备入口开启新预算，
 工具续轮和同一轮内的多次模型请求不重置；同轮插话不另行询问资料提供者或建立新预算。每次询问还受上表单点时限约束；
 `will-model-request` 的 `select` 与 `payload` 共用该次请求的 **1 秒**，下一请求重新取得
 请求预算，但继续消费本轮剩余的 5 秒。实际 `deadline` 会按两项剩余预算缩短。
@@ -85,7 +85,9 @@ cindy.onHostMessage(async (msg) => {
 预算只统计插件等待，包括插件按需唤醒；并行等待重叠的墙钟时间只计一次。宿主的
 `readRoute`、`applyRoute`、Agent 会话关闭／恢复、模型 HTTP 和工具执行不计入，
 所以这不是整条消息或整轮完成时间的上限。预算耗尽后不再询问剩余插件，按每个插件在该任务
-设置的 `onFailure`（allow / skip / block）处理，不擅自放行；记忆节点仍只允许 allow。
+设置的 `onFailure`（allow / skip / block）处理，不擅自放行。
+共享 `memory_search` 不参与 App 每轮 5 秒累计预算，每次检索的提供者等待独立最多 **1.5 秒**，
+仅允许 allow-on-failure。一个 App 轮的插件总等待不包含记忆；每次额外检索最多再加 1.5 秒。
 未选择插件时同步短路，不建立预算或新增定时器。旧的自动化和新任务节点时限保持不变。
 
 ### 为新任务选模型(`will-start-task`)
