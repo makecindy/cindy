@@ -268,7 +268,7 @@ async function startRewindableSession(
     ...(options.remoteHostId ? { remoteHostId: options.remoteHostId } : {}),
   });
 
-  return { agent, handle, firstQuery, infoCalls, remoteStartParams };
+  return { agent, handle, firstQuery, infoCalls, remoteStartParams, workingDir };
 }
 
 afterEach(async () => {
@@ -290,6 +290,61 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it.each([false, true])('fences an in-flight rewind preview and releases the fence on completion (failure: %s)', async (fail) => {
+    const { agent, handle, firstQuery, workingDir } = await startRewindableSession();
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    firstQuery.rewindFiles.mockImplementationOnce(async () => {
+      await gate;
+      if (fail) throw new Error('preview failed');
+      return { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 };
+    });
+    const session = new Session({ id: 'preview-idle-release', agentKind: 'claude-code',
+      workDir: workingDir, handle, capabilities: agent.capabilities,
+      logger: createNoopLogger(), turnStallMs: 0 });
+    try {
+      const preview = session.previewRewindFiles('preview-user');
+      await vi.waitFor(() => expect(firstQuery.rewindFiles).toHaveBeenCalledOnce());
+      expect(session.hasPendingHostOperation()).toBe(true);
+      await expect(session.closeIfIdle()).resolves.toBe(false);
+      expect(firstQuery.close).not.toHaveBeenCalled();
+      finish();
+      expect((await preview).canRewind).toBe(!fail);
+      expect(session.hasPendingHostOperation()).toBe(false);
+      await expect(session.closeIfIdle()).resolves.toBe(true);
+    } finally { finish(); await session.close(); }
+  });
+
+  // Idle release must retain the controller's deferred rewind point. Re-enter
+  // the production Session close guard, then verify the next send still forks
+  // at that point on native Claude and a non-Anthropic model route. Unit tier.
+  it.each(['claude-opus-4-6', 'gpt-5.6-sol'])(
+    'keeps a pending rewind through idle close and applies it on next send (%s)', async (model) => {
+      const { agent, handle, firstQuery, workingDir } = await startRewindableSession({
+        model,
+        availableModels: [...TEST_MODELS, { id: 'gpt-5.6-sol', displayName: 'GPT fixture',
+          contextWindow: 256_000, efforts: ['high'], defaultEffort: 'high' }],
+      });
+      const session = new Session({ id: 'rewind-idle-release', agentKind: 'claude-code',
+        workDir: workingDir, handle, capabilities: agent.capabilities,
+        logger: createNoopLogger(), turnStallMs: 0 });
+      try {
+        expect(session.hasPendingHostOperation()).toBe(false);
+        await session.commitRewindFiles('user-before-rewind', 'assistant-rewind-point');
+        expect(firstQuery.close).toHaveBeenCalledOnce();
+        expect(session.isTurnRunning()).toBe(false);
+        await expect(session.closeIfIdle()).resolves.toBe(false);
+        expect(session.getStatus()).toBe('active');
+
+        sdkMock.query.mockReturnValue(createFakeQuery());
+        await session.send('continue after the idle scan');
+        const rebuilt = sdkMock.query.mock.calls[1][0].options;
+        expect(rebuilt.resumeSessionAt).toBe('assistant-rewind-point');
+        expect(rebuilt.forkSession).toBe(true);
+      } finally { await session.close(); }
+    },
+  );
+
   // Regression: connection metadata reached the catalog, but never the Claude spawn.
   // Existing window tests do not exercise output limits. Unit SDK-boundary assertions
   // cover two same-name routes, refresh/removal and the settings-file precedence layer.

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { projectBotGroupProcess, readBotGroupProcessMessages, type BotGroupProcessRef, type BotGroupProcessMessage, type BotGroupMemberView } from '../../../shared/botGroupChat';
 import { WorkGroupBlock, TeammateWorkSegment, type WorkGroupChild } from '@/components/chat/WorkGroupBlock';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -42,7 +43,7 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     return () => { cancelled = true; };
   }, [process.sessionId, process.clientId, deviceId, attempt, opened]);
   const projection = projectBotGroupProcess(result?.messages ?? [], false);
-  return <WorkGroupBlock blockId={`group-process:${process.executionId}`} journal durationMs={process.durationMs ?? projection.durationMs}
+  return <WorkGroupBlock pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} blockId={`group-process:${process.executionId}`} journal durationMs={process.durationMs ?? projection.durationMs}
     childItems={[{ kind: 'rendered', key: process.executionId, renderNode: () => <>
       <MarkProcessVisible onVisible={() => setOpened(true)} />
       {!result && <Spinner size={14} />}
@@ -66,7 +67,7 @@ export function BotGroupProcessEntries({ messages, id, running = false }: { mess
   return <div data-testid="bot-group-process-notes" className="flex min-w-0 flex-col gap-3">
     {projection.segments.map((segment, index) => segment.kind === 'content'
       ? <MarkdownRenderer key={segment.key} content={segment.item.text ?? ''} workingDir="" />
-      : <TeammateWorkSegment key={segment.key} blockId={`${id}:${segment.key}`} active={running && index === projection.segments.length - 1}
+      : <TeammateWorkSegment pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} key={segment.key} blockId={`${id}:${segment.key}`} active={running && index === projection.segments.length - 1}
           childItems={segment.items.map(item => item.kind === 'thinking'
             ? { kind: 'thinking', key: item.key, message: { clientId: item.key, role: 'thinking', content: '' } }
             : { kind: 'tools', key: item.key, toolCalls: (item.toolCalls ?? []).map(message => ({ ...message, role: 'tool_use' as const })), resultMap: item.resultMap ?? new Map(), settledIds: item.settledIds ?? new Set() }) as WorkGroupChild[]} />)}

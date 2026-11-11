@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "保存",
+    "promptUnsupported": "この Pi の実行場所ではシステム指示の追加に対応していません。",
+    "title": "タスクのプラグイン",
+    "description": "このタスクで使うプラグインを選択します。変更は次のメッセージから反映されます。",
+    "unsupported": "リクエストごとの処理はローカルの Pi のみ対応しています。このタスクのエンジンでは利用できません。",
+    "failed": "設定を読み込めないか保存できませんでした。このパネルを開き直して再試行してください。"
+  },
   "sharedTaskRecovery": {
     "title": "元のコンピューターでセッションを再開できません",
     "description": "別のコンピューターまたはプロバイダーを選び、コンテキストを引き継いで続行できます。メッセージは保持されますが、元のコンピューターの実行状態全体は移行されません。",
@@ -860,6 +868,7 @@
       "assignLocalAria": "{{name}} で他のパソコンからの新しいタスクを受け付ける",
       "moreAria": "{{name}} の他の操作",
       "remove": "グループから外す",
+      "removeLocalBlocked": "グループを作成したパソコンはグループから外せません",
       "status": {
         "checking": "確認中…",
         "idle": "待機中",
@@ -2260,6 +2269,7 @@
         "desktopVisibilityHint": "Cindy の背後にあるデスクトップやウィンドウを透かします。文字や操作部分は鮮明に保たれます。",
         "desktopBlurLabel": "デスクトップのぼかし",
         "desktopBlurHint": "背後のデスクトップをぼかします。0 でオフ、値が大きいほど強くなります。強さを調整できない OS では標準の効果を使います。",
+        "desktopBlurSwitchHint": "Windows のシステム効果でウィンドウ背後のデスクトップをぼかします。Windows 11 バージョン 22H2 以降が必要です。",
         "blurLabel": "壁紙のぼかし",
         "blurHint": "壁紙だけをぼかします。0でオフになります。動く壁紙のぼかしはGPU負荷を増やします。",
         "motionLabel": "表示方法",
@@ -3586,6 +3596,36 @@
           "invalid": "プレビューできません。設定を確認するか、ファイルを選び直してください",
           "skipped": "スキップ済み。インポートするにはファイルを選び直してください",
           "authorizationPending": "接続を追加しました。プロバイダー設定で認証を完了してください"
+        },
+        "local": {
+          "title": "ローカルアプリからインポート",
+          "note": "このコンピューターに保存された API 設定を読み取り、元のアプリは変更しません。Claude Code はユーザーの settings.json（CLAUDE_CONFIG_DIR を含む）のみが対象です。シェル環境変数、プロジェクト設定、管理対象の設定は読み取りません。",
+          "review": "確認してインポート（{{count}}）",
+          "scanning": "保存済み設定を読み取り中…",
+          "empty": "保存済み API 設定が見つかりません。",
+          "failed": "読み取りを完了できませんでした。再試行してください。",
+          "edit": "編集",
+          "editFailed": "URL、プロトコル、キーを確認して再試行してください。",
+          "editNote": "キーを空欄にすると読み取り済みの認証情報を保持します。URL やプロトコルを変更すると新しいキーが必要です。",
+          "name": "表示名",
+          "baseUrl": "ベース URL",
+          "protocol": "API プロトコル",
+          "chooseProtocol": "プロトコルを選択",
+          "apiKey": "API キー",
+          "keepKey": "空欄で読み取り済みのキーを保持",
+          "missingUrl": "URL が必要です",
+          "status": {
+            "missing": "設定が見つかりません",
+            "readFailed": "読み取れません。権限を確認して再試行してください",
+            "invalid": "形式を認識できません。設定を確認・編集してください",
+            "limit": "読み取り上限に達しました。このソースは未完了です",
+            "unsupported": "この設定は自動インポートできません。コマンドや apiKeyHelper は実行しません。API 設定を手動で追加してください。",
+            "needsInput": "設定の補完が必要です",
+            "changed": "元の設定が変更されました。再スキャンしてください",
+            "duplicate": "同一の接続がすでに存在します"
+          },
+          "rescan": "再スキャン",
+          "sourceDisabled": "元のアプリで無効になっています"
         }
       },
       "order": {
@@ -3747,6 +3787,10 @@
           "openaiImagesHint": "この接続のアドレスと API Key で /images/generations と /images/edits を呼び出します。有効にすると、プロバイダーの画像接続はこの接続のみになります。不足するモデル ID は手動で追加し、モデル詳細で画像機能を指定してください。",
           "xaiVideos": "xAI 互換の動画 API を使用",
           "xaiVideosHint": "この接続のアドレスと API キーで動画タスクを送信・確認します。有効にすると、この接続がプロバイダーの唯一の動画接続になります。不足するモデル ID を追加し、モデル詳細で動画機能を設定してください。",
+          "minimaxVideos": "MiniMax 互換の動画 API を使用",
+          "minimaxVideosHint": "この接続のアドレスと API キーで MiniMax-H3 などの MiniMax 動画タスクを送信・確認します。プロバイダーが使える動画 API は 1 つだけです。不足するモデル ID を追加し、モデル詳細で動画機能を設定してください。",
+          "openaiVideos": "OpenAI 互換の動画 API を使用（/v1/videos）",
+          "openaiVideosHint": "この接続のアドレスと API キーで、tu-zi など多くの中継サービスが使う POST /v1/videos 形式のタスクを送信・確認します。MiniMax-H3 などのモデルもこの形式で使えます。プロバイダーが使える動画 API は 1 つだけです。不足するモデル ID を追加し、モデル詳細で動画機能を設定してください。",
           "runtimeSupportsImageGeneration": "画像の生成と編集に対応",
           "runtimeSupportsImageGenerationHelpLabel": "画像の生成と編集への対応について",
           "runtimeSupportsImageGenerationConditionTitle": "適用条件",
@@ -6571,8 +6615,27 @@
             "copied": "連携コードをコピーしました",
             "hint": "または Feishu / Lark で Cindy bot にこのコードをダイレクトメッセージで送信してください"
           },
+          "linkedAccounts": "連携済みアカウント：{{count}}",
+          "connectionTenant": "所属企業：{{tenant}}",
           "setWorkingDevice": "作業用パソコンに設定",
-          "workingDeviceSet": "作業用パソコンに設定しました"
+          "workingDeviceSet": "作業用パソコンに設定しました",
+          "appType": {
+            "self_built": "組織のカスタムアプリ",
+            "store": "ストアアプリ"
+          },
+          "linkedBotsSummary": "連携済みボット: {{bots}} · アカウント: {{accounts}}",
+          "chooseBot": "連携するボットを選んでください。複数のボットを同時に使えます。",
+          "connectBot": "このボットを連携",
+          "linkAnotherAccount": "別の Feishu アカウントを連携",
+          "botFallback": "Cindy ボット",
+          "bridgeTitle": "Feishu / Lark ボット",
+          "bridgeDescription": "ボットは Feishu / Lark のメッセージを Cindy に届けるだけです。各アカウントのメッセージはその作業用パソコンで処理され、セッションはボットとアカウントごとに分かれます。",
+          "settingsTitle": "作業ディレクトリとモデル",
+          "settingsDescription": "Cindy アカウントとこのパソコンに属する設定で、ボットや Feishu / Lark アカウントごとには変わりません。すべての Feishu / Lark ボットで共通です。ディレクトリ一覧は他のチャンネルとも共通です。",
+          "workingDeviceLabel": "作業用パソコン：{{name}}",
+          "workingDeviceThisComputer": "このパソコン",
+          "workingDeviceUnknown": "作業用パソコンはまだ同期されていません",
+          "workingDeviceUnnamed": "名前のないパソコン"
         }
       },
       "summary": {
@@ -7993,8 +8056,18 @@
         "subscribeScheduleRunDetail": "「事前チェック」でこのプラグインを選んだ自動化は、実行前に先に確認します。自動化の名前と指示を参照でき、今回をスキップまたは停止できますが、代わりに承認することはできません。",
         "subscribeRoutineRun": "選んだチームメイトのルーティンの実行前にチェックできます",
         "subscribeRoutineRunDetail": "「事前チェック」でこのプラグインを選んだルーティンは、トリガーされるたびに先に確認します。ルーティンの指示とトリガーしたイベントの内容を参照でき、今回をスキップまたは停止できますが、代わりに承認することはできません。",
+        "systemPrompt": "選択したタスクにシステム指示を追加できます",
+        "systemPromptDetail": "以下の静的な文章を、このプラグインを選択したタスクに限り Cindy の固定指示の後へ追加します。順序と対応エンジンはパッケージで指定します。変更は次のメッセージから反映され、エラーはタスクの設定に従います。",
+        "subscribeComposeContext": "選択したタスクの返信前に参考資料を追加できます",
+        "subscribeComposeContextDetail": "選択したタスクの現在のメッセージだけを共有します。結果は通常の参考資料として扱われ、システム指示や承認にはなりません。エラー時はタスクの設定に従います。",
+        "subscribeSearchMemory": "選択したタスクにメモリを提供できます",
+        "subscribeSearchMemoryDetail": "既存の memory_search にプラグイン名付きの全文結果を追加します。メモリ検索を有効にしてください。選択したタスクの検索語だけを共有し、失敗時は Cindy の結果を保持します。",
+        "subscribeStartTurn": "選択したタスクで返信前にモデルを選べます",
+        "subscribeStartTurnDetail": "タスクでこのプラグインを選んだ場合のみ、現在のメッセージを読み、接続済みモデル、推論強度、Fast を選べます。エラー時はタスクの設定に従い、操作を代わりに承認することはできません。",
+        "subscribeModelRequest": "選択したタスクの各モデルリクエストを処理できます",
+        "subscribeModelRequestDetail": "タスクでこのプラグインを選んだ場合のみ、モデルへのリクエストを読み、モデル、パラメーター、内容を調整できます。現在はローカルの Pi のみ対応し、エラー時はタスクの設定に従います。接続の認証情報は含まれません。",
         "subscribeStartTask": "新しいタスクのモデルを選べます",
-        "subscribeStartTaskDetail": "新しいタスクでこのプラグインのモデルを選ぶと、最初のメッセージを読んで、接続済みのモデルから 1 つ選びます。選ぶのは 1 回だけで、タスクの途中でモデルは変わりません。",
+        "subscribeStartTaskDetail": "新しいタスクでこのプラグインのモデルを選ぶと、最初のメッセージを読んで、接続済みのモデルから 1 つ選びます。この処理は最初のメッセージを送る前に一度だけ実行されます。",
         "card": "メッセージカードを描画",
         "cardExternalLink": "カード内で外部リンクを宣言でき、確認後にブラウザで開きます",
         "cardExternalLinkDetail": "カード内のリンクをクリックすると確認ダイアログが表示され、承認後にシステムブラウザで開きます。http/https アドレスのみ許可されます。",
@@ -8053,7 +8126,9 @@
         "mcpUi": "会話にインタラクティブなページを表示",
         "mcpUiDomains": "ページが接続できるドメイン：{{domains}}",
         "mcpAppOnly": "ページ専用",
-        "uiPageAccess": "ページ：{{pages}}、ドメイン：{{domains}}、ページから呼び出せるツール：{{tools}}"
+        "uiPageAccess": "ページ：{{pages}}、ドメイン：{{domains}}、ページから呼び出せるツール：{{tools}}",
+        "uiHost": "Cindy に画面とホスト操作を追加",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -9272,6 +9347,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT のクォータを更新できませんでした。再取得してください。他の使用量情報は保持されます。",
+    "retryQuota": "クォータを再取得",
+    "retryingQuota": "クォータを取得中…",
     "usageCritical": "使用量が高い状態です",
     "usageWarning": "使用量がやや高い状態です",
     "usageTitle": "使用量の詳細",
@@ -11702,7 +11780,7 @@
       "remove": "削除",
       "removeAria": "{{platform}} を削除",
       "empty": "既存のボットを追加するか、下で個人用 WeChat を接続すると、{{name}} がそこで返信します。",
-      "externalNote": "このボットにメッセージを送る人は全員 {{name}} と話すことになります。あなた自身のメッセージは {{name}} の権限で実行され、それ以外の人には権限を制限した非表示のタスクが個別に用意されます。",
+      "externalNote": "連携後、Telegram と Feishu/Lark の個別メッセージはオーナーからのみ受け付けます。グループへの参加は各プラットフォームの設定に従い、ツールは {{name}} の権限で動作します。別々のセッションでも資料とメモリは共有されます。",
       "sharedMemoryNote": "{{name}} はここでの情報と他の会話の情報をまとめて使います。記憶を分けたい場合は別の仲間を使ってください。",
       "groups": {
         "title": "グループ",
@@ -12572,47 +12650,47 @@
         "claude-code": {
           "ask": {
             "label": "デフォルト権限",
-            "description": "ワークスペース内の読み書きを許可し、より高い権限、ネットワークアクセス、ワークスペース外のパスが必要なときは確認します。"
+            "description": "必要に応じて、あなたが操作を承認します。"
           },
           "acceptEdits": {
             "label": "編集を自動承認",
-            "description": "ファイル編集リクエストを自動で承認し、確認の手間を減らします。リスクの高いコマンドや権限は基盤の権限ポリシーに従います。"
+            "description": "ファイル編集はそのまま許可し、その他の操作は必要に応じてあなたが承認します。"
           },
           "auto": {
             "label": "自動レビュー",
-            "description": "ワークスペース内の読み書きを許可し、昇格リクエストを自動でレビューします。高リスクな操作は拒否または確認される場合があります。中断は減りますが、誤判定の可能性があります。"
+            "description": "AI モデルが操作を承認するため、追加の待ち時間が生じる場合があります。必要に応じてあなたが確認します。"
           },
           "bypassPermissions": {
             "label": "フルアクセス",
-            "description": "追加確認なしで任意のファイル編集とネットワークコマンド実行を許可します。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
+            "description": "通常の操作はそのまま許可し、ワークスペース外のファイルやネットワークを使うコマンドも利用できます。"
           }
         },
         "codex": {
           "ask": {
             "label": "デフォルト権限",
-            "description": "ワークスペース内の読み書きを許可し、より高い権限、ネットワークアクセス、ワークスペース外のパスが必要なときは確認します。"
+            "description": "必要に応じて、あなたが操作を承認します。"
           },
           "auto": {
             "label": "自動レビュー",
-            "description": "保護されたワークスペースサンドボックス内でコマンドを自動実行します。境界を越える操作は自動レビュアーが判断し、高リスクな操作は拒否または確認される場合があります。"
+            "description": "AI モデルが操作を承認するため、追加の待ち時間が生じる場合があります。必要に応じてあなたが確認します。"
           },
           "bypassPermissions": {
             "label": "フルアクセス",
-            "description": "追加確認なしで任意のファイル編集とネットワークコマンド実行を許可します。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
+            "description": "通常の操作はそのまま許可し、ワークスペース外のファイルやネットワークを使うコマンドも利用できます。"
           }
         },
         "pi": {
           "ask": {
             "label": "デフォルト権限",
-            "description": "読み取り専用ツールはそのまま実行し、ファイル書き込み・コマンド実行・MCP ツールは毎回確認します。"
+            "description": "必要に応じて、あなたが操作を承認します。"
           },
           "auto": {
             "label": "自動レビュー",
-            "description": "ワークスペース内の書き込みと安全なコマンドは自動実行し、境界外への書き込み・危険なコマンド・MCP ツールは確認します。"
+            "description": "AI モデルが操作を承認するため、追加の待ち時間が生じる場合があります。必要に応じてあなたが確認します。"
           },
           "bypassPermissions": {
             "label": "フルアクセス",
-            "description": "追加確認なしで任意のファイル編集とネットワークコマンド実行を許可します。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
+            "description": "通常の操作はそのまま許可し、ワークスペース外のファイルやネットワークを使うコマンドも利用できます。"
           }
         }
       }
@@ -13486,8 +13564,8 @@
       "dismissTitle": "過去の失敗通知を閉じる"
     },
     "worktreeRestoreBanner": {
-      "text": "このセッションのワークツリーは回収されました（ディレクトリが存在しません）。",
-      "textPendingSnapshot": "このセッションには未適用の変更スナップショットがあります。",
+      "text": "このセッションのワークツリー「{{name}}」は回収されました（ディレクトリが存在しません）。",
+      "textPendingSnapshot": "このセッションのワークツリー「{{name}}」には未適用の変更スナップショットがあります。",
       "restoreAction": "ワークツリーを復元",
       "applySnapshotAction": "変更を適用",
       "restoring": "復元中…",
@@ -14013,6 +14091,7 @@
       "botSentNamed": "仲間「{{name}}」から送信",
       "orcaFromLead": "Lead からのメッセージ",
       "orcaFromWorker": "Worker からのメッセージ",
+      "orcaFromWorkerBatch": "システムから報告された {{count}} 件の Worker 結果",
       "orcaFromWorkerNamed": "Worker「{{role}}」からのメッセージ",
       "hookChannelFrom": "{{channel}} から",
       "deviceSentMobileNamed": "スマートフォン「{{name}}」から送信",
@@ -14079,7 +14158,7 @@
       "errors": {
         "noPriorAssistantPreview": "AI の返信の後ろにある質問で rewind してください（この前に assistant の返信がありません）",
         "sessionRunning": "タスクの停止待ちがタイムアウトしました。もう一度巻き戻してください",
-        "noLiveQuery": "セッションが非アクティブです — 任意のメッセージ（\"ok\" でも可）を送信して SDK を起動してから rewind してください",
+        "noLiveQuery": "タスクの実行環境を復元できなかったため、巻き戻しは完了しませんでした。",
         "noPriorAssistantCommit": "AI の返信の後ろにある質問で rewind してください",
         "commitGeneric": "rewind に失敗しました。再試行してください",
         "remoteNotSupported": "リモート Claude Code セッションはまだ rewind に対応していません"
@@ -14349,6 +14428,14 @@
       "replied": "からの返信",
       "toggle": "「{{title}}」からの返信を開閉",
       "openTask": "タスクを開く"
+    },
+    "subscriptionAccountError": {
+      "limited": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。上限のリセットを待って再試行するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。",
+      "limitedUntil": "このタスクで使用しているサブスクリプションアカウントが利用上限に達しました。リセット予定：{{resetAt}}。リセット後に再試行するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。",
+      "loginRequired": "このタスクで使用しているサブスクリプションアカウントへの再ログインが必要です。タスクを実行しているコンピューターで再ログインしてから、再試行してください。",
+      "signingIn": "このタスクで使用しているサブスクリプションアカウントにログイン中です。完了後に再試行してください。",
+      "unavailable": "このタスクに割り当てられたサブスクリプションアカウントは、このリクエストに使用できません。実行先のコンピューターでモデルプロバイダーのアカウント設定を確認するか、別のモデル接続先を選んでください。",
+      "legacy": "このタスクに割り当てられたサブスクリプションアカウントを利用できません。実行先のコンピューターでログイン状態と使用量を確認するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。"
     }
   },
   "ccAgent": {
@@ -19311,6 +19398,12 @@
       "restore": "既定に戻す"
     }
   },
+  "pluginUi": {
+    "display": "表示方法",
+    "original": "元の表示",
+    "menu": "プラグインのビューとコマンド",
+    "actionFailed": "プラグインの操作を完了できませんでした。もう一度お試しください。"
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "このカードを操作できるのはセッションのオーナーだけです。",
     "retry": "再読み込み",
@@ -19769,6 +19862,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "アカウント未割り当て",
+    "boundUnavailable": "アカウントを利用できません",
     "providerManagedAuth": "現在の Codex プロバイダーでは ChatGPT アカウント情報を取得できません。プロバイダーの追加時に「$t(subscriptionAccounts.signIn.anotherAccount)」を選ぶと、別のフォルダーを使用できます。",
     "signIn": {
       "checking": "ローカルアカウントを確認中…",
@@ -19796,7 +19890,16 @@
     "openDirectory": "アカウントフォルダーを開く",
     "openDirectoryFailed": "アカウントフォルダーを開けませんでした。移動または削除された可能性があります。",
     "loginAgain": "再ログイン",
-    "login": "ログイン"
+    "login": "ログイン",
+    "quotaRecoverIn": "{{duration}}後に利用可能",
+    "quotaExhausted": "利用枠を使い切りました",
+    "quotaFiveHourRemaining": "5時間枠の残り {{percent}}%",
+    "quotaFiveHourExhausted": "5時間枠を使い切りました",
+    "quotaAverage": "クォータ残り {{percent}}%（平均）",
+    "quotaUpdating": "クォータ更新待ち",
+    "quotaResetSoon": "まもなくリセット",
+    "quotaAverageHint": "週の上限 · アカウントごとの単純平均",
+    "quotaResetHint": "現在の利用ペースではリセット時にクォータが残る見込みです。24時間以内は黄色、6時間以内は赤色で表示します。"
   },
   "sessionNotify": {
     "finished": "このタスクは今回のターンを終えました。最終回答：",

@@ -309,6 +309,18 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(dismiss).toHaveBeenCalledOnce();
   });
 
+  // Unit regression: startup account errors need actionable copy, not replyFailed.
+  it.each([
+    ['[SUBSCRIPTION_ACCOUNT_LIMITED] diagnostic', 'limited'],
+    ['[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] diagnostic', 'loginRequired'],
+    ['The task subscription account requires login or quota reset', 'legacy'],
+  ])('localizes subscription startup failure %s', (message, key) => {
+    const error = `LAZY_CREATE_FAILED: ${message}`;
+    render(<ErrorBanner error={error} retryText="original" onRetry={vi.fn()} agentKind="cc" />);
+    expect(screen.getByText(`chat.subscriptionAccountError.${key}`)).toBeTruthy();
+    expect(screen.queryByText(error)).toBeNull();
+  });
+
   it('localizes the Codex resume preflight marker without exposing the host envelope', () => {
     const error = `LAZY_CREATE_FAILED: ${CODEX_RESUME_NOT_READY_WIRE_MESSAGE}`;
     render(

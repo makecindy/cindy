@@ -55,7 +55,7 @@ import {
   parseOrcaPersistedMessage,
   type OrcaCollabCard,
 } from '@/session/orcaCollab';
-import { isMobileImPlatform, type MobileImPlatform } from '@/session/messageSourceLabels';
+import { isMobileImPlatform, orcaAutoBridgeBatchCount, type MobileImPlatform } from '@/session/messageSourceLabels';
 import {
   parseMobilePersistedSessionReferenceMetadata,
   type MobilePersistedSessionReferenceMetadata,
@@ -526,6 +526,7 @@ export function normalizeRemoteMessages(
       const reportCard = parseOrcaPersistedMessage(
         message.content,
         orcaOrigin?.kind === 'orca' ? readString(orcaOrigin.senderLabel) ?? undefined : undefined,
+        orcaAutoBridgeBatchCount(orcaOrigin),
       );
       if (reportCard) {
         result.push({
@@ -540,7 +541,7 @@ export function normalizeRemoteMessages(
           orcaCard: reportCard,
           align: 'agent',
           createdAt: message.createdAt,
-          ...readSessionOrigin(message),
+          ...(orcaAutoBridgeBatchCount(orcaOrigin) ? {} : readSessionOrigin(message)),
         });
         continue;
       }

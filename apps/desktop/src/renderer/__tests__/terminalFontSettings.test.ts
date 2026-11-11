@@ -27,12 +27,12 @@ function installBridge(initial: AppearanceSettings) {
       appearanceSettings: {
         getSync: () => snapshot,
         setPatch,
-        onChanged: (callback: typeof onChanged) => {
+        onChanged: vi.fn((callback: typeof onChanged) => {
           onChanged = callback;
           return () => {
             onChanged = undefined;
           };
-        },
+        }),
       },
       logToMain,
     },
@@ -50,6 +50,17 @@ function installBridge(initial: AppearanceSettings) {
 beforeEach(() => {
   document.documentElement.removeAttribute('style');
   document.body.removeAttribute('style');
+});
+
+it('uses the existing single appearance subscription for default and plugin settings', () => {
+  installBridge(DEFAULT_APPEARANCE_SETTINGS);
+  const stop = vi.fn();
+  const bridge = window.electronAPI.appearanceSettings;
+  vi.mocked(bridge.onChanged).mockReturnValue(stop);
+  const hook = renderHook(() => useFontSettings(), { wrapper });
+  expect(bridge.onChanged).toHaveBeenCalledTimes(1);
+  hook.unmount();
+  expect(stop).toHaveBeenCalledTimes(1);
 });
 
 afterEach(() => {

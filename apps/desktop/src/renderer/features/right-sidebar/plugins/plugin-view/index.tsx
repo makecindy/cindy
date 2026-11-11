@@ -11,6 +11,8 @@
  */
 
 import { Puzzle } from 'lucide-react';
+import { PluginUiView } from '@/cindy-brain/PluginUiView';
+import { getApprovedGhostHostUi } from '../../../../../shared/ghost';
 import type { TFunction } from 'i18next';
 
 import {
@@ -40,7 +42,7 @@ function PluginViewTabPillTitle({ state, t }: { state: PluginViewTabState; t: TF
   return (
     <>
       {ghost
-        ? globalTabTitleForGhost(ghost, effectivePluginView(state, ghost))
+        ? (state.resourceViewId ? getApprovedGhostHostUi(ghost)?.views?.find(view => view.id === state.resourceViewId)?.title ?? ghost.manifest.name : globalTabTitleForGhost(ghost, effectivePluginView(state, ghost)))
         : t('rightSidebar.tabs.kinds.pluginView')}
     </>
   );
@@ -57,6 +59,7 @@ function PluginViewBody({ state }: TabKindBodyProps<PluginViewTabState>) {
   const runtimeState = useGhostRuntimeState(state.instanceId);
   // 停用 / 卸载的瞬间投影层已把页签隐藏,这里只兜住收起前的一两帧。
   if (!ghost || ghost.enabled === false) return null;
+  if (state.resourceViewId) return <PluginUiView ghost={ghost} viewId={state.resourceViewId} sessionId={null} input={state.resourceInput} />;
   if (runtimeState === 'crashed' || runtimeState === 'fused') {
     return <GhostPanelError ghost={ghost} state={runtimeState} />;
   }
@@ -100,6 +103,10 @@ const plugin: TabKindPlugin<PluginViewTabState> = {
         : '';
     // 页签记着它承载的是 panel 还是 main 页面;丢了它就会一律回落成停靠面板那一份。
     const view = (raw as { view?: unknown } | null)?.view;
+    const resourceViewId = (raw as { resourceViewId?: unknown } | null)?.resourceViewId;
+    const resourceInput = (raw as PluginViewTabState | null)?.resourceInput;
+    if (typeof resourceViewId === 'string') return { instanceId, resourceViewId,
+      ...(resourceInput && typeof resourceInput === 'object' && !Array.isArray(resourceInput) ? { resourceInput } : {}) };
     return view === 'panel' || view === 'main' ? { instanceId, view } : { instanceId };
   },
 };

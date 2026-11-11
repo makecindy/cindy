@@ -1092,6 +1092,11 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
           emit('localDb.subagentRuns.onChanged', parsed);
         } else if (parsed.type === 'input_projection') {
           emit('maker.onInputProjection', parsed.projection);
+        } else if (parsed.type === 'input_receipt') {
+          // /chat uses this transport receipt to end an interrupted input's
+          // stream. The renderer already receives the queue projection; this
+          // is not a model event and must not flush or alter its text stream.
+          return;
         } else if (parsed.type === 'project_aliases_changed') {
           emit('localDb.projectAliases.onChanged');
         } else {

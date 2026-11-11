@@ -4,13 +4,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { assertBundleVersion, checkBuiltInSkills, SKILLS_ROOT, VERSION_FILE } from '../check-built-in-skills.mjs';
+import { assertBundleVersion, checkBuiltInSkills, RECORDS_DIRECTORY, SKILLS_ROOT, VERSION_FILE } from '../check-built-in-skills.mjs';
 
 // Regression: bundle 89 changed after its version bump, and personal composition
 // shipped it. Runtime tests only cover refusal after installation, not the build gate.
 // Unit/runner tier: version outcomes in memory plus one small real-Git smoke for
 // complete merge history and actual worktree bytes. No user profile or app is loaded.
-// Standalone: node --test scripts/__tests__/check-built-in-skills.test.mjs — 1.67s on macOS.
+// Standalone: node --test scripts/__tests__/check-built-in-skills.test.mjs — 3.2s on macOS.
 test('unchanged bundles and properly incremented bundles are accepted', () => {
   const history = [{ ref: 'base', version: 89, fingerprint: 'old' }];
   assert.doesNotThrow(() => assertBundleVersion({ version: 89, fingerprint: 'old' }, history));
@@ -94,6 +94,45 @@ test('build gate checks real bytes and both parents of a clean synthetic merge',
   assert.equal(check().version, 3);
   assert.equal(status, '');
   assert.equal(git('diff', '--name-only'), VERSION_FILE);
+
+  // Record scheme: the version is a fixed base plus the number of record files, so
+  // branches stop editing one shared number (10 open PRs conflicted on that line,
+  // 2026-11-11). History still contains the hand-incremented versions above.
+  commit('composition bump');
+  const record = name => put(`${SKILLS_ROOT}/${RECORDS_DIRECTORY}/${name}.md`, `${name}\n`);
+  put(VERSION_FILE, 'export const BUILT_IN_SKILLS_BUNDLE_VERSION_BASE = 3;\n');
+  assert.throws(check, /at least one record file/);
+  record('adopt-records');
+  assert.equal(check().version, 4);
+  const adopted = commit('adopt version records');
+
+  put(`${SKILLS_ROOT}/example/references/a.md`, 'record branch x\n');
+  assert.throws(check, /version 4 was reused.*Add one new record file/);
+  put(`${SKILLS_ROOT}/${RECORDS_DIRECTORY}/notes.txt`, 'not a record');
+  assert.throws(check, /version 4 was reused/);
+  fs.unlinkSync(path.join(root, SKILLS_ROOT, RECORDS_DIRECTORY, 'notes.txt'));
+  record('x');
+  assert.equal(check().version, 5);
+  const x = commit('branch x');
+
+  git('checkout', '-b', 'y', adopted);
+  put(`${SKILLS_ROOT}/example/references/b.md`, 'record branch y\n');
+  record('y');
+  commit('branch y');
+  assert.equal(check().version, 5);
+  assert.throws(() => check([x]), /version 5 was reused/);
+  // The composition is newer than both sources without anyone editing a file.
+  git('-c', 'commit.gpgsign=false', 'merge', '--no-ff', x, '-m', 'record composition');
+  assert.equal(git('status', '--porcelain'), '');
+  assert.equal(check().version, 6);
+  fs.unlinkSync(path.join(root, SKILLS_ROOT, RECORDS_DIRECTORY, 'x.md'));
+  assert.throws(check, /older than 6.*add a record file/);
+  git('checkout', '--', '.');
+  // A conflict resolved by keeping an old-style bump must not pass on a number the runtime ignores.
+  put(VERSION_FILE, 'export const BUILT_IN_SKILLS_BUNDLE_VERSION_BASE = 3;\nexport const BUILT_IN_SKILLS_BUNDLE_VERSION = 9;\n');
+  assert.throws(check, /still declares BUILT_IN_SKILLS_BUNDLE_VERSION/);
+  git('checkout', '--', '.');
+
   fs.writeFileSync(path.join(root, '.git', 'shallow'), git('rev-parse', 'HEAD') + '\n');
   assert.throws(check, /complete Git history/);
 });

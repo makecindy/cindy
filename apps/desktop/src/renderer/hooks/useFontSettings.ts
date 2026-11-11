@@ -14,6 +14,7 @@ import {
   SCALED_TAILWIND_TOKENS,
   TAILWIND_LINE_HEIGHTS,
 } from '../styles/generated/token-mappings';
+import { usePluginAppearance } from '../cindy-brain/usePluginAppearance';
 
 import {
   APPEARANCE_LIMITS,
@@ -134,8 +135,9 @@ export function applyFontSettings(settings: FontSettings): void {
 }
 
 export function FontSettingsProvider({ children }: { children: ReactNode }) {
+  const initial = useMemo(getInitialAppearanceSettings, []);
+  const applyPluginSettings = usePluginAppearance(applyFontSettings, initial);
   const [settings, setSettings] = useState<ConfigurableFontSettings>(() => {
-    const initial = getInitialAppearanceSettings();
     return {
       uiFamily: initial.uiFamily,
       codeFamily: initial.codeFamily,
@@ -164,6 +166,7 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
     if (!bridge?.onChanged) return;
     return bridge.onChanged((next: AppearanceSettings) => {
       const normalized = normalizeAppearanceSettings(next);
+      applyPluginSettings(normalized);
       const confirmed = {
         uiFamily: normalized.uiFamily,
         codeFamily: normalized.codeFamily,
@@ -180,7 +183,7 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
       settingsRef.current = optimistic;
       setSettings(optimistic);
     });
-  }, []);
+  }, [applyPluginSettings]);
 
   const patch = useCallback((next: Partial<ConfigurableFontSettings>) => {
     const previous = settingsRef.current;

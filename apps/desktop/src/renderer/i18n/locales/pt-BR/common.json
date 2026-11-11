@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "Salvar",
+    "promptUnsupported": "Este local de execução do Pi não oferece suporte a trechos de instruções de sistema.",
+    "title": "Plugins da tarefa",
+    "description": "Selecione os plugins desta tarefa. As alterações valem a partir da próxima mensagem.",
+    "unsupported": "O processamento de cada solicitação só está disponível com Pi local. O mecanismo desta tarefa não oferece suporte.",
+    "failed": "Não foi possível carregar ou salvar as configurações. Reabra este painel para tentar novamente."
+  },
   "sharedTaskRecovery": {
     "title": "Não é possível retomar no computador original",
     "description": "Escolha outro computador ou fornecedor para continuar com uma transferência de contexto. As mensagens são mantidas, mas o estado completo da execução no computador original não é transferido.",
@@ -878,6 +886,7 @@
       "assignLocalAria": "Permitir que {{name}} aceite novas tarefas de outros computadores",
       "moreAria": "Mais ações para {{name}}",
       "remove": "Remover do grupo",
+      "removeLocalBlocked": "O computador que hospeda o grupo não pode ser removido",
       "status": {
         "checking": "Verificando…",
         "idle": "Ocioso",
@@ -2328,6 +2337,7 @@
         "desktopVisibilityHint": "Mostra a área de trabalho e as janelas atrás da Cindy. Textos e controles permanecem nítidos.",
         "desktopBlurLabel": "Desfoque da área de trabalho",
         "desktopBlurHint": "Desfoca a área de trabalho atrás da janela. 0 desativa; valores maiores aumentam o desfoque. Sistemas sem ajuste de intensidade usam o efeito padrão.",
+        "desktopBlurSwitchHint": "Desfoca a área de trabalho atrás da janela com o efeito do sistema do Windows. Requer o Windows 11 versão 22H2 ou posterior.",
         "blurLabel": "Desfoque do papel de parede",
         "blurHint": "Desfoque apenas o papel de parede. Defina como 0 para desativar. Desfocar papéis de parede animados aumenta o uso da GPU.",
         "motionLabel": "Exibição",
@@ -3676,6 +3686,36 @@
           "invalid": "Prévia indisponível; verifique a configuração ou selecione o arquivo novamente",
           "skipped": "Ignorado; selecione o arquivo novamente para importar esta entrada",
           "authorizationPending": "Conexão adicionada; conclua a autorização nas configurações do provedor"
+        },
+        "local": {
+          "title": "Importar de aplicativos locais",
+          "note": "Lê as configurações de API salvas neste computador sem alterar os aplicativos de origem. Claude Code: apenas settings.json do usuário, incluindo CLAUDE_CONFIG_DIR. Não lê variáveis do shell nem configurações de projeto ou gerenciadas.",
+          "review": "Revisar e importar ({{count}})",
+          "scanning": "Lendo configurações salvas…",
+          "empty": "Nenhuma configuração de API salva foi encontrada.",
+          "failed": "Não foi possível concluir a leitura. Tente novamente.",
+          "edit": "Editar",
+          "editFailed": "Confira a URL, o protocolo e a chave e tente novamente.",
+          "editNote": "Deixe a chave em branco para manter a credencial lida. Alterar a URL ou o protocolo exige uma nova chave.",
+          "name": "Nome de exibição",
+          "baseUrl": "URL base",
+          "protocol": "Protocolo da API",
+          "chooseProtocol": "Escolha um protocolo",
+          "apiKey": "Chave de API",
+          "keepKey": "Deixe em branco para manter a chave lida",
+          "missingUrl": "URL necessária",
+          "status": {
+            "missing": "Configuração não encontrada",
+            "readFailed": "Não foi possível ler; confira as permissões ou tente novamente",
+            "invalid": "Formato desconhecido; confira ou edite a configuração",
+            "limit": "Limite atingido; esta origem não foi lida por completo",
+            "unsupported": "Esta configuração não pode ser importada automaticamente. Comandos e apiKeyHelper não são executados; adicione a configuração de API manualmente.",
+            "needsInput": "É necessário completar a configuração",
+            "changed": "A origem mudou; faça uma nova busca",
+            "duplicate": "Já existe uma conexão idêntica"
+          },
+          "rescan": "Buscar novamente",
+          "sourceDisabled": "Desativado no aplicativo de origem"
         }
       },
       "order": {
@@ -3837,6 +3877,10 @@
           "openaiImagesHint": "Usa o endereço e a chave de API desta conexão para /images/generations e /images/edits. Ao ativar, esta passa a ser a única conexão Images do provedor. Adicione manualmente os IDs de modelos ausentes e depois declare sua capacidade de imagem nos detalhes do modelo.",
           "xaiVideos": "Usar API de vídeos compatível com xAI",
           "xaiVideosHint": "Usa o endereço e a chave de API desta conexão para enviar tarefas de vídeo e consultar seu status. Ao ativar, esta passa a ser a única conexão de vídeo do provedor. Adicione os IDs de modelos ausentes e depois declare a capacidade de vídeo nos detalhes do modelo.",
+          "minimaxVideos": "Usar API de vídeos compatível com MiniMax",
+          "minimaxVideosHint": "Usa o endereço e a chave de API desta conexão para enviar tarefas de vídeo do MiniMax, como o MiniMax-H3, e consultar seu status. Um provedor só pode usar uma API de vídeo. Adicione os IDs de modelos ausentes e depois declare a capacidade de vídeo nos detalhes do modelo.",
+          "openaiVideos": "Usar API de vídeos compatível com OpenAI (/v1/videos)",
+          "openaiVideosHint": "Usa o endereço e a chave de API desta conexão para enviar tarefas com POST /v1/videos e consultar seu status, o formato usado pela maioria dos relays, como o tu-zi; modelos como o MiniMax-H3 funcionam por ele. Um provedor só pode usar uma API de vídeo. Adicione os IDs de modelos ausentes e depois declare a capacidade de vídeo nos detalhes do modelo.",
           "runtimeSupportsImageGeneration": "Oferece geração e edição de imagens",
           "runtimeSupportsImageGenerationHelpLabel": "Sobre o suporte à geração e edição de imagens",
           "runtimeSupportsImageGenerationConditionTitle": "Quando ativar",
@@ -6681,8 +6725,27 @@
             "copied": "Código de vinculação copiado",
             "hint": "Ou envie este código ao bot Cindy por mensagem direta no Feishu / Lark"
           },
+          "linkedAccounts": "Contas vinculadas: {{count}}",
+          "connectionTenant": "Empresa: {{tenant}}",
           "setWorkingDevice": "Definir como computador de trabalho",
-          "workingDeviceSet": "Computador de trabalho definido"
+          "workingDeviceSet": "Computador de trabalho definido",
+          "appType": {
+            "self_built": "Aplicativo da organização",
+            "store": "Aplicativo da loja"
+          },
+          "linkedBotsSummary": "Bots vinculados: {{bots}} · contas: {{accounts}}",
+          "chooseBot": "Escolha um bot para vincular. Você pode usar vários bots ao mesmo tempo.",
+          "connectBot": "Vincular este bot",
+          "linkAnotherAccount": "Vincular outra conta Feishu",
+          "botFallback": "Bot Cindy",
+          "bridgeTitle": "Bots do Feishu / Lark",
+          "bridgeDescription": "Os bots apenas repassam suas mensagens do Feishu / Lark para o Cindy. As mensagens de cada conta vinculada vão para o computador de trabalho dela, e as sessões ficam separadas por bot e por conta.",
+          "settingsTitle": "Diretórios de trabalho e modelos",
+          "settingsDescription": "Pertencem à sua conta Cindy neste computador, não a um bot nem a uma conta do Feishu / Lark: todos os bots do Feishu / Lark usam os mesmos. A lista de diretórios também é compartilhada com outros canais.",
+          "workingDeviceLabel": "Computador de trabalho: {{name}}",
+          "workingDeviceThisComputer": "Este computador",
+          "workingDeviceUnknown": "Computador de trabalho ainda não sincronizado",
+          "workingDeviceUnnamed": "Computador sem nome"
         }
       },
       "summary": {
@@ -8108,8 +8171,18 @@
         "subscribeScheduleRunDetail": "As automações em que você o escolher em Verificação prévia consultam-no primeiro. Ele vê o nome e as instruções e pode pular ou parar essa execução, mas não aprovar nada por você.",
         "subscribeRoutineRun": "Pode verificar rotinas de colegas escolhidas antes de executarem",
         "subscribeRoutineRunDetail": "As rotinas em que você o escolher em Verificação prévia consultam-no primeiro. Ele vê as instruções e os eventos que as acionaram e pode pular ou parar essa execução, mas não aprovar nada por você.",
+        "systemPrompt": "Pode adicionar instruções de sistema às tarefas selecionadas",
+        "systemPromptDetail": "Os textos estáticos abaixo vêm após as instruções fixas da Cindy apenas nas tarefas que selecionam este plugin. O pacote define a ordem e os mecanismos. As alterações valem a partir da próxima mensagem; os erros seguem a configuração da tarefa.",
+        "subscribeComposeContext": "Pode adicionar referências antes das respostas nas tarefas selecionadas",
+        "subscribeComposeContextDetail": "Só as tarefas selecionadas compartilham a mensagem atual. Os resultados são referências comuns, não instruções de sistema nem autorizações. Os erros seguem a configuração da tarefa.",
+        "subscribeSearchMemory": "Pode fornecer memórias às tarefas selecionadas",
+        "subscribeSearchMemoryDetail": "Adiciona resultados completos com o nome do plugin ao memory_search. A busca de memória deve estar ativada. Só a consulta é compartilhada; em caso de falha, os resultados da Cindy são mantidos.",
+        "subscribeStartTurn": "Pode escolher um modelo antes de cada resposta nas sessões selecionadas",
+        "subscribeStartTurnDetail": "Somente as sessões em que você seleciona este plugin compartilham a mensagem atual com ele. Ele pode escolher um modelo conectado, o esforço de raciocínio e Fast. Os erros seguem a configuração da sessão; ele não pode aprovar ações por você.",
+        "subscribeModelRequest": "Pode processar cada solicitação ao modelo nas sessões selecionadas",
+        "subscribeModelRequestDetail": "Somente as sessões em que você seleciona este plugin compartilham com ele as solicitações ao modelo. Ele pode ajustar modelos, parâmetros e conteúdo. Atualmente, apenas o Pi local é compatível; os erros seguem a configuração da sessão. As credenciais de conexão não são incluídas.",
         "subscribeStartTask": "Pode escolher o modelo de novas tarefas",
-        "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo oferecido por ele, ele lê a primeira mensagem e escolhe um dos seus modelos conectados. Escolhe uma vez; o modelo não muda durante a tarefa.",
+        "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo oferecido por ele, ele lê a primeira mensagem e escolhe um dos seus modelos conectados. Esta etapa é executada apenas antes da primeira mensagem.",
         "card": "Renderiza cartões de mensagens",
         "cardExternalLink": "Os cartões podem declarar links externos que abrem seu navegador após confirmação",
         "cardExternalLinkDetail": "Clicar em um link de cartão exibe uma caixa de diálogo de confirmação; a URL só abre no navegador do sistema após sua aprovação. Apenas endereços http/https são permitidos.",
@@ -8168,7 +8241,9 @@
         "mcpUi": "Exibir páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Somente página",
-        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}"
+        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}",
+        "uiHost": "Fornecer interfaces e ações do host no Cindy",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de conexão",
@@ -9387,6 +9462,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "Não foi possível atualizar a cota do ChatGPT. Tente consultar novamente; as outras informações de uso são mantidas.",
+    "retryQuota": "Consultar a Cota Novamente",
+    "retryingQuota": "Consultando a cota…",
     "usageCritical": "Uso alto",
     "usageWarning": "Uso elevado",
     "usageTitle": "Detalhes de uso",
@@ -11846,7 +11924,7 @@
       "remove": "Remover",
       "removeAria": "Remover {{platform}}",
       "empty": "Adicione um bot que você já tem ou conecte seu WeChat pessoal abaixo, e {{name}} responderá por lá.",
-      "externalNote": "Qualquer pessoa que enviar mensagens a este bot estará conversando com {{name}}. Suas próprias mensagens usam as permissões de {{name}}; as demais pessoas recebem uma tarefa oculta separada com permissões restritas.",
+      "externalNote": "Após a vinculação, Telegram e Feishu/Lark só aceitam mensagens privadas do proprietário. Os grupos seguem as configurações de participação de cada plataforma e as permissões de ferramentas de {{name}}. Tarefas separadas compartilham arquivos e memória.",
       "sharedMemoryNote": "{{name}} usa informações daqui e de outras conversas em conjunto. Para manter as memórias separadas, use outro colega.",
       "groups": {
         "title": "Grupos",
@@ -12718,47 +12796,47 @@
         "claude-code": {
           "ask": {
             "label": "Permissões padrão",
-            "description": "Permite acesso de leitura e gravação dentro do espaço de trabalho e pede confirmação antes de usar permissões superiores, acesso à rede ou caminhos fora do espaço de trabalho."
+            "description": "Você aprova as ações quando necessário."
           },
           "acceptEdits": {
             "label": "Aceitar edições automaticamente",
-            "description": "Aceita automaticamente solicitações de edição de arquivos para reduzir confirmações repetidas. Comandos ou permissões de maior risco ainda seguem a política de permissões subjacente."
+            "description": "Edições de arquivos são permitidas diretamente; você aprova outras ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Permite acesso de leitura e gravação dentro do espaço de trabalho e revisa automaticamente solicitações de elevação de permissões; ações de alto risco ainda podem ser negadas ou exigir confirmação. Isso reduz interrupções, mas pode cometer erros."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; você confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer arquivo e executar comandos com acesso à rede sem outra confirmação. Risco máximo; use apenas para tarefas confiáveis."
+            "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
           }
         },
         "codex": {
           "ask": {
             "label": "Permissões padrão",
-            "description": "Permite acesso de leitura e gravação dentro do espaço de trabalho e pede confirmação antes de usar permissões superiores, acesso à rede ou caminhos fora do espaço de trabalho."
+            "description": "Você aprova as ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Executa comandos automaticamente no ambiente isolado protegido do espaço de trabalho. Ações que ultrapassam os limites desse ambiente passam por uma revisão automática; ações de alto risco ainda podem ser negadas ou exigir confirmação."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; você confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer arquivo e executar comandos com acesso à rede sem outra confirmação. Risco máximo; use apenas para tarefas confiáveis."
+            "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
           }
         },
         "pi": {
           "ask": {
             "label": "Permissões padrão",
-            "description": "Ferramentas somente leitura são executadas diretamente; gravar arquivos, executar comandos e usar ferramentas MCP exige confirmação a cada vez."
+            "description": "Você aprova as ações quando necessário."
           },
           "auto": {
             "label": "Revisão automática",
-            "description": "Gravações dentro do espaço de trabalho e comandos seguros são executados automaticamente; gravações fora dele, comandos arriscados e ferramentas MCP ainda exigem confirmação."
+            "description": "Um modelo de IA aprova as ações, o que pode exigir mais espera; você confirma quando necessário."
           },
           "bypassPermissions": {
             "label": "Acesso total",
-            "description": "Permite editar qualquer arquivo e executar comandos com acesso à rede sem outra confirmação. Risco máximo; use apenas para tarefas confiáveis."
+            "description": "Ações rotineiras são permitidas diretamente, incluindo arquivos fora do espaço de trabalho e comandos de rede."
           }
         }
       }
@@ -13629,8 +13707,8 @@
       "dismissTitle": "Dispensar aviso de falha anterior"
     },
     "worktreeRestoreBanner": {
-      "text": "O worktree desta Sessão foi removido (diretório ausente).",
-      "textPendingSnapshot": "Esta Sessão tem um snapshot de alterações não aplicado.",
+      "text": "O worktree “{{name}}” desta Sessão foi removido (diretório ausente).",
+      "textPendingSnapshot": "O worktree “{{name}}” desta Sessão tem um snapshot de alterações não aplicado.",
       "restoreAction": "Restaurar worktree",
       "applySnapshotAction": "Aplicar alterações",
       "restoring": "Restaurando…",
@@ -14158,6 +14236,7 @@
       "botSentNamed": "Enviado pelo colega \"{{name}}\"",
       "orcaFromLead": "Mensagem do Lead",
       "orcaFromWorker": "Mensagem do Worker",
+      "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensagem do Worker \"{{role}}\"",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado do celular \"{{name}}\"",
@@ -14224,7 +14303,7 @@
       "errors": {
         "noPriorAssistantPreview": "Volte a partir de uma pergunta que venha após uma resposta da IA (esta não tem uma resposta anterior do assistente)",
         "sessionRunning": "A tarefa não parou a tempo — tente voltar novamente",
-        "noLiveQuery": "A sessão está inativa — envie qualquer mensagem primeiro (até mesmo \"ok\") para ativar o SDK antes de voltar",
+        "noLiveQuery": "Não foi possível restaurar o ambiente de execução da tarefa. A reversão não foi concluída.",
         "noPriorAssistantCommit": "Volte a partir de uma pergunta que venha após uma resposta da IA",
         "commitGeneric": "Falha ao voltar. Tente novamente",
         "remoteNotSupported": "As sessões remotas do Claude Code ainda não permitem voltar"
@@ -14550,6 +14629,14 @@
       "replied": "respondeu",
       "toggle": "Mostrar ou ocultar a resposta de “{{title}}”",
       "openTask": "Abrir tarefa"
+    },
+    "subscriptionAccountError": {
+      "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos. A conta não muda automaticamente.",
+      "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos. A conta não muda automaticamente.",
+      "loginRequired": "A conta de assinatura desta tarefa exige um novo login. Entre novamente no computador que executa a tarefa e tente de novo.",
+      "signingIn": "O login na conta de assinatura desta tarefa está em andamento. Tente de novo quando terminar.",
+      "unavailable": "A conta de assinatura atribuída a esta tarefa não pode ser usada nesta solicitação. Verifique a conta nas configurações do provedor de modelos no computador que executa a tarefa ou escolha outra origem de modelos.",
+      "legacy": "A conta de assinatura atribuída a esta tarefa não está disponível. Verifique o login e o uso no computador que executa a tarefa ou escolha outra origem de modelos. A conta não muda automaticamente."
     }
   },
   "ccAgent": {
@@ -19557,6 +19644,12 @@
       "restore": "Restaurar padrões"
     }
   },
+  "pluginUi": {
+    "display": "Exibição",
+    "original": "Original",
+    "menu": "Visualizações e comandos do plugin",
+    "actionFailed": "Não foi possível concluir a ação do plugin. Tente novamente."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "Apenas o proprietário da sessão pode interagir com este cartão.",
     "retry": "Recarregar",
@@ -20028,6 +20121,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Conta não atribuída",
+    "boundUnavailable": "Conta indisponível",
     "providerManagedAuth": "O provedor atual do Codex não disponibiliza informações da conta do ChatGPT. Ao adicionar o provedor, selecione “$t(subscriptionAccounts.signIn.anotherAccount)” para usar uma pasta separada.",
     "signIn": {
       "checking": "Verificando a conta local…",
@@ -20055,7 +20149,16 @@
     "openDirectory": "Abrir pasta da conta",
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Ela pode ter sido movida ou excluída.",
     "loginAgain": "Entrar novamente",
-    "login": "Entrar"
+    "login": "Entrar",
+    "quotaRecoverIn": "Disponível em {{duration}}",
+    "quotaExhausted": "Cota esgotada",
+    "quotaFiveHourRemaining": "Cota de 5 horas restante: {{percent}}%",
+    "quotaFiveHourExhausted": "Cota de 5 horas esgotada",
+    "quotaAverage": "Média restante {{percent}}%",
+    "quotaUpdating": "Cota aguardando atualização",
+    "quotaResetSoon": "Redefinição em breve",
+    "quotaAverageHint": "Cota semanal · Peso igual por conta",
+    "quotaResetHint": "No ritmo atual, pode restar cota na redefinição: amarelo em até 24 horas, vermelho em até 6 horas."
   },
   "sessionNotify": {
     "finished": "Esta tarefa concluiu a rodada. Resposta final:",

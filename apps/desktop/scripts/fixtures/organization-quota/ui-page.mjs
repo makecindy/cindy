@@ -7,7 +7,7 @@ export default {
   real: 'TodaySpendChip, QuotaHoverCard, useClaudeAccountUsage, translations and themes',
   notCovered: 'Server reads, menu bar, device-link transport, subscription providers and the unmounted home dashboard',
   stubs: {
-    'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ dataOwnerId: "fixture", dataOwnerGeneration: 1, mode: "cloud", user: { membershipKind: "org" } });',
+    'src/renderer/contexts/AuthContext': 'export const useOptionalDataOwnerGeneration = () => 1; export const useAuth = () => ({ dataOwnerId: "fixture", dataOwnerGeneration: 1, mode: "cloud", user: { membershipKind: "org" } });',
     'src/renderer/hooks/useApiKey': 'export const useApiKey = () => ({ hasSavedKey: true, isReconciling: false });',
     'src/renderer/hooks/useProviders': 'export const useProviders = () => ({ providers: [] });',
     'src/renderer/hooks/useDeviceProviders': 'export const useDeviceProviders = () => ({ providers: [] });',

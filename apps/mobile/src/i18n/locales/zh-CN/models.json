@@ -74,6 +74,9 @@
     "cancel": "保持不变"
   },
   "unified": {
+    "accountUnassigned": "账号待分配",
+    "accountCount_other": "{{count}} 个账号",
+    "accountFallback": "账号 {{index}}",
       "favoriteConfiguration": "收藏此配置",
       "savedConfiguration": "已收藏 · 点击取消",
       "currentConfiguration": "当前配置",
@@ -113,6 +116,12 @@
       "hour": "小时",
       "minute": "分钟",
       "second": "秒"
-    }
+    },
+    "quotaAverage": "平均余量 {{percent}}%",
+    "quotaUpdating": "余量待更新",
+    "quotaResetSoon": "即将重置",
+    "quotaResetIn": "{{duration}}后重置",
+    "quotaAverageHint": "周限额 · 按账号等权平均",
+    "quotaResetHint": "按当前使用速度，重置时可能仍有余量：24 小时内为黄色，6 小时内为红色。"
   }
 }

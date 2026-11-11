@@ -6,7 +6,7 @@ import { useModelFavoritesHost } from './state/useModelFavoritesHost';
 import { getDataOwnerGeneration } from './contexts/dataOwnerGeneration';
 import { RouterProvider } from 'react-router-dom';
 
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { RemoteDesktopHost } from '@/features/remote-desktop/RemoteDesktopHost';
 
 import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
@@ -43,6 +43,8 @@ import { PluginModelPickerHost } from '@/cindy-brain/PluginModelPickerHost';
 import { LocalAgentConfirmationHost } from '@/components/LocalAgentConfirmationHost';
 import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfirmHost';
 import { GhostInstallConsentHost } from '@/cindy-brain/GhostInstallConsentHost';
+const PluginUiHost = lazy(() => import('@/cindy-brain/PluginUiHost').then(module => ({ default: module.PluginUiHost })));
+import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
 import { SetupMigrationHost } from '@/features/setup-migration/SetupMigrationHost';
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
 import { GithubSetupRequestHost } from '@/features/cc-agent/GithubSetupRequestHost';
@@ -260,12 +262,14 @@ function MakerBootstrap() {
 }
 
 function OwnerScopedRouter() {
-  const { dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
+  const { dataOwnerId, dataOwnerRecoveryEpoch, canEnterApp } = useAuth();
   const ownerKey = `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`;
   return (
+    <PluginUiProvider enabled={canEnterApp} host={<Suspense fallback={null}><PluginUiHost /></Suspense>}>
     <MainViewHistoryProvider ownerKey={ownerKey} locationKey={router.state.location.key}>
       <RouterProvider key={ownerKey} router={router} />
     </MainViewHistoryProvider>
+    </PluginUiProvider>
   );
 }
 

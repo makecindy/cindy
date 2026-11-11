@@ -1,4 +1,12 @@
 {
+  "runtimePlugins": {
+    "save": "Speichern",
+    "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",
+    "title": "Aufgaben-Plugins",
+    "description": "Plugins für diese Aufgabe auswählen. Änderungen gelten ab der nächsten Nachricht.",
+    "unsupported": "Die Verarbeitung jeder Anfrage wird nur mit lokalem Pi unterstützt. Die Engine dieser Aufgabe unterstützt sie nicht.",
+    "failed": "Die Einstellungen konnten nicht geladen oder gespeichert werden. Dieses Fenster erneut öffnen und noch einmal versuchen."
+  },
   "sharedTaskRecovery": {
     "title": "Fortsetzen auf dem ursprünglichen Computer nicht möglich",
     "description": "Wähle einen anderen Computer oder Anbieter, um mit einer Kontextübergabe fortzufahren. Deine Nachrichten bleiben erhalten, der vollständige Ausführungszustand des ursprünglichen Computers wird jedoch nicht übertragen.",
@@ -868,6 +876,7 @@
       "assignLocalAria": "{{name}} erlauben, neue Aufgaben von anderen Computern anzunehmen",
       "moreAria": "Weitere Aktionen für {{name}}",
       "remove": "Aus Gruppe entfernen",
+      "removeLocalBlocked": "Der Computer, der die Gruppe hostet, kann nicht entfernt werden",
       "status": {
         "checking": "Wird geprüft…",
         "idle": "Inaktiv",
@@ -2290,6 +2299,7 @@
         "desktopVisibilityHint": "Zeigt den Desktop und Fenster hinter Cindy. Text und Bedienelemente bleiben klar.",
         "desktopBlurLabel": "Desktop-Unschärfe",
         "desktopBlurHint": "Verwischt den Desktop hinter dem Fenster. 0 schaltet den Effekt aus, höhere Werte verstärken ihn. Systeme ohne einstellbare Stärke verwenden ihren Standardeffekt.",
+        "desktopBlurSwitchHint": "Verwischt den Desktop hinter dem Fenster mit dem Windows-Systemeffekt. Erfordert Windows 11 Version 22H2 oder neuer.",
         "blurLabel": "Unschärfe des Hintergrundbilds",
         "blurHint": "Nur das Hintergrundbild weichzeichnen. Zum Deaktivieren auf 0 setzen. Das Weichzeichnen animierter Hintergrundbilder erhöht die GPU-Auslastung.",
         "motionLabel": "Anzeige",
@@ -3627,6 +3637,36 @@
           "invalid": "Vorschau nicht verfügbar; Konfiguration prüfen oder Datei erneut auswählen",
           "skipped": "Übersprungen; Datei erneut auswählen, um diesen Eintrag zu importieren",
           "authorizationPending": "Verbindung hinzugefügt; schließe die Autorisierung in den Anbietereinstellungen ab"
+        },
+        "local": {
+          "title": "Aus lokalen Apps importieren",
+          "note": "Gespeicherte API-Konfigurationen auf diesem Computer lesen, ohne die Quell-Apps zu ändern. Claude Code: nur die settings.json des Benutzers, auch unter CLAUDE_CONFIG_DIR. Shell-Variablen sowie Projekt- und verwaltete Einstellungen werden nicht gelesen.",
+          "review": "Prüfen und importieren ({{count}})",
+          "scanning": "Gespeicherte Konfigurationen werden gelesen…",
+          "empty": "Keine gespeicherten API-Konfigurationen gefunden.",
+          "failed": "Lesen nicht abgeschlossen. Bitte erneut versuchen.",
+          "edit": "Bearbeiten",
+          "editFailed": "URL, Protokoll und Schlüssel prüfen und erneut versuchen.",
+          "editNote": "Ein leeres Schlüsselfeld behält die gelesenen Zugangsdaten bei. Eine geänderte URL oder ein anderes Protokoll erfordert einen neuen Schlüssel.",
+          "name": "Anzeigename",
+          "baseUrl": "Basis-URL",
+          "protocol": "API-Protokoll",
+          "chooseProtocol": "Protokoll auswählen",
+          "apiKey": "API-Schlüssel",
+          "keepKey": "Leer lassen, um den gelesenen Schlüssel zu behalten",
+          "missingUrl": "URL erforderlich",
+          "status": {
+            "missing": "Keine Konfiguration gefunden",
+            "readFailed": "Lesen nicht möglich; Berechtigungen prüfen oder erneut versuchen",
+            "invalid": "Unbekanntes Format; Konfiguration prüfen oder bearbeiten",
+            "limit": "Leselimit erreicht; diese Quelle wurde nicht vollständig gelesen",
+            "unsupported": "Diese Konfiguration kann nicht automatisch importiert werden. Befehle und apiKeyHelper werden nicht ausgeführt; fügen Sie die API-Konfiguration manuell hinzu.",
+            "needsInput": "Konfiguration muss ergänzt werden",
+            "changed": "Quelle geändert; erneut suchen",
+            "duplicate": "Eine identische Verbindung ist bereits vorhanden"
+          },
+          "rescan": "Erneut suchen",
+          "sourceDisabled": "In der Quell-App deaktiviert"
         }
       },
       "order": {
@@ -3788,6 +3828,10 @@
           "openaiImagesHint": "Verwendet die Adresse und den API-Schlüssel dieser Verbindung für /images/generations und /images/edits. Durch Aktivieren wird sie zur einzigen Images-Verbindung des Anbieters. Fehlende Modell-IDs manuell hinzufügen und dann in den Modelldetails die Bildfunktion angeben.",
           "xaiVideos": "xAI-kompatible Videos API verwenden",
           "xaiVideosHint": "Verwendet die Adresse und den API-Schlüssel dieser Verbindung, um Videoaufgaben zu übermitteln und ihren Status abzufragen. Durch Aktivieren wird sie zur einzigen Videoverbindung des Anbieters. Fehlende Modell-IDs hinzufügen und dann in den Modelldetails die Videofunktion angeben.",
+          "minimaxVideos": "MiniMax-kompatible Videos API verwenden",
+          "minimaxVideosHint": "Verwendet die Adresse und den API-Schlüssel dieser Verbindung, um MiniMax-Videoaufgaben wie MiniMax-H3 zu übermitteln und ihren Status abzufragen. Ein Anbieter kann nur eine Video-API verwenden. Fehlende Modell-IDs hinzufügen und dann in den Modelldetails die Videofunktion angeben.",
+          "openaiVideos": "OpenAI-kompatible Videos API verwenden (/v1/videos)",
+          "openaiVideosHint": "Verwendet die Adresse und den API-Schlüssel dieser Verbindung, um Aufgaben mit POST /v1/videos zu übermitteln und abzufragen – das Format der meisten Relays wie tu-zi; Modelle wie MiniMax-H3 funktionieren darüber. Ein Anbieter kann nur eine Video-API verwenden. Fehlende Modell-IDs hinzufügen und dann in den Modelldetails die Videofunktion angeben.",
           "runtimeSupportsImageGeneration": "Unterstützt Bilderzeugung und -bearbeitung",
           "runtimeSupportsImageGenerationHelpLabel": "Info zur Unterstützung von Bilderzeugung und -bearbeitung",
           "runtimeSupportsImageGenerationConditionTitle": "Wann aktivieren",
@@ -6614,8 +6658,27 @@
             "copied": "Verknüpfungscode kopiert",
             "hint": "Oder sende diesen Code in Feishu / Lark per Direktnachricht an den Cindy-Bot"
           },
+          "linkedAccounts": "Verknüpfte Konten: {{count}}",
+          "connectionTenant": "Unternehmen: {{tenant}}",
           "setWorkingDevice": "Als Arbeitscomputer festlegen",
-          "workingDeviceSet": "Arbeitscomputer festgelegt"
+          "workingDeviceSet": "Arbeitscomputer festgelegt",
+          "appType": {
+            "self_built": "Organisations-App",
+            "store": "Store-App"
+          },
+          "linkedBotsSummary": "Verknüpfte Bots: {{bots}} · Konten: {{accounts}}",
+          "chooseBot": "Wähle einen Bot zum Verknüpfen. Du kannst mehrere Bots gleichzeitig verwenden.",
+          "connectBot": "Diesen Bot verknüpfen",
+          "linkAnotherAccount": "Weiteres Feishu-Konto verknüpfen",
+          "botFallback": "Cindy-Bot",
+          "bridgeTitle": "Feishu-/Lark-Bots",
+          "bridgeDescription": "Bots leiten deine Feishu-/Lark-Nachrichten nur an Cindy weiter. Die Nachrichten jedes verknüpften Kontos gehen an dessen Arbeitscomputer; Sitzungen bleiben je Bot und Konto getrennt.",
+          "settingsTitle": "Arbeitsverzeichnisse und Modelle",
+          "settingsDescription": "Sie gehören zu deinem Cindy-Konto auf diesem Computer, nicht zu einem Bot oder Feishu-/Lark-Konto. Alle Feishu-/Lark-Bots verwenden dieselben. Die Verzeichnisliste wird auch mit anderen Kanälen geteilt.",
+          "workingDeviceLabel": "Arbeitscomputer: {{name}}",
+          "workingDeviceThisComputer": "Dieser Computer",
+          "workingDeviceUnknown": "Arbeitscomputer noch nicht synchronisiert",
+          "workingDeviceUnnamed": "Unbenannter Computer"
         }
       },
       "summary": {
@@ -8036,8 +8099,18 @@
         "subscribeScheduleRunDetail": "Automatisierungen, bei denen du es unter Vorabprüfung wählst, fragen es zuerst. Es sieht Name und Anweisungen und kann den Lauf überspringen oder stoppen, aber nichts für dich genehmigen.",
         "subscribeRoutineRun": "Kann ausgewählte Teammate-Routinen vor dem Start prüfen",
         "subscribeRoutineRunDetail": "Routinen, bei denen du es unter Vorabprüfung wählst, fragen es zuerst. Es sieht die Anweisungen und auslösenden Ereignisse und kann den Lauf überspringen oder stoppen, aber nichts für dich genehmigen.",
+        "systemPrompt": "Kann Systemanweisungen zu ausgewählten Aufgaben hinzufügen",
+        "systemPromptDetail": "Die statischen Texte unten werden nur in ausgewählten Aufgaben nach Cindys festen Anweisungen ergänzt. Reihenfolge und Engine-Geltung stammen aus dem Paket. Änderungen gelten ab der nächsten Nachricht; Fehler folgen der Aufgabeneinstellung.",
+        "subscribeComposeContext": "Kann vor Antworten in ausgewählten Aufgaben Referenzmaterial ergänzen",
+        "subscribeComposeContextDetail": "Nur ausgewählte Aufgaben teilen ihre aktuelle Nachricht. Ergebnisse sind gewöhnliches Referenzmaterial, keine Systemanweisungen oder Genehmigungen. Fehler folgen der Aufgabeneinstellung.",
+        "subscribeSearchMemory": "Kann Erinnerungen für ausgewählte Aufgaben bereitstellen",
+        "subscribeSearchMemoryDetail": "Ergänzt die bestehende memory_search mit vollständigen Einträgen und Plugin-Namen. Die Gedächtnissuche muss aktiviert sein. Nur die Suchanfrage wird geteilt; bei Fehlern bleiben Cindys Ergebnisse erhalten.",
+        "subscribeStartTurn": "Kann vor jeder Antwort in ausgewählten Sitzungen ein Modell wählen",
+        "subscribeStartTurnDetail": "Nur Sitzungen, in denen du dieses Plugin auswählst, geben die aktuelle Nachricht an das Plugin weiter. Es kann ein verbundenes Modell, Denkintensität und Fast wählen. Fehler folgen der Sitzungseinstellung; es kann keine Aktionen für dich genehmigen.",
+        "subscribeModelRequest": "Kann jede Modellanfrage in ausgewählten Sitzungen verarbeiten",
+        "subscribeModelRequestDetail": "Nur Sitzungen, in denen du dieses Plugin auswählst, geben ihre Modellanfragen an das Plugin weiter. Es kann Modelle, Parameter und Inhalte anpassen. Derzeit nur mit lokalem Pi unterstützt; Fehler folgen der Sitzungseinstellung. Verbindungsdaten werden nicht weitergegeben.",
         "subscribeStartTask": "Kann das Modell für neue Aufgaben wählen",
-        "subscribeStartTaskDetail": "Wenn eine neue Aufgabe ein Modell dieses Plugins nutzt, liest es die erste Nachricht und wählt eines deiner verbundenen Modelle. Es wählt einmal; das Modell ändert sich während der Aufgabe nicht.",
+        "subscribeStartTaskDetail": "Wenn eine neue Aufgabe ein Modell dieses Plugins nutzt, liest es die erste Nachricht und wählt eines deiner verbundenen Modelle. Dieser Einstieg wird nur einmal vor der ersten Nachricht ausgeführt.",
         "card": "Stellt Nachrichtenkarten dar",
         "cardExternalLink": "Karten können externe Links enthalten, die nach Bestätigung deinen Browser öffnen",
         "cardExternalLinkDetail": "Beim Anklicken eines Kartenlinks erscheint ein Bestätigungsdialog. Die URL öffnet sich erst nach deiner Zustimmung im Systembrowser. Nur http/https-Adressen sind erlaubt.",
@@ -8096,7 +8169,9 @@
         "mcpUi": "Interaktive Seiten in der Unterhaltung anzeigen",
         "mcpUiDomains": "Netzwerkdomains der Seiten: {{domains}}",
         "mcpAppOnly": "Nur Seite",
-        "uiPageAccess": "Seiten: {{pages}}; Domains: {{domains}}; für Seiten verfügbare Tools: {{tools}}"
+        "uiPageAccess": "Seiten: {{pages}}; Domains: {{domains}}; für Seiten verfügbare Tools: {{tools}}",
+        "uiHost": "Oberflächen und Host-Aktionen in Cindy bereitstellen",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Verbindungsadresse hinzufügen",
@@ -9315,6 +9390,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "Das ChatGPT-Kontingent konnte nicht aktualisiert werden. Erneut abrufen; die anderen Nutzungsinformationen bleiben erhalten.",
+    "retryQuota": "Kontingent Erneut Abrufen",
+    "retryingQuota": "Kontingent wird abgerufen…",
     "usageCritical": "Hohe Nutzung",
     "usageWarning": "Erhöhte Nutzung",
     "usageTitle": "Nutzungsdetails",
@@ -11747,7 +11825,7 @@
       "remove": "Entfernen",
       "removeAria": "{{platform}} entfernen",
       "empty": "Füge einen vorhandenen Bot hinzu oder verbinde unten dein persönliches WeChat. {{name}} antwortet dann dort.",
-      "externalNote": "Wer diesem Bot schreibt, spricht mit {{name}}. Deine eigenen Nachrichten werden mit den Berechtigungen von {{name}} verarbeitet; alle anderen erhalten eine separate, ausgeblendete Aufgabe mit eingeschränkten Berechtigungen.",
+      "externalNote": "Nach der Verknüpfung nehmen Telegram und Feishu/Lark private Nachrichten nur vom Besitzer an. Für Gruppen gelten die jeweiligen Teilnahme-Einstellungen und die Tool-Berechtigungen von {{name}}. Getrennte Aufgaben teilen Dateien und Erinnerungen.",
       "sharedMemoryNote": "{{name}} nutzt Informationen von hier und aus anderen Unterhaltungen gemeinsam. Verwende ein anderes Teammitglied, um Erinnerungen getrennt zu halten.",
       "groups": {
         "title": "Gruppen",
@@ -12618,47 +12696,47 @@
         "claude-code": {
           "ask": {
             "label": "Standardberechtigungen",
-            "description": "Erlaubt Lese- und Schreibzugriff im Arbeitsbereich und fragt vor der Nutzung höherer Berechtigungen, Netzwerkzugriffen oder Zugriffen auf Pfade außerhalb des Arbeitsbereichs."
+            "description": "Du genehmigst Aktionen bei Bedarf."
           },
           "acceptEdits": {
             "label": "Änderungen automatisch akzeptieren",
-            "description": "Akzeptiert Anfragen zur Dateibearbeitung automatisch, um wiederholte Bestätigungen zu reduzieren. Für risikoreichere Befehle oder Berechtigungen gilt weiterhin die zugrunde liegende Berechtigungsrichtlinie."
+            "description": "Dateiänderungen sind direkt erlaubt; andere Aktionen genehmigst du bei Bedarf."
           },
           "auto": {
             "label": "Automatische Prüfung",
-            "description": "Erlaubt Lese- und Schreibzugriff im Arbeitsbereich und prüft Anfragen nach erweiterten Berechtigungen automatisch; risikoreiche Aktionen können weiterhin abgelehnt werden oder eine Bestätigung erfordern. Das reduziert Unterbrechungen, kann aber zu Fehlern führen."
+            "description": "Ein KI-Modell genehmigt Aktionen. Das kann zusätzliche Wartezeit erfordern; bei Bedarf bestätigst du."
           },
           "bypassPermissions": {
             "label": "Vollzugriff",
-            "description": "Erlaubt das Bearbeiten jeder Datei und das Ausführen von Befehlen mit Netzwerkzugriff ohne weitere Bestätigung. Höchstes Risiko; nur für vertrauenswürdige Aufgaben verwenden."
+            "description": "Routineaktionen sind direkt erlaubt, einschließlich Dateien außerhalb des Arbeitsbereichs und Netzwerkbefehlen."
           }
         },
         "codex": {
           "ask": {
             "label": "Standardberechtigungen",
-            "description": "Erlaubt Lese- und Schreibzugriff im Arbeitsbereich und fragt vor der Nutzung höherer Berechtigungen, Netzwerkzugriffen oder Zugriffen auf Pfade außerhalb des Arbeitsbereichs."
+            "description": "Du genehmigst Aktionen bei Bedarf."
           },
           "auto": {
             "label": "Automatische Prüfung",
-            "description": "Führt Befehle automatisch in der geschützten Sandbox des Arbeitsbereichs aus. Aktionen, die die Sandbox-Grenze überschreiten, werden automatisch geprüft; risikoreiche Aktionen können weiterhin abgelehnt werden oder eine Bestätigung erfordern."
+            "description": "Ein KI-Modell genehmigt Aktionen. Das kann zusätzliche Wartezeit erfordern; bei Bedarf bestätigst du."
           },
           "bypassPermissions": {
             "label": "Vollzugriff",
-            "description": "Erlaubt das Bearbeiten jeder Datei und das Ausführen von Befehlen mit Netzwerkzugriff ohne weitere Bestätigung. Höchstes Risiko; nur für vertrauenswürdige Aufgaben verwenden."
+            "description": "Routineaktionen sind direkt erlaubt, einschließlich Dateien außerhalb des Arbeitsbereichs und Netzwerkbefehlen."
           }
         },
         "pi": {
           "ask": {
             "label": "Standardberechtigungen",
-            "description": "Nur lesende Tools werden direkt ausgeführt; beim Schreiben von Dateien, Ausführen von Befehlen und bei MCP-Tools wirst du jedes Mal gefragt."
+            "description": "Du genehmigst Aktionen bei Bedarf."
           },
           "auto": {
             "label": "Automatische Prüfung",
-            "description": "Schreibzugriffe im Arbeitsbereich und sichere Befehle werden automatisch ausgeführt; bei Schreibzugriffen außerhalb des Arbeitsbereichs, riskanten Befehlen und MCP-Tools wirst du weiterhin gefragt."
+            "description": "Ein KI-Modell genehmigt Aktionen. Das kann zusätzliche Wartezeit erfordern; bei Bedarf bestätigst du."
           },
           "bypassPermissions": {
             "label": "Vollzugriff",
-            "description": "Erlaubt das Bearbeiten jeder Datei und das Ausführen von Befehlen mit Netzwerkzugriff ohne weitere Bestätigung. Höchstes Risiko; nur für vertrauenswürdige Aufgaben verwenden."
+            "description": "Routineaktionen sind direkt erlaubt, einschließlich Dateien außerhalb des Arbeitsbereichs und Netzwerkbefehlen."
           }
         }
       }
@@ -13506,8 +13584,8 @@
       "dismissTitle": "Hinweis auf früheren Fehler schließen"
     },
     "worktreeRestoreBanner": {
-      "text": "Der Worktree dieser Sitzung wurde bereinigt (Verzeichnis fehlt).",
-      "textPendingSnapshot": "Diese Sitzung enthält einen noch nicht angewendeten Änderungs-Snapshot.",
+      "text": "Der Worktree „{{name}}“ dieser Sitzung wurde bereinigt (Verzeichnis fehlt).",
+      "textPendingSnapshot": "Der Worktree „{{name}}“ dieser Sitzung enthält einen noch nicht angewendeten Änderungs-Snapshot.",
       "restoreAction": "Worktree wiederherstellen",
       "applySnapshotAction": "Änderungen anwenden",
       "restoring": "Wiederherstellung läuft…",
@@ -14033,6 +14111,7 @@
       "botSentNamed": "Von Teammitglied „{{name}}“ gesendet",
       "orcaFromLead": "Nachricht vom Lead",
       "orcaFromWorker": "Nachricht vom Worker",
+      "orcaFromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
       "orcaFromWorkerNamed": "Nachricht vom Worker „{{role}}“",
       "hookChannelFrom": "Aus {{channel}}",
       "deviceSentMobileNamed": "Vom Smartphone „{{name}}“ gesendet",
@@ -14099,7 +14178,7 @@
       "errors": {
         "noPriorAssistantPreview": "Setze bitte von einer Frage aus zurück, die auf eine KI-Antwort folgt (vor dieser gibt es keine Assistentenantwort)",
         "sessionRunning": "Die Aufgabe wurde nicht rechtzeitig beendet – versuche das Zurücksetzen erneut",
-        "noLiveQuery": "Die Sitzung ist inaktiv – sende zuerst eine Nachricht (auch nur „ok“), um das SDK vor dem Zurücksetzen zu aktivieren",
+        "noLiveQuery": "Die Laufzeitumgebung der Aufgabe konnte nicht wiederhergestellt werden. Das Zurücksetzen wurde nicht abgeschlossen.",
         "noPriorAssistantCommit": "Setze bitte von einer Frage aus zurück, die auf eine KI-Antwort folgt",
         "commitGeneric": "Zurücksetzen fehlgeschlagen. Versuch es erneut",
         "remoteNotSupported": "Remote-Sitzungen mit Claude Code unterstützen das Zurücksetzen noch nicht"
@@ -14415,6 +14494,14 @@
       "replied": "hat geantwortet",
       "toggle": "Antwort von „{{title}}“ ein- oder ausblenden",
       "openTask": "Aufgabe öffnen"
+    },
+    "subscriptionAccountError": {
+      "limited": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Warte auf die Zurücksetzung oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
+      "limitedUntil": "Das Abonnementkonto dieser Aufgabe hat sein Nutzungslimit erreicht. Voraussichtliche Zurücksetzung: {{resetAt}}. Warte bis dahin oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt.",
+      "loginRequired": "Das Abonnementkonto dieser Aufgabe erfordert eine erneute Anmeldung. Melde dich auf dem Computer, der die Aufgabe ausführt, erneut an und versuche es dann noch einmal.",
+      "signingIn": "Die Anmeldung für das Abonnementkonto dieser Aufgabe läuft. Versuche es nach Abschluss der Anmeldung erneut.",
+      "unavailable": "Das dieser Aufgabe zugewiesene Abonnementkonto kann für diese Anfrage nicht verwendet werden. Prüfe das Konto in den Modellanbieter-Einstellungen auf dem ausführenden Computer oder wähle eine andere Modellquelle.",
+      "legacy": "Das dieser Aufgabe zugewiesene Abonnementkonto ist nicht verfügbar. Prüfe Anmeldung und Nutzung auf dem ausführenden Computer oder wähle eine andere Modellquelle. Das Konto wird nicht automatisch gewechselt."
     }
   },
   "ccAgent": {
@@ -19383,6 +19470,12 @@
       "restore": "Standardwerte wiederherstellen"
     }
   },
+  "pluginUi": {
+    "display": "Darstellung",
+    "original": "Original",
+    "menu": "Plugin-Ansichten und Befehle",
+    "actionFailed": "Die Plugin-Aktion konnte nicht abgeschlossen werden. Versuche es erneut."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "Nur der Besitzer der Sitzung kann mit dieser Karte interagieren.",
     "retry": "Neu laden",
@@ -19841,6 +19934,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "Konto nicht zugewiesen",
+    "boundUnavailable": "Konto nicht verfügbar",
     "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",
     "signIn": {
       "checking": "Lokales Konto wird geprüft…",
@@ -19868,7 +19962,16 @@
     "openDirectory": "Kontoordner öffnen",
     "openDirectoryFailed": "Der Kontoordner konnte nicht geöffnet werden. Er wurde möglicherweise verschoben oder gelöscht.",
     "loginAgain": "Erneut anmelden",
-    "login": "Anmelden"
+    "login": "Anmelden",
+    "quotaRecoverIn": "In {{duration}} wieder verfügbar",
+    "quotaExhausted": "Kontingent aufgebraucht",
+    "quotaFiveHourRemaining": "5-Stunden-Kontingent: {{percent}}% verbleibend",
+    "quotaFiveHourExhausted": "5-Stunden-Kontingent aufgebraucht",
+    "quotaAverage": "Ø verbleibend {{percent}} %",
+    "quotaUpdating": "Kontingent wird aktualisiert",
+    "quotaResetSoon": "Bald zurückgesetzt",
+    "quotaAverageHint": "Wochenkontingent · Konten gleich gewichtet",
+    "quotaResetHint": "Beim aktuellen Verbrauch bleibt beim Zurücksetzen voraussichtlich Kontingent übrig: gelb innerhalb von 24 Stunden, rot innerhalb von 6 Stunden."
   },
   "sessionNotify": {
     "finished": "Diese Aufgabe hat ihren Durchgang abgeschlossen. Ihre endgültige Antwort:",
