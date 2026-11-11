@@ -85,7 +85,8 @@ export default {
       assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.openBot'), exact: true }).count(), 2);
       assert.ok(await card.getByText('团队 Cindy', { exact: true }).isVisible());
       assert.ok(await card.getByText('Alice', { exact: true }).isVisible());
-      assert.ok(await card.getByText(await ui.t('settings.remoteControl.hook.feishu.sharedSettings'), { exact: true }).isVisible());
+      assert.ok(await card.getByText(await ui.t('settings.remoteControl.hook.feishu.bridgeDescription'), { exact: true }).isVisible());
+      assert.ok(await card.getByText(await ui.t('settings.remoteControl.hook.feishu.settingsDescription'), { exact: true }).isVisible());
       assert.equal(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.unlink'), exact: true }).count(), 3);
     }
     if (ui.data.kind === 'store' || ui.data.kind === 'store-pending' || ui.data.kind === 'store-failed') {

@@ -1268,13 +1268,18 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       mode: 'chip' | 'row';
       provider: NeutralCardProvider;
     },
+    /**
+     * 非空 = 换掉区块标题与说明。飞书的目录与模型跟随 Cindy 账号和这台电脑,
+     * 不属于某个机器人或飞书账号, 通用的「按渠道独立」说不清这层归属。
+     */
+    copy?: { title: string; description: string },
   ) => (
     <>
       <div className="h-px w-full bg-[var(--border-default)]" />
       <div className="flex flex-col gap-1.5">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-12 font-medium text-[var(--text-secondary)]">
-            {t('settings.remoteControl.hook.form.workspacesCardTitle')}
+            {copy?.title ?? t('settings.remoteControl.hook.form.workspacesCardTitle')}
           </span>
           <span className="text-12 text-[var(--text-tertiary)]">
             · {t('settings.remoteControl.hook.form.workspacesBoundCount', { count: workdirCount })}
@@ -1343,7 +1348,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           ) : null}
         </div>
         <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
-          {t('settings.remoteControl.hook.form.workspacesCardDescription')}
+          {copy?.description ?? t('settings.remoteControl.hook.form.workspacesCardDescription')}
         </span>
         {/* row 形态才需要解释"选中即默认"这层语义, 并把权限档的后果说在选之前。
             文案不用方位词指代("下面的目录") —— 同一区块也渲染进确认门弹窗。 */}
@@ -1535,6 +1540,11 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   const renderFeishuApplications = (view: ProviderHookView) => {
     const busy = view.binding?.state === 'pending' || view.binding?.state === 'awaiting_confirmation';
     return <div id={imBotSettings.cindyFeishuWorkingDevice.targetId} className="flex flex-col gap-3">
+      {/* 机器人只是消息入口: 先说清它不持有目录与模型, 那两样在卡片后半段单独成区。 */}
+      {view.applications!.length > 0 ? <div className="flex flex-col gap-1.5">
+        <span className="text-12 font-medium text-[var(--text-secondary)]">{t('settings.remoteControl.hook.feishu.bridgeTitle')}</span>
+        <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.bridgeDescription')}</span>
+      </div> : null}
       {!view.enabled || view.applications!.length === 0 ? <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t(!view.enabled ? 'settings.remoteControl.hook.feishu.disabledHint' : personalAccount ? 'settings.remoteControl.hook.feishu.unavailableHintPersonal' : 'settings.remoteControl.hook.feishu.unavailableHint')}</p> : null}
       {view.applications!.length > 0 && view.enabled && view.available && view.status === 'connected' && !busy && (view.bindings?.length ?? 0) === 0
         ? <p className="text-11 leading-relaxed text-[var(--text-secondary)]">{t('settings.remoteControl.hook.feishu.chooseBot')}</p> : null}
@@ -1587,7 +1597,6 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
           {accounts.map((account) => renderFeishuAccount(account, view, app.appType === 'store'))}
         </SettingsCard>;
       })}
-      {view.applications!.length > 0 ? <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">{t('settings.remoteControl.hook.feishu.sharedSettings')}</p> : null}
     </div>;
   };
 
@@ -1868,7 +1877,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                 // X / 飞书沿用标题行的 chip(它们的卡上没有别的行内控件可对齐)。
                 mode: provider === 'telegram' ? 'row' : 'chip',
                 provider,
-              })
+              }, provider === 'feishu' ? {
+                title: t('settings.remoteControl.hook.feishu.settingsTitle'),
+                description: t('settings.remoteControl.hook.feishu.settingsDescription'),
+              } : undefined)
             : null}
           {/* 存量 global override 的收尾入口。刻意不按 provider 也不按 cs.confirmed 收:
               global scope 是 Telegram 与 X 共用的那一份, 旧设置在绑定确认之前就已经在盘上

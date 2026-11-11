@@ -56,6 +56,8 @@ export const imBotSettings = defineSettings({
       'settings.remoteControl.hook.feishu.bindCode.label', 'settings.remoteControl.hook.feishu.bindCode.hint',
       'settings.remoteControl.hook.feishu.disabledHint', 'settings.remoteControl.hook.feishu.chooseBot',
       'settings.remoteControl.hook.feishu.connectBot', 'settings.remoteControl.hook.feishu.linkAnotherAccount',
+      'settings.remoteControl.hook.feishu.bridgeTitle', 'settings.remoteControl.hook.feishu.bridgeDescription', 'settings.remoteControl.hook.feishu.settingsTitle',
+      'settings.remoteControl.hook.feishu.settingsDescription',
     ],
     aliases: ['Feishu', 'Lark', '飞书', 'Feishu bot', 'Lark bot'],
   },
