@@ -1,4 +1,8 @@
 import { createRemoteSessionOpener, createRemoteSessionExecutionResolver } from '../remoteSessionCreation.js';
+import { validateHandoffWorkingDir } from '../handoffWorkingDir.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { captureAgentRequest } from '../forwardedRequest.js';
 import { createRemoteSessionHandoff } from '../../mcp-integrations/sessionHandoffRemote.js';
 import { validateRemoteTaskActionReceipt } from '../remoteTaskActionReceipt.js';
@@ -59,7 +63,7 @@ function creationFixture() {
     captureOwner: () => () => {}, withSessionLock: async (_id, run) => run(),
     sessionExists: async id => rows.has(id),
     resolveProject: async () => ({ ok: true, projectDir: '/destination/project' }),
-    validateDirectory: async directory => ({ ok: true, workingDir: directory }),
+    validateDirectory: async directory => ({ ok: true, dir: directory }),
     resolveExecution: async () => ({ agentKind: 'codex', model: 'destination-default', fastMode: false }),
     prepareWorktree: vi.fn(), discardWorktree: vi.fn(), broadcastCreated: vi.fn(),
     openSessionCommit: insert,
@@ -104,6 +108,29 @@ describe('maker:session:handoff (receiving computer)', () => {
     expect(await createSessionHandoffHandler({ create, send, validate: async () => false })('source', wire))
       .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
     expect(create).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled();
+  });
+
+  // Unit regression: execution in an existing managed worktree is valid even though
+  // that path cannot be registered as a project. Use the same real validator as local creation.
+  it('creates in an existing worktree while retaining its registered repository project', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-remote-cwd-'));
+    try {
+      const repository = path.join(root, 'repo');
+      const worktree = path.join(repository, '.cindy-worktrees', 'task');
+      await fs.mkdir(worktree, { recursive: true });
+      const { id, rows, deps } = creationFixture();
+      deps.resolveProject = async () => ({ ok: true, projectDir: repository });
+      deps.validateDirectory = validateHandoffWorkingDir;
+      const send = vi.fn(async () => ({ ok: true as const, agentKind: 'codex', wakeKind: 'queued' as const,
+        targetTitle: null, targetLastUserSendAt: null }));
+      const handle = createSessionHandoffHandler({ create: createRemoteSessionOpener(deps), send, validate: async () => true });
+      expect(await handle('source-device', { ...request, sessionId: id, action: 'create', create: {
+        permissionMode: 'ask', projectDir: repository, workingDir: worktree,
+      } })).toMatchObject({ ok: true, wakeKind: 'created', workingDir: await fs.realpath(worktree), projectDir: repository });
+      expect(rows.get(id)).toMatchObject({ workingDir: await fs.realpath(worktree), projectDir: repository, workspaceKind: 'project' });
+      expect(deps.prepareWorktree).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledOnce();
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
   });
 
   // Unit regression: openSession's early persistence callback precedes the final async

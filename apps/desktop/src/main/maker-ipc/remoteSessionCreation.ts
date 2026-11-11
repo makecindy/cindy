@@ -2,6 +2,7 @@ import type { openSession, OpenedSessionRow } from '../localDb/sessionOpening.js
 import type { TaskActionDeliveryGuard } from './taskActionAuthorization.js';
 import type { RemoteSessionCreation, RemoteSessionCreated } from '../../shared/remoteSessionCreation.js';
 import { resolveSessionExecutionSelection, type SessionExecutionSelection } from './sessionExecutionSelection.js';
+import type { HandoffWorkingDirValidation } from './handoffWorkingDir.js';
 
 type Failure = { ok: false; errorCode: string; message: string };
 type Execution = Pick<RemoteSessionCreated, 'agentKind' | 'model' | 'fastMode'>
@@ -46,7 +47,7 @@ export function createRemoteSessionOpener(deps: {
   withSessionLock<T>(id: string, run: () => Promise<T>): Promise<T>;
   sessionExists(id: string): Promise<boolean>;
   resolveProject(input: { projectDir?: string | null; workingDir?: string }): Promise<{ ok: true; projectDir: string | null } | Failure>;
-  validateDirectory(path: string): Promise<{ ok: true; workingDir: string } | { ok: false; message: string }>;
+  validateDirectory(path: string): Promise<HandoffWorkingDirValidation>;
   resolveExecution(options: RemoteSessionCreation): Promise<Execution>;
   prepareWorktree(id: string, directory: string): Promise<{ ok: true; path: string } | Failure>;
   discardWorktree(id: string): Promise<unknown>;
@@ -68,7 +69,7 @@ export function createRemoteSessionOpener(deps: {
         const checked = await deps.validateDirectory(workingDir);
         await check();
         if (!checked.ok) return { ok: false, errorCode: 'INVALID_ARGS', message: checked.message };
-        workingDir = checked.workingDir;
+        workingDir = checked.dir;
       }
       const execution = await deps.resolveExecution(input);
       await check();

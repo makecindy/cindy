@@ -13530,7 +13530,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       withSessionLock: withSendToSessionLock,
       sessionExists: async id => Boolean((await getDbClient().drizzle.select({ id: sessions.id }).from(sessions).where(eq(sessions.id, id)).limit(1))[0]),
       resolveProject: input => resolveSessionProject({ ...input, callerSessionId: undefined }),
-      validateDirectory: validateExistingLocalProjectDirectory,
+      validateDirectory: validateHandoffWorkingDir,
       resolveExecution: createRemoteSessionExecutionResolver({
         isSelfDeviceId: id => id === getSelfDeviceId(),
         resolveLocal: input => resolveSessionExecution({ agentKind: input.agentKind, model: input.model, effort: input.effort, fastMode: input.fast }),
