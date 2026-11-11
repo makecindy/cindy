@@ -215,3 +215,69 @@ it('ends a view when its plugin is turned off or the connection ends', async () 
     errorCode: 'PERMISSION_DENIED',
   });
 });
+
+// Regression inputs for the public open API: deferred screen discovery creates
+// interleavings not covered by the sequential open and settled-revocation tests.
+// Unit tier: one in-process fake host and the existing loopback listener.
+function deferredScreens(fixture: ReturnType<typeof setup>) {
+  let resolve!: (value: unknown) => void;
+  const pending = new Promise((done) => {
+    resolve = done;
+  });
+  fixture.invoke.mockImplementation(async (_device, request) =>
+    request.op === 'capabilities'
+      ? { version: 1, enabled: true, liveScreens: true }
+      : ((await pending) as never),
+  );
+  return { resolve, listed: [listed('_root__sim', 'a', ['t1'])] };
+}
+
+it('shares concurrent opens and counts pending different targets against capacity', async () => {
+  const fixture = setup();
+  current = fixture.views;
+  const deferred = deferredScreens(fixture);
+  const opens = ['a', 'a', 'b', 'c', 'd', 'e'].map((id) =>
+    fixture.views.handle('sim', { op: 'open', deviceId: 'remote', id }),
+  );
+  await until(() => fixture.invoke.mock.calls.some(([, request]) => request.op === 'screens'));
+  deferred.resolve({
+    screens: ['a', 'b', 'c', 'd', 'e'].map((id) => listed('_root__sim', id, ['t1'])),
+  });
+  const result = await Promise.all(opens);
+  expect(result[0]).toEqual(result[1]);
+  expect(result.filter((item) => (item as { ok: boolean }).ok)).toHaveLength(5);
+  expect(result[5]).toEqual({ ok: false, errorCode: 'TOO_MANY_VIEWS' });
+  expect(
+    fixture.relay.sent.filter((item) => item.channel === LIVE_SCREEN_RELAY.START),
+  ).toHaveLength(4);
+});
+
+it.each(['plugin', 'all', 'host', 'navigation', 'crash'] as const)(
+  'revokes a pending open across %s invalidation even if it becomes allowed again',
+  async (boundary) => {
+    const fixture = setup();
+    current = fixture.views;
+    const deferred = deferredScreens(fixture);
+    const pending = fixture.views.handle('sim', { op: 'open', deviceId: 'remote', id: 'a' });
+    await until(() => fixture.invoke.mock.calls.some(([, request]) => request.op === 'screens'));
+    if (boundary === 'plugin') fixture.views.invalidate('sim');
+    else if (boundary === 'all') fixture.views.endAll();
+    else if (boundary === 'host') fixture.views.setHost(fakeHost().host);
+    else if (boundary === 'navigation')
+      fixture.relay.emitter.emit('did-start-navigation', {}, 'about:blank', false, true);
+    else fixture.relay.emitter.emit('render-process-gone');
+    deferred.resolve({ screens: deferred.listed });
+    expect(await pending).toMatchObject({ ok: false });
+    expect(fixture.relay.sent.some((item) => item.channel === LIVE_SCREEN_RELAY.START)).toBe(false);
+  },
+);
+
+it('revokes an open before its loopback listener is ready', async () => {
+  const fixture = setup();
+  current = fixture.views;
+  const pending = fixture.views.handle('sim', { op: 'open', deviceId: 'remote', id: 'a' });
+  fixture.views.endAll();
+  expect(await pending).toMatchObject({ ok: false });
+  expect(fixture.invoke).not.toHaveBeenCalled();
+  expect(fixture.relay.sent).toEqual([]);
+});

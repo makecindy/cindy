@@ -41,7 +41,7 @@ type View = {
   token: string;
   instance: string;
   /** The plugin's install key on that computer, as that computer lists it. */
-  remotePlugin: string;
+  remotePlugin: string | null;
   deviceId: string;
   screenId: string;
   relayId: string;
@@ -196,32 +196,18 @@ export class PluginLiveScreenViews {
     if (!view) {
       const host = this.host;
       if (!host || host.isDestroyed()) return fail('HOST_NOT_READY');
+      // Reserve synchronously in the existing table. Revocation and capacity
+      // apply to pending opens too; concurrent callers share this same entry.
       if (
         [...this.views.values()].filter((item) => item.instance === instance).length >=
         MAX_VIEWS_PER_PLUGIN
       )
         return fail('TOO_MANY_VIEWS');
-      try {
-        await this.listen();
-      } catch {
-        return fail('VIEW_UNAVAILABLE');
-      }
-      // Only a screen that computer lists under this same plugin can be opened.
-      let remotePlugin: string | undefined;
-      try {
-        remotePlugin = (await this.screens(link, deviceId)).find(
-          (screen) => screen.id === screenId && samePlugin(screen.plugin, instance),
-        )?.plugin;
-      } catch (error) {
-        return fail(error instanceof Error && error.message ? error.message : 'DEVICE_UNAVAILABLE');
-      }
-      if (!remotePlugin) return fail('SCREEN_NOT_FOUND');
-      if (!this.deps.allowed(instance) || host.isDestroyed()) return fail('HOST_NOT_READY');
       view = {
         id: `lv-${randomUUID()}`,
         token: randomBytes(32).toString('hex'),
         instance,
-        remotePlugin,
+        remotePlugin: null,
         deviceId,
         screenId,
         relayId: `lr-${randomUUID()}`,
@@ -232,13 +218,41 @@ export class PluginLiveScreenViews {
         idle: null,
       };
       this.views.set(view.id, view);
-      host.send(LIVE_SCREEN_RELAY.START, {
-        relayId: view.relayId,
-        deviceId,
-        screen: { plugin: remotePlugin, id: screenId },
-      } satisfies LiveScreenRelayStart);
-      this.idleSoon(view);
     }
+    const current = () =>
+      this.views.get(view.id) === view &&
+      this.host === view.host &&
+      !view.host.isDestroyed() &&
+      this.deps.allowed(instance) &&
+      this.deps.available();
+    if (view.remotePlugin === null) {
+      try {
+        await this.listen();
+        if (!current()) return fail('HOST_NOT_READY');
+        const remotePlugin = (await this.screens(link, deviceId)).find(
+          (screen) => screen.id === screenId && samePlugin(screen.plugin, instance),
+        )?.plugin;
+        if (!current()) return fail('HOST_NOT_READY');
+        if (!remotePlugin) {
+          this.end(view, 'SCREEN_NOT_FOUND', false);
+          return fail('SCREEN_NOT_FOUND');
+        }
+        // No await from the final identity check to START: one owner commits it.
+        if (view.remotePlugin === null) {
+          view.remotePlugin = remotePlugin;
+          view.host.send(LIVE_SCREEN_RELAY.START, {
+            relayId: view.relayId,
+            deviceId,
+            screen: { plugin: remotePlugin, id: screenId },
+          } satisfies LiveScreenRelayStart);
+          this.idleSoon(view);
+        }
+      } catch {
+        this.end(view, 'VIEW_UNAVAILABLE', false);
+        return fail('VIEW_UNAVAILABLE');
+      }
+    }
+    if (!current()) return fail('HOST_NOT_READY');
     return { ok: true, view: view.id, url: `http://127.0.0.1:${this.port}/${view.token}` };
   }
 
@@ -363,16 +377,16 @@ export class PluginLiveScreenViews {
     const last = json({ type: 'state', state: 'ended', error });
     for (const reader of view.readers) reader.response.end(last);
     view.readers.clear();
-    if (stopRelay && !view.host.isDestroyed())
+    if (stopRelay && view.remotePlugin !== null && !view.host.isDestroyed())
       view.host.send(LIVE_SCREEN_RELAY.STOP, { relayId: view.relayId });
     if (!this.views.size) this.closeServer();
   }
   private closeServer(): void {
     const server = this.server;
     this.server = null;
-    this.starting = null;
     this.port = 0;
     if (!server) return;
+    this.starting = null;
     server.close();
     server.closeAllConnections();
   }
@@ -388,6 +402,12 @@ export class PluginLiveScreenViews {
         reject(error);
       });
       server.listen(0, '127.0.0.1', () => {
+        this.starting = null;
+        if (!this.views.size) {
+          server.close();
+          reject(new Error('VIEW_CLOSED'));
+          return;
+        }
         this.server = server;
         this.port = (server.address() as AddressInfo).port;
         resolve(this.port);

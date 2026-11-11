@@ -81,8 +81,19 @@ export function taskLiveScreenEntries(
     }
     entry.screens.push(screen);
   }
-  const usable = entries.filter((entry) => !entry.need);
-  return usable.length ? usable : entries.slice(0, 1);
+  const groups = new Map<string, TaskLiveScreenEntry>();
+  for (const entry of entries) {
+    const identity = parsePluginStoragePart(entry.plugin);
+    const key = identity ? JSON.stringify([identity.namespace, identity.ghostId]) : entry.plugin;
+    const previous = groups.get(key);
+    if (!previous || (previous.need && !entry.need)) groups.set(key, entry);
+    else if (previous.ghost === entry.ghost) {
+      for (const screen of entry.screens)
+        if (!previous.screens.some((known) => known.id === screen.id))
+          previous.screens.push(screen);
+    }
+  }
+  return [...groups.values()];
 }
 
 /** Where the user makes the plugin usable: its own page here, else its market listing. */

@@ -1321,8 +1321,8 @@
         "action": "Install"
       },
       "enable": {
-        "title": "Turn on the “{{plugin}}” plugin",
-        "body": "This task has {{device}} open on another computer. Turn on the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
+        "title": "Enable the “{{plugin}}” plugin",
+        "body": "This task has {{device}} open on another computer. Enable the “{{plugin}}” plugin on this computer to view and operate it in the right sidebar.",
         "action": "Turn on"
       },
       "update": {

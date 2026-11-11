@@ -109,7 +109,8 @@
 - **页面**:地址除 `session=<任务 ID>` 外多带 `device=<那台电脑的设备 ID>` 与
   `deviceName=<那台电脑的名字>`(仅供显示;请在页面上标明这是哪台电脑上的设备,让用户看得出
   不是本机)。带 `device` 时
-  任务不在本机:不要读本机设备、不要启动本机环境,只显示那台电脑上的设备。设备出现时宿主
+  任务的 Agent 在另一台电脑上运行。插件可以在同一个页签里列出本机和那台电脑的设备,
+  必须明确标识设备所在电脑,并将管理操作路由到该电脑;本机设备由用户操作。设备出现时宿主
   自动打开页签一次;逻辑页此时调 `cindy.taskView()` 不会打开远程任务的页面。
 - **通道**:逻辑页调 `cindy.liveScreenView(req)`(等价于
   `cindy.send({type:'live-screen-view-request', ...req})`,旧版 Cindy 没有这个方法),
@@ -121,7 +122,9 @@
 | `{op:'open', deviceId, id}` | `{ok, view, url}`:`url` 是本机回环地址,带一次性令牌 |
 | `{op:'close', view}` | `{ok}` |
 
-- **画面**:`GET <url>/stream` 与 §4.22.1 的帧流同一格式(`0x01` avcC、`0x02` 关键帧、`0x03`
+- **访问方式**:`url` 仅交给本插件已声明的 Node worker。它代理画面与输入,并从自己已有的本机
+  服务端口向页面提供同源接口。插件任务页不能直接 fetch 这个地址;不放宽页面 CSP 或分区网络闸。
+- **画面**:Node worker 请求 `GET <url>/stream` 与 §4.22.1 的帧流同一格式(`0x01` avcC、`0x02` 关键帧、`0x03`
   普通帧),所以解码本机设备的页面可以直接复用。`0x10` JSON 有三种:
   `{"type":"state","state":"connecting|live|reconnecting|ended","error"?}`、
   `{"type":"device", id, name, platform, cornerRadius, maxTouches, keyboard, buttons}`(那台电脑的
@@ -129,6 +132,8 @@
   画面经过重新编码,不是逐像素原图。
 - **输入**:`POST <url>/input`,正文 `{events:[…]}`,最多 64 个、16 KB,事件形状同 §4.22.1 的
   `touch` / `press` / `text` / `release`,按键为 `{kind:'key', code, down}`(按下与抬起各一个)。
+  这是传输层格式,不同于提供端的完整 `key` 事件。若页面使用 `modifiers`,worker 应先发送修饰键
+  按下、普通键按下/抬起、修饰键逆序抬起;远端由既有输入映射还原为完整事件。
   `state` 不是 `live` 时返回 `VIEW_NOT_READY`,不排队、不补发。`POST <url>/retry` 是用户在页面上
   主动要求重连:`error` 为 `connectionBusy`(正被用户的另一台设备查看)时即接管。
 - **生命周期**:同一设备重复 `open` 得到同一个地址;20 秒没有人读 `stream`、插件停用或卸载、

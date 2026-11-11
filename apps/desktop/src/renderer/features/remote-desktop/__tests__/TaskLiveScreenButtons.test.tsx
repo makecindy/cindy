@@ -13,6 +13,7 @@ import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDev
 import {
   resetAutoOpenedTaskLiveScreens,
   TaskLiveScreenButtons,
+  taskLiveScreenEntries,
   useAutoOpenTaskLiveScreens,
 } from '../TaskLiveScreenButtons';
 import { useTaskLiveScreens } from '../useTaskLiveScreens';
@@ -212,7 +213,7 @@ it('asks for the plugin instead of opening anything when this computer cannot sh
   await settle();
   expect(notices).toHaveBeenLastCalledWith(
     expect.any(String),
-    expect.objectContaining({ title: 'Turn on the “Device Simulator” plugin' }),
+    expect.objectContaining({ title: 'Enable the “Device Simulator” plugin' }),
   );
   installed.ghosts = [plugin({ remote: false })];
   view.rerender(<Entries />);
@@ -229,4 +230,28 @@ it('asks for the plugin instead of opening anything when this computer cannot sh
   expect(openTab).toHaveBeenCalledExactlyOnceWith('task-1', '_root__cindy-simulator', {
     userInitiated: false,
   });
+});
+
+// Multiple providers are independent: one working plugin must not hide another
+// plugin's setup entry. Only same-source logical identity duplicates collapse.
+it('keeps every plugin entry and setup need while merging duplicate install keys', () => {
+  const own = plugin();
+  const a = listed('a', 'Phone', ['task-1']);
+  const b = {
+    ...listed('b', 'Other phone', ['task-1']),
+    plugin: '_root__second',
+    pluginName: 'Second',
+  };
+  const entries = taskLiveScreenEntries(
+    [a, b, { ...a, plugin: 'cindy-simulator' }] as never,
+    [own] as never,
+  );
+  expect(entries).toHaveLength(2);
+  expect(entries[0].screens).toHaveLength(1);
+  expect(entries[0].need).toBeNull();
+  expect(entries[1]).toMatchObject({ plugin: '_root__second', need: 'install' });
+  expect(taskLiveScreenEntries([a, b] as never, []).map((entry) => entry.need)).toEqual([
+    'install',
+    'install',
+  ]);
 });
