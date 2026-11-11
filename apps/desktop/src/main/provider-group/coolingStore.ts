@@ -44,20 +44,33 @@ function normalize(raw: unknown): CoolingFile {
 }
 
 const log = desktopMakerLogger.child('provider-group');
-const store = createOverrideSettingsFile<CoolingFile>({
-  filePath: () => ownerScopedUserDataPath('provider-group-cooling.json'),
-  scopeKey: activeOwnerScopeKey,
-  defaults: { cooling: {} },
-  normalize,
-  log,
-  label: 'provider-group-cooling',
-  // 每个成员由单条冷却扩展到多个模型范围，读写预算同比扩展；仍保留整文件上限。
-  maxBytes: 1024 * 1024 * PROVIDER_GROUP_COOLING_SCOPE_CAP,
-});
+function coolingFile(name: string, label: string) {
+  return createOverrideSettingsFile<CoolingFile>({
+    filePath: () => ownerScopedUserDataPath(name),
+    scopeKey: activeOwnerScopeKey,
+    defaults: { cooling: {} },
+    normalize,
+    log,
+    label,
+    // 每个成员由单条冷却扩展到多个模型范围，读写预算同比扩展；仍保留整文件上限。
+    maxBytes: 1024 * 1024 * PROVIDER_GROUP_COOLING_SCOPE_CAP,
+  });
+}
+const store = coolingFile('provider-group-cooling.json', 'provider-group-cooling');
+/**
+ * 供应商内订阅账号的冷却(subscription-account-pools.md)：与组内电脑同一格式与合并规则，
+ * 按 provider → 账号 id 存在本机，重启后照样避开刚撞上限、登录失效或过载的账号。
+ */
+const accountStore = coolingFile('subscription-account-cooling.json', 'subscription-account-cooling');
 
 export function readProviderGroupCooling(): ProviderGroupPersistedCooling {
   store.invalidateIfChanged();
   return store.read().cooling;
+}
+
+export function readSubscriptionAccountCooling(): ProviderGroupPersistedCooling {
+  accountStore.invalidateIfChanged();
+  return accountStore.read().cooling;
 }
 
 /**
@@ -94,6 +107,13 @@ function mergeCooling(
 export function writeProviderGroupCooling(cooling: ProviderGroupPersistedCooling): Promise<void> {
   return store.updateAtomic((current) => normalize({ cooling: mergeCooling(current.value.cooling, cooling) })).then(() => undefined).catch((error: unknown) => {
     log.warn('provider group: saving cooldowns failed', { error: error instanceof Error ? error.message : String(error) });
+  });
+}
+
+/** 账号冷却的合并写入；失败只记日志，内存里的冷却照常生效。 */
+export function writeSubscriptionAccountCooling(cooling: ProviderGroupPersistedCooling): Promise<void> {
+  return accountStore.updateAtomic((current) => normalize({ cooling: mergeCooling(current.value.cooling, cooling) })).then(() => undefined).catch((error: unknown) => {
+    log.warn('subscription accounts: saving cooldowns failed', { error: error instanceof Error ? error.message : String(error) });
   });
 }
 

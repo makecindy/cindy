@@ -9,9 +9,16 @@ import {
   isNativeProviderAuthBound,
   isNativeProviderAuthSharedSystemCredential,
 } from '../maker-host/nativeProviderAuthBinding.js';
-import { pickProviderGroupMember } from '../provider-group/scheduler.js';
+import { pickProviderGroupMember, providerGroupMembersFull } from '../provider-group/scheduler.js';
+import { concurrencyLimitPatch, effectiveConcurrencyLimit } from '../../shared/providerGroup.js';
 import { providerGroupMemberUsageState } from '../provider-group/usage.js';
-import { coolingScope, currentCooling, PROVIDER_GROUP_COOLING_SCOPE_CAP } from '../provider-group/cooling.js';
+import {
+  coolingScope,
+  currentCooling,
+  PROVIDER_GROUP_COOLING_SCOPE_CAP,
+  PROVIDER_GROUP_FAILURE_COOLDOWN_MS,
+} from '../provider-group/cooling.js';
+import { readSubscriptionAccountCooling, writeSubscriptionAccountCooling } from '../provider-group/coolingStore.js';
 import { PROVIDER_GROUP_DEFAULT_COOLDOWN_MS } from '../provider-group/router.js';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
@@ -109,12 +116,38 @@ function currentRuntime(): OwnerRuntime {
       lastPicked: new Map(),
       logins: new Map(),
       invalidated: new Map(),
-      quotaCooling: new Map(),
+      quotaCooling: loadCooling(),
     };
   }
   return runtime;
 }
 const keyOf = (provider: SubscriptionProvider, id: string) => `${provider}:${id}`;
+/** Persisted like provider group cooling, so a restart does not first retry a failed account. */
+function loadCooling(): Map<string, Record<string, number>> {
+  const loaded = new Map<string, Record<string, number>>();
+  try {
+    const now = Date.now();
+    for (const [provider, accounts] of Object.entries(readSubscriptionAccountCooling())) {
+      if (provider !== 'anthropic' && provider !== 'openai') continue;
+      for (const [id, value] of Object.entries(accounts)) {
+        const scopes = currentCooling(value, now);
+        if (Object.keys(scopes).length) loaded.set(keyOf(provider, id), scopes);
+      }
+    }
+  } catch {
+    /* Cooling is an optimization; an unreadable file must not block assignment. */
+  }
+  return loaded;
+}
+function persistCooling(state: OwnerRuntime): void {
+  if (state.owner !== activeOwnerScopeKey()) return;
+  const cooling: Record<string, Record<string, Record<string, number>>> = {};
+  for (const [key, scopes] of state.quotaCooling) {
+    const split = key.indexOf(':');
+    (cooling[key.slice(0, split)] ??= {})[key.slice(split + 1)] = scopes;
+  }
+  void writeSubscriptionAccountCooling(cooling);
+}
 function accountCooling(state: OwnerRuntime, provider: SubscriptionProvider, id: string, model?: string): boolean {
   const key = keyOf(provider, id);
   const scopes = currentCooling(state.quotaCooling.get(key), Date.now());
@@ -393,6 +426,31 @@ export async function readSubscriptionSessionUsage(provider: SubscriptionProvide
   return info.usage ?? null;
 }
 
+/**
+ * Provider group §5/§6.1 pre-send check for one bound account: it cannot take this model now
+ * when it remembers a real failure (cooling), its trusted quota snapshot is exhausted, or it is
+ * signed out. Unknown quota is not exhaustion. Paused or removed accounts are not judged here.
+ * Runs before every send, so it only reads what this owner already knows (failures, the cached
+ * snapshot kept fresh by quota events and list reads) and never waits for the native CLI.
+ */
+export function readSubscriptionAccountBlocked(
+  provider: SubscriptionProvider,
+  accountId: string,
+  model: string | undefined,
+): boolean {
+  const pool = readPool(provider);
+  if (!pool || pool.disconnected || pool.accounts.length < 2) return false;
+  if (!pool.accounts.some((account) => account.id === accountId && !account.paused)) return false;
+  const state = currentRuntime();
+  if (accountCooling(state, provider, accountId, model)) return true;
+  const info = state.cache.get(keyOf(provider, accountId));
+  if (!info || info.unavailable) return false;
+  if (!info.auth.authenticated) return true;
+  return providerGroupMemberUsageState(info.usage ?? {},
+    provider === 'openai' ? model?.replace(/^chatgpt\//, '') : model,
+    Date.now(), provider === 'openai' ? 'codex' : 'claude-code').limited;
+}
+
 /** A positive result can retire a member/model cooldown, so unknown quota is
  * not enough. This never selects/binds an account or changes an existing task. */
 export async function readSubscriptionPoolModelAvailability(
@@ -516,6 +574,7 @@ export async function readSubscriptionPoolUsage(
         key: a.id,
         usable: infos[i].auth.authenticated && !usage.limited,
         running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
+        limit: effectiveConcurrencyLimit(a),
         urgency: usage.urgency,
         fiveHourTight: usage.fiveHourTight,
       };
@@ -672,11 +731,23 @@ export async function readSubscriptionPool(
   };
 }
 
+/** Every assignable account is at its concurrency limit (2026-11-11: full accounts take no new task). */
+export const SUBSCRIPTION_ACCOUNTS_FULL_ERROR =
+  '[SUBSCRIPTION_ACCOUNTS_FULL] every available subscription account has reached its concurrency limit';
+
 export interface SubscriptionAccountLease {
   account: NativeSubscriptionAccount;
   /** New turns must not reuse an account explicitly disabled by the user. */
   assertDispatchable(): void;
-  observeFailure(error: unknown, model: string | undefined, phase: 'start' | 'run'): void;
+  /** Pool account id (not the owner-scoped capability id). */
+  accountId: string;
+  /** Selected from an existing task binding or an explicit legacy route rather than by the pool policy. */
+  pinned: boolean;
+  /**
+   * Records the failure like a provider group member (usage limit until reset, auth/overload
+   * briefly) and returns whether the group policy would move this work to another member.
+   */
+  observeFailure(error: unknown, model: string | undefined, phase: 'start' | 'run'): boolean;
   changeModel(model: string, apply: () => Promise<void>): Promise<void>;
   bind(keys: string[]): Promise<void>;
   running(active: boolean): void;
@@ -688,7 +759,15 @@ export async function acquireSubscriptionAccount(
   model: string | undefined,
   keys: string[],
   control = false,
-  options: { remote?: boolean; accountId?: string; resuming?: boolean } = {},
+  options: {
+    remote?: boolean;
+    accountId?: string;
+    resuming?: boolean;
+    /** Accounts already tried for this start (provider group: each member at most once per round). */
+    exclude?: ReadonlySet<string>;
+    /** Only check that the policy can select an account (throws otherwise); reserve nothing, return null. */
+    dryRun?: boolean;
+  } = {},
 ): Promise<SubscriptionAccountLease | null> {
   const pool = readPool(provider);
   if (!pool) return null;
@@ -731,6 +810,8 @@ export async function acquireSubscriptionAccount(
           remote: options.remote === true, newRoute: !binding && !options.resuming,
         }) === true),
       running: state.running.get(keyOf(provider, a.id))?.size ?? 0,
+      // Control leases reserve no slot. Pinned tasks never re-pick, so the limit only gates new assignments.
+      limit: control ? Number.POSITIVE_INFINITY : effectiveConcurrencyLimit(a),
       urgency: usage.urgency,
       fiveHourTight: usage.fiveHourTight,
     };
@@ -743,14 +824,18 @@ export async function acquireSubscriptionAccount(
     pinned ??
     pickProviderGroupMember(members, latest.strategy, {
       lastPicked: state.lastPicked.get(provider),
+      ...(options.exclude ? { exclude: options.exclude } : {}),
     });
   const member = members.find((a) => a.id === selected);
+  if (!selected && !pinned && providerGroupMembersFull(members, { exclude: options.exclude }))
+    throw new Error(SUBSCRIPTION_ACCOUNTS_FULL_ERROR);
   if (!selected || !member || !member.usable || (!control && member.paused))
     throw new Error(
       pinned
         ? 'The task subscription account requires login or quota reset'
         : 'No subscription account is available',
     );
+  if (options.dryRun) return null;
   const token = randomUUID();
   const key = keyOf(provider, selected);
   const active = state.running.get(key) ?? new Set<string>();
@@ -782,21 +867,33 @@ export async function acquireSubscriptionAccount(
       if (readPool(provider)?.accounts.find(a => a.id === selected)?.paused)
         throw new Error('The task subscription account is disabled; retry to switch accounts');
     },
+    accountId: selected,
+    pinned: pinned !== undefined,
     observeFailure(error, failedModel, phase) {
-      try { assertCurrent(); } catch { return; } // Ignore late failures after owner/account removal.
+      try { assertCurrent(); } catch { return false; } // Ignore late failures after owner/account removal.
       const signals = providerGroupFailureSignals(error);
       const decision = decideProviderGroupFailure(signals, phase);
-      if (decision.action !== 'switch' || decision.cause !== 'usage-limit') return;
+      if (decision.action !== 'switch') return false;
+      // Same causes and durations as a group member (provider-groups.md §5 冷却): the task model
+      // until its quota resets; login or overload failures cool the whole account briefly.
+      if (!decision.cool) return true;
       const now = Date.now();
-      const resetAt = readTurnUsageResetAt(signals, now);
-      const scope = coolingScope(provider === 'openai' ? failedModel?.replace(/^chatgpt\//, '') : failedModel);
+      const usageLimit = decision.cause === 'usage-limit';
+      const resetAt = usageLimit ? readTurnUsageResetAt(signals, now) : null;
+      const scope = usageLimit
+        ? coolingScope(provider === 'openai' ? failedModel?.replace(/^chatgpt\//, '') : failedModel)
+        : '';
       const scopes = currentCooling(state.quotaCooling.get(key), now);
-      const until = resetAt !== null && resetAt > now ? resetAt : now + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS;
+      const until = !usageLimit
+        ? now + PROVIDER_GROUP_FAILURE_COOLDOWN_MS
+        : resetAt !== null && resetAt > now ? resetAt : now + PROVIDER_GROUP_DEFAULT_COOLDOWN_MS;
       // Refresh the scope's insertion order and bound remembered model failures.
       const previous = scopes[scope] ?? 0;
       delete scopes[scope];
       scopes[scope] = Math.max(previous, until);
       state.quotaCooling.set(key, Object.fromEntries(Object.entries(scopes).slice(-PROVIDER_GROUP_COOLING_SCOPE_CAP)));
+      persistCooling(state);
+      return true;
     },
     account: {
       id: `${accountOwnerPrefix()}:${provider}:${selected}`,
@@ -904,7 +1001,7 @@ export async function runSubscriptionAccountCommand(
           : {
               ...a,
               ...(command.paused !== undefined ? { paused: command.paused } : {}),
-              ...(command.limit !== undefined ? { limit: command.limit } : {}),
+              ...(command.limit !== undefined ? concurrencyLimitPatch(command.limit) : {}),
               ...(command.weight !== undefined ? { weight: command.weight } : {}),
             },
       ),
