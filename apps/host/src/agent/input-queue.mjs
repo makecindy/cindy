@@ -26,13 +26,14 @@ function composeInput(item, stored) {
   if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throw new Error('clientId is required');
   const text = typeof item.text === 'string' ? item.text : item.content;
   if (typeof text !== 'string' || !text.trim()) throw new Error('message text is required');
-  const opts = item.createOpts ?? {};
-  const agentKind = makerKind(opts.agentKind || item.agentKind || stored.agentKind);
+  // Picker changes already persist through /sessions/update. Input fields are
+  // snapshots for presentation, not another authority over task settings.
+  const agentKind = makerKind(stored.agentKind);
   if (!['claude-code', 'codex', 'pi'].includes(agentKind)) throw new Error('invalid agent kind');
-  const model = item.model || opts.model || stored.model || '';
-  const workingDir = item.workingDir || opts.workingDir || stored.workingDir || '';
-  const effort = item.effort || opts.effort || stored.effort || '';
-  const permissionMode = item.permissionMode || opts.permissionMode || stored.permissionMode || '';
+  const model = stored.model || '';
+  const workingDir = stored.workingDir || '';
+  const effort = stored.effort || '';
+  const permissionMode = stored.permissionMode || '';
   const content = typeof item.persistedContent === 'string' ? item.persistedContent : text;
   // The renderer already separates visible composer text from its serialized
   // storage envelope. Keep that distinction in queue snapshots and projections.

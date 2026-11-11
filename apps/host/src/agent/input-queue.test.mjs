@@ -295,20 +295,38 @@ test('reopens a stored conversation with its SDK identity after a Host restart',
   await h.queue.dispose();
 });
 
-// Input settings were only used by createSession: later queued messages silently
-// ran with the first model/permission choice. Exercise two real queue dispatches.
-test('applies the next queued model and permission choice before reusing a session', async () => {
-  const h = createHarness();
-  await enqueue(h, 'settings', { clientId: 'first', text: 'one', model: 'model-a', permissionMode: 'ask' });
-  const session = h.maker.getSession('settings');
-  await h.queue.enqueue('settings', { clientId: 'second', text: 'two', model: 'model-b', permissionMode: 'acceptEdits' });
-  session.emit({ type: 'done' });
-  await waitFor(() => session.sent.length === 2);
-  assert.equal(h.maker.getSession('settings'), session);
-  assert.equal(session.options.model, 'model-b');
-  assert.equal(session.options.permissionMode, 'acceptEdits');
-  await h.queue.dispose();
-});
+// User decision 2026-11-11: picker edits persist task settings immediately,
+// like Desktop. A queued snapshot must not restore an older route or widen a
+// newly tightened mode. Unit: two pending inputs and a picker edit before drain;
+// cover both the existing runtime and a cold resume through the real queue.
+for (const cold of [false, true]) {
+  test(`queued messages use latest task settings (${cold ? 'cold' : 'live'} runtime)`, async t => {
+    const settings = { agentKind: 'claude-code', workingDir: '/tmp', model: 'model-a',
+      providerId: 'provider-a', permissionMode: 'bypassPermissions', effort: 'low', fastMode: true, planModeEnabled: false };
+    const h = createHarness({ readSession: async id => ({ id, ...settings }) });
+    t.after(() => h.queue.dispose());
+    await enqueue(h, 'settings', { clientId: 'first', text: 'one' });
+    const first = h.maker.getSession('settings');
+    await h.queue.enqueue('settings', { clientId: 'second', text: 'two', model: 'model-a', permissionMode: 'bypassPermissions' });
+    // This represents the existing /sessions/update picker endpoint, not input metadata.
+    Object.assign(settings, { model: 'model-b', providerId: 'provider-b', permissionMode: 'ask',
+      effort: 'high', fastMode: false, planModeEnabled: true });
+    await h.queue.enqueue('settings', { clientId: 'third', text: 'three', model: 'model-a', permissionMode: 'bypassPermissions' });
+    if (cold) await h.maker.closeSession('settings');
+    first.emit({ type: 'done' });
+    await waitFor(() => h.maker.getSession('settings')?.sent.includes('two'));
+    const current = h.maker.getSession('settings');
+    assert.equal(current === first, !cold);
+    for (const key of ['model', 'providerId', 'permissionMode', 'effort', 'fastMode']) {
+      assert.equal(current.options[key], settings[key], key);
+    }
+    assert.equal(current.options.planMode, true);
+    current.emit({ type: 'done' });
+    await waitFor(() => current.sent.includes('three'));
+    assert.equal(current.options.model, 'model-b');
+    assert.equal(current.options.permissionMode, 'ask');
+  });
+}
 
 // Shared-send wiring, unit: the previous direct sender never refreshed a live
 // runtime. A cwd/resource change must retain the queued turn, bind replies to
@@ -330,7 +348,7 @@ for (const refresh of ['working-directory', 'project-resources']) {
     await waitFor(() => h.maker.getSession('refresh') !== previous && h.maker.getSession('refresh')?.sent.length === 1);
     const current = h.maker.getSession('refresh');
     assert.notEqual(current, previous);
-    assert.equal(current.options.model, 'chosen');
+    assert.equal(current.options.model, 'stored');
     assert.equal(current.options.permissionMode, 'ask');
     assert.equal(current.options.resumeSessionId, 'same-transcript');
     assert.equal(current.workDir, cwd);
@@ -413,8 +431,8 @@ test('dispatches a queued message and stores the user and assistant rows', async
 
   const session = h.maker.sessions.get('task-1');
   assert.deepEqual(session.sent, ['hello']);
-  // The composer's route wins over the stored row.
-  assert.equal(session.options.model, 'anthropic/claude-sonnet-5-5');
+  // Task settings are authoritative; a stale input snapshot cannot replace them.
+  assert.equal(session.options.model, 'stored-model');
   await waitFor(() => h.persisted.some((row) => row.role === 'user'));
   assert.equal(projection.turnInProgress, true);
 

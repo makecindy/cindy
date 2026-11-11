@@ -559,7 +559,7 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
 | `commitUserPromptPreview` | 可选 | 不适用 | 同上。 |
 | `rollbackUserPromptPreview` | 可选 | 不适用 | 同上。 |
 | `isSessionRunningError` | 必需 | 真实实现 | 抽取/复用原错误判据，保持 coordinator 的排队与拒绝语义。 |
-| `reconcileCreateOptsWithDb` | 可选 | 不适用 | Host 每条输入的模型/权限选择优先，首批不注入。若改为任务行为准，须先讨论并在受理时写回选择。 |
+| `reconcileCreateOptsWithDb` | 可选 | 真实实现 | 与桌面共用任务行对账；网页选择器已先落库，排队项不覆盖模型/权限。冷启动、重建和已有运行时都在执行前读最新任务设置。 |
 | `applyPendingAgentSwitch` | 可选 | 真实实现 | 先核对现有 Host 切引擎路径；沿用已选配置，不能丢交接或授权。 |
 | `onModelDispatched` | 可选 | 真实实现 | 复用实际派发模型落库，不能用界面选择值回填历史。 |
 | `prepareUnhealthySession` | 可选 | 真实实现 | 复用不健康 runtime 关闭与恢复；避免对旧 handle 发送。 |
@@ -590,7 +590,7 @@ withAccountFreeOwnerCommit：主线 notify=false 只发 pending，分支补发�
    Node 真实加载成功只能证明依赖可用，不能证明 Host 已使用该事务。
 2. **发送前置与接线**：先搬 `buildCreateOptsWithStderr`、`isSessionRunningError`、
    `readSessionSource`，加入可选的启动前持久钩子；Host 准入、runtime-only 关闭、turn 绑定
-   就绪后切换发送。保留每条输入选择，不注入 DB 覆盖和历史授权恢复。
+   就绪后切换发送。任务设置现已按本节末尾的新合同对齐桌面；历史授权恢复另作独立提交。
 3. **插话与媒体/历史服务**：`steerToAgentAccepted` 单独提交，只搬原函数体和依赖；
    从 `normalizeAttachments.ts`、`localDb/ipc/messages.ts`、`localDb/ipc/sessions.ts`
    抽取实际依赖 Electron 的最小边界，再接附件物化、清空回退、Pi 条目与归档恢复。
@@ -666,3 +666,24 @@ Host 发送已调用 `createMakerSendTransaction`，不再自行拼发送的权�
   插话断言先失败，修正后通过；模拟上游不是真实模型，运行时重开不是进程重启。
 - 源码 Host 独立临时 profile 的启动、重复实例排斥、受保护停止、信号退出与进程重启通过。
   未使用正式 profile、真实登录和凭证，未重启正式 Cindy。Windows、手机和本批打包版未验收。
+
+
+### 任务设置对齐桌面（2026-11-11）
+
+模型、供应商、推理档位、Fast、权限与计划模式统一以任务设置为准，取代上一检查点的
+“每条输入选择优先”。网页选择器原本已调用 `/sessions/update` 落库；本批去掉输入携带的
+旧设置优先层，不把旧输入快照再写回任务。排队期间改选模型或收紧权限，尚未执行的两条
+消息都使用最新任务设置。原有定时输入的单次计划意图仍保留，不改变桌面的定时运行合同。
+
+`reconcileCreateOptsAgainstDb` 抽为 `sessionOptionsReconciler`，桌面保留原查询及赋值规则；
+Host 通过当前账号的任务准入读取接线，执行前也应用于现有 Session，切引擎按原关闭重建
+流程处理。历史原生 resume/fork/thread 清理、providerId 的 null/undefined 区别保留。
+
+验证中有意修改“输入选择覆盖任务行”的两处旧合同断言，另按新合同更新运行时刷新用例的
+预期模型；不把它们说成未改断言。新增真实队列的存活/冷启动两种情况：两条待发消息在
+任务改成新模型、较严权限后均使用最新设置。三条新合同断言先红；接线后输入队列 61 项、
+桌面发送与对账 356 项通过。桌面原 guard 中已抽出的函数改为调用实际生产入口，保留
+权限、Plan 与三态供应商路由断言。日志位于 `/tmp/cindy-task-settings-*.log`。
+
+Host 全部 199 项、两端类型检查、测试规范及文档合同检查通过。
+历史授权恢复尚未在本提交接入，作为下一独立提交实施和审阅。

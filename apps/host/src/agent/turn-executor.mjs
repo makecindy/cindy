@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createSessionOptionsReconciler } from '../../../desktop/src/main/maker-ipc/sessionOptionsReconciler.ts';
 import { createMakerSendTransaction, prepareDirectoryGrantsForBootstrap } from '../../../desktop/src/main/maker-ipc/makerSendTransaction.ts';
 import { createSessionStderrOptions, isSessionRunningError } from '../../../desktop/src/main/maker-ipc/sessionRequest.ts';
 import { withRehydrateCloseSuppressed } from '../../../desktop/src/main/maker-host/rehydrateCloseSuppression.ts';
@@ -149,6 +150,7 @@ export function createTurnExecutor(deps) {
     listen(id, session);
   }
 
+  const reconcileCreateOptsWithDb = createSessionOptionsReconciler({ log, readSession: readExecutionSession });
   const statDirectory = deps.statDirectory ?? fs.stat;
   const transaction = createMakerSendTransaction({
     // A server's OS language is not the remote user's interface preference.
@@ -228,11 +230,12 @@ export function createTurnExecutor(deps) {
         agentMeta: { ...message.agentMeta, ...(transcriptParentUuid ? { transcriptParentUuid } : {}) } }, options);
     },
     isSessionRunningError,
+    reconcileCreateOptsWithDb,
     readWorkingDirectoryRecoveryCreateOpts: async id => {
       const stored = await readExecutionSession(id);
       const turn = turns.get(id);
-      // Model and permission choices belong to this queued input. Only the cwd
-      // and resume identity can be repaired from persistence during a refresh.
+      // The shared reconciler refreshes execution settings before bootstrap;
+      // recovery also needs the current task directory and native identity.
       return { ...turn.createOpts, workingDir: stored.workingDir,
         resumeSessionId: turn.createOpts.agentKind === makerKind(stored.agentKind) ? stored.sdkSessionId || undefined : undefined };
     },
@@ -265,10 +268,11 @@ export function createTurnExecutor(deps) {
     planRepeatableWireNotes: (id, notes, options) => wireNotes.plan(id, notes, options),
     log,
     // No readAutoReviewHistory: App, delegated and scheduled input cannot regain
-    // authority from prior user messages. No DB reconciliation of input settings.
+    // authority from prior user messages. Historical authorization is a separate checkpoint.
   });
 
   async function send(sessionId, message, createOpts, sendOpts) {
+    createOpts = { ...createOpts };
     const turn = { running: true, terminal: false, dbKind: dbKind(createOpts.agentKind),
       createOpts, sendOpts, clientId: sendOpts.persistUserMessage?.clientId };
     turns.set(sessionId, turn);
@@ -280,9 +284,17 @@ export function createTurnExecutor(deps) {
     turn.check = check;
     turn.preparing = (async () => {
       await sendOpts[MCP_APP_MESSAGE_GUARD]?.();
+      const stored = await readExecutionSession(sessionId);
+      const scheduled = (sendOpts.persistUserMessage?.origin ?? sendOpts.origin)?.kind === 'scheduler';
+      const scheduledPlan = createOpts.planMode;
+      await reconcileCreateOptsWithDb(sessionId, createOpts);
+      // Scheduled input keeps its explicit per-turn Plan intent, as on Desktop;
+      // the shared lazy bootstrap still starts the runtime with the stored mode.
+      if (scheduled) createOpts.planMode = scheduledPlan;
+      createOpts.workingDir = stored.workingDir || '';
+      turn.dbKind = dbKind(createOpts.agentKind);
       await deps.beforeSessionStart?.(sessionId, createOpts.agentKind);
       check();
-      const stored = await readExecutionSession(sessionId);
       assertHostTaskExecutionSupported(createOpts);
       deps.assertProviderExecutionSupported?.(sessionId, createOpts.providerId);
       check();

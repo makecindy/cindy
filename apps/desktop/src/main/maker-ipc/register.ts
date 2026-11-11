@@ -580,6 +580,7 @@ import {
   scheduleWorktreeRecycleForStatusChange,
   setSessionRuntimeCleanup,
 } from '../localDb/ipc/sessions.js';
+import { createSessionOptionsReconciler } from './sessionOptionsReconciler.js';
 import { readSessionSource } from '../localDb/sessionDispatchSnapshot.js';
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
 
@@ -11412,77 +11413,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // GET_CONTEXT_USAGE 的 lazy 分支共用(后者无校正曾是审计实锤缺口)。
   // 权限档同样是会话级设置:forceQueue 入队快照不能锁死排队期间的切档,冷启动必须
   // 再读一次当前落库值,否则降档后仍免确认、升档后仍重复询问。
-  async function reconcileCreateOptsAgainstDb(sessionId: string, co: CreateOpts): Promise<void> {
-    try {
-      const db = getDbClient().drizzle;
-      const [row] = await db
-        .select({
-          agentKind: sessions.agentKind,
-          model: sessions.model,
-          sdkSessionId: sessions.sdkSessionId,
-          providerId: sessions.providerId,
-          effort: sessions.effort,
-          fastMode: sessions.fastMode,
-          permissionMode: sessions.permissionMode,
-          planModeEnabled: sessions.planModeEnabled,
-          agentDeviceId: sessions.agentDeviceId,
-          remoteHostId: sessions.remoteHostId,
-        })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      if (!row) return;
-      // Agent 换电脑也在发送事务内落地：快照里的旧位置不能把 Agent 拉回原来那台。
-      // 缺省(undefined)交给 bootstrapSession 按任务记录读取，与恢复路径同一口径。
-      if (!co.remoteHostId && !row.remoteHostId) {
-        co.agentDeviceId = row.agentDeviceId ?? undefined;
-      }
-      const dbMakerKind = dbToMakerAgentKind(row.agentKind);
-      if (co.agentKind !== dbMakerKind) {
-        log.warn('lazy-create: createOpts agentKind drifted from DB (agent switch); reconciling', {
-          sessionId,
-          staleAgentKind: co.agentKind,
-          dbAgentKind: dbMakerKind,
-        });
-        co.agentKind = dbMakerKind;
-      }
-      // 意图制切换 / 凭证形态切换下,renderer 与排队项的 createOpts 快照构建于 send
-      // 事务内 apply 之前。agentKind 可能已一致,但 model/resume/providerId/effort/fast
-      // 仍是旧值；
-      // 尤其 resumeSessionId 可能是**旧引擎**的原生会话 id——resume 会以错误引擎
-      // 解释它)。lazy-create 时刻 DB 行是唯一真源,执行字段无条件对齐。
-      co.model = row.model ?? undefined;
-      co.resumeSessionId = row.sdkSessionId ?? undefined;
-      if (!row.sdkSessionId && co.vendorOptions) {
-        // context.rebuild clears the DB sdk_session_id. Queued createOpts may
-        // still carry vendor-specific resume/fork anchors from before the close;
-        // strip every native continuation hint so CC/Codex bootstrap fresh too.
-        const freshVendorOptions = { ...co.vendorOptions };
-        for (const key of ['resumeSessionAt', 'forkSession', 'threadId', 'tailTurnsToDrop']) {
-          delete freshVendorOptions[key];
-        }
-        co.vendorOptions =
-          Object.keys(freshVendorOptions).length > 0 ? freshVendorOptions : undefined;
-      }
-      co.providerId = row.providerId;
-      co.effort = (row.effort ?? undefined) as CreateOpts['effort'];
-      co.fastMode = (row.fastMode ?? false);
-      co.permissionMode = permissionModeOrAsk(row.permissionMode);
-      // 新建会话的计划模式按落库状态起档：排队项的 createOpts.planMode 是那一条消息的
-      // 计划意图（伙伴委派等 Host 输入恒为 false），本轮意图仍由发送事务按原快照传给
-      // send，这里只校正冷启动的会话状态，不改本轮是否以计划执行。
-      co.planMode = row.planModeEnabled === true;
-    } catch (error) {
-      // context.rebuild clears sdk_session_id before the next bootstrap. If the
-      // DB truth cannot be read, continuing with caller-supplied opts could
-      // resurrect the dead native resume/fork/thread; fail closed instead.
-      log.warn('lazy-create: DB reconciliation failed; refusing stale native bootstrap', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
-  }
+  const reconcileCreateOptsAgainstDb = createSessionOptionsReconciler({ log });
 
   // 冷 Pi 切模核实前的运行时恢复（#5508）：流程在 coldPiRehydration.ts 内，每条失败
   // 路径都带类别；这里只接 DB、工作目录探测与 bootstrap。
