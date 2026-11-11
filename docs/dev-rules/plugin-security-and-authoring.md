@@ -206,6 +206,8 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   调用方显式为插件实例与请求时 owner 快照，不绑定任务；组批准与共享风险规则的原生逐次确认替代任务权限档，执行前及返回前复核账号和安装版本，现有写入钩子同样复核。
   每次批准查询均重新读取和验证 receipt，不使用授权缓存或同步段去重。
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
+  外部 AI 工具历史的 `scan_importable_sessions`、`get_session_import_status`、`import_sessions` 在共享 handler 中对插件返回 `UNSUPPORTED_CAPABILITY`，不进入扫描、状态或导入回调；前两者会触发既有中断导入恢复，不能作为纯读取开放。Agent 和设置页不变。
+  持有任务 admission 的调用任务修改自身 `permission_mode`（含混合运行设置请求）在任何写入前返回 `UNSUPPORTED_CAPABILITY`，不改写权限快照或放宽守卫；插件、修改其他任务、无 admission 及仅改模型保持原行为。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
   原生任务包由 `history/export_session` 和 `control/import_session` 开放，均逐次确认，直接复用分享包导出与导入事务。
   插件仅经本实例既有 handoff 收取与提交包，不接受或返回宿主路径；Agent 保留原生路径调用。
@@ -973,7 +975,10 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 调用按原章节号读取。不要在 TypeScript、工具描述或界面文案中另存一套编写流程。
 页面手册 `PAGE-GENERATION.md` 另以 `FORGE_PAGE_MANUAL` 导出，`ghost_forge_guide({section:"pages"})` 整份返回，
 不拼进 `FORGE_GUIDE`（手册自带 `## ` 小节，拼进去会被当成章节切开）。
-修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。改动其中的《Cindy MCP Apps 页面生成手册》
+修改随包 Skill 字节时，在 `apps/desktop/resources/system-skills/_versions/` 新增一个记录文件
+（版本号 = `BUILT_IN_SKILLS_BUNDLE_VERSION_BASE` + 记录数；不要把旧式 `BUILT_IN_SKILLS_BUNDLE_VERSION = N`
+常量加回来，门禁会阻断），规则见 [`credentials-and-local-storage.md`](credentials-and-local-storage.md)
+「Cindy 托管的预装技能」。改动其中的《Cindy MCP Apps 页面生成手册》
 （`PAGE-GENERATION.md`）时，还要在对应客户端上线前把新手册发布到各区域 CDN，用法与发版前检查见
 [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的《Cindy MCP Apps 页面生成手册》一条。
 手册 CDN 路径带客户端版本号与 sha256（`mcp-apps/manual/<版本号>/<sha256>.md`），发布脚本从打包产出的

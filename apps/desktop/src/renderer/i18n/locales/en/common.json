@@ -9405,6 +9405,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "ChatGPT quota could not be updated. Retry the read; other usage information is kept.",
+    "retryQuota": "Retry Quota Read",
+    "retryingQuota": "Reading Quota…",
     "usageCritical": "High usage",
     "usageWarning": "Elevated usage",
     "usageTitle": "Usage details",

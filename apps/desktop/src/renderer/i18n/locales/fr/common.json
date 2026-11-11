@@ -9477,6 +9477,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "Impossible de mettre à jour le quota ChatGPT. Relancez la lecture ; les autres informations d’utilisation sont conservées.",
+    "retryQuota": "Relancer la Lecture du Quota",
+    "retryingQuota": "Lecture du quota…",
     "usageCritical": "Consommation élevée",
     "usageWarning": "Consommation en hausse",
     "usageTitle": "Détail de la consommation",

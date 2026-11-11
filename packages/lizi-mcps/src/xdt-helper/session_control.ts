@@ -129,7 +129,7 @@ export interface SessionControlDeps {
         pendingMutation: SessionRuntimeSnapshot['pendingMutation'];
         permissionMode?: PermissionMode;
       },
-      'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE'
+      'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'UNSUPPORTED_CAPABILITY'
     >
   >;
 }
@@ -448,7 +448,7 @@ export function registerSetSessionRuntimeTool(
       effort: z.enum(EFFORT_VALUES).optional().describe('推理强度。省略表示保持当前值。'),
       fast: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('false=标准，true=快速，ultrafast=超快（仅支持该档位的 Codex 模型）。'),
       permission_mode: z.enum(['ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']).optional()
-        .describe('任务权限档，复用界面的权限提交与回滚；提高权限走逐次确认。'),
+        .describe('任务权限档，复用界面的权限提交与回滚；提高权限走逐次确认。持有任务操作授权的调用任务不支持修改自身权限（含混合 patch），返回 UNSUPPORTED_CAPABILITY。'),
       expected_generation: z
         .number()
         .int()

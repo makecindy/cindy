@@ -55,6 +55,38 @@ it('denies native package export outside the existing history scope before file 
   await server.close();
 });
 
+// Unit, #9801 / 4537273680: external-history scan/status callbacks also recover
+// interrupted imports. Existing task tests did not cover a plugin caller. The
+// real shared dispatcher must reject all three tools before any callback (and
+// therefore recovery or source scan) runs, while preserving Agent behavior.
+it('rejects plugin external-history imports without invoking recovery callbacks', async () => {
+  const job = { requestId: 'import-1', status: 'running', items: [] };
+  const sessionImport = {
+    scan: vi.fn(async () => ({ candidates: [], hiddenCounts: {}, sources: [], sourceErrors: [] })),
+    start: vi.fn(async () => job),
+    status: vi.fn(async () => job),
+  };
+  const calls = [
+    { tool: 'scan_importable_sessions', args: {} },
+    { tool: 'get_session_import_status', args: { request_id: job.requestId } },
+    { tool: 'import_sessions', args: { keys: ['codex:session'] } },
+  ];
+  const plugin = createXdtHelperMcpServer({ sessionImport }, { agentKind: 'codex', workingDir: '',
+    hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 } });
+  try {
+    for (const { tool, args } of calls) {
+      expect(parsePayload(await plugin.hostTools.call(tool, args)))
+        .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    }
+    for (const callback of Object.values(sessionImport)) expect(callback).not.toHaveBeenCalled();
+  } finally { await plugin.close(); }
+  const agent = createXdtHelperMcpServer({ sessionImport }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' });
+  try {
+    for (const { tool, args } of calls) expect(parsePayload(await agent.hostTools.call(tool, args))).toMatchObject({ ok: true, scope: 'local' });
+    for (const callback of Object.values(sessionImport)) expect(callback).toHaveBeenCalledOnce();
+  } finally { await agent.close(); }
+});
+
 // Unit production dispatcher, parity #13: deletion was absent. An explicit target must
 // reach the same Host operation for task/plugin callers, while the current task stays protected.
 it('deletes an explicit target through the shared lifecycle handler and protects the caller', async () => {

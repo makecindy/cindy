@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SessionActivitySnapshot } from '@cindy/maker-shared/session-activity';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
-import { admitTaskAction } from '../taskActionAuthorization.js';
+import { admitPluginTaskAction, admitTaskAction } from '../taskActionAuthorization.js';
 import {
   authorizeSessionQueueReorder,
   createSessionControlService,
@@ -390,6 +390,49 @@ describe('session control domain service', () => {
     expect(result).toMatchObject(generation === 0 ? { ok: true, permissionMode: 'bypassPermissions', generation: 0 } : { ok: false, errorCode: 'CONFLICT' });
     expect(deps.setSessionRuntime).not.toHaveBeenCalled();
     expect(deps.setSessionPermissionMode).toHaveBeenCalledTimes(generation === 0 ? 1 : 0);
+  });
+
+  // Unit, #9801 / 4537184245: an admitted caller's own permission generation is
+  // part of its authority. Existing permission cases had no admission. Reject a
+  // permission-only or mixed patch before either runtime or permission is written.
+  it.each([false, true])('rejects admitted self permission changes without partial writes (mixed=%s)', async mixed => {
+    const { deps, service } = setup();
+    const patch = { permissionMode: 'bypassPermissions' as const, ...(mixed ? { model: 'next' } : {}) };
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'target', tool: 'set_session_runtime', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {} },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await expect(decision.run(() => service.setSessionRuntime({ targetSessionId: 'target', patch })))
+      .resolves.toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+    expect(deps.setSessionPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it.each(['other-task', 'plugin'] as const)('preserves permission changes from an admitted %s caller', async caller => {
+    const { deps, service } = setup();
+    const call = { server: 'cindy_helper' as const, tool: 'set_session_runtime', args: {} };
+    const decision = caller === 'plugin'
+      ? admitPluginTaskAction({ ...call, sessionId: undefined, caller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 } }, () => {})
+      : await admitTaskAction({ ...call, sessionId: 'caller' },
+        { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {} });
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await expect(decision.run(() => service.setSessionRuntime({ targetSessionId: 'target', patch: { permissionMode: 'default' } })))
+      .resolves.toMatchObject({ ok: true, permissionMode: 'default' });
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledOnce();
+  });
+
+  it('preserves model-only changes by an admitted caller to itself', async () => {
+    const { deps, service } = setup();
+    const decision = await admitTaskAction(
+      { server: 'cindy_helper', sessionId: 'target', tool: 'set_session_runtime', args: {} },
+      { key: 'input', ownerInput: true, delegated: false, assertCurrent: async () => {} },
+    );
+    if (!decision.ok || !decision.run) throw new Error('missing action scope');
+    await expect(decision.run(() => service.setSessionRuntime({ targetSessionId: 'target', patch: { model: 'next' } })))
+      .resolves.toMatchObject({ ok: true, generation: 1 });
+    expect(deps.setSessionRuntime).toHaveBeenCalledOnce();
+    expect(deps.setSessionPermissionMode).not.toHaveBeenCalled();
   });
 
   it('steers only a live supported turn and never falls back after a terminal race', async () => {

@@ -9477,6 +9477,9 @@
     }
   },
   "quotaCard": {
+    "codexRefreshFailed": "No se pudo actualizar la cuota de ChatGPT. Vuelve a consultarla; se conserva la información de uso restante.",
+    "retryQuota": "Volver a Consultar la Cuota",
+    "retryingQuota": "Consultando la cuota…",
     "usageCritical": "Uso alto",
     "usageWarning": "Uso elevado",
     "usageTitle": "Detalles de uso",
