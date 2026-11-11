@@ -140,6 +140,10 @@ export class ChatBridgeToolContext {
     // never contribute a selector.
     for (const tool of request.tools ?? []) context.addResponseTool(tool);
     context.addCurrentInlineTools(request.input);
+    // `tool_search_output` loads definitions into the current catalog, so a later turn may force
+    // one by qualified name. Record those into the snapshot only; the adapter itself is still
+    // registered by collectHistoryTools so its position in `tools` stays unchanged.
+    context.recordLoadedToolSearchSelectors(request.input);
     context.recordCurrentSelectors();
     context.collectHistoryTools(request.input);
     return context;
@@ -206,9 +210,14 @@ export class ChatBridgeToolContext {
     // wire name in the restoration map, so use only an entry this turn catalogued.
     const currentIdentity = this.currentIdentities.get(kind + '\0' + (namespace === undefined ? '' : namespace) + '\0' + name);
     if (advertised !== undefined && advertised.kind === selectorKind) return advertised.chatName;
-    // Otherwise the declaration may live under a reserved wire name because another kind of tool
-    // already owns the plain one; only an entry this turn catalogued may answer.
-    return currentIdentity === undefined ? clampChatToolName(name) : currentIdentity;
+    if (currentIdentity !== undefined) return currentIdentity;
+    // A qualified selector this turn never declared keeps its namespace. Dropping to the bare
+    // name would force a same-named tool the caller did not name; base and the canonical
+    // lowering both send the flattened name and let the provider reject it.
+    if (namespace !== undefined) return fallbackName;
+    // A bare selector that this turn did not declare stays bare: `required`-style callers rely
+    // on it being resolved only by an exact snapshot hit above.
+    return clampChatToolName(name);
   }
 
   private reserveName(preferred: string, identity: string): string {
@@ -387,7 +396,47 @@ export class ChatBridgeToolContext {
     this.currentSelectors.set(key, existing === undefined || existing === chatName ? chatName : null);
   }
 
-/** Register the inline `additional_tools` group that belongs to this turn. */
+/**
+ * Index the tool-search definitions this turn loaded, without advertising them again.
+ *
+ * Only outputs at or after this turn's inline group count; anything earlier is replay.
+ */
+  private recordLoadedToolSearchSelectors(input: ResponsesRequest['input']): void {
+    if (!Array.isArray(input)) return;
+    const boundary = indexOfCurrentTurnInlineTools(input);
+    for (let index = 0; index < input.length; index += 1) {
+      const item = input[index];
+      if (!isPlainObject(item) || !Array.isArray(item.tools)) continue;
+      if (item.type !== 'tool_search_output' && item.type !== 'tool_search_call_output') continue;
+      if (boundary >= 0 && index < boundary) continue;
+      for (const tool of item.tools) this.recordLoadedToolIdentity(tool);
+    }
+  }
+
+  /** Mirror what addResponseTool advertises, but only into the selector snapshot. */
+  private recordLoadedToolIdentity(tool: unknown): void {
+    if (!isPlainObject(tool)) return;
+    const group = typeof tool.namespace === 'string' ? tool.namespace : undefined;
+    if (tool.type === 'namespace') {
+      const children = Array.isArray(tool.tools) ? tool.tools : Array.isArray(tool.children) ? tool.children : undefined;
+      const name = typeof tool.name === 'string' ? tool.name : undefined;
+      if (name === undefined || children === undefined) return;
+      for (const child of children) {
+        if (!isPlainObject(child)) continue;
+        this.recordLoadedToolIdentity({ ...child, namespace: name });
+      }
+      return;
+    }
+    const name = typeof tool.name === 'string' ? tool.name : undefined;
+    if (name === undefined || name.length === 0) return;
+    const kind = tool.type === 'custom' ? 'custom' : 'function';
+    const folded = group === undefined || group === BUILTIN_FUNCTIONS_NAMESPACE
+      ? name
+      : group + '__' + name;
+    const identity = kind + '\0' + (group === undefined ? '' : group) + '\0' + name;
+    this.currentIdentities.set(identity, clampChatToolName(folded));
+  }
+
   private addCurrentInlineTools(input: ResponsesRequest['input']): void {
     if (!Array.isArray(input)) return;
     const index = indexOfCurrentTurnInlineTools(input);

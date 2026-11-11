@@ -881,6 +881,32 @@ describe('translateResponsesRequest', () => {
     expect(out.tools?.map(tool => (tool as { function: { name: string } }).function.name)).toEqual(['lookup']);
   });
 
+  it('keeps an undeclared qualified selector qualified (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      tools: [{ type: 'function', name: 'read', parameters: { type: 'object' } }],
+      input: [{ type: 'message', role: 'user', content: 'hello' }],
+      tool_choice: { type: 'function', name: 'read', namespace: 'missing' },
+    }));
+
+    // Dropping to the bare name would force a tool the selector never named.
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'missing__read' } });
+  });
+
+  it('resolves a qualified selector for a tool loaded by tool_search_output (#9715)', () => {
+    const { request } = translateResponsesRequestWithContext(base({
+      input: [
+        {
+          type: 'tool_search_output',
+          tools: [{ type: 'namespace', name: 'clock', tools: [{ type: 'function', name: 'now', parameters: { type: 'object' } }] }],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'now', namespace: 'clock' },
+    }));
+
+    expect(request.tool_choice).toEqual({ type: 'function', function: { name: 'clock__now' } });
+  });
+
   it('does not let a functions selector borrow another namespace child (#9715)', () => {
     const out = translateResponsesRequest(base({
       input: [
