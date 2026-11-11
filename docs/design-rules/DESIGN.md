@@ -989,6 +989,11 @@ Default-theme values; the CINDY themes resolve the same tokens to translucent in
 
 ## 10. Theme System & Token Reference
 
+Legacy local-theme compatibility: `--shadow-chip-raised` remains registered with
+its original Light / Dark defaults (see the generated `colors.ts` values), so
+existing themes can reference it from other shadow tokens. It is retained only
+for compatibility under design-governance §4; new UI must not consume it directly.
+
 ### Light / Dark Dual-Mode Delivery Gate(双模式交付门槛)
 
 - **Every UI must be implemented for both Light and Dark modes.** When adding or changing any page, component, layout, style, motion, or UI copy, both modes must be designed and built within the same piece of work; designing or implementing only one mode counts as incomplete. **Visual QA in both modes is expected effort, not a blocking gate** — see the last bullet.

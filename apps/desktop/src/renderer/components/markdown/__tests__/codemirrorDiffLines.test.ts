@@ -31,10 +31,10 @@ function changedRows(view: EditorView) {
 }
 
 describe('diff-file row backgrounds', () => {
-  it('distinguishes header-like changes inside a hunk from file headers', () => {
-    const view = openDiff('--- a/file\n+++ b/file\n@@ -1 +1 @@\n----\n+++counter;');
+  it.each(['----', '---counter;'])('distinguishes %s inside a hunk from file headers', removed => {
+    const view = openDiff(`--- a/file\n+++ b/file\n@@ -1 +1 @@\n${removed}\n+++counter;`);
     expect(changedRows(view)).toEqual([
-      ['----', 'del'],
+      [removed, 'del'],
       ['+++counter;', 'add'],
     ]);
   });

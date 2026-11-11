@@ -2110,6 +2110,10 @@ const GENERATED_DEFAULTS = {
     "light": "0 4px 12px rgb(0 0 0 / 0.08)",
     "dark": "0 4px 12px rgb(0 0 0 / 0.3)"
   },
+  "shadow-chip-raised": {
+    "light": "0 1px 2px rgba(0, 0, 0, 0.12)",
+    "dark": "0 1px 2px rgba(0, 0, 0, 0.4)"
+  },
   "shadow-menu": {
     "light": "0 4px 16px rgba(0, 0, 0, 0.15)",
     "dark": "0 4px 16px rgba(0, 0, 0, 0.5)"
@@ -3066,6 +3070,8 @@ registerColor('color-error-700', GENERATED_DEFAULTS["color-error-700"], 'Danger 
 registerColor('focus-ring', GENERATED_DEFAULTS["focus-ring"], 'Opaque a11y focus border(设计定稿 2026-07-17 #417CDD,取代 blue-500 #3b82f6)');
 registerColor('focus-ring-soft', GENERATED_DEFAULTS["focus-ring-soft"], '50% alpha focus ring(随 focus-ring #417CDD,定稿 2026-07-17)— 替代 ring-[#xxx]/50 写法');
 registerColor('text-selection-bg', GENERATED_DEFAULTS["text-selection-bg"], '文字选中背景(焦点离开宿主窗口时仍保持清晰可见)');
+// Compatibility-only public token: old local themes can reference this ID.
+registerColor('shadow-chip-raised', GENERATED_DEFAULTS["shadow-chip-raised"], '旧本地主题兼容阴影；新 UI 不直接使用');
 registerColor('shadow-menu', GENERATED_DEFAULTS["shadow-menu"], 'Dropdown / context menu / 中型悬浮卡 shadow');
 registerColor('overlay-modal', GENERATED_DEFAULTS["overlay-modal"], '常规模态 backdrop');
 registerColor('overlay-lightbox', GENERATED_DEFAULTS["overlay-lightbox"], '图片/视频/mermaid lightbox 深 backdrop');

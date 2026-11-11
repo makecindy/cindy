@@ -3135,6 +3135,16 @@
           "$value": "{reference.defaults.shadow-soft-panel.dark}"
         }
       },
+      "shadow-chip-raised": {
+        "light": {
+          "$type": "shadow",
+          "$value": "{reference.defaults.shadow-chip-raised.light}"
+        },
+        "dark": {
+          "$type": "shadow",
+          "$value": "{reference.defaults.shadow-chip-raised.dark}"
+        }
+      },
       "shadow-menu": {
         "light": {
           "$type": "shadow",

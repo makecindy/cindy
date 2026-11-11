@@ -1,12 +1,12 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 583,
+  "snapshotCount": 584,
   "categories": {
     "literal": 291,
     "alias": 247,
     "hsl-triplet": 6,
-    "runtime-derived-or-protected": 39
+    "runtime-derived-or-protected": 40
   },
   "entries": [
     {
@@ -4876,6 +4876,14 @@
         "light": "focus-ring-soft",
         "dark": "focus-ring-soft"
       },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "shadow-chip-raised",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "shadow",
+      "darkKind": "shadow",
       "modeledAsSemantic": false
     },
     {

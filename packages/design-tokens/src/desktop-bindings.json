@@ -2108,6 +2108,10 @@
       "light": "semantic.defaults.shadow-soft-panel.light",
       "dark": "semantic.defaults.shadow-soft-panel.dark"
     },
+    "shadow-chip-raised": {
+      "light": "semantic.defaults.shadow-chip-raised.light",
+      "dark": "semantic.defaults.shadow-chip-raised.dark"
+    },
     "shadow-menu": {
       "light": "semantic.defaults.shadow-menu.light",
       "dark": "semantic.defaults.shadow-menu.dark"
