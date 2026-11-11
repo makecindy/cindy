@@ -30,7 +30,7 @@ import {
   sha256,
   signAndPackMacApp,
 } from './ci/lib.mjs';
-import { artifactBaseName, signedBuildInfo } from './ci/package-lib.mjs';
+import { artifactBaseName, assertSignableBuildInfo, signedBuildInfo } from './ci/package-lib.mjs';
 import { applyMacSigningConfigToEnv } from './ci/release-regions.mjs';
 
 function fail(message) {
@@ -47,18 +47,20 @@ function main() {
   const buildInfoPath = path.resolve(values['build-info']);
   const artifactDir = path.dirname(buildInfoPath);
   const pending = JSON.parse(fs.readFileSync(buildInfoPath, 'utf8'));
-  if (pending.platform !== 'darwin' || !pending.version) fail(`${buildInfoPath} 不是有版本的 macOS build-info`);
-
-  const unsigned = pending.files?.find((f) => f.role === 'unsigned-app');
-  if (pending.signing?.mode !== 'pending' || !unsigned) {
-    fail(`${buildInfoPath} 不是 --stage build 的待签名产物(signing.mode=${pending.signing?.mode ?? '缺失'})`);
+  // build-info 来自运行上游代码的打包机:路径与命令只用校验过格式的字段。
+  let region, arch, version, unsignedName;
+  try {
+    ({ region, arch, version, unsignedName } = assertSignableBuildInfo(pending));
+  } catch (err) {
+    fail(`${buildInfoPath} 不是可签名的 --stage build 产物: ${err.message}`);
   }
+  const unsigned = pending.files.find((f) => f.role === 'unsigned-app');
   // 签名前先核对拷来的包就是打包机记下的那一份(传输损坏或被换包都在这里拦下)。
-  const payloadPath = path.join(artifactDir, unsigned.name);
+  const payloadPath = path.join(artifactDir, unsignedName);
   if (!fs.existsSync(payloadPath)) fail(`未签名包不存在: ${payloadPath}`);
   const actual = { sha256: sha256(payloadPath), size: fs.statSync(payloadPath).size };
   if (actual.sha256 !== unsigned.sha256 || actual.size !== unsigned.size) {
-    fail(`${unsigned.name} 与 build-info 记录不符(sha256 ${actual.sha256} / ${unsigned.sha256},size ${actual.size} / ${unsigned.size})`);
+    fail(`${unsignedName} 与 build-info 记录不符(sha256 ${actual.sha256} / ${unsigned.sha256},size ${actual.size} / ${unsigned.size})`);
   }
 
   let headCommit = '';
@@ -69,7 +71,7 @@ function main() {
     console.warn(`WARN: 签名机 checkout ${headCommit.slice(0, 12)} 与包的 commit ${pending.commitSha.slice(0, 12)} 不同;entitlements 与 DMG 背景取自签名机的 checkout。`);
   }
 
-  applyMacSigningConfigToEnv(pending.region);
+  applyMacSigningConfigToEnv(region);
   const applePassword = process.env.APPLE_APP_PASSWORD;
   if (!applePassword) fail('签名机缺 APPLE_APP_PASSWORD(Developer ID 签名 + 公证)');
   const identity = { ...resolveAppleIdentity(), applePassword };
@@ -89,26 +91,33 @@ function main() {
     console.warn('WARN: macOS Touch ID WebAuthn is disabled: the build machine did not bake APPLE_TEAM_ID into this package.');
   }
 
-  const appName = packagedAppName(pending.region);
-  const baseName = artifactBaseName({ version: pending.version, versionless: false });
+  const appName = packagedAppName(region);
+  const baseName = artifactBaseName({ version, versionless: false });
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-sign-'));
-  const packagedDir = path.join(workDir, `${appName}-darwin-${pending.arch}`);
-  const outputs = [`${baseName}-${pending.arch}.dmg`, `${baseName}-${pending.arch}-hotfix.zip`]
+  const packagedDir = path.join(workDir, `${appName}-darwin-${arch}`);
+  const outputs = [`${baseName}-${arch}.dmg`, `${baseName}-${arch}-hotfix.zip`]
     .map((name) => path.join(artifactDir, name));
   try {
-    console.log(`==> Unpacking ${unsigned.name}...`);
+    console.log(`==> Unpacking ${unsignedName}...`);
     execFileSync('/usr/bin/ditto', ['-x', '-k', payloadPath, packagedDir], { stdio: 'inherit' });
     const files = signAndPackMacApp({
       packagedDir,
       appName,
-      arch: pending.arch,
+      arch,
       artifactDir,
       baseName,
       identity,
       webAuthnProvisioningProfile,
     });
     const signed = signedBuildInfo(pending, { files, teamId: identity.teamId });
-    fs.writeFileSync(buildInfoPath, JSON.stringify(signed, null, 2) + '\n');
+    // 先写同目录临时文件再 rename:写一半失败时原 pending build-info 完好,可以直接重跑。
+    const tmpPath = `${buildInfoPath}.tmp`;
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(signed, null, 2) + '\n');
+      fs.renameSync(tmpPath, buildInfoPath);
+    } finally {
+      fs.rmSync(tmpPath, { force: true });
+    }
   } catch (err) {
     // 签名、公证或 DMG 失败:清掉本轮写出的产物,保留未签名包与 pending build-info,可直接重跑。
     for (const file of outputs) fs.rmSync(file, { force: true });

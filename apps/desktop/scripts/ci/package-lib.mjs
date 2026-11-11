@@ -304,6 +304,36 @@ export function assertPageManualCommitted({ porcelain, versionless, manualPath }
 }
 
 /**
+ * 签名机的入口校验。build-info 由打包机写出,而打包机运行上游代码、可能已被入侵:签名机拼路径与
+ * 命令用到的 region / arch / version / 未签名包文件名都必须是固定格式,不能借字段注入 shell 命令
+ * 或跳出产物目录。返回签名所需的已校验字段。
+ * @param {Record<string, any>} pending
+ * @returns {{ region: string, arch: string, version: string, unsignedName: string }}
+ */
+export function assertSignableBuildInfo(pending) {
+  if (pending.signing?.mode !== 'pending') {
+    throw new Error(`build-info 的 signing.mode 是 ${pending.signing?.mode ?? '(缺失)'},不是待签名的 pending`);
+  }
+  const { platform, region, arch, version } = pending;
+  if (platform !== 'darwin') throw new Error(`build-info 的 platform 不是 darwin: ${JSON.stringify(platform)}`);
+  if (!SUPPORTED_REGIONS.includes(region)) throw new Error(`build-info 的 region 非法: ${JSON.stringify(region)}`);
+  if (!PLATFORM_ARCHS.darwin.includes(arch)) throw new Error(`build-info 的 arch 非法: ${JSON.stringify(arch)}`);
+  if (typeof version !== 'string' || !isExplicitVersion(version)) {
+    throw new Error(`build-info 的 version 非法: ${JSON.stringify(version)}`);
+  }
+  const unsignedName = `${artifactBaseName({ version, versionless: false })}-${arch}-unsigned.zip`;
+  const unsigned = pending.files?.filter((f) => f.role === 'unsigned-app') ?? [];
+  if (unsigned.length !== 1 || unsigned[0].name !== unsignedName) {
+    throw new Error(`build-info 应只记录一个未签名包 ${unsignedName}`);
+  }
+  const bakedTeamId = pending.signing.webAuthnAppleTeamId ?? null;
+  if (bakedTeamId !== null && !/^[A-Z0-9]{10}$/.test(bakedTeamId)) {
+    throw new Error(`build-info 的 webAuthnAppleTeamId 非法: ${JSON.stringify(bakedTeamId)}`);
+  }
+  return { region, arch, version, unsignedName };
+}
+
+/**
  * 签名机把 --stage build 的 build-info 改写成签名后的版本:只替换 files 与 signing,
  * 版本、commit、vendors 等构建事实原样保留,并记下签名所用的未签名包。
  * 构建时烘焙的 WebAuthn Team ID 必须与签名身份一致,否则 Touch ID 的 keychain 访问组对不上。
@@ -311,9 +341,7 @@ export function assertPageManualCommitted({ porcelain, versionless, manualPath }
  * @param {{ files: Array<{ role: string, name: string, sha256: string, size: number }>, teamId: string }} signed
  */
 export function signedBuildInfo(pending, { files, teamId }) {
-  if (pending.signing?.mode !== 'pending') {
-    throw new Error(`build-info 的 signing.mode 是 ${pending.signing?.mode ?? '(缺失)'},不是待签名的 pending`);
-  }
+  assertSignableBuildInfo(pending);
   const bakedTeamId = pending.signing.webAuthnAppleTeamId ?? null;
   if (bakedTeamId && bakedTeamId !== teamId) {
     throw new Error(`包里烘焙的 WebAuthn Team ID ${bakedTeamId} 与签名身份 ${teamId} 不一致`);
