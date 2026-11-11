@@ -808,3 +808,78 @@ describe('OpenCode Go subscription quota', () => {
     expect(await read(true)).toMatchObject({ status: 'unavailable', error: 'auth' });
   });
 });
+
+// #9879; unit through the production account reader: fixed credential destination,
+// cached/coalesced reads and stale-identity rejection were not covered for MiniMax.
+describe('MiniMax subscription quota', () => {
+  let current: Provider;
+  let key: string;
+  const payload = { base_resp: { status_code: 0 }, model_remains: [{
+    model_name: 'general', current_interval_total_count: 0, current_interval_usage_count: 0,
+    current_interval_remaining_percent: 80, current_weekly_remaining_percent: 55,
+  }] };
+  const fetcher = vi.fn<typeof fetch>();
+  beforeEach(() => {
+    resetProviderAccountUsageForTest();
+    nowMs = 1_000_000;
+    key = 'synthetic-minimax-subscription-key';
+    current = mkProvider({ id: 'minimax-copy', routing: {
+      codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+    } });
+    setAccountUsageProviderReader(() => current);
+    setAccountUsageKeyReader(() => key);
+    setAccountUsageOwnerStampReader(() => ({ dataOwnerId: 'fixture', generation: 1 }));
+    setAccountUsageNow(() => nowMs);
+    fetcher.mockReset().mockImplementation(async () => jsonRes(payload));
+    setAccountUsageFetch(fetcher);
+  });
+  afterEach(resetProviderAccountUsageForTest);
+  const read = (forceRefresh = false) => readProviderAccountUsage({ providerId: current.id, agent: 'codex', forceRefresh });
+
+  it('queries only the region-pinned official endpoint and reuses successful reads', async () => {
+    expect(await read()).toMatchObject({ status: 'ready', stale: false, snapshot: {
+      kind: 'minimax-plan-quota', windows: [{ id: 'rolling', usedPercent: 20 }, { id: 'weekly', usedPercent: 45 }],
+    } });
+    expect(fetcher).toHaveBeenCalledWith('https://www.minimaxi.com/v1/token_plan/remains', expect.objectContaining({
+      redirect: 'error', headers: expect.objectContaining({ Authorization: `Bearer ${key}` }),
+    }));
+    await read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    current.routing.codex!.upstream = 'https://api.minimax.io/anthropic';
+    await read();
+    expect(fetcher).toHaveBeenLastCalledWith('https://www.minimax.io/v1/token_plan/remains', expect.anything());
+  });
+
+  it('does not query through copied proxy or disabled routes', async () => {
+    current.routing.codex!.upstream = 'https://proxy.example/v1';
+    expect(await read()).toEqual({ status: 'unsupported' });
+    current.routing.codex!.upstream = 'https://api.minimaxi.com/v1';
+    current.routing.codex!.disabled = true;
+    await read();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('coalesces pending reads and discards an account response after its key changes', async () => {
+    let complete!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const first = read();
+    const second = read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    key = 'synthetic-other-account-key';
+    complete(jsonRes(payload));
+    expect(await first).toMatchObject({ status: 'unavailable', error: 'updating' });
+    expect(await second).toMatchObject({ status: 'unavailable', error: 'updating' });
+    expect(await read()).toMatchObject({ status: 'ready', stale: false });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([401, 200])('marks retained data stale on network failure and clears rejected credentials (HTTP %s)', async status => {
+    await read();
+    nowMs += 300_001;
+    fetcher.mockRejectedValueOnce(new Error('synthetic connection failure'));
+    expect(await read()).toMatchObject({ status: 'ready', stale: true, error: 'network' });
+    nowMs += 15_001;
+    fetcher.mockResolvedValueOnce(jsonRes(status === 200 ? { base_resp: { status_code: 1004 } } : {}, status));
+    expect(await read(true)).toMatchObject({ status: 'unavailable', error: 'auth' });
+  });
+});

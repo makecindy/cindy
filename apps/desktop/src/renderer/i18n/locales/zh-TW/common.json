@@ -69,6 +69,13 @@
       "invalid-response": "供應商回傳了無法辨識的餘額資料，請稍後重試。",
       "throttled": "剛剛重新整理過餘額，請稍後重試。",
       "unknown": "Cindy 無法載入供應商餘額，請稍後重試。"
+    },
+    "minimax": {
+      "usage": "開啟 MiniMax 控制台",
+      "unavailable": "暫時無法讀取 MiniMax 方案用量，請檢查訂閱金鑰或稍後重新整理。",
+      "windowsInfo": "僅顯示介面回傳的配額週期；此介面未提供每月用量。",
+      "noPlan": "此金鑰沒有可用的方案配額，請在 MiniMax 控制台確認訂閱。",
+      "weeklyUnlimited": "每週配額未設上限。"
     }
   },
   "localAgent": {

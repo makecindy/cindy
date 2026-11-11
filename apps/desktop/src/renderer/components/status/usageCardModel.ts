@@ -12,6 +12,7 @@ import type {
   ZhipuCodingPlanQuotaSnapshot,
 } from '../../../shared/providerAccountUsage';
 import type { OpenCodeGoUsageSnapshot } from '../../../shared/opencodeGoUsage';
+import type { MiniMaxPlanUsageSnapshot } from '../../../shared/minimaxPlanUsage';
 import {
   isXaiWeeklyUsageCurrent,
   type XaiSubscriptionUsageSnapshot,
@@ -461,5 +462,29 @@ export function buildOpenCodeGoUsageCard(snapshot: OpenCodeGoUsageSnapshot | nul
     updatedAt: snapshot?.fetchedAt,
     emptyText: windows.length ? undefined : t(snapshot ? 'quotaCard.noWindows' : 'quotaCard.waiting'),
     notices: snapshot?.windows.some(window => window.limited) ? [{ text: t('quotaCard.limitRejected'), tone: 'crit' }] : [],
+  };
+}
+
+export function buildMiniMaxUsageCard(snapshot: MiniMaxPlanUsageSnapshot | null, t: TFunction): UsageCardAccount {
+  const details: string[] = snapshot ? [t('providerAccountUsage.minimax.windowsInfo')] : [];
+  if (snapshot?.weeklyUnlimited) details.push(t('providerAccountUsage.minimax.weeklyUnlimited'));
+  if (snapshot?.boostedWeeklyRemainingPercent != null) {
+    details.push(`${t('providerAccountUsage.kimi.limit_7d')} · ${t('quotaCard.remainingPercent', {
+      percent: Math.round(snapshot.boostedWeeklyRemainingPercent * 100) / 100,
+    })}`);
+  }
+  return {
+    title: 'MiniMax',
+    windows: snapshot?.windows.map(window => ({
+      key: window.id,
+      title: [window.model, t(window.id === 'rolling' ? 'providerAccountUsage.kimi.limit_5h' : 'providerAccountUsage.kimi.limit_7d')].filter(Boolean).join(' · '),
+      showRemaining: true,
+      window: { utilization: window.usedPercent, resetsAt: window.resetsAt === null ? null : window.resetsAt / 1000 },
+      paceWindowMinutes: window.id === 'rolling' ? 300 : 10_080,
+    })) ?? [],
+    details,
+    updatedAt: snapshot?.fetchedAt,
+    emptyText: snapshot?.windows.length ? undefined : t(snapshot?.noPlan
+      ? 'providerAccountUsage.minimax.noPlan' : snapshot ? 'quotaCard.noWindows' : 'quotaCard.waiting'),
   };
 }

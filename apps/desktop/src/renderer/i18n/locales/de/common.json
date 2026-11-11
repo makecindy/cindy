@@ -69,6 +69,13 @@
       "invalid-response": "Der Anbieter hat unlesbare Guthabendaten zurückgegeben. Versuche es später erneut.",
       "throttled": "Das Guthaben wurde gerade aktualisiert. Versuche es etwas später erneut.",
       "unknown": "Cindy kann das Guthaben beim Anbieter nicht laden. Versuche es später erneut."
+    },
+    "minimax": {
+      "usage": "MiniMax-Konsole öffnen",
+      "unavailable": "Die MiniMax-Tarifnutzung ist nicht verfügbar. Prüfe deinen Abonnementschlüssel oder aktualisiere später.",
+      "windowsInfo": "Es werden nur gemeldete Kontingentzeiträume angezeigt. Diese API liefert keine monatliche Nutzung.",
+      "noPlan": "Für diesen Schlüssel ist kein Tarifkontingent verfügbar. Prüfe dein Abonnement in der MiniMax-Konsole.",
+      "weeklyUnlimited": "Das wöchentliche Kontingent ist unbegrenzt."
     }
   },
   "localAgent": {

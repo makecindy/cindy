@@ -16,6 +16,7 @@ import { isDeviceLinkRemotePushCurrent } from '../lib/remoteDataOwnerPushFence';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '../contexts/dataOwnerGeneration';
 import { isKimiCodingProviderView } from '../../shared/kimiCodingUsage';
 import { isOpenCodeGoProviderView } from '../../shared/opencodeGoUsage';
+import { isMiniMaxPlanProvider } from '../../shared/minimaxPlanUsage';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
@@ -105,7 +106,9 @@ export function useProviderAccountUsage(
   const [revision, setRevision] = useState(0);
   const kimi = isKimiCodingProviderView(provider, agent);
   const opencodeGo = isOpenCodeGoProviderView(provider, agent);
-  const structuredQuota = kimi || opencodeGo;
+  // MiniMax is a local account read; never borrow this computer's key for a remote route.
+  const minimax = !deviceId && isMiniMaxPlanProvider(provider, agent);
+  const structuredQuota = kimi || opencodeGo || minimax;
   const supported =
     !!provider && !provider.removed && !provider.suspended && (!structuredQuota || provider.connected) &&
     (!deviceId?.startsWith('share:')) &&

@@ -11,6 +11,7 @@
 
 import type { KimiCodingUsageSnapshot } from './kimiCodingUsage';
 import type { OpenCodeGoUsageSnapshot } from './opencodeGoUsage';
+import type { MiniMaxPlanUsageSnapshot } from './minimaxPlanUsage';
 
 import type { AgentKind } from '@cindy/model-providers';
 
@@ -46,7 +47,8 @@ export type ProviderAccountUsageSnapshot =
   | DeepSeekAccountUsageSnapshot
   | ZhipuCodingPlanQuotaSnapshot
   | KimiCodingUsageSnapshot
-  | OpenCodeGoUsageSnapshot;
+  | OpenCodeGoUsageSnapshot
+  | MiniMaxPlanUsageSnapshot;
 
 /** 智谱 GLM Coding Plan 一个计费窗口的已用比例与重置时间。 */
 export interface ZhipuCodingPlanWindow {
@@ -122,6 +124,12 @@ export function getProviderAccountUsageDashboardUrl(upstream: string): string | 
         return 'https://z.ai/manage-apikey/coding-plan/personal/my-plan';
       case 'https://opencode.ai':
         return 'https://opencode.ai/console';
+      case 'https://api.minimaxi.com':
+      case 'https://www.minimaxi.com':
+        return 'https://platform.minimaxi.com/subscribe/token-plan';
+      case 'https://api.minimax.io':
+      case 'https://www.minimax.io':
+        return 'https://platform.minimax.io/subscribe/token-plan';
     }
   } catch {
     // 未配置或非法地址没有对应的官方看板。

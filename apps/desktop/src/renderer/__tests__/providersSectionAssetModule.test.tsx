@@ -269,6 +269,37 @@ it.each(['ready', 'unavailable'])('uses the queried dashboard in the settings ca
   expect(window.electronAPI.openExternal).toHaveBeenCalledExactlyOnceWith(dashboardUrl);
 });
 
+// #9879; unit UI: old settings render no MiniMax module. Exercise the real
+// hook/card with an IPC fixture; ensure the selected runtime is not a mixed
+// connection's unrelated account. No real credentials or network are used.
+it('shows MiniMax plan windows and refreshes the matching runtime in a mixed connection', async () => {
+  const fetchUsage = vi.fn(async () => ({
+    status: 'ready', stale: false, agent: 'codex',
+    snapshot: { kind: 'minimax-plan-quota', fetchedAt: Date.now(), noPlan: false,
+      weeklyUnlimited: false, boostedWeeklyRemainingPercent: null,
+      windows: [
+        { id: 'rolling', model: null, usedPercent: 20, resetsAt: null },
+        { id: 'weekly', model: null, usedPercent: 45, resetsAt: null },
+      ] },
+  }));
+  Object.assign(window.electronAPI.maker, { fetchProviderAccountUsage: fetchUsage });
+  render(<ProviderAccountUsageModule provider={{
+    id: 'plan-copy', connected: true, auth: { method: 'apiKey' },
+    routing: {
+      'claude-code': { upstream: 'https://api.deepseek.com', authStrategy: 'api-key-header' },
+      codex: { upstream: 'https://api.minimaxi.com/v1', authStrategy: 'api-key-header' },
+    },
+  } as ProviderView} />);
+  await screen.findByText('MiniMax');
+  await waitFor(() => expect(fetchUsage).toHaveBeenCalledWith({ providerId: 'plan-copy', agent: 'codex', forceRefresh: false }));
+  expect(screen.getByText('providerAccountUsage.kimi.limit_5h')).toBeTruthy();
+  expect(screen.getByText('providerAccountUsage.kimi.limit_7d')).toBeTruthy();
+  const refresh = screen.getByRole('button', { name: 'providerAccountUsage.kimi.refresh' });
+  await waitFor(() => expect(refresh.hasAttribute('disabled')).toBe(false));
+  fireEvent.click(refresh);
+  await waitFor(() => expect(fetchUsage).toHaveBeenLastCalledWith({ providerId: 'plan-copy', agent: 'codex', forceRefresh: true }));
+});
+
 it('keeps the manual refresh action after the first OpenCode Go quota snapshot', async () => {
   Object.assign(window.electronAPI.maker, {
     fetchProviderAccountUsage: vi.fn(async () => ({

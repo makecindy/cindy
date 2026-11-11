@@ -69,6 +69,13 @@
       "invalid-response": "供应商返回了无法识别的余额数据，请稍后重试。",
       "throttled": "刚刚刷新过余额，请稍后重试。",
       "unknown": "Cindy 无法加载供应商余额，请稍后重试。"
+    },
+    "minimax": {
+      "usage": "打开 MiniMax 控制台",
+      "unavailable": "暂时无法读取 MiniMax 套餐用量，请检查订阅密钥或稍后刷新。",
+      "windowsInfo": "仅显示接口返回的配额周期；该接口未提供月度用量。",
+      "noPlan": "此密钥没有可用的套餐配额，请在 MiniMax 控制台确认订阅。",
+      "weeklyUnlimited": "每周配额未设上限。"
     }
   },
   "localAgent": {
