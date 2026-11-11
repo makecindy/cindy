@@ -239,14 +239,6 @@ export function SessionImportSection() {
     };
   }, []);
 
-  // 导入结束：侧栏刷新出新任务。
-  const finishedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!job || job.status === 'running' || finishedRef.current === job.requestId) return;
-    finishedRef.current = job.requestId;
-    emitRefresh();
-  }, [job]);
-
   const projectKey = useMemo(() => (projectParam ? platformKey(projectParam) : null), [projectParam]);
   const projectName = useMemo(() => {
     if (!projectParam) return '';
@@ -318,7 +310,6 @@ export function SessionImportSection() {
     try {
       const view = await window.electronAPI.localDb.sessionImport.start(keys);
       jobIdRef.current = view.requestId;
-      finishedRef.current = null;
       setJob(view);
       setSelected(new Set());
     } catch (err) {
