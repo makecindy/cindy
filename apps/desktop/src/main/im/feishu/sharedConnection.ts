@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import { getCurrentDbClientSnapshot } from '../../localDb/client/current';
 import { botProfiles, botSessionLinks } from '../../localDb/schema';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState';
-import { t } from '../../i18n';
+import { t } from '../../i18n.desktop';
 import { bindingStore } from '../binding';
 import { isInControl } from '../shared/controlState';
 import type { BotImConnectionRecord } from '../../../shared/botImConnection';

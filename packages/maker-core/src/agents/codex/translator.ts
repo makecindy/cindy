@@ -439,6 +439,7 @@ export interface CodexTranslateContext {
    * 缺省 = 不回调 (makerMemoryEnabled 关时 agent 不注入)。
    */
   onCompactBoundary?: () => void;
+  compactTrigger?: 'auto' | 'manual';
   /**
    * 服务过载错误的重投接管钩子 (由 agent 层注入)。
    *
@@ -2506,7 +2507,7 @@ function handleImageGeneration(
 
 // ── contextCompaction → compact_boundary ─────────────────────────────────────
 // codex auto-compact 边界 — 协议只给 id, 没有 trigger / pre/post tokens / duration。
-// trigger 一律 'auto' (codex 没暴露手动 compact 入口给 UI), 其他字段 0 占位。
+// 手动请求由 adapter 标记 trigger，其他字段由原生协议决定，缺省以 0 占位。
 // 与 claude-code translator handleSystem (subtype=compact_boundary) 形状对齐。
 
 function handleContextCompaction(
@@ -2519,9 +2520,10 @@ function handleContextCompaction(
   ctx.log.info('codex ◾ contextCompaction', { id: item.id });
   queue.push({
     type: 'compact_boundary',
+    ...(ctx.compactTrigger === 'manual' ? { turnScope: 'background' as const } : {}),
     data: {
       boundaryId: item.id,
-      trigger: 'auto',
+      trigger: ctx.compactTrigger ?? 'auto',
       preTokens: 0,
       postTokens: 0,
       durationMs: 0,

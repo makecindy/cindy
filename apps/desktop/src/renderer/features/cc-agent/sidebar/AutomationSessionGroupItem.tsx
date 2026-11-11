@@ -96,14 +96,6 @@ interface FrozenGroupState {
   visibleSessionIds: string[];
 }
 
-/** 伙伴设置的「例行任务」页（本机或远程伙伴）。 */
-function teammateRoutinesPath(botId: string, deviceId?: string): string {
-  const base = deviceId
-    ? `/bots/remote/${encodeURIComponent(deviceId)}/${encodeURIComponent(botId)}`
-    : `/bots/${encodeURIComponent(botId)}`;
-  return `${base}?settings=1&settingsPage=routines`;
-}
-
 /** 单独成组件：伙伴归属订阅只在例行任务分组上挂载，普通自动化组头不付这份成本。 */
 function TeammateRoutineOwnerMark({ session }: { session: Session }) {
   return <BotFollowMark followers={useSessionFollowers(session)} />;
@@ -225,7 +217,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     // 远程分组只提供在对方电脑上执行的操作（运行、暂停 / 恢复、标为已读）；编辑页与删除
     // 确认只管本机任务，查看入口也不能拿远程 id 去聚焦本机自动化页。
     const isRemoteGroup = !!group.deviceLinkDeviceId;
-    // 伙伴例行任务分组没有 schedule：只提供标为已读，运行与编辑在伙伴设置「例行任务」页。
+    // 旧伙伴例行任务分组没有 schedule，例行任务页也已移除：只提供标为已读。
     // 伙伴任务的归档归伙伴生命周期管理，主进程拒绝通用归档，所以这里也不提供「全部归档」。
     const teammateRoutine = group.teammateRoutine;
     // 远程且已结束、又没有未读时，菜单里没有可执行项，不显示「更多」。
@@ -570,7 +562,22 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
               </span>
               {/* text 延续 vendor → Timer → 标题；list 把 Timer 排到标题右侧，避免它
                 被误读成一层缩进，同时保留自动任务身份和点击入口。Timer 与标题是
-                同级按钮，避免 role=button 嵌进 title button 后无法进入 Tab 顺序。 */}
+                同级按钮，避免 role=button 嵌进 title button 后无法进入 Tab 顺序。
+                旧伙伴例行任务分组没有可打开的规则页，Timer 只表明自动运行身份。 */}
+              {teammateRoutine ? (
+                <span
+                  className={cn(
+                    'relative inline-flex size-3 shrink-0 items-center justify-center',
+                    sessionVariant === 'list' && 'order-2',
+                  )}
+                >
+                  <AutomationTimerIcon
+                    size={10}
+                    activeForeground={hasActiveHidden}
+                    running={isRunning}
+                  />
+                </span>
+              ) : (
               <Tip text={scheduleBindingLabel} side="bottom">
                 <button
                   type="button"
@@ -579,11 +586,9 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                   onClick={(event) => {
                     event.stopPropagation();
                     navigate(
-                      teammateRoutine
-                        ? teammateRoutinesPath(teammateRoutine.botId, group.deviceLinkDeviceId)
-                        : group.scheduleId && !isRemoteGroup
-                          ? scheduleFocusPath(group.scheduleId)
-                          : '/cc-agent/scheduled',
+                      group.scheduleId && !isRemoteGroup
+                        ? scheduleFocusPath(group.scheduleId)
+                        : '/cc-agent/scheduled',
                     );
                   }}
                   onPointerDown={(event) => event.stopPropagation()}
@@ -602,6 +607,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                   />
                 </button>
               </Tip>
+              )}
               <button
                 type="button"
                 onClick={(event) => {

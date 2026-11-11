@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+vi.mock('@/session/SessionProjectMoveSheet', () => ({
+  sessionAllowsProjectMove: () => false,
+  useSessionProjectMoveSheet: () => ({ open: vi.fn(), parentClosed: vi.fn(), sheet: null }),
+}));
 vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => null }));
 vi.mock('@/session/SessionPrLinks', () => ({ SessionPrLinks: () => null }));
 import { act, type ReactNode } from "react";

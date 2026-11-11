@@ -309,6 +309,11 @@ export interface GhostManagerOptions {
   /** Read-only source projections. Does not affect running, installation, or publishing ACL. */
   sourcesForInstance?: (record: PluginInstanceRecord, receipt: PluginInstanceReceiptFact | null | undefined) =>
     Pick<InstalledGhost, 'publishingSource'>;
+  /** One listing's source facts, discarded after the scan; never runtime authorization. */
+  prepareListingSources?: () => {
+    project: NonNullable<GhostManagerOptions['sourcesForInstance']>;
+    isCurrent: () => boolean;
+  };
   /** 意识仓库根目录(生产:userData/cindy-brain;测试:os.tmpdir 下临时目录)。 */
   getRootDir: () => string;
   /** Host 批准状态根；必须位于插件安装根之外。 */
@@ -1000,7 +1005,8 @@ export class GhostManager {
   }
 
 
-  private instanceProjection(relId: string, ghostId: string, approval: GhostInstallReceiptReadResult): {
+  private instanceProjection(relId: string, ghostId: string, approval: GhostInstallReceiptReadResult,
+    sources = this.options.sourcesForInstance): {
     instanceKey?: string;
     publishingSource?: InstalledGhost['publishingSource'];
     namespace?: string | null;
@@ -1012,7 +1018,7 @@ export class GhostManager {
     if (!record || record.ghostId !== ghostId) return {};
     return {
       instanceKey: record.instanceKey,
-      ...this.options.sourcesForInstance?.(record, this.receiptFact(relId, approval)),
+      ...sources?.(record, this.receiptFact(relId, approval)),
       namespaceState: record.namespaceState,
       ...(record.namespaceState === 'confirmed' || record.namespaceState === 'unconfirmed'
         ? { namespace: record.namespace } : {}),
@@ -2902,8 +2908,9 @@ export class GhostManager {
         isPresenceUnknown: () => false,
       });
       const result: InstalledGhost[] = [];
+      const sources = this.createListingSources();
       for (const entry of entries) {
-        result.push(...this.projectListedEntries([entry], readReceipt, disabled));
+        result.push(...this.projectListedEntries([entry], readReceipt, disabled, sources?.project));
         await new Promise<void>((resolve) => setImmediate(resolve));
         assertOwner();
         if (mutations !== this.mutationTail) break;
@@ -2913,6 +2920,7 @@ export class GhostManager {
       if (locale !== this.options.getLocale?.() ||
           (registry !== this.instanceRegistryService.current() &&
            JSON.stringify(registry) !== JSON.stringify(this.instanceRegistryService.current()))) continue;
+      if (sources && !sources.isCurrent()) continue;
       return {
         ghosts: result.sort((a, b) => a.manifest.id.localeCompare(b.manifest.id)),
         registry,
@@ -2920,6 +2928,21 @@ export class GhostManager {
       };
     }
     throw new Error('ghost installations changed repeatedly during background scan');
+  }
+
+  private createListingSources(): ReturnType<NonNullable<GhostManagerOptions['prepareListingSources']>> | undefined {
+    const prepare = this.options.prepareListingSources?.bind(this.options);
+    if (!prepare) return undefined;
+    let snapshot: ReturnType<typeof prepare> | undefined;
+    return {
+      project: (record, receipt) => {
+        // Empty scans and skipped entries must not depend on ledger readability.
+        // Share one snapshot only after a projected instance actually needs it.
+        snapshot ??= prepare();
+        return snapshot.project(record, receipt);
+      },
+      isCurrent: () => snapshot?.isCurrent() ?? true,
+    };
   }
 
   private async listContentEntriesAsync(root: string): Promise<Array<{ relId: string; dir: string }>> {
@@ -2975,7 +2998,8 @@ export class GhostManager {
       receiptFact: (relId) => this.receiptFact(relId, readReceipt(relId)),
       isPresenceUnknown: (relId) => this.isContentPresenceUnknown(relId),
     });
-    const result = this.projectListedEntries(entries, readReceipt);
+    const result = this.projectListedEntries(entries, readReceipt, undefined,
+      this.createListingSources()?.project);
     result.sort((a, b) => a.manifest.id.localeCompare(b.manifest.id));
     return { ghosts: result, registry };
   }
@@ -3005,6 +3029,7 @@ export class GhostManager {
     listedDirs: Array<{ relId: string; dir: string }>,
     readReceipt?: (relId: string) => GhostInstallReceiptReadResult,
     disabledMarkers?: ReadonlyMap<string, boolean>,
+    sources = this.options.sourcesForInstance,
   ): InstalledGhost[] {
     const result: InstalledGhost[] = [];
     for (const listed of listedDirs) {
@@ -3044,7 +3069,7 @@ export class GhostManager {
         result.push({
           manifest: localizedManifest,
           dir,
-          ...this.instanceProjection(relId, identity.ghostId, approvalResult),
+          ...this.instanceProjection(relId, identity.ghostId, approvalResult, sources),
           enabled: !retired && enabled,
           ...(retirement ? { retirement } : {}),
           approval: { state: 'approved', revision: receipt.revision },
@@ -3129,7 +3154,7 @@ export class GhostManager {
       result.push({
         manifest: localizedManifest,
         dir,
-        ...this.instanceProjection(relId, identity.ghostId, approvalResult),
+        ...this.instanceProjection(relId, identity.ghostId, approvalResult, sources),
         enabled: false,
         approval: { state: approvalResult.state },
         ...(retired ? { retirement: { id: retired.id, eligible: false, unread: false } } : {}),

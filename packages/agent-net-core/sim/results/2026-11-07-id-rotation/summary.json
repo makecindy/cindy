@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-07",
+  "core_dependencies": 0,
+  "tests": {
+    "passed": 128,
+    "failed": 0,
+    "ignored": 2
+  },
+  "rotating_random_moves": {
+    "random_seeds": 2000,
+    "regression_seeds": 6,
+    "failed": 0
+  },
+  "traversal_random_seeds": 300,
+  "mutants": {
+    "caught": 4,
+    "survived": 0
+  },
+  "node_driver": {
+    "passed": 6,
+    "failed": 0
+  },
+  "edgehub": {
+    "core": {
+      "passed": 12,
+      "failed": 0
+    },
+    "relay": {
+      "passed": 12,
+      "failed": 0
+    },
+    "push": {
+      "passed": 12,
+      "failed": 0
+    },
+    "punch": {
+      "passed": 12,
+      "failed": 0
+    }
+  },
+  "matrix": {
+    "cases": 306,
+    "known_address_id_reuse": 0,
+    "before_finish_us": 475453298,
+    "after_finish_us": 475003206,
+    "before_recovery_us": 295470718,
+    "after_recovery_us": 297260118,
+    "before_wire_bytes": 1641485146,
+    "after_wire_bytes": 1656873558,
+    "retired_packets": 42,
+    "client_exhaustions": 0,
+    "server_exhaustions": 743
+  },
+  "wasm_bytes": {
+    "baseline_ebe20d411a": 334263,
+    "current": 359804
+  },
+  "clippy_unique_diagnostics": {
+    "baseline": 13,
+    "current": 13,
+    "added": 0,
+    "strict_passed": false
+  },
+  "real_wifi_cellular_retested": false
+}

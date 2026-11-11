@@ -17,7 +17,7 @@ import { createImOrchestrator, type ImOrchestrator } from '../shared/orchestrato
 import type { ImOrchestratorConfig } from '../shared/types';
 import { buildFeishuAdapter } from './adapter';
 import type { ImChannelAdapter } from '../shared/types';
-import { t } from '../../i18n';
+import { t } from '../../i18n.desktop';
 
 /** 兼容别名 — 历史命名, 形状即 ImOrchestratorConfig。 */
 export type FeishuOrchestratorConfig = ImOrchestratorConfig;

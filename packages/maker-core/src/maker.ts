@@ -1457,6 +1457,19 @@ export class Maker {
     // status listener 会自动清理 activeSessions 并 emit
   }
 
+  /**
+   * 项目资源漂移的 pi 本地根任务:空闲时经 Maker 以 runtime-refresh 原因回收运行时。
+   * 供直发链路(IM turnRunner / scheduler 直发降级 / goal)在 send 前调用,与桌面发送
+   * 事务(makerSendTransaction 的 lazy bootstrap)同口径;调用方随后按各自的自愈路径
+   * 重建会话再投递。非本 maker 会话/未漂移/非空闲一律 no-op 返回 false。
+   */
+  async recyclePiRuntimeIfResourcesDrifted(session: Session): Promise<boolean> {
+    if (this.activeSessions.get(session.id) !== session) return false;
+    if (!session.hasRecyclableProjectResourceDrift()) return false;
+    await this.closeSessionIfCurrent(session, 'runtime-refresh');
+    return true;
+  }
+
   /** 关闭并移除一个 session */
   async closeSession(
     id: string,
@@ -1701,6 +1714,8 @@ export class Maker {
   async listAgentSkills(
     agentKind: AgentKind,
     opts: ListAgentSkillsOptions & { sessionId?: string },
+    /** Host-only request-scoped verification; never part of renderer/remote options. */
+    readDisabledSkillPaths?: () => Promise<readonly string[]>,
   ): Promise<ListAgentSkillsResult> {
     const { sessionId, ...agentOpts } = opts;
     const sessionMeta = sessionId ? await this.storage.get(sessionId) : null;
@@ -1712,11 +1727,13 @@ export class Maker {
       ));
     const agent = this.requireAgent(agentKind);
     const session = sessionId ? this.getSession(sessionId) : undefined;
-    const filter = (result: ListAgentSkillsResult) => agent.filterActiveSkillCommands(
-      result, agentOpts.remoteHostId ?? sessionMeta?.remoteHostId ?? undefined,
-      session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined,
-    );
-    const result = filter(await agent.listAgentSkills({
+    const filter = async (result: ListAgentSkillsResult) => {
+      const remoteHostId = agentOpts.remoteHostId ?? sessionMeta?.remoteHostId ?? undefined;
+      const snapshot = session?.agentKind === agentKind ? session.getDisabledSkillPaths() : undefined;
+      const current = !remoteHostId && snapshot === undefined ? await readDisabledSkillPaths?.() : undefined;
+      return agent.filterActiveSkillCommands(result, remoteHostId, snapshot, current);
+    };
+    const result = await filter(await agent.listAgentSkills({
       ...agentOpts,
       includeManagedPiPackages,
     }));

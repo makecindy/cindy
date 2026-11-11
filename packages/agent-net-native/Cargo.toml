@@ -1,0 +1,27 @@
+[package]
+name = "cindy-agent-net-native"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Native host adapter for the dependency-free Agent-Net state machine."
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Keep this host adapter outside agent-net-core's dependency-free workspace.
+[workspace]
+members = ["."]
+
+[dependencies]
+agent-net-core = { path = "../agent-net-core" }
+base64 = "0.22"
+ring = "0.17"
+serde_json = "1"
+x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize", "precomputed-tables"] }
+zeroize = "1"
+
+[profile.release]
+lto = "thin"
+strip = true
+panic = "unwind"

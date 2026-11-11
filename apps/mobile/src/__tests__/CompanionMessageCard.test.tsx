@@ -238,11 +238,15 @@ it.each(['running', 'waiting'])('shows task errors ahead of a stale %s delegatio
   expect(openEntry()?.disabled).toBe(false);
 });
 
-it('opens the task from the whole card and keeps stop as a small action while it runs', async () => {
+// Nothing updates V1 task rows any more: an unfinished stored row is not shown as live,
+// and the card offers no stop action.
+it('opens the task from the whole card and shows a stored running row as unknown without a stop action', async () => {
   await render();
   expect(openEntry()?.disabled).toBe(false);
   expect(node.textContent).not.toContain('devices.companions.openTask');
-  expect(node.textContent).toContain('devices.companions.stopTask');
+  expect(node.textContent).toContain('devices.companions.status.unknown');
+  expect(node.textContent).not.toContain('devices.companions.status.running');
+  expect(node.textContent).not.toContain('devices.companions.stopTask');
 });
 
 // Review regression: a one-shot off-list title masked later renames indefinitely.
@@ -473,21 +477,15 @@ it('isolates a broken private-chat card so the session can keep rendering', asyn
   expect(node.textContent).toBe('devices.companions.actionFailed');
 });
 
-it('reads, opens and stops the task on its source computer, then disables stop offline', async () => {
+it('reads and opens the task on its source computer', async () => {
   await render();
   expect(h.invoke).toHaveBeenCalledWith('home', 'maker:bot-delegations:list', ['parent']);
-  const button = (label: string) =>
-    [...node.querySelectorAll('button')].find((b) => b.textContent === label)!;
   await act(async () => openEntry()!.click());
   expect(h.push).toHaveBeenCalledWith({
     pathname: '/sessions/[sessionId]',
     params: { deviceId: 'home', sessionId: 'child' },
   });
-  await act(async () => button('devices.companions.stopTask').click());
-  expect(h.invoke).toHaveBeenCalledWith('home', 'maker:bot-delegation:cancel', ['parent', 'job']);
-  h.status = 'reconnecting';
-  await render();
-  expect(button('devices.companions.stopTask').disabled).toBe(true);
+  expect(h.invoke).not.toHaveBeenCalledWith('home', 'maker:bot-delegation:cancel', expect.anything());
 });
 it('ignores another peer push and refreshes the actual task to completed', async () => {
   await render();
@@ -543,21 +541,24 @@ it('does not render an old account response after account and connection change'
 });
 
 it('keeps the last successful task across a failed refresh and reconnection, but never another account', async () => {
+  h.invoke.mockResolvedValue({ ok: true, delegations: [
+    { id: 'job', status: 'completed', title: 'Report', childSessionId: 'child' },
+  ] });
   await render();
   h.status = 'offline';
   h.epoch += 1;
   await render();
-  expect(node.textContent).toContain('devices.companions.status.running');
+  expect(node.textContent).toContain('devices.companions.status.completed');
   expect(node.textContent).toContain('devices.companions.stale');
   h.invoke.mockRejectedValue(new Error('offline'));
   h.status = 'online';
   await render();
-  expect(node.textContent).toContain('devices.companions.status.running');
+  expect(node.textContent).toContain('devices.companions.status.completed');
   expect(node.textContent).toContain('devices.companions.stale');
   h.accountGeneration += 1;
   h.status = 'offline';
   await render();
-  expect(node.textContent).not.toContain('devices.companions.status.running');
+  expect(node.textContent).not.toContain('devices.companions.status.completed');
 });
 it('opens the child session associated PR and consumes its status without needing a report link', async () => {
   const ref = {
@@ -976,15 +977,14 @@ it.each(['sent', 'received'] as const)('keeps a compact %s private-message entry
   } });
 });
 
-it('shows the starting state until the first read settles, then the background-task title fallback', async () => {
+it('never claims a stored task is starting, before or after the first read, and falls back to the background-task title', async () => {
   let finish!: (value: unknown) => void;
   h.invoke.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
   const untitled = { ...message, companion: { kind: 'task', meta: { ...message.companion!.meta, objective: '  ' } } } as NormalizedRemoteMessage;
   await act(async () => root.render(createElement(CompanionMessageCard, { deviceId: 'home', message: untitled })));
-  expect(node.textContent).toContain('devices.companions.status.queued');
-  expect(node.textContent).not.toContain('devices.companions.status.unknown');
+  expect(node.textContent).toContain('devices.companions.status.unknown');
+  expect(node.textContent).not.toContain('devices.companions.status.queued');
   expect(node.textContent).toContain('devices.companions.backgroundTask');
-  // A settled read without this task is unverifiable, not still starting.
   await act(async () => finish({ ok: true, delegations: [] }));
   expect(node.textContent).toContain('devices.companions.status.unknown');
 });

@@ -10,6 +10,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { normalizeDiscordChannelAccess } from '@cindy/im';
 
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { desktopMakerLogger } from '../../maker-host/logger-adapter.js';
@@ -20,6 +21,7 @@ import {
   isBotImGroupChatId,
   type BotImChannel,
   type BotImConnectionRecord,
+  type BotImDiscordChannelAccess,
   type BotImFeishuService,
   type BotImTaskArchiveActivity,
 } from '../../../shared/botImConnection.js';
@@ -63,6 +65,7 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
       ? r.botContextId
       : null;
   const groupActivation = normalizeGroupActivation(r.groupActivation);
+  const discordChannelAccess = r.channel === 'discord' ? normalizeDiscordAccess(r.discordChannelAccess) : undefined;
   const archivedTaskRows = normalizeArchivedTaskRows(r.archivedTaskRows);
   const archivedTaskActivity = normalizeArchivedTaskActivity(r.archivedTaskActivity, archivedTaskRows);
   const sharedFeishu = r.channel === 'feishu' ? normalizeSharedFeishu(r.sharedFeishu) : undefined;
@@ -74,6 +77,7 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
     botContextId,
     ...(sharedFeishu ? { sharedFeishu } : {}),
     ...(groupActivation ? { groupActivation } : {}),
+    ...(discordChannelAccess ? { discordChannelAccess } : {}),
     ...(archivedTaskRows ? { archivedTaskRows } : {}),
     ...(archivedTaskActivity ? { archivedTaskActivity } : {}),
   };
@@ -134,6 +138,12 @@ function normalizeGroupActivation(raw: unknown): Record<string, 'always'> | unde
     if (isBotImGroupChatId(chatId) && mode === 'always') out[chatId] = 'always';
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** Only persist valid Discord guild/channel allowlists. */
+export function normalizeDiscordAccess(raw: unknown): BotImDiscordChannelAccess | undefined {
+  const access = normalizeDiscordChannelAccess(raw);
+  return access.channels.length > 0 || (access.guilds?.length ?? 0) > 0 ? access : undefined;
 }
 
 function normalizeDocument(raw: unknown): BotImConnectionDocument {
@@ -211,7 +221,7 @@ export async function addBotImConnectionRecord(
 
 export async function updateBotImConnectionRecord(
   id: string,
-  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation' | 'sharedFeishu'>>,
+  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation' | 'sharedFeishu' | 'discordChannelAccess'>>,
   assertCurrent?: () => void,
 ): Promise<BotImConnectionRecord | null> {
   if (!isBotImConnectionId(id)) return null;
