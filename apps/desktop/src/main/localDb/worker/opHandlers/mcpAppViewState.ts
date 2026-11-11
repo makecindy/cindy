@@ -64,3 +64,11 @@ export function saveMcpAppViewState(db: Database.Database, args: unknown): void 
       row.id, binding.sessionId, binding.serverId, binding.serverRevision, binding.pluginInstance, json, bytes);
   })();
 }
+
+/** Call inside the transaction that marks these tasks deleted; archived tasks retain state. */
+export function deleteDeletedSessionViewStates(db: Database.Database, sessionIds: string[]): void {
+  if (!sessionIds.length) return;
+  const remove = db.prepare(`DELETE FROM mcp_app_view_states WHERE session_id = ?
+    AND EXISTS (SELECT 1 FROM sessions WHERE id = ? AND status = 'deleted')`);
+  for (const sessionId of sessionIds) remove.run(sessionId, sessionId);
+}

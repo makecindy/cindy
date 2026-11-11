@@ -325,6 +325,37 @@ describe('db worker tx handlers', () => {
       expect(await reopened.query('SELECT * FROM mcp_app_view_states')).toEqual([]);
     }, { useInlineWorker });
   });
+  // DB regression: overwrite import bypassed terminal-status cleanup. Exercise
+  // both worker entries; a failed graph or cleanup must roll back the old drafts.
+  it.each([false, true])('deletes replaced task state atomically during share import (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await client.exec('ALTER TABLE sessions ADD COLUMN worktree_path TEXT');
+      await client.exec('ALTER TABLE sessions ADD COLUMN plan_mode_enabled INTEGER DEFAULT 0');
+      for (const id of ['replaced', 'untouched']) {
+        await seedSession(client, id);
+        await client.exec("INSERT INTO messages (id,client_id,session_id,role,content,created_at) VALUES (?,?,?,'assistant','{}',1)", [id, id, id]);
+        await client.exec("INSERT INTO mcp_app_view_states VALUES (?,?, 'fixture','revision',NULL,?,2)", [id, id, '{}']);
+      }
+      const session = { id: 'imported', title: 'Imported task', workspaceKind: 'project', model: 'fixture',
+        workingDir: null, worktreePath: null, providerId: null, sdkSessionId: null,
+        codexHistoryHasProductPrompt: null, clearedAt: null, userSendAt: null,
+        effort: 'high', permissionMode: 'ask', status: 'active', totalTokenUsage: 0, totalCostUsd: 0,
+        contextTokens: 0, contextWindow: 0, fastMode: false, planModeEnabled: false, agentKind: 'cc',
+        source: 'shared', extraDirs: '[]', createdAt: 10, updatedAt: 10 };
+      const args = { session, messages: [], replaceSessions: [{ id: 'replaced', status: 'active' as const }] };
+      await expect(client.tx('session.importShare', { ...args, session: { ...session, title: 42 } } as never)).rejects.toThrow();
+      expect(await client.query('SELECT session_id FROM mcp_app_view_states ORDER BY session_id'))
+        .toEqual([{ session_id: 'replaced' }, { session_id: 'untouched' }]);
+      await client.exec("CREATE TRIGGER fail_state_delete BEFORE DELETE ON mcp_app_view_states BEGIN SELECT RAISE(ABORT, 'state cleanup failed'); END");
+      await expect(client.tx('session.importShare', args)).rejects.toThrow('state cleanup failed');
+      expect(await client.query("SELECT id, status FROM sessions ORDER BY id"))
+        .toEqual([{ id: 'replaced', status: 'active' }, { id: 'untouched', status: 'active' }]);
+      await client.exec('DROP TRIGGER fail_state_delete');
+      await client.tx('session.importShare', args);
+      expect(await client.query("SELECT status FROM sessions WHERE id='replaced'")).toEqual([{ status: 'deleted' }]);
+      expect(await client.query('SELECT session_id FROM mcp_app_view_states')).toEqual([{ session_id: 'untouched' }]);
+    }, { useInlineWorker });
+  });
   it.each([false, true])('enforces the task quota atomically and keeps hidden states charged (inline=%s)', async useInlineWorker => {
     await withClient(async client => {
       await seedSession(client, 'quota');

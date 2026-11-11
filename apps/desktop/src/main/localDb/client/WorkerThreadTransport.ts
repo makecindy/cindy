@@ -1,4 +1,4 @@
-import { saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
+import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js';
@@ -31,6 +31,7 @@ const WORKER_CODE = `
 const viewStateCardSql = ${viewStateCardSql.toString()};
 const assertViewStateCard = ${assertViewStateCard.toString()};
 const saveMcpAppViewState = ${saveMcpAppViewState.toString()};
+const deleteDeletedSessionViewStates = ${deleteDeletedSessionViewStates.toString()};
 const sanitizeToolResultDiagnostics = ${sanitizeToolResultDiagnostics.toString()};
 const extractToolResultDiagnostics = ${extractToolResultDiagnostics.toString()};
 const compactToolCardResult = ${compactToolCardResult.toString()};
@@ -1259,9 +1260,7 @@ function sessionsSetTerminalStatus(readyDb, args) {
           'remote_host_id AS remoteHostId, source').all(now, sessionId)
       : [];
     if (status === 'deleted') {
-      const deleteState = readyDb.prepare('DELETE FROM mcp_app_view_states WHERE session_id = ?');
-      deleteState.run(sessionId);
-      for (const child of deletedSideChats) deleteState.run(child.sessionId);
+      deleteDeletedSessionViewStates(readyDb, [sessionId, ...deletedSideChats.map(child => child.sessionId)]);
     }
     for (const child of deletedSideChats) {
       readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
@@ -1408,6 +1407,7 @@ function sessionImportShare(readyDb, args) {
       deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
       readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(replacementUpdatedAt, replacedSession.id);
     }
+    deleteDeletedSessionViewStates(readyDb, replaceSessions.map(session => session.id));
     let count = insertSessionWithMessages(session, messages);
     if (orca) {
       const team = asRecord(orca.team, 'orca.team');

@@ -112,6 +112,31 @@ it('merges B/C only behind A and reports the same failed commit to both callers'
   expect((await f.reply(f.doc.viewId, 3)).error?.code).toBe(-32603);
   expect((await f.reply(f.doc.viewId, 4)).error?.code).toBe(-32603);
 });
+// Unit regression: a failed old write must not short-circuit waiting for a pending
+// successful write or suppress the replacement page's independent storage read.
+it('restores the successful pending batch after the old in-flight batch fails', async () => {
+  const f = await fixture(); await f.initialize();
+  const a = deferred(), b = deferred();
+  const persist = f.save.getMockImplementation()!;
+  f.save.mockImplementationOnce(() => a.promise).mockImplementationOnce(async value => {
+    await b.promise; await persist(value);
+  });
+  await f.set(2, { page: 2 }); await f.set(3, { version: 1, page: 3 });
+  await vi.advanceTimersByTimeAsync(0);
+  await f.host.teardown('device:test', 'task', f.doc.viewId);
+  const next = await f.open();
+  const initializing = f.initialize(next.viewId, 4);
+  await vi.advanceTimersByTimeAsync(0);
+  a.reject(viewStateError('CINDY_VIEW_STATE_STORAGE_UNAVAILABLE'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.read).toHaveBeenCalledTimes(1);
+  expect(f.save).toHaveBeenCalledTimes(2);
+  b.resolve();
+  const init = await initializing;
+  expect(f.read).toHaveBeenCalledTimes(2);
+  expect(init.result?.hostContext['cindy/view-state']).toEqual({ version: 1, page: 3 });
+  expect(init.result?.hostCapabilities.experimental['cindy/view-state']).toMatchObject({ maxBytes: 65536 });
+});
 it('bounds unacknowledged requests and does not replace the latest valid pending value on rejection', async () => {
   const f = await fixture(); await f.initialize(); const gate = deferred();
   f.save.mockImplementationOnce(() => gate.promise);

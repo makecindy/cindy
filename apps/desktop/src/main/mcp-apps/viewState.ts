@@ -64,7 +64,8 @@ export class ViewStateWriter {
   constructor(private readonly save: ViewStateStorage['save']) {}
   get hasRequests(): boolean { return this.requests > 0; }
   barrier(): Promise<void> {
-    return Promise.all([this.inFlight?.done, this.pending?.done]).then(() => {});
+    // A failed write does not imply that the last committed snapshot cannot be read.
+    return Promise.allSettled([this.inFlight?.done, this.pending?.done]).then(() => {});
   }
   async set(state: unknown): Promise<void> {
     if (this.requests >= 32) throw viewStateError('CINDY_VIEW_STATE_BUSY');

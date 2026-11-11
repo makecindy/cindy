@@ -1,4 +1,4 @@
-import { saveMcpAppViewState } from './mcpAppViewState.js';
+import { deleteDeletedSessionViewStates, saveMcpAppViewState } from './mcpAppViewState.js';
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
@@ -1273,6 +1273,8 @@ function botsDeleteProfile(
       }
     }
 
+    deleteDeletedSessionViewStates(db, [...allSessionIds, ...projectChanged]);
+
     const hasMediaRefs = Boolean(db.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_refs'",
     ).get());
@@ -2214,9 +2216,7 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
             remote_host_id AS remoteHostId, source`).all(now, sessionId) as SessionsSetTerminalStatusResult['deletedSideChats']
       : [];
     if (status === 'deleted') {
-      const deleteState = db.prepare('DELETE FROM mcp_app_view_states WHERE session_id = ?');
-      deleteState.run(sessionId);
-      for (const child of deletedSideChats) deleteState.run(child.sessionId);
+      deleteDeletedSessionViewStates(db, [sessionId, ...deletedSideChats.map(child => child.sessionId)]);
     }
     for (const child of deletedSideChats) {
       db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
@@ -3124,6 +3124,7 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
       deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
       db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(replacementUpdatedAt, replacedSession.id);
     }
+    deleteDeletedSessionViewStates(db, replaceSessions.map(session => session.id));
     let messageCount = insertSessionWithMessages(session, messages);
     if (orca) {
       const team = asRecord(orca.team, 'orca.team');
