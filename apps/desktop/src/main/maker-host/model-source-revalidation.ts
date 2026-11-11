@@ -5,7 +5,7 @@ const AGENTS = ['claude-code', 'codex', 'pi'] as const;
 const FAILURE_RETRY_MS = 5 * 60_000;
 
 interface ModelSourceRevalidationDeps {
-  fetchModels(config: CustomProviderConfig, agent: AgentKind, isCurrent: () => boolean): Promise<DiscoveredModel[] | null>;
+  fetchModels(config: CustomProviderConfig, agent: AgentKind, isCurrent: () => boolean): Promise<DiscoveredModel[] | null | { retryAt: number }>;
   save(id: string, previous: CustomProviderConfig, next: CustomProviderConfig): Promise<boolean>;
   credentialRevision(id: string): number;
   isMutating(id: string): boolean;
@@ -43,14 +43,21 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
       const signature = modelSourceRequestSignature(JSON.stringify([scope, revision, config.auth, requests]), {});
       let read = reads.get(config.id);
       if (!read || read.signature !== signature || deps.now() >= read.retryAt) {
-        const promise = Promise.all(agents.map(async agent => ({ agent,
-          models: await Promise.resolve().then(() => isCurrent() ? deps.fetchModels(config, agent, isCurrent) : null).catch(() => null),
-        })));
+        let retryAt = 0;
+        const promise = Promise.all(agents.map(async agent => {
+          const result = await Promise.resolve().then(() => isCurrent() ? deps.fetchModels(config, agent, isCurrent) : null).catch(() => null);
+          if (result && !Array.isArray(result)) retryAt = Math.max(retryAt, result.retryAt);
+          // Retain only source fields for saved IDs, never the full catalog.
+          const ids = new Set(config.runtimes[agent]!.models.map(model => model.id));
+          return { agent, models: Array.isArray(result) ? result.filter(model => ids.has(model.id)).map(model => ({
+            id: model.id, name: '', discoveredSource: model.discoveredSource,
+          })) : null };
+        }));
         read = { signature, retryAt: Infinity, promise };
         reads.set(config.id, read);
         const entry = read;
         void promise.then(rows => {
-          if (rows.some(row => row.models === null)) entry.retryAt = deps.now() + FAILURE_RETRY_MS;
+          if (rows.some(row => row.models === null)) entry.retryAt = Math.max(deps.now() + FAILURE_RETRY_MS, retryAt);
         });
       }
       const rows = await read.promise;
@@ -70,7 +77,18 @@ export function createModelSourceRevalidator(deps: ModelSourceRevalidationDeps) 
       }
       // CAS also rejects edits/deletion while the request was in flight. The
       // ordinary store strips transient secure headers before writing SQLite.
-      return changed && isCurrent() && await deps.save(config.id, config, { ...config, runtimes });
+      const saved = changed && isCurrent() && await deps.save(config.id, config, { ...config, runtimes });
+      if (reads.get(config.id) === read) {
+        // Release successful results after CAS; keep only failed runtime markers
+        // and their deadline. A CAS miss can retry discovery after the cooldown.
+        const failed = rows.filter(row => row.models === null);
+        if (saved && !failed.length) reads.delete(config.id);
+        else {
+          read.promise = Promise.resolve(failed);
+          if (!saved && changed) read.retryAt = Math.max(deps.now() + FAILURE_RETRY_MS, Number.isFinite(read.retryAt) ? read.retryAt : 0);
+        }
+      }
+      return saved;
     }));
     return results.some(Boolean);
   };

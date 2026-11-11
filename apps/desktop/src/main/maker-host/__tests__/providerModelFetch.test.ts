@@ -27,6 +27,25 @@ function fakeResponse(status: number, body: string): Response {
 }
 
 describe('import discovery limits', () => {
+  // #9882, unit: preserve Retry-After through the real first/paginated fetch
+  // failure result; existing HTTP tests asserted only classification.
+  it.each(['900', 'Wed, 11 Nov 2026 10:15:00 GMT', 'invalid'])(
+    'preserves first and later page Retry-After %s', async header => {
+      const now = Date.parse('2026-11-11T10:00:00Z');
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+      try {
+        for (const later of [false, true]) {
+          const result = await fetchProviderModels(spec({ requireComplete: true }), async url =>
+            later && !String(url).includes('page=2')
+              ? fakeResponse(200, JSON.stringify({ data: ['one'], next: '?page=2' }))
+              : new Response('{}', { status: later ? 503 : 429, headers: { 'retry-after': header } }));
+          expect(result.ok).toBe(false);
+          expect(result.retryAt).toBe(header === 'invalid' ? undefined : now + 900_000);
+        }
+      } finally { clock.mockRestore(); }
+    },
+  );
+
   // #9882 review: allowEmpty must not turn business failures into deletions.
   // Unit via production fetch; prior error tests only covered named gateways.
   it.each([{ error: 'unavailable', data: [] }, { error_code: 503, data: [] }])(

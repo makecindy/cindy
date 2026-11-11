@@ -272,6 +272,21 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  // #9882, unit: production recovery reload must retain same-owner routes on
+  // transient reads, while the ordinary load still clears an unavailable snapshot.
+  it('preserves routes only for a failed best-effort recovery reload', async () => {
+    const config: CustomProviderConfig = { id: 'reload-failure', name: 'Saved route', runtimes: {} };
+    h.customProviderRead.mockResolvedValue([config]);
+    await refreshCustomProvidersIntoCatalog();
+    h.customProviderRead.mockRejectedValue(new Error('transient read failure'));
+    try {
+      await refreshCustomProvidersIntoCatalog(() => true, { preserveOnFailure: true });
+      expect(getActiveCatalog().providers.some(provider => provider.id === config.id)).toBe(true);
+      await refreshCustomProvidersIntoCatalog();
+      expect(getActiveCatalog().providers.some(provider => provider.id === config.id)).toBe(false);
+    } finally { h.customProviderRead.mockReset(); setCustomProviders([]); }
+  });
+
   // #9882 latest review: a good first page plus a failed second page must not
   // erase a saved source. Unit via production recovery + HTTP parser + CAS;
   // prior restart coverage only used a complete single-page response.

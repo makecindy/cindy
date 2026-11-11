@@ -102,6 +102,8 @@ export interface ProviderModelsFetchSpec {
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
 export interface ProviderModelsFetchResult {
   ok: boolean;
+  /** Main-only recovery hint, absolute milliseconds since epoch. */
+  retryAt?: number;
   /** 拉到的模型清单（ok=true 时给出；已按 id 去重;contextWindow 为端点声明的上下文长度,尽力提取）。 */
   models?: DiscoveredModel[];
   /** 失败分类码（ok=false 时给出）。 */
@@ -321,6 +323,15 @@ export async function fetchProviderModels(
     return { ok: false, code: 'UNKNOWN', detail: INVALID_DISCOVERY_URL };
   }
   const { url, init } = request;
+  let retryAt: number | undefined;
+  const captureRetryAfter = (response: Response) => {
+    if (!spec.requireComplete) return;
+    if (response.status !== 429 && response.status !== 503) return;
+    const value = response.headers.get('retry-after')?.trim();
+    if (!value) return;
+    const deadline = /^\d+$/.test(value) ? Date.now() + Number(value) * 1000 : Date.parse(value);
+    if (Number.isFinite(deadline) && deadline > Date.now()) retryAt = Math.max(retryAt ?? 0, deadline);
+  };
   let res: Response;
   try {
     res = await fetchModelsResponse(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }, fetchImpl);
@@ -329,6 +340,7 @@ export async function fetchProviderModels(
     return { ok: false, code: cls.code, detail: cls.detail };
   }
   if (!res.ok) {
+    captureRetryAfter(res);
     // A configured Codex manifest may be unavailable on older compatible gateways.
     // Retry only the same endpoint without its manifest selector; never retry auth failures.
     const ordinaryUrl = new URL(url);
@@ -346,7 +358,7 @@ export async function fetchProviderModels(
       /* 读体失败按空体分类 */
     }
     const cls = classifyProviderError({ status: res.status, bodyText });
-    return { ok: false, code: cls.code, status: res.status, detail: cls.detail };
+    return { ok: false, code: cls.code, status: res.status, detail: cls.detail, ...(retryAt ? { retryAt } : {}) };
   }
   let json: unknown;
   try {
@@ -365,7 +377,7 @@ export async function fetchProviderModels(
   const models = await collectModelDiscoveryPages(json, url, async nextUrl => {
     if (Date.now() >= pageDeadline) throw new Error('catalog deadline exceeded');
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
-    if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
+    if (!page.ok) { captureRetryAfter(page); await page.body?.cancel(); throw new Error('catalog page failed'); }
     return JSON.parse(await readLimitedBody(page, responseByteLimit ?? 8 * 1024 * 1024));
   }, { requireComplete: spec.requireComplete });
   // These exact OpenAI-compatible catalog views can legitimately be empty. Keep
@@ -405,6 +417,7 @@ export async function fetchProviderModels(
       code: 'UNKNOWN',
       status: res.status,
       detail: 'no models found in response',
+      ...(retryAt ? { retryAt } : {}),
     };
   }
   return { ok: true, models: issueModelSourceSnapshot(models, spec.agent, modelSourceRequestSignature(url, init)) };

@@ -664,7 +664,7 @@ const revalidateModelSources = createModelSourceRevalidator({
     };
     if (config.auth?.method === 'oauth') {
       const result = await fetchSavedOAuthProviderModels(buildUserProvider(config), agent, config.id, isCurrent, guardedFetch, runtime.headers, { requireComplete: true });
-      return result.ok ? result.models ?? null : null;
+      return result.ok ? result.models ?? null : result.retryAt ? { retryAt: result.retryAt } : null;
     }
     const authMethod = config.auth?.method ?? 'apiKey';
     const apiKey = authMethod === 'apiKey' ? readCustomProviderKey(config.id, agent) : null;
@@ -673,7 +673,7 @@ const revalidateModelSources = createModelSourceRevalidator({
       agent, baseUrl: runtime.baseUrl, modelsUrl: runtime.modelsUrl, wireProtocol: runtime.wireProtocol,
       authMethod, apiKey, headers: runtime.headers, redirect: 'error', allowEmpty: true, requireComplete: true,
     }, guardedFetch);
-    return result.ok ? result.models ?? null : null;
+    return result.ok ? result.models ?? null : result.retryAt ? { retryAt: result.retryAt } : null;
   },
 });
 
@@ -689,7 +689,7 @@ async function recoverCustomProviderModelSources(
   // Keep startup/routing responsive. Successful revalidation reloads the latest
   // DB state through the usual catalog path and its existing change broadcast.
   await revalidateModelSources(configs, JSON.stringify([owner.dataOwnerId, owner.generation]), isCurrent).then(async changed => {
-    if (changed && isCurrent()) await refreshCustomProvidersIntoCatalog(isCurrent);
+    if (changed && isCurrent()) await refreshCustomProvidersIntoCatalog(isCurrent, { preserveOnFailure: true });
   }).catch(() => {
     log.warn('custom provider model source recovery failed');
   });
@@ -710,6 +710,7 @@ export async function refreshCustomProviderModelSources(): Promise<void> {
 
 export async function refreshCustomProvidersIntoCatalog(
   shouldApply?: () => boolean,
+  options: { preserveOnFailure?: boolean } = {},
 ): Promise<void> {
   if (shouldApply && !shouldApply()) {
     log.info('discarded stale custom provider catalog refresh');
@@ -796,6 +797,10 @@ export async function refreshCustomProvidersIntoCatalog(
       log.info('discarded stale custom provider catalog refresh failure', {
         err: String(err),
       });
+      return;
+    }
+    if (options.preserveOnFailure) {
+      log.warn('failed to reload recovered sources; retained current owner catalog snapshot');
       return;
     }
     setCustomProviders([]);

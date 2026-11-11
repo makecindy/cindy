@@ -48,6 +48,44 @@ const savedGateway = (): CustomProviderConfig => ({
 });
 
 describe('model source automatic revalidation', () => {
+  // #9882, unit: production revalidator must retain a server deadline while
+  // releasing successful rows; old tests covered only the fixed failure cooldown.
+  it('retains the server deadline after a different runtime succeeds', async () => {
+    let saved = savedGateway();
+    saved.runtimes.codex = structuredClone(saved.runtimes.pi!);
+    let now = 0;
+    const fetchModels = vi.fn(async (_config: CustomProviderConfig, agent: string) =>
+      agent === 'pi' || now >= 900_000 ? issue() : { retryAt: 900_000 });
+    const revalidate = createModelSourceRevalidator({
+      fetchModels, now: () => now, credentialRevision: () => 0, isMutating: () => false,
+      save: async (_id, _previous, next) => { saved = next; return true; },
+    });
+    expect(await revalidate([saved], 'owner', () => true)).toBe(true);
+    now = 300_000;
+    expect(await revalidate([saved], 'owner', () => true)).toBe(false);
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+    now = 900_000;
+    expect(await revalidate([saved], 'owner', () => true)).toBe(true);
+    expect(fetchModels).toHaveBeenCalledTimes(3);
+    expect(saved.runtimes.codex!.models[0].discoveredSource?.providerId).toBe('A');
+  });
+
+  // Unit: after releasing a successful discovery, a CAS miss must not pin an
+  // unusable settled result forever; retry only after the normal cooldown.
+  it('retries a failed source write without retaining the successful catalog', async () => {
+    const config = savedGateway();
+    let now = 0;
+    const fetchModels = vi.fn(async () => issue());
+    const save = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const revalidate = createModelSourceRevalidator({ fetchModels, save, now: () => now, credentialRevision: () => 0, isMutating: () => false });
+    expect(await revalidate([config], 'owner', () => true)).toBe(false);
+    expect(await revalidate([config], 'owner', () => true)).toBe(false);
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    now = 300_000;
+    expect(await revalidate([config], 'owner', () => true)).toBe(true);
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
   it.each(['none', 'owner', 'credential', 'mutation', 'edit'] as const)(
     'shares concurrent discovery and respects %s changes before saving', async change => {
       const config = savedGateway();
