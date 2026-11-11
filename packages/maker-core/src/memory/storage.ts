@@ -372,11 +372,22 @@ export class MemoryStorage {
     return this.mutate(async () => {
       const current = await this.checkVersion(input.keep.filename, input.keep.updatedAt);
       for (const source of input.sources) await this.checkVersion(source.filename, source.updatedAt);
-      await this.writeFile(
-        { ...input.changes, type: current.frontmatter.type, name: current.slug, mode: 'update' },
-        input.keep.filename,
-        input.sources.map((s) => s.filename),
-      );
+      try {
+        await this.writeFile(
+          { ...input.changes, type: current.frontmatter.type, name: current.slug, mode: 'update' },
+          input.keep.filename,
+          input.sources.map((s) => s.filename),
+        );
+      } catch (e) {
+        // 保留条目已经改写、之后重建派生索引才失败: 写入已经提交, 必须把它连同失败一起交给
+        // 调用方记录 (来源一条都没删, 不继续删), 否则改写前的内容没有撤销记录。
+        // 写入之前就失败 (预算、大小、版本) 时文件没变, 照常抛出。
+        const after = await this.read(input.keep.filename).catch(() => null);
+        if (after && after.frontmatter.updatedAt !== input.keep.updatedAt) {
+          return { saved: after, deleted: [], failure: e };
+        }
+        throw e;
+      }
       const deleted: string[] = [];
       let failure: unknown;
       for (const source of input.sources) {

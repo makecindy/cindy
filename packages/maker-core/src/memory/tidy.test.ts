@@ -11,7 +11,7 @@
  * 模块 (tidy.ts) 加它在 manager 上的入口; 用真 better-sqlite3 走生产的 store。
  */
 
-import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -414,6 +414,42 @@ describe('MakerMemoryManager.tidy', () => {
       expect((await store.list()).find((r) => r.filename === 'feedback_zh.md')?.body).toBe('只存在于这一条里的内容');
       manager.dispose();
     });
+  });
+
+  // 评审 (Codex P1, 同一族: 文件已落盘、派生索引重建失败时, 改动仍要进整理记录)。
+  it('保留条目已改写、索引重建失败: 改写进整理记录, 来源不删, 撤销恢复改写前的内容', async () => {
+    const plan = JSON.stringify({
+      merges: [{ sources: ['feedback_zh.md', 'feedback_zh2.md'], title: 'z', description: 'z', body: '合并后的内容', reason: '同一件事' }],
+      deletes: [],
+    });
+    const { manager } = managerWith(() => plan);
+    await write(manager, 'zh', '回复一律用中文');
+    await write(manager, 'zh2', '只在这一条里的内容');
+    await write(manager, 'other', '称用户不称主人');
+
+    const proto = MemoryStorage.prototype as unknown as { rebuildIndex: () => Promise<void> };
+    const real = proto.rebuildIndex;
+    let failed = false;
+    const spy = vi.spyOn(proto, 'rebuildIndex').mockImplementation(async function (this: unknown) {
+      const dir = path.join(root, 'maker-memory', memoryScopeDirName(WORKDIR));
+      const body = await readFile(path.join(dir, 'feedback_zh2.md'), 'utf8');
+      if (!failed && body.includes('合并后的内容')) {
+        failed = true;
+        throw new Error('simulated rebuildIndex io failure');
+      }
+      return real.call(this);
+    });
+    await expect(manager.tidy(WORKDIR, 'manual')).rejects.toThrow(/simulated rebuildIndex/);
+    spy.mockRestore();
+
+    const store = await manager.getStore(WORKDIR);
+    // 来源没有被删 (写入失败后不继续删)。
+    expect((await store.list()).map((r) => r.filename)).toContain('feedback_zh.md');
+    const [run] = await manager.listTidyRuns(WORKDIR);
+    expect(run?.changes.map((c) => `${c.kind}:${c.filename}`)).toEqual(['updated:feedback_zh2.md']);
+    expect(await manager.undoTidy(WORKDIR, run!.id)).toEqual({ restored: 1, skipped: 0 });
+    expect((await store.list()).find((r) => r.filename === 'feedback_zh2.md')?.body).toBe('只在这一条里的内容');
+    manager.dispose();
   });
 
   it('伙伴的记忆不参与整理', async () => {
