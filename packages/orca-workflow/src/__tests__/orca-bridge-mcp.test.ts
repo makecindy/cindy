@@ -18,7 +18,16 @@ import {
   SEND_TO_LEAD_TOOL_DESCRIPTION,
   type OrcaBridgeMcpDeps,
   type OrcaWorkerLink,
+  type OrcaWorkerReportQueueBridge,
+  type OrcaWorkerReportQueueStatus,
+  type OrcaWorkerReportReceipt,
 } from '../orca-bridge-mcp';
+import { renderOrcaWorkerSystemPrompt } from '../orca-bridge-prompt';
+
+const WORKER_BRIDGE_TOOLS = [
+  'send_to_lead', 'read_lead_history', 'read_lead', 'lead_status',
+  'get_lead_queue_status', 'update_queued_report', 'cancel_queued_report', 'merge_queued_reports',
+];
 
 interface FakeSession {
   id: string;
@@ -300,9 +309,17 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(provider.isEnabled?.(ctx)).toBe(enabled);
     const config = provider.toClaudeSdkConfig?.(ctx) as { instance: FakeMcpServer } | null;
     if (!enabled) expect(config).toBeNull();
-    else expect(Object.keys(config!.instance._registeredTools)).toEqual([
-      'send_to_lead', 'read_lead_history', 'read_lead', 'lead_status',
-    ]);
+    else expect(Object.keys(config!.instance._registeredTools)).toEqual(WORKER_BRIDGE_TOOLS);
+  });
+
+  // The Worker prompt is the only place a model learns these names; a tool the prompt
+  // lists but the bridge does not register (or the reverse) is a call that cannot succeed.
+  it('registers exactly the tools the Worker prompt lists', () => {
+    const prompt = renderOrcaWorkerSystemPrompt({
+      workerId: 'w', sessionId: 's', workflowId: 'f', leadSessionId: 'l',
+    });
+    const listed = /^Tools: ([^.]+)\./m.exec(prompt)?.[1]?.split(', ');
+    expect(listed).toEqual(WORKER_BRIDGE_TOOLS);
   });
 
   // Live cross-device probe: an authenticated Worker with no local role could see
@@ -319,7 +336,7 @@ describe('orca_worker_bridge MCP helpers', () => {
     const result = await server._registeredTools.send_to_lead.handler({ worker_id: 'worker-on-pc', message: 'result' });
     expect(parseToolJson(result)).toMatchObject({ ok: true, queued: true, lead_session_id: 'lead-on-pc' });
     expect(forward).toHaveBeenCalledTimes(1);
-    expect(Object.keys(server._registeredTools)).toEqual(['send_to_lead', 'read_lead_history', 'read_lead', 'lead_status']);
+    expect(Object.keys(server._registeredTools)).toEqual(WORKER_BRIDGE_TOOLS);
   });
 
   it('keeps the caller policy and model-only report contract concise', () => {
@@ -366,6 +383,14 @@ describe('orca_worker_bridge MCP helpers', () => {
     };
     const getWorkerLink = vi.fn(async () => workerLink);
     const dispatchInterAgentMessage = vi.fn();
+    const workerReportQueue = {
+      list: vi.fn<OrcaWorkerReportQueueBridge['list']>(async () => ({
+        leadIsWorking: true, willQueue: true, queuePaused: false, queuedCount: 1, reports: [],
+      })),
+      update: vi.fn<OrcaWorkerReportQueueBridge['update']>(),
+      cancel: vi.fn<OrcaWorkerReportQueueBridge['cancel']>(),
+      merge: vi.fn<OrcaWorkerReportQueueBridge['merge']>(),
+    };
     const { createSessionCalls, maker, persisted, statusUpdates } = makeProvider({
       activeSessions: { 'lead-1': lead },
       workerLink,
@@ -378,6 +403,7 @@ describe('orca_worker_bridge MCP helpers', () => {
       },
       wireSession: () => undefined,
       dispatchInterAgentMessage,
+      workerReportQueue,
       orcaTeamStore: {
         getWorkerLink,
         async updateWorkerStatus(workerId, status) {
@@ -411,7 +437,24 @@ describe('orca_worker_bridge MCP helpers', () => {
       worker_id: 'forged-worker-id',
       message: 'partial child result',
     }))).toMatchObject({ code: expectedCode });
-    expect(getWorkerLink).toHaveBeenCalledTimes(lookupCount);
+    // Rewriting or withdrawing a queued report changes what the Lead reads just as a new
+    // report does, so the same callers are refused; reading the queue stays available.
+    for (const [tool, args] of [
+      ['update_queued_report', { queued_message_id: 'q1', message: 'child rewrite' }],
+      ['cancel_queued_report', { queued_message_id: 'q1' }],
+      ['merge_queued_reports', { queued_message_ids: ['q1', 'q2'], message: 'child merge' }],
+    ] as const) {
+      expect(expectToolError(await server._registeredTools[tool].handler({
+        worker_id: 'worker-1', ...args,
+      }))).toMatchObject({ code: expectedCode });
+    }
+    expect(workerReportQueue.update).not.toHaveBeenCalled();
+    expect(workerReportQueue.cancel).not.toHaveBeenCalled();
+    expect(workerReportQueue.merge).not.toHaveBeenCalled();
+    expect(parseToolJson(await server._registeredTools.get_lead_queue_status.handler({
+      worker_id: 'worker-1',
+    }))).toMatchObject({ lead_queued_count: 1, your_queued_reports: [] });
+    expect(getWorkerLink).toHaveBeenCalledTimes(lookupCount + 1);
     expect(dispatchInterAgentMessage).not.toHaveBeenCalled();
     expect(createSessionCalls).toEqual([]);
     expect(persisted).toEqual([]);
@@ -497,7 +540,11 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(readLeadHistory).toHaveBeenCalledTimes(1);
   });
 
-  function makeWorkerBridgeLeadHarness(lead: FakeSession, dispatchInterAgentMessage?: OrcaBridgeMcpDeps['dispatchInterAgentMessage']) {
+  function makeWorkerBridgeLeadHarness(
+    lead: FakeSession,
+    dispatchInterAgentMessage?: OrcaBridgeMcpDeps['dispatchInterAgentMessage'],
+    workerReportQueue?: OrcaWorkerReportQueueBridge,
+  ) {
     const logger = makeLogger();
     const workerLink: OrcaWorkerLink = {
       workerId: 'worker-1',
@@ -516,11 +563,12 @@ describe('orca_worker_bridge MCP helpers', () => {
       logger,
       workerLink,
     });
-    const finishReport = vi.fn<(accepted: boolean) => Promise<void>>(async () => {});
+    const finishReport = vi.fn<(accepted: boolean, receipt?: OrcaWorkerReportReceipt) => Promise<void>>(async () => {});
     const captureLocalWorkerReport = vi.fn(() => finishReport);
     const workerProvider = createOrcaWorkerBridgeMcpProvider({
       captureLocalWorkerReport,
       dispatchInterAgentMessage,
+      workerReportQueue,
       getMaker: () => base.maker as unknown as Maker,
       logger: logger as never,
       persistUserMessage: async (sessionId, message) => {
@@ -651,7 +699,89 @@ describe('orca_worker_bridge MCP helpers', () => {
     await accepted?.();
     expect(h.statusUpdates).toHaveLength(0);
     expect(h.captureLocalWorkerReport).toHaveBeenCalledWith('worker-session-1');
-    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(true);
+    // Only a report that reached the Lead counts as delivered; a queued one is recorded by its
+    // queue id because the Worker can still withdraw it.
+    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(
+      true,
+      mode === 'queued' ? { delivered: false, queuedMessageId: 'report-client' } : { delivered: true },
+    );
+  });
+
+  // 2026-11-10: a reviewer Worker queued three reports behind a busy Lead, could neither see nor
+  // change them, and sent a fourth asking the Lead to skip them. Existing cases covered delivery
+  // only. Unit tier: the public tool handlers with an in-memory queue.
+  const queueStatus = (reports: OrcaWorkerReportQueueStatus['reports']): OrcaWorkerReportQueueStatus => ({
+    leadIsWorking: true, willQueue: true, queuePaused: false, queuedCount: reports.length + 1, reports,
+  });
+  const makeReportQueue = (status: OrcaWorkerReportQueueStatus) => ({
+    list: vi.fn<OrcaWorkerReportQueueBridge['list']>(async () => status),
+    update: vi.fn<OrcaWorkerReportQueueBridge['update']>(async p => ({ ok: true, queuedMessageId: p.queuedMessageId })),
+    cancel: vi.fn<OrcaWorkerReportQueueBridge['cancel']>(async () => ({
+      ok: false, errorCode: 'LAST_REPORT', message: 'only report',
+    })),
+    merge: vi.fn<OrcaWorkerReportQueueBridge['merge']>(async () => ({
+      ok: false, errorCode: 'QUEUE_CHANGED', message: 'not consecutive', status,
+    })),
+  });
+  const attested = { workerId: 'worker-1', workerSessionId: 'worker-session-1', leadSessionId: 'lead-1' };
+
+  it('tells the Worker which of its earlier reports the Lead has not read when a report queues', async () => {
+    const queue = makeReportQueue(queueStatus([
+      { queuedMessageId: 'earlier', position: 1, content: 'Full report\nwith details', consuming: false },
+      { queuedMessageId: 'report-client', position: 2, content: 'Verdict unchanged', consuming: false },
+    ]));
+    const h = makeWorkerBridgeLeadHarness(makeSession('lead-1'), async () => ({
+      ok: true, mode: 'queued', clientId: 'report-client',
+    }), queue);
+
+    expect(parseToolJson(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1', message: 'Verdict unchanged',
+    }))).toEqual({
+      ok: true,
+      queued: true,
+      queued_message_id: 'report-client',
+      queue_position: 2,
+      lead_queued_count: 3,
+      other_queued_reports: [{ queued_message_id: 'earlier', position: 1, starts: 'Full report with details' }],
+      worker_id: 'worker-1',
+      lead_session_id: 'lead-1',
+    });
+    expect(queue.list).toHaveBeenCalledExactlyOnceWith(attested);
+  });
+
+  it('manages queued reports only under the attested Worker identity', async () => {
+    const queue = makeReportQueue(queueStatus([
+      { queuedMessageId: 'q1', position: 0, content: 'stale', consuming: false },
+    ]));
+    const h = makeWorkerBridgeLeadHarness(makeSession('lead-1'), undefined, queue);
+    const tools = h.server._registeredTools;
+
+    expect(parseToolJson(await tools.get_lead_queue_status.handler({ worker_id: 'worker-1' }))).toEqual({
+      worker_id: 'worker-1',
+      lead_session_id: 'lead-1',
+      lead_is_working: true,
+      will_queue: true,
+      queue_paused: false,
+      lead_queued_count: 2,
+      your_queued_reports: [{ queued_message_id: 'q1', position: 0, content: 'stale', consuming: false }],
+    });
+    expect(parseToolJson(await tools.update_queued_report.handler({
+      worker_id: 'worker-1', queued_message_id: 'q1', message: 'current',
+    }))).toEqual({ ok: true, queued_message_id: 'q1' });
+    expect(queue.update).toHaveBeenCalledExactlyOnceWith({ ...attested, queuedMessageId: 'q1', message: 'current' });
+    // Host refusals reach the model with their code so it can pick the other tool.
+    expect(expectToolError(await tools.cancel_queued_report.handler({
+      worker_id: 'worker-1', queued_message_id: 'q1',
+    }))).toEqual({ error: 'only report', code: 'LAST_REPORT' });
+    expect(expectToolError(await tools.merge_queued_reports.handler({
+      worker_id: 'worker-1', queued_message_ids: ['q1', 'q2'], message: 'merged',
+    }))).toMatchObject({ code: 'QUEUE_CHANGED', your_queued_reports: [{ queued_message_id: 'q1' }] });
+
+    // A worker_id that is not the caller's own never reaches the host queue.
+    expect(expectToolError(await tools.update_queued_report.handler({
+      worker_id: 'worker-2', queued_message_id: 'q1', message: 'x',
+    }))).toMatchObject({ error: 'worker identity mismatch' });
+    expect(queue.update).toHaveBeenCalledTimes(1);
   });
 
   it('forwards explicit send_to_lead delivery and omits it when the worker keeps the default', async () => {
@@ -702,7 +832,7 @@ describe('orca_worker_bridge MCP helpers', () => {
     }));
     expectToolError(await h.server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'result' }));
     expect(h.statusUpdates).toEqual([]);
-    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(false);
+    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(false, { delivered: false });
   });
 
   it('hydrates lead provider route before cold send_to_lead creates the lead session', async () => {

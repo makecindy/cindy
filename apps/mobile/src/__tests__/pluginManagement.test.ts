@@ -2,6 +2,7 @@ import { sharedTaskHostPeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { createPluginManagementClient, type PluginManagementInvoke } from '@/plugins/pluginManagementClient';
+import { createPluginPromptReads } from '@/plugins/pluginPromptReads';
 import { createPluginManagementController } from '@/plugins/pluginManagementController';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
@@ -352,3 +353,78 @@ it.each([null, 'legacy', [], { ui: { resources: [{ uri: 'ui://run', file: '../pa
       mcpApps: { ui: { resources: [{ uri: 'ui://run', file: 'page.html' }], tools: { run: {} } } } } })).toBe(true);
   },
 );
+
+// Production readers/controllers, real protocol envelopes: switches previously downloaded
+// the complete plugin market for every chat hint. Display reuse must never authorize a write.
+describe('shared chat plugin hints', () => {
+  it('shares concurrent and sequential switches, drops market data, and invalidates on changes/expiry', async () => {
+    vi.useFakeTimers();
+    const h = host(); const reads = createPluginPromptReads(h.invoke, () => true);
+    const results = await Promise.all(Array.from({ length: 20 }, () => reads.read('host-1')));
+    for (let n = 0; n < 20; n++) expect(await reads.read('host-1')).toBe(results[0]);
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0].actionId).toBe('management:snapshot');
+    expect(results[0].snapshot?.market.items).toEqual([]);
+    const event = {};
+    reads.invalidate('host-1', event);
+    const fresh = reads.read('host-1');
+    reads.invalidate('host-1', event); // Provider + visible consumer see the same push.
+    await fresh;
+    expect(h.requests).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(30001);
+    await reads.read('host-1');
+    expect(h.requests).toHaveLength(3);
+  });
+  it('rejects invalidated in-flight replies and retries after a read failure', async () => {
+    const h = host(); const pending = deferred<unknown>();
+    const invoke = vi.fn().mockReturnValueOnce(pending.promise).mockImplementation(h.invoke) as PluginManagementInvoke;
+    const reads = createPluginPromptReads(invoke, () => true);
+    const first = reads.read('host-1');
+    const rejection = expect(first).rejects.toThrow('PLUGIN_MANAGEMENT_STALE');
+    await Promise.resolve(); reads.invalidate(); pending.resolve(capability); await rejection;
+    await expect(reads.read('host-1')).resolves.toMatchObject({ capability: 'supported' });
+    reads.invalidate();
+    vi.mocked(invoke).mockRejectedValueOnce(new Error('offline'));
+    await expect(reads.read('host-1')).rejects.toThrow('offline');
+    await expect(reads.read('host-1')).resolves.toMatchObject({ capability: 'supported' });
+  });
+  it('rechecks live facts before a mutation even when the display was shared', async () => {
+    const h = host(); const reads = createPluginPromptReads(h.invoke, () => true);
+    const c = createPluginManagementController(h.client, { readDisplay: () => reads.read('host-1') });
+    controllers.push(c); await c.refresh();
+    h.setFacts(snapshot([])); // Plugin removed after the hint was fetched.
+    await c.setEnabled(plugin, false);
+    expect(h.requests.map(r => r.actionId)).toEqual(['management:snapshot', 'management:snapshot']);
+    expect(c.getState()).toMatchObject({ outcome: 'failed', errorCode: 'PLUGIN_INSTALL_CHANGED' });
+  });
+  it('fences a shared read when the account changes', async () => {
+    const h = host(); const pending = deferred<unknown>();
+    const invoke = vi.fn().mockReturnValueOnce(pending.promise).mockImplementation(h.invoke) as PluginManagementInvoke;
+    const reads = createPluginPromptReads(invoke, () => true);
+    const first = reads.read('host-1'); const rejection = expect(first).rejects.toThrow('PLUGIN_MANAGEMENT_STALE');
+    await Promise.resolve(); setMobileAuthOwner('new-owner'); pending.resolve(capability); await rejection;
+  });
+});
+
+it('does not reuse a chat hint across a sessions subscription gap', async () => {
+  const h = host(); let subscription: number | null = 1;
+  const reads = createPluginPromptReads(h.invoke, () => true, () => subscription);
+  await reads.read('host-1'); await reads.read('host-1'); expect(h.requests).toHaveLength(1);
+  subscription = null; await reads.read('host-1'); expect(h.requests).toHaveLength(2);
+  subscription = 2; await reads.read('host-1'); expect(h.requests).toHaveLength(3);
+});
+
+it('retains an actionable UI hint while excluding suppressed, approved and unrelated plugins', async () => {
+  const h = host();
+  const needsUi = { ...plugin, manifest: { ...plugin.manifest, tools: [{ name: 'run' }],
+    mcpApps: { ui: { resources: [{ uri: 'ui://run', file: 'page.html' }], tools: { run: {} } } } } };
+  h.setFacts({ ...snapshot([needsUi,
+    { ...needsUi, instanceKey: '_root__suppressed', uiPromptSuppressed: true },
+    { ...needsUi, instanceKey: '_root__approved', uiCapabilityApproved: true },
+    { ...plugin, instanceKey: '_root__ordinary' }]), uiCapabilityApproval: true });
+  const reads = createPluginPromptReads(h.invoke, () => true);
+  const display = await reads.read('host-1');
+  expect(display.snapshot?.ghosts).toEqual([needsUi]);
+  expect(display.snapshot?.uiCapabilityApproval).toBe(true);
+  expect(display.snapshot?.market.items).toEqual([]);
+});

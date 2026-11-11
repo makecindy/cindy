@@ -88,7 +88,7 @@ describe('GitContextBadge', () => {
       </Tooltip.Provider>,
     );
 
-    expect(screen.getByRole('button', { name: /pr.openAria/ }).textContent).toContain('#7');
+    expect(screen.getByRole('button', { name: /pr.summaryAria/ }).textContent).toContain('#7');
     expect(screen.queryByLabelText(/ccAgent\.gitContext\.branchAria/)).toBeNull();
   });
 
@@ -107,7 +107,7 @@ describe('GitContextBadge', () => {
           <GitContextBadge session={{ ...dialogueSession, deviceLinkDeviceId }} />
         </Tooltip.Provider>,
       );
-      const triggers = screen.getAllByRole('button', { name: /pr.openAria/ });
+      const triggers = screen.getAllByRole('button', { name: /pr.summaryAria/ });
       expect(triggers).toHaveLength(2);
       pointer(triggers[0], 'over');
       advance(300);
@@ -162,24 +162,25 @@ describe('GitContextBadge', () => {
         <GitContextBadge session={dialogueSession} />
       </Tooltip.Provider>,
     );
-    expect(screen.queryAllByRole('button', { name: /pr.openAria/ })).toHaveLength(0);
+    expect(screen.queryAllByRole('button', { name: /pr.summaryAria/ })).toHaveLength(0);
     expect(manager()).toBeTruthy();
   });
 
   // Unit regression for review of #8238: the gear lives in a portaled panel, so
   // keyboard users need Tab to hand focus over without the preview closing.
-  it('键盘可从PR徽标Tab进入齿轮，预览不因焦点移入而关闭，Shift+Tab返回', async () => {
+  it('键盘可从PR徽标Tab进入链接，预览不因焦点移入而关闭，Shift+Tab返回', async () => {
     const {
       triggers: [trigger],
     } = renderHeader();
     vi.spyOn(trigger, 'matches').mockImplementation((selector) => selector === ':focus-visible');
     fireEvent.focus(trigger);
     const gear = screen.getByRole('button', { name: 'ccAgent.gitContext.pr.manage.title' });
+    const link = screen.getByRole('link');
     fireEvent.keyDown(trigger, { key: 'Tab' });
-    expect(document.activeElement).toBe(gear);
-    fireEvent.blur(trigger, { relatedTarget: gear });
+    expect(document.activeElement).toBe(link);
+    fireEvent.blur(trigger, { relatedTarget: link });
     expect(screen.getByRole('dialog')).toBeTruthy();
-    fireEvent.keyDown(gear, { key: 'Tab', shiftKey: true });
+    fireEvent.keyDown(link, { key: 'Tab', shiftKey: true });
     expect(document.activeElement).toBe(trigger);
     gear.focus();
     await act(async () => {
@@ -190,10 +191,10 @@ describe('GitContextBadge', () => {
     ]);
   });
 
-  // Unit: one PR is now one navigation button. Previous tests pinned a popover
-  // on click, which is no longer a supported behavior. Minimum timing inputs:
-  // first hover 299/300ms, an already-open sibling, leaving and re-entering.
-  // Production header and fake timers verify focus, navigation and visible data.
+  // Unit: clicking the production header must keep its existing summary open;
+  // only its link navigates. Previous coverage required direct navigation.
+  // Minimal regression: click a chip, leave for 300ms, then click the panel link.
+  // Fake timers also cover hover previews, dismissal and sibling transitions.
   function renderHeader(unresolvedCount = 2) {
     vi.useFakeTimers();
     const openExternal = vi.fn();
@@ -224,7 +225,7 @@ describe('GitContextBadge', () => {
       prRefs: refs,
       prStatuses: new Map(
         refs.map((ref) => [
-          `octo/repo#${ref.prNumber}`,
+          `github:github.com/octo/repo#${ref.prNumber}`,
           {
             ...ref,
             ok: true as const,
@@ -245,7 +246,7 @@ describe('GitContextBadge', () => {
         <GitContextBadge session={dialogueSession} />
       </Tooltip.Provider>,
     );
-    const triggers = screen.getAllByRole('button', { name: /pr.openAria/ });
+    const triggers = screen.getAllByRole('button', { name: /pr.summaryAria/ });
     const composer = screen.getByRole('textbox');
     composer.focus();
     return { ...view, triggers, composer, openExternal, context };
@@ -317,27 +318,50 @@ describe('GitContextBadge', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('评论和检查区域都直接打开PR，点击收起并抑制原位重弹，标题仍可打开链接', () => {
+  it('点击PR、评论或检查区域固定浮窗，再点收起；只有浮窗内链接跳转', () => {
     const {
       triggers: [trigger],
       openExternal,
     } = renderHeader();
-    pointer(trigger, 'over');
-    advance(300);
-    fireEvent.click(screen.getByRole('link'));
-    expect(openExternal).toHaveBeenLastCalledWith('https://github.com/octo/repo/pull/7');
-    for (const icon of ['message-square', 'circle-x']) {
-      fireEvent.click(trigger.querySelector(`.lucide-${icon}`)!);
-      expect(openExternal).toHaveBeenLastCalledWith('https://github.com/octo/repo/pull/7');
-      expect(screen.queryByRole('dialog')).toBeNull();
-      pointer(trigger, 'over');
-      advance(500);
-      expect(screen.queryByRole('dialog')).toBeNull();
-      pointer(trigger, 'out');
+    for (const target of [
+      trigger,
+      trigger.querySelector('.lucide-message-square')!,
+      trigger.querySelector('.lucide-circle-x')!,
+    ]) {
       pointer(trigger, 'over');
       advance(300);
+      fireEvent.click(target);
+      pointer(trigger, 'out');
+      advance(500);
       expect(screen.getByRole('dialog')).toBeTruthy();
+      expect(trigger.getAttribute('aria-expanded')).toBe('true');
+      expect(openExternal).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('link'));
+      expect(openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/7');
+      openExternal.mockClear();
+      fireEvent.click(trigger);
+      expect(screen.queryByRole('dialog')).toBeNull();
     }
+  });
+
+  it('点击立即打开，Escape关闭；切换PR后不残留固定状态', () => {
+    const {
+      triggers: [a, b],
+      openExternal,
+    } = renderHeader();
+    fireEvent.click(a);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    fireEvent.keyDown(a, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(a);
+    pointer(b, 'over');
+    expect(screen.getByRole('link').textContent).toContain('#8');
+    pointer(b, 'out');
+    pointer(a, 'over');
+    pointer(a, 'out');
+    advance(300);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
   it('focus-visible显示只读面板且失焦/Escape关闭，鼠标及触屏焦点不打开', () => {
@@ -363,7 +387,7 @@ describe('GitContextBadge', () => {
     matches.mockRestore();
   });
 
-  it('触屏和笔只点击跳转，不打开悬停面板', () => {
+  it('触屏和笔点击打开浮窗，不触发悬停或直接跳转', () => {
     const {
       triggers: [trigger],
       openExternal,
@@ -375,7 +399,10 @@ describe('GitContextBadge', () => {
       advance(500);
       expect(screen.queryByRole('dialog')).toBeNull();
       fireEvent.click(trigger);
-      expect(openExternal).toHaveBeenLastCalledWith('https://github.com/octo/repo/pull/7');
+      expect(screen.getByRole('dialog')).toBeTruthy();
+      expect(openExternal).not.toHaveBeenCalled();
+      fireEvent.click(trigger);
+      expect(screen.queryByRole('dialog')).toBeNull();
       fireEvent.blur(trigger);
       pointer(trigger, 'out', type);
     }
@@ -393,7 +420,7 @@ describe('GitContextBadge', () => {
     );
     gitContextMock.mockReturnValue({ ...context, prStatuses: new Map() });
     rerender(header);
-    pointer(screen.getAllByRole('button', { name: /pr.openAria/ })[0], 'over');
+    pointer(screen.getAllByRole('button', { name: /pr.summaryAria/ })[0], 'over');
     advance(300);
     expect(screen.getByText('ccAgent.gitContext.pr.statusNotFetched')).toBeTruthy();
     expect(screen.queryByText('ccAgent.gitContext.pr.statusUnknown')).toBeNull();
@@ -401,7 +428,7 @@ describe('GitContextBadge', () => {
       ...context,
       prStatuses: new Map([
         [
-          'octo/repo#7',
+          'github:github.com/octo/repo#7',
           {
             ok: false,
             owner: 'octo',
@@ -421,6 +448,67 @@ describe('GitContextBadge', () => {
     expect(screen.queryByText('ccAgent.gitContext.pr.statusNotFetched')).toBeNull();
   });
 
+  // Unit: MR summaries retain host-specific guidance and their own link;
+  // an MR must never open the GitHub setup dialog.
+  it.each(['glab-missing', 'glab-not-logged-in'] as const)(
+    'shows host-specific MR guidance for %s and opens the MR from its summary',
+    (reason) => {
+      const { context, rerender, openExternal } = renderHeader();
+      const ref = {
+        ...context.prRefs[0],
+        provider: 'gitlab' as const,
+        host: 'git.example.com',
+        owner: 'group/sub',
+      };
+      gitContextMock.mockReturnValue({
+        ...context,
+        prRefs: [ref],
+        prStatuses: new Map([
+          ['gitlab:git.example.com/group/sub/repo#7', { ...ref, ok: false as const, reason }],
+        ]),
+      });
+      rerender(
+        <Tooltip.Provider>
+          <GitContextBadge session={dialogueSession} />
+        </Tooltip.Provider>,
+      );
+      const trigger = screen.getByRole('button', { name: /gitlab.summaryAria/ });
+      pointer(trigger, 'over');
+      advance(300);
+      expect(
+        screen.getByText(
+          new RegExp(reason === 'glab-missing' ? 'gitlab.missing' : 'gitlab.notLoggedIn'),
+        ).textContent,
+      ).toContain('git.example.com');
+      expect(screen.queryByRole('button', { name: /guidance/ })).toBeNull();
+      fireEvent.click(trigger);
+      expect(openExternal).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('link'));
+      expect(openExternal).toHaveBeenLastCalledWith(
+        'https://git.example.com/group/sub/repo/-/merge_requests/7',
+      );
+      for (const origin of [
+        { source: 'review' },
+        { deviceLinkDeviceId: 'remote' },
+        { remoteHostId: 'ssh' },
+      ]) {
+        rerender(
+          <Tooltip.Provider>
+            <GitContextBadge
+              session={{ ...dialogueSession, ...origin, id: JSON.stringify(origin) } as Session}
+            />
+          </Tooltip.Provider>,
+        );
+        pointer(screen.getByRole('button', { name: /gitlab.summaryAria/ }), 'over');
+        advance(300);
+        expect(screen.queryByText(/gitlab\.(missing|notLoggedIn)/)).toBeNull();
+        expect(
+          screen.getByText('ccAgent.gitContext.pr.statusUnknown {"host":"git.example.com"}'),
+        ).toBeTruthy();
+      }
+    },
+  );
+
   it.each(['gh-missing', 'gh-not-logged-in'] as const)(
     '面板保留仓库、状态和安装登录提示：%s',
     async (reason) => {
@@ -428,7 +516,10 @@ describe('GitContextBadge', () => {
       gitContextMock.mockReturnValue({
         ...context,
         prStatuses: new Map([
-          ['octo/repo#7', { ok: false, owner: 'octo', repo: 'repo', prNumber: 7, reason }],
+          [
+            'github:github.com/octo/repo#7',
+            { ok: false, owner: 'octo', repo: 'repo', prNumber: 7, reason },
+          ],
         ]),
       });
       rerender(
@@ -437,10 +528,9 @@ describe('GitContextBadge', () => {
         </Tooltip.Provider>,
       );
       const trigger = screen.getByRole('button', {
-        name: reason === 'gh-missing' ? /guidance.install.aria/ : /guidance.login.aria/,
+        name: /pr.summaryAria.*7/,
       });
-      pointer(trigger, 'over');
-      advance(300);
+      fireEvent.click(trigger);
       expect(screen.getByRole('link').textContent).toContain('octo/repo #7');
       expect(
         screen.getByText(
@@ -480,11 +570,13 @@ describe('GitContextBadge', () => {
       screen.getByText('ccAgent.gitContext.pr.unresolvedLabel').nextElementSibling?.textContent,
     ).toBe('100');
 
-    const status = context.prStatuses.get('octo/repo#7')!;
+    const status = context.prStatuses.get('github:github.com/octo/repo#7')!;
     for (const checks of [status.ok ? status.checks : null, null]) {
       gitContextMock.mockReturnValue({
         ...context,
-        prStatuses: new Map([['octo/repo#7', { ...status, unresolvedCount: 0, checks }]]),
+        prStatuses: new Map([
+          ['github:github.com/octo/repo#7', { ...status, unresolvedCount: 0, checks }],
+        ]),
       });
       rerender(
         <Tooltip.Provider>
@@ -504,6 +596,40 @@ describe('GitContextBadge', () => {
     }
   });
 
+  // Unit: conflicts must be visible independently of checks, while main status keeps priority.
+  it.each([
+    ['open', true, 'var(--warning-fg)', true],
+    ['draft', true, 'var(--text-tertiary)', true],
+    ['open', false, 'var(--diff-add-fg)', false],
+    ['open', null, 'var(--diff-add-fg)', false],
+    ['merged', true, 'var(--focus-ring)', false],
+    ['closed', true, 'var(--error-fg)', false],
+  ] as const)(
+    'shows conflicts for %s/%s without replacing its state icon',
+    (kind, conflicts, color, shown) => {
+      const { context, rerender } = renderHeader(0);
+      const status = context.prStatuses.get('github:github.com/octo/repo#7')!;
+      gitContextMock.mockReturnValue({
+        ...context,
+        prStatuses: new Map([
+          ['github:github.com/octo/repo#7', { ...status, status: kind, conflicts, checks: null }],
+        ]),
+      });
+      rerender(
+        <Tooltip.Provider>
+          <GitContextBadge session={dialogueSession} />
+        </Tooltip.Provider>,
+      );
+      const trigger = screen.getAllByRole('button', { name: /pr.summaryAria/ })[0];
+      expect(trigger.querySelector('svg')?.style.color).toBe(color);
+      expect(trigger.getAttribute('aria-label')?.includes('pr.conflicts')).toBe(shown);
+      pointer(trigger, 'over');
+      advance(300);
+      expect(Boolean(screen.queryByText('ccAgent.gitContext.pr.merge'))).toBe(shown);
+      expect(Boolean(screen.queryByText('ccAgent.gitContext.pr.conflicts'))).toBe(shown);
+    },
+  );
+
   // Merged PRs drop the header check signal, whatever the checks say; the panel keeps them.
   it.each([
     [{ total: 3, passed: 3, skipped: 0, failed: 0, pending: 0 }, 'check'],
@@ -511,17 +637,19 @@ describe('GitContextBadge', () => {
     [null, 'circle-help'],
   ] as const)('已合并 PR 的徽标不显示检查状态：%j', (checks, icon) => {
     const { context, rerender } = renderHeader();
-    const status = context.prStatuses.get('octo/repo#7')!;
+    const status = context.prStatuses.get('github:github.com/octo/repo#7')!;
     gitContextMock.mockReturnValue({
       ...context,
-      prStatuses: new Map([['octo/repo#7', { ...status, status: 'merged', checks }]]),
+      prStatuses: new Map([
+        ['github:github.com/octo/repo#7', { ...status, status: 'merged', checks }],
+      ]),
     });
     rerender(
       <Tooltip.Provider>
         <GitContextBadge session={dialogueSession} />
       </Tooltip.Provider>,
     );
-    const trigger = screen.getAllByRole('button', { name: /pr.openAria/ })[0];
+    const trigger = screen.getAllByRole('button', { name: /pr.summaryAria/ })[0];
     expect(trigger.querySelector('.lucide-git-merge')).toBeTruthy();
     expect(trigger.querySelector(`.lucide-${icon}`)).toBeNull();
     pointer(trigger, 'over');
@@ -537,17 +665,17 @@ describe('GitContextBadge', () => {
     [null, 'circle-help'],
   ] as const)('检查汇总保留成功、无检查和未知区别：%j', (checks, icon) => {
     const { context, rerender } = renderHeader();
-    const status = context.prStatuses.get('octo/repo#7')!;
+    const status = context.prStatuses.get('github:github.com/octo/repo#7')!;
     gitContextMock.mockReturnValue({
       ...context,
-      prStatuses: new Map([['octo/repo#7', { ...status, checks }]]),
+      prStatuses: new Map([['github:github.com/octo/repo#7', { ...status, checks }]]),
     });
     rerender(
       <Tooltip.Provider>
         <GitContextBadge session={dialogueSession} />
       </Tooltip.Provider>,
     );
-    const trigger = screen.getAllByRole('button', { name: /pr.openAria/ })[0];
+    const trigger = screen.getAllByRole('button', { name: /pr.summaryAria/ })[0];
     expect(trigger.querySelector(`.lucide-${icon}`)).toBeTruthy();
     expect(trigger.querySelector(`.lucide-${icon}`)?.parentElement?.textContent).toBe('');
     pointer(trigger, 'over');
@@ -755,7 +883,7 @@ describe('SessionPrManager', () => {
       act(async () => {
         fireEvent.keyDown(
           screen.getByRole('button', {
-            name: 'ccAgent.gitContext.pr.manage.dragHandle {"repo":"repo","number":2}',
+            name: 'ccAgent.gitContext.pr.manage.dragHandle {"repo":"repo","numberLabel":"#2"}',
           }),
           { key: 'ArrowDown', altKey: true },
         );
@@ -915,7 +1043,7 @@ describe('SessionPrManager', () => {
     const f = fixture();
     await f.open();
     const handleName = (number: number) =>
-      `ccAgent.gitContext.pr.manage.dragHandle {"repo":"repo","number":${number}}`;
+      `ccAgent.gitContext.pr.manage.dragHandle {"repo":"repo","numberLabel":"#${number}"}`;
     const handle = screen.getByRole('button', { name: handleName(2) });
     const row = handle.closest('[data-sortable-id]')!.firstElementChild as HTMLElement;
     expect(row.tabIndex).toBe(-1);
@@ -1017,7 +1145,7 @@ describe('SessionPrManager', () => {
     await act(async () => {
       fireEvent.keyDown(
         screen.getByRole('button', {
-          name: 'ccAgent.gitContext.pr.manage.dragHandle {"repo":"repo","number":2}',
+          name: 'ccAgent.gitContext.pr.manage.dragHandle {"repo":"repo","numberLabel":"#2"}',
         }),
         { key: 'ArrowDown', altKey: true },
       );
@@ -1049,7 +1177,7 @@ describe('SessionPrManager', () => {
     await act(async () => {
       fireEvent.keyDown(
         screen.getByRole('button', {
-          name: 'ccAgent.gitContext.pr.manage.dragHandle {"repo":"repo","number":2}',
+          name: 'ccAgent.gitContext.pr.manage.dragHandle {"repo":"repo","numberLabel":"#2"}',
         }),
         { key: 'ArrowDown', altKey: true },
       );

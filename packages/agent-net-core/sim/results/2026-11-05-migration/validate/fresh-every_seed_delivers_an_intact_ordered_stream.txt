@@ -1,0 +1,8 @@
+    Finished `sim` profile [optimized] target(s) in 0.40s
+     Running tests\reliability.rs (target\sim\deps\reliability-e650928dd03e5967.exe)
+
+running 1 test
+test every_seed_delivers_an_intact_ordered_stream ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 7.10s
+

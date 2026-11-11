@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Push-Diagnose",
+    "read": "Push-Status lesen",
+    "busy": "Wird gelesen…",
+    "failed": "Push-Status konnte nicht gelesen werden. Bitte erneut versuchen.",
+    "copyFailed": "Token konnte nicht kopiert werden.",
+    "copied": "Token kopiert.",
+    "bundle": "App-ID",
+    "build": "Build",
+    "environment": "APNs-Umgebung",
+    "permission": "Systemberechtigung",
+    "alerts": "Banner",
+    "lockScreen": "Sperrbildschirm",
+    "notificationCenter": "Mitteilungszentrale",
+    "copy": "APNs-Token kopieren",
+    "hide": "Ergebnis ausblenden",
+    "unknown": "Unbekannt",
+    "on": "Ein",
+    "off": "Aus",
+    "hint": "Nur auf Anfrage auslesen. Das APNs-Token wird nur hier angezeigt, nicht in Diagnosen gespeichert oder von diesem Werkzeug hochgeladen. Beim Verlassen oder im Hintergrund wird es ausgeblendet. Nur für Apples Push-Konsole kopieren; kopierter Text bleibt in der Zwischenablage.",
+    "permissions": {
+      "granted": "Erlaubt",
+      "denied": "Abgelehnt",
+      "undetermined": "Nicht angefragt",
+      "provisional": "Stille Zustellung"
+    }
+  },
   "localLogs": {
     "upload": "Protokolle hochladen",
     "uploadResult": {
@@ -135,11 +162,16 @@
     "permissionDenied": "Erlaube Cindy-Benachrichtigungen in deinen Systemeinstellungen.",
     "unregisterQueued": "Deaktiviert. Die Abmeldung wird abgeschlossen, sobald du wieder online bist.",
     "preview": "Chatvorschauen anzeigen",
-    "background": "Chat im Hintergrund verbunden halten",
-    "backgroundActive": "Chatnachrichten werden im Hintergrund empfangen",
+    "background": "Hintergrundbenachrichtigungen",
+    "backgroundActive": "Benachrichtigungen werden im Hintergrund empfangen",
     "backgroundStop": "Empfang beenden",
-    "backgroundHint": "Die Hintergrundverbindung funktioniert ohne Google und zeigt eine dauerhafte Benachrichtigung an. Darüber kannst du sie beenden.",
-    "googleUnavailable": "Google-Push ist nicht verfügbar. Aktiviere die Hintergrundverbindung für den Chat, um Nachrichten zu empfangen."
+    "backgroundHint": "Cindy hält bei möglicherweise nicht verfügbarem Google-Push automatisch eine Hintergrundverbindung. Dabei erscheint eine dauerhafte Benachrichtigung.",
+    "googleUnavailable": "Google-Push ist nicht verfügbar. Die Hintergrundverbindung richtet sich nach deinen Benachrichtigungseinstellungen.",
+    "backgroundModes": {
+      "auto": "Automatisch",
+      "on": "Immer an",
+      "off": "Aus"
+    }
   },
   "about": {
     "sectionTitle": "Über dieses Smartphone",
@@ -351,5 +383,44 @@
     "title": "Entwickler",
     "identity": "Kennungen",
     "updateInfo": "Update-Infos"
+  },
+  "handheld": {
+    "sectionTitle": "Handheld",
+    "label": "Handheld-Modus",
+    "entryHint": "Bediene Cindy mit dem eingebauten Controller eines Gaming-Handhelds und halte die Sprachtaste gedrückt, um zu sprechen.",
+    "on": "An",
+    "off": "Aus",
+    "openAccessibility": "Einstellungen für den Handheld-Modus öffnen",
+    "title": "Handheld-Modus",
+    "hint": "Bediene Cindy nur mit dem Controller: Steuerkreuz oder linker Stick bewegen den Fokus, A wählt aus, B geht zurück.",
+    "saveFailed": "Die Einstellung konnte nicht gespeichert werden. Sie gilt, bis du Cindy schließt.",
+    "reset": "Auf Standard zurücksetzen",
+    "voiceKey": {
+      "title": "Sprachtaste",
+      "hint": "Halte diese Taste gedrückt, um zu sprechen, und lass sie los, um aufzuhören. Der Text bleibt im Eingabefeld. Auf dem Startbildschirm startet langes Drücken eine neue Aufgabe. Wenn du A, B, L1 oder R1 wählst, verliert diese Taste ihre übliche Funktion.",
+      "capture": "Controller-Taste drücken, um sie festzulegen",
+      "capturing": "Drücke die gewünschte Taste…"
+    },
+    "display": {
+      "title": "Bildschirm",
+      "secondary": "Auf zweitem Bildschirm anzeigen",
+      "hint": "Cindy wechselt auf den zweiten Bildschirm, etwa den unteren Bildschirm eines Dual-Screen-Handhelds. Beim Ausschalten des Handheld-Modus kehrt Cindy auf den Hauptbildschirm zurück.",
+      "none": "Dieses Gerät hat nur einen Bildschirm. Cindy passt sich seiner Größe an.",
+      "current": "Aktueller Bildschirm",
+      "single": "Hauptbildschirm"
+    },
+    "controls": {
+      "title": "Controller",
+      "gamepad": "Controller",
+      "noGamepad": "Nicht erkannt",
+      "moveKeys": "Steuerkreuz / linker Stick",
+      "move": "Fokus bewegen",
+      "confirm": "Auswählen",
+      "back": "Zurück",
+      "voice": "Gedrückt halten zum Sprechen",
+      "scrollKeys": "Rechter Stick",
+      "scroll": "Scrollen",
+      "page": "Seite vor / zurück"
+    }
   }
 }

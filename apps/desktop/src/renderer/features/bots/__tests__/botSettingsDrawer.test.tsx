@@ -314,7 +314,7 @@ it.each(['close button', 'Escape'])('closes a paused teammate\'s settings to the
   if (kind === 'Escape') fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
   else fireEvent.click(screen.getByRole('button', { name: 'bots.close' }));
   await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/bots/list'));
-  // The save / routine-draft guard still runs before leaving.
+  // The save / draft guard still runs before leaving.
   expect(guard).toHaveBeenCalledOnce();
 });
 

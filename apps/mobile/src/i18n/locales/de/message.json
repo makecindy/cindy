@@ -64,7 +64,8 @@
       "discord": "Discord",
       "wechat": "WeChat",
       "wecom": "WeCom",
-      "dingtalk": "DingTalk"
+      "dingtalk": "DingTalk",
+      "imessage": "iMessage"
     },
     "modelMismatch": "Dieser Durchgang wurde von {{actual}} statt vom ausgewählten {{selected}} beantwortet (vorübergehende serverseitige Herabstufung)",
     "copyStateCopying": "Wird kopiert",
@@ -460,9 +461,6 @@
     "close": "Schließen",
     "reset": "Ansicht zurücksetzen",
     "open": "Vorschau öffnen",
-    "zoomIn": "Vergrößern",
-    "zoomOut": "Verkleinern",
-    "fit": "An Fenster anpassen",
     "actualSize": "Originalgröße (1:1)",
     "save": "Original speichern",
     "share": "Teilen",

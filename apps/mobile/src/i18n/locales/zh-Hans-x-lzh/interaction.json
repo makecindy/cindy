@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "已毕",
+    "mcpCancel": "取消",
     "mode": {
       "default": "常例权柄",
       "acceptEdits": "许修",
@@ -27,6 +29,13 @@
       "description": "完全访问将关工作区沙箱，并略过常规审批。{{appName}} 可改工作区外之卷、行联网命令而不复相询；内置高险之举仍须确认。慎之。",
       "confirm": "启完全访问",
       "cancel": "守今之权柄"
+    },
+    "description": {
+      "default": "操作须批者，由君裁可。",
+      "acceptEdits": "编辑文件径许，余事按需请君裁可。",
+      "auto": "操作由 AI 模型裁可，审之或须多候；必要时仍请君确认。",
+      "bypass": "常规操作径许，可访工作区外文件、联网执行命令。",
+      "plan": "惟析事定策，不改档。"
     }
   },
   "planMode": {
@@ -34,6 +43,10 @@
     "exit": "出谋划式"
   },
   "panel": {
+    "questionUnanswered": "未答",
+    "questionWithdrawn": "无须再答",
+    "withdrawnDraft": "此问无须再答。\n{{reason}}\n草稿尚存，可另作补充发送。",
+    "sendSupplement": "发送补充",
     "readOnlyKind": "待确",
     "readOnlyTitle": "机上方待确认",
     "pendingRequests": "待理之请",
@@ -98,7 +111,14 @@
     "planFeedbackPlaceholder": "告 Claude 当如何为之",
     "planFeedbackRequired": "书回馈方可呈。",
     "planFeedbackSubmit": "呈谋之回馈",
-    "planFeedbackAccessibility": "以回馈改其谋"
+    "planFeedbackAccessibility": "以回馈改其谋",
+    "validation": {
+      "required": "此项必填。",
+      "choice": "请择所列之项。",
+      "tooShort": "所填须足 {{count}} 字。",
+      "tooLong": "所填勿逾 {{count}} 字。"
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -173,6 +193,7 @@
     "fromLead": "Lead 之讯",
     "fromWorkerNamed": "Worker「{{role}}」之讯",
     "fromWorker": "Worker 之讯",
+    "fromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",
     "emptyMessageBody": "（空讯）"
   },
   "contextSheet": {
@@ -299,6 +320,8 @@
       "picture": "观画面",
       "backToForm": "归表单",
       "liveView": "即景",
+      "openRemoteDesktop": "启远程桌面",
+      "useForm": "改以表单填写",
       "fill": "填",
       "skip": "略",
       "continue": "续",
@@ -306,6 +329,9 @@
       "showPassword": "显密码",
       "hidePassword": "隐密码",
       "scan": "扫码"
+    },
+    "directSignIn": {
+      "hint": "请径于窗中登录，毕则自续。"
     },
     "remoteUnavailable": "此机不能自远程受书。请于主机之上竟此步，再交还 Agent。",
     "unnamedField": "输入处",
@@ -380,6 +406,8 @@
       "submitting": "方呈"
     },
     "permission": {
+      "titleStdin": "可向终端输入乎？",
+      "titleMcpUrl": "应 {{server}} 之请",
       "highRiskTitle": "高险之授权须再确认",
       "highRiskDetail": "先核指令内容，再点一次确许；不确则拒之。",
       "sessionAllowTitle": "可唯许一次，亦可本差事常许",
@@ -434,5 +462,39 @@
       "ghost_id": "法器",
       "tool": "工具"
     }
+  },
+  "issueConfirm": {
+    "title": "确呈反馈至 {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "功能之议",
+    "titleLabel": "题",
+    "bodyLabel": "正文(Markdown)",
+    "privacyHint": "Issue 之题与正文将公开示人，且或被搜索、缓存。系统仅能屏蔽部分常见之敏感信息，未能辨一切语意之隐私。",
+    "relatedLogsHint": "此呈含上方所示之相关客户端日志；日志于公开前已经来源与字段筛选、去敏及长度之限。",
+    "privacyConfirm": "吾已察上方公开之内容，无不宜公开之个人、言谈或业务信息",
+    "submissionMethodLabel": "发布之法",
+    "identityGithubUser": "以 GitHub 名籍 @{{login}} 径发",
+    "identityGithubUserHint": "君将为此 Issue 之 GitHub 作者，可于 GitHub 修之或阖之",
+    "identityPlatform": "Cindy 官方 Bot @{{login}}（默认）",
+    "identityPlatformHint": "君非此 Issue 之 GitHub 作者，呈后不能自修或自阖",
+    "publicNameLabel": "公署其名",
+    "publicNameHint": "此署名将公开示于 Issue 正文",
+    "anonymous": "匿名",
+    "useAnonymous": "用匿名署名",
+    "envLine": "所呈客户端之环境（呈时自附）：客户端 {{appVersion}} · {{platform}} {{arch}}（{{osVersion}}）· 界面语言 {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}}（今之差事）",
+    "regionLine": "版本区域：{{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "呈反馈",
+    "cancel": "罢",
+    "previewLabel": "GitHub · 公开反馈",
+    "edit": "修改",
+    "doneEditing": "改毕",
+    "publicSubmit": "公开呈送",
+    "publicationNotice": "呈送后，正文与署名皆公开于 GitHub。",
+    "attribution": "署名：{{name}}",
+    "environment": "附运行环境",
+    "identitySettings": "署名与账号"
   }
 }

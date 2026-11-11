@@ -10,6 +10,11 @@ const sharedUi = replaceChannelLabel(telegramUi);
 
 export const ui = {
   ...sharedUi,
+  error: {
+    ...sharedUi.error,
+    permissionModeUnsupported:
+      '这条群消息尚未执行：当前任务的权限档位无法提供群消息所需的操作审批。请机器人绑定的用户在 Cindy 中把当前任务改为「自动审批」后重发。',
+  },
   slash: {
     ...sharedUi.slash,
     help: `🤖 我能帮你做这些：

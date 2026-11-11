@@ -26,6 +26,7 @@ import {
   userBrowserCapabilities,
   UserBrowserBackend,
   type UserBrowserPageControl,
+  type UserBrowserBackendOptions,
 } from './browser-backend/user-browser-backend.js';
 import { artifactSessionRoot } from './browser-backend/rsb-webview-artifacts.js';
 import { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
@@ -80,7 +81,7 @@ import {
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 import { readCdpBrowserCommandLine, terminateManagedChromePortOwner } from './browser-backend/proxy-auth.js';
-import { openExtensionStoreInUserBrowser } from './browser-backend/open-extension-store.js';
+import { openExtensionStoreInUserBrowser, startUserBrowser } from './browser-backend/open-extension-store.js';
 import { ExternalLinkHandoff } from './browser-backend/external-link-handoff.js';
 import { resolveBrowserScreenshot } from './browserScreenshotResolver.js';
 import { compressInlineImage } from './inlineImageCompressor.js';
@@ -363,8 +364,13 @@ const initialKind = readBrowserBackendSettings().kind;
  */
 let userBrowserPageControlProvider: () => UserBrowserPageControl | null = () => null;
 
-export function setUserBrowserPageControlProvider(provider: () => UserBrowserPageControl | null): void {
+let userBrowserUnavailableReason: UserBrowserBackendOptions['getUnavailableReason'];
+export function setUserBrowserPageControlProvider(
+  provider: () => UserBrowserPageControl | null,
+  unavailableReason?: UserBrowserBackendOptions['getUnavailableReason'],
+): void {
   userBrowserPageControlProvider = provider;
+  userBrowserUnavailableReason = unavailableReason;
 }
 
 let currentUserBrowserBackend: UserBrowserBackend | null = null;
@@ -377,6 +383,8 @@ export function clearUserBrowserMarksForSession(sessionId: string): void {
 function createUserBrowserBackend(): UserBrowserBackend {
   return (currentUserBrowserBackend = new UserBrowserBackend({
     getPageControl: () => userBrowserPageControlProvider(),
+    startBrowser: () => startUserBrowser({ resolveBrowser: () => resolveSourceBrowserFromOs() }),
+    getUnavailableReason: () => userBrowserUnavailableReason?.() ?? 'plugin-missing',
     // Same upload roots as the sidebar browser: the session's own folders plus its artifacts.
     resolveUploadRoots: async (sessionId) => [
       artifactSessionRoot(nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'), sessionId),
@@ -558,6 +566,7 @@ export function getBrowserMcpDeps(): {
   getRuntime(): BrowserControlRuntime;
   resolveProfile: NonNullable<BrowserMcpDeps['resolveProfile']>;
   getBackendScope: NonNullable<BrowserMcpDeps['getBackendScope']>;
+  getBackendKind: NonNullable<BrowserMcpDeps['getBackendKind']>;
   resolveScreenshot: NonNullable<BrowserMcpDeps['resolveScreenshot']>;
   compressInlineImage: NonNullable<BrowserMcpDeps['compressInlineImage']>;
   setBackend(kind: BackendKind): Promise<BackendKind>;
@@ -604,6 +613,7 @@ export function getBrowserMcpDeps(): {
     resolveProfile: (profile) => resolveBackendProfile(backendController.kind, profile, () =>
       activeManagedProfileName(readBrowserBackendSettings().useRealProfile)),
     getBackendScope: () => backendController.getBackendScope(),
+    getBackendKind: () => backendController.getCurrentBackendKind(),
     resolveScreenshot: (result) =>
       resolveBrowserScreenshot(result, {
         runtimeDir: process.env.XDT_BROWSER_RUNTIME_DIR,

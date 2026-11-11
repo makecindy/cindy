@@ -13,7 +13,7 @@ import { createRoot } from 'react-dom/client';
 
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
-import 'harmonyos-sans-sc-webfont-splitted';
+import './styles/cjk-webfont.css';
 
 import '@/i18n';
 import './themes/colors';
@@ -27,16 +27,18 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ConfirmDialogProvider } from './components/ui/confirm-dialog-provider';
 import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettings';
 import { LocaleProvider, bootstrapInitialLocale } from './hooks/useLocale';
-import { getInitialThemeVariant } from './hooks/useTheme';
+import { followLocalThemeChanges, getInitialThemeVariant } from './hooks/useTheme';
 import { WallpaperSettingsProvider } from './hooks/useWallpaperSettings';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
 import { installHiddenAnimationGate } from './lib/hiddenAnimationGate';
+import { PluginModelPickerHost } from './cindy-brain/PluginModelPickerHost';
 
 document.documentElement.dataset.platform = window.electronAPI.platform;
 installHiddenAnimationGate();
 bootstrapLocalThemesSync();
 themeService.applyTheme(getInitialThemeVariant().theme);
+followLocalThemeChanges();
 applyFontSettings(getInitialFontSettings());
 bootstrapInitialLocale();
 
@@ -48,8 +50,9 @@ createRoot(rootElement).render(
     <LocaleProvider>
       <ConfirmDialogProvider>
         <AuthProvider enableSessionExpiredPrompt={false}>
-          <WallpaperSettingsProvider>
+          <WallpaperSettingsProvider desktopBackground={false}>
             {isSidebarTabWindow() ? <SidebarTabWindowLayout /> : <SidebarWindowLayout />}
+            <PluginModelPickerHost bootstrapCatalog />
           </WallpaperSettingsProvider>
         </AuthProvider>
       </ConfirmDialogProvider>

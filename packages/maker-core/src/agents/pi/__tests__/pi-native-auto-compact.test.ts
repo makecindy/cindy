@@ -9,6 +9,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertPiSpawnArgvFitsPlatform } from '../project-resource-cli.js';
 import { preparePinnedPiSkillInvocation } from '../runtime-capabilities.js';
+import { estimatePiContext } from '../context-estimate.js';
 
 const knobs = vi.hoisted(() => ({
   spawnArgs: [] as string[],
@@ -25,6 +26,7 @@ const knobs = vi.hoisted(() => ({
   runtimeModel: "m",
   runtimeContextWindow: 200_000,
   contextTokens: null as number | null,
+  contextMessages: undefined as unknown,
   targetRuntimeContextWindow: 100_000,
   setModelReportsContextWindow: true,
   verifiedContextWindows: [] as number[],
@@ -71,6 +73,7 @@ vi.mock("../rpc-client.js", () => ({
       error?: string;
     }> {
       knobs.rpcCalls.push(cmd);
+      if (cmd.type === 'get_messages') return { success: true, data: { messages: knobs.contextMessages } };
       if (cmd.type === 'get_commands') return { success: true, data: { commands: [
         { name: 'cindy-native-provider-refresh', source: 'extension' },
       ] } };
@@ -218,6 +221,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     knobs.runtimeModel = "m";
     knobs.runtimeContextWindow = 200_000;
     knobs.contextTokens = null;
+    knobs.contextMessages = undefined;
     knobs.targetRuntimeContextWindow = 100_000;
     knobs.setModelReportsContextWindow = true;
     knobs.verifiedContextWindows = [];
@@ -243,8 +247,11 @@ describe("PiAgent native auto-compaction ownership", () => {
       expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
       expect((await handle.getContextUsage!()).maxTokens).toBe(1_000);
       knobs.contextTokens = 6_000;
+      knobs.contextMessages = [{ role: 'system', content: '', sections: { preamble: 'abcd' } }];
       expect(await handle.getContextUsage!()).toMatchObject({
         totalTokens: 6_000, maxTokens: 1_000, rawMaxTokens: 1_000, percentage: 100,
+        categories: [],
+        textEstimate: { method: 'text-heuristic', items: [{ source: 'native', tokens: 1 }] },
       });
       expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(false);
       budget = 32_000;
@@ -1037,5 +1044,36 @@ describe("PiAgent native auto-compaction ownership", () => {
     await handle.setModel!("n");
     expect(readLatestPiSettings().compaction?.reserveTokens).toBe(25_000);
     await handle.close();
+  });
+});
+
+// Context diagnostics must follow Pi's active projection (including removals),
+// while native totals remain authoritative. Unit coverage was previously only
+// the native total/window; these inputs distinguish replacement and missing data.
+describe('Pi context text diagnostics', () => {
+  it('counts effective sections and tools once after updates and removals', () => {
+    const tool = { name: 'read', description: 'read', parameters: {} };
+    const messages = [
+      { role: 'system', content: '', sections: { skills: 'discard', project_context: 'discard', addendum: '<addendum>host\n\nuser</addendum>' }, toolsAdded: [tool, { ...tool, name: 'gone' }] },
+      { role: 'system', content: '', sections: { skills: 'abcd', project_context: null }, toolsRemoved: [{ name: 'gone' }], toolsAdded: [{ ...tool, description: 'updated' }] },
+      { role: 'user', content: [{ type: 'text', text: '你好' }, { type: 'image', data: 'a'.repeat(10000) }] },
+    ];
+    const result = estimatePiContext(messages, [{ source: 'host', text: 'host' }, { source: 'user', text: 'user' }]);
+    expect(result?.items).toEqual(expect.arrayContaining([
+      { source: 'host', tokens: 1 }, { source: 'user', tokens: 1 },
+      { source: 'skills', tokens: 1 }, { source: 'messages', tokens: 2 },
+    ]));
+    expect(result?.items.some(item => item.source === 'project' || item.source === 'other')).toBe(false);
+    const onlyCurrentTool = estimatePiContext([{ role: 'system', toolsAdded: [{ ...tool, description: 'updated' }] }], []);
+    expect(result?.items.find(item => item.source === 'tools')).toEqual(onlyCurrentTool?.items[0]);
+  });
+
+  it('reports no breakdown without a native system snapshot and keeps checkpoint summaries', () => {
+    expect(estimatePiContext([{ role: 'user', content: 'history' }], [])).toBeUndefined();
+    expect(estimatePiContext(undefined, [])).toBeUndefined();
+    expect(estimatePiContext([
+      { role: 'system', sections: { preamble: 'abcd' } },
+      { role: 'compactionSummary', summary: '摘要' },
+    ], [])?.items).toEqual([{ source: 'native', tokens: 1 }, { source: 'messages', tokens: 2 }]);
   });
 });

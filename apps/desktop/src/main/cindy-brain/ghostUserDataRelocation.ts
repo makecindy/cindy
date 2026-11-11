@@ -22,7 +22,6 @@ const USER_DATA_REFERENCES = [
   'media',
   'cards',
   'unread',
-  'routines',
   'recommendations',
   'recentUsage',
 ] as const;

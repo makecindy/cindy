@@ -29,7 +29,8 @@ import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy
  *  - **冷启动首屏借冷缓存**(`hydrateFromCache`):列表快照落在 main 的 userData
  *    (`main/device-link/mirrorCacheStore.ts`),冷启动时先画上次看到的行,免得侧边栏
  *    等一次 bootstrap 往返才出现远程项目。这不动摇「零权威状态」:种入的分片一律标
- *    **disconnected**(缓存不是 live 设备)、只在该设备还没有分片时种入；缓存不标记任何
+ *    **connecting**(缓存不是 live 设备:画成「检测中」而不是离线,写操作照样被挡;link 迟迟
+ *    不上线由接入器的宽限期降为 disconnected)、只在该设备还没有分片时种入；缓存不标记任何
  *    状态桶已权威加载，active bootstrap 与 archived 按需请求仍会分别校准。设备已不合格时由既有
  *    `resolveIneligibleRemoteProjectAction`(它的 `hasCachedShard` 判据)收敛为
  *    disconnect / remove。缓存永不参与写路径。
@@ -604,6 +605,92 @@ function stamp(
   return preserveSessionContent(session, stamped);
 }
 
+type UnreachableStatus = Exclude<DeviceLinkConnectionStatus, 'connected'>;
+
+/**
+ * 「失联」只能往更不确定的方向走:connected → connecting → disconnected。
+ * disconnected 是确认过的离线,不因 relay 重连升回 connecting;同态不重打。
+ */
+function skipUnreachableTransition(current: DeviceLinkConnectionStatus, target: UnreachableStatus): boolean {
+  return current === target || (target === 'connecting' && current === 'disconnected');
+}
+
+/**
+ * 标记某台设备暂不可达(target = disconnected / connecting),保留最近一次会话快照。
+ * 两种目标态共享同一套失效:快照代次作废、loading / failed 清零、archived「曾加载过」撤销——
+ * link 断了之后在途读取都不可信,与画成哪种图标无关。
+ */
+function markDeviceUnreachable(deviceId: string, target: UnreachableStatus): void {
+  invalidateDeviceSnapshotEpochs(deviceId);
+  const bootstrapStateCleared = setBootstrapState(deviceId, 'idle');
+  const archivedLoadingCleared = setSessionStatusLoading(deviceId, 'archived', false);
+  const archivedFailureCleared = setSessionStatusFailed(deviceId, 'archived', false);
+  const shard = shards.get(deviceId);
+  // 旧 archived 行可继续作断线缓存，但断线期间的 push 不会补播；重连后必须重新拉取，
+  // 不能让「曾加载过」永久挡住按需校准。
+  const archivedLoadedCleared = shard?.loadedStatuses.delete('archived') ?? false;
+  if (!shard || skipUnreachableTransition(shard.connectionStatus, target)) {
+    if (archivedLoadedCleared) recomputeArchivedLoadedDeviceIds();
+    if (
+      bootstrapStateCleared ||
+      archivedLoadingCleared ||
+      archivedFailureCleared ||
+      archivedLoadedCleared
+    ) {
+      subs.forEach((fn) => fn());
+    }
+    return;
+  }
+  shard.connectionStatus = target;
+  shard.sessions = shard.sessions.map((s) => ({
+    ...s,
+    deviceLinkConnectionStatus: target,
+  }));
+  recompute();
+}
+
+/** 全部已缓存远程设备一起标为 target(见 markDeviceUnreachable),不清空侧边栏会话快照。 */
+function markAllUnreachable(target: UnreachableStatus, matchesDevice?: (deviceId: string) => boolean): void {
+  if (matchesDevice) {
+    for (const deviceId of knownDeviceIds()) {
+      if (matchesDevice(deviceId)) markDeviceUnreachable(deviceId, target);
+    }
+    return;
+  }
+  for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
+  for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
+  const bootstrapStateChanged =
+    bootstrapLoadingDeviceIds.size > 0 ||
+    archivedLoadingDeviceIds.size > 0 ||
+    bootstrapFailedDeviceIds.size > 0 ||
+    archivedFailedDeviceIds.size > 0;
+  if (bootstrapLoadingDeviceIds.size > 0) bootstrapLoadingDeviceIds = new Set();
+  if (archivedLoadingDeviceIds.size > 0) archivedLoadingDeviceIds = new Set();
+  if (bootstrapFailedDeviceIds.size > 0) bootstrapFailedDeviceIds = new Set();
+  if (archivedFailedDeviceIds.size > 0) archivedFailedDeviceIds = new Set();
+  let shardChanged = false;
+  let archivedLoadedChanged = false;
+  for (const shard of shards.values()) {
+    for (const status of ['active', 'archived'] as const) {
+      const key = snapshotEpochKey(shard.deviceId, status);
+      if (!snapshotEpoch.has(key)) snapshotEpoch.set(key, 1);
+    }
+    if (shard.loadedStatuses.delete('archived')) archivedLoadedChanged = true;
+    if (skipUnreachableTransition(shard.connectionStatus, target)) continue;
+    shardChanged = true;
+    shard.connectionStatus = target;
+    shard.sessions = shard.sessions.map((s) => ({
+      ...s,
+      deviceLinkConnectionStatus: target,
+    }));
+  }
+  if (shardChanged) recompute();
+  else {
+    if (archivedLoadedChanged) recomputeArchivedLoadedDeviceIds();
+    if (bootstrapStateChanged || archivedLoadedChanged) subs.forEach((fn) => fn());
+  }
+}
+
 const actions = {
   /** The synchronizer owns initialization; late completion cannot settle a newer run. */
   beginInitialDiscovery(): () => void {
@@ -738,8 +825,10 @@ const actions = {
    *
    * 三条硬约束(见文件头「冷启动首屏借冷缓存」):
    *  - 只种**尚无分片**的设备:任何权威数据(snapshot / patch)都优先,缓存绝不覆盖它。
-   *  - 一律标 **disconnected**:缓存不是 live 设备,标 connected 会画出假在线,
-   *    也会让「新建对话」这类以连接态为准的判定误放行。
+   *  - 一律标 **connecting**:缓存不是 live 设备,标 connected 会画出假在线,
+   *    也会让「新建对话」这类以连接态为准的判定误放行;但也不标 disconnected ——
+   *    冷启动的头几秒设备大多其实在线,画成离线再翻回来就是用户看到的「先离线再在线」。
+   *    connecting 对写路径与 disconnected 等价(remoteSessionWriteGuard),只是图标不同。
    *  - 不清 bootstrapFailed、不动 epoch:种入不是一次拉取,不参与乱序保护。
    */
   hydrateFromCache(
@@ -760,8 +849,8 @@ const actions = {
       shards.set(deviceId, {
         deviceId,
         deviceName,
-        connectionStatus: 'disconnected',
-        sessions: cachedSessions.map((s) => stamp(s, deviceId, deviceName, 'disconnected')),
+        connectionStatus: 'connecting',
+        sessions: cachedSessions.map((s) => stamp(s, deviceId, deviceName, 'connecting')),
         // 冷缓存只用于首屏，不是本轮权威结果；重连后 active / archived 仍要分别校准。
         loadedStatuses: new Set(),
       });
@@ -951,74 +1040,26 @@ const actions = {
    * connecting 等瞬态断线,避免 All Sessions 因网络抖动反复增删远程会话。
    */
   markDeviceDisconnected(deviceId: string): void {
-    invalidateDeviceSnapshotEpochs(deviceId);
-    const bootstrapStateCleared = setBootstrapState(deviceId, 'idle');
-    const archivedLoadingCleared = setSessionStatusLoading(deviceId, 'archived', false);
-    const archivedFailureCleared = setSessionStatusFailed(deviceId, 'archived', false);
-    const shard = shards.get(deviceId);
-    // 旧 archived 行可继续作断线缓存，但断线期间的 push 不会补播；重连后必须重新拉取，
-    // 不能让「曾加载过」永久挡住按需校准。
-    const archivedLoadedCleared = shard?.loadedStatuses.delete('archived') ?? false;
-    if (!shard || shard.connectionStatus === 'disconnected') {
-      if (archivedLoadedCleared) recomputeArchivedLoadedDeviceIds();
-      if (
-        bootstrapStateCleared ||
-        archivedLoadingCleared ||
-        archivedFailureCleared ||
-        archivedLoadedCleared
-      ) {
-        subs.forEach((fn) => fn());
-      }
-      return;
-    }
-    shard.connectionStatus = 'disconnected';
-    shard.sessions = shard.sessions.map((s) => ({
-      ...s,
-      deviceLinkConnectionStatus: 'disconnected',
-    }));
-    recompute();
+    markDeviceUnreachable(deviceId, 'disconnected');
+  },
+
+  /**
+   * 标记某台设备「暂时失联、正在重新确认」:relay 瞬时重连时 connected → connecting,
+   * 侧栏画检测中而不是离线。已是 disconnected 的不升回 connecting ——那是确认过的离线。
+   * 快照代次 / loading 态的失效与 markDeviceDisconnected 完全一样:link 断了,在途读取都作废。
+   */
+  markDeviceConnecting(deviceId: string): void {
+    markDeviceUnreachable(deviceId, 'connecting');
   },
 
   /** 标记全部已缓存远程设备暂不可达,但不清空侧边栏会话快照。 */
   markAllDisconnected(matchesDevice?: (deviceId: string) => boolean): void {
-    if (matchesDevice) {
-      for (const deviceId of knownDeviceIds()) {
-        if (matchesDevice(deviceId)) actions.markDeviceDisconnected(deviceId);
-      }
-      return;
-    }
-    for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
-    for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
-    const bootstrapStateChanged =
-      bootstrapLoadingDeviceIds.size > 0 ||
-      archivedLoadingDeviceIds.size > 0 ||
-      bootstrapFailedDeviceIds.size > 0 ||
-      archivedFailedDeviceIds.size > 0;
-    if (bootstrapLoadingDeviceIds.size > 0) bootstrapLoadingDeviceIds = new Set();
-    if (archivedLoadingDeviceIds.size > 0) archivedLoadingDeviceIds = new Set();
-    if (bootstrapFailedDeviceIds.size > 0) bootstrapFailedDeviceIds = new Set();
-    if (archivedFailedDeviceIds.size > 0) archivedFailedDeviceIds = new Set();
-    let shardChanged = false;
-    let archivedLoadedChanged = false;
-    for (const shard of shards.values()) {
-      for (const status of ['active', 'archived'] as const) {
-        const key = snapshotEpochKey(shard.deviceId, status);
-        if (!snapshotEpoch.has(key)) snapshotEpoch.set(key, 1);
-      }
-      if (shard.loadedStatuses.delete('archived')) archivedLoadedChanged = true;
-      if (shard.connectionStatus === 'disconnected') continue;
-      shardChanged = true;
-      shard.connectionStatus = 'disconnected';
-      shard.sessions = shard.sessions.map((s) => ({
-        ...s,
-        deviceLinkConnectionStatus: 'disconnected',
-      }));
-    }
-    if (shardChanged) recompute();
-    else {
-      if (archivedLoadedChanged) recomputeArchivedLoadedDeviceIds();
-      if (bootstrapStateChanged || archivedLoadedChanged) subs.forEach((fn) => fn());
-    }
+    markAllUnreachable('disconnected', matchesDevice);
+  },
+
+  /** 同 markAllDisconnected,但目标态是 connecting(relay 重连中);已 disconnected 的保持不变。 */
+  markAllConnecting(matchesDevice?: (deviceId: string) => boolean): void {
+    markAllUnreachable('connecting', matchesDevice);
   },
 
   /** 移除某台设备的所有远端会话(访问撤销 / 关被控 / 本机禁用控制 / 删除)。 */

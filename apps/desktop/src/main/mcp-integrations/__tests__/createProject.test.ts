@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   rename: vi.fn(),
   visibility: vi.fn(),
   hiddenKeys: [] as string[],
+  projectsRoot: null as string | null,
+  home: '',
 }));
 vi.mock('../../localDb/dialogueWorkspace.js', () => ({
   dialogueWorkspaceRootDir: () => h.dialogueRoot,
@@ -39,6 +41,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 vi.mock('electron', () => ({
+  app: { getPath: () => h.home },
   BrowserWindow: {
     getAllWindows: () => [
       { trusted: true, webContents: { send: h.send } },
@@ -85,6 +88,7 @@ vi.mock('../../sidebarSettingsStore.js', () => ({
   loadSidebarSettingsSnapshot: () => ({ ...h.owner, hiddenProjectKeys: h.hiddenKeys }),
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../projects-root-settings.js', () => ({ readProjectsRootDirectory: () => h.projectsRoot }));
 
 import { createProject } from '../createProject.js';
 import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from '../projectManagement.js';
@@ -112,6 +116,8 @@ describe('createProject', () => {
     h.aliases.mockResolvedValue([]);
     h.rename.mockResolvedValue(null);
     h.visibility.mockResolvedValue(true);
+    h.projectsRoot = null;
+    h.home = path.join(directory, 'home');
   });
   afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
@@ -188,6 +194,48 @@ describe('createProject', () => {
       expect(h.restore).not.toHaveBeenCalled();
     },
   );
+
+  // Unit regression (teammate tasks landing outside projects): a projectless source
+  // has no membership to inherit, so before this rule every task it started was
+  // projectless even when it ran inside a registered project. Only visible catalog
+  // entries may match, and an explicit or inherited choice always wins over cwd.
+  it.each([
+    { name: 'a subdirectory of the project', workingDir: ['packages', 'app'], expected: 'project' },
+    { name: 'a managed worktree of the project', workingDir: ['.cindy-worktrees', 'task'], expected: 'project' },
+    { name: 'the nearer of two nested projects', workingDir: ['inner', 'src'], expected: 'inner' },
+    { name: 'the repository, not a sibling registered worktree', workingDir: ['.worktrees', 'b'], siblingFirst: true, expected: 'project' },
+    { name: 'the visible ancestor of a removed project', workingDir: ['inner', 'src'], hideInner: true, expected: 'project' },
+    { name: 'the available ancestor of a missing project', workingDir: ['gone', 'src'], expected: 'project' },
+    { name: 'no project for a directory outside the catalog', workingDir: ['..'], expected: null },
+    { name: 'no project when the caller passes null', workingDir: ['packages', 'app'], explicit: null, expected: null },
+    { name: 'the inherited project over the execution directory', workingDir: ['inner', 'src'], source: 'project', expected: 'project' },
+  ] as const)('places a projectless source task by execution directory: $name', async row => {
+    const project = h.registered[0].path;
+    const inner = `${project}/inner`;
+    await mkdir(path.join(directory, 'inner', 'src'), { recursive: true });
+    await mkdir(path.join(directory, 'packages', 'app'), { recursive: true });
+    await mkdir(path.join(directory, '.worktrees', 'a'), { recursive: true });
+    await mkdir(path.join(directory, '.worktrees', 'b'), { recursive: true });
+    const catalog = [{ path: project }, { path: inner }, { path: `${project}/gone` }];
+    // Listed first, the sibling worktree is what grouping identity would match before the repository.
+    h.registered = 'siblingFirst' in row
+      ? [{ path: `${project}/.worktrees/a` }, ...catalog] : [...catalog, { path: `${project}/.worktrees/a` }];
+    if ('hideInner' in row) h.hiddenKeys = [`local:${inner}`];
+    h.query.mockResolvedValue([{
+      id: 'caller', remoteHostId: null, workingDir: '/dialogue',
+      ...('source' in row ? { workspaceKind: 'project', projectDir: project } : { workspaceKind: 'dialogue', projectDir: null }),
+    }]);
+    const expected = row.expected === null ? null : row.expected === 'inner' ? inner : project;
+    expect(await resolveSessionProject({
+      callerSessionId: 'caller', workingDir: path.join(directory, ...row.workingDir),
+      ...('explicit' in row ? { projectDir: row.explicit } : {}),
+    })).toEqual({
+      ok: true, projectDir: expected,
+      ...(expected !== null && !('source' in row) ? { projectFromWorkingDir: true } : {}),
+    });
+    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.restore).not.toHaveBeenCalled();
+  });
 
   it('rejects unknown inherited membership instead of using an execution directory', async () => {
     h.query.mockResolvedValue([{ id: 'caller', remoteHostId: null, workspaceKind: null,
@@ -447,6 +495,31 @@ describe('createProject', () => {
       nextOffset: null,
       projects: [{ directoryName: 'second', alias: null, hidden: false }],
     });
+  });
+  // Rule (#8259): "New project…" suggests where new project folders go. Unit via the
+  // list_projects entry: shared parent of visible projects, else ~/Projects; a stored
+  // choice wins. Hidden projects must not steer the suggestion.
+  it('suggests the shared parent of visible projects, then ~/Projects, and prefers the stored choice', async () => {
+    const parent = path.join(directory, 'code');
+    const elsewhere = path.join(directory, 'elsewhere');
+    await mkdir(parent);
+    h.hiddenKeys = [`local:${path.join(elsewhere, 'a')}`, `local:${path.join(elsewhere, 'b')}`];
+    h.list.mockResolvedValue([
+      { path: path.join(elsewhere, 'a'), exists: true, lastUsedAt: '2026-09-19T00:00:00Z' },
+      { path: path.join(elsewhere, 'b'), exists: true, lastUsedAt: '2026-09-18T00:00:00Z' },
+      { path: path.join(parent, 'one'), exists: true, lastUsedAt: '2026-09-17T00:00:00Z' },
+      { path: path.join(parent, 'two'), exists: true, lastUsedAt: '2026-09-16T00:00:00Z' },
+    ]);
+    const list = () => listProjects({ callerSessionId: 'caller', includeHidden: true, offset: 0, limit: 100 });
+    expect(await list()).toMatchObject({ projectsRoot: { path: parent, source: 'inferred', exists: true } });
+
+    h.list.mockResolvedValue([{ path: path.join(parent, 'one'), exists: true, lastUsedAt: '2026-09-17T00:00:00Z' }]);
+    expect(await list()).toMatchObject({
+      projectsRoot: { path: path.join(h.home, 'Projects'), source: 'default', exists: false },
+    });
+
+    h.projectsRoot = directory;
+    expect(await list()).toMatchObject({ projectsRoot: { path: directory, source: 'setting', exists: true } });
   });
   it('renames a registered offline project and clears the alias without changing its directory or visibility', async () => {
     const workingDir = directory.replaceAll('\\', '/');

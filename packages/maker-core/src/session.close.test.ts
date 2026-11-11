@@ -211,6 +211,28 @@ describe('Session close lifecycle', () => {
     expect(handle.close).toHaveBeenCalledOnce();
   });
 
+  it('resource recycling shares the closeIfIdle idle predicate and never breaks manual compaction', async () => {
+    const { session, handle } = liveTurn();
+    let hostOperationInFlight = true;
+    handle.hasPendingHostOperation = () => hostOperationInFlight;
+    handle.hasProjectResourceDrift = () => true;
+
+    // 手动压缩等宿主排他操作进行中:即使资源已漂移也判定不可回收(否则会关掉
+    // 正在等待结果的压缩请求),与 closeIfIdle 同一口径。
+    expect(session.hasRecyclableProjectResourceDrift()).toBe(false);
+
+    hostOperationInFlight = false;
+    expect(session.hasRecyclableProjectResourceDrift()).toBe(true);
+  });
+
+  it('skips resource recycling while a turn is running even if resources drifted', async () => {
+    const { session, handle } = liveTurn();
+    handle.hasProjectResourceDrift = () => true;
+    await session.send('work');
+    expect(session.hasRecyclableProjectResourceDrift()).toBe(false);
+    await session.close();
+  });
+
   it('rejects a non-Host send while a retiring silent-stop claim is live', async () => {
     const { session, handle, queue, seen, idle } = liveTurn();
     await session.send('work');
@@ -907,5 +929,61 @@ describe('Host automatic review lifecycle', () => {
     reviewGate.resolve();
     expect(await pending).toMatchObject({ verdict: 'block' });
     expect(await session.reviewHostPermissionAction(action)).toEqual({ verdict: 'ask' });
+  });
+});
+
+/**
+ * #8831 退出期守卫: 宿主整机拆除(Maker.shutdown)开始后, 空闲会话的 provider
+ * 死亡终态错误不属于任何轮次 — 照常派发会落伪造的 role:'error' 记录,
+ * 重启被误读成「上一轮未完成」。只抑制终态错误; 有在跑轮次时仍照常派发。
+ */
+describe('Session shutdown-scoped terminal-error suppression', () => {
+  function idleSession(isHostShuttingDown: () => boolean, handleRunning = false) {
+    const queue = createAsyncQueue<AgentEvent>();
+    let running = handleRunning;
+    const handle = {
+      id: 'pi-runtime', agentKind: 'pi', model: 'm',
+      send: vi.fn(async () => { running = true; }),
+      events: () => queue,
+      isTurnRunning: () => running,
+      close: vi.fn(async () => { running = false; queue.end(); }),
+      abort: vi.fn(async () => { running = false; }),
+      setInteractionResolver() {},
+    } as unknown as AgentSessionHandle;
+    const session = new Session({ id: 'pi-task', agentKind: 'pi', workDir: '/repo',
+      handle, capabilities: {} as never, logger: createLogger(), turnStallMs: 0,
+      isHostShuttingDown });
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push(event));
+    return { session, queue, seen };
+  }
+
+  it('suppresses a terminal provider error on an idle session once host shutdown begins', async () => {
+    const { session, queue, seen } = idleSession(() => true);
+    queue.push({ type: 'error', source: 'pi',
+      data: { message: 'process killed during shutdown', isTerminal: true, reason: 'process_died' } });
+    queue.push({ type: 'text', source: 'pi', data: { text: 'late output', isFinal: true } });
+    queue.end();
+    await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
+    expect(seen.map((event) => event.type)).toEqual(['text']);
+  });
+
+  it('still surfaces a terminal provider error while a turn is running during shutdown', async () => {
+    const { session, queue, seen } = idleSession(() => true, true);
+    queue.push({ type: 'error', source: 'pi',
+      data: { message: 'crash mid-turn', isTerminal: true, reason: 'sdk_stream_crashed' } });
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    expect(seen[0]?.data).toMatchObject({ reason: 'sdk_stream_crashed', isTerminal: true });
+    queue.end();
+    await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
+  });
+
+  it('delivers terminal errors normally when the host is not shutting down', async () => {
+    const { session, queue, seen } = idleSession(() => false);
+    queue.push({ type: 'error', source: 'pi',
+      data: { message: 'idle crash without shutdown', isTerminal: true, reason: 'process_died' } });
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    queue.end();
+    await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
   });
 });

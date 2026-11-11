@@ -64,7 +64,6 @@ import {
   type BotGroupSpeaker,
   type BotGroupSpeakingMode,
   type BotGroupSummary,
-  type BotGroupTaskCard,
 } from '../../shared/botGroupChat.js';
 
 /** docs/product-rules/bot-group-chat.md §4.2 — enforced here, never by prompt. */
@@ -140,11 +139,15 @@ export interface BotGroupChatServiceDeps {
     talkPlanId?: string;
     personalDigest?: boolean;
   }) => Promise<LaneResult>;
+  /** Live native context identity; absent/unknown means background must be restored. */
+  readLaneContext?: (sessionId: string) => { key: string; contextTokens: number } | null;
   /** Same hidden, durable input path as Bot DMs; attachments go with the turn like a task message's. */
   dispatch: (params: {
     targetSessionId: string;
     message: string;
     persistedContent: string;
+    /** Exact owner-authored text verified by the live server execution, never the group envelope. */
+    autoReviewUserText?: string;
     clientId: string;
     attachments?: BotGroupAttachment[];
     toolsDisabled?: boolean;
@@ -188,6 +191,8 @@ export interface BotGroupChatServiceDeps {
   onChanged?: (payload: BotGroupChangedPayload, ownerScope?: DataOwnerBroadcastScope) => void;
   onChatMessageNotification?: (payload: import('./chatMessageNotifications.js').ChatMessageNotification, current: () => boolean) => void;
   onChatGroupAttention?: (groupId: string, input: import('../agent-island/groupChat.js').AgentIslandGroupChatInput | null, current: () => boolean) => void;
+  /** The signed-in account's own preference `key` changed (written by this or another device). */
+  onAccountPreferenceChanged?: (key: string) => void;
   /** Cloud companions (cloud-companions.md); absent keeps the Chat Server per-computer only. */
   companionCloud?: import('../companion-cloud/runtime.js').CompanionCloudHost;
   now?: () => number;
@@ -2245,32 +2250,9 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     editPlanStep,
     settleLaneTurn,
     refreshPendingInteraction,
-    /** Only a server room has a message channel a teammate can post into outside a turn. */
-    postCompanionTaskMessage: async (_input: BotGroupTaskPostInput): Promise<BotGroupTaskPostResult> =>
-      ({ ok: false, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: false }),
     dispose,
   };
 }
-
-/** One message a teammate posts into its group about an independent task (bot-group-chat.md §10). */
-export interface BotGroupTaskPostInput {
-  groupId: string;
-  botId: string;
-  /** Idempotent per event: retries return the message the server already stored. */
-  clientId: string;
-  text: string;
-  card?: BotGroupTaskCard;
-  /** Generic task outboxes freeze the same wire payload without a delegation row. */
-  preparePost?: (prepare: () => Promise<import('./botGroupTaskPostSnapshot.js').BotGroupTaskPostSnapshot>,
-    destination: { endpoint: string; selfId: string; roomId: string; clientId: string }) => Promise<import('./botGroupTaskPostSnapshot.js').BotGroupTaskPostSnapshot>;
-  /** Delivered files, uploaded as this teammate's attachments; unreadable ones are skipped. */
-  files?: Array<{ absolutePath: string }>;
-  /** A task started in a Thread reports back into that Thread. */
-  threadRootId?: string;
-}
-export type BotGroupTaskPostResult =
-  | { ok: true; messageId: string }
-  | { ok: false; errorCode: string; retryable: boolean };
 
 export type BotGroupChatService = ReturnType<typeof createBotGroupChatService> & {
   chatServer?: import('../../shared/botGroupChat.js').ChatServerApi;

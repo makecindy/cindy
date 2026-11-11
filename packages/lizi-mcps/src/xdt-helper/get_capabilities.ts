@@ -1,3 +1,4 @@
+import { controlQueryShape, type ControlQuery } from './control-catalog.js';
 /**
  * xdt-helper/get_capabilities.ts — get_capabilities tool
  *
@@ -17,7 +18,7 @@ import { z } from 'zod';
 import { findCapability, listCapabilityIndex } from './capabilities.js';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 
-export interface RuntimeCapabilityQuery { server?: string; category?: string; toolQuery?: string; offset?: number; }
+export interface RuntimeCapabilityQuery { server?: string; category?: string; toolQuery?: string; offset?: number; toolName?: string; }
 export type RuntimeCapabilityReader = (query: RuntimeCapabilityQuery) => Promise<unknown>;
 export interface ProductHelpDoc { id: string; title: string; summary: string; content: string; }
 
@@ -49,31 +50,39 @@ export function registerGetCapabilitiesTool(
   registry: XdtHelperToolRegistry,
   readRuntime?: RuntimeCapabilityReader,
   helpDocs?: readonly ProductHelpDoc[],
+  readControl?: (query: ControlQuery) => Promise<Record<string, unknown>>,
 ): void {
   registry.register({
     name: 'get_capabilities',
     category: 'cindy',
     description:
       `查询 ${BRAND_NAME} 自身能力。不传参数 → 返回所有能力的 {key, title, oneLiner} 索引;` +
-      '传 key=<具体能力 key> → 返回该能力的完整 detail。scope=runtime 查询当前 Agent 的真实工具目录；指定 server 查看注册工具，category 展开内置类目。产品说明不等于可调用工具。' +
+      'scope=control 按 toolQuery 搜索全产品控制能力，key 查详情、operation 查单项参数；也可直接用顶层 list_tools({query})。传 key=<具体能力 key> → 返回该能力的完整 detail。scope=runtime 查询当前 Agent 的真实工具目录；指定 server 查看注册工具，category 展开内置类目。产品说明不等于可调用工具。' +
       `当用户问"${BRAND_NAME} 能做什么 / 有哪些功能 / 支持 X 吗"时调用本工具,而不是用训练数据回答。` +
       `用户问"你是谁 / 你是什么 / 你跑在哪 / ${BRAND_NAME} 是什么产品 / 谁做的 / 开不开源 / 源码在哪"时,` +
       '同样调本工具取 key=about-cindy,不要靠工作目录路径、工具名或训练数据推断。' +
       `用户问"某功能在哪 / 界面上怎么操作 / 找不到某个入口"时,用 scope=help 先看帮助文档目录,再传 key 读对应篇,按文档回答。`,
     inputShape: {
-      scope: z.enum(['product', 'runtime', 'help']).optional().describe('product 查询产品介绍；runtime 查询实际注册与启用状态；help 查询界面入口与操作步骤的帮助文档。'),
+      ...controlQueryShape,
+      scope: z.enum(['product', 'runtime', 'help', 'control']).optional().describe('product 查询产品介绍；runtime 查询实际注册与启用状态；help 查询界面入口与操作步骤；control 按需查询设置和操作。'),
+      toolName: z.string().max(160).optional().describe('runtime 中已发现的工具名，返回完整只读参数定义。'),
       server: z.string().optional().describe('从 runtime 目录返回的 server 标识。'),
       category: z.string().optional().describe('该 server 的 list_tools 返回的类目。'),
-      toolQuery: z.string().trim().max(200).optional().describe('引擎管理的 MCP 工具按名称或说明筛选；每页最多 50 项。'),
+      toolQuery: z.string().trim().max(200).optional().describe('control 搜索设置和操作，每页 5 项；runtime 搜索引擎 MCP 工具，每页最多 50 项。'),
       offset: z.number().int().min(0).max(100_000).optional().describe('引擎工具目录的分页起点，沿用同一 server 和 toolQuery，传上页 nextOffset。'),
       key: z
         .string()
         .optional()
         .describe('能力 key 或帮助文档 key(从不传 key 的目录返回中获取)。不传 = 返回目录。'),
     },
-    handler: async ({ key, scope, server, category, toolQuery, offset }) => {
+    handler: async ({ key, scope, server, category, toolQuery, offset, toolName, operation, cursor }) => {
+      if (scope === 'control') {
+        if (server !== undefined || offset !== undefined || toolName !== undefined) return textResult({ ok: false, errorCode: 'INVALID_ARGS', message: 'control 使用 key、category、toolQuery、operation、cursor；server、offset、toolName 属于 runtime。' }, true);
+        const result = readControl ? await readControl({ key, category, toolQuery, operation, cursor }) : { ok: false, errorCode: 'CONTROL_UNAVAILABLE' };
+        return textResult(result, result.ok === false);
+      }
       if (scope === 'runtime') {
-        const result = readRuntime ? await readRuntime({ server, category, ...(toolQuery !== undefined ? { toolQuery } : {}), ...(offset !== undefined ? { offset } : {}) })
+        const result = readRuntime ? await readRuntime({ server, category, ...(toolName ? { toolName } : {}), ...(toolQuery !== undefined ? { toolQuery } : {}), ...(offset !== undefined ? { offset } : {}) })
           : { ok: false, errorCode: 'RUNTIME_CATALOG_UNAVAILABLE', message: '当前宿主尚未提供运行能力目录。' };
         return textResult(result);
       }

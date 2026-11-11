@@ -36,7 +36,7 @@ export const PEEK_OPEN_DELAY_MS = 120;
 export const PEEK_CLOSE_GRACE_MS = 160;
 /** 滑出动画时长 —— 与 Sidebar.tsx peekClosing 的 duration-200 保持一致。 */
 export const PEEK_CLOSE_ANIM_MS = 200;
-/** pin 冻结时长 —— 覆盖流内 spacer 的 250ms 宽度动画 + 余量。 */
+/** pin 冻结时长 —— 覆盖流内 spacer 的 200ms 宽度动画 + 余量。 */
 export const PEEK_PIN_FREEZE_MS = 300;
 
 /** 全局 pointermove 兜底的「视为仍在 peek 交互内」白名单:抽屉、触发钮、

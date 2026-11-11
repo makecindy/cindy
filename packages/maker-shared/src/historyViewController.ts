@@ -1,7 +1,7 @@
 import {
   nextHistoryCacheReceipt, type HistoryCacheReceipt,
   readHistoryWorkDetails, readContinuousHistoryPage, retainHistoryViewPrefix, isHistoryViewUnavailable, historyWorkSummaries, historyViewLeaves, type HistoryDetailPage, type HistoryMessageSource,
-  type HistoryViewItem, type HistoryViewPage, type HistoryWorkPatch, type HistoryWorkSummary,
+  type HistoryViewItem, type HistoryViewPage, type HistoryWorkPatch, type HistoryWorkReference, type HistoryWorkSummary,
 } from './historyView.js';
 
 export interface HistoryWorkDetailState<T extends HistoryMessageSource> {
@@ -35,9 +35,9 @@ export interface HistoryViewTransport<T extends HistoryMessageSource> {
   /** False when the owning screen already coordinates focus/reconnect snapshots. */
   refreshOnResume?: boolean;
   page(before?: string): Promise<HistoryViewPage<T>>;
-  details(summary: HistoryWorkSummary, after?: string): Promise<HistoryDetailPage<T>>;
+  details(ref: HistoryWorkReference, after?: string): Promise<HistoryDetailPage<T>>;
   /** Full replacement of this view's intent; empty releases detail streaming. */
-  expanded(summaries: readonly HistoryWorkSummary[]): Promise<void>;
+  expanded(refs: readonly HistoryWorkReference[]): Promise<void>;
   /** Local diagnostics only: counts and lifecycle, never message bodies. */
   diagnostic?(event: HistoryViewDiagnostic): void;
 }
@@ -50,6 +50,36 @@ export interface HistoryViewDiagnostic {
   detailMessageCount: number;
   ready: boolean;
   stale: boolean;
+}
+
+/** Display-only artifact paths and live tool inputs are not read-request inputs. */
+function workReference(summary: HistoryWorkSummary): HistoryWorkReference {
+  return {
+    key: summary.key,
+    firstMessageId: summary.firstMessageId,
+    lastMessageId: summary.lastMessageId,
+    ...(summary.firstStoredMessageId === undefined ? {} : { firstStoredMessageId: summary.firstStoredMessageId }),
+    ...(summary.lastStoredMessageId === undefined ? {} : { lastStoredMessageId: summary.lastStoredMessageId }),
+    ...(summary.liveMessageIds === undefined ? {} : { liveMessageIds: [...summary.liveMessageIds] }),
+    ...(summary.parentToolUseId === undefined ? {} : { parentToolUseId: summary.parentToolUseId }),
+  };
+}
+
+// Keep small collapsed ranges warm, but never serialize large bodies just to
+// measure them. Count every string field (including tool input), with cycle safety.
+function detailCharacters(value: unknown): number {
+  const pending = [value];
+  const seen = new Set<object>();
+  let size = 0;
+  while (pending.length) {
+    const item = pending.pop();
+    if (typeof item === 'string') size += item.length;
+    else if (item && typeof item === 'object' && !seen.has(item)) {
+      seen.add(item);
+      for (const child of Object.values(item)) pending.push(child);
+    }
+  }
+  return size;
 }
 
 /**
@@ -84,6 +114,8 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     private readonly intentQueue = { tail: Promise.resolve() as Promise<void> },
   ) {}
   isActive = (): boolean => this.active && this.networkAvailable;
+  /** Inactive views can reload on return; offline/fallback views cannot. */
+  canReloadDetails = (): boolean => this.networkAvailable && this.state.ready && !this.state.error;
   /** Offline reading retains the view, but never sends page/detail/interest requests. */
   setNetworkAvailable(available: boolean): void {
     if (this.networkAvailable === available) return;
@@ -229,7 +261,14 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       });
       const stableItems = items.length === this.state.items.length
         && items.every((item, index) => item === this.state.items[index]) ? this.state.items : items;
+      const presentKeys = new Set(historyWorkSummaries(stableItems).map(summary => summary.key));
+      // Evicting an obsolete range must also invalidate its pending read, or a
+      // late reply can resurrect an unreachable detail body.
+      for (const key of this.detailRuns.keys()) {
+        if (!presentKeys.has(key)) this.detailRuns.delete(key);
+      }
       this.publish({ items: stableItems, ready: true, loading: false,
+        details: this.trimCollapsedDetails(this.state.expanded, stableItems),
         ...(older ? {} : { stale: false, readReceipt }),
         hasMore: retained.hasMore, nextCursor: retained.nextCursor }, older ? 'older' : 'latest');
       if (!older) this.latestReadOkStartedAtMs = readStartedAt;
@@ -259,10 +298,29 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     const next = new Set(this.state.expanded);
     if (expanded) next.add(key); else next.delete(key);
     if (!expanded) this.detailRuns.delete(key);
-    this.publish({ expanded: next });
+    this.publish({ expanded: next, ...(!expanded ? { details: this.trimCollapsedDetails(next) } : {}) });
     this.sendIntent();
     const summary = historyWorkSummaries(this.state.items).find((value) => value.key === key);
     if (expanded && summary) void this.loadDetails(summary);
+  }
+
+  private trimCollapsedDetails(expanded: ReadonlySet<string>, items = this.state.items) {
+    // Offline readers cannot reload an evicted body. Running/expanded ranges and
+    // in-flight reads are owned by their visible surfaces, not this warm cache.
+    if (!this.networkAvailable) return this.state.details;
+    const details = new Map(this.state.details);
+    const summaries = historyWorkSummaries(items);
+    const present = new Set(summaries.map(row => row.key));
+    const running = new Set(summaries.filter(row => row.isStreaming).map(row => row.key));
+    let retained = 0;
+    for (const [key, detail] of [...details].reverse()) {
+      if (!present.has(key)) { details.delete(key); continue; }
+      if (expanded.has(key) || running.has(key) || (detail.loading && this.detailRuns.has(key))) continue;
+      const size = detailCharacters(detail.messages);
+      if (size >= 1024 * 1024 || retained + size > 32 * 1024 * 1024) details.delete(key);
+      else retained += size;
+    }
+    return details.size === this.state.details.size ? this.state.details : details;
   }
 
   /**
@@ -302,7 +360,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       if (version !== this.intentVersion || generation !== this.generation || !this.networkAvailable) return;
       // Empty replacement intents must release old interest even before a reset view is ready.
       const summaries = this.active ? historyWorkSummaries(this.state.items).filter((item) => this.state.expanded.has(item.key)) : [];
-      await this.transport.expanded(summaries);
+      await this.transport.expanded(summaries.map(workReference));
     }).catch(() => {
       // Detail interest is advisory; a transient ACK failure must not poison a successful page.
       if (this.active && version === this.intentVersion && generation === this.generation) this.invalidate();
@@ -344,7 +402,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     token.promise = (async () => {
       try {
         await readHistoryWorkDetails({
-          readPage: (cursor) => this.transport.details(summary, cursor ?? undefined),
+          readPage: (cursor) => this.transport.details(workReference(summary), cursor ?? undefined),
           isCurrent: current,
           onPage: (rows) => {
             const incoming = new Set(rows.map((row) => row.clientId));
@@ -391,7 +449,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
             // or subscribing to hidden activity. Mount/collapse cannot cancel it.
             try {
               await readHistoryWorkDetails({
-                readPage: (cursor) => this.transport.details(summary, cursor ?? undefined),
+                readPage: (cursor) => this.transport.details(workReference(summary), cursor ?? undefined),
                 isCurrent: current,
                 onPage: (rows) => { messages.push(...rows); },
               });

@@ -120,7 +120,7 @@ it.each([
         const row = within(screen.getByTestId('cindy-device-row'));
         expect(row.queryByLabelText(en.bots.devicePicker.unread)).toBeNull();
         if (unreadCount > 1) {
-          expect(row.getByLabelText(i18n.t('bots.list.unread', { count: unreadCount }))).toBeTruthy();
+          expect(view.container.querySelectorAll('[data-teammate-status]')).toHaveLength(1);
         }
         expect(
           view.container.querySelector('[data-teammate-status="error"]') !==
@@ -202,7 +202,7 @@ it.each([true, false])(
     expect(trigger.className).toContain(
       selected
         ? 'hover:[--button-face-bg:color-mix(in_srgb,currentColor_10%,transparent)]'
-        : 'hover:[--button-face-bg:var(--sidebar-item-hover)]',
+        : 'hover:[--button-face-bg:hsl(var(--sidebar-item-hover))]',
     );
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
     fireEvent.click(await screen.findByRole('option', { name: /Mac mini/ }));

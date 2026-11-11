@@ -74,6 +74,11 @@
     "cancel": "Ne rien changer"
   },
   "unified": {
+    "accountUnassigned": "Compte non attribué",
+    "accountCount_one": "{{count}} compte",
+    "accountCount_other": "{{count}} comptes",
+    "accountFallback": "Compte {{index}}",
+    "accountCount_many": "{{count}} comptes",
     "favoriteConfiguration": "Ajouter cette configuration aux favoris",
     "savedConfiguration": "En favori · Touchez pour retirer",
     "currentConfiguration": "Configuration actuelle",
@@ -114,6 +119,12 @@
       "minute": "min",
       "second": "s"
     },
-    "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs"
+    "groupBadge_many": "Groupe de fournisseurs · {{count}} ordinateurs",
+    "quotaAverage": "Restant moyen {{percent}} %",
+    "quotaUpdating": "Quota en attente de mise à jour",
+    "quotaResetSoon": "Réinitialisation proche",
+    "quotaResetIn": "Réinitialisation dans {{duration}}",
+    "quotaAverageHint": "Quota hebdomadaire · Poids égal par compte",
+    "quotaResetHint": "Au rythme actuel, du quota pourrait rester à la réinitialisation : jaune sous 24 heures, rouge sous 6 heures."
   }
 }

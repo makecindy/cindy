@@ -58,7 +58,7 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
       'utf8',
     );
     expect(entriesHook).toContain('buildMainListEntries({');
-    expect(entriesHook).toContain('projects, dialogues, bots, unclassified');
+    expect(entriesHook).toContain('projects, dialogues, unclassified');
   });
 
   it('drops the removed date-grouped section entirely', () => {
@@ -187,8 +187,10 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     );
     expect(newMakerDraftRouteSource).toContain('patchCollab({ enabled: false });');
     expect(newMakerDraftRouteSource).toMatch(
-      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: null,/,
+      /applyDraftTarget\(\{\s*deviceId: dialogueTargetRequest\.deviceId,\s*deviceName: dialogueTargetRequest\.deviceName,\s*workingDir: defaultDir,\s*explicitNoProject:/,
     );
+    expect(newMakerDraftRouteSource).toContain("workspacePrompt === 'generic'");
+    expect(newMakerDraftRouteSource).toContain("workspacePrompt === 'dialogue'");
     expect(newMakerDraftRouteSource).toContain(
       'state: consumeNewMakerDialogueTargetRequest(location.state)',
     );

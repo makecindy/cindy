@@ -63,11 +63,11 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
   ],
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
-  setMivoSecretAliasVerifier: vi.fn(),
+  migrateInstalledGhostSecretAliases: vi.fn(() => true),
   readCustomProviderKey: (providerId: string) =>
     providerId === 'xai' ? 'legacy-custom-key' : null,
 }));
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   hasGrokOAuthLogin: () => state.loggedIn,
   getGrokAccessToken: async () => 'grok-test-token',
   peekGrokAccessToken: () => (state.loggedIn ? 'grok-test-token' : null),

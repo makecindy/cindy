@@ -5,7 +5,7 @@ Desktop 已接管设计数值的 DTCG 编辑源。Terrazzo **2.7.1** 在构建�
 ## 修改与生成
 
 1. 在 `src/reference/` 修改标准 DTCG 值，或在 `src/semantic/`、`src/component/`、`src/themes/` 调整已批准的角色关系。`desktop-bindings.json` 只登记输出映射、保留项和文档用途，不存第二份数值。
-2. 运行 `pnpm --filter @cindy/design-tokens generate`。同一 Terrazzo parse/build 流程生成全部输出及 DESIGN §3/§10/§16.1 已接管的精确摘要；品牌保护项单独保留，不读取测试 fixture。
+2. 运行 `pnpm --filter @cindy/design-tokens generate`。同一 Terrazzo parse/build 流程生成全部输出及 DESIGN §3/§10、`login-flow.md` §16.1 已接管的精确摘要；品牌保护项单独保留，不读取测试 fixture。
 3. 运行 `pnpm --filter @cindy/design-tokens generate -- --check`（或包脚本 `check:generated`）、本包测试、Desktop 冻结/主题/字号测试与适用门禁。生成两次必须稳定；缺文件、手改或过期输出失败。
 4. 本次迁移不改冻结预期。有意改风格仍须按治理合同交真实证据与设计批准，批准后显式更新独立预期；不能通过重跑生成器自动刷新 fixture。
 
