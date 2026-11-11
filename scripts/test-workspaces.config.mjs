@@ -346,7 +346,25 @@ const requiredUnitWorkspace = (name, cwd, { workers = 1, execution, pool, exclud
 
 export default {
   workspaces: [
-    requiredUnitWorkspace('cindy-headless', 'apps/cindy-headless'),
+    {
+      name: 'cindy-headless',
+      cwd: 'apps/cindy-headless',
+      status: 'required',
+      tiers: {
+        unit: {
+          status: 'required',
+          command: unitVitestCommand(),
+          exclude: ['src/*.integration.test.ts'],
+        },
+        integration: {
+          status: 'manual',
+          reason: 'Headless contract tests use real on-disk SQLite; CI runs them once on Linux, the only runtime platform.',
+          coverage: 'allowlist',
+          command: vitestBin('run', '--maxWorkers=1'),
+          include: ['src/*.integration.test.ts'],
+        },
+      },
+    },
     noCollectableWorkspace('@cindy/host', 'apps/host',
       'Uses node:test and runs in the dedicated Host regressions CI job on macOS, Windows and Linux (pnpm --dir apps/host test).'),
     {

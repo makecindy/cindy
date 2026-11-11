@@ -211,6 +211,11 @@ jobs:
         if: matrix.shard == 1
         run: pnpm run test:workspaces --tier integration --workspace @cindy/maker-pi-manager
 
+      # 真实 SQLite 文件 I/O，只在 Headless 的运行平台 Linux 上执行一次。
+      - name: Run Headless SQLite integration tests
+        if: matrix.shard == 1
+        run: pnpm run test:workspaces --tier integration --workspace cindy-headless
+
       # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
       - name: Run companion database regressions
         if: matrix.shard == 1
