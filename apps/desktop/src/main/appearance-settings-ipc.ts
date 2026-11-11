@@ -33,6 +33,7 @@ import {
   writeAppearanceSettingsPatch,
 } from './appearance-settings-store.js';
 import { applyDockIcon } from './app-icon.js';
+import { pluginAppearanceRevision } from './cindy-brain/pluginAppearanceRevision.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -64,6 +65,12 @@ export function registerAppearanceSettingsIpc(): void {
     const state = readAppearanceSettingsState();
     broadcast(state.value);
     return state;
+  });
+
+  ipcMain.handle('appearance-settings:plugin-font', async (event, role: unknown) => {
+    if (!isTrustedAppearanceSettingsReadEvent(event) || typeof role !== 'string') throwIpcError('INVALID_PARAMS', 'Appearance font reader required');
+    const { readSelectedPluginFont } = await import('./mcp-apps/appearance.js');
+    return readSelectedPluginFont(role);
   });
 
   // Local Desktop appearance only: no remote allowlist and no renderer-supplied path.
@@ -191,8 +198,8 @@ function appearanceForWindow(
   win: BrowserWindow | null,
 ): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
-  const { customWallpaperUrl: _privateUrl, ...publicSettings } = settings;
-  void _privateUrl;
+  const { customWallpaperUrl: _privateUrl, customWallpaperFallbackUrl: _fallback, ...publicSettings } = settings;
+  void _privateUrl; void _fallback;
   return {
     ...publicSettings,
     wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
@@ -235,8 +242,8 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
   }
   const patch: AppearanceOverrides = {};
-  if ('uiFamily' in raw) patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily');
-  if ('codeFamily' in raw) patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily');
+  if ('uiFamily' in raw) { patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily'); patch.uiFontResource = undefined; }
+  if ('codeFamily' in raw) { patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily'); patch.codeFontResource = undefined; }
   if ('terminalFamily' in raw)
     patch.terminalFamily = parseFamily(raw.terminalFamily, 'terminalFamily');
   if ('uiSize' in raw)
@@ -357,9 +364,23 @@ function parseNumber(
 
 export const __testing = { parsePatch };
 
+/** Plugin settings use the same profile owner and existing window broadcast. */
+export function publishAppearanceFromOwner(settings: AppearanceSettings): void {
+  applyAppearanceToWindows(settings);
+  broadcast(settings);
+}
+
 /** UI and Agent edits share validation, persistence, live windows and broadcasts. */
-export async function updateAppearanceFromSettings(rawPatch: unknown) {
-  const settings = await writeAppearanceSettingsPatch(parsePatch(rawPatch));
+export async function updateAppearanceFromSettings(rawPatch: unknown, options?: { ifRevision?: unknown; assertCurrent?(): void }) {
+  const patch = parsePatch(rawPatch);
+  const settings = options ? await updateAppearanceSettingsAtomic(() => {
+    options.assertCurrent?.();
+    if (options.ifRevision !== undefined) {
+      if (typeof options.ifRevision !== 'string' || !/^[a-f0-9]{64}$/.test(options.ifRevision)) throw new Error('MCP_APP_INVALID_REQUEST');
+      if (options.ifRevision !== pluginAppearanceRevision(readAppearanceSettings())) throw new Error('MCP_APP_APPEARANCE_CHANGED');
+    }
+    return patch;
+  }) : await writeAppearanceSettingsPatch(patch);
   applyAppearanceToWindows(settings);
   applyDockIcon(settings);
   broadcast(settings);

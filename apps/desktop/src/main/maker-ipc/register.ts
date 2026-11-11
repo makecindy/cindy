@@ -19269,7 +19269,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!owner || owner !== getCurrentDbClientSnapshot()) throw new Error('MCP_APP_OWNER_CHANGED');
     };
     assertOwner();
-    const session = await withSendToSessionLock(grant.sessionId, () => restorePluginPageSession(grant.sessionId, {
+    if (grant.sessionId === null) {
+      // Explicitly taskless: never inherit an Agent's ambient authority or focused task.
+      const deps = getCindyGhostsMcpDeps(undefined, {}, grant);
+      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
+      await grant.assertCurrent();
+      assertOwner();
+      return result.ok ? pluginAppResult(result.result) : { isError: true,
+        content: [{ type: 'text', text: JSON.stringify(result) }] };
+    }
+    const pageSessionId = grant.sessionId;
+    const session = await withSendToSessionLock(pageSessionId, () => restorePluginPageSession(pageSessionId, {
       getSession: (id) => maker.getSession(id),
       getMeta: (id) => maker.getSessionMeta(id),
       buildCreateOpts: (id, meta) => buildCreateOptsForQueuedSession(id, meta, true),

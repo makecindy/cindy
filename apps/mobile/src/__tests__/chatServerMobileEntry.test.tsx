@@ -34,7 +34,7 @@ vi.mock('expo-router', async () => { const { useEffect } = await import('react')
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
 vi.mock('@/i18n', () => ({ default: { t: (key: string) => key } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => h.auth }));
-vi.mock('@/config/env', () => ({ getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
+vi.mock('@/config/env', () => ({ BUILD_AUTH_REGION: 'global', getActiveMobileSessionRealm: () => 'global', getMobileEndpointForRealm: () => 'https://chat.example.invalid', loadMobileEndpointsForRealm: vi.fn() }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => h.link }));
 vi.mock('@/device-link/revokedDevicesStore', () => ({ useRevokedDevices: () => new Set() }));
 vi.mock('@/session/useRemoteResourceList', () => ({ useRemoteResourceList: () => h.legacy }));
