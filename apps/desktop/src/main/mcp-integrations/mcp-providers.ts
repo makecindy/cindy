@@ -26,6 +26,7 @@ import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
 import { createTaskWorktreeHost } from './createTaskWorktree.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
+import { createDesktopSessionShareCallbacks } from '../session-share/sessionShareTools.desktop.js';
 import { listProjects, renameProject, removeProject, readCurrentSessionProject } from './projectManagement.js';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
@@ -413,6 +414,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     return result;
   };
 
+  const sessionShare = createDesktopSessionShareCallbacks();
   const providers = createLiziMcpProviders({
     // 先传完整内置列表；按会话启停由下面的 isEnabled 包装处理。
     enabled: BUILTIN_LIZI_MCP_IDS,
@@ -968,6 +970,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       askUserQuestionAsync: deps.askUserQuestionAsync,
       manageUserQuestions: deps.manageUserQuestions,
       sessionImport: sessionImportCallbacks,
+      sessionShare: {
+        export: (params, context) => withAccountDataAccess(context.sessionId, () => sessionShare.export(params, context)),
+        import: (params, context) => withAccountDataAccess(context.sessionId, () => sessionShare.import(params, context)),
+      },
       renameSessions: async ({ changes, dryRun }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
