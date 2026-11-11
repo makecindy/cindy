@@ -44,7 +44,7 @@ import {
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { ServerApiError, serverApiFetch } from '../serverApiClient.desktop';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
+import { deviceLinkApiFetch, officialDeviceLinkApiBase, resolveDeviceLinkApiBase } from './deviceLinkApi.desktop.js';
 import {
   __resetDirectoryThrottleForTests,
   clearDirectoryRetryDeadline,
@@ -204,8 +204,11 @@ export interface DeviceLinkIpcDeps {
   getPeerLinks(): DeviceLinkPeerLinksSnapshot;
   /** 远程连接拓扑:持久化并立即应用单台设备的 Agent-Net 选路偏好 */
   setPeerPathPreference?(deviceId: string, preference: DeviceLinkPeerPathPreference): Promise<void>;
-  /** 出站路径诊断探针(#9537):解析跨设备通道 origin 的当前代理判定,不发业务请求。 */
-  probeProxyVerdict(upstreamUrl: string): Promise<OutboundPathSnapshot | null>;
+  /**
+   * 出站路径诊断探针(#9537):解析跨设备通道候选 origin 的当前代理判定,不发业务请求。
+   * 收 origin 候选列表:同账号走当前中转,共享任务在自建中转下走独立官方连接。
+   */
+  probeProxyVerdict(upstreamUrls: readonly string[]): Promise<OutboundPathSnapshot | null>;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
   /** 本机被移除后「重新加入」(deviceRejoin.ts)。 */
@@ -410,11 +413,19 @@ export async function handleSetPeerPathPreference(
 
 /**
  * 出站路径判定(#9537):按跨设备通道 origin 解析当前系统/env 代理,给渲染侧在连接
- * 反复失败时提示「本机可能在走代理」。null = 没判定(同 origin 判定冲突 / 解析未落
- * 快照),渲染侧按无提示处理;`unknown`(没问出来)照实透传,渲染侧不得当事实用。
+ * 反复失败时提示「本机可能在走代理」。null = 没判定(候选判定冲突 / 解析未落快照),
+ * 渲染侧按无提示处理;`unknown`(没问出来)照实透传,渲染侧不得当事实用。
+ *
+ * 候选给两条线路的 origin:同账号设备走当前中转(官方或自建);自建中转选中时,共享
+ * 任务走独立的官方连接(自建中转不转发跨账号帧,见 routedClient crossAccountConnection)。
+ * 无自建中转时两者相同,退化为单候选。判定不一致(PAC 逐 path / NO_PROXY / loopback
+ * 直连例外)时探针返回 null —— 宁可不报,也不谎称走了代理。
  */
 export async function handleGetProxyVerdict(deps: DeviceLinkIpcDeps): Promise<DeviceLinkProxyVerdict | null> {
-  const snap = await deps.probeProxyVerdict(resolveDeviceLinkApiBase());
+  const snap = await deps.probeProxyVerdict([
+    resolveDeviceLinkApiBase(),
+    officialDeviceLinkApiBase(),
+  ]);
   if (!snap) return null;
   return { kind: snap.kind, proxy: snap.proxy ?? null };
 }
