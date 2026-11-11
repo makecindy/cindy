@@ -2458,7 +2458,10 @@ function getCindyGhostsMcpDeps(
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
       const sessionWorkdir = sessionContext?.workingDir ?? null;
-      const installed = await listInstalledGhostsAsync();
+      // Page authority already binds a physical instance; do not rediscover
+      // every installed plugin for each page interaction.
+      const pageGhost = pageCall ? getGhostManager().findInstalledInstance(pageCall.instance) : undefined;
+      const installed = pageCall ? (pageGhost ? [pageGhost] : []) : await listInstalledGhostsAsync();
       const initialVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
@@ -2827,10 +2830,7 @@ function getCindyGhostsMcpDeps(
       // a same-ID plugin replacement removing the declaration during the await.
       if (preDispatch.manifest.sessionContext === true) {
         const ctx = await buildGhostSessionContext(sessionIdForConfirm, sessionWorkdir);
-        const postCtxManifest = findInstalledGhostByInstanceId(
-          getGhostManager().list(),
-          instanceId,
-        )?.manifest;
+        const postCtxManifest = getGhostManager().findInstalledInstance(instanceId)?.manifest;
         if (postCtxManifest?.sessionContext === true) {
           mergedArgs = { ...mergedArgs, session_context: ctx };
         }

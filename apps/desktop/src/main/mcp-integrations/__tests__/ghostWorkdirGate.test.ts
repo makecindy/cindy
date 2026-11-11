@@ -166,6 +166,10 @@ vi.mock('../../maker-ipc/botAuthorizationService.js', () => ({
 
 const WORKDIR = '/proj/alpha';
 const listMock = vi.fn<() => unknown[]>(() => []);
+const listInstalledMock = vi.fn(() => listMock());
+const listInstalledAsyncMock = vi.fn(async () => listMock());
+const findInstalledInstanceMock = vi.fn((id: string) =>
+  listMock().find(ghost => installedGhostStoragePart(ghost as InstalledGhost) === id));
 const approvedReceiptMock = vi.fn<(...args: unknown[]) => { manifest: InstalledGhost["manifest"] } | null>(() => null);
 const activeSessionAvailableMock = vi.fn<(ghostId: string) => boolean>(() => true);
 const dispatchMock = vi.fn(async () => ({ ok: true as const, result: 'done' }));
@@ -198,10 +202,10 @@ const sessionSnapshotMock = vi.fn(async (): Promise<{
   remoteHostId: null,
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  getGhostManager: () => ({ list: listMock,
-    findInstalledInstance: (id: string) => listMock().find(ghost => installedGhostStoragePart(ghost as InstalledGhost) === id),
+  getGhostManager: () => ({ list: listInstalledMock,
+    findInstalledInstance: findInstalledInstanceMock,
     readApprovedInstallReceipt: approvedReceiptMock, managedRootDirs: () => [] }),
-  listInstalledGhostsAsync: async () => listMock(),
+  listInstalledGhostsAsync: listInstalledAsyncMock,
   ghostForgeForbiddenRootDirs: () => [],
   listAvailableGhostsForAuthorization: () => listMock(),
   findAvailableGhostForAuthorization: (id: string) =>
@@ -384,6 +388,9 @@ beforeEach(() => {
   fs.mkdirSync(outsideDir, { recursive: true });
   approvedReceiptMock.mockReset();
   approvedReceiptMock.mockReturnValue(null);
+  listInstalledMock.mockClear();
+  listInstalledAsyncMock.mockClear();
+  findInstalledInstanceMock.mockClear();
   listMock.mockReset();
   listMock.mockReturnValue([chipGhost('art'), chipGhost('other')]);
   activeSessionAvailableMock.mockReset();
@@ -3854,6 +3861,76 @@ describe('plugin page audience and shared tool execution', () => {
       manifest: { ...(chipGhost('art') as InstalledGhost).manifest,
         mcpApps: { ui: { resources: [], tools: { run: { visibility: ['app'] } } } } } };
   }
+  // Regression: a page tool call scanned every installation, including a second
+  // synchronous scan for sessionContext. Existing audience tests did not check IO.
+  // Unit: real ticket + callGhostTool entry, fake install store (50 instances),
+  // one session-context tool; preserve dispatch and all mutable-state denials.
+  function callPage(ghost: InstalledGhost) {
+    const grant = { instance: installedGhostStoragePart(ghost), revision: 'approved-ui',
+      sessionId: 's1', clientId: 'card', tool: 'run', assertCurrent: async () => {} };
+    return withPluginPageTicket(grant, ticket => consumePluginPageTicket(ticket,
+      grant.instance, grant.revision, grant.tool, pageCall =>
+        getCindyGhostsMcpDeps({ sessionId: 's1', sessionInstanceId: 's1-instance',
+          agentKind: 'claude-code', workingDir: WORKDIR }, {}, pageCall)
+          .callGhostTool({ ghostId: grant.instance, tool: grant.tool, args: {} })));
+  }
+  it('dispatches a page tool with session context without scanning other installations', async () => {
+    const ghost = pageGhost();
+    ghost.manifest.sessionContext = true;
+    ghost.instanceKey = '_root__art';
+    ghost.namespace = null;
+    const newerCopy = { ...ghost, instanceKey: '_ns__local__art', namespace: 'local',
+      manifest: { ...ghost.manifest, version: '99.0.0' } };
+    listMock.mockReturnValue([ghost, newerCopy, ...Array.from({ length: 48 }, (_, i) => chipGhost(`other-${i}`))]);
+    expect(await callPage(ghost)).toMatchObject({ ok: true, result: 'done' });
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      ghostId: installedGhostStoragePart(ghost), tool: 'run',
+      args: expect.objectContaining({ session_context: expect.objectContaining({ session_id: 's1' }) }),
+    }));
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).not.toHaveBeenCalled();
+  });
+  // The initial lookup must retain the same errors before setup can run;
+  // revision drift here is a page authorization error, unlike drift after await.
+  it.each([
+    ['disabled', 'GHOST_ASLEEP'],
+    ['revision', 'PERMISSION_DENIED'],
+    ['workdir', 'GHOST_DISABLED_IN_WORKDIR'],
+    ['missing', 'GHOST_NOT_FOUND'],
+  ] as const)('rejects an initially %s page target before setup', async (change, errorCode) => {
+    const ghost = pageGhost();
+    listMock.mockReturnValue([ghost]);
+    if (change === 'disabled') listMock.mockReturnValue([{ ...ghost, enabled: false }]);
+    if (change === 'revision') listMock.mockReturnValue([{ ...ghost, approval: { state: 'approved', revision: 'replacement' } }]);
+    if (change === 'workdir') setGhostDisabledForWorkdir(WORKDIR, installedGhostStoragePart(ghost), true);
+    if (change === 'missing') listMock.mockReturnValue([]);
+    expect(await callPage(ghost)).toMatchObject({ ok: false, errorCode });
+    expect(ensureReadyMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['disabled', 'GHOST_ASLEEP'],
+    ['revision', 'GHOST_NOT_FOUND'],
+    ['workdir', 'GHOST_DISABLED_IN_WORKDIR'],
+    ['missing', 'GHOST_NOT_FOUND'],
+  ] as const)('rejects a page tool when %s changes during session context lookup', async (change, errorCode) => {
+    const ghost = pageGhost();
+    ghost.manifest.sessionContext = true;
+    listMock.mockReturnValue([ghost]);
+    sessionSnapshotMock.mockImplementationOnce(async () => {
+      if (change === 'disabled') listMock.mockReturnValue([{ ...ghost, enabled: false }]);
+      if (change === 'revision') listMock.mockReturnValue([{ ...ghost, approval: { state: 'approved', revision: 'replacement' } }]);
+      if (change === 'workdir') setGhostDisabledForWorkdir(WORKDIR, installedGhostStoragePart(ghost), true);
+      if (change === 'missing') listMock.mockReturnValue([]);
+      return { workingDir: WORKDIR, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null };
+    });
+    expect(await callPage(ghost)).toMatchObject({ ok: false, errorCode });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(listInstalledAsyncMock).not.toHaveBeenCalled();
+    expect(listInstalledMock).not.toHaveBeenCalled();
+  });
   // C14/X01: a cold page call used to bootstrap with no business id, then leak
   // its ALS grant into long-lived MCP callbacks. Existing tests only used live
   // tasks. Unit: real ticket/restore/ghost dispatch, bootstrap and IO are fakes.
