@@ -17,6 +17,7 @@ import { createWebAuth, isLoopbackRequest, CONNECT_PAGE, CONNECT_SCRIPT } from '
 import { buildWebShim } from './web-client-build.mjs';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
+const HOST_PROMPT_BUFFER_BYTES = 1024 * 1024;
 
 function send(response, status, body, extraHeaders = {}) {
   response.writeHead(status, { ...JSON_HEADERS, ...extraHeaders });
@@ -255,8 +256,10 @@ export function createHostServer(input) {
         const confirmationCaller = deps.webAuth.caller?.(request.headers.cookie)
           ?? (isAuthorized(request.headers.authorization, deps.token) ? `local-api:${deps.instanceId}` : null);
         const disconnectController = confirmationCaller && versioned && url.searchParams.get('confirmations') === '1' ? deps.connectController?.(confirmationCaller, event => {
-          if (response.writableEnded || response.destroyed || !isWebAuthorized(request, deps)) return false;
-          response.write(`data: ${JSON.stringify({ type: 'host_prompt', channel: event.channel, payload: event.payload })}\n\n`); response.flush?.(); return true;
+          if (response.writableEnded || response.destroyed || response.writableLength > HOST_PROMPT_BUFFER_BYTES || !isWebAuthorized(request, deps)) return false;
+          const written = response.write(`data: ${JSON.stringify({ type: 'host_prompt', channel: event.channel, payload: event.payload })}\n\n`);
+          response.flush?.();
+          return written || response.writableLength === 0;
         }) : undefined;
         const keepAlive = setInterval(() => {
           if (response.writableEnded) return;

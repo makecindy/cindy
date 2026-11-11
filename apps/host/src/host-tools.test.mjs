@@ -180,6 +180,10 @@ test('negotiated HTTP event streams deliver one live owner dialog without puttin
   const cookie = `cindy_host_web=${auth.exchange(auth.pair())}`;
   const server = createHostServer({ token: 'fixture', instanceId: 'fixture', events, webAuth: auth,
     connectController: confirmations.connect, resolvePluginConfirmation: confirmations.resolve });
+  let eventResponse;
+  server.prependListener('request', (request, response) => {
+    if (request.url.startsWith('/events')) eventResponse = response;
+  });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   let connected, prompted, connection;
@@ -193,6 +197,42 @@ test('negotiated HTTP event streams deliver one live owner dialog without puttin
     onEvent: event => { received.push(event); if (event.channel === 'ghosts:confirm-request') prompted(event.payload); },
   });
   await ready;
+  // Performance regression, unit with loopback HTTP: production Host gateway
+  // must not execute when its new confirmation writer cannot deliver. The
+  // existing stream test covered only a healthy controller. Simulate the two
+  // writable states locally, without timing-dependent slow-network sleeps.
+  const database = { drizzle: {} };
+  setCurrentDbClient(database, 'owner');
+  let spawned = 0;
+  const ghost = { enabled: true, dir: '/fixture/slow', approvedHostToolGroups: ['terminal'],
+    approval: { state: 'approved', revision: 'r1' }, manifest: { id: 'slow', name: 'Slow', agent: { hostTools: ['terminal'] } } };
+  const service = createHostToolService({ profileDir: '/fixture', ownerId: 'owner', current: () => true,
+    owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), getGhost: () => ghost,
+    getSession: () => undefined, confirmations, manager: {}, t: key => key,
+    terminal: { start() { spawned++; throw new Error('UNEXPECTED_EXECUTION'); }, disposeScoped() {} } });
+  t.after(() => { service.close(); clearCurrentDbClient(database); });
+  const write = eventResponse.write;
+  for (const initial of [1024 * 1024 + 1, 0]) {
+    let buffered = initial;
+    Object.defineProperty(eventResponse, 'writableLength', { configurable: true, get: () => buffered });
+    eventResponse.write = function (data, ...rest) {
+      if (String(data).includes('"type":"host_prompt"')) {
+        const frame = JSON.parse(String(data).slice('data: '.length));
+        if (frame.channel === 'ghosts:confirm-request') queueMicrotask(() => {
+          confirmations.resolve(auth.caller(cookie), 'confirm', frame.payload.requestId, true);
+        });
+        buffered = 16 * 1024; return false;
+      }
+      return write.call(this, data, ...rest);
+    };
+    const denied = await service.request('slow', { type: 'host-tool-request', server: 'cindy_helper', tool: 'terminal_start', args: {} }, () => true);
+    const result = JSON.parse(denied.content.find(item => item.type === 'text').text);
+    assert.equal(result.errorCode, 'PERMISSION_DENIED');
+    assert.equal(spawned, 0, 'a failed owner dialog must never execute the terminal tool');
+  }
+  // A false write result whose buffer already drained can still deliver.
+  Object.defineProperty(eventResponse, 'writableLength', { configurable: true, get: () => 0 });
+  eventResponse.write = function (data, ...rest) { write.call(this, data, ...rest); return false; };
   const answer = confirmations.confirm({ ghostId: 'demo', ghostName: 'Demo', body: 'Run?',
     confirmText: null, cancelText: null, danger: false });
   const prompt = await dialog;
