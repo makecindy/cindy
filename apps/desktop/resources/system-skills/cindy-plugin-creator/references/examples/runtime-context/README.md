@@ -11,6 +11,11 @@ Pack the folder using `ghost_forge_pack`, inspect the five independent permissio
 install the resulting `.cindy` package in a test profile. In a test task, open **Task plugins**
 and select this plugin for the controls to verify. Installing alone does not select it.
 
+Start normal new turns in the App. Personal IM, official hooks and same-turn steer do not
+prepare these runtime controls or collect context. Existing App-started Pi turns keep their
+request controls. The shared memory_search tool still uses the task's selected memory providers,
+regardless of which entry started the message; changing entries does not erase existing context.
+
 - The static system fragment appears after the native fixed system prefix; another task
   without the selection must have its original prompt bytes.
 - The context marker is ordinary user-role reference material, separate from system instructions.

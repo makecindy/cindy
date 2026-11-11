@@ -1,7 +1,7 @@
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
-import { appendRuntimePluginContext, createTaskRuntimePlugins, runtimePluginInputText } from './runtimePlugins.js';
+import { createTaskRuntimePlugins } from './runtimePlugins.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
 import { readRuntimePluginSettings, writeRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
 import { parseRuntimePluginSettings } from '../../shared/pluginRuntime.js';
@@ -5104,25 +5104,7 @@ export async function prepareUnhealthySessionForSend(sessionId: string): Promise
   await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
 }
 
-let runtimePluginDirectSendPreparer: ReturnType<typeof createTaskRuntimePlugins>['prepare'] | undefined;
-let runtimePluginMessageComposer: ReturnType<typeof createTaskRuntimePlugins>['compose'] | undefined;
 let runtimePluginBudgetClearer: ((sessionId: string) => void) | undefined;
-type RuntimePluginSessionOptions = Parameters<ReturnType<typeof getMaker>['createSession']>[0];
-let runtimePluginSessionStarter: ((opts: RuntimePluginSessionOptions, signal?: AbortSignal) => ReturnType<ReturnType<typeof getMaker>['createSession']>) | undefined;
-
-/** Direct channels use the same task control preparation before their existing send lock. */
-export function prepareRuntimePluginsForDirectSend(sessionId: string, message: unknown, signal?: AbortSignal) {
-  return runtimePluginDirectSendPreparer?.(sessionId, message, signal);
-}
-
-export function composeRuntimePluginMessageForSend(sessionId: string, message: UserMessage, currentText: string, signal?: AbortSignal) {
-  return runtimePluginMessageComposer?.(sessionId, message, currentText, signal);
-}
-
-/** Keep task prompt assembly identical at Desktop, IM and hook startup entries. */
-export function createSessionWithRuntimePlugins(opts: RuntimePluginSessionOptions, signal?: AbortSignal) {
-  return runtimePluginSessionStarter ? runtimePluginSessionStarter(opts, signal) : getMaker().createSession(opts, signal);
-}
 
 /** Later successful model/provider picks supersede an earlier cross-engine intent. */
 export function cancelPendingAgentSwitchForSession(sessionId: string): void {
@@ -9231,7 +9213,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const appliedTaskPrompts = new WeakMap<Awaited<ReturnType<typeof maker.createSession>>, string>();
   const readTaskPrompt = (sessionId: string, agentKind: AgentKind, agentDeviceId?: string | null) =>
     ghostTaskSystemPrompt(sessionId, agentKind === 'claude-code' ? 'cc' : agentKind, !(agentKind === 'pi' && agentDeviceId));
-  runtimePluginSessionStarter = (o, signal) => {
+  const createSessionWithRuntimePlugins = (o: CreateOpts, signal?: AbortSignal) => {
     if (o.id && maker.getSession(o.id)) return maker.createSession(o, signal);
     const taskPrompt = o.id ? readTaskPrompt(o.id, o.agentKind, o.agentDeviceId) : '';
     if (!taskPrompt) return maker.createSession(o, signal);
@@ -18433,7 +18415,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   runtimePluginBudgetClearer = runtimePluginControl.forgetSession;
   const taskRuntimePlugins = createTaskRuntimePlugins({
     control: runtimePluginControl, readSettings: readRuntimePluginSettings,
-    composeContext: composeGhostRuntimeContext,
     requestSupported: sessionId => !maker.getSession(sessionId)?.remoteHostId,
     readRoute: async sessionId => {
       const profiles = await readSessionRuntimeProfiles(sessionId);
@@ -18464,20 +18445,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     changed: (sessionId, pluginId, phase) => log.info('runtime plugin changed model request', { sessionId, pluginId, phase }),
   });
-  runtimePluginMessageComposer = taskRuntimePlugins.compose;
-  runtimePluginDirectSendPreparer = (sessionId, message, signal) => {
-    const pending = taskRuntimePlugins.prepare(sessionId, message, signal);
-    const live = maker.getSession(sessionId);
-    if (!pending && !readRuntimePluginSettings(sessionId)?.['system-prompt']?.length
-      && (!live || !appliedTaskPrompts.get(live))) return undefined;
-    return (async () => {
-      const options = pending ? await pending : {};
-      const prompt = prepareTaskPromptForSend(sessionId);
-      if (prompt) await prompt;
-      return options;
-    })();
-  };
-
   ipcMain.handle('maker:runtime-plugins', async (event, sessionId: unknown, value: unknown) => {
     assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     const owner = captureDataOwnerBroadcastScope();
@@ -19235,7 +19202,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       .limit(1);
     const blocked = botSessionInputBlockReason(botInput ?? null);
     if (blocked) throwIpcError('PRECONDITION_FAILED', blocked);
-    let so = (sendOpts ?? {}) as {
+    const so = (sendOpts ?? {}) as {
       messageUuid?: string;
       userName?: string;
       signal?: AbortSignal;
@@ -19261,7 +19228,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
       readonly [ASYNC_QUESTION_ANSWER]?: true;
       readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
-      readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
+      readonly [AUTO_REVIEW_SOURCE_CONTENT]?: string;
       readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
       readonly [AUTO_REVIEW_USER_INTENT]?: string;
       readonly [MCP_APP_MESSAGE_GUARD]?: McpAppMessageGuard;
@@ -19412,23 +19379,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, appContext.text);
     }
     try {
-      const runtimeContext = steerAllowsEnvironmentNotes
-        ? composeGhostRuntimeContext(sessionId,
-            () => runtimePluginInputText(so[AUTO_REVIEW_SOURCE_CONTENT] ?? so[MAIN_OWNED_SEND_CONTEXT]?.rawChannelText ?? message), so.signal)
-        : undefined;
-      if (runtimeContext) {
-        const material = await runtimeContext;
-        sess = readCurrentSteerSession();
-        if (sess !== authorizationSession || sess.getTurnGeneration() !== authorizationTurn) {
-          throw new Error(`[STALE_TURN] Session ${sessionId} changed turns while preparing plugin context`);
-        }
-        if (!sess.isTurnRunning()) throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} has no active turn`);
-        if (material) {
-          steerPayload = appendRuntimePluginContext(steerPayload as HandoffWireMessage, material);
-          so = { ...so, [AUTO_REVIEW_SOURCE_CONTENT]: so[AUTO_REVIEW_SOURCE_CONTENT]
-            ?? (typeof normalized === 'string' ? normalized : (normalized as UserMessage).content) };
-        }
-      }
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);
       const precondition = readRemoteInputClearBoundaryPrecondition(sendOpts);

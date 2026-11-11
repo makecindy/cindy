@@ -13,9 +13,9 @@
 | `will-schedule-run` | 每次自动化(定时任务,含脚本模式)运行前;恢复中断的续跑不再问 | allow / skip / block | 30 秒 |
 | `will-routine-run` | 兼容保留,不再触发:伙伴例行任务已改成项目自动化(2026-11-08),声明照常安装 | allow / skip / block | 30 秒 |
 | `will-start-task` | 新任务(含 `/goal` 开的)第一条消息发出、任务建好之前;只问一次,之后的消息不再问;伙伴对话不问 | allow / route | 8 秒 |
-| `will-start-turn` | 任务中新一轮开始前，不含同轮插话；只问任务设置中选中的插件 | allow / route / skip / block | 1 秒 |
-| `will-model-request` | 本机 Pi 的每次模型请求，包含工具结果后的继续请求 | allow / route（select 阶段）/ transform（payload 阶段）/ skip / block | 每次请求的 select＋payload 合计 1 秒 |
-| `will-compose-context` | 每条模型消息装配时，为选了该插件的任务补参考资料 | allow / context / skip / block | 2 秒 |
+| `will-start-turn` | App 内正常发起的新一轮开始前；只问任务设置中选中的插件 | allow / route / skip / block | 1 秒 |
+| `will-model-request` | App 正常发起的本机 Pi 轮次内，每次模型请求，包含工具结果后的继续请求 | allow / route（select 阶段）/ transform（payload 阶段）/ skip / block | 每次请求的 select＋payload 合计 1 秒 |
+| `will-compose-context` | App 内正常发起的新一轮装配消息时，为选了该插件的任务补参考资料 | allow / context / skip / block | 2 秒 |
 | `will-search-memory` | 所选任务调用已有 `cindy_memory.memory_search` 时 | allow / memories | 1.5 秒，失败保留 Cindy 结果 |
 | `system-prompt` | 装配所选任务的系统提示词；由清单 `systemPrompt` 静态提供，不发送询问 | 无运行期裁决 | 不启动插件 |
 
@@ -77,8 +77,8 @@ cindy.onHostMessage(async (msg) => {
 
 ### 任务运行时等待预算
 
-四个新增运行时节点共用每轮 **5 秒**插件等待预算。普通消息在统一发送准备入口开启新预算，
-同轮插话、工具续轮和同一轮内的多次模型请求不重置。每次询问还受上表单点时限约束；
+四个新增运行时节点共用每轮 **5 秒**插件等待预算。App 普通消息在统一发送准备入口开启新预算，
+工具续轮和同一轮内的多次模型请求不重置；同轮插话不另行询问资料提供者或建立新预算。每次询问还受上表单点时限约束；
 `will-model-request` 的 `select` 与 `payload` 共用该次请求的 **1 秒**，下一请求重新取得
 请求预算，但继续消费本轮剩余的 5 秒。实际 `deadline` 会按两项剩余预算缩短。
 
@@ -148,6 +148,11 @@ cindy.send({
 确认分别展示权限，用户仍须在任务菜单的「任务插件」中选择；安装或启用不会替所有任务选择。
 没有选择时不唤醒插件、不读取消息或模型目录。新任务选模保持原来的“一次”语义。
 
+发送接入范围仅限 **App 内正常发起的新轮次**。个人 IM、官方 hook 和同轮插话不执行这里的
+轮前准备或资料收集，也不通过这些入口装配／更新静态片段、安装逐请求回调。已经由 App
+开启的 Pi 轮次仍沿用该轮的请求控制；已有会话内容不会因更换消息入口被清空。
+`memory_search` 是共享工具，按下文的任务选择规则调用记忆提供者，不受发送入口限定。
+
 `will-start-turn` 数据为 `{ sessionId, route, text }`，可回 `allow` 或完整 `route`。
 路由复用插件模型的 `agentKind / providerId / model / agentDeviceId? / effort?`，本节点另接受
 `fastMode: boolean | "ultrafast"`，只能选当前已连接且可用的组合。Claude Code、Codex、Pi
@@ -180,9 +185,8 @@ cindy.send({
 
 `will-compose-context` 数据为 `{ sessionId, text }`（当前消息）。
 
-普通发送和同轮插话共用该节点，只发送尚未附加交接、应用资料或环境说明的当前原文。
-插话沿本轮剩余预算，等待结束后复核同一会话、轮次和取消状态；skip/block 拒绝本次插话，
-不重建 Agent 或重新执行新轮次选模。原生非模型命令沿既有判定跳过资料装配。
+仅 App 内正常发起的新轮次询问该节点，只发送尚未附加引用历史、交接、应用资料或环境说明的
+当前原文；IM、hook 和同轮插话不询问资料提供者。原生非模型命令沿既有判定跳过资料装配。
 资料不进入自动审核的授权来源；原消息的附件边界和主人原话保持不变。
 
 返回示例：
@@ -240,8 +244,8 @@ v3 清单直接声明 `systemPrompt`，不要在 `subscribe.hooks` 写 `system-p
 明确选择了本插件的任务，不能声明全局范围。
 
 安装／更新确认以独立权限行显示完整片段、顺序、范围和引擎；更改这些内容需要重新确认该项
-权限。插件详情也展示原文。用户随后在任务菜单的「任务插件」中选择系统指令提供者，下一条
-消息起生效。片段先按 `order` 升序，再按 `插件 id:片段 id` 字典序排列；多个插件共用这个
+权限。插件详情也展示原文。用户随后在任务菜单的「任务插件」中选择系统指令提供者，从下一次
+App 内正常发起的新轮次生效。片段先按 `order` 升序，再按 `插件 id:片段 id` 字典序排列；多个插件共用这个
 次序，宿主还限制装配总量。只有所选且已批准、已启用的插件可以参与。停用、卸载或不支持
 当前执行位置时，使用用户为该插件选择的出错策略。
 

@@ -32,12 +32,6 @@ import { createFeishuGroupTurnPermissionPolicy } from '../../feishu/permissionPo
 import { createWechatTurnPermissionPolicy } from '../../wechat/permissionPolicy';
 import { enqueueAskCardPatch } from '../askCardPatchQueue';
 import { createSerializedConnectionLifecycle } from '../../connectionLifecycle';
-import { MODEL_REQUEST_CONTROL } from '@cindy/maker-core';
-import { createTaskRuntimePlugins } from '../../../maker-ipc/runtimePlugins';
-import { createRuntimePluginControl } from '../../../cindy-brain/runtimeControl';
-import { createRuntimeContextProviders } from '../../../cindy-brain/runtimeContext';
-import type { RuntimePluginSettings } from '../../../../shared/pluginRuntime';
-import { agentHandoffPending } from '../../../maker-ipc/agentHandoffPendingSingleton';
 
 const mocks = vi.hoisted(() => ({
   logger: {
@@ -618,87 +612,6 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   afterEach(async () => {
     await runner?.disposeAllSessions();
     runner = null;
-  });
-
-  // Review regression, unit: the real personal IM entry must run the same task
-  // preparation as Desktop. Existing send-outcome tests had no selected plugins.
-  // Minimum input: one opted-in task, followed by the same task with no selection.
-  it('applies task runtime plugins to IM sends and preserves unselected wire bytes', async () => {
-    let settings: RuntimePluginSettings = {};
-    const screen = vi.fn(async (point: string, _data: unknown) => point === 'will-compose-context'
-      ? { action: 'context' as const, ghostId: 'context', ghostName: 'Context', blocks: [{ id: 'b', text: 'IM plugin reference' }] }
-      : { action: 'allow' as const });
-    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true, screen });
-    const providers = createRuntimeContextProviders(control);
-    const readRoute = vi.fn(async () => ({ agentKind: 'pi' as const, providerId: 'xd', model: 'test-model' }));
-    const service = createTaskRuntimePlugins({ control, readSettings: () => settings,
-      readRoute,
-      routeAvailable: async () => true, applyRoute: vi.fn(), changed: vi.fn(),
-      composeContext: providers.compose });
-    const bodies: unknown[] = [];
-    for (const selected of [false, true, false]) {
-      settings = selected ? {
-        'will-start-turn': [{ pluginId: 'router', onFailure: 'block' }],
-        'will-compose-context': [{ pluginId: 'context', onFailure: 'block' }],
-        'will-model-request': [{ pluginId: 'request', onFailure: 'block' }],
-      } : {};
-      const h = setupSession(async () => ({ accepted: true }));
-      const handoff = vi.spyOn(agentHandoffPending, 'peek');
-      if (selected) handoff.mockResolvedValueOnce('PRIVATE_ENGINE_HANDOFF');
-      const readsBefore = readRoute.mock.calls.length;
-      const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
-        prepareRuntimeTurn: (id, message) => {
-          const pending = service.prepare(id, message);
-          if (!selected) expect(pending).toBeUndefined();
-          return pending;
-        },
-        composeRuntimeMessage: (id, message, currentText) => {
-          const pending = service.compose(id, message, currentText);
-          if (!selected) expect(pending).toBeUndefined();
-          return pending;
-        },
-      });
-      try {
-        await localRunner.runAgentTurn({ botContextId: 'cli_test_bot', userId: 'ou_user',
-          userMessageId: 'runtime-input', text: 'IM runtime fixture', attachments: [] });
-        expect(h.send).toHaveBeenCalledOnce();
-        expect(readRoute.mock.calls.length - readsBefore).toBe(selected ? 2 : 0);
-        bodies.push(h.send.mock.calls[0][0]);
-        expect(typeof h.send.mock.calls[0][1]?.[MODEL_REQUEST_CONTROL]).toBe(selected ? 'function' : 'undefined');
-        h.emit({ type: 'done', data: {} });
-      } finally {
-        handoff.mockRestore();
-        await localRunner.disposeAllSessions();
-      }
-    }
-    expect(bodies[2]).toEqual(bodies[0]);
-    expect(JSON.stringify(bodies[0])).not.toContain('IM plugin reference');
-    expect(JSON.stringify(bodies[1])).toContain('IM plugin reference');
-    expect(JSON.stringify(bodies[1])).toContain('PRIVATE_ENGINE_HANDOFF');
-    expect(screen.mock.calls.find(([point]) => point === 'will-compose-context')?.[1]).toMatchObject({ text: 'IM runtime fixture' });
-    expect(screen.mock.calls.map(([point]) => point)).toEqual(['will-start-turn', 'will-compose-context']);
-  });
-
-  it('blocks an IM send when the selected task plugin stops the turn', async () => {
-    const settings = { 'will-start-turn': [{ pluginId: 'router', onFailure: 'block' as const }] };
-    const control = createRuntimePluginControl({ readSettings: () => settings, captureOwner: () => () => true,
-      screen: async () => ({ action: 'block', ghostId: 'router', ghostName: 'Router', reason: '', failure: false }) });
-    const service = createTaskRuntimePlugins({ control, readSettings: () => settings,
-      readRoute: async () => ({ agentKind: 'cc', providerId: 'xd', model: 'test-model' }),
-      routeAvailable: async () => true, applyRoute: vi.fn(), changed: vi.fn() });
-    const h = setupSession(async () => ({ accepted: true }));
-    const onEarlyReject = vi.fn(async () => true);
-    const localRunner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
-      prepareRuntimeTurn: (id, message) => service.prepare(id, message),
-    });
-    try {
-      await localRunner.runAgentTurn({ botContextId: 'cli_test_bot', userId: 'ou_user',
-        userMessageId: 'runtime-blocked', text: 'Blocked fixture', attachments: [], onEarlyReject });
-      expect(h.send).not.toHaveBeenCalled();
-      expect(onEarlyReject).toHaveBeenCalledOnce();
-    } finally {
-      await localRunner.disposeAllSessions();
-    }
   });
 
   it('keeps child events out of personal IM streaming, attachments and completion', async () => {

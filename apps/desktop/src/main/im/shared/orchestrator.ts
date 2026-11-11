@@ -21,9 +21,6 @@ import {
   acquirePendingAgentSwitchForDirectSend,
   acquirePendingAgentSwitchForImSend,
   prepareUnhealthySessionForSend,
-  prepareRuntimePluginsForDirectSend,
-  composeRuntimePluginMessageForSend,
-  createSessionWithRuntimePlugins,
   registerSwitchedSessionVendorOptionsResolver,
 } from '../../maker-ipc/register';
 import { createImChannelDefaultRouteSync } from './channelDefaultRouteSync';
@@ -165,9 +162,6 @@ export function createImOrchestrator(
     isRouteUsable: (route) => turnRunner.hasAuthForRoute(route),
   });
   const turnRunner = createTurnRunner(adapter, repo, cards, {
-    prepareRuntimeTurn: (sessionId, message) => prepareRuntimePluginsForDirectSend(sessionId, message),
-    composeRuntimeMessage: (sessionId, message, currentText) => composeRuntimePluginMessageForSend(sessionId, message, currentText),
-    createRuntimeSession: options => createSessionWithRuntimePlugins(options),
     acquirePendingAgentSwitch: (sessionId, opts) =>
       opts?.channelOwned
         ? acquirePendingAgentSwitchForImSend(sessionId, () => defaultRouteSync.syncUnderLock(sessionId))

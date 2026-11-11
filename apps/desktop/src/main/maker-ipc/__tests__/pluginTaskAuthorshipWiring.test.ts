@@ -3,180 +3,22 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
-import { appendAutoReviewUserIntent, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions, type SessionSendOptions } from '@cindy/maker-core';
+import { appendAutoReviewUserIntent, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '@cindy/maker-core';
 import { HOST_ONLY_AGENT_PREFIX, buildMakerUserMessage, sanitizeQueuedMessageForPersistence, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { buildPluginMessage } from '../../../shared/pluginMessage.js';
 import { redactInputProjectionForSharedGuest } from '../../device-link/sharedTaskMessageOrigin.js';
 import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import { captureAgentRequest } from '../forwardedRequest.js';
-import { restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
+import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
 import { createPluginTargetReviewLoader } from '../../cindy-brain/pluginTargetReview.js';
 import { createPluginTaskReviewResolver } from '../pluginTaskReviewContext.js';
-import { createRuntimePluginControl } from '../../cindy-brain/runtimeControl.js';
-import { createRuntimeContextProviders } from '../../cindy-brain/runtimeContext.js';
-import { appendRuntimePluginContext, runtimePluginInputText } from '../runtimePlugins.js';
-import { prependNoteToWireUserMessage } from '../agentHandoff.js';
-import { shouldPrependMobileClientPromptNote } from '../mobileClientPromptNote.js';
 
 const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
 const compile = (code: string) => ts.transpileModule(code, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
-
-// PR #9803, guard/unit: execute the shared production steer closure with the
-// real context controller and permission projection. Ordinary send tests cannot
-// cover INPUT_STEER/legacy STEER. Minimum failure: selected provider + busy turn;
-// its material/skip must apply without authorizing its text or changing a new turn.
-const steerStart = source.indexOf('  const steerToAgentAccepted = async (');
-const compiledRuntimeSteer = compile(source.slice(steerStart, source.indexOf('  const trustedDesktopSteerText =', steerStart))
-  + '\nreturn steerToAgentAccepted;');
-function runtimeSteerHarness(agentKind = 'codex') {
-  let selected = false;
-  const settings = () => selected ? { 'will-compose-context': [{ pluginId: 'provider', onFailure: 'block' as const }] } : {};
-  const screen = vi.fn(async (_point: string, _data: unknown): Promise<import('../../../shared/ghost.js').GhostRuntimeControlPointResult> => ({
-    action: 'context', ghostId: 'provider', ghostName: 'Provider', blocks: [{ id: 'data', text: 'PLUGIN_REFERENCE' }],
-  }));
-  const control = createRuntimePluginControl({ readSettings: settings, captureOwner: () => () => true, screen });
-  const providers = createRuntimeContextProviders(control);
-  const compose = vi.fn(providers.compose);
-  const extract = vi.fn(runtimePluginInputText);
-  const delivered = vi.fn(async (_message: unknown, opts: SessionSendOptions) => { await opts.beforeProviderStart?.(); });
-  const intervention = vi.fn();
-  const appContext = { text: 'PRIVATE_APP_CONTEXT', assertCurrent: vi.fn(), consume: vi.fn() };
-  const live = { agentKind, generation: 1, running: true,
-    capabilities: { sameTurnSteer: { supported: true } },
-    isTurnRunning: () => live.running, getTurnGeneration: () => live.generation, steer: delivered };
-  const query = { from: () => query, leftJoin: () => query, where: () => query, limit: async () => [] };
-  const deps = {
-    maker: { getSession: () => live, getSessionMeta: async () => null },
-    getDbClient: () => ({ drizzle: { select: () => query } }),
-    sessions: {}, botSessionLinks: {}, botProfiles: {}, eq: () => undefined,
-    assertReviewExternalInputAllowed: async () => {}, botSessionInputBlockReason: () => null,
-    prepareUserMessageForAgent: async (_id: string, message: unknown) => message,
-    restoreAutoReviewSteerIntent, readAutoReviewHistory: async () => [],
-    shouldPrependMobileClientPromptNote, readReplyQuoteNote: async () => null, REPLY_QUOTE_SOURCE_CONTENT: Symbol(),
-    buildWireMessageSourceNote: () => null, readWireSourceDevice: () => null,
-    buildClientEnvironmentNote: () => null, buildUiLanguageErrorNote: () => null,
-    turnUiLanguageFromSendOpts: () => 'en', getResolvedMainLocale: () => 'en',
-    turnClassicalStyleFromSendOpts: () => false, getMainClassicalStyle: () => false,
-    isMobileControllerInvoke: () => false, getHostSourceDevice: () => undefined,
-    wireNoteMemory: { plan: () => ({ notes: {}, commit: vi.fn() }) },
-    isOwnerOwnMessage: () => true, inputHandoffSteerNote: () => 'PRIVATE_HANDOFF', inputHandoffNoteDelivered: vi.fn(),
-    mcpAppModelContext: async () => appContext,
-    composeGhostRuntimeContext: compose, appendRuntimePluginContext, runtimePluginInputText: extract, prependNoteToWireUserMessage,
-    isDeviceLinkInvoke: () => false, assertRemoteInputClearNotInFlight: () => {},
-    readRemoteInputClearBoundaryPrecondition: () => ({ present: false }),
-    readExpectedInputGeneration: () => undefined, assertCurrentInputGeneration: () => {},
-    FORWARDED_REQUEST_RECEIPT, MAIN_OWNED_SEND_CONTEXT, AUTO_REVIEW_SOURCE_CONTENT,
-    AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_USER_INTENT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS,
-    MCP_APP_MESSAGE_GUARD, publishUiSessionIntervention: intervention, noteInteractionRouteSteer: () => {},
-    summarizeIpcUserMessage: () => ({}), log: { info: () => {}, warn: () => {}, debug: () => {} },
-    throwIpcError: (code: string, message: string) => { throw new Error(`[${code}] ${message}`); },
-  };
-  const steer = new Function(...Object.keys(deps), compiledRuntimeSteer)(...Object.values(deps)) as
-    (sessionId: string, message: unknown, options?: SendOptions) => Promise<void>;
-  return { steer, screen, compose, extract, delivered, intervention, appContext, live,
-    select: (value: boolean) => { selected = value; } };
-}
-
-it.each(['claude-code', 'codex', 'pi'])('applies selected context to shared %s steer and preserves unselected bytes', async agentKind => {
-  const f = runtimeSteerHarness(agentKind);
-  await f.steer('task', 'Read only.');
-  const baseline = f.delivered.mock.calls[0];
-  expect(f.extract).not.toHaveBeenCalled();
-  expect(f.screen).not.toHaveBeenCalled();
-  f.select(true);
-  await f.steer('task', 'Read only.');
-  const [payload, opts] = f.delivered.mock.calls[1];
-  const content = typeof payload === 'string' ? payload : (payload as { content: string }).content;
-  expect(content).toContain('PLUGIN_REFERENCE');
-  expect(content).toContain('PRIVATE_HANDOFF');
-  expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toBe('Read only.');
-  expect(appendAutoReviewUserIntent('Earlier intent.', content, opts))
-    .toEqual(appendAutoReviewUserIntent('Earlier intent.', 'Read only.'));
-  expect(f.screen.mock.calls[0][1]).toMatchObject({ text: 'Read only.' });
-  f.select(false);
-  await f.steer('task', 'Read only.');
-  expect(f.delivered.mock.calls[2][0]).toEqual(baseline[0]);
-  const { beforeProviderStart: _before, ...baselineOptions } = baseline[1];
-  const { beforeProviderStart: _after, ...unselectedOptions } = f.delivered.mock.calls[2][1];
-  expect(Reflect.ownKeys(unselectedOptions)).toEqual(Reflect.ownKeys(baselineOptions));
-  for (const key of Reflect.ownKeys(baselineOptions)) {
-    expect(Reflect.get(unselectedOptions, key), String(key)).toEqual(Reflect.get(baselineOptions, key));
-  }
-  expect(f.compose.mock.results.at(-1)?.value).toBeUndefined();
-});
-
-it.each(['skip', 'block'] as const)('does not deliver a shared steer after a context %s verdict', async action => {
-  const f = runtimeSteerHarness(); f.select(true);
-  f.screen.mockResolvedValue({ action, ghostId: 'provider', ghostName: 'Provider', reason: '', failure: false });
-  await expect(f.steer('task', 'Read only.')).rejects.toThrow();
-  expect(f.delivered).not.toHaveBeenCalled();
-  expect(f.intervention).not.toHaveBeenCalled();
-  expect(f.appContext.consume).not.toHaveBeenCalled();
-});
-
-it.each(['ended', 'replaced', 'aborted'] as const)('does not deliver context after the steered turn is %s', async boundary => {
-  const f = runtimeSteerHarness(); f.select(true);
-  let answer!: (result: import('../../../shared/ghost.js').GhostRuntimeControlPointResult) => void;
-  let entered!: () => void;
-  const waiting = new Promise<void>(resolve => { entered = resolve; });
-  f.screen.mockImplementation(() => { entered(); return new Promise(resolve => { answer = resolve; }); });
-  const abort = new AbortController();
-  const pending = f.steer('task', 'Read only.', { signal: abort.signal });
-  const observed = pending.then(() => undefined, error => error);
-  await Promise.race([waiting, observed]);
-  expect(f.screen).toHaveBeenCalledOnce();
-  if (boundary === 'ended') f.live.running = false;
-  else if (boundary === 'replaced') f.live.generation += 1;
-  else abort.abort();
-  answer({ action: 'context', ghostId: 'provider', ghostName: 'Provider', blocks: [{ id: 'data', text: 'PLUGIN_REFERENCE' }] });
-  expect(await observed).toBeInstanceOf(Error);
-  expect(f.delivered).not.toHaveBeenCalled();
-  expect(f.intervention).not.toHaveBeenCalled();
-});
-
-it('preserves the attachment boundary when adding context to steer', async () => {
-  const f = runtimeSteerHarness(); f.select(true);
-  const message = { type: 'user', content: [{ type: 'text', text: 'Read this new attachment.' }, { type: 'image', path: '/synthetic/new.png' }] };
-  await f.steer('task', message);
-  const opts = f.delivered.mock.calls[0][1];
-  expect(opts[AUTO_REVIEW_SOURCE_CONTENT]).toEqual(message.content);
-});
-
-it('leaves Pi native slash steer unchanged without calling providers', async () => {
-  const f = runtimeSteerHarness('pi'); f.select(true);
-  await f.steer('task', '/fixture-command');
-  expect(f.delivered.mock.calls[0][0]).toBe('/fixture-command');
-  expect(f.compose).not.toHaveBeenCalled();
-  expect(f.screen).not.toHaveBeenCalled();
-});
-
-// INPUT_STEER's real coordinator enriches the model message before the common
-// host closure. A plain steer fixture cannot detect disclosure of other tasks.
-it('keeps referenced task history out of providers through the real INPUT_STEER coordinator', async () => {
-  const f = runtimeSteerHarness(); f.select(true);
-  const raw = 'Compare cindy://session/referenced-task';
-  const coordinator = new AgentInputCoordinator({
-    sendToAgent: vi.fn(), steerToAgent: (id, message, opts) => f.steer(id, message, opts),
-    abortSession: vi.fn(), isTurnRunning: () => f.live.running,
-    getTurnGeneration: () => f.live.generation, hasPendingInteraction: () => false,
-    getAgentKind: () => 'codex', getSdkSessionId: async () => 'sdk', emitProjection: vi.fn(),
-    resolveSessionReferences: async () => [{ sessionId: 'referenced-task', source: 'local',
-      messages: [{ role: 'user', content: 'PRIVATE_TASK_HISTORY' }], range: 'recent', messageCount: 1, truncated: false }],
-  });
-  const item: AgentInputQueuedMessage = { clientId: 'runtime-reference', text: raw, persistedContent: JSON.stringify({ text: raw }),
-    model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/synthetic', autoReviewUserText: raw,
-    sessionRefs: [{ sessionId: 'referenced-task' }],
-    chatMessage: { clientId: 'runtime-reference', role: 'user', content: raw, isStreaming: false, createdAt: '2026-11-11T00:00:00Z' },
-    createOpts: { agentKind: 'codex', model: 'm', effort: 'high', permissionMode: 'auto', workingDir: '/synthetic', userPrompt: '', makerMemoryEnabled: true } };
-  expect(await coordinator.steer('task', item)).toBe(true);
-  expect(f.delivered).toHaveBeenCalledOnce();
-  expect(JSON.stringify(f.delivered.mock.calls[0][0])).toContain('PRIVATE_TASK_HISTORY');
-  expect(f.screen.mock.calls[0][1]).toMatchObject({ text: raw });
-});
 
 // PR #7824 merge regression (guard): run the production target send adapter,
 // queue builder/coordinator and review resolver. DB-only tests and a synthetic
