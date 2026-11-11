@@ -8258,7 +8258,9 @@
         "mcpUi": "Afficher des pages interactives dans la conversation",
         "mcpUiDomains": "Domaines accessibles aux pages : {{domains}}",
         "mcpAppOnly": "Page uniquement",
-        "uiPageAccess": "Pages : {{pages}} ; domaines : {{domains}} ; outils disponibles aux pages : {{tools}}"
+        "uiPageAccess": "Pages : {{pages}} ; domaines : {{domains}} ; outils disponibles aux pages : {{tools}}",
+        "uiHost": "Fournir des interfaces et des actions hôte dans Cindy",
+        "uiHostAccess": "{{subject}} : {{access}}"
       },
       "connections": {
         "confirmTitle": "Ajouter une adresse de connexion",
@@ -14251,6 +14253,7 @@
       "botSentNamed": "Envoyé par le coéquipier « {{name}} »",
       "orcaFromLead": "Message du Lead",
       "orcaFromWorker": "Message du Worker",
+      "orcaFromWorkerBatch": "Rapport système : {{count}} résultats de Worker",
       "orcaFromWorkerNamed": "Message du Worker « {{role}} »",
       "hookChannelFrom": "Depuis {{channel}}",
       "deviceSentMobileNamed": "Envoyé depuis le téléphone « {{name}} »",
@@ -19650,6 +19653,12 @@
       "restore": "Réinitialiser"
     }
   },
+  "pluginUi": {
+    "display": "Affichage",
+    "original": "Original",
+    "menu": "Vues et commandes du plugin",
+    "actionFailed": "Cette action du plugin n’a pas pu être effectuée. Réessayez."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "Seul le propriétaire de la session peut interagir avec cette carte.",
     "retry": "Recharger",
@@ -20150,6 +20159,10 @@
     "openDirectoryFailed": "Impossible d’ouvrir le dossier du compte. Il a peut-être été déplacé ou supprimé.",
     "loginAgain": "Se reconnecter",
     "login": "Se connecter",
+    "quotaRecoverIn": "Disponible dans {{duration}}",
+    "quotaExhausted": "Quota épuisé",
+    "quotaFiveHourRemaining": "Quota de 5 heures restant : {{percent}}%",
+    "quotaFiveHourExhausted": "Quota de 5 heures épuisé",
     "quotaAverage": "Restant moyen {{percent}} %",
     "quotaUpdating": "Quota en attente de mise à jour",
     "quotaResetSoon": "Réinitialisation proche",

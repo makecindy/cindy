@@ -17,6 +17,8 @@
  */
 
 import { Puzzle } from 'lucide-react';
+import { PluginUiView } from '@/cindy-brain/PluginUiView';
+import { getApprovedGhostHostUi } from '../../../../../shared/ghost';
 import type { TFunction } from 'i18next';
 
 import { GhostPanelError, GhostWebviewBody } from '@/cindy-brain/ghostPanelBody';
@@ -31,6 +33,8 @@ import type { TabKindBodyProps, TabKindPlugin } from '../../types';
 /** 任务页页签状态:承载哪个已装插件实例。 */
 export interface PluginTaskTabState {
   instanceId: string;
+  resourceViewId?: string;
+  resourceInput?: Record<string, unknown>;
 }
 
 function useInstalledGhostByInstance(instanceId: string): InstalledGhost | undefined {
@@ -42,7 +46,7 @@ function PluginTaskTabPillTitle({ state, t }: { state: PluginTaskTabState; t: TF
   return (
     <>
       {ghost
-        ? (ghost.manifest.taskView?.title ?? ghost.manifest.name)
+        ? (state.resourceViewId ? getApprovedGhostHostUi(ghost)?.views?.find(view => view.id === state.resourceViewId)?.title ?? ghost.manifest.name : ghost.manifest.taskView?.title ?? ghost.manifest.name)
         : t('rightSidebar.tabs.kinds.pluginTask')}
     </>
   );
@@ -90,8 +94,12 @@ function PluginTaskBody({ state, ctx }: TabKindBodyProps<PluginTaskTabState>) {
   // 归属未知时只保留页签和选中位,不为可能属于远端的任务加载本机插件页。
   if (ctx.remoteHostId || ctx.deviceLinkDeviceId === undefined) return null;
   // 停用 / 卸载的瞬间可用性投影已把页签隐藏,这里只兜住收起前的一两帧。
-  if (!ghost || ghost.enabled === false || !ghost.manifest.taskView) return null;
+  if (!ghost || ghost.enabled === false) return null;
   const remoteDevice = ctx.deviceLinkDeviceId;
+  if (state.resourceViewId) return remoteDevice === null
+    ? <PluginUiView ghost={ghost} viewId={state.resourceViewId} sessionId={ctx.sessionId} input={state.resourceInput} />
+    : null;
+  if (!ghost.manifest.taskView) return null;
   if (remoteDevice !== null && ghost.manifest.taskView.remote !== true) return null;
   if (runtimeState === 'crashed' || runtimeState === 'fused') {
     return <GhostPanelError ghost={ghost} state={runtimeState} />;
@@ -131,6 +139,8 @@ const plugin: TabKindPlugin<PluginTaskTabState> = {
   TabBody: PluginTaskBody,
   defaultState: () => ({ instanceId: '' }),
   hydrateState: (raw) => ({
+    ...((raw as PluginTaskTabState | null)?.resourceInput && typeof (raw as PluginTaskTabState).resourceInput === 'object' && !Array.isArray((raw as PluginTaskTabState).resourceInput) ? { resourceInput: (raw as PluginTaskTabState).resourceInput } : {}),
+    ...(typeof (raw as PluginTaskTabState | null)?.resourceViewId === 'string' ? { resourceViewId: (raw as PluginTaskTabState).resourceViewId } : {}),
     instanceId:
       raw &&
       typeof raw === 'object' &&

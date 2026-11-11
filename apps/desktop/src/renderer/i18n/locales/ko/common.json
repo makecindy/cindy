@@ -8143,7 +8143,9 @@
         "mcpUi": "대화에 인터랙티브 페이지 표시",
         "mcpUiDomains": "페이지 연결 도메인: {{domains}}",
         "mcpAppOnly": "페이지 전용",
-        "uiPageAccess": "페이지: {{pages}}; 도메인: {{domains}}; 페이지에서 호출할 수 있는 도구: {{tools}}"
+        "uiPageAccess": "페이지: {{pages}}; 도메인: {{domains}}; 페이지에서 호출할 수 있는 도구: {{tools}}",
+        "uiHost": "Cindy에 인터페이스 및 호스트 작업 제공",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "연결 주소 추가",
@@ -14106,6 +14108,7 @@
       "botSentNamed": "동료 \"{{name}}\"에서 보냄",
       "orcaFromLead": "Lead에서 온 메시지",
       "orcaFromWorker": "Worker에서 온 메시지",
+      "orcaFromWorkerBatch": "시스템이 반환한 Worker 결과 {{count}}개",
       "orcaFromWorkerNamed": "Worker \"{{role}}\"에서 온 메시지",
       "hookChannelFrom": "{{channel}}에서",
       "deviceSentMobileNamed": "휴대폰 \"{{name}}\"에서 보냄",
@@ -19404,6 +19407,12 @@
       "restore": "기본값 복원"
     }
   },
+  "pluginUi": {
+    "display": "표시 방식",
+    "original": "원본",
+    "menu": "플러그인 보기 및 명령",
+    "actionFailed": "플러그인 작업을 완료하지 못했습니다. 다시 시도해 주세요."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "이 카드는 세션 소유자만 조작할 수 있습니다.",
     "retry": "다시 불러오기",
@@ -19891,6 +19900,10 @@
     "openDirectoryFailed": "계정 폴더를 열 수 없습니다. 이동되었거나 삭제되었을 수 있습니다.",
     "loginAgain": "다시 로그인",
     "login": "로그인",
+    "quotaRecoverIn": "{{duration}} 후 이용 가능",
+    "quotaExhausted": "한도 소진",
+    "quotaFiveHourRemaining": "5시간 한도 잔여 {{percent}}%",
+    "quotaFiveHourExhausted": "5시간 한도 소진",
     "quotaAverage": "평균 잔여량 {{percent}}%",
     "quotaUpdating": "잔여량 업데이트 대기",
     "quotaResetSoon": "곧 초기화",

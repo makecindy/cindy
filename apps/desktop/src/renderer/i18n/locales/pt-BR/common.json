@@ -8258,7 +8258,9 @@
         "mcpUi": "Exibir páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Somente página",
-        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}"
+        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}",
+        "uiHost": "Fornecer interfaces e ações do host no Cindy",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de conexão",
@@ -14251,6 +14253,7 @@
       "botSentNamed": "Enviado pelo colega \"{{name}}\"",
       "orcaFromLead": "Mensagem do Lead",
       "orcaFromWorker": "Mensagem do Worker",
+      "orcaFromWorkerBatch": "Relatório do sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensagem do Worker \"{{role}}\"",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado do celular \"{{name}}\"",
@@ -19650,6 +19653,12 @@
       "restore": "Restaurar padrões"
     }
   },
+  "pluginUi": {
+    "display": "Exibição",
+    "original": "Original",
+    "menu": "Visualizações e comandos do plugin",
+    "actionFailed": "Não foi possível concluir a ação do plugin. Tente novamente."
+  },
   "mcpApps": {
     "sharedTaskReadOnly": "Apenas o proprietário da sessão pode interagir com este cartão.",
     "retry": "Recarregar",
@@ -20150,6 +20159,10 @@
     "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Ela pode ter sido movida ou excluída.",
     "loginAgain": "Entrar novamente",
     "login": "Entrar",
+    "quotaRecoverIn": "Disponível em {{duration}}",
+    "quotaExhausted": "Cota esgotada",
+    "quotaFiveHourRemaining": "Cota de 5 horas restante: {{percent}}%",
+    "quotaFiveHourExhausted": "Cota de 5 horas esgotada",
     "quotaAverage": "Média restante {{percent}}%",
     "quotaUpdating": "Cota aguardando atualização",
     "quotaResetSoon": "Redefinição em breve",

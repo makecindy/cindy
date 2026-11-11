@@ -193,6 +193,7 @@
     "fromLead": "Lead からのメッセージ",
     "fromWorkerNamed": "Worker「{{role}}」からのメッセージ",
     "fromWorker": "Worker からのメッセージ",
+    "fromWorkerBatch": "システムから報告された {{count}} 件の Worker 結果",
     "emptyMessageBody": "（空のメッセージ）"
   },
   "contextSheet": {

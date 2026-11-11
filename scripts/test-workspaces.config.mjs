@@ -175,6 +175,8 @@ const desktopGuardInclude = [
   'src/main/__tests__/sessionRuntimeControlWiring.test.ts',
   // Orca queued acceptance must keep using delivery-scoped authority, not the round guard.
   'src/main/maker-ipc/__tests__/orcaDeliveryWiring.contract.test.ts',
+  // Orca auto-bridge batching: host-only stamping and wire-mark stripping are trust boundaries.
+  'src/main/maker-ipc/__tests__/orcaAutoBridgeBatch.contract.test.ts',
   'src/main/localDb/ipc/__tests__/sessionCreatedBroadcast.test.ts',
   'src/renderer/__tests__/promptRecommendationBadge.test.ts',
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',

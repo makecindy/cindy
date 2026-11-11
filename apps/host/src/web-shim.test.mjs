@@ -94,11 +94,15 @@ test('history events reach the browser preload subscribers exactly once', async 
     { seq: 2, type: 'error_persisted', sessionId: 'task', persistId: 'err' },
     { seq: 3, type: 'subagent_runs_changed', sessionId: 'task' },
     { seq: 4, type: 'task_tags_changed', payload: { tags: [{ id: 'tag', name: 'Review', color: 'blue' }] }, ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 } },
+    { seq: 5, type: 'input_receipt', sessionId: 'task', inputClientId: 'stopped', clientId: 'stopped', status: 'interrupted' },
+    { seq: 6, type: 'text', sessionId: 'task', inputClientId: 'next', data: { text: 'next reply' } },
   ];
   const b = browser(() => ({}), source, () => new Response(new ReadableStream({ start(controller) {
     controller.enqueue(new TextEncoder().encode(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')));
   } })));
   const received = [];
+  const agentEvents = [];
+  b.api.maker.onEvent(event => agentEvents.push(event));
   b.api.localDb.messages.onDeleted(event => received.push(event));
   b.api.localDb.messages.onErrorPersisted(event => received.push(event));
   b.api.localDb.subagentRuns.onChanged(event => received.push(event));
@@ -108,6 +112,11 @@ test('history events reach the browser preload subscribers exactly once', async 
     frames[0], { sessionId: 'task', persistId: 'err' }, frames[2],
     { payload: frames[3].payload, ownerStamp: frames[3].ownerStamp },
   ]);
+  // Host stop receipts belong to /chat, not the Agent timeline. A real text
+  // event must still reach the renderer exactly once after that receipt.
+  assert.equal(agentEvents.length, 1);
+  assert.equal(agentEvents[0].event.type, 'text');
+  assert.equal(agentEvents[0].event.data.text, 'next reply');
   b.close();
 });
 

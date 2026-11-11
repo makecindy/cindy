@@ -52,7 +52,7 @@ export const CONTROL_CATALOG: readonly Control[] = [
   helper('tools.mcp', 'tools-and-extensions', '连接 MCP', '使用宿主的 MCP 配置表单。', ['request_mcp_setup'], ['mcp', '外部工具']),
   helper('tools.skills', 'tools-and-extensions', 'Skill 管理', '按当前宿主提供的 Skill 能力发现。', ['search_skills', 'start_skill_learning', 'publish_skill'], ['skill', '技能']),
   helper('runtimes.pi', 'runtimes-and-storage', 'Pi 托管运行环境', '读取版本、检查和安装托管 Pi；复用现有内核管理器。', ['get_pi_runtime', 'update_pi_runtime'], ['pi', '升级 pi', '更新 pi', '运行环境'], '更新不是改 JSON；正在运行的进程与后续任务使用版本分别报告。'),
-  helper('application.update', 'application', 'Cindy 应用更新', '检查并通过内置更新器安装。', ['check_app_update', 'install_app_update'], ['cindy 更新', 'cindy 升级', 'app update'], '安装沿用内置更新器确认，不下载替换当前宿主。'),
+  helper('application.update', 'application', 'Cindy 应用更新', '更新 Cindy 用 install_app_update，由宿主确认后通过内置更新器安装；check_app_update 仅检查版本。', ['check_app_update', 'install_app_update'], ['cindy 更新', 'cindy 升级', '更新 cindy', '升级 cindy', 'update cindy', 'upgrade cindy', 'app update'], '没有可安装更新或不支持安装时说明返回原因，不自行下载替换当前宿主。工具不可用时，在运行 Cindy 的电脑上使用设置中的“检查更新”。'),
   // Explicit gaps remain discoverable. Metadata must never imply a working mutation.
   ...[
     ['application.window', 'application', '窗口行为与开机启动', '唤醒、菜单栏、关闭窗口和激活点击', '窗口 开机 菜单栏 wake startup'],

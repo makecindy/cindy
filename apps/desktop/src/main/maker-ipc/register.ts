@@ -1,3 +1,4 @@
+import { prepareSubscriptionAccountForSend } from '../subscription-accounts/prepareSend.js';
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
@@ -587,6 +588,8 @@ import {
   scheduleWorktreeRecycleForStatusChange,
   setSessionRuntimeCleanup,
 } from '../localDb/ipc/sessions.js';
+import { createSessionOptionsReconciler } from './sessionOptionsReconciler.js';
+import { readSessionSource } from '../localDb/sessionDispatchSnapshot.js';
 // sidebar-card-mode: turn-done 后刷新列表预览,并按需生成置顶卡片摘要
 
 import {
@@ -1053,7 +1056,7 @@ import {
   materializeDirectSendOssAttachments,
   materializeQueuedOssAttachmentsDeferred,
   collectQueuedAttachmentRefs,
-} from './normalizeAttachments.js';
+} from './normalizeAttachments.desktop.js';
 import { QueuedAttachmentOwnershipRegistry } from './queuedAttachmentOwnership.js';
 import { prepareRemoteReviewAttachments } from './reviewRemoteInput.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../agent-island/displayConfig.js';
@@ -1231,7 +1234,7 @@ import {
 } from '../usage/accountUsageLimit.js';
 import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { createUsageLimitRecoveryStore, type SavedUsageLimitWait } from './usageLimitRecoveryStore.js';
-import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
+import { type MakerSessionCreateOpts, createSessionStderrOptions, isSessionRunningError } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
 import {
@@ -3360,33 +3363,6 @@ async function prepareUserMessageForAgent(
   return normalized as IpcUserMessage;
 }
 
-function summarizeIpcUserMessage(message: IpcUserMessage): Record<string, unknown> {
-  if (typeof message === 'string') {
-    return { contentType: 'string', textLen: message.length };
-  }
-  const content = message.content;
-  if (typeof content === 'string') {
-    return { contentType: 'string', textLen: content.length };
-  }
-  let textLen = 0;
-  let imageCount = 0;
-  let fileCount = 0;
-  let mentionCount = 0;
-  for (const block of content) {
-    if (block.type === 'text' && typeof block.text === 'string') textLen += block.text.length;
-    else if (block.type === 'image') imageCount += 1;
-    else if (block.type === 'file') fileCount += 1;
-    else if (block.type === 'mention') mentionCount += 1;
-  }
-  return {
-    contentType: 'blocks',
-    blockCount: content.length,
-    textLen,
-    imageCount,
-    fileCount,
-    mentionCount,
-  };
-}
 
 /**
  * 待解决的 interaction 请求(permission/ask/plan 三合一)—— 用 promise 跨 IPC 边界。
@@ -4360,6 +4336,7 @@ import {
   waitForSendToSessionLock,
   assertSessionNotRestarting,
 } from './sendToSessionLock.js';
+import { createMakerSteerTransaction, summarizeIpcUserMessage } from './makerSteerTransaction.js';
 export { acquireSendToSessionLock, hasSendToSessionLock, withSendToSessionLock };
 
 export interface ApplyDirectoryGrantsOptions {
@@ -5122,8 +5099,22 @@ export async function acquirePendingAgentSwitchForDirectSend(
 }
 
 /** 直发路径在 createSession / 重读 live session 之前关掉不健康原生会话。 */
-export async function prepareUnhealthySessionForSend(sessionId: string): Promise<void> {
-  await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
+export async function prepareUnhealthySessionForSend(sessionId: string): Promise<boolean> {
+  const switched = await prepareSubscriptionAccountForSend(sessionId, {
+    readSession: getSessionRowSnapshotStrict,
+    isRunning: (id) => {
+      const live = getMaker().getSession(id);
+      return isSessionInTurn(id) || !!live?.isTurnRunning() || (live?.listBackgroundTasks().length ?? 0) > 0;
+    },
+    rebuild: async (id, assertCurrent) => {
+      const recovery = contextOverflowRolloverHolder;
+      if (!recovery) throw new Error('Subscription account recovery is not ready');
+      await recovery.prepareNativeSessionRecovery(id, 'retain-route', assertCurrent,
+        agentInputCoordinatorHolder?.getInputAbortSignal(id));
+      agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
+    },
+  });
+  return switched || (await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? false);
 }
 
 let runtimePluginBudgetClearer: ((sessionId: string) => void) | undefined;
@@ -8685,21 +8676,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   type CreateOpts = MakerSessionCreateOpts;
 
-  function buildCreateOptsWithStderr(o: CreateOpts) {
-    // 把 vendor 子进程 stderr 引到主进程日志,否则 "process exited with code 1" 之类
-    // 的失败信息会被默默丢掉。renderer 仍可以通过 vendorOptions 自定义,这里只在缺省时兜底。
-    return withCreateSessionStderr(o, (agentKind, line) =>
-      log.warn(`[${agentKind}/stderr] ${line}`),
-    );
-  }
-
-  function isSessionRunningError(err: unknown): boolean {
-    if (!err || typeof err !== 'object') return false;
-    const code = (err as { code?: unknown }).code;
-    if (code === 'SESSION_RUNNING') return true;
-    const message = (err as { message?: unknown }).message;
-    return typeof message === 'string' && message.startsWith('SESSION_RUNNING:');
-  }
+  const buildCreateOptsWithStderr = createSessionStderrOptions(log);
 
   // SEND lazy-create owns its non-Orca cache write here (line below); direct
   // CREATE_SESSION uses markKnownNonOrcaIfApplicable outside this function.
@@ -8757,15 +8734,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('UNSUPPORTED_CAPABILITY', 'Review tasks are local-only in this version');
     }
     enforceReviewCreateOptions(o);
-  }
-
-  async function readSessionSource(sessionId: string): Promise<string | null> {
-    const [row] = await getDbClient()
-      .drizzle.select({ source: sessions.source })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    return row?.source ?? null;
   }
 
   async function assertReviewExternalInputAllowed(sessionId: string): Promise<void> {
@@ -11505,77 +11473,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // GET_CONTEXT_USAGE 的 lazy 分支共用(后者无校正曾是审计实锤缺口)。
   // 权限档同样是会话级设置:forceQueue 入队快照不能锁死排队期间的切档,冷启动必须
   // 再读一次当前落库值,否则降档后仍免确认、升档后仍重复询问。
-  async function reconcileCreateOptsAgainstDb(sessionId: string, co: CreateOpts): Promise<void> {
-    try {
-      const db = getDbClient().drizzle;
-      const [row] = await db
-        .select({
-          agentKind: sessions.agentKind,
-          model: sessions.model,
-          sdkSessionId: sessions.sdkSessionId,
-          providerId: sessions.providerId,
-          effort: sessions.effort,
-          fastMode: sessions.fastMode,
-          permissionMode: sessions.permissionMode,
-          planModeEnabled: sessions.planModeEnabled,
-          agentDeviceId: sessions.agentDeviceId,
-          remoteHostId: sessions.remoteHostId,
-        })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      if (!row) return;
-      // Agent 换电脑也在发送事务内落地：快照里的旧位置不能把 Agent 拉回原来那台。
-      // 缺省(undefined)交给 bootstrapSession 按任务记录读取，与恢复路径同一口径。
-      if (!co.remoteHostId && !row.remoteHostId) {
-        co.agentDeviceId = row.agentDeviceId ?? undefined;
-      }
-      const dbMakerKind = dbToMakerAgentKind(row.agentKind);
-      if (co.agentKind !== dbMakerKind) {
-        log.warn('lazy-create: createOpts agentKind drifted from DB (agent switch); reconciling', {
-          sessionId,
-          staleAgentKind: co.agentKind,
-          dbAgentKind: dbMakerKind,
-        });
-        co.agentKind = dbMakerKind;
-      }
-      // 意图制切换 / 凭证形态切换下,renderer 与排队项的 createOpts 快照构建于 send
-      // 事务内 apply 之前。agentKind 可能已一致,但 model/resume/providerId/effort/fast
-      // 仍是旧值；
-      // 尤其 resumeSessionId 可能是**旧引擎**的原生会话 id——resume 会以错误引擎
-      // 解释它)。lazy-create 时刻 DB 行是唯一真源,执行字段无条件对齐。
-      co.model = row.model ?? undefined;
-      co.resumeSessionId = row.sdkSessionId ?? undefined;
-      if (!row.sdkSessionId && co.vendorOptions) {
-        // context.rebuild clears the DB sdk_session_id. Queued createOpts may
-        // still carry vendor-specific resume/fork anchors from before the close;
-        // strip every native continuation hint so CC/Codex bootstrap fresh too.
-        const freshVendorOptions = { ...co.vendorOptions };
-        for (const key of ['resumeSessionAt', 'forkSession', 'threadId', 'tailTurnsToDrop']) {
-          delete freshVendorOptions[key];
-        }
-        co.vendorOptions =
-          Object.keys(freshVendorOptions).length > 0 ? freshVendorOptions : undefined;
-      }
-      co.providerId = row.providerId;
-      co.effort = (row.effort ?? undefined) as CreateOpts['effort'];
-      co.fastMode = (row.fastMode ?? false);
-      co.permissionMode = permissionModeOrAsk(row.permissionMode);
-      // 新建会话的计划模式按落库状态起档：排队项的 createOpts.planMode 是那一条消息的
-      // 计划意图（伙伴委派等 Host 输入恒为 false），本轮意图仍由发送事务按原快照传给
-      // send，这里只校正冷启动的会话状态，不改本轮是否以计划执行。
-      co.planMode = row.planModeEnabled === true;
-    } catch (error) {
-      // context.rebuild clears sdk_session_id before the next bootstrap. If the
-      // DB truth cannot be read, continuing with caller-supplied opts could
-      // resurrect the dead native resume/fork/thread; fail closed instead.
-      log.warn('lazy-create: DB reconciliation failed; refusing stale native bootstrap', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
-  }
+  const reconcileCreateOptsAgainstDb = createSessionOptionsReconciler({ log });
 
   // 冷 Pi 切模核实前的运行时恢复（#5508）：流程在 coldPiRehydration.ts 内，每条失败
   // 路径都带类别；这里只接 DB、工作目录探测与 bootstrap。
@@ -12266,7 +12164,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         resolvedSelection = await applyScheduledProfile(sessionId, selection, signal);
       }
       stage = 'direct-send:prepareUnhealthySession';
-      await contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId);
+      await prepareUnhealthySessionForSend(sessionId);
       // The caller retains the lease through runtime refresh and Session.send.
       stage = 'direct-send:caller-dispatch';
       return { release, selection: resolvedSelection };
@@ -13099,7 +12997,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       };
 
       lockStage = 'prepare-unhealthy-session';
-      await contextOverflowRolloverHolder?.prepareUnhealthySession(targetSessionId);
+      if (await prepareUnhealthySessionForSend(targetSessionId)) {
+        // Pre-send account/context recovery retired the native thread. Do not pass
+        // the metadata captured before recovery back to lazy bootstrap.
+        meta.sdkSessionId = undefined;
+      }
       let live = maker.getSession(targetSessionId);
       if (live?.agentKind === 'pi' && live.getStatus() === 'error') {
         // A failed Pi close deliberately remains in Maker.activeSessions so the
@@ -15585,7 +15487,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasSendToSessionLock: (sessionId) => sendToSessionLocks.has(sessionId),
     withSendToSessionLock,
     prepareUnhealthySession: (sessionId) =>
-      contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? Promise.resolve(false),
+      prepareUnhealthySessionForSend(sessionId),
     hydrateOrcaSessionIfNeeded: async (sessionId, meta) => {
       // 目标必是 Orca Lead/Worker；已装载时不读库、不建 createOpts。
       if (isOrcaMcpHydrated(sessionId) || !maker.getSession(sessionId)) return;
@@ -16387,6 +16289,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         source: 'worker',
         senderLabel: 'Worker',
         workerId,
+        autoBridge: true,
         meta: {
           source: 'maker-ipc/auto-bridge',
           context: `worker_auto_bridge/${leadSessionId}/${workerId}`,
@@ -18566,6 +18469,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
+    getResolvedMainLocale: () => getResolvedMainLocale(),
+    getMainClassicalStyle: () => getMainClassicalStyle(),
+    readMcpAppModelContext: sessionId => mcpAppModelContext(sessionId),
     prepareRuntimePrompt: prepareTaskPromptForSend,
     composeRuntimeContext: composeGhostRuntimeContext,
     prepareRuntimeTurn: (sessionId, message, signal) => {
@@ -18870,7 +18776,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
     },
     prepareUnhealthySession: (sessionId) =>
-      contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? Promise.resolve(false),
+      prepareUnhealthySessionForSend(sessionId),
     workdirDiagnostics: workdirLog,
     log,
   });
@@ -19279,203 +19185,25 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * vendor start failures are hard pre-accept failures so renderer rolls back
    * the optimistic bubble instead of resurrecting the message as a new turn.
    */
-  const steerToAgentAccepted = async (
-    sessionId: unknown,
-    message: unknown,
-    sendOpts?: unknown,
-  ): Promise<void> => {
-    if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
-    await assertReviewExternalInputAllowed(sessionId);
-    const [botInput] = await getDbClient()
-      .drizzle.select({
-        source: sessions.source,
-        role: botSessionLinks.role,
-        profileStatus: botProfiles.status,
-      })
-      .from(sessions)
-      .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
-      .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    const blocked = botSessionInputBlockReason(botInput ?? null);
-    if (blocked) throwIpcError('PRECONDITION_FAILED', blocked);
-    const so = (sendOpts ?? {}) as {
-      messageUuid?: string;
-      userName?: string;
-      signal?: AbortSignal;
-      beforeProviderStart?: () => Promise<void>;
-      /** coordinator 从队列项透传的手机来源(main 构造,非 wire 输入)。 */
-      fromMobileClient?: boolean;
-      uiLanguage?: string;
-      classicalStyle?: string;
-      /**
-       * 消息来源(coordinator 从队列项透传;直连 maker:steer 只有 IPC 边界按 invoke
-       * context 盖的 sourceDevice,其余字段的 wire 值已被 stripMainOnlySendOpts 剥掉)。
-       * 只用于生成发给模型的说明,不是权限判据。
-       */
-      sourceDevice?: unknown;
-      sourceOrigin?: unknown;
-      [FORWARDED_REQUEST_RECEIPT]?: AgentRequestReceipt;
-      sourcePlugin?: unknown;
-      sharedTaskAuthor?: unknown;
-      expectedClearBoundaryMs?: number | null;
-      expectedInputGeneration?: number;
-      expectedTurnSession?: object;
-      expectedTurnGeneration?: number;
-      readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
-      readonly [ASYNC_QUESTION_ANSWER]?: true;
-      readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
-      readonly [AUTO_REVIEW_SOURCE_CONTENT]?: string;
-      readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
-      readonly [AUTO_REVIEW_USER_INTENT]?: string;
-      readonly [MCP_APP_MESSAGE_GUARD]?: McpAppMessageGuard;
-      readonly [REPLY_QUOTE_SOURCE_CONTENT]?: string;
-    };
-    const readCurrentSteerSession = () => {
-      const current = maker.getSession(sessionId);
-      if (!current) {
-        log.warn('steer: session not running', { sessionId });
-        throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} is not running`);
-      }
-      if (
-        (so.expectedTurnSession !== undefined && current !== so.expectedTurnSession) ||
-        (so.expectedTurnGeneration !== undefined &&
-          current.getTurnGeneration() !== so.expectedTurnGeneration)
-      ) {
-        throw new Error(`[STALE_TURN] Session ${sessionId} changed turns before steer delivery`);
-      }
-      return current;
-    };
-    let sess = readCurrentSteerSession();
-    log.info('steer: invoked', {
-      sessionId,
-      agentKind: sess.agentKind,
-      sameTurnSteerSupported: sess.capabilities.sameTurnSteer.supported,
-      activeBeforeNormalize: sess.isTurnRunning(),
-    });
-    if (!sess.capabilities.sameTurnSteer.supported) {
-      throwIpcError(
-        'UNSUPPORTED_CAPABILITY',
-        `Agent ${sess.agentKind} does not support same-turn steer`,
-      );
-    }
-    if (!sess.isTurnRunning()) {
-      throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} has no active turn`);
-    }
-
-    let normalized: IpcUserMessage;
-    try {
-      normalized = await prepareUserMessageForAgent(sessionId, message, 'steer');
-    } catch (err) {
-      const messageText = err instanceof Error ? err.message : String(err);
-      log.warn('steer: normalize message failed', {
-        sessionId,
-        agentKind: sess.agentKind,
-        error: messageText,
-      });
-      throwIpcError('INTERNAL', messageText);
-    }
-    // Attachment normalization can cross async boundaries. Re-check active turn so
-    // a just-finished turn does not accidentally accept a stale 插话 request.
-    log.debug('steer: normalized message', {
-      sessionId,
-      agentKind: sess.agentKind,
-      activeAfterNormalize: sess.isTurnRunning(),
-      ...summarizeIpcUserMessage(normalized),
-    });
-    sess = readCurrentSteerSession();
-    if (!sess.isTurnRunning()) {
-      throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} has no active turn`);
-    }
-    // Same `[引用说明]` as an ordinary send (steer does not go through the send transaction).
-    const steerReplyQuoteNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-      ? ((await readReplyQuoteNote(sessionId, so[REPLY_QUOTE_SOURCE_CONTENT]).catch(() => null)) ?? null)
-      : null;
-    const meta = await maker.getSessionMeta(sessionId).catch(() => null);
-    sess = readCurrentSteerSession();
-    const authorizationSession = sess;
-    const authorizationTurn = sess.getTurnGeneration();
-    const restoredSteerIntent = await restoreAutoReviewSteerIntent(
-      typeof normalized === 'string' ? normalized : normalized.content,
-      so,
-      () => readAutoReviewHistory(sessionId),
-    );
-    sess = readCurrentSteerSession();
-    if (sess !== authorizationSession || sess.getTurnGeneration() !== authorizationTurn) {
-      throw new Error(`[STALE_TURN] Session ${sessionId} changed turns while restoring authorization`);
-    }
-    // 来源说明与客户端说明同样只进 wire payload(steer 路径的落库由 coordinator 写原话,
-    // 天然不污染原话)。steer 不经 send 事务,两段说明只在这里加一次。
-    const steerSourceNote = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-      ? buildWireMessageSourceNote({
-          origin: so.sourceOrigin,
-          autoReviewUserText: so[FORWARDED_REQUEST_RECEIPT],
-          sourcePlugin: so.sourcePlugin,
-          sharedTaskAuthor: so.sharedTaskAuthor,
+  const steerToAgentAccepted = createMakerSteerTransaction({
+    maker,
+    assertInputAllowed: async sessionId => {
+      await assertReviewExternalInputAllowed(sessionId);
+      const [botInput] = await getDbClient()
+        .drizzle.select({
+          source: sessions.source,
+          role: botSessionLinks.role,
+          profileStatus: botProfiles.status,
         })
-      : null;
-    const withSteerReplyQuoteNote = steerReplyQuoteNote
-      ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerReplyQuoteNote)
-      : normalized;
-    const withSteerSourceNote = steerSourceNote
-      ? prependNoteToWireUserMessage(withSteerReplyQuoteNote as HandoffWireMessage, steerSourceNote)
-      : withSteerReplyQuoteNote;
-    // 设备来源只认盖章值(coordinator 透传 / 直连 IPC 边界按 async context 盖);没有设备
-    // 信息时沿用旧手机判据:IPC 直连 steer 时 async context 在;coordinator 投递时靠透传。
-    const steerDevice = readWireSourceDevice(so.sourceDevice);
-    const steerAllowsEnvironmentNotes = shouldPrependMobileClientPromptNote(normalized, sess.agentKind);
-    const steerNote = steerAllowsEnvironmentNotes
-      ? buildClientEnvironmentNote({
-          device: steerDevice,
-          host: steerDevice ? getHostSourceDevice() : undefined,
-          legacyMobile: isMobileControllerInvoke() || so.fromMobileClient === true,
-        })
-      : null;
-    const steerLanguageNote = steerAllowsEnvironmentNotes
-      ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()), {
-          classicalStyle: turnClassicalStyleFromSendOpts(so, getMainClassicalStyle()),
-        })
-      : null;
-    // 环境说明与 send 事务共用同一份去重记忆:插话进的是同一个原生上下文。
-    const steerNotePlan = steerAllowsEnvironmentNotes
-      ? wireNoteMemory.plan(sessionId, {
-          'client-environment': steerNote,
-          'ui-language': steerLanguageNote,
-          'side-chat': meta?.parentSessionId && (await readSessionSource(sessionId)) === 'side-chat' ? SIDE_CHAT_CONTEXT : null,
-        }, { force: false })
-      : null;
-    const steerPlannedNotes = steerNotePlan?.notes ?? {};
-    const withSteerNote = steerPlannedNotes['client-environment']
-      ? prependNoteToWireUserMessage(withSteerSourceNote as HandoffWireMessage, steerPlannedNotes['client-environment'])
-      : withSteerSourceNote;
-    let steerPayload = steerPlannedNotes['ui-language']
-      ? prependNoteToWireUserMessage(withSteerNote as HandoffWireMessage, steerPlannedNotes['ui-language'])
-      : withSteerNote;
-    // The owner's message closed a waiting 代输入 card: tell the agent, on this message only.
-    // Same owner test as the queue's: this runs outside the context that told a guest apart at enqueue.
-    const pendingHandoffNote = isOwnerOwnMessage({
-      sharedTaskAuthor: so.sharedTaskAuthor,
-      sourcePlugin: so.sourcePlugin,
-      appMessageGuard: so[MCP_APP_MESSAGE_GUARD],
-    })
-      ? inputHandoffSteerNote(sessionId, message)
-      : null;
-    // A native command keeps its first characters: it carries no note, and the note is dropped, not kept for later.
-    const steerHandoffNote = pendingHandoffNote && shouldPrependMobileClientPromptNote(normalized, sess.agentKind) ? pendingHandoffNote : null;
-    if (pendingHandoffNote && !steerHandoffNote) inputHandoffNoteDelivered(sessionId);
-    if (steerHandoffNote) {
-      steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, steerHandoffNote);
-    }
-    if (steerPlannedNotes['side-chat']) {
-      steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, steerPlannedNotes['side-chat']);
-    }
-    const appContext = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
-      ? await mcpAppModelContext(sessionId)
-      : undefined;
-    if (appContext?.text) {
-      steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, appContext.text);
-    }
-    try {
+        .from(sessions)
+        .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+        .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      const blocked = botSessionInputBlockReason(botInput ?? null);
+      if (blocked) throwIpcError('PRECONDITION_FAILED', blocked);
+    },
+    assertInputCurrent: (sessionId, sendOpts) => {
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);
       const precondition = readRemoteInputClearBoundaryPrecondition(sendOpts);
@@ -19483,57 +19211,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrentInputClearBoundary(sessionId, precondition.expected);
       }
       assertCurrentInputGeneration(sessionId, readExpectedInputGeneration(sendOpts));
-      if (so[MCP_APP_MESSAGE_GUARD]) await so[MCP_APP_MESSAGE_GUARD]!();
-      await so.beforeProviderStart?.();
-      sess = readCurrentSteerSession();
-      // 同轮插话也属于新输入。必须在 vendor await 前通知，旧轮可能先于 steer ack 结束。
-      // 共用入口同时覆盖 INPUT_STEER、队列提升和旧 STEER IPC。
-      publishUiSessionIntervention(sessionId);
-      // A channel route vouches only for its triggering sender; steered input ends that.
-      noteInteractionRouteSteer(sess);
-      await sess.steer(steerPayload as never, {
-        ...(so[MCP_APP_MESSAGE_GUARD] || so.beforeProviderStart || appContext?.text ? {
-          beforeProviderStart: async () => {
-            await so[MCP_APP_MESSAGE_GUARD]?.();
-            await appContext?.assertCurrent();
-            await so.beforeProviderStart?.();
-          },
-        } : {}),
-        logTitle: meta?.title,
-        messageUuid: so.messageUuid,
-        userName: so.userName,
-        signal: so.signal,
-        [MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT],
-        [ASYNC_QUESTION_ANSWER]: so[ASYNC_QUESTION_ANSWER],
-        [SUPERSEDE_ASYNC_QUESTIONS]: so[SUPERSEDE_ASYNC_QUESTIONS],
-        [AUTO_REVIEW_SOURCE_CONTENT]: so[AUTO_REVIEW_SOURCE_CONTENT],
-        [AUTO_REVIEW_DELEGATED_CONTINUATION]: so[AUTO_REVIEW_DELEGATED_CONTINUATION],
-        [AUTO_REVIEW_USER_INTENT]: restoredSteerIntent,
-      });
-      appContext?.consume();
-      steerNotePlan?.commit();
-      if (steerHandoffNote) inputHandoffNoteDelivered(sessionId);
-      log.info('steer: delivered', { sessionId, agentKind: sess.agentKind });
-    } catch (err) {
-      const messageText = err instanceof Error ? err.message : String(err);
-      const isClosedDeliveryFailure =
-        /session (?:is )?closed|closed session|input queue is closed/i.test(messageText);
-      if (!isClosedDeliveryFailure && /no active .*turn|has no active turn/i.test(messageText)) {
-        log.warn('steer: no active turn during delivery', {
-          sessionId,
-          agentKind: sess.agentKind,
-          error: messageText,
-        });
-        throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} has no active turn`);
-      }
-      log.warn('steer: delivery failed', {
-        sessionId,
-        agentKind: sess.agentKind,
-        error: messageText,
-      });
-      throwIpcError('INTERNAL', messageText);
-    }
-  };
+    },
+    prepareUserMessageForAgent: (...args) => prepareUserMessageForAgent(...args),
+    readReplyQuoteNote: (...args) => readReplyQuoteNote(...args),
+    readAutoReviewHistory: id => readAutoReviewHistory(id),
+    readSessionSource: id => readSessionSource(id),
+    getHostSourceDevice: () => getHostSourceDevice(),
+    getResolvedMainLocale: () => getResolvedMainLocale(),
+    getMainClassicalStyle: () => getMainClassicalStyle(),
+    wireNoteMemory,
+    inputHandoffSteerNote: (...args) => inputHandoffSteerNote(...args),
+    inputHandoffNoteDelivered: id => inputHandoffNoteDelivered(id),
+    mcpAppModelContext: id => mcpAppModelContext(id),
+    publishUiSessionIntervention: id => publishUiSessionIntervention(id),
+    log,
+  });
 
   const trustedDesktopSteerText = new AsyncLocalStorage<string>();
   const attachTrustedDesktopSendContext = (message: unknown, sendOpts: unknown, expectedText?: string): unknown => {
@@ -19577,7 +19269,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!owner || owner !== getCurrentDbClientSnapshot()) throw new Error('MCP_APP_OWNER_CHANGED');
     };
     assertOwner();
-    const session = await withSendToSessionLock(grant.sessionId, () => restorePluginPageSession(grant.sessionId, {
+    if (grant.sessionId === null) {
+      // Explicitly taskless: never inherit an Agent's ambient authority or focused task.
+      const deps = getCindyGhostsMcpDeps(undefined, {}, grant);
+      const result = await deps.callGhostTool({ ghostId: grant.instance, tool: grant.tool, args, signal });
+      await grant.assertCurrent();
+      assertOwner();
+      return result.ok ? pluginAppResult(result.result) : { isError: true,
+        content: [{ type: 'text', text: JSON.stringify(result) }] };
+    }
+    const pageSessionId = grant.sessionId;
+    const session = await withSendToSessionLock(pageSessionId, () => restorePluginPageSession(pageSessionId, {
       getSession: (id) => maker.getSession(id),
       getMeta: (id) => maker.getSessionMeta(id),
       buildCreateOpts: (id, meta) => buildCreateOptsForQueuedSession(id, meta, true),
@@ -21476,6 +21178,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
+    if (normalized.origin?.kind === 'orca') {
+      // 系统兜底合批标记只由 main 的 auto-bridge 入口盖章；wire 自报一律剥掉。
+      const origin = { ...normalized.origin };
+      delete origin.autoBridge;
+      delete origin.autoBridgeBatchCount;
+      normalized.origin = origin;
+    }
     delete normalized.sharedTaskAuthor;
     delete normalized.autoReviewUserText;
     delete normalized.botTaskCoordination;
