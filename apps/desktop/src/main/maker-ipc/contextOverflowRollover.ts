@@ -413,6 +413,7 @@ export interface ContextOverflowRolloverDeps {
     botRole?: string | null;
     agentKind: string;
     remoteHostId: string | null;
+    agentDeviceId?: string | null;
     clearedAt: number | null;
     sdkSessionId?: string | null;
     contextTokens?: number | null;
@@ -421,6 +422,8 @@ export interface ContextOverflowRolloverDeps {
     providerId?: string | null;
     workingDir?: string | null;
   } | null>;
+  /** An idle runtime may need a fresh context when its subscription account was paused. */
+  needsNativeSessionHandoff?(sessionId: string, row: NonNullable<Awaited<ReturnType<ContextOverflowRolloverDeps['getSessionRow']>>>): Promise<boolean>;
   /** 发送前只读复核：旧错误不能把已经恢复健康的新线程再次重建。 */
   classifyCodexHistory?(threadId: string): Promise<'oversized' | 'healthy' | 'unknown'>;
   resolveVerifiedWindow?(
@@ -1073,9 +1076,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (!sessionRow || sessionRow.status === 'deleted') return false;
     // SSH only; device-link 会话在被控桌面是本地 session,继续换窗。
     if (sessionRow.remoteHostId) return false;
-    if (!sessionRow.sdkSessionId) return false;
     const live = deps.getLiveSession(sessionId);
     if (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0) return false;
+    const accountHandoff = await deps.needsNativeSessionHandoff?.(sessionId, sessionRow) ?? false;
+    if (!sessionRow.sdkSessionId && !accountHandoff) return false;
     // All companion lanes use the ordinary Session recovery boundary. Healthy
     // contexts stay with the harness; age and companion identity do not rotate them.
     const botChat = isBotChatContext(sessionRow);
@@ -1116,7 +1120,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       compactFailed ||
       (botChat && isCompanionCompactFailure(lastError));
     const oversized = isOversizedHistoryErrorData(lastError);
-    const historyHealth = oversized && sessionRow.agentKind === 'codex'
+    const historyHealth = oversized && sessionRow.agentKind === 'codex' && sessionRow.sdkSessionId
       ? await deps.classifyCodexHistory?.(sessionRow.sdkSessionId)
       : undefined;
     const action = decideCindyCompression({
@@ -1124,7 +1128,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       bytes: piByteRecoveryFailed || historyHealth === 'oversized' || (oversized && historyHealth !== 'healthy') ? 'violated' : 'unknown',
       tokens: tokenViolated ? 'violated' : 'unknown',
     });
-    if (action !== 'rebuild') return false;
+    if (action !== 'rebuild' && !accountHandoff) return false;
     let lastUser: OverflowSourceMessage | undefined;
     let lastUserIndex = -1;
     for (let i = source.length - 1; i >= 0; i -= 1) {
@@ -1139,8 +1143,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       lastUser = (await deps.findLatestUser?.(sessionId)) ?? undefined;
       lastUserIndex = -1;
     }
-    if (!lastUser) return false;
-    const rebuildReason: ContextRebuildReason = isPiPromptRpcTimeoutError(lastError)
+    if (!lastUser && !accountHandoff) return false;
+    const rebuildReason: ContextRebuildReason = accountHandoff ? 'native-session-recovery' : isPiPromptRpcTimeoutError(lastError)
       ? 'pi-prompt-timeout'
       : 'context-overflow';
     // 待发出/失败的 user 还会由本次 send 或 Retry 再 wire 一次，交接里不能带。
@@ -1164,13 +1168,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       toLabel: label,
       sessionId,
       reason: botChat || isOversizedHistoryErrorData(lastError) ? 'native-session-recovery' : rebuildReason,
-      includeToolResults: botChat || isOversizedHistoryErrorData(lastError),
+      includeToolResults: accountHandoff || botChat || isOversizedHistoryErrorData(lastError),
       companion: botChat,
       ...(await companionRecall(sessionId, botChat)),
     });
     await deps.commitRebuild(sessionId, handoff, {
       reason: rebuildReason,
-      sourceUserClientId: lastUser.clientId,
+      sourceUserClientId: lastUser?.clientId ?? null,
       sourceAgentKind: normalizeOverflowDbAgentKind(sessionRow.agentKind),
       sourceModel: sessionRow.model ?? null,
       sourceProviderId: sessionRow.providerId ?? null,
@@ -1182,7 +1186,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     deps.log.info('unhealthy native session rebuilt before send; skip compact/resume', {
       sessionId,
       reason: rebuildReason,
-      sourceUserClientId: lastUser.clientId,
+      sourceUserClientId: lastUser?.clientId ?? null,
     });
     return true;
   };

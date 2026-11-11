@@ -28,6 +28,27 @@ describe('window theme mode store', () => {
     expect(__testing.normalize(null)).toEqual({ mode: 'system' });
   });
 
+  // Windows picks `transparent` before the first window exists, from this remembered need.
+  it('keeps the remembered transparent-window need and drops malformed values', () => {
+    expect(__testing.normalize({ mode: 'dark', needsTransparentWindow: true })).toEqual({
+      mode: 'dark',
+      needsTransparentWindow: true,
+    });
+    expect(__testing.normalize({ mode: 'dark', needsTransparentWindow: false })).toEqual({
+      mode: 'dark',
+      needsTransparentWindow: false,
+    });
+    expect(__testing.normalize({ mode: 'dark', needsTransparentWindow: 'yes' })).toEqual({
+      mode: 'dark',
+    });
+    expect(
+      __testing.resolveSnapshotForSystem(
+        { mode: 'system', resolvedIsDark: true, systemIsDark: true, needsTransparentWindow: true },
+        true,
+      ).needsTransparentWindow,
+    ).toBe(true);
+  });
+
   it('runtime-validates the complete vibrancy payload before any theme side effect', () => {
     expect(parseWindowThemeVibrancyPayload({
       familyId: 'eclipse',

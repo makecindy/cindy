@@ -42,7 +42,7 @@ export default {
       data: { single: true },
     },
     'single-added-paused': {
-      about: 'One added account keeps its paused explanation without an account name',
+      about: 'A paused account is excluded and cannot restore the default quota card',
       data: { singleAdded: 'paused' },
     },
     'single-added-signed-out': {
@@ -73,7 +73,7 @@ export default {
       .click();
     await page
       .getByTestId('provider-group-member-quota')
-      .locator('[role="progressbar"], [data-testid="provider-group-member-account"]')
+      .locator('[role="progressbar"], [data-testid="provider-group-member-account"], p')
       .first()
       .waitFor();
   },
@@ -147,23 +147,27 @@ export default {
       assert.equal(await accounts.count(), 0);
       return;
     }
+    if (ui.case === 'single-added-paused') {
+      assert.equal(await accounts.count(), 0);
+      assert.equal(await page.getByRole('progressbar').count(), 0);
+      return;
+    }
     await accounts.first().waitFor();
     if (ui.case.startsWith('single-added-')) {
       assert.equal(await accounts.count(), 1);
       assert.equal(await accounts.getByText('second@example.com', { exact: true }).count(), 0);
-      const paused = ui.case === 'single-added-paused';
       await accounts
         .getByText(
           await ui.t(
-            paused ? 'providerGroup.member.status.paused' : 'subscriptionAccounts.signedOut',
+            'subscriptionAccounts.signedOut',
           ),
           { exact: true },
         )
         .waitFor();
-      assert.equal(await accounts.getByRole('progressbar').count(), paused ? 2 : 0);
+      assert.equal(await accounts.getByRole('progressbar').count(), 0);
       return;
     }
-    assert.equal(await accounts.count(), ui.case === 'states' ? 3 : 2);
+    assert.equal(await accounts.count(), 2);
     // Every account's bars share one column, whatever each account's own labels and numbers are.
     const bars = await page.getByRole('progressbar').evaluateAll((elements) =>
       elements.map((element) => {
@@ -173,15 +177,9 @@ export default {
     );
     assert.equal(new Set(bars).size, 1, bars.join(', '));
     if (ui.case === 'states') {
-      await accounts
-        .nth(1)
-        .getByText(await ui.t('providerGroup.member.status.paused'), { exact: true })
-        .waitFor();
-      await accounts
-        .nth(2)
-        .getByText(await ui.t('subscriptionAccounts.signedOut'), { exact: true })
-        .waitFor();
-      assert.equal(await accounts.nth(2).getByRole('progressbar').count(), 0);
+      assert.equal(await page.getByText('second@example.com', { exact: true }).count(), 0);
+      await accounts.nth(1).getByText(await ui.t('subscriptionAccounts.signedOut'), { exact: true }).waitFor();
+      assert.equal(await accounts.nth(1).getByRole('progressbar').count(), 0);
     }
     if (ui.case === 'missing-usage') {
       await accounts
