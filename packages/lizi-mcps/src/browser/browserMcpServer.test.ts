@@ -1950,17 +1950,20 @@ describe('browser · batch, cdp and target-tailored rules', () => {
     };
     return { calls, invoke, client: h.client, cleanup: h.cleanup };
   }
-  /** The tool layer's own checks that a page shows something, not steps the caller asked for. */
-  const isContentScript = (request: Record<string, unknown>) =>
-    request.action === 'act' && String((request.request as { fn?: unknown } | undefined)?.fn ?? '').includes('document.readyState');
-  const isContentSnapshot = (request: Record<string, unknown>) => request.action === 'snapshot' && request.maxChars === undefined;
+  /** The tool layer's own text reads of a page: probes while it waits, and what `read` returns. */
+  const isPageText = (request: Record<string, unknown>) =>
+    request.action === 'act' && (request.request as { domRead?: { kind?: string } } | undefined)?.domRead?.kind === 'text';
+  const pageText = (url: string, readyState: string, text: string | number) => ({ data: { result: {
+    ok: true, url, title: 'Title', readyState, found: true,
+    length: typeof text === 'number' ? text : text.length, text: typeof text === 'number' ? '' : text,
+  } } });
 
   it('runs batch steps in order on the tab an earlier step opened and stops at the first failure', async () => {
     const h = await scripted((request) => {
       if (request.action === 'open') return { data: { targetId: 'tab-9', url: 'https://example.test/' } };
       if (request.action === 'tabs') return { data: { tabs: [] } };
       if ((request.request as { kind?: string } | undefined)?.kind === 'click') return { ok: false, message: 'element is not visible' };
-      if (isContentScript(request)) return { data: { result: ['https://example.test/', 'complete', 4000] } };
+      if (isPageText(request)) return pageText('https://example.test/', 'complete', 4000);
       return { data: { targetId: request.targetId } };
     });
     try {
@@ -1973,7 +1976,7 @@ describe('browser · batch, cdp and target-tailored rules', () => {
       expect(isError).toBe(true);
       expect(body).toMatchObject({ ok: false, action: 'batch', completed: 2, total: 4, failedStep: 2 });
       expect(body.steps.map((step: { ok: boolean }) => step.ok)).toEqual([true, true, false]);
-      const acts = h.calls.filter((request) => request.action === 'act' && !isContentScript(request));
+      const acts = h.calls.filter((request) => request.action === 'act' && !isPageText(request));
       // Both acts ran on the opened tab; the read after the failure was never dispatched.
       expect(acts.map((request) => [request.targetId, (request.request as { kind: string }).kind])).toEqual([['tab-9', 'type'], ['tab-9', 'click']]);
     } finally { await h.cleanup(); }
@@ -1987,17 +1990,15 @@ describe('browser · batch, cdp and target-tailored rules', () => {
   // Left out of the order: open's same-site tab listing and the login-wall check after a snapshot.
   const order = (calls: Array<Record<string, unknown>>) => calls
     .filter((request) => request.action !== 'tabs'
-      && (isContentScript(request) || (request.request as { kind?: string } | undefined)?.kind !== 'evaluate'))
-    .map((request) => isContentScript(request) ? 'script' : isContentSnapshot(request) ? 'look'
-      : request.action === 'act' ? (request.request as { kind: string }).kind : request.action);
-  type Probe = unknown[] | { ok: false; errorCode?: string };
-  const page = (probes: Probe[], settled: Probe, snapshots: string[] = []) => (request: Record<string, unknown>) => {
+      && (isPageText(request) || (request.request as { kind?: string } | undefined)?.kind !== 'evaluate'))
+    .map((request) => isPageText(request) ? 'text' : request.action === 'act' ? (request.request as { kind: string }).kind : request.action);
+  type Probe = [url: string, readyState: string, text: string | number] | { ok: false; errorCode?: string };
+  const page = (probes: Probe[], settled: Probe) => (request: Record<string, unknown>) => {
     if (request.action === 'tabs') return { data: { tabs: [] } };
-    if (isContentScript(request)) {
+    if (isPageText(request)) {
       const probe = probes.shift() ?? settled;
-      return Array.isArray(probe) ? { data: { result: probe } } : { message: 'Execution context was destroyed', ...probe };
+      return Array.isArray(probe) ? pageText(...probe) : { message: 'Execution context was destroyed', ...probe };
     }
-    if (isContentSnapshot(request)) return { data: { targetId: 'tab-1', snapshot: snapshots.shift() ?? '- main' } };
     return { data: { targetId: 'tab-1', url: 'https://example.test/', snapshot: '- main' } };
   };
 
@@ -2006,24 +2007,35 @@ describe('browser · batch, cdp and target-tailored rules', () => {
       ['chrome://new-tab-page/', 'complete', 0], // what a new tab shows first: finished and empty, not the page
       { ok: false },                             // the navigation replaced the document under the probe
       ['https://example.test/', 'loading', 0],
-      ['https://example.test/', 'interactive', 40],
-      ['https://example.test/', 'complete', 180], // finished, but too little text to trust on first sight
-    ], ['https://example.test/', 'complete', 180]));
+      ['https://example.test/', 'interactive', 240],
+      ['https://example.test/', 'complete', 480], // finished, but too little text to trust on first sight
+    ], ['https://example.test/', 'complete', 480]));
     try {
       const { body } = await h.invoke({ action: 'open', url: 'https://example.test/', afterSnapshot: {} });
       expect(body.afterSnapshot.data.snapshot).toBe('- main');
       // Only the sixth probe sees the same length twice; the page is read after it, never before.
-      // The placeholder's two seconds of emptiness do not count towards giving up on a blank page.
-      expect(order(h.calls)).toEqual(['open', 'script', 'script', 'script', 'script', 'script', 'script', 'snapshot']);
-      expect(h.calls.filter(isContentScript).every((request) => request.targetId === 'tab-1')).toBe(true);
+      // The placeholder's emptiness does not count towards giving up on a blank page.
+      expect(order(h.calls)).toEqual(['open', 'text', 'text', 'text', 'text', 'text', 'text', 'snapshot']);
+      expect(h.calls.filter(isPageText).every((request) => request.targetId === 'tab-1'
+        && (request.request as { domRead: { text: { maxChars: number } } }).domRead.text.maxChars === 0)).toBe(true);
+    } finally { await h.cleanup(); }
+  });
+
+  it('holds a page that shows only a frame of text until it has stayed that way for four probes', async () => {
+    // Seen on a search page: 114 characters of menu for half a second, then the results.
+    const h = await scripted(page([
+      ['https://example.test/', 'interactive', 114], ['https://example.test/', 'interactive', 114], ['https://example.test/', 'interactive', 114],
+    ], ['https://example.test/', 'complete', 1549]));
+    try {
+      await h.invoke({ action: 'open', url: 'https://example.test/', afterSnapshot: {} });
+      expect(order(h.calls)).toEqual(['open', 'text', 'text', 'text', 'text', 'snapshot']);
     } finally { await h.cleanup(); }
   });
 
   it.each([
-    ['open: a finished page with enough text is taken at the first probe', { action: 'open', url: 'https://example.test/', afterSnapshot: {} }, ['open', 'script', 'snapshot']],
-    ['a batch step with more steps after it', { action: 'batch', steps: [{ action: 'open', url: 'https://example.test/' }, { action: 'snapshot' }] }, ['open', 'script', 'snapshot']],
-    // navigate already waited for the document: a page that shows something needs no page script.
-    ['navigate with afterSnapshot', { action: 'navigate', targetId: 'tab-1', url: 'https://example.test/next', afterSnapshot: {} }, ['navigate', 'look', 'snapshot']],
+    ['open: a page with enough text is taken at the first probe', { action: 'open', url: 'https://example.test/', afterSnapshot: {} }, ['open', 'text', 'snapshot']],
+    ['a batch step with more steps after it', { action: 'batch', steps: [{ action: 'open', url: 'https://example.test/' }, { action: 'snapshot' }] }, ['open', 'text', 'snapshot']],
+    ['navigate with afterSnapshot', { action: 'navigate', targetId: 'tab-1', url: 'https://example.test/next', afterSnapshot: {} }, ['navigate', 'text', 'snapshot']],
     ['open as the last step of a batch', { action: 'batch', steps: [{ action: 'tabs' }, { action: 'open', url: 'https://example.test/' }] }, ['open']],
     ['open on its own', { action: 'open', url: 'https://example.test/' }, ['open']],
     ['a click with afterSnapshot', { action: 'act', targetId: 'tab-1', request: { kind: 'click', ref: 'e1' }, afterSnapshot: {} }, ['click', 'snapshot']],
@@ -2036,20 +2048,19 @@ describe('browser · batch, cdp and target-tailored rules', () => {
     } finally { await h.cleanup(); }
   });
 
-  it('after navigate, waits for a page that renders from scripts and is still empty when the document loaded', async () => {
-    const h = await scripted(page([['https://example.test/app', 'complete', 0], ['https://example.test/app', 'complete', 640]],
-      ['https://example.test/app', 'complete', 2800], ['']));
+  it('after navigate, which already waited for the document, takes the first text and waits only for an empty page', async () => {
+    const h = await scripted(page([['https://example.test/app', 'complete', 0], ['https://example.test/app', 'complete', 0]],
+      ['https://example.test/app', 'complete', 60]));
     try {
       const { isError } = await h.invoke({ action: 'navigate', targetId: 'tab-1', url: 'https://example.test/app', afterSnapshot: {} });
       expect(isError).toBe(false);
-      // Empty, then header and footer only, then the content: read at the third probe.
-      expect(order(h.calls)).toEqual(['navigate', 'look', 'script', 'script', 'script', 'snapshot']);
+      expect(order(h.calls)).toEqual(['navigate', 'text', 'text', 'text', 'snapshot']);
     } finally { await h.cleanup(); }
   });
 
   it.each([
-    ['cannot be probed for a while', [{ ok: false }, { ok: false }, { ok: false }, { ok: false }] as Probe[], ['open', 'script', 'script', 'script', 'script', 'snapshot']],
-    ['is on a backend without page scripts', [{ ok: false, errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST' }] as Probe[], ['open', 'script', 'snapshot']],
+    ['cannot be probed for a while', Array.from({ length: 6 }, () => ({ ok: false }) as Probe), ['open', 'text', 'text', 'text', 'text', 'text', 'text', 'snapshot']],
+    ['is on a backend without page scripts', [{ ok: false, errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST' }] as Probe[], ['open', 'text', 'snapshot']],
   ])('still reads the page when it %s', async (_name, probes, expected) => {
     const h = await scripted(page(probes, ['https://example.test/', 'complete', 4000]));
     try {
@@ -2057,6 +2068,163 @@ describe('browser · batch, cdp and target-tailored rules', () => {
       expect(isError).toBe(false);
       expect(body.afterSnapshot.data.snapshot).toBe('- main');
       expect(order(h.calls)).toEqual(expected);
+    } finally { await h.cleanup(); }
+  });
+
+  // read (2026-11-12). Unit tier, production MCP entry with a scripted runtime.
+  // Rules protected: `read` returns what the pages show as text; several addresses are all opened before
+  // any is read, so they load side by side; its own tabs are closed whatever happens, unless kept; one
+  // page failing does not hide the others; a backend without page scripts still gets the page's text.
+  // No earlier test reached these: the action did not exist.
+  const site = (texts: Record<string, string>, extra?: (request: Record<string, unknown>) => ReturnType<Scripted>) => {
+    const tabs = new Map<string, string>();
+    return (request: Record<string, unknown>) => {
+      const answered = extra?.(request);
+      if (answered) return answered;
+      if (request.action === 'open') {
+        const url = String(request.url);
+        if (!(url in texts)) return { ok: false, message: `getaddrinfo ENOTFOUND ${new URL(url).hostname}` };
+        const targetId = `tab-${tabs.size + 1}`;
+        tabs.set(targetId, url);
+        return { data: { targetId, url } };
+      }
+      if (isPageText(request)) {
+        const url = tabs.get(String(request.targetId)) ?? 'https://example.test/open';
+        const text = texts[url] ?? 'An open page';
+        const spec = (request.request as { domRead: { text: { offset?: number; maxChars?: number } } }).domRead.text;
+        const sent = pageText(url, 'complete', text);
+        sent.data.result.text = text.slice(spec.offset ?? 0, (spec.offset ?? 0) + (spec.maxChars ?? 8000));
+        return sent;
+      }
+      return { data: { targetId: request.targetId } };
+    };
+  };
+  const long = 'x'.repeat(3000);
+
+  it('read opens every address before reading any, returns their text and closes its tabs', async () => {
+    const h = await scripted(site({ 'https://a.test/': `A ${long}`, 'https://b.test/': `B ${long}` }));
+    try {
+      const { isError, body } = await h.invoke({ action: 'read', pages: ['https://a.test/', 'https://b.test/'], maxChars: 10 });
+      expect(isError).toBe(false);
+      expect(body).toMatchObject({ ok: true, action: 'read', pages: [
+        { ok: true, url: 'https://a.test/', title: 'Title', text: `A ${'x'.repeat(8)}`, chars: 3002, truncated: true, nextOffset: 10 },
+        { ok: true, url: 'https://b.test/', text: `B ${'x'.repeat(8)}`, chars: 3002, truncated: true, nextOffset: 10 },
+      ] });
+      expect(body.pages[0]).not.toHaveProperty('targetId');
+      // Both tabs exist before the first read: the pages load at the same time.
+      expect(order(h.calls)).toEqual(['open', 'open', 'text', 'text', 'text', 'text', 'close', 'close']);
+      expect(h.calls.filter((request) => request.action === 'close').map((request) => request.targetId)).toEqual(['tab-1', 'tab-2']);
+    } finally { await h.cleanup(); }
+  });
+
+  it('read reports a page that could not be opened next to the ones it read', async () => {
+    const h = await scripted(site({ 'https://a.test/': `A ${long}` }));
+    try {
+      const { isError, body } = await h.invoke({ action: 'read', pages: ['https://a.test/', 'https://gone.test/'] });
+      expect(isError).toBe(false);
+      expect(body).toMatchObject({ ok: true, failed: 1, pages: [{ ok: true, url: 'https://a.test/' }, { ok: false, requested: 'https://gone.test/', message: expect.stringContaining('ENOTFOUND') }] });
+      const lone = await h.invoke({ action: 'read', url: 'https://gone.test/' });
+      expect(lone.isError).toBe(true);
+      expect(lone.body).toMatchObject({ ok: false, message: expect.stringContaining('ENOTFOUND') });
+    } finally { await h.cleanup(); }
+  });
+
+  it('read keeps the tab when asked, and reads on from an offset in a tab that is already open', async () => {
+    const h = await scripted(site({ 'https://a.test/': `A ${long}` }));
+    try {
+      const kept = await h.invoke({ action: 'read', url: 'https://a.test/', keep: true, label: 'doc', maxChars: 5 });
+      expect(kept.body.pages[0]).toMatchObject({ ok: true, targetId: 'tab-1', label: 'doc', text: 'A xxx', nextOffset: 5 });
+      expect(h.calls.some((request) => request.action === 'close')).toBe(false);
+      const more = await h.invoke({ action: 'read', targetId: 'tab-1', offset: 3000, selector: 'main' });
+      expect(more.body.pages[0]).toMatchObject({ ok: true, targetId: 'tab-1', text: 'xx', chars: 3002 });
+      expect(more.body.pages[0]).not.toHaveProperty('truncated');
+      expect((h.calls.filter(isPageText).at(-1)!.request as { domRead: unknown }).domRead).toEqual({ kind: 'text', text: { selector: 'main', offset: 3000, maxChars: 8000 } });
+    } finally { await h.cleanup(); }
+  });
+
+  it('read as a batch step reads the tab the batch is on', async () => {
+    const h = await scripted(site({ 'https://a.test/': `A ${long}` }));
+    try {
+      const { body } = await h.invoke({ action: 'batch', steps: [
+        { action: 'open', url: 'https://a.test/' }, { action: 'act', request: { kind: 'click', ref: 'e1' } }, { action: 'read', maxChars: 3 },
+      ] });
+      expect(body).toMatchObject({ ok: true, completed: 3 });
+      expect(body.steps[2].pages[0]).toMatchObject({ ok: true, targetId: 'tab-1', text: 'A x' });
+      expect(h.calls.some((request) => request.action === 'close')).toBe(false);
+    } finally { await h.cleanup(); }
+  });
+
+  it('read falls back to the declarative text of the page on a backend without page scripts', async () => {
+    const h = await scripted(site({ 'https://a.test/': 'unused' }, (request) => {
+      if (isPageText(request)) return { ok: false, errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST', message: 'needs a newer extension' };
+      const read = (request.request as { domRead?: { kind?: string; extract?: unknown } } | undefined)?.domRead;
+      if (read?.kind === 'extract') return { data: { url: 'https://a.test/', result: { ok: true, count: 1, records: [{ text: 'Shown   \n\n\n\ntext' }] } } };
+      return undefined;
+    }));
+    try {
+      const { isError, body } = await h.invoke({ action: 'read', url: 'https://a.test/' });
+      expect(isError).toBe(false);
+      expect(body.pages[0]).toMatchObject({ ok: true, url: 'https://a.test/', text: 'Shown\n\ntext', chars: 11 });
+      expect((h.calls.find((request) => (request.request as { domRead?: { kind?: string } } | undefined)?.domRead?.kind === 'extract')!
+        .request as { domRead: unknown }).domRead).toEqual({ kind: 'extract', extract: { fields: { text: 'body' } } });
+      expect(h.calls.at(-1)).toMatchObject({ action: 'close', targetId: 'tab-1' });
+    } finally { await h.cleanup(); }
+  });
+
+  it('read answers a selector that matches nothing with the whole page, and says so', async () => {
+    const h = await scripted(site({ 'https://a.test/': 'unused' }, (request) => {
+      if (!isPageText(request)) return undefined;
+      const spec = (request.request as { domRead: { text: { selector?: string; maxChars?: number } } }).domRead.text;
+      if (spec.maxChars === 0) return pageText('https://a.test/', 'complete', 4000);
+      const sent = pageText('https://a.test/', 'complete', spec.selector ? '' : 'The whole page');
+      if (spec.selector) sent.data.result.found = false;
+      return sent;
+    }));
+    try {
+      const { isError, body } = await h.invoke({ action: 'read', url: 'https://a.test/', selector: '.guessed' });
+      expect(isError).toBe(false);
+      expect(body.pages[0]).toMatchObject({ ok: true, text: 'The whole page', hint: expect.stringContaining('.guessed') });
+    } finally { await h.cleanup(); }
+  });
+
+  // A wrong argument used to be answered with the whole schema (about eleven thousand characters) every time.
+  // Rule protected: the answer describes the fields that are wrong, lists the valid keys for an unknown one,
+  // and still gives everything to a call that asks what exists.
+  it('describes only the fields that are wrong when arguments do not validate', async () => {
+    const h = await scripted(() => undefined);
+    try {
+      const wrong = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'read', pages: [{ url: 'https://a.test/' }] } } });
+      const wrongBody = JSON.parse((wrong.content as Array<{ text: string }>)[0].text);
+      expect(wrong.isError).toBe(true);
+      expect(wrongBody.errorCode).toBe('INVALID_ARGS');
+      expect(Object.keys(wrongBody.data.schema.properties)).toEqual(['pages']);
+      expect(wrongBody.data.schema.properties.pages.items.type).toBe('string');
+      const unknown = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: { action: 'read', link: 'https://a.test/' } } });
+      const unknownBody = JSON.parse((unknown.content as Array<{ text: string }>)[0].text);
+      expect(unknownBody.data.validKeys).toEqual(expect.arrayContaining(['action', 'url', 'pages', 'targetId']));
+      expect(JSON.stringify(unknownBody).length).toBeLessThan(2500);
+      const empty = await h.client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: {} } });
+      const emptyBody = JSON.parse((empty.content as Array<{ text: string }>)[0].text);
+      expect(Object.keys(emptyBody.data.schema.properties)).toEqual(expect.arrayContaining(['action', 'request', 'steps', 'extract']));
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    [{ action: 'read' }, 'url、pages'],
+    [{ action: 'read', url: 'https://a.test/', pages: ['https://b.test/'] }, '只能给一个'],
+    [{ action: 'read', url: 'file:///etc/passwd' }, 'http(s)'],
+    [{ action: 'read', pages: ['https://a.test/', 'chrome://settings'] }, 'http(s)'],
+    [{ action: 'read', targetId: 'tab-1', keep: true }, 'keep / label'],
+    [{ action: 'read', pages: ['https://a.test/', 'https://b.test/'], label: 'x' }, 'label'],
+    [{ action: 'open', url: 'https://a.test/', pages: ['https://b.test/'] }, '仅用于 action=read'],
+  ])('refuses %j before touching the browser', async (args, reason) => {
+    const h = await scripted(site({ 'https://a.test/': 'A' }));
+    try {
+      const { isError, body } = await h.invoke(args);
+      expect(isError).toBe(true);
+      expect(body.message).toContain(reason);
+      expect(h.calls).toEqual([]);
     } finally { await h.cleanup(); }
   });
 

@@ -520,6 +520,16 @@ describe('UserBrowserBackend · 读取与动作', () => {
       ok: true,
       data: { result: { password: false, code: false, unavailable: true } },
     });
+    // 旧版扩展不能跑页面脚本:可见文字读取明确拒绝,调用方据此退回声明式读取。
+    const before = fake.jobs.length;
+    expect(
+      await call(b, {
+        action: 'act',
+        targetId: 't1',
+        request: { kind: 'evaluate', fn: 'x', domRead: { kind: 'text', text: {} } },
+      }),
+    ).toMatchObject({ ok: false, errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST' });
+    expect(fake.jobs.slice(before).map(([action]) => action)).not.toContain('evaluate');
     expect(
       fake.jobs.filter(
         ([action, payload]) =>
@@ -666,6 +676,13 @@ describe('UserBrowserBackend · 读取与动作', () => {
       ok: true,
     });
     expect(fake.jobs.at(-1)?.[0]).toBe('evaluate');
+    // 页面可见文字(read 动作、打开后的等待)走页面脚本:脚本读 innerText,不是扩展声明式读取的 textContent。
+    expect(
+      await act({ kind: 'evaluate', fn: 'ignored', domRead: { kind: 'text', text: { maxChars: 50 } } }),
+    ).toMatchObject({ ok: true });
+    expect(fake.jobs.at(-1)?.[0]).toBe('evaluate');
+    expect(String(fake.jobs.at(-1)?.[1].fn)).toContain('innerText');
+    expect(String(fake.jobs.at(-1)?.[1].fn)).not.toContain('ignored');
   });
 
   it('新版扩展:上传只读会话允许目录里的文件,并以字节交给扩展', async () => {

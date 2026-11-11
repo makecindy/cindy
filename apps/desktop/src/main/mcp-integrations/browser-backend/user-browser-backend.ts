@@ -1648,6 +1648,20 @@ export class UserBrowserBackend implements BrowserBackend {
       req.request as { domRead?: { kind?: string; extract?: Record<string, unknown> } }
     ).domRead;
     if (!domRead) return outdated(req.action, '任意页面脚本(evaluate.fn)');
+    if (domRead.kind === 'text') {
+      // The rendered text of the page. The extension's declarative extract reads textContent (scripts,
+      // styles and hidden parts included), so this one needs a page script; callers fall back to extract.
+      if (!this.parity(control, record.clientId)) return outdated(req.action, '读取页面可见文字');
+      const job = await this.pageJob(control, record, 'evaluate', { fn: buildDomReadSource(domRead) });
+      if (!job.ok) return this.failureResult(req.action, job);
+      return actionOk(req.action, {
+        backend: this.kind,
+        targetId: record.targetId,
+        url: record.url,
+        result: job.result,
+        untrusted_content: true,
+      });
+    }
     const html =
       domRead.kind === 'extract' &&
       Object.values(

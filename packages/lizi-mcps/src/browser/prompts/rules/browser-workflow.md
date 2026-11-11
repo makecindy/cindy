@@ -65,7 +65,7 @@
 
 每次工具调用都是一整轮模型请求。接下来几步已经确定时,用 `action: "batch"` + `steps: [...]` 一次发出,不要一步一轮:
 
-- 每一步就是本工具的一份普通参数(`open` / `navigate` / `snapshot` / `screenshot` / `act` / `extract` / `requests` / `responseBody` / `tabs` / `focus` / `close` / `dialog` / `console` / `cdp`),按顺序执行。没写 `targetId` 的步骤沿用 batch 的 `targetId`,或这次 batch 里 `open` / `navigate` 刚得到的标签页。
+- 每一步就是本工具的一份普通参数(`open` / `navigate` / `snapshot` / `screenshot` / `act` / `extract` / `read` / `requests` / `responseBody` / `tabs` / `focus` / `close` / `dialog` / `console` / `cdp`),按顺序执行。没写 `targetId` 的步骤沿用 batch 的 `targetId`,或这次 batch 里 `open` / `navigate` 刚得到的标签页。
 - 适合:同一页填多个字段再提交;点击后等待某个内容出现再读取;依次打开几个已知地址各读一段。例:`{action:"batch",steps:[{action:"act",request:{kind:"click",ref:"e7"}},{action:"act",request:{kind:"wait",text:"加载完成"}},{action:"extract",extract:{fields:{total:"#total"}}}]}`。
 - 把观察和它服务的动作放进同一次调用(末步带 `afterSnapshot`,或后面接一步 `extract` / `snapshot`),不要单独花一轮只做等待或只看一眼。batch 里的读取要收窄:`extract` 取字段,`snapshot` 默认最多 6000 字符。
 - 下一步取决于还没看到的页面内容时不要猜:`ref` 只来自已经看到的快照,跳到新页面后的元素要先观察再操作(可以用 `selector` 的步骤除外)。
@@ -106,6 +106,7 @@
 <!-- /backend -->
 
 #### Token 效率(按"最省 → 兜底"的顺序选路)
+0. **只要页面上的文字就用 `read`**:`{action:"read",url}` 打开页面、等内容出现、返回可见文字(默认最多 8000 字符,`maxChars` 最高 20000)并关闭标签页;几个地址用 `pages:[…]` 一次读完(同时打开,最多 8 个)。`selector` 只读其中一块;被截断时把返回的 `nextOffset` 作为 `offset` 续读。读已打开的页面用 `{action:"read",targetId}`,也可以作为 batch 的一步(点击、等待之后接 `{action:"read"}`)。读完还要在页面上操作时带 `keep:true`,结果里有 `targetId`。`read` 返回的是文字,没有 ref:要点击或输入仍先 `snapshot`。
 1. **优先复用配方**: `open/navigate` 会随结果给出最多三个本地 `recipeSuggestions`，可带简短 `intent` 收窄；同任务相同站点/意图且目录未变不重复提示，不另起模型请求。自行判断业务、账号与参数是否适用，再显式 `recipe(recipeId,inputs)`；候选在真实执行通过校验后返回 `verified:true`，需启用时用 `saveRecipe` 保存同一草稿，不重复试跑。已知 id 直接复用，无须先导航或查目录。缺少合适候选时可用 `siteguide` + `site` 看完整站点指南，不要默认加载全部目录；`siteguide` 不是网站的 sitemap.xml。
 2. **数据型页面优先读接口,别扒 DOM**:很多列表 / 详情背后是 JSON API,读接口比扒渲染后的 DOM 又稳又省。
    - ① `action: "requests"`(带**具体** `filter`,如 `/api/quotes`;别用太宽的 `api`,会撞 `fonts.googleapis.com` 之类)看页面发了哪些 XHR/fetch、拿到接口 URL。这是读**已发生**请求的清单。
@@ -193,6 +194,7 @@
 | `profiles` | 看 profile 列表(**不含**按站点登录态信号) |
 | `tabs` / `open` / `focus` / `close` | 标签页:列 / 开(带 label)/ 切 / 关 |
 | `navigate` | 当前或指定 tab 导航到 URL |
+| `read` | 读页面可见文字:`url` / `pages` 打开、等内容、读完即关;`targetId` 读已打开的页面 |
 | `snapshot` | 读页面结构 + 拿 ref(交互前定位元素用) |
 | `act` | 执行 click/type/fill/press/select/hover/drag/wait/evaluate(见 `request.kind`) |
 | `extract` | 按字段 schema 从 DOM 提结构化数据(列表/详情,优于全页 snapshot) |
