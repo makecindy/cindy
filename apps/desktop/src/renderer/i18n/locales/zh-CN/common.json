@@ -2261,6 +2261,7 @@
         "desktopVisibilityHint": "透出 Cindy 后面的桌面与窗口，文字和控件保持清晰。",
         "desktopBlurLabel": "桌面模糊",
         "desktopBlurHint": "模糊窗口后面的桌面，0 为关闭，数值越大越模糊。不支持强度调节的系统使用默认效果。",
+        "desktopBlurSwitchHint": "用 Windows 系统效果模糊窗口后面的桌面。需要 Windows 11 22H2 或更高版本。",
         "blurLabel": "壁纸模糊",
         "blurHint": "仅模糊壁纸，0 为关闭。动态壁纸开启模糊后会增加显卡负载。",
         "motionLabel": "展示方式",
