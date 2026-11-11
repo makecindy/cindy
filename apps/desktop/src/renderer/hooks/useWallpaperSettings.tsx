@@ -118,8 +118,7 @@ export function WallpaperSettingsProvider({
   const isDarkRef = useRef(isDark);
   isDarkRef.current = isDark;
   const visibility = visibilityPreview ?? getBackgroundVisibility(settings, isDark);
-  const sidebarTransparency =
-    sidebarPreview ?? getSidebarTransparency(settings);
+  const sidebarTransparency = sidebarPreview ?? getSidebarTransparency(settings);
   const reducedMotion = useReducedMotion();
   const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
   const videoAsset = useWallpaperAsset(
@@ -249,18 +248,15 @@ export function WallpaperSettingsProvider({
     },
     [patch],
   );
+  // Keyboard commit precedes change in Radix. Read the optimistic committed value
+  // synchronously so a failed save cannot leave a stale preview behind.
   const previewVisibility = useCallback((value: number | null) => {
     const next = value === null ? null : clampAppearanceWallpaperVisibility(value);
     setVisibilityPreview(next === getBackgroundVisibility(settingsRef.current, isDarkRef.current) ? null : next);
   }, []);
   const previewSidebarVisibility = useCallback((value: number | null) => {
     const next = value === null ? null : clampAppearanceWallpaperVisibility(value);
-    // Same ordering trap as previewVisibility: Radix commits before it reports the
-    // change, so compare against the optimistic committed value and drop the preview
-    // when it agrees — otherwise a failed save keeps showing the unsaved value.
-    setSidebarPreview(
-      next === getSidebarTransparency(settingsRef.current) ? null : next,
-    );
+    setSidebarPreview(next === getSidebarTransparency(settingsRef.current) ? null : next);
   }, []);
   const setSidebarVisibility = useCallback(
     (value: number) => {
