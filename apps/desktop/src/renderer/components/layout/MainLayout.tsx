@@ -1,3 +1,4 @@
+import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { PerformanceTrace, openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
@@ -1728,6 +1729,7 @@ export function MainLayout() {
     <FeatureSidebarSlotProvider
       isCollapsed={sidebarPeek.isPeekVisible ? false : isSidebarCollapsed || isRailMode}
     >
+      <FirstRunGuide />
       <ScheduleSessionIndexOwner />
       {!isSecondaryWindow() && <PerformanceTrace statusContainer={performanceTraceStatusHost} />}
       <div

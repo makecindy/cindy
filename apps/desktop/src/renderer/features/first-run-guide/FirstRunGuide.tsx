@@ -194,15 +194,25 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
     if (stepRef.current === 'models' || stepRef.current === 'import') parkFirstRunGuide();
   }, [location.key]);
 
+  // Only a connection started from this guide can return automatically. Existing
+  // connections (including Cindy AI) do not complete another provider's setup.
+  const pendingConnection = useRef<{ id: string | null; connected: Set<string> } | null>(null);
+
   // Come back by itself once the reason for leaving is settled.
   useEffect(() => {
     if (!parked) return;
-    if (step === 'models' && hasModel) resumeFirstRunGuide();
+    const pending = pendingConnection.current;
+    if (step === 'models' && pending && providers.some((provider) =>
+      provider.connected && !pending.connected.has(provider.id) && (!pending.id || provider.id === pending.id),
+    )) {
+      pendingConnection.current = null;
+      resumeFirstRunGuide();
+    }
     if (step === 'migration' && !migrationDialogOpen) {
       refreshMigration();
       resumeFirstRunGuide();
     }
-  }, [hasModel, migrationDialogOpen, parked, refreshMigration, step]);
+  }, [providers, migrationDialogOpen, parked, refreshMigration, step]);
 
   const canOpenBilling = canAccessBillingSettings({ mode, membershipKind: user?.membershipKind ?? null });
   // The official service's balance, read once when the model step is first shown. Only personal
@@ -211,12 +221,12 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
   useEffect(() => {
     if (step !== 'models' || !canOpenBilling || balanceRequested.current) return;
     balanceRequested.current = true;
-    let cancelled = false;
     billingApi
       .getBalance()
-      .then((next) => { if (!cancelled) setBalance(next); })
-      .catch(() => { if (!cancelled) setBalance(null); });
-    return () => { cancelled = true; };
+      .then(setBalance)
+      .catch(() => setBalance(null));
+    // This read belongs to the guide instance, not the currently visible step.
+    // Account changes close the instance; React discards its late state updates.
   }, [canOpenBilling, step]);
 
   const goNext = () => setIndex((current) => Math.min(current + 1, (steps?.length ?? 1) - 1));
@@ -302,7 +312,13 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
   const paidBalance = balance ? Number(balance.planCredits) > 0 || Number(balance.purchasedCredits) > 0 : false;
   const giftedBalance = balance ? Number(balance.promotionalCredits) > 0 : false;
 
-  const goConnect = (id: string) => navigate(`/settings?tab=providers&connect=${encodeURIComponent(id)}`);
+  const goConnect = (id: string | null) => {
+    pendingConnection.current = {
+      id,
+      connected: new Set(providers.filter((provider) => provider.connected).map((provider) => provider.id)),
+    };
+    navigate(id ? `/settings?tab=providers&connect=${encodeURIComponent(id)}` : '/settings?tab=providers&wizard=1');
+  };
   const connectedRows = providers.filter((provider) => provider.connected && provider.id !== 'xd').slice(0, MODEL_ROWS);
 
   const providerRow = (row: ProviderOnboardingRow) => {
@@ -401,7 +417,7 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
                   <DoneLine>{t('firstRunGuide.models.cindy.active')}</DoneLine>
                 )}
                 {canOpenBilling ? (
-                  <Button variant="secondary" size="sm" tone="quiet" compact type="button" onClick={() => navigate('/settings?tab=billing')}>
+                  <Button variant="secondary" size="sm" tone="quiet" compact type="button" onClick={() => { pendingConnection.current = null; navigate('/settings?tab=billing'); }}>
                     {t('billing.sidebar')}
                   </Button>
                 ) : null}
@@ -427,7 +443,7 @@ function FirstRunGuideBody({ context, parked }: { context: FirstRunGuideContext;
               tone="quiet"
               compact
               type="button"
-              onClick={() => navigate('/settings?tab=providers&wizard=1')}
+              onClick={() => goConnect(null)}
             >
               <KeyRound size={13} aria-hidden="true" />
               {t('firstRunGuide.models.own.more')}

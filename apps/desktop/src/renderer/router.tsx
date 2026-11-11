@@ -2,7 +2,6 @@ import { SettingsView } from '@/components/settings/SettingsView';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
 import { MainLayout } from '@/components/layout/MainLayout';
-import { FirstRunGuide } from '@/features/first-run-guide/FirstRunGuide';
 import { MainEntryRedirect } from '@/components/layout/MainEntryRedirect';
 import { RouteErrorFallback } from '@/components/error/RouteErrorFallback';
 import { SidebarWindowLayout } from '@/components/layout/SidebarWindowLayout';
@@ -78,8 +77,7 @@ export const router = createHashRouter([
             errorElement: <RouteErrorFallback variant="section" />,
           },
           {
-            // 开始引导与主界面同层:它要用路由跳到设置、任务导入、伙伴等现有页面。
-            element: <><MainLayout /><FirstRunGuide /></>,
+            element: <MainLayout />,
             children: [
               {
                 // pathless wrapper:内容区(cc-agent / skillhub / settings …)渲染

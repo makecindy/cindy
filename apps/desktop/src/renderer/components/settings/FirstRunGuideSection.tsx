@@ -18,6 +18,7 @@ export function FirstRunGuideSection() {
           title={t('firstRunGuide.settings.description')}
           trailing={
             <Button
+              data-settings-search-action="Reopen the get-started guide"
               variant="secondary"
               size="md"
               className="shrink-0"
