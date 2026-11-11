@@ -92,12 +92,46 @@ async function defaultExecGit(args: string[], cwd: string): Promise<string> {
   // 用 `git -C <dir>` 而不是 child 的 cwd 选项: Windows 上子进程的 CWD 会锁住
   // 该目录, 会话用临时 cwd 的测试/短命场景在 teardown 删目录时 EPERM。
   // 相对路径输出 (--git-common-dir) 相对 -C 目录解析, 与 cwd 选项语义一致。
+  // 真正的 git 进程仍会切进 -C 目录, 所以它活着时目录照样被占住, 见下方超时处理。
+  if (process.platform === 'win32') return execGitWithTreeTimeout(args, cwd);
   const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
     timeout: GIT_PROBE_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
     windowsHide: true,
   });
   return stdout;
+}
+
+/**
+ * Windows: `git` is normally the Git for Windows launcher (`cmd\git.exe`), which runs the real
+ * `mingw64\bin\git.exe` as its child. execFile's own timeout kills only the launcher, so the real
+ * git kept running inside the probed folder, holding it as its current directory: the folder
+ * could not be deleted (EBUSY) until that git ended. On timeout the whole tree is ended instead,
+ * and the probe settles when its output pipes close, that is once every git in the tree has
+ * exited. Should taskkill fail, only the launcher is killed, as before.
+ */
+function execGitWithTreeTimeout(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile('git', ['-C', cwd, ...args], { maxBuffer: 1024 * 1024, windowsHide: true },
+      (error, stdout) => {
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve(stdout);
+      });
+    const killLauncher = () => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.kill();
+    };
+    const timer = setTimeout(() => {
+      if (!child.pid || child.exitCode !== null) {
+        killLauncher();
+        return;
+      }
+      execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: GIT_PROBE_TIMEOUT_MS },
+        (error) => { if (error) killLauncher(); });
+    }, GIT_PROBE_TIMEOUT_MS);
+  });
 }
 
 interface CacheEntry {
