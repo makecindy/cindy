@@ -1210,8 +1210,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
           }
           assertReady();
           const live = deps.getLiveSession(sessionId);
-          if (target && live?.isTurnRunning()) {
-            throw new Error('Native session recovery cannot interrupt a running turn');
+          if (target && (live?.isTurnRunning() || (live?.listBackgroundTasks?.().length ?? 0) > 0)) {
+            throw new Error('Native session recovery cannot interrupt a running turn or background task');
           }
           // Manual restart closes the broken runtime without asking it to compact.
           if (live) await deps.closeSession(sessionId);

@@ -628,6 +628,19 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
+  // Regression #9964: an idle root turn can still own background builds/tests.
+  // Earlier recovery tests only covered foreground work; closing here kills that work.
+  it.each(['retain-route', { model: 'new-model', providerId: 'openai', effort: null, fastMode: false }] as const)(
+    'does not close background work during native recovery (%j)', async target => {
+      const deps = makeDeps([msg('user', 'keep the build running', 'u1')]);
+      deps.getLiveSession.mockReturnValue({ isTurnRunning: () => false, listBackgroundTasks: () => [{}] });
+      await expect(createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', target, vi.fn()))
+        .rejects.toThrow('running');
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.commitRebuild).not.toHaveBeenCalled();
+      expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    });
+
   it('does not commit an account handoff after the user stops recovery', async () => {
     const deps = makeDeps([msg('user', 'keep this context', 'u1')]);
     const recovery = createContextOverflowRollover(deps);

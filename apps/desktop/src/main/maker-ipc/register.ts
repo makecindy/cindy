@@ -5115,7 +5115,10 @@ export async function acquirePendingAgentSwitchForDirectSend(
 export async function prepareUnhealthySessionForSend(sessionId: string): Promise<boolean> {
   const switched = await prepareSubscriptionAccountForSend(sessionId, {
     readSession: getSessionRowSnapshotStrict,
-    isRunning: (id) => isSessionInTurn(id) || !!getMaker().getSession(id)?.isTurnRunning(),
+    isRunning: (id) => {
+      const live = getMaker().getSession(id);
+      return isSessionInTurn(id) || !!live?.isTurnRunning() || (live?.listBackgroundTasks().length ?? 0) > 0;
+    },
     rebuild: async (id, assertCurrent) => {
       const recovery = contextOverflowRolloverHolder;
       if (!recovery) throw new Error('Subscription account recovery is not ready');
