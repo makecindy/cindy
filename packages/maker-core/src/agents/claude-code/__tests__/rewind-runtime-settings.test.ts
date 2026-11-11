@@ -290,6 +290,31 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it.each([false, true])('fences an in-flight rewind preview and releases the fence on completion (failure: %s)', async (fail) => {
+    const { agent, handle, firstQuery, workingDir } = await startRewindableSession();
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    firstQuery.rewindFiles.mockImplementationOnce(async () => {
+      await gate;
+      if (fail) throw new Error('preview failed');
+      return { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 };
+    });
+    const session = new Session({ id: 'preview-idle-release', agentKind: 'claude-code',
+      workDir: workingDir, handle, capabilities: agent.capabilities,
+      logger: createNoopLogger(), turnStallMs: 0 });
+    try {
+      const preview = session.previewRewindFiles('preview-user');
+      await vi.waitFor(() => expect(firstQuery.rewindFiles).toHaveBeenCalledOnce());
+      expect(session.hasPendingHostOperation()).toBe(true);
+      await expect(session.closeIfIdle()).resolves.toBe(false);
+      expect(firstQuery.close).not.toHaveBeenCalled();
+      finish();
+      expect((await preview).canRewind).toBe(!fail);
+      expect(session.hasPendingHostOperation()).toBe(false);
+      await expect(session.closeIfIdle()).resolves.toBe(true);
+    } finally { finish(); await session.close(); }
+  });
+
   // Idle release must retain the controller's deferred rewind point. Re-enter
   // the production Session close guard, then verify the next send still forks
   // at that point on native Claude and a non-Anthropic model route. Unit tier.

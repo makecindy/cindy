@@ -274,8 +274,9 @@ it.each([false, true])('preserves task data and resumes native identity after re
     isOrdinaryTask: async (id, nativeId) => (await storage.get(id))?.sdkSessionId === nativeId,
     hasPendingInput: async () => false, isHostBusy: () => false,
     withLock: async (_id, fn) => fn(),
-    close: (session, retryFailedClose) => suppression.withSuppressed(session.id, () =>
-      retryFailedClose && session.getStatus() === 'error' ? session.close().then(() => true) : session.closeIfIdle()),
+    close: (session, retryFailedClose) => suppression.withSuppressed(session.id, async () =>
+      await maker.closeSessionIfCurrent(session as typeof first, 'runtime-refresh',
+        retryFailedClose && session.getStatus() === 'error' ? undefined : { onlyIfIdle: true }) === 'closed'),
     now: () => now, released: vi.fn(), warn: log.warn,
   });
   try {
@@ -304,6 +305,7 @@ it.each([false, true])('preserves task data and resumes native identity after re
     }
     expect(handles[0].close).toHaveBeenCalledTimes(failFirstClose ? 2 : 1);
     expect(maker.getSession('task')).toBeUndefined();
+    expect(maker.getSessionCloseReason(first)).toBe('runtime-refresh');
     expect(rows.get('task')).toEqual(stored);
     expect(storage.delete).not.toHaveBeenCalled();
     expect(removeAttachmentsAndWorkspace).not.toHaveBeenCalled();
