@@ -19,6 +19,8 @@ import type { WebContents } from 'electron';
 
 import { PtyManager, type DataPayload, type ExitPayload } from '../ptyManager';
 import { HostTerminalService, type HostTerminalScope } from '../hostTerminalService';
+import { getDesktopHostTerminalService } from '../terminalService.desktop';
+import * as appSessionState from '../../appSessionState';
 import { createTerminalToolExecutor } from '../terminalToolAccess';
 import type { InstalledGhost } from '../../../shared/ghost';
 
@@ -250,6 +252,14 @@ describe('PtyManager.create', () => {
 // 需求 22 要求宿主托管命令与作业；旧覆盖只有窗口推送，未覆盖续读、内存上限或无窗口 owner。
 // 最小失败输入：两次读取同一游标、缓冲溢出、replace 环境及停止后写入；tier: unit，注入 fake PTY。
 describe('PtyManager host process lifecycle', () => {
+  // Unused-capability cleanup must not allocate the singleton or subscribe to
+  // account changes. Minimal input: cache miss during cleanup; unit, no PTY.
+  it('does not create a Desktop terminal service just to clean an unused plugin', () => {
+    const subscribe = vi.spyOn(appSessionState, 'onAppSessionInvalidated');
+    expect(getDesktopHostTerminalService(false)).toBeUndefined();
+    expect(subscribe).not.toHaveBeenCalled();
+  });
+
   // Performance contract for #9825: ordinary UI terminals must keep their old
   // push-only path. The existing managed-job tests do not cover an unused reader.
   // Minimal input: one UI PTY emitting a 32 KiB frame; unit, injected fake PTY.

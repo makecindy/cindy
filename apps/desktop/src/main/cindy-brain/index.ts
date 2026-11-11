@@ -2330,7 +2330,7 @@ export function acceptPluginInvocation(id: string, invocationId: string): void {
 function disposePluginRuntimeHostServices(id: string): void {
   networkSlotSingleton?.disposeGhost(id);
   fsSlotSingleton?.disposePlugin(id);
-  getDesktopHostTerminalService().disposePlugin(id);
+  getDesktopHostTerminalService(false)?.disposePlugin(id);
   disposePluginHostTools(id);
 }
 
