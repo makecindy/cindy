@@ -899,6 +899,118 @@ describe('virtual workspace', () => {
     }
   });
 
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：createReverseHttpRouter 转发给本机 MCP 的工具参数；协同派活、回报与任务间
+   *   消息的正文里，远程 Agent 写下的虚拟路径是否落成接收方读得到的本机路径。
+   * - Bug 依据：2026-11-10 协同任务，Lead 的 Agent 在另一台电脑，给五个 Worker 的任务说明路径全是
+   *   Lead 自己虚拟工作区里的路径，五个 Worker 全部读不到、无法开工。
+   * - 现有覆盖缺口：此前只有 prompt 字段（#8728）做了还原，协同与任务间消息的正文原样转发。
+   * - 最小失败输入：cindy_orca create_workers 的 initial_task 含一个虚拟工作区路径。
+   * - tier：unit（临时目录 + 内存里的 MCP 转发）。
+   */
+  it.each(['/home/agent/workspace', 'C:\\Agent\\workspace'])('hands task text to other tasks with local paths at %s', async (virtual) => {
+    const { project, executor } = setup(virtual);
+    const agentPath = virtual.startsWith('C:') ? path.win32 : path.posix;
+    const brief = path.join(project, 'briefs', 'task.md');
+    fs.mkdirSync(path.dirname(brief), { recursive: true });
+    fs.writeFileSync(brief, '# brief');
+    const text = '任务说明在 ' + agentPath.join(virtual, 'briefs', 'task.md') + '，接口 /api/v1 保持不变';
+    const localText = '任务说明在 ' + brief + '，接口 /api/v1 保持不变';
+    interface ForwardedArguments {
+      workers?: Array<{ label: string; initial_task: string }>;
+      message?: string;
+      args?: { message: string };
+    }
+    const forwarded: ForwardedArguments[] = [];
+    const router = createReverseHttpRouter({
+      executor,
+      mcpTarget: () => ({ url: 'http://unused', headers: {} }),
+      fetch: async (_url, options) => {
+        const request = JSON.parse(Buffer.from(options!.body as Uint8Array).toString());
+        forwarded.push(request.params.arguments);
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [] } }), { headers: { 'content-type': 'application/json' } });
+      },
+    });
+    const call = async (server: string, name: string, args: Record<string, unknown>) => {
+      await router({ method: 'POST', path: '/mcp/' + server, headers: [], body: Buffer.from(JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args },
+      })).toString('base64') });
+      return forwarded.at(-1)!;
+    };
+    const sameSeparators = (value: string) => value.replace(/\\/g, '/');
+    try {
+      const batch = await call('cindy_orca', 'create_workers', { workers: [{ label: 'a', role: 'dev', initial_task: text }] });
+      const [created] = batch.workers!;
+      expect(sameSeparators(created.initial_task)).toBe(sameSeparators(localText));
+      // 接收方按消息里的路径读文件：必须是本机真实存在的那个文件。
+      expect(fs.readFileSync(/^任务说明在 (.+)，接口/.exec(created.initial_task)![1], 'utf8')).toBe('# brief');
+      expect(created.label).toBe('a');
+      for (const [server, name, args] of [
+        ['cindy_orca', 'send_to_worker', { target_session_id: 's1', message: text }],
+        ['orca_worker_bridge', 'send_to_lead', { worker_id: 'w1', message: text }],
+        ['cindy_helper', 'call_tool', { name: 'send_to_session', args: { session_id: 's2', message: text } }],
+      ] as const) {
+        const sent = await call(server, name, args);
+        expect(sameSeparators((sent.args ?? sent).message!)).toBe(sameSeparators(localText));
+      }
+      // 插件自己的业务参数不做文本替换，哪怕字段也叫 message。
+      expect((await call('some_plugin', 'post', { message: text })).message).toBe(text);
+    } finally {
+      await executor.close();
+    }
+  });
+
+  /**
+   * #8728：远程 Agent 建的定时任务由本机之后的任务执行，prompt 里的虚拟路径必须落成本机路径，
+   * 读回时再投影成单层虚拟路径。tier：unit(临时目录 + 内存里的调度存储)。
+   */
+  it.each(['/home/agent/workspace', 'C:\\Agent\\workspace'])('stores scheduler prompts with local paths and reads them back as virtual paths at %s', async (virtual) => {
+    const { project, executor } = setup(virtual);
+    const agentPath = virtual.startsWith('C:') ? path.win32 : path.posix;
+    const skill = path.join(project, 'skills', 'pr', 'SKILL.md');
+    fs.mkdirSync(path.dirname(skill), { recursive: true });
+    fs.writeFileSync(skill, '# pr');
+    const virtualSkill = agentPath.join(virtual, 'skills', 'pr', 'SKILL.md');
+    const virtualCheckout = agentPath.join(virtual, 'checkout');
+    const prompt = '按 ' + virtualSkill + ' 跟进 PR，检出目录 ' + virtualCheckout + '，说明里的 /api/v1 保持不变';
+    const stored = new Map<string, string>();
+    const router = createReverseHttpRouter({
+      executor,
+      mcpTarget: () => ({ url: 'http://unused', headers: {} }),
+      fetch: async (_url, options) => {
+        const request = JSON.parse(Buffer.from(options!.body as Uint8Array).toString());
+        const { name, args } = request.params.arguments;
+        const input = typeof args === 'string' ? JSON.parse(args) : args;
+        if (name !== 'schedule_get') stored.set(input.id ?? 's1', input.prompt);
+        const result = { content: [{ type: 'text', text: JSON.stringify({ id: input.id ?? 's1', prompt: stored.get(input.id ?? 's1') }) }] };
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }), { headers: { 'content-type': 'application/json' } });
+      },
+    });
+    const call = async (name: string, args: Record<string, unknown> | string) => {
+      const reply = await router({ method: 'POST', path: '/mcp/cindy_scheduler', headers: [], body: Buffer.from(JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } },
+      })).toString('base64') });
+      if (reply.type !== 'http') throw new Error('expected MCP HTTP reply');
+      return JSON.parse(JSON.parse(Buffer.from(reply.body!, 'base64').toString()).result.content[0].text);
+    };
+    const localPrompt = '按 ' + skill + ' 跟进 PR，检出目录 ' + path.join(project, 'checkout') + '，说明里的 /api/v1 保持不变';
+    // 正文里的分隔符保持 Agent 写法（Windows 上存成 C:/...），所以只比较路径本身，不比较分隔符写法。
+    const sameSeparators = (text: string | undefined) => text?.replace(/\\/g, '/');
+    try {
+      expect(await call('schedule_create', { name: 'PR', prompt })).toEqual({ id: 's1', prompt });
+      expect(sameSeparators(stored.get('s1'))).toBe(sameSeparators(localPrompt));
+      // 本机任务执行时按 prompt 里的路径读 Skill。
+      expect(fs.readFileSync(/^按 (.+) 跟进/.exec(stored.get('s1')!)![1], 'utf8')).toBe('# pr');
+      expect(await call('schedule_get', { id: 's1' })).toEqual({ id: 's1', prompt });
+      await call('schedule_update', JSON.stringify({ id: 's1', prompt: prompt + '。' }));
+      expect(sameSeparators(stored.get('s1'))).toBe(sameSeparators(localPrompt + '。'));
+      expect(await call('schedule_get', { id: 's1' })).toEqual({ id: 's1', prompt: prompt + '。' });
+    } finally {
+      await executor.close();
+    }
+  });
+
   it.each(['/Users/agent/workspace', 'C:\\Agent\\workspace'])('runs a Skill script in the real directory and returns JSON paths at %s', async (virtual) => {
     const { project, executor } = setup(virtual);
     const agentPath = virtual.startsWith('C:') ? path.win32 : path.posix;
@@ -1108,6 +1220,24 @@ describe('path projection cost with many aliases', () => {
     expect(virtualOf(runtime)).toBe(virtual + '/f.txt');
     expect(localOf(virtual + '/f.txt')).toBe(path.join(runtime, 'f.txt'));
     expect(workspace.agentPathPrefixes()).toContain(virtual);
+  });
+
+  // 连回时已有映射默认保持原目标；重新同步过的托管 Skill 目录用 replaceFrom 换成新目标，不再指向被淘汰的旧快照。
+  it('keeps existing aliases on reconnect except the ones asked to be replaced', () => {
+    const project = path.join(root, 'work');
+    const oldSkill = path.join(root, 'skill-v1');
+    const newSkill = path.join(root, 'skill-v2');
+    const personal = path.join(root, 'personal');
+    for (const dir of [project, oldSkill, newSkill, personal]) fs.mkdirSync(dir, { recursive: true });
+    const workspace = new ExecutorWorkspace({ workingDir: project });
+    workspace.setVirtualRoot(VIRTUAL);
+    const skill = VIRTUAL + '/workspace/.claude/skills/cindy-pr';
+    const mine = VIRTUAL + '/workspace/.claude/skills/mine';
+    workspace.setAliases([{ from: skill, to: oldSkill }, { from: mine, to: personal }]);
+    workspace.addAliases([{ from: skill, to: newSkill }, { from: mine, to: newSkill }], new Set([skill]));
+    const localOf = (virtual: string) => path.normalize(workspace.mapTextFromAgent(virtual));
+    expect(localOf(skill + '/run.mjs')).toBe(path.join(newSkill, 'run.mjs'));
+    expect(localOf(mine + '/a.md')).toBe(path.join(personal, 'a.md'));
   });
 
   it('follows a symlinked alias target that is retargeted between batches', async ({ skip }) => {

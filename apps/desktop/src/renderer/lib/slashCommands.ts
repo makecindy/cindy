@@ -27,6 +27,9 @@ export { leadingSlashInvocation };
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SlashCommands');
+// Diagnostics only: retain at most 256 name/kind conflicts per renderer lifetime.
+// Once full, suppress new conflicts too rather than evicting and repeating old warnings.
+const warnedCommandConflicts = new Set<string>();
 const shadowedUnavailableSkillsByCommands = new WeakMap<UnifiedCommand[], Set<string>>();
 
 export type { UnifiedCommand } from '@cindy/maker-core';
@@ -289,7 +292,11 @@ export function mergeCommands(
         if (isSlashCommandUnavailable(cmd)) {
           shadowedUnavailableSkills.add(cmd.name.toLowerCase());
         } else {
-          log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
+          const conflict = JSON.stringify([cmd.name, cmd.kind]);
+          if (!warnedCommandConflicts.has(conflict) && warnedCommandConflicts.size < 256) {
+            warnedCommandConflicts.add(conflict);
+            log.warn(`Slash command "/${cmd.name}" already provided by higher-priority tier; skipping ${cmd.kind}.`);
+          }
         }
         continue;
       }
@@ -313,6 +320,55 @@ function hasShadowedUnavailableSkill(
 export function hasUnavailableProjectSkillPreview(commands: UnifiedCommand[]): boolean {
   return commands.some(isSlashCommandUnavailable)
     || (shadowedUnavailableSkillsByCommands.get(commands)?.size ?? 0) > 0;
+}
+
+export interface PluginSkillSetupPaletteEntry {
+  skillName: string;
+  description: string;
+  /** Short row tag, e.g. "needs install". */
+  meta?: string;
+  /**
+   * The plugin is installed but unusable in this project, so the Skill linked from its global install
+   * would only fail here: this row takes that command's place. (A same-named Skill of the user's own is
+   * hidden from the list too, but typing its name still runs it.)
+   */
+  replacesInstalled?: boolean;
+}
+
+const pluginSkillSetupCommands = new WeakMap<UnifiedCommand, string>();
+
+/**
+ * Palette-only rows for plugin Skills whose plugin is not usable yet. They go
+ * after every real command and, unless the entry says its installed Skill is
+ * unusable here (`replacesInstalled`), only when no command of that name exists,
+ * so a real Skill wins. Keep them out of the decoration roster and dispatch:
+ * they are a setup entry, not a sendable command.
+ */
+export function addPluginSkillSetupCommands(
+  commands: UnifiedCommand[],
+  entries: readonly PluginSkillSetupPaletteEntry[],
+): UnifiedCommand[] {
+  const replaced = new Set(entries.filter((entry) => entry.replacesInstalled).map((entry) => entry.skillName.toLowerCase()));
+  if (replaced.size > 0) commands = commands.filter((command) => !replaced.has(command.name.toLowerCase()));
+  const names = new Set(commands.map((command) => command.name.toLowerCase()));
+  const extra = entries
+    .filter((entry) => !names.has(entry.skillName.toLowerCase()))
+    .map((entry) => {
+      const command: UnifiedCommand = {
+        kind: 'desktop',
+        name: entry.skillName,
+        description: entry.description,
+        ...(entry.meta ? { meta: entry.meta } : {}),
+      };
+      pluginSkillSetupCommands.set(command, entry.skillName);
+      return command;
+    });
+  return extra.length > 0 ? [...commands, ...extra] : commands;
+}
+
+/** The Skill a palette row would set up, or undefined for ordinary commands. */
+export function pluginSkillSetupName(command: UnifiedCommand): string | undefined {
+  return pluginSkillSetupCommands.get(command);
 }
 
 /**

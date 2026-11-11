@@ -11,6 +11,7 @@ vi.mock('@/session/scheduleIndex', () => ({ sessionMayHaveScheduleRuns: mocks.ma
 import {
   countSessionsWithActiveBoundSchedules,
   loadActiveBoundScheduleNames,
+  loadConfirmedActiveBoundScheduleNames,
   SCHEDULE_LOOKUP_WAIT_MS,
 } from '@/session/archiveScheduleConfirm';
 
@@ -33,6 +34,18 @@ describe('archive schedule lookup deadline', () => {
 
     await expect(single).resolves.toEqual([]);
     await expect(bulk).resolves.toBe(0);
+  });
+
+  // Rule: the silent card auto-archive has no confirmation behind it, so a slow or failed lookup must not read as
+  // "no binding" there (Desktop's loadConfirmedActiveBoundScheduleNames).
+  it('leaves the silent auto-archive unconfirmed when the lookup is slow or fails', async () => {
+    mocks.list.mockReturnValueOnce(new Promise(() => {})).mockRejectedValueOnce(new Error('NOT_CONNECTED'));
+    const slow = loadConfirmedActiveBoundScheduleNames(args);
+    await vi.advanceTimersByTimeAsync(SCHEDULE_LOOKUP_WAIT_MS);
+    await expect(slow).resolves.toBeNull();
+    await expect(loadConfirmedActiveBoundScheduleNames(args)).resolves.toBeNull();
+    mocks.list.mockResolvedValueOnce([{ id: 'a', name: 'Daily', status: 'active', targetSessionId: 'task' }]);
+    await expect(loadConfirmedActiveBoundScheduleNames(args)).resolves.toEqual(['Daily']);
   });
 
   it('reports both ordinary and persistent active bindings that will restore the task', async () => {

@@ -1,3 +1,4 @@
+import { type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * interrupted-turn 自动续跑 —— 「上游把一个已经干到一半的 turn 打断了」这类
  * terminal error 的识别与重连决策。
@@ -46,6 +47,7 @@ export interface InterruptedTurnErrorSignals {
   errorStatus?: number;
   /** Bounded details for the live error projection; never contains raw provider data. */
   toolLoop?: AgentInputToolLoopDetails;
+  outputLimit?: OutputLimitDetails;
   /** translator 判定的账号用量 / 限流错误。 */
   usageLimit?: boolean;
   /** 上游给出的限额重置时刻(unix ms)。 */
@@ -144,6 +146,20 @@ export function isAcceptedTurnContinuationOnlyReason(reason: unknown): boolean {
     reason === 'upstream_response_idle_timeout' ||
     reason === 'codex_reconnect_stalled'
   );
+}
+
+/** The agent serving this route on another computer is gone (remote-agent controller / host). */
+export function isRemoteAgentRouteLostReason(reason: unknown): boolean {
+  return reason === 'remote_agent_closed' || reason === 'remote_agent_lost';
+}
+
+/**
+ * Resumes that may only CONTINUE and must follow the Session through its own unexpected close:
+ * accepted-turn stalls, plus a lost remote agent (the Session dies with it, and the turn's tools may
+ * already have run there). Only a Bot candidate route is ever granted the latter resume.
+ */
+export function isContinuationOnlyAutoResumeReason(reason: unknown): boolean {
+  return isAcceptedTurnContinuationOnlyReason(reason) || isRemoteAgentRouteLostReason(reason);
 }
 
 /**

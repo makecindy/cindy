@@ -1,5 +1,12 @@
 import { usePreviewFocusReturn } from './PreviewChrome';
-import { PreviewHeader, PreviewFooter, PreviewButton } from './PreviewChrome';
+import {
+  PREVIEW_PANEL_CLASS,
+  PREVIEW_PANEL_STYLE,
+  PreviewHeader,
+  PreviewFooter,
+  PreviewButton,
+  PreviewScrim,
+} from './PreviewChrome';
 import { previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
@@ -28,7 +35,7 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
  *     inside, and returns focus to the pre-open element on unmount.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FocusScope } from '@radix-ui/react-focus-scope';
 import { Box, FolderOpen, RotateCcw, Minus, Plus } from 'lucide-react';
@@ -71,12 +78,31 @@ interface ModelLightboxProps {
   filename?: string;
 }
 
+// `<model-viewer>`(连同 three.js,约 1 MB)只在首次打开 3D 预览时加载,不进主窗口
+// 首屏。包加载后自行注册自定义元素;失败时清掉缓存,「重试」会再次调用 import()
+// (浏览器是否重新读取分包取决于其模块缓存;分包缺失本身属于安装损坏)。
+let modelViewerModule: Promise<unknown> | null = null;
+
+function loadModelViewer(): Promise<unknown> {
+  modelViewerModule ??= import('@google/model-viewer').catch((err: unknown) => {
+    modelViewerModule = null;
+    throw err;
+  });
+  return modelViewerModule;
+}
+
+function isModelViewerDefined(): boolean {
+  return customElements.get('model-viewer') !== undefined;
+}
+
 export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps) {
   const restorePreviewFocus = usePreviewFocusReturn();
   const { t } = useTranslation();
   const [isVisible, setIsVisible] = useState(false);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
+  // 元素注册前不渲染 <model-viewer>,属性始终按已定义元素的方式写入。
+  const [viewerReady, setViewerReady] = useState(isModelViewerDefined);
   const isClosingRef = useRef(false);
   const onCloseRef = useRef(onClose);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
@@ -154,7 +180,10 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
   // 上——不监听就是"看起来像一张拖不动的静态图"的静默失败(历史上协议特权
   // 丢失导致 fetch 被拒时正是这个表现)。失败时保留 lightbox(poster 仍可
   // 看、右键"打开模型"仍可用),toast 告知即可,不自动关闭。
-  useEffect(() => {
+  // 用 layout effect 在元素挂上的同一次提交里绑定:查看器代码异步就绪后,元素是在
+  // 非交互的更新里插入的,普通 effect 可能晚于绘制才执行,很快失败的加载(如 fetch
+  // 被拒)会在绑定前就派发 'error'。
+  useLayoutEffect(() => {
     const el = modelViewerRef.current;
     if (!el) return;
     const onError = () => {
@@ -162,7 +191,25 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
     };
     el.addEventListener('error', onError);
     return () => el.removeEventListener('error', onError);
-  }, [retry]);
+  }, [retry, viewerReady]);
+
+  // 查看器代码本身加载失败(例如分包文件缺失)同样走失败提示,而不是一直转圈;
+  // 「重试」递增 retry 后重新加载。
+  useEffect(() => {
+    if (viewerReady) return;
+    let cancelled = false;
+    loadModelViewer().then(
+      () => {
+        if (!cancelled) setViewerReady(true);
+      },
+      () => {
+        if (!cancelled) setFailed(true);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [viewerReady, retry]);
 
   async function handleModelAction(action: 'open' | 'reveal'): Promise<void> {
     if (modelPending) return;
@@ -216,6 +263,13 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
     // 还给打开前的元素(ChatImageView 键盘路径 = 预览触发器)。handleClose
     // 里既有的 blur 仍保留——点进模型后 model-viewer shadow DOM 的焦点框
     // 要在淡出前先灭掉。
+    <>
+    <PreviewScrim
+      onClose={() => {
+        if (performance.now() - lastMenuCloseAt.current < 150) return;
+        handleClose();
+      }}
+    />
     <FocusScope
       onUnmountAutoFocus={restorePreviewFocus}
       asChild
@@ -229,11 +283,10 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
     <div
       ref={overlayRef}
       data-lightbox-layer
+      className={PREVIEW_PANEL_CLASS}
       style={{
-        position: 'fixed',
-        inset: 0,
+        ...PREVIEW_PANEL_STYLE,
         zIndex: 9999,
-        background: 'var(--surface)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -302,8 +355,8 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
       {/* biome-ignore lint/a11y/noStaticElementInteractions: right-click opens a pointer context menu for the model canvas. */}
       <div
         style={{
-          width: 'min(85vw, 1024px)',
-          height: 'calc(100vh - 160px)',
+          width: 'min(calc(var(--preview-width) - 80px), 1024px)',
+          height: 'calc(var(--preview-height) - 160px)',
           position: 'relative',
           zIndex: 1,
         }}
@@ -312,6 +365,7 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
           setMenuPos({ x: e.clientX, y: e.clientY });
       }}
       >
+        {viewerReady ? (
         <model-viewer
             key={retry}
             ref={modelViewerRef}
@@ -337,10 +391,10 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
             backgroundColor: 'transparent',
           }}
         />
-        {/* Small loading hint while we wait for the IPC + initial parse.
-            model-viewer's built-in progress bar appears on top of this once
-            src is set, so the spinner only shows during the IPC roundtrip. */}
-        {modelUrl === null ? (
+        ) : null}
+        {/* Small loading hint while the viewer code or the model URL is not ready.
+            model-viewer's built-in progress bar takes over once it renders with src. */}
+        {modelUrl === null || (!viewerReady && !failed) ? (
           <div
             style={{
               position: 'absolute',
@@ -452,6 +506,7 @@ export function ModelLightbox({ source, onClose, filename }: ModelLightboxProps)
       </DropdownMenu>
     </div>
     </FocusScope>
+    </>
   );
 
   return createPortal(overlay, document.body);

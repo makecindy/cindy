@@ -24,6 +24,32 @@
 
 import type { BotCapabilities, BotProfileUpdatePatch } from './botStore';
 import { reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection';
+import { extractIpcError } from '../../../shared/ipcError';
+
+/** Only recognized causes become localized copy; never display raw host errors. */
+export function botSettingsSaveErrorKey(error: unknown): string | null {
+  const failure = extractIpcError(error);
+  if (!failure) return null;
+  switch (failure.code) {
+    case 'INVALID_PARAMS':
+      return /Model route unavailable|任务模型不可用/.test(failure.message)
+        ? 'ipcError.MODEL_SELECTION_UNAVAILABLE' : 'ipcError.INVALID_PARAMS';
+    case 'MODEL_SELECTION_UNAVAILABLE':
+      return 'ipcError.MODEL_SELECTION_UNAVAILABLE';
+    case 'DEVICE_LINK_DEVICE_OFFLINE':
+    case 'DEVICE_LINK_NOT_CONNECTED':
+      return 'bots.profileSaveOffline';
+    case 'DEVICE_LINK_TIMEOUT':
+    case 'DEVICE_LINK_DEVICE_UNRESPONSIVE':
+      return 'bots.remoteSettings.saveFailed';
+    case 'UNSUPPORTED_CAPABILITY':
+      return 'bots.remoteSettings.unsupported';
+    case 'PRECONDITION_FAILED':
+      return /伙伴配置已更新/.test(failure.message) ? 'bots.remoteSettings.conflict' : 'ipcError.PRECONDITION_FAILED';
+    default:
+      return null;
+  }
+}
 
 /** 提交给 `updateBotProfile` 的字段集合(与手动保存时的载荷完全一致)。 */
 export interface BotSettingsPayload {
@@ -145,6 +171,11 @@ export function botSettingsChanges(previous: BotSettingsPayload, next: BotSettin
   if (modelSelection) {
     for (const key of ['modelChain', 'modelChainOverride', 'modelOverride', 'harness', 'model', 'providerId', 'effort', 'fastMode'] as const)
       capabilityChanges[key] = capabilities[key];
+    // Retrying the same remote choice must carry its mirror too. Keep ordinary
+    // local saves compatible with hosts that predate the optional location field.
+    if (capabilities.agentDeviceId != null || previous.capabilities.agentDeviceId != null) {
+      capabilityChanges.agentDeviceId = capabilities.agentDeviceId ?? null;
+    }
   }
   const capabilityBaseline = {
     ...('skills' in changed ? { skills: previous.skills } : {}),
@@ -208,7 +239,7 @@ export interface BotSettingsAutosaveOptions {
   /** 真正提交(IPC)。resolve = 已落库(此时 commit 侧应已推进基线);reject = 失败。 */
   commit: (payload: BotSettingsPayload, modelSelection?: boolean) => Promise<void>;
   /** 状态变化回调。dispose 之后不再触发。 */
-  onStatusChange?: (status: BotAutosaveStatus) => void;
+  onStatusChange?: (status: BotAutosaveStatus, error?: unknown) => void;
 }
 
 export interface BotSettingsAutosaveHandle {
@@ -242,9 +273,9 @@ export function createBotSettingsAutosave(
   let modelSelectionRevision = 0;
   let savedModelSelectionRevision = 0;
 
-  const emit = (status: BotAutosaveStatus): void => {
+  const emit = (status: BotAutosaveStatus, error?: unknown): void => {
     if (detached) return;
-    options.onStatusChange?.(status);
+    options.onStatusChange?.(status, error);
   };
 
   const clearTimer = (): void => {
@@ -286,8 +317,8 @@ export function createBotSettingsAutosave(
       try {
         await commit(payload);
         emit(isDirty() ? 'idle' : 'saved');
-      } catch {
-        emit('error');
+      } catch (error) {
+        emit('error', error);
       }
     })();
     inFlight = attempt;

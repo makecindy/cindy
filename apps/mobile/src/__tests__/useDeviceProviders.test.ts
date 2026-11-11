@@ -2,11 +2,13 @@
  * useDeviceProviders 的 deviceId-aware 缓存单测(device-link「以被控端为准」)。
  * 守住:按 deviceId 隔离、inflight 去重、缓存命中不重拉、evict 只清该设备、evict 在途结果
  * 丢弃不复活、reject 不缓存下次重试 —— 对齐桌面 deviceProvidersCache.test。
- * 模块级缓存:每个用例 vi.resetModules() + 动态 import 拿干净模块。fetcher 注入,无需 stub 全局。
+ * 模块只加载一次，每例经生产 clearAllDeviceProviders 清理。fetcher 注入，无需 stub 全局。
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { PROVIDER_METADATA_TRUST_MS } from '@cindy/device-link';
+import * as mod from '@/device-link/deviceProvidersCache';
 
 import type { ProviderView } from '@cindy/model-providers/registry';
 
@@ -14,7 +16,99 @@ const readTextLf = (path: string, encoding: BufferEncoding): string =>
   readFileSync(path, encoding).toString().replace(/\r\n/g, '\n');
 
 beforeEach(() => {
-  vi.resetModules();
+  mod.clearAllDeviceProviders();
+});
+afterEach(() => { mod.clearAllDeviceProviders(); vi.useRealTimers(); });
+
+it('keeps the host deadline across ordinary/fresh cache reads and retires the mounted payload at expiry', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const fetcher = vi.fn(async () => ({ ...result('host'), providerContinuity: { stale: true, remainingMs: 1000 } }));
+  await mod.fetchDeviceProviders('host', fetcher);
+  const generation = mod.getDeviceProvidersGen('host');
+  await vi.advanceTimersByTimeAsync(500);
+  await mod.fetchDeviceProviders('host', fetcher);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(501);
+  expect(mod.getCachedDeviceProviders('host')).toBeUndefined();
+  expect(mod.getDeviceProvidersGen('host')).toBe(generation + 1);
+  await expect(mod.fetchDeviceProvidersFresh('host', async () => ({ ...result('host'),
+    providerContinuity: { stale: true, remainingMs: 0 } }))).rejects.toThrow('snapshot expired');
+  expect(mod.getCachedDeviceProviders('host')).toBeUndefined();
+  await mod.fetchDeviceProviders('host', fetcher);
+  await expect(mod.fetchDeviceProvidersFresh('host', async () => ({ ...result('host'),
+    providerContinuity: { stale: true, remainingMs: 0 } }))).rejects.toThrow('snapshot expired');
+  expect(mod.getCachedDeviceProviders('host')).toBeUndefined();
+});
+
+// Regression: a host that predates the optional providerContinuity field must
+// keep its original view lifecycle. Only the new host advertises the bound.
+it('keeps an unstamped legacy host catalog on its original view lifecycle', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const fetcher = vi.fn(async () => result('host'));
+  await mod.fetchDeviceProviders('host', fetcher);
+  await vi.advanceTimersByTimeAsync(PROVIDER_METADATA_TRUST_MS + 1);
+  expect(mod.getCachedDeviceProviders('host')?.providers ?? []).toHaveLength(1);
+});
+
+// Unit: a suspended JS runtime can wake after the host deadline but before the
+// expiry timer callback runs. The synchronous getter must retire the payload
+// immediately, but notify mounted consumers from a microtask so React does not
+// start a replacement read during render.
+it('defers a getter-discovered expiry notification until after the synchronous read', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const fetcher = vi.fn(async () => ({ ...result('host'),
+    providerContinuity: { stale: true, remainingMs: 1000 } }));
+  await mod.fetchDeviceProviders('host', fetcher);
+  const events = vi.fn();
+  const off = mod.subscribeDeviceProvidersGen('host', events);
+  try {
+    vi.setSystemTime(Date.now() + 1001);
+    expect(mod.getCachedDeviceProviders('host')).toBeUndefined();
+    expect(events).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(events).toHaveBeenCalledTimes(1);
+    expect(events).toHaveBeenCalledWith('evict');
+  } finally {
+    off();
+  }
+});
+
+// Unit: a deferred expiry belongs to the owner/scope that observed it. After
+// clearAll starts a new owner, the old microtask must not notify the new hooks.
+it('does not deliver a deferred expiry to a new owner after clearAll', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const fetcher = vi.fn(async () => ({ ...result('host'),
+    providerContinuity: { stale: true, remainingMs: 1000 } }));
+  await mod.fetchDeviceProviders('host', fetcher);
+  vi.setSystemTime(Date.now() + 1001);
+  expect(mod.getCachedDeviceProviders('host')).toBeUndefined();
+  mod.clearAllDeviceProviders();
+  const events = vi.fn();
+  const off = mod.subscribeDeviceProvidersGen('host', events);
+  try {
+    await Promise.resolve();
+    expect(events).not.toHaveBeenCalled();
+  } finally {
+    off();
+  }
+});
+
+// Timing guard: one slow read must spend the short upstream budget once, from
+// the request start. Response-time baselines would extend it; pre-deduction
+// would spend it twice.
+it('deducts a slow upstream read once and never extends a short budget', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const fetcher = vi.fn(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return { ...result('host'), providerContinuity: { stale: false, remainingMs: 1000 } };
+  });
+  const pending = mod.fetchDeviceProviders('host', fetcher);
+  await vi.advanceTimersByTimeAsync(400);
+  await pending;
+  await vi.advanceTimersByTimeAsync(599);
+  expect(mod.getCachedDeviceProviders('host')?.providers ?? []).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(2);
+  expect(mod.getCachedDeviceProviders('host')).toBeUndefined();
 });
 
 type Providers = { providers: ProviderView[] };
@@ -22,25 +116,36 @@ const result = (deviceId: string): Providers =>
   ({ providers: [{ id: `${deviceId}-xd` } as ProviderView] });
 
 describe('useDeviceProviders deviceId-aware cache', () => {
-  it('unsupported refresh retires only that device cache without publishing an empty success', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
+  it.each(['CHANNEL_NOT_ALLOWED', 'ACCESS_REVOKED', 'SHARE_PAUSED', 'PRECONDITION_FAILED'])('%s retires only that device cache without publishing an empty success', async code => {
     await mod.fetchDeviceProviders('dev-1', async () => result('dev-1'));
     await mod.fetchDeviceProviders('dev-2', async () => result('dev-2'));
     const otherGen = mod.getDeviceProvidersGen('dev-2');
     const readyListener = vi.fn();
     mod.subscribeDeviceProviders('dev-1', readyListener);
     await expect(mod.fetchDeviceProvidersFresh('dev-1', async () => {
-      throw new Error('[CHANNEL_NOT_ALLOWED] unavailable');
-    })).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+      throw new Error(`[${code}] unavailable`);
+    })).rejects.toThrow(code);
     expect(mod.getCachedDeviceProviders('dev-1')).toBeUndefined();
     expect(readyListener).not.toHaveBeenCalled();
     expect(mod.getCachedDeviceProviders('dev-2')).toEqual(result('dev-2'));
     expect(mod.getDeviceProvidersGen('dev-2')).toBe(otherGen);
   });
 
+  // Positive control for the permanent-failure arm above: a typed transient read
+  // failure keeps the bounded snapshot so the mounted picker survives a relay
+  // hiccup, while the next successful read still replaces it.
+  it('keeps the bounded cache for a transient fresh failure and replaces it on the next success', async () => {
+    await mod.fetchDeviceProviders('dev-1', async () => result('dev-1-old'));
+    await expect(mod.fetchDeviceProvidersFresh('dev-1', async () => {
+      throw new Error('[DEVICE_LINK_TIMEOUT] no invoke-result');
+    })).rejects.toThrow('DEVICE_LINK_TIMEOUT');
+    expect(mod.getCachedDeviceProviders('dev-1')).toEqual(result('dev-1-old'));
+    await mod.fetchDeviceProvidersFresh('dev-1', async () => result('dev-1-new'));
+    expect(mod.getCachedDeviceProviders('dev-1')).toEqual(result('dev-1-new'));
+  });
+
   it('首次 fetch 调用注入的 fetcher', async () => {
     const fetcher = vi.fn(async () => result('dev-1'));
-    const mod = await import('@/device-link/deviceProvidersCache');
     const providers = await mod.fetchDeviceProviders('dev-1', fetcher);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(providers).toEqual({ providers: [{ id: 'dev-1-xd' }] });
@@ -49,7 +154,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   it('被控端回传 modelVisibilityOverrides 时原样入缓存(手机据此过滤模型列表)', async () => {
     const overrides = { 'codex:xd:gpt-5.4': false };
     const fetcher = vi.fn(async () => ({ ...result('dev-1'), modelVisibilityOverrides: overrides }));
-    const mod = await import('@/device-link/deviceProvidersCache');
     const payload = await mod.fetchDeviceProviders('dev-1', fetcher);
     expect(payload.modelVisibilityOverrides).toEqual(overrides);
     expect(mod.getCachedDeviceProviders('dev-1')?.modelVisibilityOverrides).toEqual(overrides);
@@ -57,7 +161,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
 
   it('缓存命中:同设备二次 fetch 不再发请求', async () => {
     const fetcher = vi.fn(async () => result('dev-1'));
-    const mod = await import('@/device-link/deviceProvidersCache');
     await mod.fetchDeviceProviders('dev-1', fetcher);
     await mod.fetchDeviceProviders('dev-1', fetcher);
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -65,7 +168,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
 
   it('fetchDeviceProvidersFresh:缓存命中也执行 fetcher 访问工作站,成功后回写缓存(codex P2)', async () => {
     const fetcher = vi.fn(async () => result('dev-1-new'));
-    const mod = await import('@/device-link/deviceProvidersCache');
     // 先普通读取填缓存(缓存命中不再发请求)
     await mod.fetchDeviceProviders('dev-1', vi.fn(async () => result('dev-1-old')));
     expect(mod.getCachedDeviceProviders('dev-1')).toEqual({ providers: [{ id: 'dev-1-old-xd' }] });
@@ -78,7 +180,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('fetchDeviceProvidersFresh 失败:不覆盖缓存,抛错由调用方回退', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     await mod.fetchDeviceProviders('dev-1', vi.fn(async () => result('dev-1-old')));
     await expect(mod.fetchDeviceProvidersFresh('dev-1', () => Promise.reject(new Error('down'))))
       .rejects.toThrow('down');
@@ -86,7 +187,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('fresh failure invalidates the pending read and reports the error without retrying other failures', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     let release!: (v: Providers) => void;
     const ordinary = mod.fetchDeviceProviders('dev-1', () => new Promise<Providers>((r) => { release = r; }));
     const error = new Error('transient down');
@@ -104,7 +204,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('fetchDeviceProvidersFresh 无普通在途时不推进代际:守卫 genAt 校验可直接采信(codex P2)', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     const genBefore = mod.getDeviceProvidersGen('dev-1');
     const fetcher = vi.fn(async () => result('dev-1'));
     await mod.fetchDeviceProvidersFresh('dev-1', fetcher);
@@ -113,7 +212,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('fetchDeviceProvidersFresh 有普通在途时推进代际:旧普通请求后返回不回写覆盖 fresh(greptile P1)', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     // 普通请求挂起(发起时目录为 A)
     const ordinaryResolvers: Array<(v: Providers) => void> = [];
     const ordinary = vi.fn(() => new Promise<Providers>((r) => ordinaryResolvers.push(r)));
@@ -133,7 +231,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('clearAll 纳入 fresh-only 在途设备:登出后 fresh 响应不回写跨账号残留(greptile/copilot P1)', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     const freshResolvers: Array<(v: Providers) => void> = [];
     const freshFetcher = vi.fn(() => new Promise<Providers>((r) => freshResolvers.push(r)));
     // 无普通缓存/在途,只有 fresh 在途(提交终检触发)
@@ -146,7 +243,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('clearAll:不向 payload 订阅者推送空载荷(防误标就绪),仅代际失效(codex review P2)', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     const f1 = vi.fn(async () => result('dev-1'));
     await mod.fetchDeviceProviders('dev-1', f1);
     const subscriber = vi.fn();
@@ -160,7 +256,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
 
   it('inflight 去重:同设备并发只发一次', async () => {
     const fetcher = vi.fn(async () => result('dev-1'));
-    const mod = await import('@/device-link/deviceProvidersCache');
     await Promise.all([
       mod.fetchDeviceProviders('dev-1', fetcher),
       mod.fetchDeviceProviders('dev-1', fetcher),
@@ -169,7 +264,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('key 隔离:dev-1 / dev-2 各拉各的,互不影响', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     const f1 = vi.fn(async () => result('dev-1'));
     const f2 = vi.fn(async () => result('dev-2'));
     await mod.fetchDeviceProviders('dev-1', f1);
@@ -225,7 +319,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     // 故障半径三问的多 peer 用例:恢复路径改动必须带「≥2 控制端共享同一被控端,
     // 一个 peer 静默/失败,其它 peer 零感知」——dev-1 fresh 失败只作用于 dev-1
     // 自身(不覆盖缓存、不推进代际),dev-2 的缓存命中与代际不受波及。
-    const mod = await import('@/device-link/deviceProvidersCache');
     const dev2Fetcher = vi.fn(async () => result('dev-2'));
     await mod.fetchDeviceProviders('dev-2', dev2Fetcher);
     const dev2Gen = mod.getDeviceProvidersGen('dev-2');
@@ -241,7 +334,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('驱逐:evict 后同设备重新拉取;只清该设备(dev-2 仍命中缓存)', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     const f1 = vi.fn(async () => result('dev-1'));
     const f2 = vi.fn(async () => result('dev-2'));
     await mod.fetchDeviceProviders('dev-1', f1);
@@ -256,7 +348,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   it('evict 在途 fetch → 结果丢弃,不复活缓存', async () => {
     const resolvers: Array<(v: Providers) => void> = [];
     const fetcher = vi.fn(() => new Promise<Providers>((r) => resolvers.push(r)));
-    const mod = await import('@/device-link/deviceProvidersCache');
 
     const p = mod.fetchDeviceProviders('dev-1', fetcher); // 在途(未 resolve)
     mod.evictDeviceProviders('dev-1'); // 设备切换 → 驱逐(代际自增)
@@ -274,14 +365,12 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     const fetcher = vi.fn(async () => {
       throw new Error("channel 'maker:provider:list' not allowed remotely");
     });
-    const mod = await import('@/device-link/deviceProvidersCache');
     await expect(mod.fetchDeviceProviders('dev-old', fetcher)).rejects.toThrow();
     await expect(mod.fetchDeviceProviders('dev-old', fetcher)).rejects.toThrow();
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it('clearAll:登出后全部设备缓存清空,各自重拉(防跨账号串数据)', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     const f1 = vi.fn(async () => result('dev-1'));
     const f2 = vi.fn(async () => result('dev-2'));
     await mod.fetchDeviceProviders('dev-1', f1);
@@ -301,7 +390,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   it('clearAll 在途 fetch → 结果丢弃,不复活缓存(代际作废)', async () => {
     const resolvers: Array<(v: Providers) => void> = [];
     const fetcher = vi.fn(() => new Promise<Providers>((r) => resolvers.push(r)));
-    const mod = await import('@/device-link/deviceProvidersCache');
 
     const p = mod.fetchDeviceProviders('dev-1', fetcher); // 在途(未 resolve)
     mod.clearAllDeviceProviders(); // 登出 → 全清 + 代际自增
@@ -316,7 +404,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('新快照只通知对应 deviceId 的已挂载订阅者', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     const dev1 = vi.fn();
     const dev2 = vi.fn();
     const off1 = mod.subscribeDeviceProviders('dev-1', dev1);
@@ -333,7 +420,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   it('revision 后新请求先完成、旧请求后完成时只通知新快照', async () => {
     const resolvers: Array<(value: Providers) => void> = [];
     const fetcher = vi.fn(() => new Promise<Providers>((resolve) => resolvers.push(resolve)));
-    const mod = await import('@/device-link/deviceProvidersCache');
     const listener = vi.fn();
     mod.subscribeDeviceProviders('dev-1', listener);
 
@@ -351,24 +437,23 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('getDeviceProvidersGen:evict / clearAll 自增代际,其他设备不受影响(codex P2 ready 代际)', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
-    const gen0 = mod.getDeviceProvidersGen('dev-1');
-    mod.evictDeviceProviders('dev-1');
-    expect(mod.getDeviceProvidersGen('dev-1')).toBe(gen0 + 1);
+    const used = 'generation-used', untouched = 'generation-untouched';
+    const gen0 = mod.getDeviceProvidersGen(used);
+    mod.evictDeviceProviders(used);
+    expect(mod.getDeviceProvidersGen(used)).toBe(gen0 + 1);
     // 重拉完成不进一步提升代际(代际只随驱逐前进,置位时记录即稳定)
-    await mod.fetchDeviceProviders('dev-1', async () => result('dev-1'));
-    expect(mod.getDeviceProvidersGen('dev-1')).toBe(gen0 + 1);
-    mod.evictDeviceProviders('dev-1');
-    expect(mod.getDeviceProvidersGen('dev-1')).toBe(gen0 + 2);
+    await mod.fetchDeviceProviders(used, async () => result(used));
+    expect(mod.getDeviceProvidersGen(used)).toBe(gen0 + 1);
+    mod.evictDeviceProviders(used);
+    expect(mod.getDeviceProvidersGen(used)).toBe(gen0 + 2);
     // clearAll 只自增代际表内设备;从未有缓存活动的设备不受影响
-    const gen2 = mod.getDeviceProvidersGen('dev-2');
+    const gen2 = mod.getDeviceProvidersGen(untouched);
     mod.clearAllDeviceProviders();
-    expect(mod.getDeviceProvidersGen('dev-1')).toBe(gen0 + 3);
-    expect(mod.getDeviceProvidersGen('dev-2')).toBe(gen2);
+    expect(mod.getDeviceProvidersGen(used)).toBe(gen0 + 3);
+    expect(mod.getDeviceProvidersGen(untouched)).toBe(gen2);
   });
 
   it('subscribeDeviceProvidersGen:evict/clearAll 主动通知,fetch 完成不通知(codex P2)', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     const dev1 = vi.fn();
     const dev2 = vi.fn();
     const off1 = mod.subscribeDeviceProvidersGen('dev-1', dev1);
@@ -406,7 +491,6 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 
   it('fresh 作废普通在途:代际通知原因 fresh-invalidate(fresh 自身恢复,hook 不得重拉)', async () => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     const listener = vi.fn();
     const off = mod.subscribeDeviceProvidersGen('dev-1', listener);
     // 普通请求在途时启动 fresh → 作废普通在途,通知原因 fresh-invalidate
@@ -435,13 +519,11 @@ describe('provider catalog error classification', () => {
     [new Error('[CHANNEL_NOT_ALLOWED] unavailable'), true],
     [Object.assign(new Error('unavailable'), { code: 'CHANNEL_NOT_ALLOWED' }), true],
   ])('allows legacy fallback only for a typed unsupported error: %s', async (error, expected) => {
-    const mod = await import('@/device-link/deviceProvidersCache');
     expect(mod.isDeviceProvidersUnsupportedError(error)).toBe(expected);
   });
 });
 
 it('uses host display order in cached and fresh reads without mutating the wire catalog', async () => {
-  const mod = await import('@/device-link/deviceProvidersCache');
   const providers = ['a','b','c'].map(id => ({id})) as ProviderView[];
   const first = await mod.fetchDeviceProviders('order-host', async()=>({providers,providerOrder:['b','missing','b','a']}));
   expect(first.providers.map(p=>p.id)).toEqual(['b','a','c']);

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { fetchVideoTaskContent } from '../videoTaskContent.js';
 
 const fetch = vi.hoisted(() => vi.fn());
-vi.mock('../../maker-host/outbound-fetch.js', () => ({ outboundFetch: fetch }));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ outboundFetch: fetch }));
 
 const reserve = 256n * 1024n * 1024n;
 const connection = { baseUrl: 'https://relay.example/v1', headers: { authorization: 'Bearer test-key' }, revision: 'original', assertCurrent: vi.fn() };

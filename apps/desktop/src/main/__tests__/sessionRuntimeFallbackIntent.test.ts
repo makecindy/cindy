@@ -19,7 +19,7 @@ function harness() {
   let generation = 0;
   const current = { agentDeviceId: null as string | null, agentKind: 'codex', model: 'current', providerId: 'openai', effort: 'high', fastMode: false };
   const candidate = { ...current, agentKind: 'claude-code', model: 'fallback' };
-  const readCandidate = vi.fn(async (): Promise<{ isBot: boolean; candidate: typeof candidate | null }> => ({ isBot: true, candidate }));
+  const readCandidate = vi.fn(async (): Promise<{ isBot: boolean; candidate: typeof candidate | null; routeLocked?: boolean }> => ({ isBot: true, candidate }));
   const switchAgent = vi.fn(async () => ({ switched: true, engineReady: true }));
   const accept = vi.fn();
   const withLock = vi.fn(async (_id: string, task: () => Promise<unknown>) => task());
@@ -94,6 +94,14 @@ describe('automatic runtime selection respects the user send boundary', () => {
     const h = harness();
     h.readCandidate.mockResolvedValue({ isBot: true, candidate: null });
     expect(await h.run('session', 1, 1, true)).toMatchObject({ outcome: 'exhausted' });
+    expect(h.switchAgent).not.toHaveBeenCalled();
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+
+  it('reports a Bot without any other route as unchanged, not exhausted', async () => {
+    const h = harness();
+    h.readCandidate.mockResolvedValue({ isBot: true, candidate: null, routeLocked: true });
+    expect(await h.run('session', 1, 1, true)).toMatchObject({ session: null, outcome: 'unchanged' });
     expect(h.switchAgent).not.toHaveBeenCalled();
     expect(h.apply).not.toHaveBeenCalled();
   });

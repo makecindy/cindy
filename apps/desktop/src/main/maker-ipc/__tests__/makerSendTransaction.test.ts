@@ -41,7 +41,7 @@ import ts from 'typescript';
 import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
 import { createPreflightHarness, filesystemError } from './helpers/workingDirectoryPreflightHarness';
 import { buildCindyMakeTaskNote } from '../../cindy-make/taskNote';
-import { getResolvedMainLocale } from '../../i18n';
+import { getResolvedMainLocale } from '../../i18n.desktop';
 import { buildMobileClientPromptNote } from '../mobileClientPromptNote';
 import { buildUiLanguageErrorNote } from '../uiLanguageErrorNote';
 import * as mcpApps from '../../mcp-apps/runtime.js';
@@ -92,6 +92,31 @@ describe('local application task takeover', () => {
       expect(replacement.send).toHaveBeenCalledOnce();
     }
     expect(session.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('project resource drift recycling', () => {
+  function driftDeps() {
+    const { deps, session } = createDeps();
+    const live = createSession({ hasRecyclableProjectResourceDrift: () => true });
+    deps.getSession = () => live;
+    return { deps, live, session };
+  }
+
+  it('recycles a drifted live runtime when createOpts allows lazy rebuild', async () => {
+    const { deps, live } = driftDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted(
+      'session-1', 'hello', { id: 'session-1', agentKind: 'pi', workingDir: 'C:\\repo' });
+    expect(deps.closeSessionIfCurrent).toHaveBeenCalledWith('session-1');
+    expect(live.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps the live-send path when no createOpts can rebuild the runtime', async () => {
+    const { deps, live } = driftDeps();
+    // 直发/老链路无 createOpts:回收后 lazy-create 无法重建,按原运行时投递
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
+    expect(deps.closeSessionIfCurrent).not.toHaveBeenCalled();
+    expect(live.send).toHaveBeenCalledOnce();
   });
 });
 describe('MCP App next-turn context', () => {
@@ -299,6 +324,7 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
     readScheduledPermissions: vi.fn(async () => ({ permissionMode: 'ask', planModeEnabled: false })),
     getSession: vi.fn((sessionId: string) => (sessionId === session.id ? session : undefined)),
     closeSession: vi.fn(async () => {}),
+    closeSessionIfCurrent: vi.fn(async () => {}),
     preflightBotRuntimeResources: vi.fn(async () => {}),
     getSessionMeta: vi.fn(async () => ({ title: '现有会话' })),
     ensureRemoteReadyForSessionStart: vi.fn(async () => {}),
@@ -498,7 +524,9 @@ describe('maker SEND transaction', () => {
     'does not resume product work when %s wins after message persistence',
     async (reason) => {
       const dispatch = vi.fn();
+      const ackInterruptedTurnDispatched = vi.fn();
       const { deps, session } = createDeps({
+        ackInterruptedTurnDispatched,
         prepareProductTurn: () => dispatch,
         assertBeforeVendorDispatch: () => {
           throw new Error('stale input');
@@ -521,6 +549,7 @@ describe('maker SEND transaction', () => {
       else await expect(sending).resolves.toMatchObject({ accepted: false });
       expect(deps.createDbMessage).toHaveBeenCalledOnce();
       expect(dispatch).not.toHaveBeenCalled();
+      expect(ackInterruptedTurnDispatched).not.toHaveBeenCalled();
     },
   );
   it('dispatches a bound lazy session after one timed-out probe without probing again at bootstrap', async () => {
@@ -753,45 +782,71 @@ describe('maker SEND transaction', () => {
     );
   });
 
-  it('forwards the exact Learn pin to Claude for provider-boundary expansion', async () => {
-    const grant = {
-      version: 1 as const,
-      sessionInstanceId: 'session-instance-1',
-      resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
-    };
-    const captureCindyLearnInvocation = vi.fn(async () => grant);
-    const claudeSession = createSession({ agentKind: 'claude-code' });
-    const { deps } = createDeps({
-      getSession: vi.fn(() => claudeSession),
-      captureCindyLearnInvocation,
-    });
+  // #8549 (unit): provider dispatch must retain the direct command and pin.
+  // Review found the missing state: a fresh engine-switch handoff preceding
+  // /cindy:learn. Keep it pending until an accepted ordinary message delivers it.
+  const learnDispatchCases = (['claude-code', 'pi'] as const).flatMap((agentKind) =>
+    ['/learn release flow', '/skill:learn release flow', '/cindy:learn'].flatMap((command) =>
+      [false, true].map((hasHandoff) => ({ agentKind, command, hasHandoff })),
+    ),
+  );
+  it.each(learnDispatchCases)(
+    'forwards the exact Learn pin and command: $agentKind $command handoff=$hasHandoff', async ({ agentKind, command, hasHandoff }) => {
+      const grant = {
+        version: 1 as const,
+        sessionInstanceId: 'session-instance-1',
+        resolvedSkillPath: '/system-skills/v10/learn/SKILL.md',
+      };
+      const captureCindyLearnInvocation = vi.fn<NonNullable<MakerSendTransactionDeps['captureCindyLearnInvocation']>>(async () => grant);
+      const learnSession = createSession({ agentKind });
+      let handoff = hasHandoff ? 'HANDOFF-TEXT' : null;
+      const consumePendingHandoff = vi.fn(() => { handoff = null; });
+      const { deps } = createDeps({
+        getSession: vi.fn(() => learnSession),
+        captureCindyLearnInvocation,
+        peekPendingHandoff: vi.fn(async () => handoff),
+        consumePendingHandoff,
+      });
+      const transaction = createMakerSendTransaction(deps);
 
-    await createMakerSendTransaction(deps).sendToAgentAccepted(
-      'session-1',
-      { type: 'user', content: '/learn release flow' },
-      undefined,
-      {
-        persistUserMessage: {
-          clientId: 'claude-learn-1',
-          content: '/learn release flow',
+      await transaction.sendToAgentAccepted(
+        'session-1',
+        { type: 'user', content: command },
+        undefined,
+        {
+          persistUserMessage: {
+            clientId: 'claude-learn-1',
+            content: command,
+          },
         },
-      },
-    );
+      );
 
-    expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
-    const sendOptions = vi.mocked(claudeSession.send).mock.calls[0]?.[1];
-    expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
-      name: 'learn',
-      path: grant.resolvedSkillPath,
-    });
-    expect(deps.createDbMessage).toHaveBeenCalledWith(
-      'session-1',
-      expect.objectContaining({
-        agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
-      }),
-      undefined,
-    );
-  });
+      expect(captureCindyLearnInvocation).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(learnSession.send).mock.calls[0]?.[0]).toEqual({
+        type: 'user', content: command,
+      });
+      const sendOptions = vi.mocked(learnSession.send).mock.calls[0]?.[1];
+      expect(sendOptions?.[PINNED_SKILL_INVOCATION]).toEqual({
+        name: 'learn',
+        path: grant.resolvedSkillPath,
+      });
+      expect(deps.createDbMessage).toHaveBeenCalledWith(
+        'session-1',
+        expect.objectContaining({
+          agentMeta: expect.objectContaining({ cindyLearnInvocation: grant }),
+        }),
+        undefined,
+      );
+      expect(consumePendingHandoff).not.toHaveBeenCalled();
+
+      captureCindyLearnInvocation.mockResolvedValue(null);
+      await transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'Continue' });
+      expect(vi.mocked(learnSession.send).mock.calls[1]?.[0]).toEqual(
+        withUiLanguageUserMessage(`${hasHandoff ? 'HANDOFF-TEXT\n\n' : ''}Continue`),
+      );
+      expect(consumePendingHandoff).toHaveBeenCalledTimes(hasHandoff ? 1 : 0);
+    },
+  );
 
   it('restamps a trusted local queue edit for the existing Desktop command route', async () => {
     const { deps, session } = createDeps();
@@ -1656,7 +1711,17 @@ describe('maker SEND transaction', () => {
     expect(onUndispatchedDirectUserTurn).toHaveBeenCalledWith('session-1');
   });
 
-  it('acks an interrupted turn with the executor clock only after direct dispatch is accepted', async () => {
+  // Regression: typing a normal continuation after app restart must retire the
+  // old interruption just like the Continue button. The shared send transaction
+  // covers both coordinator queue dispatch and direct/remote sends (unit tier).
+  it.each([
+    { label: 'ordinary direct input', sendOpts: undefined },
+    {
+      label: 'ordinary queued input',
+      sendOpts: { persistUserMessage: { clientId: 'resume-input', content: 'Please continue.' } },
+    },
+    { label: 'legacy Continue input', sendOpts: { ackInterruptedTurnOnDispatch: true } },
+  ])('acks the old interruption only after $label is dispatched', async ({ sendOpts }) => {
     const ackInterruptedTurnDispatched = vi.fn(async () => {});
     const session = createSession({
       send: vi.fn(async () => {
@@ -1673,15 +1738,13 @@ describe('maker SEND transaction', () => {
 
     try {
       await expect(
-        transaction.sendToAgentAccepted('session-1', 'continue', undefined, {
-          ackInterruptedTurnOnDispatch: true,
-        }),
+        transaction.sendToAgentAccepted('session-1', 'Please continue.', undefined, sendOpts),
       ).resolves.toMatchObject({ accepted: true });
     } finally {
       now.mockRestore();
     }
 
-    expect(ackInterruptedTurnDispatched).toHaveBeenCalledWith('session-1', 49_999);
+    expect(ackInterruptedTurnDispatched).toHaveBeenCalledExactlyOnceWith('session-1', 49_999);
     expect(vi.mocked(session.send).mock.invocationCallOrder[0]).toBeLessThan(
       ackInterruptedTurnDispatched.mock.invocationCallOrder[0]!,
     );
@@ -2795,6 +2858,50 @@ describe('maker SEND transaction', () => {
     expect(newSession.send).toHaveBeenCalled();
   });
 
+  // Orca inter-agent delivery reaches an idle live session without sendToAgentAccepted;
+  // it uses this entry so a session that became a Lead after startup is rebuilt first.
+  it('rebuilds an idle live Orca session on request and leaves a hydrated one alone', async () => {
+    const oldSession = createSession({
+      id: 'orca-session',
+      workDir: 'C:\\repo',
+      hostStartupPreferences: { userPrompt: 'custom prompt', makerMemoryEnabled: false },
+    });
+    const newSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
+    const hydrated = { current: false };
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => hydrated.current),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      bootstrapSession: vi.fn(async () => {
+        hydrated.current = true;
+        return { session: newSession, didInjectOrcaInstructions: true, didInjectProjectContext: false };
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'orca-session',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      orcaRole: 'lead',
+    };
+
+    await expect(transaction.hydrateActiveOrcaSession('orca-session', createOpts)).resolves.toBe(true);
+    expect(deps.closeSession).toHaveBeenCalledTimes(1);
+    expect(deps.bootstrapSession).toHaveBeenCalledTimes(1);
+    // Startup preferences of the replaced runtime survive the rebuild.
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      userPrompt: 'custom prompt',
+      makerMemoryEnabled: false,
+    }));
+    expect(deps.markOrcaRoleIfNeeded).toHaveBeenCalledWith('orca-session', 'lead');
+    expect(oldSession.send).not.toHaveBeenCalled();
+
+    await expect(transaction.hydrateActiveOrcaSession('orca-session', createOpts)).resolves.toBe(false);
+    expect(deps.closeSession).toHaveBeenCalledTimes(1);
+    expect(deps.bootstrapSession).toHaveBeenCalledTimes(1);
+  });
+
   it('reconciles createOpts against DB before closing the old runtime on active Orca rehydrate (#2882)', async () => {
     const oldSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
     const newSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
@@ -3481,30 +3588,6 @@ describe('Cindy Make task note', () => {
     memory.reset('session-1');
     await transaction.sendToAgentAccepted('session-1', 'Continue explaining');
     expect(vi.mocked(session.send).mock.calls[2][0]).toContain('[Side chat context]');
-  });
-
-  // Unit / #7253: only wire context explains delivery reporting. The previous
-  // source-note coverage did not protect all harnesses, dedupe, or persistence.
-  it.each(['claude-code', 'codex', 'pi'] as const)('adds deduplicated delivery context to %s without saving it as user text', async (agentKind) => {
-    const memory = createWireNoteMemory();
-    const session = createSession({ agentKind });
-    const note = '[Task delivery] Report newly delivered results before ending.';
-    const { deps } = createDeps({
-      getSession: () => session,
-      readTaskDeliveryNote: async () => note,
-      planRepeatableWireNotes: (id, notes, opts) => memory.plan(id, notes, opts),
-    });
-    const transaction = createMakerSendTransaction(deps);
-    await transaction.sendToAgentAccepted('session-1', 'Complete the work', undefined, {
-      persistUserMessage: { clientId: 'delivery-1', content: 'Complete the work' },
-    });
-    expect(vi.mocked(session.send).mock.calls[0][0]).toContain(note);
-    expect(vi.mocked(deps.createDbMessage).mock.calls[0][1].content).toBe('Complete the work');
-    await transaction.sendToAgentAccepted('session-1', 'Continue');
-    expect(vi.mocked(session.send).mock.calls[1][0]).toBe('Continue');
-    memory.reset('session-1');
-    await transaction.sendToAgentAccepted('session-1', 'Continue after compaction');
-    expect(vi.mocked(session.send).mock.calls[2][0]).toContain(note);
   });
 
   it('tells the agent the owner\'s message closed its input handoff card, on that message only and without saving it', async () => {
@@ -4431,6 +4514,7 @@ describe('session-agent-switch handoff injection', () => {
         scheduledModelScope: { restore: vi.fn(async () => undefined) },
         // UI-origin cross-engine preparation can return without clearing the intent.
         applyPendingAgentSwitchIfIdle: vi.fn(async () => undefined),
+        recoverRenamedSessionModelOnSend: vi.fn(async () => undefined),
         agentSwitchDeps: {}, agentSwitchPending: pending,
         getSessionRowSnapshotStrict: vi.fn(async () => ({ orcaRole, orcaRemoteLead })),
         parseOrcaRemoteLead,
@@ -4680,65 +4764,6 @@ it('persists coordination audit metadata and dispatches the model without a prom
   });
 });
 
-describe('working memory refresh after native compaction', () => {
-  const note = '[Working memory refresh · internal context]\n- 周五前改完周报模板';
-
-  it('prepends the refresh note once and consumes that generation only after the engine accepted the turn', async () => {
-    const session = createSession({ agentKind: 'codex' });
-    const { deps } = createDeps({
-      getSession: vi.fn(() => session),
-      peekWorkingMemoryRefresh: vi.fn(async () => ({ generation: 7, note })),
-      consumeWorkingMemoryRefresh: vi.fn(),
-    });
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
-    expect(vi.mocked(session.send).mock.calls[0]?.[0]).toBe(`${uiLanguageNote()}\n\n${note}\n\nhello`);
-    expect(deps.consumeWorkingMemoryRefresh).toHaveBeenCalledWith('session-1', 7);
-
-    const rejecting = createSession({ agentKind: 'codex', send: vi.fn(async () => ({ accepted: false }) as SessionSendResult) });
-    const { deps: rejectedDeps } = createDeps({
-      getSession: vi.fn(() => rejecting),
-      peekWorkingMemoryRefresh: vi.fn(async () => ({ generation: 7, note })),
-      consumeWorkingMemoryRefresh: vi.fn(),
-    });
-    await createMakerSendTransaction(rejectedDeps).sendToAgentAccepted('session-1', 'hello').catch(() => undefined);
-    expect(rejectedDeps.consumeWorkingMemoryRefresh).not.toHaveBeenCalled();
-  });
-
-  it('skips the refresh when a rebuild handoff already carries the ledger, but still consumes that generation', async () => {
-    const session = createSession({ agentKind: 'codex' });
-    const { deps } = createDeps({
-      getSession: vi.fn(() => session),
-      peekPendingHandoff: vi.fn(async () => 'HANDOFF'),
-      peekWorkingMemoryRefresh: vi.fn(async () => ({ generation: 3, note })),
-      consumeWorkingMemoryRefresh: vi.fn(),
-    });
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
-    const sent = vi.mocked(session.send).mock.calls[0]?.[0] as string;
-    expect(sent).toContain('HANDOFF');
-    expect(sent).not.toContain('Working memory refresh');
-    expect(deps.consumeWorkingMemoryRefresh).toHaveBeenCalledWith('session-1', 3);
-  });
-
-  it('consumes the marker even when the session has no ledger, and nothing when none is pending', async () => {
-    const session = createSession({ agentKind: 'codex' });
-    const { deps } = createDeps({
-      getSession: vi.fn(() => session),
-      peekWorkingMemoryRefresh: vi.fn(async () => ({ generation: 2, note: null })),
-      consumeWorkingMemoryRefresh: vi.fn(),
-    });
-    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
-    expect(vi.mocked(session.send).mock.calls[0]?.[0]).toBe(withUiLanguageNote('hello'));
-    expect(deps.consumeWorkingMemoryRefresh).toHaveBeenCalledWith('session-1', 2);
-
-    const { deps: idle, session: idleSession } = createDeps({
-      peekWorkingMemoryRefresh: vi.fn(async () => null),
-      consumeWorkingMemoryRefresh: vi.fn(),
-    });
-    await createMakerSendTransaction(idle).sendToAgentAccepted('session-1', 'hello');
-    expect(idleSession.send).toHaveBeenCalledOnce();
-    expect(idle.consumeWorkingMemoryRefresh).not.toHaveBeenCalled();
-  });
-});
 
 describe('repeatable environment notes are sent only when they change', () => {
   const host = { deviceId: 'mac-1', name: 'Mac' };

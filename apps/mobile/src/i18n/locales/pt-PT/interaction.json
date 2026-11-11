@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Concluído",
+    "mcpCancel": "Cancelar",
     "mode": {
       "default": "Permissões predefinidas",
       "acceptEdits": "Permitir edições",
@@ -34,6 +36,10 @@
     "exit": "Sair do modo de planeamento"
   },
   "panel": {
+    "questionUnanswered": "Sem resposta",
+    "questionWithdrawn": "Já não precisa de resposta",
+    "withdrawnDraft": "Esta pergunta já não precisa de resposta.\n{{reason}}\nO rascunho foi guardado e pode ser enviado como complemento.",
+    "sendSupplement": "Enviar complemento",
     "readOnlyKind": "Pendente",
     "readOnlyTitle": "A aguardar confirmação no seu computador",
     "pendingRequests": "Pedidos pendentes",
@@ -98,7 +104,14 @@
     "planFeedbackPlaceholder": "Dizer ao Claude o que fazer",
     "planFeedbackRequired": "Introduza comentários antes de submeter.",
     "planFeedbackSubmit": "Submeter comentários ao plano",
-    "planFeedbackAccessibility": "Dar comentários para alterar o plano"
+    "planFeedbackAccessibility": "Dar comentários para alterar o plano",
+    "validation": {
+      "required": "Preencha este campo obrigatório.",
+      "choice": "Escolha uma das opções apresentadas.",
+      "tooShort": "Introduza pelo menos {{count}} caracteres.",
+      "tooLong": "Introduza no máximo {{count}} caracteres."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -389,6 +402,8 @@
       "submitting": "A enviar"
     },
     "permission": {
+      "titleStdin": "Permitir entrada neste terminal?",
+      "titleMcpUrl": "Concluir o pedido de {{server}}",
       "highRiskTitle": "Uma permissão de alto risco requer confirmação",
       "highRiskDetail": "Reveja o comando e confirme novamente para o permitir. Recuse se tiver dúvidas.",
       "sessionAllowTitle": "Permitir uma vez ou permitir sempre para esta tarefa",
@@ -443,5 +458,39 @@
       "ghost_id": "Plugin",
       "tool": "Ferramenta"
     }
+  },
+  "issueConfirm": {
+    "title": "Confirmar envio de feedback para {{appName}}",
+    "typeBug": "Erro",
+    "typeFeature": "Funcionalidade",
+    "titleLabel": "Título",
+    "bodyLabel": "Corpo (Markdown)",
+    "privacyHint": "O título e o corpo da ocorrência serão públicos e poderão ser pesquisáveis ou guardados em cache. A ocultação automática abrange apenas alguns padrões comuns e não consegue detetar todo o contexto sensível.",
+    "relatedLogsHint": "Este envio inclui os registos do cliente relacionados apresentados acima. São filtrados, expurgados e limitados em extensão antes da publicação.",
+    "privacyConfirm": "Revi o conteúdo público acima e não contém informação pessoal, de conversas ou empresarial que deva permanecer privada",
+    "submissionMethodLabel": "Identidade de envio",
+    "identityGithubUser": "A minha conta GitHub @{{login}}",
+    "identityGithubUserHint": "Será o autor no GitHub e poderá editar ou fechar esta ocorrência no GitHub",
+    "identityPlatform": "Bot oficial do Cindy @{{login}} (predefinição)",
+    "identityPlatformHint": "Não é necessário configurar uma conta GitHub. O bot oficial cria a ocorrência e pode adicionar uma atribuição pública no corpo",
+    "publicNameLabel": "Atribuição pública",
+    "publicNameHint": "Esta atribuição aparecerá publicamente no corpo da ocorrência",
+    "anonymous": "Anónimo",
+    "useAnonymous": "Usar atribuição anónima",
+    "envLine": "Ambiente do cliente de envio (anexado automaticamente ao enviar): cliente {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · Idioma da interface {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · ID do modelo {{modelId}} (esta sessão)",
+    "regionLine": "Região da compilação: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Enviar feedback",
+    "cancel": "Cancelar",
+    "previewLabel": "GitHub · Feedback público",
+    "edit": "Editar",
+    "doneEditing": "Concluir edição",
+    "publicSubmit": "Enviar publicamente",
+    "publicationNotice": "O conteúdo e o seu nome ficarão públicos no GitHub.",
+    "attribution": "Por {{name}}",
+    "environment": "Ambiente incluído",
+    "identitySettings": "Nome e conta"
   }
 }

@@ -634,7 +634,7 @@ export function BranchWorktreeChip({
         onEscapeKeyDown={(e) => {
           if (e.isComposing) e.preventDefault();
         }}
-        className="max-h-[280px] w-auto min-w-[200px] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-lg"
+        className="max-h-[280px] w-auto min-w-[200px] overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-[shadow:var(--shadow-menu)]"
       >
         {branchesLoading ? (
           <div className="px-3 py-1.5 text-13 text-muted-foreground">

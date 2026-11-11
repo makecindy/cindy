@@ -1,0 +1,54 @@
+    Finished `sim` profile [optimized] target(s) in 0.03s
+     Running tests\reliability.rs (target\sim\deps\reliability-e650928dd03e5967.exe)
+
+running 47 tests
+test acknowledgement_of_unsent_data_is_rejected ... ok
+test profile_slowest_seeds ... ignored
+test packets_of_another_version_are_rejected ... ok
+test parity_with_an_impossible_length_is_ignored ... ok
+test reopened_window_is_announced_immediately ... ok
+test initial_timeout_keeps_the_first_flight_available_for_measurement ... ok
+test outages_recover_or_give_up_within_the_deadline ... ok
+test same_seed_replays_the_same_run ... ok
+test segments_beyond_the_window_are_retried_not_lost ... ok
+test queue_overflow_is_not_mistaken_for_random_loss ... ok
+test long_paths_keep_sending_before_the_first_ack ... ok
+test hostile_packets_never_panic_or_grow_memory ... ok
+test crafted_flood_cannot_grow_receive_buffers ... ok
+test lost_messages_do_not_wait_for_the_next_one ... ok
+test different_recovery_policies_interoperate ... ok
+test timeouts_do_not_resend_the_whole_window ... ok
+test window_probe_waits_when_an_ack_fills_the_packet ... ok
+test slow_reader_stalls_the_sender_and_recovers ... ok
+test rtt_is_relearned_when_the_path_gets_longer ... ok
+test clean_paths_carry_no_redundancy ... ok
+test outage_during_startup_is_not_read_as_a_rate_limit ... ok
+test short_outages_recover_within_a_few_round_trips ... ok
+test outages_cost_little_traffic_and_recover_quickly ... ok
+test parity_is_not_starved_by_piggybacked_acks ... ok
+test reordering_is_learned_and_stops_being_retransmitted ... ok
+test rate_limited_loss_is_not_read_as_random ... ok
+test startup_stops_before_overflowing_the_queue ... ok
+test rate_limiters_are_found_without_any_rtt_signal ... ok
+test rtt_is_learned_even_when_every_packet_times_out_first ... ok
+test bulk_transfers_do_not_keep_the_queue_full ... ok
+test small_messages_stay_covered_on_long_paths ... ok
+test forged_parity_never_panics_or_grows_memory ... ok
+test idle_before_the_first_send_does_not_slow_the_transfer ... ok
+test jitter_is_not_counted_as_holes ... ok
+test repeated_outages_recover_fast ... ok
+test first_flight_measures_the_path ... ok
+test blocked_windows_are_not_held_up_by_a_lost_retransmission ... ok
+test late_packets_are_repaired_like_lost_ones ... ok
+test every_seed_delivers_an_intact_ordered_stream ... ok
+test late_packets_get_acknowledged ... ok
+test parity_recovers_losses_without_a_round_trip ... ok
+test random_loss_does_not_collapse_the_rate ... ok
+test window_limited_transfers_refill_immediately ... ok
+test own_queue_does_not_hide_random_loss ... ok
+test recovery_policies_keep_streams_intact_and_make_progress ... ok
+test shifting_the_clock_changes_nothing ... ok
+test parity_share_stays_close_to_the_loss_rate ... ok
+
+test result: ok. 46 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 7.81s
+

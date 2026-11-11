@@ -78,16 +78,18 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
 
   it('enqueue 与 steer 两个 IPC 边界都盖章,编辑时按编辑者重新盖章', () => {
     // 手机会话页所有发送都走这两条,只在 invoke context 里读来源实际读不到(review P1)。
-    // 第三处是排队编辑(两个编辑入口共用 stampQueuedEditProvenance)。
+    // 第三处是排队编辑(两个编辑入口共用 stampQueuedEditProvenance)；
+    // 第四处是异步问题答案入队(asyncQuestionInputDispatcher)。
     const stamps = register.match(/stampMobileClientOrigin\(/g) ?? [];
-    expect(stamps.length).toBe(3);
+    expect(stamps.length).toBe(4);
     expect(register.match(/stampQueuedEditProvenance\(sid, updated, remote, editor\)/g)?.length).toBe(2);
     expect(register).toContain('isMobileControllerInvoke(),');
   });
 
   it('device-link provenance is stamped at both queue input boundaries', () => {
+    // Plus the async question answer enqueue (asyncQuestionInputDispatcher).
     const stamps = register.match(/stampTrustedDeviceLinkQueuedOrigin\(/g) ?? [];
-    expect(stamps.length).toBe(3);
+    expect(stamps.length).toBe(4);
     expect(register).toContain('deviceLinkInvoke,');
     // 设备来源与 device-link 标记同点盖章(两处 IPC 边界)。
     expect(register.match(/deviceLinkInvoke,\r?\n\s+readDeviceLinkInvokeSourceDevice\(\),/g)?.length).toBe(2);

@@ -28,9 +28,12 @@ describe('Pi session-tree lazy resume provider route', () => {
 
     expect(listSkills).toContain('const kind = requireAgentKind(agentKind);');
     expect(listSkills).toContain('await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();');
+    // Guard discovery order independently of optional host verification arguments.
+    const skillsDiscoveryIdx = listSkills.indexOf('maker.listAgentSkills(');
+    expect(skillsDiscoveryIdx).toBeGreaterThanOrEqual(0);
     expect(
       listSkills.indexOf('await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();'),
-    ).toBeLessThan(listSkills.indexOf('maker.listAgentSkills(kind, skillParams)'));
+    ).toBeLessThan(skillsDiscoveryIdx);
 
     expect(listCustomizations).toContain("else if (agentKind === 'pi') {");
     expect(listCustomizations).toContain(

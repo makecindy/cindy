@@ -53,6 +53,12 @@ interface PermissionSelectorProps {
    */
   triggerVariant?: 'chip' | 'field';
   /**
+   * chip 形态的弹层:默认是 composer 的容器形变(MorphPopover)。模态弹窗里要传 false ——
+   * 形变面板挂在弹窗之外,会被模态层挡住点击;改用锚定的 Radix Popover,trigger 外观不变。
+   * 与 ModelSelector 的同名开关同一用途。field 形态恒为 Radix,不受它影响。
+   */
+  useMorphPopover?: boolean;
+  /**
    * 可及名上下文前缀(如「权限模式 · chat」)。多实例同屏(IM 目录偏好逐行一个)时
    * 前置到 trigger 的 aria-label,行与行才能被读屏区分 —— 与
    * VendorSegmentedSwitcher.ariaLabel 同一动机;单实例的 composer 不传,行为不变。
@@ -122,6 +128,7 @@ export function PermissionSelector({
   iconOnly = false,
   visualVariant = 'default',
   triggerVariant = 'chip',
+  useMorphPopover = true,
   ariaContext,
   disabledModes,
   allowedModes,
@@ -164,6 +171,8 @@ export function PermissionSelector({
   const triggerDescription = descriptionOf(current, effectiveMode);
   const isCreateAgentVariant = visualVariant === 'create-agent';
   const isFieldTrigger = triggerVariant === 'field';
+  // 走 Radix Popover 的两种情况:设置页字段,以及模态弹窗里的 chip。
+  const anchoredPopover = isFieldTrigger || !useMorphPopover;
   const previousOptionsLengthRef = useRef(options.length);
   // 窄态工具条:权限语义由 tooltip + aria-label 保留，视觉收成固定宽图标。
   // 普通会话在侧栏 + 浏览器 split-pane 下同样会变窄，不能只处理 create-agent。
@@ -232,8 +241,8 @@ export function PermissionSelector({
           <button
             type="button"
             disabled={disabled}
-            // field 走 Radix Popover,开合交给 PopoverTrigger;chip 的 morph 自管点击。
-            onClick={isFieldTrigger ? undefined : () => setOpen((prev) => (disabled ? false : !prev))}
+            // Radix Popover 的开合交给 PopoverTrigger;chip 的 morph 自管点击。
+            onClick={anchoredPopover ? undefined : () => setOpen((prev) => (disabled ? false : !prev))}
             aria-expanded={open && !disabled}
             aria-haspopup="listbox"
             className={cn(
@@ -388,13 +397,14 @@ export function PermissionSelector({
   // 与 ModelSelector 的 field 形态同一原语。容器形变(MorphPopover)是 composer 专属
   // 类目(design-rules §14.4),且它只在打开时测一次 fixed 几何,设置页的 overflow-y
   // 滚动列里面板会脱锚(2026-07 review 实锤),settings 一律走 Radix。
-  if (isFieldTrigger) {
+  if (anchoredPopover) {
     return (
       <Popover open={open && !disabled} onOpenChange={(next) => setOpen(disabled ? false : next)}>
         <PopoverTrigger asChild>{triggerButton}</PopoverTrigger>
         <PopoverContent
           side="bottom"
-          align="end"
+          // chip 在工具条左端:面板左缘对齐它;字段形态与 trigger 等宽,对齐哪边都一样。
+          align={isFieldTrigger ? 'end' : 'start'}
           sideOffset={4}
           collisionPadding={8}
           onOpenAutoFocus={(event) => {
@@ -406,15 +416,16 @@ export function PermissionSelector({
             }
           }}
           className={cn(
-            // 面板宽度绑定 trigger 宽度(DESIGN.md §Select & Dropdown: 不许比触发它的
+            // 字段形态:面板宽度绑定 trigger 宽度(DESIGN.md §Select & Dropdown: 不许比触发它的
             // 控件更宽或更窄;Radix 语义即 --radix-popover-trigger-width)。行内容自带
             // truncate,窄字段下文案省略号收尾,描述仍有行级 tooltip 兜底。
-            'w-[var(--radix-popover-trigger-width)] rounded-[12px] p-2',
+            // chip 形态:trigger 比菜单窄,面板用与 composer 形变面板相同的 300px。
+            isFieldTrigger
+              ? 'w-[var(--radix-popover-trigger-width)]'
+              : 'w-[300px] max-w-[calc(100vw-16px)]',
+            'rounded-[12px] p-2',
             'bg-[var(--model-dropdown-bg)]',
             'border border-[var(--model-dropdown-border)]',
-            // 共享 PopoverContent 自带 shadow-md;DESIGN.md §4 面板无阴影(分离感来自
-            // 层色/描边),显式压掉。
-            'shadow-none',
           )}
         >
           {optionsList}

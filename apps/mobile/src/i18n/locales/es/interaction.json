@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Listo",
+    "mcpCancel": "Cancelar",
     "mode": {
       "default": "Permisos predeterminados",
       "acceptEdits": "Permitir ediciones",
@@ -34,6 +36,10 @@
     "exit": "Salir del modo de plan"
   },
   "panel": {
+    "questionUnanswered": "Sin respuesta",
+    "questionWithdrawn": "Ya no necesita respuesta",
+    "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",
+    "sendSupplement": "Enviar información adicional",
     "readOnlyKind": "Pendiente",
     "readOnlyTitle": "Esperando confirmación en su computadora",
     "pendingRequests": "Solicitudes pendientes",
@@ -98,7 +104,14 @@
     "planFeedbackPlaceholder": "Dile a Claude qué hacer",
     "planFeedbackRequired": "Ingrese sus comentarios antes de enviarlos.",
     "planFeedbackSubmit": "Enviar comentarios sobre el plan",
-    "planFeedbackAccessibility": "Dar retroalimentación para cambiar el plan."
+    "planFeedbackAccessibility": "Dar retroalimentación para cambiar el plan.",
+    "validation": {
+      "required": "Completa este campo obligatorio.",
+      "choice": "Elige una de las opciones de la lista.",
+      "tooShort": "Introduce al menos {{count}} caracteres.",
+      "tooLong": "Introduce como máximo {{count}} caracteres."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -389,6 +402,8 @@
       "submitting": "Presentando"
     },
     "permission": {
+      "titleStdin": "¿Permitir entrada en este terminal?",
+      "titleMcpUrl": "Completar la solicitud de {{server}}",
       "highRiskTitle": "El permiso de alto riesgo necesita confirmación",
       "highRiskDetail": "Revise el comando y luego confirme nuevamente para permitirlo. Niégalo si no estás seguro.",
       "sessionAllowTitle": "Permitir una vez o permitir siempre para esta tarea",
@@ -443,5 +458,39 @@
       "ghost_id": "Complemento",
       "tool": "Herramienta"
     }
+  },
+  "issueConfirm": {
+    "title": "Confirmar envío de comentarios a {{appName}}",
+    "typeBug": "Error",
+    "typeFeature": "Función",
+    "titleLabel": "Título",
+    "bodyLabel": "Contenido (Markdown)",
+    "privacyHint": "El título y el contenido del reporte serán públicos y podrían aparecer en búsquedas o almacenarse en caché. La ocultación automática de datos solo cubre algunos patrones comunes y no puede detectar todos los contextos sensibles.",
+    "relatedLogsHint": "Este envío incluye los registros del cliente relacionados que se muestran arriba. Se filtran, se ocultan los datos sensibles y se limita su longitud antes de publicarlos.",
+    "privacyConfirm": "Revisé el contenido público de arriba y no contiene información personal, de conversaciones ni empresarial que deba permanecer privada",
+    "submissionMethodLabel": "Identidad de envío",
+    "identityGithubUser": "Mi cuenta de GitHub @{{login}}",
+    "identityGithubUserHint": "Serás el autor del reporte en GitHub y podrás editarlo o cerrarlo allí",
+    "identityPlatform": "Bot oficial de Cindy @{{login}} (predeterminado)",
+    "identityPlatformHint": "No necesitas configurar una cuenta de GitHub. El bot oficial crea el reporte y puedes añadir una atribución pública en el contenido",
+    "publicNameLabel": "Atribución pública",
+    "publicNameHint": "Esta atribución aparecerá públicamente en el contenido del reporte",
+    "anonymous": "Anónimo",
+    "useAnonymous": "Usar atribución anónima",
+    "envLine": "Entorno del cliente que se enviará (se adjunta automáticamente al enviar): cliente {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · idioma de la interfaz {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · ID del modelo {{modelId}} (esta sesión)",
+    "regionLine": "Región de compilación: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Enviar comentarios",
+    "cancel": "Cancelar",
+    "previewLabel": "GitHub · Comentarios públicos",
+    "edit": "Editar",
+    "doneEditing": "Terminar edición",
+    "publicSubmit": "Enviar públicamente",
+    "publicationNotice": "El contenido y tu nombre serán públicos en GitHub.",
+    "attribution": "Por {{name}}",
+    "environment": "Entorno incluido",
+    "identitySettings": "Nombre y cuenta"
   }
 }

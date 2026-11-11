@@ -139,6 +139,29 @@ function createAgent(
 }
 
 describe('Maker Pi managed-package skill boundary', () => {
+  // PB97, unit: preview listings must consume the Host's async verified paths
+  // without calling the synchronous fallback; active tasks retain their snapshot.
+  it('uses async activation facts for previews, but preserves live and SSH filtering', async () => {
+    const source = '/fixture/disabled-skill';
+    const fallback = vi.fn(() => { throw new Error('blocking fallback'); });
+    const readDisabled = vi.fn(async () => [source]);
+    const agent = createAgent(async (opts) => ({ ...createHandle({ id: opts.sessionId! }), disabledSkillPaths: [] }));
+    agent.listAgentSkills = vi.fn(async () => ({ skills: [{ kind: 'agent-skill' as const,
+      name: 'demo', source: 'skill' as const, path: source }] }));
+    agent.filterActiveSkillCommands = (result, remote, snapshot, current) => BaseAgent.prototype.filterActiveSkillCommands.call(
+      { deps: { getDisabledSkillPaths: fallback } } as unknown as BaseAgent, result, remote, snapshot, current,
+    );
+    const maker = new Maker({ agents: { codex: agent }, storage: createStorage(), logger: createLogger() });
+    try {
+      expect((await maker.listAgentSkills('codex', { workingDir: '/repo' }, readDisabled)).skills).toEqual([]);
+      expect(readDisabled).toHaveBeenCalledTimes(1);
+      await maker.createSession({ id: 'live', agentKind: 'codex', workingDir: '/repo', model: 'm' });
+      expect((await maker.listAgentSkills('codex', { workingDir: '/repo', sessionId: 'live' }, readDisabled)).skills).toHaveLength(1);
+      expect((await maker.listAgentSkills('codex', { workingDir: '/repo', remoteHostId: 'ssh' }, readDisabled)).skills).toHaveLength(1);
+      expect(readDisabled).toHaveBeenCalledTimes(1);
+      expect(fallback).not.toHaveBeenCalled();
+    } finally { await maker.shutdown(); }
+  });
   it('uses the runtime Skill view for host authorization checks', async () => {
     const agent = createAgent(async () => {
       throw new Error('not used');
@@ -1390,6 +1413,31 @@ describe('Maker session close events', () => {
     expect(replacement.close).not.toHaveBeenCalled();
     await next.close();
     queue.end();
+  });
+
+  it('recycles drifted pi runtimes with the runtime-refresh reason for direct senders', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const handle = createHandle({ id: 'drifted', agentKind: 'pi' });
+    handle.hasProjectResourceDrift = () => true;
+    handle.events = () => queue;
+    const start = vi.fn().mockResolvedValue(handle);
+    const maker = new Maker({ agents: { pi: createAgent(start, 'pi') }, storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'drifted', agentKind: 'pi' as const, workingDir: '/repo', model: 'm' });
+    expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(true);
+    expect(maker.getSessionCloseReason(session)).toBe('runtime-refresh');
+    expect(maker.getSession(session.id)).toBeUndefined();
+    queue.end();
+  });
+
+  it('recycle is a no-op when project resources have not drifted', async () => {
+    const handle = createHandle({ id: 'fresh', agentKind: 'pi' });
+    handle.hasProjectResourceDrift = () => false;
+    const start = vi.fn().mockResolvedValue(handle);
+    const maker = new Maker({ agents: { pi: createAgent(start, 'pi') }, storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'fresh', agentKind: 'pi' as const, workingDir: '/repo', model: 'm' });
+    expect(await maker.recyclePiRuntimeIfResourcesDrifted(session)).toBe(false);
+    expect(maker.getSession(session.id)).toBe(session);
+    await session.close();
   });
 
   it.each([

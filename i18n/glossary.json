@@ -5,6 +5,12 @@
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
+    {"id":"plugin-community","status":"proposed","en":"Community","translations":{"zh-CN":"社区","zh-TW":"社群","ja":"コミュニティ","ko":"커뮤니티","fr":"Communauté","es":"Comunidad","de":"Community","pt-BR":"Comunidade","pt-PT":"Comunidade","zh-Hans-x-lzh":"社区","zh-Hant-x-lzh":"社群"},"note":"插件公开来源下的社区发布者身份标识，与官方并列；用户于 2026-11-09 确认设计。社区作者继续不公开署名；不表示个人私有市场或运行时信任。"},
+    {"id":"automation-trigger-mode","status":"proposed","en":"Trigger mode","translations":{"zh-CN":"触发方式","zh-TW":"觸發方式","ja":"トリガー方式","ko":"트리거 방식"},"note":"自动化何时运行的选择：定时、手动或 Webhook。独立于执行方式（AI 任务或脚本），用户于 2026-11-04 选择此交互方向。"},
+    {"id": "request-refund", "status": "proposed", "en": "Request Refund", "translations": {"zh-CN": "申请退款", "zh-TW": "申請退款", "ja": "返金を申請", "ko": "환불 신청", "fr": "Demander un remboursement", "es": "Solicitar reembolso", "de": "Rückerstattung anfordern", "pt-PT": "Pedir reembolso", "pt-BR": "Solicitar reembolso", "zh-Hant-x-lzh": "請退款", "zh-Hans-x-lzh": "请退款"}, "note": "订单行的邮件退款申请入口；由用户确认使用客服邮件处理，不代表自动退款。"},
+    {"id": "provider-transaction-id", "status": "proposed", "en": "Provider transaction ID", "translations": {"zh-CN": "渠道交易号", "zh-TW": "渠道交易號", "ja": "決済取引ID", "ko": "결제 거래 ID", "fr": "Identifiant de transaction du prestataire", "es": "ID de transacción del proveedor", "de": "Transaktions-ID des Zahlungsanbieters", "pt-PT": "ID de transação do prestador", "pt-BR": "ID da transação do provedor", "zh-Hant-x-lzh": "渠道交易號", "zh-Hans-x-lzh": "渠道交易号"}, "note": "支付渠道记录的交易号，用于开票弹窗和邮件；支付宝为实际交易号，Stripe 为 PaymentIntent ID 或 Charge ID，不是本地订单号或商户订单号。"},
+    {"id": "island-subtle-reminders", "status": "proposed", "en": "Subtle reminders", "translations": {"zh-CN": "轻提醒", "zh-TW": "輕提醒", "ja": "控えめな通知", "ko": "은은한 알림", "es": "Avisos discretos", "fr": "Alertes discrètes", "de": "Dezente Hinweise", "pt-PT": "Avisos discretos", "pt-BR": "Avisos discretos", "zh-Hant-x-lzh": "輕提醒", "zh-Hans-x-lzh": "轻提醒"}, "checkCase": false, "note": "灵动岛设置：新消息、待回复和错误通过图标变化提示，不向下弹出通知卡片；手动点击展开完整任务列表保持不变。"},
+    {"id": "gitlab-merge-request", "status": "proposed", "en": "MR", "translations": {"zh-CN": "MR", "zh-TW": "MR", "ja": "MR", "ko": "MR", "fr": "MR", "es": "MR", "de": "MR", "pt-PT": "MR", "pt-BR": "MR", "zh-Hans-x-lzh": "MR", "zh-Hant-x-lzh": "MR"}, "note": "GitLab Merge Request 的平台名称，界面保留 MR 与 !编号；不同于 GitHub PR。"},
     {"id": "additional-fees", "status": "proposed", "en": "Additional fees", "translations": {"zh-CN": "附加费用", "zh-TW": "附加費用", "ja": "追加費用", "ko": "추가 비용"}, "note": "任务中主对话之外的额外模型费用，按模型和调用渠道汇总；用户于 2026-10-30 选定中文名称。"},
     {"id": "cindy-ai-personal", "status": "proposed", "en": "Cindy AI · Personal", "translations": {"zh-CN": "Cindy AI · 个人", "zh-TW": "Cindy AI · 個人", "ja": "Cindy AI · 個人", "ko": "Cindy AI · 개인"}, "note": "个人身份使用的 Cindy AI 显示名。按模型来源电脑的登录身份生成；不改变供应商 ID、路由或 Auto 模型名。"},
     {"id": "cindy-ai-xd", "status": "proposed", "en": "Cindy AI · XD", "translations": {"zh-CN": "Cindy AI · 心动", "zh-TW": "Cindy AI · 心動", "ja": "Cindy AI · XD", "ko": "Cindy AI · XD"}, "note": "心动企业身份使用的 Cindy AI 显示名。其他企业使用 Cindy AI · 企业名称；与 Nova 或新版网关后端无关。身份未知时只显示 Cindy AI，不猜测归属。"},
@@ -592,6 +598,19 @@
         "ko": "Lark"
       },
       "note": "Lark 国际版 IM 服务的官方品牌名，四语统一保留原品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
+    },
+    {
+      "id": "feishu-link-code",
+      "status": "proposed",
+      "en": "Link code",
+      "translations": {
+        "zh-CN": "关联码",
+        "zh-TW": "關聯碼",
+        "ja": "連携コード",
+        "ko": "연동 코드"
+      },
+      "checkCase": false,
+      "note": "官方飞书 / Lark 机器人关联时的一次性短码：网页授权不可用的用户把它私聊发给机器人完成关联，只在关联进行中出现，过期作废，不是密钥。与供应商分享的「配对码」(Pairing Code)、本机应用的「连接码」(Connection code) 是不同概念；ko 取「연동 코드」以免与「연결 코드」(Connection code) 撞名。"
     },
     {
       "id": "personal-wechat",
@@ -2776,10 +2795,23 @@
         ]
       },
       "minorityByDesign": {
+        "ko": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），录屏音频错误提示中的 turn it off / turn off audio 也属此义，不应译成表示完整问答往返的 턴。韩语按实际语境表达开关动作；不为提高占比改写开关文案。",
         "de": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 Runde，普通界面沿用消息；不为提高占比改写开关文案。",
         "pt-PT": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 turno，普通界面沿用消息；不为提高占比改写开关文案。",
         "pt-BR": "英文 Turn 的全词统计还包含大量 turn on/off（启用/关闭），这些不是完整问答往返，不应译成此处术语。仅完整往返使用 turno，普通界面沿用消息；不为提高占比改写开关文案。"
       }
+    },
+    {
+      "id": "migration-assistant",
+      "status": "proposed",
+      "en": "Migration Assistant",
+      "translations": {
+        "zh-CN": "迁移助理",
+        "zh-TW": "遷移助理",
+        "ja": "移行アシスタント",
+        "ko": "마이그레이션 지원"
+      },
+      "note": "新电脑从同账号的其他电脑复制插件、技能与设置的功能名（设置 → 通用），用户 2026-10-20 定名「迁移助理」。ja / ko 参照系统同类功能的常见叫法；登记为 proposed，待术语评审。"
     },
     {
       "id": "withdraw-reply",
@@ -2814,7 +2846,7 @@
         "ko": "동료"
       },
       "checkCase": false,
-      "note": "Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以通过有界私信互相沟通，也可以启动独立 Cindy 任务。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。"
+      "note": "Cindy 里的**持久 AI 助手实体**（原名 Bot）：有长期身份、自有记忆与技能、模型候选链，可以用 send_to_session 给其它任务和伙伴发消息或新开普通 Cindy 任务（2026-11-08 起 V2：伙伴 = 一个项目 + 它的任务 + 身份，伙伴私信已下线）。产品定位参照「AI teammates」，故取人称名词而非机器名词。英文用法分两层：功能名与复数用 Teammates（侧栏标题），句中单数用小写 teammate（`this teammate`、`Archive teammate`）——故 checkCase 为 false。**与 IM 平台机器人严格区分**：Telegram Bot / Discord Bot / 飞书 bot / 企业微信机器人 / @BotFather / bot token 指的是消息平台上的 bot 账号，仍写作 Bot / 机器人，不改成本词；判据是「这个词指的是 Cindy 里那个持久助手实体」才用本词。覆盖 desktop 的 bots.* 命名空间、sidebar.tabs.bots、newChat.atMention.bot 与 mobile 的 devices.json bots.*。先登记为 proposed：改名刚落地，等 UI 走查与产品评审后再定 decided，届时再决定是否把「Bot」登记为各语言的 forbidden 译法（现在不能登记——存量 IM 平台 bot 文案会被大面积误伤）。"
     },
     {
       "id": "nightly-learning",
@@ -2827,7 +2859,7 @@
         "ko": "야간 학습"
       },
       "checkCase": false,
-      "note": "伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。"
+      "note": "（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴的内置例行任务：到点（默认每天 3:30，可改每周一 3:30）回看上次之后和主人的对话，整理伙伴自己的记忆与技能（合并、拆分、停用、把反复出现的做法转正为技能），每条改动可撤销；没有新对话时不调用模型（docs/product-rules/bot-routines.md「内置夜间学习」）。英文句中小写 nightly learning，故 checkCase 为 false。只出现过一次、等待再次出现的做法叫「在观察的做法 / approaches being watched」，不叫候选技能。先登记为 proposed，等 UI 走查后再定。"
     },
     {
       "id": "teammate-core-skill",
@@ -2840,7 +2872,7 @@
         "ko": "핵심 스킬"
       },
       "checkCase": false,
-      "note": "伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。"
+      "note": "伙伴能力页的第一组：所有伙伴相同、常驻、随 Cindy 更新、不能关闭或修改的编排技能（内部名 teammate-guide；docs/product-rules/cindy-bots-runtime.md §6「伙伴技能分层」；2026-11-08 起 V2 伙伴的主人对话不再挂载它）。不叫「基础技能」「基座」。先登记为 proposed，等 UI 走查后再定。"
     },
     {
       "id": "teammate-system-skills",
@@ -2853,7 +2885,7 @@
         "ko": "시스템 스킬"
       },
       "checkCase": false,
-      "note": "伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。"
+      "note": "（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴能力页的第二组：待办、例行任务、工作台与跟进，默认开启，主人可按伙伴单独关闭；关闭时提示词、工具与后台动作一起停（同上）。不叫「内置技能」，以免与本机内置技能混淆。先登记为 proposed。"
     },
     {
       "id": "group-chat",
@@ -2993,7 +3025,7 @@
         "ja": "マニュアル",
         "ko": "매뉴얼"
       },
-      "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于已停止新增的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
+      "note": "插件随包提供、由 ghost_manual 按需读取的渐进披露长文资料。它不是权限项，也不等同于插件随包的 Agent Skill；先登记为 proposed，待插件作者与用户实际使用后再固化。"
     },
     {
       "id": "vision-bridge",
@@ -3185,7 +3217,7 @@
         "ja": "ルーティン",
         "ko": "루틴"
       },
-      "note": "伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。"
+      "note": "伙伴的长期指令，可由多个时间或事件条件触发；沿用 Chris 提供的 Grok Bot 界面用语。2026-11-08 起伙伴 V2 的定时工作改为项目里的普通自动化，例行任务的管理界面已下线；条目保留以核对存量文案与 V1 运行任务的历史显示，新文案用「自动化」。"
     },
     {
       "id": "routine-trigger",
@@ -3197,7 +3229,7 @@
         "ja": "トリガー",
         "ko": "트리거"
       },
-      "note": "例行任务的时间或事件触发条件。"
+      "note": "例行任务的时间或事件触发条件（例行任务 2026-11-08 起随伙伴 V2 下线，见 Routine 条目）。"
     },
     {
       "id": "auto-unlock-computer",
@@ -3339,7 +3371,7 @@
         "ko": "근황"
       },
       "checkCase": false,
-      "note": "伙伴聊天头部网格按钮打开的浮层：电脑、待办、输出内容三块（docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。"
+      "note": "伙伴聊天头部网格按钮打开的浮层：电脑、近期任务、输出内容三块（2026-11-08 起待办块随伙伴 V2 移除；docs/product-rules/cindy-bots-runtime.md「伙伴近况」）。取代已下线的右侧栏「工作台」标签；只指这个伙伴浮层，不泛指任务列表或其它面板。先登记为 proposed，待 Chris 实机试用后再定。"
     },
     {
       "id": "follow-up-all-sessions",
@@ -3352,7 +3384,7 @@
         "ko": "모든 세션 자동 후속 관리"
       },
       "checkCase": false,
-      "note": "伙伴设置里的开关与工作台小标：账号里只有一位伙伴负责定时看一遍所有任务（实现里叫 scheduler / 总调度，默认 Cindy 助理）。面向用户不写「总调度」「调度员」，一律用这句；在别的伙伴上打开就移过去，关闭则没有伙伴统一跟进。session 按已裁决译法写「任务 / Session / セッション / 세션」。"
+      "note": "（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴设置里的开关与工作台小标：账号里只有一位伙伴负责定时看一遍所有任务（实现里叫 scheduler / 总调度，默认 Cindy 助理）。面向用户不写「总调度」「调度员」，一律用这句；在别的伙伴上打开就移过去，关闭则没有伙伴统一跟进。session 按已裁决译法写「任务 / Session / セッション / 세션」。"
     },
     {
       "id": "teammate-todo",
@@ -3365,7 +3397,7 @@
         "ko": "할 일"
       },
       "checkCase": false,
-      "note": "伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。"
+      "note": "（2026-11-08 起随伙伴 V2 下线，界面不再提供；条目保留以核对存量与历史文案，新文案不要再用。）伙伴独立事务清单，含交办与获准信息中的主动发现；项目、执行任务与PR仅可选关联。不替代Session任务生命周期。V2 把未完成事项写进伙伴项目的 CARRYOVER.md；旧消息里的 Todo 引用照常渲染。"
     },
     {
       "id": "voiceprint",
@@ -3433,6 +3465,19 @@
       "note": "Codex 模型的第三档速度；与推理深度 Ultra 独立。标准、快速、超快分别对应默认、Fast、Ultrafast。"
     },
     {
+      "id": "agent-network",
+      "status": "proposed",
+      "en": "Agent network",
+      "translations": {
+        "zh-CN": "Agent 网络",
+        "zh-TW": "Agent 網路",
+        "ja": "Agent ネットワーク",
+        "ko": "Agent 네트워크"
+      },
+      "checkCase": false,
+      "note": "agent-net 的产品名：所有用 Cindy 登录的 App 和硬件组成的互联网络。代码与文档里的 agent-net 是工程名，不出现在 UI 文案。"
+    },
+    {
       "id": "performance-trace",
       "status": "proposed",
       "en": "Performance Trace",
@@ -3443,6 +3488,117 @@
         "ko": "성능 기록"
       },
       "note": "用户按需录制 Cindy 性能现场的诊断入口；完整轨迹留在本地，结构化报告经用户提交。"
+    },
+    {
+      "id": "message-read",
+      "status": "proposed",
+      "en": "Read",
+      "translations": {
+        "zh-CN": "已读",
+        "zh-TW": "已讀",
+        "ja": "既読",
+        "ko": "읽음"
+      },
+      "note": "群聊里「别的成员已经看过这条消息」的状态（消息气泡下的双勾、「N 人已读」）。与「Read」作动词（读取文件）无关；只用于消息读取状态。"
+    },
+    {"id": "connection-path-direct", "status": "proposed", "en": "Direct", "translations": {"zh-CN": "直连", "zh-TW": "直連", "ja": "直接", "ko": "직접"}, "note": "远程连接拓扑里两台设备之间的数据路径不经中转。只用于路径，不用于「电脑直连」（remote-desktop-direct）那种连接方式名。"},
+    {"id": "connection-path-via-relay", "status": "proposed", "en": "Via relay", "translations": {"zh-CN": "经中转", "zh-TW": "經中轉", "ja": "中継経由", "ko": "중계 경유"}, "note": "远程连接拓扑里两台设备之间的数据经中转服务转发。与「中转服务」（self-hosted-relay-service）是同一个「中转」。"},
+    {"id": "connection-latency", "status": "proposed", "en": "Latency", "translations": {"zh-CN": "延迟", "zh-TW": "延遲", "ja": "遅延", "ko": "지연"}, "note": "远程连接拓扑与浮层里的往返时间（ms）。"},
+    {"id": "new-connection-view", "status": "proposed", "en": "New connection view", "translations": {"zh-CN": "新版连接", "zh-TW": "新版連線", "ja": "新しい接続ビュー", "ko": "새 연결 보기"}, "note": "「远程连接」页里切换到拓扑形态的开关名；按设备保存、默认关。"},
+    {
+      "id": "merge-conflict",
+      "status": "proposed",
+      "en": "Merge conflict",
+      "translations": {
+        "zh-CN": "合并冲突",
+        "zh-TW": "合併衝突",
+        "ja": "マージコンフリクト",
+        "ko": "병합 충돌"
+      },
+      "checkCase": false,
+      "note": "GitHub PR / GitLab MR 的合并冲突。数据行标签为 Merge / 合并，状态值为 Conflicts / 有冲突；与检查失败及应用崩溃区分。"
+    },
+    {
+      "id": "macos-dynamic-island",
+      "status": "proposed",
+      "en": "Dynamic Island",
+      "translations": {
+        "zh-CN": "灵动岛",
+        "zh-TW": "動態島",
+        "ja": "Dynamic Island",
+        "ko": "Dynamic Island"
+      },
+      "checkCase": false,
+      "note": "Apple 的灵动岛（新款 MacBook Pro 摄像头挖孔处），沿用 Apple 各地区用语，繁中按 Apple 台湾用语作「動態島」。Cindy 自己的顶部任务面板已改名为任务胶囊 / Agent Notch（见 agent-notch），「灵动岛」只指 Apple 的；设置页分区标题也用这个词，统称两者所在的一页。"
+    },
+    {
+      "id": "agent-notch",
+      "status": "proposed",
+      "en": "Agent Notch",
+      "translations": {
+        "zh-CN": "任务胶囊",
+        "zh-TW": "任務膠囊",
+        "ja": "Agent Notch",
+        "ko": "Agent Notch",
+        "fr": "Agent Notch",
+        "es": "Agent Notch",
+        "de": "Agent Notch",
+        "pt-PT": "Agent Notch",
+        "pt-BR": "Agent Notch",
+        "zh-Hans-x-lzh": "任务胶囊",
+        "zh-Hant-x-lzh": "任務膠囊"
+      },
+      "checkCase": false,
+      "note": "Cindy 在屏幕顶部显示任务的面板（原名灵动岛 / Agent Island）。苹果在新款 MacBook Pro 上推出灵动岛后改名，避免与 Apple 的灵动岛混同；中文不直译 notch（「刘海」易联想发型），用户于 2026-11-07 选定。设置页搜索保留旧名作别名。"
+    },
+    {
+      "id": "macos-live-activities",
+      "status": "proposed",
+      "en": "Live Activities",
+      "translations": {
+        "zh-CN": "实时活动",
+        "zh-TW": "即時動態",
+        "ja": "ライブアクティビティ",
+        "ko": "실시간 현황"
+      },
+      "checkCase": false,
+      "note": "Apple 的实时活动（ActivityKit）。沿用 Apple 各地区官方译名；Cindy 只以此展示任务状态，不作为自有功能名。"
+    },
+    {
+      "id": "agent-net",
+      "status": "proposed",
+      "en": "Agent-Net",
+      "translations": { "zh-CN": "Agent-Net", "zh-TW": "Agent-Net", "ja": "Agent-Net", "ko": "Agent-Net", "fr": "Agent-Net", "es": "Agent-Net", "de": "Agent-Net", "pt-PT": "Agent-Net", "pt-BR": "Agent-Net", "zh-Hant-x-lzh": "Agent-Net", "zh-Hans-x-lzh": "Agent-Net" },
+      "checkCase": false,
+      "note": "端到端加密的 V2 设备链路名称；各语言保留品牌拼写。拓扑只在已协商的实际连接上标注。"
+    },
+    {
+      "id": "device-link",
+      "status": "proposed",
+      "en": "Device Link",
+      "translations": { "zh-CN": "Device Link", "zh-TW": "Device Link", "ja": "Device Link", "ko": "Device Link", "fr": "Device Link", "es": "Device Link", "de": "Device Link", "pt-PT": "Device Link", "pt-BR": "Device Link", "zh-Hant-x-lzh": "Device Link", "zh-Hans-x-lzh": "Device Link" },
+      "checkCase": false,
+      "note": "兼容设备所用的旧版链路名称；与 Agent-Net 的协议标识并列，直连或经中转另行展示。"
+    },
+    {
+      "id": "official-feishu-working-computer",
+      "status": "proposed",
+      "en": "Working computer",
+      "translations": {
+        "zh-CN": "工作电脑",
+        "zh-TW": "工作電腦",
+        "ja": "作業用パソコン",
+        "ko": "작업 컴퓨터",
+        "fr": "Ordinateur de travail",
+        "es": "Ordenador de trabajo",
+        "de": "Arbeitscomputer",
+        "pt-PT": "Computador de trabalho",
+        "pt-BR": "Computador de trabalho",
+        "zh-Hant-x-lzh": "工作電腦",
+        "zh-Hans-x-lzh": "工作电脑"
+      },
+      "checkCase": false,
+      "note": "官方飞书 / Lark 机器人中接收新消息的已关联电脑；每个应用和飞书账号独立选择，默认最新关联的电脑。"
     }
   ]
 }

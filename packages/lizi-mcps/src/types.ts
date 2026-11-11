@@ -289,17 +289,6 @@ export interface SlackHookMcpDeps {
   logger?: LiziMcpLogger;
 }
 
-/** Native routine service; only caller-bound companion tools expose it to agents. */
-export interface RoutineToolService {
-  deliveryTargets?(botId: string): Promise<import('@cindy/maker-scheduler').RoutineDeliveryTarget[]>;
-  list(botId: string): Promise<import('@cindy/maker-scheduler').Routine[]>;
-  sources(): Promise<import('@cindy/maker-scheduler').RoutineSource[]>;
-  save(botId: string, input: import('@cindy/maker-scheduler').RoutineInput, id?: string): Promise<import('@cindy/maker-scheduler').Routine>;
-  history(botId: string, id: string): Promise<import('@cindy/maker-scheduler').RoutineRun[]>;
-  remove(botId: string, id: string): Promise<void>;
-  runNow(botId: string, id: string): Promise<void>;
-}
-
 /**
  * Host injects a `getScheduler()` accessor — the cindy_scheduler MCP server
  * never holds a long-lived Scheduler reference because the host may
@@ -331,6 +320,27 @@ export interface SchedulerMcpDeps {
    * (同 MemoryMcpDeps.searchSessions 模式)。
    */
   hookScript?: SchedulerHookScriptService;
+  /** 本机 Webhook 触发的状态(host 注入);不含密钥。缺省 = schedule_get 不带 webhookStatus。 */
+  webhookStatus?: (schedule: import('@cindy/maker-scheduler').Schedule) => {
+    receiver: string;
+    url?: string;
+    hasSecret: boolean;
+    lastReceivedAt?: number;
+    received: number;
+    ignored: number;
+    connected?: boolean;
+    problem?: string;
+    quotaLimit?: number;
+    quotaResetAt?: number;
+  } | null;
+  /** 这台电脑的 Webhook 接收方;signed-out / unavailable 时拒绝开启触发条件。缺省 = 不检查。 */
+  webhookReceiver?: () => 'cloud' | 'local' | 'signed-out' | 'unavailable';
+  /** 同账号云端地址管理；只返回安全摘要，不暴露签名密钥。 */
+  webhookManagement?: {
+    list(): Promise<unknown>;
+    release(id: string): Promise<void>;
+    restore(scheduleId: string): Promise<void>;
+  };
   /**
    * 本机定时任务可选的 Agent 运行位置与各处的模型(与协同 Worker 的 list_available_models
    * 同一份 host 实现)。agentDeviceId:null = 本机。缺省 = schedule_list_models 不注册。
@@ -426,6 +436,7 @@ export interface LspMcpDeps {
 /** ConnectionPool.list() 返回的单主机快照子集。 */
 export interface SshHostSnapshotLike {
   config: {
+    displayName?: string;
     /** SSH alias（= ~/.ssh/config 的 Host 指令），也是 pool 的主键。 */
     id: string;
     hostname: string;
@@ -508,6 +519,10 @@ export interface SshMcpDeps {
   ensureReady(id: string): Promise<void>;
   /** 设置页同一添加流程：写入本机 SSH 配置并刷新连接池；失败以 `[CODE] message` 抛出。 */
   addHost(input: SshAddHostInput): Promise<void>;
+  /** Same settings mutations. Optional for older hosts. */
+  updateHost?(input: { id: string } & Partial<Omit<SshAddHostInput, 'id'>>): Promise<SshHostSnapshotLike>;
+  removeHost?(id: string): Promise<void>;
+  listHosts?(): Promise<SshHostSnapshotLike[]>;
   /** 设置页「重新读取 ~/.ssh/config」。读取失败时返回诊断类别，连接池保持上次成功的结果。 */
   reloadConfig(): Promise<{ diagnostic: string | null; warningCount: number }>;
   /** Host-owned synchronous boundary redactor. It must not retain its inputs. */
@@ -652,6 +667,8 @@ export interface BrowserMcpDeps {
   resolveProfile?(profile?: string): string | undefined;
   /** Existing host lifecycle/backend identities; changes invalidate session evidence. */
   getBackendScope?(): { lifecycle: object; backend: object };
+  /** Active automation target; lets the workflow rules carry only what applies to it. Absent → all rules. */
+  getBackendKind?(): BrowserBackendKind;
   /**
    * Resolve a successful screenshot runtime result into verified image bytes.
    * The host owns file-system access so this package never receives a generic

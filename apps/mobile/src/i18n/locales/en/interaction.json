@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Done",
+    "mcpCancel": "Cancel",
     "mode": {
       "default": "Default permissions",
       "acceptEdits": "Allow edits",
@@ -34,6 +36,10 @@
     "exit": "Exit plan mode"
   },
   "panel": {
+    "questionUnanswered": "Unanswered",
+    "questionWithdrawn": "No longer needs an answer",
+    "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
+    "sendSupplement": "Send additional information",
     "readOnlyKind": "Pending",
     "readOnlyTitle": "Waiting for confirmation on your computer",
     "pendingRequests": "Pending requests",
@@ -98,7 +104,14 @@
     "planFeedbackPlaceholder": "Tell Claude what to do",
     "planFeedbackRequired": "Enter feedback before submitting.",
     "planFeedbackSubmit": "Submit plan feedback",
-    "planFeedbackAccessibility": "Give feedback to change the plan"
+    "planFeedbackAccessibility": "Give feedback to change the plan",
+    "validation": {
+      "required": "Complete this required field.",
+      "choice": "Choose one of the listed options.",
+      "tooShort": "Enter at least {{count}} characters.",
+      "tooLong": "Enter no more than {{count}} characters."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -385,6 +398,8 @@
       "submitting": "Submitting"
     },
     "permission": {
+      "titleStdin": "Allow input to this terminal?",
+      "titleMcpUrl": "Complete the request from {{server}}",
       "highRiskTitle": "High-risk permission needs confirmation",
       "highRiskDetail": "Review the command, then confirm again to allow it. Deny it if you're unsure.",
       "sessionAllowTitle": "Allow once or always allow for this task",
@@ -439,5 +454,39 @@
       "ghost_id": "Plugin",
       "tool": "Tool"
     }
+  },
+  "issueConfirm": {
+    "title": "Confirm feedback submission to {{appName}}",
+    "typeBug": "Bug",
+    "typeFeature": "Feature",
+    "titleLabel": "Title",
+    "bodyLabel": "Body (Markdown)",
+    "privacyHint": "The Issue title and body will be public and may be searchable or cached. Automatic redaction only covers some common patterns and cannot detect all sensitive context.",
+    "relatedLogsHint": "This submission includes the related client logs shown above. They are filtered, redacted, and length-limited before publication.",
+    "privacyConfirm": "I reviewed the public content above and it contains no personal, conversation, or business information that should remain private",
+    "submissionMethodLabel": "Submission Identity",
+    "identityGithubUser": "My GitHub account @{{login}}",
+    "identityGithubUserHint": "You will be the GitHub author and can edit or close this Issue on GitHub",
+    "identityPlatform": "Cindy official bot @{{login}} (default)",
+    "identityPlatformHint": "No GitHub account setup is required. The official bot creates the Issue, and you can add a public attribution in the body",
+    "publicNameLabel": "Public Attribution",
+    "publicNameHint": "This attribution will appear publicly in the Issue body",
+    "anonymous": "Anonymous",
+    "useAnonymous": "Use Anonymous Attribution",
+    "envLine": "Submitting client environment (attached automatically on submit): client {{appVersion}} · {{platform}} {{arch}} ({{osVersion}}) · UI language {{uiLanguage}}",
+    "runtimeLine": "Harness {{harness}} · Model ID {{modelId}} (this session)",
+    "regionLine": "Build region: {{region}}",
+    "regionCodeCn": "CN",
+    "regionCodeDev": "Dev",
+    "submit": "Submit Feedback",
+    "cancel": "Cancel",
+    "previewLabel": "GitHub · Public feedback",
+    "edit": "Edit",
+    "doneEditing": "Done editing",
+    "publicSubmit": "Submit publicly",
+    "publicationNotice": "Your feedback and attribution will be public on GitHub.",
+    "attribution": "By {{name}}",
+    "environment": "Environment included",
+    "identitySettings": "Name and account"
   }
 }

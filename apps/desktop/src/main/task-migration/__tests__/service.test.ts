@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ipcMain } from 'electron';
 import { WORKTREE_MOVE_BLOCKED_MESSAGE, sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
+import { agentNetMediaDestination } from '../../device-link/agentNetMediaRouting';
 import {
   parseAttachmentOssRef,
   TASK_MIGRATION_ESTIMATE_TIMEOUT_MS,
@@ -22,6 +23,7 @@ const state = vi.hoisted(() => ({
   dbs: new Map<string, { query: ReturnType<typeof vi.fn>; queryOne: ReturnType<typeof vi.fn> }>(),
   rows: new Map<string, Map<string, Record<string, unknown>>>(),
   files: new Map<string, string>(),
+  uploadDestinations: [] as Array<string | undefined>,
   imports: vi.fn(),
   created: vi.fn(),
   snapshot: vi.fn(),
@@ -127,7 +129,7 @@ vi.mock('../../device-link/invoke-context', () => ({
     return peer ? { controllerDeviceId: peer } : null;
   },
 }));
-vi.mock('../../device-link/settings-store', () => ({
+vi.mock('../../device-link/settings-store.desktop', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }),
 }));
 vi.mock('../../device-link', () => ({
@@ -163,6 +165,7 @@ vi.mock('../../device-link/mediaTransfer', () => ({
     file: string,
     opts: { onProgress?: (bytes: number) => void; signal?: AbortSignal },
   ) => {
+    state.uploadDestinations.push(agentNetMediaDestination());
     if (state.stallUpload) {
       state.stallUpload();
       await new Promise((_, reject) =>
@@ -188,7 +191,7 @@ vi.mock('../../device-link/remoteAttachment', () => ({
   },
 }));
 vi.mock('../../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent() {} }));
-vi.mock('../../cindy-media/refCompensationJournal', () => ({
+vi.mock('../../cindy-media/refCompensationJournal.desktop', () => ({
   captureMediaRefCompensationScope: () => ({}),
 }));
 vi.mock('../../im/binding', () => ({ bindingStore: { findByTarget: () => null } }));
@@ -355,6 +358,7 @@ describe('resumable cross-computer copy', () => {
     state.rows.clear();
     state.dbs.clear();
     state.files.clear();
+    state.uploadDestinations = [];
     state.imports.mockClear();
     state.created.mockReset();
     state.snapshot.mockClear();
@@ -444,6 +448,19 @@ describe('resumable cross-computer copy', () => {
       });
     return separate;
   }
+
+  // V2 encryption rule: a locally started migration has no inbound invoke
+  // context. Peer-file refusal must still pass the known destination into the
+  // real media routing context, rather than upload plaintext or fail strict mode.
+  // Existing tests stubbed uploadLocalFile without observing its destination.
+  // Unit tier: real service/AsyncLocalStorage, memory transfer and temporary files.
+  it('binds every outbound fallback upload to the migration destination', async () => {
+    await start();
+    expect((await settled()).stage).toBe('complete');
+    expect(state.uploadDestinations.length).toBeGreaterThan(0);
+    expect(new Set(state.uploadDestinations)).toEqual(new Set(['B']));
+    expect(agentNetMediaDestination()).toBeUndefined();
+  });
 
   it('flushes journal files using writable handles without truncation', async () => {
     const open = vi.spyOn(syncFs, 'openSync');

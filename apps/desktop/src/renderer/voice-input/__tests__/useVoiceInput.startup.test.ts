@@ -160,6 +160,7 @@ beforeEach(() => {
   mocks.startEngine.mockReset().mockResolvedValue(undefined);
   mocks.stopEngine.mockReset();
   mocks.drainEngine.mockReset();
+  mocks.promptExpired.mockReset();
   mocks.releasePreparation.mockReset();
   mocks.prepareMicrophone.mockReset().mockReturnValue(mocks.releasePreparation);
 });
@@ -555,6 +556,55 @@ describe('local voice capture independent of startup checks and cloud', () => {
       await nextStart;
     });
     expect(h.api.appendAudio).toHaveBeenCalledExactlyOnceWith(chunk(0));
+  });
+
+  // 测试价值：真实 useVoiceInput 连续 start/stop 后必须仍能停止当前麦克风。
+  // 依据：2026-11-09 旧 done 把新输入置为 done，后续 start 覆盖仍在采集的 engine。
+  // 缺口：已有 immediate-restart 测试只模拟旧 start 返回，没有旧 run 的 IPC 事件。
+  // 最小输入：A stop → B start → A done → B start 返回 → B stop；另保留早到 auth。
+  // tier: unit，mock 设备/IPC、假时钟；修复前定向墙钟 1.47s（16 过/1 失败）。
+  it('ignores a cancelled run finishing while the next microphone is already open', async () => {
+    const h = mount();
+    await act(async () => { h.result.current.start(); });
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      await h.result.current.stop();
+    });
+    const nextConnection = deferred<{ ok: true; runId: string }>();
+    h.api.start.mockReturnValue(nextConnection.promise);
+    await act(async () => { h.result.current.start(); });
+    const stopCount = mocks.stopEngine.mock.calls.length;
+    await act(async () => {
+      // main can finish the cancelled connection after the next capture starts.
+      h.connection.resolve({ ok: true, runId: 'old' });
+    });
+    act(() => {
+      h.api.onEvent.mock.calls.at(-1)![0]({ type: 'state', runId: 'old', state: 'done' });
+    });
+    expect(h.result.current.state).toBe('listening');
+    expect(mocks.stopEngine).toHaveBeenCalledTimes(stopCount);
+    await act(async () => { nextConnection.resolve({ ok: true, runId: 'new' }); });
+    expect(h.result.current.state).toBe('listening');
+    await act(async () => { await h.result.current.stop(); });
+    expect(mocks.stopEngine).toHaveBeenCalledTimes(stopCount + 1);
+    expect(h.result.current.state).toBe('done');
+  });
+
+  it('delivers an early auth event only after the matching start owns the run', async () => {
+    const h = mount();
+    await act(async () => { h.result.current.start(); });
+    act(() => {
+      h.api.onEvent.mock.calls.at(-1)![0]({
+        type: 'auth-required', runId: 'current', provider: 'codex', reason: 'expired',
+      });
+    });
+    expect(mocks.promptExpired).not.toHaveBeenCalled();
+    await act(async () => { h.connection.resolve({ ok: true, runId: 'current' }); });
+    expect(mocks.promptExpired).toHaveBeenCalledExactlyOnceWith('expired');
+    await act(async () => {
+      h.mute.resolve({ ok: true });
+      await h.result.current.cancel();
+    });
   });
 
   it('cleans up local capture when readiness IPC rejects', async () => {

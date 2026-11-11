@@ -7,11 +7,11 @@ vi.mock('electron', () => ({
   powerSaveBlocker: { start: () => 0, stop: () => {}, isStarted: () => false },
   nativeImage: { createFromPath: () => ({ isEmpty: () => true }) },
 }));
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }),
 }));
 
-import { __testing } from '../dispatch';
+import { __testing } from '../dispatch.desktop';
 import * as subscriptions from '../subscriptions';
 import { setSharedTaskDispatchHost } from '../sharedTaskDispatch';
 import type { SharedTaskHost } from '../sharedTaskHost';

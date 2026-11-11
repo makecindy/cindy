@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from '
 import { flushSync } from 'react-dom';
 import { observeProgrammaticScroll } from './observeProgrammaticScroll';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
+import { collectTabbables } from '@/lib/focusTraversal';
 import { isPageTextAccessActive, subscribePageTextAccess } from '@/lib/pageTextAccess';
 import { MessageViewportGeometry } from './messageViewportGeometry';
 
@@ -39,6 +40,7 @@ export function useMessageViewport(options: Options) {
   const accessibilitySupportRef = useRef(accessibilitySupport);
   const [keyboardOrSelection, setKeyboardOrSelection] = useState(false);
   const keyboardOrSelectionRef = useRef(false);
+  const [keyboardRows, setKeyboardRows] = useState<ReadonlySet<string>>(() => new Set());
   const [pageTextAccess, setPageTextAccess] = useState(isPageTextAccessActive);
   const pageTextAccessRef = useRef(pageTextAccess);
   const [mounted, setMounted] = useState(() => {
@@ -60,6 +62,20 @@ export function useMessageViewport(options: Options) {
   } | null>(null);
   const mutations = useRef<MutationObserver | null>(null);
   const [geometry] = useState(() => new MessageViewportGeometry());
+  // Reading-position snapshots use the same row index as virtualization. A
+  // long expanded history must not scan every preceding DOM row on each scroll.
+  const getViewportTopRow = useCallback(() => {
+    const root = latest.current.scrollRef.current;
+    const items = latest.current.itemsRef.current;
+    if (!root || !items) return null;
+    const records = mutations.current?.takeRecords();
+    if (records?.length) geometry.mutations(records, items);
+    if (geometry.invalid) measurement.current = null;
+    const previousOrigin = geometry.origin;
+    geometry.refresh(root, items, heights.current);
+    if (geometry.origin !== previousOrigin) measurement.current = null;
+    return geometry.range(root.scrollTop, root.clientHeight, 0).anchorElement;
+  }, [geometry]);
   const needsReconcileRef = useRef<() => boolean>(() => true);
   const reconcileRef = useRef<() => void>(() => {});
   // Programmatic writes made in rAF or an event callback can paint before the
@@ -205,7 +221,6 @@ export function useMessageViewport(options: Options) {
         measurement.current = null;
       }
     };
-    let keyboardTraversal = false;
     let textAccessTimer: ReturnType<typeof setTimeout> | undefined;
     const setTextAccess = (enabled: boolean) => {
       if (keyboardOrSelectionRef.current === enabled) return;
@@ -223,7 +238,8 @@ export function useMessageViewport(options: Options) {
       return false;
     };
     const updateTextAccess = () => {
-      setTextAccess((keyboardTraversal && root.contains(document.activeElement)) || selectionIntersectsItems());
+      setTextAccess(selectionIntersectsItems());
+      if (!root.contains(document.activeElement)) setKeyboardRows(previous => previous.size ? new Set() : previous);
     };
     const settleTextAccess = () => {
       clearTimeout(textAccessTimer);
@@ -232,16 +248,39 @@ export function useMessageViewport(options: Options) {
       textAccessTimer = setTimeout(updateTextAccess, 0);
     };
     const pointer = () => {
-      keyboardTraversal = false;
       settleTextAccess();
     };
+    const prepareTabDestination = (reverse: boolean) => {
+      // Include virtual rows in native DOM order, revealing only rows on the
+      // way to the next control. Never consume Tab or move focus ourselves.
+      // A Tab between composer/toolbar controls must not expand the history.
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) return;
+      for (let remaining = latest.current.entries.length; remaining > 0; remaining--) {
+        const candidates = collectTabbables(document, element =>
+          items.contains(element) && element.hasAttribute('data-message-placeholder'));
+        // Native positive tabindex precedes ordinary document-order controls.
+        candidates.sort((a, b) => (a.tabIndex > 0 ? a.tabIndex : Infinity) -
+          (b.tabIndex > 0 ? b.tabIndex : Infinity));
+        const index = candidates.indexOf(active);
+        const next = index >= 0 ? candidates[index + (reverse ? -1 : 1)] :
+          (reverse ? [...candidates].reverse() : candidates).find(element =>
+            Boolean(active.compareDocumentPosition(element) &
+              (reverse ? Node.DOCUMENT_POSITION_PRECEDING : Node.DOCUMENT_POSITION_FOLLOWING)));
+        if (!next || !items.contains(next) || !next.hasAttribute('data-message-placeholder')) return;
+        const key = next.dataset.renderItemKey;
+        if (!key) return;
+        flushSync(() => {
+          preserveTextAccessAnchor();
+          setKeyboardRows(previous => new Set([...previous, key]));
+        });
+      }
+    };
     const keyboard = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || event.isComposing) return;
       if (event.key === 'Tab') {
-        // Capture at window: Tab/Shift+Tab can enter from a composer or toolbar
-        // outside the scroll root. Mount before native tab-order traversal.
-        keyboardTraversal = true;
-        flushSync(() => setTextAccess(true));
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        prepareTabDestination(event.shiftKey);
         settleTextAccess();
         return;
       }
@@ -278,7 +317,9 @@ export function useMessageViewport(options: Options) {
     root.addEventListener('pointerdown', retainInteraction, true);
     root.addEventListener('focusin', retainInteraction);
     root.addEventListener('keydown', retainInteraction, true);
-    window.addEventListener('keydown', keyboard, true);
+    // Bubble after editor completion / modal handlers have had first refusal,
+    // but before the browser performs its native focus or selection action.
+    window.addEventListener('keydown', keyboard);
     window.addEventListener('pointerdown', pointer, true);
     document.addEventListener('focusin', settleTextAccess);
     document.addEventListener('focusout', settleTextAccess);
@@ -296,7 +337,7 @@ export function useMessageViewport(options: Options) {
       root.removeEventListener('pointerdown', retainInteraction, true);
       root.removeEventListener('focusin', retainInteraction);
       root.removeEventListener('keydown', retainInteraction, true);
-      window.removeEventListener('keydown', keyboard, true);
+      window.removeEventListener('keydown', keyboard);
       window.removeEventListener('pointerdown', pointer, true);
       document.removeEventListener('focusin', settleTextAccess);
       document.removeEventListener('focusout', settleTextAccess);
@@ -305,11 +346,12 @@ export function useMessageViewport(options: Options) {
   }, [options.scrollRef, options.itemsRef, options.connection, preserveTextAccessAnchor, syncViewport, geometry]);
 
   return {
+    getViewportTopRow,
     connectViewport,
     reconcileViewport,
     syncViewport,
     shouldMount: (entry: Entry) => options.disabled || accessibilitySupport || pageTextAccess || keyboardOrSelection || entry.retain ||
-      retained.current.has(entry.key) || mounted.has(entry.key),
+      retained.current.has(entry.key) || keyboardRows.has(entry.key) || mounted.has(entry.key),
     placeholderHeight: (key: string) => heights.current.get(key) ?? ESTIMATE,
   };
 }

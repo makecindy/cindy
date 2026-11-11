@@ -16,6 +16,7 @@ import type {
   DictationRefinementContext,
   VoiceInputErrorCode,
   VoiceInputState,
+  VoiceInputRendererEvent,
 } from '@cindy/voice-input-core';
 
 import { Spinner } from '@/components/ui/spinner';
@@ -78,7 +79,7 @@ import {
 } from './readinessRecovery';
 import { buildRefinementPreviewText } from './refinementPreviewText';
 import { useVoiceProcessingIndicator } from './useVoiceProcessingIndicator';
-import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
+import { dispatchVoiceInputEvent } from './eventScope';
 import { VoiceInputStatusErrorIcon, VoiceInputStatusNotice } from './VoiceInputStatusNotice';
 import { useVoiceInputOverlayDrag } from './useVoiceInputOverlayDrag';
 import { useSpeakerFilterNotice } from './useSpeakerFilterNotice';
@@ -1344,12 +1345,16 @@ export function VoiceInputOverlay() {
   }, []);
 
   useEffect(() => {
-    return window.electronAPI.voiceInput.onEvent((event) => {
-      if (!shouldHandleVoiceInputEvent(
-        ownedRunIdRef.current,
-        event.runId,
-        isVoiceInputEventScopeActive(stateRef.current),
-      )) return;
+    let subscribed = true;
+    const unsubscribe = window.electronAPI.voiceInput.onEvent((event) => {
+      dispatchVoiceInputEvent(
+        event,
+        () => subscribed ? ownedRunIdRef.current : null,
+        startReadyRef.current?.promise,
+        handleEvent,
+      );
+    });
+    function handleEvent(event: VoiceInputRendererEvent): void {
       switch (event.type) {
         case 'auth-required':
           codexSessionPromptActiveRef.current = requestCodexSessionExpiredPrompt(event.reason);
@@ -1482,7 +1487,11 @@ export function VoiceInputOverlay() {
           }
           break;
       }
-    });
+    }
+    return () => {
+      subscribed = false;
+      unsubscribe();
+    };
   }, [formatVoiceInputError, requestCodexSessionExpiredPrompt, resolveDoneWaiters, setVoiceState, showSpeakerFiltered]);
 
   useEffect(() => {
@@ -1618,7 +1627,7 @@ export function VoiceInputOverlay() {
       onPointerMove={actionTipsDisabled ? enableActionTips : undefined}
     >
       <div
-        className="w-full rounded-[14px] border border-[var(--cmd-palette-border)] px-4 py-3 shadow-[var(--shadow-menu)] backdrop-blur"
+        className="w-full rounded-xl border border-[var(--cmd-palette-border)] px-4 py-3 shadow-[shadow:var(--shadow-menu)] backdrop-blur"
         style={{ backgroundColor: 'color-mix(in srgb, var(--cmd-palette-bg) 95%, transparent)' }}
         {...dragHandlers}
       >
@@ -1746,7 +1755,7 @@ export function VoiceInputOverlay() {
                   void cancelAndClose();
                 }}
                 onClick={suppressOverlayButtonClick}
-                className="shrink-0 shadow-sm"
+                className="shrink-0"
               >
                 {t('commonUi.confirmDialog.cancel')}
               </Button>
@@ -1761,7 +1770,7 @@ export function VoiceInputOverlay() {
                   openPermissionPromptSettings();
                 }}
                 onClick={suppressOverlayButtonClick}
-                className="shrink-0 shadow-sm"
+                className="shrink-0"
               >
                 <Settings className="h-3.5 w-3.5" />
                 {t('voiceInputOverlay.openPermissionSettings')}
@@ -1785,7 +1794,7 @@ export function VoiceInputOverlay() {
                 void openReadinessSettings();
               }}
               onClick={suppressOverlayButtonClick}
-              className="shrink-0 shadow-sm"
+              className="shrink-0"
             >
               <Settings className="h-3.5 w-3.5" />
               {t('voiceInputOverlay.openSettings')}
@@ -1810,7 +1819,7 @@ export function VoiceInputOverlay() {
                     void openAccessibilitySettings();
                   }}
                   onClick={suppressOverlayButtonClick}
-                  className="shrink-0 shadow-sm"
+                  className="shrink-0"
                 >
                   <Settings className="h-3.5 w-3.5" />
                   {t('voiceInputOverlay.openPermissionSettings')}
@@ -1827,7 +1836,7 @@ export function VoiceInputOverlay() {
                   void copyPendingText();
                 }}
                 onClick={suppressOverlayButtonClick}
-                className="shrink-0 shadow-sm"
+                className="shrink-0"
               >
                 <Copy className="h-3.5 w-3.5" />
                 {t('voiceInputOverlay.copy')}

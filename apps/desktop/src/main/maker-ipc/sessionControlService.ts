@@ -1,4 +1,5 @@
-import { formatForwardedRequest } from './forwardedRequest.js';
+import { formatForwardedRequest, type CapturedAgentRequest } from './forwardedRequest.js';
+import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type {
   AgentKind,
   Effort,
@@ -97,6 +98,7 @@ export interface SessionControlServiceDeps {
     beforeMutation?: () => Promise<void>;
     patch: {
       harness?: AgentKind;
+      agentDeviceId?: string | null;
       model?: string;
       providerId?: string | null;
       effort?: Effort | null;
@@ -110,6 +112,11 @@ export interface SessionControlServiceDeps {
     queuedMessageId: string;
     message: string;
   }): Promise<AgentInputQueuedMessage>;
+  /**
+   * The editing task's current request decides whether an edited hand-off still speaks for
+   * the owner. Omitted keeps the item's provenance without owner authority.
+   */
+  captureRequest?(callerSessionId: string, message: string, target: { sessionId: string }): Promise<CapturedAgentRequest>;
   steerQueuedMessage(
     sessionId: string,
     item: AgentInputQueuedMessage,
@@ -155,6 +162,8 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     }): Promise<SessionQueuedMessageControlResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
+      const captured = await deps.captureRequest?.(params.callerSessionId, params.message,
+        { sessionId: params.targetSessionId });
       return queueControl.update({
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
@@ -162,7 +171,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
         beforeMutation: combineInputGuards(params.beforeMutation, assertTaskActionCurrent),
         rebuild: (item, message) => {
-          const next = rebuildSessionQueueItem(item, message);
+          const next = rebuildSessionQueueItem(item, message, captured?.autoReviewUserText);
           bindTaskActionInput(params.targetSessionId, next);
           return next;
         },
@@ -263,7 +272,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       }
       const turnGeneration = live.getTurnGeneration();
       const queuedMessageId = params.queuedMessageId ?? deps.createId();
-      const item = await deps.createQueuedMessage({
+      const item: AgentInputQueuedMessage = await deps.createQueuedMessage({
         ...params,
         queuedMessageId,
       });
@@ -348,6 +357,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       beforeMutation?: () => Promise<void>;
       patch: {
         harness?: AgentKind;
+        agentDeviceId?: string | null;
         model?: string;
         providerId?: string | null;
         effort?: Effort | null;
@@ -385,7 +395,7 @@ export function authorizeSessionQueueReorder(
   const plainMachineMessage =
     !item.sourcePlugin &&
     (item.origin?.kind === 'orca' ||
-      (item.origin?.kind === 'session' && !item.origin.senderBotId));
+      item.origin?.kind === 'session');
   const owned =
     authorizeSessionQueueItem(item, callerSessionId).ok || callerSessionId === targetSessionId;
   return plainMachineMessage && owned
@@ -400,14 +410,25 @@ export function authorizeSessionQueueReorder(
 export function rebuildSessionQueueItem(
   item: AgentInputQueuedMessage,
   message: string,
+  /** The editor's freshly captured receipt; edited text is a new hand-off, not the old one. */
+  captured?: AgentRequestReceipt,
 ): AgentInputQueuedMessage {
   const request = typeof item.autoReviewUserText === 'object' ? item.autoReviewUserText.request : undefined;
-  if (item.origin?.kind === 'session') message = formatForwardedRequest(request ?? { userText: null }, message);
+  // Older envelopes keep their quoted user words when edited. Any other item (a plain hand-off or
+  // an ordinary message without authority) speaks for the user only if the editor's own request
+  // re-checked exactly the new text; otherwise it keeps its provenance without authority.
+  const legacyEnvelope = request?.plainBody !== true && typeof request?.userText === 'string';
+  const plainRequest = legacyEnvelope ? undefined
+    : captured?.request?.delegatedText === message ? captured.request
+      : request?.plainBody ? { sessionId: request.sessionId, clientId: request.clientId, plainBody: true as const }
+        : undefined;
+  const nextRequest = plainRequest ?? request;
+  if (item.origin?.kind === 'session') message = formatForwardedRequest(nextRequest ?? { userText: null }, message);
   const updated = updateQueuedMessageText(item, message);
   if (updated.origin?.kind === 'session') {
     updated.autoReviewUserText = {
       kind: typeof item.autoReviewUserText === 'object' ? item.autoReviewUserText.kind : 'agent-request',
-      request: request ?? { userText: null },
+      request: nextRequest ?? { userText: null },
     };
     // send_to_session owns raw user text, not a renderer composer envelope.
     // A valid JSON object/array is still literal message content, so editing it

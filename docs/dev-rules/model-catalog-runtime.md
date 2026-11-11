@@ -125,7 +125,7 @@ Server 目录；不改 Gateway 的价格、成员、上下文与可用性。
 
 ### 模型简介本地化
 
-Desktop 模型选择器、旧入口的配置浮层及设置详情在展示简介时统一使用
+旧入口的配置浮层及设置详情在展示简介时统一使用
 `renderer/lib/modelDescriptions.ts` 解析本地简介，文案放在五语 `common.json` 的
 `modelDescriptions`。只写简短用途，不从文案推导能力、协议、价格、窗口或默认档位。
 
@@ -137,13 +137,26 @@ Desktop 模型选择器、旧入口的配置浮层及设置详情在展示简介
 费用符号、折扣和免费标签统一使用中性色，保留原价档位的符号个数、折扣明暗与百分比标签。
 整行不换行，长来源名称省略；额度段最多占行宽 70%，过长时省略，
 给来源保留可见空间，悬停仍可查看完整来源与额度状态。远程目录不读取本机账号余量，改读被控端用量镜像
-（与会话用量 chip 共用同一缓存与推送，口径同 `useProviderWeeklyQuota.ts`）；任务所在电脑自己的 Cindy AI
-及单供应商分栏继续展示本地简介。分享来的、同账号其他电脑上的 Cindy AI 以及外来收藏不属于这一例外，
+（与会话用量 chip 共用同一缓存与推送，口径同 `useProviderWeeklyQuota.ts`）；统一模型选择器中原有的
+简介行改为供应商名称，但仍用本地简介是否存在来决定该行显隐，原单行型号不新增第二行。
+分享来的、同账号其他电脑上的 Cindy AI 以及外来收藏保留来源行，
 与其他供应商一样展示来源（如 `Cindy AI · 来自 Magi 的分享`、`Cindy AI · 工作室 Mac`，#6110）；是否属于
 本机目录由 `UnifiedModelPanel` 判断，可见行与定宽测量行共用同一判断，`UnifiedModelRow` 收到来源即展示。
 实现见 `renderer/components/new-chat/ModelSourceDetails.tsx` 和 `UnifiedModelRow.tsx`，行为覆盖见
 `renderer/__tests__/modelSourceDetails.test.tsx`、`unifiedModelPanelRendering.test.tsx` 及
 `remoteAgentDeviceFavoritesPanel.test.tsx`。
+
+Magpie 的 `magpie_label` / `owned_by` 作为连接内、完整 wire 模型 ID 下的发现来源，
+只替换上述既有第二行中的供应商名称，不重复加 Magpie 前缀；账号、电脑、分享及余量信息保留。
+完整模型 ID 不参与 bridge 前缀归一化；端点或授权上下文改变时清除旧来源，迟到刷新不得恢复。
+收藏与最近记录复用带命名空间的路由身份存储，实际调用仍用完整 wire ID；旧的归一化记录
+只有目录证明唯一时才恢复，歧义记录保留但不展示、不猜测绑定。旧客户端不识别新存储身份时
+不显示该快捷方式，既有字段与协议不变。替换密钥或请求头后，新发现收据按提交的新上下文验证，
+不能因为旧上下文已失效而丢弃有效的新来源。
+重启后，缺少当前 Main 发现标记的持久化来源仅从目录展示投影移除，保留原始配置和完整 ID，
+直到正常发现成功；这也覆盖凭证已写入、配置尚未提交时进程中断的情况。
+实现及回归见 `modelSource.ts`、`model-source-snapshots.ts` 和
+`renderer/__tests__/magpieModelSourceRow.test.tsx`。
 
 同系列不同接入路径复用用途说明；特殊长上下文版本保留单独的费用提醒。
 媒体用途优先尊重明确的类型字段，不能因厂商分组是 GPT 就介绍成编程模型。
@@ -179,6 +192,17 @@ Registry 的全部模型及其 routes，防止只翻译当前默认启用的几�
 
 ### 三引擎上下文预算（2026-09-09）
 
+- 远程 Agent 目录在供应商视图的模型行附加 `contextWindowOverride`，只取来源电脑当前账号的
+  精确「引擎 + 供应商连接 + 模型 ID」显式预算。`contextWindow` 保留设置页的目录默认值，
+  共用的 `remoteInvocationModels` 在远程选模时合入有效窗口；本机及远控设置页不把覆盖值当默认。
+  恢复默认后下次目录读取移除该字段；分享备用目录发布时合入现有 `contextWindow`。
+  Desktop 配置浮层按正在浏览的目录来源取值：远程 Agent、分享与被控电脑均使用来源窗口，
+  不读取控制端同名模型的偏好或 Codex 原生窗口。被控电脑选模只合入预算，保留完整目录；
+  本机浮层继续读取本机偏好与 Codex 原生元数据，远控设置页仍保留原始默认值。
+  Mobile 的 `mobileUnifiedEntries` 在选模派生时同样合入来源预算，包含直接控制电脑的基础目录；
+  仅合入预算，不套用远程 Agent 的授权过滤，也不修改缓存目录的默认值。
+  缺字段或无效值沿用原窗口，旧使用端忽略新增字段，因此完整修复要求提供端和使用端都升级。
+  压缩比例仍由执行电脑运行时读取，不从使用端反向覆盖；目录回归不代表真实长会话压缩已验收。
 - 以下字段指客户端 `CatalogModel`：`contextWindow` 是工作默认值，`contextWindowMax` 保留上游最大支持值；后者不能写入 Registry。
   单模型上下文设置另存用户预算；恢复默认删除预算，重新读取当前工作默认值。
   Claude Code、Codex、Pi 的创建、恢复、切换和历史整理都必须使用同一路由预算。
@@ -226,6 +250,16 @@ Codex 的 `context_window` 是工作默认，`max_context_window` 是原生最�
 下架型号不能因为补元数据而被重新加入。无原生数据时仍依赖 Registry，不能把读取失败推断成 872K 或 1M。
 
 2026-09-07 的全目录核对与源侧待办见 [2026-09-07 核对记录](../model-catalog-audit-2026-09-07.md)。
+
+官方 OpenAI API 的 Codex 连接另行读取 API 模式的 `model/list`，将明确报告的思考档位与
+Fast 合入 discovery 层；仅适用于 `https://api.openai.com/v1` Responses 路由及精确型号 ID。
+不从订阅账号复制能力、不扩充已配置模型成员，也不授予 Ultrafast；未知别名、中转和其它
+引擎保持原有能力来源。显式用户配置、服务端强制覆盖及本地覆盖仍按既有优先级处理。
+该快照只存内存，账号边界清空；API 探测不改写共享 Codex 历史目录。能力报告不证明 API
+账号的服务端权限。实现见 `codex-api-model-capabilities.ts`，原生验证见
+`packages/maker-core/src/agents/codex/api-capabilities.integration.test.ts`。
+Ultra 由 Codex 原生解释（含多 Agent 行为及普通 HTTP effort 映射），不能把字符串
+`ultra` 直接当成公共 Responses API 的 reasoning effort。
 
 ### 型号标准与 Gateway 控制（2026-09-07 用户裁决）
 

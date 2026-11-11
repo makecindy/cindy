@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import type { PiPackageMutationRequest } from '../../../shared/piPackages.js';
+import { atomicWriteFileSync } from '../../utils/atomicWriteFile.js';
 
 // Windows 未开启 Developer Mode / 无 Create Symbolic Link 权限时，文件 symlink
 // 会返回 EPERM；目录 junction 不受此限制，但本文件的竞态用例必须替换单个文件。
@@ -29,6 +30,13 @@ function canCreateFileSymlink(): boolean {
 }
 
 const canLinkFile = canCreateFileSymlink();
+
+// Peer Mains publish change tokens with an atomic rename. A plain writeFile
+// truncates first, and the directory watcher can observe that empty moment as
+// a missing token, which a recovery test would then count as a token edge.
+function writePeerToken(tokenPath: string, contents: string): void {
+  atomicWriteFileSync(tokenPath, contents);
+}
 
 const runtime = vi.hoisted(() => ({
   userData: '',
@@ -3798,7 +3806,7 @@ describe('Pi package executable-code boundary', () => {
     const unsubscribe = store.onPiPackagesChanged(listener);
     try {
       await new Promise((resolve) => setTimeout(resolve, 50));
-      await fs.writeFile(runtimeToken, 'runtime:isolated-edge\n');
+      writePeerToken(runtimeToken, 'runtime:isolated-edge\n');
       await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
         timeout: 2_000,
       });
@@ -3869,17 +3877,17 @@ describe('Pi package executable-code boundary', () => {
 
       // Recover the old legacy baseline while runtime observation stays down.
       legacyReadBlocked = false;
-      await fs.writeFile(legacyToken, 'runtime:old\n');
+      writePeerToken(legacyToken, 'runtime:old\n');
       // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Simulate another Main publishing only the runtime edge while its legacy
       // mirror write fails. The legacy file intentionally stays on the old token.
-      await fs.writeFile(runtimeToken, 'runtime:peer-edge\n');
+      writePeerToken(runtimeToken, 'runtime:peer-edge\n');
       // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 300));
       runtimeReadBlocked = false;
-      await fs.writeFile(runtimeToken, 'runtime:peer-edge\n');
+      writePeerToken(runtimeToken, 'runtime:peer-edge\n');
 
       await vi.waitFor(() => expect(originListener).toHaveBeenCalledWith('external-runtime'), {
         timeout: 2_000,
@@ -3934,9 +3942,9 @@ describe('Pi package executable-code boundary', () => {
 
       // Legacy is absent, so its successful read established a valid null
       // recovery baseline before another Main publishes only the runtime edge.
-      await fs.writeFile(runtimeToken, 'runtime:peer-only-after-null\n');
+      writePeerToken(runtimeToken, 'runtime:peer-only-after-null\n');
       runtimeReadBlocked = false;
-      await fs.writeFile(runtimeToken, 'runtime:peer-only-after-null\n');
+      writePeerToken(runtimeToken, 'runtime:peer-only-after-null\n');
 
       await vi.waitFor(() => expect(originListener).toHaveBeenCalledWith('external-runtime'), {
         timeout: 2_000,
@@ -3983,7 +3991,7 @@ describe('Pi package executable-code boundary', () => {
         expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
       ));
       runtimeReadBlocked = false;
-      await fs.writeFile(runtimeToken, 'runtime:already-present\n');
+      writePeerToken(runtimeToken, 'runtime:already-present\n');
       // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(listener).not.toHaveBeenCalled();
@@ -4020,14 +4028,14 @@ describe('Pi package executable-code boundary', () => {
         'Pi package change token read failed',
         expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
       ));
-      await fs.writeFile(legacyToken, 'runtime:legacy-edge\n');
+      writePeerToken(legacyToken, 'runtime:legacy-edge\n');
       await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
         timeout: 2_000,
       });
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
 
       runtimeReadBlocked = false;
-      await fs.writeFile(runtimeToken, 'runtime:old\n');
+      writePeerToken(runtimeToken, 'runtime:old\n');
       // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
@@ -4064,7 +4072,7 @@ describe('Pi package executable-code boundary', () => {
         'Pi package change token read failed',
         expect.objectContaining({ tokenKind: 'runtime', failureCategory: 'io-failure' }),
       ));
-      await fs.writeFile(legacyToken, 'runtime:legacy-edge\n');
+      writePeerToken(legacyToken, 'runtime:legacy-edge\n');
       await vi.waitFor(() => expect(listener).toHaveBeenCalledWith('external-runtime'), {
         timeout: 2_000,
       });
@@ -4076,7 +4084,7 @@ describe('Pi package executable-code boundary', () => {
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
 
       runtimeReadBlocked = false;
-      await fs.writeFile(runtimeToken, 'runtime:old\n');
+      writePeerToken(runtimeToken, 'runtime:old\n');
       // real-wait: observe a full filesystem polling window to reject duplicate or stale runtime events.
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(listener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
@@ -4185,10 +4193,8 @@ describe('Pi package executable-code boundary', () => {
     try {
       await vi.waitFor(() => expect(delayedPaths.size).toBe(2));
       const peerToken = `runtime:${Date.now()}-222-peer`;
-      await Promise.all([
-        fs.writeFile(runtimeTokenPath, `${peerToken}\n`),
-        fs.writeFile(legacyTokenPath, `${peerToken}\n`),
-      ]);
+      writePeerToken(runtimeTokenPath, `${peerToken}\n`);
+      writePeerToken(legacyTokenPath, `${peerToken}\n`);
       releaseInitialReads();
 
       await vi.waitFor(() => expect(closeSessionIfCurrent).toHaveBeenCalledWith(
@@ -4327,6 +4333,9 @@ describe('Pi package executable-code boundary', () => {
 
   it('does not let an immediate view publication overwrite a peer runtime invalidation', async () => {
     const { source } = await createPackage();
+    // Keep this race on the directory-watch path. A missing package home is
+    // only observed by the 2 s fallback poll, which would equal the wait below.
+    await fs.mkdir(path.join(runtime.userData, 'pi-package-home'), { recursive: true });
     const firstStore = await import('../pi-package-store.js');
     const listener = vi.fn();
     const unsubscribe = firstStore.onPiPackagesChanged(listener);
@@ -4362,6 +4371,40 @@ describe('Pi package executable-code boundary', () => {
         path.join(runtime.userData, 'pi-package-home', 'cindy-package-view-change-token'),
         'utf8',
       )).resolves.toMatch(/^view:/);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('reattaches the directory watcher after the package home is replaced', async () => {
+    // Replacing the watched directory leaves a handle bound to the old one on
+    // some platforms without an 'error' event. The fallback poll must replace it,
+    // otherwise every later peer change waits for the 2 s poll.
+    const home = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(home, { recursive: true });
+    const store = await import('../pi-package-store.js');
+    const listener = vi.fn();
+    const unsubscribe = store.onPiPackagesChanged(listener);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const publishPeerRuntimeToken = (tag: string) => {
+      writePeerToken(path.join(home, 'cindy-package-runtime-change-token'), `runtime:${Date.now()}-${tag}\n`);
+    };
+    const waitForNotifications = (count: number, timeout: number) =>
+      vi.waitFor(() => expect(listener.mock.calls.length).toBeGreaterThanOrEqual(count), { timeout, interval: 10 });
+    try {
+      publishPeerRuntimeToken('before-replace');
+      await waitForNotifications(1, 1_500);
+
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.mkdir(home, { recursive: true });
+      // The first edge may arrive through events still queued on the old handle
+      // or through the fallback poll, depending on the platform.
+      publishPeerRuntimeToken('first-after-replace');
+      await waitForNotifications(2, 5_000);
+
+      // The watcher is reattached, so the next edge must not wait for the poll.
+      publishPeerRuntimeToken('second-after-replace');
+      await waitForNotifications(3, 1_000);
     } finally {
       unsubscribe();
     }

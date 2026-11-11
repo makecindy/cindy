@@ -36,6 +36,10 @@ const makerSendSource = readFileSync(
   resolve(mainRoot, 'maker-ipc/makerSendTransaction.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const queuedInputOriginSource = readFileSync(
+  resolve(mainRoot, 'maker-ipc/queuedInputOrigin.ts'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
 function handlerBody(source: string, channel: string, nextChannel: string): string {
   const start = source.indexOf(channel);
@@ -290,13 +294,15 @@ describe('session runtime control wiring', () => {
       /if \(!app.isPackaged \|\| isCindyVersionLaunchPending\(\)\)\s+markDesktopDevWindowReady\(mainWindow.webContents.getOSProcessId\(\)\);/,
     );
   });
-  it('advertises host-side model-window protection to remote controllers', () => {
+  it('advertises host-side model-window protection and Orca relocation to remote controllers', () => {
     const capabilities = handlerBody(
       registerSource,
       'ipcMain.handle(MAKER_INVOKE.GET_CAPABILITIES',
       'ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS',
     );
     expect(capabilities).toContain('supportsModelWindowSwitchGuard: true');
+    // Controllers only offer moving a controlled Orca Lead / local Worker's Agent when this is declared.
+    expect(capabilities).toContain('supportsOrcaAgentRelocation: true');
   });
 
   it('authenticates Desktop package-command entry points before minting Main context', () => {
@@ -330,9 +336,9 @@ describe('session runtime control wiring', () => {
       expect(body).toContain('if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);');
       expect(body).toContain('stampTrustedDesktopQueuedOrigin(');
     }
-    expect(makerSendSource).toContain('clientId: explicitUserItem.clientId');
-    expect(makerSendSource).toContain('persistedContent: explicitUserItem.persistedContent');
-    expect(makerSendSource).toContain(
+    expect(queuedInputOriginSource).toContain('clientId: explicitUserItem.clientId');
+    expect(queuedInputOriginSource).toContain('persistedContent: explicitUserItem.persistedContent');
+    expect(queuedInputOriginSource).toContain(
       'if (deviceLinkInvoke || !canTrustDesktopPiCommand(item)) return explicitUserItem',
     );
     expect(makerSendSource).toContain('TRUSTED_DESKTOP_PI_COMMAND_SNAPSHOT');
@@ -747,6 +753,19 @@ describe('session runtime control wiring', () => {
     expect(persistSelection).toBeGreaterThan(patchFast);
     expect(normalWakeGuard).toBeGreaterThan(persistSelection);
     expect(wakeQueue).toBeGreaterThan(normalWakeGuard);
+  });
+
+  it('persists a send-time renamed model inside the shared route transaction', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain('persistRenamedSessionModel: true');
+    const persistGate = setModel.indexOf('internalOptions.persistRenamedSessionModel === true');
+    const persist = setModel.indexOf('await persistSessionFields(sessionId, patch);', persistGate);
+    expect(persistGate).toBeGreaterThan(-1);
+    expect(persist).toBeGreaterThan(persistGate);
   });
 
   it('uses current runtime window facts but still requires a verified target before rebuilding', () => {

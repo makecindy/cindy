@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Push diagnostics",
+    "read": "Read push status",
+    "busy": "Reading…",
+    "failed": "Could not read push status. Please try again.",
+    "copyFailed": "Could not copy the token.",
+    "copied": "Token copied.",
+    "bundle": "App ID",
+    "build": "Build",
+    "environment": "APNs environment",
+    "permission": "System permission",
+    "alerts": "Alerts",
+    "lockScreen": "Lock screen",
+    "notificationCenter": "Notification Center",
+    "copy": "Copy APNs token",
+    "hide": "Hide result",
+    "unknown": "Unknown",
+    "on": "On",
+    "off": "Off",
+    "hint": "Read only when requested. The APNs token is shown locally, never saved in diagnostics or uploaded by this tool, and hidden when you leave or background this screen. Copy only for Apple’s Push Notifications Console; copied text remains in your clipboard.",
+    "permissions": {
+      "granted": "Allowed",
+      "denied": "Denied",
+      "undetermined": "Not requested",
+      "provisional": "Quiet delivery"
+    }
+  },
   "localLogs": {
     "upload": "Upload logs",
     "uploadResult": {
@@ -135,11 +162,16 @@
     "permissionDenied": "Allow Cindy notifications in your system settings.",
     "unregisterQueued": "Turned off. Unregistering will finish once you’re back online.",
     "preview": "Show chat previews",
-    "background": "Keep chat connected in background",
-    "backgroundActive": "Receiving chat messages in background",
+    "background": "Background notifications",
+    "backgroundActive": "Receiving notifications in background",
     "backgroundStop": "Stop receiving",
-    "backgroundHint": "The background connection works without Google and shows an ongoing notification. You can stop it from that notification.",
-    "googleUnavailable": "Google push is unavailable. Enable the background chat connection to receive messages."
+    "backgroundHint": "Cindy automatically keeps a background connection when Google push may be unavailable. An ongoing notification is shown while connected.",
+    "googleUnavailable": "Google push is unavailable. Background delivery follows your notification settings.",
+    "backgroundModes": {
+      "auto": "Automatic",
+      "on": "Always on",
+      "off": "Off"
+    }
   },
   "about": {
     "sectionTitle": "About This Phone",
@@ -351,5 +383,44 @@
     "title": "Developer",
     "identity": "Identifiers",
     "updateInfo": "Update info"
+  },
+  "handheld": {
+    "sectionTitle": "Handheld",
+    "label": "Handheld mode",
+    "entryHint": "Use Cindy with the built-in controller of a gaming handheld, and hold the voice key to talk.",
+    "on": "On",
+    "off": "Off",
+    "openAccessibility": "Open handheld mode settings",
+    "title": "Handheld mode",
+    "hint": "Use Cindy with just the controller: the D-pad or left stick moves focus, A selects and B goes back.",
+    "saveFailed": "Couldn't save this setting. It stays in effect until Cindy closes.",
+    "reset": "Reset to default",
+    "voiceKey": {
+      "title": "Voice key",
+      "hint": "Hold this key to talk and release it to stop. Your words stay in the message box. Holding it on the home screen starts a new task. Choosing A, B, L1 or R1 replaces what that button normally does.",
+      "capture": "Press a controller button to set",
+      "capturing": "Press the button you want to use…"
+    },
+    "display": {
+      "title": "Screen",
+      "secondary": "Show on second screen",
+      "hint": "Cindy moves to the second screen, such as the lower screen of a dual-screen handheld. Turning off handheld mode moves it back to the main screen.",
+      "none": "This device has one screen. Cindy adapts to its size.",
+      "current": "Current screen",
+      "single": "Main screen"
+    },
+    "controls": {
+      "title": "Controller",
+      "gamepad": "Controller",
+      "noGamepad": "Not detected",
+      "moveKeys": "D-pad / left stick",
+      "move": "Move focus",
+      "confirm": "Select",
+      "back": "Back",
+      "voice": "Hold to talk",
+      "scrollKeys": "Right stick",
+      "scroll": "Scroll",
+      "page": "Page up / down"
+    }
   }
 }

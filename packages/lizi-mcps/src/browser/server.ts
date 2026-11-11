@@ -5,15 +5,13 @@ import { jsonObjectArg } from '../json-object-arg.js';
 import type { BrowserMcpDeps } from '../types.js';
 import { BrowserToolRegistry } from './tool-registry.js';
 import { registerBrowserTools } from './tools.js';
-import browserWorkflowRules from './prompts/rules/browser-workflow.md?raw';
-
-/** key → markdown body. Bundled into list_tools responses ONCE per category. */
-const RULES: Record<string, string> = {
-  'browser-workflow': browserWorkflowRules,
-};
+import { renderBrowserWorkflowRules } from './workflow-rules.js';
 
 const D_LIST_TOOLS =
-  '探索浏览器自动化可用工具(渐进式发现入口)。不传 category → 返回所有类目+每个类目工具数量。' +
+  '探索浏览器自动化可用工具(渐进式发现入口)。当网页抓取未取得用户所需内容时，可用浏览器继续读取动态页面或图片。' +
+  '仅当用户请求依赖尚未查看的图片时，需查看图片或截图；跳转地址不能代替图片内容。' +
+  '已有正文足够回答时直接回答，不因链接含 photo 或页面可能有图而额外开浏览器。' +
+  '不传 category → 返回所有类目+每个类目工具数量。' +
   '传 category=browser → 返回浏览器操作工具。获取工具名后用 call_tool({name, args}) 执行。';
 
 const D_CALL_TOOL =
@@ -21,7 +19,7 @@ const D_CALL_TOOL =
 
 const CATEGORY_ENUM = ['browser'] as const;
 
-function registerListToolsEntry(server: McpServer, registry: BrowserToolRegistry): void {
+function registerListToolsEntry(server: McpServer, registry: BrowserToolRegistry, deps: BrowserMcpDeps): void {
   server.tool(
     'list_tools',
     D_LIST_TOOLS,
@@ -36,9 +34,11 @@ function registerListToolsEntry(server: McpServer, registry: BrowserToolRegistry
         // field; resolve every key referenced in this category.
         const ruleKeys = registry.collectRuleKeys(category);
         const bundledRules: Record<string, string> = {};
+        // Tailored to the active target; remembered so a later status can say the rules are for another one.
+        const backend = deps.getBackendKind?.();
+        registry.rulesBackend = backend ?? 'all';
         for (const key of ruleKeys) {
-          const body = RULES[key];
-          if (body) bundledRules[key] = body;
+          if (key === 'browser-workflow') bundledRules[key] = renderBrowserWorkflowRules(backend);
         }
         return {
           content: [
@@ -101,7 +101,7 @@ export function createBrowserMcpServer(deps: BrowserMcpDeps): McpServer {
   });
   const registry = new BrowserToolRegistry();
   registerBrowserTools(registry, deps);
-  registerListToolsEntry(server, registry);
+  registerListToolsEntry(server, registry, deps);
   registerCallToolEntry(server, registry);
   return server;
 }

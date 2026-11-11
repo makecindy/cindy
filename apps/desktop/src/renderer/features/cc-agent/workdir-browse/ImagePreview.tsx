@@ -6,7 +6,7 @@ import { toLocalFileUrl } from '@/lib/localPathResolver';
 import { cn } from '@/lib/utils';
 
 import { OpenInSystemActions } from './OpenInSystemActions';
-import { basename, dirname, formatBytes, formatMtime, joinPath } from './lib/fileMeta';
+import { basename, formatBytes, formatMtime, joinPath } from './lib/fileMeta';
 
 export interface ImagePreviewProps {
   workdir: string;
@@ -25,7 +25,6 @@ export function ImagePreview({ workdir, relPath, size, mtimeMs, sessionId }: Ima
   const { t } = useTranslation();
   const name = basename(relPath);
   const absPath = joinPath(workdir, relPath);
-  const folderPath = joinPath(workdir, dirname(relPath));
   const src = toLocalFileUrl(absPath);
   // 点击图片 → 全屏 ImageLightbox(缩放/复制/另存/标注/发送到对话与聊天图
   // 一致)。此前这里是纯静态 <img>,是图片能力升级后唯一没接 lightbox 的入口。
@@ -65,7 +64,7 @@ export function ImagePreview({ workdir, relPath, size, mtimeMs, sessionId }: Ima
         {name} · {formatBytes(size)} ·{' '}
         {t('ccAgent.workdirBrowse.unrenderable.modifiedAt', { time: formatMtime(mtimeMs) })}
       </div>
-      <OpenInSystemActions absPath={absPath} folderPath={folderPath} className="shrink-0" />
+      <OpenInSystemActions absPath={absPath} className="shrink-0" />
     </div>
   );
 }

@@ -17,7 +17,7 @@ import { projectAutomationConsents, schedules, sessions } from '../localDb/schem
 import { projectAutomationConsentToRow } from '../localDb/mapper';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths';
 import { migrateLegacyXdmakerDir } from '../utils/legacyXdmakerMigration';
-import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage';
+import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage.desktop';
 
 /**
  * ProjectAutomationLoader reads .cindy/automations/schedules.json and syncs it
@@ -47,6 +47,7 @@ export interface ProjectScheduleConfig {
   recurring?: boolean;
   manual?: boolean;
   intervalMs?: number;
+  expireAt?: number;
   agentKind?: 'claude-code' | 'codex' | 'pi';
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
@@ -115,6 +116,8 @@ export class ProjectAutomationLoader {
       storage: DrizzleScheduleStorage;
       getDb: () => SchedulerDrizzleDb;
       logger: Logger;
+      /** A project of one of this account's teammates: Cindy's own folder, synced without asking. */
+      isOwnTeammateProject?: (workingDir: string) => Promise<boolean>;
     },
   ) {}
 
@@ -198,7 +201,10 @@ export class ProjectAutomationLoader {
       const current = byConfigId.get(config.id);
       return !current || schedulesDiffer(current, config, workingDir);
     });
-    if (changed && approvedHash !== read.configHash) {
+    // A teammate's project is Cindy's own folder, not something brought in from elsewhere: sync it
+    // directly. Only a real teammate project of this account: a folder that merely looks like one asks.
+    if (changed && approvedHash !== read.configHash
+      && !(await this.deps.isOwnTeammateProject?.(workingDir).catch(() => false))) {
       const pendingImport = {
         workingDir, configHash: read.configHash, schedules: read.schedules,
         removedNames: removed.map((s) => s.name),
@@ -259,6 +265,8 @@ export class ProjectAutomationLoader {
   async upsertSchedule(
     workingDir: string,
     config: ProjectScheduleConfig,
+    /** Host writers (a teammate's own automations) must not replace a file they cannot read whole. */
+    options: { keepUnreadable?: boolean } = {},
   ): Promise<ReconcileResult> {
     if (!isProjectScheduleConfig(config)) {
       throwInvalidParams('invalid project schedule config');
@@ -267,6 +275,11 @@ export class ProjectAutomationLoader {
       throwInvalidParams('project schedule id must be kebab-case ascii');
     }
     const read = await this.readProjectAutomationsFromDisk(workingDir);
+    if (options.keepUnreadable && read.kind !== 'loaded' && read.kind !== 'missing') {
+      const err = new Error(`project automations unreadable (${read.kind}); left as it is`);
+      (err as { code?: string }).code = 'PRECONDITION_FAILED';
+      throw err;
+    }
     const schedules = read.kind === 'loaded' ? read.schedules : [];
     const next: ProjectAutomationsFile = {
       version: 1,
@@ -401,6 +414,8 @@ export class ProjectAutomationLoader {
     const content = `${JSON.stringify(file, null, 2)}\n`;
     await fs.writeFile(tmpPath, content, 'utf8');
     await fs.rename(tmpPath, filePath);
+    // A read cached before this write (e.g. "no file yet") must not hide it.
+    this.cache.delete(path.resolve(workingDir));
   }
 
   private async listKnownWorkingDirs(): Promise<string[]> {
@@ -472,6 +487,7 @@ function scheduleConfigToCreateInput(
     recurring: config.recurring ?? true,
     manual: config.manual ?? false,
     intervalMs: config.intervalMs,
+    expireAt: config.expireAt,
     agentKind: config.agentKind ?? 'claude-code',
     // 恒带 key：配置删除显式选择后，reconcile 清除已保存的标记。
     modelAgentKind: config.modelAgentKind,
@@ -517,6 +533,7 @@ export function schedulesDiffer(
     schedule.recurring !== expected.recurring ||
     schedule.manual !== expected.manual ||
     schedule.intervalMs !== expected.intervalMs ||
+    schedule.expireAt !== expected.expireAt ||
     schedule.agentKind !== expected.agentKind ||
     schedule.modelAgentKind !== expected.modelAgentKind ||
     schedule.modelAgentDeviceId !== expected.modelAgentDeviceId ||
@@ -588,6 +605,7 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     optionalBoolean(config.recurring) &&
     optionalBoolean(config.manual) &&
     optionalNumber(config.intervalMs) &&
+    optionalNumber(config.expireAt) &&
     optionalAgentKind(config.agentKind) &&
     optionalAgentKind(config.modelAgentKind) &&
     (config.modelAgentDeviceId === undefined || (typeof config.modelAgentDeviceId === 'string' &&

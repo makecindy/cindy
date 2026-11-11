@@ -59,6 +59,7 @@ vi.mock('electron', () => ({
   dialog: pickerDialog,
 }));
 vi.mock('../../authManager.js', () => ({
+  getAuthState: () => ({ user: { orgSlug: 'acme' } }),
   getCurrentUserId: vi.fn(() =>
     runtime.session.mode === 'cloud' ? runtime.session.dataOwnerId : null,
   ),
@@ -310,7 +311,32 @@ function harness(items: VisiblePluginSummary[], marketDirs: Array<{ name: string
     });
   }
   const api = {
-    listAll: vi.fn(async () => ({ plugins: items, removals: [] })),
+    read: vi.fn(async () => ({ plugins: items, removals: [] })),
+    listAll: vi.fn(async () => api.read()),
+    catalog: vi.fn(async (options: NonNullable<Parameters<PluginMarketApi['catalog']>[0]> = {}): Promise<Awaited<ReturnType<PluginMarketApi['catalog']>>> => {
+      const value = await api.read();
+      const matches = value.plugins.filter(item => !options.query || [item.name, item.description, item.author, item.ghostId]
+        .some(text => text?.toLocaleLowerCase().includes(options.query!.toLocaleLowerCase())));
+      const counts = { all: matches.length, public: 0, organization: 0, personal: 0 };
+      for (const item of matches) counts[item.scope]++;
+      const selected = matches.filter(item => !options.scope || options.scope === 'all' || options.scope === item.scope);
+      const offset = Number(options.cursor ?? 0), limit = options.limit ?? 12;
+      return { schemaVersion: 2, plugins: selected.slice(offset, offset + limit), currentOrganization: null,
+        counts: options.counts === false ? null : counts, nextCursor: offset + limit < selected.length ? String(offset + limit) : null };
+    }),
+    defaults: vi.fn(async () => {
+      const value = await api.read();
+      return { schemaVersion: 2, plugins: value.plugins.filter(item => item.defaultInstall), nextCursor: null, currentOrganization: null };
+    }),
+    resolve: vi.fn(async (targets: Parameters<PluginMarketApi['resolve']>[0]) => {
+      const value = await api.read();
+      return { schemaVersion: 2, currentOrganization: null, removals: [], results: targets.map(target => {
+        const found = value.plugins.filter(item => target.pluginId ? item.id === target.pluginId
+          : item.ghostId === target.ghostId && (item.namespace ?? null) === target.namespace);
+        return found.length === 1 ? { key: target.key, status: 'available', plugin: found[0]!, matchesQuery: true }
+          : { key: target.key, status: 'unavailable' };
+      }) };
+    }),
     detail: vi.fn(async (pluginId: string) => {
       const item = items.find((candidate) => candidate.id === pluginId);
       if (!item) throw new Error('not found');
@@ -362,13 +388,95 @@ function harness(items: VisiblePluginSummary[], marketDirs: Array<{ name: string
 }
 
 describe('PluginMarketService 自定义市场聚合', () => {
+  // Unit, #9487: registered namespace errors also satisfy isIpcError. Both the
+  // combined page and custom-only count read must retain independently readable plugins.
+  it.each(
+    (['PLUGIN_NAMESPACE_CLIENT_REQUIRED', 'PLUGIN_NAMESPACE_CONFIG_REQUIRED'] as const)
+      .flatMap(code => (['all', 'custom'] as const).map(scope => ({ code, scope }))),
+  )('keeps local plugins for $code in the $scope source', async ({ code, scope }) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-namespace-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    h.api.catalog.mockRejectedValue(Object.assign(new Error('namespace unavailable'), { code }));
+    const page = await h.service.query({ scope });
+    expect(page.items).toMatchObject([{ ghostId: 'alpha', sourceType: 'local-market' }]);
+    expect(page.organizationAccessError).toBe(code);
+    expect(page.unavailableReason).toBeNull();
+  });
+
+  // Unit: source filters reuse counts; neither an unrelated local scan nor a server
+  // catalog request is needed just to read the selected source with counts=false.
+  it('reads only the selected source when search-wide counts are already known', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-source-filter-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
+    const discovery = vi.spyOn(MarketSourceManager.prototype, 'forEachDiscoveredSource');
+    const server = await h.service.query({ scope: 'public', counts: false });
+    expect(server.items).toHaveLength(1);
+    expect(discovery).not.toHaveBeenCalled();
+    const custom = await h.service.query({ scope: 'custom', counts: false });
+    expect(custom.items).toMatchObject([{ ghostId: 'alpha', sourceType: 'local-market' }]);
+    expect(h.api.catalog).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit, #9487: lookup replaced a snapshot that preserved local items on server failure.
+  // One readable local source plus a rejected server target read must still return the plugin.
+  it('looks up a local market plugin when the server target read fails', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-offline-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    Object.assign(h.api, { resolve: vi.fn().mockRejectedValue(new Error('server offline')) });
+    const result = await h.service.lookup(['alpha']);
+    expect(result.items).toMatchObject([{ ghostId: 'alpha', sourceType: 'local-market', sourceMarketName: 'team-lib' }]);
+    expect(result.unavailableReason).toBe('server offline');
+  });
+
+  // Unit regression: Agent/background readers consume items and cursors, not complete counts.
+  // Existing pagination coverage always requested counts; a first page with counts=false still scanned the catalog.
+  it('skips complete counts without losing the requested page or its continuation', async () => {
+    const items = Array.from({ length: 21 }, (_, index) => ({ ...serverSummary(),
+      id: `c${String(index).padStart(24, '0')}`, ghostId: `server-${index}` }));
+    const h = harness(items, []);
+    const first = await h.service.query({ limit: 10, counts: false });
+    expect(first.items).toHaveLength(10);
+    expect(first.counts).toBeNull();
+    expect(first.nextCursor).not.toBeNull();
+    expect(h.api.catalog).toHaveBeenLastCalledWith(expect.objectContaining({ counts: false }));
+    const second = await h.service.query({ limit: 10, cursor: first.nextCursor, counts: false });
+    expect(second.items).toHaveLength(10);
+    expect(second.counts).toBeNull();
+    expect(new Set([...first.items, ...second.items].map(item => item.pluginId)).size).toBe(20);
+  });
+  it('discovers local sources for counts and the local page, without rescanning them on intermediate server pages', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-paging-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const items = Array.from({ length: 30 }, (_, index) => ({ ...serverSummary(),
+      id: `c${String(index).padStart(24, '0')}`, ghostId: `server-${index}` }));
+    const h = harness(items, [{ name: 'team-lib', dir }]);
+    const discovery = vi.spyOn(MarketSourceManager.prototype, 'forEachDiscoveredSource');
+    const first = await h.service.query({ limit: 12 });
+    expect(first.counts?.all).toBe(31);
+    expect(discovery).toHaveBeenCalledTimes(1);
+    const second = await h.service.query({ limit: 12, cursor: first.nextCursor });
+    expect(second.items).toHaveLength(12);
+    expect(discovery).toHaveBeenCalledTimes(1);
+    const third = await h.service.query({ limit: 12, cursor: second.nextCursor });
+    expect(third.items).toHaveLength(7);
+    expect(third.items.at(-1)?.sourceType).toBe('local-market');
+    expect(discovery).toHaveBeenCalledTimes(2);
+    expect(h.api.listAll).not.toHaveBeenCalled();
+  });
   it('appends custom market items after server items with source identity', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
     const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
 
-    const snapshot = await h.service.snapshot();
+    const snapshot = await h.service.query();
     expect(snapshot.unavailableReason).toBeNull();
     expect(snapshot.customSourceNames).toEqual(['team-lib']);
     expect(snapshot.items).toHaveLength(2);
@@ -393,7 +501,7 @@ describe('PluginMarketService 自定义市场聚合', () => {
       [{ name: 'offline-market', dir: path.join(root, 'does-not-exist') }],
     );
 
-    const snapshot = await h.service.snapshot();
+    const snapshot = await h.service.query();
 
     expect(snapshot.items).toHaveLength(1);
     expect(snapshot.items[0]?.sourceType).toBe('server');
@@ -553,7 +661,7 @@ describe('PluginMarketService 自定义市场聚合', () => {
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
     const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
 
-    const snapshot = await h.service.snapshot();
+    const snapshot = await h.service.query();
     expect(snapshot.items.find((item) => item.sourceType === 'server')?.installState).toBe(
       'not-installed',
     );
@@ -1223,7 +1331,7 @@ describe('PluginMarketService 自定义市场 snapshot 账户作用域', () => {
     // 以 user-1 捕获 owner、按 user-1 完成自定义发现;在随后的服务端目录
     // await 间隙把会话漂移到 user-2,此后 requireSameMarketOwner 必须检测到并拒绝,
     // 而不是把 user-1 的自定义插件聚合进 user-2 的快照。
-    h.api.listAll.mockImplementation(async () => {
+    h.api.read.mockImplementation(async () => {
       runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
       return { plugins: [], removals: [] };
     });
@@ -1505,7 +1613,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
 
     // 打包(异步)完成后、装出前,会话已漂移到 user-2:beforeCommit 必须拒绝,
     // 不得把 user-1 选择的插件装进 user-2 的运行时。
-    h.api.listAll.mockImplementation(async () => {
+    h.api.read.mockImplementation(async () => {
       runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
       return { plugins: [], removals: [] };
     });
@@ -1616,7 +1724,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     const h = harness([], [{ name: 'team-lib', dir }]);
 
     // listAll 因切号失败:catch 分支不能把按 user-1 发现的自定义项返回当前会话。
-    h.api.listAll.mockImplementation(async () => {
+    h.api.read.mockImplementation(async () => {
       runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
       throw new Error('session changed');
     });
@@ -1807,7 +1915,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       enabled: true,
     });
 
-    const snapshot = await h.service.snapshot();
+    const snapshot = await h.service.query();
     expect(snapshot.items.find((entry) => entry.sourceType === 'server')?.installState).toBe(
       'not-installed',
     );
@@ -2463,7 +2571,7 @@ describe('Agent custom marketplace boundaries', () => {
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha', version: '2.0.0' }]);
     const h = harness([], [{ name: 'team-lib', dir }]);
-    if (unavailable) h.api.listAll.mockRejectedValue(new Error('offline'));
+    if (unavailable) h.api.read.mockRejectedValue(new Error('offline'));
     runtime.ghosts = [installedGhost(root, 'alpha', '1.0.0')];
     h.ledger.upsertInstallation({
       pluginId: customMarketPluginId('team-lib', 'alpha'), ghostId: 'alpha',

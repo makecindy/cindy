@@ -2,19 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 import { getRemoteResource, MOBILE_REMOTE_RESOURCE_PRIMITIVES } from '../device-link/remoteResources';
 import { normalizeRemoteActions, normalizeRemoteBlocks } from '../device-link/remoteResourceContent';
 import type { RemoteInvoke } from '../device-link/mobileMakerTransport';
-const ref = { collectionId: 'teammates', kind: 'bot', id: 'routine:b/r' };
+const ref = { collectionId: 'teammates', kind: 'bot', id: 'settings:b/r' };
 const action = { id: 'opaque', label: 'Save', fields: [{ id: 'name', label: 'Name', kind: 'text' }] };
-const block = { id: 'r', primitive: 'routine-detail', fallbackMarkdown: 'Daily', data: {
-  id: 'r', revision: 1, editable: true, input: { name: 'Daily', prompt: 'Read updates', enabled: true, triggers: [{ id: 't', kind: 'interval', intervalMs: 60_000 }] },
-  sources: [], history: [], operationActions: { 'routine-save': 'opaque' },
+const block = { id: 'r', primitive: 'form', fallbackMarkdown: 'Daily', data: {
+  id: 'r', revision: 1, editable: true, input: { name: 'Daily', prompt: 'Read updates', enabled: true },
+  operationActions: { save: 'opaque' },
 } };
 describe('resource content through the actual mobile API boundary', () => {
-  it('retains the complete routine and opaque actions instead of projecting them away as a list item', async () => {
+  it('retains the complete form and opaque actions instead of projecting them away as a list item', async () => {
     const invoke = vi.fn(async () => ({ ref, display: { title: 'Daily' }, revision: '1', links: [], actions: [action], blocks: [block] })) as RemoteInvoke;
-    const result = await getRemoteResource(invoke, { deviceId: 'host', deviceName: 'Mac' }, ref, 'en', ['routine-detail']);
+    const result = await getRemoteResource(invoke, { deviceId: 'host', deviceName: 'Mac' }, ref, 'en', ['form']);
     expect(result.actions).toEqual([action]);
     expect(result.blocks).toEqual([block]);
-    expect(vi.mocked(invoke).mock.calls[0]![2]).toMatchObject([{ client: { primitives: [...MOBILE_REMOTE_RESOURCE_PRIMITIVES, 'routine-detail'] } }]);
+    expect(vi.mocked(invoke).mock.calls[0]![2]).toMatchObject([{ client: { primitives: [...MOBILE_REMOTE_RESOURCE_PRIMITIVES, 'form'] } }]);
   });
   it('keeps only public invitation progress for the ordinary teammate resolver', async () => {
     const invoke = vi.fn(async () => ({ ref, display: { title: 'Mimi' }, revision: '1', links: [], blocks: [{ id: 'invitation', primitive: 'status', fallbackMarkdown: '', data: { stage: 'skills', generatedDraft: 'private' } }] })) as RemoteInvoke;
