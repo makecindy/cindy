@@ -72,7 +72,10 @@ describe('remote stream close settles the product turn', () => {
       if (mode === 'terminal-error') f.deliver({ t: 'event', event: { type: 'error', data: {
         message: 'provider failure', reason: 'provider-error', isTerminal: true,
       }, source: 'codex' } });
-      if (mode === 'abort') await f.session.abort();
+      if (mode === 'abort') {
+        await f.session.abort();
+        f.deliver({ t: 'state', state: { turnRunning: true } });
+      }
       if (mode === 'close') await f.session.close();
       else f.deliver({ t: 'closed', reason: mode === 'superseded' ? 'superseded' : 'ended' });
       await f.finish();
@@ -81,8 +84,26 @@ describe('remote stream close settles the product turn', () => {
       expect(errors).toHaveLength(mode === 'terminal-error' || mode === 'close' ? 1 : 0);
       expect(errors.some(event => (event.data as { reason?: string }).reason === 'remote_agent_closed')).toBe(false);
       if (mode === 'terminal-error') expect(errors[0].data).toMatchObject({ reason: 'provider-error', message: 'provider failure' });
+      if (mode === 'abort') expect(f.seen).toContainEqual(expect.objectContaining({ type: 'done',
+        data: expect.objectContaining({ status: 'cancelled' }) }));
       if (mode === 'superseded') expect(f.seen).toContainEqual(expect.objectContaining({ type: 'done',
         data: expect.objectContaining({ status: 'cancelled' }) }));
+    } finally { await f.session.close(); }
+  });
+
+  it('reports a genuine early close on a new send after cancellation', async () => {
+    const f = fixture();
+    try {
+      await f.session.send('first');
+      await f.session.abort();
+      f.deliver({ t: 'event', event: { type: 'done', data: { status: 'cancelled' }, source: 'codex' } });
+      await vi.waitFor(() => expect(f.seen.some(e => e.type === 'done')).toBe(true));
+      expect(await f.session.send('second')).toMatchObject({ accepted: true });
+      f.client.onData(Buffer.alloc(0), true);
+      await f.finish();
+      expect(f.seen.filter(e => e.type === 'error')).toEqual([
+        expect.objectContaining({ data: expect.objectContaining({ reason: 'remote_agent_closed' }) }),
+      ]);
     } finally { await f.session.close(); }
   });
 

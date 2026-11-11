@@ -298,6 +298,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   // A delivered product terminal owns the turn. Transport teardown must not
   // replace its outcome (including provider errors and quota reset details).
   let terminalEventDelivered = false;
+  let abortRequested = false;
   let activeTurn = state.turnRunning === true;
   let interruption = 0;
 
@@ -412,6 +413,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     if (encoded.wire.cindy?.autoReviewSourceContent) projectMessage(encoded.wire.cindy.autoReviewSourceContent);
     const beforeInterruption = interruption;
     if (method === 'send') {
+      abortRequested = false;
       terminalEventDelivered = false;
       activeTurn = true;
     }
@@ -471,6 +473,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
     steer: (message, opts) => sendLikeTracked('steer', message, opts),
     // 已让出名额时对方没有在跑的回合，停止什么也不用做。
     abort: async () => {
+      abortRequested = true;
       activeTurn = false;
       deps.cancelPendingConfirmations?.();
       await callIfLive('abort');
@@ -606,6 +609,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       if (!event || typeof event !== 'object' || typeof (event as AgentEvent).type !== 'string') return;
       let typed = event as AgentEvent;
       if (terminalEventDelivered && startsRemoteProductTurn(typed)) {
+        abortRequested = false;
         terminalEventDelivered = false;
         activeTurn = true;
       }
@@ -622,7 +626,8 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       if (disposed) return;
       state = { ...state, ...next };
       // An idle state can precede the terminal event; only that event settles the turn.
-      if (next.turnRunning === true && !terminalEventDelivered) activeTurn = true;
+      // Abort ACK may still carry busy state; preserve the local cancellation boundary.
+      if (next.turnRunning === true && !terminalEventDelivered && !abortRequested) activeTurn = true;
       if (carriedUsage !== undefined) {
         // 新进程开始干活或报了有内容的用量后，以它为准。
         if (state.turnRunning === true || !isEmptyUsage(state.usage)) carriedUsage = undefined;
