@@ -2759,7 +2759,7 @@
         "dbSizeWarningDisableLabel": "今後通知しない",
         "dbSizeWarningDisableDescription": "有効にするとデータベース容量の通知を非表示にします。",
         "dbAutoCleanupTitle": "削除済みタスクの自動整理",
-        "dbAutoCleanupDescription": "起動時に、サイドバーで削除したタスクのメッセージと索引を自動的に回収します。アーカイブ済みのタスクには影響しません。",
+        "dbAutoCleanupDescription": "起動時に、サイドバーで削除したタスクのメッセージと索引を削除して空き容量を増やします。アーカイブ済みのタスクには影響しません。",
         "dbAutoCleanupEnableLabel": "自動整理を有効にする",
         "dbAutoCleanupRetentionLabel": "保存期間",
         "dbAutoCleanupRetentionDays": "{{days}} 日",

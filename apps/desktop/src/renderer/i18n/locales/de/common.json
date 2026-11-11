@@ -2789,7 +2789,7 @@
         "dbSizeWarningDisableLabel": "Nicht erneut erinnern",
         "dbSizeWarningDisableDescription": "Wenn aktiviert, werden Hinweise zum Datenbankspeicher ausgeblendet.",
         "dbAutoCleanupTitle": "Gelöschte Aufgaben automatisch bereinigen",
-        "dbAutoCleanupDescription": "Beim Start werden Nachrichten und Indizes von in der Seitenleiste gelöschten Aufgaben automatisch freigegeben. Archivierte Aufgaben bleiben unberührt.",
+        "dbAutoCleanupDescription": "Beim Start werden die Nachrichten und Indizes von in der Seitenleiste gelöschten Aufgaben gelöscht, um Speicherplatz freizugeben. Archivierte Aufgaben bleiben unberührt.",
         "dbAutoCleanupEnableLabel": "Automatische Bereinigung",
         "dbAutoCleanupRetentionLabel": "Aufbewahrung",
         "dbAutoCleanupRetentionDays": "{{days}} Tage",

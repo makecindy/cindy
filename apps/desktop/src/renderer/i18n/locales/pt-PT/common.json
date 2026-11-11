@@ -2827,7 +2827,7 @@
         "dbSizeWarningDisableLabel": "Não voltar a lembrar",
         "dbSizeWarningDisableDescription": "Quando ativado, os lembretes de espaço da base de dados ficam ocultos.",
         "dbAutoCleanupTitle": "Limpar automaticamente as tarefas eliminadas",
-        "dbAutoCleanupDescription": "Ao iniciar, as mensagens e índices das tarefas eliminadas na barra lateral são recuperados automaticamente. As tarefas arquivadas nunca são afetadas.",
+        "dbAutoCleanupDescription": "Ao iniciar, as mensagens e índices das tarefas eliminadas da barra lateral são apagados para libertar espaço. As tarefas arquivadas nunca são afetadas.",
         "dbAutoCleanupEnableLabel": "Limpeza automática",
         "dbAutoCleanupRetentionLabel": "Retenção",
         "dbAutoCleanupRetentionDays": "{{days}} dias",

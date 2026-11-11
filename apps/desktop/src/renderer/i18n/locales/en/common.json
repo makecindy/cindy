@@ -2789,7 +2789,7 @@
         "dbSizeWarningDisableLabel": "Do not remind me again",
         "dbSizeWarningDisableDescription": "When enabled, database space reminders are hidden.",
         "dbAutoCleanupTitle": "Automatically clean deleted tasks",
-        "dbAutoCleanupDescription": "On startup, reclaims the messages and indexes of tasks deleted from the sidebar. Archived tasks are never touched.",
+        "dbAutoCleanupDescription": "On startup, frees the storage used by the messages and indexes of tasks deleted from the sidebar. Archived tasks are never touched.",
         "dbAutoCleanupEnableLabel": "Automatic cleanup",
         "dbAutoCleanupRetentionLabel": "Retention",
         "dbAutoCleanupRetentionDays": "{{days}} days",
