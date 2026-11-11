@@ -10,8 +10,10 @@ import type { AgentInputQueuedMessage, AgentInputMakerMessage } from '../../../s
 import {
   createOrcaInterAgentDispatcher,
   type OrcaInterAgentDispatcherDeps,
+  type OrcaInterAgentDispatcher,
 } from '../orcaInterAgentDispatcher.js';
 import { AgentInputCoordinator, type AgentInputSendOpts } from '../agent-input-coordinator.js';
+import { createOrcaWorkerReportQueue } from '../orcaWorkerReportQueue.js';
 import { AUTO_BRIDGE_BATCH_MAX_CHARS, AUTO_BRIDGE_BATCH_MAX_ITEMS } from '../orcaAutoBridgeBatch.js';
 
 const mocks = vi.hoisted(() => ({
@@ -232,6 +234,142 @@ describe('sender-chosen steering into an active turn', () => {
     expect(result.ok).toBe(false);
     expect('reportRejected' in result ? result.reportRejected : undefined).toBe(mode === 'cancelled' ? true : undefined);
   });
+  // #9346 P2, unit: a retained edit/merge survived its old admission failure,
+  // but dispatcher cleanup removed the only callback that captures Lead output.
+  // Exercise the actual Main enqueue adapter, coordinator, Worker queue tools,
+  // bridge send/read and Session events; persistence is the injected I/O boundary.
+  it.each(['edited', 'merged'] as const)('keeps reply capture after a retained %s admission fails', async mode => {
+    const sid = 'target-session', workerSessionId = 'worker-session';
+    let live = false, delayFailure = false;
+    let releaseFailure!: () => void, admissionReady!: () => void, sent!: () => void;
+    const failure = new Promise<void>(resolve => { releaseFailure = resolve; });
+    const admission = new Promise<void>(resolve => { admissionReady = resolve; });
+    const delivered = new Promise<void>(resolve => { sent = resolve; });
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const lead = { id: sid, getStatus: () => 'idle', isTurnRunning: () => false,
+      onEvent: (fn: (event: AgentEvent) => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; },
+    } as unknown as Session;
+    let dispatcher!: OrcaInterAgentDispatcher;
+    const snapshots: AgentInputQueuedMessage[][] = [];
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (_sid, _message, _opts, sendOpts) => {
+        await sendOpts.persistUserMessage?.onPersisted?.();
+        for (const fn of listeners) fn({ type: 'text', data: { text: 'Lead reply after retained admission', isFinal: true } } as AgentEvent);
+        for (const fn of listeners) fn({ type: 'done', data: {} } as AgentEvent);
+        const result = { kind: 'session-dispatch', source: 'test', dispatched: true } as const;
+        await dispatcher.settleQueuedOrcaInterAgentAcceptedCallback(sid, sendOpts, result);
+        sent();
+        return result;
+      },
+      steerToAgent: async () => {}, abortSession: async () => {}, isTurnRunning: () => false,
+      hasPendingInteraction: () => false, getAgentKind: () => 'codex', getSdkSessionId: async () => undefined,
+      emitProjection: () => {}, persistQueueSnapshot: (_sid, items) => { snapshots.push(JSON.parse(JSON.stringify(items))); },
+      awaitQueuePersistence: async () => {
+        if (delayFailure) { admissionReady(); await failure; throw new Error('old admission receipt failed'); }
+      },
+      onAcceptedQueuedMessage: (sessionId, item, restored) => dispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item, restored),
+      onDiscardedQueuedMessage: (_sid, item) => dispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId),
+      loadQueueSnapshot: async () => [], loadClearBoundary: async () => null,
+      touchUserSend: async () => {}, createUserMessage: vi.fn(),
+    });
+    const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+    const start = source.indexOf('    enqueueQueuedMessage: async');
+    const end = source.indexOf('    reserveNextQueuedMessage:', start);
+    if (start < 0 || end < start) throw new Error('Main enqueue adapter unavailable');
+    const enqueue = new Function('inputCoordinator', 'activeOwnerScopeKey', 'isAppSessionBoundaryPending',
+      ts.transpileModule('return ({' + source.slice(start, end) + '}).enqueueQueuedMessage;',
+        { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText,
+    )(coordinator, () => 'owner', () => false);
+    dispatcher = createHarness({
+      getLiveSession: () => null, shouldQueueNewTurn: () => true,
+      enqueueQueuedMessage: (sessionId, item, onQueueOwned) => enqueue(sessionId, item, onQueueOwned),
+      resolveWorkerSessionLink: async () => ({ leadSessionId: sid, workerSessionId }),
+    }).dispatcher;
+    const log = { ...mocks.logger, debug: vi.fn(), child: () => log } as unknown as Logger;
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => ({ getSession: () => live ? lead : undefined }) as unknown as Maker,
+      logger: log, persistUserMessage: vi.fn(), wireSession: vi.fn(),
+      dispatchInterAgentMessage: params => dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(params),
+      orcaTeamStore: { updateWorkerStatus: vi.fn(), getWorkerLink: async () => ({
+        workerId: 'worker-1', workerSessionId, workflowId: 'team-1', leadSessionId: sid,
+        leadSession: { sessionId: sid, agentKind: 'codex', workingDir: '/repo', model: 'model' },
+      }) },
+    });
+    const ctx = { sessionId: workerSessionId, agentKind: 'codex' as const, workingDir: '/repo',
+      mcpCallerAttested: true, mcpCallerKind: 'root' as const,
+      vendorOptions: { orcaRole: 'worker', orcaWorkerId: 'worker-1' } };
+    const pending = () => coordinator.getQueueControlSnapshot(sid).pendingQueue;
+    const reports = createOrcaWorkerReportQueue({
+      getSessionQueueSnapshot: async () => ({ pendingQueue: pending(), consumingClientIds: [],
+        isWorking: false, willQueue: true, queuePaused: true }),
+      ensureQueueRestored: async () => true,
+      replaceQueuedMessage: (id, cid, item) => coordinator.replaceQueuedMessage(id, cid, item),
+      removeQueuedMessage: (id, cid) => { coordinator.remove(id, cid); return true; },
+      mergeQueuedMessages: (id, ids, build) => coordinator.mergeQueuedMessagesAtomically(id, ids, build).merged,
+      resolveWorkerRole: async () => 'reviewer', reportWithdrawalStanding: () => 'other-assignment',
+      adoptQueuedReport: () => {}, log: mocks.logger,
+    });
+    const identity = { workerId: 'worker-1', workerSessionId, leadSessionId: sid };
+    try {
+      await coordinator.ensureQueueRestored(sid);
+      coordinator.setExecutionPaused(sid, true);
+      if (mode === 'merged') {
+        const first = await provider.invokeTool(ctx, 'send_to_lead', { worker_id: 'worker-1', message: 'Report A' },
+          { manageWorkerStatus: false, reportClientId: 'capture-a' });
+        expect(first.isError).not.toBe(true);
+      }
+      delayFailure = true;
+      const sending = provider.invokeTool(ctx, 'send_to_lead', { worker_id: 'worker-1', message: 'Report B' },
+        { manageWorkerStatus: false, reportClientId: 'capture-b' });
+      await admission;
+      if (mode === 'merged') {
+        coordinator.move(sid, 'capture-b', 0);
+        expect(await reports.merge({ ...identity, queuedMessageIds: ['capture-b', 'capture-a'], message: 'Edited combined report' }))
+          .toMatchObject({ ok: true });
+      } else expect(await reports.update({ ...identity, queuedMessageId: 'capture-b', message: 'Edited report' }))
+        .toMatchObject({ ok: true });
+      expect(pending()).toHaveLength(1);
+      expect(pending()[0].orcaReportDelivery).toBeUndefined();
+      expect(snapshots.at(-1)?.[0].clientId).toBe('capture-b');
+      delayFailure = false;
+      releaseFailure();
+      expect((await sending).isError).toBe(true);
+      expect(listeners.size).toBe(0);
+      live = true;
+      coordinator.setExecutionPaused(sid, false);
+      coordinator.resume(sid);
+      await delivered;
+      const result = await provider.invokeTool(ctx, 'read_lead', { worker_id: 'worker-1' });
+      expect(result.isError).toBe(false);
+      expect(JSON.parse(result.content[0]!.text)).toMatchObject({ status: 'done', result: 'Lead reply after retained admission' });
+    } finally {
+      delayFailure = false;
+      releaseFailure();
+      coordinator.clearSession(sid);
+    }
+  });
+
+  // Failed preparation owns only its own registration, never a newer or
+  // already queue-owned callback with the same id.
+  it.each(['unowned', 'newer', 'existing'] as const)('cleans only its callback registration after an %s queue failure', async mode => {
+    const own = vi.fn(), other = vi.fn();
+    let dispatcher!: OrcaInterAgentDispatcher, item!: AgentInputQueuedMessage;
+    dispatcher = createHarness({ getLiveSession: () => null,
+      enqueueQueuedMessage: (_sid, queued) => {
+        item = queued;
+        if (mode === 'newer') dispatcher.registerQueuedOrcaInterAgentAcceptedCallback('callback-id', other);
+        throw new Error('queue unavailable before ownership');
+      },
+    }).dispatcher;
+    if (mode === 'existing') dispatcher.registerQueuedOrcaInterAgentAcceptedCallback('callback-id', other);
+    await expect(dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...report, reportClientId: 'callback-id', onAccepted: own }))
+      .rejects.toThrow('queue unavailable before ownership');
+    await dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', item);
+    expect(own).not.toHaveBeenCalled();
+    expect(other).toHaveBeenCalledTimes(mode === 'unowned' ? 0 : 1);
+    dispatcher.discardQueuedOrcaInterAgentAcceptedCallback('callback-id');
+  });
+
   // #9346 P2, unit: persist the real dispatcher's cold report, then recreate both
   // dispatcher and bridge provider. Existing capture tests kept the old closure.
   it.each(['complete', 'cancelled'] as const)('rebinds a restored report capture at acceptance: %s', async mode => {
@@ -1203,7 +1341,7 @@ describe('Orca lead/worker dispatcher', () => {
     const internal = createHarness({ resolveWorkerSenderLabel, getLiveSession: vi.fn(() => null) });
     await internal.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(params);
     expect(internal.deps.enqueueQueuedMessage).toHaveBeenCalledWith(
-      params.targetSessionId, expect.objectContaining({ text: expectedText }),
+      params.targetSessionId, expect.objectContaining({ text: expectedText }), expect.any(Function),
     );
 
     const reserved = createHarness({ resolveWorkerSenderLabel });

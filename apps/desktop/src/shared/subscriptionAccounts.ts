@@ -9,7 +9,10 @@ export type SubscriptionProvider = 'anthropic' | 'openai';
 export interface SubscriptionAccountConfig {
   id: string;
   paused: boolean;
+  /** Stored value; the enforced limit comes from effectiveConcurrencyLimit (unset = unlimited). */
   limit: number;
+  /** Set when the user chose a limit in a client that understands unlimited concurrency. */
+  limitSet?: true;
   weight: number;
 }
 export interface SubscriptionPoolConfig {
@@ -83,7 +86,8 @@ export type SubscriptionAccountCommand =
       strategy?: ProviderGroupStrategy;
       accountId?: string;
       paused?: boolean;
-      limit?: number;
+      /** null clears the setting: unlimited concurrency. */
+      limit?: number | null;
       weight?: number;
     };
 

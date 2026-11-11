@@ -1,3 +1,8 @@
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import type { DbClient } from '../../localDb/client/DbClient.js';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
+import { saveAgentInputQueueSnapshot, awaitAgentInputQueueSnapshotPersistence, readInputDeliveryReceipts, loadAgentInputQueueSnapshot, saveCancelledInputDelivery } from '../../localDb/agentInputQueueSnapshots.js';
 import { createInputEnqueueHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
 import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
@@ -13294,7 +13299,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 // entries, with an in-memory persistence boundary. Existing auto-bridge tests
 // manually replayed terminal events and never exercised a cold Lead's queue.
 describe('Orca report durable recovery', () => {
-  const report = () => makeItem('report-1', 'Review complete', {
+  const report = (clientId = 'report-1') => makeItem(clientId, 'Review complete', {
     origin: { kind: 'orca', senderLabel: 'reviewer', senderSessionId: 'worker-session' },
     orcaReportDelivery: { workerId: 'worker-1' }, durableDelivery: true,
   });
@@ -13746,6 +13751,163 @@ describe('Orca report durable recovery', () => {
       await flush();
       expect(restarted.sendToAgent).toHaveBeenCalledOnce();
     }
+  });
+
+  // #9346 P1, db: a failed snapshot INSERT published a cancellation tombstone
+  // and retired an unacknowledged report. Exercise the real coordinator, Main
+  // discard callback, SQLite receipt and runtime; user withdrawal stays terminal.
+  it.each(['snapshot-failure', 'user-withdrawal', 'merged-replacement'] as const)('preserves report debt unless the user cancels: %s', async mode => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec([
+      'CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);',
+      'CREATE TABLE messages (id TEXT, session_id TEXT, client_id TEXT, role TEXT, content TEXT, tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, rewind_at INTEGER, created_at INTEGER, UNIQUE(session_id, client_id));',
+      'CREATE TABLE sessions (id TEXT PRIMARY KEY, cleared_at INTEGER);',
+    ].join('\n'));
+    const db = { drizzle: drizzle(sqlite) } as unknown as DbClient;
+    setCurrentDbClient(db, 'report-admission-test');
+    const saveReport = vi.fn(async () => {});
+    const settled = vi.fn(async (commit: (markWorkerDone: boolean) => Promise<unknown>) => { await commit(true); });
+    const runtime = createOrcaRemoteWorkerRuntime({
+      createReportId: () => 'failed-report',
+      readLeadReportReceipt: async (sid, id) => (await readInputDeliveryReceipts(sid, [id]))[0].state,
+      captureReportedTurn: () => settled,
+      invoke: async () => { throw new Error('execution device offline'); },
+      deviceName: () => 'test device', saveReport, onTurnStarted: async () => {},
+      captureTurnEnded: () => async () => true, onWorkerStateChanged: () => {},
+      now: () => 1, setTimeout: () => 0, clearTimeout: () => {}, log: mocks.logger,
+    });
+    const admissionFailure = deferred<void>(), releaseAdmission = deferred<void>();
+    const h = createHarness({ awaitQueuePersistence: async sid => {
+      try { await awaitAgentInputQueueSnapshotPersistence(sid); }
+      catch (error) {
+        if (mode === 'merged-replacement') { admissionFailure.resolve(); await releaseAdmission.promise; }
+        throw error;
+      }
+    } });
+    h.persistQueueSnapshot.mockImplementation(saveAgentInputQueueSnapshot);
+    const discardedCallback = vi.fn();
+    const bindings = {
+      settleTaskActionInput: async () => {}, notePluginTaskLifecycle: () => {},
+      saveCancelledInputDelivery, log: mocks.logger, welcomeDispatchReceipts: { settle: vi.fn() },
+      rollbackAgentIslandUserPrompt: () => {}, discardQueuedAttachmentOwnership: () => {},
+      orcaInterAgentDispatcher: { discardQueuedOrcaInterAgentAcceptedCallback: discardedCallback },
+      orcaTeamServiceForEvents: undefined, settleUndispatchedInterruptedAutoResume: () => {},
+      finalizeUndispatchedClaimedRetry: () => {}, schedulerQueuedPromptDiscardWatchers: new Map(),
+      schedulerQueuedPromptPreparations: new Map(),
+    };
+    try {
+      const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+      const start = source.indexOf('    onDiscardedQueuedMessage: (sessionId, item, opts) => {');
+      const end = source.indexOf('    hasPendingCredentialSwitch: createDeferredRestartQueueGate(', start);
+      if (start < 0 || end < start) throw new Error('Main discard callback unavailable');
+      const callback = new Function(...Object.keys(bindings), transpileModule(
+        'return ({' + source.slice(start, end) + '}).onDiscardedQueuedMessage;',
+        { compilerOptions: { target: ScriptTarget.ES2022 } },
+      ).outputText)(...Object.values(bindings));
+      h.onDiscardedQueuedMessage.mockImplementation(callback);
+      runtime.track({
+        workerId: 'worker-1', teamId: 'team', leadSessionId: 'lead', proxySessionId: 'worker-session',
+        deviceId: 'execution', remoteSessionId: 'remote-worker', lastBridgedMessageId: null,
+        pendingReport: { clientIds: ['assignment'], baselineMessageId: null },
+      });
+      await h.coordinator.ensureQueueRestored('lead');
+      h.coordinator.setExecutionPaused('lead', true);
+      await awaitAgentInputQueueSnapshotPersistence('lead');
+      if (mode === 'merged-replacement') {
+        h.coordinator.enqueue('lead', report('accepted-report'));
+        await awaitAgentInputQueueSnapshotPersistence('lead');
+      }
+      if (mode !== 'user-withdrawal') sqlite.exec(mode === 'merged-replacement'
+        ? "CREATE TRIGGER fail_report BEFORE INSERT ON agent_input_queue_snapshots WHEN json_array_length(NEW.payload) = 2 AND json_extract(NEW.payload, '$[1].clientId') = 'failed-report' BEGIN SELECT RAISE(FAIL, 'snapshot unavailable'); END;"
+        : "CREATE TRIGGER fail_report BEFORE INSERT ON agent_input_queue_snapshots WHEN NEW.payload <> '[]' BEGIN SELECT RAISE(FAIL, 'snapshot unavailable'); END;");
+      const deliver = vi.fn(async (id: string) => {
+        if (mode !== 'user-withdrawal') {
+          const pending = h.coordinator.enqueueDurably('lead', report(id));
+          const rejected = expect(pending).rejects.toThrow('snapshot unavailable');
+          if (mode === 'merged-replacement') {
+            // Delay only the failed admission reply; subsequent real SQLite
+            // snapshots and the public Worker merge still complete normally.
+            await admissionFailure.promise;
+            h.coordinator.move('lead', id, 0);
+            const reports = createOrcaWorkerReportQueue({
+              getSessionQueueSnapshot: async () => ({
+                pendingQueue: h.coordinator.getQueueControlSnapshot('lead').pendingQueue,
+                consumingClientIds: [], isWorking: false, willQueue: true, queuePaused: true,
+              }),
+              ensureQueueRestored: async () => true,
+              replaceQueuedMessage: (sid, cid, item) => h.coordinator.replaceQueuedMessage(sid, cid, item),
+              removeQueuedMessage: (sid, cid) => { h.coordinator.remove(sid, cid); return true; },
+              mergeQueuedMessages: (sid, ids, build) => h.coordinator.mergeQueuedMessagesAtomically(sid, ids, build).merged,
+              resolveWorkerRole: async () => 'reviewer', reportWithdrawalStanding: () => 'other-assignment',
+              adoptQueuedReport: () => {}, log: mocks.logger,
+            });
+            await expect(reports.merge({ workerId: 'worker-1', workerSessionId: 'worker-session', leadSessionId: 'lead',
+              queuedMessageIds: [id, 'accepted-report'], message: 'merged reports stay owned',
+            })).resolves.toMatchObject({ ok: true });
+            await awaitAgentInputQueueSnapshotPersistence('lead');
+            releaseAdmission.resolve();
+          }
+          await rejected;
+        } else {
+          await h.coordinator.enqueueDurably('lead', report(id));
+          h.coordinator.remove('lead', id);
+        }
+        await awaitAgentInputQueueSnapshotPersistence('lead');
+        return { isError: true };
+      });
+      await runtime.runReportDelivery('worker-session', ['assignment'], deliver, result => !result.isError);
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+      if (mode === 'merged-replacement') {
+        const snapshot = await loadAgentInputQueueSnapshot('lead');
+        expect(snapshot).toHaveLength(1);
+        expect(snapshot[0]).toMatchObject({ clientId: 'failed-report', mergedDeliveryClientIds: ['accepted-report'] });
+        expect(snapshot[0].persistedContent).toContain('merged reports stay owned');
+        expect(h.coordinator.getProjection('lead').pendingQueue).toHaveLength(1);
+        expect(await readInputDeliveryReceipts('lead', ['failed-report', 'accepted-report'])).toEqual([
+          { clientId: 'failed-report', state: 'pending' }, { clientId: 'accepted-report', state: 'removed' },
+        ]);
+        expect(discardedCallback).toHaveBeenCalledExactlyOnceWith('accepted-report');
+        expect(settled).toHaveBeenCalledOnce();
+        return;
+      }
+      expect(h.coordinator.getProjection('lead').pendingQueue).toEqual([]);
+      expect(discardedCallback).toHaveBeenCalledExactlyOnceWith('failed-report');
+      expect(await readInputDeliveryReceipts('lead', ['failed-report'])).toEqual([
+        { clientId: 'failed-report', state: mode === 'snapshot-failure' ? 'unknown' : 'removed' },
+      ]);
+      if (mode === 'snapshot-failure') {
+        expect(sqlite.prepare('SELECT * FROM messages').all()).toEqual([]);
+        expect(settled).not.toHaveBeenCalled();
+        expect(saveReport).toHaveBeenLastCalledWith('worker-1', expect.objectContaining({
+          clientIds: ['assignment'], delivery: expect.objectContaining({ clientId: 'failed-report' }),
+        }));
+        // Unknown admission stays fenced instead of automatically replaying it.
+        await expect(runtime.runReportDelivery('worker-session', ['assignment'], deliver, result => !result.isError,
+          { alreadyReported: { isError: false } })).rejects.toThrow('REPORT_DELIVERY_UNCONFIRMED');
+        expect(deliver).toHaveBeenCalledOnce();
+      } else {
+        expect(settled).toHaveBeenCalledOnce();
+        expect(saveReport).toHaveBeenLastCalledWith('worker-1', null, undefined, true);
+      }
+    } finally {
+      releaseAdmission.resolve();
+      await awaitAgentInputQueueSnapshotPersistence('lead').catch(() => {});
+      runtime.stop();
+      clearCurrentDbClient(db);
+      sqlite.close();
+    }
+  });
+
+  // A failed receipt for a duplicate cannot revoke the previously owned input.
+  it('does not roll back an existing report when a duplicate receipt fails', async () => {
+    const write = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('snapshot unavailable'));
+    const h = createHarness({ awaitQueuePersistence: write });
+    h.coordinator.setExecutionPaused('lead', true);
+    await h.coordinator.enqueueDurably('lead', report());
+    await expect(h.coordinator.enqueueDurably('lead', report())).rejects.toThrow('snapshot unavailable');
+    expect(h.coordinator.getProjection('lead').pendingQueue).toHaveLength(1);
+    expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
   });
 
   it('does not dispatch a report before persistence or after a failed receipt', async () => {

@@ -191,9 +191,13 @@ jobs:
 
       - name: Install Linux user-installer test tools
         run: |
-          # Keep Ubuntu's signed repositories without the runner mirror's failing DNS.
+          # Ubuntu's archive hostnames have repeatedly failed DNS on runners.
+          # Use the Kernel Archives' Ubuntu mirror without changing Ubuntu's
+          # archive signing keys or the image's security fallback.
           if [ -f /etc/apt/apt-mirrors.txt ]; then
-            sudo sed -i 's|https\?://azure\.archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+            sudo sed -i -e '/azure\.archive\.ubuntu\.com/d' \
+              -e 's|https://archive\.ubuntu\.com/ubuntu/|https://mirrors.kernel.org/ubuntu/|' \
+              /etc/apt/apt-mirrors.txt
           fi
           sudo apt-get update
           sudo apt-get install --yes libarchive-tools binutils desktop-file-utils xdg-utils

@@ -94,3 +94,20 @@ describe('Claude quota percentage authority', () => {
     expect(mergeClaudeSubscriptionUsageDuringRead(endpoint, endpoint, next).sevenDay?.utilization).toBe(1);
   });
 });
+
+// #9995 / unit: new statuses must not inherit another event's claim. Previous
+// merge coverage did not exercise status-only updates after a shared-window event.
+describe('Claude rejection claim belongs to its status event', () => {
+  it.each([null, undefined])('clears a stale claim on a new status with claim=%s', (claim) => {
+    const previous = merge(endpoint, { ...headers, representativeClaim: 'five_hour' });
+    const rejected = merge(previous, { source: 'unified-headers', updatedAt: now + 2000,
+      rateLimitStatus: 'rejected', representativeClaim: claim });
+    expect(claudeAccountUsageLimit(rejected, 'claude-opus', now)?.limited).toBe(false);
+    expect(rejected.representativeClaim).toBeNull();
+    // A usage-only update still preserves the status and its actual claim.
+    const shared = merge(previous, { ...headers, rateLimitStatus: 'rejected', representativeClaim: 'seven_day' });
+    const partial = merge(shared, { source: 'unified-headers', fiveHour: { utilization: 26 } });
+    expect(claudeAccountUsageLimit(partial, 'claude-opus', now)?.limited).toBe(true);
+    expect(partial.representativeClaim).toBe('seven_day');
+  });
+});

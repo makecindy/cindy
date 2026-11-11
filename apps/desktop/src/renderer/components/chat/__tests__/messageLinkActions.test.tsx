@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -28,6 +27,7 @@ vi.mock('../useDeleteMessage', () => ({ useDeleteMessage: () => async () => {} }
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { UserMessageImageLink } from '../UserMessageImageLink';
 import { UserMessage } from '../UserMessage';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { MemoryRouter } from 'react-router-dom';
 import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import { _resetLinkOpenPreferenceForTests } from '@/hooks/useLinkOpenPreference';

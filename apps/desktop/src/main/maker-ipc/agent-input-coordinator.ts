@@ -620,7 +620,7 @@ export interface AgentInputCoordinatorDeps {
    * host 用它释放按 clientId 暂存的 accepted 副作用(如 orca 排队消息的回调表),
    * 否则被丢弃项的暂存条目会永久泄漏。
    */
-  onDiscardedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage, opts?: { mergedInto: string }) => void;
+  onDiscardedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage, opts?: { mergedInto?: string; admissionFailed?: true }) => void;
   /**
    * 排队项派发那一刻，追加在发给模型的 wire 消息末尾的宿主说明；返回 null 不追加。
    * `pendingQueue` 是该项取出后仍在等待的队列。说明不写回队列项（不进排队正文与落库正文）。
@@ -2020,7 +2020,7 @@ export class AgentInputCoordinator {
   }
 
   /** A host receipt must not race vendor dispatch or a failed snapshot write. */
-  async enqueueDurably(sessionId: string, item: AgentInputQueuedMessage, ownerIsCurrent: () => boolean = () => true): Promise<void> {
+  async enqueueDurably(sessionId: string, item: AgentInputQueuedMessage, ownerIsCurrent: () => boolean = () => true, onQueueOwned?: () => void): Promise<void> {
     const state = this.getState(sessionId);
     const generation = state.generation;
     await this.ensureQueueRestored(sessionId);
@@ -2028,14 +2028,27 @@ export class AgentInputCoordinator {
     if (!current() || state.generation !== generation || !this.deps.awaitQueuePersistence) throw new Error('Durable input is unavailable');
     const lock = `durable-input:${item.clientId}`;
     this.setInteractionLock(sessionId, lock, true);
+    let admitted: AgentInputQueuedMessage | undefined;
     try {
-      this.enqueue(sessionId, item);
+      let duplicate = false;
+      this.enqueue(sessionId, item, { onDuplicate: () => { duplicate = true; } });
+      const queued = state.pendingQueue.find(entry => entry.clientId === item.clientId);
+      if (queued) {
+        if (!duplicate) admitted = queued;
+        // The queue now settles callbacks on actual discard/acceptance. A later
+        // receipt failure cannot revoke an edited or merged replacement's capture.
+        onQueueOwned?.();
+      }
       await this.deps.awaitQueuePersistence(sessionId);
       if (!current() || !state.pendingQueue.some(queued => queued.clientId === item.clientId)) {
         throw new Error('Durable input was cancelled');
       }
     } catch (error) {
-      if (current()) this.remove(sessionId, item.clientId);
+      // The same ID may now belong to an edited/merged replacement. An old
+      // admission cannot revoke that object, or a previously accepted duplicate.
+      if (current() && admitted && state.pendingQueue.includes(admitted)) {
+        this.removeQueuedInput(sessionId, item.clientId, true);
+      }
       throw error;
     } finally {
       if (current()) this.setInteractionLock(sessionId, lock, false);
@@ -3788,13 +3801,21 @@ export class AgentInputCoordinator {
   }
 
   remove(sessionId: string, clientId: string): AgentInputProjection {
+    return this.removeQueuedInput(sessionId, clientId);
+  }
+
+  /** Failed admission releases callbacks without publishing a user withdrawal. */
+  private removeQueuedInput(sessionId: string, clientId: string, admissionFailed = false): AgentInputProjection {
     const state = this.getState(sessionId);
     assertSharedTaskQueueMutation(getDeviceLinkInvokeContext()?.sharedTask, sessionId, 'input.withdraw', state.pendingQueue.find((item) => item.clientId === clientId));
     if (state.steeringQueueClientIds.includes(clientId)) return this.getProjection(sessionId);
     const before = state.pendingQueue.length;
     const removed = state.pendingQueue.find((q) => q.clientId === clientId);
     state.pendingQueue = state.pendingQueue.filter((q) => q.clientId !== clientId);
-    if (removed) this.deps.onDiscardedQueuedMessage?.(sessionId, removed);
+    if (removed) {
+      if (admissionFailed) this.deps.onDiscardedQueuedMessage?.(sessionId, removed, { admissionFailed: true });
+      else this.deps.onDiscardedQueuedMessage?.(sessionId, removed);
+    }
     // 显式移除的消息从未派发:该 clientId 允许被合法地重新入队(重排/再发都是
     // 既有产品流),必须从弱网重发幂等窗口里遗忘,否则再入队会被误吞。
     if (removed) {

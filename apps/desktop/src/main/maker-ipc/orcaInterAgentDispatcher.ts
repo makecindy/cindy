@@ -223,7 +223,8 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     sessionId: string,
     meta: TSessionMeta,
   ) => Promise<AgentInputCreateOpts>;
-  enqueueQueuedMessage: (sessionId: string, item: AgentInputQueuedMessage) => void | Promise<void>;
+  /** Queue-owned callbacks settle with the item, even if its admission receipt later fails. */
+  enqueueQueuedMessage: (sessionId: string, item: AgentInputQueuedMessage, onQueueOwned?: () => void) => void | Promise<void>;
   /** Restore first, then synchronously reserve the item at the live queue head. */
   reserveNextQueuedMessage: (
     sessionId: string,
@@ -489,19 +490,15 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         queued.orcaReportDelivery = { workerId: params.workerId };
         queued.durableDelivery = true;
       }
-      if (params.onAccepted) {
-        registerQueuedOrcaInterAgentAcceptedCallback(
-          clientId,
-          params.onAccepted,
-          params.onAcceptedRollback,
-          params.onAcceptedCommit,
-        );
-      }
+      const releaseAccepted = params.onAccepted && !queuedAccepted.has(clientId)
+        ? queuedAccepted.registerOwned(clientId, params.onAccepted, params.onAcceptedRollback, params.onAcceptedCommit)
+        : undefined;
+      let queueOwnsAccepted = false;
       try {
         deliveryAttempt.started = true;
-        await deps.enqueueQueuedMessage(params.targetSessionId, queued);
+        await deps.enqueueQueuedMessage(params.targetSessionId, queued, () => { queueOwnsAccepted = true; });
       } catch (error) {
-        discardQueuedOrcaInterAgentAcceptedCallback(clientId);
+        if (!queueOwnsAccepted) releaseAccepted?.();
         throw error;
       }
       log.info(logEvent, {
