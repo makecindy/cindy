@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import os from 'node:os';
 
 import { createChatHandler } from './chat.mjs';
 import { createEventHub } from './events.mjs';
@@ -29,7 +30,7 @@ test('chat uses the durable queue and approvals reach the client once', async (t
   let emitEvent = () => {};
   const session = {
     id: 'session-1',
-    instanceId: 'runtime-1', agentKind: 'claude-code', workDir: '/tmp',
+    instanceId: 'runtime-1', agentKind: 'claude-code', workDir: os.tmpdir(),
     isTurnRunning: () => false,
     onEvent(callback) {
       emitEvent = callback;
@@ -52,7 +53,7 @@ test('chat uses the durable queue and approvals reach the client once', async (t
     },
   };
 
-  const readSession = async () => ({ id: 'session-1', agentKind: 'claude-code', model: 'm', workingDir: '/tmp', providerId: null });
+  const readSession = async () => ({ id: 'session-1', agentKind: 'claude-code', model: 'm', workingDir: os.tmpdir(), providerId: null });
   let live = false;
   const saved = [];
   const queue = createInputQueue({ readSession, hub,

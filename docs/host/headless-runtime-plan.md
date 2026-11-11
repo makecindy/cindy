@@ -1105,3 +1105,31 @@ Desktop `makerSendTransaction` 10.92 秒、`normalizeAttachmentsTemp` 1.57 秒�
 313 毫秒；超过 10 秒来自既有大模块的加载成本，没有新增真实等待或放宽超时。
 日志 `/tmp/cindy-host-parity-single-{desktop,host}-*.log`；文档合同与测试卫生检查均通过，
 日志 `/tmp/cindy-host-parity-final-{docs,hygiene}.log`。
+
+### PR #9963 首轮 CI 与审阅修复（2026-11-11）
+
+Greptile 的 P1 确认成立：生产 `markStarted` 以前使用尽力而为的桌面开始标记，
+写入失败被内部吞掉，等待 drain 也不能证明成功。新增显式的
+`markSessionTurnStartedDurable`，仅 Host 接入：本次数据库错误返回调用方，冻结或无库时
+拒绝，后续串行写链仍可继续；Desktop 原入口仍是原来的吞错/日志行为。
+Host 队列用真实 SQLite trigger 拒绝开始 UPDATE 的回归先红后绿：没有派发、没有用户行，
+输入保留在队首；解除故障后 durable 标记可正常写入。既有 mock 抛错用例不能覆盖这个生产
+装配缺口，新增用例并入 `input-queue.test.mjs`，tier 为 unit，无新增真实等待。
+
+CI 的三类测试位置问题同时修正：模型对账/手机说明 guard 指向抽取后的共享模块，原字段
+断言保留；插件插话的六项授权/撤权测试改为调用完整 `createMakerSteerTransaction`，
+不再剪取 register.ts 的旧代码。原授权结果、撤权零执行与零 consume 断言保留，完整事务
+现在覆盖派发前和启动前两次 message guard。Windows Host 交互测试用 `os.tmpdir()`
+替代 `/tmp`，使工作目录在运行平台上实际存在，没有跳过生产路径检查。
+
+验证：Host 228 项通过（约 4.8 秒）；Desktop 开始标记与三组 CI 失败文件 4 文件 105 项
+通过（6.67 秒），插件授权完整工厂 24 项另行通过，日志
+`/tmp/cindy-9963-r1-{host-final,desktop,authorship-final}.log`。生产 SQLite 回归的先红/后绿
+日志为 `/tmp/cindy-9963-marker-{red,green}.log`；原生隔离 E2E 三条 PASS，日志
+`/tmp/cindy-9963-r1-native.log`。真实 Windows 执行仍须等新提交的 CI，不能用 macOS
+定向运行代替；其余未验收边界同上。
+
+本轮两端类型检查及测试卫生通过，日志
+`/tmp/cindy-9963-r1-host-types.log`、`/tmp/cindy-9963-r1-desktop-types-final.log`、
+`/tmp/cindy-9963-r1-hygiene.log`。插件授权单文件运行 5.64 秒（24 项，执行 77 毫秒）；
+没有增加测试基线额度，也没有新增源码文本断言。

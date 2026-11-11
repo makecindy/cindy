@@ -15,7 +15,7 @@ import { createImageCacheStore } from '../../../desktop/src/main/imageCacheStore
 import { createHostAttachments } from '../attachments.ts';
 import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
 import { saveAgentInputQueueSnapshot, loadAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
-import { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
+import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites } from '../../../desktop/src/main/localDb/sessionActiveTurn.ts';
 
 import { createInputQueue } from './input-queue.mjs';
 import { applyLiveSessionSettings } from './session-settings.mjs';
@@ -421,6 +421,30 @@ for (const writeFails of [false, true]) {
     }
   });
 }
+
+// Greptile P1: production swallowed SQLite failures, unlike the throwing stub.
+// Unit, real SQLite trigger + real queue: reject the start marker, retain input,
+// and prove that neither the provider nor user-message persistence was reached.
+test('production startup marker failure prevents dispatch and leaves input recoverable', async t => {
+  const sqlite = new Database(':memory:');
+  sqlite.exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, active_turn_started_at INTEGER);
+    INSERT INTO sessions(id) VALUES ('marker-failure');
+    CREATE TRIGGER reject_start BEFORE UPDATE OF active_turn_started_at ON sessions
+    BEGIN SELECT RAISE(ABORT, 'startup marker storage unavailable'); END;`);
+  setCurrentDbClient({ drizzle: drizzle(sqlite) }, 'isolated-marker-test');
+  const h = createHarness({ markStarted: markSessionTurnStartedDurable });
+  t.after(async () => { await h.queue.dispose(); clearCurrentDbClient(); sqlite.close(); });
+  await h.queue.enqueue('marker-failure', { clientId: 'one', text: 'must not run' });
+  await waitFor(() => h.queue.projection('marker-failure').error
+    || h.maker.getSession('marker-failure')?.sent.length);
+  assert.equal(h.maker.getSession('marker-failure').sent.length, 0);
+  assert.match(h.queue.projection('marker-failure').error, /startup marker storage unavailable/);
+  assert.equal(h.queue.projection('marker-failure').pendingQueue[0].clientId, 'one');
+  assert.equal(h.persisted.length, 0);
+  sqlite.exec('DROP TRIGGER reject_start');
+  await markSessionTurnStartedDurable('marker-failure');
+  assert.equal(typeof sqlite.prepare('SELECT active_turn_started_at AS started FROM sessions').get().started, 'number');
+});
 
 // Host has no remote/teammate/Orca/group launcher yet. Persisted task facts,
 // not a forgeable wire field, must reject before runtime creation (unit).
@@ -1391,7 +1415,7 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
   reopen();
   const delivered = new Set();
   const persistence = {
-    markStarted: async id => { markSessionTurnStarted(id); await drainSessionActiveTurnWrites(id); },
+    markStarted: markSessionTurnStartedDurable,
     markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
     persistQueueSnapshot: saveAgentInputQueueSnapshot,
     loadQueueSnapshot: loadAgentInputQueueSnapshot,

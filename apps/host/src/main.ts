@@ -37,7 +37,7 @@ import { OwnerSessionStorage } from '../../desktop/src/main/localDb/sessionStora
 import { getDbClient, setCurrentDbClient, clearCurrentDbClient, getCurrentDbClientSnapshot } from '../../desktop/src/main/localDb/client/current.ts';
 import { loadAgentInputQueueSnapshot, saveAgentInputQueueSnapshot, getPersistedInputClientIds } from '../../desktop/src/main/localDb/agentInputQueueSnapshots.ts';
 import { touchUserSendRow } from '../../desktop/src/main/localDb/sessionQueries.ts';
-import { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
+import { markSessionTurnStartedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, ackSessionTurnEndedDurable,
   hasAssistantProgressAfterMessage, getRecoveryContextSnapshot,
 } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
 import { readSessionExtraDirsFromDb, readSessionWritableDirsFromDb } from '../../desktop/src/main/maker-host/session-storage.js';
@@ -842,10 +842,7 @@ const inputQueue = createInputQueue({
   persistQueueSnapshot: saveAgentInputQueueSnapshot,
   loadQueueSnapshot: loadAgentInputQueueSnapshot,
   getPersistedClientIds: getPersistedInputClientIds,
-  markStarted: async (sessionId: string) => {
-    markSessionTurnStarted(sessionId);
-    await drainSessionActiveTurnWrites(sessionId);
-  },
+  markStarted: markSessionTurnStartedDurable,
   markEnded: async (sessionId: string, endedAt: number) => {
     markSessionTurnEnded(sessionId, endedAt);
     await drainSessionActiveTurnWrites(sessionId);
