@@ -20,4 +20,6 @@ Pi 只改写副本首行的 session ID 与 cwd，使其指向接收端工作目�
 回归：`relocateNativeHistory.test.ts`、`nativeHistoryTransfer.test.ts`、`nativeHistoryStorage.test.ts`、`sessionAgentSwitchHandler.test.ts`、device-link `remoteAgent.test.ts`。
 配额均衡的同账号提议复用既有 `kind: auto`，桌面与手机不弹常规换电脑确认。实际需要摘要时，宿主通过既有 permission
 确认卡（`hostOwnedConfirmation: native_history_fallback`）询问，支持同账号远控回答；取消、超时保留原电脑与原生记录。
+配额探测因目标此刻接不了而失败（供应商组失败判定为 `unavailable`：连不上、`REMOTE_AGENT_BUSY` 任务数已满、不提供这个模型等）时不发确认卡，
+还原源路由后原样报错，由配额均衡留在原电脑发送并退避；只有目标能接、原生记录恢复不了才询问。无协议变化。
 旧客户端已支持 auto 和通用 permission 卡；共享来源仍沿用原来的 ask/记住偏好，不自动扩大授权。

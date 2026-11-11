@@ -597,3 +597,19 @@ it('preserves companion identity and the selected archived transcript', () => {
   const item = toSearchListItem(hit, Date.now());
   expect(item.title).toBe('Melody · Remote planning');
 });
+
+// Unit regression: indexed hits outside the home cache lost their labels; cached
+// hits also need fresh labels (including removal), with old-host fallback intact.
+it('preserves task tags through indexed and cached search projections', () => {
+  const tags = [{ id: 'red', name: 'Important', color: 'red' as const, favoriteOrder: null, revision: 1 }];
+  const item = indexedPage(['a']).results[0]!;
+  item.session.tags = tags;
+  expect(toSearchListItem(item, Date.now()).session.tags).toEqual(tags);
+  const cached = session({ id: 'a', title: 'needle', tags });
+  item.session.tags = [];
+  expect(toSearchListItem(item, Date.now(), undefined, cached).session.tags).toEqual([]);
+  delete item.session.tags;
+  expect(toSearchListItem(item, Date.now(), undefined, cached).session.tags).toEqual(tags);
+  const page = searchCachedDeviceSessions(studio, { query: 'needle' }, [cached]);
+  expect(page.results[0]?.session.tags).toEqual(tags);
+});

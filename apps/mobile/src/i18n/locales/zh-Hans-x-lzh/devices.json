@@ -972,5 +972,8 @@
       "disk-full": "纳之未成：磁盘空间不足",
       "native-unloadable": "纳之未成：原始记录无法加载"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "待更新"
   }
 }

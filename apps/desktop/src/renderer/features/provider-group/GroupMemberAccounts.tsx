@@ -48,12 +48,12 @@ function listedAccounts(raw: unknown, providerId: SubscriptionProvider): GroupMe
   );
 }
 
-/** `deviceId` 为 null 时读本机；只在 `enabled`(展开且这台可读)时读取，返回 null 表示还没有账号列表。 */
+/** `deviceId` 为 null 时读本机；只在 `enabled`(展开且这台可读)时读取，首读完成前不展示单账号兜底卡。 */
 export function useGroupMemberAccounts(
   providerId: string | null,
   deviceId: string | null,
   enabled: boolean,
-): GroupMemberAccount[] | null {
+): { accounts: GroupMemberAccount[] | null; loading: boolean } {
   const pool = enabled && providerId && isSubscriptionProvider(providerId) ? providerId : null;
   const observed = useLiveQuotaForeground(pool !== null) && pool !== null ? pool : null;
   const reconnectEpoch = useDeviceLinkReconnectEpoch(
@@ -65,7 +65,7 @@ export function useGroupMemberAccounts(
   const [loaded, setLoaded] = useState<{
     key: string;
     owner: typeof owner;
-    accounts: GroupMemberAccount[];
+    accounts: GroupMemberAccount[] | null;
   } | null>(null);
   useEffect(() => {
     // 不可读(离线、权限撤销)时不留旧账号，恢复后重新读。
@@ -87,7 +87,11 @@ export function useGroupMemberAccounts(
         if (disposed || request !== latest || !isDataOwnerGenerationCurrent(owner)) return;
         setLoaded({ key, owner, accounts: listedAccounts(result, observed) });
       } catch {
-        // 读取失败保留上一次的账号列表；从没读到过就继续显示原来的单张卡。
+        if (disposed || request !== latest || !isDataOwnerGenerationCurrent(owner)) return;
+        // 旧电脑不支持账号列表时，首读失败后才用原来的单张卡；刷新失败保留已读到的列表。
+        setLoaded(previous => previous?.key === key && previous.owner === owner
+          ? previous
+          : { key, owner, accounts: null });
       }
     };
     void refresh();
@@ -103,9 +107,10 @@ export function useGroupMemberAccounts(
       offChanged?.();
     };
   }, [observed, deviceId, key, owner, reconnectEpoch]);
-  return pool && loaded?.key === key && isDataOwnerGenerationCurrent(loaded.owner)
-    ? loaded.accounts
+  const current = pool && loaded?.key === key && isDataOwnerGenerationCurrent(loaded.owner)
+    ? loaded
     : null;
+  return { accounts: current?.accounts ?? null, loading: pool !== null && current === null };
 }
 
 /** `defaultCard` 是这台电脑原有的用量卡，它属于 CLI 默认账号，保留实时刷新与 Codex 重置次数。 */
