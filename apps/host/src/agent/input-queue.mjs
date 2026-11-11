@@ -1,5 +1,3 @@
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
-import { restoreAutoReviewSteerIntent } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
@@ -129,6 +127,7 @@ export function createInputQueue(deps) {
       assertCurrent, isCurrent,
       isClearBoundaryCurrent: (id, boundary, generation) => coordinator.getClearBoundaryMs(id) === boundary
         && (generation === undefined || coordinator.isGenerationCurrent(id, generation)),
+      isInputGenerationCurrent: (id, generation) => coordinator.isGenerationCurrent(id, generation),
       isExecutionPaused: id => coordinator.isExecutionPaused(id),
       isStoppingRuntime: () => closing,
       persistMessage: deps.persistMessage ?? (async () => {}),
@@ -153,40 +152,7 @@ export function createInputQueue(deps) {
           throw error;
         }
       },
-      steerToAgent: async (id, message, opts) => {
-        opts.signal?.throwIfAborted();
-        await opts[MCP_APP_MESSAGE_GUARD]?.();
-        await opts.beforeProviderStart?.();
-        assertCurrent(); opts.signal?.throwIfAborted();
-        await executor.readExecutionSession(id);
-        assertCurrent(); opts.signal?.throwIfAborted();
-        const session = deps.getMaker().getSession(id);
-        if (!session) throw new Error('NO_ACTIVE_TURN');
-        const generation = session.getTurnGeneration();
-        const authorization = { ...opts, [AUTO_REVIEW_DELEGATED_CONTINUATION]:
-          opts[AUTO_REVIEW_DELEGATED_CONTINUATION] === true || typeof opts[MCP_APP_MESSAGE_GUARD] === 'function' ? true : undefined };
-        const intent = await restoreAutoReviewSteerIntent(
-          typeof message === 'string' ? message : message.content,
-          authorization, () => executor.readAutoReviewHistory(id));
-        const assertTurnCurrent = () => {
-          assertCurrent(); opts.signal?.throwIfAborted();
-          if (deps.getMaker().getSession(id) !== session || session.getTurnGeneration() !== generation) {
-            throw new Error('[STALE_TURN] Session changed turns while restoring authorization');
-          }
-        };
-        assertTurnCurrent();
-        // Session.steer resolves void on acceptance; rejection is an exception.
-        await session.steer(message, {
-          [AUTO_REVIEW_SOURCE_CONTENT]: opts[AUTO_REVIEW_SOURCE_CONTENT],
-          [AUTO_REVIEW_DELEGATED_CONTINUATION]: authorization[AUTO_REVIEW_DELEGATED_CONTINUATION],
-          [AUTO_REVIEW_USER_INTENT]: intent, signal: opts.signal,
-          beforeProviderStart: async () => {
-            await opts[MCP_APP_MESSAGE_GUARD]?.();
-            await opts.beforeProviderStart?.();
-            assertTurnCurrent();
-          },
-        });
-      },
+      steerToAgent: executor.steer,
       abortSession: id => {
         const promise = executor.abort(id);
         stateFor(id).aborting = promise;

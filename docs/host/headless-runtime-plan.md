@@ -785,3 +785,38 @@ provider 尚未确认 idle、持久写入尚在进行时，以及旧账号或关
 新工厂在 Node 实际加载通过（`/tmp/cindy-steer-desktop-tests.log`、
 `/tmp/cindy-steer-node-load.log`）；函数体比对见 `/tmp/cindy-steer-extraction-check.log`。
 本检查点只完成抽取，Host 接线和新增的插话可观察行为需要后续独立验证。
+
+### Host 接入共用插话（2026-11-11）
+
+Host 的队列端口现调用同一个 `createMakerSteerTransaction`，删除原先自行恢复授权后
+直接 `Session.steer` 的分支。授权历史、引用说明、来源说明、App 上下文与提问分类
+由共用事务处理；消息 UUID、用户名称及宿主专用上下文按协调器原有合同透传。
+发送与插话使用同一份 `wireNoteMemory`，已送达的设备/语言说明不重复，压缩后重新附带。
+说明只进入模型输入，不改变落库原文。
+
+Host 装配保留准入、当前账号、清空边界、输入代次、Session 身份/回合代次及取消检查；
+在异步准备前固定本次插话的 Session，在供应商开始前再次检查。App 上下文仍来自现有
+插件 gateway，消费和授权检查沿用共用事务。没有代输入服务时不生成代输入说明；
+完整附件归一化仍未接入，本机绝对文件路径沿用现状，缓存/OSS/base64 引用明确拒绝。
+
+桌面此步仅将设备身份端口的返回类型允许为空，原装配继续返回实际设备身份，没有
+改变桌面运行逻辑。桌面工厂抽取与 Host 接线分别保存为本地提交，便于独立审阅。
+
+测试价值：既有 `input-queue.test.mjs` 通过真实队列与共用工厂验证插话的提问回复标记、
+普通输入替代待答提问的标记、执行器 UUID 与落库 UUID 一致，以及发送到插话的说明
+去重/压缩重发。旧 Host 未透传这些字段，最小的「运行中任务收到一条提问回答」先红后绿。
+另外在 App 上下文读取处暂停，分别换号、推进回合或撤销上下文，验证返回拒绝且不送达、
+不落库、不消费上下文；这覆盖新接线增加的异步边界。模型与 App IO 为进程内假依赖，
+tier 为 unit，并入既有文件。队列合同是返回 `false`，初版测试误用 `assert.rejects`，
+已按实际接口修正；未修改生产拒绝行为来迁就测试。
+
+- Host 212 项全部通过（4.63 秒），Host 和桌面类型检查通过。
+  日志 `/tmp/cindy-shared-steer-host-tests3.log`、`/tmp/cindy-shared-steer-host-types.log`、
+  `/tmp/cindy-shared-steer-desktop-types.log`；新元数据断言红/绿日志分别为
+  `/tmp/cindy-shared-steer-host-red.log` 和 `/tmp/cindy-shared-steer-host-green.log`。
+- 隔离 Host HTTP/SQLite/原生 Codex 验证发送、回复与 UUID 落库、插话、运行时重开及停止，
+  以及网关/自定义供应商、运行中 key 轮换，两条 PASS、退出 0：
+  `/tmp/cindy-shared-steer-native.log`。上游为本机模拟服务，凭证为测试值，未使用正式 profile。
+- 真实账号、真实模型、打包运行、Windows、手机仍未验收；浏览器无实机目检。
+  完整媒体/清空回退/归档服务、引擎切换、启动闭包与正式调度器装配仍未完成。
+  本检查点未推送、未开 PR；原有的切引擎后首条续接风险仍在，不算本次插话验收范围。

@@ -16,7 +16,7 @@ import { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-brain/g
 import { AcceptedCallbackDispatchCancelled } from '../../../desktop/src/main/maker-ipc/acceptedCallbackRunner.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
-import { AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_SOURCE_CONTENT } from '@cindy/maker-core';
+import { AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_SOURCE_CONTENT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS } from '@cindy/maker-core';
 
 /** Minimal Maker stand-in: one live session per id, driven by the test. */
 function createFakeMaker() {
@@ -39,6 +39,7 @@ function createFakeMaker() {
         id: opts.id,
         instanceId: `runtime-${opts.id}-${Math.random()}`,
         agentKind: opts.agentKind,
+        capabilities: { sameTurnSteer: { supported: true } },
         workDir: opts.workingDir,
         remoteHostId: opts.remoteHostId ?? null,
         running: false,
@@ -50,6 +51,7 @@ function createFakeMaker() {
         options: opts,
         sent: [],
         sendOptions: [],
+        steerOptions: [],
         aborted: 0,
         async setModel(model, settings) { Object.assign(session.options, { model }, settings); },
         async setEffort(effort) { session.options.effort = effort; },
@@ -79,8 +81,10 @@ function createFakeMaker() {
           session.aborted += 1;
           session.running = false;
         },
-        async steer(text) {
-          session.sent.push(`steer:${text}`);
+        async steer(text, options = {}) {
+          await options.beforeProviderStart?.();
+          session.steerOptions.push(options);
+          session.sent.push(`steer:${typeof text === 'string' ? text : text.content}`);
         },
       };
       sessions.set(opts.id, session);
@@ -712,6 +716,59 @@ test('a remote device note is deduplicated until the native context is compacted
       { deviceId: 'phone', platform: 'mobile' });
   }
 });
+
+// Shared steer must carry protected coordinator metadata and use the send
+// transaction's note memory. Prior direct Host steer lost both (unit, real queue).
+test('steer shares note memory and preserves question classification and persisted UUID', async t => {
+  const h = createHarness(); t.after(() => h.queue.dispose());
+  const remote = fn => runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', controllerPlatform: 'ios', channel: 'maker:input:steer' }, fn);
+  await remote(() => enqueue(h, 'steer-notes', { clientId: 'first', text: 'start' }));
+  const session = h.maker.getSession('steer-notes');
+  await remote(() => h.queue.steer('steer-notes', { clientId: 'question-reply:answer', text: 'yes' }));
+  const question = session.steerOptions[0];
+  assert.equal(question[ASYNC_QUESTION_ANSWER], true);
+  assert.equal(question[SUPERSEDE_ASYNC_QUESTIONS], undefined);
+  assert.ok(question.messageUuid);
+  assert.equal(h.persisted.find(row => row.clientId === 'question-reply:answer').agentMeta.uuid, question.messageUuid);
+  assert.equal(session.sent.at(-1), 'steer:yes', 'the already delivered phone note is not repeated');
+  session.emit({ type: 'compact_boundary', data: {} });
+  await remote(() => h.queue.steer('steer-notes', { clientId: 'follow-up', text: 'change direction' }));
+  assert.equal(session.steerOptions[1][SUPERSEDE_ASYNC_QUESTIONS], true);
+  assert.notEqual(session.sent.at(-1), 'steer:change direction', 'compaction requires the environment note again');
+  assert.equal(h.persisted.find(row => row.clientId === 'follow-up').content, 'change direction');
+});
+
+// Shared steer now reads App context asynchronously. A reply prepared for an
+// old account/turn or revoked context must never reach the provider or storage.
+// Unit: real queue/factory, a held context read is the minimal race input.
+for (const invalidation of ['owner', 'turn', 'app-context']) {
+  test(`steer refuses ${invalidation} invalidated while preparing App context`, async t => {
+    let owner = {}, preparing = false, valid = true, consumed = 0, entered, release;
+    const started = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const h = createHarness({ getOwner: () => owner, readMcpAppModelContext: async () => {
+      if (!preparing) return { text: '', async assertCurrent() {}, consume() {} };
+      entered(); await gate;
+      return { text: 'context from the current App', async assertCurrent() {
+        if (!valid) throw new Error('APP_CONTEXT_REVOKED');
+      }, consume() { consumed++; } };
+    } });
+    t.after(() => h.queue.dispose());
+    await enqueue(h, 'steer-race', { clientId: 'first', text: 'start' });
+    const session = h.maker.getSession('steer-race');
+    preparing = true;
+    const steering = h.queue.steer('steer-race', { clientId: 'racing', text: 'continue' });
+    await started;
+    if (invalidation === 'owner') owner = {};
+    else if (invalidation === 'turn') session.generation++;
+    else valid = false;
+    release();
+    assert.equal(await steering, false, 'the coordinator reports a refused steer without throwing');
+    assert.equal(session.steerOptions.length, 0);
+    assert.equal(h.persisted.some(row => row.clientId === 'racing'), false);
+    assert.equal(consumed, 0);
+  });
+}
 
 // Unit, attachment handoff: preserve local file support through the shared
 // sender; unresolved transfer references cannot appear accepted with no file.

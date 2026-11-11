@@ -1,4 +1,8 @@
 import fs from 'node:fs/promises';
+import { createMakerSteerTransaction } from '../../../desktop/src/main/maker-ipc/makerSteerTransaction.ts';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
+import { readReplyQuoteNote } from '../../../desktop/src/main/maker-ipc/chatReplyQuoteNote.ts';
+import { publishUiSessionIntervention } from '../../../desktop/src/main/maker-ipc/uiContinuationSignal.ts';
 import { listMessagesForAgentHandoff } from '../../../desktop/src/main/localDb/agentHandoffHistory.ts';
 import { createSessionOptionsReconciler } from '../../../desktop/src/main/maker-ipc/sessionOptionsReconciler.ts';
 import { createMakerSendTransaction, prepareDirectoryGrantsForBootstrap } from '../../../desktop/src/main/maker-ipc/makerSendTransaction.ts';
@@ -272,6 +276,70 @@ export function createTurnExecutor(deps) {
     log,
   });
 
+  function assertSteerCurrent(id, opts) {
+    deps.assertCurrent();
+    opts.signal?.throwIfAborted();
+    if (opts.expectedClearBoundaryMs !== undefined
+      && !deps.isClearBoundaryCurrent(id, opts.expectedClearBoundaryMs, opts.expectedInputGeneration)) {
+      throw new Error('[STALE_INPUT] Task history changed before steer delivery');
+    }
+    if (opts.expectedInputGeneration !== undefined
+      && !deps.isInputGenerationCurrent(id, opts.expectedInputGeneration)) {
+      throw new Error('[STALE_INPUT] Input generation changed before steer delivery');
+    }
+  }
+
+  const steerTransaction = createMakerSteerTransaction({
+    maker: {
+      getSession: id => deps.getMaker().getSession(id),
+      getSessionMeta: id => deps.getMaker().getSessionMeta(id),
+    },
+    assertInputAllowed: async id => { await readExecutionSession(id); },
+    assertInputCurrent: assertSteerCurrent,
+    prepareUserMessageForAgent: prepareHostUserMessage,
+    readReplyQuoteNote,
+    readAutoReviewHistory,
+    readSessionSource: async id => (await readExecutionSession(id)).source ?? null,
+    getHostSourceDevice: () => deps.readHostDeviceIdentity?.(),
+    getResolvedMainLocale: deps.getResolvedMainLocale ?? (() => null),
+    getMainClassicalStyle: deps.getMainClassicalStyle ?? (() => DEFAULT_CLASSICAL_REPLY_STYLE),
+    wireNoteMemory: wireNotes,
+    // Host has no input-handoff service yet, so no pending handoff note exists.
+    inputHandoffSteerNote: () => null,
+    inputHandoffNoteDelivered: () => {},
+    mcpAppModelContext: deps.readMcpAppModelContext ?? (async () => ({ text: '', async assertCurrent() {}, consume() {} })),
+    publishUiSessionIntervention,
+    log,
+  });
+
+  async function steer(id, message, opts) {
+    opts.signal?.throwIfAborted();
+    await opts[MCP_APP_MESSAGE_GUARD]?.();
+    await opts.beforeProviderStart?.();
+    assertSteerCurrent(id, opts);
+    const session = deps.getMaker().getSession(id);
+    if (!session) throw new Error('NO_ACTIVE_TURN');
+    const generation = session.getTurnGeneration();
+    const assertTurnCurrent = () => {
+      assertSteerCurrent(id, opts);
+      if (deps.getMaker().getSession(id) !== session || session.getTurnGeneration() !== generation) {
+        throw new Error('[STALE_TURN] Session changed turns before steer delivery');
+      }
+    };
+    // Bind before any async normalization/history IO. The common transaction
+    // and the provider-start hook both reject a replacement turn or owner.
+    await steerTransaction(id, message, { ...opts,
+      expectedTurnSession: opts.expectedTurnSession ?? session,
+      expectedTurnGeneration: opts.expectedTurnGeneration ?? generation,
+      [AUTO_REVIEW_DELEGATED_CONTINUATION]: opts[AUTO_REVIEW_DELEGATED_CONTINUATION] === true
+        || typeof opts[MCP_APP_MESSAGE_GUARD] === 'function' ? true : undefined,
+      beforeProviderStart: async () => {
+        await opts.beforeProviderStart?.();
+        assertTurnCurrent();
+      },
+    });
+  }
+
   async function send(sessionId, message, createOpts, sendOpts) {
     createOpts = { ...createOpts };
     const turn = { running: true, terminal: false, dbKind: dbKind(createOpts.agentKind),
@@ -341,6 +409,7 @@ export function createTurnExecutor(deps) {
 
   return {
     send,
+    steer,
     readExecutionSession,
     readAutoReviewHistory,
     async restoreSession(id, options, assertCurrent) {

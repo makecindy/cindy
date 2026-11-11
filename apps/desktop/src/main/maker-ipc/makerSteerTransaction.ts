@@ -32,7 +32,7 @@ export interface MakerSteerTransactionDeps {
   readReplyQuoteNote: typeof import('./chatReplyQuoteNote.js').readReplyQuoteNote;
   readAutoReviewHistory: NonNullable<MakerSendTransactionDeps['readAutoReviewHistory']>;
   readSessionSource(id: string): Promise<string | null>;
-  getHostSourceDevice: NonNullable<MakerSendTransactionDeps['readHostDeviceIdentity']>;
+  getHostSourceDevice: () => ReturnType<NonNullable<MakerSendTransactionDeps['readHostDeviceIdentity']>> | undefined;
   getResolvedMainLocale: MakerSendTransactionDeps['getResolvedMainLocale'];
   getMainClassicalStyle: MakerSendTransactionDeps['getMainClassicalStyle'];
   wireNoteMemory: Pick<ReturnType<typeof createWireNoteMemory>, 'plan'>;
