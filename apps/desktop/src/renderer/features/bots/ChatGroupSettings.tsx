@@ -240,14 +240,24 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   let footer: ReactNode = null;
   if (page?.kind === 'manage') {
     const activeCompanions = companions.filter(member => member.status === 'active');
+    // A project group's organizer answers messages that @ nobody (§4.0, §7.1): the unaddressed row says
+    // so, and the organizer leads the project section instead of sitting under 分工.
+    const projectLed = !!group.project && group.singleSpeaker === true;
+    const organizerRow = companions.length > 0 && <SettingsRow wrap title={t('bots.groupChat.organizer')}
+      hint={t(key(projectLed && replyMode === 'all' ? 'organizerProjectHint' : 'organizerHint'))}
+      trailing={<Select label={t('bots.groupChat.organizer')} value={group.organizerBotId ?? ''} disabled={busy} size="compact" className="max-w-[220px]" truncateOptions
+        options={activeCompanions.map(member => ({ value: member.botId, label: member.name }))}
+        onValueChange={organizerBotId => void updateWorkSettings({ organizerBotId })} />} />;
     body = <>
       {group.archived && <SettingsNotice>{t(key('archived'))}</SettingsNotice>}
       {/* Whether unaddressed messages wake anyone; independent of the order teammates answer in. */}
       <SettingsSection title={t(key('replies'))}>
         <SettingsCard>
-          <SettingsRow wrap title={t(shared('replyMode'))} hint={t(replyMode === 'all' ? shared('replyModeNote') : key('replyModeMentionedNote'))}
+          <SettingsRow wrap title={t(shared('replyMode'))}
+            hint={t(replyMode === 'mentioned' ? key('replyModeMentionedNote') : projectLed ? key('replyModeOrganizerNote') : shared('replyModeNote'))}
             trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} size="compact" className="max-w-[220px]"
-              options={(['mentioned', 'all'] as const).map(value => ({ value, label: t(REPLY_MODE_LABELS[value]) }))}
+              options={(['mentioned', 'all'] as const).map(value => ({ value,
+                label: t(value === 'all' && projectLed ? key('replyModeOrganizer') : REPLY_MODE_LABELS[value]) }))}
               onValueChange={value => void saveRules({ replyMode: value as typeof replyMode })} />} />
           {group.supportsMentionAudiences && owner && <SettingsRow wrap title={t(shared('allowMentionAllBots'))} hint={t(shared('allowMentionAllBotsHint'))}
             trailing={<Switch aria-label={t(shared('allowMentionAllBots'))} checked={group.allowMentionAllBots === true}
@@ -265,26 +275,23 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       {/* The group's project: a shared repository and this computer's folder. Replies and 分工 work in it (§7.5). */}
       <SettingsSection title={t(key('project'))} caption={t(key('projectCaption'))}>
         <SettingsCard>
+          {projectLed && organizerRow}
           {group.supportsGroupProject && <SettingsRow wrap title={t(key('githubRepo'))} hint={t(key('githubRepoHint'))}
             trailing={<GithubRepoField repo={group.project?.repo ?? ''} busy={busy} onSave={githubRepo => void updateWorkSettings({ githubRepo })} />} />}
           <SettingsRow wrap title={t(key('projectFolder'))} hint={t(key(group.projectDirAuto ? 'projectDirAutoHint' : 'projectDirHint'))}
             trailing={<ProjectFolder dir={group.projectDir} auto={group.projectDirAuto === true} busy={busy} onChoose={() => void chooseProjectDir()} onClear={() => void updateWorkSettings({ projectDir: null })} />} />
         </SettingsCard>
       </SettingsSection>
-      {/* The organizer arranges a 分工 whose steps are not written out; in a project group it also
-          answers messages that @ nobody (§7.1). */}
-      <SettingsSection title={t(key('work'))} caption={t(key('workCaption'))}>
+      {/* Elsewhere the organizer arranges a 分工 whose steps are not written out (§7.1). */}
+      {((!projectLed && organizerRow) || group.autoContinue !== undefined) && <SettingsSection title={t(key('work'))} caption={t(key('workCaption'))}>
         <SettingsCard>
-          {companions.length > 0 && <SettingsRow wrap title={t('bots.groupChat.organizer')} hint={t(key(group.project && replyMode === 'all' ? 'organizerProjectHint' : 'organizerHint'))}
-            trailing={<Select label={t('bots.groupChat.organizer')} value={group.organizerBotId ?? ''} disabled={busy} size="compact" className="max-w-[220px]" truncateOptions
-              options={activeCompanions.map(member => ({ value: member.botId, label: member.name }))}
-              onValueChange={organizerBotId => void updateWorkSettings({ organizerBotId })} />} />}
+          {!projectLed && organizerRow}
           {/* Kept on this computer like the project folder; only 分工 you start follow it (§7.4). */}
           {group.autoContinue !== undefined && <SettingsRow title={t('bots.groupChat.plan.autoContinue')} hint={t(key('autoContinueHint'))}
             trailing={<Switch data-testid="bot-group-auto-continue" checked={group.autoContinue === true} disabled={busy}
               aria-label={t('bots.groupChat.plan.autoContinue')} onCheckedChange={autoContinue => void updateWorkSettings({ autoContinue })} />} />}
         </SettingsCard>
-      </SettingsSection>
+      </SettingsSection>}
       <SettingsSection caption={owner && group.supportsDissolve !== true ? t('bots.groupChat.lifecycle.unavailable') : undefined}>
         <SettingsCard>
           <SettingsRow title={t(key(group.archived ? 'unarchive' : 'archive'))} hint={t(key(group.archived ? 'unarchiveRowHint' : 'archiveRowHint'))} disabled={busy}

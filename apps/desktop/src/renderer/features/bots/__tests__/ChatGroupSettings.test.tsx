@@ -334,15 +334,26 @@ it('saves the group repository from the project section', async () => {
   expect(mocks.updateBotGroup).toHaveBeenCalledOnce();
 });
 
-// bot-group-chat.md §7.1 (2026-11-11): in a project group the organizer also answers messages that
-// @ nobody, except where only @mentioned teammates reply; the 负责人 row must not claim it otherwise.
+// bot-group-chat.md §4.0/§7.1 (2026-11-11): in a project group the organizer answers messages that
+// @ nobody, except where only @mentioned teammates reply. The unaddressed row must say who answers
+// (it used to promise a discussion queue), and the organizer row leads the project section; without
+// a project both read as before and the organizer stays under 分工.
+const SHARED = 'bots.groupChat.settings.';
+const sectionOf = (element: HTMLElement) => element.closest('section')!.querySelector('h2, h3')!.textContent;
 it.each([
-  ['a project, anyone may reply', { kind: 'github' as const, repo: 'makecindy/cindy' }, 'all', 'organizerProjectHint'],
-  ['a project, only @mentioned reply', { kind: 'github' as const, repo: 'makecindy/cindy' }, 'mentioned', 'organizerHint'],
-  ['no project', null, 'all', 'organizerHint'],
-] as const)('describes the organizer for %s', (_case, project, replyMode, hint) => {
-  renderAt({ ...group(true), singleSpeaker: true, supportsGroupProject: true, project, replyMode }, 'manage');
+  ['a project, anyone may reply', { kind: 'github' as const, repo: 'makecindy/cindy' }, 'all', 'project', 'organizerProjectHint', key('replyModeOrganizer'), key('replyModeOrganizerNote')],
+  ['a project, only @mentioned reply', { kind: 'github' as const, repo: 'makecindy/cindy' }, 'mentioned', 'project', 'organizerHint', key('replyModeOrganizer'), key('replyModeMentionedNote')],
+  ['no project', null, 'all', 'work', 'organizerHint', `${SHARED}replyModeAll`, `${SHARED}replyModeNote`],
+] as const)('describes who answers and places the organizer for %s', (_case, project, replyMode, section, hint, allLabel, replyHint) => {
+  renderAt({ ...group(true), singleSpeaker: true, supportsGroupProject: true, project, replyMode, autoContinue: false }, 'manage');
+  const organizer = screen.getByRole('combobox', { name: 'bots.groupChat.organizer' });
+  expect(sectionOf(organizer)).toBe(key(section));
   expect(screen.getByText(key(hint))).toBeTruthy();
+  expect(screen.getByText(replyHint)).toBeTruthy();
+  fireEvent.click(screen.getByRole('combobox', { name: `${SHARED}replyMode` }));
+  expect(screen.getByRole('option', { name: allLabel })).toBeTruthy();
+  // 分工 keeps its remaining row either way.
+  expect(sectionOf(screen.getByTestId('bot-group-auto-continue'))).toBe(key('work'));
 });
 
 it('does not offer leaving when this account owns every group owner, including its companion', () => {
