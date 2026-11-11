@@ -117,12 +117,87 @@ export function createBlobImageStorage(
 }
 
 /**
- * 生成视频的 mime 归一化(review P1):video provider 把上游 HTTP 头的
- * content-type 原样透传——OSS 签名 URL 常见 `application/octet-stream`、或带
- * `; charset=` 参数,老实现(createVideoFilename)对未知 mime 兜底 .mp4。
- * writeBlob 是精确白名单会硬抛,长任务(2-10 分钟、钱已花)在最后一步失败
- * 不可接受,这里对齐老容错:剥参数 + 小写;非白名单视频 mime 兜底 video/mp4。
+ * 生成视频的 mime 归一化(review P1):上游 HTTP 头的 content-type 不可信
+ * ——OSS 签名 URL 常见 `application/octet-stream`、或带 `; charset=` 参数。writeBlob 是
+ * 精确白名单会硬抛,长任务(2-10 分钟、钱已花)在最后一步失败不可接受,
+ * 所以闻不出来的字节仍兜底 video/mp4。
+ *
+ * 先闻字节(与 xAI 下载同一个 sniffMediaMime):闻出 video/* 就用闻出的结果,
+ * 不信任上游头。错误页 / JSON 不是容器,sniff 认不出它们,但也不能兜底成 mp4
+ * ——那会让用户看到成功、播放是黑屏。图片/音频/模型字节不在这里报错,
+ * 闻不出视频时维持调用方原来的声明。
  */
+const GENERATED_VIDEO_BODY_PREVIEW_BYTES = 64;
+
+function generatedVideoBodyPreview(buffer: Uint8Array): string {
+  const slice = buffer.subarray(0, Math.min(buffer.byteLength, GENERATED_VIDEO_BODY_PREVIEW_BYTES));
+  let text = '';
+  for (const byte of slice) {
+    text += byte >= 0x20 && byte <= 0x7e ? String.fromCharCode(byte) : '.';
+  }
+  return text;
+}
+
+const GENERATED_VIDEO_ERROR_PREFIXES = ['<!doctype', '<html', '{', '[', '<?xml', '<error'] as const;
+
+function isGeneratedVideoAsciiSpace(byte: number | undefined): boolean {
+  return byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d;
+}
+
+function generatedVideoAsciiAt(buffer: Uint8Array, offset: number, text: string): boolean {
+  if (offset < 0 || buffer.byteLength < offset + text.length) return false;
+  for (let i = 0; i < text.length; i += 1) {
+    if (buffer[offset + i] !== text.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
+function findGeneratedVideoAscii(buffer: Uint8Array, offset: number, text: string): number {
+  const last = buffer.byteLength - text.length;
+  for (let i = Math.max(0, offset); i <= last; i += 1) {
+    if (generatedVideoAsciiAt(buffer, i, text)) return i;
+  }
+  return -1;
+}
+
+/**
+ * 错误页 / JSON / XML 正文。先跳过 BOM、空白和前置 HTML 注释,再只认开头,
+ * 避免把视频里碰巧出现的字符当成错误页。注释没有闭合就不把后面的字节当成正文开头。
+ */
+function looksLikeGeneratedVideoErrorBody(buffer: Uint8Array): boolean {
+  let offset = 0;
+  if (buffer.byteLength >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+    offset = 3;
+  }
+  while (offset < buffer.byteLength) {
+    while (offset < buffer.byteLength && isGeneratedVideoAsciiSpace(buffer[offset])) offset += 1;
+    if (!generatedVideoAsciiAt(buffer, offset, '<!--')) break;
+    const end = findGeneratedVideoAscii(buffer, offset + 4, '-->');
+    if (end < 0) return false;
+    offset = end + 3;
+  }
+  const head = buffer.subarray(offset, Math.min(buffer.byteLength, offset + 16));
+  const ascii = generatedVideoBodyPreview(head).toLowerCase();
+  return GENERATED_VIDEO_ERROR_PREFIXES.some((prefix) => ascii.startsWith(prefix));
+}
+
+/**
+ * 入仓前的视频类型。返回 null 表示「不是可判定的视频」:调用方继续用自己的声明。
+ * 错误页 / JSON 直接抛。错误信息只留分类和上游声明,不附正文,避免签名 URL 和响应内容进日志。
+ */
+export function sniffGeneratedVideoMime(buffer: Uint8Array, declaredMime: string): string | null {
+  const sniffed = sniffMediaMime(buffer, declaredMime);
+  if (sniffed?.startsWith('video/')) return sniffed;
+  if (looksLikeGeneratedVideoErrorBody(buffer)) {
+    throw new Error(`生成视频不是受支持的视频(实际是错误页或 JSON,上游声明 ${declaredMime || '缺失'})`);
+  }
+  return null;
+}
+
+export function resolveGeneratedVideoMime(buffer: Uint8Array, declaredMime: string): string {
+  return sniffGeneratedVideoMime(buffer, declaredMime) ?? normalizeGeneratedVideoMime(declaredMime);
+}
+
 export function normalizeGeneratedVideoMime(raw: string): string {
   const m = raw.split(';')[0].trim().toLowerCase();
   if (m.startsWith('video/') && blobStore.supportedMime(m)) return m;
@@ -141,7 +216,7 @@ export function createBlobVideoStorage(db?: LedgerDb): {
       throw new Error('art: storage mime is required');
     }
     const written = await ingestMedia(
-      { buffer, mimeType: normalizeGeneratedVideoMime(mime), refs: [] },
+      { buffer, mimeType: resolveGeneratedVideoMime(buffer, mime), refs: [] },
       db,
     );
     const originalPath = blobStore.resolveSafe(written.url).absPath;
