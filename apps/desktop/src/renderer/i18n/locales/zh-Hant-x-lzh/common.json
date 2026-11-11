@@ -17342,6 +17342,7 @@
   "orca": {
     "workerReport": {
       "dropped": "無需處理",
+      "failed": "已敗",
       "awaitingAnswer": "候答",
       "awaitingReview": "待勘"
     },

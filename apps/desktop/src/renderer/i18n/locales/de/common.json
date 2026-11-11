@@ -17409,6 +17409,7 @@
   "orca": {
     "workerReport": {
       "dropped": "Keine Aktion nötig",
+      "failed": "Fehlgeschlagen",
       "awaitingAnswer": "Antwort nötig",
       "awaitingReview": "Zu prüfen"
     },

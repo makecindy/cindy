@@ -375,6 +375,12 @@ Lead 的消息流与历史记录。只放进回执等于没送——Worker 可�
 - `failed` 结算欠回报，置 `error` 并携带 `question`。`blocked` 缺 `question` 时 bridge 直接拒绝，不派发。
 - `dropped` 结算欠回报，置 `done` 且面板显示「无需处理」，并且**不记完成未读**（没有要让用户看的结果）。
 
+面板标记只对四种状态出现，判据是「是否需要一个人做决定」：`ready`→待验收、`blocked`→等回复、
+`failed`→已失败（错误色，与「等回复」分开——失败要重试或停止，不是回答一个提问）、`dropped`→无需处理
+（本轮确实没有动作，标出来免得读成漏报）。`progress` / `waiting` 不出标记：`running` 的呼吸点和
+`idle` 状态已经表达了它们，重复标注只占注意力预算。标记是行内 chip，问题放在它的 `title` 里，
+不另占一行。
+
 映射的时序：终态先到时由终态侧映射；**终态先到、回报后到**（在途回执晚于 turn 终止事件）时由回报侧在同一 worker transition 内补映射，否则晚到的 `waiting` / `blocked` 会永久停在 `done`。每份新回报都覆盖 `latest_report`，面板与通知不读旧问题。
 
 `worker status` 枚举保持 `idle/running/done/error` 不变——结构化状态属于回报层，不是新的 worker 状态轴（质量裁决与验收仍由 Lead 侧承担）。需人工处理的回报不另开一条 Worker 通知：任务的通知 owner 仍是 Lead（Worker 完成不单独通知的既有裁决），问题随正文到达 Lead 后由那一轮以 Lead 名义统一通知。远端 Worker（运行设备/SSH）第一期维持历史回读 + 文本回报，`latest_report` 由本机回报路径写入。

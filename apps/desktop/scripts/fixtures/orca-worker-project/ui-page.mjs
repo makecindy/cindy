@@ -35,6 +35,7 @@ export default {
     dialogue: { about: 'Dialogue Lead hides checkbox until a Git project is selected' },
     'report-ready': { about: 'A ready Worker report shows the awaiting-review chip' },
     'report-blocked': { about: 'A blocked Worker report shows the awaiting-answer chip with its question' },
+    'report-failed': { about: 'A failed Worker report shows its own chip in the error tone, not the answer chip' },
     'report-dropped': { about: 'A dropped Worker report shows the no-action chip' },
   },
   async ready(page) {
@@ -73,7 +74,9 @@ export default {
           ? 'awaitingReview'
           : ui.case === 'report-blocked'
             ? 'awaitingAnswer'
-            : 'dropped';
+            : ui.case === 'report-failed'
+              ? 'failed'
+              : 'dropped';
       const label = await ui.t(`orca.workerReport.${key}`);
       const dropdown = page.getByTestId('report-dropdown');
       await dropdown.getByRole('button', { name: /frontend/ }).click();

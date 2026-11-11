@@ -54,7 +54,7 @@ function Fixture() {
     </main>
   );
 }
-const reported = (state: 'ready' | 'blocked' | 'dropped'): WorkerInfo[] =>
+const reported = (state: 'ready' | 'blocked' | 'failed' | 'dropped'): WorkerInfo[] =>
   workers.map((worker, index) =>
     index === 1
       ? { ...worker, status: 'done', latestReport: { state, question: '选方案 A 还是 B', summary: '两条路径都验过' } }
@@ -87,7 +87,7 @@ function WorkersFixture() {
   );
 }
 /** 真实 store 驱动提醒，Worker 运行状态始终 idle，以覆盖原来的漏报。 */
-function ReportFixture({ state }: { state: 'ready' | 'blocked' | 'dropped' }) {
+function ReportFixture({ state }: { state: 'ready' | 'blocked' | 'failed' | 'dropped' }) {
   const list = reported(state);
   return (
     <main className="mx-auto w-full max-w-[480px] space-y-12 p-5">
@@ -261,7 +261,11 @@ void mountPage({
       );
     }
     if (ctx.case.startsWith('report-')) {
-      return <ReportFixture state={ctx.case === 'report-ready' ? 'ready' : ctx.case === 'report-blocked' ? 'blocked' : 'dropped'} />;
+      const state = ctx.case === 'report-ready' ? 'ready'
+        : ctx.case === 'report-blocked' ? 'blocked'
+        : ctx.case === 'report-failed' ? 'failed'
+        : 'dropped';
+      return <ReportFixture state={state} />;
     }
     return ctx.case === 'workers' ? <WorkersFixture /> : <Fixture />;
   },

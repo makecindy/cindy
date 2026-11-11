@@ -332,17 +332,30 @@ function clearTimerRef(ref: { current: number | null }): void {
   }
 }
 
+/**
+ * 六态里只有四种出面板标记，按「是否需要一个人做决定」划：
+ *   ready → 待验收（要人去看结果）
+ *   blocked → 等回复（要人回答）
+ *   failed → 已失败（要人重试/停止，和「等回复」是两件事，不能合并文案）
+ *   dropped → 无需处理（本轮本来没有动作，标出来免得看着像漏报）
+ * progress / waiting 不出标记：running 的呼吸点和 idle 状态已经表达了它们，
+ * 再加一个「进行中 / 空闲」只是重复占位（注意力是有成本的产品预算）。
+ */
 function WorkerReportChip({ report }: { report: WorkerInfo['latestReport'] }) {
   const { t } = useTranslation();
   if (!report) return null;
   const key = report.state === 'dropped' ? 'orca.workerReport.dropped'
-    : report.state === 'blocked' || report.state === 'failed' ? 'orca.workerReport.awaitingAnswer'
+    : report.state === 'blocked' ? 'orca.workerReport.awaitingAnswer'
+    : report.state === 'failed' ? 'orca.workerReport.failed'
     : report.state === 'ready' ? 'orca.workerReport.awaitingReview'
     : null;
   if (!key) return null;
   return (
     <span
-      className="ml-1 rounded-full bg-[var(--surface-chip)] px-1.5 text-10 text-[var(--text-tertiary)]"
+      className={cn(
+        'ml-1 rounded-full bg-[var(--surface-chip)] px-1.5 text-10',
+        report.state === 'failed' ? 'text-[var(--error-fg)]' : 'text-[var(--text-tertiary)]',
+      )}
       title={report.question ?? report.summary ?? undefined}
     >
       {t(key)}

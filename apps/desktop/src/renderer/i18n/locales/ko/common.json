@@ -17342,6 +17342,7 @@
   "orca": {
     "workerReport": {
       "dropped": "조치 불필요",
+      "failed": "실패",
       "awaitingAnswer": "답변 대기",
       "awaitingReview": "검토 대기"
     },
