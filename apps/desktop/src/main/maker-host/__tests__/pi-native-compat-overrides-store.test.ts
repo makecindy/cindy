@@ -82,13 +82,13 @@ describe('learned cache compatibility', () => {
   it('allows precise reset by removing an entry and observes file replacement', async () => {
     await record('a', 'model', fix, a);
     // Writers replace this file by rename, often within one filesystem mtime
-    // tick. Pin both mtimes so the replacement is indistinguishable by time
-    // alone and must be noticed by its identity.
+    // tick. Pin both mtimes and match the size so the replacement differs only
+    // by file identity.
     const tick = new Date(Math.floor(Date.now() / 1000) * 1000);
     fs.utimesSync(file, tick, tick);
     expect(read('a', 'model', a)).toEqual(fix);
     const replacement = file + '.replacement';
-    fs.writeFileSync(replacement, JSON.stringify({ routes: {} }));
+    fs.writeFileSync(replacement, JSON.stringify({ routes: {} }).padEnd(fs.statSync(file).size));
     fs.utimesSync(replacement, tick, tick);
     fs.renameSync(replacement, file);
     expect(read('a', 'model', a)).toBeUndefined();

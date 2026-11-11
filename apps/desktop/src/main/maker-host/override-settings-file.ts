@@ -85,7 +85,7 @@ export function createOverrideSettingsFile<T>(options: {
    */
   function statFileIdentity(): string | null {
     try {
-      return fileIdentity(fs.statSync(options.filePath()));
+      return fileIdentity(fs.statSync(options.filePath(), { bigint: true }));
     } catch {
       return null;
     }
@@ -99,8 +99,8 @@ export function createOverrideSettingsFile<T>(options: {
     let readStatus: CachedState<T>['readStatus'] = 'missing';
     try {
       if (fs.existsSync(file)) {
-        const stat = fs.statSync(file);
-        if (options.maxBytes !== undefined && stat.size > options.maxBytes) {
+        const stat = fs.statSync(file, { bigint: true });
+        if (options.maxBytes !== undefined && Number(stat.size) > options.maxBytes) {
           throw new Error(`file exceeds ${options.maxBytes} byte limit`);
         }
         const text = fs.readFileSync(file, 'utf-8');
@@ -446,8 +446,10 @@ export function portableOverrideSettings<T>(
   };
 }
 
-function fileIdentity(stat: fs.Stats): string {
-  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+function fileIdentity(stat: fs.BigIntStats): string {
+  // Windows file IDs are 64-bit; number-valued Stats can round distinct IDs to
+  // one value, so keep the bigint form.
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
 }
 
 function pathDirname(filePath: string): string {
