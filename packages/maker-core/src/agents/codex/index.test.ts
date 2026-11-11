@@ -1752,7 +1752,10 @@ describe('CodexAgent oneShot dispatch guard', () => {
   it('rechecks ownership before turn/start and releases the temporary thread', async () => {
     const agent = new CodexAgent(createDeps());
     const request = vi.fn(async (method: string) => {
-      if (method === Method.ThreadStart) return { thread: { id: 'thread-before-turn-guard' } };
+      // No caller model: the app-server picks its own default and reports it back.
+      if (method === Method.ThreadStart) {
+        return { thread: { id: 'thread-before-turn-guard' }, model: 'server-default-model' };
+      }
       throw new Error(`unexpected request: ${method}`);
     });
     const release = vi.fn(async () => undefined);
@@ -1769,7 +1772,7 @@ describe('CodexAgent oneShot dispatch guard', () => {
     });
 
     const beforeDispatch = vi
-      .fn<() => Promise<boolean>>()
+      .fn<(route?: { model?: string }) => Promise<boolean>>()
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false);
 
@@ -1777,8 +1780,12 @@ describe('CodexAgent oneShot dispatch guard', () => {
       .rejects.toMatchObject({ name: 'OneShotError', reason: 'network' });
 
     expect(beforeDispatch).toHaveBeenCalledTimes(2);
+    // A retired hard-coded model id would fail every default one-shot, so no
+    // model is sent; the host still gets the chosen model before the prompt.
+    expect(beforeDispatch).toHaveBeenNthCalledWith(1);
+    expect(beforeDispatch).toHaveBeenNthCalledWith(2, { model: 'server-default-model' });
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(Method.ThreadStart, expect.any(Object));
+    expect(request).toHaveBeenCalledWith(Method.ThreadStart, expect.not.objectContaining({ model: expect.anything() }));
     expect(request).not.toHaveBeenCalledWith(Method.TurnStart, expect.any(Object));
     expect(subscribeThread).toHaveBeenCalledWith('thread-before-turn-guard', expect.any(Object));
     expect(release).toHaveBeenCalledOnce();
