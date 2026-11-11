@@ -25,23 +25,36 @@ function options() {
 }
 describe('plugin appearance renderer', () => {
   // A structurally valid packaged font can still fail Chromium's final decode.
-  // Real shared consumer: reject its FontFace, retain the default fallback and notify.
+  // Real shared consumer: a failed replacement must release the old face so
+  // the existing CSS fallback is reachable. Resource-read errors retain it. Unit.
   it('rejects a corrupt theme font face and reports the default-font fallback', async () => {
     const h = options(), hash = 'b'.repeat(64), family = `CindyTheme_${hash}`;
+    const previousHash = 'c'.repeat(64), previousFamily = `CindyTheme_${previousHash}`;
+    let loadedFamily = previousFamily;
     const fonts = { add: vi.fn(), delete: vi.fn() }, descriptor = Object.getOwnPropertyDescriptor(document, 'fonts');
     Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
-    vi.stubGlobal('FontFace', class { load = async () => { throw new Error('Font decode failed'); }; });
-    h.bridge.loadPluginFont = vi.fn(async () => ({ family, bytes: new Uint8Array([0]).buffer }));
+    vi.stubGlobal('FontFace', class {
+      constructor(readonly family: string) {}
+      load = async () => { if (this.family === family) throw new Error('Font decode failed'); return this; };
+    });
+    h.bridge.loadPluginFont = vi.fn(async () => ({ family: loadedFamily, bytes: new Uint8Array([0]).buffer }));
     const settings = normalizeAppearanceSettings({ uiFamily: family, uiFontResource: {
       family, hash, reference: 'asset:font', source: { themeId: 'paper-light-local', packageSha256: 'a'.repeat(64) },
     } });
     try {
+      expect(await applyPluginAppearance(normalizeAppearanceSettings({ uiFamily: previousFamily, uiFontResource: {
+        family: previousFamily, hash: previousHash, reference: 'asset:font', source: settings.uiFontResource!.source,
+      } }), h)).toBe('applied');
+      const previousFace = h.faces.get('uiFont')!.face;
+      loadedFamily = family;
       vi.mocked(h.bridge.loadPluginFont!).mockRejectedValueOnce(new Error('Resource unavailable'));
       expect(await applyPluginAppearance(settings, h)).toBe('failed');
       await act(async () => {});
       expect(themeFailureNotice).not.toHaveBeenCalled();
+      expect(h.faces.get('uiFont')!.face).toBe(previousFace); expect(fonts.delete).not.toHaveBeenCalled();
       expect(await applyPluginAppearance(settings, h)).toBe('failed');
-      expect(fonts.add).not.toHaveBeenCalled(); expect(h.faces.size).toBe(0);
+      expect(fonts.add).toHaveBeenCalledExactlyOnceWith(previousFace); expect(h.faces.size).toBe(0);
+      expect(fonts.delete).toHaveBeenCalledExactlyOnceWith(previousFace);
       await waitFor(() => expect(themeFailureNotice).toHaveBeenCalledExactlyOnceWith('settings.appearance.themeFontFailed'));
     } finally {
       if (descriptor) Object.defineProperty(document, 'fonts', descriptor);

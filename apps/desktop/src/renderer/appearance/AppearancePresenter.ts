@@ -112,7 +112,11 @@ export async function applyAppearance(settings: AppearanceSettings, options: {
         if (pending.get(role) !== entry || !entry.current() || !loaded || loaded.family !== resource.family) return undefined;
         try { return await new FontFace(resource.family, loaded.bytes).load(); }
         catch (error) {
-          if (entry.current() && 'themeId' in resource.source) notifyThemeAppearanceFailure(true);
+          if (entry.current() && 'themeId' in resource.source) {
+            const previous = faces.get(role);
+            if (previous) { document.fonts.delete(previous.face); faces.delete(role); }
+            notifyThemeAppearanceFailure(true);
+          }
           throw error;
         }
       }) };
