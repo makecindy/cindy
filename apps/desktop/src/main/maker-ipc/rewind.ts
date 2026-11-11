@@ -142,7 +142,7 @@ export function registerMakerRewindIpc(): void {
     },
   );
 
-  ipcMain.handle(MAKER_INVOKE.REWIND_COMMIT, (event, sessionId, clientId, opts) => {
+  ipcMain.handle(MAKER_INVOKE.REWIND_COMMIT, async (event, sessionId, clientId, opts) => {
     assertTrustedRewindCaller(event);
     return commitTaskRewind(sessionId, clientId, opts);
   });
