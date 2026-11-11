@@ -10,7 +10,7 @@ import {
   parseInvokeTransferOptions,
   type DeviceLinkTransferCodec,
 } from '../invokeTransfer.js';
-import { applyInvokeResultPatch, sampleInvokeResultText } from '../invokeDelta.js';
+import { InvokeDeltaBases, applyInvokeResultPatch, sampleInvokeResultText } from '../invokeDelta.js';
 
 const codec: Required<Omit<DeviceLinkTransferCodec, 'gunzipBase64Async' | 'deflateRawBase64' | 'inflateRawBase64'>> = {
   gzipBase64: (text) => gzipSync(Buffer.from(text, 'utf8')).toString('base64'),
@@ -234,6 +234,36 @@ describe('invoke result transfer encoding', () => {
 });
 
 describe('invoke result delta', () => {
+  it('gzips a 1–4 KB list patch like a result and keeps smaller patches plain', () => {
+    // Host and controller through their real entries, as client.sendInvokeResult / invoke run them.
+    const bases = new InvokeDeltaBases();
+    const inbound = new InboundInvokeTransferOptions();
+    const cache = new InvokeResultCache(codec);
+    const request = { channel: 'local-db:sessions:list', args: [200, 'active'] };
+    let n = 0;
+    const roundTrip = (rows: unknown) => {
+      const prepared = cache.prepare('desktop', request);
+      const id = `r${++n}`;
+      inbound.record('phone', id, prepared.payload);
+      const sent = encodeInvokeResultTransfer(inbound.get('phone', id)!, { ok: true, result: rows }, codec, { src: 'phone', bases });
+      return { sent, decoded: prepared.decode(sent) };
+    };
+    const rows = Array.from({ length: 60 }, (_, i) => ({ id: `s${i}`, preview: createHash('sha256').update(String(i)).digest('hex') }));
+    roundTrip(rows);
+    // One changed row of ~1.8 KB UTF-8: the patch sits between 1 KiB and the 4096-character tag threshold.
+    const changed = rows.map((row, i) => (i === 7 ? { ...row, preview: '进度更新'.repeat(150) } : row));
+    const medium = roundTrip(changed);
+    const mediumDelta = (medium.sent as { transfer?: { delta?: { gzipBase64?: string; patch?: unknown } } }).transfer?.delta;
+    expect(mediumDelta?.gzipBase64).toEqual(expect.any(String));
+    expect(mediumDelta?.patch).toBeUndefined();
+    expect(medium.decoded).toEqual({ ok: true, result: changed });
+    // A patch under 1 KiB stays plain: gzip + base64 would not pay for its wrapper.
+    const small = changed.map((row, i) => (i === 3 ? { ...row, preview: 'x' } : row));
+    const tiny = roundTrip(small);
+    expect((tiny.sent as { transfer?: { delta?: { patch?: unknown } } }).transfer?.delta?.patch).toBeDefined();
+    expect(tiny.decoded).toEqual({ ok: true, result: small });
+  });
+
   it('reads one full result after a run of deltas the controller could not hash', () => {
     const cache = new InvokeResultCache({ gunzipBase64: codec.gunzipBase64 });
     const request = { channel: 'local-db:sessions:list', args: [200, 'active'] };

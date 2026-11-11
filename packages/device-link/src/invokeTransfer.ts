@@ -103,6 +103,8 @@ export const INVOKE_TRANSFER_MIN_GZIP_BYTES = 1024;
  * 4 KB 以上可以忽略；门槛降到 1 KiB 后约占 4%，收益判据要算进去。
  */
 const INVOKE_TRANSFER_GZIP_WRAPPER_BYTES = 48;
+/** 列表补丁压缩后只是把 `"patch":` 换成 `"gzipBase64":""`，可靠层转义后约多 9 B。 */
+const INVOKE_DELTA_GZIP_WRAPPER_BYTES = 16;
 /**
  * 编码结果的解压上限，与传输层单条逻辑消息上限同量级：更大的结果被控端不编码，
  * 仍走原有的超限处理；控制端解压超过即判失败。
@@ -171,15 +173,23 @@ export function encodeInvokeResultTransfer(
       return { ok: true, result: null, transfer: { tag, delta: encodeDelta(options, base!.tag, text, patch, codec) } };
     }
   }
-  if (compressible && codec.gzipBase64) {
-    const gzipBase64 = codec.gzipBase64(text);
-    // Base64 is ASCII, whereas Chinese/emoji JSON takes multiple UTF-8 bytes
-    // per character. Compare transmitted bytes, not JS string lengths.
-    if (gzipBase64.length + INVOKE_TRANSFER_GZIP_WRAPPER_BYTES < bytes * 0.9) {
-      return { ok: true, result: null, transfer: { ...(tag ? { tag } : {}), gzipBase64 } };
-    }
+  const gzipBase64 = compressible ? gzipWhenSmaller(text, bytes, INVOKE_TRANSFER_GZIP_WRAPPER_BYTES, codec) : undefined;
+  if (gzipBase64 !== undefined) {
+    return { ok: true, result: null, transfer: { ...(tag ? { tag } : {}), gzipBase64 } };
   }
   return tag ? { ...payload, transfer: { tag } } : payload;
+}
+
+/**
+ * 整份结果与列表补丁共用的压缩判据：UTF-8 ≥ 1 KiB，且压缩后加上各自的包装仍省 10% 以上。
+ * `bytes` 由调用方算好（未声明 gzip 时传 0）。
+ */
+function gzipWhenSmaller(text: string, bytes: number, wrapperBytes: number, codec: DeviceLinkTransferCodec): string | undefined {
+  if (bytes < INVOKE_TRANSFER_MIN_GZIP_BYTES || !codec.gzipBase64) return undefined;
+  const gzipBase64 = codec.gzipBase64(text);
+  // Base64 is ASCII, whereas Chinese/emoji JSON takes multiple UTF-8 bytes
+  // per character. Compare transmitted bytes, not JS string lengths.
+  return gzipBase64.length + wrapperBytes < bytes * 0.9 ? gzipBase64 : undefined;
 }
 
 function encodeDelta(
@@ -191,11 +201,14 @@ function encodeDelta(
 ): InvokeResultDelta {
   const check = { base, length: text.length, sample: sampleInvokeResultText(text) };
   const patchText = JSON.stringify(patch);
-  if (options.gzip && codec.gzipBase64 && patchText.length >= INVOKE_TRANSFER_MIN_CHARS) {
-    const gzipBase64 = codec.gzipBase64(patchText);
-    if (gzipBase64.length < byteLength(patchText) * 0.9) return { ...check, gzipBase64 };
-  }
-  return { ...check, patch };
+  // Same threshold and saving rule as a whole result, with the patch's own smaller wrapper:
+  // one changed row plus the reused indexes is usually 1–3 KB, which would otherwise go out raw
+  // and be escaped again inside the reliable frame.
+  // Host-side choice only: a controller that declared gzip decodes a gzip patch of any size.
+  // The content tag / notModified threshold is about the whole result and is unchanged.
+  const patchBytes = options.gzip === 1 ? byteLength(patchText) : 0;
+  const gzipBase64 = gzipWhenSmaller(patchText, patchBytes, INVOKE_DELTA_GZIP_WRAPPER_BYTES, codec);
+  return gzipBase64 !== undefined ? { ...check, gzipBase64 } : { ...check, patch };
 }
 
 /** 被控端：记住每个入站 invoke 的声明，供回结果（含补发 / 降级重发）时编码。 */
