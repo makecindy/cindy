@@ -83,6 +83,28 @@ it('expands a restored-open sidebar and closes without a renderer-derived shrink
   expect(result.current.collapsed).toBe(true);
 });
 
+// Bug: opening a task from the system island restores that task's remembered sidebar
+// state; the session switch then restored the standalone window and narrowed it.
+it('keeps the window width when a session switch restores the sidebar state', async () => {
+  const resize = vi.fn(async (requested: number) => (requested > 0 ? 401 : -401));
+  window.electronAPI = { windowSidebarExpansion: resize } as never;
+  const { result, rerender } = renderHook(
+    ({ collapsed, userToggle }) => useSidebarPresentation(root, collapsed, true, () => 400, userToggle),
+    { initialProps: { collapsed: true, userToggle: true } },
+  );
+  await act(async () => { rerender({ collapsed: false, userToggle: true }); });
+  window.innerWidth = 1401;
+  frame();
+  expect(resize).toHaveBeenCalledExactlyOnceWith(400);
+  resize.mockClear();
+  await act(async () => { rerender({ collapsed: true, userToggle: false }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(result.current).toEqual({ collapsed: true, instant: true });
+  await act(async () => { rerender({ collapsed: false, userToggle: false }); });
+  expect(resize).not.toHaveBeenCalled();
+  expect(result.current).toEqual({ collapsed: false, instant: true, expandedWidth: 800 });
+});
+
 // Bug: leaving the chat route retracts the expansion; returning must expand again
 // instead of adopting the shrunken window (repeated navigation narrowed it 1800 → 1399 → 998).
 it('re-expands when returning to a sidebar route after it was retracted', async () => {

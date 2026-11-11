@@ -15,10 +15,13 @@ export function useSidebarPresentation(
   collapsed: boolean,
   ready: boolean,
   expansionWidth: () => number,
+  userToggle = true,
 ): SidebarPresentation {
   const [presentation, setPresentation] = useState<SidebarPresentation>({ collapsed, instant: false });
   const expansion = useRef(expansionWidth);
   expansion.current = expansionWidth;
+  const userResize = useRef(userToggle);
+  userResize.current = userToggle;
   const previous = useRef<boolean | null>(null);
   const generation = useRef(0);
   const frame = useRef<number | null>(null);
@@ -36,7 +39,10 @@ export function useSidebarPresentation(
     const width = root.current?.getBoundingClientRect().width ?? 0;
     // Saved native bounds are standalone; a restored-open sidebar expands normally.
     const openingFromMount = ready && wasCollapsed === null && !collapsed;
-    if (!ready || (wasCollapsed === null && collapsed) || !resize || width <= 0) {
+    // A session switch restores that task's remembered visibility. Only the user's own
+    // toggle may resize the native window; navigation keeps the width the user chose.
+    const restored = !userResize.current && ready && wasCollapsed !== null;
+    if (!ready || (wasCollapsed === null && collapsed) || !resize || width <= 0 || restored) {
       if (!ready && wasCollapsed === false && resize) {
         void resize(0).catch(() => undefined);
       }
