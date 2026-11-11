@@ -3699,7 +3699,7 @@ describe('Bot canonical Session lifecycle', () => {
     });
     expect(opts.botRuntimeProfile?.mcpPolicy.configured).toContain('cindy_scheduler');
     expect(opts.botProfileContextPrompt).toContain('你能建普通自动化');
-    expect(opts.botProfileContextPrompt).toContain('你能看、能管主人的任务');
+    expect(opts.botProfileContextPrompt).toContain('你能看、能管用户的任务');
   });
 
   it('refreshes canonical MCP generations and Toolset versions in place', async () => {
