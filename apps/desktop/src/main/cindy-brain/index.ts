@@ -251,7 +251,6 @@ import {
   type GhostSetupAssessment,
   type GhostSetupReauthSuggest,
   type GhostVideoRefMode,
-  type GhostVideoResultParams,
   type InstalledGhost,
   type GhostLibraryOverview,
   GHOST_HANDOFF_REF_RE,
@@ -483,7 +482,6 @@ import {
 } from './cardStoreDb.js';
 import { updateMessageContent } from '../localDb/ipc/messages.js';
 import { runAssistantReplyHook } from './assistantReplyHook.js';
-import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 
 import {
   deriveCindyMediaConfig,
@@ -496,7 +494,6 @@ import {
   GhostCindySlot,
   type CindyImageCapabilities,
   type CindyVideoCapabilities,
-  type CindyVideoParams,
 } from './cindySlot.js';
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
@@ -715,7 +712,6 @@ import {
 } from './ghostRecentUsageStore.js';
 import { createXaiImageChannel } from './xaiImageClient.js';
 import {
-  getCindyProxyMediaService,
   getCindyVideoProviderRegistry,
   withCindyMediaBillingSession,
 } from '../mcp-integrations/cindyProxyMedia.js';
@@ -738,6 +734,10 @@ import { resolveCustomMediaConnection, isCustomVideoProvider } from './customMed
 import { videoConnectionRevision } from '../cindy-media/customVideoProtocol.js';
 import { createXaiVideoProvider } from '../cindy-proxy-media/video/providers/xai.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
+import { callCindyMedia } from '../cindy-media/invocationService.js';
+import { invokeLegacyMedia, legacyVideoReceipt } from '../cindy-media/legacyMediaInvocation.js';
+import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
+import { probeImageSize } from './imageProbe.js';
 import {
   configureProviderMediaRuntime,
   listProviderMediaModels,
@@ -747,7 +747,7 @@ import {
 import { loadPluginMediaAvailability } from './pluginMediaCatalogFallback.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
-import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop.js';
+import { captureMediaRefCompensationScope, withMediaRefCompensation } from '../cindy-media/refCompensationJournal.desktop.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { recordGhostCallMedia } from './ghostMediaLedger.js';
 import { resolveGhostMediaHandoverTarget } from './ghostMediaHandoverTargetTracker.js';
@@ -758,7 +758,7 @@ import { isModelAccessReady } from '../model-access/readiness.js';
 import {
   filterEnabledGatewayMediaModels,
   isMediaModelExecutable,
-  isMediaModelExecutableForGuide,
+  isMediaModelExecutableForLegacyInput,
   listExecutableMediaModels,
   supportsMediaCapability,
 } from '../model-access/mediaModels.js';
@@ -4770,7 +4770,6 @@ function isVideoCatalogProviderReady(providerId: string): boolean {
   return false;
 }
 
-const LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID = 'openai-images-v1';
 type LegacyCindyMediaAction = 'generate' | 'edit';
 
 /** 旧 cindy-request 类目清单只保留其固定通道对当前动作真正可执行的 XD 模型。 */
@@ -4781,31 +4780,29 @@ function isXdMediaModelExecutableForCatalog(
 ): boolean {
   if (kind === 'image') {
     if (action) {
-      return isMediaModelExecutableForGuide(
+      return isMediaModelExecutableForLegacyInput(
         modelId,
-        LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID,
         action === 'edit' ? 'image.edit' : 'image.generate',
       );
     }
     return (
-      isMediaModelExecutableForGuide(
+      isMediaModelExecutableForLegacyInput(
         modelId,
-        LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID,
         'image.generate',
       ) ||
-      isMediaModelExecutableForGuide(modelId, LEGACY_CINDY_REQUEST_IMAGE_GUIDE_ID, 'image.edit')
+      isMediaModelExecutableForLegacyInput(modelId, 'image.edit')
     );
   }
   if (kind === 'video') {
     if (action) {
-      return isMediaModelExecutable(
+      return isMediaModelExecutableForLegacyInput(
         modelId,
         action === 'edit' ? 'video.image_to_video' : 'video.generate',
       );
     }
     return (
-      isMediaModelExecutable(modelId, 'video.generate') ||
-      isMediaModelExecutable(modelId, 'video.image_to_video')
+      isMediaModelExecutableForLegacyInput(modelId, 'video.generate') ||
+      isMediaModelExecutableForLegacyInput(modelId, 'video.image_to_video')
     );
   }
   return true;
@@ -4870,7 +4867,7 @@ function getCatalogMediaConfig(
         // 执行侧那道防御保留 —— 它管的是这里与执行层之间的窗口。
         (kind === 'embed' && !isKnownEmbeddingModel(modelId)) ||
         // A ready provider may contain image models owned by an unready runtime.
-        (kind === 'image' && !imageRegistry?.isProviderReady(providerId, modelId)) ||
+        (kind === 'image' && providerId !== 'xd' && !imageRegistry?.isProviderReady(providerId, modelId)) ||
         // 视频目录可能比当前客户端通道先热更。执行 registry 不认识的型号
         // 必须先过滤，不能把“目录有”冒充成“这版客户端能下单”。
         (kind === 'video' && !(videoRegistry?.hasAlias(modelId, providerId) ?? false)),
@@ -4881,14 +4878,15 @@ function getCatalogMediaConfig(
       // managed URL/base64 handling; keep new sources out of the frozen legacy API.
       kind === 'image'
         ? (providerId) =>
-            imageRegistry?.isProviderLegacyReady(providerId) ?? false
+            providerId === 'xd' ? isXdGatewayProviderReady(providerId)
+              : imageRegistry?.isProviderLegacyReady(providerId) ?? false
         : kind === 'video'
           ? isVideoCatalogProviderReady
           : isXdGatewayProviderReady,
       // 编辑就绪过滤:仅支持生成的来源(supportsEdit: false)的模型不进编辑清单,
       // 防用户把该型号钉到 image.edit 偏好后在 editImage 路径拿到确定性 400。
       kind === 'image'
-        ? (providerId) => imageRegistry?.isProviderEditReady(providerId) ?? false
+        ? (providerId) => providerId === 'xd' || (imageRegistry?.isProviderEditReady(providerId) ?? false)
         : undefined,
       kind === 'image' || kind === 'video' ? isCatalogMediaModelVisible : undefined,
     );
@@ -5298,53 +5296,6 @@ async function readImageFileAsDataUri(absPath: string): Promise<string> {
 }
 
 /**
- * 视频代办执行(cindy 槽 → art 视频 provider 层):alias 已过白名单校验,
- * registry 缺席(极端:art 服务未配视频 provider)时人话报错。
- * submit→轮询→下载一条龙在 @cindy/mcps submitAndAwaitVideo(原 lizi_art 工具层
- * 的执行链,工具壳已退役);分钟级长任务,期间 cindySlot 在途名额持续占用。
- */
-async function runGhostVideo(
-  params: {
-    alias: string;
-    providerId?: string;
-    prompt: string;
-    imageDataUris?: string[];
-    /** 参考图用法(仅图生视频有);不传 = 执行器缺省的首尾帧。 */
-    refMode?: GhostVideoRefMode;
-  } & CindyVideoParams,
-): Promise<{ buffer: Buffer; mimeType: string; videoParams: GhostVideoResultParams }> {
-  const registry = getVideoProviderRegistry();
-  if (!registry || !registry.hasAny()) {
-    throw new Error('视频能力不可用:主机未配置视频通道');
-  }
-  if (params.providerId && !registry.hasAlias(params.alias, params.providerId)) {
-    throw new Error('视频模型与所选来源不匹配,本次生成已取消');
-  }
-  // 提交紧前重查(第二十一轮):参考图 data URI 准备是 await,窗口内被停用即拒。
-  assertMediaModelStillEnabled(
-    'video',
-    params.alias,
-    params.providerId,
-    params.imageDataUris ? 'edit' : 'generate',
-  );
-  const r = await submitAndAwaitVideo(registry, params);
-  return {
-    buffer: r.buffer,
-    mimeType: r.mimeType,
-    // 实际生效参数回执(执行器已把上游上报值与提交值合并过)。
-    videoParams: {
-      durationSeconds: r.effectiveParams.duration,
-      resolution: r.effectiveParams.resolution,
-      ratio: r.effectiveParams.ratio,
-      fps: r.effectiveParams.fps,
-      // 音轨状态执行器可能给不出(型号没这个旋钮 / 支持但没登记上游默认):
-      // 给不出就不带这个键,别把"说不上来"写成 false。
-      ...(r.effectiveParams.audio !== undefined ? { audio: r.effectiveParams.audio } : {}),
-    },
-  };
-}
-
-/**
  * 某视频型号的画面参数支持集(cindySlot 按型号二次校验用)。registry 缺席
  * 或 alias 查无 → null,cindySlot 据此跳过按型号校验(值仍会被执行器兜底拦下)。
  */
@@ -5382,6 +5333,7 @@ function getGhostImageCapabilities(
   providerId?: string,
 ): CindyImageCapabilities | null {
   try {
+    if (providerId === 'xd') return {};
     return {
       maxEditImages: resolveImageChannelForModel(model, 'edit', providerId).maxEditImages,
     };
@@ -5391,11 +5343,8 @@ function getGhostImageCapabilities(
 }
 
 /**
- * 图像执行通道注册表单例(见 imageChannelRegistry.ts 头注)。xd 通道在此登记:
- * ready 跟随网关能力(canUseCindyGateway;key 缺失时 requireApiKey 在派发时人话拒,
- * 与历史行为一致),backend 是 cindyProxyMedia 的网关客户端,aspectRatio → 网关
- * size 枚举的翻译在适配层完成(通道各家 wire 不同,意图翻译是通道自己的知识)。
- * 后续来源(gemini / openai / xai)在各自 PR 里追加注册。
+ * 原生图片来源的执行适配器。XD 请求按 Server Guide 由 Core 发送，
+ * 不再为旧插件单独注册固定 OpenAI 图片通道。
  */
 const registeredCodexImageAccounts = new Set<string>();
 const registeredByokImageAccounts = new Set<string>();
@@ -5404,23 +5353,6 @@ let imageChannelRegistrySingleton: ImageChannelRegistry | null = null;
 function getImageChannelRegistry(): ImageChannelRegistry {
   if (!imageChannelRegistrySingleton) {
     const registry = new ImageChannelRegistry();
-    registry.register('xd', {
-      imageProtocol: 'openai',
-      ready: () => getAppCapabilities().canUseCindyGateway,
-      generateImage: (params) =>
-        getCindyProxyMediaService().backend.generateImage({
-          model: params.model,
-          prompt: params.prompt,
-          ...normalizeImageParameters('openai', params.model, params),
-        }),
-      editImage: (params) =>
-        getCindyProxyMediaService().backend.editImage({
-          model: params.model,
-          prompt: params.prompt,
-          imagePaths: params.imagePaths,
-          ...normalizeImageParameters('openai', params.model, params),
-        }),
-    });
     const readXaiApiImageKey = (): string | null => {
       // 图片凭证只取路由命中官方 api.x.ai 端点的 runtime:代理 runtime 的密钥
       // 不得发往官方图片端点(避免 401/403 与凭证披露,见 PR #3875 review)。
@@ -5733,13 +5665,46 @@ function listLocalProviderVideoModels(respectDisplaySwitch = false): ProviderMed
           name: model.name,
           providerId: provider.id,
           mode: 'video_generation' as const,
-          ...(isCustomVideoProvider(provider) ? { videoProtocol: 'xai-videos' as const } : {}),
+          ...(isCustomVideoProvider(provider) && model.sourceAgent
+            ? { videoProtocol: provider.routing[model.sourceAgent]?.videoApi }
+            : provider.id === 'xai' ? { videoProtocol: 'xai-videos' as const } : {}),
           modalities: { input: [...modalities.input], output: [...modalities.output] },
           ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
         },
       ];
     });
   });
+}
+
+async function resolveNativeVideoConnection(providerId: string, modelId: string): Promise<ProviderVideoConnection | null> {
+  const registry = getVideoProviderRegistry();
+  if (providerId !== 'xai' || !registry?.hasAlias(modelId, providerId) || !isVideoCatalogProviderReady(providerId)) return null;
+  const owner = activeOwnerScopeKey();
+  const generation = getGrokOAuthCredentialGeneration();
+  const assertCurrent = () => {
+    if (isGhostBoundaryPending() || activeOwnerScopeKey() !== owner ||
+        getGrokOAuthCredentialGeneration() !== generation || !hasGrokOAuthLogin()) {
+      throw new Error('视频来源或账号已改变，本次操作已停止；不要重新生成');
+    }
+  };
+  let token = await getGrokAccessToken();
+  assertCurrent();
+  const headers = { Authorization: `Bearer ${token}` };
+  return {
+    baseUrl: 'https://api.x.ai/v1', headers,
+    revision: createHash('sha256').update(JSON.stringify([providerId, modelId, owner, generation])).digest('hex'),
+    requestModelId: registry.resolveByAlias(modelId).internalModel,
+    assertCurrent,
+    onAuthRejected: async failure => {
+      const failedAccessToken = token;
+      await invalidateXaiBridgeAuth({ ...failure, failedAccessToken });
+      assertCurrent();
+      token = await getGrokAccessToken();
+      assertCurrent();
+      headers.Authorization = `Bearer ${token}`;
+      return token !== failedAccessToken;
+    },
+  };
 }
 
 function resolveCustomVideoConnection(providerId: string, modelId: string): ProviderVideoConnection | null {
@@ -5767,7 +5732,9 @@ function resolveCustomVideoConnection(providerId: string, modelId: string): Prov
 }
 
 configureProviderMediaRuntime({
-  resolveVideoConnection: resolveCustomVideoConnection,
+  resolveVideoConnection: (providerId, modelId) => providerId === 'xai'
+    ? resolveNativeVideoConnection(providerId, modelId)
+    : resolveCustomVideoConnection(providerId, modelId),
   listModels: () => listLocalProviderMediaModels(true),
   listVideoModels: () => listLocalProviderVideoModels(true),
   listExecutableModels: () => listLocalProviderMediaModels(false),
@@ -5853,69 +5820,43 @@ export function getGhostCindySlot(): GhostCindySlot {
       getGhost: findGhostForInstanceId,
       getOwnerScopeKey: () => activeOwnerScopeKey(),
       isOwnerBoundaryPending: () => isGhostBoundaryPending(),
-      // model 已在 modelSlot 按白名单校验;归属来源(providerId)按白名单条目
-      // 定位,经 imageChannelRegistry 取对应执行通道(2026-07 图像多来源)。
-      generateImage: async ({ prompt, model, providerId, aspectRatio }) => {
-        try {
-          assertMediaModelStillEnabled('image', model, providerId, 'generate');
-          const channel = resolveImageChannelForModel(model, 'generate', providerId);
-          return decodeImageResponse(
-            await channel.generateImage({
-              model,
-              prompt,
-              ...(aspectRatio ? { aspectRatio } : {}),
-            }),
-          );
-        } catch (err) {
-          humanizeImageChannelError(err);
-        }
-      },
-      editImage: async ({ prompt, model, providerId, imagePaths, aspectRatio }) => {
-        try {
-          assertMediaModelStillEnabled('image', model, providerId, 'edit');
-          const channel = resolveImageChannelForModel(model, 'edit', providerId);
-          return decodeImageResponse(
-            await channel.editImage({
-              model,
-              prompt,
-              imagePaths,
-              ...(aspectRatio ? { aspectRatio } : {}),
-            }),
-          );
-        } catch (err) {
-          humanizeImageChannelError(err);
-        }
-      },
-      generateVideo: async ({ prompt, model, providerId, ...videoParams }) => {
-        try {
-          assertMediaModelStillEnabled('video', model, providerId, 'generate');
-          return await runGhostVideo({ alias: model, providerId, prompt, ...videoParams });
-        } catch (err) {
-          humanizeImageChannelError(err);
-        }
-      },
-      editVideo: async ({ prompt, model, providerId, imagePaths, refMode, ...videoParams }) => {
-        try {
-          assertMediaModelStillEnabled('video', model, providerId, 'edit');
-          // 先算总量再读(闸按 refMode 分档:存量首尾帧不设闸,原样)。闸与
-          // 读取绑在一个入口里,顺序是那边的结构保证、不是这里的约定;结果
-          // 保序——顺序即语义:首/尾帧,或提示词里 [Image 1]… 的序号。
-          const imageDataUris = await readRefImagesWithinBudget(
-            imagePaths,
-            readImageFileAsDataUri,
-            refMode,
-          );
-          return await runGhostVideo({
-            alias: model,
-            providerId,
-            prompt,
-            imageDataUris,
-            refMode,
-            ...videoParams,
-          });
-        } catch (err) {
-          humanizeImageChannelError(err);
-        }
+      // 旧协议只适配参数/结果；付费提交、轮询和入仓全部复用 Core。
+      invokeMedia: async ({ imagePaths, imageRefs, sessionId, assertCurrent, ...request }) => {
+        assertCurrent();
+        const maker = sessionId ? (await import('../maker-host/index.js')).getMakerIfReady() : undefined;
+        assertCurrent();
+        const session = sessionId ? maker?.getSession(sessionId) : undefined;
+        const turnGeneration = session?.getTurnGeneration();
+        const video = request.kind.endsWith('video');
+        assertMediaModelStillEnabled(video ? 'video' : 'image', request.model,
+          request.providerId, request.kind.startsWith('edit_') ? 'edit' : 'generate');
+        const images = video
+          ? await readRefImagesWithinBudget(imagePaths, readImageFileAsDataUri, request.refMode ?? 'first_and_last_frame')
+          : imageRefs;
+        assertCurrent();
+        const source = video ? getVideoProviderRegistry()?.resolveByAlias(request.model) : undefined;
+        const defaults = source ? { ...source.provider.capabilities.defaults,
+          audioDefault: source.provider.capabilities.audioDefault } : undefined;
+        const input = { ...request, ...(images.length ? { images } : {}),
+          ...(defaults ? { videoDefaults: defaults } : {}) };
+        let response: unknown;
+        const downloadContext = session ? createMediaDownloadContext(session, () =>
+          maker?.getSession(session.id) === session && session.getTurnGeneration() === turnGeneration) : undefined;
+        const result = await invokeLegacyMedia(input, {
+          callCore: (operation, context) => callCindyMedia(operation, context, sessionId, value => { response = value; }),
+          downloadContext,
+          assertCurrent, timeoutMs: (source ? source.expectedSeconds * 3 : 600) * 1000,
+        }).catch(humanizeImageChannelError).finally(() => downloadContext?.dispose?.());
+        assertCurrent();
+        const parsed = blobStore.parseBlobUrl(result.url);
+        if (!parsed) throw new Error('Core 媒体结果地址不合法');
+        const info = await ledger.getBlobInfo(parsed.hash, getDbClient().drizzle);
+        assertCurrent();
+        if (!info || info.ext !== parsed.ext) throw new Error('Core 媒体结果缺少入仓记录');
+        const dims = video ? null : probeImageSize(await fs.promises.readFile(blobStore.resolveSafe(result.url).absPath));
+        assertCurrent();
+        return { url: result.url, hash: parsed.hash, ...info, ...(dims ?? {}),
+          ...(defaults ? { videoParams: legacyVideoReceipt(input, defaults, response) } : {}) };
       },
       // 画面参数按型号二次校验的数据源(registry capabilities)。
       imageCapabilities: getGhostImageCapabilities,
@@ -6096,9 +6037,9 @@ export function getGhostCindySlot(): GhostCindySlot {
           return null;
         }
         assertOwnerScopeCurrent();
-        return absPath;
+        return { absPath, url: blobStore.blobUrl(hash, info.ext) };
       },
-      saveGhostMedia: async ({ ghostId, buffer, mimeType, ownerScopeKey, label, callId }) => {
+      saveGhostMedia: async ({ ghostId, media, ownerScopeKey, label, callId }) => {
         const assertOwnerScopeCurrent = (): void => {
           if (isGhostBoundaryPending() || activeOwnerScopeKey() !== ownerScopeKey) {
             throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
@@ -6109,27 +6050,22 @@ export function getGhostCindySlot(): GhostCindySlot {
         // 防止旧账号产物在切号窗口被登记到新账号画廊。
         assertOwnerScopeCurrent();
         const db = getDbClient().drizzle;
-        const written = await ingestMedia(
-          {
-            buffer,
-            mimeType,
-            isCache: false,
-            refs: [
-              {
-                refKind: 'ghost-gallery',
-                refId: ghostId,
-                originKind: 'ghost',
-                originId: ghostId,
-                ...(label ? { label } : {}),
-              },
-            ],
-            assertStillValid: assertOwnerScopeCurrent,
-            refCompensationScope: captureMediaRefCompensationScope(ownerScopeKey),
+        const refId = randomUUID();
+        await withMediaRefCompensation({
+          scope: captureMediaRefCompensationScope(ownerScopeKey), refIds: [refId],
+          perform: async () => {
+            assertOwnerScopeCurrent();
+            await ledger.addRef({
+              id: refId, hash: media.hash, refKind: 'ghost-gallery', refId: ghostId,
+              originKind: 'ghost', originId: ghostId, ...(label ? { label } : {}),
+            }, db);
+            assertOwnerScopeCurrent();
           },
-          db,
-        );
-        recordGhostCallMedia(ghostId, callId, written.url);
-        return { url: written.url, hash: written.hash, ext: written.ext };
+          compensate: id => ledger.removeRefById(id, db),
+        });
+        assertOwnerScopeCurrent();
+        recordGhostCallMedia(ghostId, callId, media.url);
+        return { url: media.url, hash: media.hash, ext: media.ext };
       },
       // ── deposit_media 接线(#784)────────────────────────────────────────
       // 真实类型只认字节:与 network as:'media' 同一魔数实现,再过一道 blobStore
@@ -9771,7 +9707,7 @@ export function registerGhostIpc(): void {
       const callId = (payload as { callId?: unknown } | null)?.callId;
       const sessionId = getPluginTaskSourceSessionId(id, typeof callId === 'string' ? callId : undefined);
       return withCindyMediaBillingSession(sessionId, () =>
-        getGhostCindySlot().handleModelRequest(id, payload),
+        getGhostCindySlot().handleModelRequest(id, payload, sessionId),
       );
     }
     // fetch-request = network 槽代理 HTTP(invoke 返回值即响应,机制同上)。

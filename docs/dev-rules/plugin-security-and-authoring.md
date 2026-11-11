@@ -707,8 +707,10 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   Guide 失败必须局部隔离，不能阻断其余模型或插件面板。响应仍只把归一化后的
   `modalities.input/output` 原样交给插件，不得包含 Guide、endpoint、凭证或内部兼容判定；
   付费请求前 Core 必须再次校验。新媒体生成请求只能由当前 Agent 调用永久 Core `media`
-  工具发起，插件沙箱和 panel 不得直接提交、轮询或下载。存量 `cindy-request` 媒体代办仅作
-  兼容，不得作为新 Guide 模型的接入路径。插件工具通过现有 `tool-result` 返回普通 JSON，
+  工具发起，插件沙箱和 panel 不得直接提交、轮询或下载。存量 `cindy-request` 媒体代办保留
+  原接口：Host 完成原有权限、配额、参考图归属与账号校验后，将旧参数适配到已有 Core
+  `prepare/request/poll`；可用模型由 Server operation 的输入是否可表达决定，不按 Guide ID
+  筛选。兼容入口不向插件开放任意 Core 操作，不另起 Agent，也不重复入仓。插件工具通过现有 `tool-result` 返回普通 JSON，
   Agent 读取后自行决定下一次 `media` 调用；Host 不识别插件专用媒体意图字段，也不自动
   转发。插件需要结果时，Agent 调用普通接收工具，并通过顶层
   `ghost_call.attachments` 显式交接；Host 复用已有的通用授权链，将授权后的指纹注入
