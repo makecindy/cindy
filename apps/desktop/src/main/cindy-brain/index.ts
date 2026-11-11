@@ -162,8 +162,14 @@ function requestPluginHostToolCall(id: string, payload: unknown, current: () => 
     getGhost: findGhostForInstanceId, owner: getActiveDataOwnerPushStamp,
     createRuntime: (server, caller) => {
       const root = server === 'cindy_docs' || server === 'cindy_computer' ? ownerScopedUserDataPath('ghost-fs', caller.pluginId) : '';
-      if (root) fs.mkdirSync(root, { recursive: true });
-      return createHostToolRuntime(server, caller, root, ghostInstallApprovalToken(findGhostForInstanceId(caller.pluginId)?.approval));
+      const runtime = createHostToolRuntime(server, caller, root, ghostInstallApprovalToken(findGhostForInstanceId(caller.pluginId)?.approval));
+      if (!root || !runtime) return runtime;
+      return { describe: tool => runtime.describe(tool), close: () => runtime.close(), call: async (tool, args) => {
+        // Metadata inspection and denied requests must not touch disk. The
+        // gateway invokes call only inside the current, approved caller scope.
+        await fs.promises.mkdir(root, { recursive: true });
+        return runtime.call(tool, args);
+      } };
     },
     approveGroup: (pluginId, group, active) => requestPluginTaskApproval(pluginId, active, facts => {
       const window = getDeepLinkMainWindow();

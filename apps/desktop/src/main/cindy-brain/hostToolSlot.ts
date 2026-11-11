@@ -1,4 +1,4 @@
-import { GHOST_HOST_TOOL_GROUPS, type GhostHostToolGroup } from '@cindy/plugin-protocol';
+import { declaredGhostHostToolGroups, GHOST_HOST_TOOL_GROUPS, type GhostHostToolGroup } from '@cindy/plugin-protocol';
 import type { HostToolCaller, HostToolRuntime } from '@cindy/mcps';
 import type { GhostPipeHostToolRequest, InstalledGhost } from '../../shared/ghost.js';
 import { ghostInstallApprovalToken } from '../../shared/ghost.js';
@@ -45,6 +45,8 @@ export async function handlePluginHostToolRequest(id: string, payload: unknown, 
       activeOwner.dataOwnerId === owner.dataOwnerId && activeOwner.ownerGeneration === owner.ownerGeneration;
   };
   if (!ghost || !current()) return fail('PERMISSION_DENIED');
+  const serviceGroup = SERVICE_GROUPS[server];
+  if (serviceGroup && !declaredGhostHostToolGroups(ghost.manifest).includes(serviceGroup)) return fail('PERMISSION_DENIED');
   const caller = { kind: 'plugin' as const, pluginId: id, ...owner };
   const runtime = ports.createRuntime(server, caller);
   if (!runtime) return fail(ports.unavailableRuntimeError?.errorCode ?? 'HOST_NOT_READY', ports.unavailableRuntimeError?.message);

@@ -60,6 +60,10 @@ function fixture() {
 }
 const code = (value: Awaited<ReturnType<typeof handlePluginHostToolRequest>>) => JSON.parse(value.content[0].type === 'text' ? value.content[0].text : '{}').errorCode;
 
+const desktopEntry = createGhostProductionCallbacks<{
+  requestPluginHostToolCall(id: string, payload: unknown, current: () => boolean): Promise<unknown>;
+}>({ functions: ['requestPluginHostToolCall'] });
+
 describe('plugin Host tool entry', () => {
   // Unit, §1.2: runtime.close is asynchronous too. The old last check ran
   // before cleanup, so an owner switch during close could return old data.
@@ -74,6 +78,38 @@ describe('plugin Host tool entry', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  // Unit performance regression: the new service admission constructed a runtime
+  // for undeclared groups, and Desktop created directories before approval. The
+  // existing policy cases asserted only the final error, missing these side effects.
+  it('rejects undeclared service groups before constructing their runtime', async () => {
+    const f = fixture();
+    const create = vi.spyOn(f.ports, 'createRuntime');
+    expect(code(await handlePluginHostToolRequest('dashboard', {
+      type: 'host-tool-request', server: 'cindy_docs', tool: 'read_sheet', args: {},
+    }, () => true, f.ports))).toBe('PERMISSION_DENIED');
+    expect(create).not.toHaveBeenCalled();
+  });
+  it('creates a private output directory only for an approved Desktop service execution', async () => {
+    const f = fixture(), mkdirSync = vi.fn(), mkdir = vi.fn(async () => {});
+    f.ghost.manifest.agent!.hostTools = ['docs'];
+    f.ghost.approvedHostToolGroups = [];
+    const api = desktopEntry({ handlePluginHostToolRequest, findGhostForInstanceId: () => f.ghost,
+      getActiveDataOwnerPushStamp: f.ports.owner, ghostInstallApprovalToken: () => 'r1',
+      ownerScopedUserDataPath: () => '/fixture/private', fs: { mkdirSync, promises: { mkdir } },
+      createHostToolRuntime: () => ({ describe: () => ({ name: 'read_sheet', category: 'read' }), call: f.invoke, close: async () => {} }),
+      requestPluginTaskApproval: async () => f.ghost.approvedHostToolGroups!.includes('docs'),
+      getDesktopMcpToolApprovalPolicy: () => 'auto-approve', log: { info: vi.fn() },
+    });
+    const request = () => api.requestPluginHostToolCall('dashboard', { type: 'host-tool-request', server: 'cindy_docs', tool: 'read_sheet', args: {} }, () => true);
+    await request();
+    expect(mkdirSync).not.toHaveBeenCalled();
+    expect(mkdir).not.toHaveBeenCalled();
+    expect(f.invoke).not.toHaveBeenCalled();
+    f.ghost.approvedHostToolGroups = ['docs'];
+    expect(await request()).toEqual(f.result);
+    expect(mkdirSync).not.toHaveBeenCalled();
+    expect(mkdir).toHaveBeenCalledExactlyOnceWith('/fixture/private', { recursive: true });
+  });
   // Item 28, unit: the real sandbox lifecycle and production exit callback must
   // close the native service scope. Node stop coverage missed the logic-page
   // stop/crash/update path added for computer connections in item 26.
