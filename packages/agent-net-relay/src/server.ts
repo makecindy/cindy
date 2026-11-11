@@ -13,7 +13,7 @@ import {
   API, AGENT_NET_VERSION, MAX_FRAME_BYTES, MAX_MEDIA_OBJECT_BYTES, MAX_MEDIA_BINARY_CHUNK_BYTES, MAX_GRANT_LIFETIME_MS, MEDIA_NETWORK_QUOTA_BYTES, ID_PATTERN, KEY_PATTERN, notificationKeyPayload, decodeDatagrams, encodeDatagrams,
   type Delegation, type DeviceCertificate, type DeviceView, type JoinRequest, type PushRegistration, type DeviceMetadata,
   sharingOriginsPayload, sharingOriginsPolicyValid, type SharingOrigins, MAX_CONTROL_BYTES,
-  guestRequestPath, delegationPrincipalMatches, delegationEndpointCertificate,
+  guestRequestPath, delegationPrincipalMatches, delegationEndpointCertificate, isAgentNetStunHost,
 } from '@cindy/agent-net-protocol';
 import { sha256, verifySignature, verifyCertificate, verifyDelegation, verifyJoinRequest, verifyRequestProof, verifyRequestDigestProof, verifyTenantJoinRequest } from './identity.js';
 import { Store, type NetworkRecord } from './store.js';
@@ -40,6 +40,8 @@ export interface RelayLogger {
 }
 export interface RelayOptions {
   dataDir: string; host?: string; port?: number; udpHost?: string; udpPort?: number;
+  /** Public host for `udpPort` when UDP is published apart from the HTTPS host; clients otherwise use the API host. */
+  stunHost?: string;
   mode?: 'official' | 'self-hosted'; publicUrl?: string;
   tls?: { cert: string | Buffer; key: string | Buffer };
   bootstrap?: Bootstrap;
@@ -99,6 +101,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   if (mode === 'official' && !options.enroll) throw new Error('OFFICIAL_ENROLLMENT_REQUIRED');
   if (mode === 'official' && options.bootstrap) throw new Error('OFFICIAL_CANNOT_BOOTSTRAP_OWNER_NETWORK');
   if (mode === 'self-hosted' && options.enroll) throw new Error('SELF_HOSTED_CANNOT_USE_OFFICIAL_ENROLLMENT');
+  if (options.stunHost !== undefined && !isAgentNetStunHost(options.stunHost)) throw new Error('INVALID_STUN_HOST');
   const store = await Store.open(options.dataDir);
   if (options.bootstrap) {
     const bootstrap = options.bootstrap;
@@ -341,7 +344,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     if (url.pathname === '/health' && method === 'GET') return writeJson(res, 200, { status: 'ok', protocolVersion: AGENT_NET_VERSION, udp: options.udpPort === undefined ? 'disabled' : 'ok' });
     if (url.pathname === API + '/info' && method === 'GET') return writeJson(res, 200, {
-      protocolVersion: AGENT_NET_VERSION, mode, udpPort: advertisedUdpPort, features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', 'notification-keys-v2', ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
+      protocolVersion: AGENT_NET_VERSION, mode, udpPort: advertisedUdpPort,
+      ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', 'notification-keys-v2', ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
         ...(mode === 'self-hosted' && store.primaryNetworkId() !== undefined ? ['tenants-v1'] : [])],
     });
     if (url.pathname.startsWith(API + '/sharing/')) {

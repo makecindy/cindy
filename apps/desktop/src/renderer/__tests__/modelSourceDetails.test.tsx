@@ -74,6 +74,7 @@ import {
   ModelSourceDetails,
   ModelSourceUsageProvider,
 } from '@/components/new-chat/ModelSourceDetails';
+import { SessionSubscriptionAccountProvider } from '@/components/new-chat/SessionSubscriptionAccount';
 
 const quotaText = (text: string) => (_: string, node: Element | null) =>
   node?.textContent === text &&
@@ -167,10 +168,10 @@ describe('model source second line', () => {
     expect(view.container.textContent).toContain('100%');
     expect(view.container.textContent).not.toContain('a@example.test');
     expect(command).toHaveBeenCalledTimes(2);
-    // Pausing B removes its identity, plan and quota together, before the read returns.
+    // Refresh keeps the complete previous display until the replacement arrives.
     pool = { ...pool, accounts: pool.accounts.map(account => ({ ...account, paused: true })) };
     act(() => changed?.({ providerId: 'anthropic' }));
-    expect(view.container.textContent).not.toContain('b@example.test');
+    expect(view.container.textContent).toContain('b@example.test · Max');
     await act(async () => {});
     expect(view.container.textContent).toContain('subscriptionAccounts.unassigned');
     expect(view.container.textContent).not.toMatch(/Pro|Max|%|@/);
@@ -637,4 +638,111 @@ it('shows Kimi remaining quota on its own model source without borrowing Codex u
   expect(view.container.textContent).not.toContain('Pro');
   expect(fetchUsage).toHaveBeenCalledTimes(1);
   expect(reads.codex.mock.calls.some(([enabled]) => enabled)).toBe(false);
+});
+
+// 2026-11-11 user report (unit/jsdom): in an existing task pinned to the pool's second account,
+// the model row named the CLI default account and showed its quota; a group member answered with
+// its next pool pick. Draft-pool tests above only cover new tasks, never a task's own binding.
+// Minimal input: the default account at 93% weekly used and the task's account at 20%.
+describe('model source for an existing task on a subscription account pool', () => {
+  let taskSequence = 0;
+  const bound = {
+    providerId: 'anthropic',
+    state: 'bound',
+    account: {
+      isDefault: false, number: 2, identity: 'b@example.test', plan: 'max', paused: false, status: 'ready',
+      usage: { claude: { sevenDay: { utilization: 20, resetsAt: now / 1000 + 86400 } } },
+    },
+  };
+  function mount(deviceId: string | null, reply: () => Promise<unknown>, readable = true) {
+    const taskId = `account-display-task-${++taskSequence}`;
+    const sessionAccount = vi.fn(reply);
+    const unconfigured = { providerId: 'anthropic', configured: false, accounts: [] };
+    const command = vi.fn(async () => unconfigured);
+    const invoke = vi.fn(async (_device: string, channel: string, args: { action?: string }[]) => {
+      if (channel !== 'maker:subscription-accounts') throw new Error('TEMPORARILY_BUSY');
+      return args[0]?.action === 'session' ? reply() : unconfigured;
+    });
+    Object.assign(window, { electronAPI: {
+      subscriptionAccounts: { sessionAccount, command, onChanged: () => () => {} },
+      deviceLink: { invoke, onPresenceChanged: () => () => {}, onStatusChanged: () => () => {} },
+    } });
+    const tree = () => (
+      <SessionSubscriptionAccountProvider providerId="anthropic" deviceId={deviceId} sessionId={taskId} nativeSessionId="sdk-1">
+        <ModelSourceUsageProvider providers={[provider('anthropic', 'claude')]} scope={readable ? { deviceId } : null}>
+          <ModelSourceDetails providerId="anthropic" label="Claude" accountIdentity="a@example.test" modelId="claude-sonnet" />
+        </ModelSourceUsageProvider>
+      </SessionSubscriptionAccountProvider>
+    );
+    const view = render(tree());
+    return { view, sessionAccount, invoke, taskId, rerender: () => view.rerender(tree()) };
+  }
+  beforeEach(() => {
+    reads.claudeSnapshot = { subscriptionType: 'pro', sevenDay: { utilization: 93 } };
+    reads.remoteClaude.mockReturnValue({ subscriptionType: 'pro', sevenDay: { utilization: 93 } });
+  });
+
+  it.each([null, 'group-member'])('names the pinned account and reads only its quota (device %s)', async (deviceId) => {
+    const { view, sessionAccount, invoke, taskId } = mount(deviceId, async () => bound);
+    // Until the executing computer answers, nothing of the default account is shown.
+    expect(view.container.textContent).not.toMatch(/a@example|7%/);
+    await act(async () => {});
+    expect(view.container.textContent).toContain('b@example.test · Max');
+    expect(view.container.textContent).toContain('80%');
+    expect(view.container.textContent).not.toMatch(/a@example|Pro|7%/);
+    expect(reads.claude).not.toHaveBeenCalledWith(true, 'anthropic');
+    expect(reads.remoteClaude).not.toHaveBeenCalledWith('group-member', 'anthropic');
+    const query = { action: 'session', providerId: 'anthropic', sessionId: taskId, nativeSessionId: 'sdk-1' };
+    if (deviceId) expect(invoke).toHaveBeenCalledWith(deviceId, 'maker:subscription-accounts', [query]);
+    else expect(sessionAccount).toHaveBeenCalledWith(query);
+  });
+
+  // An unreadable directory must not inherit the active task's private account.
+  it('keeps the task account out of an unreadable model-source scope', async () => {
+    const { view } = mount(null, async () => bound, false);
+    await act(async () => {});
+    expect(view.container.textContent).not.toMatch(/b@example|80%/);
+  });
+
+  // Only an authoritative legacy answer can restore the original reader.
+  it('keeps the original account reader for an explicitly unconfigured pool', async () => {
+    const { view } = mount(null, async () => ({ providerId: 'anthropic', state: 'legacy' }));
+    await act(async () => {});
+    expect(view.container.textContent).toContain('a@example.test · Pro');
+    expect(view.container.textContent).toContain('7%');
+  });
+
+  // PR #9918 review (unit): initial request failures are not proof of a default
+  // account. Previous cases only exercised successful reads or explicit legacy.
+  it.each([null, 'busy-executor'])('hides the default account after a failed read and retries (device %s)', async (deviceId) => {
+    let failing = true;
+    const { view } = mount(deviceId, async () => {
+      if (failing) throw new Error('TEMPORARILY_BUSY');
+      return bound;
+    });
+    await act(async () => {});
+    expect(view.container.textContent).not.toMatch(/a@example|7%|80%/);
+    failing = false;
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(view.container.textContent).toContain('b@example.test · Max');
+    expect(view.container.textContent).toContain('80%');
+  });
+
+  // PR #9918 review (unit): a same-owner repair advances the auth generation
+  // without remounting the task. The new generation must read and accept data.
+  it('recovers the task account after a same-owner generation change', async () => {
+    let reply = bound;
+    const { view, rerender } = mount(null, async () => reply);
+    await act(async () => {});
+    expect(view.container.textContent).toContain('b@example.test');
+    reply = { ...bound, account: { ...bound.account, identity: 'renewed@example.test',
+      usage: { claude: { sevenDay: { utilization: 50, resetsAt: now / 1000 + 86400 } } } } };
+    reads.ownerGeneration = 1;
+    setDataOwnerGeneration(null, 1);
+    rerender();
+    await act(async () => {});
+    expect(view.container.textContent).toContain('renewed@example.test');
+    expect(view.container.textContent).toContain('50%');
+    expect(view.container.textContent).not.toMatch(/b@example|80%/);
+  });
 });

@@ -318,11 +318,6 @@ export interface TelegramIMOptions {
    * 同进程第二份实例必须关掉, 由宿主自己的 IPC 按实例分发。
    */
   ipc?: boolean;
-  /**
-   * 非主人私聊是否进业务层(缺省 false = 只回一句礼貌提示)。伙伴自有连接对外
-   * 开放时打开: 陌生人私聊带 `speaker.isOwner=false` 进业务层, 命令仍只认主人。
-   */
-  guestDm?: boolean;
 }
 
 /** 宿主 Agent 工具可直接发出的媒体种类 → Bot API 方法与字段名。 */
@@ -1727,18 +1722,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.logStaleSkip(staleFor, 'private', m.message_id);
         return;
       }
-      const isOwnerDm = String(m.from.id) === this.ownerUserId;
-      if (!isOwnerDm) {
-        if (!this.opts.guestDm) {
-          // 非 owner 私聊: 礼貌回应一句(官方 bot unbound 提示的个人版语义),
-          // per-user 冷却防刷屏; 不进任何业务链路。
-          this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
-          return;
-        }
-        // 对外开放的私聊: 命令永远 owner 专属, 陌生人的命令静默丢(与群成员同口径,
-        // 不可被探测); 普通消息带非主人标记进业务层。
-        const probe = (m.text ?? '').trimStart();
-        if (probe.startsWith('/') || probe.startsWith('!')) return;
+      if (String(m.from.id) !== this.ownerUserId) {
+        // 个人与伙伴 bot 的私聊都只认已绑定主人。必须在附件下载、typing、
+        // emitMessage 之前返回；独立访客任务和模型身份提示不是隐私边界。
+        this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
+        return;
       }
       // 附件下载可达数秒 — 快照受理时的配置, 完成后配置已换代就丢弃
       // (与 Discord 的 acceptedContext 模式同口径)。
@@ -1762,21 +1750,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       // DM 也要 typing: 首条真实消息落地前, 聊天列表/标题栏的「正在输入…」
       // 是唯一反馈, 靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
       this.startTypingLoop(String(m.chat.id));
-      this.emitMessage(
-        isOwnerDm
-          ? event
-          : {
-              ...event,
-              speaker: {
-                id: String(m.from.id),
-                name:
-                  [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') ||
-                  String(m.from.id),
-                ...(m.from.username ? { username: m.from.username } : {}),
-                isOwner: false,
-              },
-            },
-      );
+      this.emitMessage(event);
       return;
     }
 
