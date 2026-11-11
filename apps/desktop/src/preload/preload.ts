@@ -5142,6 +5142,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onChanged: fanOutSubscriptionAccountsChanged,
     command: (command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView> =>
       ipcRenderer.invoke('maker:subscription-accounts', command),
+    // 已建立任务实际在用的账号(只读，用量显示用)。
+    sessionAccount: (query: import('../shared/subscriptionAccounts').SubscriptionSessionAccountQuery): Promise<unknown> =>
+      ipcRenderer.invoke('maker:subscription-accounts', query),
   },
   providerGroup: {
     command: (command: ProviderGroupCommand): Promise<unknown> =>
