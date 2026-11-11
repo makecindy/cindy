@@ -64,6 +64,7 @@ import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import TapDBAPI from '@/vendor/tapdb/tapdb.esm.min.js';
 import { createLogger } from '@/lib/logger';
 import { makerChatStore } from '@/lib/makerChatStore';
+import type { AuthStateObserver } from '@/lib/authService';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
 import { TAPDB_EVENT_URL_BY_REGION } from '../../shared/endpoints';
 
@@ -267,19 +268,25 @@ function syncWorkingReport(): void {
  *
  * 本函数**不碰 TapDB SDK** —— 是否初始化完全取决于 main 回报的 allowed。
  */
-export function initTapdb(): void {
+export function initTapdb(auth: AuthStateObserver): void {
   if (gateMounted) return;
   gateMounted = true;
+
+  // 晚开窗口只补种已有身份;读取不能启动认证,也不算一次真实登录。
+  const seed = auth.getSnapshot();
+  currentUserId = seed?.isAuthenticated && seed.user ? seed.user.id : null;
 
   // 登录态订阅必须先于 SDK 初始化:冷启动若已登录,auth:state-change 只广播一次,
   // 而那一刻用户可能还没同意协议(SDK 未 init)。这里无论如何都记录 userId,
   // 等 SDK 真正 init 时再补一次 setUser,避免漏绑。
   try {
-    window.electronAPI.onAuthStateChange((state) => {
+    auth.onAuthStateChange((state, source) => {
       try {
         const nextUserId = state.isAuthenticated && state.user ? state.user.id : null;
         const previousUserId = currentUserId;
         currentUserId = nextUserId;
+        // 初始化和订阅回放只补种身份;真实登录与跨天活跃仍走推送/交互路径。
+        if (source !== 'push') return;
         if (!sdkInitialized || !reportingAllowed) return;
 
         if (nextUserId === null) {
@@ -303,26 +310,6 @@ export function initTapdb(): void {
     });
   } catch (err) {
     log.error('onAuthStateChange subscription failed (non-fatal)', err);
-  }
-
-  // 身份补种:登录**之后**才打开的二级窗口(独立侧栏等)错过了 auth:state-change
-  // 的初始广播,currentUserId 停在 null —— 半夜定时 token 刷新的广播会被误判成
-  // 「身份变化」触发非交互 setUser(假 DAU)。挂完订阅后主动读一次当前身份;
-  // 只在仍未从广播学到身份时写入,不与并发广播竞争,也不触发任何上报。
-  try {
-    const seed = window.electronAPI.authInitialize?.();
-    if (seed) {
-      void seed
-        .then((state) => {
-          if (currentUserId !== null) return;
-          if (state?.isAuthenticated && state.user?.id) currentUserId = state.user.id;
-        })
-        .catch(() => {
-          // 静默:读不到就维持广播驱动的原行为。
-        });
-    }
-  } catch (err) {
-    log.error('auth identity seed failed (non-fatal)', err);
   }
 
   // 交互驱动的活跃信号(见文件头「活跃口径」)。capture 挂在 window 捕获阶段,

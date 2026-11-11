@@ -20,7 +20,7 @@ import { companionHomes } from '../companion-cloud/homes.js';
 import { readLatestMirrorRows, readMirrorRowsBefore } from '../companion-cloud/host.js';
 import { mirrorMessageText, type CompanionMirrorRow } from '../companion-cloud/mirror.js';
 import { companionAvatarThumbnail } from '../agent-island/companionIdentity.js';
-import { summarizeInteraction } from '../bot-autonomy/phase.js';
+import { summarizeInteraction } from '../mcp-integrations/taskPhase.js';
 
 /** Longest reply text handed to a plugin; longer replies are cut and marked truncated. */
 export const PLUGIN_COMPANION_REPLY_MAX = 8000;
@@ -87,7 +87,7 @@ export function companionInteractionKind(raw: unknown): PluginCompanionInteracti
  */
 function permissionShownWhole(action: string, input: unknown): boolean {
   if (action === 'command' || action === 'file-read') return true;
-  if (action !== 'browser' && action !== 'plugin' && action !== 'tool') return false;
+  if (action !== 'browser' && action !== 'plugin' && action !== 'mcp' && action !== 'tool') return false;
   if (input !== undefined && (typeof input !== 'object' || input === null || Array.isArray(input))) return false;
   return (JSON.stringify(input ?? {}, null, 2) ?? '').length <= WHOLE_ARGUMENTS_MAX;
 }
@@ -111,7 +111,7 @@ export function companionInteractionDetail(raw: unknown, ref: string): PluginCom
     const toolName = text(request.toolName, 400);
     const action = describePermissionAction(toolName, record(request.input));
     return {
-      ref, kind, action: action.kind, tool: text(request.displayName, 400) || text(request.title, 400) || toolName,
+      ref, kind, action: action.kind === 'mcp' ? 'tool' : action.kind, tool: text(request.displayName, 400) || text(request.title, 400) || toolName,
       subject: action.subject ? text(action.subject, 400) : null, preview: text(action.preview, PREVIEW_MAX),
       allowHere: permissionShownWhole(action.kind, request.input) && Array.from(action.preview).length <= PLUGIN_COMPANION_CONFIRM_MAX,
     };

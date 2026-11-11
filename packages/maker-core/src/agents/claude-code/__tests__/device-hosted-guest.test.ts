@@ -18,7 +18,7 @@ import {
 } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import { DEVICE_HOSTED_GUEST_CLAUDE_TOOLS } from '../../shared/device-hosted.js';
+import { DEVICE_HOSTED_GUEST_CLAUDE_TOOLS, DEVICE_HOSTED_MCP_TIMEOUT_MS } from '../../shared/device-hosted.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -275,8 +275,10 @@ describe('Claude Code device-hosted guest sessions', () => {
     const { options } = await startHostedSession(true);
     const header = `${DEVICE_HOSTED_GUEST_ROUTE_HEADER}: guest-route-token`;
     expect(options.env?.ANTHROPIC_CUSTOM_HEADERS?.split('\n')).toContain(header);
-    // 最高优先级设置层再写一次，会话中途的项目设置改不掉它。
-    expect(options.settings?.env?.ANTHROPIC_CUSTOM_HEADERS).toBe(options.env?.ANTHROPIC_CUSTOM_HEADERS);
+    // 令牌只走子进程环境。设置对象会被整份序列化落盘，里面不能有明文令牌；
+    // 项目设置改不掉它，靠的是 host-managed 会话从 settings env 里剥掉这个头。
+    expect(JSON.stringify(options.settings ?? {})).not.toContain('guest-route-token');
+    expect(options.settings?.env).toBeUndefined();
     expect(options.settings?.availableModels).toEqual(['shared/model-a', 'shared/model-b']);
     expect(options.env?.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined();
     expect(options.env?.ANTHROPIC_SMALL_FAST_MODEL).toBe('shared/model-a');
@@ -328,5 +330,14 @@ describe('Claude Code device-hosted guest sessions', () => {
     expect((await startHostedSession(true)).options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBeUndefined();
     const { options } = await startHostedSession(false, { local: true });
     expect(options.env?.CINDY_INPUT_HANDOFF_ROUTE).toBe('route-hosted-session');
+  });
+
+  // 2026-11-04: on a slow relay, Claude Code's default 30s MCP connect limit dropped all
+  // 91 tunnelled tools at the start of a turn. Local tasks keep Claude Code's default.
+  it('waits for tunnelled tools on a slow link, only for tasks hosted for another computer', async () => {
+    for (const guest of [true, false]) {
+      expect((await startHostedSession(guest)).options.env?.MCP_TIMEOUT).toBe(String(DEVICE_HOSTED_MCP_TIMEOUT_MS));
+    }
+    expect((await startHostedSession(false, { local: true })).options.env?.MCP_TIMEOUT).toBeUndefined();
   });
 });

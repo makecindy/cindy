@@ -100,7 +100,7 @@ export function orcaWorkerFormFromPrefs(
   return {
     role: 'developer',
     agent,
-    model: { id: remembered.model, providerId: null, effort: remembered.effort, fast: remembered.fast },
+    model: { id: remembered.model, providerId: remembered.providerId ?? null, effort: remembered.effort, fast: remembered.fast },
     permissionMode: prefs.workerPermissionMode,
     initialTask: '',
   };

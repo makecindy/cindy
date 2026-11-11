@@ -28,6 +28,7 @@ import {
 	formatDesktopStartupFailure,
 	inspectSharedUserDataRegion,
 	partitionDesktopDevProcesses,
+	assertNoRestartTargets,
 	commandBelongsToCheckout,
 	darwinTerminalLoggedCommand,
 	desktopDevTerminalLogPath,
@@ -40,10 +41,13 @@ import {
 	writeDarwinTerminalLaunchScript,
 	darwinTerminalSourceCommand,
 	prepareDarwinTerminalLaunch,
+	currentDarwinTerminal,
 	waitForDesktopStartup,
 	shouldRefuseHostedRestart,
 	commandContainsPath,
 	inheritedUserDataBlocksNamedIsolation,
+	requestWindowsDesktopQuit,
+	stopWindowsDesktopDevProcesses,
 } from "../restart-desktop-remote.mjs";
 import {
 	DESKTOP_DEV_VERDICT_PREFIX,
@@ -92,6 +96,67 @@ function appleScriptLines(args) {
 // 且 path.resolve 会补盘符)。测试的合成路径也必须走同一套 path API,才能在
 // macOS / Windows 上都与生产实际所见一致——硬编码 POSIX 字面量只在 *nix 成立。
 const stepScript = (root, name) => path.join(root, "scripts", name);
+
+// Unit: Windows restart must let Electron persist its clean exit before killing
+// any launcher/renderer. Existing tests only covered process selection, not stop order.
+test("Windows stop waits for main disposal, then kills only surviving original targets", async () => {
+	const root = path.resolve("sandbox-repo");
+	const targets = [
+		{ pid: 10, ppid: 0, command: `node "${stepScript(root, "desktop-dev-runner.mjs")}" remote` },
+		{ pid: 11, ppid: 10, command: `"${path.join(root, "node_modules", "electron", "dist", "electron.exe")}" .` },
+		{ pid: 13, ppid: 11, command: `electron --type=crashpad-handler --user-data-dir=${path.join(root, "profile")} /prefetch:4 --no-rate-limit --monitor-self-annotation=ptype=crashpad-handler` },
+		{ pid: 12, ppid: 11, command: `electron --type=renderer --user-data-dir="${path.join(root, "profile")}"` },
+	];
+	for (const outcome of ["clean", "timeout", "legacy"]) {
+		const calls = [];
+		await stopWindowsDesktopDevProcesses(targets, root, {
+			requestQuit: instance => {
+				assert.equal(instance.pid, 11);
+				assert.equal(instance.userDataDir, path.join(root, "profile"));
+				calls.push("request");
+				return outcome === "legacy" ? null : () => calls.push("cleanup");
+			},
+			waitForExit: async (timeout, filter) => {
+				assert.ok(timeout > 20_000);
+				assert.deepEqual(targets.filter(filter).map(p => p.pid), [11]);
+				assert.deepEqual(calls, ["request"]);
+				calls.push("wait");
+			},
+			listProcesses: () => [
+				...(outcome === "clean" ? [targets[0]] : targets),
+				{ pid: 99, ppid: 0, command: "other checkout" },
+			],
+			forceKill: pid => calls.push(`kill:${pid}`), log: () => {},
+		});
+		assert.deepEqual(calls, outcome === "clean"
+			? ["request", "wait", "kill:10", "cleanup"]
+			: outcome === "timeout" ? ["request", "wait", "kill:10", "kill:11", "kill:13", "kill:12", "cleanup"]
+			: ["request", "kill:10", "kill:11", "kill:13", "kill:12"]);
+	}
+});
+
+test("Windows quit request requires matching supported provenance and uses its generation", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dev-quit-"));
+	try {
+		const records = path.join(dir, ".dev-instances");
+		fs.mkdirSync(records);
+		const instance = { pid: 123, userDataDir: dir, rootDir: path.join(dir, "repo") };
+		const record = { ...instance, quitRequestProtocol: 1, instanceId: "12345678-1234-1234-1234-123456789abc" };
+		for (const invalid of [{ ...record, quitRequestProtocol: undefined }, { ...record, pid: 456 },
+			{ ...record, rootDir: path.join(dir, "another-repo") }, { ...record, instanceId: "../bad" }]) {
+			fs.writeFileSync(path.join(records, "123.json"), JSON.stringify(invalid));
+			assert.equal(requestWindowsDesktopQuit(instance, 100), null);
+		}
+		fs.writeFileSync(path.join(records, "123.json"), JSON.stringify(record));
+		const cleanup = requestWindowsDesktopQuit(instance, 100);
+		const request = path.join(records, `123-${record.instanceId}.quit`);
+		assert.deepEqual(JSON.parse(fs.readFileSync(request, "utf8")), {
+			action: "quit", pid: 123, instanceId: record.instanceId, expiresAt: 30100,
+		});
+		cleanup();
+		assert.equal(fs.existsSync(request), false);
+	} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("macOS Terminal launch runs command before activating Terminal", () => {
 	const lines = appleScriptLines(osascriptLaunchDarwinTerminalArgs("echo test"));
@@ -240,6 +305,76 @@ test("restart kill scope only targets the checkout that runs the script", () => 
 	const { targets, preserved } = partitionDesktopDevProcesses(processes, ownRoot);
 	assert.deepEqual(targets.map((proc) => proc.pid), [1, 3]);
 	assert.deepEqual(preserved.map((proc) => proc.pid), [2]);
+});
+
+// 借用的 node / pnpm 必须是真实文件：含空格路径与「长得像启动器的目录名」只能靠文件系统区分。
+function makeLauncherFixture(ownDirName = "cindy-src") {
+	const base = fs.mkdtempSync(path.join(os.tmpdir(), "restart-launcher-"));
+	const ownRoot = path.join(base, ownDirName);
+	const otherRoot = path.join(base, "cindy-personal");
+	const binDir = path.join(ownRoot, ".tooling/node-v22/bin");
+	fs.mkdirSync(binDir, { recursive: true });
+	const borrowedNode = path.join(binDir, "node");
+	const borrowedPnpm = path.join(binDir, "pnpm");
+	fs.writeFileSync(borrowedNode, "");
+	fs.writeFileSync(borrowedPnpm, "");
+	const forge = (root) => path.join(root, "node_modules/@electron-forge/cli/dist/electron-forge-start.js");
+	return { base, ownRoot, otherRoot, borrowedNode, borrowedPnpm, forge, checkoutPaths: [ownRoot, otherRoot] };
+}
+
+test("restart kill scope ignores a node runtime borrowed from this checkout by another checkout", () => {
+	// 2026-11-06：另一份 checkout 用本 checkout 的 node 启动 dev，本 checkout restart 把它整组杀掉。
+	const fx = makeLauncherFixture();
+	try {
+		const processes = [
+			{ pid: 1, command: `${fx.borrowedNode} /home/u/.cache/corepack/pnpm/10/bin/pnpm.cjs dev:desktop:remote` },
+			{ pid: 2, command: `node ${fx.borrowedPnpm} --filter desktop dev:remote` },
+			{ pid: 3, command: `${fx.borrowedNode} ${fx.forge(fx.otherRoot)}` },
+			{ pid: 4, command: `${fx.borrowedNode} ${fx.forge(fx.ownRoot)}` },
+			{ pid: 5, command: `${path.join(fx.ownRoot, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron")} .` },
+		];
+		const devProcesses = processes.filter((proc) => isRepositoryDesktopDevProcess(proc, fx.checkoutPaths, 999));
+
+		const { targets } = partitionDesktopDevProcesses(devProcesses, fx.ownRoot, fx.checkoutPaths);
+		assert.deepEqual(targets.map((proc) => proc.pid), [4, 5]);
+		assert.equal(commandBelongsToCheckout(processes[2].command, fx.otherRoot, fx.checkoutPaths), true);
+	} finally {
+		fs.rmSync(fx.base, { recursive: true, force: true });
+	}
+});
+
+for (const ownDirName of ["cindy src", "cindy src - old"]) {
+	test(`restart kill scope strips a borrowed node whose unquoted path contains spaces (${ownDirName})`, () => {
+		// `ps` 不给带空格的参数补引号：借用的 node 路径含空格（含「空格 + 横线」）时仍要整段剥掉。
+		const fx = makeLauncherFixture(ownDirName);
+		try {
+			const processes = [
+				{ pid: 1, command: `${fx.borrowedNode} ${fx.forge(fx.otherRoot)}` },
+				{ pid: 2, command: `${fx.borrowedNode} ${fx.forge(fx.ownRoot)}` },
+				{ pid: 3, command: `"${fx.borrowedNode}" ${fx.forge(fx.otherRoot)}` },
+			];
+			const { targets } = partitionDesktopDevProcesses(processes, fx.ownRoot, fx.checkoutPaths);
+			assert.deepEqual(targets.map((proc) => proc.pid), [2]);
+		} finally {
+			fs.rmSync(fx.base, { recursive: true, force: true });
+		}
+	});
+}
+
+test("restart kill scope keeps a checkout whose directory name looks like a launcher", () => {
+	// /…/node workspace/cindy 里的 `/…/node` 只是目录名前缀，不是启动器。
+	const base = fs.mkdtempSync(path.join(os.tmpdir(), "restart-launcher-"));
+	try {
+		const ownRoot = path.join(base, "node workspace", "cindy");
+		const electron = path.join(ownRoot, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
+		fs.mkdirSync(path.dirname(electron), { recursive: true });
+		const command = `${electron} .`;
+
+		assert.equal(commandContainsPath(command, ownRoot), true);
+		assert.equal(isRepositoryDesktopDevProcess({ pid: 1, command }, [ownRoot], 999), true);
+	} finally {
+		fs.rmSync(base, { recursive: true, force: true });
+	}
 });
 
 test("restart from the main checkout keeps dev instances of nested managed worktrees", () => {
@@ -662,19 +797,21 @@ test("preserve-running only shares a target with live records from the same regi
 test("desktop restart runner forwards user args (incl. --isolated) into the kill stage", () => {
 	const root = "/repo/cindy";
 	const steps = buildDesktopRestartSteps(
-		["--region=global", "--isolated=tgbot-review", "--wait-ready"],
+		["--region=global", "--isolated=tgbot-review", "--reuse-terminal", "--wait-ready"],
 		root,
 	);
 	assert.deepEqual(steps[0].args, [
 		stepScript(root, "restart-desktop-remote.mjs"),
 		"--region=global",
 		"--isolated=tgbot-review",
+		"--reuse-terminal",
 		"--kill-only",
 	]);
 	assert.deepEqual(steps[steps.length - 1].args, [
 		stepScript(root, "restart-desktop-remote.mjs"),
 		"--region=global",
 		"--isolated=tgbot-review",
+		"--reuse-terminal",
 		"--wait-ready",
 	]);
 });
@@ -894,6 +1031,26 @@ test("structured startup failures keep their actionable reason", () => {
 		}),
 		"[SINGLE_INSTANCE_OWNED] Another Cindy instance owns the primary slot. (userDataDir=/tmp/Cindy)",
 	);
+});
+
+// Test value: identifyDesktopProcesses must return the actual profile so whoami
+// can load its ready/source record. Windows Crashpad's /prefetch:4 was included
+// in that path, producing WHOAMI_MISMATCH for a running dev instance. Existing
+// fixtures only used --switch boundaries; the minimum missing input is an
+// unquoted profile path followed by /prefetch:4. Unit tier, in-memory process facts.
+test("desktop whoami excludes Windows prefetch from the Crashpad userData path", () => {
+	const sourceRoot = path.join(os.tmpdir(), "whoami-source");
+	const userData = path.join(os.tmpdir(), "Application Support", "CindyGlobal-dev");
+	const electron = path.join(sourceRoot, "node_modules", "electron", "dist", "electron.exe");
+	const appPath = path.join(sourceRoot, "apps", "desktop");
+	const instances = identifyDesktopProcesses([
+		{ pid: 10, ppid: 9, command: `"${electron}" .` },
+		{ pid: 11, ppid: 10, command: `"${electron}" --type=crashpad-handler --user-data-dir=${userData} /prefetch:4 --no-rate-limit --database=unused` },
+		{ pid: 12, ppid: 10, command: `"${electron}" --type=renderer --app-path="${appPath}" --enable-sandbox` },
+	], [{ rootDir: sourceRoot, branch: null }]);
+
+	assert.equal(instances.length, 1);
+	assert.equal(instances[0].userDataDir, userData);
 });
 
 test("desktop whoami identifies multiple passive previews sharing one userData", () => {
@@ -1692,6 +1849,71 @@ test("logged terminal command keeps the child exit code and caps the log size", 
 	}
 });
 
+test("reusing a terminal refuses headless input instead of opening a window", () => {
+	if (process.platform !== "darwin" || !process.stdin.isTTY) {
+		assert.throws(() => currentDarwinTerminal(), /requires a live macOS terminal/);
+	}
+});
+
+test("personal coordinator reuses its input terminal with redirected output and drains after ready", {
+	skip: process.platform !== "darwin", timeout: 30_000,
+}, (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-one-terminal-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const module = new URL("../restart-desktop-remote.mjs", import.meta.url).href;
+	const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+	const app = path.join(dir, "app with 'quotes.mjs");
+	fs.writeFileSync(app, `
+import fs from 'node:fs';
+if (!process.stdin.isTTY || !process.stdout.isTTY) process.exit(91);
+console.log('fixture-ready');
+setTimeout(() => {
+  for (let i = 0; i < 144; i++) fs.writeSync(1, 'x'.repeat(65536));
+  console.log('fixture-after-log-cap');
+  process.exit(7);
+}, 150);
+`);
+	const coordinator = path.join(dir, "coordinator.mjs");
+	fs.writeFileSync(coordinator, `
+import fs from 'node:fs';
+import { currentDarwinTerminal, launchDarwinDevInCurrentTerminal } from ${JSON.stringify(module)};
+if (!process.stdin.isTTY || process.stdout.isTTY) process.exit(92);
+const tty = currentDarwinTerminal();
+const child = launchDarwinDevInCurrentTerminal(${JSON.stringify(`${quote(process.execPath)} ${quote(app)}`)}, ${JSON.stringify(path.join(dir, "dev.log"))});
+child.on('error', error => { throw error; });
+child.on('exit', code => { console.log(JSON.stringify({code, tty})); process.exit(code); });
+`);
+	const supervisor = path.join(dir, "supervisor.mjs");
+	fs.writeFileSync(supervisor, `
+import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+const output = fs.openSync(${JSON.stringify(path.join(dir, "coordinator.log"))}, 'w');
+const result = spawnSync(process.execPath, [${JSON.stringify(coordinator)}], {
+  detached: true, stdio: ['inherit', output, output], timeout: 20000,
+});
+fs.closeSync(output);
+process.exit(result.status ?? 93);
+`);
+	const display = fs.openSync(path.join(dir, "terminal.log"), "w");
+	let result;
+	try {
+		// A test PTY stands in for an existing Terminal window. The production
+		// coordinator receives its stdin while its stdout is redirected to a file.
+		result = spawnSync("/usr/bin/script", ["-q", "/dev/null", process.execPath, supervisor], {
+			stdio: ["ignore", display, display], timeout: 25000,
+		});
+	} finally { fs.closeSync(display); }
+	assert.equal(result.error, undefined);
+	assert.equal(result.status, 7, fs.readFileSync(path.join(dir, "coordinator.log"), "utf8"));
+	const receipt = JSON.parse(fs.readFileSync(path.join(dir, "coordinator.log"), "utf8"));
+	assert.match(receipt.tty, /^\/dev\/tty/);
+	assert.equal(receipt.code, 7);
+	assert.equal(fs.statSync(path.join(dir, "dev.log")).size, 8 * 1024 * 1024);
+	assert.match(fs.readFileSync(path.join(dir, "dev.log"), "utf8").slice(0, 100), /fixture-ready/);
+	assert.match(fs.readFileSync(path.join(dir, "terminal.log"), "utf8").slice(-200), /fixture-after-log-cap/);
+	assert.equal(fs.existsSync(path.join(dir, "dev.log.fifo")), false);
+});
+
 test("readDesktopDevLogTail strips terminal control sequences and keeps the last lines", () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dev-log-"));
 	try {
@@ -1706,4 +1928,42 @@ test("readDesktopDevLogTail strips terminal control sequences and keeps the last
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+// Shared signed runtimes must still identify each release/profile independently;
+// otherwise an upgrade can overlook a running instance or claim another release ready.
+// Minimal input: two releases sharing one binary; only one has a live renderer. Tier: unit + temp receipt.
+test('whoami attributes a shared personal shell to its business checkout', { skip: process.platform !== 'darwin' && 'macOS-only fixed app runtime' }, () => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'shared-shell-whoami-'));
+ try {
+  const roots=['first','second'].map(n=>path.join(dir,n)), runtime=path.join(dir,'runtime');
+  for(const root of roots){const resources=path.join(root,'apps/desktop/resources');fs.mkdirSync(resources,{recursive:true});
+   fs.writeFileSync(path.join(resources,'personal-native.json'),JSON.stringify({runtime:{directory:runtime,key:'runtime-fixture',digest:'fixture-digest'}}));}
+  const fixed=path.join(dir,'Cindy Personal.app');
+  fs.writeFileSync(fixed+'.personal-install.json',JSON.stringify({key:'runtime-fixture',digest:'fixture-digest'}));
+  const binary=path.join(runtime,'Cindy.app/Contents/MacOS/Electron');
+  const processes=[{pid:11,ppid:1,command:`${binary} ${roots[0]}/apps/desktop`},
+   {pid:12,ppid:11,command:`helper --type=renderer --app-path=${roots[0]}/apps/desktop --user-data-dir=${dir}/sandbox`},
+   {pid:21,ppid:1,command:`${fixed}/Contents/MacOS/Electron ${roots[1]}/apps/desktop`}];
+  const found=identifyDesktopProcesses(processes,roots.map(rootDir=>({rootDir,branch:null})));
+  assert.deepEqual(found.map(i=>[i.pid,i.rootDir,i.ready]),[[11,roots[0],true],[21,roots[1],false]]);
+  assert.equal(isRepositoryDesktopDevProcess(processes[0],[roots[0]],999),true);
+  assert.equal(isRepositoryDesktopDevProcess(processes[0],[roots[1]],999),false);
+  assert.equal(isRepositoryDesktopDevProcess(processes[2],[roots[1]],999),true);
+  assert.ok(devEnvPrefix({CINDY_PERSONAL_FIXED_APP:fixed},'darwin').includes(`CINDY_PERSONAL_FIXED_APP='${fixed}'`));
+  assert.ok(darwinStaleDevEnvUnset({}).includes('CINDY_PERSONAL_FIXED_APP'));
+  fs.unlinkSync(fixed+'.personal-install.json');
+  assert.equal(identifyDesktopProcesses(processes,roots.map(rootDir=>({rootDir,branch:null}))).length,1);
+ } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+// Real kill partition: changing userData never makes a shared instance in this checkout safe
+// to restart. This is the missing regression behind personal manual-check's unsafe rehearsal.
+test('isolated preview refuses a shared instance in its checkout before stopping or clearing caches', () => {
+ const root='/tmp/fixture-personal-baseline';
+ const processes=[{pid:42,ppid:1,command:`/Users/fixture/Applications/Cindy Personal.app/Contents/MacOS/Electron ${root}/apps/desktop --user-data-dir=/tmp/shared`}];
+ const dev=processes.filter(p=>isRepositoryDesktopDevProcess(p,[root]));
+ assert.equal(dev.length,1);
+ assert.throws(()=>assertNoRestartTargets(dev,root,[root]),/occupied checkout/);
+ assert.doesNotThrow(()=>assertNoRestartTargets(processes,'/tmp/another-candidate',[root,'/tmp/another-candidate']));
 });

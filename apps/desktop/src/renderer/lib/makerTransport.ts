@@ -176,7 +176,6 @@ export async function openInputHandoffPicture(
 export interface RoutableMaker {
   predictNextPrompt: FullMaker['predictNextPrompt'];
   listBotDelegations: FullMaker['listBotDelegations'];
-  cancelBotDelegation: FullMaker['cancelBotDelegation'];
   getBotDirectMessageThread: FullMaker['getBotDirectMessageThread'];
   send: FullMaker['send'];
   setModel: FullMaker['setModel'];
@@ -285,7 +284,6 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
   return {
     predictNextPrompt: t('maker:predict-prompt') as FullMaker['predictNextPrompt'],
     listBotDelegations: t('maker:bot-delegations:list') as FullMaker['listBotDelegations'],
-    cancelBotDelegation: t('maker:bot-delegation:cancel') as FullMaker['cancelBotDelegation'],
     getBotDirectMessageThread: t('maker:bot-direct-message-thread:get') as FullMaker['getBotDirectMessageThread'],
     applyTurnChangeSet: t('maker:turn-change-set:apply') as FullMaker['applyTurnChangeSet'],
     send: t('maker:send') as FullMaker['send'],
@@ -494,18 +492,6 @@ export function getSessionFor(sessionId: string): Promise<Session> {
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return sessionService.get(sessionId);
   return invokeRemote(deviceId, 'local-db:sessions:get', [sessionId]) as Promise<Session>;
-}
-
-/**
- * 查被控端某会话的权威 turn 运行态(远程走隧道 maker:session-in-turn)。
- * 控制端 stall 看门狗用:卡死 Generating 但久未收 push 时核实被控端是否真的还在跑——
- * 答 false 才安全收尾,绝不误杀真正在跑的慢 turn。
- * 本机会话不走看门狗 → 直接 resolve(false)(调用方已 gate,这里仅防御)。
- */
-export function isSessionTurnRunningFor(sessionId: string): Promise<boolean> {
-  const deviceId = getSessionDeviceId(sessionId);
-  if (!deviceId) return Promise.resolve(false);
-  return invokeRemote(deviceId, 'maker:session-in-turn', [sessionId]) as Promise<boolean>;
 }
 
 /**

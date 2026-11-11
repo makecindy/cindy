@@ -53,7 +53,7 @@ vi.mock('../proc-util', async (importOriginal) => {
   return { ...actual, killProcessTree: killProcessTreeMock };
 });
 
-import { ScriptScheduleRunner, buildScriptEnv } from '../script-runner';
+import { ScriptScheduleRunner, buildScriptEnv } from '../script-runner.desktop';
 
 function childProcess() {
   const child = new EventEmitter() as EventEmitter & {
@@ -105,6 +105,24 @@ describe('ScriptScheduleRunner', () => {
     executePreRunHookMock.mockReset();
     restoreArchivedSessionForSend.mockReset();
     killProcessTreeMock.mockClear();
+  });
+
+  // PR #9059 / unit: hook outcomes were covered, but a deadline becoming invalid
+  // during preparation was not. The real fire entry must start no host process.
+  it.each(['before-hook', 'after-hook'])('defers an invalidated script dispatch (%s)', async (boundary) => {
+    let allowed = boundary === 'after-hook';
+    executePreRunHookMock.mockImplementation(async () => {
+      allowed = false;
+      return { decision: 'allow', exitCode: 0, durationMs: 1, stdout: '', stderr: '', timedOut: false };
+    });
+    spawnMock.mockImplementation(() => { throw new Error('script must not start'); });
+    const runner = new ScriptScheduleRunner({ broker: { call: vi.fn() }, logger: {} });
+    await expect(runner.fire({ ...schedule(), preRunHook: { command: 'check' } }, {
+      runId: 'run-deadline', firedAt: 1, signal: new AbortController().signal,
+      canDispatch: () => allowed,
+    })).resolves.toMatchObject({ sessionId: '', deferred: true });
+    expect(executePreRunHookMock).toHaveBeenCalledTimes(boundary === 'after-hook' ? 1 : 0);
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it.each(['deleted', 'missing'])('pauses a bound script with a %s owner before any hook or process', async (status) => {

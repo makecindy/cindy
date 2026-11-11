@@ -1,3 +1,6 @@
+import { createGlabCliTokenSource } from '../git-context/glabCliTokenSource';
+import { fetchGitlabMr } from '../git-context/gitlabPrSummary';
+import { remotePrStatuses } from '@cindy/maker-shared';
 /**
  * git-context/prStatusService 单测 — 状态映射、TTL 缓存、in-flight 去重、
  * gh 缺失/未登录降级(不缓存,远端归一 no-token)、404/网络错误映射。依赖全注入,零网络零 Electron。
@@ -13,6 +16,7 @@ import {
 } from '../git-context/prStatusService';
 import type { GhCliTokenReadResult } from '../git-context/ghCliTokenSource';
 import { fetchPrSummary, summarizeChecks } from '../git-context/prSummary';
+import { PrFollowWatch, prStatusSignature } from '../git-context/prFollowWatch';
 import type { GithubClient } from '@cindy/github-client';
 
 const Q = { owner: 'makecindy', repo: 'cindy', prNumber: 85 };
@@ -351,5 +355,419 @@ describe('PrStatusService', () => {
     const results = await svc.getStatuses(queries);
     expect(results).toHaveLength(10);
     expect(fetchPr).toHaveBeenCalledTimes(10);
+  });
+});
+
+// Unit: REST mergeable already reaches metadata, but a passing CI summary hid conflicts.
+it.each([
+  [false, true],
+  [true, false],
+  [null, null],
+  [undefined, null],
+] as const)('projects GitHub mergeable %s into conflicts %s', async (mergeable, conflicts) => {
+  const service = new PrStatusService({
+    readToken: TOKEN_OK,
+    fetchPr: async () => remote({ metadata: { mergeable } }),
+  });
+  expect((await service.getStatuses([Q]))[0]).toMatchObject({ ok: true, conflicts });
+});
+
+// Unit: production MR fetch + shared status service, not a copied mapper.
+// GitHub fixtures cannot detect GitLab pipeline selection/paging or credentials crossing hosts.
+describe('GitLab MR status', () => {
+  const q = {
+    provider: 'gitlab' as const,
+    host: 'git.example.com',
+    owner: 'group/sub',
+    repo: 'project',
+    prNumber: 7,
+  };
+  const mr = () => ({
+    state: 'opened',
+    draft: false,
+    title: 'MR title',
+    sourceBranch: 'feature',
+    diffHeadSha: 'head',
+    resolvableDiscussionsCount: 5,
+    resolvedDiscussionsCount: 3,
+    headPipeline: {
+      status: 'RUNNING',
+      jobs: {
+        count: 5,
+        nodes: ['SUCCESS', 'FAILED', 'MANUAL', 'SKIPPED', 'CANCELED'].map((status) => ({ status })),
+        pageInfo: { hasNextPage: false },
+      },
+    },
+  });
+  // Unit: use the same GraphQL response; omitted fields from older hosts remain unknown.
+  it.each([true, false, null, undefined])('projects GitLab conflicts %s', async (conflicts) => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: { project: { mergeRequest: { ...mr(), conflicts } } },
+          }),
+        ),
+    );
+    const service = new PrStatusService({
+      readToken: TOKEN_OK,
+      readGitlabToken: async () => ({ ok: true, token: 'fake' }),
+      fetchPr: vi.fn(),
+      fetchGitlab: (token, query) => fetchGitlabMr(token, query, fetch),
+    });
+    expect((await service.getStatuses([q]))[0]).toMatchObject({
+      ok: true,
+      conflicts: conflicts ?? null,
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it('skips optional manual jobs but keeps blocking or unknown manual jobs pending', async () => {
+    const value = mr();
+    value.headPipeline.status = 'SUCCESS';
+    const nodes = [
+      { status: 'MANUAL', allowFailure: true },
+      { status: 'MANUAL', allowFailure: false },
+      { status: 'MANUAL' },
+      { status: 'MANUAL', allowFailure: 'true' },
+    ];
+    value.headPipeline.jobs = {
+      count: nodes.length,
+      nodes,
+      pageInfo: { hasNextPage: false },
+    };
+    const fetch = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body));
+      value.headPipeline.jobs.nodes = /nodes\s*\{[^}]*\ballowFailure\b/.test(query)
+        ? nodes
+        : nodes.map(({ status }) => ({ status }));
+      return new Response(JSON.stringify({ data: { project: { mergeRequest: value } } }));
+    });
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 4,
+      passed: 0,
+      failed: 0,
+      pending: 3,
+      skipped: 1,
+    });
+  });
+  it('counts only latest GitLab jobs after a failed attempt is retried successfully', async () => {
+    const attempts = [
+      { status: 'FAILED', retried: true },
+      { status: 'SUCCESS', retried: false },
+      { status: 'SUCCESS', retried: false },
+    ];
+    const fetch = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body));
+      const nodes = /jobs\s*\([^)]*retried\s*:\s*false/.test(query)
+        ? attempts.filter((job) => !job.retried)
+        : attempts;
+      const value = mr();
+      value.headPipeline.status = 'SUCCESS';
+      value.headPipeline.jobs = {
+        count: nodes.length,
+        nodes,
+        pageInfo: { hasNextPage: false },
+      };
+      return new Response(JSON.stringify({ data: { project: { mergeRequest: value } } }));
+    });
+
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 2,
+      passed: 2,
+      failed: 0,
+      pending: 0,
+      skipped: 0,
+    });
+  });
+  it('reports zero checks without a head pipeline but keeps a missing diff head unknown', async () => {
+    const value = { ...mr(), headPipeline: null };
+    const fetch = vi.fn(
+      async () => new Response(JSON.stringify({ data: { project: { mergeRequest: value } } })),
+    );
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 0,
+      failed: 0,
+      passed: 0,
+      pending: 0,
+      skipped: 0,
+    });
+    value.diffHeadSha = '';
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
+  });
+  it('summarizes GitLab-selected merged-result jobs', async () => {
+    const value = mr();
+    const pipeline = { ...value.headPipeline, sha: 'synthetic-merge-commit' };
+    value.headPipeline = pipeline;
+    const fetch = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response(JSON.stringify({ data: { project: { mergeRequest: value } } })),
+      );
+    expect(await fetchGitlabMr('fake-token', q, fetch)).toMatchObject({
+      unresolved_count: 2,
+      checks: { total: 5, passed: 1, failed: 2, pending: 1, skipped: 1 },
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe('https://git.example.com/api/graphql');
+    expect(JSON.parse(fetch.mock.calls[0][1].body).variables).toEqual({
+      path: 'group/sub/project',
+      iid: '7',
+    });
+    value.headPipeline.jobs.pageInfo.hasNextPage = true;
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
+    value.headPipeline.jobs.pageInfo.hasNextPage = false;
+    value.headPipeline.jobs.nodes[0].status = 'FUTURE';
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
+  });
+  it.each(['https://other.example.com/api/graphql', 'http://git.example.com/api/graphql'])(
+    'never sends credentials to redirect %s',
+    async (location) => {
+      const fetch = vi
+        .fn()
+        .mockResolvedValue(new Response(null, { status: 302, headers: { location } }));
+      await expect(fetchGitlabMr('fake-token', q, fetch)).rejects.toThrow();
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+  it('makes no unauthenticated request, maps 401 to login and never falls back to GitHub', async () => {
+    const github = vi.fn();
+    const gitlab = vi.fn().mockRejectedValue({ status: 401 });
+    const read = vi.fn().mockResolvedValue({ ok: false, reason: 'glab-missing' });
+    const reject = vi.fn();
+    const service = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: github,
+      readGitlabToken: read,
+      fetchGitlab: gitlab,
+      rejectGitlabToken: reject,
+    });
+    expect(await service.getStatuses([q])).toEqual([{ ...q, ok: false, reason: 'glab-missing' }]);
+    expect(gitlab).not.toHaveBeenCalled();
+    read.mockResolvedValue({ ok: true, token: 'fake-token' });
+    expect(await service.getStatuses([q])).toEqual([
+      { ...q, ok: false, reason: 'glab-not-logged-in' },
+    ]);
+    expect(read).toHaveBeenCalledWith(q.host);
+    expect(reject).toHaveBeenCalledWith(q.host);
+    expect(github).not.toHaveBeenCalled();
+    expect(filterPrStatusQueriesForRefs([{ ...q, host: 'other.example.com' }, Q], [q])).toEqual([]);
+  });
+  // Unit regression: the focus handler used full invalidation, discarding successful
+  // GitHub/GitLab caches and in-flight reads. Existing auth tests never crossed a
+  // window focus. One cached PR, one pending PR and two MR hosts expose the loss.
+  it('on window focus retries GitLab login failures without refetching successes or discarding in-flight reads', async () => {
+    let signedIn = false;
+    const healthy = { ...q, host: 'healthy.example.com' };
+    const exec = vi.fn(
+      (
+        _file: string,
+        args: string[],
+        _options: unknown,
+        callback: (error: Error | null, stdout: string) => void,
+      ) => callback(null, args.at(-1) === healthy.host || signedIn ? 'fake-token' : ''),
+    );
+    const tokens = createGlabCliTokenSource({
+      exec: exec as unknown as typeof import('node:child_process').execFile,
+      now: () => 0,
+    });
+    let finish!: (value: PrRemoteState) => void;
+    let started!: () => void;
+    const pending = new Promise<PrRemoteState>((resolve) => {
+      finish = resolve;
+    });
+    const fetching = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const next = { ...Q, prNumber: 86 };
+    const fetchPr = vi.fn(async (_token: string, query: typeof Q) => {
+      if (query.prNumber === next.prNumber) {
+        started();
+        return pending;
+      }
+      return remote({});
+    });
+    const fetchGitlab = vi.fn(async () => remote({}));
+    const service = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr,
+      readGitlabToken: (host) => tokens.readTokenDetailed(host),
+      invalidateGitlabTokenFailures: () => tokens.invalidateNegativeCache(),
+      fetchGitlab,
+      now: () => 0,
+    });
+    expect(await service.getStatuses([Q, q, healthy])).toMatchObject([
+      { ok: true },
+      { ok: false, reason: 'glab-not-logged-in' },
+      { ok: true },
+    ]);
+    signedIn = true;
+    expect((await service.getStatuses([q]))[0]).toMatchObject({ ok: false });
+    const inFlight = service.getStatuses([next]);
+    await fetching;
+    service.invalidateGitlabAuthFailures();
+    expect(await service.getStatuses([Q, q, healthy])).toMatchObject([
+      { ok: true },
+      { ok: true },
+      { ok: true },
+    ]);
+    expect(fetchPr).toHaveBeenCalledTimes(2);
+    expect(fetchGitlab).toHaveBeenCalledTimes(2);
+    await tokens.readTokenDetailed(healthy.host);
+    expect(exec).toHaveBeenCalledTimes(3);
+    const joined = service.getStatuses([next]);
+    finish(remote({ title: 'in flight' }));
+    expect(await inFlight).toMatchObject([{ ok: true, title: 'in flight' }]);
+    expect(await joined).toEqual(await inFlight);
+    expect(await service.getStatuses([next])).toEqual(await inFlight);
+    expect(fetchPr).toHaveBeenCalledTimes(2);
+  });
+  it('keeps legacy hosts from receiving MR queries on their GitHub channel', async () => {
+    const invoke = vi.fn().mockImplementation(async (channel: string) => {
+      if (channel === 'git-context:mr-status') throw new Error('CHANNEL_NOT_ALLOWED');
+      return [{ ...Q, ok: false, reason: 'not-found' }];
+    });
+    expect(await remotePrStatuses([Q, q], 'session', invoke)).toEqual([
+      { ...Q, ok: false, reason: 'not-found' },
+      { ...q, ok: false, reason: 'unsupported' },
+    ]);
+    expect(invoke.mock.calls[0][1][0].queries).toEqual([Q]);
+    expect(invoke.mock.calls[1][1][0].queries).toEqual([q]);
+  });
+  // Unit regression: transport failures must not claim an old host, or retry MRs as PRs.
+  // The existing legacy-host test only exercised CHANNEL_NOT_ALLOWED.
+  it.each([
+    [
+      Object.assign(new Error('blocked'), { code: 'DEVICE_LINK_CHANNEL_NOT_ALLOWED' }),
+      'unsupported',
+    ],
+    [new Error('[UNSUPPORTED_CAPABILITY] old host'), 'unsupported'],
+    [Object.assign(new Error('timed out'), { code: 'TIMEOUT' }), 'fetch-failed'],
+    [
+      new Error('[NOT_CONNECTED] disconnected; CHANNEL_NOT_ALLOWED is only diagnostic text'),
+      'fetch-failed',
+    ],
+  ] as const)(
+    'classifies remote MR failures without losing diagnostics: %s',
+    async (error, reason) => {
+      const invoke = vi.fn().mockRejectedValue(error);
+      const reportError = vi.fn();
+      expect(await remotePrStatuses([q], 'session', invoke, reportError)).toEqual([
+        { ...q, ok: false, reason },
+      ]);
+      expect(invoke).toHaveBeenCalledExactlyOnceWith('git-context:mr-status', [
+        { sessionId: 'session', queries: [q] },
+      ]);
+      expect(reportError).toHaveBeenCalledExactlyOnceWith(error);
+    },
+  );
+});
+
+// Rule (Dash, 2026-11-06): a PR follow-up should react when the title-bar refresh already saw the
+// PR change, instead of waiting for its next cron look; no test covered status → schedule.
+// Production entry: PrStatusService.getStatuses feeding the real PrFollowWatch (unit, fake clock).
+// Minimal inputs: one head change, a schedule for #8 next to one for #85, one in flight.
+describe('PR follow watch', () => {
+  const schedule = (id: string, url: string, extra: Record<string, unknown> = {}) =>
+    ({ id, status: 'active', recurring: true, manual: false, preRunHook: { command: `node "/s/pr-heartbeat-gate.mjs" ${url}` }, ...extra }) as never;
+  function setup() {
+    let now = 0;
+    let head = 'a1';
+    const runNow = vi.fn(async () => ({ runId: 'r' }));
+    const inflight = vi.fn(() => 0);
+    const hasCapacity = vi.fn(() => true);
+    const autoRunAllowed = vi.fn(() => true);
+    const watch = new PrFollowWatch({
+      listActive: async () => [
+        schedule('follow-85', 'https://github.com/MakeCindy/cindy/pull/85'),
+        schedule('follow-8', 'https://github.com/makecindy/cindy/pull/8'),
+        schedule('other', 'https://github.com/makecindy/cindy/pull/850'),
+        schedule('once', 'https://github.com/makecindy/cindy/pull/85', { recurring: false }),
+        schedule('manual', 'https://github.com/makecindy/cindy/pull/85', { manual: true }),
+      ],
+      inflight,
+      hasCapacity,
+      autoRunAllowed,
+      runNow,
+      now: () => now,
+    });
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      fetchPr: async () => remote({ head_sha: head } as Partial<PrRemoteState>),
+      cacheTtlMs: 1,
+      staleTtlMs: 0,
+      now: () => now,
+      onObserved: (query, result) => watch.observe(query, result),
+    });
+    const look = async (at: number, nextHead = head) => {
+      now = at;
+      head = nextHead;
+      await svc.getStatuses([Q], { waitForFresh: true });
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    return { look, runNow, inflight, hasCapacity, autoRunAllowed };
+  }
+
+  it('runs only recurring schedules naming this PR, once per change, skipping in-flight and recent ones', async () => {
+    const { look, runNow, inflight } = setup();
+    await look(10);
+    await look(20);
+    expect(runNow).not.toHaveBeenCalled();
+    await look(30, 'b2');
+    expect(runNow.mock.calls).toEqual([['follow-85', { kind: 'watch', source: 'pr-status', detail: 'https://github.com/makecindy/cindy/pull/85' }]]);
+    await look(40, 'c3');
+    expect(runNow).toHaveBeenCalledTimes(1);
+    inflight.mockReturnValue(1);
+    await look(70_000, 'd4');
+    expect(runNow).toHaveBeenCalledTimes(1);
+    inflight.mockReturnValue(0);
+    await look(80_000, 'e5');
+    expect(runNow).toHaveBeenCalledTimes(2);
+  });
+
+  // Review (Greptile P1 on #9022): run-now skips the scheduler's concurrency cap, so a burst of PR
+  // changes could start more agents than maxConcurrentRuns. Minimal input: one change while no slot is
+  // free, then a later refresh once a slot opens (unit).
+  it('waits for a free scheduler slot instead of exceeding the cap, and runs on the next refresh', async () => {
+    const { look, runNow, hasCapacity } = setup();
+    await look(10);
+    hasCapacity.mockReturnValue(false);
+    await look(100_000, 'b2');
+    expect(runNow).not.toHaveBeenCalled();
+    hasCapacity.mockReturnValue(true);
+    await look(200_000);
+    expect(runNow).toHaveBeenCalledTimes(1);
+    await look(300_000);
+    expect(runNow).toHaveBeenCalledTimes(1);
+  });
+
+  // Review (Codex P2 on #9022): a passive instance shares data with another one that owns automatic runs.
+  it('never starts runs on a passive scheduler instance', async () => {
+    const { look, runNow, autoRunAllowed } = setup();
+    autoRunAllowed.mockReturnValue(false);
+    await look(10);
+    await look(100_000, 'b2');
+    expect(runNow).not.toHaveBeenCalled();
+  });
+
+  it('treats failed reads as no news and keeps the baseline', async () => {
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({
+      listActive: async () => [schedule('follow-85', 'https://github.com/makecindy/cindy/pull/85')],
+      inflight: () => 0,
+      hasCapacity: () => true,
+      autoRunAllowed: () => true,
+      runNow,
+    });
+    const ok = (headSha: string) => ({ ok: true, status: 'open', prNumber: 85, headSha }) as never;
+    const settle = () => new Promise((resolve) => setImmediate(resolve));
+    watch.observe(Q, ok('a1'));
+    watch.observe(Q, { ok: false, prNumber: 85, reason: 'fetch-failed' } as never);
+    watch.observe(Q, ok('a1'));
+    await settle();
+    expect(runNow).not.toHaveBeenCalled();
+    watch.observe(Q, ok('b2'));
+    await settle();
+    expect(runNow).toHaveBeenCalledTimes(1);
+    expect(prStatusSignature({ ok: false, prNumber: 85, reason: 'fetch-failed' } as never)).toBeNull();
   });
 });

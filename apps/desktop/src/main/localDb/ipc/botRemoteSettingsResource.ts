@@ -1,9 +1,10 @@
 import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
-import { normalizeBotModelChain, readBotTaskModelOverride, type BotModelRoute } from '../../../shared/botModelChain.js';
+import { normalizeBotModelChain } from '../../../shared/botModelChain.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { RemoteActionDescriptor, RemoteActionInvokeRequest, RemoteActionInvokeResponse, RemoteLocalizedText, RemoteResource } from '@cindy/device-link';
 import type { getBotRemoteSettingsSource } from './bots.js';
 import { botRemoteResourceFromSource } from './botRemoteResourceProjection.js';
+import { automationsTitle } from './botRemoteAutomations.js';
 import { RemoteResourceRegistryError, type RemoteResourceHostContext } from '../../device-link/remoteResourceRegistry.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 
@@ -30,8 +31,6 @@ const copy = {
   identity: text('Personality', '性格', '性格', '性格', '성격', {"es":"Personalidad","fr":"Personnalité","de":"Persönlichkeit","pt-PT":"Personalidade","pt-BR":"Personalidade","zh-Hant-x-lzh":"性情","zh-Hans-x-lzh":"性情"}),
   models: text('Models', '模型', '模型', 'モデル', '모델', {"es":"Modelos","fr":"Modèles","de":"Modelle","pt-PT":"Modelos","pt-BR":"Modelos","zh-Hant-x-lzh":"模型","zh-Hans-x-lzh":"模型"}),
   followsDefault: text('Follow app default', '跟随应用默认', '跟隨應用預設', 'アプリのデフォルトに従う', '앱 기본값 사용', {"es":"Usar el predeterminado de la aplicación","fr":"Utiliser le réglage par défaut de l’application","de":"App-Standard verwenden","pt-PT":"Usar a predefinição da aplicação","pt-BR":"Seguir padrão do aplicativo","zh-Hant-x-lzh":"從應用預設","zh-Hans-x-lzh":"从应用默认"}),
-  taskModel: text('Task Model', '任务模型', '任務模型', 'セッション用モデル', '세션 모델', {"es":"Modelo de tareas","fr":"Modèle de tâche","de":"Aufgabenmodell","pt-PT":"Modelo de tarefas","pt-BR":"Modelo de tarefas","zh-Hant-x-lzh":"差事模型","zh-Hans-x-lzh":"差事模型"}),
-  taskFollowsPrimary: text('Inherit Primary Model', '继承主模型', '繼承主模型', 'メインモデルを継承', '기본 모델 상속', {"es":"Heredar modelo principal","fr":"Utiliser le modèle principal","de":"Primäres Modell übernehmen","pt-PT":"Herdar modelo principal","pt-BR":"Herdar modelo principal","zh-Hant-x-lzh":"承主模型","zh-Hans-x-lzh":"承主模型"}),
   memory: text('Memory', '记忆', '記憶', '記憶', '기억', {"es":"Memoria","fr":"Mémoire","de":"Gedächtnis","pt-PT":"Memória","pt-BR":"Memória","zh-Hant-x-lzh":"記憶","zh-Hans-x-lzh":"记忆"}),
   memoryEnabled: text('Remember Things About Me', '记住与我有关的事', '記住與我有關的事', '私に関することを覚える', '나에 관한 내용 기억하기', {"es":"Recordar cosas sobre mí","fr":"Mémoriser des informations à mon sujet","de":"Dinge über mich merken","pt-PT":"Lembrar-se de coisas sobre mim","pt-BR":"Lembrar informações sobre mim","zh-Hant-x-lzh":"記與吾相關之事","zh-Hans-x-lzh":"记与吾相关之事"}),
   userContext: text('What You Know About Me', '关于我的记忆', '關於我的記憶', '私についての記憶', '나에 관한 기억', {"es":"Lo que sabes sobre mí","fr":"Ce que vous savez de moi","de":"Was du über mich weißt","pt-PT":"O que sabe sobre mim","pt-BR":"O que você sabe sobre mim","zh-Hant-x-lzh":"關於吾之記憶","zh-Hans-x-lzh":"关于吾之记忆"}),
@@ -64,7 +63,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
   const now = deps.now ?? Date.now;
   const bound = new Map<string, BoundGrant>();
   const submitting = new Set<string>();
-  /** All module-specific actions, including routines, use this same opaque admission boundary.
+  /** All module-specific actions use this same opaque admission boundary.
    * The fixed inner action ids are display semantics only, never public mutation authority. */
   const bindResource = async (context: RemoteResourceHostContext, resource: RemoteResource,
     readRevision: () => Promise<string>, run: (request: RemoteActionInvokeRequest) => Promise<RemoteActionInvokeResponse>) => {
@@ -131,13 +130,12 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
       form('profile', [{ id: 'name', kind: 'text', label: copy.name, required: true }, { id: 'description', kind: 'multiline', label: copy.description }, { id: 'identity', kind: 'multiline', label: copy.identity }], { name: source.name, description: source.description, identity: settings.identity }),
       form('memory', [{ id: 'memory', kind: 'toggle', label: copy.memoryEnabled }, { id: 'userContext', kind: 'multiline', label: copy.userContext }], { memory: settings.memory, userContext: settings.userContext }),
       form('permissions', [{ id: 'permissions', kind: 'select', label: copy.permissions, options: ['ask', 'auto', 'trusted'].map(value => ({ value, label: copy[value as 'ask' | 'auto' | 'trusted'] })) }], { permissions: settings.permissions }),
-      form('models', [{ id: 'followsDefault', label: copy.followsDefault, kind: 'toggle' }, { id: 'modelChain', label: copy.models, kind: 'multiline' },
-        { id: 'taskFollowsPrimary', label: copy.taskFollowsPrimary, kind: 'toggle' },
-        { id: 'taskModel', label: copy.taskModel, kind: 'multiline' }],
-        { followsDefault: settings.followsDefault, modelChain: serializeModelRoutes(settings.modelChain),
-          taskFollowsPrimary: !settings.taskModelOverride,
-          taskModel: serializeModelRoutes(settings.taskModelOverride ? [settings.taskModelOverride] : settings.modelChain.slice(0, 1)) }),
-      { id: 'connections', primitive: 'markdown', fallbackMarkdown: [...settings.skills, ...settings.connections, ...settings.toolsets].join('\n') },
+      form('models', [{ id: 'followsDefault', label: copy.followsDefault, kind: 'toggle' }, { id: 'modelChain', label: copy.models, kind: 'multiline' }],
+        { followsDefault: settings.followsDefault, modelChain: serializeModelRoutes(settings.modelChain) }),
+      ...(settings.projectMode ? [] : [{ id: 'connections', primitive: 'markdown' as const, fallbackMarkdown: [...settings.skills, ...settings.connections, ...settings.toolsets].join('\n') }]),
+      // The teammate project's automations (`settings:<id>/automations`), as on the desktop settings page.
+      ...(settings.projectMode ? [{ id: 'automations', primitive: 'list', fallbackMarkdown: '',
+        data: { entries: [{ id: 'automations', title: automationsTitle, resourceId: `settings:${source.id}/automations` }] } }] : []),
     ];
     // A failed shelf read must not turn into an empty shelf or prevent profile recovery.
     try {
@@ -230,29 +228,13 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
         chain = normalizeBotModelChain(value);
         if (!Array.isArray(value) || !chain.length || chain.length !== value.length || value.some(route => !['claude', 'codex', 'pi'].includes(route?.harness))) throwIpcError('INVALID_PARAMS', 'Invalid model chain');
       }
-      const capabilities: Record<string, unknown> = {};
+      // The retired task model fields (`taskFollowsPrimary`, `taskModel`) of an older controller are
+      // accepted and ignored; sent alone they change nothing and are refused as an empty change.
       const acceptsModelSelection = 'followsDefault' in input || 'modelChain' in input;
-      // Old clients only send primary fields. Absence must preserve the task override.
-      if (acceptsModelSelection) {
-        capabilities.modelChainOverride = followsDefault ? null : chain;
-        capabilities.modelOverride = null;
-      }
-      if ('taskFollowsPrimary' in input || 'taskModel' in input) {
-        if ('taskFollowsPrimary' in input && typeof input.taskFollowsPrimary !== 'boolean')
-          throwIpcError('INVALID_PARAMS', 'Invalid task model preference');
-        const inherits = input.taskFollowsPrimary ?? !settings.taskModelOverride;
-        let route: BotModelRoute | null = settings.taskModelOverride ?? chain[0] ?? null;
-        if (!inherits && 'taskModel' in input) {
-          try {
-            const value = JSON.parse(string('taskModel'));
-            if (!Array.isArray(value) || value.length !== 1) throw new Error('Invalid task model');
-            route = readBotTaskModelOverride(value[0]);
-          } catch { throwIpcError('INVALID_PARAMS', 'Invalid task model'); }
-        }
-        if (!inherits && !route) throwIpcError('INVALID_PARAMS', 'Task model required');
-        capabilities.taskModelOverride = inherits ? null : route;
-      }
-      patch = { capabilities, ...(acceptsModelSelection ? { acceptSavedModelSelectionVersion: grant.version } : {}) };
+      patch = acceptsModelSelection ? {
+        capabilities: { modelChainOverride: followsDefault ? null : chain, modelOverride: null },
+        acceptSavedModelSelectionVersion: grant.version,
+      } : {};
     }
     if (patch && !Object.keys(patch).length) throwIpcError('INVALID_PARAMS', 'No changed teammate fields');
     if (grant.operation === 'permissions') {

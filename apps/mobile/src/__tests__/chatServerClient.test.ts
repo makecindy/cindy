@@ -112,6 +112,36 @@ describe('direct group plans', () => {
     expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}/plans?ids=${id(40)},${id(41)}`);
     expect(chatGroupView(next, id(10)).plans[0]).toMatchObject({ id: id(41), status: 'done' });
   });
+  it('projects future-skip support and sends only a pending position while the current bot runs', async () => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0, supportsPendingSkip: true,
+      activeExecution: { id: id(50), status: 'running' } });
+    state.plan.steps[0].status = 'running';
+    state.plan.steps.push({ ...state.plan.steps[0], position: 1, status: 'pending' });
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].supportsPendingSkip).toBe(true);
+    await client.actPlan(id(1), page.plans![0], { action: 'skip', position: 1 }, 'future-skip');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { action: 'skip', position: 1, expectedRevision: 3, operationId: 'future-skip' }, undefined, undefined);
+    await expect(client.actPlan(id(1), { ...page.plans![0], supportsPendingSkip: undefined },
+      { action: 'skip', position: 1 }, 'old-server')).rejects.toThrow('PLAN_CLOSED');
+  });
+  it('projects the exact queued attempt and sends it with the displayed revision', async () => {
+    const { client, state, request } = fixture();
+    Object.assign(state.plan, { kind: 'talk', status: 'running', current_step: 0,
+      activeExecution: { id: id(50), status: 'queued' } });
+    state.plan.steps[0].status = 'running';
+    const page = await client.load(id(1));
+    expect(chatGroupView(page, id(10)).plans[0].steps[0]).toMatchObject({ executionId: id(50), executionStatus: 'queued' });
+    await client.actPlan(id(1), page.plans![0], { action: 'skip', position: 0, executionId: id(50) }, 'skip');
+    expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/plans/${id(40)}`, 'POST',
+      { action: 'skip', position: 0, executionId: id(50), expectedRevision: 3, operationId: 'skip' }, undefined, undefined);
+    await expect(client.actPlan(id(1), { ...page.plans![0], activeExecution: { id: id(50), status: 'running' } },
+      { action: 'skip', position: 0, executionId: id(50) }, 'claimed')).rejects.toThrow('TURN_ALREADY_STARTED');
+    await expect(client.actPlan(id(1), { ...page.plans![0], kind: 'work' },
+      { action: 'skip', position: 0, executionId: id(50) }, 'work')).rejects.toThrow('PLAN_CLOSED');
+    expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+  });
   it('reassigns only eligible work steps and refuses talk-plan edits', async () => {
     const { client, state, request } = fixture();
     Object.assign(state.plan, { status: 'waiting', current_step: 0 });
@@ -403,13 +433,13 @@ describe('direct Chat Server client', () => {
     const blankText = { ...onlyMedia, content: [{ type: 'text', text: ' \n' }, ...onlyMedia.content] };
     expect(chatRoomRow(room(), { ...snapshot(), messages: [blankText] }, id(11)).item.display.preview).toBe('a.png, b.pdf');
   });
-  it.each(['AUTH_REQUIRED', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
+  it.each(['AUTH_REQUIRED', 'RUNTIME_TIMEOUT', 'private diagnostic', undefined])('reads executions and projects a safe notice beside its visible source: %s', async failure_code => {
     const source = message(20);
     let status = 'failed';
     const request = vi.fn();
     request.mockImplementation(async (path: string) => path.endsWith('/snapshot') ? snapshot()
       : path.endsWith('/plans') ? []
-      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code }]
+      : path.includes('/execution-failures?') ? [{ id: id(30), source_message_id: source.id, bot_id: id(10), epoch: 1, status, failure_code, failure_reason: 'unclaimed_timeout' }]
       : [source]);
     const client = createChatServerClient(request);
     const page = await client.load(id(1));
@@ -418,7 +448,8 @@ describe('direct Chat Server client', () => {
     expect(view.messages).toHaveLength(2);
     expect(view.messages[0]).toMatchObject({ id: source.id, kind: 'message' });
     expect(view.messages[1]).toMatchObject({ id: `execution-failure:${id(30)}:1`, sequence: view.messages[0].sequence,
-      kind: 'notice', runtimeFailureCode: failure_code === 'AUTH_REQUIRED' ? failure_code : 'RUNTIME_ERROR' });
+      kind: 'notice', runtimeFailureCode: failure_code === 'AUTH_REQUIRED' || failure_code === 'RUNTIME_TIMEOUT' ? failure_code : 'RUNTIME_ERROR' });
+    expect(view.messages[1].runtimeFailureReason).toBe(failure_code === 'RUNTIME_TIMEOUT' ? 'unclaimed_timeout' : undefined);
     expect(view.lastMessage?.preview).toBe('20');
     expect(JSON.stringify(view.messages)).not.toContain('private diagnostic');
     status = 'queued';
@@ -685,7 +716,7 @@ it('stops my requests and companions without stopping another member’s work', 
   await createChatServerClient(request as any).stop(id(1), 'stop-operation');
   const writes = request.mock.calls.filter(([, method]) => method === 'POST');
   expect(writes).toEqual([
-    [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }],
+    [`/conversations/${id(1)}/plans/${planId}`, 'POST', { operationId: `stop-operation:plan:${planId}`, expectedRevision: 7, action: 'stop' }, undefined],
     [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `stop-operation:execution:${id(30)}`, action: 'stop' }, id(12)],
     [`/conversations/${id(1)}/executions/${id(31)}/control`, 'POST', { operationId: `stop-operation:execution:${id(31)}`, action: 'stop' }, undefined],
   ]);
@@ -715,7 +746,7 @@ it('reads Cindy preset identity without inferring from names and retains known I
   const actors = [1, 2, 3, 4].map(n => ({ id: id(n), externalId: `bot-${n}`, kind: 'bot', name: 'Cindy', avatar: null, homeDeviceId: 'mac' }));
   const ids = await createChatServerClient(request as any).cindyCompanionIds(actors, ['bot-4']);
   expect(ids).toEqual(['bot-1', 'bot-2', 'bot-4']);
-  expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
+  expect(request.mock.calls.every(call => call[0] === '/preferences?key=companion.profile.v1' && call[1] === 'GET')).toBe(true);
 });
 
 // Unit: group and thread projections retain the optional process locator while
@@ -824,14 +855,17 @@ it.each([{ status: 403, code: 'PERMISSION_DENIED' }, { status: 404, code: 'CONVE
 // root summaries, explicit following, or trustworthy thread-share source resolution.
 it('projects authoritative reply counts, distinct responders, unread mentions and resolved shares', () => {
   const root = { ...message(20), replyCount: 17 };
-  const reply = { ...message(21), threadRootId: root.id, mentions: [id(11)] };
-  const share = { ...message(22), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+  const reply = { ...message(21), threadRootId: root.id, mentions: [id(11)], mentionAudience: 'bots' as const };
+  const share = { ...message(22), mentions: [id(10)], content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
     data: { messageId: reply.id, threadRootId: root.id }, fallback: 'Untrusted old text' }] };
   const s = { ...snapshot(), messages: [share, reply, root], reads: [] };
   const view = chatGroupView({ snapshot: s, messages: [root, share], before: null }, id(11));
   expect(view.messages[0]).toMatchObject({ replyCount: 17, threadUnread: { count: 1, mentioned: true },
     threadPreview: { responders: [{ authorBotId: reply.authorId }], replies: [{ id: reply.id }] } });
-  expect(view.messages[1]).toMatchObject({ content: '', threadShare: { status: 'available', content: '21', sharedByAuthor: true } });
+  // PR #8818: source identity travels with source text; delivery recipients stay intact.
+  expect(view.messages[1]).toMatchObject({ content: '', mentions: { all: false, botIds: [id(10)] },
+    threadShare: { status: 'available', content: '21', sharedByAuthor: true,
+      mentions: { all: false, allBots: true, botIds: [id(11)] } } });
   expect(chatGroupView({ snapshot: { ...s, reads: undefined }, messages: [root], before: null }, id(11)).messages[0].threadUnread).toBeUndefined();
   expect(chatGroupView({ snapshot: s, messages: [share], before: null, threadSources: { [reply.id]: null } }, id(11)).messages[0])
     .toMatchObject({ content: '', threadShare: { status: 'unavailable', content: '', attachments: [] } });
@@ -984,4 +1018,72 @@ it.each(['bot', 'human'] as const)('projects a capability notice only from its c
   expect(view.messages[0].kind).toBe(kind === 'bot' ? 'notice' : 'message');
   expect(view.messages[0].capabilityNoticeCode).toBe(kind === 'bot' ? 'ATTACHMENTS_UNAVAILABLE' : undefined);
   expect(view.messages[0].content).toBe('Some attachments were not delivered');
+});
+
+// 测试价值：群聊 §4.0 的默认本人范围和显式 all，以及真实拒绝/收尾竞态。
+// 旧测试只覆盖一次本人 happy path；最小输入是一条他人的执行或一条被拒的本人执行。
+// tier: unit，生产 ChatServerClient 通过内存 request，不连接服务器。
+it.each(['owner', 'admin', 'member'] as const)('authorizes explicit all with a fresh %s role', async role => {
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' }, capabilities: { groupSingleSpeaker: 1 } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), members: snapshot().members.map(member => ({ ...member, role })) };
+    if (path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(12), requester_id: id(99), status: 'running' }];
+    if (method === 'POST') return {};
+    throw new Error(path);
+  });
+  const client = createChatServerClient(request as any);
+  if (role === 'member') {
+    await expect(client.stop(id(1), 'all-op', 'all')).rejects.toThrow('ROLE_REQUIRED');
+    expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+  } else {
+    await client.stop(id(1), 'all-op', 'all');
+    expect(request.mock.calls.some(([path, method]) => method === 'POST' && path.includes(id(30)))).toBe(true);
+  }
+});
+it.each(['running', 'stopping', 'cancelled', 'missing'] as const)('preserves a refused stop unless reread explicitly settles it (%s)', async latest => {
+  let reads = 0;
+  const rejection = Object.assign(new Error('FORBIDDEN'), { status: 403 });
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') throw rejection;
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return snapshot();
+    if (path.endsWith('/plans')) return [];
+    if (path.endsWith('/executions')) {
+      reads++;
+      return reads > 1 && latest === 'missing' ? [] : [{ id: id(30), bot_id: id(12), requester_id: id(10), status: reads === 1 ? 'running' : latest }];
+    }
+    throw new Error(path);
+  });
+  const action = createChatServerClient(request as any).stop(id(1), 'stop-op');
+  if (latest === 'stopping' || latest === 'cancelled') await expect(action).resolves.toBeUndefined();
+  else await expect(action).rejects.toBe(rejection);
+});
+it('does not send a later stop after its group action owner changes', async () => {
+  let current = true;
+  const request = vi.fn(async (path: string) => {
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' } };
+    current = false;
+    return snapshot();
+  });
+  await expect(createChatServerClient(request as any).stop(id(1), 'stale-op', undefined, () => current)).rejects.toThrow('OWNER_CHANGED');
+  expect(request.mock.calls.map(([path]) => path)).toHaveLength(2);
+});
+
+it('uses my admin companion actor for an explicit all, preserving server plan revision', async () => {
+  const manager = { ...snapshot().members[0], id: id(12), kind: 'bot', ownerActorId: id(10), role: 'admin' };
+  const request = vi.fn(async (path: string, method?: string) => {
+    if (method === 'POST') return {};
+    if (path === '/me') return { actor: { id: id(10), kind: 'human' }, capabilities: { groupSingleSpeaker: 1 } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), members: [...snapshot().members, manager] };
+    if (path.endsWith('/plans')) return [{ id: id(40), creator_id: id(99), status: 'running', revision: 7 }];
+    if (path.endsWith('/executions')) return [{ id: id(30), bot_id: id(13), requester_id: id(99), status: 'running' }];
+    throw new Error(path);
+  });
+  await createChatServerClient(request as any).stop(id(1), 'all-op', 'all');
+  const writes = request.mock.calls.filter(([, method]) => method === 'POST');
+  expect(writes).toEqual([
+    [`/conversations/${id(1)}/plans/${id(40)}`, 'POST', { operationId: `all-op:plan:${id(40)}`, expectedRevision: 7, action: 'stop' }, id(12)],
+    [`/conversations/${id(1)}/executions/${id(30)}/control`, 'POST', { operationId: `all-op:execution:${id(30)}`, action: 'stop' }, id(12)],
+  ]);
 });

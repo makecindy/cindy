@@ -27,6 +27,12 @@ describe('subscription Fast policy wire compatibility', () => {
     expect(parseRemoteAgentCaps(caps).subscriptionFastPolicy).toBeUndefined();
     expect(parseRemoteAgentCaps({ ...caps, subscriptionFastPolicy: true }).subscriptionFastPolicy).toBe(true);
     expect(parseRemoteAgentCaps({ ...caps, subscriptionFastPolicy: 'true' }).subscriptionFastPolicy).toBeUndefined();
+    expect(parseRemoteAgentCaps(caps).subscriptionFastPolicyCache).toBeUndefined();
+    expect(parseRemoteAgentCaps({ ...caps, subscriptionFastPolicyCache: true }).subscriptionFastPolicyCache).toBe(true);
+    expect(parseRemoteAgentCaps({ ...caps, subscriptionFastPolicyCache: 'true' }).subscriptionFastPolicyCache).toBeUndefined();
+    expect(parseRemoteAgentCaps(caps).groupContinuity).toBeUndefined();
+    expect(parseRemoteAgentCaps({ ...caps, groupContinuity: true }).groupContinuity).toBe(true);
+    expect(parseRemoteAgentCaps({ ...caps, groupContinuity: 'true' }).groupContinuity).toBeUndefined();
   });
   it('parses a narrow registration without trusting arbitrary execution options', () => {
     const command = { op: 'fast-policy', group: 'openai-account', revision: 2, allowFast: false,
@@ -280,6 +286,18 @@ describe('remote agent channel', () => {
     const identity = { shareId: 'share-1', memberId: 'member-1', guestDeviceId: 'guest-pc', sessionId: 'task-1' };
     const grant = { op: 'delegate', action: 'grant', ...identity, providerId: 'openai', model: 'gpt', generation };
     expect(parseRemoteAgentRequest(grant)).toMatchObject(grant);
+    // Speed metadata rides the already authenticated grant; old grants remain
+    // parseable, and malformed policy must never become permission to use Fast.
+    const fastPolicy = { group: 'group', revision: 3, allowFast: false };
+    expect(parseRemoteAgentRequest({ ...grant, fastPolicy })).toMatchObject({ fastPolicy });
+    // Wire input cannot supply M's clock/local trust or choose a task binding.
+    expect(parseRemoteAgentRequest({ ...grant, fastPolicy: { ...fastPolicy,
+      local: true, confirmedAt: Number.MAX_SAFE_INTEGER, binding: { sessionId: 'other-task' } } }))
+      .toEqual({ ...grant, fastPolicy });
+    expect(() => parseRemoteAgentRequest({ ...grant, fastPolicy: { ...fastPolicy, allowFast: 'false' } }))
+      .toThrow('REMOTE_AGENT_INVALID');
+    expect(() => parseRemoteAgentRequest({ ...grant, fastPolicy: { ...fastPolicy, revision: -1 } }))
+      .toThrow('REMOTE_AGENT_INVALID');
     expect(() => parseRemoteAgentRequest({ ...grant, generation: undefined })).toThrow('REMOTE_AGENT_INVALID');
     const usage = { op: 'direct-usage', ...identity, agentKind: 'codex', generation,
       usageId: '22222222-2222-4222-8222-222222222222', samples: [{ model: 'gpt', turns: 1,

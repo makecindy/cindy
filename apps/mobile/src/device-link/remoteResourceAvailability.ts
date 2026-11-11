@@ -41,3 +41,6 @@ export function remoteResourceConnectionState(relayStatus: string, presence: boo
   if (presence === false) return false;
   return presence === true ? true : null;
 }
+
+/** Bound focus reuse when a hidden screen temporarily has no push subscription. Not authority. */
+export const REMOTE_DISPLAY_REUSE_MS = 30_000;

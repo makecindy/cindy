@@ -84,6 +84,19 @@ describe('OS deep-link registration', () => {
     expect(registerWindowsDeepLinkName).not.toHaveBeenCalled();
   });
 
+  it('preserves installed handlers during a packaged smoke test', () => {
+    vi.spyOn(app, 'isPackaged', 'get').mockReturnValue(true);
+    const argv = process.argv;
+    process.argv = ['cindy', '--smoke-test'];
+    try {
+      registerDeepLinkProtocol();
+      expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+      expect(registerWindowsDeepLinkName).not.toHaveBeenCalled();
+    } finally {
+      process.argv = argv;
+    }
+  });
+
   it('registers every supported scheme for packaged clients without a dev launch command', () => {
     vi.spyOn(app, 'isPackaged', 'get').mockReturnValue(true);
     vi.mocked(app.setAsDefaultProtocolClient).mockReturnValue(true);
@@ -467,6 +480,15 @@ describe('parseDeepLink', () => {
     expect(parseDeepLink('cindy://settings/builtin-tools?connect=x')).toEqual({ type: 'settings', tab: 'builtin-tools' });
     expect(parseDeepLink('cindy://settings/builtin-tools/computer')).toBeNull();
     expect(parseDeepLink('cindy://settings/general')).toBeNull();
+  });
+
+  it('parses settings/im-bot with an optional cindy/personal group and rejects anything else', () => {
+    // 官方 IM 机器人(飞书)的未关联引导卡点开后直达「设置 → IM 机器人」的官方分区。
+    expect(parseDeepLink('cindy://settings/im-bot')).toEqual({ type: 'settings', tab: 'im-bot' });
+    expect(parseDeepLink('cindy://settings/im-bot?group=cindy')).toEqual({ type: 'settings', tab: 'im-bot', imGroup: 'cindy' });
+    expect(parseDeepLink('xdt-maker://settings/im-bot/?group=personal')).toEqual({ type: 'settings', tab: 'im-bot', imGroup: 'personal' });
+    expect(parseDeepLink('cindy://settings/im-bot?group=admin')).toBeNull();
+    expect(parseDeepLink('cindy://settings/im-bot/feishu')).toBeNull();
   });
 
   it('parses settings/providers payload with and without a connect target', () => {

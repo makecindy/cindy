@@ -1591,8 +1591,10 @@ describe('cindy-bridge extension source', () => {
     // 路由指定额外头必须合并进请求（anthropic-version / x-api-key / 自定义 provider 头），
     // 缺失会被后端拒（对齐 host 侧 vision-channel 的 headers 合并）。
     expect(source).toContain('...spec.headers');
-    // anthropic-messages 视觉请求必须带 max_tokens（/v1/messages 强制要求，缺省会 400）。
-    expect(source).toContain('max_tokens: 1024');
+    // anthropic-messages 视觉请求必须带有界 max_tokens（/v1/messages 缺省会 400）。
+    // #4580：1024 会被 thinking 块吃光。预算对齐 host 侧 VISION_ANTHROPIC_MAX_TOKENS=4096。
+    expect(source).toContain('const VISION_ANTHROPIC_MAX_TOKENS = 4096');
+    expect(source).toContain('max_tokens: VISION_ANTHROPIC_MAX_TOKENS');
     // fallback 去重必须比较 headers——同 (url/model/auth) 但路由头不同（如不同
     // anthropic-beta）的 fallback 是独立后端，不得误判为重复跳过（P2）。
     expect(source).toContain('JSON.stringify(cfg.fallback.headers');
@@ -1608,6 +1610,44 @@ describe('cindy-bridge extension source', () => {
     expect(source).toContain('vision bridge pi primary backend failed');
     expect(source).toContain('vision bridge pi used fallback backend');
     expect(source).toContain('vision bridge pi fallback backend failed');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：桥源码里的 anthropicVisionText。Pi 视觉桥只采用 text 块。
+  // - Bug／规则依据：#4580。思考块被拼进描述，或只有思考时被当成转图成功。
+  // - 现有覆盖缺口：原断言只锁了 max_tokens: 1024，没有跑过响应解析。
+  // - 最小失败输入：thinking 块带 text 字段排在 text 块前；或 content 里只有 thinking。
+  // - tier：unit。截取桥里的真实函数执行，不发网络请求。
+  it('skips Anthropic thinking blocks and leaves a thinking-only vision reply empty (#4580)', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('function anthropicVisionText');
+    const end = source.indexOf('async function callPiVision', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const extract = runInNewContext(
+      ts.transpile(source.slice(start, end) + '\nanthropicVisionText;', {
+        target: ts.ScriptTarget.ES2022,
+      }),
+    ) as (blocks: unknown) => string;
+    expect(
+      extract([
+        { type: 'thinking', thinking: 'hidden', text: 'should not leak' },
+        { type: 'redacted_thinking', data: 'opaque', text: 'also hidden' },
+        { type: 'text', text: 'a red button' },
+      ]),
+    ).toBe('a red button');
+    expect(extract([{ type: 'text', text: 'a blue ' }, { type: 'text', text: 'sky' }])).toBe(
+      'a blue sky',
+    );
+    expect(extract([{ type: 'thinking', thinking: 'only thoughts', text: 'not a description' }]).trim()).toBe(
+      '',
+    );
+    // 空串不是成功：callPiVision 仍在 trim 后抛 vision empty description。
+    const callSite = source.slice(source.indexOf("wire === 'anthropic-messages'", end));
+    expect(callSite).toContain('content = anthropicVisionText(blocks)');
+    expect(callSite.indexOf('content = anthropicVisionText(blocks)')).toBeLessThan(
+      callSite.indexOf("throw new Error('vision empty description')"),
+    );
   });
 
   it('captures known writes before execution and marks opaque tools only after a result', () => {
@@ -1635,18 +1675,8 @@ describe('cindy-bridge extension source', () => {
   it('keeps generic MCP behind two tools and gives frequent Bot actions typed fast paths', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent'",
-    );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task'",
-    );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_MESSAGE_SESSION_TASK_TOOL = 'message_session_task'",
-    );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task'",
-    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("'send_to_agent'");
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("'start_session_task'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate'",
     );
@@ -1658,11 +1688,7 @@ describe('cindy-bridge extension source', () => {
       "enum: ['status', 'notify', 'call', 'reply', 'cancel']",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_BOT_MEMORY_TOOL = 'bot_memory'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi, {\n        botMemoryFacade: cfg.botMemoryFacade === true,');
-    // A system Skill the owner switched off keeps its tools out of Pi's direct list too.
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "deniedTools: Array.isArray(cfg.deniedTools) ? cfg.deniedTools.filter((name) => typeof name === 'string') : [],",
-    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true });');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
     // Post-compaction amnesia drives voluntary re-inspection: the persisted
@@ -2424,7 +2450,9 @@ it('re-surfaces the disclosure set once after compaction instead of editing ever
   expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
 });
 
-it('registers list_machines directly so Pi does not have to find it through the MCP gateway', async () => {
+// Regression: optional questions need the same direct discoverability as sync questions.
+// Unit: execute the production gateway and verify real MCP routing and permission identity.
+it.each(['list_machines', 'ask_user_question_async', 'manage_user_questions'])('registers %s directly without MCP discovery', async (name) => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(
     source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
@@ -2448,17 +2476,18 @@ it('registers list_machines directly so Pi does not have to find it through the 
   const withoutHost: any[] = [];
   gateway.add('cindy_helper', client, [{ name: 'list_tools', inputSchema: { type: 'object' } }, { name: 'call_tool', inputSchema: { type: 'object' } }]);
   gateway.register({ registerTool: (tool: unknown) => withoutHost.push(tool) });
-  expect(withoutHost.map((tool) => tool.name)).not.toContain('list_machines');
+  expect(withoutHost.map((tool) => tool.name)).not.toContain(name);
 
   const direct = new context.Gateway();
-  direct.add('cindy_helper', client, [{ name: 'list_machines', inputSchema: { type: 'object' } }]);
+  direct.add('cindy_helper', client, [{ name, inputSchema: { type: 'object' } }]);
   const tools: any[] = [];
   direct.register({ registerTool: (tool: unknown) => tools.push(tool) });
-  const tool = tools.find((item) => item.name === 'list_machines');
-  await tool.execute('call-1', {}, new AbortController().signal);
-  expect(calls.at(-1)).toMatchObject({ method: 'tools/call', params: { name: 'list_machines', arguments: {} } });
+  const tool = tools.find((item) => item.name === name);
+  const args = name === 'ask_user_question_async' ? { questions: [{ question: 'Which scope?' }] } : {};
+  await tool.execute('call-1', args, new AbortController().signal);
+  expect(calls.at(-1)).toMatchObject({ method: 'tools/call', params: { name, arguments: args } });
   // Ask and Auto judge the real MCP identity, so this auto-approves like the same tool over MCP.
-  expect(direct.resolveHookedCall('list_machines', {}).qualifiedName).toBe('mcp__cindy_helper__list_machines');
+  expect(direct.resolveHookedCall(name, {}).qualifiedName).toBe('mcp__cindy_helper__' + name);
   expect(direct.resolveHookedCall('read', {})).toBeNull();
 });
 
@@ -2490,59 +2519,15 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
   const ordinary: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => ordinary.push(tool) });
   expect(ordinary.map((tool) => tool.name)).toEqual(['cindy_mcp_list_tools', 'cindy_mcp_call_tool']);
-  expect(gateway.resolveDirectHelperTool('start_session_task', {})).toBeNull();
+  expect(gateway.resolveDirectHelperTool('list_agents', {})).toBeNull();
 
   const bot: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
-  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'check_agent_message', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now', 'routine_delivery_targets', 'schedule_list_models', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'get_task_digest', 'get_workbench', 'read_workbench_task', 'continue_workbench_task']) {
+  for (const name of ['list_agents', 'create_teammate', 'get_task_digest']) {
     const tool = bot.find((item) => item.name === name);
     expect(tool).toBeDefined();
-    const args = name === 'routine_save' ? {
-      name: 'Rest', prompt: 'Remind me to rest', enabled: true, silentWhenIdle: false, preRunHook: { command: 'node check.mjs' },
-      modelOverride: { agentKind: 'codex', model: 'economy', providerId: 'connected', agentDeviceId: null, effort: 'low', fastMode: 'ultrafast' },
-      sessionMode: 'fresh', delivery: { kind: 'companion', mode: 'direct' },
-      triggers: [
-        { id: 'minute', kind: 'interval', intervalMs: 60000, anchorMs: 30000 },
-        { id: 'one-shot', kind: 'once', at: 90000 },
-      ],
-    } : name === 'schedule_list_models' ? { agent: 'codex', agentDeviceId: 'local' } : name === 'schedule_notify_current_run' || name === 'get_workbench' ? {} : name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'continue_workbench_task' ? { task_id: 'laptop::session-1', message: 'Report progress and continue' } : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'check_agent_message' ? { message_id: 'message-1' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' || name === 'routine_delivery_targets' ? {}
-      : name.startsWith('routine_') ? { id: 'routine-1' }
-      : name === 'start_session_task' ? { instruction: 'Prepare a report' }
-      : name === 'send_to_agent' ? { target_id: 'd'.repeat(80) + '::' + 'b'.repeat(128), message: 'Please review' }
-      : name === 'create_teammate' ? { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' }
-      : name === 'message_session_task' ? { task_id: 'task-1', message: 'Add a summary' }
-      : { task_id: 'task-1' };
-    if (name === 'routine_save') {
-      expect(tool.parameters.required).toEqual(['name', 'prompt', 'enabled', 'triggers']);
-      expect(tool.parameters.properties.botId).toBeUndefined();
-      // Regression: the host accepted these fields, but Pi's direct schema hid them.
-      expect(tool.parameters.properties.sessionMode.enum).toEqual(['persistent', 'fresh']);
-      expect(tool.parameters.properties.modelOverride.anyOf).toContainEqual({ type: 'null' });
-      const model = tool.parameters.properties.modelOverride.anyOf.find((schema: any) => schema.type === 'object');
-      expect(model.required).toEqual(['agentKind', 'model']);
-      expect(model.properties.fastMode.anyOf).toContainEqual({ type: 'string', enum: ['ultrafast'] });
-      // #8784: the '' effort sentinel stays in the shared schema so
-      // non-Gemini providers can express an explicit unset; Gemini-bound
-      // requests have '' stripped per request in before_provider_request
-      // (see the Gemini tool payload test below).
-      expect(model.properties.effort.enum).toContain('');
-      const variants = tool.parameters.properties.triggers.items.anyOf;
-      const interval = variants.find((item: any) => item.properties.kind.enum.includes('interval'));
-      expect(interval.properties.intervalMs.minimum).toBe(60000);
-      expect(interval.properties.anchorMs).toMatchObject({ type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
-      expect(interval.required).not.toContain('anchorMs');
-      const once = variants.find((item: any) => item.properties.kind.enum.includes('once'));
-      expect(once).toMatchObject({
-        required: ['id', 'kind', 'at'], additionalProperties: false,
-        properties: { at: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER } },
-      });
-    }
-    if (name === 'start_session_task') {
-      expect(tool.description).toContain('A repository, multiple files, tools, or a deliverable alone is not a reason to delegate');
-      expect(tool.description).toContain('the user explicitly requests an independent task');
-      expect(tool.description).toContain('Follow up with message_session_task on the same task');
-    }
-    if (name === 'send_to_agent') expect(tool.parameters.properties.target_id.maxLength).toBe(210);
+    const args = name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'list_agents' ? {}
+      : { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' };
     const resolved = gateway.resolveDirectHelperTool(name, args);
     expect(resolved.qualifiedName).toBe('mcp__cindy_helper__' + name);
     expect(resolved.args).toEqual(args); // Permission review retains the actual operation and arguments.
@@ -2550,12 +2535,6 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     await tool.execute('call-1', args, controller.signal);
     expect(calls.at(-1)).toEqual({ method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } }, signal: controller.signal });
   }
-
-  // #8784: '' is a meaningful explicit-unset sentinel for non-Gemini
-  // providers, so the shared registration keeps it (see the effort assertion
-  // above). The guarantee that '' never reaches Gemini is tested at the
-  // provider request hook below, the only point that knows the model — a
-  // registration-time sweep would forbid the sentinel outright.
 });
 
 it('strips empty-string enum values from Gemini-bound tool payloads at the provider request hook, and leaves other providers untouched', async () => {
@@ -2563,13 +2542,11 @@ it('strips empty-string enum values from Gemini-bound tool payloads at the provi
   // - Production entry: the bridge's before_provider_request handler; the
   //   observable result is the Gemini wire payload (pi-ai params shape:
   //   config.tools[].functionDeclarations[].parametersJsonSchema).
-  // - Bug/rule: #8784 (Gemini 400 on '' enums) + Codex P1/P2 on PR #8798 —
-  //   the shared registration must keep '' for non-Gemini providers while
-  //   Gemini-bound schemas drop it.
-  // - Coverage gap: no test invoked the hook; the old registration sweep
-  //   asserted the wrong layer (it forbade '' in the shared schema).
-  // - Minimal failing input: a Gemini payload whose routine_save effort enum
-  //   carries ''; a non-Gemini payload with the same schema.
+  // - Bug/rule: #8784 (Gemini 400 on '' enums) — Gemini-bound schemas must
+  //   drop '' while non-Gemini payloads pass through untouched.
+  // - Coverage gap: no test invoked the hook.
+  // - Minimal failing input: a Gemini payload whose probe declaration carries
+  //   an enum of [''] and a const of ''; a non-Gemini payload with the same schema.
   // - Tier: unit; the hook runs in-process against a fake pi.
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(
@@ -2591,15 +2568,11 @@ it('strips empty-string enum values from Gemini-bound tool payloads at the provi
   ]);
   const bot: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
-  const routineSave = bot.find((item) => item.name === 'routine_save');
-  expect(routineSave).toBeDefined();
-  expect(routineSave.parameters.properties.modelOverride.anyOf
-    .find((schema: any) => schema.type === 'object').properties.effort.enum).toContain('');
 
   const geminiModel = { api: 'google-generative-ai', id: 'gemini-2.5-pro', provider: 'cindy' };
   const payload = {
     model: 'gemini-2.5-pro',
-    contents: [{ role: 'user', parts: [{ text: 'Save a routine' }] }],
+    contents: [{ role: 'user', parts: [{ text: 'Do the task' }] }],
     config: {
       tools: [{ functionDeclarations: [
         ...bot.map((tool: any) => ({
@@ -2637,19 +2610,15 @@ it('strips empty-string enum values from Gemini-bound tool payloads at the provi
     for (const declaration of entry.functionDeclarations) visit(declaration.parametersJsonSchema, declaration.name);
   }
   expect(emptyValues).toEqual([]);
-  const saved = result.config.tools[0].functionDeclarations.find((d: any) => d.name === 'routine_save');
-  const modelOverride = saved.parametersJsonSchema.properties.modelOverride.anyOf
-    .find((schema: any) => schema.type === 'object');
-  expect(modelOverride.properties.effort.enum).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
   const probe = result.config.tools[0].functionDeclarations.find((d: any) => d.name === 'probe_required_empty');
   expect(probe.parametersJsonSchema.properties.mode.enum).toBeUndefined();
   expect(probe.parametersJsonSchema.properties.mode.type).toBe('string');
   expect(probe.parametersJsonSchema.properties.flag.const).toBeUndefined();
   expect(probe.parametersJsonSchema.required).toEqual(['mode']);
-  // The input payload is not mutated: the shared registration still carries ''.
-  const inputSaved = payload.config.tools[0].functionDeclarations.find((d: any) => d.name === 'routine_save');
-  expect(inputSaved?.parametersJsonSchema.properties.modelOverride.anyOf
-    .find((schema: any) => schema.type === 'object').properties.effort.enum).toContain('');
+  // The input payload is not mutated: the probe still carries ''.
+  const inputProbe = payload.config.tools[0].functionDeclarations.find((d: any) => d.name === 'probe_required_empty');
+  expect(inputProbe.parametersJsonSchema.properties.mode.enum).toEqual(['']);
+  expect(inputProbe.parametersJsonSchema.properties.flag.const).toBe('');
   // A non-Gemini model passes through untouched, '' intact.
   expect(await hook({ payload }, { model: { api: 'anthropic-messages', id: 'claude', provider: 'cindy' } })).toBe(payload);
   // A Gemini payload with no '' is returned unchanged.

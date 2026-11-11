@@ -25,7 +25,7 @@ import { isModelVisible, visibleModelUnion } from '@cindy/model-providers';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { buildOfficialBotCommandMenus } from '../im/shared/botCommands.js';
 import { stopSessionTurnExplicitly } from '../maker-ipc/register.js';
 import { onChannelTurn } from '../maker-ipc/channelTurnSignal.js';
@@ -77,6 +77,7 @@ import {
   type HookPrefsPatch,
   type HookPrefsView,
   type HookWorkspacePrefs,
+  type NeutralHookProvider,
   type ProviderPrefsView,
   type SlackHookView,
   type TelegramHookBehaviorPatch,
@@ -112,6 +113,7 @@ import { resolveHookInteraction } from './interactions.js';
 import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
 import { validateXExternalUrl } from './xDeepLink.js';
+import { validateFeishuExternalUrl } from './feishuDeepLink.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
@@ -132,6 +134,32 @@ function requireHookControl(): void {
   if (!hookControlAvailable()) {
     throwIpcError('PERMISSION_DENIED', 'Cindy IM bots require a Cindy account.');
   }
+}
+
+/** provider-neutral 线(Telegram / X / 飞书)的显示名, 只用于 IPC 错误文案。 */
+const NEUTRAL_PROVIDER_DISPLAY_NAMES: Record<NeutralHookProvider, string> = {
+  telegram: 'Telegram',
+  x: 'X',
+  feishu: 'Feishu',
+};
+
+/**
+ * provider-neutral 动作的 provider 形参校验。白名单而非 `!== 'slack'`: 协议先行
+ * 加入、客户端未接线的 provider 不得落到任何 lane。
+ */
+function requireNeutralProvider(payload: unknown): NeutralHookProvider {
+  const p = requireObject(payload);
+  if (
+    typeof p.provider !== 'string' ||
+    !Object.prototype.hasOwnProperty.call(NEUTRAL_PROVIDER_DISPLAY_NAMES, p.provider)
+  ) {
+    throwIpcError('INVALID_PARAMS', 'provider must be telegram, x or feishu');
+  }
+  return p.provider as NeutralHookProvider;
+}
+
+function providerDisplayName(provider: NeutralHookProvider): string {
+  return NEUTRAL_PROVIDER_DISPLAY_NAMES[provider];
 }
 
 /** Local/signed-out sessions must not observe a previous cloud owner's config. */
@@ -160,6 +188,16 @@ function disabledHookView(): SlackHookView {
     x: {
       enabled: false,
       url: getClientEndpoint('xHookWsUrl'),
+      status: 'disabled',
+      lastError: null,
+      available: false,
+      capabilityPending: false,
+      binding: null,
+      defaultWorkspace: null,
+    },
+    feishu: {
+      enabled: false,
+      url: getClientEndpoint('feishuHookWsUrl'),
       status: 'disabled',
       lastError: null,
       available: false,
@@ -444,6 +482,11 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
             url: getClientEndpoint('xHookWsUrl'),
             enabled: config.xEnabled,
           },
+          feishu: {
+            name: `${BRAND_NAME} Feishu`,
+            url: getClientEndpoint('feishuHookWsUrl'),
+            enabled: config.feishuEnabled,
+          },
           slack: {
             name: `${BRAND_NAME} Slack`,
             url: store!.effectiveUrl(),
@@ -558,6 +601,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       createTransport: createHookTransport,
       getTelegramUrl: () => getClientEndpoint('telegramHookWsUrl'),
       getXUrl: () => getClientEndpoint('xHookWsUrl'),
+      getFeishuUrl: () => getClientEndpoint('feishuHookWsUrl'),
       // 与 device-link 同款 token 源: 现值优先, 缺失 refresh 一次
       getAuthToken: async () => {
         if (!hookControlAvailable()) return null;
@@ -640,6 +684,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       openXUrl: (url) => {
         const safeUrl = validateXExternalUrl(url);
+        return shell.openExternal(safeUrl);
+      },
+      openFeishuUrl: (url) => {
+        const safeUrl = validateFeishuExternalUrl(url);
         return shell.openExternal(safeUrl);
       },
       log,
@@ -791,25 +839,12 @@ export function registerHookControlIpc(): void {
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_PROVIDER_ENABLED, (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
+    const provider = requireNeutralProvider(payload);
     const p = requireObject(payload);
-    if (p.provider !== 'telegram' && p.provider !== 'x') {
-      throwIpcError('INVALID_PARAMS', 'provider must be telegram or x');
-    }
     if (typeof p.enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled must be boolean');
-    m.setProviderEnabled(p.provider, p.enabled);
+    m.setProviderEnabled(provider, p.enabled);
     return { hook: m.snapshot() };
   });
-
-  /** provider-neutral 绑定动作的 provider 形参校验(telegram / x)。 */
-  const requireNeutralProvider = (payload: unknown): 'telegram' | 'x' => {
-    const p = requireObject(payload);
-    if (p.provider !== 'telegram' && p.provider !== 'x') {
-      throwIpcError('INVALID_PARAMS', 'provider must be telegram or x');
-    }
-    return p.provider;
-  };
-  const providerDisplayName = (provider: 'telegram' | 'x'): string =>
-    provider === 'telegram' ? 'Telegram' : 'X';
 
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_START, (_e, payload) => {
     requireHookControl();
@@ -834,6 +869,21 @@ export function registerHookControlIpc(): void {
         `${providerDisplayName(provider)} binding attempt is not active`,
       );
     }
+    return { hook: m.snapshot() };
+  });
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_SELECT, async (_e, payload) => {
+    requireHookControl();
+    const { manager: m } = ensureInstances();
+    const provider = requireNeutralProvider(payload);
+    const assertAccount = captureChannelAccount();
+    try {
+      await m.providerBindSelect(provider);
+    } catch (error) {
+      if (error instanceof HookNotConnectedError) throwIpcError('HOOK_NOT_CONNECTED', hookNotConnectedIpcMessage(provider));
+      throwIpcError('PRECONDITION_FAILED', 'Unable to set working computer');
+    }
+    assertAccount();
     return { hook: m.snapshot() };
   });
 
@@ -871,7 +921,9 @@ export function registerHookControlIpc(): void {
       } catch (err) {
         if (
           err instanceof Error &&
-          (err.name === 'TelegramDeepLinkValidationError' || err.name === 'XLinkValidationError')
+          (err.name === 'TelegramDeepLinkValidationError' ||
+            err.name === 'XLinkValidationError' ||
+            err.name === 'FeishuLinkValidationError')
         ) {
           throwIpcError('INVALID_PARAMS', err.message);
         }
@@ -1163,8 +1215,8 @@ export function registerHookControlIpc(): void {
     async (_e, payload) => {
       const p = requireObject(payload);
       const channel = requireString(p.channel, 'channel');
-      if (channel !== 'slack' && channel !== 'telegram' && channel !== 'x') {
-        throwIpcError('INVALID_PARAMS', 'channel must be slack, telegram or x');
+      if (channel !== 'slack' && channel !== 'telegram' && channel !== 'x' && channel !== 'feishu') {
+        throwIpcError('INVALID_PARAMS', 'channel must be slack, telegram, x or feishu');
       }
       // 输入设界(codex review): 即使 renderer 被攻破, 也不允许任意长度/格式的键
       // 无限追加条目撑爆本地文件 —— workspace 按别名正则(与 prefs 同规), 其余限长。

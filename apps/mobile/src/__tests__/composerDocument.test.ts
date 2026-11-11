@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatQuoteForSend } from '@cindy/maker-shared/chat-quotes';
+import { buildTodoReferenceHref } from '@cindy/maker-shared/agent-input-projection';
 import {
   appendComposerNode,
   composerDocumentFromEncodedMessage,
@@ -7,6 +8,7 @@ import {
   composerDocumentProjectedText,
   composerCaretPosition,
   composerSelectionOffset,
+  displayComposerSlashRuntimeAliases,
   hydrateComposerMessageReferenceBodies,
   isLongComposerPaste,
   mentionComposerNode,
@@ -19,11 +21,11 @@ import {
   type ComposerDocument,
   removeComposerNode,
   replaceComposerTextRange,
+  restoreComposerSlashRuntimeAliases,
   serializeComposerDocument,
   sessionLinkComposerNode,
   slashCommandTextNode,
   textComposerDocument,
-  todoReferenceComposerNode,
 } from '@/session/composerDocument';
 
 describe('mobile composer document', () => {
@@ -184,6 +186,45 @@ describe('mobile composer document', () => {
     expect(serializeComposerDocument(edited).text).toBe('/compacx now');
   });
 
+  it('edits sent runtime slash aliases by their label and resends the wire name', () => {
+    const wire = '/cindy-plugin-cindy-github:pr';
+    const sent = composerDocumentFromSerializedMessage(`${wire} 跟进`, {
+      slashCommandRanges: [{ start: 0, end: wire.length }],
+    });
+    const { document, aliases } = displayComposerSlashRuntimeAliases(sent);
+    expect(composerDocumentProjectedText(document)).toBe('/pr 跟进');
+
+    const edited = replaceComposerTextRange(document, 4, 6, [{ type: 'text', text: '看看' }]);
+    expect(serializeComposerDocument(restoreComposerSlashRuntimeAliases(edited, aliases))).toMatchObject({
+      text: `${wire} 看看`,
+      slashCommandRanges: [{ start: 0, end: wire.length }],
+    });
+    // Typing over the command drops its mark; whatever the user typed is sent as-is.
+    const retyped = replaceComposerTextRange(document, 1, 3, [{ type: 'text', text: 'help' }]);
+    expect(serializeComposerDocument(restoreComposerSlashRuntimeAliases(retyped, aliases)).text)
+      .toBe('/help 跟进');
+  });
+
+  it('keeps each same-named plugin command on its own wire name when editing', () => {
+    const first = '/cindy-plugin-a:pr';
+    const second = '/cindy-plugin-b:pr';
+    const text = `${first} then ${second}`;
+    const sent = composerDocumentFromSerializedMessage(text, {
+      slashCommandRanges: [
+        { start: 0, end: first.length },
+        { start: first.length + 6, end: text.length },
+      ],
+    });
+    const { document, aliases } = displayComposerSlashRuntimeAliases(sent);
+    expect(composerDocumentProjectedText(document)).toBe('/pr then /pr');
+    expect(serializeComposerDocument(restoreComposerSlashRuntimeAliases(document, aliases)).text).toBe(text);
+
+    // Removing one of two ambiguous `/pr` commands must not guess which plugin is left.
+    const removed = replaceComposerTextRange(document, 0, 3, [{ type: 'text', text: '' }]);
+    expect(composerDocumentProjectedText(restoreComposerSlashRuntimeAliases(removed, aliases)))
+      .toBe(' then /pr');
+  });
+
   it('serializes long paste atoms with exact presentation ranges', () => {
     let document = textComposerDocument('before ');
     document = appendComposerNode(document, pastedTextComposerNode('first\nsecond'));
@@ -291,9 +332,10 @@ describe('mobile composer document', () => {
     expect(serializeComposerDocument(restored)).toEqual(serialized);
   });
 
-  // 近况里点一条待办：与桌面同一 wire（[标题](cindy://bot-todo/…)）与结构化 todo 引用，伙伴才知道是哪一条。
-  it('sends a quoted todo as the same structured reference as Desktop and restores it for editing', () => {
-    const node = todoReferenceComposerNode({ botId: 'bot-1', todoId: 't 1', title: 'Reply [Lizi]' });
+  // 旧消息里的待办引用（V1 伙伴近况引用的，[标题](cindy://bot-todo/…)）照常序列化并还原以便编辑。
+  it('keeps an older quoted todo as the same structured reference as Desktop and restores it for editing', () => {
+    const href = buildTodoReferenceHref('bot-1', 't 1');
+    const node = { type: 'mention' as const, kind: 'todo' as const, label: 'Reply [Lizi]', raw: `[Reply \\[Lizi\\]](${href})`, href };
     const serialized = serializeComposerDocument({ version: 1, nodes: [node, { type: 'text', text: ' 改到周五' }] });
     expect(serialized.text).toBe(`[Reply \\[Lizi\\]](${node.href}) 改到周五`);
     expect(serialized.agentReferences).toEqual([expect.objectContaining({

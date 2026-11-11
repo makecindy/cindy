@@ -14,12 +14,19 @@ public class XdtIosActionSheetModule: Module {
       Events("onGeometryChange")
     }
     Constant("residentHistoryAvailable") { true }
+    Constant("sharedTaskDrawerAvailable") { true }
+    Constant("taskDrawerHandoffAvailable") { true }
+    View(CindyTaskDrawerHost.self) {
+      ViewName("TaskDrawerHost")
+      Prop("surfaceId") { (view, id: String) in view.surfaceId = id }
+    }
     View(CindyResidentHistoryHost.self) {
       ViewName("ResidentHistoryHost")
       Prop("surfaceId") { (view, id: String) in view.surfaceId = id }
     }
     View(CindyResidentHistorySlot.self) {
       ViewName("ResidentHistorySlot")
+      Events("onDock")
       Prop("surfaceId") { (view, id: String) in view.surfaceId = id }
       Prop("selected") { (view, selected: Bool) in view.selected = selected }
     }

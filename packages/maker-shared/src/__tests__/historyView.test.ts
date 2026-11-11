@@ -19,6 +19,16 @@ describe('history reading projection', () => {
     expect(projected.flatMap(item => item.type === 'messages' ? item.messages : []).map(message => message.id))
       .toContain('1');
   });
+  // Tier: behavior. A teammate's reply lists the tasks it started from these receipts; folded into
+  // deferred work they never reached the chat (2026-11-10).
+  it('keeps a send_to_session receipt available outside deferred work', () => {
+    const rows = [row(0, 'user', 'Start a task'), row(1, 'thinking', 'plan'),
+      row(2, 'tool_use', { toolName: 'mcp__cindy_helper__call_tool', toolUseId: 'send', input: { name: 'send_to_session', args: {} } }),
+      { ...row(3, 'tool_result', JSON.stringify({ ok: true, target_session_id: 's-1', wake_kind: 'created', target_title: 'Fix it' })), toolUseId: 'send' },
+      { ...row(4, 'assistant', 'Started it.'), agentMeta: { turnCompleted: true } }];
+    const visible = projectHistoryView(rows, false, true).flatMap(item => item.type === 'messages' ? item.messages : []).map(message => message.id);
+    expect(visible).toEqual(expect.arrayContaining(['2', '3']));
+  });
   it.each([false, true])('archives interrupted progress in recoverable history ranges (streaming=%s)', (streaming) => {
     const rows = [row(0, 'user', 'Work'), row(1, 'assistant', 'Checking the build'),
       row(2, 'thinking', 'detail'), row(3, 'error', { message: 'Usage limit reached' }),
@@ -434,6 +444,57 @@ describe('shared history view lifecycle', () => {
     expect(view.getSnapshot()).toMatchObject({ ready: false, items: [], hasMore: false, nextCursor: null });
     expect(view.getSnapshot().details.size).toBe(0);
     expect(view.getSnapshot().expanded.size).toBe(0);
+  });
+
+  // Unit: a refreshed projection can remove a work range while its detail read
+  // is pending. That late response must not resurrect an unreachable body.
+  it('discards late details for a range removed by a refreshed page', async () => {
+    let rows = [row(1, 'thinking', 'old')];
+    let resolve!: (page: { version: 1; messages: HistoryMessageSource[]; hasMore: false; nextCursor: null }) => void;
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView(rows, false), hasMore: false, nextCursor: null }),
+      details: () => new Promise<Parameters<typeof resolve>[0]>(done => { resolve = done; }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const group = view.getSnapshot().items[0];
+    if (group.type !== 'work') throw new Error('Expected a work group');
+    view.setExpanded(group.key, true);
+    const pending = view.loadDetails(group.summary);
+    rows = [row(1, 'assistant', 'updated')];
+    await view.refresh();
+    expect(historyWorkSummaries(view.getSnapshot().items)).toHaveLength(0);
+    resolve({ version: 1, messages: [row(1, 'thinking', 'late body')], hasMore: false, nextCursor: null });
+    await pending;
+    expect(view.getSnapshot().details.size).toBe(0);
+  });
+
+  it('releases a large partial detail body when collapsed during pagination', async () => {
+    const body = row(1, 'thinking', 'x'.repeat(1024 * 1024));
+    let finish!: (page: { version: 1; messages: HistoryMessageSource[]; hasMore: false; nextCursor: null }) => void;
+    let started!: () => void;
+    const secondPage = new Promise<void>(resolve => { started = resolve; });
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView([body], false), hasMore: false, nextCursor: null }),
+      details: async (_ref, after) => {
+        if (!after) return { version: 1, messages: [body], hasMore: true, nextCursor: 'next' };
+        started();
+        return new Promise<Parameters<typeof finish>[0]>(resolve => { finish = resolve; });
+      },
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const group = view.getSnapshot().items[0];
+    if (group.type !== 'work') throw new Error('Expected a work group');
+    view.setExpanded(group.key, true);
+    const pending = view.loadDetails(group.summary);
+    await secondPage;
+    expect(view.getSnapshot().details.get(group.key)?.messages).toHaveLength(1);
+    view.setExpanded(group.key, false);
+    expect(view.getSnapshot().details.size).toBe(0);
+    finish({ version: 1, messages: [], hasMore: false, nextCursor: null });
+    await pending;
+    expect(view.getSnapshot().details.size).toBe(0);
   });
 
   it.each([false, true])('joins an expanded detail read through its latest revision (changed=%s)', async (changed) => {

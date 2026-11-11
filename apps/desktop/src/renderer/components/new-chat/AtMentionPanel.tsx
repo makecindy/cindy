@@ -186,12 +186,15 @@ export function AtMentionPanel({
     if (!onSearchChange) return;
     searchRef.current?.focus();
   }, [onSearchChange]);
-  // 从「添加目录」二级页切回时，请「+」弹层按本面板重量尺寸(内容变高会被弹层高度钳住)。
-  // 首次打开时弹层尚未完成开场形变，会忽略这次请求。
+  // 内嵌形态的高度由外壳按内容重测。只在挂载时请求一次不够：搜索词、结果行、已引用目录
+  // 变化后内容变矮，外壳若仍停在打开时的高度会留下大块空白；变高时又会被高度钳住，
+  // ResizeObserver 看不到增长。首次打开时弹层尚未完成开场形变，会忽略这次请求。
+  const resourceEntryCount = entries.reduce((count, entry) => (entry.kind === 'resource' ? count + 1 : count), 0);
+  const referencedDirCount = (referenceDirs?.dirs.length ?? 0) + (writableDirs?.dirs.length ?? 0);
   useLayoutEffect(() => {
     if (!embedded) return;
     rootRef.current?.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
-  }, [embedded]);
+  }, [embedded, searchValue, resourceEntryCount, referencedDirCount, state.kind]);
   const [panelScroll, setPanelScroll] = useState(0);
   const [tooltipMeasure, setTooltipMeasure] = useState<TooltipMeasure>({
     key: null,
@@ -350,7 +353,7 @@ export function AtMentionPanel({
         {...menuRowAttrs({ checked: action.checked === true, current: focused, disabled: action.disabled })}
         className={cn(
           COMPOSER_MENU_ROW,
-          'flex w-full items-center gap-2 px-3 py-2 text-left',
+          'flex w-full shrink-0 items-center gap-2 px-3 py-2 text-left',
           emphasized && 'text-[var(--warning-accent)]',
           action.disabled && 'cursor-not-allowed opacity-50',
         )}
@@ -449,7 +452,7 @@ export function AtMentionPanel({
         {...menuRowAttrs({ current: focused, disabled })}
         className={cn(
           COMPOSER_MENU_ROW,
-          'flex w-full items-center gap-2',
+          'flex w-full shrink-0 items-center gap-2',
           'h-[44px] px-[10px] text-left',
           disabled && 'cursor-not-allowed opacity-45',
         )}
@@ -544,9 +547,12 @@ export function AtMentionPanel({
         if (target?.closest(`input, textarea, [${MENU_ROW_ATTR}]`)) return;
         event.preventDefault();
       }}
+      {...(embedded ? { 'data-morph-scroll': 'inner' } : {})}
       className={cn(
         'pointer-events-auto',
-        embedded ? 'relative' : 'absolute left-0 bottom-full mb-2 z-50',
+        // 内嵌时外壳会把量到的确定高度写到本层 style.height 上，条目多时只滚下面这一层 (#9536)。
+        // 没有外壳时高度仍是 auto。data-morph-scroll 告诉外壳不要再出一条滚动条；切页后重新判定。
+        embedded ? 'relative flex min-h-0 max-h-full flex-1 flex-col' : 'absolute left-0 bottom-full mb-2 z-50',
       )}
     >
       <div
@@ -558,7 +564,10 @@ export function AtMentionPanel({
           // embedded: fill the Morph shell. A nested w-[480px] is 2px wider
           // than the border-box panel and paints a horizontal scrollbar thumb
           // for ~2s via the global .is-scrolling auto-hide.
-          embedded ? 'w-full min-w-0' : 'w-[480px]',
+          embedded ? 'flex min-h-0 w-full min-w-0 flex-1 flex-col' : 'w-[480px]',
+          // 内嵌形态自己就是唯一滚动区：横轴锁死，竖向跟着上面那个确定高度滚。
+          // 外壳看到 data-morph-scroll="inner" 后保持不滚，避免并排两条竖向滚动条 (#9536)。
+          // 不再用 h-full：父层只有 max-h-full 时百分比高度仍是 auto，列表会按内容撑出去。
           'overflow-x-hidden overflow-y-auto',
           'p-[6px]',
           !embedded && [
@@ -568,7 +577,8 @@ export function AtMentionPanel({
           ],
         )}
         // Registered floating-layer shadow, as on the shared menus (DESIGN §4 / §6).
-        style={{ boxShadow: embedded ? undefined : 'var(--shadow-menu)', maxHeight }}
+        // 独立 @ 浮层自定 maxHeight；内嵌形态的高度由 MorphPopover 钳制后传下来。
+        style={{ boxShadow: embedded ? undefined : 'var(--shadow-menu)', maxHeight: embedded ? undefined : maxHeight }}
       >
         <MenuHighlightLayer />
         {hasSearchBox ? (
@@ -613,7 +623,7 @@ export function AtMentionPanel({
         )}
         {showErrorState && (
           <div className="flex flex-col items-center justify-center py-[16px] gap-[10px]">
-            <div className="text-13 text-[var(--destructive)]">
+            <div className="text-13 text-[var(--error-fg)]">
               {t('newChat.atMention.scanFailed')}
             </div>
             <div className="text-12 text-[var(--cmd-palette-item-meta)] px-[12px] text-center">
@@ -671,7 +681,7 @@ export function AtMentionPanel({
                           <div
                             key={p}
                             {...menuRowAttrs()}
-                            className={cn(COMPOSER_MENU_ROW, 'group flex h-[44px] items-center gap-2 px-[10px]')}
+                            className={cn(COMPOSER_MENU_ROW, 'group flex h-[44px] shrink-0 items-center gap-2 px-[10px]')}
                           >
                             <FolderPlus
                               size={16}
@@ -747,7 +757,7 @@ export function AtMentionPanel({
                 className={cn(
                   COMPOSER_MENU_ROW,
                   'flex w-full items-center gap-2 px-[10px] py-[8px] text-left',
-                  'text-12 text-[var(--destructive)]',
+                  'text-12 text-[var(--error-fg)]',
                 )}
               >
                 {t('newChat.atMention.scanFailed')} · {t('newChat.atMention.retry')}

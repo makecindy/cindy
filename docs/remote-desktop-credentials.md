@@ -172,6 +172,37 @@ this probe reaches `fieldReady: true`; a separately cleared, never-submitted tes
 value confirms the submit button appears after insertion. Actual password submission
 and successful system unlock remain distinct physical acceptance checks.
 
+### Mac submission diagnostics
+
+Debug builds of the Mac helper emit fixed local stages through unified logging:
+`subsystem = app.cindy.remote-desktop`, `category = auto-unlock`. Stages cover
+password write, submit-button wait, final revalidation, the single AXPress result,
+unlock observation/timeout, and best-effort cleanup. Each record contains only the
+stage, a fixed result (`start`, `success`, `cannotComplete`, `failed`, `cancelled`),
+and elapsed milliseconds. Passwords, password length/digests, AX values, account or
+device identifiers, PIDs, and raw OS/AX error text are never logged. Release builds
+compile these records out. They are not added to upload summaries.
+
+The verified write/press targets use a 2-second AX messaging timeout; traversal
+keeps its 0.1-second read budget. macOS loginwindow secure-field writes can exceed
+100ms, and the short action timeout produced intermittent `cannotComplete` writes.
+Cleanup after a successful unlock may report `failed` because the secure field is
+gone; that does not change the unlock result.
+
+The production submission coordinator is shared with fake-AX unit tests. Those
+tests use a fake monotonic clock and cover delayed/missing submit buttons, final
+revalidation failure or cancellation, `.cannotComplete` followed by observed unlock,
+post-press timeout/cancellation, and the invariant that each attempt presses at
+most once. Identity, window, secure-field, and same-parent button checks are not
+relaxed by these diagnostics.
+
+The native bridge reports a rejected authentication with a fixed `CREDENTIAL_*`
+failure by throwing that code; Mobile preserves the exception and maps it to the
+existing user-facing error. A rejected result without a native failure remains a
+password rejection. Automatic unlock failures are shown as a dismissible non-modal
+`ErrorNotice` on the remote picture; the Security page keeps the same notice without
+duplicating the banner while it is open.
+
 ### Saved-password reconnect diagnosis
 
 A deliberate reconnect or a foreground return after releasing the viewer in the
@@ -179,6 +210,15 @@ background resets the optional automatic-unlock attempt. Media recovery and iOS
 `inactive` overlays retain suppression, so a cancelled Face ID request is not
 repeated by network retries. This changes only the local phone attempt flag, not
 any Device Link transport or other controller.
+
+Returning to the app, or to the remote desktop screen after it released the lease,
+still reconnects with `resume` so the host can refuse it (for example after an idle
+lock). On macOS that return may nevertheless use the saved password: unlocking waits
+for the first frame, which only follows the host accepting the start. Previously the
+resume flag alone suppressed unlocking, so a Mac that locked while the phone was away
+stayed locked after the return. Linux prepares unlocking before the start request
+and therefore keeps suppressing it for every resume. The return marker is cleared as
+soon as a lease starts, so later network recovery remains automatic and does not unlock.
 
 Phone-native failures distinguish inactive application, concurrent authentication,
 missing saved password, changed saved binding, and fixed Keychain read failure

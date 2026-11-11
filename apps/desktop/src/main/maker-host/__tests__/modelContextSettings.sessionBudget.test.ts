@@ -351,3 +351,12 @@ describe('applySessionContextWindowBudgetToCreateOpts', () => {
     expect('contextWindowBudget' in opts).toBe(false);
   });
 });
+
+// Preserve the existing test owner/path contract after storage ports were extracted.
+vi.mock('../../ownerContext.js', () => ({
+  activeDataOwnerId: () => 'test-owner',
+  ownerGeneration: () => 1,
+  isOwnerBoundaryPending: () => false,
+  hasCommittedOwner: () => Boolean('test-owner'),
+  ownerScopedPath: (...parts: string[]) => path.join(budgetState.dir, ...parts),
+}));

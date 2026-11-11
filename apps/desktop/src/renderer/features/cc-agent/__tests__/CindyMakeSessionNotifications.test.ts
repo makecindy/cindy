@@ -141,7 +141,7 @@ function dispatcher(local: NotificationSession[], remote: NotificationSession[] 
   };
   return new Function(...Object.keys(bindings), emitted)(...Object.values(bindings)) as (
     sessionId: string, kind: 'done' | 'error' | 'needs-reply',
-    options?: { inputHandoff: true; inputHandoffRequestId: string },
+    options?: { inputHandoff?: true; inputHandoffRequestId?: string; alertEventId?: string },
   ) => void;
 }
 
@@ -158,6 +158,23 @@ describe('disabled Make notification dispatch', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(send).toHaveBeenCalledExactlyOnceWith(route, expect.any(String), 'needs-reply', expect.objectContaining(options));
+  });
+
+  // #9317 / unit: the sidebar callback is the production owner of every session
+  // notification. The alert identity has to survive each local dispatch branch,
+  // including the async hidden-bot fallback, or main never sees it.
+  it.each(['ordinary', 'worker', 'unknown'] as const)('forwards the alert identity for %s tasks', async route => {
+    const options = { alertEventId: 'turn:100:ask:1' };
+    const fire = dispatcher(route === 'unknown' ? [] : [{
+      id: route, title: 'Task', source: 'desktop',
+      ...(route === 'worker' ? { orcaRole: 'worker' as const } : {}),
+    }]);
+    fire(route, 'needs-reply', options);
+    fire(route, 'error', { alertEventId: 'turn:100:error' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(send).toHaveBeenCalledWith(route, expect.any(String), 'needs-reply', expect.objectContaining(options));
+    expect(send).toHaveBeenCalledWith(route, expect.any(String), 'error', expect.objectContaining({ alertEventId: 'turn:100:error' }));
   });
 
   it.each(['cindy-make', 'cindy-make-merge'].flatMap(source =>

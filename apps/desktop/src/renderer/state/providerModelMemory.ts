@@ -981,6 +981,21 @@ export function clearProviderModelFast(agent: AgentKind, providerId: string, mod
   persist(next, [op], map);
 }
 
+/** Group preference edits preserve the existing global/source layering and do not touch lastModel. */
+export function editProviderModelMemoryBatch(ops: readonly ProviderModelMemoryEdit[]): boolean {
+  if (ops.some((op) => !op.providerId || op.providerId === MODEL_PRESET_SLOT_ID || !op.model)) return false;
+  const next = ops.reduce(applyProviderMemoryOp, freshMap());
+  const key = storageKey();
+  try { window.localStorage.setItem(key, JSON.stringify(next)); } catch { return false; }
+  pendingOpsByStorageKey.delete(key);
+  cache = next;
+  emit();
+  return true;
+}
+
+export type ProviderModelMemoryEdit = Extract<ProviderMemoryOp,
+  { kind: 'set-effort' | 'set-fast' | 'clear-effort' | 'clear-fast' }>;
+
 /**
  * 快照当前全部槽的 (effortByModel, fastByModel, thinkingByModel)(丢弃 lastModel)。
  * 用于 renderer → main 缓存和 device-link 控制端镜像被控设备的全局模型预设。
@@ -1031,3 +1046,6 @@ export function __resetForTest(): void {
 
 export const __STORAGE_KEY = STORAGE_KEY;
 export const __LEGACY_STORAGE_KEY_V1 = LEGACY_STORAGE_KEY_V1;
+
+/** Owner token for async alias edits; never carry a pending write into another account. */
+export function getProviderModelMemoryOwner(): string | null { return activeDataOwnerId; }

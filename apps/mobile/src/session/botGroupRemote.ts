@@ -13,6 +13,7 @@ import {
   BOT_GROUP_REMOTE_COLLECTION_ID,
   BOT_GROUP_REMOTE_RESOURCE_KIND,
   isBotGroupRuntimeFailureCode,
+  readBotGroupRuntimeFailureReason,
   isBotGroupCapabilityNoticeCode,
   parseBotGroupQuoteView,
   parseBotGroupTaskCardView,
@@ -115,7 +116,7 @@ const NOTICE_CODES = new Set<string>([
 const PLAN_STATUSES = new Set<BotGroupPlanView['status']>([
   'proposed', 'running', 'waiting', 'done', 'stopped', 'dismissed', 'superseded',
 ]);
-const STEP_STATUSES = new Set<BotGroupPlanStepView['status']>(['pending', 'running', 'done', 'failed']);
+const STEP_STATUSES = new Set<BotGroupPlanStepView['status']>(['pending', 'running', 'done', 'failed', 'skipped']);
 const SPEAKER_ACTIVITIES = new Set<BotGroupSpeaker['activity']>(['reply', 'planning', 'step']);
 const ATTACHMENT_CATEGORIES = new Set<BotGroupAttachmentCategory>(['image', 'pdf', 'text', 'office', 'file']);
 const ATTACHMENT_STATES = new Set<NonNullable<BotGroupAttachment['state']>>(['loading', 'unavailable']);
@@ -162,6 +163,9 @@ function parseMember(value: unknown): BotGroupMemberView | null {
   return {
     botId,
     name,
+    ...(text(record.displayName, MAX_NAME) ? { displayName: text(record.displayName, MAX_NAME)! } : {}),
+    ...(text(record.nickname, MAX_NAME) ? { nickname: text(record.nickname, MAX_NAME)! } : {}),
+    ...(text(record.ownerName, MAX_NAME) ? { ownerName: text(record.ownerName, MAX_NAME)! } : {}),
     ...(id(record.actorId) ? { actorId: id(record.actorId)! } : {}),
     ...(record.actorKind === 'human' || record.actorKind === 'bot' || record.actorKind === 'integration' ? { actorKind: record.actorKind } : {}),
     ...(typeof record.isOwned === 'boolean' ? { isOwned: record.isOwned } : {}),
@@ -233,6 +237,8 @@ function parseMessage(value: unknown): BotGroupMessageView | null {
   // A task this teammate started from the group (bot-group-chat.md §10); older computers send none.
   const task = authorKind === 'bot' ? parseBotGroupTaskCardView(record.task) : null;
   const process = authorKind === 'bot' && record.deleted !== true ? parseBotGroupProcessRef(record.process) : null;
+  const runtimeFailureReason = kind === 'notice' && authorKind === 'system'
+    ? readBotGroupRuntimeFailureReason(record.runtimeFailureCode, record.runtimeFailureReason) : undefined;
   return {
     id: messageId,
     sequence,
@@ -248,6 +254,7 @@ function parseMessage(value: unknown): BotGroupMessageView | null {
     mentions: parseMentions(record.mentions),
     noticeCode,
     ...(isBotGroupRuntimeFailureCode(record.runtimeFailureCode) ? { runtimeFailureCode: record.runtimeFailureCode } : {}),
+    ...(runtimeFailureReason ? { runtimeFailureReason } : {}),
     ...(kind === 'notice' && authorKind === 'bot' && record.deleted !== true && isBotGroupCapabilityNoticeCode(record.capabilityNoticeCode)
       ? { capabilityNoticeCode: record.capabilityNoticeCode } : {}),
     planId: optionalId(record.planId),
@@ -275,7 +282,10 @@ function parseStep(value: unknown): BotGroupPlanStepView | null {
   const status = enumOf(record?.status, STEP_STATUSES);
   const task = text(record?.task, 4_096);
   if (!record || position === null || !botId || !status || task === null) return null;
-  return { position, botId, botName: text(record.botName, MAX_NAME) ?? '', task, status };
+  return { position, botId, botName: text(record.botName, MAX_NAME) ?? '', task, status,
+    ...(id(record.resultMessageId) ? { resultMessageId: id(record.resultMessageId)! } : {}),
+    ...(id(record.executionId) ? { executionId: id(record.executionId)! } : {}),
+    ...(typeof record.executionStatus === 'string' ? { executionStatus: record.executionStatus } : {}) };
 }
 
 function parsePlan(value: unknown): BotGroupPlanView | null {
@@ -291,9 +301,12 @@ function parsePlan(value: unknown): BotGroupPlanView | null {
     id: planId,
     status,
     kind: record.kind === 'talk' || record.kind === 'work' ? record.kind : undefined,
+    supportsPendingSkip: record.supportsPendingSkip === true,
+    canManage: typeof record.canManage === 'boolean' ? record.canManage : undefined,
     canAdd: typeof record.canAdd === 'boolean' ? record.canAdd : undefined,
-    // The computer's 自动交接 for a 分工 it started; changed only there.
+    // The setting belongs to this computer; only a new host explicitly offers remote control.
     autoContinue: typeof record.autoContinue === 'boolean' ? record.autoContinue : undefined,
+    canSetAutoContinue: record.canSetAutoContinue === true,
     organizerBotId: id(record.organizerBotId) ?? '',
     organizerName: text(record.organizerName, MAX_NAME) ?? '',
     steps: steps as BotGroupPlanStepView[],
@@ -344,6 +357,7 @@ function parseRound(value: unknown): BotGroupRoundView {
     status: record?.status === 'running' ? 'running' : 'idle',
     speakers,
     canContinue: record?.canContinue === true,
+    ...(record?.othersActive === true ? { othersActive: true } : {}),
   };
 }
 
@@ -391,6 +405,8 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     name,
     serverBacked: record.serverBacked === true,
     singleSpeaker: record.singleSpeaker === true,
+    canStopAll: record.canStopAll === true,
+    supportsScopedStop: record.supportsScopedStop === true,
     supportsMentionAudiences: record.supportsMentionAudiences === true,
     allowMentionAllBots: record.allowMentionAllBots === true,
     supportsDivision: record.supportsDivision === true,
@@ -409,6 +425,7 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     supportsMemberRemoval: record.supportsMemberRemoval === true,
     supportsSettingsManagement: record.supportsSettingsManagement === true,
     supportsReadReceipts: record.supportsReadReceipts === true,
+    ...(record.supportsLocalReadSync === true ? { supportsLocalReadSync: true } : {}),
     supportsPersonalMask: record.supportsPersonalMask === true,
     replyMode: record.replyMode === 'mentioned' ? 'mentioned' : 'all',
     speakingMode: record.speakingMode === 'sequential' ? 'sequential' : 'auto',
@@ -460,6 +477,7 @@ const ERROR_CODES: readonly BotGroupErrorCode[] = [
   'MENTION_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED',
   'PLAN_OPEN',
   'PLAN_CLOSED',
+  'TURN_ALREADY_STARTED',
   'HOST_NOT_READY',
   'NOT_FOUND',
   'INVALID_PARAMS',

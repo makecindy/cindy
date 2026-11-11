@@ -43,7 +43,7 @@ import { registerScheduleSilenceCurrentRunTool } from '../scheduler/silenceCurre
 import { registerScheduleCreateTool } from '../scheduler/create.js';
 import { registerScheduleUpdateTool } from '../scheduler/update.js';
 import { registerScheduleSetPreRunHookTool } from '../scheduler/setPreRunHook.js';
-import type { LiziMcpSessionContext } from '../types.js';
+import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 
 // ── In-memory ScheduleStorage / Runner / Clock (same shape as Phase 1 tests) ──
 
@@ -158,6 +158,7 @@ interface Harness {
 
 async function makeHarness(opts?: {
   schedulerNotReady?: boolean;
+  webhookManagement?: SchedulerMcpDeps['webhookManagement'];
 }): Promise<Harness> {
   const storage = new InMemoryStorage();
   const clock = new FakeClock();
@@ -172,6 +173,7 @@ async function makeHarness(opts?: {
   // to compute nextFireAt for any pre-existing actives (none here).
 
   const server = createSchedulerMcpServer({
+    webhookManagement: opts?.webhookManagement,
     getScheduler: () => {
       if (opts?.schedulerNotReady) {
         throw new Error('scheduler not started');
@@ -225,6 +227,28 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     h = await makeHarness();
   });
 
+  // Unit integration: account management must be discoverable and reachable through
+  // the public MCP dispatcher, including an endpoint belonging to an offline device.
+  it('discovers account Webhook management and dispatches validated list/release/restore calls', async () => {
+    await h.cleanup();
+    const service = { list: vi.fn(async () => ({ used: 1, limit: 10, endpoints: [{ id: 'whk_old', deviceId: 'offline' }] })),
+      release: vi.fn(async (_id: string) => {}), restore: vi.fn(async (_id: string) => {}) };
+    h = await makeHarness({ webhookManagement: service });
+    try {
+      const discovered = await h.client.callTool({ name: 'list_tools', arguments: { category: 'scheduler' } });
+      expect(JSON.stringify(discovered.content)).toContain('schedule_webhook_release');
+      const list = await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_list', args: {} } });
+      expect(JSON.stringify(list.content)).toContain('offline');
+      const bad = await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_release', args: { id: '../secret' } } });
+      expect(bad.isError).toBe(true);
+      expect(service.release).not.toHaveBeenCalled();
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_release', args: { id: 'whk_old' } } });
+      expect(service.release).toHaveBeenCalledWith('whk_old');
+      await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_webhook_restore', args: { id: 's1' } } });
+      expect(service.restore).toHaveBeenCalledWith('s1');
+    } finally { await h.cleanup(); }
+  });
+
   // Integration: schema parsing used to strip the Agent location. Follow the real
   // MCP dispatcher through create/update and verify the saved route and null clear.
   it('persists shared model selections and clears their location through MCP', async () => {
@@ -257,6 +281,10 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(payload.categories).toEqual([
       { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*schedule_create.*只在本机/) },
     ]);
+    // Agent/user parity: the first discovery result must expose remote trigger
+    // configuration while keeping secret/URL operations out of Agent tools.
+    expect(payload.categories[0].description).toMatch(/Webhook[^。；]*触发配置[^。；]*可指定电脑/);
+    expect(payload.categories[0].description).toMatch(/密钥.*更换地址.*用户.*详情/);
     await h.cleanup();
   });
 
@@ -306,16 +334,6 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       'schedule_silence_current_run',
       'schedule_update',
     ]);
-    await h.cleanup();
-  });
-
-  it('rejects arbitrary-bot routine management on the general scheduler surface', async () => {
-    for (const name of ['routine_list', 'routine_sources', 'routine_save', 'routine_history', 'routine_delete', 'routine_run_now']) {
-      const result = await h.client.callTool({
-        name: 'call_tool', arguments: { name, args: { botId: 'another-bot', id: 'routine' } },
-      });
-      expect(result.isError).toBe(true);
-    }
     await h.cleanup();
   });
 
@@ -1081,6 +1099,62 @@ describe('schedule_notify_current_run — runId resolution branches', () => {
     expect(env.ok).toBe(true);
     expect(env.data).toMatchObject({ notified: true, runId: 'run-fallback' });
     expect(fake.notifiedArg).toBe('run-fallback');
+  });
+});
+
+// ── schedule_create / schedule_update: Webhook 触发需要 Cindy 账号 ───────────────
+
+describe('Webhook 触发需要可用的接收方', () => {
+  const baseArgs = {
+    name: 't',
+    prompt: 'p',
+    cronExpr: '*/10 * * * *',
+    timezone: 'Asia/Shanghai',
+    recurring: true,
+    agentKind: 'claude-code',
+    notify: { desktop: true, feishu: false },
+  };
+
+  async function callCreate(receiver: 'cloud' | 'signed-out' | 'unavailable', extra: Record<string, unknown>) {
+    const create = vi.fn((input: object) => ({ id: 'new-sched', ...input }));
+    const registry = new SchedulerToolRegistry();
+    registerScheduleCreateTool(
+      registry,
+      { getScheduler: () => ({ create }) as never, webhookReceiver: () => receiver },
+      () => ({ agentKind: 'claude-code', workingDir: '/x' }),
+    );
+    const res = await registry.call('schedule_create', { ...baseArgs, ...extra });
+    return { create, env: JSON.parse((res.content[0] as { text: string }).text) as { ok: boolean; message?: string } };
+  }
+
+  it('未登录时拒绝开启，不创建任务', async () => {
+    const { create, env } = await callCreate('signed-out', { webhookTrigger: {} });
+    expect(env.ok).toBe(false);
+    expect(env.message).toContain('登录 Cindy 账号');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('当前环境没有接收服务时拒绝开启', async () => {
+    const { create, env } = await callCreate('unavailable', { webhookTrigger: {} });
+    expect(env.ok).toBe(false);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('已登录时可以开启；不用 Webhook 的任务不受影响', async () => {
+    expect((await callCreate('cloud', { webhookTrigger: {} })).env.ok).toBe(true);
+    expect((await callCreate('signed-out', {})).env.ok).toBe(true);
+  });
+
+  // 规则：docs/product-rules/schedule-webhook-trigger.md。Agent 能选发送方，但密钥不经过模型。
+  it('发送方交给引擎校验；参数里夹带密钥会被拒绝', async () => {
+    const source = { preset: 'stripe', signed: false };
+    const { create, env } = await callCreate('cloud', { webhookTrigger: { source } });
+    expect(env.ok).toBe(true);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ webhookTrigger: { source } }));
+
+    const smuggled = await callCreate('cloud', { webhookTrigger: { source: { preset: 'stripe', secret: 'whsec_x' } } });
+    expect(smuggled.env.ok).toBe(false);
+    expect(smuggled.create).not.toHaveBeenCalled();
   });
 });
 

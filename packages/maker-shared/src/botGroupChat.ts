@@ -77,6 +77,11 @@ export function isBotGroupRuntimeFailureCode(value: unknown): value is BotGroupR
   return typeof value === 'string' && BOT_GROUP_RUNTIME_FAILURE_CODES.some(code => code === value);
 }
 
+export type BotGroupRuntimeFailureReason = 'unclaimed_timeout';
+export function readBotGroupRuntimeFailureReason(code: unknown, value: unknown): BotGroupRuntimeFailureReason | undefined {
+  return code === 'RUNTIME_TIMEOUT' && value === 'unclaimed_timeout' ? value : undefined;
+}
+
 /** Current execution state, separate from persisted/paginated chat messages. */
 export interface BotGroupExecutionFailureView {
   executionId: string;
@@ -85,6 +90,7 @@ export interface BotGroupExecutionFailureView {
   botId: string;
   botName: string;
   code: BotGroupRuntimeFailureCode;
+  reason?: BotGroupRuntimeFailureReason;
   planId: string | null;
   updatedAt?: number;
 }
@@ -99,8 +105,10 @@ export function readBotGroupExecutionFailure(value: unknown, roomId: string): Bo
     || typeof row.bot_id !== 'string' || !row.bot_id
     || typeof row.epoch !== 'number' || !Number.isSafeInteger(row.epoch) || row.epoch < 0) return null;
   const updatedAt = typeof row.updated_at === 'string' ? Date.parse(row.updated_at) : NaN;
+  const reason = readBotGroupRuntimeFailureReason(row.failure_code, row.failure_reason);
   return { executionId: row.id, epoch: row.epoch, sourceMessageId: row.source_message_id,
     botId: row.bot_id, botName: '', code: isBotGroupRuntimeFailureCode(row.failure_code) ? row.failure_code : 'RUNTIME_ERROR',
+    ...(reason ? { reason } : {}),
     planId: typeof row.plan_id === 'string' ? row.plan_id : null,
     ...(Number.isFinite(updatedAt) ? { updatedAt } : {}) };
 }
@@ -198,6 +206,7 @@ export interface BotGroupMessageView {
   noticeCode: BotGroupNoticeCode | null;
   /** Localized cause and remedy for a failed execution; raw diagnostics stay on the executor. */
   runtimeFailureCode?: BotGroupRuntimeFailureCode;
+  runtimeFailureReason?: BotGroupRuntimeFailureReason;
   capabilityNoticeCode?: BotGroupCapabilityNoticeCode;
   /** The plan this message belongs to: the 安排卡, a step hand-off or the plan's end. */
   planId: string | null;
@@ -216,7 +225,7 @@ export interface BotGroupMessageView {
   /** A main-chat message that re-posts an existing thread reply by reference. */
   threadShare?: BotGroupThreadShareView;
   /**
-   * Your own message in a group whose server reports read receipts: another human member has
+   * Your own message in a group whose server reports read receipts: another member (a person, or a teammate whose computer took the execution up) has
    * read it (the double check). Omitted otherwise; never set on other people's messages.
    */
   readByOthers?: boolean;
@@ -332,6 +341,8 @@ export interface BotGroupThreadShareView {
   authorName: string;
   /** The sharer wrote the reply themselves (sent to the thread and the main chat). */
   sharedByAuthor: boolean;
+  /** Original reply's targets, paired with its content. Older projections omit this. */
+  mentions?: BotGroupMention;
   content: string;
   attachments: BotGroupAttachment[];
   createdAt: number | null;
@@ -398,7 +409,7 @@ export type BotGroupPlanStatus =
   | 'stopped'
   | 'dismissed'
   | 'superseded';
-export type BotGroupPlanStepStatus = 'pending' | 'running' | 'done' | 'failed';
+export type BotGroupPlanStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 
 export interface BotGroupPlanStepView {
   position: number;
@@ -409,6 +420,9 @@ export interface BotGroupPlanStepView {
   status: BotGroupPlanStepStatus;
   /** The step's latest hand-off message (a redo replaces it); absent where the host does not report it. */
   resultMessageId?: string | null;
+  /** Current server attempt, absent on older servers and completed turns. */
+  executionId?: string;
+  executionStatus?: string;
 }
 
 export interface BotGroupPlanView {
@@ -428,6 +442,8 @@ export interface BotGroupPlanView {
   kind?: 'talk' | 'work';
   /** Server groups: the viewer may continue or stop it (creator, owner or admin). */
   canManage?: boolean;
+  /** Server supports marking future talk turns skipped; absent on older hosts. */
+  supportsPendingSkip?: boolean;
   /** Server groups: what the viewer sends without naming anyone goes to the step under way (creator, or a human owner/admin). */
   canAdd?: boolean;
   /**
@@ -435,6 +451,8 @@ export interface BotGroupPlanView {
    * A choice of the computer that made it, not shared chat state; absent where unsupported.
    */
   autoContinue?: boolean;
+  /** Remote host can change its local handoff setting for this open work plan. Absent on older hosts. */
+  canSetAutoContinue?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -521,6 +539,8 @@ export interface BotGroupSummary {
   canInvite?: boolean;
   /** Server groups: an owner or admin may also stop everyone's work, not only their own. */
   canStopAll?: boolean;
+  /** Explicit host/client support for stop scope; older hosts ignore scope and must not offer all. */
+  supportsScopedStop?: boolean;
   /**
    * Server groups whose server gives each request one teammate (the lead when nobody is named)
    * and arranges turns itself; no speaking modes (bot-group-chat.md §4).
@@ -627,6 +647,7 @@ export type BotGroupErrorCode =
   | 'PLAN_OPEN'
   /** The plan already ended, was replaced, or is in a state that does not allow the action. */
   | 'PLAN_CLOSED'
+  | 'TURN_ALREADY_STARTED'
   /** The quoted message was deleted, moved out of reach or never belonged to this timeline. */
   | 'QUOTE_UNAVAILABLE'
   | 'INTERNAL';
@@ -696,9 +717,10 @@ export type BotGroupPlanAction = 'start' | 'dismiss' | 'continue' | 'retry';
 
 export interface BotGroupPlanEditInput extends BotGroupPlanActionInput {
   position: number;
-  /** `reassign` needs `botId`; `remove` keeps at least one step. Proposed plans only. */
-  action: 'reassign' | 'remove';
+  /** `skip` targets an exact unclaimed execution or a future pending position in a server discussion. */
+  action: 'reassign' | 'remove' | 'skip';
   botId?: string;
+  executionId?: string;
 }
 
 export interface BotGroupGetOptions {
@@ -781,6 +803,7 @@ export type BotGroupRemoteActionId =
   | 'plan-dismiss'
   | 'plan-continue'
   | 'plan-retry'
+  | 'plan-auto-continue'
   | 'plan-edit';
 
 /**
@@ -791,6 +814,11 @@ export interface BotGroupRemoteChatData extends BotGroupDetail {
   projectDirName: string | null;
   /** Host forwards a measured main-timeline read to the chat server. Older hosts omit it. */
   supportsReadReceipts?: boolean;
+  /**
+   * Early local group: the host keeps its read position and accepts `read` with `{ at }`
+   * (host time of the newest message shown), so reading on the phone clears the computer's badge.
+   */
+  supportsLocalReadSync?: boolean;
   supportsPersonalMask?: boolean;
   /**
    * The computer accepts attachments on `send` (absent on older computers, which would
@@ -907,7 +935,7 @@ export interface BotGroupMessageReader { actorId: string; name: string | null; r
 /** Who has read one message of a group (bot-group-chat.md「消息已读」). Only the readers are listed, never who has not. */
 export interface BotGroupMessageReaders {
   messageId: string;
-  /** Human members other than the author who can see the message. */
+  /** Members other than the author who can see the message: people and teammates. */
   eligibleCount: number;
   /** How many of them have read it; matches `readers` when the list is given. */
   readCount: number;

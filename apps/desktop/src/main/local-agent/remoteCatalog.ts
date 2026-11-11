@@ -4,9 +4,9 @@ import { readDeviceProviderViews } from '../remote-agent/controller/deviceCatalo
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { deviceLinkApiFetch } from '../device-link/deviceLinkApi.js';
 import { getReceivedShares } from '../device-link/providerShareGuest.js';
-import { readDeviceLinkSettings } from '../device-link/settings-store.js';
+import { readDeviceLinkSettings } from '../device-link/settings-store.desktop.js';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { LOCAL_AGENT_ROUTE, localAgentModels, type LocalAgentModel } from './catalog.js';
 import type { ProviderGroupConfig } from '../../shared/providerGroup.js';
 import { collectRemoteProviderGroups, remoteProviderEntryKey } from '../../shared/remoteProviderGroups.js';

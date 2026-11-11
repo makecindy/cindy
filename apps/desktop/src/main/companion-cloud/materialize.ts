@@ -13,10 +13,12 @@ import { directRoomSourceId } from './directRoom.js';
 import { readAllRoomMessages } from './room.js';
 import type { BotSkillFile } from '../maker-ipc/botSkillFiles.js';
 import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
-import type { CompanionCloudState } from './state.js';
+import type { CompanionBotState, CompanionCloudState } from './state.js';
+import { readCompanionRows, storedValueHash, type CompanionStore } from './store.js';
 import { errorCode, isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import {
-  COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
+  COMPANION_AUTOMATION_PREFIX, COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_PROJECT_CARRYOVER_KEY,
+  COMPANION_PROJECT_RULES_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY, TOMBSTONE_HASH, isCompanionProfileSnapshot, valueHash,
 } from './uploader.js';
 
@@ -31,6 +33,8 @@ export interface CompanionWriteFence {
 /** Local profile, Bot Home and Session operations, all through the existing services. */
 export interface CompanionMaterializeHost {
   readProfile: (botId: string) => Promise<CompanionLocalProfile | null>;
+  /** A different, non-archived Cindy identity; never match by display name. */
+  findConflictingCindy?: (botId: string) => Promise<string | null>;
   /**
    * The cloud avatar is restored when its bytes are still available. A temporary download failure
    * rejects; a permanent one stores the default avatar together with durable local-only provenance.
@@ -67,15 +71,38 @@ export interface CompanionMaterializeHost {
   /** Make a restored skill's folder hold these files. `fetch` gives a file's local path; null when it is gone for good. Returns the files that did not arrive. */
   applySkillFiles?: (botId: string, slug: string, files: BotSkillFile[], fetch: (file: BotSkillFile) => Promise<string | null>,
     options: { removeOthers: boolean; keep?: string[] }, fence: CompanionWriteFence) => Promise<string[]>;
-  /** The companion's todos from the cloud replace the same ids here; `remove` ids are deleted. */
-  applyTodos?: (botId: string, items: unknown[], remove: string[], fence: CompanionWriteFence) => Promise<void>;
-  /** Its routines from the cloud are created or updated with their ids; `remove` ids are deleted. */
+  /**
+   * Routines an older (V1) computer uploaded become automations of the teammate's project, once per
+   * routine id; `remove` lists their tombstones (not applied, see host.ts).
+   */
   applyRoutines?: (botId: string, routines: unknown[], remove: string[], fence: CompanionWriteFence) => Promise<void>;
   /**
    * Its workbench folders and portable judgments join this computer's, or with `replace` take their
    * place (`null`: the companion has none).
    */
   applyWorkbench?: (botId: string, value: unknown, fence: CompanionWriteFence, options?: { replace?: boolean }) => Promise<void>;
+  /**
+   * A V2 teammate's project rules (`companion.project-rules.v1`) become its project's `AGENTS.md`
+   * (the teammate becomes a project first). Unchanged rules write nothing.
+   */
+  applyProjectRules?: (botId: string, content: string, fence: CompanionWriteFence) => Promise<void>;
+  /**
+   * The project's automations (`companion.automation.v1:<configId>`): each value is upserted by its
+   * config id with its paused state, a tombstone (`value: null`) removes it.
+   */
+  applyAutomations?: (botId: string, rows: Array<{ id: string; value: unknown }>, fence: CompanionWriteFence) => Promise<void>;
+  /**
+   * Merging a copy: its project rules are added to this teammate's own under a heading naming
+   * where they came from; rules already included write nothing.
+   */
+  mergeProjectRules?: (botId: string, from: string, content: string, fence: CompanionWriteFence) => Promise<void>;
+  /** The project's unfinished V1 work (`companion.project-carryover.v1`) becomes its `CARRYOVER.md`. */
+  applyProjectCarryover?: (botId: string, content: string, fence: CompanionWriteFence) => Promise<void>;
+  /**
+   * Todos a computer still on V1 uploaded: the open ones join the project's `CARRYOVER.md` (once),
+   * like a local upgrade carries them. Teammates no longer keep todos.
+   */
+  applyLegacyTodos?: (botId: string, todos: unknown[], fence: CompanionWriteFence) => Promise<void>;
   ensureCanonicalSession: (botId: string, fence: CompanionWriteFence) => Promise<string>;
   /**
    * Local rows created at or after `fromMs`, including rewound and deleted ones (`removed`):
@@ -117,8 +144,25 @@ const text = (value: unknown) => typeof value === 'string' ? value : undefined;
 const record = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const noFence: CompanionWriteFence = { assertCurrent: () => undefined };
 
+/** A local identity conflict needs a deliberate merge or move, not another creation attempt. */
+export class CompanionIdentityConflict extends Error {
+  constructor(readonly conflictingBotId: string) { super('LOCAL_CINDY_CONFLICT'); }
+}
+
+export async function assertCompanionIdentity(
+  host: Pick<CompanionMaterializeHost, 'findConflictingCindy'>,
+  botId: string, templateId: unknown, fence: CompanionWriteFence,
+): Promise<void> {
+  fence.assertCurrent();
+  if (templateId !== 'cindy' || !host.findConflictingCindy) return;
+  const conflict = await host.findConflictingCindy(botId);
+  fence.assertCurrent();
+  if (conflict) throw new CompanionIdentityConflict(conflict);
+}
+
 export async function materializeCompanion(input: {
   api: CompanionApi;
+  store?: CompanionStore;
   state: CompanionCloudState;
   host: CompanionMaterializeHost;
   actor: CompanionMaterializeActor;
@@ -140,10 +184,24 @@ export async function materializeCompanion(input: {
     return value;
   };
   const botId = actor.externalId;
-  const rows = await step(() => api<Array<{ key: string; value: unknown; revision: number }>>('/preferences', 'GET', undefined, actor.id));
-  const prefs = new Map((Array.isArray(rows) ? rows : []).map(row => [row.key, row]));
+  const rows = await step(() => readCompanionRows(api, input.store, actor.id));
+  const prefs = new Map(rows.map(row => [row.key, row]));
   const profileValue = prefs.get(COMPANION_PROFILE_KEY)?.value;
   const profile = isCompanionProfileSnapshot(profileValue) ? profileValue : null;
+  /** A restored value is recorded under the revisions of where it came from. */
+  const remember = (entry: CompanionBotState, key: string, value: { hash: string; revision: number }) => {
+    // The other location's record is from before another computer changed the value: drop it, or a
+    // later edit back to that old value would look already uploaded there (and be lost).
+    const row = prefs.get(key);
+    if (row?.fromStore) {
+      const hash = value.hash === TOMBSTONE_HASH ? value.hash : storedValueHash(row.value, row.prefRevision ?? 0);
+      entry.stored = { ...entry.stored, [key]: { hash, revision: value.revision, local: true, ...(row.prefRevision !== undefined ? { prefRevision: row.prefRevision } : {}) } };
+      delete entry.prefs[key];
+    } else {
+      entry.prefs[key] = { ...value, local: true };
+      if (entry.stored?.[key]) { const { [key]: _old, ...rest } = entry.stored; entry.stored = rest; }
+    }
+  };
   const known = state.bot(botId);
   const knownPrefs = known?.actorId === actor.id ? known.prefs : {};
 
@@ -157,6 +215,10 @@ export async function materializeCompanion(input: {
   // Without the home's profile snapshot this copy's own (or empty) profile would be published as
   // the companion's identity: wait (demoted, retried) until the home has uploaded one.
   if (!profile) throw new Error('PROFILE_SNAPSHOT_MISSING');
+  const templateId = text(record(profile)?.templateId);
+  // The cloud externalId is the only reusable local identity. Another Cindy (even one with
+  // the same name) must not be overwritten, re-keyed or silently merged into this actor.
+  await assertCompanionIdentity(host, botId, templateId, fence);
   // An existing local copy is saved before the cloud copy replaces (or deletes) its files.
   let backup: string | null | undefined;
   if (local && !(known?.actorId === actor.id && known.backedUp) && host.backupHome) {
@@ -166,7 +228,6 @@ export async function materializeCompanion(input: {
     state.update(botId, actor.id, entry => { entry.backedUp = true; });
   }
   const name = text(profile?.name)?.trim() || actor.name || local?.displayName || '伙伴';
-  const templateId = text(record(profile)?.templateId);
   if (!local) {
     await step(() => host.createProfile({ id: botId, name, description: text(profile?.description) ?? '',
       identitySource: text(profile?.soul) ?? '', userContextSource: text(profile?.user) ?? '', avatar: actor.avatar,
@@ -271,12 +332,12 @@ export async function materializeCompanion(input: {
     });
   }
 
-  // Todos, routines and the workbench move with the companion: applied in one batch each (the
-  // cloud wins; a routine tombstone removes it here). A todo is deleted by marking it (the mark
-  // travels as a value); its tombstone only means it left the travelling window (closed long ago),
-  // so this computer keeps its own copy.
+  // Routines an older computer uploaded move with the companion, applied in one batch. Teammates no
+  // longer keep todos: an older computer's open ones become unfinished work in the project.
+  const applyTodos = host.applyLegacyTodos;
   const batches = [
-    { prefix: COMPANION_TODO_PREFIX, kind: 'todo', run: host.applyTodos, removes: false },
+    { prefix: COMPANION_TODO_PREFIX, kind: 'todo', removes: false,
+      run: applyTodos ? (id: string, values: unknown[], _removed: string[], writeFence: CompanionWriteFence) => applyTodos(id, values, writeFence) : undefined },
     { prefix: COMPANION_ROUTINE_PREFIX, kind: 'routine', run: host.applyRoutines, removes: true },
   ] as const;
   for (const batch of batches) {
@@ -289,11 +350,38 @@ export async function materializeCompanion(input: {
       for (const [key, row] of rows) applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
     });
   }
+  // A V2 teammate's project setup, after its memories and skills: the project (made here first when
+  // needed) takes them over. Older homes upload neither key: the project keeps what it has.
+  const rulesRow = prefs.get(COMPANION_PROJECT_RULES_KEY);
+  const rules = rulesRow ? text(record(rulesRow.value)?.content) : undefined;
+  if (rulesRow && host.applyProjectRules && (rules !== undefined || rulesRow.value === null)) {
+    await apply('project-rules', async () => {
+      // Removed on the home is not removed here: a project always keeps its rules file.
+      if (rules !== undefined) await step(() => host.applyProjectRules!(botId, rules, fence));
+      applied.set(COMPANION_PROJECT_RULES_KEY, { hash: rulesRow.value === null ? TOMBSTONE_HASH : valueHash(rulesRow.value), revision: rulesRow.revision });
+    });
+  }
+  const carryoverRow = prefs.get(COMPANION_PROJECT_CARRYOVER_KEY);
+  const carryover = carryoverRow ? text(record(carryoverRow.value)?.content) : undefined;
+  if (carryoverRow && host.applyProjectCarryover && (carryover !== undefined || carryoverRow.value === null)) {
+    await apply('project-carryover', async () => {
+      // Removed on the home is not removed here: the owner may still need it.
+      if (carryover !== undefined) await step(() => host.applyProjectCarryover!(botId, carryover, fence));
+      applied.set(COMPANION_PROJECT_CARRYOVER_KEY, { hash: carryoverRow.value === null ? TOMBSTONE_HASH : valueHash(carryoverRow.value), revision: carryoverRow.revision });
+    });
+  }
+  const automationRows = [...prefs].filter(([key]) => key.startsWith(COMPANION_AUTOMATION_PREFIX));
+  if (automationRows.length && host.applyAutomations) {
+    await apply('automation', async () => {
+      await step(() => host.applyAutomations!(botId, automationRows.map(([key, row]) => ({ id: key.slice(COMPANION_AUTOMATION_PREFIX.length), value: row.value })), fence));
+      for (const [key, row] of automationRows) applied.set(key, { hash: row.value === null ? TOMBSTONE_HASH : valueHash(row.value), revision: row.revision });
+    });
+  }
   // A workbench this computer synced before is the cloud's from back then: the cloud replaces it, so
   // a folder or judgment removed meanwhile (or all of them) stays removed. One that never synced
   // (an old copy of its own) joins, and goes up with the rest.
   const workbench = prefs.get(COMPANION_WORKBENCH_KEY);
-  const replaceWorkbench = !!knownPrefs[COMPANION_WORKBENCH_KEY];
+  const replaceWorkbench = !!knownPrefs[COMPANION_WORKBENCH_KEY] || (known?.actorId === actor.id && !!known.stored?.[COMPANION_WORKBENCH_KEY]);
   if (workbench && host.applyWorkbench && (workbench.value !== null || replaceWorkbench)) {
     await apply('workbench', async () => {
       await step(() => host.applyWorkbench!(botId, workbench.value, fence, { replace: replaceWorkbench }));
@@ -304,7 +392,7 @@ export async function materializeCompanion(input: {
   if (failures > 0) {
     // Keep what was restored (so the retry does not back the copy up again) and stay demoted.
     state.update(botId, actor.id, entry => {
-      for (const [key, value] of applied) entry.prefs[key] = { ...value, local: true };
+      for (const [key, value] of applied) remember(entry, key, value);
       // The copy now exists: the retry no longer sees it as new, so remember what it could not keep.
       if (notices.length) entry.arrivalNotices = notices;
     });
@@ -326,7 +414,8 @@ export async function materializeCompanion(input: {
   state.update(botId, actor.id, entry => {
     // Revisions may have moved on while another computer was the home.
     entry.prefsSeeded = false;
-    for (const [key, value] of applied) entry.prefs[key] = { ...value, local: true };
+    entry.storeSeeded = false;
+    for (const [key, value] of applied) remember(entry, key, value);
     if (!keepCursor) entry.mirror = { sessionId, ...cursor };
     if (needsRebuild) entry.pendingRebuild = true;
     if (notices.length) entry.arrivalNotices = notices; else delete entry.arrivalNotices;

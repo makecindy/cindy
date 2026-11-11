@@ -1,4 +1,5 @@
 import { BotChatReplyTarget } from '@/features/bots/BotChatQuoteViews';
+import { BotStartedTasksFooter, type BotStartedTask } from './BotStartedTasks';
 import { useBotChatQuote } from '@/features/bots/botChatQuoteContext';
 import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
 import { hasRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
@@ -214,6 +215,8 @@ interface AssistantMessageProps {
   botStarterOptions?: string[];
   starterOptionsLocked?: boolean;
   botTaskResults?: BotCollaborationMeta[];
+  /** Teammate chat: tasks this reply started, shown at the foot of its bubble. */
+  botStartedTasks?: readonly BotStartedTask[];
   /** Per-turn 费用 (USD) — 仅该轮最后一条 assistant 有值, action bar 时间旁显示。 */
   turnMoney?: RegionalMoney;
   turnCostUsd?: number;
@@ -253,6 +256,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   showActionBar = false,
   simplifiedBotConversation = false,
   botTaskResults,
+  botStartedTasks,
   botLearning,
   botStarterOptions,
   starterOptionsLocked,
@@ -387,6 +391,7 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <div
+      data-selection-quote-scope=""
       className={cn('flex w-full flex-col items-start gap-1.5', botBubble && 'group/message')}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -405,46 +410,48 @@ export const AssistantMessage = memo(function AssistantMessage({
             {t('chat.failedSamplingAttempt')}
           </div>
         )}
-        {ghostRenderCard && messageClientId && !showOriginal ? (
-          // 出口钩子自绘:意识卡片替换气泡(净化后的静态 HTML,沙箱 iframe)。
-          // 复用 GhostToolCard(自带主机身份头 + 主题注入 + 沙箱),turn 级无
-          // 工具名/参数,running 恒 false(turn 已结束)。
-          <GhostToolCard
-            callId={messageClientId}
-            ghostId={ghostRenderCard.ghostId}
-            toolName=""
-            toolInput={undefined}
-            html={ghostRenderCard.html}
-            height={ghostRenderCard.height}
-            running={false}
-            sessionId={currentSessionId}
-          />
-        ) : isStreaming && USE_LINE_COMMIT_STREAMING && !hasRichAnswer(content) ? (
-          <StreamingBody
-            workingDir={workingDir}
-            content={displayContent}
-            localFileRefs={localFileRefs}
-            currentSessionId={currentSessionId}
-            currentSessionTitle={currentSessionTitle}
-            streamFadeKey={streamFadeKey}
-            allowPrivilegedLinks={allowPrivilegedLinks}
-          />
-        ) : (
-          // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
-          // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部启用
-          // 100ms throttle, false 时无节流, 行为和该文件性能优化前完全一致。
-          <MarkdownRenderer
-            renderRichAnswers
-            workingDir={workingDir}
-            content={displayContent}
-            isStreaming={isStreaming}
-            streamFadeKey={streamFadeKey}
-            localFileRefs={localFileRefs}
-            currentSessionId={currentSessionId}
-            currentSessionTitle={currentSessionTitle}
-            allowPrivilegedLinks={allowPrivilegedLinks}
-          />
-        )}
+        <div data-selection-quote-body="" className="contents">
+          {ghostRenderCard && messageClientId && !showOriginal ? (
+            // 出口钩子自绘:意识卡片替换气泡(净化后的静态 HTML,沙箱 iframe)。
+            // 复用 GhostToolCard(自带主机身份头 + 主题注入 + 沙箱),turn 级无
+            // 工具名/参数,running 恒 false(turn 已结束)。
+            <GhostToolCard
+              callId={messageClientId}
+              ghostId={ghostRenderCard.ghostId}
+              toolName=""
+              toolInput={undefined}
+              html={ghostRenderCard.html}
+              height={ghostRenderCard.height}
+              running={false}
+              sessionId={currentSessionId}
+            />
+          ) : isStreaming && USE_LINE_COMMIT_STREAMING && !hasRichAnswer(content) ? (
+            <StreamingBody
+              workingDir={workingDir}
+              content={displayContent}
+              localFileRefs={localFileRefs}
+              currentSessionId={currentSessionId}
+              currentSessionTitle={currentSessionTitle}
+              streamFadeKey={streamFadeKey}
+              allowPrivilegedLinks={allowPrivilegedLinks}
+            />
+          ) : (
+            // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
+            // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部启用
+            // 100ms throttle, false 时无节流, 行为和该文件性能优化前完全一致。
+            <MarkdownRenderer
+              renderRichAnswers
+              workingDir={workingDir}
+              content={displayContent}
+              isStreaming={isStreaming}
+              streamFadeKey={streamFadeKey}
+              localFileRefs={localFileRefs}
+              currentSessionId={currentSessionId}
+              currentSessionTitle={currentSessionTitle}
+              allowPrivilegedLinks={allowPrivilegedLinks}
+            />
+          )}
+        </div>
         {/* 自绘卡在场:提供原文 ↔ 意识卡片切换(信任边界,主机绘制,始终可切回原文)。 */}
         {ghostRenderCard && (
           <button
@@ -470,6 +477,9 @@ export const AssistantMessage = memo(function AssistantMessage({
             shared/modelMismatch.ts)。常显不随 hover —— 用户需要在不悬停的情况
             下知道这轮不是自己选的模型回答的;icon 用 warning 语义色(token 豁免
             簇),文字保持 tertiary 灰阶,不喧宾夺主。 */}
+        {botBubble && botStartedTasks?.length ? (
+          <BotStartedTasksFooter tasks={botStartedTasks} hostSessionId={currentSessionId} />
+        ) : null}
         {modelMismatch && (
           <div className="mt-1 flex items-center gap-1.5 text-11" style={{ color: 'var(--text-tertiary)' }}>
             <TriangleAlert size={11} style={{ color: 'var(--warning-fg)' }} aria-hidden />

@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "推送诊断",
+    "read": "读取推送状态",
+    "busy": "读取中…",
+    "failed": "无法读取推送状态，请重试。",
+    "copyFailed": "无法复制令牌。",
+    "copied": "令牌已复制。",
+    "bundle": "应用 ID",
+    "build": "构建号",
+    "environment": "APNs 环境",
+    "permission": "系统权限",
+    "alerts": "横幅提醒",
+    "lockScreen": "锁定屏幕",
+    "notificationCenter": "通知中心",
+    "copy": "复制 APNs 令牌",
+    "hide": "隐藏结果",
+    "unknown": "未知",
+    "on": "已开启",
+    "off": "已关闭",
+    "hint": "仅点击后读取。APNs 令牌只在本页显示，不写入诊断记录，也不由此工具上传；离开页面或切到后台后隐藏。复制仅用于 Apple 推送控制台；已复制的内容仍留在剪贴板。",
+    "permissions": {
+      "granted": "已允许",
+      "denied": "已拒绝",
+      "undetermined": "尚未请求",
+      "provisional": "静默送达"
+    }
+  },
   "localLogs": {
     "upload": "上传日志",
     "uploadResult": {
@@ -135,11 +162,16 @@
     "permissionDenied": "通知权限未开启，请在系统设置中允许 Cindy 发送通知。",
     "unregisterQueued": "已关闭，联网后自动完成注销。",
     "preview": "显示消息内容预览",
-    "background": "在后台保持消息连接",
+    "background": "后台通知",
     "backgroundActive": "正在后台接收消息",
     "backgroundStop": "停止接收",
-    "backgroundHint": "后台连接不依赖 Google，会显示常驻通知；可随时在通知栏停止。",
-    "googleUnavailable": "Google 推送暂不可用。可开启后台消息连接接收消息。"
+    "backgroundHint": "Cindy 会在 Google 推送可能不可用时自动保持后台连接，连接期间会显示常驻通知。",
+    "googleUnavailable": "Google 推送暂不可用，将按通知设置使用后台连接。",
+    "backgroundModes": {
+      "auto": "自动",
+      "on": "始终开启",
+      "off": "关闭"
+    }
   },
   "about": {
     "sectionTitle": "关于这台手机",
@@ -351,5 +383,44 @@
     "title": "开发者",
     "identity": "标识信息",
     "updateInfo": "更新信息"
+  },
+  "handheld": {
+    "sectionTitle": "掌机",
+    "label": "掌机模式",
+    "entryHint": "在游戏掌机上用手柄操作 Cindy，长按语音键直接说话。",
+    "on": "已开启",
+    "off": "未开启",
+    "openAccessibility": "打开掌机模式设置",
+    "title": "掌机模式",
+    "hint": "开启后可以只用手柄操作：十字键或左摇杆移动焦点，A 确认，B 返回。",
+    "saveFailed": "设置没能保存，这次打开期间仍然有效。",
+    "reset": "恢复默认",
+    "voiceKey": {
+      "title": "语音键",
+      "hint": "长按这个键开始说话，松开停止，文字会留在输入框里。在首页长按会直接新建任务。选 A、B、L1、R1 会占用它们原来的确认、返回和翻页。",
+      "capture": "按手柄上的键来设置",
+      "capturing": "请按下要用的键…"
+    },
+    "display": {
+      "title": "屏幕",
+      "secondary": "显示在副屏",
+      "hint": "开启后 Cindy 会移到副屏（比如双屏掌机的下屏）；关闭掌机模式时回到主屏。",
+      "none": "这台设备只有一块屏幕，Cindy 会自动适配它的尺寸。",
+      "current": "当前屏幕",
+      "single": "主屏"
+    },
+    "controls": {
+      "title": "手柄操作",
+      "gamepad": "手柄",
+      "noGamepad": "未检测到",
+      "moveKeys": "十字键 / 左摇杆",
+      "move": "移动焦点",
+      "confirm": "确认",
+      "back": "返回",
+      "voice": "长按说话",
+      "scrollKeys": "右摇杆",
+      "scroll": "滚动",
+      "page": "翻页"
+    }
   }
 }

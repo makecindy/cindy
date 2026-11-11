@@ -2,7 +2,7 @@
 
 > 状态：产品决策已定（2026-10-09，见 §5），分三步实现，不是产品规则。
 > 三步均已实现，待验收：运行设备侧支持与 schema、Lead 侧编排与 Agent 工具、协同面板界面。
-> 协议见 `docs/dev-rules/protocol-compatibility.md`「协同远端 Worker」，运行时契约见
+> 协议见 `docs/dev-rules/protocol-compatibility/orca-remote-worker.md`「协同远端 Worker」，运行时契约见
 > `docs/dev-rules/orca-team-architecture.md`「远端 Worker」。界面首版只在本机 Lead 上提供「运行设备」；
 > 被远程控制的 Lead 仍可由它自己的 Agent 经 `execution_device_id` 创建；SSH 主机上的 Lead 不支持。
 > 来源讨论：issue #5620「远程控制功能疑问」→ 跨设备派活。
@@ -29,7 +29,7 @@
 | SSH 远端                                     | Worker 继承 Lead 的 `remoteHostId`，在同一台远端主机运行                                                                                     | `orca-team-architecture.md`                                                    |
 | 远程控制（device-link）                      | Lead、Worker、团队全部在被控端，控制端只是镜像                                                                                               | 同上                                                                           |
 | `create_worker` 的 `working_dir`             | 只能选「Worker 所在主机」，即 Lead 所在的机器                                                                                                | 同上                                                                           |
-| 已有的「远程 Agent」                         | 只借用另一台电脑的 Agent 程序、登录与供应商；**命令与文件仍在本机**。Worker 继承 Lead 的 `agentDeviceId`，不能单独指定                       | `protocol-compatibility.md`「远程 Agent」；`orcaWorkerCreationService.ts`      |
+| 已有的「远程 Agent」                         | 只借用另一台电脑的 Agent 程序、登录与供应商；**命令与文件仍在本机**。Worker 继承 Lead 的 `agentDeviceId`，不能单独指定                       | `protocol-compatibility/remote-agent.md`「远程 Agent」；`orcaWorkerCreationService.ts`      |
 | 被控的电脑能否同时控制另一台                 | 能。远程 Agent 就是 A 作为发起方驱动 B；当前开发会话即为实例：XD-PC 被手机控制，同时把 Agent 放在另一台电脑运行                              | `apps/desktop/src/main/remote-agent/controller/`                               |
 | 在另一台电脑新建任务、发消息、订阅事件的通道 | 已在同账号 allowlist：`maker:create-session`、`maker:send`、`maker:abort-session`、`maker:input:*`、`maker:event`、`maker:mark-orca-role` 等 | `packages/device-link/src/allowlist.ts`                                        |
 

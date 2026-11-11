@@ -7,7 +7,7 @@ import {
   View,
 } from "react-native";
 import SegmentedControl from "@expo/ui/community/segmented-control";
-import { Check, ChevronDown, Maximize, RotateCcw } from "lucide-react-native";
+import { Check, ChevronDown } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
 import {
   REMOTE_DESKTOP_VIDEO_QUALITIES,
@@ -17,7 +17,6 @@ import {
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
 import { mobileInteractionStyles } from "@/components/mobileInteractionStyles";
-import { RemoteDesktopActionButton } from "./RemoteDesktopActionButton";
 import {
   NativePullDownMenu,
   usesNativePullDownMenu,
@@ -45,9 +44,6 @@ type Props = {
     busy: boolean;
     modesSupported: boolean;
     displayGeometry?: string;
-    viewerDisplaySupported?: boolean;
-    viewerDisplayMatched?: boolean;
-    onFitDisplay?(): void;
     onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
     readModes(): Promise<RemoteDesktopDisplayMode[]>;
     onResolution(mode: RemoteDesktopDisplayMode): Promise<void>;
@@ -91,7 +87,11 @@ export function RemoteDesktopDisplaySettings({
     };
   }, [connected, video.modesSupported, video.displayGeometry, reload]);
   const disabled = !connected || !video.supported;
-  const title = { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body };
+  const title = {
+    color: colors.textPrimary,
+    fontSize: typeScale.body,
+    lineHeight: lineHeight.body,
+  };
   // 说明档(13/18,二级字色):成句的提示与当前分辨率取值。
   const hint = {
     color: colors.textSecondary,
@@ -278,63 +278,6 @@ export function RemoteDesktopDisplaySettings({
           <View style={{ marginHorizontal: -spacing.md }}>
             {displayControl}
           </View>
-          {video.viewerDisplaySupported && (
-            <View style={{ gap: spacing.sm }}>
-              <RemoteDesktopActionButton
-                variant="glass"
-                systemImage={
-                  video.viewerDisplayMatched
-                    ? "arrow.uturn.backward"
-                    : "arrow.up.left.and.arrow.down.right"
-                }
-                accessibilityRole="button"
-                accessibilityLabel={t(
-                  video.viewerDisplayMatched
-                    ? "remoteDesktop.restoreViewerDisplay"
-                    : "remoteDesktop.fitViewerDisplay",
-                )}
-                disabled={!connected || !controlling || video.busy}
-                onPress={() => video.onFitDisplay?.()}
-                style={[
-                  styles.row,
-                  {
-                    backgroundColor:
-                      Platform.OS === "ios" ? "transparent" : colors.surface,
-                    borderColor: colors.border,
-                    borderWidth:
-                      Platform.OS === "ios" ? 0 : StyleSheet.hairlineWidth,
-                    borderRadius: radius.pill,
-                    padding: spacing.md,
-                    justifyContent: "center",
-                    opacity: !connected || !controlling || video.busy ? 0.6 : 1,
-                  },
-                ]}
-              >
-                {video.busy ? (
-                  <ActivityIndicator size="small" color={colors.textPrimary} />
-                ) : video.viewerDisplayMatched ? (
-                  <RotateCcw size={iconSize.md} color={colors.textPrimary} />
-                ) : (
-                  <Maximize size={iconSize.md} color={colors.textPrimary} />
-                )}
-                <Text
-                  style={[
-                    title,
-                    { fontWeight: fontWeight.medium, flexShrink: 1 },
-                  ]}
-                >
-                  {t(
-                    video.viewerDisplayMatched
-                      ? "remoteDesktop.restoreViewerDisplay"
-                      : "remoteDesktop.fitViewerDisplay",
-                  )}
-                </Text>
-              </RemoteDesktopActionButton>
-              <Text style={hint}>
-                {t("remoteDesktop.fitViewerDisplayHint")}
-              </Text>
-            </View>
-          )}
           <View
             style={{
               height: StyleSheet.hairlineWidth,

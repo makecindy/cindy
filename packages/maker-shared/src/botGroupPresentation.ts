@@ -7,6 +7,7 @@ import { RichAnswerStream, splitRichAnswer, richMarkdown, richString, richLabel,
 import {
   isBotGroupPlanOpen,
   isBotGroupCapabilityNoticeCode,
+  readBotGroupRuntimeFailureReason,
   type BotGroupDetail,
   type BotGroupErrorCode,
   type BotGroupExecutionFailureView,
@@ -149,12 +150,14 @@ export function projectBotGroupExecutionFailures(
     kind: 'notice', authorKind: 'system', authorBotId: failure.botId, authorName: failure.botName,
     content: '', noticeCode: failure.code === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed',
     runtimeFailureCode: failure.code, mentions: { all: false, botIds: [] }, planId: failure.planId,
+    ...(readBotGroupRuntimeFailureReason(failure.code, failure.reason) ? { runtimeFailureReason: failure.reason } : {}),
     threadRootId: source.threadRootId ?? null, files: [], attachments: [], createdAt: failure.updatedAt ?? source.createdAt,
   }))]);
 }
 
 /** Copy variant for a refused group action; null keeps the caller's own fallback. */
 export type BotGroupErrorVariant =
+  | 'turnAlreadyStarted'
   | 'invalidAttachment'
   | 'attachmentUnavailable'
   | 'attachmentTooLarge'
@@ -202,6 +205,7 @@ const ERROR_VARIANTS: ReadonlyMap<string, BotGroupErrorVariant> = new Map<BotGro
   ['HOST_NOT_READY', 'hostNotReady'],
   ['PLAN_OPEN', 'planOpen'],
   ['PLAN_CLOSED', 'planClosed'],
+  ['TURN_ALREADY_STARTED', 'turnAlreadyStarted'],
   ['QUOTE_UNAVAILABLE', 'quoteUnavailable'],
 ]);
 
@@ -239,6 +243,21 @@ export function currentBotGroupPlanStep(plan: BotGroupPlanView): BotGroupPlanSte
   return plan.steps.find((step) => step.position === plan.currentStep) ?? null;
 }
 
+/** Assignment and device admission are different states; stopped plans override stale step state. */
+export function botGroupPlanStepState(plan: BotGroupPlanView, step: BotGroupPlanStepView) {
+  if (plan.kind === 'talk' && step.status === 'running' && plan.status === 'stopped') return 'stopped';
+  if (plan.kind === 'talk' && step.status === 'running' && step.executionStatus === 'queued') return 'queued';
+  return step.status;
+}
+
+export function canSkipBotGroupPlanStep(plan: BotGroupPlanView, step: BotGroupPlanStepView): boolean {
+  if (plan.kind !== 'talk' || plan.canManage !== true || plan.currentStep === null) return false;
+  if (plan.supportsPendingSkip === true && ['running', 'waiting'].includes(plan.status)
+    && step.position > plan.currentStep && step.status === 'pending') return true;
+  return plan.status === 'running' && step.position === plan.currentStep
+    && step.status === 'running' && step.executionStatus === 'queued' && !!step.executionId;
+}
+
 export type BotGroupPlanFollowUp =
   | { kind: 'continue'; next: BotGroupPlanStepView }
   | { kind: 'retry'; failed: BotGroupPlanStepView };
@@ -252,7 +271,7 @@ export function botGroupPlanFollowUp(plan: BotGroupPlanView | null): BotGroupPla
   const current = currentBotGroupPlanStep(plan);
   if (!current) return null;
   if (current.status === 'failed') return { kind: 'retry', failed: current };
-  if (current.status !== 'done') return null;
+  if (current.status !== 'done' && !(plan.kind === 'talk' && current.status === 'skipped')) return null;
   const index = plan.steps.indexOf(current);
   const next = plan.steps.slice(index + 1).find((step) => step.status === 'pending');
   return next ? { kind: 'continue', next } : null;
@@ -460,4 +479,17 @@ export function botGroupBodyParts(content: string, authorKind?: BotGroupMessageV
     // Do not present a partial chart as complete data; preserve its source block.
     return result.length && !unavailableChart ? result : [{ kind: 'markdown' as const, content: source }];
   });
+}
+
+/** A long queue shows this many turns around the current one until it is expanded. */
+const QUEUE_VISIBLE_STEPS = 3;
+
+/** The turns a folded queue shows: the one before the current turn, it, and the next. */
+export function botGroupQueueWindow(plan: BotGroupPlanView): { start: number; end: number } {
+  const count = plan.steps.length;
+  // Folding away a single turn saves nothing.
+  if (count <= QUEUE_VISIBLE_STEPS + 1) return { start: 0, end: count };
+  const active = plan.steps.findIndex((step) => step.status !== 'done' && step.status !== 'skipped');
+  const start = Math.min(Math.max((active < 0 ? count - 1 : active) - 1, 0), count - QUEUE_VISIBLE_STEPS);
+  return { start, end: start + QUEUE_VISIBLE_STEPS };
 }

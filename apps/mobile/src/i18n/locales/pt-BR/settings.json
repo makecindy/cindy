@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Diagnóstico de notificações",
+    "read": "Ler estado das notificações",
+    "busy": "Lendo…",
+    "failed": "Não foi possível ler o estado. Tente novamente.",
+    "copyFailed": "Não foi possível copiar o token.",
+    "copied": "Token copiado.",
+    "bundle": "ID do app",
+    "build": "Compilação",
+    "environment": "Ambiente APNs",
+    "permission": "Permissão do sistema",
+    "alerts": "Alertas",
+    "lockScreen": "Tela bloqueada",
+    "notificationCenter": "Central de Notificações",
+    "copy": "Copiar token APNs",
+    "hide": "Ocultar resultado",
+    "unknown": "Desconhecido",
+    "on": "Ativado",
+    "off": "Desativado",
+    "hint": "Lê apenas quando solicitado. O token APNs aparece só nesta tela, sem ser salvo no diagnóstico ou enviado por esta ferramenta. Fica oculto ao sair ou ir para segundo plano. Copie apenas para o console de notificações da Apple; o texto copiado permanece na área de transferência.",
+    "permissions": {
+      "granted": "Permitida",
+      "denied": "Negada",
+      "undetermined": "Não solicitada",
+      "provisional": "Entrega silenciosa"
+    }
+  },
   "localLogs": {
     "upload": "Enviar logs",
     "uploadResult": {
@@ -135,11 +162,16 @@
     "permissionDenied": "Permita notificações do Cindy nas configurações do sistema.",
     "unregisterQueued": "Desativado. O cancelamento do registro será concluído quando você voltar a ficar online.",
     "preview": "Mostrar prévias das conversas",
-    "background": "Manter a conversa conectada em segundo plano",
-    "backgroundActive": "Recebendo mensagens de conversas em segundo plano",
+    "background": "Notificações em segundo plano",
+    "backgroundActive": "Recebendo notificações em segundo plano",
     "backgroundStop": "Parar de receber",
-    "backgroundHint": "A conexão em segundo plano funciona sem o Google e exibe uma notificação permanente. Você pode interrompê-la nessa notificação.",
-    "googleUnavailable": "As notificações push do Google estão indisponíveis. Ative a conexão de conversas em segundo plano para receber mensagens."
+    "backgroundHint": "A Cindy mantém uma conexão automaticamente quando o Google Push pode estar indisponível. Uma notificação permanente aparece durante a conexão.",
+    "googleUnavailable": "O Google Push está indisponível. A conexão em segundo plano segue suas configurações de notificações.",
+    "backgroundModes": {
+      "auto": "Automático",
+      "on": "Sempre ativadas",
+      "off": "Desativadas"
+    }
   },
   "about": {
     "sectionTitle": "Sobre este celular",
@@ -351,5 +383,44 @@
     "title": "Desenvolvedor",
     "identity": "Identificadores",
     "updateInfo": "Informações da atualização"
+  },
+  "handheld": {
+    "sectionTitle": "Console portátil",
+    "label": "Modo console portátil",
+    "entryHint": "Use o Cindy com o controle embutido de um console portátil e segure a tecla de voz para falar.",
+    "on": "Ativado",
+    "off": "Desativado",
+    "openAccessibility": "Abrir as configurações do modo console portátil",
+    "title": "Modo console portátil",
+    "hint": "Use o Cindy só com o controle: o direcional ou o analógico esquerdo movem o foco, A seleciona e B volta.",
+    "saveFailed": "Não foi possível salvar esta configuração. Ela continua valendo até você fechar o Cindy.",
+    "reset": "Restaurar padrão",
+    "voiceKey": {
+      "title": "Tecla de voz",
+      "hint": "Segure esta tecla para falar e solte para parar. O texto fica na caixa de mensagem. Na tela inicial, segurar a tecla abre uma tarefa nova. Se você escolher A, B, L1 ou R1, esse botão deixa de fazer a função de sempre.",
+      "capture": "Aperte um botão do controle para definir",
+      "capturing": "Aperte o botão que você quer usar…"
+    },
+    "display": {
+      "title": "Tela",
+      "secondary": "Mostrar na segunda tela",
+      "hint": "O Cindy vai para a segunda tela, como a tela de baixo de um console com duas telas. Ao desativar o modo console portátil, ele volta para a tela principal.",
+      "none": "Este dispositivo tem só uma tela. O Cindy se ajusta ao tamanho dela.",
+      "current": "Tela atual",
+      "single": "Tela principal"
+    },
+    "controls": {
+      "title": "Controle",
+      "gamepad": "Controle",
+      "noGamepad": "Não detectado",
+      "moveKeys": "Direcional / analógico esquerdo",
+      "move": "Mover o foco",
+      "confirm": "Selecionar",
+      "back": "Voltar",
+      "voice": "Segurar para falar",
+      "scrollKeys": "Analógico direito",
+      "scroll": "Rolar",
+      "page": "Mudar de página"
+    }
   }
 }

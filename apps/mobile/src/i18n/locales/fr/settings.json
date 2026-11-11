@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Diagnostic des notifications",
+    "read": "Lire l’état des notifications",
+    "busy": "Lecture…",
+    "failed": "Impossible de lire l’état. Réessayez.",
+    "copyFailed": "Impossible de copier le jeton.",
+    "copied": "Jeton copié.",
+    "bundle": "Identifiant de l’app",
+    "build": "Build",
+    "environment": "Environnement APNs",
+    "permission": "Autorisation système",
+    "alerts": "Bannières",
+    "lockScreen": "Écran verrouillé",
+    "notificationCenter": "Centre de notifications",
+    "copy": "Copier le jeton APNs",
+    "hide": "Masquer le résultat",
+    "unknown": "Inconnu",
+    "on": "Activé",
+    "off": "Désactivé",
+    "hint": "Lecture à votre demande uniquement. Le jeton APNs reste à l’écran, sans enregistrement dans le diagnostic ni envoi par cet outil. Il disparaît en quittant l’écran ou en passant en arrière-plan. Copiez-le uniquement pour la console de notifications Apple ; le texte copié reste dans le presse-papiers.",
+    "permissions": {
+      "granted": "Autorisée",
+      "denied": "Refusée",
+      "undetermined": "Non demandée",
+      "provisional": "Livraison silencieuse"
+    }
+  },
   "localLogs": {
     "upload": "Envoyer les journaux",
     "uploadResult": {
@@ -135,11 +162,16 @@
     "permissionDenied": "Autorisez les notifications de Cindy dans les paramètres du système.",
     "unregisterQueued": "Désactivé. La désinscription se terminera dès que vous serez de nouveau en ligne.",
     "preview": "Aperçus des conversations",
-    "background": "Rester connecté en arrière-plan",
+    "background": "Notifications en arrière-plan",
     "backgroundActive": "Réception des messages en arrière-plan",
     "backgroundStop": "Arrêter la réception",
-    "backgroundHint": "La connexion en arrière-plan fonctionne sans Google et affiche une notification permanente. Vous pouvez l'arrêter depuis cette notification.",
-    "googleUnavailable": "Les notifications push Google sont indisponibles. Activez la connexion de conversation en arrière-plan pour recevoir les messages."
+    "backgroundHint": "Cindy maintient automatiquement une connexion si les notifications Google risquent d’être indisponibles. Une notification permanente s’affiche pendant la connexion.",
+    "googleUnavailable": "Les notifications Google sont indisponibles. La connexion en arrière-plan suit vos réglages de notification.",
+    "backgroundModes": {
+      "auto": "Automatique",
+      "on": "Toujours activées",
+      "off": "Désactivées"
+    }
   },
   "about": {
     "sectionTitle": "À propos de ce téléphone",
@@ -351,5 +383,44 @@
     "title": "Développeur",
     "identity": "Identifiants",
     "updateInfo": "Infos de mise à jour"
+  },
+  "handheld": {
+    "sectionTitle": "Console portable",
+    "label": "Mode console portable",
+    "entryHint": "Utilisez Cindy avec la manette intégrée d'une console portable et maintenez la touche vocale pour parler.",
+    "on": "Activé",
+    "off": "Désactivé",
+    "openAccessibility": "Ouvrir les réglages du mode console portable",
+    "title": "Mode console portable",
+    "hint": "Utilisez Cindy uniquement à la manette : la croix directionnelle ou le stick gauche déplacent le focus, A valide et B revient en arrière.",
+    "saveFailed": "Impossible d'enregistrer ce réglage. Il reste actif jusqu'à la fermeture de Cindy.",
+    "reset": "Réinitialiser",
+    "voiceKey": {
+      "title": "Touche vocale",
+      "hint": "Maintenez cette touche pour parler et relâchez-la pour arrêter. Le texte reste dans la zone de message. Sur l'écran d'accueil, un appui long ouvre une nouvelle tâche. Si vous choisissez A, B, L1 ou R1, ce bouton perd sa fonction habituelle.",
+      "capture": "Appuyez sur un bouton de la manette pour l'attribuer",
+      "capturing": "Appuyez sur le bouton à utiliser…"
+    },
+    "display": {
+      "title": "Écran",
+      "secondary": "Afficher sur le second écran",
+      "hint": "Cindy passe sur le second écran, par exemple l'écran inférieur d'une console à double écran. En désactivant le mode console portable, Cindy revient sur l'écran principal.",
+      "none": "Cet appareil n'a qu'un écran. Cindy s'adapte à sa taille.",
+      "current": "Écran actuel",
+      "single": "Écran principal"
+    },
+    "controls": {
+      "title": "Manette",
+      "gamepad": "Manette",
+      "noGamepad": "Non détectée",
+      "moveKeys": "Croix / stick gauche",
+      "move": "Déplacer le focus",
+      "confirm": "Valider",
+      "back": "Retour",
+      "voice": "Maintenir pour parler",
+      "scrollKeys": "Stick droit",
+      "scroll": "Faire défiler",
+      "page": "Page précédente / suivante"
+    }
   }
 }

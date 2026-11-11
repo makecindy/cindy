@@ -1,4 +1,5 @@
 import { isKimiCodingProviderView, kimiUsageWindowMinutes } from '../../../shared/kimiCodingUsage';
+import { isOpenCodeGoProviderView, opencodeGoUsageWindowMinutes } from '../../../shared/opencodeGoUsage';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
 import { CodexResetCredits } from './CodexResetCredits';
 import {
@@ -84,7 +85,6 @@ import {
   useRemoteXaiSubscriptionUsage,
 } from '@/hooks/useRemoteDeviceUsage';
 import {
-  isClaudeSubscriptionAlerting,
   matchScopedWindowForModel,
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
@@ -134,6 +134,7 @@ import {
   buildXaiUsageCard,
   buildZhipuUsageCard,
   buildKimiUsageCard,
+  buildOpenCodeGoUsageCard,
   type UsageCardAccount,
 } from './usageCardModel';
 import { useProviderAccountUsage } from '@/hooks/useProviderAccountUsage';
@@ -529,6 +530,23 @@ function getClaudeChipWindows(
       level: claudeWindowLevel(weekly.window),
     });
   }
+  // A scoped model window replaces the total week in the compact view. Reveal
+  // the total when it needs attention, so the warning always has a visible cause.
+  const totalWeek = snapshot.sevenDay;
+  if (
+    weekly?.modelDisplayName && totalWeek && Number.isFinite(totalWeek.utilization)
+    && claudeWindowLevel(totalWeek) !== 'normal'
+  ) {
+    const resetsAtMs = toEpochMs(totalWeek.resetsAt);
+    windows.push({
+      key: 'claude-weekly:total',
+      label: t('todaySpend.claude.totalWeeklyLabel'),
+      remainingPercent: 100 - clampPercent(totalWeek.utilization),
+      resetsAtMs,
+      resetPending: isResetPending(resetsAtMs, nowMs),
+      level: claudeWindowLevel(totalWeek),
+    });
+  }
   return windows.map((window) => ({
     ...window,
     key: JSON.stringify([window.key, snapshot.accountFingerprint ?? null]),
@@ -572,10 +590,6 @@ function getZhipuChipWindows(
   push('zhipu-weekly', snapshot.weekly, t('quotaCard.weeklyLabel'), WEEKLY_WINDOW_MINUTES);
   return windows;
 }
-
-// 告警判定 (chip 变红的口径 + allowed_warning 为何不染红、为何不用 representativeClaim
-// 的取舍) 已收进 shared/claudeSubscriptionUsage.ts 的
-// isClaudeSubscriptionAlerting (纯数据判定, 有直接单测)。
 
 /** 最近一轮 tooltip 使用的 assistant 消息明细。 */
 interface LatestTurnUsageSummary {
@@ -811,7 +825,15 @@ function formatDeepSeekBalanceSegment(
   return t('providerAccountUsage.deepSeek.chipBalance', { balance });
 }
 
-function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
+function renderSegmentedLabel(segments: React.ReactNode[], wrap = false): React.ReactNode {
+  if (wrap) return segments.map((seg, i) => (
+    <span key={i} className="inline-flex min-h-5 items-center whitespace-nowrap tabular-nums">
+      {seg}
+      {i < segments.length - 1 && (
+        <span aria-hidden="true" className="mx-2 inline-block h-3 w-px bg-current opacity-30" />
+      )}
+    </span>
+  ));
   return segments.map((seg, i) => (
     <React.Fragment key={i}>
       {i > 0 && (
@@ -1023,7 +1045,8 @@ export function TodaySpendChip({
   const usesZhipuCodingPlanForm =
     !isAnyRemoteSession && Boolean(isZhipuCodingPlanProviderView(selectedQuotaProvider));
   const usesKimiCodingForm = !remoteHostId && !accountUnreadable && isKimiCodingProviderView(selectedQuotaProvider);
-  const usesProviderAccountUsageForm = usesDeepSeekAccountForm || usesZhipuCodingPlanForm || usesKimiCodingForm;
+  const usesOpenCodeGoForm = !remoteHostId && !accountUnreadable && isOpenCodeGoProviderView(selectedQuotaProvider);
+  const usesProviderAccountUsageForm = usesDeepSeekAccountForm || usesZhipuCodingPlanForm || usesKimiCodingForm || usesOpenCodeGoForm;
   // 会话所在引擎 → 查询用 runtime：同一供应商各引擎可用不同账户的独立密钥，
   // 余额/配额必须对准当前会话实际路由的账户（vendorKey 缺省 = 默认路由，不传）。
   const providerAccountAgent: AgentKind | undefined =
@@ -1037,7 +1060,7 @@ export function TodaySpendChip({
   const providerAccountUsage = useProviderAccountUsage(
     usesProviderAccountUsageForm && providerAccountAgent ? selectedQuotaProvider : undefined,
     providerAccountAgent,
-    usesKimiCodingForm ? accountDeviceId : null,
+    usesKimiCodingForm || usesOpenCodeGoForm ? accountDeviceId : null,
   );
   const providerAccountSnapshot =
     providerAccountUsage.result?.status === 'ready' ? providerAccountUsage.result.snapshot : null;
@@ -1447,6 +1470,18 @@ export function TodaySpendChip({
         resetPending: isResetPending(w.resetsAt, windowLabelNowMs),
         level: quotaLevelFromUsed(w.usedPercent),
       })) : [])
+    : usesOpenCodeGoForm
+    ? (providerAccountSnapshot?.kind === 'opencode-go-quota' && providerAccountUsage.result?.status === 'ready' && !providerAccountUsage.result.stale
+      ? providerAccountSnapshot.windows.map(w => ({
+        key: w.id,
+        label: w.id === 'monthly'
+          ? t('providerAccountUsage.kimi.limit_month_total')
+          : formatCompactTimeUntilReset(w.resetsAt === null ? null : w.resetsAt / 1000, windowLabelNowMs, t, opencodeGoUsageWindowMinutes(w.id)) ?? t(w.id === 'rolling' ? 'providerAccountUsage.kimi.limit_5h' : 'providerAccountUsage.kimi.limit_7d'),
+        remainingPercent: 100 - w.usedPercent,
+        resetsAtMs: w.resetsAt,
+        resetPending: isResetPending(w.resetsAt, windowLabelNowMs),
+        level: quotaLevelFromUsed(w.usedPercent),
+      })) : [])
     : usesCodexQuotaForm
     ? getCodexChipWindows(accountUsage, t, windowLabelNowMs)
     : usesXaiQuotaForm
@@ -1462,13 +1497,15 @@ export function TodaySpendChip({
               windowLabelNowMs,
             )
           : [];
-  // chip 最多两个窗口段, 固定两个 slot 无条件调 hook(Rules of Hooks)。
+  // OpenCode Go exposes three meters; keep one rollup slot per window segment.
   // 重置滚动: 快照刷新中同窗口剩余百分比大幅回升(典型: 窗口到点重置 0% → 100%)
   // 时, 显示值从 0% 快速滚动到新值。
   const windowSlotA = chipWindows[0] ?? null;
   const windowSlotB = chipWindows[1] ?? null;
+  const windowSlotC = chipWindows[2] ?? null;
   const rollupA = useQuotaResetRollup(windowSlotA);
   const rollupB = useQuotaResetRollup(windowSlotB);
+  const rollupC = useQuotaResetRollup(windowSlotC);
   // 窗口段元素登记表(key → span): 撒花锚点用, 段消失时由 ref 回调置 null。
   const segmentElsRef = React.useRef<Record<string, HTMLSpanElement | null>>({});
   const windowSegments: React.ReactNode[] = chipWindows.map((window, index) => {
@@ -1484,7 +1521,7 @@ export function TodaySpendChip({
         </React.Fragment>
       );
     }
-    const rollup = index === 0 ? rollupA : rollupB;
+    const rollup = index === 0 ? rollupA : index === 1 ? rollupB : rollupC;
     const text = t(
       usesCodexQuotaForm
         ? 'todaySpend.codex.windowSegment'
@@ -1644,6 +1681,7 @@ export function TodaySpendChip({
   const deviceLinkRemoteFormResolved =
     !accountUnreadable &&
     (isDeviceLinkRemoteClaudeSubscription ||
+      usesOpenCodeGoForm ||
       (isDeviceLinkRemote &&
         (usesCodexQuotaForm || usesXaiQuotaForm || isDeviceLinkRemoteGateway)));
   let labelNode: React.ReactNode;
@@ -1667,10 +1705,17 @@ export function TodaySpendChip({
       ...(usesDeepSeekAccountForm && deepSeekBalanceSegment ? [deepSeekBalanceSegment] : []),
       ...windowSegments,
     ];
+    if (isClaudeSubscription && claudeSubscriptionUsage?.rateLimitStatus?.trim().toLowerCase() === 'rejected') {
+      chipSegments.push(
+        <span key="claude-rejected" className="text-[var(--error-fg)]">
+          {t('todaySpend.claude.temporarilyLimited')}
+        </span>,
+      );
+    }
     if (sessionSegment) chipSegments.push(sessionSegment);
     labelNode =
       chipSegments.length > 0 ? (
-        renderSegmentedLabel(chipSegments)
+        renderSegmentedLabel(chipSegments, isClaudeSubscription)
       ) : (
         <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>
       );
@@ -1679,6 +1724,8 @@ export function TodaySpendChip({
     if (!remoteHostId) {
       account = usesKimiCodingForm
         ? buildKimiUsageCard(providerAccountSnapshot?.kind === 'kimi-coding-quota' ? providerAccountSnapshot : null, t)
+        : usesOpenCodeGoForm
+        ? buildOpenCodeGoUsageCard(providerAccountSnapshot?.kind === 'opencode-go-quota' ? providerAccountSnapshot : null, t)
         : usesCodexQuotaForm
         ? buildCodexUsageCard(
             accountUsage,
@@ -1703,7 +1750,7 @@ export function TodaySpendChip({
                   t,
                 )
               : buildClaudeUsageCard(claudeSubscriptionUsage, t);
-      if (usesKimiCodingForm && providerAccountUsage.result?.status === 'ready' && providerAccountUsage.result.stale) account.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
+      if ((usesKimiCodingForm || usesOpenCodeGoForm) && providerAccountUsage.result?.status === 'ready' && providerAccountUsage.result.stale) account.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
       if (usesProviderAccountUsageForm && providerAccountUsage.result?.status === 'unavailable') {
         account.emptyText = t(`providerAccountUsage.${usesKimiCodingForm ? 'kimi.' : ''}error.${providerAccountUsage.result.error}`);
       }
@@ -1825,26 +1872,18 @@ export function TodaySpendChip({
     account.emptyText = t('todaySpend.codex.noUsageDetail');
   }
 
-  // 告警态: 黄 / 红的窗口只给它自己的剩余百分比上色 (共用 quota-level 规则与额度色),
-  // 其它窗口段、分隔线与任务价值保持常色。其它模型的周限吃紧不染红 —— chip 上没有
-  // 那一段, 红了也无从解释 (见 isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
-  // 兜底: 当前会话确实受限 (headers 报 rejected, 或 scoped 周限占位时总周限告警) 但
-  // chip 上没有任何一个上色的窗口 → 仍整条变红, 不丢受限信号。悬念期的告警窗口也算
-  // 「chip 上有」: 它的旧数据已失真, 段上显示「重置中…」不染红, 也不借兜底把整条染红。
-  const hasAlertingChipWindow = chipWindows.some((window) => window.level !== 'normal');
-  // 服务端明确拒绝 (rejected) 是红色信号, 不被只有黄色的窗口挡掉。
-  const claudeRejected =
-    isClaudeSubscription && claudeSubscriptionUsage?.rateLimitStatus?.trim().toLowerCase() === 'rejected';
-  const chipAlertingFallback =
-    claudeRejected ||
-    (!hasAlertingChipWindow &&
-      ((isClaudeSubscription && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId)) ||
-        (usesXaiQuotaForm && isXaiSubscriptionAlerting(xaiSubscriptionUsage))));
+  // Claude warnings are attached to their own window or explicit rejection
+  // segment. Neither the separators nor the task value inherit an alert color.
+  const chipAlertingFallback = usesXaiQuotaForm
+    && !chipWindows.some((window) => window.level !== 'normal')
+    && isXaiSubscriptionAlerting(xaiSubscriptionUsage);
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
   const buttonClass = cn(
-    'inline-flex h-5 shrink-0 items-center',
+    isClaudeSubscription
+      ? 'inline-flex min-h-5 min-w-0 max-w-full flex-wrap items-center justify-end gap-y-1'
+      : 'inline-flex h-5 shrink-0 items-center',
     'text-12 font-medium leading-none tabular-nums',
     chipAlertingFallback
       ? 'text-[var(--error-fg)] hover:text-[var(--error-fg-strong)]'
@@ -1857,7 +1896,7 @@ export function TodaySpendChip({
   return (
     <div
       ref={chipRef}
-      className="inline-flex h-5 shrink-0 items-center gap-3"
+      className={cn('inline-flex items-center gap-3', isClaudeSubscription ? 'min-h-5 min-w-0 max-w-full' : 'h-5 shrink-0')}
       onMouseEnter={refreshCodexRateLimits}
       onFocusCapture={refreshCodexRateLimits}
     >
