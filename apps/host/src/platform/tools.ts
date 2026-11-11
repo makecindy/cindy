@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import type { createPlatformClientBridge } from './client-bridge.js';
 import path from 'node:path';
@@ -52,11 +53,13 @@ export function createHostPlatformTools(options: {
   const browser = createBrowserRuntime({ tempDir: () => os.tmpdir(), settings, managedLaunch: options.managedLaunch, recipes: { ...loader, ...writer },
     secretIo: options.secretIo,
     // Never silently substitute a different browser or reconstruct lost tabs.
-    createEmbeddedBackend: options.createEmbeddedBackend ?? (options.client ? (() => ({ kind: 'rsb-webview',
-      call: async request => options.client!.call({ method: 'browser.call', request }) as Promise<any>,
-      probeControl: async probe => { await options.client!.call({ method: 'browser.probe', probe }); },
-      dispose: async () => {},
-    })) : (() => ({ kind: 'rsb-webview',
+    createEmbeddedBackend: options.createEmbeddedBackend ?? (options.client ? (() => {
+      const executorKey = randomUUID();
+      return { kind: 'rsb-webview',
+        call: async request => options.client!.call({ method: 'browser.call', request }, { sessionId: executorKey }) as Promise<any>,
+        probeControl: async probe => { await options.client!.call({ method: 'browser.probe', probe }, { sessionId: executorKey }); },
+        dispose: async () => { await options.client!.cleanupSession(executorKey, { method: 'browser.dispose' }); },
+      }; }) : (() => ({ kind: 'rsb-webview',
       call: async request => ({ ok: false, action: request.action, errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
         message: 'The persistent embedded browser is not connected. The selected browser has not been changed.' }),
       probeControl: async () => { throw new Error('HOST_EMBEDDED_BROWSER_UNAVAILABLE'); },

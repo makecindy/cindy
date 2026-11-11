@@ -183,3 +183,28 @@ test('Host browser settings change the active task backend and reject stale owne
   await assert.rejects(service('/api/browser-backend/set-kind', { kind: 'external' }), /OWNER_CHANGED/);
   assert.equal(createBrowserBackendSettingsStore(() => f.profileDir).readBrowserBackendSettings().kind, 'user-browser');
 });
+
+// Production controller + dispatch gate: switching backend disposes its actual
+// executor, and disconnect/replacement never redirects disposal into a new one.
+test('embedded backend disposal follows the executing window without waiting for replacements', async t => {
+  const gate = createPlatformClientHandoff({ assertCurrent() {} });
+  t.after(() => gate.close());
+  const methods = [];
+  const identity = { id: 'old', pid: 42 };
+  gate.attach({ ...identity, canDetach: async () => true, resume: async () => true,
+    call: async op => { methods.push(op.method); return { ok: true, tabs: [] }; } });
+  const f = await fixture(t, 'rsb-webview', gate);
+  const a = await f.client('task');
+  assert.equal((await tabs(a)).isError, false);
+  await f.tools.browserSettings.setKind(undefined, { kind: 'user-browser' });
+  assert.deepEqual(methods, ['browser.call', 'browser.dispose']);
+  await f.tools.browserSettings.setKind(undefined, { kind: 'rsb-webview' });
+  await tabs(a);
+  await gate.prepare(identity); gate.detach(identity);
+  const replacement = [];
+  gate.attach({ id: 'new', pid: 43, canDetach: async () => true, resume: async () => true,
+    call: async op => { replacement.push(op.method); return { ok: true, tabs: [] }; } });
+  await f.tools.browserSettings.setKind(undefined, { kind: 'user-browser' });
+  assert.deepEqual(replacement, []);
+  assert.equal(gate.status().waiting, 0);
+});

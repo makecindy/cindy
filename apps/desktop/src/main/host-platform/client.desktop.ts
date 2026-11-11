@@ -21,13 +21,14 @@ export function connectHostPlatformClient(config: HostDelegationConfig) {
   let pause: ReturnType<typeof pauseDesktopInputForClientUpgrade> = null;
   const computer = getComputerMcpDeps();
   const computerSessions = new Set<string>();
-  const browser = createDesktopEmbeddedBackend(async sessionId => {
+  const createBrowser = () => createDesktopEmbeddedBackend(async sessionId => {
     check();
     const roots = await rpc.call({ method: 'browser.uploadRoots', sessionId });
     check();
     if (!Array.isArray(roots) || roots.some(root => typeof root !== 'string')) throw Error('PLATFORM_UPLOAD_ROOTS_INVALID');
     return roots;
   });
+  let browser = createBrowser();
   let socket: WebSocket;
   let rpc: ReturnType<typeof createHostPlatformRpc>;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -89,6 +90,11 @@ export function connectHostPlatformClient(config: HostDelegationConfig) {
           return computer.callTool(op.name as Parameters<typeof computer.callTool>[0], op.args, { ...op.context, signal });
         case 'browser.call':
           return browser.call(op.request);
+        case 'browser.dispose':
+          await browser.dispose();
+          check(); signal.throwIfAborted();
+          browser = createBrowser();
+          return true;
         case 'browser.probe':
           await browser.probeControl(op.probe); return true;
         default: throw Error('PLATFORM_OPERATION_INVALID');
