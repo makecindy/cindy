@@ -129,7 +129,7 @@ import type { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { ORCA_REMOTE_WORKER_OPEN_CHANNEL, REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { isDeferredHistoryPush, deferredToolBoundary, buildHistoryWorkPatch, thinkingDeltaUpdatesWorkLine } from './historyViewPush';
-import { withoutHistoryViewDeltaToken } from './historyViewDelta';
+import { clearHistoryViewDeltas, withoutHistoryViewDeltaToken } from './historyViewDelta';
 import { HISTORY_WORK_PATCH_CHANNEL } from '@cindy/maker-shared/message-window';
 import { mapHistoryViewMessages, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
 import { createLogger } from '../logger';
@@ -2736,6 +2736,9 @@ function dropAllControllers(
     }
     clearReportedControllerName(dst);
   }
+  // 登出 / 失去持有权：随后的 client.stop() 清空全部列表增量基准，历史页增量基页也一并全部释放，
+  // 包括此前普通断线、为重连保留的控制端（它们不在上面的 controllerIds 里）。
+  if (reason === 'shutdown') clearHistoryViewDeltas();
   clearAllRemoteInvokeState();
   subscriptions.clearAll();
   topicSubscriptionControllers.clear();
@@ -2898,7 +2901,9 @@ function purgeRevokedController(deviceId: string, preservePendingOpen = false): 
  */
 function wireInboundDispatch(client: DeviceLinkClient): () => void {
   activeClient = client;
-  return client.onFrame((env: Envelope) => {
+  // 历史页增量的被控端基页与列表增量基准同时释放：控制端被主动关掉时，普通断线保留。
+  const offReleased = client.onInboundPeerReleased((peer) => clearHistoryViewDeltas(peer));
+  const offFrame = client.onFrame((env: Envelope) => {
     // 可靠传输的 ACK 边界是“已进入本地执行状态机”，不是“耗时 IPC 已执行完成”。
     // handleInvoke 会在第一次 await 前登记 in-flight requestId 去重；这里不把它的
     // Promise 交回 transport，避免一个慢查询把后续 stop/steer/push 全部堵在队头。
@@ -2906,6 +2911,10 @@ function wireInboundDispatch(client: DeviceLinkClient): () => void {
       log.error('inbound frame handling failed', err);
     });
   });
+  return () => {
+    offReleased();
+    offFrame();
+  };
 }
 
 async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<void> {

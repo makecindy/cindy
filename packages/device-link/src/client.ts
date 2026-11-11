@@ -964,6 +964,7 @@ export class DeviceLinkClient {
   private presenceHandlers = new Set<(snap: PresenceSnapshot) => void>();
   private frameHandlers = new Set<InboundFrameHandler>();
   private peerStreamAcceptedHandlers = new Set<(peer: string, streamId: string) => void>();
+  private inboundPeerReleasedHandlers = new Set<(peer: string) => void>();
   private issueHandlers = new Set<(issue: DeviceLinkConnectionIssue | null) => void>();
   private peerRouteStateHandlers = new Set<
     (change: DeviceLinkPeerRouteStateChanged) => void
@@ -1467,6 +1468,24 @@ export class DeviceLinkClient {
     return () => this.peerRouteStateHandlers.delete(cb);
   }
 
+  /**
+   * 被控端：某个控制端被本机主动关掉（撤销、踢出、关闭远控、退出、用户停止），
+   * 为它保留的增量基准可以释放。transport-timeout 与普通断线不触发：重连的控制端
+   * 仍能沿用基准拿增量。与本机的列表增量基准在同一处释放（`closeLink`）。
+   */
+  onInboundPeerReleased(cb: (peer: string) => void): () => void {
+    this.inboundPeerReleasedHandlers.add(cb);
+    return () => this.inboundPeerReleasedHandlers.delete(cb);
+  }
+
+  private releaseInboundPeer(dst: string): void {
+    this.invokeDeltaBases.forgetPeer(dst);
+    for (const cb of this.inboundPeerReleasedHandlers) {
+      try { cb(dst); }
+      catch (error) { this.log.error('inbound peer release handler threw', error); }
+    }
+  }
+
   /** 订阅单 peer 可靠传输复位；host 恢复只能影响 `change.deviceId`。 */
   onPeerTransportReset(
     cb: (change: DeviceLinkPeerTransportReset) => void,
@@ -1946,7 +1965,7 @@ export class DeviceLinkClient {
     this.pendingInboundLinkOffers.delete(dst);
     const peer = this.peerTransport.get(dst);
     // 被控端主动关掉某个控制端（撤销、踢出、关闭远控、退出）：它的增量基准不再需要。
-    if (direction === 'inbound' && reason !== 'transport-timeout') this.invokeDeltaBases.forgetPeer(dst);
+    if (direction === 'inbound' && reason !== 'transport-timeout') this.releaseInboundPeer(dst);
     if (direction === 'inbound') {
       if (isProviderSharePeer(dst)) {
         this.clearProviderShareDirectLease(dst);

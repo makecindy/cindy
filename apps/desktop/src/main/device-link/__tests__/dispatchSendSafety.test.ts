@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  DeviceLinkClient,
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
@@ -24,6 +25,7 @@ import {
   CONTROLLER_CAPABILITY_TOOL_USE_EVENT_INPUT_OPTIONAL_V1,
 } from '@cindy/device-link';
 import { versionMessageBody } from '../sessionMessageReuse';
+import { encodeHistoryViewDelta } from '../historyViewDelta';
 
 vi.mock('electron', () => ({
   app: {
@@ -48,7 +50,7 @@ vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 
-import { __testing, runInvoke, wireInboundDispatch, setRemoteTurnChangeAction } from '../dispatch.desktop';
+import { __testing, dropAllControllers, runInvoke, wireInboundDispatch, setRemoteTurnChangeAction } from '../dispatch.desktop';
 import { __testing as registry } from '../invoke-registry';
 import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
 import { currentDbRpcAdmissionClass } from '../../localDb/client/rpcAdmission';
@@ -71,6 +73,7 @@ function mkClient(
     sendLinkAccept: vi.fn(),
     closeLink: vi.fn(),
     onFrame: vi.fn(),
+    onInboundPeerReleased: vi.fn(() => () => {}),
     sendPush: over.sendPush ?? vi.fn(),
   };
 }
@@ -1495,4 +1498,55 @@ it('compacts rich answer history into a complete replayable snapshot instead of 
   expect(operation).toMatchObject({ seq: 1, op: 'create', id: 'text', props: { text: '中'.repeat(600) + '80' } });
   expect(result.endsWith('\n```\n')).toBe(true);
   expect(encodedByteLength(result)).toBeLessThan(128 * 1024);
+});
+
+/**
+ * history-view-delta-v1 Host bases are released at the same point as the list delta bases:
+ * `DeviceLinkClient.closeLink(..., 'inbound')` for a controller this Host closes on purpose.
+ * A timeout or an outbound close keeps them, so a reconnecting controller still reads deltas.
+ * Logout (hosting dropped for 'shutdown', then client.stop() clears all list bases) releases every
+ * controller's bases. Without the release, a revoked controller's fingerprints, and after logout
+ * those of a controller that had disconnected, stay in the process until LRU eviction.
+ */
+describe('history delta bases follow the Host closing a controller', () => {
+  it('drops a controller closed on purpose, and every controller on logout', () => {
+    // Never started: closeLink releases per-controller state without a socket.
+    const client = new DeviceLinkClient({
+      getWsUrl: () => 'ws://memory.invalid/device-link', getToken: async () => 'test-token',
+      getHello: () => ({ deviceName: 'host', platform: 'darwin', appVersion: 'test', remoteControlEnabled: true, busy: false }),
+      createWebSocket: () => { throw new Error('not started'); },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    const off = wireInboundDispatch(client);
+    const page = { version: 1 as const, hasMore: false, nextCursor: null,
+      items: [{ type: 'messages' as const, key: 'c1', messages: [{ id: 'm1', clientId: 'c1', role: 'user', content: 'hi', createdAt: '2026-11-11T00:00:00.000Z' }] }] };
+    const shape = { keys: ['c1'], fingerprints: ['fp-c1'], running: new Map<string, string>() };
+    const read = (controller: string, base?: string) => {
+      const result = encodeHistoryViewDelta(controller, 'release-s', 'true:true', { version: 1, ...(base ? { base } : {}) }, page, shape);
+      return { same: result.items[0].type === ('same' as string), token: result.historyDelta!.token! };
+    };
+    try {
+      const a = read('release-ctrl-a').token;
+      const b = read('release-ctrl-b').token;
+      client.closeLink('release-ctrl-a', 'transport-timeout', 'inbound');
+      client.closeLink('release-ctrl-a', 'user', 'outbound');
+      expect(read('release-ctrl-a', a).same).toBe(true);
+
+      client.closeLink('release-ctrl-a', 'revoked', 'inbound');
+      const reread = read('release-ctrl-a', a);
+      expect(reread.same).toBe(false);
+      expect(read('release-ctrl-b', b).same).toBe(true);
+      expect(read('release-ctrl-a', reread.token).same).toBe(true);
+
+      // Logout / losing ownership drops every controller on purpose, including one whose link had
+      // already ended normally (kept for its reconnect, so not in any closeLink set any more).
+      const left = read('release-ctrl-left').token;
+      dropAllControllers(client, 'shutdown');
+      expect(read('release-ctrl-left', left).same).toBe(false);
+      expect(read('release-ctrl-b', b).same).toBe(false);
+    } finally {
+      off();
+      client.stop();
+    }
+  });
 });

@@ -16,7 +16,11 @@ import type { HistoryPageShape } from '../localDb/ipc/historyViewReader';
  * exactly the non-running contents a `same` can refer to, costs no extra serialization,
  * and repeats for an unchanged page (an identical re-read can still end as `notModified`).
  * Dropping bases is never needed for correctness: a base only names content that
- * controller already holds. Bounded memory is the only reason to evict.
+ * controller already holds. A controller's bases are released when this Host closes it on
+ * purpose (revoked, kicked, remote control off, quit; `DeviceLinkClient.onInboundPeerReleased`,
+ * together with the list delta bases). An ordinary disconnect or transport timeout keeps
+ * them, so the reconnecting controller still reads deltas; logout and losing ownership drop
+ * all of them (`dropAllControllers(…, 'shutdown')`). LRU bounds the rest.
  */
 /** Per controller and task, across read options: a prefetch without work lines can serve the open view. */
 const BASES_PER_VIEW = 4;
