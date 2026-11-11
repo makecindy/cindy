@@ -511,7 +511,7 @@ export function App() {
                               <LocalAgentConfirmationHost />
                               <ForgeOidcInstallConfirmHost />
                               <GhostInstallConsentHost />
-                              {/* 新电脑设置:只挂主窗(应答界面偏好读取、首次建议与迁移弹窗)。 */}
+                              {/* 迁移助理与开始引导:只挂主窗(应答界面偏好读取、首次登录后按需显示引导、迁移弹窗)。 */}
                               {!isSecondaryWindow() && !isSidebarWindow() && <SetupMigrationHost />}
                               <PluginPublisherConfirmHost />
                               <GithubSetupRequestHost />

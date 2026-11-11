@@ -1,5 +1,6 @@
 import { askAnswerError, askQuestionOptions, answerKey } from "@cindy/maker-shared";
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Spinner } from '@/components/ui/spinner';
 /**
  * AskUserQuestionPrompt
@@ -1073,7 +1074,15 @@ function AskUserQuestionForm({
               onClick={handleCustomOptionClick}
             >
               {isMultiSelect && (
-                <div className="h-[18px] w-[18px] shrink-0 rounded-[4px] border-[1.5px] border-[var(--ask-checkbox-border)]" />
+                // Visual cue only, aligned with the option checkboxes above: the row
+                // button opens the answer field, so this box takes no focus or clicks.
+                <Checkbox
+                  checked={false}
+                  readOnly
+                  tabIndex={-1}
+                  aria-hidden
+                  className="pointer-events-none"
+                />
               )}
               <span className="text-14 italic text-[var(--ask-option-custom)]">
                 {t('chat.askUserQuestion.customAnswer')}
@@ -1171,68 +1180,66 @@ function AskUserQuestionForm({
         {/* Options Container */}
         {options.length > 0 && (
           <div className="overflow-hidden rounded-[12px] border border-[var(--ask-option-border)] bg-[var(--ask-option-list-bg)]">
-            {options.map((opt, idx) => (
-              <div key={opt.label}>
-                {idx > 0 && <div className="h-px bg-[var(--ask-option-divider)]" />}
-                <button
-                  type="button"
-                  disabled={voiceLocked}
-                  className={cn(
-                    'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
-                    'transition-colors hover:bg-[var(--ask-option-hover)]',
-                    // Highlight selected option when revisiting single-select via Back
-                    !isMultiSelect &&
-                      existingAnswer === opt.label &&
-                      'bg-[var(--ask-option-hover)]',
-                  )}
-                  onClick={() =>
-                    isMultiSelect ? handleToggle(opt.label) : handleSingleSelect(opt.label)
-                  }
-                >
-                  <div className="flex items-center gap-3">
-                    {/* Checkbox for multi-select */}
-                    {isMultiSelect && (
-                      <div
-                        className={cn(
-                          'flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[4px]',
-                          selectedLabels.has(opt.label)
-                            ? 'bg-[var(--ask-checkbox-checked-bg)]'
-                            : 'border-[1.5px] border-[var(--ask-checkbox-border)]',
-                        )}
-                      >
-                        {selectedLabels.has(opt.label) && (
-                          <svg
-                            width="12"
-                            height="12"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="var(--ask-checkbox-checked-icon)"
-                            strokeWidth="3"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                      </div>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="text-14 font-medium text-[var(--ask-option-label)]">
-                        {opt.label}
-                      </div>
-                      {opt.description && (
-                        <div className="mt-1 text-13 text-[var(--ask-option-desc)]">
-                          {opt.description}
-                        </div>
-                      )}
+            {options.map((opt, idx) => {
+              const rowClassName = cn(
+                'flex w-full items-center justify-between px-[16px] py-[14px] text-left',
+                'transition-colors hover:bg-[var(--ask-option-hover)]',
+              );
+              const optionText = (
+                <div className="min-w-0 flex-1">
+                  <div className="text-14 font-medium text-[var(--ask-option-label)]">
+                    {opt.label}
+                  </div>
+                  {opt.description && (
+                    <div className="mt-1 text-13 text-[var(--ask-option-desc)]">
+                      {opt.description}
                     </div>
-                  </div>
-                  <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
-                    {idx + 1}
-                  </div>
-                </button>
-              </div>
-            ))}
+                  )}
+                </div>
+              );
+              const numberBadge = (
+                <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
+                  {idx + 1}
+                </div>
+              );
+              return (
+                <div key={opt.label}>
+                  {idx > 0 && <div className="h-px bg-[var(--ask-option-divider)]" />}
+                  {isMultiSelect ? (
+                    // Multi-select rows are real checkboxes (shared Checkbox, DESIGN.md §4);
+                    // the label keeps the whole row clickable.
+                    <label
+                      className={cn(rowClassName, voiceLocked ? 'cursor-not-allowed' : 'cursor-pointer')}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Checkbox
+                          checked={selectedLabels.has(opt.label)}
+                          disabled={voiceLocked}
+                          onChange={() => handleToggle(opt.label)}
+                          className="disabled:opacity-100"
+                        />
+                        {optionText}
+                      </div>
+                      {numberBadge}
+                    </label>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={voiceLocked}
+                      className={cn(
+                        rowClassName,
+                        // Highlight selected option when revisiting single-select via Back
+                        existingAnswer === opt.label && 'bg-[var(--ask-option-hover)]',
+                      )}
+                      onClick={() => handleSingleSelect(opt.label)}
+                    >
+                      <div className="flex items-center gap-3">{optionText}</div>
+                      {numberBadge}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 

@@ -2,6 +2,7 @@ import { ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { TemplateParameter } from '@cindy/maker-scheduler';
 
+import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 
 interface TemplateParamFormProps {
@@ -52,36 +53,20 @@ function TemplateParamControl({
   const placeholder = parameter.placeholder ?? parameter.default ?? '';
   if (parameter.type === 'boolean') {
     const checked = value === 'true';
+    // The parameter row is already a label (TemplateParamForm), so this row stays a span:
+    // one label owns the checkbox.
     return (
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={checked}
-        onClick={() => onChange(checked ? 'false' : 'true')}
+      <span
         className={cn(
           'inline-flex h-9 w-fit items-center gap-2 rounded-md px-1.5',
+          'cursor-pointer',
           'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
           'transition-colors hover:bg-[var(--surface-hover)]',
-          'focus:outline-none',
         )}
       >
-        <span
-          className={cn(
-            'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[1.5px] transition-colors',
-            checked
-              ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-              : 'border-[var(--cmd-palette-item-meta)] bg-transparent',
-          )}
-          aria-hidden
-        >
-          {checked && (
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2.5} className="h-[10px] w-[10px]">
-              <path d="M3 8l3.5 3.5L13 5" />
-            </svg>
-          )}
-        </span>
+        <Checkbox checked={checked} onChange={() => onChange(checked ? 'false' : 'true')} />
         {parameter.placeholder ?? parameter.label}
-      </button>
+      </span>
     );
   }
 
