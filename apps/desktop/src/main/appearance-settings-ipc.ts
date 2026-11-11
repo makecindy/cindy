@@ -39,10 +39,15 @@ export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 export const APPEARANCE_SETTINGS_CHANGED_CHANNEL = 'appearance-settings:changed';
 
 let registered = false;
+let bingWallpaperHandlers: {
+  reconcile?: () => void;
+  refresh?: () => Promise<void>;
+} = {};
 
-export function registerAppearanceSettingsIpc(): void {
+export function registerAppearanceSettingsIpc(handlers: typeof bingWallpaperHandlers = {}): void {
   if (registered) return;
   registered = true;
+  bingWallpaperHandlers = handlers;
   // The saved scale can survive while the native window displays a different
   // zoom (#7486). Restore it on activation without rewriting the preference or
   // repeatedly applying an already matching scale. Only app-content windows
@@ -61,9 +66,20 @@ export function registerAppearanceSettingsIpc(): void {
 
   ipcMain.handle('appearance-settings:get', (event) => {
     assertTrustedAppRendererEvent(event);
+    bingWallpaperHandlers.reconcile?.();
     const state = readAppearanceSettingsState();
     broadcast(state.value);
     return state;
+  });
+
+  ipcMain.handle('appearance-settings:refresh-bing-wallpaper', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      await bingWallpaperHandlers.refresh?.();
+      return readAppearanceSettings();
+    } catch {
+      throwIpcError('INTERNAL', 'Unable to refresh Bing wallpaper');
+    }
   });
 
   // Local Desktop appearance only: no remote allowlist and no renderer-supplied path.
@@ -191,13 +207,17 @@ function appearanceForWindow(
   win: BrowserWindow | null,
 ): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
-  const { customWallpaperUrl: _privateUrl, ...publicSettings } = settings;
+  const { customWallpaperUrl: _privateUrl, bingWallpaper: _bing, ...publicSettings } = settings;
+  void _bing;
   void _privateUrl;
   return {
     ...publicSettings,
-    wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
+    wallpaperId: settings.wallpaperId === 'custom' || settings.wallpaperId === 'bing-daily'
+      ? 'none' : settings.wallpaperId,
   };
 }
+
+export function broadcastAppearanceSettings(): void { broadcast(readAppearanceSettings()); }
 
 function broadcast(settings: AppearanceSettings): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -362,13 +382,19 @@ export async function updateAppearanceFromSettings(rawPatch: unknown) {
   const settings = await writeAppearanceSettingsPatch(parsePatch(rawPatch));
   applyAppearanceToWindows(settings);
   applyDockIcon(settings);
-  broadcast(settings);
-  return settings;
+  bingWallpaperHandlers.reconcile?.();
+  // Reconciliation may synchronously restore a failure during retry backoff.
+  // Publish the current host snapshot rather than the pre-reconcile write result.
+  const current = readAppearanceSettings();
+  broadcast(current);
+  return current;
 }
 export async function resetAppearanceFromSettings() {
   const settings = await resetAppearanceSettings();
   applyAppearanceToWindows(settings);
   applyDockIcon(settings);
-  broadcast(settings);
-  return settings;
+  bingWallpaperHandlers.reconcile?.();
+  const current = readAppearanceSettings();
+  broadcast(current);
+  return current;
 }

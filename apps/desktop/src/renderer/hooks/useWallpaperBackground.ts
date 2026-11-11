@@ -12,6 +12,9 @@ export function useWallpaperBackground({
   blur,
   reducedMotion,
   decodeUrl,
+  decodeRetryKey = 0,
+  onDecodeError,
+  onDecodeReady,
 }: {
   background: string | undefined;
   desktopBackground?: boolean;
@@ -19,6 +22,10 @@ export function useWallpaperBackground({
   blur: number;
   reducedMotion: boolean;
   decodeUrl?: string;
+  /** Changes on explicit retry so a failed URL can be decoded again. */
+  decodeRetryKey?: number;
+  onDecodeError?: (url: string) => void;
+  onDecodeReady?: (url: string) => void;
 }) {
   const transitionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const decoded = useRef(new Set<string>());
@@ -34,16 +41,18 @@ export function useWallpaperBackground({
         await image.decode();
         if (!current) return;
         decoded.current.add(decodeUrl);
+        onDecodeReady?.(decodeUrl);
         setDecodedRevision((value) => value + 1);
       } catch {
         // Keep the displayed background if a custom image cannot decode.
+        if (current) onDecodeError?.(decodeUrl);
       }
     };
     void decode();
     return () => {
       current = false;
     };
-  }, [decodeUrl, imageReady]);
+  }, [decodeUrl, imageReady, decodeRetryKey, onDecodeError, onDecodeReady]);
 
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -148,4 +157,6 @@ export function useWallpaperBackground({
         root.style.removeProperty(name);
     };
   }, []);
+
+  return imageReady;
 }

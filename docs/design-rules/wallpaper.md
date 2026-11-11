@@ -2,6 +2,25 @@
 
 > 迁自 `DESIGN.md` §2，规范效力不变。文中未注明文档的 `§N` 均指 [DESIGN.md](./DESIGN.md)。
 
+### Bing 每日壁纸
+
+`bing-daily` 是用户主动选择的应用内静态背景来源，默认仍为 None。选中且可见时，
+Main 在应用运行期间检查 Bing 当前图片；不更改操作系统桌面、不安装其他应用。
+来源切换与原有可见度、模糊设置独立，更新图片不重置滑杆。初次无缓存时保持主题底色，
+在设置内显示获取状态；已有缓存时先显示缓存，新图解码后再替换；网络更新或解码失败均保留旧图，设置提供相应重试。
+新图解码成功后，设置显示其日期、标题、版权和受限 Bing 出处链接，避免误标仍在显示的旧图。失败时提供重试，不弹后台通知。
+未选中时浏览网格不拉取预览，选择其他来源或将可见度归零后停止更新。
+
+每日图不使用固定官方 CDN 清单或视频分段控件。Main 单实例合并并发检查，正常约每六小时
+（附少量抖动）或跨天后检查；启动、联网恢复、聚焦与唤醒只检查是否到期，不绕过失败退避。
+Bing 发布时间不等于本地零点，不保证零点立即更新。缓存保留当前与上一张的本机引用，
+和 custom、官方图片在同一媒体作用域合并保护。
+实现：Desktop 的 `main/bing-wallpaper-source.ts`、`bing-wallpaper-service.ts`、
+`bing-wallpaper-host.ts`、`bing-wallpaper-settings.ts`。
+回归：`main/__tests__/bingWallpaper.test.ts`、`customWallpaper.test.ts` 和
+`renderer/hooks/__tests__/useWallpaperSettings.test.tsx`。
+可视检查场景为 `scripts/fixtures/bing-wallpaper/`；其宿主状态为合成数据。
+
 ### Optional application wallpaper (user decision, 2026-10-01)
 
 An explicitly selected Desktop wallpaper replaces the flat page canvas across

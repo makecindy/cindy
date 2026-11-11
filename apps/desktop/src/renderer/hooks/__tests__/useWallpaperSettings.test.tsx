@@ -25,6 +25,7 @@ function Controls() {
       <span data-testid="visibility">{settings.visibility}</span>
       <span data-testid="motion">{settings.wallpaperMotion}</span>
       <span data-testid="download-progress">{settings.downloadProgress}</span>
+      <span data-testid="bing-decode-failed">{String(settings.bingDecodeFailed)}</span>
     </>
   );
 }
@@ -43,6 +44,106 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
+  // #9758 review, unit: host repairs identical content to the same URL after
+  // startup decode fails. Existing tests retry only through a manual click.
+  it.each(['loading', 'ready'] as const)('automatically re-decodes a repaired unchanged URL from %s', async (initialStatus) => {
+    const url = 'cindy-media://client-wallpaper/' + 'a'.repeat(64) + '.webp';
+    const attempts: Array<{ resolve: () => void; reject: () => void }> = [];
+    vi.stubGlobal('Image', class {
+      src = '';
+      decode = () => new Promise<void>((resolve, reject) => {
+        attempts.push({ resolve, reject: () => reject(new Error('missing file')) });
+      });
+    });
+    const snapshot = (status: 'loading' | 'ready') => ({ ...DEFAULT_APPEARANCE_SETTINGS,
+      wallpaperId: 'bing-daily' as const, wallpaperVisibility: 0.6, wallpaperBlur: 9,
+      bingWallpaper: { status, image: { url, imageKey: url, market: 'en-US', date: '20261109',
+        title: 'Example', copyright: 'Example', sourceUrl: '' } },
+    });
+    let changed!: (value: ReturnType<typeof snapshot>) => void;
+    const refresh = vi.fn();
+    vi.stubGlobal('electronAPI', { appearanceSettings: {
+      getSync: () => snapshot(initialStatus),
+      onChanged: (callback: typeof changed) => { changed = callback; return () => {}; },
+      refreshBingWallpaper: refresh,
+    } });
+    render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
+    await act(async () => attempts[0].reject());
+    expect(screen.getByTestId('bing-decode-failed').textContent).toBe('true');
+    // Also covers loading/ready notifications batched into one React render.
+    act(() => { changed(snapshot('loading')); changed(snapshot('ready')); });
+    expect(attempts).toHaveLength(2);
+    act(() => changed(snapshot('ready')));
+    expect(attempts).toHaveLength(2);
+    await act(async () => attempts[1].resolve());
+    expect(screen.getByTestId('bing-decode-failed').textContent).toBe('false');
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + url + '")');
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-blur')).toBe('9px');
+    expect(refresh).not.toHaveBeenCalled();
+  });
+  // #9640, unit: real provider/canvas. A daily image can change URL without changing its
+  // source ID; visibility/blur persist and a failed decode exposes a same-URL retry.
+  it('decodes daily changes, keeps the previous image on failure and clears it after reset', async () => {
+    const first = 'cindy-media://client-wallpaper/' + 'a'.repeat(64) + '.webp';
+    const second = 'cindy-media://client-wallpaper/' + 'b'.repeat(64) + '.webp';
+    const third = 'cindy-media://client-wallpaper/' + 'c'.repeat(64) + '.webp';
+    const decodes = new Map<string, Array<{ resolve: () => void; reject: () => void }>>();
+    vi.stubGlobal('Image', class {
+      src = '';
+      decode = () => new Promise<void>((resolve, reject) => {
+        const attempts = decodes.get(this.src) ?? [];
+        attempts.push({ resolve, reject: () => reject(new Error('decode failed')) });
+        decodes.set(this.src, attempts);
+      });
+    });
+    const snapshot = (url: string) => ({ ...DEFAULT_APPEARANCE_SETTINGS,
+      wallpaperId: 'bing-daily' as const, wallpaperBlur: 9, wallpaperVisibility: 0.6,
+      bingWallpaper: { status: 'ready' as const, image: { url, imageKey: url,
+        market: 'en-US', date: '20261109', title: 'Example', copyright: 'Example', sourceUrl: '' } },
+    });
+    let changed!: (settings: ReturnType<typeof snapshot>) => void;
+    const ensureImage = vi.fn();
+    const ensureVideo = vi.fn();
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    const setPatch = vi.fn();
+    vi.stubGlobal('electronAPI', { appearanceSettings: {
+      getSync: () => snapshot(first),
+      onChanged: (callback: typeof changed) => { changed = callback; return () => {}; },
+      setPatch, refreshBingWallpaper: refresh,
+      ensureWallpaperImage: ensureImage, ensureWallpaperVideo: ensureVideo,
+    } });
+    render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
+    await act(async () => decodes.get(first)![0].resolve());
+    const root = document.documentElement;
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + first + '")');
+    expect(root.style.getPropertyValue('--app-wallpaper-veil')).toBe('40%');
+    expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('9px');
+    act(() => changed(snapshot(second)));
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + first + '")');
+    await act(async () => decodes.get(second)![0].resolve());
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + second + '")');
+    expect(root.style.getPropertyValue('--app-wallpaper-veil')).toBe('40%');
+    expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('9px');
+    act(() => changed(snapshot(third)));
+    await act(async () => decodes.get(third)![0].reject());
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + second + '")');
+    expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('9px');
+    expect(screen.getByTestId('bing-decode-failed').textContent).toBe('true');
+    fireEvent.click(screen.getByText('Retry'));
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(ensureImage).not.toHaveBeenCalled();
+    expect(ensureVideo).not.toHaveBeenCalled();
+    await waitFor(() => expect(decodes.get(third)).toHaveLength(2));
+    expect(screen.getByTestId('bing-decode-failed').textContent).toBe('true');
+    await act(async () => decodes.get(third)![1].resolve());
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + third + '")');
+    expect(screen.getByTestId('bing-decode-failed').textContent).toBe('false');
+    fireEvent.click(screen.getByText('Reset'));
+    await act(async () => {});
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('');
+    expect(setPatch).toHaveBeenCalled();
+  });
+
   // #8591: A -> B must show B's preview immediately, then its decoded original.
   // Existing coverage required retaining A instead. Minimal input: two selections
   // with out-of-order image downloads; unit tier, real provider and canvas.

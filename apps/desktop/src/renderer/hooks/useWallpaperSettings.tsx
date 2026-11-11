@@ -1,3 +1,4 @@
+import type { BingWallpaperSnapshot } from '@/../shared/bingWallpaper';
 import {
   createContext,
   useCallback,
@@ -37,9 +38,12 @@ export interface WallpaperSettings {
   wallpaperBlur?: number | null;
   wallpaperMotion: WallpaperMotion;
   customWallpaperUrl?: string;
+  bingWallpaper?: BingWallpaperSnapshot;
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
+  bingDecodeFailed: boolean;
+  bingImageReady: boolean;
   playbackFailed: boolean;
   downloadPending: boolean;
   downloadFailed: boolean;
@@ -79,6 +83,7 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
     wallpaperBlur: settings.wallpaperBlur,
     wallpaperMotion: settings.wallpaperMotion,
     customWallpaperUrl: settings.customWallpaperUrl,
+    bingWallpaper: settings.bingWallpaper,
   };
 }
 
@@ -95,11 +100,22 @@ export function WallpaperSettingsProvider({
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
   const [visibilityPreview, setVisibilityPreview] = useState<number | null>(null);
   const [failedUrl, setFailedUrl] = useState('');
+  const [bingDecodeFailedUrl, setBingDecodeFailedUrl] = useState('');
+  const [bingDecodeRetryKey, setBingDecodeRetryKey] = useState(0);
   const onPlaybackFailure = useCallback(
     () => setFailedUrl(settings.customWallpaperUrl ?? ''),
     [settings.customWallpaperUrl],
   );
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
+  const onBingDecodeReady = useCallback((url: string) => {
+    setBingDecodeFailedUrl((failed) => failed === url ? '' : failed);
+  }, []);
+  const onBingDecodeError = useCallback(
+    (url: string) => {
+      if (settings.wallpaperId === 'bing-daily') setBingDecodeFailedUrl(url);
+    },
+    [settings.wallpaperId],
+  );
   const isDark = useIsDarkMode();
   const isDarkRef = useRef(isDark);
   isDarkRef.current = isDark;
@@ -116,22 +132,30 @@ export function WallpaperSettingsProvider({
   const downloadBytes = imageAsset.total + videoAsset.total;
   const downloadProgress =
     downloadBytes > 0 ? (imageAsset.loaded + videoAsset.loaded) / downloadBytes : 0;
+  const bingUrl = settings.bingWallpaper?.image?.url;
+  const bingDecodeFailed =
+    settings.wallpaperId === 'bing-daily' && !!bingUrl && bingDecodeFailedUrl === bingUrl;
   const retryDownload = useCallback(() => {
+    if (settings.wallpaperId === 'bing-daily') {
+      if (bingUrl && bingDecodeFailedUrl === bingUrl) {
+        setBingDecodeRetryKey((key) => key + 1);
+      }
+      void getBridge()?.refreshBingWallpaper?.().catch(() => undefined);
+      return;
+    }
     imageAsset.retry();
     videoAsset.retry();
-  }, [imageAsset.retry, videoAsset.retry]);
+  }, [imageAsset.retry, videoAsset.retry, settings.wallpaperId, bingUrl, bingDecodeFailedUrl]);
   const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
-  const background =
-    settings.wallpaperId === 'custom'
-      ? customUrl
-        ? isCustomWallpaperVideo(customUrl)
-          ? 'none'
-          : `url("${customUrl}")`
-        : undefined
-      : imageAsset.url
-        ? `url("${imageAsset.url}")`
-        : getBuiltinWallpaperBackground(settings.wallpaperId);
-  useWallpaperBackground({
+  let background: string | undefined;
+  if (settings.wallpaperId === 'bing-daily') {
+    background = bingUrl ? `url("${bingUrl}")` : undefined;
+  } else if (settings.wallpaperId === 'custom') {
+    background = customUrl ? isCustomWallpaperVideo(customUrl) ? 'none' : `url("${customUrl}")` : undefined;
+  } else {
+    background = imageAsset.url ? `url("${imageAsset.url}")` : getBuiltinWallpaperBackground(settings.wallpaperId);
+  }
+  const imageReady = useWallpaperBackground({
     background,
     // Only macOS has an independent native sidebar material. Elsewhere 0% keeps the
     // original window backdrop (Windows 11 Acrylic, otherwise opaque) until opt-in.
@@ -141,9 +165,13 @@ export function WallpaperSettingsProvider({
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
     reducedMotion,
     decodeUrl:
+      settings.wallpaperId === 'bing-daily' ? bingUrl :
       settings.wallpaperId === 'custom' && !isCustomWallpaperVideo(customUrl)
         ? customUrl || undefined
         : undefined,
+    decodeRetryKey: bingDecodeRetryKey,
+    onDecodeError: onBingDecodeError,
+    onDecodeReady: onBingDecodeReady,
   });
   const settingsRef = useRef(settings);
   const confirmedRef = useRef(settings);
@@ -158,6 +186,14 @@ export function WallpaperSettingsProvider({
     let revision = 0;
     const apply = (next: AppearanceSettings) => {
       const confirmed = pickWallpaperSettings(normalizeAppearanceSettings(next));
+      // A host repair can restore identical bytes at the same content-addressed
+      // URL. Retry decoding on readiness, even if React batches loading/ready.
+      if (
+        confirmed.wallpaperId === 'bing-daily' &&
+        confirmed.bingWallpaper?.image &&
+        confirmed.bingWallpaper.status === 'ready' &&
+        confirmedRef.current.bingWallpaper?.status !== 'ready'
+      ) setBingDecodeRetryKey((key) => key + 1);
       confirmedRef.current = confirmed;
       const optimistic = pendingRef.current.reduce(
         (current, pending) => ({ ...current, ...pending.patch }),
@@ -188,7 +224,9 @@ export function WallpaperSettingsProvider({
         .catch(() => undefined);
     };
     refresh();
+    window.addEventListener('online', refresh);
     return () => {
+      window.removeEventListener('online', refresh);
       disposed = true;
       unsubscribe();
     };
@@ -276,6 +314,8 @@ export function WallpaperSettingsProvider({
   const value = useMemo<WallpaperSettingsContextValue>(
     () => ({
       ...settings,
+      bingDecodeFailed,
+      bingImageReady: Boolean(bingUrl) && imageReady,
       wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
@@ -301,6 +341,9 @@ export function WallpaperSettingsProvider({
       blurPreview,
       setWallpaper,
       settings,
+      bingDecodeFailed,
+      bingUrl,
+      imageReady,
       failedUrl,
       visibility,
       downloadPending,

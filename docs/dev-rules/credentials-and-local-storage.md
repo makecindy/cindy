@@ -378,6 +378,13 @@ relay 原有 60 秒主动续期节流保持不变。
   `apps/desktop/src/main/mcp-integrations/browser-backend/rsb-webview-upload-policy.ts`；
   回归见对应上传策略测试和 `packages/lizi-mcps/src/browser/opencli-recipes.test.ts`。
 
+Bing 每日壁纸的客户端共用缓存引用位于 `userData/bing-wallpaper.json`，
+只存 current/previous 的本地媒体引用、公开图片标题/版权/出处、请求市场和检查时间。
+图片字节仍在既有 `cindy-media/client-wallpaper` 作用域；不存账号、cookie 或凭证。
+该文件不参与新电脑设置迁移；只迁移用户显式选择的 `bing-daily` 来源偏好。
+文件不可读时保留并拒绝普通覆盖，媒体回收跳过该作用域的删除。实现：
+`main/bing-wallpaper-settings.ts`；回收边界见 [媒体存储](media-storage-and-protocols.md)。
+
 ## Review 清单
 
 截图翻译语言覆盖存于 `userData/screenshot-translation-settings.json`，仅保存

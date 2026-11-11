@@ -11,6 +11,8 @@ const state = vi.hoisted(() => ({
   pending: false,
   failed: false,
   progress: 0,
+  bingDecodeFailed: false,
+  bingImageReady: true,
   retry: vi.fn(),
   select: vi.fn(),
 }));
@@ -19,6 +21,13 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
   useWallpaperSettings: () => ({
     ...DEFAULT_APPEARANCE_SETTINGS,
     wallpaperId: state.id,
+    bingDecodeFailed: state.bingDecodeFailed,
+    bingImageReady: state.bingImageReady,
+    bingWallpaper: { status: 'ready', image: {
+      url: 'cindy-media://client-wallpaper/' + 'a'.repeat(64) + '.webp',
+      date: '20261109', title: 'New daily image', copyright: 'New image attribution',
+      sourceUrl: 'https://www.bing.com/', imageKey: 'daily', market: 'en-US',
+    } },
     visibility: 1,
     downloadPending: state.pending,
     downloadFailed: state.failed,
@@ -38,6 +47,8 @@ beforeEach(() => {
   state.pending = false;
   state.failed = false;
   state.progress = 0;
+  state.bingDecodeFailed = false;
+  state.bingImageReady = true;
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -55,6 +66,24 @@ afterEach(() => {
 });
 
 describe('wallpaper download feedback', () => {
+  // #9758 review, unit: a ready main snapshot may fail renderer decoding. The
+  // existing CDN feedback cases cannot detect attribution for an undisplayed image.
+  it('offers decode retry without attributing the retained old background to the new image', () => {
+    state.id = 'bing-daily';
+    state.bingImageReady = false;
+    const { rerender } = render(<WallpaperSection />);
+    expect(screen.queryByText('New image attribution')).toBeNull();
+    state.bingDecodeFailed = true;
+    rerender(<WallpaperSection />);
+    expect(screen.getByText('settings.appearance.wallpaper.bingDecodeFailed')).toBeTruthy();
+    expect(screen.queryByText('New image attribution')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.appearance.wallpaper.retryDownload' }));
+    expect(state.retry).toHaveBeenCalledOnce();
+    state.bingDecodeFailed = false;
+    state.bingImageReady = true;
+    rerender(<WallpaperSection />);
+    expect(screen.getByText('New image attribution')).toBeTruthy();
+  });
   // User request 2026-10-17: still-only originals share download progress/retry
   // with scenes, but have no motion switch. Existing cases only exercised
   // cindy-window; minimum additional input is night-launch (cindy-whisper gained motion on 2026-10-17); unit tier.

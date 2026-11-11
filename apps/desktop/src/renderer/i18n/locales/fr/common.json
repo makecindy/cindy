@@ -2320,7 +2320,8 @@
           "dune-sphere": "Sphère des dunes",
           "ocean-clouds": "Nuages océaniques",
           "rose-quartz": "Quartz rose",
-          "custom": "Fond d'écran personnalisé"
+          "custom": "Fond d'écran personnalisé",
+          "bing-daily": "Fond Quotidien Bing"
         },
         "visibilityLabel": "Visibilité du fond d'écran",
         "visibilityHint": "0 % masque le fond d'écran ; 100 % l'affiche sans superposition.",
@@ -2344,7 +2345,13 @@
         "customFailed": "Impossible d'enregistrer le fond d'écran. Veuillez réessayer.",
         "downloading": "Téléchargement du fond d'écran…",
         "downloadFailed": "Certaines ressources du fond d'écran sont indisponibles. L'arrière-plan disponible est utilisé.",
-        "retryDownload": "Réessayer le téléchargement"
+        "retryDownload": "Réessayer le téléchargement",
+        "bingHint": "Mise à jour automatique lorsque Cindy est en cours d’exécution. Images fournies par Bing.",
+        "bingLoading": "Mise à jour du fond…",
+        "bingFailed": "Impossible de charger le fond quotidien",
+        "bingStale": "Mise à jour impossible. L’image en cache est conservée.",
+        "bingDecodeFailed": "Impossible de décoder l’image du jour. L’image précédente est conservée.",
+        "bingSource": "À Propos de Cette Image"
       },
       "layout": {
         "label": "Disposition des panneaux",

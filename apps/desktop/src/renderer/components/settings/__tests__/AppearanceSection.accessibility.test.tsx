@@ -141,6 +141,7 @@ describe('AppearanceSection accessibility', () => {
       'settings.appearance.wallpaper.options.dune-sphere',
       'settings.appearance.wallpaper.options.ocean-clouds',
       'settings.appearance.wallpaper.options.rose-quartz',
+      'settings.appearance.wallpaper.options.bing-daily',
       'settings.appearance.wallpaper.options.custom',
     ]);
     expect(

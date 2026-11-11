@@ -3,8 +3,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
+import { bingWallpaperStore, readBingWallpaperCache } from '../bing-wallpaper-settings';
+import { startBingWallpaperService, stopBingWallpaperService, refreshBingWallpaper } from '../bing-wallpaper-host';
+import { readAppearanceSettings, writeAppearanceSettingsPatch } from '../appearance-settings-store';
+import { fetchBingMetadata, fetchBingImage } from '../bing-wallpaper-source';
 
 const h = vi.hoisted(() => ({ dir: '', picker: vi.fn(), account: 'a', db: vi.fn() }));
+vi.mock('../bing-wallpaper-source.js', () => ({
+  BingWallpaperRequestError: class extends Error {},
+  bingWallpaperMarket: () => 'en-US',
+  fetchBingMetadata: vi.fn(), fetchBingImage: vi.fn(),
+}));
+vi.mock('../i18n.desktop.js', () => ({ getResolvedMainLocale: () => 'en' }));
 vi.mock('electron', () => ({
   app: { getPath: () => h.dir },
   dialog: { showOpenDialog: h.picker },
@@ -61,6 +71,7 @@ beforeEach(() => {
   h.picker.mockReset();
 });
 afterEach(() => {
+  stopBingWallpaperService();
   expect(h.db).not.toHaveBeenCalled();
   vi.restoreAllMocks();
   fs.rmSync(h.dir, { recursive: true, force: true });
@@ -76,6 +87,132 @@ async function selectImage(color = 'blue') {
   return bytes;
 }
 const parent = {} as never;
+
+// #9640: real host/store/media lifecycle. Existing custom tests did not include a
+// mutable third-party source. A daily image must survive custom import/removal;
+// corrupt reference metadata must forbid recycling. Unit tier, unique temporary userData.
+describe('daily wallpaper media ownership', () => {
+  // #9758 clock rollback: production host must replace a future-dated cache,
+  // but retain a cache written during the request. Service-only tests mock publish.
+  // Unit tier; minimal input is a valid cached image with checkedAt > Date.now().
+  it.each([false, true])('handles future cache timestamps without losing concurrent publication (%s)', async (concurrent) => {
+    const oldBytes = await prepareWallpaperImage(await selectImage('red'));
+    const old = await writeBlob({ buffer: oldBytes, mimeType: 'image/webp', scope: 'client-wallpaper' });
+    const info = { imageKey: 'old', market: 'en-US', date: '20261109', title: '', copyright: '', sourceUrl: '' };
+    const future = Date.now() + 24 * 3600_000;
+    await bingWallpaperStore.writePatchAtomic({
+      current: { ...info, url: old.url }, checkedAt: future, nextCheckAt: future + 3600_000,
+    });
+    const newBytes = await prepareWallpaperImage(await selectImage('blue'));
+    vi.mocked(fetchBingMetadata).mockImplementationOnce(async () => {
+      if (concurrent) await bingWallpaperStore.writePatchAtomic({
+        current: { ...info, imageKey: 'concurrent', url: old.url }, checkedAt: future + 1,
+      });
+      return { ...info, imageKey: 'refreshed', imageUrl: 'https://www.bing.com/th?id=OHR.Test.jpg' };
+    });
+    vi.mocked(fetchBingImage).mockResolvedValue(newBytes);
+    await writeAppearanceSettingsPatch({ wallpaperId: 'bing-daily' });
+    startBingWallpaperService(() => {});
+    await refreshBingWallpaper();
+    const cache = readBingWallpaperCache();
+    expect(cache.current?.imageKey).toBe(concurrent ? 'concurrent' : 'refreshed');
+    expect(readAppearanceSettings().bingWallpaper?.status).toBe(concurrent ? 'stale' : 'ready');
+    if (!concurrent) {
+      expect(cache.checkedAt).toBeLessThan(future);
+      expect((await readClientWallpaperFile(cache.current!.url)).buffer).toEqual(newBytes);
+      expect(cache.previous?.url).toBe(old.url);
+    }
+  });
+  it.each([{ wallpaperVisibility: 0 }, { wallpaperOverlay: 1 }])(
+    'does not request Bing while the saved wallpaper is fully hidden: %j', async (hidden) => {
+      vi.mocked(fetchBingMetadata).mockClear();
+      await writeAppearanceSettingsPatch({ wallpaperId: 'bing-daily', ...hidden });
+      startBingWallpaperService(() => {});
+      await refreshBingWallpaper();
+      expect(fetchBingMetadata).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(h.dir, 'bing-wallpaper.json'))).toBe(false);
+    });
+
+  it('publishes through the host, keeps custom media and reuses the saved image after restart', async () => {
+    await selectImage('green');
+    await importCustomWallpaper(parent);
+    const custom = readCustomWallpaperUrl();
+    const bytes = await prepareWallpaperImage(await selectImage('blue'));
+    vi.mocked(fetchBingMetadata).mockResolvedValue({
+      imageKey: 'en-US:fixture', imageUrl: 'https://www.bing.com/th?id=OHR.Test.jpg',
+      market: 'en-US', date: '20261109', title: 'Example', copyright: 'Example', sourceUrl: '',
+    });
+    vi.mocked(fetchBingImage).mockResolvedValue(bytes);
+    await writeAppearanceSettingsPatch({ wallpaperId: 'bing-daily', wallpaperBlur: 7 });
+    await new Promise<void>((resolve) => {
+      startBingWallpaperService(() => {
+        if (readAppearanceSettings().bingWallpaper?.status === 'ready') resolve();
+      });
+    });
+    const image = readBingWallpaperCache().current!;
+    expect(image.url).toMatch(/^cindy-media:\/\/client-wallpaper\//);
+    expect((await readClientWallpaperFile(image.url)).buffer).toEqual(bytes);
+    expect(readCustomWallpaperUrl()).toBe(custom);
+    expect(readAppearanceSettings()).toMatchObject({ wallpaperId: 'bing-daily', wallpaperBlur: 7 });
+    await selectImage('red');
+    await importCustomWallpaper(parent);
+    await removeCustomWallpaper();
+    expect((await readClientWallpaperFile(image.url)).buffer).toEqual(bytes);
+    stopBingWallpaperService();
+    vi.mocked(fetchBingMetadata).mockClear();
+    await new Promise<void>((resolve) => {
+      startBingWallpaperService(() => {
+        if (readAppearanceSettings().bingWallpaper?.status === 'ready') resolve();
+      });
+    });
+    expect(fetchBingMetadata).not.toHaveBeenCalled();
+    expect(readAppearanceSettings().bingWallpaper?.image?.url).toBe(image.url);
+  });
+
+  it('keeps the durable old image and custom media when publishing a replacement fails', async () => {
+    await selectImage('green');
+    await importCustomWallpaper(parent);
+    const custom = readCustomWallpaperUrl();
+    const oldBytes = await prepareWallpaperImage(await selectImage('red'));
+    const old = await writeBlob({ buffer: oldBytes, mimeType: 'image/webp', scope: 'client-wallpaper' });
+    const info = { imageKey: 'old', market: 'en-US', date: '20261109', title: 'Example', copyright: '', sourceUrl: '' };
+    await bingWallpaperStore.writePatchAtomic({ current: { ...info, url: old.url } });
+    const file = path.join(h.dir, 'bing-wallpaper.json');
+    const durable = fs.readFileSync(file, 'utf8');
+    vi.mocked(fetchBingMetadata).mockResolvedValue({ ...info, imageKey: 'new', imageUrl: 'https://www.bing.com/th?id=OHR.Test.jpg' });
+    vi.mocked(fetchBingImage).mockResolvedValue(await prepareWallpaperImage(await selectImage('blue')));
+    vi.spyOn(bingWallpaperStore, 'updateAtomic').mockRejectedValueOnce(new Error('disk publication failed'));
+    await writeAppearanceSettingsPatch({ wallpaperId: 'bing-daily' });
+    startBingWallpaperService(() => {});
+    await refreshBingWallpaper();
+    expect(readAppearanceSettings().bingWallpaper).toMatchObject({ status: 'stale', image: { url: old.url } });
+    expect(fs.readFileSync(file, 'utf8')).toBe(durable);
+    await expect(readClientWallpaperFile(custom)).resolves.toBeDefined();
+    expect((await readClientWallpaperFile(old.url)).buffer).toEqual(oldBytes);
+    expect((await listBlobFiles('client-wallpaper')).entries).toHaveLength(2);
+  });
+
+  it('preserves both daily generations and skips deletion if their durable references are corrupt', async () => {
+    const current = await writeBlob({ buffer: Buffer.from('daily'), mimeType: 'image/webp', scope: 'client-wallpaper' });
+    const previous = await writeBlob({ buffer: Buffer.from('previous'), mimeType: 'image/webp', scope: 'client-wallpaper' });
+    const info = { imageKey: 'test', market: 'en-US', date: '20261109', title: '', copyright: '', sourceUrl: '' };
+    await bingWallpaperStore.writePatchAtomic({
+      current: { ...info, url: current.url }, previous: { ...info, url: previous.url },
+    });
+    await selectImage();
+    await importCustomWallpaper(parent);
+    await removeCustomWallpaper();
+    await expect(readClientWallpaperFile(current.url)).resolves.toBeDefined();
+    await expect(readClientWallpaperFile(previous.url)).resolves.toBeDefined();
+    const referenceFile = path.join(h.dir, 'bing-wallpaper.json');
+    fs.writeFileSync(referenceFile, '{broken');
+    await selectImage('red');
+    await importCustomWallpaper(parent);
+    expect(fs.readFileSync(referenceFile, 'utf8')).toBe('{broken');
+    await expect(readClientWallpaperFile(current.url)).resolves.toBeDefined();
+    await expect(readClientWallpaperFile(previous.url)).resolves.toBeDefined();
+  });
+});
 
 describe('client-owned custom wallpaper lifecycle', () => {
   it('rejects a 20–100 MB image after only the header, even with an MP4 filename', async () => {

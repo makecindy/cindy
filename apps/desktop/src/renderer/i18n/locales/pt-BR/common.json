@@ -2320,7 +2320,8 @@
           "dune-sphere": "Esfera de dunas",
           "ocean-clouds": "Nuvens oceânicas",
           "rose-quartz": "Quartzo rosa",
-          "custom": "Papel de parede personalizado"
+          "custom": "Papel de parede personalizado",
+          "bing-daily": "Imagem Diária do Bing"
         },
         "visibilityLabel": "Visibilidade do papel de parede",
         "visibilityHint": "0% oculta o papel de parede; 100% o exibe sem sobreposição.",
@@ -2344,7 +2345,13 @@
         "customFailed": "Não foi possível salvar o papel de parede. Tente novamente.",
         "downloading": "Baixando papel de parede…",
         "downloadFailed": "Alguns recursos do papel de parede estão indisponíveis. Usando o fundo disponível.",
-        "retryDownload": "Tentar baixar novamente"
+        "retryDownload": "Tentar baixar novamente",
+        "bingHint": "Atualiza automaticamente enquanto o Cindy está em execução. Imagens fornecidas pelo Bing.",
+        "bingLoading": "Atualizando a imagem de fundo…",
+        "bingFailed": "Não foi possível carregar a imagem diária",
+        "bingStale": "Não foi possível atualizar. A imagem em cache será mantida.",
+        "bingDecodeFailed": "Não foi possível decodificar a imagem diária. A imagem anterior continua visível.",
+        "bingSource": "Sobre Esta Imagem"
       },
       "layout": {
         "label": "Layout dos painéis",

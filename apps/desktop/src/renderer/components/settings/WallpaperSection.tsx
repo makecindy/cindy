@@ -1,12 +1,13 @@
 import { appearanceSettings } from './AppearanceSection.settings-search';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { useTranslation } from 'react-i18next';
-import { RotateCcw, ImagePlus, Film } from 'lucide-react';
+import { RotateCcw, ImagePlus, Film, CalendarDays } from 'lucide-react';
 import { useEffect, useCallback, useId, useRef, useState } from 'react';
 import { extractIpcError } from '@/utils/ipcError';
 import { downloadPercent } from './DownloadMeter';
 
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Slider } from '@/components/ui/slider';
 import { Tip } from '@/components/ui/tooltip';
@@ -38,6 +39,9 @@ export function WallpaperSection() {
     visibility,
     wallpaperMotion,
     customWallpaperUrl,
+    bingWallpaper,
+    bingDecodeFailed,
+    bingImageReady,
     playbackFailed,
     downloadPending,
     downloadFailed,
@@ -80,6 +84,9 @@ export function WallpaperSection() {
   useEffect(() => {
     if (visibility === 0) previewBlur(null);
   }, [visibility, previewBlur]);
+  const isBing = wallpaperId === 'bing-daily';
+  const bingFailed = bingDecodeFailed || bingWallpaper?.status === 'failed' || bingWallpaper?.status === 'stale';
+  const bingLoading = bingWallpaper?.status === 'loading';
   const customVideo = isCustomWallpaperVideo(customWallpaperUrl);
   const downloading = isCdnWallpaper(wallpaperId) && downloadPending;
   const retryable = isCdnWallpaper(wallpaperId) && downloadFailed && !downloadPending;
@@ -160,7 +167,9 @@ export function WallpaperSection() {
               const selected = wallpaperId === id;
               const label = t('settings.appearance.wallpaper.options.' + id);
               const background =
-                id === 'custom' && customWallpaperUrl && !customVideo
+                id === 'bing-daily' && isBing && bingWallpaper?.image?.url
+                  ? `url("${bingWallpaper.image.url}")`
+                  : id === 'custom' && customWallpaperUrl && !customVideo
                   ? `url("${customWallpaperUrl}")`
                   : getBuiltinWallpaperPreview(id);
               return (
@@ -281,6 +290,11 @@ export function WallpaperSection() {
                           <ImagePlus size={22} aria-hidden="true" />
                         </span>
                       ) : null}
+                      {id === 'bing-daily' && (!isBing || !bingWallpaper?.image) && (
+                        <span className="absolute inset-0 flex items-center justify-center text-[var(--settings-section-sublabel)]">
+                          <CalendarDays size={22} aria-hidden="true" />
+                        </span>
+                      )}
                       {id === 'none' ? (
                         <span className="absolute inset-0 flex items-center justify-center text-12 text-[var(--settings-section-sublabel)]">
                           {t('settings.appearance.wallpaper.nonePreview')}
@@ -323,6 +337,40 @@ export function WallpaperSection() {
               {t('settings.appearance.wallpaper.downloadFailed')} ·{' '}
               {t('settings.appearance.wallpaper.retryDownload')}
             </p>
+          )}
+
+          {isBing && (
+            <div className="flex flex-col gap-2 text-12 text-[var(--text-secondary)]">
+              <p>{t('settings.appearance.wallpaper.bingHint')}</p>
+              <div role="status" className="flex flex-wrap items-center gap-2">
+                {bingLoading && <Spinner size={14} />}
+                {bingLoading && t('settings.appearance.wallpaper.bingLoading')}
+                {bingDecodeFailed && t('settings.appearance.wallpaper.bingDecodeFailed')}
+                {!bingDecodeFailed && bingFailed && t(bingWallpaper?.image
+                  ? 'settings.appearance.wallpaper.bingStale'
+                  : 'settings.appearance.wallpaper.bingFailed')}
+                {bingFailed && (
+                  <Button variant="secondary" size="sm" type="button"
+                    data-settings-search-action="Retry the selected daily wallpaper download"
+                    onClick={retryDownload}>
+                    {t('settings.appearance.wallpaper.retryDownload')}
+                  </Button>
+                )}
+              </div>
+              {bingWallpaper?.image && bingImageReady && !bingDecodeFailed && (
+                <div className="flex flex-col gap-1">
+                  <p className="break-words">{bingWallpaper.image.date.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')} · {bingWallpaper.image.title}</p>
+                  <p className="break-words">{bingWallpaper.image.copyright}</p>
+                  {bingWallpaper.image.sourceUrl && (
+                    <Button variant="secondary" size="sm" type="button" className="self-start"
+                      data-settings-search-action="Open the current Bing image attribution"
+                      onClick={() => { void window.electronAPI.openExternal(bingWallpaper.image!.sourceUrl).catch(() => undefined); }}>
+                      {t('settings.appearance.wallpaper.bingSource')}
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
 
           <div className="flex flex-wrap items-center gap-3">

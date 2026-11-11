@@ -1254,6 +1254,7 @@ interface ElectronAPI {
   appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
   appearanceSettings: {
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
+    refreshBingWallpaper?: () => Promise<void>;
     ensureWallpaperVideo?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
     ensureWallpaperImage?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
     onWallpaperDownloadProgress?: (callback: (progress: import('../shared/appearanceSettings').WallpaperDownloadProgress) => void) => () => void;

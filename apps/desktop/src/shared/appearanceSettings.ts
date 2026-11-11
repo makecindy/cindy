@@ -1,3 +1,4 @@
+import { normalizeBingWallpaperSnapshot, type BingWallpaperSnapshot } from './bingWallpaper';
 import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
 
 /**
@@ -67,6 +68,8 @@ export interface AppearanceSettings {
   appIcon: AppIcon;
   /** Read-only, host-owned media reference; never accepted by set-patch. */
   customWallpaperUrl?: string;
+  /** Read-only host snapshot, never persisted as an appearance override. */
+  bingWallpaper?: BingWallpaperSnapshot;
 }
 
 /** Keep the terminal's existing platform fallbacks independent of code fonts. */
@@ -114,6 +117,7 @@ export const SELECTABLE_WALLPAPER_IDS = [
   'dune-sphere',
   'ocean-clouds',
   'rose-quartz',
+  'bing-daily',
   'custom',
 ] as const;
 
@@ -242,6 +246,7 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
     return { ...DEFAULT_APPEARANCE_SETTINGS };
   }
   const value = raw as Record<string, unknown>;
+  const bingWallpaper = normalizeBingWallpaperSnapshot(value.bingWallpaper);
   return {
     uiFamily: normalizeFamily(value.uiFamily),
     codeFamily: normalizeFamily(value.codeFamily),
@@ -279,6 +284,7 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
       ? { desktopVisibility: clampAppearanceWallpaperVisibility(value.desktopVisibility) }
       : {}),
     customWallpaperUrl: normalizeCustomWallpaperUrl(value.customWallpaperUrl),
+    ...(bingWallpaper ? { bingWallpaper } : {}),
   };
 }
 

@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import { readReferencedBingWallpaperUrls } from './bing-wallpaper-settings.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { normalizeCustomWallpaperUrl } from '../shared/appearanceSettings.js';
@@ -55,6 +56,7 @@ export function readReferencedClientWallpaperUrls(): string[] {
   }
   return [
     customUrl,
+    ...readReferencedBingWallpaperUrls(),
     ...Object.values(manifest)
       .filter((item) => item.delivery === 'cdn')
       .flatMap((item) => [

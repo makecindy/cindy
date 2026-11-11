@@ -2320,7 +2320,8 @@
           "dune-sphere": "Esfera de dunas",
           "ocean-clouds": "Nuvens oceânicas",
           "rose-quartz": "Quartzo rosa",
-          "custom": "Imagem de fundo personalizada"
+          "custom": "Imagem de fundo personalizada",
+          "bing-daily": "Imagem Diária do Bing"
         },
         "visibilityLabel": "Visibilidade da imagem de fundo",
         "visibilityHint": "0% oculta a imagem de fundo; 100% mostra-a sem sobreposição.",
@@ -2344,7 +2345,13 @@
         "customFailed": "Não foi possível guardar a imagem de fundo. Tente novamente.",
         "downloading": "A transferir imagem de fundo…",
         "downloadFailed": "Alguns recursos da imagem de fundo estão indisponíveis. A utilizar o fundo disponível.",
-        "retryDownload": "Repetir transferência"
+        "retryDownload": "Repetir transferência",
+        "bingHint": "Atualiza automaticamente enquanto o Cindy está em execução. Imagens fornecidas pelo Bing.",
+        "bingLoading": "A atualizar a imagem de fundo…",
+        "bingFailed": "Não foi possível carregar a imagem diária",
+        "bingStale": "Não foi possível atualizar. A imagem em cache será mantida.",
+        "bingDecodeFailed": "Não foi possível descodificar a imagem diária. A imagem anterior continua visível.",
+        "bingSource": "Sobre Esta Imagem"
       },
       "layout": {
         "label": "Disposição dos painéis",

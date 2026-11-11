@@ -2282,7 +2282,8 @@
           "dune-sphere": "Dünenkugel",
           "ocean-clouds": "Wolken über dem Ozean",
           "rose-quartz": "Rosenquarz",
-          "custom": "Eigenes Hintergrundbild"
+          "custom": "Eigenes Hintergrundbild",
+          "bing-daily": "Tägliches Bing-Hintergrundbild"
         },
         "visibilityLabel": "Sichtbarkeit des Hintergrundbilds",
         "visibilityHint": "0 % blendet das Hintergrundbild aus; 100 % zeigt es ohne Überlagerung.",
@@ -2306,7 +2307,13 @@
         "customFailed": "Der Hintergrund konnte nicht gespeichert werden. Versuche es erneut.",
         "downloading": "Hintergrundbild wird heruntergeladen…",
         "downloadFailed": "Einige Hintergrundbilddateien sind nicht verfügbar. Der verfügbare Hintergrund wird verwendet.",
-        "retryDownload": "Download erneut versuchen"
+        "retryDownload": "Download erneut versuchen",
+        "bingHint": "Wird automatisch aktualisiert, während Cindy läuft. Die Bilder werden von Bing bereitgestellt.",
+        "bingLoading": "Hintergrundbild wird aktualisiert…",
+        "bingFailed": "Das tägliche Hintergrundbild kann nicht geladen werden",
+        "bingStale": "Aktualisierung fehlgeschlagen. Das zwischengespeicherte Bild wird beibehalten.",
+        "bingDecodeFailed": "Das tägliche Bild konnte nicht dekodiert werden. Das vorherige Bild bleibt sichtbar.",
+        "bingSource": "Über Dieses Bild"
       },
       "layout": {
         "label": "Panel-Layout",
