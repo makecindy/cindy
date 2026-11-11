@@ -596,6 +596,33 @@ describe('cindy-bridge extension source', () => {
     expect(adapt(original, { ...model, api: 'openai-codex-responses' })).toBeUndefined();
   });
 
+  it('leaves tokenizer headroom when Pi clamps an oversized completion budget', () => {
+    const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('function reserveLargeCompletionHeadroom(');
+    const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('async function nativeFastPayload(', start);
+    const helper = ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end), {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const reserve = new Function(`${helper}; return reserveLargeCompletionHeadroom;`)() as
+      (payload: Record<string, unknown>, model: Record<string, unknown>) => Record<string, number> | undefined;
+    const model = { api: 'openai-completions', contextWindow: 1_048_576, maxTokens: 1_048_576 };
+    for (const [input, completion] of [[39_671, 1_010_781], [39_948, 1_010_873]]) {
+      const original = { max_tokens: completion, messages: [{ role: 'user', content: 'hello' }] };
+      const adjusted = reserve(original, model)!;
+      expect(input + adjusted.max_tokens).toBeLessThanOrEqual(model.contextWindow);
+      expect(adjusted.max_tokens).toBe(completion - 16_384);
+      expect(original.max_tokens).toBe(completion);
+    }
+    expect(reserve({ max_tokens: 384_000 }, { ...model, maxTokens: 384_000 })).toBeUndefined();
+    expect(reserve({ max_tokens: 65_536 }, model)).toBeUndefined();
+    expect(reserve({ max_tokens: 1_010_781 }, { ...model, api: 'openai-responses' })).toBeUndefined();
+    expect(reserve({ max_completion_tokens: 600_000 }, model)?.max_completion_tokens)
+      .toBe(600_000 - 44_448);
+    expect(730_000 + reserve({ max_tokens: 344_480 }, model)!.max_tokens)
+      .toBeLessThanOrEqual(model.contextWindow);
+    expect(reserve({ max_tokens: 70_000 }, { ...model, maxTokens: 384_000 })?.max_tokens)
+      .toBe(16_384);
+  });
+
   it('is valid standalone TypeScript for the Pi runtime to load', () => {
     const result = ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE, {
       compilerOptions: {

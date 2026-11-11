@@ -4316,6 +4316,31 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
+// Pi clamps a large output allowance using an estimated prompt size and a fixed
+// 4096-token reserve. On long BYOM requests, the upstream tokenizer can count
+// more prompt tokens than Pi estimated. Add headroom only when Pi has already
+// clamped a large output allowance; small response ceilings stay untouched.
+function reserveLargeCompletionHeadroom(payload, model) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  if (model?.api !== 'openai-completions') return undefined;
+  const contextWindow = model.contextWindow;
+  const modelMaxTokens = model.maxTokens;
+  const field = Number.isSafeInteger(payload.max_tokens) ? 'max_tokens'
+    : Number.isSafeInteger(payload.max_completion_tokens) ? 'max_completion_tokens' : undefined;
+  const requested = field ? payload[field] : undefined;
+  if (!Number.isSafeInteger(contextWindow) || contextWindow <= 0 ||
+      !Number.isSafeInteger(modelMaxTokens) || modelMaxTokens <= 0 ||
+      !Number.isSafeInteger(requested) || requested <= 65_536 ||
+      requested >= modelMaxTokens) return undefined;
+  // Recover Pi's estimated prompt from its context clamp. If another extension
+  // changed the request, leave that request alone instead of inferring a budget.
+  const estimatedPrompt = contextWindow - requested - 4096;
+  if (estimatedPrompt < 0) return undefined;
+  const reserve = Math.max(16_384, Math.ceil(estimatedPrompt * 0.1));
+  // Keep enough response space for a useful answer even close to compaction.
+  return { ...payload, [field]: Math.max(16_384, requested - reserve) };
+}
+
 async function nativeFastPayload(payload, model, ctx) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   if (!model || !['openai-responses', 'azure-openai-responses', 'openai-completions', 'openai-codex-responses'].includes(model.api)) return undefined;
@@ -4588,7 +4613,8 @@ export default async function cindyBridge(piApi: any) {
   pi.on('before_provider_request', async (event, ctx) => {
     const preparationStarted = performance.now();
     const payload = astraResponsesPayload(event.payload, ctx.model) ?? event.payload;
-    const next = (await nativeFastPayload(payload, ctx.model, ctx)) ?? payload;
+    const fastPayload = (await nativeFastPayload(payload, ctx.model, ctx)) ?? payload;
+    const next = reserveLargeCompletionHeadroom(fastPayload, ctx.model) ?? fastPayload;
     // A one-way native notification adds no host round trip. This is the payload
     // preparation hook, not proof that HTTP was sent or accepted upstream.
     const token = process.env.CINDY_PI_TURN_TOOL_POLICY;
