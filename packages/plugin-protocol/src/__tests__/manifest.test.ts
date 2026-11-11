@@ -18,6 +18,7 @@ import {
   isVersionlessCindyVersion,
   supportsCindyVersion,
   validateGhostManifest,
+  validateStoredGhostManifest,
 } from '../manifest.js';
 
 const validManifest = {
@@ -42,6 +43,25 @@ describe('Ghost manifest contract', () => {
     for (const target of ['http://localhost:8080/path', 'https://user:pw@example.com', 'ws://*.example.com', 'http://localhost:8080?key=x', 'file://host']) {
       expect(validateGhostManifest({ ...validManifest, slots: ['tool', 'network'], network: { hosts: [target] } }).ok, target).toBe(false);
     }
+  });
+
+  it('validates static task prompt declarations while preserving older installed plugin behavior', () => {
+    const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
+    expect(validateGhostManifest({ ...base, systemPrompt: [{ id: 'style', order: 0, text: 'Static', scope: 'selected-task' }] })).toMatchObject({ ok: true });
+    const historical = { ...base, systemPrompt: { vendorExtension: 'previously unknown' } };
+    expect(validateGhostManifest(historical).ok).toBe(false);
+    expect(validateStoredGhostManifest(historical)).toMatchObject({ ok: true, manifest: { tools: base.tools } });
+    const stored = validateStoredGhostManifest(historical);
+    if (stored.ok) expect(stored.manifest.systemPrompt).toBeUndefined();
+  });
+  // Runtime controls are on-demand entry points. Unlike message hooks, selecting
+  // one must not require a resident process (protocol contract, unit).
+  it('accepts on-demand runtime controls without making message hooks non-resident', () => {
+    const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
+    const hooks = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory'];
+    const result = validateGhostManifest({ ...base, subscribe: { hooks } });
+    expect(result).toMatchObject({ ok: true, manifest: { subscribe: { hooks } } });
+    expect(validateGhostManifest({ ...base, subscribe: { hooks: ['will-user-message'] } }).ok).toBe(false);
   });
 
   it.each([2, 3])('preserves the optional Host task card visibility flag in schema v%s', (schemaVersion) => {
