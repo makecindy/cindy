@@ -110,6 +110,11 @@ export class PrFollowWatch {
     });
   }
 
+  /** Snapshot the observer baseline before refreshing an explicit event. */
+  observedSignature(query: PrStatusQuery): string | undefined {
+    return this.signatures.get(prStatusKey(query));
+  }
+
   /** An authenticated doorbell may represent a new comment without changing status counts. */
   async notify(url: string, isCurrent: () => boolean = () => true): Promise<void> {
     await this.trigger(url, isCurrent);

@@ -300,7 +300,6 @@ export class ScheduleWebhookRemote {
     if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
     return this.enqueue(async () => {
       this.loaded = false;
-      this.githubSynced = '';
       await this.reconcile();
       if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
       if (this.githubError) throw this.githubError;
@@ -318,7 +317,7 @@ export class ScheduleWebhookRemote {
       start: input => this.request('POST', '/github/connect', input),
       complete: input => this.request('POST', '/github/connect/complete', input),
       isCurrent: () => generation === this.generation && attemptId === this.githubConnectAttempt && this.running,
-      onConnected: () => { void this.refresh().catch(() => undefined); },
+      onConnected: () => { this.githubSynced = ''; void this.refresh().catch(() => undefined); },
     });
     this.closeGithubConnect = attempt.close;
     return attempt.url;
@@ -447,7 +446,7 @@ export class ScheduleWebhookRemote {
 
   /** 打开详情、回到窗口或服务器通知时读取最新状态；不增加常驻轮询。 */
   async refresh(): Promise<void> {
-    await this.enqueue(async () => { this.loaded = false; this.githubSynced = ''; await this.reconcile(); });
+    await this.enqueue(async () => { this.loaded = false; await this.reconcile(); });
   }
 
   /** 服务器不发恢复通知，到了恢复时刻自然失效。 */
@@ -781,15 +780,18 @@ export class ScheduleWebhookRemote {
     if (!batch) return;
     const { batchId, ...delivery } = batch;
     let canAcknowledge = () => this.socket === socket && this.running;
-    const enqueue = delivery.scheduleId === GITHUB_WATCH_SCHEDULE ? this.enqueueGithub.bind(this) : this.enqueue.bind(this);
-    const receive = enqueue(async () => {
+    // Persist task doorbells on the ordinary admission lane. Only PR lookups
+    // join the GitHub lane, so a slow PR cannot delay an unrelated App task.
+    const receive = this.enqueue(async () => {
       if (this.socket !== socket || !this.running) return;
       if (delivery.scheduleId !== GITHUB_WATCH_SCHEDULE) { await this.deps.onBatch(delivery); return; }
       if (delivery.endpointId !== this.github.endpointId || !this.github.login) throw new Error('GitHub subscription is not reconciled');
       const isCurrent = this.githubGuard(socket);
       canAcknowledge = isCurrent;
       await this.deps.onGithubBatch?.({ ...delivery, batchId }, isCurrent);
-      if (!isCurrent()) return;
+      return isCurrent;
+    }).then(async (isCurrent) => {
+      if (!isCurrent?.()) return;
       const covered = this.coveredGithubPrs();
       const recover = delivery.omitted > 0 || this.githubBatchFailed;
       if (recover) this.githubBatchFailed = true;
@@ -803,9 +805,12 @@ export class ScheduleWebhookRemote {
         delivery.events.filter(event => !['check_run', 'check_suite', 'status'].includes(event.event)), heads);
       if (urls.length) {
         if (!this.deps.onGithubPrs) throw new Error('GITHUB_RECEIVER_UNAVAILABLE');
-        await this.deps.onGithubPrs(urls, isCurrent, { reason: recover ? 'overflow' : 'event', notify });
+        await this.enqueueGithub(async () => {
+          if (!isCurrent()) return;
+          await this.deps.onGithubPrs!(urls, isCurrent, { reason: recover ? 'overflow' : 'event', notify });
+          if (isCurrent()) this.githubBatchFailed = false;
+        });
       }
-      if (isCurrent()) this.githubBatchFailed = false;
     });
     receive.then(
       () => {

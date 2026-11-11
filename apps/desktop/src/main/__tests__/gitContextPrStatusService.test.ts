@@ -53,13 +53,39 @@ describe('GitHub App status refresh policy', () => {
     expect(fetchPr).toHaveBeenCalledTimes(6); // user/event force refresh bypasses TTL
   });
 
+  // Unit: one review changes the summary and supplies an explicit doorbell. The real
+  // observer and event reader must produce one run, not a deferred duplicate at 60s.
+  it('coalesces a changed summary and its explicit doorbell but keeps unchanged comments', async () => {
+    vi.useFakeTimers();
+    let head = 'first';
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+    const runNow = vi.fn(async () => null);
+    const watch = new PrFollowWatch({
+      listActive: async () => [{ id: 'follow', status: 'active', recurring: true,
+        preRunHook: { command: `node gate.mjs ${url}` } }] as never,
+      inflight: () => 0, autoRunAllowed: () => true, hasCapacity: () => true, runNow,
+    });
+    const svc = new PrStatusService({ readToken: TOKEN_OK, fetchPr: async () => remote({ head_sha: head }),
+      onObserved: (query, result) => watch.observe(query, result) });
+    try {
+      await svc.getStatuses([Q]);
+      head = 'second';
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'event', notify: [url] });
+      expect(runNow).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runNow).toHaveBeenCalledTimes(1);
+      await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'event', notify: [url] });
+      expect(runNow).toHaveBeenCalledTimes(2);
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
   it('times out a hung PR read without sending a follow-up notification', async () => {
     vi.useFakeTimers();
     const notify = vi.fn();
     try {
       const service = { getStatuses: () => new Promise(() => {}) } as unknown as PrStatusService;
       const url = 'https://github.com/example/project/pull/1';
-      const check = refreshGithubPrEvents(service, { notify }, [url], () => true, { reason: 'event', notify: [url] });
+      const check = refreshGithubPrEvents(service, { notify, observedSignature: () => undefined }, [url], () => true, { reason: 'event', notify: [url] });
       const rejected = expect(check).rejects.toThrow('PR_VERIFICATION_TIMEOUT');
       await vi.advanceTimersByTimeAsync(30_000);
       await rejected;
@@ -75,22 +101,22 @@ describe('GitHub App status refresh policy', () => {
     const svc = new PrStatusService({ readToken: TOKEN_OK, fetchPr, scope: async () => scope });
     const notify = vi.fn(async () => {});
     const urls = Array.from({ length: 12 }, (_, i) => `https://github.com/example/project/pull/${i + 1}`);
-    await refreshGithubPrEvents(svc, { notify }, urls, () => current, { reason: 'overflow', notify: urls });
+    await refreshGithubPrEvents(svc, { notify, observedSignature: () => undefined }, urls, () => current, { reason: 'overflow', notify: urls });
     expect(fetchPr).toHaveBeenCalledTimes(12);
     expect(notify).toHaveBeenCalledTimes(12);
     expect(Object.keys(await cachedGithubPrHeads(svc, urls))).toHaveLength(12);
     expect(fetchPr).toHaveBeenCalledTimes(12); // head lookup never polls
     notify.mockClear();
-    await refreshGithubPrEvents(svc, { notify }, [urls[0]!], () => current, { reason: 'event', notify: [] });
+    await refreshGithubPrEvents(svc, { notify, observedSignature: () => undefined }, [urls[0]!], () => current, { reason: 'event', notify: [] });
     expect(notify).not.toHaveBeenCalled(); // unchanged CI does not force the gate
     fail = true;
-    await expect(refreshGithubPrEvents(svc, { notify }, urls, () => current, { reason: 'overflow', notify: urls }))
+    await expect(refreshGithubPrEvents(svc, { notify, observedSignature: () => undefined }, urls, () => current, { reason: 'overflow', notify: urls }))
       .rejects.toThrow('PR_VERIFICATION_FAILED');
     scope = 'other';
     expect(await cachedGithubPrHeads(svc, urls)).toEqual({});
     current = false;
     const reads = fetchPr.mock.calls.length;
-    await refreshGithubPrEvents(svc, { notify }, urls, () => current, { reason: 'overflow', notify: urls });
+    await refreshGithubPrEvents(svc, { notify, observedSignature: () => undefined }, urls, () => current, { reason: 'overflow', notify: urls });
     expect(fetchPr).toHaveBeenCalledTimes(reads);
     expect(notify).not.toHaveBeenCalled();
   });

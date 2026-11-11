@@ -18,7 +18,7 @@ export async function cachedGithubPrHeads(service: PrStatusService, urls: readon
 
 /** A batch is acknowledged only after all selected facts have been re-read successfully. */
 export async function refreshGithubPrEvents(
-  service: PrStatusService, watch: Pick<PrFollowWatch, 'notify'>, urls: readonly string[],
+  service: PrStatusService, watch: Pick<PrFollowWatch, 'notify' | 'observedSignature'>, urls: readonly string[],
   isCurrent: () => boolean, refresh: GithubPrRefresh,
 ): Promise<void> {
   const notify = new Set(refresh.notify);
@@ -29,6 +29,7 @@ export async function refreshGithubPrEvents(
       const url = pending.shift()!;
       const pr = query(url);
       if (!pr) continue;
+      const before = watch.observedSignature(pr);
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const [result] = await Promise.race([
@@ -41,7 +42,11 @@ export async function refreshGithubPrEvents(
         if (!isCurrent()) return;
         if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
         // CI uses the shared observer; comments/overflow also check unchanged summaries.
-        if (notify.has(url)) await watch.notify(url, isCurrent);
+        // A changed observer baseline already rings the follower. An unchanged
+        // summary (or first observation) still needs the explicit comment bell.
+        if (notify.has(url) && (before === undefined || before === watch.observedSignature(pr))) {
+          await watch.notify(url, isCurrent);
+        }
       } catch (error) {
         failed = true;
         throw error;

@@ -939,9 +939,33 @@ it('rejects the legacy unbound OAuth flow before opening the browser and closes 
 });
 
 // A slow GitHub API must not hold the ordinary Webhook ACK lane or account controls.
+// Unit HTTP boundary: repeated UI/task refreshes must read status without rewriting
+// an unchanged subscription; changing the watched PR must still register once.
+it('keeps the acknowledged subscription across refresh and connection checks', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], prSubscriptions: true };
+  const baseUrl = await server.listen();
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {},
+    onBatch: async () => {}, onGithubPrs: async () => {} });
+  const follow = (number: number) => ({ ...schedule('follow'), webhookTrigger: undefined, recurring: true,
+    executionMode: 'script', scriptConfig: { command: `node follow.mjs https://github.com/example/project/pull/${number}`, capabilities: [] } }) as Schedule;
+  try {
+    await remote.sync([follow(1)]);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy('https://github.com/example/project/pull/1')).toBe(true));
+    const count = server.githubSubscriptionBodies.length;
+    await remote.refresh();
+    await remote.githubStatus();
+    await remote.refresh();
+    expect(server.githubSubscriptionBodies).toHaveLength(count);
+    await remote.sync([follow(2)]);
+    expect(server.githubSubscriptionBodies).toHaveLength(count + 1);
+  } finally { remote.stop(); await server.close(); }
+});
+
 it('keeps ordinary Webhooks and connection status usable while a GitHub batch is waiting', async () => {
   const server = new FakeServer();
-  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], automationSubscriptions: true };
   const baseUrl = await server.listen();
   let release!: () => void;
   const waiting = new Promise<void>(resolve => { release = resolve; });
@@ -949,11 +973,12 @@ it('keeps ordinary Webhooks and connection status usable while a GitHub batch is
     if (refresh.reason === 'event') await waiting;
   });
   const onBatch = vi.fn(async () => {});
+  const onGithubBatch = vi.fn(async () => {});
   const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
-    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch, onGithubPrs });
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch, onGithubPrs, onGithubBatch });
   const url = 'https://github.com/example/project/pull/1';
   try {
-    await remote.sync([schedule('ordinary'), { ...schedule('follow'), webhookTrigger: undefined, recurring: true,
+    await remote.sync([schedule('app', ['issues'], { preset: 'github-app', repositories: ['other/project'] }), schedule('ordinary'), { ...schedule('follow'), webhookTrigger: undefined, recurring: true,
       executionMode: 'script', scriptConfig: { command: `node follow.mjs ${url}`, capabilities: [] } }]);
     await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(true));
     server.push({ batchId: 'slow-github', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
@@ -963,6 +988,11 @@ it('keeps ordinary Webhooks and connection status usable while a GitHub batch is
       events: [{ deliveryId: 'ordinary-event', event: 'issues', receivedAt: 1 }] });
     await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'ordinary' }));
     expect(onBatch).toHaveBeenCalledTimes(1);
+    server.push({ batchId: 'fast-app', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
+      events: [{ deliveryId: 'issue', event: 'issues', repository: 'other/project', number: 2, receivedAt: 2 }] });
+    await vi.waitFor(() => expect(onGithubBatch).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'fast-app' }));
+
     expect(server.frames).not.toContainEqual({ type: 'ack', batchId: 'slow-github' });
     await expect(remote.githubStatus()).resolves.toMatchObject({ login: 'example-user' });
     release();
