@@ -24,25 +24,49 @@ function openDiff(doc: string) {
 }
 
 function changedRows(view: EditorView) {
-  return [...view.dom.querySelectorAll('.cm-diff-add-line, .cm-diff-del-line')]
-    .map(row => [row.textContent, row.classList.contains('cm-diff-add-line') ? 'add' : 'del']);
+  return [...view.dom.querySelectorAll('.cm-diff-add-line, .cm-diff-del-line')].map((row) => [
+    row.textContent,
+    row.classList.contains('cm-diff-add-line') ? 'add' : 'del',
+  ]);
 }
 
 describe('diff-file row backgrounds', () => {
   it('distinguishes header-like changes inside a hunk from file headers', () => {
     const view = openDiff('--- a/file\n+++ b/file\n@@ -1 +1 @@\n----\n+++counter;');
-    expect(changedRows(view)).toEqual([['----', 'del'], ['+++counter;', 'add']]);
+    expect(changedRows(view)).toEqual([
+      ['----', 'del'],
+      ['+++counter;', 'add'],
+    ]);
   });
 
   it('ends hunk context before the next file headers, even without diff --git', () => {
-    const view = openDiff('--- a/one\n+++ b/one\n@@ -1 +1 @@\n-old\n+new\n--- a/two\n+++ b/two\n@@ -0,0 +1 @@\n+++counter;');
-    expect(changedRows(view)).toEqual([['-old', 'del'], ['+new', 'add'], ['+++counter;', 'add']]);
+    const view = openDiff(
+      '--- a/one\n+++ b/one\n@@ -1 +1 @@\n-old\n+new\n--- a/two\n+++ b/two\n@@ -0,0 +1 @@\n+++counter;',
+    );
+    expect(changedRows(view)).toEqual([
+      ['-old', 'del'],
+      ['+new', 'add'],
+      ['+++counter;', 'add'],
+    ]);
   });
 
   it('rebuilds hunk context after editing the document', () => {
     const view = openDiff('--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new');
     const from = view.state.doc.line(4).from;
     view.dispatch({ changes: { from, to: view.state.doc.length, insert: '----\n+++counter;' } });
-    expect(changedRows(view)).toEqual([['----', 'del'], ['+++counter;', 'add']]);
+    expect(changedRows(view)).toEqual([
+      ['----', 'del'],
+      ['+++counter;', 'add'],
+    ]);
+  });
+
+  it('counts context rows but not no-newline markers when ending a hunk', () => {
+    const view = openDiff(
+      '--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n context\n----\n\\ No newline at end of file\n+++counter;\n--- a/next\n+++ b/next',
+    );
+    expect(changedRows(view)).toEqual([
+      ['----', 'del'],
+      ['+++counter;', 'add'],
+    ]);
   });
 });

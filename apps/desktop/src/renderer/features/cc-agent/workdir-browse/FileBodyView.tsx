@@ -1194,8 +1194,8 @@ function EditingChip({
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 h-7 text-12 font-medium',
         'shadow-[shadow:var(--shadow-menu)] backdrop-blur',
         showAmber
-          ? 'border-[var(--upgrade-banner-border)] bg-[var(--cmd-palette-bg)]/95 text-[var(--upgrade-banner-fg)]'
-          : 'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]/85 text-[var(--settings-section-desc)]',
+          ? 'border-[var(--upgrade-banner-border)] bg-[color-mix(in_srgb,var(--cmd-palette-bg)_95%,transparent)] text-[var(--upgrade-banner-fg)]'
+          : 'border-[var(--cmd-palette-border)] bg-[color-mix(in_srgb,var(--cmd-palette-bg)_85%,transparent)] text-[var(--settings-section-desc)]',
       )}
     >
       {showSaving ? (
