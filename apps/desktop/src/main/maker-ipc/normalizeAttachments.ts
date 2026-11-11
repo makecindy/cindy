@@ -39,24 +39,31 @@ type MaterializedCleanup = () => void | Promise<void>;
 /** One materialised attachment: its host-managed URL/path and the cleanup that releases only it. */
 export type MaterializedAttachmentPart = { refs: string[]; cleanup: MaterializedCleanup };
 
-export interface AttachmentNormalizerPorts {
-  getTempDir(): string;
+export interface AttachmentNormalizerIO {
   imageCacheStore: Pick<ReturnType<typeof import('../imageCacheStore.js').createImageCacheStore>,
     'resolveSafe' | 'copyFromPath' | 'removeFile'>;
   cindyMediaBlobStore: Pick<ReturnType<typeof import('../cindy-media/blobStore.js').createBlobStore>,
     'resolveSafe' | 'deleteBlobFile' | 'mimeForExt' | 'supportedMime'>;
   cindyMediaLedger: Pick<typeof import('../cindy-media/ledger.js'), 'removeRefById' | 'deleteZeroRefBlobRecord'>;
   ingestMedia: ReturnType<typeof import('../cindy-media/ingestCore.js').createMediaIngest>['ingestMedia'];
-  isRemoteAttachmentRef: typeof import('../device-link/remoteAttachment.js').isRemoteAttachmentRef;
-  parseRemoteAttachmentRef: typeof import('../device-link/remoteAttachment.js').parseRemoteAttachmentRef;
   materializeRemoteAttachment: typeof import('../device-link/remoteAttachment.js').materializeRemoteAttachment;
   removeRemote: typeof import('../device-link/mediaTransfer.js').removeRemote;
 }
 
+export interface AttachmentNormalizerPorts extends AttachmentNormalizerIO {
+  getTempDir(): string;
+  isRemoteAttachmentRef: typeof import('../device-link/remoteAttachment.js').isRemoteAttachmentRef;
+  parseRemoteAttachmentRef: typeof import('../device-link/remoteAttachment.js').parseRemoteAttachmentRef;
+  /** Freeze account-bound IO before preparation. Returned cleanup callbacks
+   * keep these bindings even after the active account changes. Desktop retains
+   * its existing dependencies when this optional port is absent. */
+  captureIO?(sessionId: string): AttachmentNormalizerIO;
+}
+
 /** One stateful normalizer per launcher; callers keep the existing lifecycle. */
 export function createAttachmentNormalizer(ports: AttachmentNormalizerPorts) {
-const { imageCacheStore, cindyMediaBlobStore, cindyMediaLedger, ingestMedia, isRemoteAttachmentRef,
-  parseRemoteAttachmentRef, materializeRemoteAttachment, removeRemote } = ports;
+const { isRemoteAttachmentRef, parseRemoteAttachmentRef } = ports;
+const legacyIO: AttachmentNormalizerIO = ports;
 const log = createLogger('maker-ipc/normalize');
 
 const TEMP_DIRS_BY_SESSION = new Map<string, string>();
@@ -338,6 +345,8 @@ async function normalizeUserMessage(
 ): Promise<UserMessageShape> {
   if (typeof msg === 'string') return msg;
   if (typeof msg.content === 'string') return msg;
+  const { imageCacheStore, cindyMediaBlobStore, materializeRemoteAttachment, removeRemote }
+    = ports.captureIO?.(sessionId) ?? legacyIO;
 
   const out: RawBlock[] = [];
   for (const raw of msg.content) {
@@ -639,6 +648,8 @@ async function materializeQueuedOssAttachmentsInternal(
         queuedFileMaterializeRef(f as SerializedFileLike) !== null,
     ) ?? false;
   if (!filesNeedMaterialize && !(pcStr && persistedContentNeedsMaterialize(pcStr))) return { item }; // 无需物化 → 原样
+  const { imageCacheStore, cindyMediaBlobStore, cindyMediaLedger, ingestMedia,
+    materializeRemoteAttachment, removeRemote } = ports.captureIO?.(sessionId) ?? legacyIO;
 
   const byRef = new Map<string, MaterializedRef>(); // 引用串 → 物化结果(同串只下载/拷贝+入库一次)
   const ossKeys = new Set<string>();

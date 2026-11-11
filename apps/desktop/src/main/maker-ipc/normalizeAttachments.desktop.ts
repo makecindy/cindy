@@ -1,3 +1,6 @@
+// register.ts and bootstrap-electron.ts read these bindings during module
+// initialization. Keep this assembly's dependencies free of back-imports to
+// either entry (and maker-host/index.ts) so the single instance is ready first.
 import { app } from 'electron';
 import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import * as cindyMediaBlobStore from '../cindy-media/blobStore.desktop.js';
