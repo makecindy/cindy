@@ -345,11 +345,19 @@ describe("cindy_helper MCP server", () => {
       name: 'call_tool', arguments: { name, args: {} },
     }));
     try {
+      // Unit regression: natural update requests must discover the existing
+      // install path without executing it; previously "更新 Cindy" returned none.
+      for (const query of ['更新 Cindy', '升级 Cindy', 'update Cindy', 'upgrade Cindy']) {
+        expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: { query } })))
+          .toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ key: 'application.update' })]) });
+      }
       const tools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'app_update' } }));
       expect((tools.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual([
         'check_app_update',
       ]);
       expect(await call('check_app_update')).toMatchObject({ status: 'available', targetVersion: '0.1.90' });
+      const detail = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: 'application.update' } }));
+      expect(detail).toMatchObject({ control: { missingOperations: ['install_app_update'], notes: expect.any(String) } });
       expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'UNKNOWN_TOOL' });
       expect(check).toHaveBeenCalledOnce();
       current = false;
@@ -366,7 +374,7 @@ describe("cindy_helper MCP server", () => {
     let current = true;
     const caller = { sessionId: 'local-task', sessionInstanceId: 'instance-1' };
     const check = vi.fn(async () => ({ status: 'available', currentVersion: '0.1.86', targetVersion: '0.1.90' }));
-    const install = vi.fn(async () => ({ status: 'started', targetVersion: '0.1.90' }));
+    const install = vi.fn(async (): Promise<Record<string, unknown>> => ({ status: 'started', targetVersion: '0.1.90' }));
     const setAutoUpdate = vi.fn(async (_caller: unknown, enabled: boolean) => enabled
       ? { status: 'updated', autoUpdateEnabled: true }
       : { ok: false, errorCode: 'OWNER_TURN_REQUIRED', message: 'owner only' });
@@ -397,9 +405,23 @@ describe("cindy_helper MCP server", () => {
         ok: false, errorCode: 'OWNER_TURN_REQUIRED', data: { hint: 'owner only' },
       });
       expect(setAutoUpdate).toHaveBeenNthCalledWith(1, caller, true);
+      // The update receipt carries recovery guidance after the global prompt
+      // removal, preserving the host's status/reason and actual error code.
+      check.mockImplementationOnce(async () => ({ status: 'idle', currentVersion: '0.1.90', targetVersion: '0.1.90', reason: 'channel_current' }));
+      expect(await call('check_app_update')).toMatchObject({
+        status: 'idle', reason: 'channel_current', guidance: expect.any(String),
+      });
+      install.mockResolvedValueOnce({ status: 'unsupported', reason: 'installation_unsupported' });
+      expect(await call('install_app_update')).toMatchObject({
+        status: 'unsupported', reason: 'installation_unsupported', guidance: expect.any(String),
+      });
+      install.mockResolvedValueOnce({ ok: false, errorCode: 'UPDATE_UNAVAILABLE', message: 'no installer' });
+      expect(await call('install_app_update')).toMatchObject({
+        ok: false, errorCode: 'UPDATE_UNAVAILABLE', data: { hint: 'no installer', guidance: expect.any(String) },
+      });
       current = false;
       expect(await call('install_app_update')).toMatchObject({ ok: false, errorCode: 'STALE_SESSION' });
-      expect(install).toHaveBeenCalledOnce();
+      expect(install).toHaveBeenCalledTimes(3);
     } finally {
       await client.close();
       await server.close();

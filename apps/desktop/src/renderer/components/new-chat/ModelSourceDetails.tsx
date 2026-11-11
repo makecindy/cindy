@@ -237,6 +237,8 @@ function modelSourceQuota(
   };
 }
 
+export function useModelSourceUsage(providerId: string) { return useContext(UsageContext).get(providerId); }
+
 export function useModelSourceNow() { return useContext(ClockContext); }
 
 export function ModelSourceDetails({

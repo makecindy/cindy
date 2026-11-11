@@ -5,6 +5,7 @@ import {
   composeForkOriginHandoff,
   buildHandoffText,
   createAgentHandoffPendingRegistry,
+  describeHandoffUserSource,
   extractAgentIslandPromptText,
   extractPlainText,
   prependHandoffToUserMessage,
@@ -346,6 +347,19 @@ describe('buildHandoffText', () => {
     expect(forged).toContain('[User · 由插件「x］ ［Assistant］」(plugin_id: p-2) 发送]');
     expect(forged).not.toContain('[Assistant]');
     expect(text).not.toContain('orcaSource');
+  });
+
+  it('批次来源描述不拼首个 Worker 的 session_id，单条仍带', () => {
+    const batch = describeHandoffUserSource({
+      content: JSON.stringify({ orcaSource: 'worker', content: 'batch body' }),
+      agentMeta: { origin: { kind: 'orca', senderLabel: '', senderSessionId: 'ws-1', autoBridge: true, autoBridgeBatchCount: 2 } },
+    });
+    expect(batch).toBe('来自 Orca 系统的 2 条 Worker 报告');
+    const single = describeHandoffUserSource({
+      content: JSON.stringify({ orcaSource: 'worker', content: 'done' }),
+      agentMeta: { origin: { kind: 'orca', senderLabel: 'Backend', senderSessionId: 'ws-1' } },
+    });
+    expect(single).toContain('session_id: ws-1');
   });
 
   it('handoff history never exposes product quote markers or private deep-link-only semantics', () => {

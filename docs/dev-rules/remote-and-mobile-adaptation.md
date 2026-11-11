@@ -1008,6 +1008,13 @@ WebSocket 写入成功）与 `afterFirstWriteMs`（首次写入到结束）；�
 在途期间只保留最新一次补读；失效立即推进已有代次，旧结果不提交。整组读取结束
 （包括失败后的其它成员）才释放刷新位置。账号切换或远程断连后的新代次独立刷新，
 不等待旧请求超时；已经取消的补读不重新打开连接。该合并不引入结果缓存或定时重试。
+同账号桌面远控的目录刷新须同时处理 `maker:provider:changed`、`maker:agents:changed`
+和 `provider-group:changed`：Main 对三者都会作废目标的在途元数据读取，Renderer 若漏接
+其中一种，迟到的 `Metadata scope changed` 就可能让模型选择器停在失败状态。收到这些
+事件时沿用上述合并刷新，只推进对应设备的代次；剩余信任时间为零的通知仍只清除目录，
+不发起补读。保护账号／撤权边界的 Main 校验不变，也不重建共享链路或 relay。
+回归见 Desktop `deviceLinkRemoteRecovery.test.tsx` 与 `remoteCatalogSnapshot.test.ts`。
+
 
 ## PR 门禁
 
