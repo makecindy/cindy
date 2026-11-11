@@ -152,9 +152,50 @@ interface ShowSessionEventPayload {
 // 时就回收掉，导致 click handler 丢失甚至触发异常事件。用 Set 持引用，等
 // close/click 后再 release。
 const liveNotifications = new Set<Notification>();
-// Only completed replies replace one another. Action requests and errors must
-// remain visible independently; the OS objects are retained until explicitly released.
+// Completed replies replace one another. Action requests are tracked separately
+// until handled; errors retain their independent lifecycle.
 const latestReplyNotifications = new Map<string, { notification: Notification; dismiss: () => void }>();
+
+interface InteractionNotification {
+  active: boolean;
+  dismiss?: () => void;
+  release: () => void;
+}
+// Include deliveries still reading their preview, so answering before show()
+// cannot leave a stale request in Notification Center. Empty scopes are removed.
+const interactionNotifications = new Map<string, Set<InteractionNotification>>();
+
+function sessionDesktopNotificationKey(sessionId: string, deviceId?: string): string {
+  const owner = captureDataOwnerBroadcastScope();
+  return JSON.stringify([owner.ownerScopeKey ?? owner.ownerStamp ?? null, deviceId ?? null, sessionId]);
+}
+
+function trackInteractionNotification(sessionId: string, deviceId?: string): InteractionNotification | undefined {
+  if (process.platform !== 'darwin' || !sessionId) return undefined;
+  const key = sessionDesktopNotificationKey(sessionId, deviceId);
+  const entries = interactionNotifications.get(key) ?? new Set<InteractionNotification>();
+  const entry: InteractionNotification = {
+    active: true,
+    release: () => {
+      entry.active = false;
+      entries.delete(entry);
+      if (entries.size === 0 && interactionNotifications.get(key) === entries) interactionNotifications.delete(key);
+    },
+  };
+  entries.add(entry);
+  interactionNotifications.set(key, entries);
+  return entry;
+}
+
+/** A submitted choice/input retires this task's outstanding macOS action notices. */
+export function dismissSessionInteractionNotifications(sessionId: string, deviceId?: string): void {
+  const entries = interactionNotifications.get(sessionDesktopNotificationKey(sessionId, deviceId));
+  if (!entries) return;
+  for (const entry of [...entries]) {
+    entry.release();
+    entry.dismiss?.();
+  }
+}
 type NotifiedReply = { eventId: string } | { fallbackSentAt: number };
 const notifiedReplies = new Map<string, NotifiedReply>();
 /**
@@ -514,15 +555,21 @@ export function showDesktopSessionEvent(
   const safeTitle = title?.trim() || sessionId.slice(0, 8) || getSessionNotificationUntitled();
   const owner = captureDataOwnerBroadcastScope();
   const replyKey = process.platform === 'darwin' && kind === 'done' && sessionId
-    ? JSON.stringify([owner.ownerScopeKey ?? owner.ownerStamp ?? null, payload.deviceId ?? null, sessionId])
+    ? sessionDesktopNotificationKey(sessionId, payload.deviceId)
     : undefined;
-  return showDesktopToast(safeTitle, kind, () => {
-    if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
-    if (sessionId) openMainWindowSession(sessionId, {
-      ...(payload.deviceId ? { deviceId: payload.deviceId } : {}),
-      ...(payload.messageClientId ? { messageClientId: payload.messageClientId } : {}),
-    });
-  }, payload.body, payload.teammate, payload.avatarJpeg, !sessionId, replyKey);
+  const interaction = kind === 'needs-reply' ? trackInteractionNotification(sessionId, payload.deviceId) : undefined;
+  try {
+    return showDesktopToast(safeTitle, kind, () => {
+      if (!isDataOwnerBroadcastScopeCurrent(owner)) return;
+      if (sessionId) openMainWindowSession(sessionId, {
+        ...(payload.deviceId ? { deviceId: payload.deviceId } : {}),
+        ...(payload.messageClientId ? { messageClientId: payload.messageClientId } : {}),
+      });
+    }, payload.body, payload.teammate, payload.avatarJpeg, !sessionId, replyKey, interaction);
+  } catch (error) {
+    interaction?.release();
+    throw error;
+  }
 }
 
 /**
@@ -612,6 +659,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // 来源边界靠上面那道 assertTrustedAppRendererEvent。
       if (markAttention && isSessionNotificationsMutedSync(sessionId)) return;
 
+      const interactionDelivery = kind === 'needs-reply' && wantDesktop
+        ? trackInteractionNotification(sessionId, payload.remoteDeviceId) : undefined;
+
       // 到达即参与：在进入异步 preview 之前把这一份绑到它自己的内容尾上。
       // 完成顺序不再决定谁是锚点。不同轮次时钟各占一桶，交错读完也不会互相当别名。
       const pendingAlert = kind !== 'done' && wantDesktop && alertEventId !== undefined && alertArrivedAt !== undefined && alertDeliveryOrder !== undefined
@@ -634,6 +684,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         let preview: SessionNotificationPreview | undefined;
         const releasePending = () => {
           if (pendingAlert && pendingAlertKey) releasePendingAlertDelivery(pendingAlertKey, pendingAlert);
+          interactionDelivery?.release();
         };
         // Only routes the phone to the teammate chat; titles and fallbacks stay per kind.
         let teammateBotId: string | undefined;
@@ -691,7 +742,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             clearTimeout(timer);
           }
         }
-        if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) {
+        if (!isDataOwnerBroadcastScopeCurrent(ownerScope) || interactionDelivery?.active === false) {
           releasePending();
           return;
         }
@@ -832,7 +883,8 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             }
           }
         }
-      })().catch((err) => log.warn('[notification] reply notification failed (non-fatal)', err));
+      })().catch((err) => log.warn('[notification] reply notification failed (non-fatal)', err))
+        .finally(() => interactionDelivery?.release());
 
       if (wantFeishu && kind !== 'done') {
         if (payload.inputHandoffRequestId) {
@@ -902,15 +954,17 @@ function assertValidSessionEventPayload(
   }
 }
 
-/** Desktop delivery, with optional replacement of a previous macOS session reply. */
+/** Desktop delivery, including replacement and handled-interaction cleanup on macOS. */
 function showDesktopToast(
   safeTitle: string, kind: SessionEventKind, onClick: () => void, previewBody?: string,
   teammate = false, avatarJpeg?: string, keepSystemSound = false, replyKey?: string,
+  interaction?: InteractionNotification,
 ): boolean {
   const body = previewBody ?? getSessionNotificationBody(kind);
 
   // Electron Notification 在某些 Linux 桌面环境下可能不可用——静默兜底。
   if (!Notification.isSupported()) {
+    interaction?.release();
     log.warn('[notification] Notification.isSupported() === false, skip');
     return false;
   }
@@ -928,6 +982,7 @@ function showDesktopToast(
 
   const release = () => {
     liveNotifications.delete(notif);
+    interaction?.release();
     // A dismissed predecessor can emit close/failed after its successor is shown.
     if (replyKey && latestReplyNotifications.get(replyKey)?.notification === notif) {
       latestReplyNotifications.delete(replyKey);
@@ -935,7 +990,7 @@ function showDesktopToast(
   };
   const dismiss = () => {
     try { notif.close(); }
-    catch (error) { log.warn('[notification] failed to dismiss previous reply:', error); }
+    catch (error) { log.warn('[notification] failed to dismiss notification:', error); }
     finally { release(); } // Electron does not guarantee a close event.
   };
 
@@ -949,6 +1004,10 @@ function showDesktopToast(
     log.warn('[notification] failed to show:', error);
     release();
   });
+  if (interaction) {
+    interaction.dismiss = dismiss;
+    notif.on('show', () => { if (!interaction.active) dismiss(); });
+  }
   if (replyKey) {
     const previous = latestReplyNotifications.get(replyKey);
     latestReplyNotifications.set(replyKey, { notification: notif, dismiss });

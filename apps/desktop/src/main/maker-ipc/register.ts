@@ -681,7 +681,7 @@ import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupCha
 import { settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { withChatServer } from './chatServer.js';
 import { createSqliteChatHistoryStore } from './chatHistoryStore.js';
-import { showDesktopChatMessage, getDesktopNotificationsEnabled } from '../notificationService.js';
+import { showDesktopChatMessage, getDesktopNotificationsEnabled, dismissSessionInteractionNotifications } from '../notificationService.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createCompanionCloudHost } from '../companion-cloud/host.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
@@ -20614,7 +20614,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     noteSessionClearBoundary,
     // 复用真人活跃边界：队首 Retry / Continue 和新输入尚未落库时也开始新限额周期。
-    onUserAction: (sessionId) => usageLimitAutoResume.noteUserAction(sessionId),
+    onUserAction: (sessionId) => {
+      usageLimitAutoResume.noteUserAction(sessionId);
+      dismissSessionInteractionNotifications(sessionId);
+    },
     // 失败 turn 重试 → hook 侧把这一轮接回渠道那条已收口的消息。source 区分
     // 人工与自动续跑：只有真人接手才作废 scheduler waiter，自动路径不能取消自己。
     onUiRetry: (sessionId, clientId, source, attemptToken) => {
@@ -26360,6 +26363,12 @@ function broadcastToAllWindows(
   ownerScope?: ReturnType<typeof captureDataOwnerBroadcastScope>,
 ): void {
   if (ownerScope && !isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+  // Only authoritative interaction closure reaches this broadcast. Viewing a
+  // task or a rejected submission does not clear its system action reminder.
+  if (channel === MAKER_PUSH.INTERACTION_DISMISSED && payload && typeof payload === 'object'
+    && typeof (payload as { sessionId?: unknown }).sessionId === 'string') {
+    dismissSessionInteractionNotifications((payload as { sessionId: string }).sessionId);
+  }
   const ownerStamp = ownerScope ? ownerScope.ownerStamp : getActiveDataOwnerPushStamp();
   if (
     channel === MAKER_PUSH.ORCA_WORKER_CHANGED &&

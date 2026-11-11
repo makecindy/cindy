@@ -1792,6 +1792,55 @@ describe('macOS latest session reply notification', () => {
     expect(bodies()).toEqual(['Previous reply']);
   });
 
+  // #9944 patch / unit: previously only native close/click could retire an
+  // actionable toast. A handled choice/input must also retire it, including a
+  // delivery still waiting for preview enrichment; ordinary replies stay visible.
+  it('dismisses only the current task interaction notices and permits the next request', () => {
+    deliver('Reply');
+    deliver('Error', { kind: 'error' });
+    deliver('Question', { kind: 'needs-reply' });
+    const question = notificationInstances.at(-1)!;
+    deliver('Permission', { kind: 'needs-reply' });
+    deliver('Other task', { kind: 'needs-reply', sessionId: 'other-task' });
+    deliver('Other device', { kind: 'needs-reply', deviceId: 'other-device', markAttention: false });
+    ownerScopeKey = 'other-owner:1';
+    deliver('Other owner', { kind: 'needs-reply' });
+    ownerScopeKey = 'reply-account:1';
+
+    service.dismissSessionInteractionNotifications('reply-session');
+    expect(bodies()).toEqual(['Reply', 'Error', 'Other task', 'Other device', 'Other owner']);
+    question.show(); // A late native show must not restore a handled request.
+    expect(question.visible).toBe(false);
+    service.dismissSessionInteractionNotifications('reply-session');
+    expect(notificationInstances[3]!.close).toHaveBeenCalledOnce();
+    deliver('Next question', { kind: 'needs-reply' });
+    expect(bodies()).toContain('Next question');
+  });
+
+  it('cancels an interaction notice handled while its preview is pending', async () => {
+    let finishPreview!: () => void;
+    readSessionNotificationPreview.mockImplementationOnce(() => new Promise(resolve => { finishPreview = () => resolve({}); }));
+    const payload = { sessionId: 'pending-question', title: 'Task', kind: 'needs-reply', channels: { desktop: true } };
+    await invokeHandler(payload);
+    service.dismissSessionInteractionNotifications('pending-question');
+    finishPreview();
+    await flushAsync();
+    expect(notificationInstances).toHaveLength(0);
+
+    await invokeHandler(payload);
+    expect(notificationInstances).toHaveLength(1);
+    expect(notificationInstances[0]!.visible).toBe(true);
+  });
+
+  it.each(['close', 'failed'])('does not close an interaction notification again after %s', (event) => {
+    deliver('Question', { kind: 'needs-reply' });
+    const question = notificationInstances.at(-1)!;
+    question.visible = false;
+    question.emit(event, {}, 'test failure');
+    service.dismissSessionInteractionNotifications('reply-session');
+    expect(question.close).not.toHaveBeenCalled();
+  });
+
   it.each(['click', 'close', 'failed'])('releases a reply after %s without closing it again', (event) => {
     deliver('Finished reply');
     const previous = notificationInstances.at(-1)!;
