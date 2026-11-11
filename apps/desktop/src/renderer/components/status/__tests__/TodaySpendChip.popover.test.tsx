@@ -11,7 +11,7 @@ function render(ui: ReactElement) {
   return renderUI(ui, { wrapper: ConfirmDialogProvider });
 }
 
-import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
+import { mergeClaudeSubscriptionUsageSnapshot, parseClaudeSdkRateLimitInfo, type ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
 import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
 import type { XaiSubscriptionUsageSnapshot } from '../../../../shared/xaiSubscriptionUsage';
 import type { ClaudeAccountUsageSnapshot } from '@/hooks/useClaudeAccountUsage';
@@ -651,12 +651,19 @@ describe('TodaySpendChip Claude subscription popover', () => {
 
   // Regression: an account-wide rejection caused by Fable must not label an Opus task limited.
   // Existing coverage only exercised allowed_warning; this uses the real chip (unit/jsdom).
-  it('分模型额度耗尽的拒绝提示跟随当前模型，切换后立即更新', () => {
-    mocks.claudeSnapshot = {
-      source: 'unified-headers', rateLimitStatus: 'rejected',
+  it.each(['five_hour', 'seven_day'])('旧 %s 事件后分模型拒绝仍跟随当前模型', (oldClaim) => {
+    const now = Date.now();
+    const endpoint: ClaudeSubscriptionUsageSnapshot = {
+      source: 'oauth-endpoint', updatedAt: now,
       fiveHour: { utilization: 52 }, sevenDay: { utilization: 61 },
       scoped: [{ modelDisplayName: 'Fable', utilization: 100 }],
     };
+    const previous = mergeClaudeSubscriptionUsageSnapshot(endpoint, parseClaudeSdkRateLimitInfo({
+      status: 'allowed', rateLimitType: oldClaim, utilization: oldClaim === 'five_hour' ? 0.52 : 0.61,
+    }, now + 1)!);
+    mocks.claudeSnapshot = mergeClaudeSubscriptionUsageSnapshot(previous, parseClaudeSdkRateLimitInfo({
+      status: 'rejected', rateLimitType: 'seven_day_overage_included',
+    }, now + 2)!);
     const props = { vendorKey: 'cc' as const, providerId: 'anthropic', sessionId: 'session-1' };
     const { rerender } = render(<TodaySpendChip {...props} modelId="claude-opus-5-5" />);
     const trigger = screen.getByTestId('task-usage-trigger');
