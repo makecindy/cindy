@@ -275,7 +275,7 @@
       "resetModules": 1
     },
     "apps/desktop/src/main/maker-host/__tests__/pi-package-store-security.test.ts": {
-      "resetModules": 17
+      "resetModules": 1
     },
     "apps/desktop/src/main/maker-host/__tests__/piBinaryDistribution.test.ts": {
       "sourceReads": 8
