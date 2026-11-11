@@ -175,24 +175,17 @@ export class ChatBridgeToolContext {
     namespace?: string,
     kind: ResponseToolIdentityKind = 'function',
   ): string {
+    // The current-turn snapshot owns selector resolution: it knows every declaration this turn
+    // made, so a name that only replayed history carries cannot become a forced selector, and a
+    // name claimed by both a bare and a namespaced tool resolves to null (ambiguous).
+    const reservedSelector = namespace === BUILTIN_FUNCTIONS_NAMESPACE;
+    const selectorName = reservedSelector || namespace === undefined ? name : namespace + '.' + name;
+    const selectorKind = kind === 'custom' ? 'custom' : 'function';
+    const recorded = this.currentSelectors.get(`${selectorKind}\0${selectorName}`);
+    if (recorded) return recorded;
     const exact = this.chatNamesByResponseName.get(responseToolIdentity(kind, name, namespace));
     if (exact !== undefined) return exact;
-    // A reserved-group selector names a bare tool, but only one this turn declared: a name that
-    // merely exists in replayed history must not become a forced selector.
-    const selectorNamespace = namespace === BUILTIN_FUNCTIONS_NAMESPACE ? undefined : namespace;
-    if (selectorNamespace === undefined) {
-      const bare = this.resolveUniqueBareSelector(kind, name);
-      if (bare !== undefined) return bare;
-    }
-    return clampChatToolName(selectorNamespace ? `${selectorNamespace}__${name}` : name);
-  }
-
-  private resolveUniqueBareSelector(
-    kind: ResponseToolIdentityKind,
-    name: string,
-  ): string | undefined {
-    const recorded = this.currentSelectors.get(`${kind === 'custom' ? 'custom' : 'function'}\0${name}`);
-    return recorded === null ? undefined : recorded;
+    return clampChatToolName(namespace ? `${namespace}__${name}` : name);
   }
 
   private reserveName(preferred: string, identity: string): string {

@@ -866,6 +866,25 @@ describe('translateResponsesRequest', () => {
     expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'clock__exec' } });
   });
 
+  it('leaves a selector ambiguous when a bare and a namespaced tool share the name (#9715)', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [
+            { type: 'function', name: 'now', parameters: { type: 'object' } },
+            { type: 'namespace', name: 'clock', tools: [{ type: 'function', name: 'now', parameters: { type: 'object' } }] },
+          ],
+        },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+      tool_choice: { type: 'function', name: 'now' },
+    }));
+
+    expect(out.tool_choice).toEqual({ type: 'function', function: { name: 'now' } });
+  });
+
   it('tolerates a non-string custom description instead of throwing (#9715)', () => {
     const out = translateResponsesRequest(base({
       input: [
